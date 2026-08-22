@@ -1,0 +1,7 @@
+schema: print-partner/compat@1
+source_name: voron_0_pancake_board
+kind: addon_electronics
+attaches_to: [{base: Voron-0, note: "README targets 'the Voron 0.1' Mini Afterburner (MiniAB) pancake stepper; V0.2/Mini-SB fit = UNKNOWN"}]
+replaces: ["direct toolhead wiring for fans/thermistor/switches"]
+conflicts: ["LDO-Picobilical", "Voron-Hardware V0-Umbilical"]
+ldo_pairing: none

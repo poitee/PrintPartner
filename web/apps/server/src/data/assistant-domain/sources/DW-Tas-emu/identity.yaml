@@ -1,0 +1,4 @@
+schema: print-partner/identity@1
+source_name: DW-Tas/emu
+role: standalone_mmu
+summary: Expandable Multi-material Unit — standalone MMU parts plan (not a Voron printer base)

@@ -1,0 +1,19 @@
+schema: print-partner/decisions@1
+# Optional candidate decisions for detect_build_decisions (model still chooses what to ask).
+decisions:
+  - id: electronics_board
+    kind: config
+    label: Lane electronics board
+    options:
+      - { id: ebb36, label: EBB36 }
+      - { id: ebb42, label: EBB42 }
+      - { id: slb, label: Solo Lane Board (SLB) }
+  - id: lane_count
+    kind: config
+    label: Lane count
+    options:
+      - { id: "5", label: "5 lanes" }
+      - { id: "4", label: "4 lanes" }
+      - { id: "3", label: "3 lanes" }
+      - { id: "2", label: "2 lanes" }
+      - { id: "1", label: "1 lane" }

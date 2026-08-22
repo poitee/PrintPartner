@@ -1,0 +1,51 @@
+schema: print-partner/aliases@1
+# user phrase -> exact source_name + ref (+ implied addons)
+aliases:
+  - {phrase: "LDO Trident R2", source_name: Voron-Trident, ref: VTr2, addons: [LDOVoronTrident@master, Voron-Stealthburner@main], stack: "LDO Trident R2", note: "Base repo is Voron-Trident @ VTr2 — LDOVoronTrident is only an addon, never the base"}
+  - {phrase: "Trident R2", source_name: Voron-Trident, ref: VTr2}
+  - {phrase: "Trident R1", source_name: Voron-Trident, ref: VTr1}
+  - {phrase: "trident latest", source_name: Voron-Trident, ref: main}
+  - {phrase: "V2.4 R2 / 2.4r2", source_name: Voron-2, ref: V2.4r2}
+  - {phrase: "voron 2.4", source_name: Voron-2, ref: Voron2.4}          # branch
+  - {phrase: "LDO 2.4 kit / LDO V2", source_name: Voron-2, ref: Voron2.4, addons: [LDOVoron2@main, Voron-Stealthburner@main], stack: "LDO Voron 2.4 (rev D / Leviathan)"}
+  - {phrase: "V0.2 / V0.2r1 / voron zero", source_name: Voron-0, ref: Voron0.2r1}   # BRANCH, no tag
+  - {phrase: "LDO 0.2R1 kit", source_name: Voron-0, ref: Voron0.2r1, addons: [LDOVoron0@v02r1], stack: "LDO Voron 0.2R1"}
+  - {phrase: "V0.1", source_name: Voron-0, ref: V0.1}                    # tag
+  - {phrase: "switchwire", source_name: Voron-Switchwire, ref: master}
+  - {phrase: "LDO switchwire kit", source_name: Voron-Switchwire, ref: master, addons: [LDOVoronSW@s1]}
+  - {phrase: "legacy / v1.8-style", source_name: Voron-Legacy, ref: main}
+  - {phrase: "stealthburner / SB", source_name: Voron-Stealthburner, ref: main}
+  - {phrase: "clockwork 2 / CW2", source_name: Voron-Stealthburner, ref: main, scope: STLs/Clockwork2}
+  - {phrase: "mini stealthburner / mini SB", source_name: Voron-0, ref: Voron0.2r1, scope: STLs/Toolheads, note: "NOT the Voron-Stealthburner repo"}
+  - {phrase: "tap / voron tap / tap r8", source_name: Voron-Tap, ref: main, note: "no tag named R8; r8 is filename suffix"}
+  - {phrase: "klicky / klicky probe", source_name: Klicky-Probe, ref: main}
+  - {phrase: "klickyNG", source_name: Klicky-Probe, ref: main, scope: Probes/KlickyNG}
+  - {phrase: "boop", source_name: Boop, ref: main, scope: beta_4/STL}
+  - {phrase: "galileo 2 / G2", source_name: Galileo2, ref: main}
+  - {phrase: "G2E", source_name: Galileo2, ref: main, scope: galileo2_extruder}
+  - {phrase: "G2SA", source_name: Galileo2, ref: main, scope: galileo2_standalone, note: "PUBLIC BETA"}
+  - {phrase: "G2Z", source_name: Galileo2, ref: main, scope: galileo2_z}
+  - {phrase: "G2XL / G2ZXL / G2XL Z Drives / G2 ZXL", source_name: Galileo2, ref: main, scope: galileo2_z, note: "G2ZXL Z-drives live in Galileo2 (same repo as G2Z); not a separate source"}
+  - {phrase: "chube / chube compact / Chube Compact hotend", source_name: Voron-Stealthburner, ref: main, note: "Hotend variant inside Stealthburner/toolhead STLs — use kit selections / path picks, NOT a separate source or invent chube_hotend"}
+  - {phrase: "LDO Micron / LDO Micron kit", source_name: Micron, ref: main, note: "Base is Micron (PrintersForAnts); enable STLs/Kit_Specific_Parts/LDO — there is no LDOMicron base id"}
+  - {phrase: "leviathan / leviathan board", source_name: Leviathan, ref: master}
+  - {phrase: "picobilical", source_name: LDO-Picobilical, ref: master}
+  - {phrase: "pancake board", source_name: voron_0_pancake_board, ref: master}
+  - {phrase: "umbilical (V0)", source_name: Voron-Hardware, ref: master, scope: V0-Umbilical}
+  - {phrase: "SB PCB / stealthburner toolhead pcb", source_name: Voron-Hardware, ref: master, scope: Stealthburner_Toolhead_PCB}
+  - {phrase: "nightwatch / pocket watch", source_name: Pocket-Watch, ref: main}
+  - {phrase: "micron / micron 120", source_name: Micron, ref: main, selection: {size: "120"}}
+  - {phrase: "micron+ / micron plus / micron 180", source_name: Micron, ref: main, selection: {size: "180"}}
+  - {phrase: "west3d micron+ kit", source_name: Micron, ref: main, addons: [West3D-Micron@main], selection: {size: "180"}}
+  - {phrase: "dragon burner", source_name: chirpy2605-voron, ref: main, scope: V0/Dragon_Burner}
+  - {phrase: "rapid burner", source_name: chirpy2605-voron, ref: main, scope: V0/Rapid_Burner}
+  - {phrase: "ebb36 mount", source_name: CANboard_Mounts, ref: main, scope: "STLs/Mellow_SHT36_BTT_EBB36_1.1_1.2_Mounts (v1.1/1.2) or STLs/BTT_EBB36_1.0_Mounts (v1.0 only)"}
+  - {phrase: "sht36 mount", source_name: CANboard_Mounts, ref: main, scope: STLs/Mellow_SHT36_BTT_EBB36_1.1_1.2_Mounts}
+  - {phrase: "milo / LDO milo", source_name: LDO-Milo-V1.5, ref: master}
+  - {phrase: "ldo extras", source_name: LDO-Extras, ref: null, note: "local-only source"}
+  - {phrase: "EMU / DW-Tas EMU / Expandable Multi-material Unit", source_name: "DW-Tas/emu", ref: main, note: "Standalone MMU base (not a Voron printer / not an addon)"}
+  - {phrase: "Trianglelabs EMU / Trianglelab EMU 5 Lane / EMU 5 Lane kit", source_name: "DW-Tas/emu", ref: main, note: "Hardware BOM only — product pages are not STL sources"}
+  - {phrase: "EBB36 EMU / EMU with EBB36", source_name: "DW-Tas/emu", ref: main, selection: {electronics_board: "ebb36"}, note: "Lane electronics, not PCB LED/button folders"}
+anti_aliases:   # phrases that must NOT resolve to a tag
+  - {phrase: "R2", note: "ambiguous: Trident R2 = VTr2; V2.4 R2 = V2.4r2; V0.2 R1 = branch Voron0.2r1"}
+  - {phrase: "latest (Micron)", note: "tag 'latest' exists on Micron but floats; prefer main+commit"}

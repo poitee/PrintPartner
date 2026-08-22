@@ -1,0 +1,16 @@
+schema: print-partner/compat@1
+source_name: Voron-0
+kind: base
+toolhead_policy: "Mini Stealthburner included in-repo (STLs/Toolheads); full-size Stealthburner does NOT fit"
+recommended_addons:
+  - {source: LDOVoron0, ref: v02r1, optional: true, note: "LDO 0.2R1 kit supplement"}
+  - {source: LDO-Picobilical, ref: master, optional: true, note: "umbilical PCB mod 'designed specifically for the Voron0 series printers'; pairs with LDOVoron0 STLs/Picobilical_Toolhead mounts"}
+  - {source: voron_0_pancake_board, ref: master, optional: true, conflicts_with: LDO-Picobilical, note: "alternative passive toolhead board (V0.1 MiniAB)"}
+  - {source: Klicky-Probe, ref: main, optional: true, path_scope: Printers/Voron/v0}
+  - {source: chirpy2605-voron, ref: main, optional: true, path_scope: "V0/* toolheads (Dragon_Burner etc.)"}
+  - {source: Boop, ref: main, optional: true, note: "nozzle probe for front-MGN9 V0.2-style toolheads"}
+not_compatible:
+  - "Voron-Tap: README states 'Switchwire, V1.8, Legacy, V0 beds are NOT rigid enough'"
+ldo_pairing:
+  kit_supplement: {source: LDOVoron0, ref: v02r1}
+  rule: "LDO 0.2R1 kit = Voron-0@Voron0.2r1 + LDOVoron0@v02r1 (+ Picobilical option)"

@@ -1,0 +1,11 @@
+schema: print-partner/identity@1
+source_name: Voron-Extras
+canonical_name: Voron Extras (non-printer accessories)
+github_url: https://github.com/VoronDesign/Voron-Extras
+default_branch: main
+head_commit: e2d4ea0e3d4c95f45eb0371cfca72e7f858f2f15   # 2026-07-29
+tags: []
+maintainer_org: VoronDesign
+relationship: {upstream: true}
+role: accents
+evidence: {date: 2026-07-29, method: "git ls-remote + shallow blob-less clone"}

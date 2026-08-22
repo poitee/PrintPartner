@@ -1,0 +1,11 @@
+schema: print-partner/compat@1
+source_name: Voron-Switchwire
+kind: base
+toolhead_policy: "Pair with Voron-Stealthburner using chain_anchor_2hole_SW / chain_anchor_3hole_SW"
+recommended_addons:
+  - {source: Voron-Stealthburner, ref: main, required: true}
+  - {source: Klicky-Probe, ref: main, optional: true, path_scope: Printers/Voron/Switchwire}
+  - {source: LDOVoronSW, ref: s1, optional: true}
+not_compatible: ["Voron-Tap (bed not rigid enough per Tap README)"]
+ldo_pairing:
+  kit_supplement: {source: LDOVoronSW, ref: s1, note: "default branch is s1, not main/master"}

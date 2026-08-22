@@ -1,0 +1,2274 @@
+{
+  "synced_at": "2026-05-17T18:54:02.156727+00:00",
+  "source": "west3d_shopify",
+  "colors": [
+    {
+      "id": "abs-matte::black-pantone-7c",
+      "display_name": "Black (Pantone 7C)",
+      "product_line": "ABS Matte",
+      "shopify_product_id": 8713547350228,
+      "shopify_variant_id": 45924783882452,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-abs-matte-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-8590986.png?v=1755306659",
+      "hex": "#c0afa1"
+    },
+    {
+      "id": "abs-matte::british-racing-green",
+      "display_name": "British Racing Green",
+      "product_line": "ABS Matte",
+      "shopify_product_id": 8713547350228,
+      "shopify_variant_id": 45924783980756,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-abs-matte-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-4575945.png?v=1755306658",
+      "hex": "#bfb8a9"
+    },
+    {
+      "id": "abs-matte::galactic-black-with-glitter",
+      "display_name": "Galactic Black (With Glitter)",
+      "product_line": "ABS Matte",
+      "shopify_product_id": 8713547350228,
+      "shopify_variant_id": 46335670780116,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-abs-matte-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-341364.jpg?v=1748643782",
+      "hex": "#e0d0c0"
+    },
+    {
+      "id": "abs-matte::grey-abyss-non-sparkle-galactic-black",
+      "display_name": "Grey Abyss (Non-Sparkle Galactic Black)",
+      "product_line": "ABS Matte",
+      "shopify_product_id": 8713547350228,
+      "shopify_variant_id": 45924784013524,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-abs-matte-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-1746847.png?v=1755306659",
+      "hex": "#c2b2a4"
+    },
+    {
+      "id": "abs-matte::hot-pink",
+      "display_name": "Hot Pink",
+      "product_line": "ABS Matte",
+      "shopify_product_id": 8713547350228,
+      "shopify_variant_id": 45924783947988,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-abs-matte-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-3637865.png?v=1755306659",
+      "hex": "#d8b7b1"
+    },
+    {
+      "id": "abs-matte::voron-red",
+      "display_name": "Voron Red",
+      "product_line": "ABS Matte",
+      "shopify_product_id": 8713547350228,
+      "shopify_variant_id": 45924783915220,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-abs-matte-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-2159373.png?v=1755306658",
+      "hex": "#dcad9f"
+    },
+    {
+      "id": "asa::black",
+      "display_name": "Black",
+      "product_line": "ASA",
+      "shopify_product_id": 8004738646228,
+      "shopify_variant_id": 44020687274196,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-asa-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-house-asa-west3d-3d-printing-supplies-ambrosia-filament-7471073.png?v=1751537564",
+      "hex": "#bfb1a3"
+    },
+    {
+      "id": "asa::bloody-murder-blood-orange",
+      "display_name": "Bloody Murder (Blood Orange)",
+      "product_line": "ASA",
+      "shopify_product_id": 8004738646228,
+      "shopify_variant_id": 46039862902996,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-asa-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-house-asa-west3d-3d-printing-supplies-ambrosia-filament-3964142.png?v=1755306884",
+      "hex": "#cfada2"
+    },
+    {
+      "id": "asa::burnt-orange",
+      "display_name": "Burnt Orange",
+      "product_line": "ASA",
+      "shopify_product_id": 8004738646228,
+      "shopify_variant_id": 47159814521044,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-asa-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-house-asa-west3d-3d-printing-supplies-ambrosia-filament-9133031.jpg?v=1761518455",
+      "hex": "#d2ae99"
+    },
+    {
+      "id": "asa::camo-green",
+      "display_name": "Camo Green",
+      "product_line": "ASA",
+      "shopify_product_id": 8004738646228,
+      "shopify_variant_id": 46039863132372,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-asa-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-house-asa-west3d-3d-printing-supplies-ambrosia-filament-4902059.png?v=1755306886",
+      "hex": "#baa98e"
+    },
+    {
+      "id": "asa::camo-olive-drab",
+      "display_name": "Camo Olive Drab",
+      "product_line": "ASA",
+      "shopify_product_id": 8004738646228,
+      "shopify_variant_id": 46039863165140,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-asa-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-house-asa-west3d-3d-printing-supplies-ambrosia-filament-3798010.png?v=1755306885",
+      "hex": "#c7bca5"
+    },
+    {
+      "id": "asa::cardovan",
+      "display_name": "Cardovan",
+      "product_line": "ASA",
+      "shopify_product_id": 8004738646228,
+      "shopify_variant_id": 46039862870228,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-asa-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-house-asa-west3d-3d-printing-supplies-ambrosia-filament-7033733.png?v=1755306884",
+      "hex": "#ab968d"
+    },
+    {
+      "id": "asa::coral-wave",
+      "display_name": "Coral Wave",
+      "product_line": "ASA",
+      "shopify_product_id": 8004738646228,
+      "shopify_variant_id": 47336905081044,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-1176959.jpg?v=1765410852",
+      "hex": "#a99d96"
+    },
+    {
+      "id": "asa::creamsicle",
+      "display_name": "Creamsicle",
+      "product_line": "ASA",
+      "shopify_product_id": 8004738646228,
+      "shopify_variant_id": 47159814488276,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-asa-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-house-asa-west3d-3d-printing-supplies-ambrosia-filament-9893906.jpg?v=1761518455",
+      "hex": "#d5b9a1"
+    },
+    {
+      "id": "asa::easter-egg",
+      "display_name": "Easter Egg",
+      "product_line": "ASA",
+      "shopify_product_id": 8004738646228,
+      "shopify_variant_id": 46039862968532,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-asa-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-house-asa-west3d-3d-printing-supplies-ambrosia-filament-3053073.png?v=1755306885",
+      "hex": "#cdbaa6"
+    },
+    {
+      "id": "asa::faded-desert-brown-fde",
+      "display_name": "Faded Desert Brown FDE",
+      "product_line": "ASA",
+      "shopify_product_id": 8004738646228,
+      "shopify_variant_id": 44425275605204,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-asa-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-house-asa-west3d-3d-printing-supplies-ambrosia-filament-5642298.png?v=1751537566",
+      "hex": "#d1c0ae"
+    },
+    {
+      "id": "asa::fluorescent-neon-green",
+      "display_name": "Fluorescent Neon Green",
+      "product_line": "ASA",
+      "shopify_product_id": 8004738646228,
+      "shopify_variant_id": 46039863066836,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-asa-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-house-asa-west3d-3d-printing-supplies-ambrosia-filament-1389952.png?v=1755306883",
+      "hex": "#b6ba8c"
+    },
+    {
+      "id": "asa::grape",
+      "display_name": "Grape",
+      "product_line": "ASA",
+      "shopify_product_id": 8004738646228,
+      "shopify_variant_id": 44461380632788,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-asa-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-house-asa-west3d-3d-printing-supplies-ambrosia-filament-1490994.png?v=1755306940",
+      "hex": "#d2aeb0"
+    },
+    {
+      "id": "asa::grey",
+      "display_name": "Grey",
+      "product_line": "ASA",
+      "shopify_product_id": 8004738646228,
+      "shopify_variant_id": 44425275572436,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/Grey_ASA.png?v=1751489597",
+      "hex": "#ccc0b2"
+    },
+    {
+      "id": "asa::hot-pink",
+      "display_name": "Hot Pink",
+      "product_line": "ASA",
+      "shopify_product_id": 8004738646228,
+      "shopify_variant_id": 46039863034068,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-asa-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-house-asa-west3d-3d-printing-supplies-ambrosia-filament-9938786.png?v=1755306884",
+      "hex": "#c29e9d"
+    },
+    {
+      "id": "asa::kb-3d-orange",
+      "display_name": "KB-3D Orange",
+      "product_line": "ASA",
+      "shopify_product_id": 8004738646228,
+      "shopify_variant_id": 44425275637972,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-asa-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-house-asa-west3d-3d-printing-supplies-ambrosia-filament-4458290.png?v=1755306884",
+      "hex": "#e3c0a5"
+    },
+    {
+      "id": "asa::midnight-purple",
+      "display_name": "Midnight Purple",
+      "product_line": "ASA",
+      "shopify_product_id": 8004738646228,
+      "shopify_variant_id": 47681585414356,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-6182215.jpg?v=1774015087",
+      "hex": "#b1a6a4"
+    },
+    {
+      "id": "asa::polar-white",
+      "display_name": "Polar White",
+      "product_line": "ASA",
+      "shopify_product_id": 8004738646228,
+      "shopify_variant_id": 45744938090708,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-asa-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-house-asa-west3d-3d-printing-supplies-ambrosia-filament-2238049.png?v=1755306941",
+      "hex": "#c9b9aa"
+    },
+    {
+      "id": "asa::quadra-teal",
+      "display_name": "Quadra Teal",
+      "product_line": "ASA",
+      "shopify_product_id": 8004738646228,
+      "shopify_variant_id": 45409297072340,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-asa-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-house-asa-west3d-3d-printing-supplies-ambrosia-filament-5764990.png?v=1755306939",
+      "hex": "#b3beb3"
+    },
+    {
+      "id": "asa::rainbow-rush",
+      "display_name": "Rainbow Rush",
+      "product_line": "ASA",
+      "shopify_product_id": 8004738646228,
+      "shopify_variant_id": 46039863001300,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-asa-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-house-asa-west3d-3d-printing-supplies-ambrosia-filament-3179797.png?v=1755306885",
+      "hex": "#bfa691"
+    },
+    {
+      "id": "asa::skin-light",
+      "display_name": "Skin (Light)",
+      "product_line": "ASA",
+      "shopify_product_id": 8004738646228,
+      "shopify_variant_id": 47159814553812,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-asa-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-house-asa-west3d-3d-printing-supplies-ambrosia-filament-2586141.jpg?v=1761518456",
+      "hex": "#ceb9a3"
+    },
+    {
+      "id": "asa::super-blue",
+      "display_name": "Super Blue",
+      "product_line": "ASA",
+      "shopify_product_id": 8004738646228,
+      "shopify_variant_id": 44461380600020,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-asa-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-house-asa-west3d-3d-printing-supplies-ambrosia-filament-2639079.png?v=1755306940",
+      "hex": "#beb7b9"
+    },
+    {
+      "id": "asa::super-grey",
+      "display_name": "Super Grey",
+      "product_line": "ASA",
+      "shopify_product_id": 8004738646228,
+      "shopify_variant_id": 46039862935764,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-asa-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-house-asa-west3d-3d-printing-supplies-ambrosia-filament-8308029.png?v=1755306884",
+      "hex": "#baa895"
+    },
+    {
+      "id": "asa::terracotta",
+      "display_name": "Terracotta",
+      "product_line": "ASA",
+      "shopify_product_id": 8004738646228,
+      "shopify_variant_id": 47336904360148,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-2178713.jpg?v=1765410852",
+      "hex": "#b8a497"
+    },
+    {
+      "id": "asa::terrestrial-blue",
+      "display_name": "Terrestrial Blue",
+      "product_line": "ASA",
+      "shopify_product_id": 8004738646228,
+      "shopify_variant_id": 44461380567252,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-asa-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-house-asa-west3d-3d-printing-supplies-ambrosia-filament-5604837.png?v=1755306940",
+      "hex": "#b7bfbd"
+    },
+    {
+      "id": "asa::twilight-tide",
+      "display_name": "Twilight Tide",
+      "product_line": "ASA",
+      "shopify_product_id": 8004738646228,
+      "shopify_variant_id": 47336900362452,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-9277734.jpg?v=1765410852",
+      "hex": "#aaa29c"
+    },
+    {
+      "id": "asa::voron-red",
+      "display_name": "Voron Red",
+      "product_line": "ASA",
+      "shopify_product_id": 8004738646228,
+      "shopify_variant_id": 44020687372500,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-asa-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-house-asa-west3d-3d-printing-supplies-ambrosia-filament-3971133.png?v=1755306940",
+      "hex": "#d8aba1"
+    },
+    {
+      "id": "asa::west-green",
+      "display_name": "West Green",
+      "product_line": "ASA",
+      "shopify_product_id": 8004738646228,
+      "shopify_variant_id": 44020687339732,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-asa-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-house-asa-west3d-3d-printing-supplies-ambrosia-filament-1850543.png?v=1755306940",
+      "hex": "#c7c5a2"
+    },
+    {
+      "id": "asa::white",
+      "display_name": "White",
+      "product_line": "ASA",
+      "shopify_product_id": 8004738646228,
+      "shopify_variant_id": 44020687306964,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-asa-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-house-asa-west3d-3d-printing-supplies-ambrosia-filament-7165312.png?v=1755306941",
+      "hex": "#d8cab9"
+    },
+    {
+      "id": "asa::yellow",
+      "display_name": "Yellow",
+      "product_line": "ASA",
+      "shopify_product_id": 8004738646228,
+      "shopify_variant_id": 44461380665556,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-asa-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-house-asa-west3d-3d-printing-supplies-ambrosia-filament-8332296.png?v=1755306939",
+      "hex": "#e0c398"
+    },
+    {
+      "id": "asa-galactic::armored-turtle-green-w-gold-sparkle",
+      "display_name": "Armored Turtle Green (w/ Gold Sparkle)",
+      "product_line": "ASA Galactic",
+      "shopify_product_id": 8004749983956,
+      "shopify_variant_id": 46335649153236,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-asa-galactic-filament-of-the-gods-glitter-sparkle-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambr-3390219.png?v=1751761932",
+      "hex": "#c8cfb7"
+    },
+    {
+      "id": "asa-galactic::cosmic-shimmer",
+      "display_name": "Cosmic Shimmer",
+      "product_line": "ASA Galactic",
+      "shopify_product_id": 8004749983956,
+      "shopify_variant_id": 47336902590676,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-asa-galactic-filament-of-the-gods-glitter-sparkle-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambr-7642198.jpg?v=1765410849",
+      "hex": "#ae9e96"
+    },
+    {
+      "id": "asa-galactic::galactic-black",
+      "display_name": "Galactic Black",
+      "product_line": "ASA Galactic",
+      "shopify_product_id": 8004749983956,
+      "shopify_variant_id": 44020722106580,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-asa-galactic-filament-of-the-gods-glitter-sparkle-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambr-8877451.png?v=1751537658",
+      "hex": "#beb1a4"
+    },
+    {
+      "id": "asa-galactic::galactic-burnt-orange-w-gold-sparkle",
+      "display_name": "Galactic Burnt Orange (w/ Gold Sparkle)",
+      "product_line": "ASA Galactic",
+      "shopify_product_id": 8004749983956,
+      "shopify_variant_id": 47681582334164,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-galactic-sparkle-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-fil-3786803.jpg?v=1774014967",
+      "hex": "#c4a89c"
+    },
+    {
+      "id": "asa-galactic::galactic-glow-clear-to-green",
+      "display_name": "Galactic Glow Clear to Green",
+      "product_line": "ASA Galactic",
+      "shopify_product_id": 8004749983956,
+      "shopify_variant_id": 47159879598292,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-asa-galactic-filament-of-the-gods-glitter-sparkle-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambr-2217640.jpg?v=1761607131",
+      "hex": "#c8c1ab"
+    },
+    {
+      "id": "asa-galactic::galactic-grape",
+      "display_name": "Galactic Grape",
+      "product_line": "ASA Galactic",
+      "shopify_product_id": 8004749983956,
+      "shopify_variant_id": 44020725317844,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-asa-galactic-filament-of-the-gods-glitter-sparkle-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambr-8783657.png?v=1751537659",
+      "hex": "#caaaa4"
+    },
+    {
+      "id": "asa-galactic::galactic-green",
+      "display_name": "Galactic Green",
+      "product_line": "ASA Galactic",
+      "shopify_product_id": 8004749983956,
+      "shopify_variant_id": 44020725350612,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-asa-galactic-filament-of-the-gods-glitter-sparkle-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambr-1148599.png?v=1751537659",
+      "hex": "#d1d7bb"
+    },
+    {
+      "id": "asa-galactic::galactic-grey",
+      "display_name": "Galactic Grey",
+      "product_line": "ASA Galactic",
+      "shopify_product_id": 8004749983956,
+      "shopify_variant_id": 44020722172116,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-asa-galactic-filament-of-the-gods-glitter-sparkle-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambr-6463087.png?v=1751537658",
+      "hex": "#c5b6a8"
+    },
+    {
+      "id": "asa-galactic::galactic-holiday-green-green-w-red-sparkle",
+      "display_name": "Galactic Holiday Green (Green w/ Red Sparkle)",
+      "product_line": "ASA Galactic",
+      "shopify_product_id": 8004749983956,
+      "shopify_variant_id": 45924859773140,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-asa-galactic-filament-of-the-gods-glitter-sparkle-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambr-5438452.png?v=1751537661",
+      "hex": "#d0c29c"
+    },
+    {
+      "id": "asa-galactic::galactic-holiday-red-red-w-green-sparkle",
+      "display_name": "Galactic Holiday Red (Red w/ Green Sparkle)",
+      "product_line": "ASA Galactic",
+      "shopify_product_id": 8004749983956,
+      "shopify_variant_id": 45924859805908,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-asa-galactic-filament-of-the-gods-glitter-sparkle-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambr-2331109.png?v=1751537759",
+      "hex": "#d6af9f"
+    },
+    {
+      "id": "asa-galactic::galactic-hot-pink",
+      "display_name": "Galactic Hot Pink",
+      "product_line": "ASA Galactic",
+      "shopify_product_id": 8004749983956,
+      "shopify_variant_id": 46039870865620,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-asa-galactic-filament-of-the-gods-glitter-sparkle-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambr-8134783.png?v=1751537760",
+      "hex": "#cfa098"
+    },
+    {
+      "id": "asa-galactic::galactic-midnight-meteorite",
+      "display_name": "Galactic Midnight Meteorite",
+      "product_line": "ASA Galactic",
+      "shopify_product_id": 8004749983956,
+      "shopify_variant_id": 44425288253652,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-asa-galactic-filament-of-the-gods-glitter-sparkle-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambr-9632673.png?v=1751537658",
+      "hex": "#c2b3b1"
+    },
+    {
+      "id": "asa-galactic::galactic-pink",
+      "display_name": "Galactic Pink",
+      "product_line": "ASA Galactic",
+      "shopify_product_id": 8004749983956,
+      "shopify_variant_id": 44020725416148,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-asa-galactic-filament-of-the-gods-glitter-sparkle-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambr-6787639.png?v=1751537759",
+      "hex": "#d7b1ae"
+    },
+    {
+      "id": "asa-galactic::galactic-planetary-blue",
+      "display_name": "Galactic Planetary Blue",
+      "product_line": "ASA Galactic",
+      "shopify_product_id": 8004749983956,
+      "shopify_variant_id": 44020725383380,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-asa-galactic-filament-of-the-gods-glitter-sparkle-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambr-4505843.png?v=1751537659",
+      "hex": "#b7bab4"
+    },
+    {
+      "id": "asa-galactic::galactic-quadra-teal",
+      "display_name": "Galactic Quadra Teal",
+      "product_line": "ASA Galactic",
+      "shopify_product_id": 8004749983956,
+      "shopify_variant_id": 46039870898388,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-asa-galactic-filament-of-the-gods-glitter-sparkle-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambr-7914784.png?v=1751537760",
+      "hex": "#aeb2a8"
+    },
+    {
+      "id": "asa-galactic::galactic-santa-s-robe-red-w-silver-sparkle",
+      "display_name": "Galactic Santa's Robe (Red w/ Silver Sparkle)",
+      "product_line": "ASA Galactic",
+      "shopify_product_id": 8004749983956,
+      "shopify_variant_id": 45924859838676,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-asa-galactic-filament-of-the-gods-glitter-sparkle-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambr-6235695.png?v=1751537760",
+      "hex": "#d8ac9c"
+    },
+    {
+      "id": "asa-galactic::galactic-super-blue",
+      "display_name": "Galactic Super Blue",
+      "product_line": "ASA Galactic",
+      "shopify_product_id": 8004749983956,
+      "shopify_variant_id": 44020725285076,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-asa-galactic-filament-of-the-gods-glitter-sparkle-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambr-7647489.png?v=1751537659",
+      "hex": "#bbb4b5"
+    },
+    {
+      "id": "asa-galactic::galactic-super-red",
+      "display_name": "Galactic Super Red",
+      "product_line": "ASA Galactic",
+      "shopify_product_id": 8004749983956,
+      "shopify_variant_id": 44020722204884,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-asa-galactic-filament-of-the-gods-glitter-sparkle-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambr-4314044.png?v=1751537658",
+      "hex": "#eac1b5"
+    },
+    {
+      "id": "asa-galactic::galactic-voron-red",
+      "display_name": "Galactic Voron Red",
+      "product_line": "ASA Galactic",
+      "shopify_product_id": 8004749983956,
+      "shopify_variant_id": 44425288286420,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-asa-galactic-filament-of-the-gods-glitter-sparkle-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambr-5827733.png?v=1751449500",
+      "hex": "#d7aba2"
+    },
+    {
+      "id": "asa-galactic::galactic-yellow",
+      "display_name": "Galactic Yellow",
+      "product_line": "ASA Galactic",
+      "shopify_product_id": 8004749983956,
+      "shopify_variant_id": 44020722139348,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-asa-galactic-filament-of-the-gods-glitter-sparkle-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambr-8378134.png?v=1755306761",
+      "hex": "#d3c49c"
+    },
+    {
+      "id": "asa-galactic::skin-rash-light-skin-with-red-glitter",
+      "display_name": "Skin Rash (Light Skin with Red Glitter)",
+      "product_line": "ASA Galactic",
+      "shopify_product_id": 8004749983956,
+      "shopify_variant_id": 47159815667924,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-asa-galactic-filament-of-the-gods-glitter-sparkle-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambr-4516078.jpg?v=1761518453",
+      "hex": "#ceb8a3"
+    },
+    {
+      "id": "asa-galactic::stardust",
+      "display_name": "Stardust",
+      "product_line": "ASA Galactic",
+      "shopify_product_id": 8004749983956,
+      "shopify_variant_id": 46039870931156,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-asa-galactic-filament-of-the-gods-glitter-sparkle-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambr-6913200.png?v=1751537760",
+      "hex": "#c3aeae"
+    },
+    {
+      "id": "asa-galactic::supernova-black",
+      "display_name": "Supernova Black",
+      "product_line": "ASA Galactic",
+      "shopify_product_id": 8004749983956,
+      "shopify_variant_id": 46086257705172,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-asa-galactic-filament-of-the-gods-glitter-sparkle-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambr-5874309.png?v=1751537760",
+      "hex": "#b8aea3"
+    },
+    {
+      "id": "asa-cf::black",
+      "display_name": "Black",
+      "product_line": "ASA-CF",
+      "shopify_product_id": 8133927436500,
+      "shopify_variant_id": 44420868276436,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/products/ambrosia-asa-cf-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-735057.jpg?v=1708708362",
+      "hex": "#d3c3b3"
+    },
+    {
+      "id": "asa-cf::dark-blue",
+      "display_name": "Dark Blue",
+      "product_line": "ASA-CF",
+      "shopify_product_id": 8133927436500,
+      "shopify_variant_id": 44420868341972,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-asa-cf-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-902701.jpg?v=1722475963",
+      "hex": "#d8c9bb"
+    },
+    {
+      "id": "asa-cf::dark-red",
+      "display_name": "Dark Red",
+      "product_line": "ASA-CF",
+      "shopify_product_id": 8133927436500,
+      "shopify_variant_id": 44420868309204,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/products/ambrosia-asa-cf-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-446084.jpg?v=1708708362",
+      "hex": "#cebdaf"
+    },
+    {
+      "id": "asa-cf::grey",
+      "display_name": "Grey",
+      "product_line": "ASA-CF",
+      "shopify_product_id": 8133927436500,
+      "shopify_variant_id": 45409394753748,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/products/ambrosia-asa-cf-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-735057.jpg?v=1708708362",
+      "hex": "#d3c3b3"
+    },
+    {
+      "id": "asa-cf::purple",
+      "display_name": "Purple",
+      "product_line": "ASA-CF",
+      "shopify_product_id": 8133927436500,
+      "shopify_variant_id": 45409394688212,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-asa-cf-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-198165.jpg?v=1720695602",
+      "hex": "#cdbcaf"
+    },
+    {
+      "id": "asa-gf-glass-filled-asa::black",
+      "display_name": "Black",
+      "product_line": "ASA-GF Glass Filled ASA",
+      "shopify_product_id": 8544357613780,
+      "shopify_variant_id": 45409918157012,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-asa-gf-glass-filled-asa-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia--302280.jpg?v=1729696176",
+      "hex": "#beae9e"
+    },
+    {
+      "id": "asa-gf-glass-filled-asa::natural",
+      "display_name": "Natural",
+      "product_line": "ASA-GF Glass Filled ASA",
+      "shopify_product_id": 8544357613780,
+      "shopify_variant_id": 45409918222548,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-asa-gf-glass-filled-asa-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia--910196.jpg?v=1720695602",
+      "hex": "#d6c6b3"
+    },
+    {
+      "id": "asa-gf-glass-filled-asa::voron-red",
+      "display_name": "Voron Red",
+      "product_line": "ASA-GF Glass Filled ASA",
+      "shopify_product_id": 8544357613780,
+      "shopify_variant_id": 45409918189780,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-asa-gf-glass-filled-asa-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia--116836.jpg?v=1729696176",
+      "hex": "#c8a696"
+    },
+    {
+      "id": "dolos-color-shifting-asa::banana-rama",
+      "display_name": "Banana Rama",
+      "product_line": "Dolos Color Shifting ASA",
+      "shopify_product_id": 8544096878804,
+      "shopify_variant_id": 47159798595796,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-dolos-color-shifting-asa-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-7262096.jpg?v=1761607061",
+      "hex": "#d5c1a8"
+    },
+    {
+      "id": "dolos-color-shifting-asa::bubble-gum",
+      "display_name": "Bubble Gum",
+      "product_line": "Dolos Color Shifting ASA",
+      "shopify_product_id": 8544096878804,
+      "shopify_variant_id": 47681577386196,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-dolos-color-shifting-asa-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-6010923.jpg?v=1774014967",
+      "hex": "#c7a5a6"
+    },
+    {
+      "id": "dolos-color-shifting-asa::cool-grey-pearl",
+      "display_name": "Cool Grey Pearl",
+      "product_line": "Dolos Color Shifting ASA",
+      "shopify_product_id": 8544096878804,
+      "shopify_variant_id": 47159798628564,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-dolos-color-shifting-asa-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-1911057.jpg?v=1761518284",
+      "hex": "#ccbbaa"
+    },
+    {
+      "id": "dolos-color-shifting-asa::prince-of-purple",
+      "display_name": "Prince of Purple",
+      "product_line": "Dolos Color Shifting ASA",
+      "shopify_product_id": 8544096878804,
+      "shopify_variant_id": 45409332429012,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-dolos-color-shifting-asa-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-8631173.png?v=1755306702",
+      "hex": "#ccbabb"
+    },
+    {
+      "id": "dolos-color-shifting-asa::rainbow",
+      "display_name": "Rainbow",
+      "product_line": "Dolos Color Shifting ASA",
+      "shopify_product_id": 8544096878804,
+      "shopify_variant_id": 47336906686676,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-dolos-color-shifting-asa-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-5477609.jpg?v=1765498270",
+      "hex": "#aca39e"
+    },
+    {
+      "id": "dolos-color-shifting-asa::titanium-anno",
+      "display_name": "Titanium Anno",
+      "product_line": "Dolos Color Shifting ASA",
+      "shopify_product_id": 8544096878804,
+      "shopify_variant_id": 45409332461780,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-dolos-color-shifting-asa-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-2940952.png?v=1755306703",
+      "hex": "#bfb6aa"
+    },
+    {
+      "id": "dolos-color-shifting-asa::violet-void",
+      "display_name": "Violet Void",
+      "product_line": "Dolos Color Shifting ASA",
+      "shopify_product_id": 8544096878804,
+      "shopify_variant_id": 46039872372948,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-dolos-color-shifting-asa-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-1711284.png?v=1755306703",
+      "hex": "#b6a190"
+    },
+    {
+      "id": "dolos-color-shifting-pla::banana-rama-refill-core",
+      "display_name": "Banana Rama / Refill Core",
+      "product_line": "Dolos Color Shifting PLA",
+      "shopify_product_id": 8145295278292,
+      "shopify_variant_id": 47685708579028,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-dolos-color-shifting-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-3443543.jpg?v=1774158668",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "dolos-color-shifting-pla::banana-rama-with-spool",
+      "display_name": "Banana Rama / With Spool",
+      "product_line": "Dolos Color Shifting PLA",
+      "shopify_product_id": 8145295278292,
+      "shopify_variant_id": 45409329774804,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-dolos-color-shifting-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-3817530.png?v=1755306726",
+      "hex": "#dac1a4"
+    },
+    {
+      "id": "dolos-color-shifting-pla::bubble-gum-refill-core",
+      "display_name": "Bubble Gum / Refill Core",
+      "product_line": "Dolos Color Shifting PLA",
+      "shopify_product_id": 8145295278292,
+      "shopify_variant_id": 47685708710100,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-dolos-color-shifting-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-3443543.jpg?v=1774158668",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "dolos-color-shifting-pla::bubble-gum-with-spool",
+      "display_name": "Bubble Gum / With Spool",
+      "product_line": "Dolos Color Shifting PLA",
+      "shopify_product_id": 8145295278292,
+      "shopify_variant_id": 47681578107092,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-dolos-color-shifting-asa-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-6010923.jpg?v=1774014967",
+      "hex": "#c7a5a6"
+    },
+    {
+      "id": "dolos-color-shifting-pla::cool-grey-pearl-refill-core",
+      "display_name": "Cool Grey Pearl / Refill Core",
+      "product_line": "Dolos Color Shifting PLA",
+      "shopify_product_id": 8145295278292,
+      "shopify_variant_id": 47685708644564,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-dolos-color-shifting-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-3443543.jpg?v=1774158668",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "dolos-color-shifting-pla::cool-grey-pearl-with-spool",
+      "display_name": "Cool Grey Pearl / With Spool",
+      "product_line": "Dolos Color Shifting PLA",
+      "shopify_product_id": 8145295278292,
+      "shopify_variant_id": 47159799611604,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-dolos-color-shifting-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-3172259.jpg?v=1761518345",
+      "hex": "#ccbbaa"
+    },
+    {
+      "id": "dolos-color-shifting-pla::prince-of-purple-refill-core",
+      "display_name": "Prince of Purple / Refill Core",
+      "product_line": "Dolos Color Shifting PLA",
+      "shopify_product_id": 8145295278292,
+      "shopify_variant_id": 47685708513492,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-dolos-color-shifting-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-3443543.jpg?v=1774158668",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "dolos-color-shifting-pla::prince-of-purple-with-spool",
+      "display_name": "Prince of Purple / With Spool",
+      "product_line": "Dolos Color Shifting PLA",
+      "shopify_product_id": 8145295278292,
+      "shopify_variant_id": 44461451804884,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-dolos-color-shifting-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-9584222.png?v=1755306727",
+      "hex": "#ccbabb"
+    },
+    {
+      "id": "dolos-color-shifting-pla::rainbow-refill-core",
+      "display_name": "Rainbow / Refill Core",
+      "product_line": "Dolos Color Shifting PLA",
+      "shopify_product_id": 8145295278292,
+      "shopify_variant_id": 47685708677332,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-dolos-color-shifting-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-3443543.jpg?v=1774158668",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "dolos-color-shifting-pla::rainbow-with-spool",
+      "display_name": "Rainbow / With Spool",
+      "product_line": "Dolos Color Shifting PLA",
+      "shopify_product_id": 8145295278292,
+      "shopify_variant_id": 47159799775444,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-dolos-color-shifting-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-5275302.jpg?v=1761518345",
+      "hex": "#c8b6aa"
+    },
+    {
+      "id": "dolos-color-shifting-pla::titanium-anno-refill-core",
+      "display_name": "Titanium Anno / Refill Core",
+      "product_line": "Dolos Color Shifting PLA",
+      "shopify_product_id": 8145295278292,
+      "shopify_variant_id": 47685708546260,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-dolos-color-shifting-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-3443543.jpg?v=1774158668",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "dolos-color-shifting-pla::titanium-anno-with-spool",
+      "display_name": "Titanium Anno / With Spool",
+      "product_line": "Dolos Color Shifting PLA",
+      "shopify_product_id": 8145295278292,
+      "shopify_variant_id": 44461447086292,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-dolos-color-shifting-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-9200312.png?v=1755306728",
+      "hex": "#bfb6aa"
+    },
+    {
+      "id": "dolos-color-shifting-pla::violet-void-refill-core",
+      "display_name": "Violet Void / Refill Core",
+      "product_line": "Dolos Color Shifting PLA",
+      "shopify_product_id": 8145295278292,
+      "shopify_variant_id": 47685708611796,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-dolos-color-shifting-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-3443543.jpg?v=1774158668",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "dolos-color-shifting-pla::violet-void-with-spool",
+      "display_name": "Violet Void / With Spool",
+      "product_line": "Dolos Color Shifting PLA",
+      "shopify_product_id": 8145295278292,
+      "shopify_variant_id": 46039717380308,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-dolos-color-shifting-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-1516453.png?v=1755306727",
+      "hex": "#b6a190"
+    },
+    {
+      "id": "galactic-sparkle-pla::armored-turtle-green-w-gold-sparkle-carboard-spool",
+      "display_name": "Armored Turtle Green (w/ Gold Sparkle) / Carboard Spool",
+      "product_line": "Galactic (Sparkle) PLA",
+      "shopify_product_id": 8544273400020,
+      "shopify_variant_id": 46337917616340,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-galactic-sparkle-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-fil-4424756.png?v=1751761820",
+      "hex": "#c8cfb7"
+    },
+    {
+      "id": "galactic-sparkle-pla::armored-turtle-green-w-gold-sparkle-refill-core",
+      "display_name": "Armored Turtle Green (w/ Gold Sparkle) / Refill Core",
+      "product_line": "Galactic (Sparkle) PLA",
+      "shopify_product_id": 8544273400020,
+      "shopify_variant_id": 47868828483796,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-galactic-sparkle-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-fil-2993333.webp?v=1777702327",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "galactic-sparkle-pla::cosmic-shimmer-carboard-spool",
+      "display_name": "Cosmic Shimmer / Carboard Spool",
+      "product_line": "Galactic (Sparkle) PLA",
+      "shopify_product_id": 8544273400020,
+      "shopify_variant_id": 47336902099156,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-galactic-sparkle-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-fil-1765078.jpg?v=1765498271",
+      "hex": "#ae9e96"
+    },
+    {
+      "id": "galactic-sparkle-pla::cosmic-shimmer-refill-core",
+      "display_name": "Cosmic Shimmer / Refill Core",
+      "product_line": "Galactic (Sparkle) PLA",
+      "shopify_product_id": 8544273400020,
+      "shopify_variant_id": 47868828549332,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-galactic-sparkle-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-fil-2993333.webp?v=1777702327",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "galactic-sparkle-pla::galactic-burnt-orange-w-gold-sparkle-carboard-spool",
+      "display_name": "Galactic Burnt Orange (w/ Gold Sparkle) / Carboard Spool",
+      "product_line": "Galactic (Sparkle) PLA",
+      "shopify_product_id": 8544273400020,
+      "shopify_variant_id": 47681580597460,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-galactic-sparkle-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-fil-3786803.jpg?v=1774014967",
+      "hex": "#c4a89c"
+    },
+    {
+      "id": "galactic-sparkle-pla::galactic-burnt-orange-w-gold-sparkle-refill-core",
+      "display_name": "Galactic Burnt Orange (w/ Gold Sparkle) / Refill Core",
+      "product_line": "Galactic (Sparkle) PLA",
+      "shopify_product_id": 8544273400020,
+      "shopify_variant_id": 47868828582100,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-galactic-sparkle-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-fil-2993333.webp?v=1777702327",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "galactic-sparkle-pla::galactic-glow-blue-carboard-spool",
+      "display_name": "Galactic Glow Blue / Carboard Spool",
+      "product_line": "Galactic (Sparkle) PLA",
+      "shopify_product_id": 8544273400020,
+      "shopify_variant_id": 45409731969236,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-galactic-sparkle-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-fil-3887518.png?v=1755306705",
+      "hex": "#c4beae"
+    },
+    {
+      "id": "galactic-sparkle-pla::galactic-glow-blue-refill-core",
+      "display_name": "Galactic Glow Blue / Refill Core",
+      "product_line": "Galactic (Sparkle) PLA",
+      "shopify_product_id": 8544273400020,
+      "shopify_variant_id": 47868827959508,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-galactic-sparkle-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-fil-2993333.webp?v=1777702327",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "galactic-sparkle-pla::galactic-grape-carboard-spool",
+      "display_name": "Galactic Grape / Carboard Spool",
+      "product_line": "Galactic (Sparkle) PLA",
+      "shopify_product_id": 8544273400020,
+      "shopify_variant_id": 45409822310612,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-galactic-sparkle-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-fil-7109880.png?v=1751761786",
+      "hex": "#dfbcb9"
+    },
+    {
+      "id": "galactic-sparkle-pla::galactic-grape-refill-core",
+      "display_name": "Galactic Grape / Refill Core",
+      "product_line": "Galactic (Sparkle) PLA",
+      "shopify_product_id": 8544273400020,
+      "shopify_variant_id": 47868828057812,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-galactic-sparkle-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-fil-2993333.webp?v=1777702327",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "galactic-sparkle-pla::galactic-green-carboard-spool",
+      "display_name": "Galactic Green / Carboard Spool",
+      "product_line": "Galactic (Sparkle) PLA",
+      "shopify_product_id": 8544273400020,
+      "shopify_variant_id": 45409822343380,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-galactic-sparkle-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-fil-2539700.png?v=1751761786",
+      "hex": "#bfc1a3"
+    },
+    {
+      "id": "galactic-sparkle-pla::galactic-green-refill-core",
+      "display_name": "Galactic Green / Refill Core",
+      "product_line": "Galactic (Sparkle) PLA",
+      "shopify_product_id": 8544273400020,
+      "shopify_variant_id": 47868828090580,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-galactic-sparkle-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-fil-2993333.webp?v=1777702327",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "galactic-sparkle-pla::galactic-grey-carboard-spool",
+      "display_name": "Galactic Grey / Carboard Spool",
+      "product_line": "Galactic (Sparkle) PLA",
+      "shopify_product_id": 8544273400020,
+      "shopify_variant_id": 45409828700372,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-galactic-sparkle-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-fil-1613429.png?v=1751761787",
+      "hex": "#d4c5b4"
+    },
+    {
+      "id": "galactic-sparkle-pla::galactic-grey-refill-core",
+      "display_name": "Galactic Grey / Refill Core",
+      "product_line": "Galactic (Sparkle) PLA",
+      "shopify_product_id": 8544273400020,
+      "shopify_variant_id": 47868828287188,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-galactic-sparkle-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-fil-2993333.webp?v=1777702327",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "galactic-sparkle-pla::galactic-hot-pink-carboard-spool",
+      "display_name": "Galactic Hot Pink / Carboard Spool",
+      "product_line": "Galactic (Sparkle) PLA",
+      "shopify_product_id": 8544273400020,
+      "shopify_variant_id": 46039716593876,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-galactic-sparkle-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-fil-6910395.png?v=1751761820",
+      "hex": "#cc9c97"
+    },
+    {
+      "id": "galactic-sparkle-pla::galactic-hot-pink-refill-core",
+      "display_name": "Galactic Hot Pink / Refill Core",
+      "product_line": "Galactic (Sparkle) PLA",
+      "shopify_product_id": 8544273400020,
+      "shopify_variant_id": 47868828352724,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-galactic-sparkle-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-fil-2993333.webp?v=1777702327",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "galactic-sparkle-pla::galactic-midnight-meteorite-carboard-spool",
+      "display_name": "Galactic Midnight Meteorite / Carboard Spool",
+      "product_line": "Galactic (Sparkle) PLA",
+      "shopify_product_id": 8544273400020,
+      "shopify_variant_id": 45409822474452,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-galactic-sparkle-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-fil-1106552.png?v=1751537246",
+      "hex": "#c2b3b1"
+    },
+    {
+      "id": "galactic-sparkle-pla::galactic-midnight-meteorite-refill-core",
+      "display_name": "Galactic Midnight Meteorite / Refill Core",
+      "product_line": "Galactic (Sparkle) PLA",
+      "shopify_product_id": 8544273400020,
+      "shopify_variant_id": 47868828254420,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-galactic-sparkle-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-fil-2993333.webp?v=1777702327",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "galactic-sparkle-pla::galactic-pink-carboard-spool",
+      "display_name": "Galactic Pink / Carboard Spool",
+      "product_line": "Galactic (Sparkle) PLA",
+      "shopify_product_id": 8544273400020,
+      "shopify_variant_id": 45409822408916,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-galactic-sparkle-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-fil-2092045.png?v=1751761786",
+      "hex": "#e2c0bb"
+    },
+    {
+      "id": "galactic-sparkle-pla::galactic-pink-refill-core",
+      "display_name": "Galactic Pink / Refill Core",
+      "product_line": "Galactic (Sparkle) PLA",
+      "shopify_product_id": 8544273400020,
+      "shopify_variant_id": 47868828156116,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-galactic-sparkle-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-fil-2993333.webp?v=1777702327",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "galactic-sparkle-pla::galactic-planetary-blue-carboard-spool",
+      "display_name": "Galactic Planetary Blue / Carboard Spool",
+      "product_line": "Galactic (Sparkle) PLA",
+      "shopify_product_id": 8544273400020,
+      "shopify_variant_id": 45409822376148,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-galactic-sparkle-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-fil-2565335.png?v=1751761786",
+      "hex": "#c6cbc2"
+    },
+    {
+      "id": "galactic-sparkle-pla::galactic-planetary-blue-refill-core",
+      "display_name": "Galactic Planetary Blue / Refill Core",
+      "product_line": "Galactic (Sparkle) PLA",
+      "shopify_product_id": 8544273400020,
+      "shopify_variant_id": 47868828123348,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-galactic-sparkle-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-fil-2993333.webp?v=1777702327",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "galactic-sparkle-pla::galactic-quadra-teal-carboard-spool",
+      "display_name": "Galactic Quadra Teal / Carboard Spool",
+      "product_line": "Galactic (Sparkle) PLA",
+      "shopify_product_id": 8544273400020,
+      "shopify_variant_id": 46050101166292,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/GalacticQuadraTealASA_PLA.png?v=1751658413",
+      "hex": "#aeb2a8"
+    },
+    {
+      "id": "galactic-sparkle-pla::galactic-quadra-teal-refill-core",
+      "display_name": "Galactic Quadra Teal / Refill Core",
+      "product_line": "Galactic (Sparkle) PLA",
+      "shopify_product_id": 8544273400020,
+      "shopify_variant_id": 47868828418260,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-galactic-sparkle-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-fil-2993333.webp?v=1777702327",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "galactic-sparkle-pla::galactic-super-blue-carboard-spool",
+      "display_name": "Galactic Super Blue / Carboard Spool",
+      "product_line": "Galactic (Sparkle) PLA",
+      "shopify_product_id": 8544273400020,
+      "shopify_variant_id": 47159781556436,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-galactic-sparkle-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-fil-7027002.jpg?v=1761607061",
+      "hex": "#c2b5ae"
+    },
+    {
+      "id": "galactic-sparkle-pla::galactic-super-blue-refill-core",
+      "display_name": "Galactic Super Blue / Refill Core",
+      "product_line": "Galactic (Sparkle) PLA",
+      "shopify_product_id": 8544273400020,
+      "shopify_variant_id": 47868828516564,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-galactic-sparkle-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-fil-2993333.webp?v=1777702327",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "galactic-sparkle-pla::galactic-velvet-black-carboard-spool",
+      "display_name": "Galactic Velvet Black / Carboard Spool",
+      "product_line": "Galactic (Sparkle) PLA",
+      "shopify_product_id": 8544273400020,
+      "shopify_variant_id": 45409731838164,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-galactic-sparkle-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-fil-7301270.png?v=1751761787",
+      "hex": "#c3b6a8"
+    },
+    {
+      "id": "galactic-sparkle-pla::galactic-velvet-black-refill-core",
+      "display_name": "Galactic Velvet Black / Refill Core",
+      "product_line": "Galactic (Sparkle) PLA",
+      "shopify_product_id": 8544273400020,
+      "shopify_variant_id": 47868827893972,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-galactic-sparkle-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-fil-2993333.webp?v=1777702327",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "galactic-sparkle-pla::galactic-voron-red-carboard-spool",
+      "display_name": "Galactic Voron Red / Carboard Spool",
+      "product_line": "Galactic (Sparkle) PLA",
+      "shopify_product_id": 8544273400020,
+      "shopify_variant_id": 45409822441684,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-galactic-sparkle-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-fil-3622414.png?v=1751449207",
+      "hex": "#d7aba2"
+    },
+    {
+      "id": "galactic-sparkle-pla::galactic-voron-red-refill-core",
+      "display_name": "Galactic Voron Red / Refill Core",
+      "product_line": "Galactic (Sparkle) PLA",
+      "shopify_product_id": 8544273400020,
+      "shopify_variant_id": 47868828221652,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-galactic-sparkle-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-fil-2993333.webp?v=1777702327",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "galactic-sparkle-pla::galactic-yellow-carboard-spool",
+      "display_name": "Galactic Yellow / Carboard Spool",
+      "product_line": "Galactic (Sparkle) PLA",
+      "shopify_product_id": 8544273400020,
+      "shopify_variant_id": 45409822277844,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-galactic-sparkle-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-fil-5622316.png?v=1755306703",
+      "hex": "#d3c49c"
+    },
+    {
+      "id": "galactic-sparkle-pla::galactic-yellow-refill-core",
+      "display_name": "Galactic Yellow / Refill Core",
+      "product_line": "Galactic (Sparkle) PLA",
+      "shopify_product_id": 8544273400020,
+      "shopify_variant_id": 47868828025044,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-galactic-sparkle-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-fil-2993333.webp?v=1777702327",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "galactic-sparkle-pla::gitd-clear-to-green-glow-carboard-spool",
+      "display_name": "GITD (Clear to Green Glow) / Carboard Spool",
+      "product_line": "Galactic (Sparkle) PLA",
+      "shopify_product_id": 8544273400020,
+      "shopify_variant_id": 45409732067540,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-galactic-sparkle-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-fil-5181663.png?v=1755306704",
+      "hex": "#c8bdab"
+    },
+    {
+      "id": "galactic-sparkle-pla::gitd-clear-to-green-glow-refill-core",
+      "display_name": "GITD (Clear to Green Glow) / Refill Core",
+      "product_line": "Galactic (Sparkle) PLA",
+      "shopify_product_id": 8544273400020,
+      "shopify_variant_id": 47868827992276,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-galactic-sparkle-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-fil-2993333.webp?v=1777702327",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "galactic-sparkle-pla::holiday-green-green-w-red-sparkle-carboard-spool",
+      "display_name": "Holiday Green (Green w/ Red Sparkle) / Carboard Spool",
+      "product_line": "Galactic (Sparkle) PLA",
+      "shopify_product_id": 8544273400020,
+      "shopify_variant_id": 45926541131988,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-galactic-sparkle-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-fil-9749449.png?v=1751761786",
+      "hex": "#c2b18c"
+    },
+    {
+      "id": "galactic-sparkle-pla::holiday-green-green-w-red-sparkle-refill-core",
+      "display_name": "Holiday Green (Green w/ Red Sparkle) / Refill Core",
+      "product_line": "Galactic (Sparkle) PLA",
+      "shopify_product_id": 8544273400020,
+      "shopify_variant_id": 47868828188884,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-galactic-sparkle-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-fil-2993333.webp?v=1777702327",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "galactic-sparkle-pla::holiday-red-red-w-green-sparkle-carboard-spool",
+      "display_name": "Holiday Red (Red w/ Green Sparkle) / Carboard Spool",
+      "product_line": "Galactic (Sparkle) PLA",
+      "shopify_product_id": 8544273400020,
+      "shopify_variant_id": 45926541099220,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-galactic-sparkle-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-fil-5421688.png?v=1751761787",
+      "hex": "#c79e8f"
+    },
+    {
+      "id": "galactic-sparkle-pla::holiday-red-red-w-green-sparkle-refill-core",
+      "display_name": "Holiday Red (Red w/ Green Sparkle) / Refill Core",
+      "product_line": "Galactic (Sparkle) PLA",
+      "shopify_product_id": 8544273400020,
+      "shopify_variant_id": 47868828319956,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-galactic-sparkle-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-fil-2993333.webp?v=1777702327",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "galactic-sparkle-pla::santa-s-robe-red-w-extra-silver-sparkle-carboard-spool",
+      "display_name": "Santa's Robe (Red w/ Extra Silver Sparkle) / Carboard Spool",
+      "product_line": "Galactic (Sparkle) PLA",
+      "shopify_product_id": 8544273400020,
+      "shopify_variant_id": 45926541164756,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-galactic-sparkle-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-fil-2090005.png?v=1751761785",
+      "hex": "#d5ae9e"
+    },
+    {
+      "id": "galactic-sparkle-pla::santa-s-robe-red-w-extra-silver-sparkle-refill-core",
+      "display_name": "Santa's Robe (Red w/ Extra Silver Sparkle) / Refill Core",
+      "product_line": "Galactic (Sparkle) PLA",
+      "shopify_product_id": 8544273400020,
+      "shopify_variant_id": 47868827926740,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-galactic-sparkle-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-fil-2993333.webp?v=1777702327",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "galactic-sparkle-pla::stardust-carboard-spool",
+      "display_name": "Stardust / Carboard Spool",
+      "product_line": "Galactic (Sparkle) PLA",
+      "shopify_product_id": 8544273400020,
+      "shopify_variant_id": 46039716561108,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-galactic-sparkle-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-fil-5762639.png?v=1751761820",
+      "hex": "#beb0ac"
+    },
+    {
+      "id": "galactic-sparkle-pla::stardust-refill-core",
+      "display_name": "Stardust / Refill Core",
+      "product_line": "Galactic (Sparkle) PLA",
+      "shopify_product_id": 8544273400020,
+      "shopify_variant_id": 47868828451028,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-galactic-sparkle-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-fil-2993333.webp?v=1777702327",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "galactic-sparkle-pla::supernova-black-multi-color-glitter-carboard-spool",
+      "display_name": "Supernova Black (multi-color glitter) / Carboard Spool",
+      "product_line": "Galactic (Sparkle) PLA",
+      "shopify_product_id": 8544273400020,
+      "shopify_variant_id": 46039716626644,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-galactic-sparkle-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-fil-1546569.png?v=1751761820",
+      "hex": "#a79e95"
+    },
+    {
+      "id": "galactic-sparkle-pla::supernova-black-multi-color-glitter-refill-core",
+      "display_name": "Supernova Black (multi-color glitter) / Refill Core",
+      "product_line": "Galactic (Sparkle) PLA",
+      "shopify_product_id": 8544273400020,
+      "shopify_variant_id": 47868828385492,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-galactic-sparkle-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-fil-2993333.webp?v=1777702327",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "pc-abs::black",
+      "display_name": "Black",
+      "product_line": "PC-ABS",
+      "shopify_product_id": 8133932155092,
+      "shopify_variant_id": 44420893671636,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pc-abs-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-house-polycarbonate-abs-west3d-3d-printing-supplies-am-784062.jpg?v=1722475963",
+      "hex": "#dacab9"
+    },
+    {
+      "id": "pc-abs::galactic-black",
+      "display_name": "Galactic Black",
+      "product_line": "PC-ABS",
+      "shopify_product_id": 8133932155092,
+      "shopify_variant_id": 44420893704404,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/products/ambrosia-pc-abs-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-house-polycarbonate-abs-west3d-3d-printing-supplies-am-853236.jpg?v=1708708361",
+      "hex": "#c7b7a7"
+    },
+    {
+      "id": "pc-abs::galactic-grey",
+      "display_name": "Galactic Grey",
+      "product_line": "PC-ABS",
+      "shopify_product_id": 8133932155092,
+      "shopify_variant_id": 45409413038292,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pc-abs-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-house-polycarbonate-abs-west3d-3d-printing-supplies-am-801726.jpg?v=1720695603",
+      "hex": "#cebfb0"
+    },
+    {
+      "id": "pc-cf::black",
+      "display_name": "Black",
+      "product_line": "PC-CF",
+      "shopify_product_id": 8134781436116,
+      "shopify_variant_id": 44425761161428,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/products/ambrosia-pc-cf-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-house-polycarbonate-cf-pccf-west3d-3d-printing-supplies-524677.jpg?v=1708708361",
+      "hex": "#ccbcac"
+    },
+    {
+      "id": "pc-cf::blue",
+      "display_name": "Blue",
+      "product_line": "PC-CF",
+      "shopify_product_id": 8134781436116,
+      "shopify_variant_id": 45409449836756,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pc-cf-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-house-polycarbonate-cf-pccf-west3d-3d-printing-supplies-408150.jpg?v=1720695605",
+      "hex": "#c8bbaf"
+    },
+    {
+      "id": "pc-cf::red",
+      "display_name": "Red",
+      "product_line": "PC-CF",
+      "shopify_product_id": 8134781436116,
+      "shopify_variant_id": 45409450229972,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pc-cf-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-house-polycarbonate-cf-pccf-west3d-3d-printing-supplies-660488.jpg?v=1720695605",
+      "hex": "#d1bcac"
+    },
+    {
+      "id": "petg::black",
+      "display_name": "Black",
+      "product_line": "PETG",
+      "shopify_product_id": 8004754211028,
+      "shopify_variant_id": 44020738097364,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/products/ambrosia-petg-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-printing-ambrosia-filament-601118.jpg?v=1699096443",
+      "hex": "#cfc1b3"
+    },
+    {
+      "id": "petg::blue",
+      "display_name": "Blue",
+      "product_line": "PETG",
+      "shopify_product_id": 8004754211028,
+      "shopify_variant_id": 45409664630996,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-petg-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-832769.jpg?v=1725635593",
+      "hex": "#bcada6"
+    },
+    {
+      "id": "petg::clear",
+      "display_name": "Clear",
+      "product_line": "PETG",
+      "shopify_product_id": 8004754211028,
+      "shopify_variant_id": 44020741374164,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/products/ambrosia-petg-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-printing-ambrosia-filament-676653.jpg?v=1708674206",
+      "hex": "#d8c9ba"
+    },
+    {
+      "id": "petg::grey",
+      "display_name": "Grey",
+      "product_line": "PETG",
+      "shopify_product_id": 8004754211028,
+      "shopify_variant_id": 45409664729300,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-petg-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-902422.jpg?v=1720695606",
+      "hex": "#ccbdac"
+    },
+    {
+      "id": "petg::orange",
+      "display_name": "Orange",
+      "product_line": "PETG",
+      "shopify_product_id": 8004754211028,
+      "shopify_variant_id": 45409664663764,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-petg-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-494754.jpg?v=1720695607",
+      "hex": "#d9bea7"
+    },
+    {
+      "id": "petg::rainbow-fusion",
+      "display_name": "Rainbow Fusion",
+      "product_line": "PETG",
+      "shopify_product_id": 8004754211028,
+      "shopify_variant_id": 47159812194516,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-petg-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-3671777.jpg?v=1761518454",
+      "hex": "#c4b6a5"
+    },
+    {
+      "id": "petg::red",
+      "display_name": "Red",
+      "product_line": "PETG",
+      "shopify_product_id": 8004754211028,
+      "shopify_variant_id": 45409664598228,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-petg-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-189216.jpg?v=1720695607",
+      "hex": "#d8bbad"
+    },
+    {
+      "id": "petg::white",
+      "display_name": "White",
+      "product_line": "PETG",
+      "shopify_product_id": 8004754211028,
+      "shopify_variant_id": 44020741341396,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/products/ambrosia-petg-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-printing-ambrosia-filament-294823.jpg?v=1708674206",
+      "hex": "#d9cbbc"
+    },
+    {
+      "id": "pha-filament::black",
+      "display_name": "Black",
+      "product_line": "PHA Filament",
+      "shopify_product_id": 8940215926996,
+      "shopify_variant_id": 46968719409364,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pha-filament-1kg-175mm-earth-friendly-filament-for-everyone-west3d-3d-printing-supplies-ambrosia-filament-9526389.jpg?v=1759909245",
+      "hex": "#d0b8a7"
+    },
+    {
+      "id": "pha-filament::fog-white",
+      "display_name": "Fog White",
+      "product_line": "PHA Filament",
+      "shopify_product_id": 8940215926996,
+      "shopify_variant_id": 46968719474900,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pha-filament-1kg-175mm-earth-friendly-filament-for-everyone-west3d-3d-printing-supplies-ambrosia-filament-2376883.jpg?v=1759909242",
+      "hex": "#d0bead"
+    },
+    {
+      "id": "pha-filament::lichen-yellow",
+      "display_name": "Lichen Yellow",
+      "product_line": "PHA Filament",
+      "shopify_product_id": 8940215926996,
+      "shopify_variant_id": 46968719737044,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pha-filament-1kg-175mm-earth-friendly-filament-for-everyone-west3d-3d-printing-supplies-ambrosia-filament-8576330.jpg?v=1759909243",
+      "hex": "#d6bea8"
+    },
+    {
+      "id": "pha-filament::natural",
+      "display_name": "Natural",
+      "product_line": "PHA Filament",
+      "shopify_product_id": 8940215926996,
+      "shopify_variant_id": 46968719540436,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pha-filament-1kg-175mm-earth-friendly-filament-for-everyone-west3d-3d-printing-supplies-ambrosia-filament-2097093.jpg?v=1759909243",
+      "hex": "#cdbcab"
+    },
+    {
+      "id": "pha-filament::pine-green",
+      "display_name": "Pine Green",
+      "product_line": "PHA Filament",
+      "shopify_product_id": 8940215926996,
+      "shopify_variant_id": 46968719605972,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pha-filament-1kg-175mm-earth-friendly-filament-for-everyone-west3d-3d-printing-supplies-ambrosia-filament-9601588.jpg?v=1759909243",
+      "hex": "#ccbdac"
+    },
+    {
+      "id": "pha-filament::slate-blue",
+      "display_name": "Slate Blue",
+      "product_line": "PHA Filament",
+      "shopify_product_id": 8940215926996,
+      "shopify_variant_id": 46968719671508,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pha-filament-1kg-175mm-earth-friendly-filament-for-everyone-west3d-3d-printing-supplies-ambrosia-filament-8762296.jpg?v=1759909243",
+      "hex": "#cabab0"
+    },
+    {
+      "id": "pla::black-refill-core",
+      "display_name": "Black / Refill Core",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 47685702942932,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-4306779.jpg?v=1774158726",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "pla::black-with-spool",
+      "display_name": "Black / With Spool",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 44020748746964,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-5835524.png?v=1755306953",
+      "hex": "#c5b6a7"
+    },
+    {
+      "id": "pla::bloody-murder-blood-orange-refill-core",
+      "display_name": "Bloody Murder (Blood Orange) / Refill Core",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 47685703729364,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-4306779.jpg?v=1774158726",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "pla::bloody-murder-blood-orange-with-spool",
+      "display_name": "Bloody Murder (Blood Orange) / With Spool",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 46049552695508,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-2516763.png?v=1761363921",
+      "hex": "#cfada2"
+    },
+    {
+      "id": "pla::blue-refill-core",
+      "display_name": "Blue / Refill Core",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 47685702975700,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-4306779.jpg?v=1774158726",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "pla::blue-with-spool",
+      "display_name": "Blue / With Spool",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 44461421920468,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-9881630.png?v=1755306953",
+      "hex": "#bbb3b4"
+    },
+    {
+      "id": "pla::burnt-orange-refill-core",
+      "display_name": "Burnt Orange / Refill Core",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 47685703827668,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-4306779.jpg?v=1774158726",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "pla::burnt-orange-with-spool",
+      "display_name": "Burnt Orange / With Spool",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 47159811277012,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-6394079.jpg?v=1761518456",
+      "hex": "#d2ae99"
+    },
+    {
+      "id": "pla::camo-green-refill-core",
+      "display_name": "Camo Green / Refill Core",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 47685703532756,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-4306779.jpg?v=1774158726",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "pla::camo-green-with-spool",
+      "display_name": "Camo Green / With Spool",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 46039718920404,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-1229255.png?v=1761363921",
+      "hex": "#baa98e"
+    },
+    {
+      "id": "pla::camo-olive-drab-refill-core",
+      "display_name": "Camo Olive Drab / Refill Core",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 47685703565524,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-4306779.jpg?v=1774158726",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "pla::camo-olive-drab-with-spool",
+      "display_name": "Camo Olive Drab / With Spool",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 46050066759892,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-4835944.png?v=1761363921",
+      "hex": "#c7bca5"
+    },
+    {
+      "id": "pla::cardovan-refill-core",
+      "display_name": "Cardovan / Refill Core",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 47685703696596,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-4306779.jpg?v=1774158726",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "pla::cardovan-with-spool",
+      "display_name": "Cardovan / With Spool",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 46039719051476,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-7489187.png?v=1761363921",
+      "hex": "#bb9f8e"
+    },
+    {
+      "id": "pla::coral-wave-refill-core",
+      "display_name": "Coral Wave / Refill Core",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 47685704089812,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-4306779.jpg?v=1774158726",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "pla::coral-wave-with-spool",
+      "display_name": "Coral Wave / With Spool",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 47336906653908,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-1176959.jpg?v=1765410852",
+      "hex": "#a99d96"
+    },
+    {
+      "id": "pla::creamsicle-refill-core",
+      "display_name": "Creamsicle / Refill Core",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 47685703794900,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-4306779.jpg?v=1774158726",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "pla::creamsicle-with-spool",
+      "display_name": "Creamsicle / With Spool",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 47159811244244,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-2668402.jpg?v=1761518456",
+      "hex": "#d5b9a1"
+    },
+    {
+      "id": "pla::easter-egg-gradient-refill-core",
+      "display_name": "Easter Egg (Gradient) / Refill Core",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 47685703303380,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-4306779.jpg?v=1774158726",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "pla::easter-egg-gradient-with-spool",
+      "display_name": "Easter Egg (Gradient) / With Spool",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 46039718822100,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-7618391.png?v=1761363921",
+      "hex": "#cdbaa6"
+    },
+    {
+      "id": "pla::faded-desert-brown-fde-refill-core",
+      "display_name": "Faded Desert Brown FDE / Refill Core",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 47685703336148,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-4306779.jpg?v=1774158726",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "pla::faded-desert-brown-fde-with-spool",
+      "display_name": "Faded Desert Brown FDE / With Spool",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 44425295364308,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-5298539.png?v=1761363921",
+      "hex": "#d1c0ae"
+    },
+    {
+      "id": "pla::fluorescent-neon-green-refill-core",
+      "display_name": "Fluorescent Neon Green / Refill Core",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 47685703631060,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-4306779.jpg?v=1774158726",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "pla::fluorescent-neon-green-with-spool",
+      "display_name": "Fluorescent Neon Green / With Spool",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 46039718985940,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-9756181.png?v=1761363921",
+      "hex": "#b6ba8c"
+    },
+    {
+      "id": "pla::glow-in-the-dark-rainbow-refill-core",
+      "display_name": "Glow in the Dark Rainbow / Refill Core",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 47685704024276,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-4306779.jpg?v=1774158726",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "pla::glow-in-the-dark-rainbow-with-spool",
+      "display_name": "Glow in the Dark Rainbow / With Spool",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 47159881892052,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-4274225.jpg?v=1761607136",
+      "hex": "#d2c1ae"
+    },
+    {
+      "id": "pla::grape-refill-core",
+      "display_name": "Grape / Refill Core",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 47685703958740,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-4306779.jpg?v=1774158726",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "pla::grape-with-spool",
+      "display_name": "Grape / With Spool",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 47159811408084,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-8551231.jpg?v=1761607135",
+      "hex": "#cdb2a9"
+    },
+    {
+      "id": "pla::green-refill-core",
+      "display_name": "Green / Refill Core",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 47685703041236,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-4306779.jpg?v=1774158726",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "pla::green-with-spool",
+      "display_name": "Green / With Spool",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 44020748779732,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-3938459.png?v=1755306952",
+      "hex": "#cac6a5"
+    },
+    {
+      "id": "pla::grey-refill-core",
+      "display_name": "Grey / Refill Core",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 47685703434452,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-4306779.jpg?v=1774158726",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "pla::grey-with-spool",
+      "display_name": "Grey / With Spool",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 45409894105300,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-6716125.png?v=1755306940",
+      "hex": "#c4b7a8"
+    },
+    {
+      "id": "pla::hot-pink-refill-core",
+      "display_name": "Hot Pink / Refill Core",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 47685703467220,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-4306779.jpg?v=1774158726",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "pla::hot-pink-with-spool",
+      "display_name": "Hot Pink / With Spool",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 46039718854868,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-7109299.png?v=1761363921",
+      "hex": "#c29e9d"
+    },
+    {
+      "id": "pla::kb3d-orange-refill-core",
+      "display_name": "KB3D Orange / Refill Core",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 47685703401684,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-4306779.jpg?v=1774158726",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "pla::kb3d-orange-with-spool",
+      "display_name": "KB3D Orange / With Spool",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 45409894072532,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-7391673.png?v=1761363921",
+      "hex": "#e3c0a5"
+    },
+    {
+      "id": "pla::midnight-purple-refill-core",
+      "display_name": "Midnight Purple / Refill Core",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 47685704122580,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-4306779.jpg?v=1774158726",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "pla::midnight-purple-with-spool",
+      "display_name": "Midnight Purple / With Spool",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 47681584660692,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-6182215.jpg?v=1774015087",
+      "hex": "#b1a6a4"
+    },
+    {
+      "id": "pla::orange-refill-core",
+      "display_name": "Orange / Refill Core",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 47685703074004,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-4306779.jpg?v=1774158726",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "pla::orange-with-spool",
+      "display_name": "Orange / With Spool",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 44020752154836,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-4046213.png?v=1755306942",
+      "hex": "#dfbca1"
+    },
+    {
+      "id": "pla::pink-refill-core",
+      "display_name": "Pink / Refill Core",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 47685703237844,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-4306779.jpg?v=1774158726",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "pla::pink-with-spool",
+      "display_name": "Pink / With Spool",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 44461422084308,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-4639938.png?v=1755306941",
+      "hex": "#ddc0b7"
+    },
+    {
+      "id": "pla::purple-refill-core",
+      "display_name": "Purple / Refill Core",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 47685703139540,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-4306779.jpg?v=1774158726",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "pla::purple-with-spool",
+      "display_name": "Purple / With Spool",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 44020752220372,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-4453642.png?v=1755306941",
+      "hex": "#c5b1b0"
+    },
+    {
+      "id": "pla::quadra-teal-refill-core",
+      "display_name": "Quadra Teal / Refill Core",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 47685703368916,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-4306779.jpg?v=1774158726",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "pla::quadra-teal-with-spool",
+      "display_name": "Quadra Teal / With Spool",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 45409894039764,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-9499106.png?v=1761363921",
+      "hex": "#b3beb3"
+    },
+    {
+      "id": "pla::rainbow-rush-refill-core",
+      "display_name": "Rainbow Rush / Refill Core",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 47685703663828,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-4306779.jpg?v=1774158726",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "pla::rainbow-rush-with-spool",
+      "display_name": "Rainbow Rush / With Spool",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 46039719018708,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-9058395.png?v=1761363921",
+      "hex": "#bfa691"
+    },
+    {
+      "id": "pla::red-refill-core",
+      "display_name": "Red / Refill Core",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 47685703106772,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-4306779.jpg?v=1774158726",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "pla::red-with-spool",
+      "display_name": "Red / With Spool",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 44020752187604,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-7879768.png?v=1755306953",
+      "hex": "#dcb1a1"
+    },
+    {
+      "id": "pla::skin-light-refill-core",
+      "display_name": "Skin (Light) / Refill Core",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 47685703762132,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-4306779.jpg?v=1774158726",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "pla::skin-light-with-spool",
+      "display_name": "Skin (Light) / With Spool",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 47159811211476,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-7212286.jpg?v=1761518456",
+      "hex": "#ceb9a3"
+    },
+    {
+      "id": "pla::soft-lavender-matte-refill-core",
+      "display_name": "Soft Lavender Matte / Refill Core",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 47685703172308,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-4306779.jpg?v=1774158726",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "pla::soft-lavender-matte-with-spool",
+      "display_name": "Soft Lavender Matte / With Spool",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 44461422018772,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-4498661.png?v=1755306941",
+      "hex": "#d6c4ba"
+    },
+    {
+      "id": "pla::soft-turquoise-matte-refill-core",
+      "display_name": "Soft Turquoise Matte / Refill Core",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 47685703008468,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-4306779.jpg?v=1774158726",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "pla::soft-turquoise-matte-with-spool",
+      "display_name": "Soft Turquoise Matte / With Spool",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 44461421986004,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-7439981.png?v=1755306941",
+      "hex": "#c6c0b0"
+    },
+    {
+      "id": "pla::super-blue-refill-core",
+      "display_name": "Super Blue / Refill Core",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 47685703991508,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-4306779.jpg?v=1774158726",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "pla::super-blue-with-spool",
+      "display_name": "Super Blue / With Spool",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 47159811440852,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-8521162.jpg?v=1761607135",
+      "hex": "#c3b6ad"
+    },
+    {
+      "id": "pla::super-grey-refill-core",
+      "display_name": "Super Grey / Refill Core",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 47685703499988,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-4306779.jpg?v=1774158726",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "pla::super-grey-with-spool",
+      "display_name": "Super Grey / With Spool",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 46039718887636,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-5937893.png?v=1761363921",
+      "hex": "#baa895"
+    },
+    {
+      "id": "pla::terracotta-refill-core",
+      "display_name": "Terracotta / Refill Core",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 47685704057044,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-4306779.jpg?v=1774158726",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "pla::terracotta-with-spool",
+      "display_name": "Terracotta / With Spool",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 47336903508180,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-1005338.jpg?v=1765410852",
+      "hex": "#b8a497"
+    },
+    {
+      "id": "pla::terrestrial-blue-refill-core",
+      "display_name": "Terrestrial Blue / Refill Core",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 47685703860436,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-4306779.jpg?v=1774158726",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "pla::terrestrial-blue-with-spool",
+      "display_name": "Terrestrial Blue / With Spool",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 47159811309780,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-1525536.jpg?v=1761607135",
+      "hex": "#c2baae"
+    },
+    {
+      "id": "pla::velvet-black-matte-refill-core",
+      "display_name": "Velvet Black (Matte) / Refill Core",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 47685702910164,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-4306779.jpg?v=1774158726",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "pla::velvet-black-matte-with-spool",
+      "display_name": "Velvet Black (Matte) / With Spool",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 44020748714196,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-6477031.png?v=1755306953",
+      "hex": "#c2b3a5"
+    },
+    {
+      "id": "pla::voron-red-refill-core",
+      "display_name": "Voron Red / Refill Core",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 47685703893204,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-4306779.jpg?v=1774158726",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "pla::voron-red-with-spool",
+      "display_name": "Voron Red / With Spool",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 47159811342548,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-5880049.jpg?v=1761518456",
+      "hex": "#d0ac9f"
+    },
+    {
+      "id": "pla::west-green-refill-core",
+      "display_name": "West Green / Refill Core",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 47685703925972,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-4306779.jpg?v=1774158726",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "pla::west-green-with-spool",
+      "display_name": "West Green / With Spool",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 47159811375316,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-5413542.jpg?v=1761607135",
+      "hex": "#cac2a5"
+    },
+    {
+      "id": "pla::white-refill-core",
+      "display_name": "White / Refill Core",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 47685703270612,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-4306779.jpg?v=1774158726",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "pla::white-with-spool",
+      "display_name": "White / With Spool",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 44020752253140,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-4603367.png?v=1755306941",
+      "hex": "#d8cab9"
+    },
+    {
+      "id": "pla::yellow-refill-core",
+      "display_name": "Yellow / Refill Core",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 47685703205076,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-4306779.jpg?v=1774158726",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "pla::yellow-with-spool",
+      "display_name": "Yellow / With Spool",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 44461422051540,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-9769710.png?v=1755306941",
+      "hex": "#dfc8a2"
+    },
+    {
+      "id": "pla::yellow-jacket-co-extrusion-refill-core",
+      "display_name": "Yellow Jacket (Co-Extrusion) / Refill Core",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 47685703598292,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-4306779.jpg?v=1774158726",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "pla::yellow-jacket-co-extrusion-with-spool",
+      "display_name": "Yellow Jacket (Co-Extrusion) / With Spool",
+      "product_line": "PLA",
+      "shopify_product_id": 8004756766932,
+      "shopify_variant_id": 46039718953172,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-9651085.png?v=1761363921",
+      "hex": "#c1b39e"
+    },
+    {
+      "id": "silk-pla::blue-green-cardboard-spool",
+      "display_name": "Blue+Green / Cardboard Spool",
+      "product_line": "SILK PLA",
+      "shopify_product_id": 8971094130900,
+      "shopify_variant_id": 47160074240212,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-silk-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-1432973.jpg?v=1761518037",
+      "hex": "#b4ada4"
+    },
+    {
+      "id": "silk-pla::blue-green-refill-core",
+      "display_name": "Blue+Green / Refill Core",
+      "product_line": "SILK PLA",
+      "shopify_product_id": 8971094130900,
+      "shopify_variant_id": 47868838248660,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-silk-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-3001435.webp?v=1777702087",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "silk-pla::blue-purple-cardboard-spool",
+      "display_name": "Blue+Purple / Cardboard Spool",
+      "product_line": "SILK PLA",
+      "shopify_product_id": 8971094130900,
+      "shopify_variant_id": 47160074207444,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-silk-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-7820679.jpg?v=1761518037",
+      "hex": "#b9a8a1"
+    },
+    {
+      "id": "silk-pla::blue-purple-refill-core",
+      "display_name": "Blue+Purple / Refill Core",
+      "product_line": "SILK PLA",
+      "shopify_product_id": 8971094130900,
+      "shopify_variant_id": 47868838215892,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-silk-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-3001435.webp?v=1777702087",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "silk-pla::bright-gold-cardboard-spool",
+      "display_name": "Bright Gold / Cardboard Spool",
+      "product_line": "SILK PLA",
+      "shopify_product_id": 8971094130900,
+      "shopify_variant_id": 47160074141908,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-silk-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-3700794.jpg?v=1761518036",
+      "hex": "#d2b99b"
+    },
+    {
+      "id": "silk-pla::bright-gold-refill-core",
+      "display_name": "Bright Gold / Refill Core",
+      "product_line": "SILK PLA",
+      "shopify_product_id": 8971094130900,
+      "shopify_variant_id": 47868838150356,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-silk-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-3001435.webp?v=1777702087",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "silk-pla::gold-red-cardboard-spool",
+      "display_name": "Gold+Red / Cardboard Spool",
+      "product_line": "SILK PLA",
+      "shopify_product_id": 8971094130900,
+      "shopify_variant_id": 47160074174676,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-silk-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-9806763.jpg?v=1761518037",
+      "hex": "#cea695"
+    },
+    {
+      "id": "silk-pla::gold-red-refill-core",
+      "display_name": "Gold+Red / Refill Core",
+      "product_line": "SILK PLA",
+      "shopify_product_id": 8971094130900,
+      "shopify_variant_id": 47868838183124,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-silk-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-3001435.webp?v=1777702087",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "silk-pla::metal-grey-cardboard-spool",
+      "display_name": "Metal Grey / Cardboard Spool",
+      "product_line": "SILK PLA",
+      "shopify_product_id": 8971094130900,
+      "shopify_variant_id": 47160074109140,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-silk-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-3951591.jpg?v=1761518036",
+      "hex": "#c2b19f"
+    },
+    {
+      "id": "silk-pla::metal-grey-refill-core",
+      "display_name": "Metal Grey / Refill Core",
+      "product_line": "SILK PLA",
+      "shopify_product_id": 8971094130900,
+      "shopify_variant_id": 47868838117588,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-silk-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-3001435.webp?v=1777702087",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "silk-pla::rainbow-candy-cardboard-spool",
+      "display_name": "Rainbow Candy / Cardboard Spool",
+      "product_line": "SILK PLA",
+      "shopify_product_id": 8971094130900,
+      "shopify_variant_id": 47160074076372,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-silk-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-3600330.jpg?v=1761518036",
+      "hex": "#cdb8aa"
+    },
+    {
+      "id": "silk-pla::rainbow-candy-refill-core",
+      "display_name": "Rainbow Candy / Refill Core",
+      "product_line": "SILK PLA",
+      "shopify_product_id": 8971094130900,
+      "shopify_variant_id": 47868838084820,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-silk-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-3001435.webp?v=1777702087",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "silk-pla::rainbow-silk-cardboard-spool",
+      "display_name": "Rainbow Silk / Cardboard Spool",
+      "product_line": "SILK PLA",
+      "shopify_product_id": 8971094130900,
+      "shopify_variant_id": 47160074043604,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-silk-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-3964311.png?v=1761410463",
+      "hex": "#d7beac"
+    },
+    {
+      "id": "silk-pla::rainbow-silk-refill-core",
+      "display_name": "Rainbow Silk / Refill Core",
+      "product_line": "SILK PLA",
+      "shopify_product_id": 8971094130900,
+      "shopify_variant_id": 47868838052052,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-silk-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-3001435.webp?v=1777702087",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "silk-pla::twilight-tide-cardboard-spool",
+      "display_name": "Twilight Tide / Cardboard Spool",
+      "product_line": "SILK PLA",
+      "shopify_product_id": 8971094130900,
+      "shopify_variant_id": 47336899707092,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-silk-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-4579427.jpg?v=1765411452",
+      "hex": "#aaa29c"
+    },
+    {
+      "id": "silk-pla::twilight-tide-refill-core",
+      "display_name": "Twilight Tide / Refill Core",
+      "product_line": "SILK PLA",
+      "shopify_product_id": 8971094130900,
+      "shopify_variant_id": 47868838314196,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-silk-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-3001435.webp?v=1777702087",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "silk-pla::yellow-green-cardboard-spool",
+      "display_name": "Yellow+Green / Cardboard Spool",
+      "product_line": "SILK PLA",
+      "shopify_product_id": 8971094130900,
+      "shopify_variant_id": 47160074272980,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-silk-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-3670176.jpg?v=1761518037",
+      "hex": "#c5b892"
+    },
+    {
+      "id": "silk-pla::yellow-green-refill-core",
+      "display_name": "Yellow+Green / Refill Core",
+      "product_line": "SILK PLA",
+      "shopify_product_id": 8971094130900,
+      "shopify_variant_id": 47868838281428,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-silk-pla-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-west3d-3d-printing-supplies-ambrosia-filament-3001435.webp?v=1777702087",
+      "hex": "#e1e1e1"
+    },
+    {
+      "id": "tpu-95::black",
+      "display_name": "Black",
+      "product_line": "TPU 95",
+      "shopify_product_id": 8133929304276,
+      "shopify_variant_id": 44420882497748,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/products/ambrosia-tpu-95-filament-of-the-gods-1kg-cardboard-spools-premium-3d-printing-filament-tpu95-west3d-3d-printing-supplies-ambrosia-filament-820230.jpg?v=1709702548",
+      "hex": "#d0bfad"
+    },
+    {
+      "id": "uber-abs::black",
+      "display_name": "Black",
+      "product_line": "Uber ABS",
+      "shopify_product_id": 8004744839380,
+      "shopify_variant_id": 44020706738388,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/products/ambrosia-uber-abs-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-abs-west3d-printing-ambrosia-filament-840152.jpg?v=1699096448",
+      "hex": "#cdbfb1"
+    },
+    {
+      "id": "uber-abs::natural",
+      "display_name": "Natural",
+      "product_line": "Uber ABS",
+      "shopify_product_id": 8004744839380,
+      "shopify_variant_id": 44020706803924,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/products/ambrosia-uber-abs-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-abs-west3d-printing-ambrosia-filament-429143.jpg?v=1699096448",
+      "hex": "#dbccbc"
+    },
+    {
+      "id": "uber-abs::pastel-pink",
+      "display_name": "Pastel Pink",
+      "product_line": "Uber ABS",
+      "shopify_product_id": 8004744839380,
+      "shopify_variant_id": 44020706836692,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/products/ambrosia-uber-abs-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-abs-west3d-printing-ambrosia-filament-494561.jpg?v=1699096448",
+      "hex": "#dbc8bd"
+    },
+    {
+      "id": "uber-abs::purple",
+      "display_name": "Purple",
+      "product_line": "Uber ABS",
+      "shopify_product_id": 8004744839380,
+      "shopify_variant_id": 44020708376788,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/products/ambrosia-uber-abs-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-abs-west3d-printing-ambrosia-filament-426625.jpg?v=1699096448",
+      "hex": "#d0c1b8"
+    },
+    {
+      "id": "uber-abs::red",
+      "display_name": "Red",
+      "product_line": "Uber ABS",
+      "shopify_product_id": 8004744839380,
+      "shopify_variant_id": 44020708344020,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/products/ambrosia-uber-abs-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-abs-west3d-printing-ambrosia-filament-261516.jpg?v=1699096448",
+      "hex": "#dcbfb3"
+    },
+    {
+      "id": "uber-abs::white",
+      "display_name": "White",
+      "product_line": "Uber ABS",
+      "shopify_product_id": 8004744839380,
+      "shopify_variant_id": 44020706771156,
+      "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/products/ambrosia-uber-abs-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-abs-west3d-printing-ambrosia-filament-936478.jpg?v=1699096448",
+      "hex": "#dbccbd"
+    }
+  ]
+}

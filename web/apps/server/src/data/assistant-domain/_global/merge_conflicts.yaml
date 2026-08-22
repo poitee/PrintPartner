@@ -1,0 +1,58 @@
+schema: print-partner/merge-conflicts@1
+# Known slug/path collisions when stacking common combos (same filename, different sources).
+conflicts:
+  - id: shared_voron_common_parts
+    stacks: ["any Voron-2 + Voron-Trident cross-reference"]
+    paths:
+      - "Tools/MGN12_rail_guide_x2.stl"          # exists in Voron-2 STLs/Tools AND Voron-Trident STLs/Tools
+      - "Tools/MGN9_rail_guide_x2.stl"
+      - "pcb_din_clip_x3.stl"                     # Voron-2 STLs/Electronics_Bay + Voron-Trident STLs/electronics_bay
+      - "raspberrypi_bracket.stl"
+      - "rs25_psu_bracket.stl"
+      - "PSU_stabilizer_50mm.stl / psu_stabilizer_50mm.stl"   # case differs between repos
+      - "mini12864_case_front.stl / mini12864_case_rear.stl"  # Skirts vs Skirt dirs
+    resolution: "namespace slugs by source_name; never merge V2+Trident as one stack anyway"
+  - id: probe_slot
+    stacks: ["base + (Voron-Tap | Klicky-Probe | Boop)"]
+    paths: ["z_endstop.stl (Trident)", "nozzle_probe.stl (Voron-2)", "carriage/front parts"]
+    resolution: "exactly one probe addon; deselect base probe/endstop parts"
+  - id: power_inlet_trident
+    stacks: ["LDO Trident R2"]
+    paths: ["Voron-Trident STLs/Skirt/rear_skirt_power_adamstech.stl vs LDOVoronTrident STLs/power_inlet_1.2mm.stl"]
+    resolution: "LDO part wins on LDO kits"
+  - id: deck_wire_cover_trident
+    stacks: ["LDO Trident R2"]
+    paths: ["Voron-Trident STLs/Panels/wire_cover_right.stl vs LDOVoronTrident STLs/ldo_deck_wire_cover_right.stl"]
+    resolution: "LDO part wins on LDO deck panels"
+  - id: nozzle_probe_v2
+    stacks: ["LDO Voron 2.4"]
+    paths: ["Voron-2 STLs/Z_Endstop/nozzle_probe.stl vs LDOVoron2 STLs/nozzle_probe_ldo.stl vs Voron-Tap (removes slot)"]
+    resolution: "Tap > nozzle_probe_ldo > stock, by attachment"
+  - id: chain_anchor
+    stacks: ["any base + Voron-Stealthburner (+LDOVoron2)"]
+    paths: ["SB STLs/Clockwork2/chain_anchor_{2hole,3hole}[_SW].stl vs LDOVoron2 STLs/cw2_offset_chain_anchor.stl"]
+    resolution: "one anchor; hole count must match base z parts (Trident z_lower_2hole/3hole, z_rear_insert_2hole/3hole)"
+  - id: sw_grills
+    stacks: ["LDO Switchwire"]
+    paths: ["Voron-Switchwire STL/Grills/* vs LDOVoronSW STLs/Grills/*"]
+    resolution: "pick per-part; note upstream root is STL/ (singular) vs LDO STLs/"
+  - id: micron_bowden_entry
+    stacks: ["West3D Micron+ 180"]
+    paths: ["Micron STLs/Panels/bowden_tube_entry_* vs West3D-Micron Bowden_tube_entry/ECAS_bowden_tube_entry.stl"]
+    resolution: "West3D ECAS variant wins on West3D kits"
+  - id: micron_klicky_dock
+    stacks: ["Micron + Klicky-Probe"]
+    paths: ["Micron STLs/Gantry/[a]_klicky_gantry_dock.stl vs Klicky-Probe printer mount sets"]
+    resolution: "use Micron's dock; take only probe body from Klicky-Probe"
+  - id: v0_wiring
+    stacks: ["Voron-0 + electronics addons"]
+    paths: ["LDO-Picobilical vs Voron-Hardware/V0-Umbilical vs voron_0_pancake_board (functional slot, not filename)"]
+    resolution: "exactly one wiring solution"
+  - id: sb_extruder
+    stacks: ["base + Voron-Stealthburner + Galileo2"]
+    paths: ["SB STLs/Clockwork2/* vs Galileo2 galileo2_extruder/stl/*"]
+    resolution: "G2E replaces CW2 rear; keep SB printhead fronts"
+  - id: superseded_dirs
+    stacks: ["all"]
+    paths: ["Voron-2 STLs/Superceded_Parts/** (sic)", "Voron-Trident STLs/superseded_parts/**"]
+    resolution: "always exclude; note different spellings/case per repo"

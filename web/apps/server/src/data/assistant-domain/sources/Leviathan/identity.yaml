@@ -1,0 +1,12 @@
+schema: print-partner/identity@1
+source_name: Leviathan
+canonical_name: LDO Leviathan controller board
+github_url: https://github.com/MotorDynamicsLab/Leviathan
+default_branch: master
+head_commit: 878c3c4893ea353552c957f574509f9890e1e37a   # 2026-07-29
+tags: []
+maintainer_org: MotorDynamicsLab (LDO)
+relationship: {upstream: false, note: "LDO/JNP collaboration; not a fork of a VoronDesign repo"}
+role: electronics
+board_revisions: [V1.2, V1.3]   # from CAD/Manual filenames
+evidence: {date: 2026-07-29, method: "git ls-remote + shallow blob-less clone"}

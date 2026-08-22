@@ -1,0 +1,11 @@
+schema: print-partner/identity@1
+source_name: CANboard_Mounts
+canonical_name: Nema14 CAN toolhead board mounts (KayosMaker)
+github_url: https://github.com/KayosMaker/CANboard_Mounts
+default_branch: main
+head_commit: 6d9a59ed29c6f1bf05b301d978276f06b84c7e0e   # 2026-07-29
+tags: []
+maintainer_org: KayosMaker (community)
+relationship: {upstream: false}
+role: electronics_mounts
+evidence: {date: 2026-07-29, method: "git ls-remote + shallow blob-less clone"}

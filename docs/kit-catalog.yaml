@@ -1,0 +1,281 @@
+# Kit catalog — single source of truth for base printers and addon categories.
+# Used by Plan Kit Configurator and maintainer tooling.
+#
+# LDO-Extras: local-only — add as a folder source.
+# See docs/examples/golden-ldo-voron-2.4-sb-tap.md.
+version: 1
+
+bases:
+  ldo_voron_2.4:
+    label: LDO Voron 2.4
+    source_name: LDOVoron2
+    printer_family: voron_2.4
+    default_addons:
+      - Voron-Stealthburner
+      - Voron-Tap
+    compatible_addons:
+      - toolhead
+      - extruder
+      - z_drives
+      - probe
+      - controller
+      - cable_routing
+      - skirts_panels
+  voron_2.4:
+    label: Voron 2.4
+    source_name: Voron-2
+    printer_family: voron_2.4
+    default_addons:
+      - Voron-Stealthburner
+      - Voron-Tap
+    compatible_addons:
+      - toolhead
+      - extruder
+      - z_drives
+      - probe
+      - controller
+      - cable_routing
+      - skirts_panels
+  ldo_voron_trident:
+    label: LDO Voron Trident
+    source_name: LDOVoronTrident
+    compatible_addons:
+      - toolhead
+      - probe
+      - controller
+      - skirts_panels
+  voron_trident:
+    label: Voron Trident
+    source_name: Voron-Trident
+    compatible_addons:
+      - toolhead
+      - probe
+      - controller
+      - skirts_panels
+  voron_0:
+    label: Voron 0
+    source_name: Voron-0
+    compatible_addons:
+      - toolhead
+      - probe
+      - controller
+  ldo_voron_0:
+    label: LDO Voron 0
+    source_name: LDOVoron0
+    compatible_addons:
+      - toolhead
+      - probe
+      - controller
+  voron_switchwire:
+    label: Voron Switchwire
+    source_name: Voron-Switchwire
+    compatible_addons:
+      - toolhead
+      - probe
+      - controller
+      - skirts_panels
+  ldo_voron_switchwire:
+    label: LDO Voron Switchwire
+    source_name: LDOVoronSW
+    compatible_addons:
+      - toolhead
+      - probe
+      - controller
+      - skirts_panels
+  voron_legacy:
+    label: Voron Legacy
+    source_name: Voron-Legacy
+    compatible_addons:
+      - toolhead
+      - probe
+      - skirts_panels
+  leviathan:
+    label: Leviathan
+    source_name: Leviathan
+    compatible_addons:
+      - toolhead
+      - probe
+      - z_drives
+      - controller
+      - skirts_panels
+  pocket_watch:
+    label: Pocket Watch
+    source_name: Pocket-Watch
+    compatible_addons:
+      - toolhead
+      - probe
+      - skirts_panels
+  micron:
+    label: Micron
+    source_name: Micron
+    compatible_addons:
+      - toolhead
+      - probe
+      - skirts_panels
+  west3d_micron:
+    label: West3D Micron
+    source_name: West3D-Micron
+    compatible_addons:
+      - toolhead
+      - probe
+      - skirts_panels
+  boop:
+    label: Boop
+    source_name: Boop
+    compatible_addons:
+      - toolhead
+      - probe
+      - skirts_panels
+  ldo_milo:
+    label: LDO Milo
+    source_name: LDO-Milo-V1.5
+    compatible_addons:
+      - toolhead
+      - probe
+  ldo_picobilical:
+    label: LDO Picobilical
+    source_name: LDO-Picobilical
+    compatible_addons:
+      - toolhead
+      - probe
+
+addon_categories:
+  z_drives:
+    label: Z drives
+    rule: pick_one
+    replaces_slot: z_drives
+    sources:
+      # Local folder only — not a GitHub import.
+      - name: LDO-Extras
+        variant_id: ldo_z_drives
+        compatible_bases: [ldo_voron_2.4, leviathan]
+
+  toolhead:
+    label: Toolhead
+    rule: pick_one
+    replaces_slot: toolhead
+    sources:
+      - name: Voron-Stealthburner
+        variant_id: stealthburner
+        compatible_bases:
+          [ldo_voron_2.4, voron_2.4, voron_trident, ldo_voron_trident, leviathan]
+      - name: Galileo2
+        variant_id: galileo2
+        compatible_bases:
+          [ldo_voron_2.4, voron_2.4, voron_trident, micron, west3d_micron, boop]
+
+  extruder:
+    label: Extruder / filament path
+    rule: pick_one
+    replaces_slot: extruder
+    sources: []
+
+  probe:
+    label: Z probe
+    rule: pick_one
+    replaces_slot: probe
+    sources:
+      - name: Voron-Tap
+        variant_id: voron_tap
+        compatible_bases:
+          [
+            ldo_voron_2.4,
+            voron_2.4,
+            voron_trident,
+            ldo_voron_trident,
+            voron_0,
+            ldo_voron_0,
+            leviathan,
+          ]
+      - name: Klicky-Probe
+        variant_id: klicky
+        compatible_bases:
+          [
+            ldo_voron_2.4,
+            voron_2.4,
+            voron_trident,
+            voron_0,
+            ldo_voron_0,
+            micron,
+            west3d_micron,
+            boop,
+          ]
+
+  controller:
+    label: Controller / electronics
+    rule: pick_one
+    replaces_slot: controller
+    sources:
+      - name: CANboard_Mounts
+        variant_id: canboard
+        compatible_bases: [ldo_voron_2.4, voron_2.4, voron_trident, leviathan]
+      - name: voron_0_pancake_board
+        variant_id: pancake
+        compatible_bases: [voron_0, ldo_voron_0]
+
+  cable_routing:
+    label: Cable routing / chains
+    rule: pick_one
+    replaces_slot: cable_routing
+    sources:
+      - name: chirpy2605-voron
+        variant_id: umbilical
+        compatible_bases: [ldo_voron_2.4, voron_2.4, leviathan]
+
+  skirts_panels:
+    label: Skirts / screen / panels
+    rule: pick_any
+    sources:
+      - name: Voron-Extras
+        variant_id: voron_extras
+        compatible_bases:
+          [
+            ldo_voron_2.4,
+            voron_2.4,
+            voron_trident,
+            ldo_voron_trident,
+            micron,
+            west3d_micron,
+            voron_switchwire,
+            ldo_voron_switchwire,
+            voron_legacy,
+            pocket_watch,
+          ]
+      - name: Voron-Hardware
+        variant_id: voron_hardware
+        compatible_bases:
+          [
+            ldo_voron_2.4,
+            voron_2.4,
+            voron_trident,
+            voron_0,
+            ldo_voron_0,
+            voron_switchwire,
+            voron_legacy,
+          ]
+
+  accent:
+    label: Cosmetic / optional
+    rule: pick_any
+    sources: []
+
+# Reference stack presets — suggested base + addon combos (user may override base).
+stack_presets:
+  voron_2.4_stock_sb_tap:
+    label: Voron 2.4 (stock) + Stealthburner + Tap
+    base: voron_2.4
+    addon_sources:
+      - Voron-Stealthburner
+      - Voron-Tap
+    default_selections:
+      toolhead: stealthburner
+      probe: voron_tap
+  ldo_2.4_sb_tap:
+    label: LDO 2.4 + Stealthburner + Tap
+    base: ldo_voron_2.4
+    addon_sources:
+      - Voron-Stealthburner
+      - Voron-Tap
+    default_selections:
+      toolhead: stealthburner
+      probe: voron_tap

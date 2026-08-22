@@ -1,0 +1,11 @@
+schema: print-partner/identity@1
+source_name: LDO-Extras
+canonical_name: LDO Extras (local-only source)
+github_url: null   # local-only per inventory; no GitHub URL
+default_branch: UNKNOWN
+head_commit: UNKNOWN
+tags: UNKNOWN
+maintainer_org: UNKNOWN (presumed LDO-related)
+relationship: UNKNOWN
+role: UNKNOWN (presumed accents/supplement)
+evidence: {date: 2026-07-29, method: "none — no remote to inspect; contents must be read from the local sync directory"}

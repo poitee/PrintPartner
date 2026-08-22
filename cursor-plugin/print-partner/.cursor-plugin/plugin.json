@@ -1,0 +1,26 @@
+{
+  "name": "print-partner",
+  "version": "1.0.0",
+  "description": "Connect Cursor to a Print Partner host over streamable HTTP MCP.",
+  "author": {
+    "name": "Print Partner"
+  },
+  "homepage": "https://github.com/poitee/PrintPartner",
+  "repository": "https://github.com/poitee/PrintPartner",
+  "license": "CC-BY-NC-4.0",
+  "keywords": ["print-partner", "mcp", "3d-printing", "voron"],
+  "variables": {
+    "type": "object",
+    "properties": {
+      "PRINT_PARTNER_MCP_URL": {
+        "type": "string",
+        "description": "Streamable HTTP MCP URL. Use https:// for remote hosts; http://127.0.0.1 only for loopback/tunnel."
+      },
+      "PRINT_PARTNER_API_KEY": {
+        "type": "string",
+        "description": "Same key as PRINT_PARTNER_API_KEY on the host (Bearer). Required when HOST is not loopback."
+      }
+    },
+    "required": ["PRINT_PARTNER_MCP_URL", "PRINT_PARTNER_API_KEY"]
+  }
+}

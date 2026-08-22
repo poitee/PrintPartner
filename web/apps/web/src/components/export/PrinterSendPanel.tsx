@@ -1,0 +1,782 @@
+import { Link } from "react-router-dom";
+import { toast } from "sonner";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  bambuConnectDownloadUrl,
+  fetchIntegrationStatus,
+  fetchIntegrations,
+  fetchPrinters,
+  startBambuConnectHandoff,
+  startPrinterUpload,
+  type IntegrationSummary,
+  type PrinterHostStatus,
+  type PrinterMachine,
+  type ReviewPart,
+} from "../../api/engine";
+import { useJobRunner } from "../../hooks/useJobRunner";
+import {
+  parseSlicedObjectsFile,
+  type ParseSlicedObjectsResult,
+} from "../../lib/parseSlicedObjects";
+import {
+  buildObjectPreviewRows,
+  proposeCheckoffFromObjects,
+  type ProposeCheckoffResult,
+} from "../../lib/proposeCheckoffFromObjects";
+import { printerHostTypeLabel, type LiveStripHostType } from "../../lib/printerLiveStrip";
+import { usePrinterStatusPollMs } from "../../hooks/usePrinterStatusPollMs";
+import { settingsPrintersRoute } from "../../lib/routes";
+import { Badge } from "../ui/badge";
+import { Button } from "../ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "../ui/card";
+import ObjectProposalRows from "./ObjectProposalRows";
+import PlateApprovalCard from "./PlateApprovalCard";
+import {
+  sendPlanBindCopy,
+} from "../../lib/printerPlanBind";
+
+const PRINTER_ID_STORAGE_KEY = "pp-export-printer-id";
+const BAMBU_PRINTER_ID_STORAGE_KEY = "pp-export-bambu-printer-id";
+
+type Props = {
+  /** Remaining incomplete review parts for local object → unit proposal. */
+  remainingParts: ReviewPart[];
+  profileId: number | null;
+  /** Active spine plan name for quiet “For [Plan].” bind line. */
+  planName?: string | null;
+  engineReady: boolean;
+};
+
+function readStickyId(key: string): string {
+  try {
+    return localStorage.getItem(key)?.trim() ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function writeStickyId(key: string, id: string): void {
+  try {
+    if (id) localStorage.setItem(key, id);
+    else localStorage.removeItem(key);
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
+
+function isAllowedGcode(name: string): boolean {
+  const lower = name.toLowerCase();
+  return lower.endsWith(".gcode") || lower.endsWith(".bgcode") || lower.endsWith(".gco");
+}
+
+function isAllowedBambuConnectFile(name: string): boolean {
+  const lower = name.toLowerCase();
+  return (
+    lower.endsWith(".gcode.3mf") ||
+    lower.endsWith(".3mf") ||
+    lower.endsWith(".gcode") ||
+    lower.endsWith(".gco")
+  );
+}
+
+function statusLabel(status: PrinterHostStatus | undefined): string {
+  if (!status) return "…";
+  switch (status.state) {
+    case "idle":
+      return "Idle";
+    case "printing":
+      return status.progress != null ? `Printing ${Math.round(status.progress)}%` : "Printing";
+    case "paused":
+      return "Paused";
+    case "complete":
+      return "Complete";
+    case "error":
+      return "Error";
+    case "offline":
+      return "Offline";
+    default:
+      return status.state;
+  }
+}
+
+function statusBadgeVariant(
+  status: PrinterHostStatus | undefined,
+): "success" | "muted" | "default" | "warning" | "error" {
+  if (!status) return "muted";
+  switch (status.state) {
+    case "idle":
+    case "complete":
+      return "success";
+    case "printing":
+      return "default";
+    case "paused":
+      return "warning";
+    case "error":
+    case "offline":
+      return "error";
+    default:
+      return "muted";
+  }
+}
+
+/** Resolve sticky pick if still in list; otherwise first printer. Never jumps to Idle. */
+function resolveStickyPrinterId(printers: PrinterMachine[], sticky: string, prev: string): string {
+  if (prev && printers.some((p) => p.id === prev)) return prev;
+  if (sticky && printers.some((p) => p.id === sticky)) return sticky;
+  return printers[0]?.id ?? "";
+}
+
+const SEND_HOST_TYPES = new Set<LiveStripHostType>(["moonraker", "prusalink"]);
+
+/**
+ * Primary Export Send UI — Send / Start print for Moonraker/PrusaLink,
+ * plus a separate Bambu Connect handoff row when a Bambu host is fleet-linked.
+ *
+ * Only two verbs live here: Send (upload) and Start print. Farm-queue verbs
+ * (Send ready / Send now / Remove) live on Progress, not on Export.
+ */
+export default function PrinterSendPanel({
+  remainingParts,
+  profileId,
+  planName = null,
+  engineReady,
+}: Props) {
+  const printerUploadJob = useJobRunner("printer-upload");
+  const pollMs = usePrinterStatusPollMs();
+  const planBind = sendPlanBindCopy(planName ?? null);
+
+  const [linkedPrinters, setLinkedPrinters] = useState<PrinterMachine[]>([]);
+  const [bambuPrinters, setBambuPrinters] = useState<PrinterMachine[]>([]);
+  const [hostTypeByPrinterId, setHostTypeByPrinterId] = useState<
+    Record<string, LiveStripHostType>
+  >({});
+  const [selectedPrinterId, setSelectedPrinterId] = useState(
+    () => readStickyId(PRINTER_ID_STORAGE_KEY),
+  );
+  const [selectedBambuPrinterId, setSelectedBambuPrinterId] = useState(
+    () => readStickyId(BAMBU_PRINTER_ID_STORAGE_KEY),
+  );
+  const [hostStatusByIntegration, setHostStatusByIntegration] = useState<
+    Record<string, PrinterHostStatus>
+  >({});
+  const [chosenFile, setChosenFile] = useState<File | null>(null);
+  const [objectParse, setObjectParse] = useState<ParseSlicedObjectsResult | null>(null);
+  const [objectPropose, setObjectPropose] = useState<ProposeCheckoffResult | null>(null);
+  const [parseBusy, setParseBusy] = useState(false);
+  const [bambuBusy, setBambuBusy] = useState(false);
+  const [printersLoading, setPrintersLoading] = useState(true);
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const bambuFileInputRef = useRef<HTMLInputElement>(null);
+  const pendingActionRef = useRef<"send" | "start" | null>(null);
+  const parseGenRef = useRef(0);
+
+  const hasLinked = linkedPrinters.length > 0;
+  const hasBambuLinked = bambuPrinters.length > 0;
+  const busy = printerUploadJob.busy || bambuBusy || parseBusy;
+
+  useEffect(() => {
+    if (!engineReady) return;
+    let cancelled = false;
+    setPrintersLoading(true);
+    void (async () => {
+      try {
+        const [printers, integrations] = await Promise.all([
+          fetchPrinters(),
+          fetchIntegrations(),
+        ]);
+        if (cancelled) return;
+        const byId = new Map<string, IntegrationSummary>(
+          integrations.map((i) => [i.id, i]),
+        );
+        const linkedForSend = printers.filter((p) => {
+          const id = p.integration_id?.trim();
+          if (!id) return false;
+          const host = byId.get(id);
+          return Boolean(
+            host && SEND_HOST_TYPES.has(host.type as LiveStripHostType) && host.config.enabled !== false,
+          );
+        });
+        const linkedBambu = printers.filter((p) => {
+          const id = p.integration_id?.trim();
+          if (!id) return false;
+          const host = byId.get(id);
+          return Boolean(host && host.type === "bambu" && host.config.enabled !== false);
+        });
+        setLinkedPrinters(linkedForSend);
+        setBambuPrinters(linkedBambu);
+        const typeMap: Record<string, LiveStripHostType> = {};
+        for (const p of [...linkedForSend, ...linkedBambu]) {
+          const id = p.integration_id?.trim();
+          const host = id ? byId.get(id) : undefined;
+          if (host) typeMap[p.id] = host.type as LiveStripHostType;
+        }
+        setHostTypeByPrinterId(typeMap);
+        const stickySend = readStickyId(PRINTER_ID_STORAGE_KEY);
+        const stickyBambu = readStickyId(BAMBU_PRINTER_ID_STORAGE_KEY);
+        setSelectedPrinterId((prev) =>
+          resolveStickyPrinterId(linkedForSend, stickySend, prev),
+        );
+        setSelectedBambuPrinterId((prev) =>
+          resolveStickyPrinterId(linkedBambu, stickyBambu, prev),
+        );
+      } catch {
+        if (cancelled) return;
+        setLinkedPrinters([]);
+        setBambuPrinters([]);
+      } finally {
+        if (!cancelled) setPrintersLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [engineReady]);
+
+  // Poll host status for badges only — do NOT auto-drain the farm send queue while
+  // Export is open. Queue drain/dispatch is Progress-only.
+  useEffect(() => {
+    if (!engineReady || (linkedPrinters.length === 0 && bambuPrinters.length === 0)) {
+      setHostStatusByIntegration({});
+      return;
+    }
+    let cancelled = false;
+    const integrationIds = [
+      ...new Set(
+        [...linkedPrinters, ...bambuPrinters]
+          .map((p) => p.integration_id?.trim())
+          .filter((id): id is string => Boolean(id)),
+      ),
+    ];
+
+    const tick = async () => {
+      if (cancelled || document.hidden) return;
+      const entries = await Promise.all(
+        integrationIds.map(async (id) => {
+          try {
+            return [id, await fetchIntegrationStatus(id)] as const;
+          } catch (e) {
+            return [
+              id,
+              {
+                state: "offline" as const,
+                message: e instanceof Error ? e.message : String(e),
+              },
+            ] as const;
+          }
+        }),
+      );
+      if (cancelled) return;
+      setHostStatusByIntegration(Object.fromEntries(entries));
+    };
+
+    void tick();
+    const timer = window.setInterval(() => void tick(), pollMs);
+    const onVisibility = () => {
+      if (!document.hidden) void tick();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [engineReady, linkedPrinters, bambuPrinters, pollMs]);
+
+  // Re-propose when remaining parts change after a successful local parse.
+  useEffect(() => {
+    if (!objectParse || objectParse.unlabeled) return;
+    setObjectPropose(proposeCheckoffFromObjects(objectParse.names, remainingParts));
+  }, [remainingParts, objectParse]);
+
+  const selectedHostStatus = useMemo(() => {
+    const machine = linkedPrinters.find((p) => p.id === selectedPrinterId);
+    const integrationId = machine?.integration_id?.trim();
+    if (!integrationId) return undefined;
+    return hostStatusByIntegration[integrationId];
+  }, [hostStatusByIntegration, linkedPrinters, selectedPrinterId]);
+
+  const selectedPrinterBusy =
+    selectedHostStatus?.state === "printing" || selectedHostStatus?.state === "paused";
+  const selectedPrinterUnavailable =
+    selectedHostStatus?.state === "offline" || selectedHostStatus?.state === "error";
+
+  /** Proposed units from local object parse — never auto-ticks Progress. */
+  const proposedUnits = useMemo(() => objectPropose?.units ?? [], [objectPropose]);
+
+  const effectiveCheckoffUnits = useMemo(() => {
+    if (profileId == null) return [];
+    return proposedUnits;
+  }, [profileId, proposedUnits]);
+
+  const previewRows = useMemo(() => {
+    if (!objectPropose) return [];
+    return buildObjectPreviewRows(objectPropose, remainingParts);
+  }, [objectPropose, remainingParts]);
+
+  const hasNamedObjects =
+    objectParse != null && !objectParse.unlabeled && objectParse.names.length > 0;
+
+  const onPrinterChange = (id: string) => {
+    setSelectedPrinterId(id);
+    writeStickyId(PRINTER_ID_STORAGE_KEY, id);
+  };
+
+  const onBambuPrinterChange = (id: string) => {
+    setSelectedBambuPrinterId(id);
+    writeStickyId(BAMBU_PRINTER_ID_STORAGE_KEY, id);
+  };
+
+  /** `Shop Voron · Moonraker` when the integration type is known. */
+  const printerLabel = (p: PrinterMachine): string => {
+    const hostType = hostTypeByPrinterId[p.id];
+    return hostType ? `${p.name} · ${printerHostTypeLabel(hostType)}` : p.name;
+  };
+
+  const runUpload = (file: File, start: boolean) => {
+    if (!planBind.canSend || profileId == null) {
+      toast.error("Pick a plan to bind this send.");
+      return;
+    }
+    if (!selectedPrinterId) {
+      toast.error("No linked printer", {
+        description: "Add a Moonraker or PrusaLink host in Settings, then link it to a machine.",
+      });
+      return;
+    }
+    if (start && selectedPrinterBusy) {
+      toast.error("Printer is busy", {
+        description: "Send still works. Start print is available when Idle.",
+      });
+      return;
+    }
+    if (start && selectedPrinterUnavailable) {
+      toast.error("Printer not ready", {
+        description: selectedHostStatus?.message?.trim() || "Host is offline or in error.",
+      });
+      return;
+    }
+
+    const units =
+      effectiveCheckoffUnits.length > 0 ? effectiveCheckoffUnits : undefined;
+    const unlabeled =
+      objectPropose?.unmatchedNames?.length ? objectPropose.unmatchedNames : undefined;
+    const printerName =
+      linkedPrinters.find((p) => p.id === selectedPrinterId)?.name ?? "printer";
+
+    void printerUploadJob.runJob(
+      () =>
+        startPrinterUpload({
+          file,
+          printer_id: selectedPrinterId,
+          start,
+          // GRE-232: always stamp active spine plan at send (immutable after).
+          profile_id: profileId,
+          checkoff_units: units,
+          unlabeled_names: unlabeled,
+        }),
+      (snap) => {
+        if (snap.status === "error") {
+          toast.error(snap.message || "Send to printer failed");
+          return;
+        }
+        const mapped =
+          typeof snap.result?.checkoff_units === "number"
+            ? snap.result.checkoff_units
+            : units?.length ?? 0;
+        if (mapped > 0) {
+          toast.success(snap.message || `Sent ${file.name} to ${printerName}`, {
+            description: `Will queue ${mapped} Checkoff unit${mapped === 1 ? "" : "s"} for verification when the print finishes.`,
+          });
+        } else {
+          toast.success(snap.message || `Sent ${file.name} to ${printerName}`);
+        }
+      },
+    );
+  };
+
+  const rejectFile = () => {
+    setChosenFile(null);
+    setObjectParse(null);
+    setObjectPropose(null);
+  };
+
+  const ensureFileThen = (action: "send" | "start") => {
+    if (chosenFile) {
+      runUpload(chosenFile, action === "start");
+      return;
+    }
+    pendingActionRef.current = action;
+    fileInputRef.current?.click();
+  };
+
+  const applyObjectParse = async (file: File): Promise<ProposeCheckoffResult | null> => {
+    const gen = ++parseGenRef.current;
+    setParseBusy(true);
+    setObjectParse(null);
+    setObjectPropose(null);
+    try {
+      const parsed = await parseSlicedObjectsFile(file);
+      if (gen !== parseGenRef.current) return null;
+      setObjectParse(parsed);
+      const proposed = proposeCheckoffFromObjects(parsed.names, remainingParts);
+      setObjectPropose(proposed);
+      return proposed;
+    } catch (e) {
+      if (gen !== parseGenRef.current) return null;
+      setObjectParse({ objects: [], names: [], format: "unknown", unlabeled: true });
+      setObjectPropose({ units: [], matches: [], unmatchedNames: [] });
+      toast.error("Could not parse object names", {
+        description: e instanceof Error ? e.message : String(e),
+      });
+      return null;
+    } finally {
+      if (gen === parseGenRef.current) setParseBusy(false);
+    }
+  };
+
+  const onFileChosen = (fileList: FileList | null) => {
+    const file = fileList?.[0];
+    if (fileInputRef.current) fileInputRef.current.value = "";
+    if (!file) {
+      pendingActionRef.current = null;
+      return;
+    }
+    if (!isAllowedGcode(file.name)) {
+      toast.error("Wrong file type", {
+        description: "Choose a sliced .gcode, .gco, or .bgcode file.",
+      });
+      pendingActionRef.current = null;
+      return;
+    }
+    setChosenFile(file);
+    const pending = pendingActionRef.current;
+    pendingActionRef.current = null;
+    void (async () => {
+      const proposed = await applyObjectParse(file);
+      // Preview before Send when objects were matched — don't auto-upload past the preview.
+      if (pending) {
+        if (proposed && proposed.units.length > 0) {
+          return;
+        }
+        // Unlabeled / empty propose may proceed without checkoff units.
+        runUpload(file, pending === "start");
+      }
+    })();
+  };
+
+  const onBambuFileChosen = (fileList: FileList | null) => {
+    const file = fileList?.[0];
+    if (bambuFileInputRef.current) bambuFileInputRef.current.value = "";
+    if (!file) return;
+    if (!isAllowedBambuConnectFile(file.name)) {
+      toast.error("Wrong file type", {
+        description: "Choose a sliced .3mf or .gcode file for Bambu Connect.",
+      });
+      return;
+    }
+    if (!selectedBambuPrinterId) {
+      toast.error("No linked Bambu printer", {
+        description: "Add a Bambu host in Settings, then link it to a machine.",
+      });
+      return;
+    }
+    if (!planBind.canSend || profileId == null) {
+      toast.error("Pick a plan to bind this send.");
+      return;
+    }
+    setChosenFile(file);
+    void (async () => {
+      let handoffUnits: typeof proposedUnits | undefined;
+      try {
+        const parsed = await parseSlicedObjectsFile(file);
+        setObjectParse(parsed);
+        const proposed = proposeCheckoffFromObjects(parsed.names, remainingParts);
+        setObjectPropose(proposed);
+        if (proposed.units.length > 0) {
+          handoffUnits = proposed.units;
+        }
+      } catch {
+        setObjectParse({ objects: [], names: [], format: "unknown", unlabeled: true });
+        setObjectPropose({ units: [], matches: [], unmatchedNames: [] });
+      }
+
+      setBambuBusy(true);
+      try {
+        const result = await startBambuConnectHandoff({
+          file,
+          printer_id: selectedBambuPrinterId,
+          // GRE-232: stamp active spine plan at handoff.
+          profile_id: profileId,
+          checkoff_units: handoffUnits,
+        });
+        if (result.launched) {
+          toast.success(result.message, {
+            description: result.checkoff_link_id
+              ? "Checkoff verification will wait for this print to finish on the linked Bambu."
+              : "Confirm the import in Bambu Connect. Does not start a print from here.",
+          });
+        } else {
+          toast.message(result.message, {
+            description: "Copy the Connect URL or download the staged file.",
+            action: {
+              label: "Copy URL",
+              onClick: () => {
+                void navigator.clipboard.writeText(result.connect_url);
+              },
+            },
+          });
+          if (result.in_container && result.download_path) {
+            window.open(bambuConnectDownloadUrl(result.download_path), "_blank");
+          }
+        }
+        if (!result.launched && !result.in_container) {
+          try {
+            window.location.href = result.connect_url;
+          } catch {
+            /* custom scheme may be blocked in some browsers */
+          }
+        }
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : String(e));
+      } finally {
+        setBambuBusy(false);
+      }
+    })();
+  };
+
+  return (
+    <div className="flex flex-col gap-3">
+      <Card className="border-border shadow-sm">
+        <CardHeader className="space-y-1.5 pb-2">
+          <CardTitle className="text-[13.5px] font-semibold leading-snug">
+            Send to printer
+          </CardTitle>
+          <CardDescription className="text-[12.5px] leading-relaxed">
+            Export remaining STLs, slice in your slicer, choose the .gcode here.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-2.5 pt-1">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".gcode,.bgcode,.gco,application/octet-stream"
+            className="hidden"
+            onChange={(e) => onFileChosen(e.target.files)}
+          />
+
+          {printersLoading && !hasLinked ? (
+            <div
+              className="flex flex-col gap-2"
+              role="status"
+              aria-label="Loading linked printers"
+              data-testid="printer-send-panel-loading"
+            >
+              <div className="h-9 w-full animate-pulse rounded-md bg-muted" />
+              <div className="h-4 w-2/3 animate-pulse rounded bg-muted" />
+            </div>
+          ) : hasLinked ? (
+            <>
+              <div className="flex flex-wrap items-center gap-2">
+                <select
+                  className="min-h-9 min-w-0 flex-1 rounded-md border border-input bg-background px-2 text-sm"
+                  value={selectedPrinterId}
+                  disabled={busy}
+                  aria-label="Target printer"
+                  onChange={(e) => onPrinterChange(e.target.value)}
+                >
+                  {linkedPrinters.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {printerLabel(p)}
+                    </option>
+                  ))}
+                </select>
+                <Badge
+                  variant={statusBadgeVariant(selectedHostStatus)}
+                  className="shrink-0 rounded-full px-2 py-0.5 font-mono text-[10.5px] font-normal"
+                >
+                  {statusLabel(selectedHostStatus)}
+                </Badge>
+              </div>
+
+              {/* ── Approval gate: shown when a file is chosen and parsed ── */}
+              {chosenFile && objectParse ? (
+                <PlateApprovalCard
+                  thumbnailUrl={objectParse.thumbnailUrl}
+                  printerName={
+                    linkedPrinters.find((p) => p.id === selectedPrinterId)?.name ?? "Printer"
+                  }
+                  plateIndex={1}
+                  plateTotal={1}
+                  printTime={objectParse.printTime}
+                  filamentWeightG={objectParse.filamentWeightG}
+                  unmatchedNames={objectPropose?.unmatchedNames ?? []}
+                  busy={printerUploadJob.busy}
+                  onApprove={() => {
+                    if (chosenFile) runUpload(chosenFile, false);
+                  }}
+                  onReject={rejectFile}
+                />
+              ) : null}
+
+              {/* Proposal rows shown below the approval card when there are named objects */}
+              {chosenFile && objectParse && hasNamedObjects && !objectParse.thumbnailUrl ? (
+                <ObjectProposalRows rows={previewRows} />
+              ) : null}
+
+              {/* File picker row — always shown so user can change the file */}
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+                  {chosenFile ? chosenFile.name : "No file chosen"}
+                </span>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={busy || parseBusy}
+                  loading={parseBusy}
+                  onClick={() => {
+                    pendingActionRef.current = null;
+                    fileInputRef.current?.click();
+                  }}
+                >
+                  {parseBusy ? "Parsing…" : chosenFile ? "Change" : "Choose .gcode"}
+                </Button>
+              </div>
+
+              {/* Send / Start buttons — only shown when no file is chosen (before approval gate) */}
+              {!chosenFile ? (
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={busy || !selectedPrinterId || !planBind.canSend}
+                    title={!planBind.canSend ? planBind.line : undefined}
+                    onClick={() => ensureFileThen("send")}
+                  >
+                    Send
+                  </Button>
+                  <Button
+                    size="sm"
+                    disabled={
+                      busy ||
+                      !selectedPrinterId ||
+                      !planBind.canSend ||
+                      selectedPrinterBusy ||
+                      selectedPrinterUnavailable
+                    }
+                    title={
+                      !planBind.canSend
+                        ? planBind.line
+                        : selectedPrinterBusy
+                          ? "Printer is busy — Start print waits until Idle"
+                          : selectedPrinterUnavailable
+                            ? "Printer offline or error"
+                            : undefined
+                    }
+                    onClick={() => ensureFileThen("start")}
+                  >
+                    Start print
+                  </Button>
+                </div>
+              ) : null}
+
+              <p className="text-[11.5px] leading-relaxed text-muted-foreground">
+                {planBind.line}
+              </p>
+              {planBind.canSend ? (
+                <p className="text-[11.5px] leading-relaxed text-muted-foreground">
+                  Send from here to track these parts on Progress.
+                </p>
+              ) : null}
+              {selectedPrinterBusy ? (
+                <p className="text-[11.5px] leading-relaxed text-muted-foreground">
+                  Printer is busy. Send still works. Or wait until Idle.
+                </p>
+              ) : null}
+            </>
+          ) : (
+            <div className="flex flex-col gap-2">
+              <p className="text-[12.5px] leading-relaxed text-muted-foreground">
+                No linked printers yet. Add a Klipper or Prusa printer in Settings to Send
+                and Start print.
+              </p>
+              <Button size="sm" variant="outline" asChild className="w-fit">
+                <Link to={settingsPrintersRoute()}>Add printers in Settings</Link>
+              </Button>
+              {!hasBambuLinked ? (
+                <p className="text-[11px] leading-relaxed text-muted-foreground">
+                  Bambu Connect is available after you link a Bambu host. It never starts a
+                  print from here.
+                </p>
+              ) : null}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {hasBambuLinked ? (
+        <Card className="border-border shadow-sm">
+          <CardHeader className="space-y-1.5 pb-2">
+            <CardTitle className="text-[13.5px] font-semibold leading-snug">
+              Bambu Connect
+            </CardTitle>
+            <CardDescription className="text-[12.5px] leading-relaxed">
+              Does not start a print from here.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-2.5 pt-1">
+            <input
+              ref={bambuFileInputRef}
+              type="file"
+              accept=".3mf,.gcode,.gco,application/octet-stream"
+              className="hidden"
+              onChange={(e) => onBambuFileChosen(e.target.files)}
+            />
+            <select
+              className="min-h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+              value={selectedBambuPrinterId}
+              disabled={busy}
+              aria-label="Bambu printer for Connect handoff"
+              onChange={(e) => onBambuPrinterChange(e.target.value)}
+            >
+              {bambuPrinters.map((p) => {
+                const integrationId = p.integration_id?.trim() ?? "";
+                const label = statusLabel(hostStatusByIntegration[integrationId]);
+                return (
+                  <option key={p.id} value={p.id}>
+                    {printerLabel(p)} · {label}
+                  </option>
+                );
+              })}
+            </select>
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={busy || !selectedBambuPrinterId || !planBind.canSend}
+              title={
+                !planBind.canSend
+                  ? planBind.line
+                  : "Stages the file and opens bambu-connect:// when possible"
+              }
+              onClick={() => bambuFileInputRef.current?.click()}
+            >
+              {bambuBusy ? "Handing off…" : "Open in Bambu Connect"}
+            </Button>
+            <p className="text-[11.5px] leading-relaxed text-muted-foreground">
+              {planBind.line}
+            </p>
+            <p className="text-[11.5px] leading-relaxed text-muted-foreground">
+              Opens Bambu Connect with the sliced file. Does not start a print from here.
+            </p>
+          </CardContent>
+        </Card>
+      ) : null}
+    </div>
+  );
+}

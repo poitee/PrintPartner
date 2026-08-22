@@ -1,0 +1,13 @@
+schema: print-partner/identity@1
+source_name: Voron-Stealthburner
+canonical_name: Voron Stealthburner (SB + Clockwork2)
+github_url: https://github.com/VoronDesign/Voron-Stealthburner
+default_branch: main
+head_commit: 8bcb9c246fac19d8ac03931ef97fa07c5e5f0f2b   # 2026-07-29
+tags: ["1.0"]
+important_tags:
+  - {name: "1.0", meaning: "SB release tag"}
+maintainer_org: VoronDesign
+relationship: {upstream: true, note: "toolhead maintained separately from printer repos on purpose"}
+role: toolhead
+evidence: {date: 2026-07-29, method: "git ls-remote + shallow blob-less clone"}

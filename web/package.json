@@ -1,0 +1,48 @@
+{
+  "name": "print-partner-web",
+  "private": true,
+  "version": "3.2.0",
+  "type": "module",
+  "engines": {
+    "node": "22.x",
+    "npm": ">=10"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "predev": "npm run build -w @print-partner/contracts && npm run build -w @print-partner/domain",
+    "dev": "concurrently -n server,web -c blue,green \"npm run dev -w @print-partner/server\" \"npm run dev -w @print-partner/web\"",
+    "build": "npm run build -w @print-partner/contracts && npm run build -w @print-partner/domain && npm run build -w @print-partner/server && npm run build -w @print-partner/web",
+    "test": "npm run test:release && npm run test -w @print-partner/contracts --if-present && npm run test -w @print-partner/domain --if-present && npm run test -w @print-partner/web --if-present && npm run test -w @print-partner/server --if-present",
+    "test:release": "node ../scripts/audit-public-release.mjs && node --test ../scripts/release.test.mjs ../scripts/site-map-docs.test.mjs",
+    "test:browser": "npm run test:browser -w @print-partner/web",
+    "test:workflow-smoke": "python3 -m unittest scripts.test_workflow_smoke",
+    "audit:cleanup": "node ../scripts/audit-cleanup.mjs",
+    "audit:public": "node ../scripts/audit-public-release.mjs",
+    "docs:licenses": "node ../scripts/update-third-party-notices.mjs",
+    "lint": "eslint .",
+    "typecheck": "npm run build -w @print-partner/contracts && npm run build -w @print-partner/domain && npm run typecheck -w @print-partner/server && npm run typecheck -w @print-partner/web",
+    "quality": "npm run lint && npm run typecheck && npm test && npm run test:workflow-smoke && npm run build && npm run test:browser",
+    "db:migrate": "npm run db:migrate -w @print-partner/server"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "concurrently": "^10.0.4",
+    "eslint": "^10.5.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "fastify": "5.12.1",
+    "typescript-eslint": "^8.62.0"
+  },
+  "overrides": {
+    "brace-expansion": "5.0.9",
+    "fast-uri": "3.1.5",
+    "find-my-way": "9.7.0",
+    "nanoid": "3.3.18",
+    "shell-quote": "1.10.0",
+    "hono": "4.13.1",
+    "postcss": "8.5.26"
+  },
+  "description": "Print Partner monorepo — Fastify API + React SPA for layered STL kit desk workflow (Library → Builds → Sources → Plan → Checkoff → Production)."
+}

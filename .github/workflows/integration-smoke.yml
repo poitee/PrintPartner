@@ -1,0 +1,113 @@
+name: Optional integration smoke
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "web/**"
+      - ".github/workflows/integration-smoke.yml"
+  pull_request:
+    paths:
+      - "web/**"
+      - ".github/workflows/integration-smoke.yml"
+  workflow_dispatch:
+    inputs:
+      postgres:
+        description: Run the live Postgres adapter smoke test
+        type: boolean
+        default: true
+      slicer_sidecar:
+        description: Build and health-check the pinned OrcaSlicer sidecar
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  postgres:
+    if: github.event_name != 'workflow_dispatch' || inputs.postgres
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16.15-alpine
+        env:
+          POSTGRES_USER: printpartner
+          POSTGRES_PASSWORD: postgres-smoke-only
+          POSTGRES_DB: printpartner
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U printpartner"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+        working-directory: web
+      - run: npm run build
+        working-directory: web
+      - name: Start SaaS server against Postgres
+        working-directory: web
+        env:
+          DATABASE_URL: postgresql://printpartner:postgres-smoke-only@127.0.0.1:5432/printpartner
+          DEPLOY_MODE: saas
+          POSTGRES_EXPERIMENTAL: "1"
+          SAAS_ALLOW_ANONYMOUS: "1"
+          MULTI_USER: "0"
+          SESSION_SECRET: postgres-smoke-session-secret-not-for-production
+          NODE_ENV: production
+          HOST: 127.0.0.1
+          PORT: "18765"
+          STATIC_DIR: ${{ github.workspace }}/web/apps/web/dist
+        run: |
+          node apps/server/dist/index.js >"${RUNNER_TEMP}/postgres-server.log" 2>&1 &
+          for ((attempt = 1; attempt <= 60; attempt++)); do
+            if curl --fail --silent http://127.0.0.1:18765/health \
+              | python3 -c 'import json,sys; data=json.load(sys.stdin); assert data["db"]["driver"] == "postgres"; assert data["db"]["connected"] is True'
+            then
+              if curl --fail --silent --show-error \
+                -H "Content-Type: application/json" \
+                -d '{"name":"Postgres CI smoke"}' \
+                http://127.0.0.1:18765/plans \
+                | python3 -c 'import json,sys; data=json.load(sys.stdin); assert isinstance(data.get("id"), int); assert data.get("name") == "Postgres CI smoke"' \
+                && curl --fail --silent --show-error http://127.0.0.1:18765/plans \
+                | python3 -c 'import json,sys; data=json.load(sys.stdin); profiles=data.get("profiles"); assert isinstance(profiles, list) and len(profiles) == 1; profile=profiles[0]; assert isinstance(profile.get("id"), int); assert profile.get("name") == "Postgres CI smoke"; assert isinstance(profile.get("part_count"), int); assert isinstance(profile.get("build_stale"), bool); progress=profile.get("accepted_progress"); assert isinstance(progress, dict) and progress.get("kind") == "empty"'
+              then
+                exit 0
+              fi
+              break
+            fi
+            sleep 2
+          done
+          cat "${RUNNER_TEMP}/postgres-server.log"
+          exit 1
+
+  slicer-sidecar:
+    if: github.event_name == 'workflow_dispatch' && inputs.slicer_sidecar
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build pinned sidecar
+        run: docker build --tag print-partner-slicer-sidecar:smoke slicer-sidecar
+      - name: Verify sidecar health
+        run: |
+          docker run --detach --name slicer-sidecar-smoke \
+            --publish 127.0.0.1:2814:2814 \
+            print-partner-slicer-sidecar:smoke
+          for ((attempt = 1; attempt <= 90; attempt++)); do
+            if curl --fail --silent http://127.0.0.1:2814/health \
+              | python3 -c 'import json,sys; data=json.load(sys.stdin); assert data["status"] == "ok"; assert data["exists"] is True'
+            then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs slicer-sidecar-smoke
+          exit 1

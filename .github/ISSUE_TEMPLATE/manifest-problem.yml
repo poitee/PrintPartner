@@ -1,0 +1,35 @@
+name: Manifest problem report
+description: Report a manifest labeling or planning issue for a build profile
+title: "[Manifest problem] "
+labels:
+  - manifest/problem
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe a problem with manifest rules, option groups, or part labeling for your build.
+        Include your profile name and any warnings you see on the Plan page.
+  - type: input
+    id: profile
+    attributes:
+      label: Build profile name
+      placeholder: My Voron 2.4 Stealth
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: What went wrong?
+      description: Expected vs actual behavior, missing parts, wrong option group, etc.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: Sources synced, manifest applied, recompute…
+  - type: input
+    id: app_version
+    attributes:
+      label: Print Partner version (optional)
+      placeholder: 1.0.0

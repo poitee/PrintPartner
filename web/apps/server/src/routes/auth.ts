@@ -1,0 +1,482 @@
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import { randomBytes } from "node:crypto";
+import type { ServerConfig } from "../config.js";
+import { isBrowserDocumentNavigation, isSpaClientPath, isStaticAssetPath } from "../lib/spa-nav.js";
+import { hashPassword, validatePasswordStrength, verifyPassword } from "../services/password.js";
+import type { AuthStore } from "../services/auth-store.js";
+import {
+  buildPasswordResetUrl,
+  deliverPasswordResetEmail,
+  requestPublicOrigin,
+} from "../services/password-reset-mail.js";
+import { toPublicUser, type SessionUser } from "./auth-types.js";
+
+declare module "fastify" {
+  interface FastifyRequest {
+    tenantId: string;
+    sessionUser: SessionUser | null;
+  }
+}
+
+export type { SessionUser } from "./auth-types.js";
+export { toPublicUser } from "./auth-types.js";
+
+const authRateLimit = { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } };
+
+function setSessionCookie(reply: FastifyReply, rawToken: string): void {
+  reply.setCookie("pp_session", rawToken, {
+    httpOnly: true,
+    path: "/",
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    maxAge: 60 * 60 * 24 * 14,
+  });
+}
+
+function finishOAuthLogin(
+  authStore: AuthStore,
+  user: ReturnType<AuthStore["upsertOAuthUser"]>,
+  reply: FastifyReply,
+  redirectUrl: string,
+): void {
+  const raw = authStore.createSession(user.id);
+  setSessionCookie(reply, raw);
+  reply.clearCookie("oauth_state", { path: "/" });
+  reply.redirect(redirectUrl);
+}
+
+export function registerAuthRoutes(
+  app: FastifyInstance,
+  config: ServerConfig,
+  authStore: AuthStore | null,
+): void {
+  app.get("/auth/me", async (request, reply) => {
+    if (!request.sessionUser) {
+      if (!config.multiUser && config.deployMode === "self-host") {
+        return {
+          user: {
+            user_id: "local",
+            login: "local",
+            display_name: "Local",
+            email: null,
+            provider: "anonymous",
+            is_admin: true,
+          },
+          multi_user: false,
+        };
+      }
+      return reply.status(401).send({ detail: "Not authenticated" });
+    }
+    return { user: toPublicUser(request.sessionUser), multi_user: config.multiUser };
+  });
+
+  app.post("/auth/logout", async (request, reply) => {
+    const cookie = request.cookies?.pp_session;
+    if (cookie && authStore) authStore.deleteSession(cookie);
+    reply.clearCookie("pp_session", { path: "/" });
+    return { ok: true };
+  });
+
+  if (config.multiUser && authStore) {
+    app.post("/auth/register", authRateLimit, async (request, reply) => {
+      const body = request.body as { email?: unknown; password?: unknown; display_name?: unknown };
+      const emailRaw = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
+      const password = typeof body.password === "string" ? body.password : "";
+      const displayName =
+        (typeof body.display_name === "string" ? body.display_name.trim() : "") ||
+        emailRaw.split("@")[0] ||
+        "User";
+      if (!emailRaw || !emailRaw.includes("@")) {
+        return reply.status(400).send({ detail: "Valid email is required" });
+      }
+      const pwErr = validatePasswordStrength(password);
+      if (pwErr) return reply.status(400).send({ detail: pwErr });
+      if (authStore.findUserByEmail(emailRaw)) {
+        return reply.status(409).send({ detail: "Email already registered" });
+      }
+      const passwordHash = hashPassword(password);
+      const user = authStore.createUser({ email: emailRaw, displayName, passwordHash });
+      const raw = authStore.createSession(user.id);
+      setSessionCookie(reply, raw);
+      const sessionUser: SessionUser = {
+        user_id: user.id,
+        tenant_id: user.id,
+        login: emailRaw,
+        display_name: user.displayName,
+        email: emailRaw,
+        provider: "email",
+        is_admin: user.isAdmin,
+      };
+      return { user: toPublicUser(sessionUser) };
+    });
+
+    app.post("/auth/login", authRateLimit, async (request, reply) => {
+      const body = request.body as { email?: unknown; password?: unknown };
+      const emailRaw = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
+      const password = typeof body.password === "string" ? body.password : "";
+      if (!emailRaw || !password) {
+        return reply.status(400).send({ detail: "Email and password are required" });
+      }
+      const user = authStore.findUserByEmail(emailRaw);
+      if (!user?.passwordHash || !verifyPassword(password, user.passwordHash)) {
+        return reply.status(401).send({ detail: "Invalid email or password" });
+      }
+      const raw = authStore.createSession(user.id);
+      setSessionCookie(reply, raw);
+      return {
+        user: toPublicUser({
+          user_id: user.id,
+          tenant_id: user.id,
+          login: emailRaw,
+          display_name: user.displayName,
+          email: emailRaw,
+          provider: "email",
+          is_admin: user.isAdmin,
+        }),
+      };
+    });
+
+    app.post("/auth/forgot-password", authRateLimit, async (request, reply) => {
+      const body = request.body as { email?: unknown };
+      const emailRaw = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
+      if (!emailRaw || !emailRaw.includes("@")) {
+        return reply.status(400).send({ detail: "Valid email is required" });
+      }
+
+      const user = authStore.findUserByEmail(emailRaw);
+      let devResetUrl: string | undefined;
+      if (user?.email) {
+        authStore.invalidatePasswordResetTokens(user.id);
+        const raw = authStore.createPasswordResetToken(user.id);
+        const origin = config.appPublicUrl ?? requestPublicOrigin(request.headers);
+        const resetUrl = buildPasswordResetUrl(origin, raw);
+        const delivery = await deliverPasswordResetEmail(config, request.log, {
+          to: user.email,
+          resetUrl,
+        });
+        devResetUrl = delivery.devResetUrl;
+      }
+
+      const response: { ok: true; message: string; dev_reset_url?: string } = {
+        ok: true,
+        message: "If an account exists for that email, a reset link was sent.",
+      };
+      if (devResetUrl) response.dev_reset_url = devResetUrl;
+      return response;
+    });
+
+    app.post("/auth/reset-password", authRateLimit, async (request, reply) => {
+      const body = request.body as { token?: unknown; password?: unknown };
+      const token = typeof body.token === "string" ? body.token.trim() : "";
+      const password = typeof body.password === "string" ? body.password : "";
+      if (!token) return reply.status(400).send({ detail: "Reset token is required" });
+      const pwErr = validatePasswordStrength(password);
+      if (pwErr) return reply.status(400).send({ detail: pwErr });
+
+      const userId = authStore.consumePasswordResetToken(token);
+      if (!userId) {
+        return reply.status(400).send({ detail: "Invalid or expired reset link" });
+      }
+
+      authStore.updatePasswordHash(userId, hashPassword(password));
+      authStore.deleteAllUserSessions(userId);
+
+      const user = authStore.findUserById(userId);
+      if (!user) return reply.status(500).send({ detail: "User not found" });
+
+      const raw = authStore.createSession(user.id);
+      setSessionCookie(reply, raw);
+      return {
+        ok: true,
+        user: toPublicUser({
+          user_id: user.id,
+          tenant_id: user.id,
+          login: user.email ?? user.displayName,
+          display_name: user.displayName,
+          email: user.email,
+          provider: "email",
+          is_admin: user.isAdmin,
+        }),
+      };
+    });
+
+    app.post("/auth/change-password", authRateLimit, async (request, reply) => {
+      if (!request.sessionUser) {
+        return reply.status(401).send({ detail: "Authentication required" });
+      }
+      const body = request.body as { current_password?: unknown; new_password?: unknown };
+      const currentPassword = typeof body.current_password === "string" ? body.current_password : "";
+      const newPassword = typeof body.new_password === "string" ? body.new_password : "";
+      if (!currentPassword || !newPassword) {
+        return reply.status(400).send({ detail: "Current and new passwords are required" });
+      }
+      const pwErr = validatePasswordStrength(newPassword);
+      if (pwErr) return reply.status(400).send({ detail: pwErr });
+
+      const user = authStore.findUserById(request.sessionUser.user_id);
+      if (!user?.passwordHash) {
+        return reply.status(400).send({ detail: "This account uses OAuth sign-in only" });
+      }
+      if (!verifyPassword(currentPassword, user.passwordHash)) {
+        return reply.status(401).send({ detail: "Current password is incorrect" });
+      }
+
+      authStore.updatePasswordHash(user.id, hashPassword(newPassword));
+      return { ok: true };
+    });
+  }
+
+  if (config.githubOAuthConfigured && authStore) {
+    app.get("/auth/github", async (_request, reply) => {
+      const state = randomBytes(16).toString("hex");
+      const params = new URLSearchParams({
+        client_id: config.githubClientId!,
+        redirect_uri: config.githubCallbackUrl!,
+        scope: "read:user user:email",
+        state,
+      });
+      reply.setCookie("oauth_state", state, {
+        httpOnly: true,
+        path: "/",
+        secure: process.env.NODE_ENV === "production",
+        maxAge: 600,
+      });
+      return reply.redirect(`https://github.com/login/oauth/authorize?${params}`);
+    });
+
+    app.get("/auth/callback", async (request, reply) => {
+      const query = request.query as { code?: string; state?: string };
+      const stateCookie = request.cookies?.oauth_state;
+      if (!query.code || !query.state || query.state !== stateCookie) {
+        return reply.status(400).send({ detail: "Invalid OAuth state" });
+      }
+      const tokenRes = await fetch("https://github.com/login/oauth/access_token", {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({
+          client_id: config.githubClientId,
+          client_secret: config.githubClientSecret,
+          code: query.code,
+          redirect_uri: config.githubCallbackUrl,
+        }),
+      });
+      const tokenJson = (await tokenRes.json()) as { access_token?: string; error?: string };
+      if (!tokenJson.access_token) {
+        return reply.status(401).send({ detail: tokenJson.error ?? "OAuth failed" });
+      }
+      const userRes = await fetch("https://api.github.com/user", {
+        headers: { Authorization: `Bearer ${tokenJson.access_token}`, Accept: "application/json" },
+      });
+      const ghUser = (await userRes.json()) as { login?: string; id?: number; email?: string | null; name?: string };
+      const login = ghUser.login ?? "github-user";
+      const providerUserId = String(ghUser.id ?? login);
+      let email = ghUser.email ?? null;
+      if (!email) {
+        const emailsRes = await fetch("https://api.github.com/user/emails", {
+          headers: { Authorization: `Bearer ${tokenJson.access_token}`, Accept: "application/json" },
+        });
+        const emails = (await emailsRes.json()) as Array<{ email: string; primary?: boolean; verified?: boolean }>;
+        email = emails.find((e) => e.primary && e.verified)?.email ?? emails[0]?.email ?? null;
+      }
+      const user = authStore.upsertOAuthUser({
+        provider: "github",
+        providerUserId,
+        displayName: ghUser.name ?? login,
+        email,
+      });
+      finishOAuthLogin(authStore, user, reply, config.authSuccessRedirect);
+    });
+  } else {
+    app.get("/auth/github", async (_request, reply) => {
+      return reply.status(501).send({
+        detail: "GitHub OAuth not configured. Set GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, GITHUB_CALLBACK_URL.",
+      });
+    });
+    app.get("/auth/callback", async (_request, reply) => {
+      return reply.status(501).send({ detail: "GitHub OAuth not configured" });
+    });
+  }
+
+  if (config.discordOAuthConfigured && authStore) {
+    app.get("/auth/discord", async (_request, reply) => {
+      const state = randomBytes(16).toString("hex");
+      const params = new URLSearchParams({
+        client_id: config.discordClientId!,
+        redirect_uri: config.discordCallbackUrl!,
+        response_type: "code",
+        scope: "identify email",
+        state,
+      });
+      reply.setCookie("oauth_state", state, {
+        httpOnly: true,
+        path: "/",
+        secure: process.env.NODE_ENV === "production",
+        maxAge: 600,
+      });
+      return reply.redirect(`https://discord.com/api/oauth2/authorize?${params}`);
+    });
+
+    app.get("/auth/discord/callback", async (request, reply) => {
+      const query = request.query as { code?: string; state?: string };
+      const stateCookie = request.cookies?.oauth_state;
+      if (!query.code || !query.state || query.state !== stateCookie) {
+        return reply.status(400).send({ detail: "Invalid OAuth state" });
+      }
+      const body = new URLSearchParams({
+        client_id: config.discordClientId!,
+        client_secret: config.discordClientSecret!,
+        grant_type: "authorization_code",
+        code: query.code,
+        redirect_uri: config.discordCallbackUrl!,
+      });
+      const tokenRes = await fetch("https://discord.com/api/oauth2/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body,
+      });
+      const tokenJson = (await tokenRes.json()) as { access_token?: string; error?: string };
+      if (!tokenJson.access_token) {
+        return reply.status(401).send({ detail: tokenJson.error ?? "Discord OAuth failed" });
+      }
+      const userRes = await fetch("https://discord.com/api/users/@me", {
+        headers: { Authorization: `Bearer ${tokenJson.access_token}` },
+      });
+      const dcUser = (await userRes.json()) as {
+        id?: string;
+        username?: string;
+        global_name?: string | null;
+        email?: string | null;
+      };
+      const login = dcUser.username ?? "discord-user";
+      const user = authStore.upsertOAuthUser({
+        provider: "discord",
+        providerUserId: dcUser.id ?? login,
+        displayName: dcUser.global_name ?? login,
+        email: dcUser.email ?? null,
+      });
+      finishOAuthLogin(authStore, user, reply, config.authSuccessRedirect);
+    });
+  } else {
+    app.get("/auth/discord", async (_request, reply) => {
+      return reply.status(501).send({ detail: "Discord OAuth not configured" });
+    });
+  }
+
+  if (process.env.NODE_ENV !== "production") {
+    app.post("/auth/dev-login", async (request, reply) => {
+      if (config.deployMode !== "saas" && !config.multiUser) {
+        return reply.status(404).send({ detail: "Not available" });
+      }
+      if (!authStore) return reply.status(503).send({ detail: "Auth store unavailable" });
+      const body = request.body as { tenant_id?: string; login?: string; email?: string };
+      const user = authStore.createUser({
+        email: body.email ?? `${body.login ?? "dev"}@dev.local`,
+        displayName: body.login ?? "dev",
+      });
+      const raw = authStore.createSession(user.id);
+      setSessionCookie(reply, raw);
+      return {
+        user: toPublicUser({
+          user_id: user.id,
+          tenant_id: user.id,
+          login: user.email ?? user.displayName,
+          display_name: user.displayName,
+          email: user.email,
+          provider: "anonymous",
+          is_admin: user.isAdmin,
+        }),
+      };
+    });
+  }
+}
+
+export function resolveRequestAuth(
+  request: FastifyRequest,
+  config: ServerConfig,
+  authStore: AuthStore | null,
+): SessionUser | null {
+  if (!config.multiUser && config.deployMode === "self-host") {
+    return {
+      user_id: "local",
+      tenant_id: "default",
+      login: "local",
+      display_name: "Local",
+      email: null,
+      provider: "anonymous",
+      is_admin: true,
+    };
+  }
+
+  const basic = config.saasBasicAuth;
+  if (basic && config.deployMode === "saas") {
+    const header = request.headers.authorization ?? "";
+    const expected = `Basic ${Buffer.from(basic).toString("base64")}`;
+    if (header === expected) {
+      const [login] = basic.split(":");
+      return {
+        user_id: `basic-${login}`,
+        tenant_id: `basic-${login}`,
+        login: login ?? "basic",
+        display_name: login ?? "basic",
+        email: null,
+        provider: "basic",
+        is_admin: false,
+      };
+    }
+  }
+
+  const sid = request.cookies?.pp_session;
+  if (sid && authStore) {
+    const user = authStore.resolveSession(sid);
+    if (user) return user;
+  }
+
+  if (config.saasAllowAnonymous && config.deployMode === "saas") {
+    return {
+      user_id: "anonymous",
+      tenant_id: "anonymous",
+      login: "anonymous",
+      display_name: "Anonymous",
+      email: null,
+      provider: "anonymous",
+      is_admin: false,
+    };
+  }
+
+  return null;
+}
+
+export function registerTenantMiddleware(
+  app: FastifyInstance,
+  config: ServerConfig,
+  authStore: AuthStore | null,
+): void {
+  app.decorateRequest("tenantId", "default");
+  app.decorateRequest("sessionUser", null);
+
+  app.addHook("onRequest", async (request, reply) => {
+    const path = request.url.split("?")[0] ?? request.url;
+
+    const user = resolveRequestAuth(request, config, authStore);
+    request.sessionUser = user;
+    request.tenantId = user?.tenant_id ?? "default";
+
+    if (path === "/health") return;
+    if (isStaticAssetPath(path)) return;
+    if (path.startsWith("/auth/")) return;
+    if (isSpaClientPath(path) && isBrowserDocumentNavigation(request)) return;
+
+    if (config.deployMode === "self-host" && config.basicAuthUser && config.basicAuthPass && !config.multiUser) {
+      const header = request.headers.authorization ?? "";
+      const expected = `Basic ${Buffer.from(`${config.basicAuthUser}:${config.basicAuthPass}`).toString("base64")}`;
+      if (header !== expected) {
+        reply.header("WWW-Authenticate", 'Basic realm="Print Partner"');
+        return reply.status(401).send({ detail: "Authentication required" });
+      }
+    }
+
+    if (!user && config.authRequired) {
+      return reply.status(401).send({ detail: "Authentication required" });
+    }
+  });
+}

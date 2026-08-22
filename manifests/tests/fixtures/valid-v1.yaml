@@ -1,0 +1,11 @@
+format: print-partner-manifest
+version: 1
+project: Example v1 kit
+option_groups:
+  toolhead:
+    rule: pick_one
+    parts:
+      - "**/toolhead/**"
+parts:
+  - match: "**/*.stl"
+    requirement: required

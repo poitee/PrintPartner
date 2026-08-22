@@ -1,0 +1,7 @@
+schema: print-partner/compat@1
+source_name: LDO-Extras
+kind: UNKNOWN
+attaches_to: []
+replaces: []
+conflicts: []
+note: "UNKNOWN until local contents are indexed."

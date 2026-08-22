@@ -1,0 +1,7 @@
+format: print-partner-manifest
+version: 1
+option_groups:
+  toolhead:
+    rule: choose_whatever
+    parts:
+      - "**/toolhead/**"

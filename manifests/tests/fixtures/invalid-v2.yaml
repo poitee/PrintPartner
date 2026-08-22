@@ -1,0 +1,6 @@
+format: print-partner-manifest
+version: 2
+sources:
+  - id: base
+    kind: ftp
+    url: ftp://example.com/base

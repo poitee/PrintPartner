@@ -1,0 +1,364 @@
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Source+Sans+3:ital,wght@0,400;0,600;1,400&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap");
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "./App.css";
+
+/* Drive the `dark:` utility variant from the .dark class set by ThemeProvider
+   (not the prefers-color-scheme media query). */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/*
+  GRE-234 — desk ink / paper / brass. Single palette; remaining shadcn tokens
+  are derived from the locked set (no second accent family).
+
+  - `:root` = light (shop daylight); `.dark` = dark desk (product default).
+  - Paper token group is theme-independent GRE-233 printable white.
+  - Flat surfaces only — no gradient header / accent bars.
+*/
+:root {
+  /* ---- Light theme (shop daylight) ---- */
+  --background: hsl(36 28% 97%);
+  --foreground: hsl(32 16% 14%);
+  --card: hsl(36 30% 99%);
+  --card-foreground: hsl(32 16% 14%);
+  --popover: hsl(36 30% 99%);
+  --popover-foreground: hsl(32 16% 14%);
+
+  --primary: hsl(34 52% 38%);
+  --primary-foreground: hsl(36 30% 98%);
+
+  /* Same brass family as primary — not a second palette. */
+  --accent-brand: hsl(34 52% 38%);
+  --accent-brand-foreground: hsl(36 30% 98%);
+
+  --secondary: hsl(32 12% 92%);
+  --secondary-foreground: hsl(32 16% 14%);
+
+  --muted: hsl(32 12% 92%);
+  --muted-foreground: hsl(32 10% 38%);
+
+  --accent: hsl(32 12% 90%);
+  --accent-foreground: hsl(32 16% 14%);
+
+  --destructive: hsl(0 62% 42%);
+  --destructive-foreground: hsl(36 30% 98%);
+
+  --success: hsl(152 40% 32%);
+  --warning: hsl(34 70% 36%);
+  --info: hsl(200 45% 38%);
+  --info-foreground: hsl(36 30% 98%);
+
+  --border: hsl(32 12% 84%);
+  --input: hsl(32 12% 84%);
+  --ring: hsl(34 52% 38%);
+
+  --surface-sunken: hsl(36 20% 94%);
+  --media-bg: hsl(32 12% 90%);
+
+  /* Flat desk chrome — no gradient header / accent bars (GRE-234). */
+  --gradient-header: var(--card);
+  --gradient-surface: var(--card);
+  --gradient-accent: var(--primary);
+
+  --shadow-sm: 0 1px 2px hsl(32 20% 40% / 0.06);
+  --shadow-md: 0 1px 3px hsl(32 20% 40% / 0.08), 0 4px 12px hsl(32 16% 30% / 0.06);
+  --shadow-lg: 0 2px 8px hsl(32 20% 40% / 0.1), 0 12px 28px hsl(32 16% 30% / 0.1);
+  --shadow-card: var(--shadow-md);
+
+  --radius: 0.5rem;
+
+  /* ---- Paper token group (printable sheet — theme-independent) ---- */
+  --paper-bg: #ffffff;
+  --paper-fg: #111827;
+  --paper-muted: #6b7280;
+  --paper-muted-fg: #374151;
+  --paper-border: #d1d5db;
+  --paper-border-strong: #9ca3af;
+  --paper-surface: #f9fafb;
+  --paper-surface-hover: #f3f4f6;
+  --paper-focus: #2563eb;
+  --paper-shadow: 0 10px 30px rgba(0, 0, 0, 0.15);
+
+  --paper-success-bg: #f0fdf4;
+  --paper-success-chip-bg: #dcfce7;
+  --paper-success-border: #86efac;
+  --paper-success-fg: #166534;
+
+  --paper-destructive: #dc2626;
+  --paper-destructive-hover: #b91c1c;
+  --paper-destructive-border: #fca5a5;
+  --paper-destructive-border-hover: #f87171;
+  --paper-destructive-bg-hover: #fef2f2;
+}
+
+/* ---- Dark theme (desk default) ---- */
+.dark {
+  --background: hsl(32 10% 9%);
+  --foreground: hsl(36 18% 93%);
+  --card: hsl(32 8% 13%);
+  --card-foreground: hsl(36 18% 93%);
+  --popover: hsl(32 8% 13%);
+  --popover-foreground: hsl(36 18% 93%);
+
+  --primary: hsl(36 48% 52%);
+  --primary-foreground: hsl(32 20% 10%);
+
+  --accent-brand: hsl(36 48% 52%);
+  --accent-brand-foreground: hsl(32 20% 10%);
+
+  --secondary: hsl(32 8% 18%);
+  --secondary-foreground: hsl(36 18% 93%);
+
+  --muted: hsl(32 8% 16%);
+  --muted-foreground: hsl(32 8% 62%);
+
+  --accent: hsl(32 8% 18%);
+  --accent-foreground: hsl(36 18% 93%);
+
+  --destructive: hsl(0 58% 52%);
+  --destructive-foreground: hsl(36 18% 93%);
+
+  --success: hsl(152 40% 42%);
+  --warning: hsl(36 55% 48%);
+  --info: hsl(200 40% 48%);
+  --info-foreground: hsl(32 20% 10%);
+
+  --border: hsl(32 8% 20%);
+  --input: hsl(32 8% 18%);
+  --ring: hsl(36 48% 52%);
+
+  --surface-sunken: hsl(32 10% 7%);
+  --media-bg: hsl(32 10% 6%);
+
+  --gradient-header: var(--card);
+  --gradient-surface: var(--card);
+  --gradient-accent: var(--primary);
+
+  --shadow-sm: 0 1px 2px hsl(32 20% 4% / 0.35);
+  --shadow-md: 0 1px 0 hsl(32 8% 24% / 0.35), 0 4px 12px hsl(32 20% 4% / 0.45);
+  --shadow-lg: 0 2px 8px hsl(32 20% 4% / 0.5), 0 16px 32px hsl(32 20% 2% / 0.55);
+  --shadow-card: var(--shadow-md);
+}
+
+/* Fonts + radii are emitted as real custom properties (used by var() in CSS). */
+@theme {
+  --font-sans: "Source Sans 3", system-ui, sans-serif;
+  --font-serif: "Source Serif 4", ui-serif, Georgia, serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
+}
+
+/* Map Tailwind color utilities onto the semantic theme variables above. */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+
+  --color-accent-brand: var(--accent-brand);
+  --color-accent-brand-foreground: var(--accent-brand-foreground);
+
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-info: var(--info);
+  --color-info-foreground: var(--info-foreground);
+
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    margin: 0;
+    overflow-x: hidden;
+  }
+
+  /* In-app dialogs/sheets follow the app theme (not forced light). */
+  .dark [role="dialog"] {
+    color-scheme: dark;
+  }
+
+  h1 {
+    @apply text-foreground font-bold tracking-tight text-balance;
+    letter-spacing: -0.025em;
+  }
+
+  h2 {
+    @apply text-foreground font-semibold tracking-tight text-balance;
+    letter-spacing: -0.02em;
+  }
+
+  h3 {
+    @apply text-foreground font-semibold tracking-tight text-balance;
+    letter-spacing: -0.015em;
+  }
+
+  h4 {
+    @apply text-foreground font-medium tracking-tight text-balance;
+    letter-spacing: -0.01em;
+  }
+
+  /* Legacy App.css pages use .muted — align with design tokens */
+  .muted,
+  .subtitle {
+    color: var(--muted-foreground);
+  }
+
+  /* Consistent, visible keyboard focus across native + custom controls */
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+}
+
+@layer utilities {
+  /* Tailwind maps text-muted to --color-muted (a surface). Use foreground for copy. */
+  .text-muted {
+    color: var(--muted-foreground);
+  }
+
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@layer components {
+  /* GRE-234: no accent bar stripe — flat desk chrome. */
+  .page-accent-bar {
+    position: relative;
+  }
+
+  .stat-tile {
+    @apply rounded-lg border border-border bg-card p-3 transition-shadow;
+    box-shadow: var(--shadow-sm);
+  }
+
+  .stat-tile:hover {
+    box-shadow: var(--shadow-md);
+  }
+
+  .section-card {
+    @apply rounded-lg border border-border bg-card p-4;
+    box-shadow: var(--shadow-sm);
+    background: var(--gradient-surface);
+  }
+
+  .source-card {
+    @apply overflow-hidden rounded-lg border border-border bg-card text-card-foreground transition-colors;
+    box-shadow: var(--shadow-card);
+  }
+
+  .source-card:hover {
+    @apply border-primary/50;
+    box-shadow: var(--shadow-md);
+  }
+
+  .source-card__body {
+    @apply p-4;
+  }
+
+  .drawer-panel {
+    @apply fixed inset-y-0 right-0 z-40 flex w-full max-w-xl flex-col border-l border-border bg-card text-card-foreground;
+    max-width: min(36rem, 100vw);
+    box-shadow: var(--shadow-lg);
+  }
+
+  .card {
+    @apply rounded-lg border border-border bg-card text-card-foreground;
+    box-shadow: var(--shadow-sm);
+  }
+
+  .table-scroll {
+    margin-left: -0.25rem;
+    margin-right: -0.25rem;
+    padding-left: 0.25rem;
+    padding-right: 0.25rem;
+  }
+
+  /*
+   * Keep the skip target in the tab order without relying on utility
+   * interactions that can leave the element clipped after focus.
+   */
+  .skip-link {
+    position: fixed;
+    top: 0.75rem;
+    left: 0.75rem;
+    z-index: 100;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .skip-link:focus,
+  .skip-link:focus-visible {
+    width: auto;
+    height: auto;
+    padding: 0.5rem 0.75rem;
+    margin: 0;
+    overflow: visible;
+    clip: auto;
+    clip-path: none;
+    white-space: normal;
+    color: var(--foreground);
+    background: var(--background);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+    box-shadow: var(--shadow-lg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@media (max-width: 767px) {
+  input[type="search"],
+  input[type="text"],
+  input[type="number"],
+  input[type="url"],
+  select,
+  textarea {
+    font-size: 16px;
+  }
+}

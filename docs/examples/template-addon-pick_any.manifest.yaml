@@ -1,0 +1,19 @@
+format: print-partner-manifest
+version: 2
+option_groups:
+  skirts_panels:
+    rule: pick_any
+    label: Skirts / screen / panels
+    variants:
+      - id: skirts
+        label: Skirts & panels
+        parts:
+          - "skirts/**"
+          - "panels/**"
+parts:
+  - match: "skirts/**"
+    requirement: optional
+    slot: skirts_panels
+  - match: "panels/**"
+    requirement: optional
+    slot: skirts_panels

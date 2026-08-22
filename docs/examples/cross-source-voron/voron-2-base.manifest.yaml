@@ -1,0 +1,53 @@
+format: print-partner-manifest
+version: 2
+parts:
+  - match: "**/PrintedParts/**"
+    requirement: required
+  - match: "**/frame/**"
+    requirement: required
+  - match: "**/stock_toolhead/**"
+    requirement: required
+    slot: toolhead
+  - match: "**/stock_probe/**"
+    requirement: optional
+    slot: probe
+option_groups:
+  toolhead:
+    rule: pick_one
+    label: Toolhead
+    variants:
+      - id: stock
+        label: Stock toolhead
+        parts:
+          - "**/stock_toolhead/**"
+  probe:
+    rule: pick_one
+    label: Probe
+    variants:
+      - id: stock
+        label: Stock probe
+        parts:
+          - "**/stock_probe/**"
+  controller:
+    rule: pick_one
+    label: Controller
+    variants:
+      - id: stock
+        label: Stock electronics
+        parts:
+          - "**/electronics/**"
+  cable_routing:
+    rule: pick_one
+    label: Cable routing
+    variants:
+      - id: stock
+        label: Stock routing
+        parts:
+          - "**/cable/**"
+slots:
+  toolhead:
+    label: Toolhead
+    default_group: toolhead
+  probe:
+    label: Probe
+    default_group: probe

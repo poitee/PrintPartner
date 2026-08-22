@@ -1,0 +1,8 @@
+schema: print-partner/compat@1
+source_name: Voron-Legacy
+kind: base
+recommended_addons:
+  - {source: Voron-Stealthburner, ref: main, optional: true, note: "SB maintained separately; Legacy has own 'X Carriage' folder"}
+  - {source: Klicky-Probe, ref: main, optional: true, path_scope: Printers/Voron/v1.8_v2.4_Legacy_Trident}
+not_compatible: ["Voron-Tap (bed not rigid enough per Tap README)"]
+ldo_pairing: {kit_supplement: null, note: "no LDO Legacy kit repo known"}

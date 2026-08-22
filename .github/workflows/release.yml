@@ -1,0 +1,215 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-publication
+  cancel-in-progress: false
+
+jobs:
+  quality:
+    uses: ./.github/workflows/web-ci.yml
+
+  manifests:
+    uses: ./.github/workflows/validate-manifests.yml
+
+  release:
+    needs: [quality, manifests]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    env:
+      IMAGE: ghcr.io/poitee/print-partner
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve and validate tagged commit
+        id: identity
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          tag_object="$(git rev-parse "refs/tags/${TAG}")"
+          commit="$(git rev-parse "refs/tags/${TAG}^{}")"
+          head_commit="$(git rev-parse 'HEAD^{commit}')"
+          test "$commit" = "$head_commit"
+          version="${TAG#v}"
+          build_date="$(git show -s --format=%cI "$commit")"
+          node scripts/release.mjs check --tag "$TAG" --commit "$commit"
+          {
+            echo "tag=$TAG"
+            echo "tag_object=$tag_object"
+            echo "commit=$commit"
+            echo "version=$version"
+            echo "build_date=$build_date"
+            echo "candidate_tag=commit-$commit"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-qemu-action@v4
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check for an existing candidate image
+        id: candidate
+        env:
+          CANDIDATE_TAG: ${{ steps.identity.outputs.candidate_tag }}
+        run: |
+          set -euo pipefail
+          if docker buildx imagetools inspect "$IMAGE:$CANDIDATE_TAG" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build and push candidate image
+        if: steps.candidate.outputs.exists == 'false'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            PP_APP_VERSION=${{ steps.identity.outputs.version }}
+            PP_COMMIT=${{ steps.identity.outputs.commit }}
+            PP_TAG=${{ steps.identity.outputs.tag }}
+            PP_BUILD_DATE=${{ steps.identity.outputs.build_date }}
+          tags: |
+            ${{ env.IMAGE }}:${{ steps.identity.outputs.candidate_tag }}
+          annotations: |
+            index:org.opencontainers.image.source=https://github.com/poitee/PrintPartner
+            index:org.opencontainers.image.version=${{ steps.identity.outputs.version }}
+            index:org.opencontainers.image.revision=${{ steps.identity.outputs.commit }}
+            index:org.opencontainers.image.ref.name=${{ steps.identity.outputs.tag }}
+            manifest-descriptor:org.opencontainers.image.source=https://github.com/poitee/PrintPartner
+            manifest-descriptor:org.opencontainers.image.version=${{ steps.identity.outputs.version }}
+            manifest-descriptor:org.opencontainers.image.revision=${{ steps.identity.outputs.commit }}
+            manifest-descriptor:org.opencontainers.image.ref.name=${{ steps.identity.outputs.tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Resolve and verify candidate digest
+        id: image
+        env:
+          CANDIDATE_TAG: ${{ steps.identity.outputs.candidate_tag }}
+          EXPECTED_VERSION: ${{ steps.identity.outputs.version }}
+          EXPECTED_COMMIT: ${{ steps.identity.outputs.commit }}
+          EXPECTED_TAG: ${{ steps.identity.outputs.tag }}
+        run: |
+          set -euo pipefail
+          reference="$IMAGE:$CANDIDATE_TAG"
+          digest="$(docker buildx imagetools inspect "$reference" | awk '/^Digest:/ { print $2; exit }')"
+          test -n "$digest"
+          docker buildx imagetools inspect "$IMAGE@$digest" --raw > candidate-manifest.json
+          jq -e \
+            --arg version "$EXPECTED_VERSION" \
+            --arg commit "$EXPECTED_COMMIT" \
+            --arg tag "$EXPECTED_TAG" \
+            '.annotations["org.opencontainers.image.version"] == $version and
+             .annotations["org.opencontainers.image.revision"] == $commit and
+             .annotations["org.opencontainers.image.ref.name"] == $tag and
+             ([.manifests[] | select(
+               .platform.os == "linux" and
+               (.platform.architecture == "amd64" or .platform.architecture == "arm64")
+             )] | length) == 2 and
+             all(.manifests[] | select(
+               .platform.os == "linux" and
+               (.platform.architecture == "amd64" or .platform.architecture == "arm64")
+             );
+               .annotations["org.opencontainers.image.version"] == $version and
+               .annotations["org.opencontainers.image.revision"] == $commit and
+               .annotations["org.opencontainers.image.ref.name"] == $tag)' \
+            candidate-manifest.json
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Render release identity asset
+        env:
+          TAG: ${{ steps.identity.outputs.tag }}
+          COMMIT: ${{ steps.identity.outputs.commit }}
+          DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          node scripts/release.mjs render-asset \
+            --tag "$TAG" \
+            --commit "$COMMIT" \
+            --digest "$DIGEST" \
+            --output release-identity.json
+
+      - name: Create or verify GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.identity.outputs.tag }}
+          COMMIT: ${{ steps.identity.outputs.commit }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            test "$(gh release view "$TAG" --json tagName --jq .tagName)" = "$TAG"
+            mkdir -p existing-release
+            if gh release view "$TAG" --json assets --jq '.assets[].name' | grep -Fxq release-identity.json; then
+              gh release download "$TAG" --pattern release-identity.json --dir existing-release
+              cmp --silent release-identity.json existing-release/release-identity.json
+            else
+              gh release upload "$TAG" release-identity.json
+            fi
+          else
+            gh release create "$TAG" release-identity.json \
+              --verify-tag \
+              --target "$COMMIT" \
+              --title "Print Partner $TAG" \
+              --generate-notes
+          fi
+
+      - name: Create or verify immutable version alias
+        env:
+          VERSION: ${{ steps.identity.outputs.version }}
+          DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if docker buildx imagetools inspect "$IMAGE:$VERSION" >/dev/null 2>&1; then
+            existing="$(docker buildx imagetools inspect "$IMAGE:$VERSION" | awk '/^Digest:/ { print $2; exit }')"
+            test "$existing" = "$DIGEST"
+          else
+            docker buildx imagetools create --tag "$IMAGE:$VERSION" "$IMAGE@$DIGEST"
+          fi
+          verified="$(docker buildx imagetools inspect "$IMAGE:$VERSION" | awk '/^Digest:/ { print $2; exit }')"
+          test "$verified" = "$DIGEST"
+
+      - name: Verify public release identity
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.identity.outputs.tag }}
+          DIGEST: ${{ steps.image.outputs.digest }}
+          VERSION: ${{ steps.identity.outputs.version }}
+        run: |
+          set -euo pipefail
+          test "$(gh release view "$TAG" --json tagName,isDraft --jq 'select(.isDraft == false) | .tagName')" = "$TAG"
+          test "$(jq -r .image.digest release-identity.json)" = "$DIGEST"
+          test "$(docker buildx imagetools inspect "$IMAGE:$VERSION" | awk '/^Digest:/ { print $2; exit }')" = "$DIGEST"
+
+      - name: Advance latest convenience alias
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.identity.outputs.tag }}
+          DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          latest_release="$(gh release view --json tagName --jq .tagName)"
+          if [ "$latest_release" = "$TAG" ]; then
+            docker buildx imagetools create --tag "$IMAGE:latest" "$IMAGE@$DIGEST"
+          else
+            echo "Skipping latest: GitHub currently marks $latest_release as the latest release."
+          fi

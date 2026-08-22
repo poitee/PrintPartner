@@ -1,0 +1,70 @@
+schema: print-partner/stacks@1
+# Named build recipes. source_name values match research/<SourceName> dirs.
+stacks:
+  - name: "LDO Trident R2"
+    base: {source_name: Voron-Trident, ref: VTr2}
+    addons:
+      - {source_name: Voron-Stealthburner, ref: main}
+      - {source_name: LDOVoronTrident, ref: master}
+      - {source_name: Leviathan, ref: master, optional: true, note: "rev D kits"}
+      - {source_name: Voron-Tap, ref: main, optional: true}
+    default_selections:
+      skirt_size: "300"
+      z_chain_hole_count: UNKNOWN   # verify against kit manual; must match SB chain anchor
+      power_inlet: "LDOVoronTrident power_inlet_1.2mm (deselect Trident rear_skirt_power_adamstech)"
+      deck_wire_cover_right: "LDOVoronTrident ldo_deck_wire_cover_right (deselect Trident wire_cover_left/right pairing accordingly)"
+    notes: "R2 == tag VTr2. Sync required after tag change."
+  - name: "Voron Trident (self-source, latest)"
+    base: {source_name: Voron-Trident, ref: main}
+    addons:
+      - {source_name: Voron-Stealthburner, ref: main}
+      - {source_name: Klicky-Probe, ref: main, optional: true, conflicts: [Voron-Tap]}
+    default_selections: {skirt_size: "300"}
+  - name: "LDO Voron 2.4 (rev D / Leviathan)"
+    base: {source_name: Voron-2, ref: Voron2.4}
+    addons:
+      - {source_name: Voron-Stealthburner, ref: main}
+      - {source_name: LDOVoron2, ref: main}
+      - {source_name: Leviathan, ref: master}
+      - {source_name: Voron-Tap, ref: main, optional: true}
+    default_selections:
+      skirt_size: "300"
+      nozzle_probe: "nozzle_probe_ldo (or none if Tap attached)"
+      plug_panel_1.2mm: "exclude on V2.4R2 builds (deprecated)"
+    notes: "pin base to tag V2.4r2 for kit fidelity"
+  - name: "LDO Voron 0.2R1"
+    base: {source_name: Voron-0, ref: Voron0.2r1}   # branch
+    addons:
+      - {source_name: LDOVoron0, ref: v02r1}        # branch
+      - {source_name: LDO-Picobilical, ref: master, optional: true}
+    default_selections:
+      power_inlet: "LDOVoron0 STLs/Power_Inlet"
+      psu_cover: "LDOVoron0 Mornsun_PSU_Cover (recommended)"
+      toolhead: "Mini Stealthburner (in Voron-0 repo, STLs/Toolheads)"
+      picobilical_spacer: "toolhead_spacer_v02.stl when Picobilical attached"
+  - name: "LDO Switchwire"
+    base: {source_name: Voron-Switchwire, ref: master}
+    addons:
+      - {source_name: Voron-Stealthburner, ref: main, note: "use chain_anchor_*_SW"}
+      - {source_name: LDOVoronSW, ref: s1}
+    default_selections: {chain_anchor: "chain_anchor_2hole_SW or 3hole_SW (match kit)"}
+  - name: "West3D Micron+ 180"
+    base: {source_name: Micron, ref: main}
+    addons:
+      - {source_name: West3D-Micron, ref: main}
+      - {source_name: Klicky-Probe, ref: main, optional: true, note: "dock parts from Micron repo"}
+      - {source_name: Galileo2, ref: main, optional: true, subprojects: [G2E, G2Z]}
+    default_selections:
+      size: "180"
+      panel_clips: "3mm foam variants (West3D Readme)"
+      bowden_entry: "West3D ECAS_bowden_tube_entry (deselect Micron's)"
+  - name: "LDO Micron"
+    base: {source_name: Micron, ref: main}
+    addons: []
+    default_selections:
+      size: UNKNOWN   # LDO sells both; confirm kit
+      kit_parts: "include STLs/Kit_Specific_Parts/LDO"
+  - name: "LDO Milo V1.5 (CNC — separate family)"
+    base: {source_name: LDO-Milo-V1.5, ref: master}
+    addons: []
+    notes: "upstream MillenniumMachines/Milo-v1.5 not in inventory; never mix with printer stacks"

@@ -1,0 +1,12 @@
+schema: print-partner/compat@1
+source_name: Micron
+kind: base
+toolhead_policy: "BOM stock toolhead is the Mini Stealthburner (per West3D Readme); toolhead files not in this repo"
+recommended_addons:
+  - {source: Klicky-Probe, ref: main, note: "probe body; docks are IN the Micron repo (Gantry)"}
+  - {source: Galileo2, ref: main, subprojects: [G2Z, G2E]}
+  - {source: West3D-Micron, ref: main, note: "for West3D Micron+ kits; 'be sure to use the 180 files'"}
+  - {source: CANboard_Mounts, ref: main, optional: true}
+size_rule: "120 = Micron, 180 = Micron+ — filter filenames by prefix after size selection"
+ldo_pairing: {kit_parts: "STLs/Kit_Specific_Parts/LDO inside this repo (no separate LDO Micron repo in inventory)"}
+conflicts: ["Tap not offered here; Boop targets front-MGN9 V0-style toolheads — verify before attaching"]

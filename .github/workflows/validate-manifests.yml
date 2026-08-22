@@ -1,0 +1,35 @@
+name: Validate manifests
+
+on:
+  workflow_call:
+  push:
+    branches: [main]
+    paths:
+      - "manifests/**"
+      - "web/apps/server/src/data/manifests/**"
+      - ".github/workflows/validate-manifests.yml"
+  pull_request:
+    paths:
+      - "manifests/**"
+      - "web/apps/server/src/data/manifests/**"
+      - ".github/workflows/validate-manifests.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  schema:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: manifests/requirements.txt
+      - name: Install validator dependencies
+        run: python -m pip install -r manifests/requirements.txt
+      - name: Test validator fixtures
+        run: python -m unittest manifests.tests.test_validate
+      - name: Validate schemas and embedded-copy drift
+        run: python manifests/scripts/validate.py

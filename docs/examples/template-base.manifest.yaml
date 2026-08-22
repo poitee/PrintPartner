@@ -1,0 +1,32 @@
+format: print-partner-manifest
+version: 2
+parts:
+  - match: "**/printed/**"
+    requirement: required
+  - match: "**/stock_toolhead/**"
+    requirement: required
+    slot: toolhead
+option_groups:
+  toolhead:
+    rule: pick_one
+    label: Toolhead
+    variants:
+      - id: stock
+        label: Stock toolhead
+        parts:
+          - "**/stock_toolhead/**"
+  probe:
+    rule: pick_one
+    label: Probe
+    variants:
+      - id: stock
+        label: Stock probe
+        parts:
+          - "**/stock_probe/**"
+slots:
+  toolhead:
+    label: Toolhead
+    default_group: toolhead
+  probe:
+    label: Probe
+    default_group: probe

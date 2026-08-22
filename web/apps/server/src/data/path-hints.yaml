@@ -1,0 +1,90 @@
+# Path hints — folder/filename patterns → suggested manifest categories.
+# Used by manifest draft generation and Kit Studio Author tree badges.
+version: 1
+
+rules:
+  - path: "*stealthburner*"
+    option_group: toolhead
+    variant_id: stealthburner
+    label: Stealthburner
+    confidence: high
+
+  - path: "**/Clockwork2/**"
+    option_group: toolhead
+    variant_id: stealthburner
+    label: Stealthburner
+    confidence: high
+
+  - path: "**/stealthburner/**"
+    option_group: toolhead
+    variant_id: stealthburner
+    label: Stealthburner
+    confidence: high
+
+  - path: "*klicky*"
+    option_group: probe
+    variant_id: klicky
+    label: Klicky probe
+    confidence: medium
+
+  - path: "**/Tap/**"
+    option_group: probe
+    variant_id: voron_tap
+    label: Voron Tap
+    confidence: high
+
+  - path: "**/tap/**"
+    option_group: probe
+    variant_id: voron_tap
+    label: Voron Tap
+    confidence: high
+
+  - path: "**/PrintedParts/**"
+    requirement: required
+    label: Printed parts
+    confidence: medium
+
+  - path: "**/STLs/**"
+    requirement: required
+    label: STLs folder
+    confidence: medium
+
+  - path: "**/printed/**"
+    requirement: required
+    label: Printed folder
+    confidence: medium
+
+  - path: "**/electronics/**"
+    option_group: controller
+    variant_id: stock
+    label: Electronics
+    confidence: medium
+
+  - path: "**/chain/**"
+    option_group: cable_routing
+    variant_id: umbilical
+    label: Cable chain
+    confidence: medium
+
+  - path: "**/2hole/**"
+    option_group: z_drives
+    variant_id: ldo_z_drives
+    label: LDO 2-hole Z
+    confidence: medium
+
+  - path: "**/3hole/**"
+    option_group: z_drives
+    variant_id: ldo_z_drives
+    label: LDO 3-hole Z
+    confidence: medium
+
+  - path: "**/stock_toolhead/**"
+    option_group: toolhead
+    variant_id: stock
+    label: Stock toolhead
+    confidence: high
+
+  - path: "**/frame/**"
+    requirement: required
+    label: Frame parts
+    confidence: medium

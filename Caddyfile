@@ -1,0 +1,22 @@
+# Caddyfile — slicer reverse-proxy routes
+#
+# Local .home domains — add to /etc/hosts or resolver:
+#   127.0.0.1  orca.home prusa.home
+#
+# Caddy on a LAN with no public ACME: uncomment the tls line per block
+# to use Caddy's internal (self-signed) CA, or add your own cert paths.
+#
+# bambu.home is intentionally absent: no working BambuStudio noVNC container
+# image exists (see pp-compose.yml notes). Bambu printer slicing goes through
+# the OrcaSlicer sidecar (Orca loads Bambu Lab machine/process profiles).
+
+orca.home {
+    # tls internal
+    reverse_proxy orcaslicer:3000
+}
+
+prusa.home {
+    # tls internal
+    reverse_proxy prusaslicer:8080
+}
+

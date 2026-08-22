@@ -1,0 +1,25 @@
+format: print-partner-manifest
+version: 2
+option_groups:
+  probe:
+    rule: pick_one
+    label: Probe
+    variants:
+      - id: voron_tap
+        label: Voron Tap
+        parts:
+          - "**/Tap/**"
+          - "**/tap/**"
+        excludes:
+          - "**/stock_probe/**"
+parts:
+  - match: "**/Tap/**"
+    change: replacement
+    requirement: required
+    slot: probe
+    replaces: "**/stock_probe/**"
+  - match: "**/tap/**"
+    change: replacement
+    requirement: required
+    slot: probe
+    replaces: "**/stock_probe/**"

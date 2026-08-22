@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <rect width="512" height="512" rx="96" fill="#0f172a"/>
+  <!-- Stylised P for PrintPartner -->
+  <rect x="120" y="120" width="60" height="272" rx="12" fill="#38bdf8"/>
+  <rect x="120" y="120" width="220" height="60" rx="12" fill="#38bdf8"/>
+  <rect x="120" y="244" width="200" height="60" rx="12" fill="#38bdf8"/>
+  <rect x="280" y="120" width="60" height="184" rx="30" fill="#38bdf8"/>
+  <!-- Checkmark accent -->
+  <polyline points="280,380 320,430 420,330" fill="none" stroke="#22c55e" stroke-width="36" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

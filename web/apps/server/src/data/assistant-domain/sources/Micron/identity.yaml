@@ -1,0 +1,13 @@
+schema: print-partner/identity@1
+source_name: Micron
+canonical_name: Micron R1 (Printers For Ants)
+github_url: https://github.com/PrintersForAnts/Micron
+default_branch: main
+head_commit: 61a229ba01c3febbfb9b994e07302d9ddac68bfb   # 2026-07-29
+tags: [latest]
+important_tags:
+  - {name: latest, meaning: "floating convenience tag — NOT a stable pin; prefer main + commit pin"}
+maintainer_org: PrintersForAnts (hartk et al.)
+relationship: {upstream: true_for_micron, note: "Voron-2-derived design; West3D-Micron supplements it for the West3D Micron+ kit"}
+role: base_kit
+evidence: {date: 2026-07-29, method: "git ls-remote + shallow blob-less clone"}

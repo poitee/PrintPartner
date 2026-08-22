@@ -1,0 +1,10 @@
+schema: print-partner/compat@1
+source_name: Voron-Hardware
+kind: addon_electronics
+attaches_to:
+  - {base: any Voron base, note: "project-dependent: V0-* projects target Voron-0; Stealthburner_Toolhead_PCB targets SB toolhead; Klipper_Expander is generic"}
+replaces: []
+conflicts:
+  - "V0-Umbilical vs LDO-Picobilical vs voron_0_pancake_board: one toolhead-wiring solution per V0 stack"
+  - "CAN toolhead boards (CANboard_Mounts targets) make Stealthburner_Toolhead_PCB umbilical redundant"
+ldo_pairing: "LDO kits ship their own PCBs (Picobilical, breakout boards); use Voron-Hardware projects mainly on self-sourced stacks"
