@@ -1,0 +1,126 @@
+services:
+  postgres:
+    image: postgres:16.15-alpine
+    environment:
+      # Development defaults only. Override every PP_DEV_* value outside an isolated workstation.
+      POSTGRES_USER: "${PP_DEV_POSTGRES_USER:-printpartner}"
+      POSTGRES_PASSWORD: "${PP_DEV_POSTGRES_PASSWORD:-printpartner-dev-only}"
+      POSTGRES_DB: "${PP_DEV_POSTGRES_DB:-printpartner}"
+    ports:
+      - "${PP_BIND_ADDRESS:-127.0.0.1}:5432:5432"
+    volumes:
+      - pp-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PP_DEV_POSTGRES_USER:-printpartner}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # RustFS runs as UID 10001; fix named-volume ownership before startup.
+  rustfs-perms:
+    image: alpine:3.21.3
+    user: root
+    volumes:
+      - pp-rustfs:/data
+      - pp-rustfs-logs:/logs
+    command: sh -c "chown -R 10001:10001 /data /logs && exit 0"
+    restart: "no"
+
+  rustfs:
+    image: rustfs/rustfs:1.0.0-rc.2
+    environment:
+      RUSTFS_VOLUMES: /data
+      RUSTFS_ADDRESS: 0.0.0.0:9000
+      RUSTFS_CONSOLE_ADDRESS: 0.0.0.0:9001
+      RUSTFS_CONSOLE_ENABLE: "true"
+      RUSTFS_ACCESS_KEY: "${PP_DEV_S3_ACCESS_KEY:-rustfs-dev-only}"
+      RUSTFS_SECRET_KEY: "${PP_DEV_S3_SECRET_KEY:-rustfs-dev-only-secret}"
+      RUSTFS_CORS_ALLOWED_ORIGINS: "*"
+    ports:
+      - "${PP_BIND_ADDRESS:-127.0.0.1}:9000:9000"
+      - "${PP_BIND_ADDRESS:-127.0.0.1}:9001:9001"
+    volumes:
+      - pp-rustfs:/data
+      - pp-rustfs-logs:/app/logs
+    healthcheck:
+      test: ["CMD", "sh", "-ec", "curl -fsS http://127.0.0.1:9000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    depends_on:
+      rustfs-perms:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # Create the dev bucket once RustFS is healthy (idempotent).
+  rustfs-init:
+    image: amazon/aws-cli:2.22.12
+    depends_on:
+      rustfs:
+        condition: service_healthy
+    environment:
+      AWS_ACCESS_KEY_ID: "${PP_DEV_S3_ACCESS_KEY:-rustfs-dev-only}"
+      AWS_SECRET_ACCESS_KEY: "${PP_DEV_S3_SECRET_KEY:-rustfs-dev-only-secret}"
+      AWS_DEFAULT_REGION: us-east-1
+    entrypoint:
+      - sh
+      - -c
+      - |
+        aws --endpoint-url http://rustfs:9000 s3 mb s3://print-partner 2>/dev/null || true
+    restart: "no"
+
+  print-partner:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "${PP_BIND_ADDRESS:-127.0.0.1}:8080:8080"
+    # Reach host services (e.g. native Ollama) via host.docker.internal on Linux too.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "8080"
+      DEPLOY_MODE: "saas"
+      SAAS_DATA_DIR: "/data"
+      STATIC_DIR: "/app/web/apps/web/dist"
+      DATABASE_URL: "postgresql://${PP_DEV_POSTGRES_USER:-printpartner}:${PP_DEV_POSTGRES_PASSWORD:-printpartner-dev-only}@postgres:5432/${PP_DEV_POSTGRES_DB:-printpartner}"
+      # Postgres currently uses an experimental synchronous compatibility bridge.
+      POSTGRES_EXPERIMENTAL: "1"
+      S3_BUCKET: "print-partner"
+      S3_REGION: "us-east-1"
+      AWS_ACCESS_KEY_ID: "${PP_DEV_S3_ACCESS_KEY:-rustfs-dev-only}"
+      AWS_SECRET_ACCESS_KEY: "${PP_DEV_S3_SECRET_KEY:-rustfs-dev-only-secret}"
+      S3_ENDPOINT: "http://rustfs:9000"
+      S3_FORCE_PATH_STYLE: "1"
+      SAAS_ALLOW_ANONYMOUS: "1"
+      MULTI_USER: "${PP_DEV_MULTI_USER:-0}"
+      SESSION_SECRET: "${PP_DEV_SESSION_SECRET:-print-partner-dev-only-session-secret}"
+      CORS_ORIGIN: "true"
+      # Optional server-side Ollama runtime (the former in-app advisor UI is removed).
+      # AI_ENABLED: "1"
+      # AI_PROVIDER: "ollama"
+      # AI_MODEL: "llama3.1:latest"
+      # OLLAMA_URL: "http://host.docker.internal:11434"
+    volumes:
+      - print-partner-data:/data
+    healthcheck:
+      # node:22-bookworm-slim has no curl/wget; use node's built-in fetch.
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/health').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rustfs-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+volumes:
+  pp-postgres:
+  pp-rustfs:
+  pp-rustfs-logs:
+  print-partner-data:

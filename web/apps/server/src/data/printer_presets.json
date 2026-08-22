@@ -1,0 +1,56 @@
+[
+  {
+    "id": "preset-prusa-mk4",
+    "name": "Prusa MK4 / MK3S+",
+    "model_slug": "prusa-mk4",
+    "bed_width_mm": 250,
+    "bed_depth_mm": 210,
+    "bed_height_mm": 250,
+    "max_filament_slots": 1
+  },
+  {
+    "id": "preset-bambu-x1",
+    "name": "Bambu X1 / P1",
+    "model_slug": "bambu-x1",
+    "bed_width_mm": 256,
+    "bed_depth_mm": 256,
+    "bed_height_mm": 256,
+    "max_filament_slots": 4
+  },
+  {
+    "id": "preset-voron-250",
+    "name": "Voron 250",
+    "model_slug": "voron-250",
+    "bed_width_mm": 250,
+    "bed_depth_mm": 250,
+    "bed_height_mm": 250,
+    "max_filament_slots": 1
+  },
+  {
+    "id": "preset-voron-300",
+    "name": "Voron 300",
+    "model_slug": "voron-300",
+    "bed_width_mm": 300,
+    "bed_depth_mm": 300,
+    "bed_height_mm": 300,
+    "max_filament_slots": 1
+  },
+  {
+    "id": "preset-voron-350",
+    "name": "Voron 350",
+    "model_slug": "voron-350",
+    "bed_width_mm": 350,
+    "bed_depth_mm": 350,
+    "bed_height_mm": 350,
+    "max_filament_slots": 1
+  },
+  {
+    "id": "preset-large",
+    "name": "Large plate (400)",
+    "model_slug": "generic-400",
+    "bed_width_mm": 400,
+    "bed_depth_mm": 400,
+    "bed_height_mm": 400,
+    "max_filament_slots": 1
+  }
+]

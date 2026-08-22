@@ -1,0 +1,15 @@
+schema: print-partner/identity@1
+source_name: Voron-Trident
+canonical_name: Voron Trident
+github_url: https://github.com/VoronDesign/Voron-Trident
+default_branch: main
+head_commit: f04f747d4dea06315806f352abf57f767cedf2b4   # 2026-07-29
+tags: [Trident, Trident-prerelease, VTr1, VTr1_afterburner, VTr2]
+important_tags:
+  - {name: VTr2, meaning: "Trident R2 release (Stealthburner era)"}
+  - {name: VTr1, meaning: "Trident R1 release (Afterburner-era STL layout differs: ElectronicsBay, Exhaust_Filter, Spool_Management)"}
+  - {name: VTr1_afterburner, meaning: "R1 snapshot with Afterburner toolhead"}
+maintainer_org: VoronDesign
+relationship: {upstream: true, ldo_fork_of: null, note: "Upstream; LDOVoronTrident is the LDO kit supplement (NOT a fork of the STLs)"}
+role: base_kit
+evidence: {date: 2026-07-29, method: "git ls-remote --symref/--tags + shallow blob-less clone; VTr1/VTr2 tag trees fetched"}

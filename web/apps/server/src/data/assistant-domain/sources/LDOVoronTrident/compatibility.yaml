@@ -1,0 +1,11 @@
+schema: print-partner/compat@1
+source_name: LDOVoronTrident
+kind: addon_kit_supplement
+attaches_to: [{base: Voron-Trident, ref: "VTr2 (recommended) or main"}]
+replaces:
+  - "Trident power inlet (adamstech-style) -> power_inlet_1.2mm.stl"
+  - "Trident wire_cover_right.stl -> ldo_deck_wire_cover_right.stl"
+conflicts: []
+pairing_rules:
+  - "LDO Trident R2 kit == Voron-Trident@VTr2 + Voron-Stealthburner@main + LDOVoronTrident@master"
+  - "controller mounts per kit rev (Octopus vs Leviathan)"

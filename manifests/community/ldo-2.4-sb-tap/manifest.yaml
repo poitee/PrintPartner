@@ -1,0 +1,110 @@
+# Community stack manifest — LDO Voron 2.4 + Stealthburner + Tap (v2)
+# Per-repo authoring templates: docs/examples/cross-source-voron/
+format: print-partner-manifest
+version: 2
+plan:
+  name: LDO Voron 2.4 + Stealthburner + Tap
+  base_source_id: ldovoron2
+  addon_source_ids:
+    - voron-stealthburner
+    - voron-tap
+sources:
+  - id: ldovoron2
+    kind: github
+    url: https://github.com/MotorDynamics2/LDOVoron2
+  - id: voron-stealthburner
+    kind: github
+    url: https://github.com/VoronDesign/Voron-Stealthburner
+  - id: voron-tap
+    kind: github
+    url: https://github.com/VoronDesign/Voron-Tap
+selections:
+  toolhead: stealthburner
+  probe: voron_tap
+option_groups:
+  toolhead:
+    rule: pick_one
+    label: Toolhead
+    variants:
+      - id: stock
+        label: LDO stock toolhead
+        parts:
+          - "**/stock_toolhead/**"
+      - id: stealthburner
+        label: Stealthburner
+        parts:
+          - "**/Stealthburner/**"
+          - "**/stealthburner/**"
+  probe:
+    rule: pick_one
+    label: Probe
+    variants:
+      - id: stock
+        label: Stock probe
+        parts:
+          - "**/stock_probe/**"
+      - id: voron_tap
+        label: Voron Tap
+        parts:
+          - "**/Tap/**"
+          - "**/tap/**"
+  controller:
+    rule: pick_one
+    label: Controller
+    variants:
+      - id: stock
+        label: LDO electronics
+        parts:
+          - "**/electronics/**"
+  z_drives:
+    rule: pick_one
+    label: Z drives
+    variants:
+      - id: stock
+        label: LDO Z drives
+        parts:
+          - "**/z_drive/**"
+          - "**/Z_Drive/**"
+parts:
+  - match: "**/PrintedParts/**"
+    requirement: required
+  - match: "**/frame/**"
+    requirement: required
+  - match: "**/LDO/**"
+    requirement: required
+  - match: "**/stock_toolhead/**"
+    requirement: required
+    slot: toolhead
+  - match: "**/stock_probe/**"
+    requirement: optional
+    slot: probe
+  - match: "**/Stealthburner/**"
+    change: replacement
+    requirement: required
+    slot: toolhead
+    replaces: "**/stock_toolhead/**"
+  - match: "**/stealthburner/**"
+    change: replacement
+    requirement: required
+    slot: toolhead
+    replaces: "**/stock_toolhead/**"
+  - match: "**/Tap/**"
+    change: replacement
+    requirement: required
+    slot: probe
+    replaces: "**/stock_probe/**"
+  - match: "**/tap/**"
+    change: replacement
+    requirement: required
+    slot: probe
+    replaces: "**/stock_probe/**"
+slots:
+  toolhead:
+    label: Toolhead
+    default_group: toolhead
+  probe:
+    label: Probe
+    default_group: probe
+  z_drives:
+    label: Z drives
+    default_group: z_drives

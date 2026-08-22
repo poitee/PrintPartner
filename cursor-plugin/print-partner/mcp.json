@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "print-partner": {
+      "url": "${PRINT_PARTNER_MCP_URL}",
+      "headers": {
+        "Authorization": "Bearer ${PRINT_PARTNER_API_KEY}"
+      }
+    }
+  }
+}

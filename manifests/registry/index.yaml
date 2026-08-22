@@ -1,0 +1,7 @@
+# Community manifest catalog. status: proposed | approved | deprecated
+entries:
+  - slug: ldo-2.4-sb-tap
+    target_repo: LDOVoron2
+    title: LDO 2.4 + Stealthburner + Tap
+    manifest_file: ldo-2.4-sb-tap/manifest.yaml
+    status: proposed

@@ -1,0 +1,17 @@
+format: print-partner-manifest
+version: 2
+parts:
+  - match: "**/frame_*.stl"
+    requirement: required
+  - match: "**/stock_toolhead/**"
+    requirement: required
+    slot: toolhead
+option_groups:
+  toolhead:
+    rule: pick_one
+    label: Toolhead
+    variants:
+      - id: stock
+        label: Stock toolhead
+        parts:
+          - "**/stock_toolhead/**"

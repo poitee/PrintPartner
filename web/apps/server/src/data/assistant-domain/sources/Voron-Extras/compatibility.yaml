@@ -1,0 +1,7 @@
+schema: print-partner/compat@1
+source_name: Voron-Extras
+kind: addon_accents
+attaches_to: [{base: any, note: "cosmetic/utility only; Bed_Models keyed to printer family"}]
+replaces: []
+conflicts: []
+ldo_pairing: none

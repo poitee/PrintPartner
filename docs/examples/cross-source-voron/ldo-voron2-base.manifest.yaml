@@ -1,0 +1,59 @@
+format: print-partner-manifest
+version: 2
+parts:
+  - match: "**/PrintedParts/**"
+    requirement: required
+  - match: "**/frame/**"
+    requirement: required
+  - match: "**/LDO/**"
+    requirement: required
+  - match: "**/stock_toolhead/**"
+    requirement: required
+    slot: toolhead
+  - match: "**/stock_probe/**"
+    requirement: optional
+    slot: probe
+option_groups:
+  toolhead:
+    rule: pick_one
+    label: Toolhead
+    variants:
+      - id: stock
+        label: LDO stock toolhead
+        parts:
+          - "**/stock_toolhead/**"
+  probe:
+    rule: pick_one
+    label: Probe
+    variants:
+      - id: stock
+        label: Stock probe
+        parts:
+          - "**/stock_probe/**"
+  controller:
+    rule: pick_one
+    label: Controller
+    variants:
+      - id: stock
+        label: LDO electronics
+        parts:
+          - "**/electronics/**"
+  z_drives:
+    rule: pick_one
+    label: Z drives
+    variants:
+      - id: stock
+        label: LDO Z drives
+        parts:
+          - "**/z_drive/**"
+          - "**/Z_Drive/**"
+slots:
+  toolhead:
+    label: Toolhead
+    default_group: toolhead
+  probe:
+    label: Probe
+    default_group: probe
+  z_drives:
+    label: Z drives
+    default_group: z_drives

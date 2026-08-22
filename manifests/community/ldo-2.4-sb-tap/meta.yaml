@@ -1,0 +1,21 @@
+# LDO 2.4 + Stealthburner + Tap — community manifest stub
+slug: ldo-2.4-sb-tap
+status: proposed
+title: LDO Voron 2.4 + Stealthburner + Tap
+description: |
+  Reference stack preset using LDOVoron2 as base with Voron-Stealthburner and Voron-Tap addons.
+  See docs/examples/cross-source-voron/ for manifest templates.
+sources:
+  - name: LDOVoron2
+    role: base
+    url: https://github.com/MotorDynamics2/LDOVoron2
+  - name: Voron-Stealthburner
+    role: addon
+    url: https://github.com/VoronDesign/Voron-Stealthburner
+  - name: Voron-Tap
+    role: addon
+    url: https://github.com/VoronDesign/Voron-Tap
+stack_preset: ldo_2.4_sb_tap
+default_selections:
+  toolhead: stealthburner
+  probe: voron_tap

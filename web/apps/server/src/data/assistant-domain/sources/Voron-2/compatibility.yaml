@@ -1,0 +1,16 @@
+schema: print-partner/compat@1
+source_name: Voron-2
+kind: base
+toolhead_policy: "Pair with Voron-Stealthburner (printheads there; X carriage files live in printer repos per SB STLs/README.md)"
+recommended_addons:
+  - {source: Voron-Stealthburner, ref: main, required: true}
+  - {source: Voron-Tap, ref: main, optional: true, replaces: [STLs/Z_Endstop/nozzle_probe.stl], note: "Tap targets 'the V2 and Trident printer designs'"}
+  - {source: Klicky-Probe, ref: main, optional: true, path_scope: Printers/Voron/v1.8_v2.4_Legacy_Trident, conflicts_with: Voron-Tap}
+  - {source: Galileo2, ref: main, optional: true, path_scope: "galileo2_extruder (SB drop-in) and galileo2_z (G2Z Z-drives 'for V2-style printers (including V2, Micron, etc.)')"}
+ldo_pairing:
+  kit_supplement: {source: LDOVoron2, ref: main}
+  electronics: {source: Leviathan, ref: master, note: "Klipper_config/voron2_leviathan.cfg exists in Leviathan repo"}
+conflicts:
+  - "Tap vs Klicky vs stock nozzle_probe/z endstop: one only"
+  - "Galileo2 G2Z replaces STLs/Z_Drive parts"
+  - "Superceded_Parts and Test_Prints excluded from stacks"

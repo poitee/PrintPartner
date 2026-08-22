@@ -1,0 +1,45 @@
+services:
+  print-partner:
+    image: ghcr.io/poitee/print-partner:${PRINT_PARTNER_VERSION:-3.2.0}
+    # Fallback for building from source: docker compose up --build
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    # Reach host services (e.g. native Ollama) via host.docker.internal on Linux too.
+    # Docker Desktop (Mac/Windows) already provides this; host-gateway is a no-op there.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "8080"
+      PRINT_PARTNER_DATA_DIR: "/data"
+      STATIC_DIR: "/app/web/apps/web/dist"
+      DEPLOY_MODE: "self-host"
+      MULTI_USER: "${MULTI_USER:-0}"
+      SESSION_SECRET: "${SESSION_SECRET:-}"
+      # Optional: require API key for /api/v1 automation (slicers, scripts)
+      # PRINT_PARTNER_API_KEY: "change-me-to-a-long-random-secret"
+      # Optional: expose Swagger UI at /api/v1/docs in production (useful for integrations and MCP tool testing)
+      # OPENAPI_UI: "1"
+      # Optional server-side Ollama runtime (the former in-app advisor UI is removed).
+      # AI_ENABLED: "1"
+      # AI_PROVIDER: "ollama"
+      # AI_MODEL: "llama3.1:latest"
+      # OLLAMA_URL: "http://host.docker.internal:11434"
+    volumes:
+      - print-partner-data:/data
+    # Entrypoint starts as root, chowns /data for named volumes, then drops to ppuser.
+    # Do not set user: here — that would skip the chown and break fresh volumes.
+    healthcheck:
+      # node:22-bookworm-slim has no curl/wget; use node's built-in fetch.
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/health').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+volumes:
+  print-partner-data:

@@ -1,0 +1,6 @@
+schema: print-partner/compat@1
+source_name: LDO-Milo-V1.5
+kind: base_supplement_cnc
+attaches_to: [{base: "MillenniumMachines Milo V1.5 (upstream not in inventory)", note: "NOT compatible with any Voron printer stack"}]
+replaces: []
+conflicts: ["any Voron stack — different machine class"]

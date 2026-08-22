@@ -1,0 +1,34 @@
+node_modules/
+.venv/
+__pycache__/
+*.py[cod]
+dist/
+build/
+!web/apps/web/src/components/build/
+!web/apps/web/src/components/build/**
+.DS_Store
+# Local IDE / editor metadata (never ship in releases)
+.cursor/
+.vscode/
+.idea/
+AGENTS.md
+*.db
+.env
+.env.*
+ai_secrets.json
+
+# Web platform (monorepo under web/)
+web/node_modules/
+web/**/node_modules/
+web/**/dist/
+web/.turbo/
+web/**/.turbo/
+web/**/coverage/
+web/**/*.tsbuildinfo
+web/apps/server/data/
+
+# Local design / scratch (never commit)
+Do Not Push/
+
+# Git worktrees (local isolation)
+.worktrees/

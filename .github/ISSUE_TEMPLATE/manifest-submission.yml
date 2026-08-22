@@ -1,0 +1,37 @@
+name: Community manifest submission
+description: Discuss and vote on a user-submitted print-partner manifest
+title: "[Manifest] "
+labels:
+  - manifest/proposed
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Link your PR that adds `manifests/community/{slug}/` and updates `manifests/registry/index.yaml`.
+        Use reactions (👍 / 👎) on this issue for lightweight voting.
+  - type: input
+    id: slug
+    attributes:
+      label: Manifest slug
+      placeholder: my-project-build
+    validations:
+      required: true
+  - type: input
+    id: target_repo
+    attributes:
+      label: Target STL repository URL
+    validations:
+      required: true
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: Required vs optional parts, option groups, addons covered
+    validations:
+      required: true
+  - type: input
+    id: pr_url
+    attributes:
+      label: Pull request URL
+    validations:
+      required: true

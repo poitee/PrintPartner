@@ -1,0 +1,38 @@
+format: print-partner-manifest
+version: 2
+plan:
+  name: Example v2 stack
+  base_source_id: base
+  addon_source_ids:
+    - addon
+sources:
+  - id: base
+    kind: github
+    url: https://github.com/example/base
+  - id: addon
+    kind: archive
+    url: https://example.com/addon.zip
+option_groups:
+  toolhead:
+    rule: pick_one
+    variants:
+      - id: stock
+        parts:
+          - "**/stock/**"
+      - id: addon
+        parts:
+          - "**/addon/**"
+parts:
+  - match: "**/*.stl"
+    requirement: required
+slots:
+  toolhead:
+    label: Toolhead
+    default_group: toolhead
+variant_dimensions:
+  size:
+    - 250
+    - 300
+  style:
+    - classic
+    - compact

@@ -1,0 +1,8 @@
+schema: print-partner/compat@1
+source_name: CANboard_Mounts
+kind: addon_electronics_mounts
+attaches_to:
+  - {base: "any printer with NEMA14-based toolhead extruder (Sherpa Mini / G2 / CW2-class)", note: "board mounts bolt to motor rear"}
+replaces: ["toolhead breakout PCB mounts / umbilical frame parts (wiring-strategy dependent)"]
+conflicts: ["Picobilical/umbilical toolhead PCBs on the same toolhead"]
+ldo_pairing: "alternative to LDO toolhead breakout PCB approach (LDOVoron2 'Toolhead Breakout PCB Bracket')"

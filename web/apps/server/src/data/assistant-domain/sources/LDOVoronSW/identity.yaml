@@ -1,0 +1,11 @@
+schema: print-partner/identity@1
+source_name: LDOVoronSW
+canonical_name: LDO Voron Switchwire Kit supplement
+github_url: https://github.com/MotorDynamicsLab/LDOVoronSW
+default_branch: s1
+head_commit: c33cd2e96f55ae8f5af498a7b38eafcc205dbb12   # 2026-07-29
+tags: []
+maintainer_org: MotorDynamicsLab (LDO)
+relationship: {upstream: false, supplements: "VoronDesign/Voron-Switchwire @ master"}
+role: base_kit_supplement
+evidence: {date: 2026-07-29, method: "git ls-remote + shallow blob-less clone"}

@@ -1,0 +1,28 @@
+format: print-partner-manifest
+version: 2
+slots:
+  cable_routing:
+    label: Umbilical / chain routing
+    default_group: cable_routing
+option_groups:
+  cable_routing:
+    rule: pick_one
+    label: Cable routing
+    variants:
+      - id: drag_chain
+        label: Drag chain
+        parts:
+          - "mods/drag_chain/**"
+  toolhead:
+    rule: pick_one
+    variants:
+      - id: umbilical_mod
+        label: Umbilical (SB + drag chain)
+        parts:
+          - "mods/umbilical/**"
+parts:
+  - match: "mods/umbilical/**"
+    slot: cable_routing
+  - match: "mods/umbilical/bracket.stl"
+    change: replacement
+    replaces_slot: cable_routing

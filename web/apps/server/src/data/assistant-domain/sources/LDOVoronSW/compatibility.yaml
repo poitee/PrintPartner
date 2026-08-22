@@ -1,0 +1,8 @@
+schema: print-partner/compat@1
+source_name: LDOVoronSW
+kind: addon_kit_supplement
+attaches_to: [{base: Voron-Switchwire, ref: master}]
+replaces: ["upstream rs_25_mount.stl when RS25 vertical mount chosen"]
+conflicts: []
+pairing_rules:
+  - "LDO Switchwire kit == Voron-Switchwire@master + Voron-Stealthburner@main (_SW anchors) + LDOVoronSW@s1"

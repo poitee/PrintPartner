@@ -1,0 +1,15 @@
+schema: print-partner/compat@1
+source_name: Voron-Stealthburner
+kind: addon_toolhead
+attaches_to:
+  - {base: Voron-2, ref: Voron2.4}
+  - {base: Voron-Trident, ref: main/VTr2}
+  - {base: Voron-Switchwire, ref: master, note: "use chain_anchor_*_SW variants"}
+  - {base: Voron-Legacy, ref: main, confidence: "README: 'compatible with several of the printers in the Voron lineup' (per printer-repo READMEs)"}
+not_for:
+  - {base: Voron-0, note: "V0 uses Mini Stealthburner inside Voron-0 repo"}
+replaces: ["Afterburner toolhead (older *_afterburner tags of printer repos)"]
+conflicts:
+  - "G2E (Galileo2 extruder) replaces Clockwork2 body parts — don't select both"
+  - "cw1 vs cw2 rear halves are mutually exclusive"
+ldo_pairing: "LDO V2/Trident kits ship SB hardware; LDOVoron2/LDOVoronTrident add covers (LDOSBCW2MountCover) and CW2 chain-anchor remixes"

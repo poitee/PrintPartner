@@ -1,0 +1,9 @@
+schema: print-partner/compat@1
+source_name: Boop
+kind: addon_probe
+attaches_to:
+  - {base: Voron-0, note: "'Printers for Ants that have front-facing MGN9 rails and rock Voron V0.2-style toolheads'"}
+  - {base: Micron, confidence: "verify rail/toolhead config — PFA family but MGN9-front requirement applies"}
+replaces: ["stock V0-style X carriage front / Z endstop approach"]
+conflicts: ["Klicky-Probe", "Voron-Tap"]
+ldo_pairing: none

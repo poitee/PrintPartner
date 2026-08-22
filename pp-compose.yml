@@ -1,0 +1,132 @@
+# pp-compose.yml — Slicer stack overlay for Print Partner
+#
+# Usage (with base compose):
+#   docker compose -f docker-compose.yml -f pp-compose.yml up -d
+#
+# Local DNS: add to /etc/hosts (or your router/pihole):
+#   127.0.0.1  orca.home prusa.home
+#
+# IMAGE TAG NOTES:
+#   OrcaSlicer is pinned to LinuxServer's v2.4.2-ls35 build.
+#   PrusaSlicer has date-based rather than semantic tags and is pinned to the
+#   newest published build available during the August 2026 audit.
+#   BambuStudio: sodiumhydrogen publishes NO Bambu Studio image (checked Aug 2026 —
+#                only orcaslicer-*/superslicer-*/prusaslicer-* tags exist under
+#                sodiumhydrogen/slicers-novnc). There is currently no known
+#                containerized noVNC/Selkies BambuStudio image; BambuStudio's own
+#                license/build makes headless Linux packaging uncommon. This
+#                service is commented out below until a real image is found —
+#                do not deploy a placeholder tag that will 404.
+#                Check: https://hub.docker.com/r/sodiumhydrogen/slicers-novnc/tags
+
+services:
+
+  # -----------------------------------------------------------------------
+  # OrcaSlicer — Selkies WebRTC remote desktop, port 3000
+  # -----------------------------------------------------------------------
+  orcaslicer:
+    image: lscr.io/linuxserver/orcaslicer:v2.4.2-ls35
+    container_name: orcaslicer
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: America/Chicago          # adjust to your timezone
+      # Selkies options (override as needed):
+      # CUSTOM_PORT: "3000"
+      # CUSTOM_HTTPS_PORT: "3001"
+    ports:
+      - "3010:3000"                # host:container — avoids collision with other services
+    volumes:
+      - orca-config:/config        # slicer profiles, settings
+      - pp-exchange:/exchange      # drop 3MF here; pick up gcode
+    restart: unless-stopped
+
+  # -----------------------------------------------------------------------
+  # PrusaSlicer — noVNC remote desktop, port 8080
+  # -----------------------------------------------------------------------
+  prusaslicer:
+    image: mikeah/prusaslicer-novnc:2024.09.13.005624
+    container_name: prusaslicer
+    ports:
+      - "3013:8080"                # host:container (3011 taken by orcaslicer's HTTPS port)
+    volumes:
+      - prusa-config:/configs      # slicer profiles, settings
+      - pp-exchange:/exchange      # drop 3MF here; pick up gcode
+    restart: unless-stopped
+
+  # -----------------------------------------------------------------------
+  # BambuStudio — NOT DEPLOYED. No working noVNC/Selkies BambuStudio image
+  # could be found (checked lscr.io/linuxserver, sodiumhydrogen/slicers-novnc,
+  # mikeah — none publish one; BambuStudio's build/licensing makes headless
+  # Linux containerization uncommon in the community). Slicing for Bambu
+  # printers routes through the OrcaSlicer sidecar instead (Orca is a
+  # BambuStudio fork and can load/slice with Bambu machine profiles — see
+  # /opt/orcaslicer/resources/profiles/BBL/* in the orcaslicer image). Revisit
+  # if/when a real BambuStudio container image appears.
+  # -----------------------------------------------------------------------
+
+  # -----------------------------------------------------------------------
+  # Slicer sidecar — headless REST API over the OrcaSlicer CLI.
+  # PP's slicer_sidecar integration calls POST /slice with a plate 3MF +
+  # resolved profile JSON; this service runs orca-slicer --slice and returns
+  # base64 gcode matching the SliceRequest/SliceResult contract in
+  # web/apps/server/src/integrations/adapters/slicer-sidecar.ts.
+  # -----------------------------------------------------------------------
+  slicer-sidecar-orca:
+    build:
+      context: ./slicer-sidecar
+      dockerfile: Dockerfile
+    image: print-partner/slicer-sidecar-orca:local
+    container_name: slicer-sidecar-orca
+    environment:
+      SLICER_KIND: orca
+      SLICER_BIN: /opt/orcaslicer/bin/orca-slicer
+      PORT: "2814"
+      SIDECAR_WORKDIR: /tmp/sidecar-jobs
+      SLICE_TIMEOUT_S: "240"
+    volumes:
+      - pp-exchange:/exchange      # shared with print-partner (3MF in, gcode out)
+    expose:
+      - "2814"
+    restart: unless-stopped
+
+  # -----------------------------------------------------------------------
+  # Caddy — reverse-proxy for *.home routes
+  # -----------------------------------------------------------------------
+  caddy:
+    image: caddy:2.9.1-alpine
+    container_name: caddy-slicers
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - orcaslicer
+      - prusaslicer
+    restart: unless-stopped
+
+  # -----------------------------------------------------------------------
+  # Print Partner — extend with read-only profile volumes + exchange
+  # When used as an overlay (-f docker-compose.yml -f pp-compose.yml),
+  # Compose merges this definition with the base service from docker-compose.yml.
+  # -----------------------------------------------------------------------
+  print-partner:
+    volumes:
+      - orca-config:/slicer-profiles/orca:ro
+      - prusa-config:/slicer-profiles/prusa:ro
+      - bambu-config:/slicer-profiles/bambu:ro
+      - pp-exchange:/exchange      # read-write: PP writes 3MF, reads gcode
+
+# -----------------------------------------------------------------------
+# Named volumes
+# -----------------------------------------------------------------------
+volumes:
+  orca-config:
+  prusa-config:
+  bambu-config:
+  pp-exchange:
+  caddy-data:
+  caddy-config:

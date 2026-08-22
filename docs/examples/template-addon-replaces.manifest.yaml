@@ -1,0 +1,16 @@
+format: print-partner-manifest
+version: 2
+option_groups:
+  cable_routing:
+    rule: pick_one
+    label: Cable routing
+    variants:
+      - id: umbilical
+        label: Umbilical mod
+        parts:
+          - "mods/umbilical/**"
+parts:
+  - match: "mods/umbilical/**"
+    change: replacement
+    replaces: "**/stock_chain/**"
+    slot: cable_routing

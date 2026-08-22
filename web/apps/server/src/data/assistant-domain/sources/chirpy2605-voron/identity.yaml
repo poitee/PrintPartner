@@ -1,0 +1,11 @@
+schema: print-partner/identity@1
+source_name: chirpy2605-voron
+canonical_name: chirpy2605 Voron mods (Dragon Burner et al.)
+github_url: https://github.com/chirpy2605/voron
+default_branch: main
+head_commit: cc2e749d09d7f24418f9f8c73c90bcefb1e29584   # 2026-07-29
+tags: []
+maintainer_org: chirpy2605 (community)
+relationship: {upstream: false, note: "personal mod collection for V0.1/Trident + PFA printers"}
+role: toolhead_mods_collection
+evidence: {date: 2026-07-29, method: "git ls-remote + shallow blob-less clone"}

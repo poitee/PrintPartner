@@ -1,0 +1,4 @@
+format: print-partner-manifest
+version: 3
+parts:
+  - match: "**/*.stl"

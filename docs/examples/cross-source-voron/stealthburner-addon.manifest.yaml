@@ -1,0 +1,25 @@
+format: print-partner-manifest
+version: 2
+option_groups:
+  toolhead:
+    rule: pick_one
+    label: Toolhead
+    variants:
+      - id: stealthburner
+        label: Stealthburner
+        parts:
+          - "**/Stealthburner/**"
+          - "**/stealthburner/**"
+        excludes:
+          - "**/stock_toolhead/**"
+parts:
+  - match: "**/Stealthburner/**"
+    change: replacement
+    requirement: required
+    slot: toolhead
+    replaces: "**/stock_toolhead/**"
+  - match: "**/stealthburner/**"
+    change: replacement
+    requirement: required
+    slot: toolhead
+    replaces: "**/stock_toolhead/**"

@@ -1,0 +1,8 @@
+schema: print-partner/compat@1
+source_name: Pocket-Watch
+kind: addon_toolhead
+attaches_to:
+  - {base: Voron-0, confidence: UNKNOWN, note: "no README; assembly manual PDF is the only doc — verify before recommending"}
+replaces: ["stock V0 toolhead (if attached)"]
+conflicts: ["other toolhead addons in same stack"]
+ldo_pairing: UNKNOWN

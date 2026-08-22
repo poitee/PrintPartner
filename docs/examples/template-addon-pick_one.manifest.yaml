@@ -1,0 +1,17 @@
+format: print-partner-manifest
+version: 2
+option_groups:
+  toolhead:
+    rule: pick_one
+    label: Toolhead
+    variants:
+      - id: my_variant
+        label: My variant
+        parts:
+          - "printed/my_variant/**"
+        excludes:
+          - "**/stock_toolhead/**"
+parts:
+  - match: "printed/my_variant/**"
+    requirement: required
+    slot: toolhead

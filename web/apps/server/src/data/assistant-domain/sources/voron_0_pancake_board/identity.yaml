@@ -1,0 +1,11 @@
+schema: print-partner/identity@1
+source_name: voron_0_pancake_board
+canonical_name: V0 MiniAB Pancake Board (passive toolhead PCB)
+github_url: https://github.com/christophmuellerorg/voron_0_pancake_board
+default_branch: master
+head_commit: aeeeb883ac2761d3369f25d07897fd8a88e21004   # 2026-07-29
+tags: []
+maintainer_org: christophmuellerorg (community)
+relationship: {upstream: false, note: "independent V0.1 mod"}
+role: electronics
+evidence: {date: 2026-07-29, method: "git ls-remote + shallow blob-less clone"}
