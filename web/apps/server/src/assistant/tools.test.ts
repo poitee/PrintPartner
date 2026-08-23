@@ -8,6 +8,7 @@ import { InProcessJobRunner } from "../routes/jobs.js";
 import { invokeAssistantTool, applyAssistantAction } from "./tools.js";
 import { inferStackPresetId, summarizeOtherBuildsAsExamples } from "./example-builds.js";
 import { buildAssistantSystemPrompt } from "./assistant-context.js";
+import { hydrateBuildPlanningBrief, newBuildPlanningBrief, readBuildPlanningBrief, saveBuildPlanningBrief } from "../services/build-planning.js";
 
 describe("assistant tools + example builds", () => {
   let dataDir: string;
@@ -61,6 +62,373 @@ describe("assistant tools + example builds", () => {
     expect(JSON.parse(content).status).toBe("proposed");
     // Layers unchanged until apply
     expect(repo.getProfileLayers(plan.id).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("attaches an uploaded STL/3MF Source to Build planning after confirmation", async () => {
+    const source = repo.createSource({ name: "Customer project files", source_kind: "local" });
+    const sourcePath = join(dataDir, "sources", String(source.id));
+    mkdirSync(sourcePath, { recursive: true });
+    writeFileSync(join(sourcePath, "frame.stl"), "solid frame");
+    writeFileSync(join(sourcePath, "project.3mf"), "3mf bytes");
+    repo.updateSource(source.id, {
+      local_path: sourcePath,
+      last_synced_at: new Date().toISOString(),
+      last_commit_sha: "c".repeat(64),
+    });
+    const plan = repo.createProfile("Uploaded project");
+    saveBuildPlanningBrief(repo, newBuildPlanningBrief(plan.id, "Build these uploaded files", []));
+
+    const proposal = await invokeAssistantTool(
+      "propose_import_build_inputs",
+      { plan_id: plan.id, inputs: [{ source_id: source.id, filenames: ["frame.stl", "project.3mf"] }] },
+      { repo },
+    );
+    expect(readBuildPlanningBrief(repo, plan.id)?.evidence).toHaveLength(0);
+
+    const applied = await applyAssistantAction(proposal.proposedAction!, {
+      repo,
+      jobs: { start: async () => "unused" } as never,
+    });
+    expect(applied.ok).toBe(true);
+    expect(readBuildPlanningBrief(repo, plan.id)?.evidence).toEqual([
+      expect.objectContaining({
+        source_id: source.id,
+        input_kind: "upload",
+        filenames: ["frame.stl", "project.3mf"],
+        sync_status: "synced",
+        pinned_revision: "c".repeat(64),
+      }),
+    ]);
+  });
+
+  it("stores informational-page extracts with retrieval provenance", async () => {
+    const plan = repo.createProfile("Documented project");
+    saveBuildPlanningBrief(repo, newBuildPlanningBrief(plan.id, "Use the assembly guide", []));
+    const proposal = await invokeAssistantTool(
+      "propose_import_build_inputs",
+      {
+        plan_id: plan.id,
+        inputs: [{
+          url: "https://example.com/assembly-guide",
+          title: "Assembly guide",
+          extract: "Use four M3 heat-set inserts.",
+        }],
+      },
+      { repo },
+    );
+    const applied = await applyAssistantAction(proposal.proposedAction!, {
+      repo,
+      jobs: { start: async () => "unused" } as never,
+    });
+    expect(applied.ok).toBe(true);
+    expect(readBuildPlanningBrief(repo, plan.id)?.evidence[0]).toEqual(
+      expect.objectContaining({
+        title: "Assembly guide",
+        extract: "Use four M3 heat-set inserts.",
+        retrieved_at: expect.any(String),
+        content_hash: expect.stringMatching(/^[0-9a-f]{64}$/),
+      }),
+    );
+  });
+
+  it("marks a requested role color satisfied when its exact catalog filament is assigned", async () => {
+    const plan = repo.createProfile("Colored project");
+    saveBuildPlanningBrief(
+      repo,
+      newBuildPlanningBrief(plan.id, "Primary color is British Racing Green.", []),
+    );
+    const proposal = await invokeAssistantTool(
+      "propose_assign_role_filament",
+      {
+        plan_id: plan.id,
+        assignment: {
+          role: "primary",
+          requested_name: "British Racing Green",
+          inventory_kind: "catalog",
+          inventory_id: "abs-matte::british-racing-green",
+          color_hex: "#bfb8a9",
+        },
+      },
+      { repo },
+    );
+    const applied = await applyAssistantAction(proposal.proposedAction!, {
+      repo,
+      jobs: { start: async () => "unused" } as never,
+    });
+    expect(applied.ok).toBe(true);
+    expect(readBuildPlanningBrief(repo, plan.id)?.requirements).toContainEqual(
+      expect.objectContaining({ key: "color_primary", status: "satisfied" }),
+    );
+  });
+
+  it("rejects fabricated catalog filament assignments", async () => {
+    const plan = repo.createProfile("Fabricated color");
+    saveBuildPlanningBrief(repo, newBuildPlanningBrief(plan.id, "Primary color is Forest Green.", []));
+    const proposal = await invokeAssistantTool("propose_assign_role_filament", {
+      plan_id: plan.id,
+      assignment: {
+        role: "primary",
+        requested_name: "Forest Green",
+        inventory_kind: "catalog",
+        inventory_id: "made-up-id",
+        color_hex: "#285238",
+      },
+    }, { repo });
+    const result = await applyAssistantAction(proposal.proposedAction!, {
+      repo,
+      jobs: { start: async () => "unused" } as never,
+    });
+    expect(result).toMatchObject({ ok: false, detail: expect.stringMatching(/inventory/i) });
+    expect(readBuildPlanningBrief(repo, plan.id)?.requirements[0]?.status).toBe("unverified");
+  });
+
+  it("rejects unverified Spoolman and unconfirmed custom assignments", async () => {
+    const plan = repo.createProfile("Unverified inventory");
+    saveBuildPlanningBrief(repo, newBuildPlanningBrief(plan.id, "Primary color is Green.", []));
+    for (const assignment of [
+      { role: "primary", requested_name: "Green", inventory_kind: "spoolman", inventory_id: "spoolman:missing:filament:9", color_hex: "#008000" },
+      { role: "primary", requested_name: "Green", inventory_kind: "custom", color_hex: "#008000" },
+    ]) {
+      const proposal = await invokeAssistantTool("propose_assign_role_filament", { plan_id: plan.id, assignment }, { repo });
+      const result = await applyAssistantAction(proposal.proposedAction!, {
+        repo, jobs: { start: async () => "unused" } as never,
+      });
+      expect(result.ok).toBe(false);
+    }
+  });
+
+  it("rejects invalid planning source roles without changing evidence", async () => {
+    const source = repo.createSource({ name: "Project", source_kind: "local" });
+    const plan = repo.createProfile("Role validation");
+    const brief = newBuildPlanningBrief(plan.id, "Build it", []);
+    brief.evidence.push({
+      id: "evidence-1",
+      url: `printpartner:source:${source.id}`,
+      normalized_url: `printpartner:source:${source.id}`,
+      kind: "model_source",
+      source_id: source.id,
+    });
+    saveBuildPlanningBrief(repo, brief);
+
+    const result = await applyAssistantAction({
+      id: "bad-role",
+      type: "propose_set_build_source_roles",
+      plan_id: plan.id,
+      label: "Set roles",
+      summary: "test",
+      params: { roles: [{ evidence_id: "evidence-1", role: "structural-base" }] },
+    }, { repo, jobs: { start: async () => "unused" } as never });
+
+    expect(result).toMatchObject({ ok: false, detail: expect.stringMatching(/role/i) });
+    expect(readBuildPlanningBrief(repo, plan.id)?.evidence[0]?.source_role).toBeUndefined();
+  });
+
+  it("rejects role assignments for unknown evidence", async () => {
+    const plan = repo.createProfile("Evidence validation");
+    saveBuildPlanningBrief(repo, newBuildPlanningBrief(plan.id, "Build it", []));
+
+    const result = await applyAssistantAction({
+      id: "unknown-evidence",
+      type: "propose_set_build_source_roles",
+      plan_id: plan.id,
+      label: "Set roles",
+      summary: "test",
+      params: { roles: [{ evidence_id: "missing", role: "addon" }] },
+    }, { repo, jobs: { start: async () => "unused" } as never });
+
+    expect(result).toMatchObject({ ok: false, detail: expect.stringMatching(/evidence/i) });
+  });
+
+  it("rebuilds and records a fresh planning draft after confirmation", async () => {
+    const source = repo.createSource({ name: "Printable project", source_kind: "local" });
+    const sourcePath = join(dataDir, "printable-project");
+    mkdirSync(sourcePath, { recursive: true });
+    writeFileSync(join(sourcePath, "bracket.stl"), [
+      "solid bracket",
+      "facet normal 0 0 1 outer loop",
+      "vertex 0 0 0 vertex 1 0 0 vertex 0 1 0",
+      "endloop endfacet",
+      "endsolid bracket",
+    ].join("\n"));
+    repo.updateSource(source.id, {
+      local_path: sourcePath,
+      last_synced_at: new Date().toISOString(),
+      last_commit_sha: "a".repeat(40),
+    });
+    const plan = repo.createProfile("Rebuilt project", source.id);
+    const brief = newBuildPlanningBrief(plan.id, "Print the bracket", []);
+    brief.evidence.push({
+      id: "printable",
+      url: `printpartner:source:${source.id}`,
+      normalized_url: `printpartner:source:${source.id}`,
+      kind: "model_source",
+      input_kind: "upload",
+      source_id: source.id,
+      source_role: "structural_base",
+    });
+    saveBuildPlanningBrief(repo, hydrateBuildPlanningBrief(repo, brief));
+
+    const result = await applyAssistantAction({
+      id: "planning-rebuild",
+      type: "propose_rebuild_plan",
+      plan_id: plan.id,
+      label: "Rebuild",
+      summary: "test",
+      params: { idempotency_key: "customer-rebuild" },
+    }, { repo, jobs: { start: async () => "unused" } as never });
+
+    expect(result).toMatchObject({ ok: true, result: { draft_id: expect.any(Number) } });
+    const saved = readBuildPlanningBrief(repo, plan.id);
+    expect(saved?.draft_id).toEqual(expect.any(Number));
+    expect(repo.getPlanDraft(plan.id, saved!.draft_id!)?.parts).toHaveLength(1);
+
+    const replay = await applyAssistantAction({
+      id: "planning-rebuild",
+      type: "propose_rebuild_plan",
+      plan_id: plan.id,
+      label: "Rebuild",
+      summary: "test",
+      params: { idempotency_key: "customer-rebuild" },
+    }, { repo, jobs: { start: async () => "unused" } as never });
+    expect(replay).toMatchObject({
+      ok: true,
+      result: { draft_id: saved!.draft_id, recompute: "existing" },
+    });
+
+    writeFileSync(join(sourcePath, "second.stl"), "solid second\nendsolid second\n");
+    repo.updateSource(source.id, {
+      last_synced_at: new Date().toISOString(),
+      last_commit_sha: "b".repeat(40),
+    });
+    saveBuildPlanningBrief(repo, hydrateBuildPlanningBrief(repo, saved!));
+    const refreshed = await applyAssistantAction({
+      id: "planning-rebuild",
+      type: "propose_rebuild_plan",
+      plan_id: plan.id,
+      label: "Rebuild",
+      summary: "test",
+      params: { idempotency_key: "customer-rebuild" },
+    }, { repo, jobs: { start: async () => "unused" } as never });
+    expect(refreshed.ok).toBe(true);
+    const refreshedBrief = readBuildPlanningBrief(repo, plan.id)!;
+    expect(refreshedBrief.draft_id).not.toBe(saved!.draft_id);
+    expect(repo.getPlanDraft(plan.id, refreshedBrief.draft_id!)?.parts).toHaveLength(2);
+  });
+
+  it("rolls back planning layer changes when rebuild fails", async () => {
+    const original = repo.createSource({ name: "Original", source_kind: "local" });
+    const originalPath = join(dataDir, "original");
+    mkdirSync(originalPath, { recursive: true });
+    writeFileSync(join(originalPath, "part.stl"), "solid part\nendsolid part\n");
+    repo.updateSource(original.id, { local_path: originalPath });
+    const empty = repo.createSource({ name: "Empty", source_kind: "local" });
+    const emptyPath = join(dataDir, "empty");
+    mkdirSync(emptyPath, { recursive: true });
+    repo.updateSource(empty.id, { local_path: emptyPath });
+    const plan = repo.createProfile("Atomic rebuild", original.id);
+    const brief = newBuildPlanningBrief(plan.id, "Use empty", []);
+    brief.evidence.push({
+      id: "empty", url: `printpartner:source:${empty.id}`,
+      normalized_url: `printpartner:source:${empty.id}`, kind: "model_source",
+      source_id: empty.id, source_role: "structural_base",
+    });
+    saveBuildPlanningBrief(repo, brief);
+
+    const result = await applyAssistantAction({
+      id: "failed-rebuild", type: "propose_rebuild_plan", plan_id: plan.id,
+      label: "Rebuild", summary: "test", params: {},
+    }, { repo, jobs: { start: async () => "unused" } as never });
+
+    expect(result.ok).toBe(false);
+    expect(repo.getProfileLayers(plan.id).find((layer) => layer.layer_type === "base")?.project_id)
+      .toBe(original.id);
+  });
+
+  it("applies a reviewed source choice to the recomputed draft", async () => {
+    const stl = (x: number) => [
+      "solid bracket", "facet normal 0 0 1 outer loop",
+      `vertex 0 0 0 vertex ${x} 0 0 vertex 0 1 0`,
+      "endloop endfacet", "endsolid bracket",
+    ].join("\n");
+    const official = repo.createSource({ name: "Official", source_kind: "local" });
+    const vendor = repo.createSource({ name: "Vendor", source_kind: "local" });
+    const officialPath = join(dataDir, "official-choice");
+    const vendorPath = join(dataDir, "vendor-choice");
+    mkdirSync(join(officialPath, "parts"), { recursive: true });
+    mkdirSync(join(vendorPath, "parts"), { recursive: true });
+    mkdirSync(join(vendorPath, "unrelated"), { recursive: true });
+    writeFileSync(join(officialPath, "parts/bracket.stl"), stl(1));
+    writeFileSync(join(vendorPath, "parts/bracket.stl"), stl(2));
+    writeFileSync(join(vendorPath, "unrelated/bonus.stl"), stl(3));
+    for (const [source, localPath, sha] of [[official, officialPath, "a"], [vendor, vendorPath, "b"]] as const) {
+      repo.updateSource(source.id, {
+        local_path: localPath,
+        last_synced_at: new Date().toISOString(),
+        last_commit_sha: sha.repeat(40),
+      });
+    }
+    const plan = repo.createProfile("Resolved project", official.id);
+    const brief = newBuildPlanningBrief(plan.id, "Use official bracket", []);
+    brief.evidence = [
+      { id: "official", url: "https://example.test/official", normalized_url: "https://example.test/official", kind: "canonical_design", source_id: official.id, source_role: "structural_base" },
+      { id: "vendor", url: "https://example.test/vendor", normalized_url: "https://example.test/vendor", kind: "vendor_overlay", source_id: vendor.id, source_role: "overlay" },
+    ];
+    brief.contributions = [{
+      id: "vendor-parts", evidence_id: "vendor", slot: "bracket",
+      responsibility: "printable_parts", path_scopes: ["parts/**"], confidence: "high",
+      evidence_text: "Use only the bracket family", status: "confirmed",
+    }];
+    const hydrated = hydrateBuildPlanningBrief(repo, brief);
+    saveBuildPlanningBrief(repo, hydrated);
+    const groupId = hydrated.differences[0]!.group_id;
+    const resolved = await applyAssistantAction({
+      id: "resolve-choice", type: "propose_resolve_build_differences", plan_id: plan.id,
+      label: "Resolve", summary: "test",
+      params: { group_id: groupId, resolution: "choose_source_a", rationale: "Official geometry" },
+    }, { repo, jobs: { start: async () => "unused" } as never });
+    expect(resolved.ok).toBe(true);
+    const rebuilt = await applyAssistantAction({
+      id: "rebuild-choice", type: "propose_rebuild_plan", plan_id: plan.id,
+      label: "Rebuild", summary: "test", params: {},
+    }, { repo, jobs: { start: async () => "unused" } as never });
+    expect(rebuilt.ok).toBe(true);
+    const saved = readBuildPlanningBrief(repo, plan.id)!;
+    const draft = repo.getPlanDraft(plan.id, saved.draft_id!)!;
+    expect(draft.parts.filter((part) => part.included).map((part) => part.sourceLayer))
+      .toEqual(["base:Official"]);
+    expect(draft.parts.some((part) => part.sourceLayer === "addon:Vendor")).toBe(false);
+    expect(draft.parts.some((part) => part.relativePath === "unrelated/bonus.stl")).toBe(false);
+
+    const changedRoles = readBuildPlanningBrief(repo, plan.id)!;
+    changedRoles.evidence = changedRoles.evidence.map((evidence) =>
+      evidence.id === "vendor" ? { ...evidence, source_role: "evidence" } : evidence,
+    );
+    changedRoles.draft_id = undefined;
+    saveBuildPlanningBrief(repo, changedRoles);
+    const rebuiltWithoutVendor = await applyAssistantAction({
+      id: "rebuild-without-vendor", type: "propose_rebuild_plan", plan_id: plan.id,
+      label: "Rebuild", summary: "test", params: {},
+    }, { repo, jobs: { start: async () => "unused" } as never });
+    expect(rebuiltWithoutVendor.ok).toBe(true);
+    expect(repo.getProfileLayers(plan.id).some((layer) => layer.project_id === vendor.id)).toBe(false);
+  });
+
+  it("invalidates a reviewed draft when a difference decision changes", async () => {
+    const plan = repo.createProfile("Invalidated decision");
+    const brief = newBuildPlanningBrief(plan.id, "Build", []);
+    brief.differences = [{
+      id: "one", group_id: "group", family: "parts", kind: "changed",
+      source_a: "A", source_b: "B", path_a: "part.stl", path_b: "part.stl", detail: "changed",
+    }];
+    brief.draft_id = 12;
+    saveBuildPlanningBrief(repo, brief);
+    const result = await applyAssistantAction({
+      id: "changed-choice", type: "propose_resolve_build_differences", plan_id: plan.id,
+      label: "Resolve", summary: "test",
+      params: { group_id: "group", resolution: "choose_source_a", rationale: "Choose A" },
+    }, { repo, jobs: { start: async () => "unused" } as never });
+    expect(result.ok).toBe(true);
+    expect(readBuildPlanningBrief(repo, plan.id)?.draft_id).toBeUndefined();
   });
 
   it("refuses assistant rebuild actions before starting a job", async () => {

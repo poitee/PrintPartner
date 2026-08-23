@@ -19,6 +19,7 @@ import BuildRecipePanel from "../components/build/BuildRecipePanel";
 import PlanRolesCard from "../components/build/PlanRolesCard";
 import PlanWarningsCard from "../components/build/PlanWarningsCard";
 import PlanCategoryDropStrip from "../components/build/PlanCategoryDropStrip";
+import BuildPlanningCard from "../components/build/BuildPlanningCard";
 import DeskNextStep from "../components/layout/DeskNextStep";
 import EmptyState from "../components/layout/EmptyState";
 import PageHeader from "../components/layout/PageHeader";
@@ -740,6 +741,8 @@ function BuildPageContent() {
       />
 
       <DeskNextStep>{planNextStep}</DeskNextStep>
+
+      <BuildPlanningCard planId={selectedProfileId} />
 
       {(profilesBackgroundError ||
         profileDataBackgroundError ||

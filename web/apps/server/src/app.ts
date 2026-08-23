@@ -136,7 +136,13 @@ export async function buildApp(config: ServerConfig, ports: RuntimePorts) {
     redis: undefined, // Use in-memory store for single-instance deployments
   });
   await app.register(websocket);
-  await app.register(multipart, { limits: { fileSize: config.uploadMaxBytes } });
+  await app.register(multipart, {
+    limits: {
+      fileSize: config.uploadMaxBytes,
+      files: 100,
+      parts: 101,
+    },
+  });
 
   const requireAdmin = createAdminPreHandler(config, validateRequestApiKey);
   app.addHook("preHandler", async (request, reply) => {

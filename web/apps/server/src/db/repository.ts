@@ -64,12 +64,7 @@ import type {
 import { and, asc, count, desc, eq, gte, isNotNull, isNull, ne, sql } from "drizzle-orm";
 import { basename, join, resolve, sep } from "node:path";
 import type { DrizzleDb } from "./client.js";
-import {
-  asSyncDb,
-  isSyncSqliteDrizzle,
-  runSerializedSettingsMutation,
-  type AppDrizzleDb,
-} from "./sync-db-bridge.js";
+import { asSyncDb, isSyncSqliteDrizzle, runSerializedSettingsMutation, type AppDrizzleDb } from "./sync-db-bridge.js";
 import { getRequestTenantId } from "../middleware/tenant-context.js";
 import type { ProfileSourceMode } from "../services/printer-profile-assignments.js";
 import { stockPresets } from "../services/slicer-instances.js";
@@ -245,8 +240,7 @@ function parsePrinterPlanBindings(raw: string | null | undefined): PrinterPlanBi
     if (
       typeof row.integration_id !== "string" ||
       !row.integration_id.trim() ||
-      (row.profile_id !== null &&
-        (!Number.isSafeInteger(row.profile_id) || Number(row.profile_id) <= 0)) ||
+      (row.profile_id !== null && (!Number.isSafeInteger(row.profile_id) || Number(row.profile_id) <= 0)) ||
       typeof row.updated_at !== "string"
     ) {
       throw new Error("Printer Plan bindings are corrupt");
@@ -260,7 +254,10 @@ function parsePrinterPlanBindings(raw: string | null | undefined): PrinterPlanBi
 }
 
 function completedPrefixLength(
-  units: ReadonlyArray<{ readonly unitIndex: number; readonly completed: boolean }>,
+  units: ReadonlyArray<{
+    readonly unitIndex: number;
+    readonly completed: boolean;
+  }>,
 ): number {
   let count = 0;
   for (const unit of [...units].sort((left, right) => left.unitIndex - right.unitIndex)) {
@@ -349,14 +346,7 @@ export class PlanTransactionUnavailableError extends Error {
 export type SourceActivationObservation = Readonly<
   Pick<
     ProjectRow,
-    | "currentSourceRevisionId"
-    | "url"
-    | "branch"
-    | "tag"
-    | "sourceKind"
-    | "sourceType"
-    | "localPath"
-    | "lastCommitSha"
+    "currentSourceRevisionId" | "url" | "branch" | "tag" | "sourceKind" | "sourceType" | "localPath" | "lastCommitSha"
   >
 >;
 export type ProfileRow = typeof defaultSchema.buildProfiles.$inferSelect;
@@ -396,8 +386,7 @@ export type AcceptedProfileSummary = Readonly<{
 }>;
 
 export type ReadAcceptedProfileSummary =
-  | { readonly kind: "found"; readonly summary: AcceptedProfileSummary }
-  | { readonly kind: "missing" };
+  { readonly kind: "found"; readonly summary: AcceptedProfileSummary } | { readonly kind: "missing" };
 
 function acceptedProfileProgress(
   read: Exclude<AcceptedPlanProgressRead, { kind: "missing" }>,
@@ -540,7 +529,10 @@ export type AppliedPlanReceipt = {
 };
 
 export type ApplyPlanChangesResult =
-  | { readonly kind: "applied" | "existing" | "already_applied"; readonly receipt: AppliedPlanReceipt }
+  | {
+      readonly kind: "applied" | "existing" | "already_applied";
+      readonly receipt: AppliedPlanReceipt;
+    }
   | { readonly kind: "idempotency_conflict" }
   | { readonly kind: "not_found" }
   | { readonly kind: "not_open"; readonly state: "abandoned" | "consumed" }
@@ -609,7 +601,10 @@ export type RebasePlanDraftResult =
   | { readonly kind: "rebased"; readonly draft: PlanDraftSnapshot }
   | { readonly kind: "existing"; readonly draft: PlanDraftSnapshot }
   | { readonly kind: "idempotency_conflict" }
-  | { readonly kind: "merge_conflicts"; readonly conflicts: readonly RebaseConflict[] }
+  | {
+      readonly kind: "merge_conflicts";
+      readonly conflicts: readonly RebaseConflict[];
+    }
   | { readonly kind: "source_conflict"; readonly draft: PlanDraftSnapshot }
   | { readonly kind: "not_abandoned"; readonly state: PlanDraftState }
   | { readonly kind: "accepted_baseline_required" }
@@ -626,27 +621,19 @@ export type ReplaceWorkingPlanSourcesResult =
       readonly selection: WorkingSourceSelection;
     }
   | { readonly kind: "conflict"; readonly selection: WorkingSourceSelection }
-  | { readonly kind: "not_found" | "build_archived" | "transaction_unavailable" };
+  | {
+      readonly kind: "not_found" | "build_archived" | "transaction_unavailable";
+    };
 
 type StoredRebasePlanDraftResult = Extract<
   RebasePlanDraftResult,
   {
-    readonly kind:
-      | "existing"
-      | "idempotency_conflict"
-      | "source_conflict"
-      | "not_found";
+    readonly kind: "existing" | "idempotency_conflict" | "source_conflict" | "not_found";
   }
 >;
 
-type AcceptedPlanRevisionIdentity = Omit<
-  PlanRevisionRow,
-  "provenanceKind" | "inputSetId"
-> &
-  (
-    | { provenanceKind: "tracked"; inputSetId: number }
-    | { provenanceKind: "legacy"; inputSetId: null }
-  );
+type AcceptedPlanRevisionIdentity = Omit<PlanRevisionRow, "provenanceKind" | "inputSetId"> &
+  ({ provenanceKind: "tracked"; inputSetId: number } | { provenanceKind: "legacy"; inputSetId: null });
 
 export type AcceptedPlanRevisionPart = PlanRevisionPartRow & {
   effectiveRole: string;
@@ -669,8 +656,7 @@ function acceptedPlanRevisionIdentity(row: PlanRevisionRow): AcceptedPlanRevisio
 }
 
 export type SourceNamingCommand =
-  | { readonly kind: "use_defaults" }
-  | { readonly kind: "override"; readonly profile: StlNamingProfileDict };
+  { readonly kind: "use_defaults" } | { readonly kind: "override"; readonly profile: StlNamingProfileDict };
 
 export type SourceNamingReadResult =
   | { readonly kind: "found"; readonly settings: SourceNamingResponse }
@@ -720,13 +706,23 @@ type PreparedPlanDraft = {
   readonly basePlanVersion: number;
   readonly capture: CapturedPlanInputs;
   readonly inputs: readonly PlanSnapshotInput[];
-  readonly parts: readonly (PlanSnapshotPart & { readonly baseRevisionPartId: number | null })[];
+  readonly parts: readonly (PlanSnapshotPart & {
+    readonly baseRevisionPartId: number | null;
+  })[];
   readonly snapshotDigest: string;
 };
 
 type PreparePlanDraftResult =
   | { readonly kind: "prepared"; readonly value: PreparedPlanDraft }
   | { readonly kind: "no_layers" | "no_stls" | "would_wipe" };
+
+function matchesPlanningPathScope(path: string, scopes: ReadonlySet<string>): boolean {
+  for (const scope of scopes) {
+    if (scope.endsWith("/**") && path.startsWith(scope.slice(0, -2))) return true;
+    if (path === scope) return true;
+  }
+  return false;
+}
 
 type PlanFreshnessContext = {
   readonly globalNaming: StlNamingProfileDict;
@@ -850,9 +846,7 @@ function readSourceUpdateFields(metadata: Record<string, unknown> | null): {
   const data = metadata ?? {};
   const status = data[REMOTE_UPDATE_STATUS_KEY];
   const valid: "up_to_date" | "updates_available" | "unknown" | null =
-    status === "up_to_date" || status === "updates_available" || status === "unknown"
-      ? status
-      : null;
+    status === "up_to_date" || status === "updates_available" || status === "unknown" ? status : null;
   const checked = data[REMOTE_CHECKED_AT_KEY];
   return {
     update_status: valid,
@@ -864,8 +858,7 @@ function sourceSummary(row: ProjectRow, docCount = 0): SourceSummary {
   const metadata = parseProjectMetadata(row.metadataJson);
   const { useDefaults } = parseSourceNamingMetadata(metadata);
   const { update_status, update_checked_at } = readSourceUpdateFields(metadata);
-  const sourceKind =
-    row.sourceKind || (row.sourceType === "local" ? "local" : "github");
+  const sourceKind = row.sourceKind || (row.sourceType === "local" ? "local" : "github");
   return {
     id: row.id,
     name: row.name,
@@ -968,11 +961,10 @@ function assessCheckoffRemap(input: {
   readonly sendQueueRaw: string | null;
   readonly oldPartMatchKeyById: ReadonlyMap<number, string>;
   readonly partProfileIdById: ReadonlyMap<number, number>;
-  readonly newPartByMatchKey: ReadonlyMap<
-    string,
-    { readonly draftPartId: number; readonly quantityEffective: number }
-  >;
-}): { readonly kind: "safe" } & CheckoffRemapPlan | { readonly kind: "unsafe"; readonly unmappable: UnmappableCheckoffLink[] } {
+  readonly newPartByMatchKey: ReadonlyMap<string, { readonly draftPartId: number; readonly quantityEffective: number }>;
+}):
+  | ({ readonly kind: "safe" } & CheckoffRemapPlan)
+  | { readonly kind: "unsafe"; readonly unmappable: UnmappableCheckoffLink[] } {
   const remapByDraftPart = new Map<string, number>();
   const unmappable: UnmappableCheckoffLink[] = [];
   const seen = new Set<string>();
@@ -1161,12 +1153,7 @@ export class AppRepository {
     const visible = this.db
       .select({ id: this.schema.buildProfiles.id })
       .from(this.schema.buildProfiles)
-      .where(
-        and(
-          eq(this.schema.buildProfiles.tenantId, this.tenantId),
-          eq(this.schema.buildProfiles.id, profileId),
-        ),
-      )
+      .where(and(eq(this.schema.buildProfiles.tenantId, this.tenantId), eq(this.schema.buildProfiles.id, profileId)))
       .get();
     if (!visible) throw new Error("Profile not found");
   }
@@ -1255,9 +1242,7 @@ export class AppRepository {
     };
   }
 
-  readAcceptedPlanOperationalSnapshot(
-    profileId: number,
-  ): ReadAcceptedPlanOperationalSnapshotResult {
+  readAcceptedPlanOperationalSnapshot(profileId: number): ReadAcceptedPlanOperationalSnapshotResult {
     const read = () =>
       readAcceptedPlanOperationalSnapshotInternal({
         db: this.db,
@@ -1274,9 +1259,7 @@ export class AppRepository {
     return this.syncSqlite;
   }
 
-  materializeAcceptedPrinterLink(
-    command: MaterializeAcceptedPrinterLinkCommand,
-  ): MaterializeAcceptedPrinterLinkResult {
+  materializeAcceptedPrinterLink(command: MaterializeAcceptedPrinterLinkCommand): MaterializeAcceptedPrinterLinkResult {
     if (!this.syncSqlite) return { kind: "transaction_unavailable" };
     return this.transaction(() => {
       let profileId: number;
@@ -1301,9 +1284,7 @@ export class AppRepository {
         fallbackFilename = command.fallbackFilename ?? command.link.filename;
       } else {
         profileId = command.profileId;
-        const current = listUnattributedPrints(this).find(
-          (print) => print.id === command.expectedPrint.id,
-        );
+        const current = listUnattributedPrints(this).find((print) => print.id === command.expectedPrint.id);
         if (
           !current ||
           current.claimed_at ||
@@ -1327,7 +1308,10 @@ export class AppRepository {
       });
       if (accepted.kind === "empty") return { kind: "empty" as const };
       if (accepted.kind !== "ready") {
-        return { kind: "accepted_state_unavailable" as const, reason: accepted.kind };
+        return {
+          kind: "accepted_state_unavailable" as const,
+          reason: accepted.kind,
+        };
       }
       const attribution = resolveAcceptedPrinterAttribution(accepted.snapshot, {
         objectNames,
@@ -1405,17 +1389,13 @@ export class AppRepository {
             }
           }
         }
-        const bindings = parsePrinterPlanBindings(
-          this.getSetting("printer.plan_bindings"),
-        );
+        const bindings = parsePrinterPlanBindings(this.getSetting("printer.plan_bindings"));
         const binding = {
           integration_id: claimPrint.integration_id,
           profile_id: profileId,
           updated_at: new Date().toISOString(),
         } satisfies PrinterPlanBinding;
-        const bindingIndex = bindings.findIndex(
-          (candidate) => candidate.integration_id === claimPrint.integration_id,
-        );
+        const bindingIndex = bindings.findIndex((candidate) => candidate.integration_id === claimPrint.integration_id);
         if (bindingIndex >= 0) bindings[bindingIndex] = binding;
         else bindings.push(binding);
         this.setSetting("printer.plan_bindings", JSON.stringify(bindings));
@@ -1425,9 +1405,7 @@ export class AppRepository {
     }, "immediate");
   }
 
-  setAcceptedUnitCompletion(
-    command: SetAcceptedUnitCompletion,
-  ): SetAcceptedUnitCompletionResult {
+  setAcceptedUnitCompletion(command: SetAcceptedUnitCompletion): SetAcceptedUnitCompletionResult {
     if (!this.syncSqlite) return { kind: "transaction_unavailable" };
     return this.transaction(
       () =>
@@ -1472,7 +1450,10 @@ export class AppRepository {
 
   setAcceptedPrintedCounts(command: {
     readonly expected: AcceptedPlanBasis;
-    readonly rows: readonly { readonly partId: number; readonly printedCount: number }[];
+    readonly rows: readonly {
+      readonly partId: number;
+      readonly printedCount: number;
+    }[];
   }): SetAcceptedPrintedCountsResult {
     if (!this.syncSqlite) return { kind: "transaction_unavailable" };
     return this.transaction((): SetAcceptedPrintedCountsResult => {
@@ -1499,16 +1480,10 @@ export class AppRepository {
         return { kind: "stale_accepted_plan" };
       }
       if (accepted.snapshot.profile.archivedAt) return { kind: "plan_archived" };
-      const partById = new Map(
-        accepted.snapshot.parts.map((part) => [part.projectionPartId, part] as const),
-      );
+      const partById = new Map(accepted.snapshot.parts.map((part) => [part.projectionPartId, part] as const));
       const seen = new Set<number>();
       for (const row of command.rows) {
-        if (
-          seen.has(row.partId) ||
-          !Number.isSafeInteger(row.printedCount) ||
-          row.printedCount < 0
-        ) {
+        if (seen.has(row.partId) || !Number.isSafeInteger(row.printedCount) || row.printedCount < 0) {
           return { kind: "invalid_rows" };
         }
         seen.add(row.partId);
@@ -1520,9 +1495,7 @@ export class AppRepository {
         const part = partById.get(row.partId)!;
         return {
           part,
-          changed: part.units.some(
-            (unit) => unit.completed !== (unit.unitIndex < row.printedCount),
-          ),
+          changed: part.units.some((unit) => unit.completed !== unit.unitIndex < row.printedCount),
           units: part.units.map((unit) => ({
             unitIndex: unit.unitIndex,
             completed: unit.unitIndex < row.printedCount,
@@ -1535,11 +1508,7 @@ export class AppRepository {
         for (const unit of change.units) {
           this.db
             .update(this.schema.printProgress)
-            .set(
-              unit.completed
-                ? { completed: true }
-                : { completed: false, assembled: false },
-            )
+            .set(unit.completed ? { completed: true } : { completed: false, assembled: false })
             .where(
               and(
                 eq(this.schema.printProgress.tenantId, this.tenantId),
@@ -1605,11 +1574,7 @@ export class AppRepository {
       }
     | AcceptedProgressFailure
     | {
-        readonly kind:
-          | "link_not_found"
-          | "link_changed"
-          | "not_awaiting_verify"
-          | "invalid_decisions";
+        readonly kind: "link_not_found" | "link_changed" | "not_awaiting_verify" | "invalid_decisions";
       } {
     if (!this.syncSqlite) return { kind: "transaction_unavailable" };
     return this.transaction(() => {
@@ -1626,8 +1591,7 @@ export class AppRepository {
           .filter(
             (unit) =>
               !current.resolved_units?.some(
-                (resolved) =>
-                  resolved.part_id === unit.part_id && resolved.unit_index === unit.unit_index,
+                (resolved) => resolved.part_id === unit.part_id && resolved.unit_index === unit.unit_index,
               ),
           )
           .map((unit) => `${unit.part_id}:${unit.unit_index}`),
@@ -1642,8 +1606,7 @@ export class AppRepository {
         },
         command.expected,
         command.decisions,
-        (resolved) =>
-          resolved.every((decision) => pending.has(`${decision.partId}:${decision.unitIndex}`)),
+        (resolved) => resolved.every((decision) => pending.has(`${decision.partId}:${decision.unitIndex}`)),
       );
       if (applied.kind !== "applied") return applied;
       const resolvedUnits = [
@@ -1656,12 +1619,8 @@ export class AppRepository {
           ...(decision.note ? { note: decision.note } : {}),
         })),
       ];
-      const resolvedKeys = new Set(
-        resolvedUnits.map((decision) => `${decision.part_id}:${decision.unit_index}`),
-      );
-      const fullyDone = current.units.every((unit) =>
-        resolvedKeys.has(`${unit.part_id}:${unit.unit_index}`),
-      );
+      const resolvedKeys = new Set(resolvedUnits.map((decision) => `${decision.part_id}:${decision.unit_index}`));
+      const fullyDone = current.units.every((unit) => resolvedKeys.has(`${unit.part_id}:${unit.unit_index}`));
       const updated = updatePrinterCheckoffLink(
         this,
         current.id,
@@ -1709,21 +1668,13 @@ export class AppRepository {
         acceptedPlanVersion: this.schema.buildProfiles.acceptedPlanVersion,
       })
       .from(this.schema.buildProfiles)
-      .where(
-        and(
-          eq(this.schema.buildProfiles.tenantId, this.tenantId),
-          eq(this.schema.buildProfiles.id, profileId),
-        ),
-      )
+      .where(and(eq(this.schema.buildProfiles.tenantId, this.tenantId), eq(this.schema.buildProfiles.id, profileId)))
       .get();
     if (!profile) throw new Error("Profile not found");
     if (profile.acceptedPlanRevisionId == null) {
       return {
         kind: "unavailable",
-        reason:
-          profile.acceptedPlanVersion === 0
-            ? "no_accepted_revision"
-            : "compatibility_dirty",
+        reason: profile.acceptedPlanVersion === 0 ? "no_accepted_revision" : "compatibility_dirty",
       };
     }
     if (profile.acceptedPlanVersion <= 0) {
@@ -1732,10 +1683,7 @@ export class AppRepository {
     return this.readRequiredUnitSetByRevision(profileId, profile.acceptedPlanRevisionId);
   }
 
-  private readRequiredUnitSetByRevision(
-    profileId: number,
-    revisionId: number,
-  ): ReadCurrentRequiredUnitSetResult {
+  private readRequiredUnitSetByRevision(profileId: number, revisionId: number): ReadCurrentRequiredUnitSetResult {
     const revision = this.db
       .select({ id: this.schema.planRevisions.id })
       .from(this.schema.planRevisions)
@@ -1761,7 +1709,9 @@ export class AppRepository {
       .get();
     if (!set) {
       const partialMapping = this.db
-        .select({ token: this.schema.planRevisionRequiredUnits.requiredUnitToken })
+        .select({
+          token: this.schema.planRevisionRequiredUnits.requiredUnitToken,
+        })
         .from(this.schema.planRevisionRequiredUnits)
         .where(
           and(
@@ -1834,10 +1784,7 @@ export class AppRepository {
       .innerJoin(
         this.schema.requiredUnits,
         and(
-          eq(
-            this.schema.requiredUnits.token,
-            this.schema.planRevisionRequiredUnits.requiredUnitToken,
-          ),
+          eq(this.schema.requiredUnits.token, this.schema.planRevisionRequiredUnits.requiredUnitToken),
           eq(this.schema.requiredUnits.tenantId, this.tenantId),
           eq(this.schema.requiredUnits.profileId, profileId),
         ),
@@ -1845,10 +1792,7 @@ export class AppRepository {
       .innerJoin(
         this.schema.planRevisionParts,
         and(
-          eq(
-            this.schema.planRevisionParts.id,
-            this.schema.planRevisionRequiredUnits.revisionPartId,
-          ),
+          eq(this.schema.planRevisionParts.id, this.schema.planRevisionRequiredUnits.revisionPartId),
           eq(this.schema.planRevisionParts.revisionId, revisionId),
           eq(this.schema.planRevisionParts.tenantId, this.tenantId),
         ),
@@ -1857,14 +1801,8 @@ export class AppRepository {
         this.schema.printProgress,
         and(
           eq(this.schema.printProgress.tenantId, this.tenantId),
-          eq(
-            this.schema.printProgress.partId,
-            this.schema.planRevisionParts.projectionPartId,
-          ),
-          eq(
-            this.schema.printProgress.unitIndex,
-            this.schema.planRevisionRequiredUnits.unitIndex,
-          ),
+          eq(this.schema.printProgress.partId, this.schema.planRevisionParts.projectionPartId),
+          eq(this.schema.printProgress.unitIndex, this.schema.planRevisionRequiredUnits.unitIndex),
         ),
       )
       .where(
@@ -1886,11 +1824,7 @@ export class AppRepository {
     const units = mappings.map((mapping): RequiredUnitView => {
       const part = partById.get(mapping.revisionPartId);
       const expectedIndex = nextIndex.get(mapping.revisionPartId) ?? 0;
-      if (
-        !part ||
-        mapping.unitIndex !== expectedIndex ||
-        mapping.unitIndex >= part.quantityEffective
-      ) {
+      if (!part || mapping.unitIndex !== expectedIndex || mapping.unitIndex >= part.quantityEffective) {
         throw new Error("Required-unit set is incomplete");
       }
       nextIndex.set(mapping.revisionPartId, expectedIndex + 1);
@@ -1948,11 +1882,7 @@ export class AppRepository {
   }
 
   async ping(): Promise<boolean> {
-    this.db
-      .select({ key: this.schema.appSettings.key })
-      .from(this.schema.appSettings)
-      .limit(1)
-      .all();
+    this.db.select({ key: this.schema.appSettings.key }).from(this.schema.appSettings).limit(1).all();
     return true;
   }
 
@@ -1982,10 +1912,7 @@ export class AppRepository {
    * SQLite: native sync transaction. Postgres: in-process queue (sync bridge cannot
    * rebind queries onto an async tx client).
    */
-  transaction<T>(
-    fn: () => T,
-    behavior: "deferred" | "immediate" = "deferred",
-  ): T {
+  transaction<T>(fn: () => T, behavior: "deferred" | "immediate" = "deferred"): T {
     if (this.syncSqlite) {
       return this.db.transaction(fn, { behavior });
     }
@@ -2230,9 +2157,11 @@ export class AppRepository {
       .all();
   }
 
-  getPrinterProfileAssignment(
-    printerId: string,
-  ): { machineProfileId: number | null; profileSource: ProfileSourceMode; updatedAt: string } | null {
+  getPrinterProfileAssignment(printerId: string): {
+    machineProfileId: number | null;
+    profileSource: ProfileSourceMode;
+    updatedAt: string;
+  } | null {
     const row = this.db
       .select({
         machineProfileId: this.schema.printerProfileAssignments.machineProfileId,
@@ -2256,9 +2185,7 @@ export class AppRepository {
     };
   }
 
-  listFilamentSlotAssignments(
-    printerId: string,
-  ): Array<{ slotIndex: number; filamentProfileId: number | null }> {
+  listFilamentSlotAssignments(printerId: string): Array<{ slotIndex: number; filamentProfileId: number | null }> {
     return this.db
       .select({
         slotIndex: this.schema.printerFilamentSlotAssignments.slotIndex,
@@ -2283,7 +2210,10 @@ export class AppRepository {
     printerId: string;
     machineProfileId: number | null;
     profileSource: ProfileSourceMode;
-    filamentSlots: Array<{ slotIndex: number; filamentProfileId: number | null }>;
+    filamentSlots: Array<{
+      slotIndex: number;
+      filamentProfileId: number | null;
+    }>;
   }): void {
     if (input.profileSource !== "assigned" && input.profileSource !== "auto_match") {
       throw new Error(`Invalid profile_source: ${String(input.profileSource)}`);
@@ -2351,12 +2281,7 @@ export class AppRepository {
     const row = this.db
       .select()
       .from(this.schema.slicerInstances)
-      .where(
-        and(
-          eq(this.schema.slicerInstances.tenantId, this.tenantId),
-          eq(this.schema.slicerInstances.id, id),
-        ),
-      )
+      .where(and(eq(this.schema.slicerInstances.tenantId, this.tenantId), eq(this.schema.slicerInstances.id, id)))
       .get();
     return row ? this.mapSlicerInstance(row) : null;
   }
@@ -2404,17 +2329,14 @@ export class AppRepository {
       watchPath: input.watchPath ?? existing?.watchPath ?? "",
       dockerTarget: input.dockerTarget ?? existing?.dockerTarget ?? "local",
       dockerHost: input.dockerHost !== undefined ? input.dockerHost : (existing?.dockerHost ?? null),
-      composeService:
-        input.composeService !== undefined ? input.composeService : (existing?.composeService ?? null),
+      composeService: input.composeService !== undefined ? input.composeService : (existing?.composeService ?? null),
       image: input.image !== undefined ? input.image : (existing?.image ?? null),
-      containerName:
-        input.containerName !== undefined ? input.containerName : (existing?.containerName ?? null),
+      containerName: input.containerName !== undefined ? input.containerName : (existing?.containerName ?? null),
       portsJson: input.portsJson ?? existing?.portsJson ?? "[]",
       volumesJson: input.volumesJson ?? existing?.volumesJson ?? "[]",
       envJson: input.envJson ?? existing?.envJson ?? "{}",
       statusCache: input.statusCache ?? existing?.statusCache ?? "unknown",
-      statusMessage:
-        input.statusMessage !== undefined ? input.statusMessage : (existing?.statusMessage ?? null),
+      statusMessage: input.statusMessage !== undefined ? input.statusMessage : (existing?.statusMessage ?? null),
       enabled: enabled ? 1 : 0,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
@@ -2457,12 +2379,7 @@ export class AppRepository {
     if (!existing) return false;
     this.db
       .delete(this.schema.slicerInstances)
-      .where(
-        and(
-          eq(this.schema.slicerInstances.tenantId, this.tenantId),
-          eq(this.schema.slicerInstances.id, id),
-        ),
-      )
+      .where(and(eq(this.schema.slicerInstances.tenantId, this.tenantId), eq(this.schema.slicerInstances.id, id)))
       .run();
     return true;
   }
@@ -2522,9 +2439,7 @@ export class AppRepository {
     };
   }
 
-  getSlicerPrinterProfileById(
-    id: number,
-  ): (SlicerProfileRow & { lastSyncedAt: string | null }) | null {
+  getSlicerPrinterProfileById(id: number): (SlicerProfileRow & { lastSyncedAt: string | null }) | null {
     const row = this.db
       .select({
         id: this.schema.printerProfiles.id,
@@ -2534,9 +2449,7 @@ export class AppRepository {
         lastSyncedAt: this.schema.printerProfiles.lastSyncedAt,
       })
       .from(this.schema.printerProfiles)
-      .where(
-        and(eq(this.schema.printerProfiles.tenantId, this.tenantId), eq(this.schema.printerProfiles.id, id)),
-      )
+      .where(and(eq(this.schema.printerProfiles.tenantId, this.tenantId), eq(this.schema.printerProfiles.id, id)))
       .get();
     if (!row) return null;
     return {
@@ -2548,9 +2461,7 @@ export class AppRepository {
     };
   }
 
-  getSlicerFilamentProfileById(
-    id: number,
-  ): (SlicerProfileRow & { lastSyncedAt: string | null }) | null {
+  getSlicerFilamentProfileById(id: number): (SlicerProfileRow & { lastSyncedAt: string | null }) | null {
     const row = this.db
       .select({
         id: this.schema.filamentProfiles.id,
@@ -2560,9 +2471,7 @@ export class AppRepository {
         lastSyncedAt: this.schema.filamentProfiles.lastSyncedAt,
       })
       .from(this.schema.filamentProfiles)
-      .where(
-        and(eq(this.schema.filamentProfiles.tenantId, this.tenantId), eq(this.schema.filamentProfiles.id, id)),
-      )
+      .where(and(eq(this.schema.filamentProfiles.tenantId, this.tenantId), eq(this.schema.filamentProfiles.id, id)))
       .get();
     if (!row) return null;
     return {
@@ -2741,10 +2650,7 @@ export class AppRepository {
     }
     if (!this.getProjectRow(input.sourceId)) throw new Error("Source not found");
 
-    const upstreamRevisionKey = requiredText(
-      input.upstreamRevisionKey,
-      "Upstream revision key",
-    );
+    const upstreamRevisionKey = requiredText(input.upstreamRevisionKey, "Upstream revision key");
     const digest = sha256Digest(input.manifestDigest, "Manifest digest");
     const snapshotLocator = requiredText(input.snapshotLocator, "Snapshot locator");
     const syncedAt = requiredText(input.syncedAt, "Sync time");
@@ -2765,10 +2671,7 @@ export class AppRepository {
 
     const existing = findRegistered();
     if (existing) {
-      if (
-        existing.manifestDigest !== digest ||
-        existing.snapshotLocator !== snapshotLocator
-      ) {
+      if (existing.manifestDigest !== digest || existing.snapshotLocator !== snapshotLocator) {
         throw new Error("Source revision conflict for the upstream revision key");
       }
       return sourceRevision(existing);
@@ -2790,10 +2693,7 @@ export class AppRepository {
 
     const registered = findRegistered();
     if (!registered) throw new Error("Source revision could not be registered");
-    if (
-      registered.manifestDigest !== digest ||
-      registered.snapshotLocator !== snapshotLocator
-    ) {
+    if (registered.manifestDigest !== digest || registered.snapshotLocator !== snapshotLocator) {
       throw new Error("Source revision conflict for the upstream revision key");
     }
     return sourceRevision(registered);
@@ -2803,12 +2703,7 @@ export class AppRepository {
     const row = this.db
       .select()
       .from(this.schema.sourceRevisions)
-      .where(
-        and(
-          eq(this.schema.sourceRevisions.tenantId, this.tenantId),
-          eq(this.schema.sourceRevisions.id, id),
-        ),
-      )
+      .where(and(eq(this.schema.sourceRevisions.tenantId, this.tenantId), eq(this.schema.sourceRevisions.id, id)))
       .get();
     return row ? sourceRevision(row) : null;
   }
@@ -2888,9 +2783,7 @@ export class AppRepository {
             : eq(this.schema.projects.currentSourceRevisionId, observed.currentSourceRevisionId),
           eq(this.schema.projects.url, observed.url),
           eq(this.schema.projects.branch, observed.branch),
-          observed.tag === null
-            ? isNull(this.schema.projects.tag)
-            : eq(this.schema.projects.tag, observed.tag),
+          observed.tag === null ? isNull(this.schema.projects.tag) : eq(this.schema.projects.tag, observed.tag),
           eq(this.schema.projects.sourceKind, observed.sourceKind),
           eq(this.schema.projects.sourceType, observed.sourceType),
           observed.localPath === null
@@ -2911,11 +2804,7 @@ export class AppRepository {
     return activated;
   }
 
-  markSourceRevisionCurrent(
-    sourceId: number,
-    revisionId: number,
-    checkedAt = new Date().toISOString(),
-  ): void {
+  markSourceRevisionCurrent(sourceId: number, revisionId: number, checkedAt = new Date().toISOString()): void {
     if (Number.isNaN(Date.parse(checkedAt))) {
       throw new Error("Source update check time must be an ISO timestamp");
     }
@@ -2946,10 +2835,7 @@ export class AppRepository {
     throw new Error("Source metadata changed repeatedly while marking revision current");
   }
 
-  private capturePlanInputs(
-    profileId: number,
-    context?: PlanFreshnessContext,
-  ): CapturedPlanInputs {
+  private capturePlanInputs(profileId: number, context?: PlanFreshnessContext): CapturedPlanInputs {
     if (!context) this.requireProfile(profileId);
     const layers = context
       ? [...(context.layersByProfile.get(profileId) ?? [])]
@@ -2974,9 +2860,7 @@ export class AppRepository {
         throw new Error("A Source can only be attached to a Plan once");
       }
       seenSources.add(layer.projectId);
-      const source = context
-        ? context.sourcesById.get(layer.projectId)
-        : this.getProjectRow(layer.projectId);
+      const source = context ? context.sourcesById.get(layer.projectId) : this.getProjectRow(layer.projectId);
       if (!source) throw new Error("Plan Source not found");
       const metadata = parseProjectMetadata(source.metadataJson);
       const { useDefaults, override } = parseSourceNamingMetadataStrict(metadata);
@@ -2987,8 +2871,8 @@ export class AppRepository {
       ).toDict();
       const revision = source.currentSourceRevisionId
         ? context
-          ? context.revisionsById.get(source.currentSourceRevisionId) ?? null
-          : this.db
+          ? (context.revisionsById.get(source.currentSourceRevisionId) ?? null)
+          : (this.db
               .select()
               .from(this.schema.sourceRevisions)
               .where(
@@ -2997,12 +2881,9 @@ export class AppRepository {
                   eq(this.schema.sourceRevisions.id, source.currentSourceRevisionId),
                 ),
               )
-              .get() ?? null
+              .get() ?? null)
         : null;
-      if (
-        source.currentSourceRevisionId &&
-        (!revision || revision.projectId !== source.id)
-      ) {
+      if (source.currentSourceRevisionId && (!revision || revision.projectId !== source.id)) {
         throw new Error("Active Source revision not found");
       }
       const localPath = revision
@@ -3069,10 +2950,7 @@ export class AppRepository {
       .select()
       .from(this.schema.profileLayers)
       .where(
-        and(
-          eq(this.schema.profileLayers.tenantId, this.tenantId),
-          eq(this.schema.profileLayers.profileId, profileId),
-        ),
+        and(eq(this.schema.profileLayers.tenantId, this.tenantId), eq(this.schema.profileLayers.profileId, profileId)),
       )
       .orderBy(asc(this.schema.profileLayers.layerOrder))
       .all();
@@ -3111,14 +2989,8 @@ export class AppRepository {
         layer_order: input.layer_order,
         tracking_kind: input.tracking_kind,
         source_revision_id: input.source_revision_id,
-        manifest_digest:
-          input.manifest_digest == null
-            ? null
-            : sha256Digest(input.manifest_digest, "Manifest digest"),
-        effective_naming_digest: sha256Digest(
-          input.effective_naming_digest,
-          "Effective naming digest",
-        ),
+        manifest_digest: input.manifest_digest == null ? null : sha256Digest(input.manifest_digest, "Manifest digest"),
+        effective_naming_digest: sha256Digest(input.effective_naming_digest, "Effective naming digest"),
       })),
     );
 
@@ -3172,12 +3044,7 @@ export class AppRepository {
 
     const inputSetDigest = digestPlanInputs(canonical);
     const recordedAt = publishedAt ?? new Date().toISOString();
-    validateAcceptedOperationalTextRow([
-      this.tenantId,
-      inputSetDigest,
-      recordedAt,
-      recordedAt,
-    ]);
+    validateAcceptedOperationalTextRow([this.tenantId, inputSetDigest, recordedAt, recordedAt]);
     this.db
       .insert(this.schema.planRevisionInputSets)
       .values({
@@ -3293,11 +3160,7 @@ export class AppRepository {
     return this.planRevisionInputSet(published);
   }
 
-  private acceptPlanRevisionInputSet(
-    profileId: number,
-    inputSetId: number,
-    acceptedAt: string,
-  ): void {
+  private acceptPlanRevisionInputSet(profileId: number, inputSetId: number, acceptedAt: string): void {
     const inputSet = this.db
       .select()
       .from(this.schema.planRevisionInputSets)
@@ -3356,12 +3219,14 @@ export class AppRepository {
     return row ? this.planRevisionInputSet(row) : null;
   }
 
-  getAcceptedProfileStlRoots(
-    profileId: number,
-  ): Array<{ sourceLayer: string; rootPath: string }> | null {
+  getAcceptedProfileStlRoots(profileId: number): Array<{ sourceLayer: string; rootPath: string }> | null {
     const accepted = this.getAcceptedPlanRevisionInputSet(profileId);
     if (!accepted || accepted.format_version !== 2) return null;
-    const roots: Array<{ sourceLayer: string; rootPath: string; layerOrder: number }> = [];
+    const roots: Array<{
+      sourceLayer: string;
+      rootPath: string;
+      layerOrder: number;
+    }> = [];
     for (const input of accepted.inputs) {
       let rootPath: string | null;
       if (input.tracking_kind === "revision" && input.source_revision_id != null) {
@@ -3399,10 +3264,7 @@ export class AppRepository {
           isNotNull(this.schema.planRevisionInputSets.publishedAt),
         ),
       )
-      .orderBy(
-        desc(this.schema.planRevisionInputSets.publishedAt),
-        desc(this.schema.planRevisionInputSets.id),
-      )
+      .orderBy(desc(this.schema.planRevisionInputSets.publishedAt), desc(this.schema.planRevisionInputSets.id))
       .limit(1)
       .get();
     return row ? this.planRevisionInputSet(row) : null;
@@ -3439,8 +3301,7 @@ export class AppRepository {
     const name = input.name.trim();
     if (!name) throw new Error("Source name is required");
     const sourceKind = (input.source_kind ?? "github").toLowerCase();
-    const sourceType =
-      input.source_type ?? (sourceKind === "local" ? "local" : "git");
+    const sourceType = input.source_type ?? (sourceKind === "local" ? "local" : "git");
     const existing = this.db
       .select()
       .from(this.schema.projects)
@@ -3541,10 +3402,7 @@ export class AppRepository {
       .select({ id: this.schema.sourceRevisions.id })
       .from(this.schema.sourceRevisions)
       .where(
-        and(
-          eq(this.schema.sourceRevisions.tenantId, this.tenantId),
-          eq(this.schema.sourceRevisions.projectId, id),
-        ),
+        and(eq(this.schema.sourceRevisions.tenantId, this.tenantId), eq(this.schema.sourceRevisions.projectId, id)),
       )
       .limit(1)
       .get();
@@ -3564,17 +3422,12 @@ export class AppRepository {
         partCount: count(this.schema.parts.id),
       })
       .from(this.schema.buildProfiles)
-      .leftJoin(
-        this.schema.parts,
-        eq(this.schema.parts.profileId, this.schema.buildProfiles.id),
-      )
+      .leftJoin(this.schema.parts, eq(this.schema.parts.profileId, this.schema.buildProfiles.id))
       .where(eq(this.schema.buildProfiles.tenantId, this.tenantId))
       .groupBy(this.schema.buildProfiles.id)
       .orderBy(asc(this.schema.buildProfiles.name))
       .all();
-    const freshnessContext = this.buildPlanFreshnessContext(
-      rows.map(({ profile }) => profile.id),
-    );
+    const freshnessContext = this.buildPlanFreshnessContext(rows.map(({ profile }) => profile.id));
 
     return rows.map(({ profile, partCount }) => {
       const freshness = this.planFreshness(profile, freshnessContext);
@@ -3585,11 +3438,7 @@ export class AppRepository {
   listAcceptedProfileSummaries(): readonly AcceptedProfileSummary[] {
     const headers = this.listProfileHeaders();
     const summaries: AcceptedProfileSummary[] = [];
-    for (
-      let offset = 0;
-      offset < headers.length;
-      offset += MAX_ACCEPTED_PROGRESS_SUMMARY_BATCH
-    ) {
+    for (let offset = 0; offset < headers.length; offset += MAX_ACCEPTED_PROGRESS_SUMMARY_BATCH) {
       const chunk = headers.slice(offset, offset + MAX_ACCEPTED_PROGRESS_SUMMARY_BATCH);
       const reads = readAcceptedPlanProgressBatch(
         {
@@ -3631,26 +3480,21 @@ export class AppRepository {
       layersByProfile.set(layer.profileId, profileLayers);
     }
 
-    const sourceIds = [...new Set(layers.flatMap((layer) =>
-      layer.projectId == null ? [] : [layer.projectId],
-    ))];
+    const sourceIds = [...new Set(layers.flatMap((layer) => (layer.projectId == null ? [] : [layer.projectId])))];
     const sources = sourceIds.length
       ? this.db
           .select()
           .from(this.schema.projects)
-          .where(
-            and(
-              eq(this.schema.projects.tenantId, this.tenantId),
-              inArray(this.schema.projects.id, sourceIds),
-            ),
-          )
+          .where(and(eq(this.schema.projects.tenantId, this.tenantId), inArray(this.schema.projects.id, sourceIds)))
           .all()
       : [];
     const sourcesById = new Map(sources.map((source) => [source.id, source]));
 
-    const revisionIds = [...new Set(sources.flatMap((source) =>
-      source.currentSourceRevisionId == null ? [] : [source.currentSourceRevisionId],
-    ))];
+    const revisionIds = [
+      ...new Set(
+        sources.flatMap((source) => (source.currentSourceRevisionId == null ? [] : [source.currentSourceRevisionId])),
+      ),
+    ];
     const revisions = revisionIds.length
       ? this.db
           .select()
@@ -3724,11 +3568,7 @@ export class AppRepository {
     for (const accepted of acceptedRows) {
       const inputSet = inputSetsById.get(accepted.inputSetId);
       const inputs = canonicalPlanInputs(inputsBySet.get(accepted.inputSetId) ?? []);
-      if (
-        !inputSet ||
-        inputSet.profileId !== accepted.profileId ||
-        inputs.length !== inputSet.expectedInputCount
-      ) {
+      if (!inputSet || inputSet.profileId !== accepted.profileId || inputs.length !== inputSet.expectedInputCount) {
         invalidProfiles.add(accepted.profileId);
       }
       acceptedByProfile.set(accepted.profileId, {
@@ -3767,19 +3607,13 @@ export class AppRepository {
     };
   }
 
-  private isProfileStale(profile: {
-    configModifiedAt: string | null;
-    lastRecomputedAt: string | null;
-  }): boolean {
+  private isProfileStale(profile: { configModifiedAt: string | null; lastRecomputedAt: string | null }): boolean {
     if (!profile.lastRecomputedAt) return true;
     if (!profile.configModifiedAt) return false;
     return profile.configModifiedAt > profile.lastRecomputedAt;
   }
 
-  private planFreshness(
-    profile: ProfileRow,
-    providedContext?: PlanFreshnessContext,
-  ): PlanFreshness {
+  private planFreshness(profile: ProfileRow, providedContext?: PlanFreshnessContext): PlanFreshness {
     const context = providedContext ?? this.buildPlanFreshnessContext([profile.id]);
     const accepted = context.acceptedByProfile.get(profile.id) ?? null;
     let currentInputs: readonly CurrentPlanInput[] = [];
@@ -3810,12 +3644,7 @@ export class AppRepository {
     this.db
       .update(this.schema.buildProfiles)
       .set({ configModifiedAt: now })
-      .where(
-        and(
-          eq(this.schema.buildProfiles.tenantId, this.tenantId),
-          eq(this.schema.buildProfiles.id, profileId),
-        ),
-      )
+      .where(and(eq(this.schema.buildProfiles.tenantId, this.tenantId), eq(this.schema.buildProfiles.id, profileId)))
       .run();
   }
 
@@ -3824,10 +3653,7 @@ export class AppRepository {
       .select({ profileId: this.schema.profileLayers.profileId })
       .from(this.schema.profileLayers)
       .where(
-        and(
-          eq(this.schema.profileLayers.tenantId, this.tenantId),
-          eq(this.schema.profileLayers.projectId, projectId),
-        ),
+        and(eq(this.schema.profileLayers.tenantId, this.tenantId), eq(this.schema.profileLayers.projectId, projectId)),
       )
       .all();
     const seen = new Set<number>();
@@ -3842,12 +3668,7 @@ export class AppRepository {
     this.db
       .update(this.schema.buildProfiles)
       .set({ lastRecomputedAt: now })
-      .where(
-        and(
-          eq(this.schema.buildProfiles.tenantId, this.tenantId),
-          eq(this.schema.buildProfiles.id, profileId),
-        ),
-      )
+      .where(and(eq(this.schema.buildProfiles.tenantId, this.tenantId), eq(this.schema.buildProfiles.id, profileId)))
       .run();
   }
 
@@ -3863,11 +3684,7 @@ export class AppRepository {
       .from(this.schema.parts)
       .where(eq(this.schema.parts.profileId, id))
       .get();
-    return this.toProfileHeader(
-      profile,
-      Number(partCount?.c ?? 0),
-      this.planFreshness(profile),
-    );
+    return this.toProfileHeader(profile, Number(partCount?.c ?? 0), this.planFreshness(profile));
   }
 
   readAcceptedProfileSummary(profileId: number): ReadAcceptedProfileSummary {
@@ -3891,21 +3708,18 @@ export class AppRepository {
   }
 
   getOwnedProfileIdentity(id: number): OwnedProfileIdentity | null {
-    return this.db
-      .select({
-        id: this.schema.buildProfiles.id,
-        name: this.schema.buildProfiles.name,
-        orderNumber: this.schema.buildProfiles.orderNumber,
-        archivedAt: this.schema.buildProfiles.archivedAt,
-      })
-      .from(this.schema.buildProfiles)
-      .where(
-        and(
-          eq(this.schema.buildProfiles.tenantId, this.tenantId),
-          eq(this.schema.buildProfiles.id, id),
-        ),
-      )
-      .get() ?? null;
+    return (
+      this.db
+        .select({
+          id: this.schema.buildProfiles.id,
+          name: this.schema.buildProfiles.name,
+          orderNumber: this.schema.buildProfiles.orderNumber,
+          archivedAt: this.schema.buildProfiles.archivedAt,
+        })
+        .from(this.schema.buildProfiles)
+        .where(and(eq(this.schema.buildProfiles.tenantId, this.tenantId), eq(this.schema.buildProfiles.id, id)))
+        .get() ?? null
+    );
   }
 
   getAcceptedPlanRevision(profileId: number): AcceptedPlanRevision | null {
@@ -3915,22 +3729,13 @@ export class AppRepository {
         planVersion: this.schema.buildProfiles.acceptedPlanVersion,
       })
       .from(this.schema.buildProfiles)
-      .where(
-        and(
-          eq(this.schema.buildProfiles.tenantId, this.tenantId),
-          eq(this.schema.buildProfiles.id, profileId),
-        ),
-      )
+      .where(and(eq(this.schema.buildProfiles.tenantId, this.tenantId), eq(this.schema.buildProfiles.id, profileId)))
       .get();
     if (!profile?.revisionId) return null;
     return this.getPlanRevisionById(profileId, profile.revisionId, profile.planVersion);
   }
 
-  private getPlanRevisionById(
-    profileId: number,
-    revisionId: number,
-    planVersion: number,
-  ): AcceptedPlanRevision {
+  private getPlanRevisionById(profileId: number, revisionId: number, planVersion: number): AcceptedPlanRevision {
     const revision = this.db
       .select()
       .from(this.schema.planRevisions)
@@ -4011,24 +3816,15 @@ export class AppRepository {
       .select()
       .from(this.schema.planDraftInputs)
       .where(
-        and(
-          eq(this.schema.planDraftInputs.tenantId, this.tenantId),
-          eq(this.schema.planDraftInputs.draftId, draftId),
-        ),
+        and(eq(this.schema.planDraftInputs.tenantId, this.tenantId), eq(this.schema.planDraftInputs.draftId, draftId)),
       )
-      .orderBy(
-        asc(this.schema.planDraftInputs.layerOrder),
-        asc(this.schema.planDraftInputs.sourceId),
-      )
+      .orderBy(asc(this.schema.planDraftInputs.layerOrder), asc(this.schema.planDraftInputs.sourceId))
       .all();
     const parts = this.db
       .select()
       .from(this.schema.planDraftParts)
       .where(
-        and(
-          eq(this.schema.planDraftParts.tenantId, this.tenantId),
-          eq(this.schema.planDraftParts.draftId, draftId),
-        ),
+        and(eq(this.schema.planDraftParts.tenantId, this.tenantId), eq(this.schema.planDraftParts.draftId, draftId)),
       )
       .orderBy(asc(this.schema.planDraftParts.id))
       .all();
@@ -4044,12 +3840,7 @@ export class AppRepository {
               finalizedAt: this.schema.planDraftRequiredUnitReconciliations.finalizedAt,
             })
             .from(this.schema.planDraftRequiredUnitReconciliations)
-            .where(
-              eq(
-                this.schema.planDraftRequiredUnitReconciliations.id,
-                row.currentRequiredUnitReconciliationId,
-              ),
-            )
+            .where(eq(this.schema.planDraftRequiredUnitReconciliations.id, row.currentRequiredUnitReconciliationId))
             .get();
     if (
       row.currentRequiredUnitReconciliationId != null &&
@@ -4140,10 +3931,7 @@ export class AppRepository {
             })
           : null;
     if (digest == null) throw new Error("Plan draft digest format is unsupported");
-    if (
-      draft.digestFormat === PLAN_DRAFT_DIGEST_FORMAT &&
-      draft.requiredUnitReconciliation != null
-    ) {
+    if (draft.digestFormat === PLAN_DRAFT_DIGEST_FORMAT && draft.requiredUnitReconciliation != null) {
       throw new Error("Plan draft v1 cannot select a Required-unit reconciliation");
     }
     if (digest !== draft.snapshotDigest) throw new Error("Plan draft snapshot digest mismatch");
@@ -4155,12 +3943,7 @@ export class AppRepository {
     return this.db
       .select({ id: this.schema.planDrafts.id })
       .from(this.schema.planDrafts)
-      .where(
-        and(
-          eq(this.schema.planDrafts.tenantId, this.tenantId),
-          eq(this.schema.planDrafts.profileId, profileId),
-        ),
-      )
+      .where(and(eq(this.schema.planDrafts.tenantId, this.tenantId), eq(this.schema.planDrafts.profileId, profileId)))
       .orderBy(asc(this.schema.planDrafts.createdAt), asc(this.schema.planDrafts.id))
       .all()
       .map((row) => this.getPlanDraft(profileId, row.id))
@@ -4178,12 +3961,7 @@ export class AppRepository {
       this.db
         .select({ id: this.schema.parts.id })
         .from(this.schema.parts)
-        .where(
-          and(
-            eq(this.schema.parts.tenantId, this.tenantId),
-            eq(this.schema.parts.profileId, profileId),
-          ),
-        )
+        .where(and(eq(this.schema.parts.tenantId, this.tenantId), eq(this.schema.parts.profileId, profileId)))
         .limit(1)
         .get(),
     );
@@ -4191,7 +3969,12 @@ export class AppRepository {
 
   private preparePlanDraft(
     profileId: number,
-    base: { readonly baseRevisionId: number | null; readonly basePlanVersion: number },
+    base: {
+      readonly baseRevisionId: number | null;
+      readonly basePlanVersion: number;
+    },
+    excludedPathsBySourceId?: ReadonlyMap<number, ReadonlySet<string>>,
+    includedPathsBySourceId?: ReadonlyMap<number, ReadonlySet<string>>,
   ): PreparePlanDraftResult {
     const accepted =
       base.baseRevisionId == null
@@ -4223,6 +4006,8 @@ export class AppRepository {
     const scans: Array<[string, ReturnType<typeof scanRepo>]> = [];
     for (const layer of capture.layers) {
       if (!layer.localPath) continue;
+      const excludedPaths = excludedPathsBySourceId?.get(layer.projectId);
+      const includedPaths = includedPathsBySourceId?.get(layer.projectId);
       scans.push([
         layer.sourceLayer,
         scanRepo(
@@ -4230,6 +4015,10 @@ export class AppRepository {
           layer.sourceLayer,
           layer.importRules,
           resolveNamingProfile(layer.namingProfile, null),
+        ).filter(
+          (part) =>
+            !excludedPaths?.has(part.relativePath) &&
+            (!includedPaths || matchesPlanningPathScope(part.relativePath, includedPaths)),
         ),
       ]);
     }
@@ -4255,54 +4044,50 @@ export class AppRepository {
       manifestDigest: captured.manifest_digest,
       effectiveNamingDigest: captured.effective_naming_digest,
     }));
-    const trackingBySourceLayer = new Map(
-      draftInputs.map((captured) => [captured.sourceLayer, captured.trackingKind]),
+    const trackingBySourceLayer = new Map(draftInputs.map((captured) => [captured.sourceLayer, captured.trackingKind]));
+    const scannedDraftParts = merged.parts.map(
+      (
+        part,
+      ): PlanSnapshotPart & {
+        baseRevisionPartId: number | null;
+      } => {
+        const prior = acceptedByKey.get(part.matchKey);
+        const defaults = roleDefaults[normalizePartRole(part.role)];
+        const editableBaseline = prior ?? newPlanDraftPartDecisionBaseline();
+        const quantityOverride = editableBaseline.quantityOverride;
+        const trackingKind = trackingBySourceLayer.get(part.sourceLayer);
+        if (!trackingKind) throw new Error("Draft Part Source layer is not captured");
+        let artifactDigest: string | null = null;
+        if (trackingKind === "revision") {
+          if (!part.absolutePath) throw new Error("Tracked draft Part has no STL path");
+          artifactDigest = sha256File(part.absolutePath);
+        }
+        return {
+          baseRevisionPartId: prior?.id ?? null,
+          partKey: part.matchKey,
+          relativePath: part.relativePath,
+          filename: part.filename,
+          sourceLayer: part.sourceLayer,
+          status: part.status,
+          roleInferred: part.role,
+          roleOverride: prior?.roleOverride ?? null,
+          filamentColorId: prior ? prior.filamentColorId : (defaults?.filament_color_id ?? null),
+          filamentCustomHex: prior ? prior.filamentCustomHex : (defaults?.filament_custom_hex ?? null),
+          spoolmanSpoolId: prior ? prior.spoolmanSpoolId : (defaults?.spoolman_spool_id ?? null),
+          quantityInferred: part.quantityAuto,
+          quantityOverride,
+          quantityEffective: quantityOverride ?? part.quantityAuto,
+          included: editableBaseline.included,
+          notes: part.notes,
+          githubBlobUrl: prior?.githubBlobUrl ?? null,
+          geometrySame: prior?.geometrySame ?? part.geometrySame,
+          requirement: prior?.requirement ?? null,
+          optionGroupId: prior?.optionGroupId ?? null,
+          manifestSource: prior?.manifestSource ?? null,
+          artifactDigest,
+        };
+      },
     );
-    const scannedDraftParts = merged.parts.map((part): PlanSnapshotPart & {
-      baseRevisionPartId: number | null;
-    } => {
-      const prior = acceptedByKey.get(part.matchKey);
-      const defaults = roleDefaults[normalizePartRole(part.role)];
-      const editableBaseline = prior ?? newPlanDraftPartDecisionBaseline();
-      const quantityOverride = editableBaseline.quantityOverride;
-      const trackingKind = trackingBySourceLayer.get(part.sourceLayer);
-      if (!trackingKind) throw new Error("Draft Part Source layer is not captured");
-      let artifactDigest: string | null = null;
-      if (trackingKind === "revision") {
-        if (!part.absolutePath) throw new Error("Tracked draft Part has no STL path");
-        artifactDigest = sha256File(part.absolutePath);
-      }
-      return {
-        baseRevisionPartId: prior?.id ?? null,
-        partKey: part.matchKey,
-        relativePath: part.relativePath,
-        filename: part.filename,
-        sourceLayer: part.sourceLayer,
-        status: part.status,
-        roleInferred: part.role,
-        roleOverride: prior?.roleOverride ?? null,
-        filamentColorId: prior
-          ? prior.filamentColorId
-          : defaults?.filament_color_id ?? null,
-        filamentCustomHex: prior
-          ? prior.filamentCustomHex
-          : defaults?.filament_custom_hex ?? null,
-        spoolmanSpoolId: prior
-          ? prior.spoolmanSpoolId
-          : defaults?.spoolman_spool_id ?? null,
-        quantityInferred: part.quantityAuto,
-        quantityOverride,
-        quantityEffective: quantityOverride ?? part.quantityAuto,
-        included: editableBaseline.included,
-        notes: part.notes,
-        githubBlobUrl: prior?.githubBlobUrl ?? null,
-        geometrySame: prior?.geometrySame ?? part.geometrySame,
-        requirement: prior?.requirement ?? null,
-        optionGroupId: prior?.optionGroupId ?? null,
-        manifestSource: prior?.manifestSource ?? null,
-        artifactDigest,
-      };
-    });
     const draftParts = applyManifestToDraftParts(this, profileId, scannedDraftParts);
     return {
       kind: "prepared",
@@ -4322,10 +4107,7 @@ export class AppRepository {
     };
   }
 
-  private rebaseAcceptedParts(
-    profileId: number,
-    revisionId: number | null,
-  ): RebaseAcceptedPart[] {
+  private rebaseAcceptedParts(profileId: number, revisionId: number | null): RebaseAcceptedPart[] {
     if (revisionId == null) return [];
     const revision = this.db
       .select({ id: this.schema.planRevisions.id })
@@ -4381,6 +4163,8 @@ export class AppRepository {
     profileId: number;
     actor: string;
     idempotencyKey: string;
+    excludedPathsBySourceId?: ReadonlyMap<number, ReadonlySet<string>>;
+    includedPathsBySourceId?: ReadonlyMap<number, ReadonlySet<string>>;
   }): RecomputePlanDraftResult {
     const actor = requiredText(input.actor, "Plan draft actor");
     const idempotencyKey = requiredText(input.idempotencyKey, "Plan draft idempotency key");
@@ -4412,17 +4196,19 @@ export class AppRepository {
       })
       .from(this.schema.buildProfiles)
       .where(
-        and(
-          eq(this.schema.buildProfiles.tenantId, this.tenantId),
-          eq(this.schema.buildProfiles.id, input.profileId),
-        ),
+        and(eq(this.schema.buildProfiles.tenantId, this.tenantId), eq(this.schema.buildProfiles.id, input.profileId)),
       )
       .get();
     if (!profile) throw new Error("Profile not found");
     if (this.planDraftNeedsAcceptedBaseline(input.profileId, profile)) {
       return { kind: "accepted_baseline_required" };
     }
-    const preparation = this.preparePlanDraft(input.profileId, profile);
+    const preparation = this.preparePlanDraft(
+      input.profileId,
+      profile,
+      input.excludedPathsBySourceId,
+      input.includedPathsBySourceId,
+    );
     if (preparation.kind !== "prepared") return preparation;
     const prepared = preparation.value;
 
@@ -4476,10 +4262,7 @@ export class AppRepository {
         ) {
           return { kind: "base_changed" };
         }
-        if (
-          this.capturePlanInputs(input.profileId).fingerprint !==
-          prepared.capture.fingerprint
-        ) {
+        if (this.capturePlanInputs(input.profileId).fingerprint !== prepared.capture.fingerprint) {
           return { kind: "inputs_changed" };
         }
         const inserted = this.db
@@ -4502,7 +4285,11 @@ export class AppRepository {
         for (const captured of prepared.inputs) {
           this.db
             .insert(this.schema.planDraftInputs)
-            .values({ tenantId: this.tenantId, draftId: inserted.id, ...captured })
+            .values({
+              tenantId: this.tenantId,
+              draftId: inserted.id,
+              ...captured,
+            })
             .run();
         }
         for (const part of prepared.parts) {
@@ -4573,10 +4360,7 @@ export class AppRepository {
     if (!successorRow) return null;
     const successor = this.getPlanDraft(input.profileId, successorRow.id);
     if (!successor) throw new Error("Rebased Plan draft is missing");
-    if (
-      successor.origin.kind === "rebase" &&
-      successor.origin.sourceSnapshotDigest === input.sourceSnapshotDigest
-    ) {
+    if (successor.origin.kind === "rebase" && successor.origin.sourceSnapshotDigest === input.sourceSnapshotDigest) {
       return { kind: "existing", draft: successor };
     }
     const sourceRow = this.db
@@ -4642,10 +4426,7 @@ export class AppRepository {
     const source = this.getPlanDraft(input.profileId, input.sourceDraftId);
     if (!source) return { kind: "not_found" };
     if (source.state !== "abandoned") return { kind: "not_abandoned", state: source.state };
-    if (
-      source.lifecycleVersion !== input.expectedSourceLifecycleVersion ||
-      source.snapshotDigest !== expectedDigest
-    ) {
+    if (source.lifecycleVersion !== input.expectedSourceLifecycleVersion || source.snapshotDigest !== expectedDigest) {
       return { kind: "source_conflict", draft: source };
     }
     const profile = this.db
@@ -4655,20 +4436,14 @@ export class AppRepository {
       })
       .from(this.schema.buildProfiles)
       .where(
-        and(
-          eq(this.schema.buildProfiles.tenantId, this.tenantId),
-          eq(this.schema.buildProfiles.id, input.profileId),
-        ),
+        and(eq(this.schema.buildProfiles.tenantId, this.tenantId), eq(this.schema.buildProfiles.id, input.profileId)),
       )
       .get();
     if (!profile) return { kind: "not_found" };
     if (this.planDraftNeedsAcceptedBaseline(input.profileId, profile)) {
       return { kind: "accepted_baseline_required" };
     }
-    if (
-      profile.baseRevisionId === source.baseRevisionId &&
-      profile.basePlanVersion === source.basePlanVersion
-    ) {
+    if (profile.baseRevisionId === source.baseRevisionId && profile.basePlanVersion === source.basePlanVersion) {
       return this.transaction((): RebasePlanDraftResult => {
         const transactionStored = this.storedRebasePlanDraft(storedInput);
         if (transactionStored) return transactionStored;
@@ -4755,123 +4530,129 @@ export class AppRepository {
       return { kind: "merge_conflicts", conflicts: merged.conflicts };
     }
 
-    const writeResult = this.transaction(():
-      | { readonly kind: "created"; readonly draftId: number }
-      | Exclude<
-          RebasePlanDraftResult,
-          { readonly kind: "rebased" } | { readonly kind: "merge_conflicts" }
-        > => {
-      const transactionStored = this.storedRebasePlanDraft(storedInput);
-      if (transactionStored) return transactionStored;
-      const currentSourceHeader = this.db
-        .select({ id: this.schema.planDrafts.id })
-        .from(this.schema.planDrafts)
-        .where(
-          and(
-            eq(this.schema.planDrafts.tenantId, this.tenantId),
-            eq(this.schema.planDrafts.profileId, input.profileId),
-            eq(this.schema.planDrafts.id, input.sourceDraftId),
-          ),
-        )
-        .get();
-      if (!currentSourceHeader) return { kind: "not_found" };
-      const currentSource = this.getPlanDraft(input.profileId, input.sourceDraftId);
-      if (!currentSource) return { kind: "not_found" };
-      if (currentSource.state !== "abandoned") {
-        return { kind: "not_abandoned", state: currentSource.state };
-      }
-      if (
-        currentSource.lifecycleVersion !== input.expectedSourceLifecycleVersion ||
-        currentSource.snapshotDigest !== expectedDigest
-      ) {
-        return { kind: "source_conflict", draft: currentSource };
-      }
-      const currentProfile = this.db
-        .select({
-          baseRevisionId: this.schema.buildProfiles.acceptedPlanRevisionId,
-          basePlanVersion: this.schema.buildProfiles.acceptedPlanVersion,
-        })
-        .from(this.schema.buildProfiles)
-        .where(
-          and(
-            eq(this.schema.buildProfiles.tenantId, this.tenantId),
-            eq(this.schema.buildProfiles.id, input.profileId),
-          ),
-        )
-        .get();
-      if (!currentProfile) return { kind: "not_found" };
-      if (this.planDraftNeedsAcceptedBaseline(input.profileId, currentProfile)) {
-        return { kind: "accepted_baseline_required" };
-      }
-      if (
-        currentProfile.baseRevisionId === currentSource.baseRevisionId &&
-        currentProfile.basePlanVersion === currentSource.basePlanVersion
-      ) {
-        return { kind: "base_unchanged" };
-      }
-      if (
-        currentProfile.baseRevisionId !== prepared.baseRevisionId ||
-        currentProfile.basePlanVersion !== prepared.basePlanVersion
-      ) {
-        return { kind: "base_changed" };
-      }
-      if (
-        this.capturePlanInputs(input.profileId).fingerprint !== prepared.capture.fingerprint
-      ) {
-        return { kind: "inputs_changed" };
-      }
-      const inserted = this.db
-        .insert(this.schema.planDrafts)
-        .values({
-          tenantId: this.tenantId,
-          profileId: input.profileId,
-          baseRevisionId: prepared.baseRevisionId,
-          basePlanVersion: prepared.basePlanVersion,
-          state: "open",
-          lifecycleVersion: 0,
-          rebasedFromDraftId: input.sourceDraftId,
-          rebasedFromLifecycleVersion: input.expectedSourceLifecycleVersion,
-          rebasedFromSnapshotDigest: expectedDigest,
-          digestFormat: PLAN_DRAFT_DIGEST_FORMAT,
-          snapshotDigest: merged.draft.snapshotDigest,
-          createdBy: actor,
-          idempotencyKey,
-          createdAt: new Date().toISOString(),
-        })
-        .returning({ id: this.schema.planDrafts.id })
-        .get();
-      if (!inserted) throw new Error("Rebased Plan draft could not be created");
-      for (const captured of merged.draft.inputs) {
-        const { id: _id, draftId: _draftId, ...values } = captured;
-        this.db
-          .insert(this.schema.planDraftInputs)
-          .values({ tenantId: this.tenantId, draftId: inserted.id, ...values })
-          .run();
-      }
-      for (const part of merged.draft.parts) {
-        const { id: _id, draftId: _draftId, ...values } = part;
-        this.db
-          .insert(this.schema.planDraftParts)
-          .values({ tenantId: this.tenantId, draftId: inserted.id, ...values })
-          .run();
-      }
-      const persisted = this.getPlanDraft(input.profileId, inserted.id);
-      if (
-        !persisted ||
-        persisted.snapshotDigest !== merged.draft.snapshotDigest ||
-        persisted.origin.kind !== "rebase" ||
-        persisted.origin.sourceDraftId !== input.sourceDraftId ||
-        persisted.origin.sourceLifecycleVersion !== input.expectedSourceLifecycleVersion ||
-        persisted.origin.sourceSnapshotDigest !== expectedDigest ||
-        persisted.baseRevisionId !== prepared.baseRevisionId ||
-        persisted.basePlanVersion !== prepared.basePlanVersion ||
-        persisted.state !== "open" ||
-        persisted.lifecycleVersion !== 0
-      ) {
-        throw new Error("Rebased Plan draft could not be verified");
-      }
-      return { kind: "created", draftId: inserted.id };
-    }, "immediate");
+    const writeResult = this.transaction(
+      ():
+        | { readonly kind: "created"; readonly draftId: number }
+        | Exclude<RebasePlanDraftResult, { readonly kind: "rebased" } | { readonly kind: "merge_conflicts" }> => {
+        const transactionStored = this.storedRebasePlanDraft(storedInput);
+        if (transactionStored) return transactionStored;
+        const currentSourceHeader = this.db
+          .select({ id: this.schema.planDrafts.id })
+          .from(this.schema.planDrafts)
+          .where(
+            and(
+              eq(this.schema.planDrafts.tenantId, this.tenantId),
+              eq(this.schema.planDrafts.profileId, input.profileId),
+              eq(this.schema.planDrafts.id, input.sourceDraftId),
+            ),
+          )
+          .get();
+        if (!currentSourceHeader) return { kind: "not_found" };
+        const currentSource = this.getPlanDraft(input.profileId, input.sourceDraftId);
+        if (!currentSource) return { kind: "not_found" };
+        if (currentSource.state !== "abandoned") {
+          return { kind: "not_abandoned", state: currentSource.state };
+        }
+        if (
+          currentSource.lifecycleVersion !== input.expectedSourceLifecycleVersion ||
+          currentSource.snapshotDigest !== expectedDigest
+        ) {
+          return { kind: "source_conflict", draft: currentSource };
+        }
+        const currentProfile = this.db
+          .select({
+            baseRevisionId: this.schema.buildProfiles.acceptedPlanRevisionId,
+            basePlanVersion: this.schema.buildProfiles.acceptedPlanVersion,
+          })
+          .from(this.schema.buildProfiles)
+          .where(
+            and(
+              eq(this.schema.buildProfiles.tenantId, this.tenantId),
+              eq(this.schema.buildProfiles.id, input.profileId),
+            ),
+          )
+          .get();
+        if (!currentProfile) return { kind: "not_found" };
+        if (this.planDraftNeedsAcceptedBaseline(input.profileId, currentProfile)) {
+          return { kind: "accepted_baseline_required" };
+        }
+        if (
+          currentProfile.baseRevisionId === currentSource.baseRevisionId &&
+          currentProfile.basePlanVersion === currentSource.basePlanVersion
+        ) {
+          return { kind: "base_unchanged" };
+        }
+        if (
+          currentProfile.baseRevisionId !== prepared.baseRevisionId ||
+          currentProfile.basePlanVersion !== prepared.basePlanVersion
+        ) {
+          return { kind: "base_changed" };
+        }
+        if (this.capturePlanInputs(input.profileId).fingerprint !== prepared.capture.fingerprint) {
+          return { kind: "inputs_changed" };
+        }
+        const inserted = this.db
+          .insert(this.schema.planDrafts)
+          .values({
+            tenantId: this.tenantId,
+            profileId: input.profileId,
+            baseRevisionId: prepared.baseRevisionId,
+            basePlanVersion: prepared.basePlanVersion,
+            state: "open",
+            lifecycleVersion: 0,
+            rebasedFromDraftId: input.sourceDraftId,
+            rebasedFromLifecycleVersion: input.expectedSourceLifecycleVersion,
+            rebasedFromSnapshotDigest: expectedDigest,
+            digestFormat: PLAN_DRAFT_DIGEST_FORMAT,
+            snapshotDigest: merged.draft.snapshotDigest,
+            createdBy: actor,
+            idempotencyKey,
+            createdAt: new Date().toISOString(),
+          })
+          .returning({ id: this.schema.planDrafts.id })
+          .get();
+        if (!inserted) throw new Error("Rebased Plan draft could not be created");
+        for (const captured of merged.draft.inputs) {
+          const { id: _id, draftId: _draftId, ...values } = captured;
+          this.db
+            .insert(this.schema.planDraftInputs)
+            .values({
+              tenantId: this.tenantId,
+              draftId: inserted.id,
+              ...values,
+            })
+            .run();
+        }
+        for (const part of merged.draft.parts) {
+          const { id: _id, draftId: _draftId, ...values } = part;
+          this.db
+            .insert(this.schema.planDraftParts)
+            .values({
+              tenantId: this.tenantId,
+              draftId: inserted.id,
+              ...values,
+            })
+            .run();
+        }
+        const persisted = this.getPlanDraft(input.profileId, inserted.id);
+        if (
+          !persisted ||
+          persisted.snapshotDigest !== merged.draft.snapshotDigest ||
+          persisted.origin.kind !== "rebase" ||
+          persisted.origin.sourceDraftId !== input.sourceDraftId ||
+          persisted.origin.sourceLifecycleVersion !== input.expectedSourceLifecycleVersion ||
+          persisted.origin.sourceSnapshotDigest !== expectedDigest ||
+          persisted.baseRevisionId !== prepared.baseRevisionId ||
+          persisted.basePlanVersion !== prepared.basePlanVersion ||
+          persisted.state !== "open" ||
+          persisted.lifecycleVersion !== 0
+        ) {
+          throw new Error("Rebased Plan draft could not be verified");
+        }
+        return { kind: "created", draftId: inserted.id };
+      },
+      "immediate",
+    );
     if (writeResult.kind !== "created") return writeResult;
     const draft = this.getPlanDraft(input.profileId, writeResult.draftId);
     if (!draft) throw new Error("Rebased Plan draft is missing");
@@ -4923,10 +4704,7 @@ export class AppRepository {
         )
         .all();
       for (const input of inputs) {
-        sourceIdByLayer.set(
-          input.sourceLayer,
-          sourceIdByLayer.has(input.sourceLayer) ? null : input.sourceId,
-        );
+        sourceIdByLayer.set(input.sourceLayer, sourceIdByLayer.has(input.sourceLayer) ? null : input.sourceId);
       }
     }
     const tokens = currentSet.units.map((unit) => unit.token);
@@ -4993,9 +4771,7 @@ export class AppRepository {
     return { kind: "ready", mappingDigest: currentSet.mappingDigest, parts };
   }
 
-  private readSavedRequiredUnitReconciliation(
-    reconciliationId: number,
-  ): SavedRequiredUnitReconciliation {
+  private readSavedRequiredUnitReconciliation(reconciliationId: number): SavedRequiredUnitReconciliation {
     const header = this.db
       .select()
       .from(this.schema.planDraftRequiredUnitReconciliations)
@@ -5037,10 +4813,7 @@ export class AppRepository {
       .where(
         and(
           eq(this.schema.planDraftRequiredUnitDecisions.tenantId, this.tenantId),
-          eq(
-            this.schema.planDraftRequiredUnitDecisions.reconciliationId,
-            reconciliationId,
-          ),
+          eq(this.schema.planDraftRequiredUnitDecisions.reconciliationId, reconciliationId),
         ),
       )
       .orderBy(asc(this.schema.planDraftRequiredUnitDecisions.targetDraftPartId))
@@ -5070,10 +4843,7 @@ export class AppRepository {
       .where(
         and(
           eq(this.schema.planDraftRequiredUnitAssignments.tenantId, this.tenantId),
-          eq(
-            this.schema.planDraftRequiredUnitAssignments.reconciliationId,
-            reconciliationId,
-          ),
+          eq(this.schema.planDraftRequiredUnitAssignments.reconciliationId, reconciliationId),
         ),
       )
       .orderBy(
@@ -5104,8 +4874,7 @@ export class AppRepository {
       });
     if (
       (header.resultKind === "unresolved" && assignments.length !== 0) ||
-      (header.resultKind === "ready" &&
-        assignments.length !== header.expectedAssignmentCount)
+      (header.resultKind === "ready" && assignments.length !== header.expectedAssignmentCount)
     ) {
       throw new Error("Required-unit reconciliation assignment count mismatch");
     }
@@ -5175,14 +4944,8 @@ export class AppRepository {
     readonly idempotencyKey: string;
   }): SavePlanDraftRequiredUnitReconciliationResult {
     const actorId = requiredText(input.actorId, "Required-unit reconciliation actor");
-    const idempotencyKey = requiredText(
-      input.idempotencyKey,
-      "Required-unit reconciliation idempotency key",
-    );
-    const expectedSnapshotDigest = sha256Digest(
-      input.expectedSnapshotDigest,
-      "Expected Plan draft snapshot digest",
-    );
+    const idempotencyKey = requiredText(input.idempotencyKey, "Required-unit reconciliation idempotency key");
+    const expectedSnapshotDigest = sha256Digest(input.expectedSnapshotDigest, "Expected Plan draft snapshot digest");
     const decisionDigest = digestRequiredUnitDecisions(input.decisions);
     const payloadDigest = createHash("sha256")
       .update(
@@ -5209,10 +4972,7 @@ export class AppRepository {
             eq(this.schema.planDraftRequiredUnitReconciliations.profileId, input.profileId),
             eq(this.schema.planDraftRequiredUnitReconciliations.draftId, input.draftId),
             eq(this.schema.planDraftRequiredUnitReconciliations.actorId, actorId),
-            eq(
-              this.schema.planDraftRequiredUnitReconciliations.idempotencyKey,
-              idempotencyKey,
-            ),
+            eq(this.schema.planDraftRequiredUnitReconciliations.idempotencyKey, idempotencyKey),
           ),
         )
         .get();
@@ -5221,7 +4981,9 @@ export class AppRepository {
           return { kind: "idempotency_conflict" };
         }
         const draftRow = this.db
-          .select({ selected: this.schema.planDrafts.currentRequiredUnitReconciliationId })
+          .select({
+            selected: this.schema.planDrafts.currentRequiredUnitReconciliationId,
+          })
           .from(this.schema.planDrafts)
           .where(
             and(
@@ -5233,7 +4995,10 @@ export class AppRepository {
           .get();
         if (!draftRow) return { kind: "not_found" };
         if (draftRow.selected !== transactionExisting.id) {
-          return { kind: "superseded", reconciliationId: transactionExisting.id };
+          return {
+            kind: "superseded",
+            reconciliationId: transactionExisting.id,
+          };
         }
         const transactionDraft = this.getPlanDraft(input.profileId, input.draftId);
         if (!transactionDraft) return { kind: "not_found" };
@@ -5256,20 +5021,14 @@ export class AppRepository {
         })
         .from(this.schema.buildProfiles)
         .where(
-          and(
-            eq(this.schema.buildProfiles.tenantId, this.tenantId),
-            eq(this.schema.buildProfiles.id, input.profileId),
-          ),
+          and(eq(this.schema.buildProfiles.tenantId, this.tenantId), eq(this.schema.buildProfiles.id, input.profileId)),
         )
         .get();
       if (!profile) return { kind: "not_found" };
       if (this.planDraftNeedsAcceptedBaseline(input.profileId, profile)) {
         return { kind: "accepted_baseline_required" };
       }
-      if (
-        profile.baseRevisionId !== draft.baseRevisionId ||
-        profile.basePlanVersion !== draft.basePlanVersion
-      ) {
+      if (profile.baseRevisionId !== draft.baseRevisionId || profile.basePlanVersion !== draft.basePlanVersion) {
         return { kind: "base_changed", draft };
       }
       const base = this.requiredUnitReconciliationBase(input.profileId, draft);
@@ -5297,10 +5056,7 @@ export class AppRepository {
         resultKind: result.kind,
         resultDigest,
       });
-      const expectedAssignmentCount = draft.parts.reduce(
-        (total, part) => total + part.quantityEffective,
-        0,
-      );
+      const expectedAssignmentCount = draft.parts.reduce((total, part) => total + part.quantityEffective, 0);
       const createdAt = new Date().toISOString();
       const inserted = this.db
         .insert(this.schema.planDraftRequiredUnitReconciliations)
@@ -5326,7 +5082,9 @@ export class AppRepository {
           createdAt,
           finalizedAt: null,
         })
-        .returning({ id: this.schema.planDraftRequiredUnitReconciliations.id })
+        .returning({
+          id: this.schema.planDraftRequiredUnitReconciliations.id,
+        })
         .get();
       if (!inserted) throw new Error("Required-unit reconciliation could not be created");
       for (const decision of input.decisions) {
@@ -5337,8 +5095,7 @@ export class AppRepository {
             reconciliationId: inserted.id,
             targetDraftPartId: decision.targetDraftPartId,
             kind: decision.kind,
-            predecessorRevisionPartId:
-              decision.kind === "replace" ? null : decision.predecessorRevisionPartId,
+            predecessorRevisionPartId: decision.kind === "replace" ? null : decision.predecessorRevisionPartId,
           })
           .run();
       }
@@ -5377,12 +5134,9 @@ export class AppRepository {
         persisted.resultDigest !== resultDigest ||
         persisted.reconciliationDigest !== reconciliationDigest ||
         JSON.stringify(persisted.selectionBasis) !== JSON.stringify(result.selectionBasis) ||
-        JSON.stringify(persisted.assignments) !==
-          JSON.stringify(result.kind === "ready" ? result.assignments : []) ||
-        JSON.stringify(persisted.surplus) !==
-          JSON.stringify(result.kind === "ready" ? result.surplus : []) ||
-        JSON.stringify(persisted.conflicts) !==
-          JSON.stringify(result.kind === "unresolved" ? result.conflicts : [])
+        JSON.stringify(persisted.assignments) !== JSON.stringify(result.kind === "ready" ? result.assignments : []) ||
+        JSON.stringify(persisted.surplus) !== JSON.stringify(result.kind === "ready" ? result.surplus : []) ||
+        JSON.stringify(persisted.conflicts) !== JSON.stringify(result.kind === "unresolved" ? result.conflicts : [])
       ) {
         throw new Error("Required-unit reconciliation persisted result mismatch");
       }
@@ -5509,13 +5263,8 @@ export class AppRepository {
         ),
       )
       .get();
-    const verifiedReconciliation = this.readSavedRequiredUnitReconciliation(
-      row.reconciliationId,
-    );
-    const verifiedMapping = this.readRequiredUnitSetByRevision(
-      row.profileId,
-      row.revisionId,
-    );
+    const verifiedReconciliation = this.readSavedRequiredUnitReconciliation(row.reconciliationId);
+    const verifiedMapping = this.readRequiredUnitSetByRevision(row.profileId, row.revisionId);
     if (
       !draft ||
       draft.state !== "consumed" ||
@@ -5555,10 +5304,7 @@ export class AppRepository {
     };
   }
 
-  private applyCheckoffRemap(
-    plan: CheckoffRemapPlan,
-    finalRemap: ReadonlyMap<string, number>,
-  ): void {
+  private applyCheckoffRemap(plan: CheckoffRemapPlan, finalRemap: ReadonlyMap<string, number>): void {
     if (finalRemap.size === 0) return;
     const remapUnit = (unit: { part_id: number; unit_index: number }) => {
       const next = finalRemap.get(`${unit.part_id}:${unit.unit_index}`);
@@ -5591,7 +5337,10 @@ export class AppRepository {
         return {
           ...item,
           checkoff_units: (
-            item.checkoff_units as Array<{ part_id: number; unit_index: number }>
+            item.checkoff_units as Array<{
+              part_id: number;
+              unit_index: number;
+            }>
           ).map(remapUnit),
         };
       });
@@ -5603,19 +5352,9 @@ export class AppRepository {
     readonly checkoffLinkCount: number;
     readonly sendQueueItemCount: number;
   } {
-    const checkoffStates = new Set([
-      "watching",
-      "awaiting_verify",
-      "host_failed",
-      "dismissed",
-      "verified",
-      "applied",
-    ]);
+    const checkoffStates = new Set(["watching", "awaiting_verify", "host_failed", "dismissed", "verified", "applied"]);
     let checkoffLinkCount = 0;
-    for (const value of applySettingArray(
-      this.getSetting("printer.checkoff_links"),
-      "Printer Checkoff links",
-    )) {
+    for (const value of applySettingArray(this.getSetting("printer.checkoff_links"), "Printer Checkoff links")) {
       const row = applyJsonRecord(value, "Printer Checkoff link");
       if (
         typeof row.state !== "string" ||
@@ -5637,19 +5376,13 @@ export class AppRepository {
           throw new Error("Printer Checkoff links are corrupt");
         }
       }
-      if (
-        row.profile_id === profileId &&
-        (row.state === "watching" || row.state === "awaiting_verify")
-      ) {
+      if (row.profile_id === profileId && (row.state === "watching" || row.state === "awaiting_verify")) {
         checkoffLinkCount += 1;
       }
     }
     const queueStates = new Set(["queued", "sending", "done", "error", "cancelled"]);
     let sendQueueItemCount = 0;
-    for (const value of applySettingArray(
-      this.getSetting("printer.send_queue"),
-      "Printer send queue",
-    )) {
+    for (const value of applySettingArray(this.getSetting("printer.send_queue"), "Printer send queue")) {
       const row = applyJsonRecord(value, "Printer send queue item");
       if (typeof row.state !== "string" || !queueStates.has(row.state)) {
         throw new Error("Printer send queue is corrupt");
@@ -5678,26 +5411,19 @@ export class AppRepository {
           .select({ profileId: this.schema.parts.profileId })
           .from(this.schema.parts)
           .where(
-            and(
-              eq(this.schema.parts.tenantId, this.tenantId),
-              eq(this.schema.parts.id, coordinate.part_id as number),
-            ),
+            and(eq(this.schema.parts.tenantId, this.tenantId), eq(this.schema.parts.id, coordinate.part_id as number)),
           )
           .get();
         if (part) coordinateOwners.add(part.profileId);
       }
       if (
         coordinateOwners.size > 1 ||
-        (explicitProfileId != null &&
-          [...coordinateOwners].some((owner) => owner !== explicitProfileId))
+        (explicitProfileId != null && [...coordinateOwners].some((owner) => owner !== explicitProfileId))
       ) {
         throw new Error("Printer send queue ownership is corrupt");
       }
       const owner = explicitProfileId ?? [...coordinateOwners][0] ?? null;
-      if (
-        owner === profileId &&
-        (row.state === "queued" || row.state === "sending" || row.state === "error")
-      ) {
+      if (owner === profileId && (row.state === "queued" || row.state === "sending" || row.state === "error")) {
         sendQueueItemCount += 1;
       }
     }
@@ -5707,10 +5433,7 @@ export class AppRepository {
   applyPlanChanges(command: ApplyPlanChangesCommand): ApplyPlanChangesResult {
     const profileId = positiveSafeId(command.profileId, "Build ID");
     const draftId = positiveSafeId(command.draftId, "Plan draft ID");
-    const expectedSnapshotDigest = sha256Digest(
-      command.expectedSnapshotDigest,
-      "Expected Plan draft snapshot digest",
-    );
+    const expectedSnapshotDigest = sha256Digest(command.expectedSnapshotDigest, "Expected Plan draft snapshot digest");
     if (
       !Number.isSafeInteger(command.expectedLifecycleVersion) ||
       command.expectedLifecycleVersion < 0 ||
@@ -5730,14 +5453,8 @@ export class AppRepository {
       expectedBaseRevisionId = null;
       expectedBasePlanVersion = 0;
     } else {
-      expectedBaseRevisionId = positiveSafeId(
-        command.expectedBase.revisionId,
-        "Expected Plan revision ID",
-      );
-      if (
-        !Number.isSafeInteger(command.expectedBase.planVersion) ||
-        command.expectedBase.planVersion <= 0
-      ) {
+      expectedBaseRevisionId = positiveSafeId(command.expectedBase.revisionId, "Expected Plan revision ID");
+      if (!Number.isSafeInteger(command.expectedBase.planVersion) || command.expectedBase.planVersion <= 0) {
         throw new Error("Expected Plan version is invalid");
       }
       expectedBasePlanVersion = command.expectedBase.planVersion;
@@ -5782,17 +5499,15 @@ export class AppRepository {
         )
         .get();
       if (appliedDraft) {
-        return { kind: "already_applied", receipt: this.appliedPlanReceipt(appliedDraft) };
+        return {
+          kind: "already_applied",
+          receipt: this.appliedPlanReceipt(appliedDraft),
+        };
       }
       const profile = this.db
         .select()
         .from(this.schema.buildProfiles)
-        .where(
-          and(
-            eq(this.schema.buildProfiles.tenantId, this.tenantId),
-            eq(this.schema.buildProfiles.id, profileId),
-          ),
-        )
+        .where(and(eq(this.schema.buildProfiles.tenantId, this.tenantId), eq(this.schema.buildProfiles.id, profileId)))
         .get();
       if (!profile) return { kind: "not_found" };
       if (profile.archivedAt != null) return { kind: "build_archived" };
@@ -5823,10 +5538,12 @@ export class AppRepository {
       ) {
         return { kind: "draft_changed" };
       }
-      if (this.planDraftNeedsAcceptedBaseline(profileId, {
-        baseRevisionId: profile.acceptedPlanRevisionId,
-        basePlanVersion: profile.acceptedPlanVersion,
-      })) {
+      if (
+        this.planDraftNeedsAcceptedBaseline(profileId, {
+          baseRevisionId: profile.acceptedPlanRevisionId,
+          basePlanVersion: profile.acceptedPlanVersion,
+        })
+      ) {
         return { kind: "accepted_baseline_required" };
       }
       if (
@@ -5857,10 +5574,7 @@ export class AppRepository {
           sourceLayer: input.source_layer,
           layerOrder: input.layer_order,
         }))
-        .sort(
-          (left, right) =>
-            left.layerOrder - right.layerOrder || left.sourceId - right.sourceId,
-        );
+        .sort((left, right) => left.layerOrder - right.layerOrder || left.sourceId - right.sourceId);
       if (JSON.stringify(liveAttachments) !== JSON.stringify(draftAttachments)) {
         return { kind: "draft_changed" };
       }
@@ -5887,12 +5601,7 @@ export class AppRepository {
         const compatibility = this.db
           .select()
           .from(this.schema.parts)
-          .where(
-            and(
-              eq(this.schema.parts.tenantId, this.tenantId),
-              eq(this.schema.parts.profileId, profileId),
-            ),
-          )
+          .where(and(eq(this.schema.parts.tenantId, this.tenantId), eq(this.schema.parts.profileId, profileId)))
           .all();
         const compatibilityById = new Map(compatibility.map((part) => [part.id, part]));
         for (const part of compatibility) {
@@ -5910,8 +5619,7 @@ export class AppRepository {
         if (
           compatibility.length !== accepted.parts.length ||
           accepted.parts.some((part) => {
-            const projected =
-              part.projectionPartId == null ? null : compatibilityById.get(part.projectionPartId);
+            const projected = part.projectionPartId == null ? null : compatibilityById.get(part.projectionPartId);
             return (
               !projected ||
               !projectionPlanningFieldsMatch(projected, {
@@ -5941,9 +5649,7 @@ export class AppRepository {
       if (draftHeader.currentRequiredUnitReconciliationId == null) {
         return { kind: "reconciliation_required", reason: "missing" };
       }
-      const reconciliation = this.readSavedRequiredUnitReconciliation(
-        draftHeader.currentRequiredUnitReconciliationId,
-      );
+      const reconciliation = this.readSavedRequiredUnitReconciliation(draftHeader.currentRequiredUnitReconciliationId);
       if (reconciliation.resultKind !== "ready") {
         return { kind: "reconciliation_required", reason: "unresolved" };
       }
@@ -5955,15 +5661,10 @@ export class AppRepository {
         throw new Error("Selected Required-unit reconciliation is corrupt");
       }
       const base = this.requiredUnitReconciliationBase(profileId, draft);
-      if (
-        base.kind !== "ready" ||
-        base.mappingDigest !== reconciliation.baseMappingDigest
-      ) {
+      if (base.kind !== "ready" || base.mappingDigest !== reconciliation.baseMappingDigest) {
         return { kind: "reconciliation_required", reason: "stale" };
       }
-      const baseUnits = base.parts.flatMap((part) =>
-        part.units.map((unit) => ({ ...unit, revisionPartId: part.id })),
-      );
+      const baseUnits = base.parts.flatMap((part) => part.units.map((unit) => ({ ...unit, revisionPartId: part.id })));
       const baseByToken = new Map(baseUnits.map((unit) => [unit.token, unit]));
       const liveBasis = reconciliation.selectionBasis.map((row) => {
         const current = baseByToken.get(row.token);
@@ -5975,7 +5676,11 @@ export class AppRepository {
         ) {
           throw new Error("Required-unit reconciliation basis identity is corrupt");
         }
-        return { ...row, completed: current.completed, assembled: current.assembled };
+        return {
+          ...row,
+          completed: current.completed,
+          assembled: current.assembled,
+        };
       });
       if (
         digestRequiredUnitSelectionBasis({
@@ -6011,7 +5716,10 @@ export class AppRepository {
             and(
               eq(this.schema.requiredUnits.tenantId, this.tenantId),
               eq(this.schema.requiredUnits.profileId, profileId),
-              inArray(this.schema.requiredUnits.token, baseUnits.map((unit) => unit.token)),
+              inArray(
+                this.schema.requiredUnits.token,
+                baseUnits.map((unit) => unit.token),
+              ),
             ),
           )
           .all()) {
@@ -6031,12 +5739,7 @@ export class AppRepository {
         ) {
           throw new Error("Required-unit identity is corrupt");
         }
-        validateAcceptedOperationalTextRow([
-          unit.token,
-          stored.tenantId,
-          stored.objectName,
-          stored.createdAt,
-        ]);
+        validateAcceptedOperationalTextRow([unit.token, stored.tenantId, stored.objectName, stored.createdAt]);
         return {
           token: unit.token,
           objectName: stored.objectName,
@@ -6050,13 +5753,9 @@ export class AppRepository {
           ...draft,
           parts: draft.parts.map((part) => {
             if (part.baseRevisionPartId == null) return part;
-            const predecessorProjectionId = predecessorProjectionByRevisionPartId.get(
-              part.baseRevisionPartId,
-            );
+            const predecessorProjectionId = predecessorProjectionByRevisionPartId.get(part.baseRevisionPartId);
             const live =
-              predecessorProjectionId == null
-                ? undefined
-                : liveFilamentByProjectionId.get(predecessorProjectionId);
+              predecessorProjectionId == null ? undefined : liveFilamentByProjectionId.get(predecessorProjectionId);
             return live ? { ...part, ...live } : part;
           }),
         },
@@ -6070,21 +5769,22 @@ export class AppRepository {
         }
         const oldPartMatchKeyById = new Map(
           this.db
-            .select({ id: this.schema.parts.id, matchKey: this.schema.parts.matchKey })
+            .select({
+              id: this.schema.parts.id,
+              matchKey: this.schema.parts.matchKey,
+            })
             .from(this.schema.parts)
-            .where(
-              and(
-                eq(this.schema.parts.tenantId, this.tenantId),
-                eq(this.schema.parts.profileId, profileId),
-              ),
-            )
+            .where(and(eq(this.schema.parts.tenantId, this.tenantId), eq(this.schema.parts.profileId, profileId)))
             .all()
             .map((row) => [row.id, row.matchKey] as const),
         );
         const newPartByMatchKey = new Map(
           prepared.parts.map((part) => [
             part.partKey,
-            { draftPartId: part.draftPartId, quantityEffective: part.quantityEffective },
+            {
+              draftPartId: part.draftPartId,
+              quantityEffective: part.quantityEffective,
+            },
           ]),
         );
         const assessment = assessCheckoffRemap({
@@ -6094,7 +5794,10 @@ export class AppRepository {
           oldPartMatchKeyById,
           partProfileIdById: new Map(
             this.db
-              .select({ id: this.schema.parts.id, profileId: this.schema.parts.profileId })
+              .select({
+                id: this.schema.parts.id,
+                profileId: this.schema.parts.profileId,
+              })
               .from(this.schema.parts)
               .where(eq(this.schema.parts.tenantId, this.tenantId))
               .all()
@@ -6103,7 +5806,10 @@ export class AppRepository {
           newPartByMatchKey,
         });
         if (assessment.kind === "unsafe") {
-          return { kind: "checkoff_remap_unsafe", unmappable: assessment.unmappable };
+          return {
+            kind: "checkoff_remap_unsafe",
+            unmappable: assessment.unmappable,
+          };
         }
         checkoffRemapPlan = assessment;
       }
@@ -6129,7 +5835,10 @@ export class AppRepository {
         ]);
       }
       const existingTokens = new Set(
-        this.db.select({ token: this.schema.requiredUnits.token }).from(this.schema.requiredUnits).all()
+        this.db
+          .select({ token: this.schema.requiredUnits.token })
+          .from(this.schema.requiredUnits)
+          .all()
           .map((row) => row.token),
       );
       const existingObjectNames = new Set(
@@ -6177,12 +5886,7 @@ export class AppRepository {
         appliedAt,
       ]);
       for (const unit of allocated.values()) {
-        validateAcceptedOperationalTextRow([
-          this.tenantId,
-          unit.token,
-          unit.objectName,
-          appliedAt,
-        ]);
+        validateAcceptedOperationalTextRow([this.tenantId, unit.token, unit.objectName, appliedAt]);
       }
       this.db
         .delete(this.schema.acceptedPlateHeads)
@@ -6210,7 +5914,9 @@ export class AppRepository {
       if (detached.changes !== 1) throw new Error("Accepted Plan pointer detach failed");
       const inputSet = this.publishPlanRevisionInputs(profileId, draftInputs, appliedAt);
       const revisionNumber = this.db
-        .select({ value: sql<number>`COALESCE(MAX(${this.schema.planRevisions.revisionNumber}), 0) + 1` })
+        .select({
+          value: sql<number>`COALESCE(MAX(${this.schema.planRevisions.revisionNumber}), 0) + 1`,
+        })
         .from(this.schema.planRevisions)
         .where(
           and(
@@ -6242,22 +5948,12 @@ export class AppRepository {
       const oldPartIds = this.db
         .select({ id: this.schema.parts.id })
         .from(this.schema.parts)
-        .where(
-          and(
-            eq(this.schema.parts.tenantId, this.tenantId),
-            eq(this.schema.parts.profileId, profileId),
-          ),
-        )
+        .where(and(eq(this.schema.parts.tenantId, this.tenantId), eq(this.schema.parts.profileId, profileId)))
         .all()
         .map((row) => row.id);
       this.db
         .delete(this.schema.parts)
-        .where(
-          and(
-            eq(this.schema.parts.tenantId, this.tenantId),
-            eq(this.schema.parts.profileId, profileId),
-          ),
-        )
+        .where(and(eq(this.schema.parts.tenantId, this.tenantId), eq(this.schema.parts.profileId, profileId)))
         .run();
       const projectionByDraftPart = new Map<number, number>();
       const revisionPartByDraftPart = new Map<number, number>();
@@ -6356,13 +6052,10 @@ export class AppRepository {
       for (const assignment of prepared.mappings) {
         const revisionPartId = revisionPartByDraftPart.get(assignment.draftPartId);
         if (!revisionPartId) throw new Error("Accepted revision Part mapping is missing");
-        const allocatedUnit = allocated.get(
-          `${assignment.draftPartId}:${assignment.unitIndex}`,
-        );
+        const allocatedUnit = allocated.get(`${assignment.draftPartId}:${assignment.unitIndex}`);
         const token = assignment.kind === "reuse" ? assignment.token : allocatedUnit?.token;
         if (!token) throw new Error("Required-unit assignment token is missing");
-        const objectName =
-          assignment.kind === "reuse" ? objectNames.get(token) : allocatedUnit?.objectName;
+        const objectName = assignment.kind === "reuse" ? objectNames.get(token) : allocatedUnit?.objectName;
         if (!objectName) throw new Error("Required-unit Object name is missing");
         this.db
           .insert(this.schema.planRevisionRequiredUnits)
@@ -6374,19 +6067,19 @@ export class AppRepository {
             requiredUnitToken: token,
           })
           .run();
-        mappingRows.push({ revisionPartId, unitIndex: assignment.unitIndex, token, objectName });
+        mappingRows.push({
+          revisionPartId,
+          unitIndex: assignment.unitIndex,
+          token,
+          objectName,
+        });
       }
       const mappingDigest = digestRequiredUnitMap({
         revisionId: revision.id,
         expectedUnitCount: prepared.expectedUnitCount,
         rows: mappingRows,
       });
-      validateAcceptedOperationalTextRow([
-        this.tenantId,
-        REQUIRED_UNIT_MAP_FORMAT,
-        mappingDigest,
-        appliedAt,
-      ]);
+      validateAcceptedOperationalTextRow([this.tenantId, REQUIRED_UNIT_MAP_FORMAT, mappingDigest, appliedAt]);
       this.db
         .insert(this.schema.planRevisionRequiredUnitSets)
         .values({
@@ -6399,14 +6092,10 @@ export class AppRepository {
           createdAt: appliedAt,
         })
         .run();
-      const progressBySlot = new Map(
-        prepared.progress.map((row) => [`${row.draftPartId}:${row.unitIndex}`, row]),
-      );
+      const progressBySlot = new Map(prepared.progress.map((row) => [`${row.draftPartId}:${row.unitIndex}`, row]));
       for (const assignment of prepared.mappings) {
         const projectionPartId = projectionByDraftPart.get(assignment.draftPartId);
-        const progress = progressBySlot.get(
-          `${assignment.draftPartId}:${assignment.unitIndex}`,
-        );
+        const progress = progressBySlot.get(`${assignment.draftPartId}:${assignment.unitIndex}`);
         if (!projectionPartId || !progress) throw new Error("Published progress target is missing");
         this.db
           .insert(this.schema.printProgress)
@@ -6453,10 +6142,7 @@ export class AppRepository {
             eq(this.schema.planDrafts.state, "open"),
             eq(this.schema.planDrafts.lifecycleVersion, command.expectedLifecycleVersion),
             eq(this.schema.planDrafts.snapshotDigest, expectedSnapshotDigest),
-            eq(
-              this.schema.planDrafts.currentRequiredUnitReconciliationId,
-              reconciliation.id,
-            ),
+            eq(this.schema.planDrafts.currentRequiredUnitReconciliationId, reconciliation.id),
           ),
         )
         .run();
@@ -6507,12 +6193,7 @@ export class AppRepository {
       const compatibility = this.db
         .select()
         .from(this.schema.parts)
-        .where(
-          and(
-            eq(this.schema.parts.tenantId, this.tenantId),
-            eq(this.schema.parts.profileId, profileId),
-          ),
-        )
+        .where(and(eq(this.schema.parts.tenantId, this.tenantId), eq(this.schema.parts.profileId, profileId)))
         .all();
       const revisionParity =
         accepted != null &&
@@ -6525,25 +6206,16 @@ export class AppRepository {
         });
       const publishedProgress = new Map(
         requiredUnits.kind === "ready"
-          ? requiredUnits.units.map((unit) => [
-              `${unit.revisionPartId}:${unit.unitIndex}`,
-              unit,
-            ])
+          ? requiredUnits.units.map((unit) => [`${unit.revisionPartId}:${unit.unitIndex}`, unit])
           : [],
       );
       const progressParity = prepared.mappings.every((assignment) => {
         const revisionPartId = revisionPartByDraftPart.get(assignment.draftPartId);
-        const progress = progressBySlot.get(
-          `${assignment.draftPartId}:${assignment.unitIndex}`,
-        );
-        const allocatedUnit = allocated.get(
-          `${assignment.draftPartId}:${assignment.unitIndex}`,
-        );
+        const progress = progressBySlot.get(`${assignment.draftPartId}:${assignment.unitIndex}`);
+        const allocatedUnit = allocated.get(`${assignment.draftPartId}:${assignment.unitIndex}`);
         const token = assignment.kind === "reuse" ? assignment.token : allocatedUnit?.token;
         const published =
-          revisionPartId == null
-            ? null
-            : publishedProgress.get(`${revisionPartId}:${assignment.unitIndex}`);
+          revisionPartId == null ? null : publishedProgress.get(`${revisionPartId}:${assignment.unitIndex}`);
         return (
           progress != null &&
           token != null &&
@@ -6597,10 +6269,7 @@ export class AppRepository {
     readonly expectedSnapshotDigest: string;
     readonly decisions: readonly PlanDraftPartDecision[];
   }): EditPlanDraftPartsResult {
-    const expectedSnapshotDigest = sha256Digest(
-      input.expectedSnapshotDigest,
-      "Expected Plan draft snapshot digest",
-    );
+    const expectedSnapshotDigest = sha256Digest(input.expectedSnapshotDigest, "Expected Plan draft snapshot digest");
     if (input.decisions.length === 0) {
       throw new Error("Plan draft edit batch requires at least one decision");
     }
@@ -6630,20 +6299,14 @@ export class AppRepository {
         })
         .from(this.schema.buildProfiles)
         .where(
-          and(
-            eq(this.schema.buildProfiles.tenantId, this.tenantId),
-            eq(this.schema.buildProfiles.id, input.profileId),
-          ),
+          and(eq(this.schema.buildProfiles.tenantId, this.tenantId), eq(this.schema.buildProfiles.id, input.profileId)),
         )
         .get();
       if (!profile) return { kind: "not_found" };
       if (this.planDraftNeedsAcceptedBaseline(input.profileId, profile)) {
         return { kind: "accepted_baseline_required" };
       }
-      if (
-        profile.baseRevisionId !== current.baseRevisionId ||
-        profile.basePlanVersion !== current.basePlanVersion
-      ) {
+      if (profile.baseRevisionId !== current.baseRevisionId || profile.basePlanVersion !== current.basePlanVersion) {
         return { kind: "base_changed", draft: current };
       }
 
@@ -6714,11 +6377,7 @@ export class AppRepository {
         );
         const partWrite =
           decision.kind === "set_included"
-            ? this.db
-                .update(this.schema.planDraftParts)
-                .set({ included: decision.value })
-                .where(partScope)
-                .run()
+            ? this.db.update(this.schema.planDraftParts).set({ included: decision.value }).where(partScope).run()
             : this.db
                 .update(this.schema.planDraftParts)
                 .set({
@@ -6735,8 +6394,7 @@ export class AppRepository {
       if (
         !persisted ||
         persisted.snapshotDigest !== nextSnapshotDigest ||
-        (nextDigestFormat === PLAN_DRAFT_SELECTION_DIGEST_FORMAT &&
-          persisted.requiredUnitReconciliation != null)
+        (nextDigestFormat === PLAN_DRAFT_SELECTION_DIGEST_FORMAT && persisted.requiredUnitReconciliation != null)
       ) {
         throw new Error("Edited Plan draft could not be verified");
       }
@@ -6778,14 +6436,9 @@ export class AppRepository {
       if (!current) return { kind: "not_found" };
       if (current.state === "consumed") return { kind: "not_allowed", state: current.state };
 
-      const source: PlanDraftState =
-        input.transition.kind === "abandon" ? "open" : "abandoned";
-      const target: PlanDraftState =
-        input.transition.kind === "abandon" ? "abandoned" : "open";
-      if (
-        current.state === target &&
-        current.lifecycleVersion === expectedLifecycleVersion + 1
-      ) {
+      const source: PlanDraftState = input.transition.kind === "abandon" ? "open" : "abandoned";
+      const target: PlanDraftState = input.transition.kind === "abandon" ? "abandoned" : "open";
+      if (current.state === target && current.lifecycleVersion === expectedLifecycleVersion + 1) {
         return { kind: "unchanged", draft: current };
       }
       if (current.lifecycleVersion !== expectedLifecycleVersion) {
@@ -6811,10 +6464,7 @@ export class AppRepository {
         if (this.planDraftNeedsAcceptedBaseline(input.profileId, profile)) {
           return { kind: "accepted_baseline_required" };
         }
-        if (
-          profile.baseRevisionId !== current.baseRevisionId ||
-          profile.basePlanVersion !== current.basePlanVersion
-        ) {
+        if (profile.baseRevisionId !== current.baseRevisionId || profile.basePlanVersion !== current.basePlanVersion) {
           return { kind: "base_changed", draft: current };
         }
       }
@@ -6858,12 +6508,7 @@ export class AppRepository {
         planVersion: this.schema.buildProfiles.acceptedPlanVersion,
       })
       .from(this.schema.buildProfiles)
-      .where(
-        and(
-          eq(this.schema.buildProfiles.tenantId, this.tenantId),
-          eq(this.schema.buildProfiles.id, profileId),
-        ),
-      )
+      .where(and(eq(this.schema.buildProfiles.tenantId, this.tenantId), eq(this.schema.buildProfiles.id, profileId)))
       .get();
     let baseInputs: PlanSnapshotInput[] = [];
     let baseParts: Array<PlanSnapshotPart & { id: number }> = [];
@@ -6940,13 +6585,14 @@ export class AppRepository {
       draft,
       baseInputs,
       baseParts,
-      baseIsCurrent:
-        current?.revisionId === draft.baseRevisionId &&
-        current.planVersion === draft.basePlanVersion,
+      baseIsCurrent: current?.revisionId === draft.baseRevisionId && current.planVersion === draft.basePlanVersion,
     });
   }
 
-  createProfile(name: string, baseProjectId?: number): ProfileHeader & {
+  createProfile(
+    name: string,
+    baseProjectId?: number,
+  ): ProfileHeader & {
     layers: Array<{
       id: number;
       layer_order: number;
@@ -6991,12 +6637,7 @@ export class AppRepository {
       if (this.syncSqlite) this.db.run(sql.raw("PRAGMA defer_foreign_keys = ON"));
       this.db
         .delete(this.schema.buildProfiles)
-        .where(
-          and(
-            eq(this.schema.buildProfiles.tenantId, this.tenantId),
-            eq(this.schema.buildProfiles.id, id),
-          ),
-        )
+        .where(and(eq(this.schema.buildProfiles.tenantId, this.tenantId), eq(this.schema.buildProfiles.id, id)))
         .run();
     };
     if (this.syncSqlite) this.transaction(mutate, "immediate");
@@ -7009,20 +6650,13 @@ export class AppRepository {
     const dup = this.db
       .select()
       .from(this.schema.buildProfiles)
-      .where(
-        and(
-          eq(this.schema.buildProfiles.tenantId, this.tenantId),
-          eq(this.schema.buildProfiles.name, trimmed),
-        ),
-      )
+      .where(and(eq(this.schema.buildProfiles.tenantId, this.tenantId), eq(this.schema.buildProfiles.name, trimmed)))
       .get();
     if (dup && dup.id !== id) throw new Error(`Profile already exists: ${trimmed}`);
     this.db
       .update(this.schema.buildProfiles)
       .set({ name: trimmed })
-      .where(
-        and(eq(this.schema.buildProfiles.tenantId, this.tenantId), eq(this.schema.buildProfiles.id, id)),
-      )
+      .where(and(eq(this.schema.buildProfiles.tenantId, this.tenantId), eq(this.schema.buildProfiles.id, id)))
       .run();
     const profile = this.getProfileHeader(id);
     if (!profile) throw new Error("Profile not found");
@@ -7035,9 +6669,7 @@ export class AppRepository {
     this.db
       .update(this.schema.buildProfiles)
       .set({ specialRequest: trimmed || null })
-      .where(
-        and(eq(this.schema.buildProfiles.tenantId, this.tenantId), eq(this.schema.buildProfiles.id, id)),
-      )
+      .where(and(eq(this.schema.buildProfiles.tenantId, this.tenantId), eq(this.schema.buildProfiles.id, id)))
       .run();
     const profile = this.getProfileHeader(id);
     if (!profile) throw new Error("Profile not found");
@@ -7056,9 +6688,7 @@ export class AppRepository {
     this.db
       .update(this.schema.buildProfiles)
       .set({ lastUsedAt: now })
-      .where(
-        and(eq(this.schema.buildProfiles.tenantId, this.tenantId), eq(this.schema.buildProfiles.id, id)),
-      )
+      .where(and(eq(this.schema.buildProfiles.tenantId, this.tenantId), eq(this.schema.buildProfiles.id, id)))
       .run();
     return this.getProfileHeader(id)!;
   }
@@ -7078,26 +6708,27 @@ export class AppRepository {
     });
     if (first.kind !== "saved" && first.kind !== "existing") return null;
     if (first.reconciliation.resultKind === "ready") return first.draft;
-    const decisions: RequiredUnitReconciliationDecision[] = first.reconciliation.conflicts.map(
-      (conflict) => {
-        switch (conflict.kind) {
-          case "unsafe_predecessor":
-            return {
-              kind: "accept_prior_completion",
-              targetDraftPartId: conflict.targetDraftPartId,
-              predecessorRevisionPartId: conflict.predecessorRevisionPartId,
-            };
-          case "ambiguous_exact_match":
-            return {
-              kind: "select_exact_predecessor",
-              targetDraftPartId: conflict.targetDraftPartId,
-              predecessorRevisionPartId: conflict.candidateRevisionPartIds[0]!,
-            };
-          case "predecessor_claimed":
-            return { kind: "replace", targetDraftPartId: conflict.targetDraftPartId };
-        }
-      },
-    );
+    const decisions: RequiredUnitReconciliationDecision[] = first.reconciliation.conflicts.map((conflict) => {
+      switch (conflict.kind) {
+        case "unsafe_predecessor":
+          return {
+            kind: "accept_prior_completion",
+            targetDraftPartId: conflict.targetDraftPartId,
+            predecessorRevisionPartId: conflict.predecessorRevisionPartId,
+          };
+        case "ambiguous_exact_match":
+          return {
+            kind: "select_exact_predecessor",
+            targetDraftPartId: conflict.targetDraftPartId,
+            predecessorRevisionPartId: conflict.candidateRevisionPartIds[0]!,
+          };
+        case "predecessor_claimed":
+          return {
+            kind: "replace",
+            targetDraftPartId: conflict.targetDraftPartId,
+          };
+      }
+    });
     const resolved = this.savePlanDraftRequiredUnitReconciliation({
       profileId: draft.profileId,
       draftId: draft.id,
@@ -7106,10 +6737,7 @@ export class AppRepository {
       actorId,
       idempotencyKey: `${idempotencyKey}:resolve`,
     });
-    if (
-      (resolved.kind !== "saved" && resolved.kind !== "existing") ||
-      resolved.reconciliation.resultKind !== "ready"
-    ) {
+    if ((resolved.kind !== "saved" && resolved.kind !== "existing") || resolved.reconciliation.resultKind !== "ready") {
       return null;
     }
     return resolved.draft;
@@ -7165,9 +6793,7 @@ export class AppRepository {
       if (accepted.kind !== "ready") return `Accepted Plan state is ${accepted.kind}`;
       if (accepted.snapshot.profile.archivedAt) return "Accepted Plan is archived";
 
-      const targetByPartKey = new Map(
-        accepted.snapshot.parts.map((part) => [part.partKey, part] as const),
-      );
+      const targetByPartKey = new Map(accepted.snapshot.parts.map((part) => [part.partKey, part] as const));
       const changes = sourceParts.flatMap((source) => {
         const target = targetByPartKey.get(source.partKey);
         return target ? [{ source, target }] : [];
@@ -7187,12 +6813,7 @@ export class AppRepository {
         const written = this.db
           .update(this.schema.parts)
           .set(filamentAssignmentColumns(source.assignment))
-          .where(
-            and(
-              eq(this.schema.parts.tenantId, this.tenantId),
-              eq(this.schema.parts.id, target.projectionPartId),
-            ),
-          )
+          .where(and(eq(this.schema.parts.tenantId, this.tenantId), eq(this.schema.parts.id, target.projectionPartId)))
           .run();
         if (written.changes !== 1) throw new Error("Accepted Part copy failed");
         if (source.printedCount == null) continue;
@@ -7221,112 +6842,94 @@ export class AppRepository {
     newName: string,
     options?: { clearCheckoff?: boolean },
   ): ProfileHeader & { layers: ReturnType<AppRepository["getProfileLayers"]> } {
-    const trimmed = newName.trim();
-    if (!trimmed) throw new Error("Profile name is required");
-    const dup = this.db
-      .select()
-      .from(this.schema.buildProfiles)
-      .where(
-        and(
-          eq(this.schema.buildProfiles.tenantId, this.tenantId),
-          eq(this.schema.buildProfiles.name, trimmed),
-        ),
-      )
-      .get();
-    if (dup) throw new Error(`Profile already exists: ${trimmed}`);
-    const source = this.db
-      .select()
-      .from(this.schema.buildProfiles)
-      .where(
-        and(eq(this.schema.buildProfiles.tenantId, this.tenantId), eq(this.schema.buildProfiles.id, id)),
-      )
-      .get();
-    if (!source) throw new Error("Profile not found");
+    return this.transaction(() => {
+      const trimmed = newName.trim();
+      if (!trimmed) throw new Error("Profile name is required");
+      const dup = this.db
+        .select()
+        .from(this.schema.buildProfiles)
+        .where(and(eq(this.schema.buildProfiles.tenantId, this.tenantId), eq(this.schema.buildProfiles.name, trimmed)))
+        .get();
+      if (dup) throw new Error(`Profile already exists: ${trimmed}`);
+      const source = this.db
+        .select()
+        .from(this.schema.buildProfiles)
+        .where(and(eq(this.schema.buildProfiles.tenantId, this.tenantId), eq(this.schema.buildProfiles.id, id)))
+        .get();
+      if (!source) throw new Error("Profile not found");
 
-    const newProfile = this.db
-      .insert(this.schema.buildProfiles)
-      .values({
-        tenantId: this.tenantId,
-        name: trimmed,
-        orderNumber: source.orderNumber,
-        specialRequest: source.specialRequest,
-        // Copies are always active spine plans (templates stay archived).
-        archivedAt: null,
-        lastUsedAt: new Date().toISOString(),
-        configModifiedAt: new Date().toISOString(),
-      })
-      .returning()
-      .get();
-    if (!newProfile) throw new Error("Failed to duplicate profile");
-
-    const layers = this.db
-      .select()
-      .from(this.schema.profileLayers)
-      .where(eq(this.schema.profileLayers.profileId, id))
-      .all();
-    for (const layer of layers) {
-      this.db
-        .insert(this.schema.profileLayers)
+      const newProfile = this.db
+        .insert(this.schema.buildProfiles)
         .values({
           tenantId: this.tenantId,
-          profileId: newProfile.id,
-          layerOrder: layer.layerOrder,
-          layerType: layer.layerType,
-          projectId: layer.projectId,
+          name: trimmed,
+          orderNumber: source.orderNumber,
+          specialRequest: source.specialRequest,
+          // Copies are always active spine plans (templates stay archived).
+          archivedAt: null,
+          lastUsedAt: new Date().toISOString(),
+          configModifiedAt: new Date().toISOString(),
         })
-        .run();
-    }
+        .returning()
+        .get();
+      if (!newProfile) throw new Error("Failed to duplicate profile");
 
-    const sourceAccepted = this.readAcceptedPlanOperationalSnapshot(id);
-    if (layers.length > 0) {
-      const published = this.publishWorkingPlan(
-        newProfile.id,
-        "system:duplicate",
-        `duplicate:${newProfile.id}`,
-      );
-      if (!published) throw new Error("Failed to publish duplicated Plan");
-    }
-    if (sourceAccepted.kind === "ready") {
-      const overlayFailure = this.overlayAcceptedOperationalCopy(
-        newProfile.id,
-        sourceAccepted.snapshot.parts.map((part) => ({
-          partKey: part.partKey,
-          assignment: liveAssignmentFrom(part),
-          printedCount:
-            options?.clearCheckoff === true ? null : completedPrefixLength(part.units),
-        })),
-      );
-      if (overlayFailure) throw new Error(`Failed to copy accepted Plan state: ${overlayFailure}`);
-    }
+      const layers = this.db
+        .select()
+        .from(this.schema.profileLayers)
+        .where(eq(this.schema.profileLayers.profileId, id))
+        .all();
+      for (const layer of layers) {
+        this.db
+          .insert(this.schema.profileLayers)
+          .values({
+            tenantId: this.tenantId,
+            profileId: newProfile.id,
+            layerOrder: layer.layerOrder,
+            layerType: layer.layerType,
+            projectId: layer.projectId,
+          })
+          .run();
+      }
 
-    const roleFilaments = this.getSetting(roleFilamentSettingKey(id));
-    if (roleFilaments) {
-      this.setSetting(roleFilamentSettingKey(newProfile.id), roleFilaments);
-    }
-    saveKitManifest(this, newProfile.id, loadKitManifest(this, id));
+      const sourceAccepted = this.readAcceptedPlanOperationalSnapshot(id);
+      if (layers.length > 0) {
+        const published = this.publishWorkingPlan(newProfile.id, "system:duplicate", `duplicate:${newProfile.id}`);
+        if (!published) throw new Error("Failed to publish duplicated Plan");
+      }
+      if (sourceAccepted.kind === "ready") {
+        const overlayFailure = this.overlayAcceptedOperationalCopy(
+          newProfile.id,
+          sourceAccepted.snapshot.parts.map((part) => ({
+            partKey: part.partKey,
+            assignment: liveAssignmentFrom(part),
+            printedCount: options?.clearCheckoff === true ? null : completedPrefixLength(part.units),
+          })),
+        );
+        if (overlayFailure) throw new Error(`Failed to copy accepted Plan state: ${overlayFailure}`);
+      }
 
-    return {
-      ...this.getProfileHeader(newProfile.id)!,
-      layers: this.getProfileLayers(newProfile.id),
-    };
+      const roleFilaments = this.getSetting(roleFilamentSettingKey(id));
+      if (roleFilaments) {
+        this.setSetting(roleFilamentSettingKey(newProfile.id), roleFilaments);
+      }
+      saveKitManifest(this, newProfile.id, loadKitManifest(this, id));
+
+      return {
+        ...this.getProfileHeader(newProfile.id)!,
+        layers: this.getProfileLayers(newProfile.id),
+      };
+    }, "immediate");
   }
 
   removeLayer(layerId: number): void {
     const layer = this.db
       .select()
       .from(this.schema.profileLayers)
-      .where(
-        and(
-          eq(this.schema.profileLayers.tenantId, this.tenantId),
-          eq(this.schema.profileLayers.id, layerId),
-        ),
-      )
+      .where(and(eq(this.schema.profileLayers.tenantId, this.tenantId), eq(this.schema.profileLayers.id, layerId)))
       .get();
     if (!layer) throw new Error("Layer not found");
-    this.db
-      .delete(this.schema.profileLayers)
-      .where(eq(this.schema.profileLayers.id, layerId))
-      .run();
+    this.db.delete(this.schema.profileLayers).where(eq(this.schema.profileLayers.id, layerId)).run();
     this.markProfileConfigModified(layer.profileId);
   }
 
@@ -7334,12 +6937,7 @@ export class AppRepository {
     const profile = this.db
       .select({ id: this.schema.buildProfiles.id })
       .from(this.schema.buildProfiles)
-      .where(
-        and(
-          eq(this.schema.buildProfiles.tenantId, this.tenantId),
-          eq(this.schema.buildProfiles.id, profileId),
-        ),
-      )
+      .where(and(eq(this.schema.buildProfiles.tenantId, this.tenantId), eq(this.schema.buildProfiles.id, profileId)))
       .get();
     if (!profile) return null;
     const layers = this.db
@@ -7355,12 +6953,7 @@ export class AppRepository {
       const source = this.db
         .select({ id: this.schema.projects.id })
         .from(this.schema.projects)
-        .where(
-          and(
-            eq(this.schema.projects.tenantId, this.tenantId),
-            eq(this.schema.projects.id, layer.projectId),
-          ),
-        )
+        .where(and(eq(this.schema.projects.tenantId, this.tenantId), eq(this.schema.projects.id, layer.projectId)))
         .get();
       if (!source) throw new Error("Working Source selection ownership is corrupt");
       if (layer.layerType !== "base" && layer.layerType !== "addon") {
@@ -7399,12 +6992,7 @@ export class AppRepository {
         const ownedSources = this.db
           .select({ id: this.schema.projects.id })
           .from(this.schema.projects)
-          .where(
-            and(
-              eq(this.schema.projects.tenantId, this.tenantId),
-              inArray(this.schema.projects.id, sourceIds),
-            ),
-          )
+          .where(and(eq(this.schema.projects.tenantId, this.tenantId), inArray(this.schema.projects.id, sourceIds)))
           .all();
         if (ownedSources.length !== sourceIds.length) return { kind: "not_found" };
       }
@@ -7450,22 +7038,13 @@ export class AppRepository {
     const layer = this.db
       .select()
       .from(this.schema.profileLayers)
-      .where(
-        and(
-          eq(this.schema.profileLayers.tenantId, this.tenantId),
-          eq(this.schema.profileLayers.id, layerId),
-        ),
-      )
+      .where(and(eq(this.schema.profileLayers.tenantId, this.tenantId), eq(this.schema.profileLayers.id, layerId)))
       .get();
     if (!layer) throw new Error("Layer not found");
     const project = this.getProjectRow(projectId);
     if (!project) throw new Error("Project not found");
     this.assertSourceNotAttached(layer.profileId, projectId, layer.id, project.name);
-    this.db
-      .update(this.schema.profileLayers)
-      .set({ projectId })
-      .where(eq(this.schema.profileLayers.id, layerId))
-      .run();
+    this.db.update(this.schema.profileLayers).set({ projectId }).where(eq(this.schema.profileLayers.id, layerId)).run();
     this.markProfileConfigModified(layer.profileId);
   }
 
@@ -7533,17 +7112,16 @@ export class AppRepository {
       .select({ id: this.schema.profileLayers.id })
       .from(this.schema.profileLayers)
       .where(
-        and(
-          eq(this.schema.profileLayers.profileId, profileId),
-          eq(this.schema.profileLayers.projectId, projectId),
-        ),
+        and(eq(this.schema.profileLayers.profileId, profileId), eq(this.schema.profileLayers.projectId, projectId)),
       )
       .get();
     if (duplicate) {
       throw new Error(`Source "${project.name}" is already attached to this build`);
     }
     const maxOrder = this.db
-      .select({ m: sql<number>`coalesce(max(${this.schema.profileLayers.layerOrder}), -1)` })
+      .select({
+        m: sql<number>`coalesce(max(${this.schema.profileLayers.layerOrder}), -1)`,
+      })
       .from(this.schema.profileLayers)
       .where(eq(this.schema.profileLayers.profileId, profileId))
       .get();
@@ -7582,7 +7160,11 @@ export class AppRepository {
     }
   }
 
-  listParts(profileId: number, limit = 10000, offset = 0): {
+  listParts(
+    profileId: number,
+    limit = 10000,
+    offset = 0,
+  ): {
     parts: PartRow[];
     total: number;
   } {
@@ -7626,7 +7208,11 @@ export class AppRepository {
     const row = this.getProjectRow(id);
     if (!row) throw new Error("Source not found");
     const serialized = serializeImportRules(rules);
-    this.db.update(this.schema.projects).set({ importedPaths: serialized }).where(eq(this.schema.projects.id, id)).run();
+    this.db
+      .update(this.schema.projects)
+      .set({ importedPaths: serialized })
+      .where(eq(this.schema.projects.id, id))
+      .run();
     const normalized = importRulesForProject(serialized) ?? [];
     this.markProfilesUsingProjectStale(id);
     return { rules: normalized };
@@ -7646,18 +7232,12 @@ export class AppRepository {
     const { parts: allParts } = this.listParts(profileId, 10000, 0);
     const q = query.trim().toLowerCase();
     const filtered = q
-      ? allParts.filter(
-          (p) =>
-            p.filename.toLowerCase().includes(q) ||
-            p.relative_path.toLowerCase().includes(q),
-        )
+      ? allParts.filter((p) => p.filename.toLowerCase().includes(q) || p.relative_path.toLowerCase().includes(q))
       : allParts;
 
     const groups = new Map<string, PartRow[]>();
     for (const part of filtered) {
-      const folder = part.relative_path.includes("/")
-        ? part.relative_path.split("/").slice(0, -1).join("/")
-        : "";
+      const folder = part.relative_path.includes("/") ? part.relative_path.split("/").slice(0, -1).join("/") : "";
       const list = groups.get(folder) ?? [];
       list.push(part);
       groups.set(folder, list);
@@ -7729,22 +7309,13 @@ export class AppRepository {
       const row = ensureBucket(normalizePartRole(part.role));
       row.part_count += 1;
       if (part.filamentColorId) {
-        row.colorCounts.set(
-          part.filamentColorId,
-          (row.colorCounts.get(part.filamentColorId) ?? 0) + 1,
-        );
+        row.colorCounts.set(part.filamentColorId, (row.colorCounts.get(part.filamentColorId) ?? 0) + 1);
       }
       if (part.filamentCustomHex) {
-        row.customHexCounts.set(
-          part.filamentCustomHex,
-          (row.customHexCounts.get(part.filamentCustomHex) ?? 0) + 1,
-        );
+        row.customHexCounts.set(part.filamentCustomHex, (row.customHexCounts.get(part.filamentCustomHex) ?? 0) + 1);
       }
       if (part.spoolmanSpoolId) {
-        row.spoolCounts.set(
-          part.spoolmanSpoolId,
-          (row.spoolCounts.get(part.spoolmanSpoolId) ?? 0) + 1,
-        );
+        row.spoolCounts.set(part.spoolmanSpoolId, (row.spoolCounts.get(part.spoolmanSpoolId) ?? 0) + 1);
       }
       const color = part.filamentColorId ? getColorById(part.filamentColorId) : null;
       if (color?.combo_label && !row.filament_display) row.filament_display = color.combo_label;
@@ -7770,13 +7341,13 @@ export class AppRepository {
         const spoolId = majority(row.spoolCounts);
         const saved = savedDefaults[row.role];
         const filament_color_id =
-          colorId ?? (row.part_count === 0 ? saved?.filament_color_id ?? null : row.filament_color_id);
+          colorId ?? (row.part_count === 0 ? (saved?.filament_color_id ?? null) : row.filament_color_id);
         const filament_custom_hex =
           colorId != null
             ? null
-            : customHex ?? (row.part_count === 0 ? saved?.filament_custom_hex ?? null : row.filament_custom_hex);
+            : (customHex ?? (row.part_count === 0 ? (saved?.filament_custom_hex ?? null) : row.filament_custom_hex));
         const spoolman_spool_id =
-          spoolId ?? (row.part_count === 0 ? saved?.spoolman_spool_id ?? null : row.spoolman_spool_id);
+          spoolId ?? (row.part_count === 0 ? (saved?.spoolman_spool_id ?? null) : row.spoolman_spool_id);
         return {
           role: row.role,
           part_count: row.part_count,
@@ -7787,7 +7358,7 @@ export class AppRepository {
           filament_hex:
             filament_custom_hex ??
             row.filament_hex ??
-            (filament_color_id ? getColorById(filament_color_id)?.hex ?? null : null),
+            (filament_color_id ? (getColorById(filament_color_id)?.hex ?? null) : null),
         };
       });
   }
@@ -7800,12 +7371,7 @@ export class AppRepository {
         orderNumber: this.schema.buildProfiles.orderNumber,
       })
       .from(this.schema.buildProfiles)
-      .where(
-        and(
-          eq(this.schema.buildProfiles.tenantId, this.tenantId),
-          eq(this.schema.buildProfiles.id, profileId),
-        ),
-      )
+      .where(and(eq(this.schema.buildProfiles.tenantId, this.tenantId), eq(this.schema.buildProfiles.id, profileId)))
       .get();
     if (!profile) throw new Error("Profile not found");
     const layers = this.getProfileLayers(profileId);
@@ -7879,7 +7445,9 @@ export class AppRepository {
       const dup = this.db
         .select()
         .from(this.schema.buildProfiles)
-        .where(and(eq(this.schema.buildProfiles.tenantId, this.tenantId), eq(this.schema.buildProfiles.name, candidate)))
+        .where(
+          and(eq(this.schema.buildProfiles.tenantId, this.tenantId), eq(this.schema.buildProfiles.name, candidate)),
+        )
         .get();
       if (!dup) {
         name = candidate;
@@ -7965,17 +7533,11 @@ export class AppRepository {
     }
 
     const published =
-      layersImported > 0
-        ? this.publishWorkingPlan(profile.id, "system:kit-import", `kit-import:${profile.id}`)
-        : false;
+      layersImported > 0 ? this.publishWorkingPlan(profile.id, "system:kit-import", `kit-import:${profile.id}`) : false;
     if (layersImported > 0 && !published) {
-      warnings.push(
-        "Accepted Plan publication failed; imported filament and checkoff state was not applied.",
-      );
+      warnings.push("Accepted Plan publication failed; imported filament and checkoff state was not applied.");
     }
-    const accepted = published
-      ? this.readAcceptedPlanOperationalSnapshot(profile.id)
-      : { kind: "empty" as const };
+    const accepted = published ? this.readAcceptedPlanOperationalSnapshot(profile.id) : { kind: "empty" as const };
     let partsImported = 0;
     if (accepted.kind === "ready") {
       partsImported = accepted.snapshot.parts.length;
@@ -8033,12 +7595,7 @@ export class AppRepository {
     const rows = this.db
       .select()
       .from(this.schema.sourceDocs)
-      .where(
-        and(
-          eq(this.schema.sourceDocs.tenantId, this.tenantId),
-          eq(this.schema.sourceDocs.projectId, projectId),
-        ),
-      )
+      .where(and(eq(this.schema.sourceDocs.tenantId, this.tenantId), eq(this.schema.sourceDocs.projectId, projectId)))
       .orderBy(asc(this.schema.sourceDocs.path))
       .all();
     return rows.map((row) => ({
@@ -8067,12 +7624,7 @@ export class AppRepository {
     if (!this.schema.sourceDocs) return;
     this.db
       .delete(this.schema.sourceDocs)
-      .where(
-        and(
-          eq(this.schema.sourceDocs.tenantId, this.tenantId),
-          eq(this.schema.sourceDocs.projectId, projectId),
-        ),
-      )
+      .where(and(eq(this.schema.sourceDocs.tenantId, this.tenantId), eq(this.schema.sourceDocs.projectId, projectId)))
       .run();
     const now = new Date().toISOString();
     for (const doc of docs) {
@@ -8136,12 +7688,7 @@ export class AppRepository {
     const rows = this.db
       .select()
       .from(this.schema.sourceNotes)
-      .where(
-        and(
-          eq(this.schema.sourceNotes.tenantId, this.tenantId),
-          eq(this.schema.sourceNotes.projectId, projectId),
-        ),
-      )
+      .where(and(eq(this.schema.sourceNotes.tenantId, this.tenantId), eq(this.schema.sourceNotes.projectId, projectId)))
       .orderBy(asc(this.schema.sourceNotes.updatedAt))
       .all();
     return rows
@@ -8167,12 +7714,7 @@ export class AppRepository {
     const row = this.db
       .select()
       .from(this.schema.sourceNotes)
-      .where(
-        and(
-          eq(this.schema.sourceNotes.tenantId, this.tenantId),
-          eq(this.schema.sourceNotes.id, noteId),
-        ),
-      )
+      .where(and(eq(this.schema.sourceNotes.tenantId, this.tenantId), eq(this.schema.sourceNotes.id, noteId)))
       .get();
     if (!row) return null;
     return {
@@ -8217,7 +7759,11 @@ export class AppRepository {
 
   updateSourceNote(
     noteId: number,
-    patch: Partial<{ title: string; bodyMarkdown: string; profileId: number | null }>,
+    patch: Partial<{
+      title: string;
+      bodyMarkdown: string;
+      profileId: number | null;
+    }>,
   ): SourceNoteSummary {
     if (!this.schema.sourceNotes) throw new Error("source_notes table unavailable");
     const existing = this.getSourceNote(noteId);
@@ -8229,11 +7775,7 @@ export class AppRepository {
     if (patch.title != null) updates.title = patch.title.trim() || "Note";
     if (patch.bodyMarkdown != null) updates.bodyMarkdown = patch.bodyMarkdown;
     if (patch.profileId !== undefined) updates.profileId = patch.profileId;
-    this.db
-      .update(this.schema.sourceNotes)
-      .set(updates)
-      .where(eq(this.schema.sourceNotes.id, noteId))
-      .run();
+    this.db.update(this.schema.sourceNotes).set(updates).where(eq(this.schema.sourceNotes.id, noteId)).run();
     return this.getSourceNote(noteId)!;
   }
 
@@ -8243,12 +7785,7 @@ export class AppRepository {
     if (!existing) return false;
     this.db
       .delete(this.schema.sourceNotes)
-      .where(
-        and(
-          eq(this.schema.sourceNotes.tenantId, this.tenantId),
-          eq(this.schema.sourceNotes.id, noteId),
-        ),
-      )
+      .where(and(eq(this.schema.sourceNotes.tenantId, this.tenantId), eq(this.schema.sourceNotes.id, noteId)))
       .run();
     return true;
   }
@@ -8257,9 +7794,7 @@ export class AppRepository {
     if (!raw) return {};
     try {
       const parsed = JSON.parse(raw) as unknown;
-      return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-        ? (parsed as Record<string, unknown>)
-        : {};
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {};
     } catch {
       return {};
     }
@@ -8287,10 +7822,7 @@ export class AppRepository {
       .select()
       .from(this.schema.planDecisions)
       .where(
-        and(
-          eq(this.schema.planDecisions.tenantId, this.tenantId),
-          eq(this.schema.planDecisions.profileId, planId),
-        ),
+        and(eq(this.schema.planDecisions.tenantId, this.tenantId), eq(this.schema.planDecisions.profileId, planId)),
       )
       .orderBy(asc(this.schema.planDecisions.createdAt))
       .all();
@@ -8298,10 +7830,7 @@ export class AppRepository {
   }
 
   /** Recent plan_decisions across the tenant, optionally excluding one plan (cross-plan memory). */
-  listRecentTenantPlanDecisions(
-    limit = 200,
-    excludePlanId?: number | null,
-  ): PlanDecision[] {
+  listRecentTenantPlanDecisions(limit = 200, excludePlanId?: number | null): PlanDecision[] {
     if (!this.schema.planDecisions) return [];
     const conditions = [eq(this.schema.planDecisions.tenantId, this.tenantId)];
     if (excludePlanId != null && excludePlanId > 0) {
@@ -8360,10 +7889,7 @@ export class AppRepository {
     this.db
       .delete(this.schema.planDecisions)
       .where(
-        and(
-          eq(this.schema.planDecisions.tenantId, this.tenantId),
-          eq(this.schema.planDecisions.profileId, planId),
-        ),
+        and(eq(this.schema.planDecisions.tenantId, this.tenantId), eq(this.schema.planDecisions.profileId, planId)),
       )
       .run();
     return before;
@@ -8374,10 +7900,7 @@ export class AppRepository {
     if (!this.schema.planDecisions) return 0;
     const before = this.listRecentTenantPlanDecisions(10_000, null).length;
     if (before === 0) return 0;
-    this.db
-      .delete(this.schema.planDecisions)
-      .where(eq(this.schema.planDecisions.tenantId, this.tenantId))
-      .run();
+    this.db.delete(this.schema.planDecisions).where(eq(this.schema.planDecisions.tenantId, this.tenantId)).run();
     return before;
   }
 
@@ -8397,10 +7920,7 @@ export class AppRepository {
       .select()
       .from(this.schema.planSnapshots)
       .where(
-        and(
-          eq(this.schema.planSnapshots.tenantId, this.tenantId),
-          eq(this.schema.planSnapshots.profileId, planId),
-        ),
+        and(eq(this.schema.planSnapshots.tenantId, this.tenantId), eq(this.schema.planSnapshots.profileId, planId)),
       )
       .orderBy(asc(this.schema.planSnapshots.createdAt))
       .all();
@@ -8412,12 +7932,7 @@ export class AppRepository {
     const row = this.db
       .select()
       .from(this.schema.planSnapshots)
-      .where(
-        and(
-          eq(this.schema.planSnapshots.tenantId, this.tenantId),
-          eq(this.schema.planSnapshots.id, snapshotId),
-        ),
-      )
+      .where(and(eq(this.schema.planSnapshots.tenantId, this.tenantId), eq(this.schema.planSnapshots.id, snapshotId)))
       .get();
     if (!row) return null;
     return {
@@ -8459,12 +7974,7 @@ export class AppRepository {
     if (!existing) return false;
     this.db
       .delete(this.schema.planSnapshots)
-      .where(
-        and(
-          eq(this.schema.planSnapshots.tenantId, this.tenantId),
-          eq(this.schema.planSnapshots.id, snapshotId),
-        ),
-      )
+      .where(and(eq(this.schema.planSnapshots.tenantId, this.tenantId), eq(this.schema.planSnapshots.id, snapshotId)))
       .run();
     return true;
   }
@@ -8519,58 +8029,57 @@ export class AppRepository {
     return this.db
       .select()
       .from(this.schema.printJobs)
-      .where(
-        and(
-          eq(this.schema.printJobs.tenantId, this.tenantId),
-          gte(this.schema.printJobs.at, sinceIso),
-        ),
-      )
+      .where(and(eq(this.schema.printJobs.tenantId, this.tenantId), gte(this.schema.printJobs.at, sinceIso)))
       .orderBy(desc(this.schema.printJobs.at))
       .limit(limit)
       .all();
   }
 
-  insertPrintJobParts(parts: Array<{
-    id: string;
-    jobId?: string;
-    at: string;
-    profileId: number;
-    partId: number;
-    unitIndex: number;
-    result: string;
-    reason?: string;
-    note?: string;
-    hostIntegrationId?: string;
-    filename?: string;
-    matchKey?: string;
-    role?: string;
-    filamentDisplay?: string;
-    linkId?: string;
-  }>): PrintJobPartRow[] {
+  insertPrintJobParts(
+    parts: Array<{
+      id: string;
+      jobId?: string;
+      at: string;
+      profileId: number;
+      partId: number;
+      unitIndex: number;
+      result: string;
+      reason?: string;
+      note?: string;
+      hostIntegrationId?: string;
+      filename?: string;
+      matchKey?: string;
+      role?: string;
+      filamentDisplay?: string;
+      linkId?: string;
+    }>,
+  ): PrintJobPartRow[] {
     if (!parts.length) return [];
     for (const profileId of new Set(parts.map((part) => part.profileId))) {
       this.requireProfile(profileId);
     }
     const inserted = this.db
       .insert(this.schema.printJobParts)
-      .values(parts.map((p) => ({
-        id: p.id,
-        tenantId: this.tenantId,
-        jobId: p.jobId ?? null,
-        at: p.at,
-        profileId: p.profileId,
-        partId: p.partId,
-        unitIndex: p.unitIndex,
-        result: p.result,
-        reason: p.reason ?? null,
-        note: p.note ?? null,
-        hostIntegrationId: p.hostIntegrationId ?? null,
-        filename: p.filename ?? null,
-        matchKey: p.matchKey ?? null,
-        role: p.role ?? null,
-        filamentDisplay: p.filamentDisplay ?? null,
-        linkId: p.linkId ?? null,
-      })))
+      .values(
+        parts.map((p) => ({
+          id: p.id,
+          tenantId: this.tenantId,
+          jobId: p.jobId ?? null,
+          at: p.at,
+          profileId: p.profileId,
+          partId: p.partId,
+          unitIndex: p.unitIndex,
+          result: p.result,
+          reason: p.reason ?? null,
+          note: p.note ?? null,
+          hostIntegrationId: p.hostIntegrationId ?? null,
+          filename: p.filename ?? null,
+          matchKey: p.matchKey ?? null,
+          role: p.role ?? null,
+          filamentDisplay: p.filamentDisplay ?? null,
+          linkId: p.linkId ?? null,
+        })),
+      )
       .returning()
       .all();
     return inserted;
@@ -8598,18 +8107,14 @@ export class AppRepository {
       })
       .from(this.schema.printJobs)
       .where(eq(this.schema.printJobs.tenantId, tenantId))
-      .groupBy(
-        this.schema.printJobs.printerId,
-        this.schema.printJobs.material,
-        this.schema.printJobs.status,
-      )
+      .groupBy(this.schema.printJobs.printerId, this.schema.printJobs.material, this.schema.printJobs.status)
       .all() as Array<{
-        printer_id: string;
-        material: string;
-        status: string;
-        cnt: number;
-        filament_sum: number | null;
-      }>;
+      printer_id: string;
+      material: string;
+      status: string;
+      cnt: number;
+      filament_sum: number | null;
+    }>;
   }
 
   listPrintJobParts(profileId: number): PrintJobPartRow[] {
@@ -8617,10 +8122,7 @@ export class AppRepository {
       .select()
       .from(this.schema.printJobParts)
       .where(
-        and(
-          eq(this.schema.printJobParts.tenantId, this.tenantId),
-          eq(this.schema.printJobParts.profileId, profileId),
-        ),
+        and(eq(this.schema.printJobParts.tenantId, this.tenantId), eq(this.schema.printJobParts.profileId, profileId)),
       )
       .orderBy(asc(this.schema.printJobParts.at))
       .all();

@@ -2749,6 +2749,51 @@ export async function fetchPlanLayers(profileId: number): Promise<ProfileLayer[]
   return body.layers;
 }
 
+export type BuildPlanningEvidence = {
+  id: string;
+  normalized_url: string;
+  kind: string;
+  input_kind?: "url" | "model_page" | "upload";
+  source_role?: string;
+  sync_status?: "pending" | "synced" | "failed";
+  pinned_revision?: string;
+  upload_required?: boolean;
+  artifacts?: Array<{
+    path: string;
+    format: "stl" | "3mf" | "zip";
+    byte_size: number;
+  }>;
+};
+
+export type BuildPlanningState = {
+  brief: {
+    special_request: string;
+    requirements: Array<{ key: string; value: string; status: string; detail?: string }>;
+    evidence: BuildPlanningEvidence[];
+    contributions: Array<{ id: string; slot: string; status: string; responsibility: string }>;
+    compatibility_findings?: Array<{
+      id: string;
+      subject: string;
+      status: string;
+      detail: string;
+    }>;
+    role_filaments: Array<{ role: string; requested_name?: string; inventory_kind: string }>;
+    draft_id?: number;
+  };
+  readiness: { ready: boolean; blockers: Array<{ code: string; detail: string }> };
+  grouped_difference_count: number;
+  difference_count: number;
+};
+
+export async function fetchBuildPlanningState(
+  profileId: number,
+): Promise<BuildPlanningState | null> {
+  const result = await engineFetch<{ planning: BuildPlanningState | null }>(
+    `/plans/${profileId}/build-planning`,
+  );
+  return result.planning;
+}
+
 export async function fetchPlanParts(profileId: number): Promise<PartRow[]> {
   const body = await engineFetch<{ parts: PartRow[] }>(
     `/plans/${profileId}/parts?limit=10000`,

@@ -14,6 +14,7 @@ import {
   type ApplyDraftWorkspaceResult,
   type PlanDraftWorkspaceResult,
 } from "../services/plan-draft-workspace.js";
+import { buildPlanningApplyBlockers } from "../services/build-planning.js";
 
 type RouteDeps = { readonly repo: AppRepository };
 
@@ -185,6 +186,17 @@ export async function registerPlanDraftRoutes(
     if (profileId == null || draftId == null || key == null) return invalidRequest(reply);
     try {
       const parsed = parseApplyPlanDraftRequest(request.body);
+      if (!deps.repo.canMutateAcceptedPlan()) {
+        return sendFailure(reply, { kind: "transaction_unavailable" });
+      }
+      const planningBlockers = buildPlanningApplyBlockers(deps.repo, profileId, draftId);
+      if (planningBlockers?.length) {
+        return reply.status(422).send({
+          code: "build_planning_blocked",
+          detail: "Build planning is not ready",
+          blockers: planningBlockers,
+        });
+      }
       const result = service.apply({
         profileId,
         draftId,

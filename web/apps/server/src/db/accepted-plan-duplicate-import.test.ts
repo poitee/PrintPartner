@@ -23,7 +23,10 @@ function acceptedPlanFixture(name: string, filenames = ["widget.stl"]) {
   const database = new SqliteDatabase(root);
   database.connect();
   const repo = new AppRepository(getDb(database), undefined, database.reposDir);
-  const source = repo.createSource({ name: `${name}Repo`, url: "https://github.com/a/b" });
+  const source = repo.createSource({
+    name: `${name}Repo`,
+    url: "https://github.com/a/b",
+  });
   const repoPath = join(root, "repos", String(source.id));
   mkdirSync(join(repoPath, "parts"), { recursive: true });
   for (const filename of filenames) {
@@ -55,7 +58,10 @@ describe("duplicateProfile accepted publish", () => {
       repo.assignAcceptedFilament({
         expected: acceptedPlanBasis(source.snapshot),
         target: { kind: "part", projectionPartId: part.projectionPartId },
-        assignment: { color: { kind: "catalog", colorId: "pla-black" }, spoolmanSpoolId: "spool-9" },
+        assignment: {
+          color: { kind: "catalog", colorId: "pla-black" },
+          spoolmanSpoolId: "spool-9",
+        },
       }).kind,
     ).toBe("updated");
     expect(
@@ -84,17 +90,12 @@ describe("duplicateProfile accepted publish", () => {
     const { database, repo, plan, repoPath } = acceptedPlanFixture("MissingDuplicateSource");
     rmSync(join(repoPath, "parts", "widget.stl"));
 
-    expect(() => repo.duplicateProfile(plan.id, "FailedCopy")).toThrow(
-      "Failed to publish duplicated Plan",
-    );
+    expect(() => repo.duplicateProfile(plan.id, "FailedCopy")).toThrow("Failed to publish duplicated Plan");
     database.close();
   });
 
   it("preserves distinct assignments on Parts that share a role", () => {
-    const { database, repo, plan } = acceptedPlanFixture("DistinctAssignments", [
-      "widget-a.stl",
-      "widget-b.stl",
-    ]);
+    const { database, repo, plan } = acceptedPlanFixture("DistinctAssignments", ["widget-a.stl", "widget-b.stl"]);
     const source = repo.readAcceptedPlanOperationalSnapshot(plan.id);
     if (source.kind !== "ready") throw new Error("source Plan is not ready");
     const [first, second] = source.snapshot.parts;
@@ -104,23 +105,27 @@ describe("duplicateProfile accepted publish", () => {
       repo.assignAcceptedFilament({
         expected: acceptedPlanBasis(source.snapshot),
         target: { kind: "part", projectionPartId: first.projectionPartId },
-        assignment: { color: { kind: "catalog", colorId: "pla-black" }, spoolmanSpoolId: null },
+        assignment: {
+          color: { kind: "catalog", colorId: "pla-black" },
+          spoolmanSpoolId: null,
+        },
       }).kind,
     ).toBe("updated");
     expect(
       repo.assignAcceptedFilament({
         expected: acceptedPlanBasis(source.snapshot),
         target: { kind: "part", projectionPartId: second.projectionPartId },
-        assignment: { color: { kind: "catalog", colorId: "pla-red" }, spoolmanSpoolId: null },
+        assignment: {
+          color: { kind: "catalog", colorId: "pla-red" },
+          spoolmanSpoolId: null,
+        },
       }).kind,
     ).toBe("updated");
 
     const copy = repo.duplicateProfile(plan.id, "DistinctAssignmentsCopy");
     const accepted = repo.readAcceptedPlanOperationalSnapshot(copy.id);
     if (accepted.kind !== "ready") throw new Error("copied Plan is not ready");
-    expect(
-      accepted.snapshot.parts.map((part) => [part.filename, part.filamentColorId]),
-    ).toEqual([
+    expect(accepted.snapshot.parts.map((part) => [part.filename, part.filamentColorId])).toEqual([
       ["widget-a.stl", "pla-black"],
       ["widget-b.stl", "pla-red"],
     ]);
@@ -128,10 +133,7 @@ describe("duplicateProfile accepted publish", () => {
   });
 
   it("rolls back every assignment when an overlay write fails", () => {
-    const { database, repo, plan, raw } = acceptedPlanFixture("RollbackAssignments", [
-      "widget-a.stl",
-      "widget-b.stl",
-    ]);
+    const { database, repo, plan, raw } = acceptedPlanFixture("RollbackAssignments", ["widget-a.stl", "widget-b.stl"]);
     const source = repo.readAcceptedPlanOperationalSnapshot(plan.id);
     if (source.kind !== "ready") throw new Error("source Plan is not ready");
     const [first, second] = source.snapshot.parts;
@@ -140,14 +142,20 @@ describe("duplicateProfile accepted publish", () => {
       repo.assignAcceptedFilament({
         expected: acceptedPlanBasis(source.snapshot),
         target: { kind: "part", projectionPartId: first.projectionPartId },
-        assignment: { color: { kind: "catalog", colorId: "pla-black" }, spoolmanSpoolId: null },
+        assignment: {
+          color: { kind: "catalog", colorId: "pla-black" },
+          spoolmanSpoolId: null,
+        },
       }).kind,
     ).toBe("updated");
     expect(
       repo.assignAcceptedFilament({
         expected: acceptedPlanBasis(source.snapshot),
         target: { kind: "part", projectionPartId: second.projectionPartId },
-        assignment: { color: { kind: "catalog", colorId: "pla-red" }, spoolmanSpoolId: null },
+        assignment: {
+          color: { kind: "catalog", colorId: "pla-red" },
+          spoolmanSpoolId: null,
+        },
       }).kind,
     ).toBe("updated");
     expect(
@@ -165,32 +173,8 @@ describe("duplicateProfile accepted publish", () => {
       END
     `);
 
-    expect(() => repo.duplicateProfile(plan.id, "RollbackAssignmentsCopy")).toThrow(
-      "rejected overlay",
-    );
-    const copy = raw
-      .prepare("SELECT id FROM build_profiles WHERE name = ?")
-      .get("RollbackAssignmentsCopy") as { id: number };
-    expect(
-      raw
-        .prepare(
-          "SELECT filename, filament_color_id FROM parts WHERE profile_id = ? ORDER BY filename",
-        )
-        .all(copy.id),
-    ).toEqual([
-      { filename: "widget-a.stl", filament_color_id: null },
-      { filename: "widget-b.stl", filament_color_id: null },
-    ]);
-    expect(
-      raw
-        .prepare(
-          `SELECT pp.completed
-           FROM print_progress pp
-           JOIN parts p ON p.id = pp.part_id
-           WHERE p.profile_id = ? AND p.filename = 'widget-a.stl' AND pp.unit_index = 0`,
-        )
-        .get(copy.id),
-    ).toEqual({ completed: 0 });
+    expect(() => repo.duplicateProfile(plan.id, "RollbackAssignmentsCopy")).toThrow("rejected overlay");
+    expect(raw.prepare("SELECT id FROM build_profiles WHERE name = ?").get("RollbackAssignmentsCopy")).toBeUndefined();
     database.close();
   });
 });
@@ -234,7 +218,10 @@ describe("importKitBundle accepted publish", () => {
         rows: [{ partId: part.projectionPartId, printedCount: 1 }],
       }).kind,
     ).toBe("updated");
-    const captured = captureAcceptedOperationalExport({ repository: repo, profileId: plan.id });
+    const captured = captureAcceptedOperationalExport({
+      repository: repo,
+      profileId: plan.id,
+    });
     if (captured.kind !== "ready") throw new Error("captured export is not ready");
     const recipe = repo.readEditableKitRecipe(plan.id);
     const data = buildKitBundleData({

@@ -3,11 +3,18 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import AdmZip from "adm-zip";
-import { extractZipBuffer, writeUploadedFiles, discoverImportRules } from "./archive-import.js";
+import { encodeAcceptedPlate3mf, type StlMesh } from "@print-partner/domain";
+import { extractZipBuffer, writeUploadedFiles, writeUploadedZip, discoverImportRules } from "./archive-import.js";
 
 function tempRoot(): string {
   return mkdtempSync(join(tmpdir(), "pp-archive-"));
 }
+
+const triangle: StlMesh = {
+  vertices: [[0, 0, 0], [10, 0, 0], [0, 5, 0]],
+  faces: [[0, 1, 2]],
+  bounds: { minX: 0, minY: 0, minZ: 0, maxX: 10, maxY: 5, maxZ: 0, widthMm: 10, depthMm: 5, heightMm: 0 },
+};
 
 /** adm-zip sanitizes names in addFile, so force a hostile entry name afterwards. */
 function addMaliciousEntry(zip: AdmZip, name: string, data: Buffer): void {
@@ -110,6 +117,37 @@ describe("archive extraction hardening", () => {
     expect(result.stlCount).toBe(2);
     expect(existsSync(join(result.extractDir, "parts/a.stl"))).toBe(true);
     expect(result.suggestedImportRules).toEqual(["parts/"]);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("includes a top-level 3MF in suggested import rules", () => {
+    const root = tempRoot();
+    const threeMf = encodeAcceptedPlate3mf([
+      { token: "bracket", objectName: "Bracket", xUm: 0, yUm: 0, mesh: triangle },
+    ]);
+    const result = writeUploadedFiles(
+      [{ relativePath: "project.3mf", buffer: Buffer.from(threeMf) }],
+      root,
+      43,
+    );
+    expect(result.stlCount).toBe(1);
+    expect(existsSync(join(result.extractDir, "_3mf/project/bracket.stl"))).toBe(true);
+    expect(result.suggestedImportRules).toEqual(["_3mf/", "project.3mf"]);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("expands 3MF projects nested in uploaded ZIP files", () => {
+    const root = tempRoot();
+    const threeMf = encodeAcceptedPlate3mf([
+      { token: "clip", objectName: "Clip", xUm: 0, yUm: 0, mesh: triangle },
+    ]);
+    const zip = new AdmZip();
+    zip.addFile("models/assembly.3mf", Buffer.from(threeMf));
+
+    const extractDir = writeUploadedZip(zip.toBuffer(), root, 44);
+
+    expect(existsSync(join(extractDir, "models/assembly.3mf"))).toBe(true);
+    expect(existsSync(join(extractDir, "_3mf/assembly/clip.stl"))).toBe(true);
     rmSync(root, { recursive: true, force: true });
   });
 

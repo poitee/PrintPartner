@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import type { AssistantActionType, AssistantProposedAction, PrinterHostStatus } from "@print-partner/contracts";
 import { isAssistantUiAction } from "@print-partner/contracts";
@@ -8,34 +8,24 @@ import {
   AcceptedPlanOperationalIntegrityError,
   type ReadAcceptedPlanOperationalSnapshotResult,
 } from "../db/accepted-plan-operational.js";
-import {
-  acceptedPlanBasis,
-  acceptedProgressSummary,
-  type AcceptedPlanBasis,
-} from "../db/accepted-plan-progress.js";
+import { acceptedPlanBasis, acceptedProgressSummary, type AcceptedPlanBasis } from "../db/accepted-plan-progress.js";
 import type { IntegrationPort } from "../integrations/store.js";
 import { loadKitCatalog } from "../services/kit-catalog.js";
 import { loadKitManifest, saveKitManifest } from "../services/kit-manifest-store.js";
-import {
-  readAcceptedPlanReview,
-  summarizeAcceptedPlanReview,
-} from "../services/accepted-plan-review.js";
+import { readAcceptedPlanReview, summarizeAcceptedPlanReview } from "../services/accepted-plan-review.js";
 import { preloadSpoolmanForColorIds } from "../services/filament-resolve.js";
+import { loadFilamentCatalog } from "../services/filament-catalog.js";
+import { rankFilamentMatches } from "../services/filament-matches.js";
+import { saveRoleFilamentDefault } from "../services/role-filament-store.js";
+import { resolveFilamentDisplay } from "../services/filament-resolve.js";
 import { applyStackPresetToProfile, resolveStackPresetId } from "../services/stack-preset.js";
-import {
-  conflictsForStack,
-  explainSource,
-  replacementsWhenAdding,
-} from "../services/interaction-graph.js";
+import { conflictsForStack, explainSource, replacementsWhenAdding } from "../services/interaction-graph.js";
 import { extractGuideAdvice, fetchWebPageText, ingestGuideText, ingestGuideUrl } from "../services/guide-ingest.js";
 import { searchOverridesFromRuntime, searchWeb } from "../services/search/index.js";
 import { fetchGithubRepoTreeSummary, parseGithubUrl } from "../services/github-sync.js";
 import { walkSourceDocs } from "../services/source-docs-scan.js";
 import { summarizeRepoTreePaths, type RepoTreeSummary } from "../services/repo-tree-summary.js";
-import {
-  detectBuildDecisions,
-  selectionsFromSuggestedDecisions,
-} from "./build-decisions.js";
+import { detectBuildDecisions, selectionsFromSuggestedDecisions } from "./build-decisions.js";
 import { upsertAdvisorSourceNote } from "./domain-pack.js";
 import { loadConfig } from "../config.js";
 import { WORKFLOW_GUIDE } from "../routes/workflow-guide.js";
@@ -55,11 +45,24 @@ import {
 import { comparePlans } from "../services/plan-compare.js";
 import { appendPlanDecision, logAppliedAction } from "../services/plan-decisions.js";
 import { buildSyncAction } from "./sync-action.js";
-import {
-  decisionFingerprint,
-  isDismissedFingerprint,
-} from "./preferences-digest.js";
+import { decisionFingerprint, isDismissedFingerprint } from "./preferences-digest.js";
 import { getLogger } from "../services/logger.js";
+import { suggestSourceContributions } from "../services/source-contribution-suggestions.js";
+import { listPrintableArtifactPaths, scanSourceArtifacts } from "../services/source-artifacts.js";
+import {
+  analyzeBuildRequest,
+  buildPlanningApplyBlockers,
+  buildEvidenceFromUploadedSource,
+  deriveBuildPlanningReadiness,
+  hydrateBuildPlanningBrief,
+  newBuildPlanningBrief,
+  normalizedUrl,
+  readBuildPlanningBrief,
+  resolvedSourcePathExclusions,
+  saveBuildPlanningBrief,
+  type SourceContribution,
+  type CompatibilityFinding,
+} from "../services/build-planning.js";
 
 const GITHUB_PAT_KEY = "github_pat";
 const SHA256_DIGEST_PATTERN = /^[0-9a-f]{64}$/;
@@ -73,16 +76,10 @@ type PrintStatsAcceptedProgress =
   | { readonly kind: "empty" }
   | {
       readonly kind: "unavailable";
-      readonly reason:
-        | "compatibility_dirty"
-        | "uninitialized"
-        | "integrity"
-        | "concurrent_update";
+      readonly reason: "compatibility_dirty" | "uninitialized" | "integrity" | "concurrent_update";
     };
 
-function printStatsAcceptedProgress(
-  progress: AcceptedProfileProgress,
-): PrintStatsAcceptedProgress {
+function printStatsAcceptedProgress(progress: AcceptedProfileProgress): PrintStatsAcceptedProgress {
   switch (progress.kind) {
     case "ready":
       return {
@@ -141,7 +138,11 @@ function readAcceptedPlanForAssistant(
 ):
   | {
       readonly kind: "read";
-      readonly identity: { readonly id: number; readonly name: string; readonly archivedAt: string | null };
+      readonly identity: {
+        readonly id: number;
+        readonly name: string;
+        readonly archivedAt: string | null;
+      };
       readonly accepted: ReadAcceptedPlanOperationalSnapshotResult;
     }
   | { readonly kind: "missing" }
@@ -157,9 +158,10 @@ function readAcceptedPlanForAssistant(
   } catch (error) {
     return {
       kind: "failure",
-      detail: error instanceof AcceptedPlanOperationalIntegrityError
-        ? "Accepted Plan data is inconsistent"
-        : "Internal Server Error",
+      detail:
+        error instanceof AcceptedPlanOperationalIntegrityError
+          ? "Accepted Plan data is inconsistent"
+          : "Internal Server Error",
     };
   }
 }
@@ -176,6 +178,209 @@ export type AssistantToolSpec = {
 };
 
 export const ASSISTANT_TOOL_SPECS: AssistantToolSpec[] = [
+  {
+    name: "analyze_build_request",
+    description: "Extract candidate Build requirements and classify supplied URLs without saving data.",
+    input_schema: {
+      type: "object",
+      properties: {
+        request: { type: "string" },
+        urls: { type: "array", items: { type: "string" } },
+      },
+      required: ["request", "urls"],
+    },
+    tier: "read",
+  },
+  {
+    name: "get_build_planning_state",
+    description:
+      "Return the planning brief, evidence, requirement state, difference counts, blockers, and next decisions.",
+    input_schema: {
+      type: "object",
+      properties: { plan_id: { type: "number" } },
+      required: ["plan_id"],
+    },
+    tier: "read",
+  },
+  {
+    name: "suggest_source_contributions",
+    description: "Inspect a synchronized Source's printable paths and suggest known or Build-scoped functional-slot contributions without saving them.",
+    input_schema: {
+      type: "object",
+      properties: {
+        plan_id: { type: "number" },
+        evidence_id: { type: "string" },
+        source_id: { type: "number" },
+      },
+      required: ["plan_id"],
+    },
+    tier: "read",
+  },
+  {
+    name: "list_build_differences",
+    description: "List complete difference groups and items with cursor pagination.",
+    input_schema: {
+      type: "object",
+      properties: {
+        plan_id: { type: "number" },
+        cursor: { type: "string" },
+        limit: { type: "number", minimum: 1, maximum: 100 },
+      },
+      required: ["plan_id"],
+    },
+    tier: "read",
+  },
+  {
+    name: "get_plan_draft",
+    description: "Return the planning workflow's current persisted draft and readiness state.",
+    input_schema: {
+      type: "object",
+      properties: { plan_id: { type: "number" } },
+      required: ["plan_id"],
+    },
+    tier: "read",
+  },
+  {
+    name: "propose_create_build",
+    description: "PROPOSE atomically creating a Build with its verbatim and normalized customer request.",
+    input_schema: {
+      type: "object",
+      properties: {
+        name: { type: "string" },
+        request: { type: "string" },
+        urls: { type: "array", items: { type: "string" } },
+        idempotency_key: { type: "string" },
+      },
+      required: ["name", "request"],
+    },
+    tier: "mutate",
+  },
+  {
+    name: "propose_update_build_brief",
+    description: "PROPOSE confirmed requirement corrections and scoped Source contributions.",
+    input_schema: {
+      type: "object",
+      properties: {
+        plan_id: { type: "number" },
+        requirements: { type: "array", items: { type: "object" } },
+        contributions: { type: "array", items: { type: "object" } },
+        compatibility_findings: { type: "array", items: { type: "object" } },
+      },
+      required: ["plan_id"],
+    },
+    tier: "mutate",
+  },
+  {
+    name: "propose_resolve_build_differences",
+    description: "PROPOSE resolving one reviewed difference group, preserving rationale and every underlying item.",
+    input_schema: {
+      type: "object",
+      properties: {
+        plan_id: { type: "number" },
+        group_id: { type: "string" },
+        resolution: {
+          type: "string",
+          enum: ["choose_source_a", "choose_source_b", "include_both", "not_applicable", "custom"],
+        },
+        rationale: { type: "string" },
+        custom_resolution: { type: "string" },
+      },
+      required: ["plan_id", "group_id", "resolution", "rationale"],
+    },
+    tier: "mutate",
+  },
+  {
+    name: "propose_assign_role_filament",
+    description: "PROPOSE assigning an exact inventory filament or a user-confirmed custom/substitute color.",
+    input_schema: {
+      type: "object",
+      properties: {
+        plan_id: { type: "number" },
+        assignment: { type: "object" },
+      },
+      required: ["plan_id", "assignment"],
+    },
+    tier: "mutate",
+  },
+  {
+    name: "propose_import_build_inputs",
+    description: "PROPOSE atomically attaching classified URL evidence or an already-uploaded Source (STL, 3MF, ZIP, and supporting files) to a Build. Printables and MakerWorld pages remain provenance links; upload their downloaded files through the Source upload API, then pass source_id here.",
+    input_schema: {
+      type: "object",
+      properties: {
+        plan_id: { type: "number" },
+        inputs: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              url: { type: "string" },
+              source_id: { type: "number" },
+              derived_from_evidence_id: { type: "string" },
+              filenames: { type: "array", items: { type: "string" } },
+              kind: { type: "string" },
+              title: { type: "string" },
+              extract: { type: "string" },
+              branch: { type: "string" },
+            },
+          },
+        },
+      },
+      required: ["plan_id", "inputs"],
+    },
+    tier: "mutate",
+  },
+  {
+    name: "propose_set_build_source_roles",
+    description: "PROPOSE plan-specific source roles without changing a Source's global role.",
+    input_schema: {
+      type: "object",
+      properties: {
+        plan_id: { type: "number" },
+        roles: { type: "array", items: { type: "object" } },
+      },
+      required: ["plan_id", "roles"],
+    },
+    tier: "mutate",
+  },
+  {
+    name: "propose_rebuild_plan",
+    description: "PROPOSE recomputing and recording a printable-part draft for planning review.",
+    input_schema: {
+      type: "object",
+      properties: {
+        plan_id: { type: "number" },
+        review_blockers: { type: "array", items: { type: "string" } },
+        idempotency_key: { type: "string" },
+      },
+      required: ["plan_id"],
+    },
+    tier: "mutate",
+  },
+  {
+    name: "propose_apply_plan_draft",
+    description: "PROPOSE applying the selected draft. Server readiness must pass at confirmation time.",
+    input_schema: {
+      type: "object",
+      properties: { plan_id: { type: "number" }, draft_id: { type: "number" } },
+      required: ["plan_id", "draft_id"],
+    },
+    tier: "mutate",
+  },
+  {
+    name: "find_filament_matches",
+    description: "Find configured catalog and Spoolman candidates by brand/name first and color second.",
+    input_schema: {
+      type: "object",
+      properties: {
+        brand: { type: "string" },
+        name: { type: "string" },
+        color_hex: { type: "string" },
+      },
+      required: ["name"],
+    },
+    tier: "read",
+  },
   {
     name: "get_kit_catalog",
     description: "Summarized kit catalog: bases, addon categories, stack presets.",
@@ -199,7 +404,9 @@ export const ASSISTANT_TOOL_SPECS: AssistantToolSpec[] = [
     description: "Layers, kit selections, and inferred stack preset for a plan.",
     input_schema: {
       type: "object",
-      properties: { plan_id: { type: "number", description: "Plan / profile id" } },
+      properties: {
+        plan_id: { type: "number", description: "Plan / profile id" },
+      },
       required: ["plan_id"],
     },
     tier: "read",
@@ -210,15 +417,16 @@ export const ASSISTANT_TOOL_SPECS: AssistantToolSpec[] = [
       "Print progress for a plan: printed/remaining units, percent, and whether archive is allowed (remaining = 0).",
     input_schema: {
       type: "object",
-      properties: { plan_id: { type: "number", description: "Plan / profile id" } },
+      properties: {
+        plan_id: { type: "number", description: "Plan / profile id" },
+      },
       required: ["plan_id"],
     },
     tier: "read",
   },
   {
     name: "get_plan_review",
-    description:
-      "Review summary for a plan: issue counts, blockers, role/filament totals — not a full STL dump.",
+    description: "Review summary for a plan: issue counts, blockers, role/filament totals — not a full STL dump.",
     input_schema: {
       type: "object",
       properties: { plan_id: { type: "number" } },
@@ -267,7 +475,10 @@ export const ASSISTANT_TOOL_SPECS: AssistantToolSpec[] = [
       properties: {
         plan_id: { type: "number" },
         source_name: { type: "string" },
-        category: { type: "string", description: "Addon category id or role label" },
+        category: {
+          type: "string",
+          description: "Addon category id or role label",
+        },
         option_groups: {
           type: "object",
           additionalProperties: { type: "string" },
@@ -306,7 +517,10 @@ export const ASSISTANT_TOOL_SPECS: AssistantToolSpec[] = [
           type: "string",
           description: "Optional GitHub tag to set on the source (e.g. VTr2 for Trident R2).",
         },
-        branch: { type: "string", description: "Optional GitHub branch to set on the source." },
+        branch: {
+          type: "string",
+          description: "Optional GitHub branch to set on the source.",
+        },
       },
       required: ["plan_id", "source_name"],
     },
@@ -361,7 +575,10 @@ export const ASSISTANT_TOOL_SPECS: AssistantToolSpec[] = [
       type: "object",
       properties: {
         plan_id: { type: "number" },
-        selections: { type: "object", additionalProperties: { type: "string" } },
+        selections: {
+          type: "object",
+          additionalProperties: { type: "string" },
+        },
       },
       required: ["plan_id", "selections"],
     },
@@ -374,14 +591,20 @@ export const ASSISTANT_TOOL_SPECS: AssistantToolSpec[] = [
     input_schema: {
       type: "object",
       properties: {
-        source_name: { type: "string", description: "Sync a single source by exact name" },
+        source_name: {
+          type: "string",
+          description: "Sync a single source by exact name",
+        },
         source_id: { type: "number" },
         project_ids: {
           type: "array",
           items: { type: "number" },
           description: "Optional list of source ids to sync",
         },
-        plan_id: { type: "number", description: "Optional active plan context" },
+        plan_id: {
+          type: "number",
+          description: "Optional active plan context",
+        },
       },
     },
     tier: "mutate",
@@ -394,7 +617,10 @@ export const ASSISTANT_TOOL_SPECS: AssistantToolSpec[] = [
       type: "object",
       properties: {
         plan_id: { type: "number" },
-        query: { type: "string", description: "Substring match on filename or path" },
+        query: {
+          type: "string",
+          description: "Substring match on filename or path",
+        },
         limit: { type: "number" },
       },
       required: ["query"],
@@ -412,8 +638,14 @@ export const ASSISTANT_TOOL_SPECS: AssistantToolSpec[] = [
           type: "string",
           enum: ["sources", "build", "review", "checkoff", "settings", "builds", "help"],
         },
-        profile_id: { type: "number", description: "Optional plan id to select / deep-link" },
-        plan_id: { type: "number", description: "Alias for profile_id (active plan context)" },
+        profile_id: {
+          type: "number",
+          description: "Optional plan id to select / deep-link",
+        },
+        plan_id: {
+          type: "number",
+          description: "Alias for profile_id (active plan context)",
+        },
       },
       required: ["route"],
     },
@@ -429,7 +661,10 @@ export const ASSISTANT_TOOL_SPECS: AssistantToolSpec[] = [
         source_name: { type: "string" },
         source_id: { type: "number" },
         tab: { type: "string", enum: ["docs", "rules", "naming", "overview"] },
-        path: { type: "string", description: "Optional file path to highlight" },
+        path: {
+          type: "string",
+          description: "Optional file path to highlight",
+        },
         query: { type: "string", description: "Optional docs keyword filter" },
         plan_id: { type: "number" },
       },
@@ -495,7 +730,10 @@ export const ASSISTANT_TOOL_SPECS: AssistantToolSpec[] = [
           type: "string",
           description: "Filter text for the Build STL import tree",
         },
-        source_name: { type: "string", description: "Optional source card to expand" },
+        source_name: {
+          type: "string",
+          description: "Optional source card to expand",
+        },
         source_id: { type: "number" },
       },
     },
@@ -531,7 +769,10 @@ export const ASSISTANT_TOOL_SPECS: AssistantToolSpec[] = [
       type: "object",
       properties: {
         plan_id: { type: "number", description: "Target plan to apply onto" },
-        source_plan_id: { type: "number", description: "Plan to copy recipe from" },
+        source_plan_id: {
+          type: "number",
+          description: "Plan to copy recipe from",
+        },
       },
       required: ["plan_id"],
     },
@@ -562,8 +803,7 @@ export const ASSISTANT_TOOL_SPECS: AssistantToolSpec[] = [
   },
   {
     name: "propose_restore_snapshot",
-    description:
-      "PROPOSE restoring a plan from a snapshot id. Requires user confirmation.",
+    description: "PROPOSE restoring a plan from a snapshot id. Requires user confirmation.",
     input_schema: {
       type: "object",
       properties: {
@@ -708,8 +948,14 @@ export const ASSISTANT_TOOL_SPECS: AssistantToolSpec[] = [
       type: "object",
       properties: {
         url: { type: "string", description: "GitHub repository URL" },
-        source_name: { type: "string", description: "Known source name (list_sources)" },
-        ref: { type: "string", description: "Optional branch/tag; defaults to the repo default" },
+        source_name: {
+          type: "string",
+          description: "Known source name (list_sources)",
+        },
+        ref: {
+          type: "string",
+          description: "Optional branch/tag; defaults to the repo default",
+        },
       },
     },
     tier: "read",
@@ -721,8 +967,14 @@ export const ASSISTANT_TOOL_SPECS: AssistantToolSpec[] = [
     input_schema: {
       type: "object",
       properties: {
-        source_name: { type: "string", description: "Known source name (list_sources)" },
-        url: { type: "string", description: "GitHub URL when the source is not added yet" },
+        source_name: {
+          type: "string",
+          description: "Known source name (list_sources)",
+        },
+        url: {
+          type: "string",
+          description: "GitHub URL when the source is not added yet",
+        },
         plan_id: { type: "number" },
         user_constraints: {
           type: "string",
@@ -765,7 +1017,10 @@ export const ASSISTANT_TOOL_SPECS: AssistantToolSpec[] = [
       type: "object",
       properties: {
         source_name: { type: "string" },
-        title: { type: "string", description: "Defaults to Guide: <host or title>" },
+        title: {
+          type: "string",
+          description: "Defaults to Guide: <host or title>",
+        },
         body_markdown: { type: "string" },
         plan_id: { type: "number" },
       },
@@ -870,11 +1125,7 @@ function asInt(raw: unknown): number | null {
   return null;
 }
 
-function resolvePlanId(
-  input: Record<string, unknown>,
-  ctx: ToolContext,
-  validateRequested = true,
-): number | null {
+function resolvePlanId(input: Record<string, unknown>, ctx: ToolContext, validateRequested = true): number | null {
   const requested = asInt(input.plan_id);
   if (requested != null && (!validateRequested || ctx.repo.getOwnedProfileIdentity(requested))) {
     return requested;
@@ -898,7 +1149,11 @@ function sourceByName(repo: AppRepository, name: string) {
   // Model often appends release suffixes ("Voron-Trident R2-0", "Voron-Trident @ VTr2").
   // Match when either string contains the other after separator normalization; prefer the
   // longest source name so "Voron-Trident R2" resolves to Voron-Trident, not Voron-2.
-  const norm = (s: string) => s.toLowerCase().replace(/[\s_-]+/g, " ").trim();
+  const norm = (s: string) =>
+    s
+      .toLowerCase()
+      .replace(/[\s_-]+/g, " ")
+      .trim();
   const needleNorm = norm(needle);
   const contains = sources.filter((s) => {
     const n = norm(s.name);
@@ -938,9 +1193,7 @@ function similarSourceNames(repo: AppRepository, name: string, limit = 5): strin
 
 function sourceNotFoundError(repo: AppRepository, sourceName: string, hint: string): string {
   const suggestions = similarSourceNames(repo, sourceName);
-  const didYouMean = suggestions.length
-    ? ` Did you mean: ${suggestions.map((n) => `"${n}"`).join(", ")}?`
-    : "";
+  const didYouMean = suggestions.length ? ` Did you mean: ${suggestions.map((n) => `"${n}"`).join(", ")}?` : "";
   return JSON.stringify({
     error: `Source not found: "${sourceName}".${didYouMean} ${hint}`,
   });
@@ -1059,7 +1312,10 @@ async function resolveRepoTreeSummary(
 
   const candidateUrl = url || source?.url || "";
   if (!candidateUrl) {
-    return { error: "url or source_name required", hint: "Call list_sources first." };
+    return {
+      error: "url or source_name required",
+      hint: "Call list_sources first.",
+    };
   }
   const parsed = parseGithubUrl(candidateUrl);
   if (!parsed) {
@@ -1148,16 +1404,11 @@ function proposeChecked(
   params: Record<string, unknown>,
   extras?: Record<string, unknown>,
 ): ToolInvokeResult {
-  if (
-    planId > 0 &&
-    !isAssistantUiAction(type) &&
-    isDismissedFingerprint(ctx.repo, planId, type, params)
-  ) {
+  if (planId > 0 && !isAssistantUiAction(type) && isDismissedFingerprint(ctx.repo, planId, type, params)) {
     return {
       content: JSON.stringify({
         error: "user_dismissed",
-        detail:
-          "User dismissed this action fingerprint on this plan. Ask before re-proposing the same change.",
+        detail: "User dismissed this action fingerprint on this plan. Ask before re-proposing the same change.",
         fingerprint: decisionFingerprint(type, params),
         action_type: type,
       }),
@@ -1181,6 +1432,255 @@ export async function invokeAssistantTool(
 
   try {
     switch (name) {
+      case "analyze_build_request": {
+        const request = typeof input.request === "string" ? input.request : "";
+        const urls = Array.isArray(input.urls)
+          ? input.urls.filter((url): url is string => typeof url === "string")
+          : [];
+        if (!request.trim()) return { content: JSON.stringify({ error: "request required" }) };
+        const analysis = analyzeBuildRequest(request, urls);
+        const catalog = loadKitCatalog();
+        const categories = catalog.addon_categories;
+        return {
+          content: JSON.stringify({
+            ...analysis,
+            functional_slot_vocabulary:
+              categories && typeof categories === "object"
+                ? Object.keys(categories)
+                : [],
+            build_scoped_slots_allowed: true,
+            supported_inputs: {
+              links: ["public Git repositories", "Printables", "MakerWorld", "public web pages"],
+              uploads: [".zip", ".stl", ".3mf", "supporting project files"],
+              upload_workflow:
+                "Create a local/model-library Source, upload files with POST /sources/:id/upload-files or an archive with POST /sources/:id/upload-zip, then attach the returned Source id with propose_import_build_inputs.",
+            },
+            contribution_instruction:
+              "Reuse a functional slot when its responsibility fits. Otherwise propose a snake_case Build-scoped slot with path scope, evidence, and confidence.",
+          }),
+        };
+      }
+      case "get_build_planning_state": {
+        const planId = resolvePlanId(input, ctx, false);
+        if (planId == null) return { content: JSON.stringify({ error: "plan_id required" }) };
+        const storedBrief = readBuildPlanningBrief(ctx.repo, planId);
+        const brief = storedBrief ? hydrateBuildPlanningBrief(ctx.repo, storedBrief) : null;
+        if (!brief)
+          return {
+            content: JSON.stringify({
+              error: "Build planning brief not found",
+            }),
+          };
+        const groupIds = [...new Set(brief.differences.map((item) => item.group_id))];
+        return {
+          content: JSON.stringify({
+            brief,
+            readiness: deriveBuildPlanningReadiness(brief),
+            grouped_difference_count: groupIds.length,
+            difference_count: brief.differences.length,
+            next_required_decisions: [
+              ...brief.evidence
+                .filter(
+                  (evidence) =>
+                    evidence.input_kind === "model_page" &&
+                    evidence.upload_required &&
+                    !brief.evidence.some(
+                      (candidate) =>
+                        candidate.input_kind === "upload" &&
+                        candidate.derived_from_evidence_id === evidence.id,
+                    ),
+                )
+                .map((evidence) => `upload:${evidence.id}`),
+              ...(brief.contributions ?? [])
+                .filter((contribution) => contribution.status === "proposed")
+                .map((contribution) => `contribution:${contribution.id}`),
+              ...groupIds.filter((id) => !brief.resolutions[id]),
+            ],
+          }),
+        };
+      }
+      case "suggest_source_contributions": {
+        const planId = resolvePlanId(input, ctx, false);
+        if (planId == null) return { content: JSON.stringify({ error: "plan_id required" }) };
+        const storedBrief = readBuildPlanningBrief(ctx.repo, planId);
+        const brief = storedBrief ? hydrateBuildPlanningBrief(ctx.repo, storedBrief) : null;
+        if (!brief) return { content: JSON.stringify({ error: "Build planning brief not found" }) };
+        const evidenceId = typeof input.evidence_id === "string" ? input.evidence_id : "";
+        const sourceId = asInt(input.source_id);
+        const evidence = brief.evidence.find((item) =>
+          evidenceId ? item.id === evidenceId : sourceId != null && item.source_id === sourceId,
+        );
+        if (!evidence?.source_id) return { content: JSON.stringify({ error: "Attached Source evidence not found" }) };
+        const source = ctx.repo.getSource(evidence.source_id);
+        if (!source?.local_path || !source.last_synced_at || !source.last_commit_sha)
+          return { content: JSON.stringify({ error: "Source must be synchronized and pinned first" }) };
+        const catalog = loadKitCatalog();
+        const categories = catalog.addon_categories;
+        const knownSlots = categories && typeof categories === "object" ? Object.keys(categories) : [];
+        const suggestions = suggestSourceContributions({
+          evidenceId: evidence.id,
+          sourceName: source.name,
+          printablePaths: listPrintableArtifactPaths(source.local_path),
+          knownSlots,
+        });
+        return {
+          content: JSON.stringify({
+            source: { id: source.id, name: source.name, pinned_revision: source.last_commit_sha },
+            suggestions,
+            note: "Suggestions are not saved. Review path scopes and evidence, then use propose_update_build_brief and confirm_apply.",
+          }),
+        };
+      }
+      case "list_build_differences": {
+        const planId = resolvePlanId(input, ctx, false);
+        if (planId == null) return { content: JSON.stringify({ error: "plan_id required" }) };
+        const storedBrief = readBuildPlanningBrief(ctx.repo, planId);
+        const brief = storedBrief ? hydrateBuildPlanningBrief(ctx.repo, storedBrief) : null;
+        if (!brief)
+          return {
+            content: JSON.stringify({
+              error: "Build planning brief not found",
+            }),
+          };
+        const offset = typeof input.cursor === "string" && /^\d+$/.test(input.cursor) ? Number(input.cursor) : 0;
+        const limit = Math.min(100, Math.max(1, asInt(input.limit) ?? 25));
+        const ids = [...new Set(brief.differences.map((item) => item.group_id))].sort();
+        const page = ids.slice(offset, offset + limit);
+        return {
+          content: JSON.stringify({
+            groups: page.map((group_id) => ({
+              group_id,
+              resolution: brief.resolutions[group_id] ?? null,
+              items: brief.differences.filter((item) => item.group_id === group_id),
+            })),
+            next_cursor: offset + limit < ids.length ? String(offset + limit) : null,
+            total_groups: ids.length,
+            total_items: brief.differences.length,
+          }),
+        };
+      }
+      case "get_plan_draft": {
+        const planId = resolvePlanId(input, ctx, false);
+        if (planId == null) return { content: JSON.stringify({ error: "plan_id required" }) };
+        const storedBrief = readBuildPlanningBrief(ctx.repo, planId);
+        const brief = storedBrief ? hydrateBuildPlanningBrief(ctx.repo, storedBrief) : null;
+        if (!brief)
+          return {
+            content: JSON.stringify({
+              error: "Build planning brief not found",
+            }),
+          };
+        const draft = brief.draft_id == null ? null : ctx.repo.getPlanDraft(planId, brief.draft_id);
+        return {
+          content: JSON.stringify({
+            draft,
+            readiness: deriveBuildPlanningReadiness(brief),
+          }),
+        };
+      }
+      case "find_filament_matches": {
+        const query = String(input.name ?? "")
+          .trim()
+          .toLowerCase();
+        const brand = String(input.brand ?? "")
+          .trim()
+          .toLowerCase();
+        if (!query) return { content: JSON.stringify({ error: "name required" }) };
+        const colorHex = typeof input.color_hex === "string" ? input.color_hex.trim() : "";
+        if (colorHex && !/^#[0-9a-f]{6}$/i.test(colorHex)) {
+          return { content: JSON.stringify({ error: "color_hex must be a six-digit hex color" }) };
+        }
+        const catalog = loadFilamentCatalog();
+        const matches = rankFilamentMatches(
+          [...catalog.colors, ...catalog.custom_colors, ...(catalog.spoolman_colors ?? [])],
+          { name: query, brand, colorHex },
+        );
+        return {
+          content: JSON.stringify({
+            matches: matches.slice(0, 20),
+            exact_available: matches.some(
+              (match) => match.exact_name && (!brand || match.brand_match),
+            ),
+          }),
+        };
+      }
+      case "propose_create_build": {
+        const buildName = String(input.name ?? "").trim();
+        const request = String(input.request ?? "");
+        const urls = Array.isArray(input.urls)
+          ? input.urls.filter((url): url is string => typeof url === "string")
+          : [];
+        if (!buildName || !request.trim())
+          return {
+            content: JSON.stringify({ error: "name and request required" }),
+          };
+        analyzeBuildRequest(request, urls);
+        return propose(
+          "propose_create_build",
+          0,
+          `Create Build ${buildName}`,
+          "Create the Build and preserve the customer request verbatim.",
+          {
+            name: buildName,
+            request,
+            urls,
+            idempotency_key: typeof input.idempotency_key === "string" ? input.idempotency_key : undefined,
+          },
+        );
+      }
+      case "propose_import_build_inputs": {
+        const planId = resolvePlanId(input, ctx, false);
+        if (planId == null) return { content: JSON.stringify({ error: "plan_id required" }) };
+        if (!readBuildPlanningBrief(ctx.repo, planId))
+          return { content: JSON.stringify({ error: "Build planning brief not found" }) };
+        if (!Array.isArray(input.inputs)) return { content: JSON.stringify({ error: "inputs required" }) };
+        const inputs = await Promise.all(input.inputs.map(async (value) => {
+          if (!value || typeof value !== "object") throw new Error("Invalid input evidence");
+          const row = value as Record<string, unknown>;
+          const sourceId = asInt(row.source_id);
+          if (sourceId != null) {
+            const source = ctx.repo.getSource(sourceId);
+            if (!source) throw new Error(`Source not found: ${sourceId}`);
+            return row;
+          }
+          const url = normalizedUrl(String(row.url ?? ""));
+          if (new URL(url).hostname !== "github.com" || typeof row.branch === "string") return row;
+          const inspected = await fetchGithubRepoTreeSummary(url, null, ctx.repo.getSetting(GITHUB_PAT_KEY));
+          return { ...row, url, branch: inspected.ref };
+        }));
+        return propose("propose_import_build_inputs", planId, "import build inputs", "Create or reuse Sources and attach the confirmed evidence.", { ...input, inputs });
+      }
+      case "propose_update_build_brief":
+      case "propose_set_build_source_roles":
+      case "propose_resolve_build_differences":
+      case "propose_assign_role_filament":
+      case "propose_rebuild_plan":
+      case "propose_apply_plan_draft": {
+        const planId = resolvePlanId(input, ctx, false);
+        if (planId == null) return { content: JSON.stringify({ error: "plan_id required" }) };
+        if (!readBuildPlanningBrief(ctx.repo, planId))
+          return {
+            content: JSON.stringify({
+              error: "Build planning brief not found",
+            }),
+          };
+        if (
+          name === "propose_resolve_build_differences" &&
+          (!String(input.group_id ?? "").trim() || !String(input.rationale ?? "").trim())
+        )
+          return {
+            content: JSON.stringify({
+              error: "group_id and rationale required",
+            }),
+          };
+        return propose(
+          name,
+          planId,
+          name.replace(/^propose_/, "").replaceAll("_", " "),
+          "Apply the confirmed Build planning change.",
+          input,
+        );
+      }
       case "get_kit_catalog":
         return { content: summarizeKitCatalog(loadKitCatalog()) };
 
@@ -1226,23 +1726,26 @@ export async function invokeAssistantTool(
         }
         const accepted = read.accepted;
         if (accepted.kind === "compatibility_dirty") {
-          return { content: JSON.stringify({ error: "Accepted Plan requires compatibility repair" }) };
+          return {
+            content: JSON.stringify({
+              error: "Accepted Plan requires compatibility repair",
+            }),
+          };
         }
         if (accepted.kind === "uninitialized") {
-          return { content: JSON.stringify({ error: "Accepted Plan operational state is not initialized" }) };
+          return {
+            content: JSON.stringify({
+              error: "Accepted Plan operational state is not initialized",
+            }),
+          };
         }
-        const parts = accepted.kind === "ready"
-          ? accepted.snapshot.parts.filter((part) => part.included)
-          : [];
-        const { totalUnits, remainingUnits } = accepted.kind === "ready"
-          ? acceptedProgressSummary(accepted.snapshot)
-          : { totalUnits: 0, remainingUnits: 0 };
+        const parts = accepted.kind === "ready" ? accepted.snapshot.parts.filter((part) => part.included) : [];
+        const { totalUnits, remainingUnits } =
+          accepted.kind === "ready" ? acceptedProgressSummary(accepted.snapshot) : { totalUnits: 0, remainingUnits: 0 };
         const printedUnits = totalUnits - remainingUnits;
         const profile = accepted.kind === "ready" ? accepted.snapshot.profile : read.identity;
         const percent =
-          totalUnits === 0
-            ? 0
-            : Math.min(100, Math.max(0, Math.floor((printedUnits / totalUnits) * 100)));
+          totalUnits === 0 ? 0 : Math.min(100, Math.max(0, Math.floor((printedUnits / totalUnits) * 100)));
         return {
           content: JSON.stringify({
             plan_id: planId,
@@ -1273,8 +1776,7 @@ export async function invokeAssistantTool(
               reposDir: ctx.repo.reposDir,
               thumbsDir: ctx.thumbsDir?.trim() || null,
               loadFilamentContext: dataDir
-                ? (colorIds) =>
-                    preloadSpoolmanForColorIds({ repo: ctx.repo, dataDir }, colorIds)
+                ? (colorIds) => preloadSpoolmanForColorIds({ repo: ctx.repo, dataDir }, colorIds)
                 : undefined,
             });
           };
@@ -1319,10 +1821,7 @@ export async function invokeAssistantTool(
       }
 
       case "get_workflow_help": {
-        const text =
-          WORKFLOW_GUIDE.length > 3500
-            ? `${WORKFLOW_GUIDE.slice(0, 3480)}\n…[truncated]`
-            : WORKFLOW_GUIDE;
+        const text = WORKFLOW_GUIDE.length > 3500 ? `${WORKFLOW_GUIDE.slice(0, 3480)}\n…[truncated]` : WORKFLOW_GUIDE;
         return { content: text };
       }
 
@@ -1335,8 +1834,7 @@ export async function invokeAssistantTool(
             }),
           };
         }
-        const exclude =
-          asInt(input.exclude_plan_id) ?? ctx.activePlanId ?? null;
+        const exclude = asInt(input.exclude_plan_id) ?? ctx.activePlanId ?? null;
         const text = summarizeOtherBuildsAsExamples({
           repo: ctx.repo,
           excludePlanId: exclude,
@@ -1348,21 +1846,15 @@ export async function invokeAssistantTool(
 
       case "get_source_docs": {
         const byId = asInt(input.source_id);
-        const byName =
-          typeof input.source_name === "string" ? input.source_name.trim() : "";
+        const byName = typeof input.source_name === "string" ? input.source_name.trim() : "";
         // Ignore placeholder ids like -1 / 0 that local models invent.
         const source =
-          byId != null && byId > 0
-            ? ctx.repo.getSource(byId)
-            : byName
-              ? sourceByName(ctx.repo, byName)
-              : null;
+          byId != null && byId > 0 ? ctx.repo.getSource(byId) : byName ? sourceByName(ctx.repo, byName) : null;
         if (!source) {
           const available = ctx.repo.listSources().map((s) => s.name);
           return {
             content: JSON.stringify({
-              error:
-                "source_id or source_name required (must match list_sources). Do not use source_id=-1.",
+              error: "source_id or source_name required (must match list_sources). Do not use source_id=-1.",
               hint: "Call list_sources first, then get_source_docs with an exact source name.",
               available_source_names: available,
             }),
@@ -1384,7 +1876,9 @@ export async function invokeAssistantTool(
         const category = typeof input.category === "string" ? input.category.trim() : "";
         if (!sourceName || !category) {
           return {
-            content: JSON.stringify({ error: "source_name and category required" }),
+            content: JSON.stringify({
+              error: "source_name and category required",
+            }),
           };
         }
         const source = sourceByName(ctx.repo, sourceName);
@@ -1401,9 +1895,9 @@ export async function invokeAssistantTool(
         for (const [k, v] of Object.entries(optionGroups)) {
           if (typeof v === "string") cleanGroups[k] = v;
         }
-        const rationale =
-          typeof input.rationale === "string" ? input.rationale.trim() : "";
-        return proposeChecked(ctx, 
+        const rationale = typeof input.rationale === "string" ? input.rationale.trim() : "";
+        return proposeChecked(
+          ctx,
           "propose_source_mapping",
           planId ?? 0,
           `Map ${sourceName} → ${category}`,
@@ -1428,16 +1922,17 @@ export async function invokeAssistantTool(
         const planId = resolvePlanId(input, ctx);
         const rawPresetId = typeof input.preset_id === "string" ? input.preset_id.trim() : "";
         if (planId == null || !rawPresetId) {
-          return { content: JSON.stringify({ error: "plan_id and preset_id required" }) };
+          return {
+            content: JSON.stringify({
+              error: "plan_id and preset_id required",
+            }),
+          };
         }
         if (!ctx.repo.getOwnedProfileIdentity(planId)) {
           return { content: JSON.stringify({ error: "Plan not found" }) };
         }
         const catalog = loadKitCatalog() as Record<string, unknown>;
-        const presets = (catalog.stack_presets ?? {}) as Record<
-          string,
-          { label?: string }
-        >;
+        const presets = (catalog.stack_presets ?? {}) as Record<string, { label?: string }>;
         const resolved = resolveStackPresetId(rawPresetId, presets);
         if (!resolved) {
           const known = Object.keys(presets).slice(0, 12).join(", ");
@@ -1456,12 +1951,8 @@ export async function invokeAssistantTool(
               base?: string;
             }
           | undefined;
-        const baseTag =
-          typeof presetEntry?.base_tag === "string" ? presetEntry.base_tag.trim() : "";
-        const baseBranch =
-          typeof presetEntry?.base_branch === "string"
-            ? presetEntry.base_branch.trim()
-            : "";
+        const baseTag = typeof presetEntry?.base_tag === "string" ? presetEntry.base_tag.trim() : "";
+        const baseBranch = typeof presetEntry?.base_branch === "string" ? presetEntry.base_branch.trim() : "";
         const refNote = baseTag
           ? ` Pins base source to tag ${baseTag} (Sync required after Apply).`
           : baseBranch
@@ -1470,17 +1961,19 @@ export async function invokeAssistantTool(
         const bases = (catalog.bases ?? {}) as Record<string, { source_name?: string }>;
         const baseId = presetEntry?.base ?? "";
         const baseSourceName = bases[baseId]?.source_name ?? baseId;
-        const proposedLayers = [
-          baseSourceName,
-          ...((presetEntry?.addon_sources as string[] | undefined) ?? []),
-        ].filter(Boolean);
-        const stackCheck = conflictsForStack(proposedLayers, { dataDir: ctx.dataDir });
+        const proposedLayers = [baseSourceName, ...((presetEntry?.addon_sources as string[] | undefined) ?? [])].filter(
+          Boolean,
+        );
+        const stackCheck = conflictsForStack(proposedLayers, {
+          dataDir: ctx.dataDir,
+        });
         const warnBits = stackCheck.warnings
           .filter((w) => w.severity === "warning")
           .map((w) => w.message)
           .slice(0, 4);
         const warnNote = warnBits.length ? ` Warnings: ${warnBits.join(" ")}` : "";
-        return proposeChecked(ctx, 
+        return proposeChecked(
+          ctx,
           "apply_stack_preset",
           planId,
           `Apply stack preset “${resolved}”`,
@@ -1489,9 +1982,7 @@ export async function invokeAssistantTool(
             preset_id: resolved,
             ...(baseTag ? { base_tag: baseTag } : {}),
             ...(baseBranch && !baseTag ? { base_branch: baseBranch } : {}),
-            ...(stackCheck.suggested_excludes.length
-              ? { suggested_excludes: stackCheck.suggested_excludes }
-              : {}),
+            ...(stackCheck.suggested_excludes.length ? { suggested_excludes: stackCheck.suggested_excludes } : {}),
           },
           {
             warnings: stackCheck.warnings,
@@ -1505,7 +1996,11 @@ export async function invokeAssistantTool(
         const planId = resolvePlanId(input, ctx);
         const sourceName = typeof input.source_name === "string" ? input.source_name.trim() : "";
         if (planId == null || !sourceName) {
-          return { content: JSON.stringify({ error: "plan_id and source_name required" }) };
+          return {
+            content: JSON.stringify({
+              error: "plan_id and source_name required",
+            }),
+          };
         }
         if (!ctx.repo.getOwnedProfileIdentity(planId)) {
           return { content: JSON.stringify({ error: "Plan not found" }) };
@@ -1525,8 +2020,7 @@ export async function invokeAssistantTool(
         const canonicalBase = source.name;
         const synced = Boolean(source.local_path && source.last_synced_at);
         const refLabel = tag ? `@${tag}` : branch ? `@${branch}` : "";
-        const needsSyncNote =
-          (tag && tag !== (source.tag ?? "")) || (branch && branch !== (source.branch ?? ""));
+        const needsSyncNote = (tag && tag !== (source.tag ?? "")) || (branch && branch !== (source.branch ?? ""));
         if (!synced && !needsSyncNote) {
           return {
             content: JSON.stringify({
@@ -1535,7 +2029,8 @@ export async function invokeAssistantTool(
             }),
           };
         }
-        return proposeChecked(ctx, 
+        return proposeChecked(
+          ctx,
           "set_base",
           planId,
           `Set base to ${canonicalBase}${refLabel}`,
@@ -1558,7 +2053,9 @@ export async function invokeAssistantTool(
         const branch = typeof input.branch === "string" ? input.branch.trim() : "";
         if (!sourceName || (!tag && !branch)) {
           return {
-            content: JSON.stringify({ error: "source_name and tag or branch required" }),
+            content: JSON.stringify({
+              error: "source_name and tag or branch required",
+            }),
           };
         }
         const source = sourceByName(ctx.repo, sourceName);
@@ -1570,7 +2067,8 @@ export async function invokeAssistantTool(
         const planId = resolvePlanId(input, ctx) ?? 0;
         const canonicalRef = source.name;
         const refBits = [tag && `tag=${tag}`, branch && `branch=${branch}`].filter(Boolean).join(", ");
-        return proposeChecked(ctx, 
+        return proposeChecked(
+          ctx,
           "set_source_git_ref",
           planId,
           `Set ${canonicalRef} → ${refBits}`,
@@ -1587,7 +2085,11 @@ export async function invokeAssistantTool(
         const planId = resolvePlanId(input, ctx);
         const sourceName = typeof input.source_name === "string" ? input.source_name.trim() : "";
         if (planId == null || !sourceName) {
-          return { content: JSON.stringify({ error: "plan_id and source_name required" }) };
+          return {
+            content: JSON.stringify({
+              error: "plan_id and source_name required",
+            }),
+          };
         }
         if (!ctx.repo.getOwnedProfileIdentity(planId)) {
           return { content: JSON.stringify({ error: "Plan not found" }) };
@@ -1627,16 +2129,15 @@ export async function invokeAssistantTool(
         const excludeNote = check.suggested_excludes.length
           ? ` Suggested excludes: ${check.suggested_excludes.slice(0, 6).join(", ")}.`
           : "";
-        return proposeChecked(ctx, 
+        return proposeChecked(
+          ctx,
           "add_addon",
           planId,
           `Add addon ${canonicalAddon}`,
           `Add “${canonicalAddon}” as an addon layer.${warnNote}${excludeNote}`,
           {
             source_name: canonicalAddon,
-            ...(check.suggested_excludes.length
-              ? { suggested_excludes: check.suggested_excludes }
-              : {}),
+            ...(check.suggested_excludes.length ? { suggested_excludes: check.suggested_excludes } : {}),
           },
           {
             warnings: check.warnings,
@@ -1650,9 +2151,12 @@ export async function invokeAssistantTool(
         const planId = resolvePlanId(input, ctx);
         const layerId = asInt(input.layer_id);
         if (planId == null || layerId == null) {
-          return { content: JSON.stringify({ error: "plan_id and layer_id required" }) };
+          return {
+            content: JSON.stringify({ error: "plan_id and layer_id required" }),
+          };
         }
-        return proposeChecked(ctx, 
+        return proposeChecked(
+          ctx,
           "remove_layer",
           planId,
           `Remove layer #${layerId}`,
@@ -1668,13 +2172,18 @@ export async function invokeAssistantTool(
             ? (input.selections as Record<string, unknown>)
             : null;
         if (planId == null || !selections) {
-          return { content: JSON.stringify({ error: "plan_id and selections required" }) };
+          return {
+            content: JSON.stringify({
+              error: "plan_id and selections required",
+            }),
+          };
         }
         const clean: Record<string, string> = {};
         for (const [k, v] of Object.entries(selections)) {
           if (typeof v === "string") clean[k] = v;
         }
-        return proposeChecked(ctx, 
+        return proposeChecked(
+          ctx,
           "update_kit_selections",
           planId,
           "Update kit selections",
@@ -1696,12 +2205,13 @@ export async function invokeAssistantTool(
         }
         const byId = asInt(input.source_id);
         if (byId != null && byId > 0) projectIds.push(byId);
-        const sourceName =
-          typeof input.source_name === "string" ? input.source_name.trim() : "";
+        const sourceName = typeof input.source_name === "string" ? input.source_name.trim() : "";
         if (sourceName) {
           const src = sourceByName(ctx.repo, sourceName);
           if (!src) {
-            return { content: sourceNotFoundError(ctx.repo, sourceName, "Use list_sources.") };
+            return {
+              content: sourceNotFoundError(ctx.repo, sourceName, "Use list_sources."),
+            };
           }
           projectIds.push(src.id);
         }
@@ -1768,20 +2278,15 @@ export async function invokeAssistantTool(
 
       case "ui_navigate": {
         const route = String(input.route ?? "").trim();
-        const allowed = new Set([
-          "sources",
-          "build",
-          "review",
-          "checkoff",
-          "settings",
-          "builds",
-          "help",
-        ]);
+        const allowed = new Set(["sources", "build", "review", "checkoff", "settings", "builds", "help"]);
         if (!allowed.has(route)) {
-          return { content: JSON.stringify({ error: `Invalid route: ${route}` }) };
+          return {
+            content: JSON.stringify({ error: `Invalid route: ${route}` }),
+          };
         }
         const profileId = resolvePlanId(input, ctx) ?? asInt(input.profile_id) ?? 0;
-        return proposeChecked(ctx, 
+        return proposeChecked(
+          ctx,
           "ui_navigate",
           profileId,
           `Open ${route}`,
@@ -1793,8 +2298,7 @@ export async function invokeAssistantTool(
       case "ui_open_source":
       case "ui_open_docs": {
         const sourceId = asInt(input.source_id);
-        const sourceName =
-          typeof input.source_name === "string" ? input.source_name.trim() : "";
+        const sourceName = typeof input.source_name === "string" ? input.source_name.trim() : "";
         let resolvedName = sourceName;
         let resolvedId = sourceId;
         if (sourceId != null) {
@@ -1805,26 +2309,25 @@ export async function invokeAssistantTool(
         } else if (sourceName) {
           const src = sourceByName(ctx.repo, sourceName);
           if (!src) {
-            return { content: sourceNotFoundError(ctx.repo, sourceName, "Use list_sources.") };
+            return {
+              content: sourceNotFoundError(ctx.repo, sourceName, "Use list_sources."),
+            };
           }
           resolvedName = src.name;
           resolvedId = src.id;
         } else {
           return {
-            content: JSON.stringify({ error: "source_name or source_id required" }),
+            content: JSON.stringify({
+              error: "source_name or source_id required",
+            }),
           };
         }
-        const tabRaw =
-          name === "ui_open_docs"
-            ? "docs"
-            : typeof input.tab === "string"
-              ? input.tab
-              : "docs";
-        const tab =
-          tabRaw === "rules" || tabRaw === "naming" ? tabRaw : "docs";
+        const tabRaw = name === "ui_open_docs" ? "docs" : typeof input.tab === "string" ? input.tab : "docs";
+        const tab = tabRaw === "rules" || tabRaw === "naming" ? tabRaw : "docs";
         const planId = resolvePlanId(input, ctx) ?? 0;
         const type = name === "ui_open_docs" ? "ui_open_docs" : "ui_open_source";
-        return proposeChecked(ctx, 
+        return proposeChecked(
+          ctx,
           type,
           planId,
           `Open ${resolvedName} ${tab}`,
@@ -1845,7 +2348,8 @@ export async function invokeAssistantTool(
         const planId = resolvePlanId(input, ctx);
         if (planId == null) return { content: JSON.stringify({ error: "plan_id required" }) };
         const surface = input.surface === "checkoff" ? "checkoff" : "review";
-        return proposeChecked(ctx, 
+        return proposeChecked(
+          ctx,
           "ui_highlight_part",
           planId,
           `Preview part #${partId}`,
@@ -1857,25 +2361,21 @@ export async function invokeAssistantTool(
       case "ui_focus_stl_search": {
         const planId = resolvePlanId(input, ctx) ?? 0;
         const query = typeof input.query === "string" ? input.query.trim() : "";
-        return proposeChecked(ctx, 
+        return proposeChecked(
+          ctx,
           "ui_focus_stl_search",
           planId,
           query ? `STL search “${query}”` : "Focus STL search",
-          query
-            ? `Open Sources and search STLs for “${query}”.`
-            : "Open Sources and focus the STL search field.",
+          query ? `Open Sources and search STLs for “${query}”.` : "Open Sources and focus the STL search field.",
           query ? { query } : {},
         );
       }
 
       case "ui_focus_kit_option": {
         const planId = resolvePlanId(input, ctx) ?? 0;
-        const groupId =
-          typeof input.group_id === "string" ? input.group_id.trim() : "";
-        const stlFilter =
-          typeof input.stl_filter === "string" ? input.stl_filter.trim() : "";
-        const sourceName =
-          typeof input.source_name === "string" ? input.source_name.trim() : "";
+        const groupId = typeof input.group_id === "string" ? input.group_id.trim() : "";
+        const stlFilter = typeof input.stl_filter === "string" ? input.stl_filter.trim() : "";
+        const sourceName = typeof input.source_name === "string" ? input.source_name.trim() : "";
         const sourceId = asInt(input.source_id);
         if (!groupId && !stlFilter) {
           return {
@@ -1887,7 +2387,9 @@ export async function invokeAssistantTool(
         if (sourceName) {
           const src = sourceByName(ctx.repo, sourceName);
           if (!src) {
-            return { content: sourceNotFoundError(ctx.repo, sourceName, "Use list_sources.") };
+            return {
+              content: sourceNotFoundError(ctx.repo, sourceName, "Use list_sources."),
+            };
           }
         } else if (sourceId != null) {
           const src = ctx.repo.getSource(sourceId);
@@ -1896,7 +2398,8 @@ export async function invokeAssistantTool(
         const labelParts: string[] = [];
         if (groupId) labelParts.push(`kit option “${groupId}”`);
         if (stlFilter) labelParts.push(`STL filter “${stlFilter}”`);
-        return proposeChecked(ctx, 
+        return proposeChecked(
+          ctx,
           "ui_focus_kit_option",
           planId,
           `Focus ${labelParts.join(" · ")}`,
@@ -1933,7 +2436,11 @@ export async function invokeAssistantTool(
         const sourcePlanId = asInt(input.source_plan_id) ?? targetId;
         const recipe = deriveBuildRecipe(ctx.repo, sourcePlanId);
         if (!recipe) {
-          return { content: JSON.stringify({ error: `Source plan not found: ${sourcePlanId}` }) };
+          return {
+            content: JSON.stringify({
+              error: `Source plan not found: ${sourcePlanId}`,
+            }),
+          };
         }
         const steps = recipeToReplaySteps(recipe);
         if (!steps.length) {
@@ -1943,7 +2450,8 @@ export async function invokeAssistantTool(
             }),
           };
         }
-        return proposeChecked(ctx, 
+        return proposeChecked(
+          ctx,
           "apply_build_recipe",
           targetId,
           `Replay recipe from #${sourcePlanId}`,
@@ -1970,11 +2478,9 @@ export async function invokeAssistantTool(
       case "create_plan_snapshot": {
         const planId = resolvePlanId(input, ctx);
         if (planId == null) return { content: JSON.stringify({ error: "plan_id required" }) };
-        const snapName =
-          typeof input.name === "string" && input.name.trim()
-            ? input.name.trim()
-            : undefined;
-        return proposeChecked(ctx, 
+        const snapName = typeof input.name === "string" && input.name.trim() ? input.name.trim() : undefined;
+        return proposeChecked(
+          ctx,
           "create_plan_snapshot",
           planId,
           snapName ? `Create snapshot “${snapName}”` : "Create plan snapshot",
@@ -1992,9 +2498,14 @@ export async function invokeAssistantTool(
         }
         const snap = getPlanSnapshot(ctx.repo, snapshotId);
         if (!snap || snap.plan_id !== planId) {
-          return { content: JSON.stringify({ error: "Snapshot not found for this plan" }) };
+          return {
+            content: JSON.stringify({
+              error: "Snapshot not found for this plan",
+            }),
+          };
         }
-        return proposeChecked(ctx, 
+        return proposeChecked(
+          ctx,
           "restore_plan_snapshot",
           planId,
           `Restore “${snap.name}”`,
@@ -2007,15 +2518,18 @@ export async function invokeAssistantTool(
         const a = asInt(input.plan_a_id);
         const b = asInt(input.plan_b_id);
         if (a == null || b == null) {
-          return { content: JSON.stringify({ error: "plan_a_id and plan_b_id required" }) };
+          return {
+            content: JSON.stringify({
+              error: "plan_a_id and plan_b_id required",
+            }),
+          };
         }
         const diff = comparePlans(ctx.repo, a, b);
         return { content: JSON.stringify(diff) };
       }
 
       case "get_interaction_graph": {
-        const sourceName =
-          typeof input.source_name === "string" ? input.source_name.trim() : "";
+        const sourceName = typeof input.source_name === "string" ? input.source_name.trim() : "";
         if (!sourceName) {
           return { content: JSON.stringify({ error: "source_name required" }) };
         }
@@ -2044,20 +2558,24 @@ export async function invokeAssistantTool(
         }
         const adding = typeof input.adding === "string" ? input.adding.trim() : "";
         if (adding) {
-          const check = replacementsWhenAdding(adding, layers, { dataDir: ctx.dataDir });
-          const full = conflictsForStack(
-            [...layers, adding].filter(Boolean),
-            { dataDir: ctx.dataDir },
-          );
+          const check = replacementsWhenAdding(adding, layers, {
+            dataDir: ctx.dataDir,
+          });
+          const full = conflictsForStack([...layers, adding].filter(Boolean), {
+            dataDir: ctx.dataDir,
+          });
           return {
             content: JSON.stringify({
               plan_id: planId,
               adding,
               ...full,
-              warnings: [...check.warnings, ...full.warnings.filter((w) => w.code !== "compat_conflict" || !check.warnings.some((c) => c.message === w.message))],
-              suggested_excludes: [
-                ...new Set([...check.suggested_excludes, ...full.suggested_excludes]),
+              warnings: [
+                ...check.warnings,
+                ...full.warnings.filter(
+                  (w) => w.code !== "compat_conflict" || !check.warnings.some((c) => c.message === w.message),
+                ),
               ],
+              suggested_excludes: [...new Set([...check.suggested_excludes, ...full.suggested_excludes])],
               conflicts: [...check.conflicts, ...full.conflicts],
             }),
           };
@@ -2068,8 +2586,7 @@ export async function invokeAssistantTool(
 
       case "ingest_guide_url": {
         const env = loadConfig();
-        const allow =
-          ctx.runtime?.assistantAllowUrlIngest ?? env.assistantAllowUrlIngest;
+        const allow = ctx.runtime?.assistantAllowUrlIngest ?? env.assistantAllowUrlIngest;
         if (!allow) {
           return {
             content: JSON.stringify({
@@ -2079,8 +2596,7 @@ export async function invokeAssistantTool(
         }
         const url = typeof input.url === "string" ? input.url.trim() : "";
         if (!url) return { content: JSON.stringify({ error: "url required" }) };
-        const maxBytes =
-          ctx.runtime?.assistantGuideIngestMaxBytes ?? env.assistantGuideIngestMaxBytes;
+        const maxBytes = ctx.runtime?.assistantGuideIngestMaxBytes ?? env.assistantGuideIngestMaxBytes;
         const result = await ingestGuideUrl(url, {
           maxBytes,
           llm: ctx.assistant?.configured ? ctx.assistant : null,
@@ -2093,21 +2609,14 @@ export async function invokeAssistantTool(
         if (!query) return { content: JSON.stringify({ error: "query required" }) };
         const site = typeof input.site === "string" ? input.site.trim() : "";
         const env = loadConfig();
-        const overrides = ctx.runtime
-          ? searchOverridesFromRuntime(ctx.runtime)
-          : undefined;
-        const result = await searchWeb(
-          { query, ...(site ? { site } : {}), maxResults: 5 },
-          env,
-          overrides,
-        );
+        const overrides = ctx.runtime ? searchOverridesFromRuntime(ctx.runtime) : undefined;
+        const result = await searchWeb({ query, ...(site ? { site } : {}), maxResults: 5 }, env, overrides);
         return { content: JSON.stringify(result) };
       }
 
       case "fetch_web_page": {
         const env = loadConfig();
-        const allow =
-          ctx.runtime?.assistantAllowUrlIngest ?? env.assistantAllowUrlIngest;
+        const allow = ctx.runtime?.assistantAllowUrlIngest ?? env.assistantAllowUrlIngest;
         if (!allow) {
           return {
             content: JSON.stringify({
@@ -2117,8 +2626,7 @@ export async function invokeAssistantTool(
         }
         const url = typeof input.url === "string" ? input.url.trim() : "";
         if (!url) return { content: JSON.stringify({ error: "url required" }) };
-        const maxBytes =
-          ctx.runtime?.assistantGuideIngestMaxBytes ?? env.assistantGuideIngestMaxBytes;
+        const maxBytes = ctx.runtime?.assistantGuideIngestMaxBytes ?? env.assistantGuideIngestMaxBytes;
         const page = await fetchWebPageText(url, {
           maxBytes,
         });
@@ -2134,17 +2642,10 @@ export async function invokeAssistantTool(
           };
         }
         const byId = asInt(sourceRaw);
-        const source =
-          byId != null && byId > 0
-            ? ctx.repo.getSource(byId)
-            : sourceByName(ctx.repo, sourceRaw);
+        const source = byId != null && byId > 0 ? ctx.repo.getSource(byId) : sourceByName(ctx.repo, sourceRaw);
         if (!source) {
           return {
-            content: sourceNotFoundError(
-              ctx.repo,
-              sourceRaw,
-              "Call list_sources first.",
-            ),
+            content: sourceNotFoundError(ctx.repo, sourceRaw, "Call list_sources first."),
           };
         }
         if (!(source.local_path && source.last_synced_at)) {
@@ -2288,10 +2789,7 @@ export async function invokeAssistantTool(
             }
           }
         }
-        const userConstraints =
-          typeof input.user_constraints === "string"
-            ? input.user_constraints.trim()
-            : "";
+        const userConstraints = typeof input.user_constraints === "string" ? input.user_constraints.trim() : "";
 
         const result = await detectBuildDecisions({
           treeSummary: summary,
@@ -2303,8 +2801,8 @@ export async function invokeAssistantTool(
           llm: ctx.assistant?.configured ? ctx.assistant : null,
         });
         const suggestedSelections = selectionsFromSuggestedDecisions(result.decisions);
-        const firstFocusable = result.decisions.find(
-          (d) => d.options.some((o) => o.selection && Object.keys(o.selection).length > 0),
+        const firstFocusable = result.decisions.find((d) =>
+          d.options.some((o) => o.selection && Object.keys(o.selection).length > 0),
         );
         return {
           content: JSON.stringify({
@@ -2337,15 +2835,11 @@ export async function invokeAssistantTool(
             }),
           };
         }
-        const sourceKindRaw =
-          typeof input.source_kind === "string" ? input.source_kind.trim().toLowerCase() : "github";
+        const sourceKindRaw = typeof input.source_kind === "string" ? input.source_kind.trim().toLowerCase() : "github";
         const allowedKinds = new Set(["github", "printables", "makerworld", "local"]);
         const source_kind = allowedKinds.has(sourceKindRaw) ? sourceKindRaw : "github";
         const url = typeof input.url === "string" ? input.url.trim() : "";
-        if (
-          (source_kind === "printables" || source_kind === "makerworld") &&
-          !url
-        ) {
+        if ((source_kind === "printables" || source_kind === "makerworld") && !url) {
           return {
             content: JSON.stringify({
               error: `url required for source_kind=${source_kind}`,
@@ -2365,9 +2859,7 @@ export async function invokeAssistantTool(
             };
           }
           const shopLike =
-            !host.includes("github.com") &&
-            !host.includes("printables.com") &&
-            !host.includes("makerworld.com");
+            !host.includes("github.com") && !host.includes("printables.com") && !host.includes("makerworld.com");
           if (source_kind === "github" && !host.includes("github.com")) {
             return {
               content: JSON.stringify({
@@ -2398,12 +2890,11 @@ export async function invokeAssistantTool(
         const tag = typeof input.tag === "string" ? input.tag.trim() : "";
         const branch = typeof input.branch === "string" ? input.branch.trim() : "";
         const role = typeof input.role === "string" ? input.role.trim() : "";
-        const local_path =
-          typeof input.local_path === "string" ? input.local_path.trim() : "";
-        const rationale =
-          typeof input.rationale === "string" ? input.rationale.trim() : "";
+        const local_path = typeof input.local_path === "string" ? input.local_path.trim() : "";
+        const rationale = typeof input.rationale === "string" ? input.rationale.trim() : "";
         const planId = resolvePlanId(input, ctx) ?? 0;
-        return proposeChecked(ctx, 
+        return proposeChecked(
+          ctx,
           "propose_add_source",
           planId,
           `Add source ${name}`,
@@ -2424,13 +2915,13 @@ export async function invokeAssistantTool(
       }
 
       case "import_guide_notes": {
-        const sourceName =
-          typeof input.source_name === "string" ? input.source_name.trim() : "";
-        const body =
-          typeof input.body_markdown === "string" ? input.body_markdown.trim() : "";
+        const sourceName = typeof input.source_name === "string" ? input.source_name.trim() : "";
+        const body = typeof input.body_markdown === "string" ? input.body_markdown.trim() : "";
         if (!sourceName || !body) {
           return {
-            content: JSON.stringify({ error: "source_name and body_markdown required" }),
+            content: JSON.stringify({
+              error: "source_name and body_markdown required",
+            }),
           };
         }
         const source = sourceByName(ctx.repo, sourceName);
@@ -2442,7 +2933,8 @@ export async function invokeAssistantTool(
         const titleRaw = typeof input.title === "string" ? input.title.trim() : "";
         const title = titleRaw || `Guide: ${source.name}`;
         const planId = resolvePlanId(input, ctx) ?? 0;
-        return proposeChecked(ctx, 
+        return proposeChecked(
+          ctx,
           "import_guide_notes",
           planId,
           `Save note “${title}”`,
@@ -2466,16 +2958,14 @@ export async function invokeAssistantTool(
         if (!excludes.length) {
           return { content: JSON.stringify({ error: "excludes required" }) };
         }
-        const rationale =
-          typeof input.rationale === "string" ? input.rationale.trim() : "";
-        return proposeChecked(ctx, 
+        const rationale = typeof input.rationale === "string" ? input.rationale.trim() : "";
+        return proposeChecked(
+          ctx,
           "propose_exclude_replaced_parts",
           planId,
           "Exclude replaced parts",
           rationale ||
-            `Merge ${excludes.length} path/slug exclude(s) into kit manifest: ${excludes
-              .slice(0, 6)
-              .join(", ")}.`,
+            `Merge ${excludes.length} path/slug exclude(s) into kit manifest: ${excludes.slice(0, 6).join(", ")}.`,
           { excludes },
         );
       }
@@ -2490,15 +2980,13 @@ export async function invokeAssistantTool(
           return { content: JSON.stringify({ error: "name required" }) };
         }
         const clearCheckoff = input.clear_checkoff === true;
-        const rationale =
-          typeof input.rationale === "string" ? input.rationale.trim() : "";
+        const rationale = typeof input.rationale === "string" ? input.rationale.trim() : "";
         return proposeChecked(
           ctx,
           "duplicate_plan",
           planId,
           `Duplicate plan as “${name}”`,
-          rationale ||
-            `Copy plan ${planId} to “${name}”${clearCheckoff ? " (clear checkoff)" : ""}.`,
+          rationale || `Copy plan ${planId} to “${name}”${clearCheckoff ? " (clear checkoff)" : ""}.`,
           { name, clear_checkoff: clearCheckoff },
         );
       }
@@ -2517,14 +3005,21 @@ export async function invokeAssistantTool(
         }
         const accepted = read.accepted;
         if (accepted.kind === "compatibility_dirty") {
-          return { content: JSON.stringify({ error: "Accepted Plan requires compatibility repair" }) };
+          return {
+            content: JSON.stringify({
+              error: "Accepted Plan requires compatibility repair",
+            }),
+          };
         }
         if (accepted.kind === "uninitialized") {
-          return { content: JSON.stringify({ error: "Accepted Plan operational state is not initialized" }) };
+          return {
+            content: JSON.stringify({
+              error: "Accepted Plan operational state is not initialized",
+            }),
+          };
         }
-        const { totalUnits, remainingUnits } = accepted.kind === "ready"
-          ? acceptedProgressSummary(accepted.snapshot)
-          : { totalUnits: 0, remainingUnits: 0 };
+        const { totalUnits, remainingUnits } =
+          accepted.kind === "ready" ? acceptedProgressSummary(accepted.snapshot) : { totalUnits: 0, remainingUnits: 0 };
         if (totalUnits <= 0 || remainingUnits > 0) {
           return {
             content: JSON.stringify({
@@ -2535,19 +3030,15 @@ export async function invokeAssistantTool(
             }),
           };
         }
-        const rationale =
-          typeof input.rationale === "string" ? input.rationale.trim() : "";
+        const rationale = typeof input.rationale === "string" ? input.rationale.trim() : "";
         const profile = accepted.kind === "ready" ? accepted.snapshot.profile : read.identity;
         return proposeChecked(
           ctx,
           "archive_plan",
           planId,
           `Archive “${profile.name}”`,
-          rationale ||
-            `Archive plan ${planId} as a reusable template (remaining = 0).`,
-          accepted.kind === "ready"
-            ? { accepted_basis: acceptedPlanBasis(accepted.snapshot) }
-            : {},
+          rationale || `Archive plan ${planId} as a reusable template (remaining = 0).`,
+          accepted.kind === "ready" ? { accepted_basis: acceptedPlanBasis(accepted.snapshot) } : {},
         );
       }
 
@@ -2586,7 +3077,7 @@ export async function invokeAssistantTool(
                 hostStatus = status;
                 state = status.state;
                 message = status.message ?? null;
-                activeJob = (status as Record<string, unknown>).filename as string | null ?? null;
+                activeJob = ((status as Record<string, unknown>).filename as string | null) ?? null;
                 progress = typeof status.progress === "number" ? status.progress : null;
                 etaSeconds = typeof status.eta_seconds === "number" ? status.eta_seconds : null;
               } catch {
@@ -2622,7 +3113,11 @@ export async function invokeAssistantTool(
             offline: printers.filter((p) => p.state === "offline" || p.state === "unknown").length,
             needs_filament_swap: printers
               .filter((p) => p.needs_filament_swap)
-              .map((p) => ({ id: p.id, name: p.name, reason: p.filament_swap_reason })),
+              .map((p) => ({
+                id: p.id,
+                name: p.name,
+                reason: p.filament_swap_reason,
+              })),
           }),
         };
       }
@@ -2637,11 +3132,7 @@ export async function invokeAssistantTool(
         if (input.hours !== undefined && input.hours !== null) {
           const raw = input.hours;
           const parsed =
-            typeof raw === "number"
-              ? raw
-              : typeof raw === "string" && raw.trim() !== ""
-                ? Number(raw)
-                : NaN;
+            typeof raw === "number" ? raw : typeof raw === "string" && raw.trim() !== "" ? Number(raw) : NaN;
           if (!Number.isFinite(parsed) || parsed <= 0) {
             return {
               content: JSON.stringify({
@@ -2665,9 +3156,7 @@ export async function invokeAssistantTool(
         const failed = recentJobs.filter((j) => j.status === "failed").length;
         const filamentG = recentJobs.reduce((s, j) => s + (j.filamentConsumedG ?? 0), 0);
 
-        const { completionRate, printStatsByPrinter } = await import(
-          "../services/farm-filament.js"
-        );
+        const { completionRate, printStatsByPrinter } = await import("../services/farm-filament.js");
 
         let activePlans:
           | {
@@ -2695,11 +3184,10 @@ export async function invokeAssistantTool(
           };
         } catch {
           activePlans = { kind: "unavailable" };
-          getLogger().log(
-            "error",
-            "[assistant] Plan progress collection unavailable",
-            { failure: "unexpected", operation: "get_print_stats" },
-          );
+          getLogger().log("error", "[assistant] Plan progress collection unavailable", {
+            failure: "unexpected",
+            operation: "get_print_stats",
+          });
         }
 
         return {
@@ -2745,9 +3233,7 @@ function mergeConfirmedSuggestedExcludes(
   params: Record<string, unknown>,
 ): string[] | null {
   if (!Array.isArray(params.suggested_excludes)) return null;
-  const excludes = params.suggested_excludes
-    .map((x) => String(x).trim())
-    .filter(Boolean);
+  const excludes = params.suggested_excludes.map((x) => String(x).trim()).filter(Boolean);
   if (!excludes.length) return null;
   const current = loadKitManifest(repo, planId);
   const merged = [...new Set([...(current.exclude ?? []), ...excludes])];
@@ -2774,12 +3260,17 @@ export async function applyAssistantAction(
   }
 
   if (action.type === "archive_plan" && !deps.repo.canMutateAcceptedPlan()) {
-    return { ok: false, status: 503, detail: "Accepted Plan update is unavailable" };
+    return {
+      ok: false,
+      status: 503,
+      detail: "Accepted Plan update is unavailable",
+    };
   }
 
   const planId = action.plan_id;
   let archiveIdentity: ReturnType<AppRepository["getOwnedProfileIdentity"]> = null;
   const skipPlanCheck =
+    action.type === "propose_create_build" ||
     action.type === "propose_source_mapping" ||
     action.type === "start_sync" ||
     action.type === "propose_add_source" ||
@@ -2796,11 +3287,7 @@ export async function applyAssistantAction(
   } else if (!skipPlanCheck && !deps.repo.getOwnedProfileIdentity(planId)) {
     return { ok: false, detail: "Plan not found" };
   }
-  if (
-    action.type === "propose_source_mapping" &&
-    planId > 0 &&
-    !deps.repo.getOwnedProfileIdentity(planId)
-  ) {
+  if (action.type === "propose_source_mapping" && planId > 0 && !deps.repo.getOwnedProfileIdentity(planId)) {
     return { ok: false, detail: "Plan not found" };
   }
 
@@ -2813,14 +3300,594 @@ export async function applyAssistantAction(
     };
 
     switch (action.type) {
+      case "propose_create_build": {
+        const name = String(action.params.name ?? "").trim();
+        const request = String(action.params.request ?? "");
+        const urls = Array.isArray(action.params.urls)
+          ? action.params.urls.filter((url): url is string => typeof url === "string")
+          : [];
+        const idempotencyKey = String(action.params.idempotency_key ?? "").trim();
+        if (!name || !request.trim()) return { ok: false, detail: "name and request required" };
+        const storedId = idempotencyKey ? deps.repo.getSetting(`build_planning.create.${idempotencyKey}`) : null;
+        if (storedId && /^\d+$/.test(storedId)) {
+          const existing = deps.repo.getOwnedProfileIdentity(Number(storedId));
+          if (existing) {
+            outcome = {
+              ok: true,
+              result: {
+                plan_id: existing.id,
+                name: existing.name,
+                idempotent_replay: true,
+              },
+            };
+            break;
+          }
+        }
+        const created = deps.repo.transaction(() => {
+          const profile = deps.repo.createProfile(name);
+          deps.repo.updateProfileSpecialRequest(profile.id, request);
+          saveBuildPlanningBrief(deps.repo, newBuildPlanningBrief(profile.id, request, urls));
+          if (idempotencyKey) deps.repo.setSetting(`build_planning.create.${idempotencyKey}`, String(profile.id));
+          return profile;
+        }, "immediate");
+        outcome = {
+          ok: true,
+          result: { plan_id: created.id, name: created.name },
+        };
+        break;
+      }
+      case "propose_update_build_brief": {
+        const brief = readBuildPlanningBrief(deps.repo, planId);
+        if (!brief) return { ok: false, detail: "Build planning brief not found" };
+        const requirements = (Array.isArray(action.params.requirements)
+          ? action.params.requirements
+          : brief.requirements).map((row) => {
+          if (!row || typeof row !== "object") throw new Error("Invalid requirement");
+          const item = row as Record<string, unknown>;
+          const key = String(item.key ?? "").trim();
+          const value = String(item.value ?? "").trim();
+          const status = String(item.status ?? "unverified");
+          if (!key || !value || !["unverified", "satisfied", "incompatible", "user_waived"].includes(status))
+            throw new Error("Invalid requirement");
+          return {
+            key,
+            value,
+            status: status as "unverified" | "satisfied" | "incompatible" | "user_waived",
+            detail: typeof item.detail === "string" ? item.detail : undefined,
+          };
+        });
+        const evidenceIds = new Set(brief.evidence.map((item) => item.id));
+        const contributions: SourceContribution[] = (Array.isArray(action.params.contributions)
+          ? action.params.contributions
+          : brief.contributions ?? []).map((value) => {
+          if (!value || typeof value !== "object") throw new Error("Invalid Source contribution");
+          const row = value as Record<string, unknown>;
+          const id = String(row.id ?? "").trim();
+          const evidenceId = String(row.evidence_id ?? "").trim();
+          const slot = String(row.slot ?? "").trim();
+          const responsibility = String(row.responsibility ?? "");
+          const confidence = String(row.confidence ?? "");
+          const status = String(row.status ?? "confirmed");
+          const evidenceText = String(row.evidence_text ?? "").trim();
+          const pathScopes = Array.isArray(row.path_scopes)
+            ? row.path_scopes.filter((scope): scope is string => typeof scope === "string" && Boolean(scope.trim())).map((scope) => scope.trim())
+            : [];
+          if (!id || !evidenceIds.has(evidenceId) || !/^[a-z][a-z0-9_]*$/.test(slot))
+            throw new Error("Source contribution identity, evidence, or slot is invalid");
+          if (!["printable_parts", "hardware_constraint", "informational_evidence"].includes(responsibility))
+            throw new Error("Source contribution responsibility is invalid");
+          if (!["low", "medium", "high"].includes(confidence) || !["proposed", "confirmed", "rejected"].includes(status) || !evidenceText)
+            throw new Error("Source contribution confidence, status, or evidence is invalid");
+          return {
+            id,
+            evidence_id: evidenceId,
+            slot,
+            responsibility: responsibility as SourceContribution["responsibility"],
+            path_scopes: pathScopes,
+            confidence: confidence as SourceContribution["confidence"],
+            evidence_text: evidenceText,
+            status: status as SourceContribution["status"],
+          };
+        });
+        const compatibilityFindings: CompatibilityFinding[] = (Array.isArray(action.params.compatibility_findings)
+          ? action.params.compatibility_findings
+          : brief.compatibility_findings ?? []).map((value) => {
+          if (!value || typeof value !== "object") throw new Error("Invalid compatibility finding");
+          const row = value as Record<string, unknown>;
+          const id = String(row.id ?? "").trim();
+          const subject = String(row.subject ?? "").trim();
+          const detail = String(row.detail ?? "").trim();
+          const status = String(row.status ?? "unverified");
+          const findingEvidenceIds = Array.isArray(row.evidence_ids)
+            ? row.evidence_ids.filter((item): item is string => typeof item === "string")
+            : [];
+          if (!id || !subject || !detail || !["unverified", "satisfied", "incompatible", "user_waived"].includes(status)) {
+            throw new Error("Invalid compatibility finding");
+          }
+          if (!findingEvidenceIds.every((evidenceId) => evidenceIds.has(evidenceId))) {
+            throw new Error("Compatibility finding references unknown evidence");
+          }
+          if (status === "unverified" || status === "satisfied" || status === "incompatible" || status === "user_waived") {
+            return { id, subject, detail, status, evidence_ids: findingEvidenceIds };
+          }
+          throw new Error("Invalid compatibility finding status");
+        });
+        saveBuildPlanningBrief(deps.repo, {
+          ...brief,
+          requirements,
+          contributions,
+          compatibility_findings: compatibilityFindings,
+          draft_id: action.params.contributions === undefined ? brief.draft_id : undefined,
+        });
+        outcome = {
+          ok: true,
+          result: {
+            requirement_count: requirements.length,
+            contribution_count: contributions.length,
+            compatibility_finding_count: compatibilityFindings.length,
+          },
+        };
+        break;
+      }
+      case "propose_import_build_inputs": {
+        const brief = readBuildPlanningBrief(deps.repo, planId);
+        if (!brief) return { ok: false, detail: "Build planning brief not found" };
+        if (!Array.isArray(action.params.inputs)) return { ok: false, detail: "inputs required" };
+        const imported = action.params.inputs.map((row) => {
+          if (!row || typeof row !== "object") throw new Error("Invalid input evidence");
+          const item = row as Record<string, unknown>;
+          const sourceId = asInt(item.source_id);
+          const source = sourceId == null ? null : deps.repo.getSource(sourceId);
+          if (sourceId != null && !source) throw new Error(`Source not found: ${sourceId}`);
+          const filenames = Array.isArray(item.filenames)
+            ? item.filenames.filter((name): name is string => typeof name === "string")
+            : [];
+          const derivedFromEvidenceId =
+            typeof item.derived_from_evidence_id === "string"
+              ? item.derived_from_evidence_id.trim()
+              : "";
+          if (
+            derivedFromEvidenceId &&
+            !brief.evidence.some((evidence) => evidence.id === derivedFromEvidenceId)
+          ) {
+            throw new Error(`Related model-page evidence not found: ${derivedFromEvidenceId}`);
+          }
+          const classified = source
+            ? buildEvidenceFromUploadedSource({
+                sourceId: source.id,
+                sourceName: source.name,
+                filenames,
+                artifacts: source.local_path ? scanSourceArtifacts(source.local_path) : undefined,
+                derivedFromEvidenceId: derivedFromEvidenceId || undefined,
+              })
+            : analyzeBuildRequest("input", [String(item.url ?? "")]).evidence[0];
+          if (!classified) throw new Error("Each input requires url or source_id");
+          const requestedKind = typeof item.kind === "string" ? item.kind : classified.kind;
+          if (
+            ![
+              "canonical_design",
+              "vendor_overlay",
+              "mod",
+              "component",
+              "model_source",
+              "informational_evidence",
+            ].includes(requestedKind)
+          ) {
+            throw new Error(`Invalid evidence kind: ${requestedKind}`);
+          }
+          const extract = typeof item.extract === "string" ? item.extract.trim() : "";
+          return {
+            ...classified,
+            kind: requestedKind as typeof classified.kind,
+            source_id: sourceId ?? undefined,
+            branch: typeof item.branch === "string" ? item.branch : undefined,
+            title: typeof item.title === "string" ? item.title : undefined,
+            extract: extract || undefined,
+            retrieved_at: extract ? new Date().toISOString() : undefined,
+            content_hash: extract
+              ? createHash("sha256").update(extract).digest("hex")
+              : undefined,
+          };
+        });
+        const saved = deps.repo.transaction(() => {
+          const byUrl = new Map(brief.evidence.map((item) => [item.normalized_url, item]));
+          const sourcesByUrl = new Map<string, ReturnType<AppRepository["listSources"]>[number]>();
+          for (const source of deps.repo.listSources()) {
+            if (!source.url) continue;
+            try {
+              sourcesByUrl.set(normalizedUrl(source.url), source);
+            } catch {
+              continue;
+            }
+          }
+          const createdSourceIds: number[] = [];
+          for (const item of imported) {
+            let next = item;
+            const parsed = item.input_kind === "upload" ? null : new URL(item.normalized_url);
+            const isGit = parsed != null && (parsed.hostname === "github.com" || parsed.pathname.endsWith(".git"));
+            if (isGit) {
+              let source = sourcesByUrl.get(item.normalized_url);
+              if (!source) {
+                const segments = parsed.pathname.split("/").filter(Boolean);
+                const baseName = segments.slice(-2).join("-").replace(/\.git$/i, "") || `Build-source-${item.id}`;
+                const usedNames = new Set(deps.repo.listSources().map((candidate) => candidate.name));
+                const sourceName = usedNames.has(baseName) ? `${baseName}-${item.id.slice(0, 6)}` : baseName;
+                source = deps.repo.createSource({
+                  name: sourceName,
+                  url: item.normalized_url,
+                  source_kind: parsed.hostname === "github.com" ? "github" : "git",
+                  source_type: "git",
+                  branch: item.branch,
+                });
+                sourcesByUrl.set(item.normalized_url, source);
+                createdSourceIds.push(source.id);
+              }
+              next = { ...item, source_id: source.id };
+            }
+            byUrl.set(next.normalized_url, next);
+          }
+          const hydrated = hydrateBuildPlanningBrief(deps.repo, {
+            ...brief,
+            evidence: [...byUrl.values()],
+            draft_id: undefined,
+          });
+          saveBuildPlanningBrief(deps.repo, hydrated);
+          return { hydrated, createdSourceIds };
+        }, "immediate");
+        outcome = {
+          ok: true,
+          result: {
+            evidence_count: saved.hydrated.evidence.length,
+            created_source_ids: saved.createdSourceIds,
+            source_ids: saved.hydrated.evidence.flatMap((item) => item.source_id == null ? [] : [item.source_id]),
+            difference_count: saved.hydrated.differences.length,
+          },
+        };
+        break;
+      }
+      case "propose_set_build_source_roles": {
+        const brief = readBuildPlanningBrief(deps.repo, planId);
+        if (!brief || !Array.isArray(action.params.roles)) return { ok: false, detail: "brief and roles required" };
+        const allowedRoles = new Set(["structural_base", "overlay", "addon", "evidence"]);
+        const roles = new Map<string, NonNullable<(typeof brief.evidence)[number]["source_role"]>>();
+        for (const value of action.params.roles) {
+          if (!value || typeof value !== "object") return { ok: false, detail: "Invalid source role assignment" };
+          const row = value as Record<string, unknown>;
+          const evidenceId = typeof row.evidence_id === "string" ? row.evidence_id.trim() : "";
+          const role = typeof row.role === "string" ? row.role.trim() : "";
+          if (!allowedRoles.has(role)) return { ok: false, detail: `Invalid source role: ${role || "missing"}` };
+          if (!brief.evidence.some((item) => item.id === evidenceId)) {
+            return { ok: false, detail: `Build evidence not found: ${evidenceId || "missing"}` };
+          }
+          if (role === "structural_base" || role === "overlay" || role === "addon" || role === "evidence") {
+            roles.set(evidenceId, role);
+          }
+        }
+        const evidence = brief.evidence.map((item) =>
+          roles.has(item.id)
+            ? {
+                ...item,
+                source_role: roles.get(item.id),
+              }
+            : item,
+        );
+        if (evidence.filter((item) => item.source_role === "structural_base").length > 1) {
+          return { ok: false, detail: "A Build can have only one structural base" };
+        }
+        saveBuildPlanningBrief(deps.repo, { ...brief, evidence, draft_id: undefined });
+        outcome = { ok: true, result: { updated: roles.size } };
+        break;
+      }
+      case "propose_resolve_build_differences": {
+        const storedBrief = readBuildPlanningBrief(deps.repo, planId);
+        const brief = storedBrief ? hydrateBuildPlanningBrief(deps.repo, storedBrief) : null;
+        if (!brief) return { ok: false, detail: "Build planning brief not found" };
+        const groupId = String(action.params.group_id ?? "").trim();
+        const resolution = String(action.params.resolution ?? "");
+        const rationale = String(action.params.rationale ?? "").trim();
+        if (!brief.differences.some((item) => item.group_id === groupId))
+          return { ok: false, detail: "Difference group not found" };
+        if (
+          !["choose_source_a", "choose_source_b", "include_both", "not_applicable", "custom"].includes(resolution) ||
+          !rationale
+        )
+          return {
+            ok: false,
+            detail: "Valid resolution and rationale required",
+          };
+        if (resolution === "custom" && !String(action.params.custom_resolution ?? "").trim())
+          return { ok: false, detail: "custom_resolution required" };
+        saveBuildPlanningBrief(deps.repo, {
+          ...brief,
+          draft_id: undefined,
+          resolutions: {
+            ...brief.resolutions,
+            [groupId]: {
+              resolution: resolution as
+                "choose_source_a" | "choose_source_b" | "include_both" | "not_applicable" | "custom",
+              rationale,
+              custom_resolution:
+                typeof action.params.custom_resolution === "string" ? action.params.custom_resolution : undefined,
+              resolved_at: new Date().toISOString(),
+            },
+          },
+        });
+        outcome = {
+          ok: true,
+          result: {
+            group_id: groupId,
+            affected_entries: brief.differences.filter((item) => item.group_id === groupId).length,
+          },
+        };
+        break;
+      }
+      case "propose_assign_role_filament": {
+        const brief = readBuildPlanningBrief(deps.repo, planId);
+        const value = action.params.assignment;
+        if (!brief || !value || typeof value !== "object")
+          return { ok: false, detail: "brief and assignment required" };
+        const row = value as Record<string, unknown>;
+        const role = String(row.role ?? "").trim();
+        const kind = String(row.inventory_kind ?? "");
+        const colorHex = String(row.color_hex ?? "");
+        if (
+          !role ||
+          !["catalog", "spoolman", "custom", "substitute"].includes(kind) ||
+          !/^#[0-9a-f]{6}$/i.test(colorHex)
+        )
+          return { ok: false, detail: "Invalid filament assignment" };
+        if ((kind === "substitute" || kind === "custom") && row.substitution_confirmed !== true)
+          return {
+            ok: false,
+            detail: "Filament substitution requires explicit confirmation",
+          };
+        const inventoryId = typeof row.inventory_id === "string" ? row.inventory_id.trim() : "";
+        if (kind === "catalog") {
+          const catalogEntry = loadFilamentCatalog().colors.find((color) => color.id === inventoryId);
+          if (!catalogEntry) return { ok: false, detail: "Catalog inventory filament not found" };
+          const requestedName = typeof row.requested_name === "string" ? row.requested_name.trim() : "";
+          const requestedBrand = typeof row.requested_brand === "string" ? row.requested_brand.trim() : "";
+          if (catalogEntry.hex.toLowerCase() !== colorHex.toLowerCase()) {
+            return { ok: false, detail: "Catalog inventory filament color does not match" };
+          }
+          if (requestedName && catalogEntry.display_name.toLowerCase() !== requestedName.toLowerCase()) {
+            return { ok: false, detail: "Requested color is not an exact catalog inventory match; confirm a substitute instead" };
+          }
+          if (requestedBrand && catalogEntry.product_line.toLowerCase() !== requestedBrand.toLowerCase()) {
+            return { ok: false, detail: "Requested brand is not an exact catalog inventory match; confirm a substitute instead" };
+          }
+        }
+        if (kind === "spoolman") {
+          const resolved = inventoryId
+            ? await resolveFilamentDisplay({ repo: deps.repo, dataDir: "" }, inventoryId)
+            : null;
+          if (!resolved) return { ok: false, detail: "Spoolman inventory filament could not be verified" };
+          if (resolved.hex?.toLowerCase() !== colorHex.toLowerCase()) {
+            return { ok: false, detail: "Spoolman inventory filament color does not match" };
+          }
+          const requestedName = typeof row.requested_name === "string" ? row.requested_name.trim() : "";
+          const requestedBrand = typeof row.requested_brand === "string" ? row.requested_brand.trim() : "";
+          if (requestedName && resolved.display_name.toLowerCase() !== requestedName.toLowerCase()) {
+            return { ok: false, detail: "Requested color is not an exact Spoolman inventory match; confirm a substitute instead" };
+          }
+          if (requestedBrand && resolved.brand?.toLowerCase() !== requestedBrand.toLowerCase()) {
+            return { ok: false, detail: "Requested brand is not an exact Spoolman inventory match; confirm a substitute instead" };
+          }
+        }
+        const assignment = {
+          role,
+          inventory_kind: kind as "catalog" | "spoolman" | "custom" | "substitute",
+          inventory_id: inventoryId || undefined,
+          requested_brand: typeof row.requested_brand === "string" ? row.requested_brand : undefined,
+          requested_name: typeof row.requested_name === "string" ? row.requested_name : undefined,
+          color_hex: colorHex,
+          substitution_confirmed: row.substitution_confirmed === true,
+        };
+        deps.repo.transaction(() => {
+          saveRoleFilamentDefault(deps.repo, planId, role, {
+            filament_color_id:
+              assignment.inventory_kind === "catalog" || assignment.inventory_kind === "spoolman"
+                ? assignment.inventory_id ?? null
+                : null,
+            filament_custom_hex:
+              assignment.inventory_kind === "custom" || assignment.inventory_kind === "substitute"
+                ? assignment.color_hex
+                : null,
+            spoolman_spool_id: null,
+          });
+          saveBuildPlanningBrief(deps.repo, {
+            ...brief,
+            draft_id: undefined,
+            requirements: brief.requirements.map((requirement) =>
+            requirement.key === `color_${role.toLowerCase().replace(/[^a-z0-9]+/g, "_")}`
+              ? {
+                  ...requirement,
+                  status: "satisfied" as const,
+                  detail: `Assigned ${assignment.inventory_kind} filament ${assignment.inventory_id ?? assignment.color_hex}`,
+                }
+              : requirement,
+            ),
+            role_filaments: [...brief.role_filaments.filter((item) => item.role !== role), assignment],
+          });
+        }, "immediate");
+        outcome = { ok: true, result: { role } };
+        break;
+      }
+      case "propose_rebuild_plan": {
+        const storedBrief = readBuildPlanningBrief(deps.repo, planId);
+        const brief = storedBrief ? hydrateBuildPlanningBrief(deps.repo, storedBrief) : null;
+        if (!brief) return { ok: false, detail: "Planning brief not found" };
+        const structuralSources = brief.evidence.filter(
+          (item) => item.source_role === "structural_base" && item.source_id != null,
+        );
+        if (structuralSources.length !== 1) {
+          return { ok: false, detail: "Planning rebuild requires exactly one structural base Source" };
+        }
+        const requestedReviewBlockers = Array.isArray(action.params.review_blockers)
+          ? action.params.review_blockers.map(String).filter(Boolean)
+          : [];
+        let rebuilt: { draftId: number; recompute: "created" | "existing"; reviewBlockers: string[] };
+        try {
+          rebuilt = deps.repo.transaction(() => {
+            const structuralSourceId = structuralSources[0]!.source_id!;
+            const targetSourceIds = new Set(
+              brief.evidence.flatMap((evidence) =>
+                evidence.source_id != null &&
+                (evidence.source_role === "structural_base" || evidence.source_role === "overlay" || evidence.source_role === "addon")
+                  ? [evidence.source_id]
+                  : [],
+              ),
+            );
+            const previouslyManaged = new Set(brief.managed_source_ids ?? []);
+            for (const layer of deps.repo.getProfileLayers(planId)) {
+              if (layer.project_id != null && previouslyManaged.has(layer.project_id) && !targetSourceIds.has(layer.project_id)) {
+                deps.repo.removeLayer(layer.id);
+              }
+            }
+            const currentLayers = deps.repo.getProfileLayers(planId);
+            const currentBase = currentLayers.find((layer) => layer.layer_type === "base");
+            if (currentBase?.project_id !== structuralSourceId) deps.repo.setBaseLayer(planId, structuralSourceId);
+            const attached = new Set(deps.repo.getProfileLayers(planId).map((layer) => layer.project_id));
+            for (const evidence of brief.evidence) {
+              if (
+                evidence.source_id != null &&
+                (evidence.source_role === "overlay" || evidence.source_role === "addon") &&
+                !attached.has(evidence.source_id)
+              ) {
+                deps.repo.addAddonLayer(planId, evidence.source_id);
+                attached.add(evidence.source_id);
+              }
+            }
+            const sourceIdsByName = new Map<string, number>();
+            for (const evidence of brief.evidence) {
+              if (evidence.source_id == null) continue;
+              const source = deps.repo.getSource(evidence.source_id);
+              if (source) sourceIdsByName.set(source.name, source.id);
+            }
+            const decisions = resolvedSourcePathExclusions({ brief, sourceIdsByName });
+            const planningInputDigest = createHash("sha256")
+              .update(JSON.stringify({
+                evidence: brief.evidence.map((item) => ({
+                  id: item.id,
+                  source_id: item.source_id,
+                  source_role: item.source_role,
+                  pinned_revision: item.pinned_revision,
+                })),
+                contributions: brief.contributions,
+                resolutions: brief.resolutions,
+                exclusions: decisions.exclusions,
+                managed_source_ids: [...targetSourceIds].sort((left, right) => left - right),
+                review_blockers: requestedReviewBlockers,
+              }))
+              .digest("hex")
+              .slice(0, 16);
+            const excludedPathsBySourceId = new Map<number, Set<string>>();
+            for (const exclusion of decisions.exclusions) {
+              const paths = excludedPathsBySourceId.get(exclusion.sourceId) ?? new Set<string>();
+              paths.add(exclusion.path);
+              excludedPathsBySourceId.set(exclusion.sourceId, paths);
+            }
+            const includedPathsBySourceId = new Map<number, Set<string>>();
+            for (const contribution of brief.contributions) {
+              if (contribution.status !== "confirmed" || contribution.responsibility !== "printable_parts") continue;
+              const evidence = brief.evidence.find((item) => item.id === contribution.evidence_id);
+              if (evidence?.source_id == null) continue;
+              const scopes = includedPathsBySourceId.get(evidence.source_id) ?? new Set<string>();
+              for (const scope of contribution.path_scopes) scopes.add(scope);
+              includedPathsBySourceId.set(evidence.source_id, scopes);
+            }
+            const recomputed = deps.repo.recomputePlanDraft({
+              profileId: planId,
+              actor: "assistant:build-planning",
+              idempotencyKey:
+                typeof action.params.idempotency_key === "string" && action.params.idempotency_key.trim()
+                  ? `${action.params.idempotency_key.trim()}:${planningInputDigest}`
+                  : `${action.id}:${planningInputDigest}`,
+              excludedPathsBySourceId,
+              includedPathsBySourceId,
+            });
+            if (recomputed.kind !== "created" && recomputed.kind !== "existing") {
+              throw new Error(`Plan draft recompute failed: ${recomputed.kind}`);
+            }
+            const draft = recomputed.draft;
+            const reviewBlockers = [...new Set([...decisions.blockers, ...requestedReviewBlockers])];
+            const draftSourceRevisions = Object.fromEntries(
+              brief.evidence.flatMap((evidence) =>
+                evidence.source_id != null && evidence.pinned_revision
+                  ? [[String(evidence.source_id), evidence.pinned_revision]]
+                  : [],
+              ),
+            );
+            saveBuildPlanningBrief(deps.repo, {
+              ...brief,
+              draft_id: draft.id,
+              draft_review_blockers: reviewBlockers,
+              managed_source_ids: [...targetSourceIds].sort((left, right) => left - right),
+              draft_source_revisions: draftSourceRevisions,
+            });
+            return { draftId: draft.id, recompute: recomputed.kind, reviewBlockers };
+          }, "immediate");
+        } catch (error) {
+          return { ok: false, detail: error instanceof Error ? error.message : String(error) };
+        }
+        outcome = {
+          ok: true,
+          result: {
+            draft_id: rebuilt.draftId,
+            recompute: rebuilt.recompute,
+            review_blockers: rebuilt.reviewBlockers,
+          },
+        };
+        break;
+      }
+      case "propose_apply_plan_draft": {
+        const storedBrief = readBuildPlanningBrief(deps.repo, planId);
+        const brief = storedBrief ? hydrateBuildPlanningBrief(deps.repo, storedBrief) : null;
+        const draftId = asInt(action.params.draft_id);
+        if (!brief || draftId == null || brief.draft_id !== draftId)
+          return { ok: false, detail: "Selected planning draft not found" };
+        const blockers = buildPlanningApplyBlockers(deps.repo, planId, draftId) ?? [];
+        if (blockers.length > 0)
+          return {
+            ok: false,
+            detail: "Build planning is not ready",
+            result: { blockers },
+          };
+        const draft = deps.repo.getPlanDraft(planId, draftId);
+        if (!draft) return { ok: false, detail: "Selected planning draft not found" };
+        const applied = deps.repo.applyPlanChanges({
+          profileId: planId,
+          draftId,
+          expectedSnapshotDigest: draft.snapshotDigest,
+          expectedLifecycleVersion: draft.lifecycleVersion,
+          expectedBase:
+            draft.baseRevisionId == null
+              ? { kind: "empty", planVersion: 0 }
+              : {
+                  kind: "revision",
+                  revisionId: draft.baseRevisionId,
+                  planVersion: draft.basePlanVersion,
+                },
+          actorId: "mcp:build-planning",
+          idempotencyKey: action.id,
+        });
+        if (applied.kind !== "applied" && applied.kind !== "existing" && applied.kind !== "already_applied") {
+          return {
+            ok: false,
+            detail: `Plan Apply failed: ${applied.kind}`,
+            result: { apply_result: applied },
+          };
+        }
+        outcome = {
+          ok: true,
+          result: { apply_result: applied, readiness: { ready: true, blockers: [] } },
+        };
+        break;
+      }
       case "apply_stack_preset": {
         const presetId = String(action.params.preset_id ?? "");
         const result = applyStackPresetToProfile(deps.repo, planId, presetId);
-        const excludeMerged = mergeConfirmedSuggestedExcludes(
-          deps.repo,
-          planId,
-          action.params ?? {},
-        );
+        const excludeMerged = mergeConfirmedSuggestedExcludes(deps.repo, planId, action.params ?? {});
         outcome = {
           ok: true,
           result: {
@@ -2851,8 +3918,7 @@ export async function applyAssistantAction(
         const source = sourceByName(deps.repo, sourceName);
         if (!source) return { ok: false, detail: `Source not found: ${sourceName}` };
         const tag = typeof action.params.tag === "string" ? action.params.tag.trim() : "";
-        const branch =
-          typeof action.params.branch === "string" ? action.params.branch.trim() : "";
+        const branch = typeof action.params.branch === "string" ? action.params.branch.trim() : "";
         const patch: { tag?: string | null; branch?: string } = {};
         if (tag) patch.tag = tag;
         if (branch) patch.branch = branch;
@@ -2894,8 +3960,7 @@ export async function applyAssistantAction(
         const source = sourceByName(deps.repo, sourceName);
         if (!source) return { ok: false, detail: `Source not found: ${sourceName}` };
         const tag = typeof action.params.tag === "string" ? action.params.tag.trim() : "";
-        const branch =
-          typeof action.params.branch === "string" ? action.params.branch.trim() : "";
+        const branch = typeof action.params.branch === "string" ? action.params.branch.trim() : "";
         if (!tag && !branch) return { ok: false, detail: "tag or branch required" };
         const patch: { tag?: string | null; branch?: string } = {};
         if (tag) patch.tag = tag;
@@ -2925,11 +3990,7 @@ export async function applyAssistantAction(
           return { ok: false, detail: `Source is not synced: ${sourceName}` };
         }
         deps.repo.addAddonLayer(planId, source.id);
-        const excludeMerged = mergeConfirmedSuggestedExcludes(
-          deps.repo,
-          planId,
-          action.params ?? {},
-        );
+        const excludeMerged = mergeConfirmedSuggestedExcludes(deps.repo, planId, action.params ?? {});
         outcome = {
           ok: true,
           result: {
@@ -2978,18 +4039,14 @@ export async function applyAssistantAction(
             if (Number.isFinite(id) && id > 0) ids.push(id);
           }
         }
-        const byName =
-          typeof action.params.source_name === "string"
-            ? action.params.source_name.trim()
-            : "";
+        const byName = typeof action.params.source_name === "string" ? action.params.source_name.trim() : "";
         if (byName) {
           const src = sourceByName(deps.repo, byName);
           if (!src) return { ok: false, detail: `Source not found: ${byName}` };
           ids.push(src.id);
         }
         const unique = [...new Set(ids)];
-        const payload =
-          unique.length > 0 ? { project_ids: unique } : ({} as Record<string, unknown>);
+        const payload = unique.length > 0 ? { project_ids: unique } : ({} as Record<string, unknown>);
         const job_id = await deps.jobs.start("sync", payload, deps.tenantId);
         outcome = {
           ok: true,
@@ -3015,8 +4072,7 @@ export async function applyAssistantAction(
           metadata: { category },
         });
         const optionGroups = (action.params.option_groups ?? {}) as Record<string, string>;
-        const targetPlan =
-          asInt(action.params.plan_id) ?? (action.plan_id > 0 ? action.plan_id : null);
+        const targetPlan = asInt(action.params.plan_id) ?? (action.plan_id > 0 ? action.plan_id : null);
         if (targetPlan != null && Object.keys(optionGroups).length > 0) {
           const current = loadKitManifest(deps.repo, targetPlan);
           saveKitManifest(deps.repo, targetPlan, {
@@ -3069,7 +4125,11 @@ export async function applyAssistantAction(
               result: { completed_steps: stepResults },
             };
           }
-          stepResults.push({ type: step.type, result: applied.result, job_id: applied.job_id });
+          stepResults.push({
+            type: step.type,
+            result: applied.result,
+            job_id: applied.job_id,
+          });
           if (
             applied.result &&
             typeof applied.result === "object" &&
@@ -3095,9 +4155,7 @@ export async function applyAssistantAction(
       }
       case "create_plan_snapshot": {
         const name =
-          typeof action.params.name === "string" && action.params.name.trim()
-            ? action.params.name.trim()
-            : undefined;
+          typeof action.params.name === "string" && action.params.name.trim() ? action.params.name.trim() : undefined;
         const snap = createPlanSnapshot(deps.repo, planId, {
           name,
           source: "assistant",
@@ -3138,24 +4196,12 @@ export async function applyAssistantAction(
           return { ok: false, detail: `Source already exists: ${name}` };
         }
         const source_kind = String(action.params.source_kind ?? "github").toLowerCase();
-        const url =
-          typeof action.params.url === "string" ? action.params.url.trim() : undefined;
-        const tag =
-          typeof action.params.tag === "string" ? action.params.tag.trim() : undefined;
-        const branch =
-          typeof action.params.branch === "string"
-            ? action.params.branch.trim()
-            : undefined;
-        const role =
-          typeof action.params.role === "string" ? action.params.role.trim() : undefined;
-        const local_path =
-          typeof action.params.local_path === "string"
-            ? action.params.local_path.trim()
-            : undefined;
-        if (
-          (source_kind === "printables" || source_kind === "makerworld") &&
-          !url
-        ) {
+        const url = typeof action.params.url === "string" ? action.params.url.trim() : undefined;
+        const tag = typeof action.params.tag === "string" ? action.params.tag.trim() : undefined;
+        const branch = typeof action.params.branch === "string" ? action.params.branch.trim() : undefined;
+        const role = typeof action.params.role === "string" ? action.params.role.trim() : undefined;
+        const local_path = typeof action.params.local_path === "string" ? action.params.local_path.trim() : undefined;
+        if ((source_kind === "printables" || source_kind === "makerworld") && !url) {
           return { ok: false, detail: `url required for ${source_kind}` };
         }
         const created = deps.repo.createSource({
@@ -3168,8 +4214,7 @@ export async function applyAssistantAction(
           local_path,
         });
         const needsSync = source_kind !== "local" || !created.local_path;
-        const canFollowUp =
-          needsSync && planId > 0 && Boolean(deps.repo.getOwnedProfileIdentity(planId));
+        const canFollowUp = needsSync && planId > 0 && Boolean(deps.repo.getOwnedProfileIdentity(planId));
         outcome = {
           ok: true,
           result: {
@@ -3196,7 +4241,10 @@ export async function applyAssistantAction(
         const title = String(action.params.title ?? "").trim() || "Guide: note";
         const body = String(action.params.body_markdown ?? "").trim();
         if (!sourceName || !body) {
-          return { ok: false, detail: "source_name and body_markdown required" };
+          return {
+            ok: false,
+            detail: "source_name and body_markdown required",
+          };
         }
         const source = sourceByName(deps.repo, sourceName);
         if (!source) return { ok: false, detail: `Source not found: ${sourceName}` };
@@ -3248,7 +4296,10 @@ export async function applyAssistantAction(
         const basis = parseAcceptedPlanBasis(action.params?.accepted_basis);
         if (!basis) return { ok: false, detail: "Accepted Plan basis is missing" };
         if (basis.profileId !== planId) {
-          return { ok: false, detail: "Accepted Plan basis does not match action Plan" };
+          return {
+            ok: false,
+            detail: "Accepted Plan basis does not match action Plan",
+          };
         }
         let archived;
         try {
@@ -3257,24 +4308,32 @@ export async function applyAssistantAction(
           return {
             ok: false,
             status: 500,
-            detail: error instanceof AcceptedPlanOperationalIntegrityError
-              ? "Accepted Plan data is inconsistent"
-              : "Internal Server Error",
+            detail:
+              error instanceof AcceptedPlanOperationalIntegrityError
+                ? "Accepted Plan data is inconsistent"
+                : "Internal Server Error",
           };
         }
         if (archived.kind === "remaining" || archived.kind === "empty") {
-          return { ok: false, detail: "Archive only when print remaining is 0" };
+          return {
+            ok: false,
+            detail: "Archive only when print remaining is 0",
+          };
         }
         if (archived.kind === "accepted_state_unavailable") {
           return {
             ok: false,
-            detail: archived.reason === "compatibility_dirty"
-              ? "Accepted Plan requires compatibility repair"
-              : "Accepted Plan operational state is not initialized",
+            detail:
+              archived.reason === "compatibility_dirty"
+                ? "Accepted Plan requires compatibility repair"
+                : "Accepted Plan operational state is not initialized",
           };
         }
         if (archived.kind === "stale_accepted_plan") {
-          return { ok: false, detail: "Accepted Plan changed; reload and retry" };
+          return {
+            ok: false,
+            detail: "Accepted Plan changed; reload and retry",
+          };
         }
         if (archived.kind === "transaction_unavailable") {
           return {
@@ -3300,7 +4359,10 @@ export async function applyAssistantAction(
         break;
       }
       default:
-        return { ok: false, detail: `Unknown action type: ${(action as { type: string }).type}` };
+        return {
+          ok: false,
+          detail: `Unknown action type: ${(action as { type: string }).type}`,
+        };
     }
 
     if (outcome.ok && planId > 0) {
@@ -3334,9 +4396,10 @@ export async function applyAssistantAction(
     return {
       ok: false,
       status: 500,
-      detail: error instanceof AcceptedPlanOperationalIntegrityError
-        ? "Accepted Plan data is inconsistent"
-        : "Internal Server Error",
+      detail:
+        error instanceof AcceptedPlanOperationalIntegrityError
+          ? "Accepted Plan data is inconsistent"
+          : "Internal Server Error",
     };
   }
 }

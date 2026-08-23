@@ -24,6 +24,7 @@ import {
 import { pipeline } from "node:stream/promises";
 
 export const SOURCE_SNAPSHOT_MANIFEST_FILE = ".printpartner-source-snapshot.json";
+export const MAX_SOURCE_SNAPSHOT_BYTES = 1024 * 1024 * 1024;
 
 const SOURCE_SNAPSHOT_MANIFEST_VERSION = 1;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
@@ -35,8 +36,8 @@ export type SourceRelativePath = string & {
   readonly [sourceRelativePathBrand]: "SourceRelativePath";
 };
 
-export type SnapshotFileKind = "stl" | "readme" | "md" | "pdf";
-export type SnapshotDocumentationKind = Exclude<SnapshotFileKind, "stl">;
+export type SnapshotFileKind = "stl" | "artifact" | "readme" | "md" | "pdf";
+export type SnapshotDocumentationKind = Exclude<SnapshotFileKind, "stl" | "artifact">;
 
 export type SnapshotFile = {
   path: SourceRelativePath;
@@ -137,6 +138,7 @@ function hasErrorCode(value: unknown, codes: ReadonlySet<string>): boolean {
 function parseFileKind(value: unknown): SnapshotFileKind {
   switch (value) {
     case "stl":
+    case "artifact":
     case "readme":
     case "md":
     case "pdf":
@@ -148,8 +150,8 @@ function parseFileKind(value: unknown): SnapshotFileKind {
 
 function parseDocumentationKind(value: unknown): SnapshotDocumentationKind {
   const kind = parseFileKind(value);
-  if (kind === "stl") {
-    throw new Error("Snapshot manifest cannot omit an STL through the documentation budget");
+  if (kind === "stl" || kind === "artifact") {
+    throw new Error("Snapshot manifest cannot omit a printable artifact through the documentation budget");
   }
   return kind;
 }
@@ -273,7 +275,7 @@ function sameContentFiles(
   return canonicalContent(left) === canonicalContent(right);
 }
 
-function byteMeter(): {
+function byteMeter(maxBytes = Number.POSITIVE_INFINITY): {
   stream: Transform;
   result(): { sizeBytes: number; sha256: string };
 } {
@@ -290,6 +292,10 @@ function byteMeter(): {
         return;
       }
       sizeBytes += buffer.byteLength;
+      if (sizeBytes > maxBytes) {
+        callback(new Error(`Source snapshot exceeds the ${MAX_SOURCE_SNAPSHOT_BYTES} byte stored-content limit`));
+        return;
+      }
       hash.update(buffer);
       callback(null, buffer);
     },
@@ -304,6 +310,7 @@ async function writeSnapshotFile(args: {
   candidateDir: string;
   file: SnapshotFile;
   openFile(file: SnapshotFile): Promise<SnapshotFileResponse>;
+  maxBytes: number;
 }): Promise<SnapshotContentFile> {
   const destination = join(args.candidateDir, ...args.file.path.split("/"));
   await mkdir(dirname(destination), { recursive: true });
@@ -312,7 +319,10 @@ async function writeSnapshotFile(args: {
     response.contentLengthBytes,
     `Content-Length for ${args.file.path}`,
   );
-  const meter = byteMeter();
+  if (contentLengthBytes != null && contentLengthBytes > args.maxBytes) {
+    throw new Error(`Source snapshot exceeds the ${MAX_SOURCE_SNAPSHOT_BYTES} byte stored-content limit`);
+  }
+  const meter = byteMeter(args.maxBytes);
   await pipeline(
     response.stream,
     meter.stream,
@@ -597,8 +607,15 @@ export class LocalSourceSnapshotStore {
       join(revisionsRoot, `.candidate-${input.upstreamRevisionKey}-`),
     );
     const publishCandidate = async (): Promise<PublishedSourceSnapshot> => {
+      let storedBytes = 0;
       for (const file of files) {
-        await writeSnapshotFile({ candidateDir, file, openFile: input.openFile });
+        const written = await writeSnapshotFile({
+          candidateDir,
+          file,
+          openFile: input.openFile,
+          maxBytes: MAX_SOURCE_SNAPSHOT_BYTES - storedBytes,
+        });
+        storedBytes += written.sizeBytes;
       }
       const content = await validateDirectoryContent(candidateDir, files);
       const stlCount = content.filter((file) => file.kind === "stl").length;
@@ -607,12 +624,12 @@ export class LocalSourceSnapshotStore {
           `Source snapshot contains ${stlCount} STL files, exceeding the limit of ${selection.maxStlFiles}`,
         );
       }
-      const documentationBytes = content
+      const nonStlBytes = content
         .filter((file) => file.kind !== "stl")
         .reduce((sum, file) => sum + file.sizeBytes, 0);
-      if (documentationBytes > selection.maxDocumentationBytes) {
+      if (nonStlBytes > selection.maxDocumentationBytes) {
         throw new Error(
-          `Source documentation exceeds the ${selection.maxDocumentationBytes} byte limit after download`,
+          `Source documentation exceeds the ${selection.maxDocumentationBytes} byte limit after download, including non-STL artifacts`,
         );
       }
       const digest = manifestDigest(content);

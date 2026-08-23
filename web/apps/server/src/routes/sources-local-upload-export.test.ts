@@ -5,8 +5,15 @@ import { tmpdir } from "node:os";
 import { buildApp } from "../app.js";
 import { loadConfig } from "../config.js";
 import { createSelfHostPorts } from "../adapters/self-host/index.js";
+import { encodeAcceptedPlate3mf, type StlMesh } from "@print-partner/domain";
 
 const cleanups: Array<() => Promise<void> | void> = [];
+
+const triangle: StlMesh = {
+  vertices: [[0, 0, 0], [10, 0, 0], [0, 5, 0]],
+  faces: [[0, 1, 2]],
+  bounds: { minX: 0, minY: 0, minZ: 0, maxX: 10, maxY: 5, maxZ: 0, widthMm: 10, depthMm: 5, heightMm: 0 },
+};
 
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0)) await cleanup();
@@ -74,8 +81,12 @@ describe("local upload Source revisions", () => {
     });
     expect(created.statusCode).toBe(200);
     const sourceId = (created.json() as { id: number }).id;
+    const project = encodeAcceptedPlate3mf([
+      { token: "bracket", objectName: "Bracket", xUm: 0, yUm: 0, mesh: triangle },
+    ]);
     const { payload, headers } = multipartFiles([
       { name: "cube.stl", content: Buffer.from("solid cube\nendsolid cube\n") },
+      { name: "project.3mf", content: Buffer.from(project) },
     ]);
     const uploaded = await app.inject({
       method: "POST",
@@ -88,8 +99,14 @@ describe("local upload Source revisions", () => {
       current_source_revision_id?: number;
       local_path?: string;
       stl_count?: number;
+      artifacts?: Array<{ path: string; format: string; printable: boolean }>;
     };
-    expect(source.stl_count).toBe(1);
+    expect(source.stl_count).toBe(2);
+    expect(source.artifacts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: "_3mf/project/bracket.stl", format: "stl", printable: true }),
+      expect.objectContaining({ path: "cube.stl", format: "stl", printable: true }),
+      expect.objectContaining({ path: "project.3mf", format: "3mf", printable: true }),
+    ]));
     expect(source.current_source_revision_id).toEqual(expect.any(Number));
     expect(source.local_path).toContain(`/repos/${sourceId}/revisions/`);
     expect(existsSync(join(source.local_path!, "cube.stl"))).toBe(true);
@@ -147,6 +164,6 @@ describe("local upload Source revisions", () => {
     expect(exportRes.statusCode).toBe(200);
     const job = await waitJob(app, (exportRes.json() as { job_id: string }).job_id);
     expect(job.status).toBe("done");
-    expect(job.result?.file_total).toBe(1);
+    expect(job.result?.file_total).toBe(2);
   });
 });

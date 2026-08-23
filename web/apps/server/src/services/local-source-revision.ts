@@ -13,6 +13,7 @@ import {
 
 export const DEFAULT_LOCAL_SNAPSHOT_STL_LIMIT = 500;
 export const DEFAULT_LOCAL_SNAPSHOT_DOCS_BYTES = 1024 * 1024 * 1024;
+export const DEFAULT_LOCAL_SNAPSHOT_TOTAL_BYTES = 1024 * 1024 * 1024;
 
 type CollectedSnapshotFile = {
   relativePath: string;
@@ -28,6 +29,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function classifySnapshotPath(path: string): SnapshotFileKind | null {
   const lower = path.toLowerCase();
   if (lower.endsWith(".stl")) return "stl";
+  if (lower.endsWith(".3mf") || lower.endsWith(".zip")) return "artifact";
   if (!lower.endsWith(".md") && !lower.endsWith(".pdf")) return null;
   if (lower.endsWith(".pdf")) return "pdf";
   const base = lower.split("/").pop() ?? lower;
@@ -85,6 +87,7 @@ function assertSnapshotResourceLimits(input: {
   files: readonly CollectedSnapshotFile[];
   maxStlFiles: number;
   maxDocumentationBytes: number;
+  maxTotalBytes: number;
 }): void {
   const stlCount = input.files.filter((file) => file.kind === "stl").length;
   if (stlCount > input.maxStlFiles) {
@@ -92,13 +95,17 @@ function assertSnapshotResourceLimits(input: {
       `Local Source contains ${stlCount} STL files, exceeding the limit of ${input.maxStlFiles}`,
     );
   }
-  const documentationBytes = input.files
+  const nonStlBytes = input.files
     .filter((file) => file.kind !== "stl")
     .reduce((sum, file) => sum + file.sizeHintBytes, 0);
-  if (documentationBytes > input.maxDocumentationBytes) {
+  if (nonStlBytes > input.maxDocumentationBytes) {
     throw new Error(
-      `Local Source documentation exceeds the ${input.maxDocumentationBytes} byte limit`,
+      `Local Source documentation exceeds the ${input.maxDocumentationBytes} byte limit, including non-STL artifacts`,
     );
+  }
+  const totalBytes = input.files.reduce((sum, file) => sum + file.sizeHintBytes, 0);
+  if (totalBytes > input.maxTotalBytes) {
+    throw new Error(`Local Source total stored bytes exceeds the ${input.maxTotalBytes} byte limit`);
   }
 }
 
@@ -129,17 +136,20 @@ export async function publishLocalSourceWorkingTree(input: {
   workingTree: string;
   maxStlFiles?: number;
   maxDocumentationBytes?: number;
+  maxTotalBytes?: number;
 }): Promise<SourceSummary> {
   const observed = input.repo.getProjectRow(input.sourceId);
   if (!observed) throw new Error("Source not found");
 
   const maxStlFiles = input.maxStlFiles ?? DEFAULT_LOCAL_SNAPSHOT_STL_LIMIT;
   const maxDocumentationBytes = input.maxDocumentationBytes ?? DEFAULT_LOCAL_SNAPSHOT_DOCS_BYTES;
+  const maxTotalBytes = input.maxTotalBytes ?? DEFAULT_LOCAL_SNAPSHOT_TOTAL_BYTES;
   const liveFiles = await collectSnapshotFiles(input.workingTree);
   assertSnapshotResourceLimits({
     files: liveFiles,
     maxStlFiles,
     maxDocumentationBytes,
+    maxTotalBytes,
   });
   await mkdir(input.reposDir, { recursive: true });
   const stagingRoot = await mkdtemp(join(input.reposDir, ".local-source-"));
@@ -156,6 +166,7 @@ export async function publishLocalSourceWorkingTree(input: {
       files: collected,
       maxStlFiles,
       maxDocumentationBytes,
+      maxTotalBytes,
     });
 
     const upstreamRevisionKey = await digestWorkingTree(collected);

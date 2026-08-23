@@ -17,6 +17,11 @@ import { AcceptedPlanOperationalIntegrityError } from "../db/accepted-plan-opera
 import { toAcceptedCheckoffView } from "../services/accepted-plan-views.js";
 import { acceptedPlanBasis } from "../db/accepted-plan-progress.js";
 import {
+  deriveBuildPlanningReadiness,
+  hydrateBuildPlanningBrief,
+  readBuildPlanningBrief,
+} from "../services/build-planning.js";
+import {
   filamentAssignmentColumns,
   resolveFilamentAssignment,
   type AssignAcceptedFilamentResult,
@@ -200,6 +205,25 @@ export async function registerPlanRoutes(
       );
       return reply.status(500).send({ detail: "Internal Server Error" });
     }
+  });
+
+  app.get("/plans/:id/build-planning", async (request, reply) => {
+    const id = Number((request.params as { id: string }).id);
+    if (!deps.repo.getOwnedProfileIdentity(id)) {
+      return reply.status(404).send({ detail: "Profile not found" });
+    }
+    const storedBrief = readBuildPlanningBrief(deps.repo, id);
+    if (!storedBrief) return { planning: null };
+    const brief = hydrateBuildPlanningBrief(deps.repo, storedBrief);
+    const groupIds = new Set(brief.differences.map((difference) => difference.group_id));
+    return {
+      planning: {
+        brief,
+        readiness: deriveBuildPlanningReadiness(brief),
+        grouped_difference_count: groupIds.size,
+        difference_count: brief.differences.length,
+      },
+    };
   });
 
   app.delete("/plans/:id", async (request, reply) => {

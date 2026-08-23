@@ -20,6 +20,7 @@ export type FilamentDisplay = {
   combo_label: string;
   hex: string | null;
   display_name: string;
+  brand?: string | null;
 };
 
 export type FilamentResolveContext = {
@@ -61,6 +62,7 @@ function fromSpoolmanFilament(filament: SpoolmanFilament): FilamentDisplay {
     combo_label: formatSpoolmanFilamentLabel(filament),
     hex: normalizeSpoolmanHex(filament.color_hex),
     display_name: filament.name?.trim() || `Filament #${filament.id}`,
+    brand: filament.vendor?.trim() || null,
   };
 }
 

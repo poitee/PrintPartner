@@ -112,7 +112,41 @@ describe("publishLocalSourceWorkingTree", () => {
         workingTree,
         maxDocumentationBytes: 0,
       }),
-    ).rejects.toThrow("Local Source documentation exceeds the 0 byte limit");
+    ).rejects.toThrow("Local Source documentation exceeds the 0 byte limit, including non-STL artifacts");
+    expect(readFileSync(blockedReposDir, "utf8")).toBe("staging must not begin");
+    sqlite.close();
+  });
+
+  it("counts uploaded 3MF and ZIP artifacts against the byte limit", async () => {
+    const { dir, sqlite, repo, source, workingTree } = fixture();
+    writeFileSync(join(workingTree, "project.3mf"), Buffer.alloc(16));
+    writeFileSync(join(workingTree, "original.zip"), Buffer.alloc(16));
+    const blockedReposDir = join(dir, "blocked-repos");
+    writeFileSync(blockedReposDir, "staging must not begin");
+
+    await expect(publishLocalSourceWorkingTree({
+      repo,
+      reposDir: blockedReposDir,
+      sourceId: source.id,
+      workingTree,
+      maxDocumentationBytes: 31,
+    })).rejects.toThrow(/exceeds the 31 byte limit, including non-STL artifacts/);
+    expect(readFileSync(blockedReposDir, "utf8")).toBe("staging must not begin");
+    sqlite.close();
+  });
+
+  it("rejects STL bytes above the total Source snapshot limit", async () => {
+    const { dir, sqlite, repo, source, workingTree } = fixture();
+    truncateSync(join(workingTree, "cube.stl"), 64);
+    const blockedReposDir = join(dir, "blocked-repos");
+    writeFileSync(blockedReposDir, "staging must not begin");
+    await expect(publishLocalSourceWorkingTree({
+      repo,
+      reposDir: blockedReposDir,
+      sourceId: source.id,
+      workingTree,
+      maxTotalBytes: 63,
+    })).rejects.toThrow(/total stored bytes exceeds the 63 byte limit/);
     expect(readFileSync(blockedReposDir, "utf8")).toBe("staging must not begin");
     sqlite.close();
   });

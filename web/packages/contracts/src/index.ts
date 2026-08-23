@@ -7,23 +7,37 @@ export * from "./plan-drafts.js";
 export type DeployMode = "self-host" | "saas";
 
 /** Global preference controlling how timestamps (e.g. "Generated …", "Last synced …") are displayed. */
-export type DateFormatId =
-  | "mdy_12h"
-  | "dmy_12h"
-  | "mdy_short"
-  | "dmy_short"
-  | "ymd_24h"
-  | "iso";
+export type DateFormatId = "mdy_12h" | "dmy_12h" | "mdy_short" | "dmy_short" | "ymd_24h" | "iso";
 
 export const DATE_FORMAT_DEFAULT: DateFormatId = "mdy_12h";
 
-export const DATE_FORMAT_PRESETS: Array<{ id: DateFormatId; label: string; example: string }> = [
-  { id: "mdy_12h", label: "Jul 3, 2026, 9:01 PM", example: "Jul 3, 2026, 9:01 PM" },
-  { id: "dmy_12h", label: "3 Jul 2026, 9:01 PM", example: "3 Jul 2026, 9:01 PM" },
-  { id: "mdy_short", label: "07/03/2026, 9:01 PM", example: "07/03/2026, 9:01 PM" },
+export const DATE_FORMAT_PRESETS: Array<{
+  id: DateFormatId;
+  label: string;
+  example: string;
+}> = [
+  {
+    id: "mdy_12h",
+    label: "Jul 3, 2026, 9:01 PM",
+    example: "Jul 3, 2026, 9:01 PM",
+  },
+  {
+    id: "dmy_12h",
+    label: "3 Jul 2026, 9:01 PM",
+    example: "3 Jul 2026, 9:01 PM",
+  },
+  {
+    id: "mdy_short",
+    label: "07/03/2026, 9:01 PM",
+    example: "07/03/2026, 9:01 PM",
+  },
   { id: "dmy_short", label: "03/07/2026, 21:01", example: "03/07/2026, 21:01" },
   { id: "ymd_24h", label: "2026-07-03 21:01", example: "2026-07-03 21:01" },
-  { id: "iso", label: "2026-07-03T21:01:32.727Z (ISO)", example: "2026-07-03T21:01:32.727Z" },
+  {
+    id: "iso",
+    label: "2026-07-03T21:01:32.727Z (ISO)",
+    example: "2026-07-03T21:01:32.727Z",
+  },
 ];
 
 function pad2(n: number): string {
@@ -31,10 +45,7 @@ function pad2(n: number): string {
 }
 
 /** Formats an ISO timestamp per the given global date-format preference. Works in both browser and Node (Intl is available in both). */
-export function formatTimestamp(
-  iso: string | null | undefined,
-  formatId: DateFormatId = DATE_FORMAT_DEFAULT,
-): string {
+export function formatTimestamp(iso: string | null | undefined, formatId: DateFormatId = DATE_FORMAT_DEFAULT): string {
   if (!iso) return "";
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
@@ -187,14 +198,7 @@ export type DeviceSummary = {
 };
 
 /** Live printer host status from IntegrationAdapter.getStatus. */
-export type PrinterHostState =
-  | "idle"
-  | "printing"
-  | "paused"
-  | "complete"
-  | "error"
-  | "offline"
-  | "unknown";
+export type PrinterHostState = "idle" | "printing" | "paused" | "complete" | "error" | "offline" | "unknown";
 
 export type PrinterHostStatus = {
   state: PrinterHostState;
@@ -315,12 +319,7 @@ export type PrinterCheckoffReconcileUpdate = {
   units_pending: number;
 };
 
-export type PrinterSendQueueState =
-  | "queued"
-  | "sending"
-  | "done"
-  | "error"
-  | "cancelled";
+export type PrinterSendQueueState = "queued" | "sending" | "done" | "error" | "cancelled";
 
 /** Legacy queue match value. Dispatch always uses the item's exact printer_id. */
 export type PrinterSendQueueMatch = "pinned" | "compatible";
@@ -430,10 +429,7 @@ export type AppUpdateCheckResponse = {
 };
 
 export type AcceptedProgressUnavailableReason =
-  | "compatibility_dirty"
-  | "uninitialized"
-  | "integrity"
-  | "concurrent_update";
+  "compatibility_dirty" | "uninitialized" | "integrity" | "concurrent_update";
 
 export type AcceptedProgressSummary =
   | {
@@ -630,13 +626,7 @@ export type JobSnapshot = JobEvent & {
 export type AiProviderId = "anthropic" | "openai" | "ollama" | "none";
 
 /** Web search backend for assistant research tools. */
-export type SearchProviderId =
-  | "anthropic-native"
-  | "openai-native"
-  | "brave"
-  | "exa"
-  | "duckduckgo"
-  | "none";
+export type SearchProviderId = "anthropic-native" | "openai-native" | "brave" | "exa" | "duckduckgo" | "none";
 
 export type SearchSetupOption = {
   id: SearchProviderId;
@@ -711,6 +701,14 @@ export type AssistantActionType =
   | "propose_exclude_replaced_parts"
   | "duplicate_plan"
   | "archive_plan"
+  | "propose_create_build"
+  | "propose_import_build_inputs"
+  | "propose_set_build_source_roles"
+  | "propose_update_build_brief"
+  | "propose_resolve_build_differences"
+  | "propose_assign_role_filament"
+  | "propose_rebuild_plan"
+  | "propose_apply_plan_draft"
   /** Client-executed UI opens — auto-run; do not require Apply. */
   | "ui_navigate"
   | "ui_open_source"
@@ -741,11 +739,7 @@ export type AssistantProposedAction = {
   params: Record<string, unknown>;
 };
 
-export type PlanDecisionKind =
-  | "applied_action"
-  | "dismissed_action"
-  | "user_note"
-  | "choice";
+export type PlanDecisionKind = "applied_action" | "dismissed_action" | "user_note" | "choice";
 
 export type PlanDecisionActor = "assistant" | "user";
 
@@ -781,8 +775,18 @@ export type PlanDecisionCreateRequest = {
 export type BuildRecipe = {
   plan_id: number;
   plan_name: string;
-  base: { source_name: string | null; project_id: number | null; tag: string | null; branch: string | null };
-  addons: Array<{ source_name: string; project_id: number; tag: string | null; branch: string | null }>;
+  base: {
+    source_name: string | null;
+    project_id: number | null;
+    tag: string | null;
+    branch: string | null;
+  };
+  addons: Array<{
+    source_name: string;
+    project_id: number;
+    tag: string | null;
+    branch: string | null;
+  }>;
   stack_preset: string | null;
   kit_selections: Record<string, string>;
   include: string[];

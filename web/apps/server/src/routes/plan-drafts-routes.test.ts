@@ -14,6 +14,7 @@ import { registerPostgresSyncQuery, unregisterPostgresSyncQuery } from "../db/sy
 import { registerPlanDraftRoutes } from "./plan-drafts.js";
 import { acceptPlanForTest } from "../test/accept-plan.js";
 import { acceptedPlanBasis } from "../db/accepted-plan-progress.js";
+import { newBuildPlanningBrief, saveBuildPlanningBrief } from "../services/build-planning.js";
 
 const cleanups: Array<() => Promise<void>> = [];
 
@@ -47,6 +48,40 @@ async function fixture() {
 }
 
 describe("Plan draft routes", () => {
+  it("blocks the native draft Apply route while AI Build planning has unresolved decisions", async () => {
+    const { app, repo, profile } = await fixture();
+    const created = (await app.inject({
+      method: "POST",
+      url: `/plans/${profile.id}/drafts/recompute`,
+      headers: { "idempotency-key": "planning-gate-draft" },
+      payload: { apply_manifest: true },
+    })).json();
+    const brief = newBuildPlanningBrief(profile.id, "Voron 2.4 with Beacon", []);
+    brief.draft_id = created.draft.draft_id;
+    saveBuildPlanningBrief(repo, brief);
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/plans/${profile.id}/drafts/${created.draft.draft_id}/apply`,
+      headers: { "idempotency-key": "planning-gate-apply" },
+      payload: {
+        expected_snapshot_digest: created.draft.snapshot_digest,
+        expected_lifecycle_version: created.draft.lifecycle_version,
+        expected_base: created.draft.base,
+      },
+    });
+
+    expect(response.statusCode).toBe(422);
+    expect(response.json()).toEqual(
+      expect.objectContaining({
+        code: "build_planning_blocked",
+        blockers: expect.arrayContaining([
+          expect.objectContaining({ code: "requirement_unverified" }),
+        ]),
+      }),
+    );
+  });
+
   it("mounts recompute flat and in v2 without changing accepted state", async () => {
     const { app, repo, profile, before, sourceRoot } = await fixture();
     writeFileSync(

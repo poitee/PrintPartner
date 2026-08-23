@@ -9,7 +9,11 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import {
   CallToolRequestSchema,
+  GetPromptRequestSchema,
+  ListPromptsRequestSchema,
+  ListResourceTemplatesRequestSchema,
   ListToolsRequestSchema,
+  ReadResourceRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import type { AssistantProposedAction } from "@print-partner/contracts";
 import { isAssistantUiAction } from "@print-partner/contracts";
@@ -27,6 +31,7 @@ import type { InProcessJobRunner } from "../routes/jobs.js";
 import type { AppRepository } from "../db/repository.js";
 import { createIntegrationPort, type IntegrationPort } from "../integrations/store.js";
 import { getIntegrationAdapter } from "../integrations/registry.js";
+import { deriveBuildPlanningReadiness, hydrateBuildPlanningBrief, readBuildPlanningBrief } from "../services/build-planning.js";
 
 export const META_TOOLS = [
   {
@@ -42,7 +47,10 @@ export const META_TOOLS = [
     inputSchema: {
       type: "object" as const,
       properties: {
-        action_id: { type: "string", description: "Id from a prior propose tool result" },
+        action_id: {
+          type: "string",
+          description: "Id from a prior propose tool result",
+        },
         suggested_excludes: {
           type: "array",
           items: { type: "string" },
@@ -74,15 +82,11 @@ export function jsonSchemaToMcp(spec: (typeof ASSISTANT_TOOL_SPECS)[number]) {
   return {
     name: spec.name,
     description:
-      spec.tier === "mutate"
-        ? `${spec.description} (proposes only — call confirm_apply to mutate)`
-        : spec.description,
+      spec.tier === "mutate" ? `${spec.description} (proposes only — call confirm_apply to mutate)` : spec.description,
     inputSchema: {
       type: "object" as const,
       properties: spec.input_schema.properties ?? {},
-      ...(spec.input_schema.required?.length
-        ? { required: spec.input_schema.required }
-        : {}),
+      ...(spec.input_schema.required?.length ? { required: spec.input_schema.required } : {}),
     },
   };
 }
@@ -145,8 +149,69 @@ export function createProductMcpServer(deps: ProductMcpDeps): Server {
 
   const server = new Server(
     { name: "print-partner-assistant", version: "1.0.0" },
-    { capabilities: { tools: {} } },
+    { capabilities: { tools: {}, prompts: {}, resources: {} } },
   );
+
+  server.setRequestHandler(ListPromptsRequestSchema, async () => ({
+    prompts: [
+      {
+        name: "plan_build",
+        description: "Research and verify a customer Build before applying its printable-part draft.",
+        arguments: [
+          {
+            name: "customer_request",
+            description: "The verbatim customer request",
+            required: true,
+          },
+        ],
+      },
+    ],
+  }));
+
+  server.setRequestHandler(GetPromptRequestSchema, async (request) => {
+    if (request.params.name !== "plan_build") throw new Error(`Unknown prompt: ${request.params.name}`);
+    const customerRequest = request.params.arguments?.customer_request ?? "";
+    return {
+      description: "Print Partner's confirmation-first Build planning workflow",
+      messages: [
+        {
+          role: "user" as const,
+          content: {
+            type: "text" as const,
+              text: `Plan this Build without choosing between conflicting sources on my behalf.\n\n${customerRequest}\n\nAnalyze the request and links first. Treat Printables, MakerWorld, and other model pages as provenance. If their printable files are not already attached, ask me to download and upload them. For uploaded ZIP, STL, 3MF, or supporting files, attach the completed Source by source_id with propose_import_build_inputs. Use the kit catalog's functional slots to propose path-scoped Source contributions with evidence and confidence; keep Library Source categories organizational only. Propose every persistent change and wait for confirm_apply. Sync and pin repository and uploaded Source evidence, record all overlapping-source differences, and ask me to resolve every group. Verify compatibility and exact filament inventory. Rebuild and review the draft. Apply only when get_build_planning_state reports ready. Do not start printing, exporting, or queueing.`,
+          },
+        },
+      ],
+    };
+  });
+
+  server.setRequestHandler(ListResourceTemplatesRequestSchema, async () => ({
+    resourceTemplates: [
+      {
+        uriTemplate: "print-partner://build-planning/{build_id}",
+        name: "Build planning state",
+        description: "Versioned Build brief, evidence, differences, decisions, draft, and readiness blockers",
+        mimeType: "application/json",
+      },
+    ],
+  }));
+
+  server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
+    const match = /^print-partner:\/\/build-planning\/(\d+)$/.exec(request.params.uri);
+    if (!match) throw new Error("Unknown Build planning resource URI");
+    const storedBrief = readBuildPlanningBrief(getRepo(), Number(match[1]));
+    if (!storedBrief) throw new Error("Build planning brief not found");
+    const brief = hydrateBuildPlanningBrief(getRepo(), storedBrief);
+    return {
+      contents: [
+        {
+          uri: request.params.uri,
+          mimeType: "application/json",
+          text: JSON.stringify({ brief, readiness: deriveBuildPlanningReadiness(brief) }, null, 2),
+        },
+      ],
+    };
+  });
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: [
@@ -177,7 +242,12 @@ export function createProductMcpServer(deps: ProductMcpDeps): Server {
           params: a.params,
         }));
         return {
-          content: [{ type: "text" as const, text: JSON.stringify({ actions }, null, 2) }],
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify({ actions }, null, 2),
+            },
+          ],
         };
       }
 
@@ -219,24 +289,24 @@ export function createProductMcpServer(deps: ProductMcpDeps): Server {
             content: [
               {
                 type: "text" as const,
-                text: JSON.stringify({ ok: false, error: "UI actions cannot be applied via MCP" }),
+                text: JSON.stringify({
+                  ok: false,
+                  error: "UI actions cannot be applied via MCP",
+                }),
               },
             ],
             isError: true,
           };
         }
-        const toApply: AssistantProposedAction =
-          Array.isArray(args.suggested_excludes)
-            ? {
-                ...action,
-                params: {
-                  ...action.params,
-                  suggested_excludes: args.suggested_excludes
-                    .map((x) => String(x).trim())
-                    .filter(Boolean),
-                },
-              }
-            : action;
+        const toApply: AssistantProposedAction = Array.isArray(args.suggested_excludes)
+          ? {
+              ...action,
+              params: {
+                ...action.params,
+                suggested_excludes: args.suggested_excludes.map((x) => String(x).trim()).filter(Boolean),
+              },
+            }
+          : action;
         try {
           const result = await applyAssistantAction(toApply, {
             repo: getRepo(),
@@ -260,7 +330,12 @@ export function createProductMcpServer(deps: ProductMcpDeps): Server {
       const known = productToolSpecs().some((t) => t.name === name);
       if (!known) {
         return {
-          content: [{ type: "text" as const, text: JSON.stringify({ error: `Unknown tool: ${name}` }) }],
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify({ error: `Unknown tool: ${name}` }),
+            },
+          ],
           isError: true,
         };
       }
@@ -269,8 +344,16 @@ export function createProductMcpServer(deps: ProductMcpDeps): Server {
       if (result.proposedAction && !isAssistantUiAction(result.proposedAction.type)) {
         pending.set(result.proposedAction.id, result.proposedAction);
       }
+      let returnedError = false;
+      try {
+        const parsed: unknown = JSON.parse(result.content);
+        returnedError = Boolean(parsed && typeof parsed === "object" && "error" in parsed);
+      } catch {
+        returnedError = false;
+      }
       return {
         content: [{ type: "text" as const, text: result.content }],
+        ...(returnedError ? { isError: true } : {}),
       };
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);

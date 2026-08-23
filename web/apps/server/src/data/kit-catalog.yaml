@@ -16,6 +16,8 @@ bases:
     compatible_addons:
       - toolhead
       - extruder
+      - hotend
+      - toolhead_electronics
       - z_drives
       - probe
       - controller
@@ -31,6 +33,8 @@ bases:
     compatible_addons:
       - toolhead
       - extruder
+      - hotend
+      - toolhead_electronics
       - z_drives
       - probe
       - controller
@@ -159,16 +163,30 @@ addon_categories:
         variant_id: stealthburner
         compatible_bases:
           [ldo_voron_2.4, voron_2.4, voron_trident, ldo_voron_trident, leviathan]
-      - name: Galileo2
-        variant_id: galileo2
-        compatible_bases:
-          [ldo_voron_2.4, voron_2.4, voron_trident, micron, west3d_micron, boop]
-
   extruder:
     label: Extruder / filament path
     rule: pick_one
     replaces_slot: extruder
+    sources:
+      - name: Galileo2
+        variant_id: g2e
+        compatible_bases:
+          [ldo_voron_2.4, voron_2.4, voron_trident, micron, west3d_micron, boop]
+
+  hotend:
+    label: Hotend mount
+    rule: pick_one
+    replaces_slot: hotend
     sources: []
+
+  toolhead_electronics:
+    label: Toolhead electronics
+    rule: pick_one
+    replaces_slot: toolhead_electronics
+    sources:
+      - name: CANboard_Mounts
+        variant_id: canboard
+        compatible_bases: [ldo_voron_2.4, voron_2.4, voron_trident, leviathan]
 
   probe:
     label: Z probe
@@ -206,9 +224,6 @@ addon_categories:
     rule: pick_one
     replaces_slot: controller
     sources:
-      - name: CANboard_Mounts
-        variant_id: canboard
-        compatible_bases: [ldo_voron_2.4, voron_2.4, voron_trident, leviathan]
       - name: voron_0_pancake_board
         variant_id: pancake
         compatible_bases: [voron_0, ldo_voron_0]
