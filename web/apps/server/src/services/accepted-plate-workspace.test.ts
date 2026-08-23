@@ -293,6 +293,50 @@ describe("accepted Plate workspace", () => {
     expect(deps.publish).toHaveBeenCalledOnce();
   });
 
+  it("publishes separate Plates when the saved Build setup separates by color", async () => {
+    const deps = publishingDependencies();
+    const secondUnit = {
+      ...setupInput.units[0],
+      token: secondToken,
+      objectName: `clip__${secondToken}`,
+      filename: "clip.stl",
+      filamentColorId: "orange",
+    };
+    vi.mocked(deps.repository.readAcceptedPlateWorkspaceInput).mockReturnValue({
+      ...setupInput,
+      units: [...setupInput.units, secondUnit],
+    });
+    deps.repository.getSetting = vi.fn(() => JSON.stringify({
+      format: "production-setup-v1",
+      profile_id: 7,
+      preferred_slicer_instance_id: null,
+      selection: { mode: "all_incomplete" },
+      rules: [{ id: "colors", enabled: true, kind: "separate_by", field: "color" }],
+      updated_at: "2026-08-23T00:00:00.000Z",
+    }));
+    deps.loadGeometry.mockResolvedValue({
+      kind: "ready",
+      geometryByToken: new Map([[token, geometry()], [secondToken, geometry()]]),
+    });
+
+    await initializeAcceptedPlates(deps, {
+      profileId: 7,
+      expected: basis,
+      expectedPlateRevisionId: null,
+      assignments: [
+        { token, printerId: "printer-one" },
+        { token: secondToken, printerId: "printer-one" },
+      ],
+    });
+
+    expect(deps.publish).toHaveBeenCalledWith(expect.objectContaining({
+      plates: [
+        expect.objectContaining({ units: [expect.objectContaining({ token })] }),
+        expect.objectContaining({ units: [expect.objectContaining({ token: secondToken })] }),
+      ],
+    }));
+  });
+
   it("returns the published revision without rereading state changed after the write", async () => {
     let state: typeof setupInput | {
       kind: "accepted_state_unavailable";

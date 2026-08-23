@@ -3,6 +3,7 @@
 export * from "./source-naming.js";
 export * from "./accepted-plates.js";
 export * from "./plan-drafts.js";
+export * from "./production-setup.js";
 
 export type DeployMode = "self-host" | "saas";
 
@@ -206,6 +207,12 @@ export type PrinterHostStatus = {
   filename?: string;
   message?: string;
   eta_seconds?: number;
+  ip_address?: string;
+  uptime_seconds?: number;
+  nozzle_temperature_c?: number;
+  nozzle_target_c?: number;
+  bed_temperature_c?: number;
+  bed_target_c?: number;
 };
 
 /** One Progress unit linked to a sent print job (verify-first Phase D). */

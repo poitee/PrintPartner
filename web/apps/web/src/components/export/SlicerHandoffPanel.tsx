@@ -16,6 +16,7 @@ import {
 import { useProfileSelection } from "../../context/ProfileContext";
 import { useEngineHealth } from "../../hooks/useEngineHealth";
 import { useJobRunner } from "../../hooks/useJobRunner";
+import { useProductionSetup } from "../../queries/productionSetup";
 import { downloadAcceptedPlateExport } from "../../lib/acceptedPlateExportResult";
 import { settingsRoute } from "../../lib/routes";
 import {
@@ -98,6 +99,7 @@ export default function SlicerHandoffPanel() {
   const { health } = useEngineHealth();
   const { selectedProfileId } = useProfileSelection();
   const queryClient = useQueryClient();
+  const productionSetup = useProductionSetup(selectedProfileId, Boolean(health?.ok));
   const workspaceQuery = useAcceptedPlateWorkspaceQuery(selectedProfileId, Boolean(health?.ok));
   const revisionWritePending = useAcceptedPlateRevisionPending(selectedProfileId);
   const exportJob = useJobRunner("export-accepted-plate-3mf", selectedProfileId);
@@ -128,6 +130,26 @@ export default function SlicerHandoffPanel() {
       cancelled = true;
     };
   }, [health?.ok]);
+
+  useEffect(() => {
+    const preferred = productionSetup.data?.preferred_slicer_instance_id;
+    if (preferred && instances.some((instance) => instance.id === preferred)) {
+      setInstanceId(preferred);
+    }
+  }, [instances, productionSetup.data?.preferred_slicer_instance_id]);
+
+  const chooseInstance = (nextId: string) => {
+    setInstanceId(nextId);
+    const current = productionSetup.data;
+    if (!current) return;
+    void productionSetup.save({
+      preferred_slicer_instance_id: nextId,
+      selection: current.selection,
+      rules: current.rules,
+    }).catch((error: unknown) => {
+      toast.error(error instanceof Error ? error.message : "Could not save slicer choice.");
+    });
+  };
 
   const capability = acceptedPlateCapability({
     enabled: Boolean(health?.ok),
@@ -209,7 +231,7 @@ export default function SlicerHandoffPanel() {
         ) : (
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-xs text-muted-foreground">Managed slicer</span>
-            <Select value={instanceId} onValueChange={setInstanceId}>
+            <Select value={instanceId} onValueChange={chooseInstance}>
               <SelectTrigger className="h-8 w-[14rem]">
                 <SelectValue placeholder="Choose slicer" />
               </SelectTrigger>
@@ -238,6 +260,10 @@ export default function SlicerHandoffPanel() {
             Download for local slicer
           </Button>
         </div>
+        <p className="text-xs text-muted-foreground">
+          Your slicer choice is saved for this Build. Download opens in a desktop slicer;
+          managed handoff stages the same accepted Plates in PrintPartner's configured slicer.
+        </p>
         {manualGuiUrl ? (
           <a
             className="text-sm font-medium text-primary underline"

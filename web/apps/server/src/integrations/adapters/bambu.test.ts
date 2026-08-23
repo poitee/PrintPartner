@@ -75,11 +75,19 @@ describe("statusFromBambuPrint", () => {
       mc_percent: 42,
       mc_remaining_time: 12,
       subtask_name: "frame_x.3mf",
+      nozzle_temper: 218.4,
+      nozzle_target_temper: 220,
+      bed_temper: 59.7,
+      bed_target_temper: 60,
     });
     expect(status.state).toBe("printing");
     expect(status.progress).toBe(42);
     expect(status.filename).toBe("frame_x.3mf");
     expect(status.eta_seconds).toBe(720);
+    expect(status.nozzle_temperature_c).toBe(218.4);
+    expect(status.nozzle_target_c).toBe(220);
+    expect(status.bed_temperature_c).toBe(59.7);
+    expect(status.bed_target_c).toBe(60);
   });
 
   it("maps FINISH to complete without progress", () => {

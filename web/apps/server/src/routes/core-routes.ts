@@ -9,6 +9,7 @@ import { registerManifestRoutes } from "./manifest.js";
 import { registerPartRoutes } from "./parts.js";
 import { registerPlanRoutes, type PlanSummaryContract } from "./plans.js";
 import { registerPrinterRoutes } from "./printers.js";
+import { registerProductionSetupRoutes } from "./production-setup.js";
 import { registerSlicerInstanceRoutes } from "./slicer-instances.js";
 import { registerSlicerHandoffRoutes } from "./slicer-handoff.js";
 import { registerProfileLibraryRoutes } from "./profile-library.js";
@@ -88,6 +89,7 @@ export async function registerCoreRoutes(
   await registerRepoManifestRoutes(app, { repo: deps.repo });
   await registerSourceDocsRoutes(app, { repo: deps.repo });
   await registerPrinterRoutes(app, { repo: deps.repo });
+  await registerProductionSetupRoutes(app, { repo: deps.repo });
   await registerSlicerInstanceRoutes(app, {
     repo: deps.repo,
     deployMode: deps.config.deployMode,

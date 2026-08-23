@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 
 import { act, renderHook } from "@testing-library/react";
+import { createElement, type PropsWithChildren } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
 import {
   parseRequiredUnitTokenContract,
@@ -11,12 +13,19 @@ import { useProductionSelection } from "./useProductionSelection";
 
 const first = parseRequiredUnitTokenContract(`ppu_${"a".repeat(32)}`);
 const second = parseRequiredUnitTokenContract(`ppu_${"b".repeat(32)}`);
+const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+function wrapper({ children }: PropsWithChildren) {
+  return createElement(QueryClientProvider, { client: queryClient }, children);
+}
 
 function unit(token: RequiredUnitToken, completed = false): ProductionSelectableUnit {
   return {
     token,
     object_name: `part__${token}`,
     filename: "part.stl",
+    relative_path: "XY/part.stl",
+    source_directory: "XY",
     source_layer: "Hardware",
     role: "primary",
     filament_color_id: null,
@@ -27,8 +36,8 @@ function unit(token: RequiredUnitToken, completed = false): ProductionSelectable
 describe("useProductionSelection", () => {
   it("preserves manual selection across workspace-only refetches", () => {
     const { result, rerender } = renderHook(
-      ({ units }) => useProductionSelection(units, null, 7),
-      { initialProps: { units: [unit(first), unit(second)] } },
+      ({ units }) => useProductionSelection(units, null, 7, false),
+      { initialProps: { units: [unit(first), unit(second)] }, wrapper },
     );
     act(() => result.current.setSelection(new Set([second])));
 
@@ -39,8 +48,8 @@ describe("useProductionSelection", () => {
 
   it("preserves manual selection when Plate edits reorder the same Required units", () => {
     const { result, rerender } = renderHook(
-      ({ units }) => useProductionSelection(units, null, 7),
-      { initialProps: { units: [unit(first), unit(second)] } },
+      ({ units }) => useProductionSelection(units, null, 7, false),
+      { initialProps: { units: [unit(first), unit(second)] }, wrapper },
     );
     act(() => result.current.setSelection(new Set([second])));
 
@@ -51,8 +60,8 @@ describe("useProductionSelection", () => {
 
   it("resets when the Required-unit identity changes", () => {
     const { result, rerender } = renderHook(
-      ({ units }) => useProductionSelection(units, "missing", 7),
-      { initialProps: { units: [unit(first), unit(second, true)] } },
+      ({ units }) => useProductionSelection(units, "missing", 7, false),
+      { initialProps: { units: [unit(first), unit(second, true)] }, wrapper },
     );
     expect([...result.current.selection]).toEqual([first]);
 
@@ -63,8 +72,8 @@ describe("useProductionSelection", () => {
 
   it("resets when the Build changes with the same Required units", () => {
     const { result, rerender } = renderHook(
-      ({ profileId }) => useProductionSelection([unit(first), unit(second)], null, profileId),
-      { initialProps: { profileId: 7 } },
+      ({ profileId }) => useProductionSelection([unit(first), unit(second)], null, profileId, false),
+      { initialProps: { profileId: 7 }, wrapper },
     );
     act(() => result.current.setSelection(new Set([second])));
 

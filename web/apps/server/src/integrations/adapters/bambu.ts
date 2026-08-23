@@ -38,6 +38,10 @@ type BambuPrintReport = {
   mc_remaining_time?: number | string;
   gcode_file?: string;
   subtask_name?: string;
+  nozzle_temper?: number | string;
+  nozzle_target_temper?: number | string;
+  bed_temper?: number | string;
+  bed_target_temper?: number | string;
 };
 
 type BambuReportPayload = {
@@ -48,6 +52,11 @@ function asNonEmptyString(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   return trimmed ? trimmed : null;
+}
+
+function finiteNumber(value: unknown): number | undefined {
+  const number = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+  return Number.isFinite(number) ? number : undefined;
 }
 
 function readHost(config: IntegrationConfig): string | null {
@@ -145,6 +154,10 @@ export function statusFromBambuPrint(print: BambuPrintReport): PrinterHostStatus
     progress: showProgress ? progress : undefined,
     filename,
     eta_seconds: showProgress ? eta_seconds : undefined,
+    nozzle_temperature_c: finiteNumber(print.nozzle_temper),
+    nozzle_target_c: finiteNumber(print.nozzle_target_temper),
+    bed_temperature_c: finiteNumber(print.bed_temper),
+    bed_target_c: finiteNumber(print.bed_target_temper),
     message:
       state === "printing" && filename
         ? `Printing ${filename}`
@@ -386,7 +399,7 @@ export const bambuAdapter: IntegrationAdapter = {
       return { state: "offline", message: resolved.message };
     }
     try {
-      return await fetchBambuStatus(resolved.conn);
+      return { ...(await fetchBambuStatus(resolved.conn)), ip_address: resolved.conn.host };
     } catch (e) {
       return {
         state: "offline",

@@ -7,6 +7,9 @@ type Props = Readonly<{
   selection: ReadonlySet<RequiredUnitToken>;
   onToggle: (token: RequiredUnitToken) => void;
   onClearGroup: (field: "source_layer" | "role", value: string) => void;
+  onSelectAll: () => void;
+  onSelectIncomplete: () => void;
+  onClearAll: () => void;
 }>;
 
 export default function ProductionSelectionPanel({
@@ -14,6 +17,9 @@ export default function ProductionSelectionPanel({
   selection,
   onToggle,
   onClearGroup,
+  onSelectAll,
+  onSelectIncomplete,
+  onClearAll,
 }: Props) {
   const sourceLayers = [...new Set(units.map((unit) => unit.source_layer))];
   const selectedCount = units.filter((unit) => selection.has(unit.token)).length;
@@ -43,6 +49,11 @@ export default function ProductionSelectionPanel({
           ))}
         </div>
       ) : null}
+      <div className="flex flex-wrap gap-2">
+        <Button type="button" size="sm" variant="secondary" onClick={onSelectIncomplete}>Select incomplete</Button>
+        <Button type="button" size="sm" variant="outline" onClick={onSelectAll}>Select all</Button>
+        <Button type="button" size="sm" variant="ghost" onClick={onClearAll}>Clear all</Button>
+      </div>
       <div className="divide-y divide-border rounded-md border border-border">
         {units.map((unit) => (
           <label
@@ -60,6 +71,7 @@ export default function ProductionSelectionPanel({
               <span className="block truncate text-sm font-medium">{unit.object_name}</span>
               <span className="block truncate text-xs text-muted-foreground">
                 {unit.source_layer} · {unit.role}
+                {unit.source_directory ? ` · ${unit.source_directory}` : ""}
                 {unit.completed ? " · complete" : ""}
               </span>
             </span>

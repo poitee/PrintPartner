@@ -76,6 +76,9 @@ describe("ProductionSelectionPanel", () => {
         selection={initialMissingSelection(units)}
         onToggle={onToggle}
         onClearGroup={onClearGroup}
+        onSelectAll={vi.fn()}
+        onSelectIncomplete={vi.fn()}
+        onClearAll={vi.fn()}
       />,
     );
 

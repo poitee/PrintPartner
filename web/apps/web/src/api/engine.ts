@@ -23,6 +23,9 @@ import {
   type ApplyPlanDraftReceipt,
   type RequiredUnitDecisionContract,
   type ProfileSummary,
+  type PrinterHostStatus,
+  type ProductionSetup,
+  type ProductionSetupInput,
   type SourceSummary,
   type StlNamingFolderRule,
   type StlNamingProfile,
@@ -61,6 +64,9 @@ export type {
   ApplyPlanDraftReceipt,
   RequiredUnitDecisionContract,
   ProfileSummary,
+  PrinterHostStatus,
+  ProductionSetup,
+  ProductionSetupInput,
   SourceSummary,
   StlNamingFolderRule,
   StlNamingProfile,
@@ -141,14 +147,6 @@ export type IntegrationSummary = {
 export type IntegrationTestResult = {
   ok: boolean;
   message?: string;
-};
-
-export type PrinterHostStatus = {
-  state: "idle" | "printing" | "paused" | "complete" | "error" | "offline" | "unknown";
-  progress?: number;
-  filename?: string;
-  message?: string;
-  eta_seconds?: number;
 };
 
 export type PrinterCheckoffUnit = {
@@ -2501,6 +2499,20 @@ export type SlicerInstanceWrite = {
 export async function fetchSlicerInstances(): Promise<SlicerInstance[]> {
   const body = await engineFetch<{ instances: SlicerInstance[] }>("/slicer-instances");
   return body.instances;
+}
+
+export async function fetchProductionSetup(profileId: number): Promise<ProductionSetup> {
+  return engineFetch<ProductionSetup>(`/plans/${profileId}/production-setup`);
+}
+
+export async function saveProductionSetup(
+  profileId: number,
+  setup: ProductionSetupInput,
+): Promise<ProductionSetup> {
+  return engineFetch<ProductionSetup>(`/plans/${profileId}/production-setup`, {
+    method: "PUT",
+    body: JSON.stringify(setup),
+  });
 }
 
 export async function createSlicerInstance(

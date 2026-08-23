@@ -9,6 +9,7 @@ import {
   type AcceptedPlateUnplacedUnit,
   type AcceptedPlateView,
   type AcceptedPlateWorkspace,
+  type ProductionGroupingRule,
 } from "@print-partner/contracts";
 import {
   arrangeAcceptedUnits,
@@ -31,10 +32,15 @@ import {
   type AcceptedArtifactGeometryLimits,
   type LoadAcceptedArtifactGeometryResult,
 } from "./accepted-artifact-geometry.js";
+import {
+  loadProductionPackingRules,
+  productionPackingBuckets,
+} from "./production-packing-rules.js";
 
 type WorkspaceRepository = Readonly<{
   readAcceptedPlateWorkspaceInput(profileId: number): ReadAcceptedPlateWorkspaceInputResult;
   publishAcceptedPlates(command: PublishAcceptedPlatesCommand): PublishAcceptedPlatesResult;
+  getSetting?(key: string): string | null;
 }>;
 
 export type AcceptedPlateWorkspaceDependencies = Readonly<{
@@ -153,8 +159,11 @@ function currentPrinters(dependencies: AcceptedPlateWorkspaceDependencies): Acce
 function setupUnit(unit: AcceptedPlateSetupUnit): AcceptedPlateSetupUnitContract {
   return {
     token: parseRequiredUnitTokenContract(unit.token),
+    part_id: unit.partId,
     object_name: unit.objectName,
     filename: unit.filename,
+    relative_path: unit.relativePath,
+    source_directory: unit.sourceDirectory,
     source_layer: unit.sourceLayer,
     role: unit.role,
     filament_color_id: unit.filamentColorId,
@@ -369,6 +378,7 @@ function packAssignedPlates(input: Readonly<{
   assignments: InitializeAcceptedPlatesCommand["assignments"];
   printers: ReadonlyMap<string, AcceptedPlatePrinter>;
   dimensions: ReadonlyMap<RequiredUnitToken, UnitDimensions>;
+  rules: readonly ProductionGroupingRule[];
 }>): readonly AcceptedPlateInput[] | { readonly kind: "unit_too_large"; readonly token: RequiredUnitToken; readonly printerId: string } {
   const assignmentByToken = new Map(input.assignments.map((assignment) => [assignment.token, assignment.printerId]));
   const assignedIds = [...input.printers.keys()].sort(compareUtf8);
@@ -383,34 +393,41 @@ function packAssignedPlates(input: Readonly<{
         if (!dimensions) throw new Error("Accepted artifact geometry is missing");
         return { token: unit.token, ...dimensions };
       });
-    const packed = packAcceptedUnits({
-      printer: {
-        bedWidthUm: printer.bed_width_um,
-        bedDepthUm: printer.bed_depth_um,
-        bedHeightUm: printer.bed_height_um,
-        marginUm: printer.margin_um,
-      },
-      units,
-    });
-    if (packed.kind === "unit_too_large") {
-      return {
-        kind: "unit_too_large",
-        token: parseRequiredUnitToken(packed.token),
-        printerId,
-      };
-    }
-    for (const packedPlate of packed.plates) {
-      plates.push({
-        plateId: plateId(input.basis, printerId, packedPlate.units.map((unit) => unit.token)),
-        printerId,
-        printerName: printer.name,
-        printerModel: printer.model,
-        bedWidthUm: printer.bed_width_um,
-        bedDepthUm: printer.bed_depth_um,
-        bedHeightUm: printer.bed_height_um,
-        marginUm: printer.margin_um,
-        units: packedPlate.units,
+    const setupByToken = new Map(input.units.map((unit) => [unit.token, unit]));
+    const packingBuckets = productionPackingBuckets(
+      units.map((unit) => ({ ...setupByToken.get(unit.token)!, ...unit })),
+      input.rules,
+    );
+    for (const bucket of packingBuckets) {
+      const packed = packAcceptedUnits({
+        printer: {
+          bedWidthUm: printer.bed_width_um,
+          bedDepthUm: printer.bed_depth_um,
+          bedHeightUm: printer.bed_height_um,
+          marginUm: printer.margin_um,
+        },
+        units: bucket,
       });
+      if (packed.kind === "unit_too_large") {
+        return {
+          kind: "unit_too_large",
+          token: parseRequiredUnitToken(packed.token),
+          printerId,
+        };
+      }
+      for (const packedPlate of packed.plates) {
+        plates.push({
+          plateId: plateId(input.basis, printerId, packedPlate.units.map((unit) => unit.token)),
+          printerId,
+          printerName: printer.name,
+          printerModel: printer.model,
+          bedWidthUm: printer.bed_width_um,
+          bedDepthUm: printer.bed_depth_um,
+          bedHeightUm: printer.bed_height_um,
+          marginUm: printer.margin_um,
+          units: packedPlate.units,
+        });
+      }
     }
   }
   return plates;
@@ -503,6 +520,10 @@ export async function initializeAcceptedPlates(
   if (!sameBasis(input.basis, command.expected) || command.profileId !== command.expected.profileId) {
     return { kind: "stale_accepted_plan" };
   }
+  const packingRules = loadProductionPackingRules(
+    dependencies.repository.getSetting?.(`production_setup:${command.profileId}`),
+    command.profileId,
+  );
   const revisionMatches = input.expectedPlateRevisionId === command.expectedPlateRevisionId;
   if (!revisionMatches && input.kind !== "ready") return { kind: "plate_revision_changed" };
   const assignmentError = assignmentFailure(input.units, command.assignments);
@@ -556,6 +577,7 @@ export async function initializeAcceptedPlates(
       assignments: command.assignments,
       printers: printerById,
       dimensions,
+      rules: packingRules,
     });
     if (isPackedPlateInputs(replay) && samePlateInputs(replay, currentPlateInputs(input.plates))) {
       const workspace = presentWorkspace(dependencies, input);
@@ -582,6 +604,7 @@ export async function initializeAcceptedPlates(
     assignments: command.assignments,
     printers: printerById,
     dimensions,
+    rules: packingRules,
   });
   if (!isPackedPlateInputs(packed)) return packed;
   const plates = mergeExistingPlates(input, packed, command.assignments);
@@ -626,6 +649,8 @@ function arrangedPlates(
   mode: "unplaced" | "all",
   basis: AcceptedPlanBasis,
   plates: readonly AcceptedPlateInput[],
+  setupUnits: readonly AcceptedPlateSetupUnit[],
+  rules: readonly ProductionGroupingRule[],
 ): readonly AcceptedPlateInput[] | { readonly kind: "unit_too_large"; readonly token: RequiredUnitToken; readonly printerId: string } {
   if (mode === "unplaced") {
     const next: AcceptedPlateInput[] = [];
@@ -673,6 +698,7 @@ function arrangedPlates(
     byPrinter.set(plate.printerId, printerPlates);
   }
   const next: AcceptedPlateInput[] = [];
+  const setupByToken = new Map(setupUnits.map((unit) => [unit.token, unit]));
   for (const printerPlates of byPrinter.values()) {
     const first = printerPlates[0];
     if (!first) continue;
@@ -686,20 +712,28 @@ function arrangedPlates(
       placement: unit.placement === "manual" || unit.placement === "unplaced" ? unit.placement : "auto" as const,
       pinned: unit.pinned === true,
     } satisfies AcceptedPlacedPackingUnit)));
-    const packed = arrangeAcceptedUnits({ mode, printer: printerGeometry(first), units });
-    if (packed.kind !== "packed") {
-      return { kind: packed.kind, token: parseRequiredUnitToken(packed.token), printerId: first.printerId };
-    }
-    for (const [index, packedPlate] of packed.plates.entries()) {
-      next.push({
-        ...first,
-        plateId: printerPlates[index]?.plateId ?? plateId(
-          basis,
-          first.printerId,
-          packedPlate.units.map((unit) => unit.token),
-        ),
-        units: packedPlate.units.map((unit) => ({ ...unit, placement: "auto", pinned: false })),
-      });
+    const buckets = productionPackingBuckets(
+      units.map((unit) => ({ ...setupByToken.get(parseRequiredUnitToken(unit.token))!, ...unit })),
+      rules,
+    );
+    let nextPlateIndex = 0;
+    for (const bucket of buckets) {
+      const packed = arrangeAcceptedUnits({ mode, printer: printerGeometry(first), units: bucket });
+      if (packed.kind !== "packed") {
+        return { kind: packed.kind, token: parseRequiredUnitToken(packed.token), printerId: first.printerId };
+      }
+      for (const packedPlate of packed.plates) {
+        next.push({
+          ...first,
+          plateId: printerPlates[nextPlateIndex]?.plateId ?? plateId(
+            basis,
+            first.printerId,
+            packedPlate.units.map((unit) => unit.token),
+          ),
+          units: packedPlate.units.map((unit) => ({ ...unit, placement: "auto", pinned: false })),
+        });
+        nextPlateIndex += 1;
+      }
     }
   }
   return next;
@@ -720,7 +754,17 @@ export function arrangeAcceptedPlates(
   if (input.plateRevisionId !== command.expectedPlateRevisionId) {
     return { kind: "plate_revision_changed" };
   }
-  const packed = arrangedPlates(command.mode, input.basis, currentPlateInputs(input.plates));
+  const packingRules = loadProductionPackingRules(
+    dependencies.repository.getSetting?.(`production_setup:${command.profileId}`),
+    command.profileId,
+  );
+  const packed = arrangedPlates(
+    command.mode,
+    input.basis,
+    currentPlateInputs(input.plates),
+    input.units,
+    packingRules,
+  );
   if ("kind" in packed) return packed;
   const published = dependencies.repository.publishAcceptedPlates({
     profileId: command.profileId,

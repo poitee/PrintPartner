@@ -67,6 +67,30 @@ function toneBadgeVariant(
   }
 }
 
+function formatTemperature(current?: number, target?: number): string {
+  if (current == null) return "Unavailable";
+  const value = `${Math.round(current)}°C`;
+  return target != null && target > 0 ? `${value} / ${Math.round(target)}°C` : value;
+}
+
+function formatUptime(seconds?: number): string {
+  if (seconds == null) return "Unavailable";
+  const days = Math.floor(seconds / 86_400);
+  const hours = Math.floor((seconds % 86_400) / 3_600);
+  const minutes = Math.floor((seconds % 3_600) / 60);
+  return days > 0 ? `${days}d ${hours}h` : hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
+}
+
+function configuredHost(host: IntegrationSummary): string | undefined {
+  const raw = host.config.host ?? host.config.hostname ?? host.config.ip ?? host.config.base_url;
+  if (typeof raw !== "string" || !raw.trim()) return undefined;
+  try {
+    return new URL(raw).hostname;
+  } catch {
+    return raw.trim();
+  }
+}
+
 export default function PrintersPage() {
   const { health, error: engineError, loading: healthLoading } = useEngineHealth();
   const { profiles } = useProfileSelection();
@@ -311,6 +335,36 @@ export default function PrintersPage() {
                         {status?.message?.trim() || "No active job"}
                       </p>
                     )}
+                    <dl className="grid grid-cols-2 gap-x-4 gap-y-2 rounded-md border border-border/70 bg-muted/25 p-3 text-xs">
+                      <div>
+                        <dt className="text-muted-foreground">Nozzle</dt>
+                        <dd className="mt-0.5 font-mono">{formatTemperature(status?.nozzle_temperature_c, status?.nozzle_target_c)}</dd>
+                      </div>
+                      <div>
+                        <dt className="text-muted-foreground">Bed</dt>
+                        <dd className="mt-0.5 font-mono">{formatTemperature(status?.bed_temperature_c, status?.bed_target_c)}</dd>
+                      </div>
+                      <div>
+                        <dt className="text-muted-foreground">Address</dt>
+                        <dd className="mt-0.5 truncate font-mono" title={status?.ip_address ?? configuredHost(host)}>
+                          {status?.ip_address ?? configuredHost(host) ?? "Unavailable"}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt className="text-muted-foreground">Uptime</dt>
+                        <dd className="mt-0.5 font-mono">{formatUptime(status?.uptime_seconds)}</dd>
+                      </div>
+                    </dl>
+                    {status?.progress != null ? (
+                      <div className="space-y-1" aria-label={`Print progress ${status.progress}%`}>
+                        <div className="flex justify-between text-[11px] text-muted-foreground">
+                          <span>Progress</span><span className="font-mono">{status.progress}%</span>
+                        </div>
+                        <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+                          <div className="h-full rounded-full bg-primary transition-[width]" style={{ width: `${status.progress}%` }} />
+                        </div>
+                      </div>
+                    ) : null}
                     <div className="flex flex-wrap gap-2 pt-1">
                       {canSend ? (
                         <Button size="sm" variant="outline" asChild>

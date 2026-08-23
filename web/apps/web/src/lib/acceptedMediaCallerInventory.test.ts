@@ -54,7 +54,11 @@ describe("known accepted Part browser media caller inventory", () => {
       sourceStlMeshUrl: productionCallers("sourceStlMeshUrl", "api/engine.ts"),
       sourceStlPreviewUrl: productionCallers("sourceStlPreviewUrl", "api/engine.ts"),
     }).toEqual({
-      partMeshUrl: ["components/Preview3D.tsx", "lib/stlThumbnail.ts"],
+      partMeshUrl: [
+        "components/Preview3D.tsx",
+        "components/export/accepted-plates/AcceptedPlate3DPreview.tsx",
+        "lib/stlThumbnail.ts",
+      ],
       partThumbnailUrl: ["components/parts/PartThumb.tsx"],
       partPreviewUrl: ["components/Preview3D.tsx"],
       uploadPartThumbnail: ["components/Preview3D.tsx", "lib/stlThumbnail.ts"],

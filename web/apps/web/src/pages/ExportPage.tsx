@@ -8,6 +8,7 @@ import ExportActionCards from "../components/export/ExportActionCards";
 import ExportRecentPanel from "../components/export/ExportRecentPanel";
 import PartsManifestTransfer from "../components/export/PartsManifestTransfer";
 import ProductionSelectionPanel from "../components/export/ProductionSelectionPanel";
+import ProductionRulesPanel from "../components/export/ProductionRulesPanel";
 import SlicerLinksPanel from "../components/export/SlicerLinksPanel";
 import SlicerHandoffPanel from "../components/export/SlicerHandoffPanel";
 import AcceptedPlateSection from "../components/export/accepted-plates/AcceptedPlateSection";
@@ -112,7 +113,7 @@ export default function ExportPage() {
     [workspaceQuery.data],
   );
   const selectParam = searchParams.get("select");
-  const { selection, setSelection } = useProductionSelection(
+  const { selection, setSelection, setupSaving, setupError } = useProductionSelection(
     selectableUnits,
     selectParam,
     selectedProfileId,
@@ -137,7 +138,7 @@ export default function ExportPage() {
         accent
         eyebrow={planIdentity}
         title="Production"
-        description="Send already-sliced G-code from your slicer. STL and 3MF below are slicer input."
+        description="Choose parts, arrange editable Plates, export to your slicer, then send sliced G-code to a printer."
       />
       <DeskNextStep>{exportNextStep}</DeskNextStep>
 
@@ -188,21 +189,18 @@ export default function ExportPage() {
         </Card>
       ) : (
         <>
-          <Suspense fallback={<div className="h-32 animate-pulse rounded-lg bg-muted" />}>
-            <PrinterSendPanel
-              remainingParts={remainingParts}
-              profileId={selectedProfileId}
-              planName={planName}
-              engineReady={engineState === "ready"}
-            />
-          </Suspense>
-
           <div className="space-y-3">
             <h2 className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-              Slicer input
+              1 · Choose slicer input
             </h2>
 
             <SlicerLinksPanel />
+            {setupSaving ? <p className="text-xs text-muted-foreground" role="status">Saving production setup…</p> : null}
+            {setupError ? (
+              <p className="text-sm text-destructive" role="alert">
+                Production choices could not be saved: {setupError instanceof Error ? setupError.message : String(setupError)}
+              </p>
+            ) : null}
             {selectableUnits.length > 0 ? (
               <ProductionSelectionPanel
                 units={selectableUnits}
@@ -211,8 +209,17 @@ export default function ExportPage() {
                 onClearGroup={(field, value) => setSelection((current) =>
                   clearProductionSelectionGroup(current, selectableUnits, field, value)
                 )}
+                onSelectAll={() => setSelection(new Set(selectableUnits.map((unit) => unit.token)))}
+                onSelectIncomplete={() => setSelection(new Set(
+                  selectableUnits.filter((unit) => !unit.completed).map((unit) => unit.token),
+                ))}
+                onClearAll={() => setSelection(new Set())}
               />
             ) : null}
+            <h2 className="pt-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+              2 · Set grouping and arrange Plates
+            </h2>
+            {selectedProfileId != null ? <ProductionRulesPanel profileId={selectedProfileId} /> : null}
             {selectedProfileId != null ? (
               <AcceptedPlateSection
                 profileId={selectedProfileId}
@@ -220,6 +227,9 @@ export default function ExportPage() {
                 selectedTokens={new Set(selectedTokens)}
               />
             ) : null}
+            <h2 className="pt-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+              3 · Export the saved Plate layout
+            </h2>
             <SlicerHandoffPanel />
 
             {loading && !review ? (
@@ -270,6 +280,20 @@ export default function ExportPage() {
                 await Promise.all([refresh(), roleFilamentsQuery.refetch()]);
               }}
             />
+          </div>
+
+          <div className="space-y-3">
+            <h2 className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+              4 · Send sliced G-code
+            </h2>
+            <Suspense fallback={<div className="h-32 animate-pulse rounded-lg bg-muted" />}>
+              <PrinterSendPanel
+                remainingParts={remainingParts}
+                profileId={selectedProfileId}
+                planName={planName}
+                engineReady={engineState === "ready"}
+              />
+            </Suspense>
           </div>
 
           <div className="flex flex-wrap gap-2">

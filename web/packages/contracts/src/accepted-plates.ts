@@ -60,8 +60,11 @@ const acceptedPlatePrinterListSchema = z.array(acceptedPlatePrinterSchema).super
 
 const acceptedPlateSetupUnitSchema = z.strictObject({
   token: requiredUnitToken,
+  part_id: positiveSafeInteger.nullable().optional(),
   object_name: z.string().min(1).max(200),
   filename: z.string().min(1).max(1_000),
+  relative_path: z.string().max(4_096).default(""),
+  source_directory: z.string().max(4_096).default(""),
   source_layer: z.string().max(500),
   role: z.string().max(200),
   filament_color_id: z.string().min(1).max(200).nullable(),

@@ -90,11 +90,25 @@ function mapPrintState(raw: string | undefined): PrinterHostStatus["state"] {
   return "unknown";
 }
 
+async function querySystemUptime(baseUrl: string, config: IntegrationConfig): Promise<number | undefined> {
+  try {
+    const response = await moonrakerFetch(`${baseUrl}/machine/proc_stats`, config);
+    if (!response.ok) return undefined;
+    const body = await response.json() as { result?: { system_uptime?: unknown } };
+    const value = body.result?.system_uptime;
+    return typeof value === "number" && Number.isFinite(value) && value >= 0
+      ? Math.round(value)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 async function queryStatus(config: IntegrationConfig): Promise<PrinterHostStatus> {
   const baseUrl = normalizeBaseUrl(config.base_url ?? config.baseUrl);
   if (!baseUrl) return { state: "offline", message: "base_url is required" };
 
-  const objects = "print_stats&virtual_sdcard&display_status";
+  const objects = "print_stats&virtual_sdcard&display_status&extruder&heater_bed";
   const res = await moonrakerFetch(
     `${baseUrl}/printer/objects/query?${objects}`,
     config,
@@ -108,6 +122,8 @@ async function queryStatus(config: IntegrationConfig): Promise<PrinterHostStatus
         print_stats?: { state?: string; filename?: string };
         virtual_sdcard?: { progress?: number };
         display_status?: { progress?: number };
+        extruder?: { temperature?: number; target?: number };
+        heater_bed?: { temperature?: number; target?: number };
       };
     };
   };
@@ -121,10 +137,17 @@ async function queryStatus(config: IntegrationConfig): Promise<PrinterHostStatus
       : undefined;
   const filename = printStats?.filename?.trim() || undefined;
   const state = mapPrintState(printStats?.state);
+  const uptimeSeconds = await querySystemUptime(baseUrl, config);
   return {
     state,
     progress: state === "printing" || state === "paused" ? progress : undefined,
     filename,
+    ip_address: new URL(baseUrl).hostname,
+    uptime_seconds: uptimeSeconds,
+    nozzle_temperature_c: status?.extruder?.temperature,
+    nozzle_target_c: status?.extruder?.target,
+    bed_temperature_c: status?.heater_bed?.temperature,
+    bed_target_c: status?.heater_bed?.target,
     message:
       state === "printing" && filename
         ? `Printing ${filename}`

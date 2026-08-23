@@ -198,8 +198,11 @@ export type ReadAcceptedPlateExportInputResult =
 
 export type AcceptedPlateSetupUnit = Readonly<{
   token: RequiredUnitToken;
+  partId: number | null;
   objectName: string;
   filename: string;
+  relativePath: string;
+  sourceDirectory: string;
   sourceLayer: string;
   role: string;
   filamentColorId: string | null;
@@ -819,8 +822,13 @@ function acceptedPlateSetupUnits(snapshot: AcceptedPlanOperationalSnapshot): Acc
       .filter((unit) => unit.required)
       .map((unit) => ({
         token: parseRequiredUnitToken(unit.token),
+        partId: part.projectionPartId,
         objectName: unit.objectName,
         filename: part.filename,
+        relativePath: part.relativePath,
+        sourceDirectory: part.relativePath.includes("/")
+          ? part.relativePath.slice(0, part.relativePath.lastIndexOf("/"))
+          : "",
         sourceLayer: part.sourceLayer,
         role: part.effectiveRole,
         filamentColorId: part.filamentColorId,

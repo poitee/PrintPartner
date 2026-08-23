@@ -6636,6 +6636,16 @@ export class AppRepository {
     const mutate = () => {
       if (this.syncSqlite) this.db.run(sql.raw("PRAGMA defer_foreign_keys = ON"));
       this.db
+        .delete(this.schema.appSettings)
+        .where(and(
+          eq(this.schema.appSettings.tenantId, this.tenantId),
+          inArray(this.schema.appSettings.key, [
+            `production_setup:${id}`,
+            roleFilamentSettingKey(id),
+          ]),
+        ))
+        .run();
+      this.db
         .delete(this.schema.buildProfiles)
         .where(and(eq(this.schema.buildProfiles.tenantId, this.tenantId), eq(this.schema.buildProfiles.id, id)))
         .run();
@@ -6912,6 +6922,23 @@ export class AppRepository {
       const roleFilaments = this.getSetting(roleFilamentSettingKey(id));
       if (roleFilaments) {
         this.setSetting(roleFilamentSettingKey(newProfile.id), roleFilaments);
+      }
+      const productionSetupRaw = this.getSetting(`production_setup:${id}`);
+      if (productionSetupRaw) {
+        try {
+          const parsed = JSON.parse(productionSetupRaw) as unknown;
+          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+            throw new Error("Invalid production setup");
+          }
+          const productionSetup = parsed as Record<string, unknown>;
+          this.setSetting(`production_setup:${newProfile.id}`, JSON.stringify({
+            ...productionSetup,
+            profile_id: newProfile.id,
+            updated_at: new Date().toISOString(),
+          }));
+        } catch {
+          // A malformed optional setup must not make an otherwise valid Build impossible to duplicate.
+        }
       }
       saveKitManifest(this, newProfile.id, loadKitManifest(this, id));
 

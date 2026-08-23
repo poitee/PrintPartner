@@ -1,19 +1,47 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type {
+  AcceptedPlateSetupUnit,
   AcceptedPlateWorkspace,
   InitializeAcceptedPlatesRequest,
+  ProductionGroupingField,
+  ProductionGroupingRule,
 } from "@print-partner/contracts";
 import { Button } from "../../ui/button";
 
 type AssignmentWorkspace = Extract<AcceptedPlateWorkspace, { kind: "setup" | "ready" }>;
+const EMPTY_RULES: readonly ProductionGroupingRule[] = [];
 
 type Props = Readonly<{
   workspace: AssignmentWorkspace;
+  rules?: readonly ProductionGroupingRule[];
   submitting: boolean;
   selectedTokens?: ReadonlySet<string>;
   onSubmit: (request: InitializeAcceptedPlatesRequest) => Promise<void>;
   onCancel?: () => void;
 }>;
+
+function unitRuleValue(
+  unit: AcceptedPlateSetupUnit,
+  field: ProductionGroupingField,
+): string | null {
+  if (field === "color") return unit.filament_color_id;
+  if (field === "source_directory") return unit.source_directory;
+  if (field === "source_layer") return unit.source_layer;
+  if (field === "role") return unit.role;
+  if (field === "part") return unit.object_name;
+  return null;
+}
+
+function suggestedPrinter(
+  unit: AcceptedPlateSetupUnit,
+  rules: readonly ProductionGroupingRule[],
+): string | null {
+  const rule = rules.find((candidate) =>
+    candidate.enabled && candidate.kind === "assign_to_printer" &&
+    unitRuleValue(unit, candidate.field) === candidate.value
+  );
+  return rule?.kind === "assign_to_printer" ? rule.printer_id : null;
+}
 
 function assignmentRows(workspace: AssignmentWorkspace) {
   const currentPrinterIds = new Set(workspace.printers.map((printer) => printer.id));
@@ -40,21 +68,35 @@ function assignmentRows(workspace: AssignmentWorkspace) {
 
 export default function AcceptedPlateAssignmentForm({
   workspace,
+  rules = EMPTY_RULES,
   submitting,
   selectedTokens,
   onSubmit,
   onCancel,
 }: Props) {
+  const assignmentsEdited = useRef(false);
   const rows = useMemo(() => {
     const all = assignmentRows(workspace);
     if (selectedTokens == null) return all;
     return all.filter((row) => selectedTokens.has(row.unit.token));
   }, [selectedTokens, workspace]);
   const [assignments, setAssignments] = useState<Record<string, string | null>>(() =>
-    Object.fromEntries(rows.map((row) => [row.unit.token, row.printerId])),
+    Object.fromEntries(rows.map((row) => [
+      row.unit.token,
+      row.printerId ?? suggestedPrinter(row.unit, rules),
+    ])),
   );
   const sourceLayers = useMemo(() => [...new Set(rows.map((row) => row.unit.source_layer))], [rows]);
   const roles = useMemo(() => [...new Set(rows.map((row) => row.unit.role))], [rows]);
+  const directories = useMemo(() => [...new Set(rows.map((row) => row.unit.source_directory).filter(Boolean))], [rows]);
+  const colors = useMemo(() => [...new Set(rows.map((row) => row.unit.filament_color_id).filter((value): value is string => Boolean(value)))], [rows]);
+  useEffect(() => {
+    if (assignmentsEdited.current) return;
+    setAssignments((current) => Object.fromEntries(rows.map((row) => [
+      row.unit.token,
+      current[row.unit.token] ?? suggestedPrinter(row.unit, rules),
+    ])));
+  }, [rows, rules]);
   const complete = rows.length > 0 && rows.every((row) => {
     const printerId = assignments[row.unit.token];
     return printerId != null && workspace.printers.some((printer) => printer.id === printerId);
@@ -75,10 +117,11 @@ export default function AcceptedPlateAssignmentForm({
   };
 
   const fillGroup = (
-    field: "source_layer" | "role",
+    field: "source_layer" | "role" | "source_directory" | "filament_color_id",
     value: string,
     printerId: string | null,
   ) => {
+    assignmentsEdited.current = true;
     setAssignments((current) => Object.fromEntries(rows.map((row) => [
       row.unit.token,
       row.unit[field] === value ? printerId : current[row.unit.token] ?? null,
@@ -86,7 +129,7 @@ export default function AcceptedPlateAssignmentForm({
   };
 
   const groupSelect = (
-    field: "source_layer" | "role",
+    field: "source_layer" | "role" | "source_directory" | "filament_color_id",
     value: string,
     label: string,
   ) => (
@@ -128,6 +171,22 @@ export default function AcceptedPlateAssignmentForm({
               ))}
             </div>
           </div>
+          {directories.length > 0 ? (
+            <div className="space-y-2">
+              <p className="text-xs font-semibold">Fill by source directory</p>
+              <div className="grid gap-2">
+                {directories.map((directory) => groupSelect("source_directory", directory, `Assign ${directory}`))}
+              </div>
+            </div>
+          ) : null}
+          {colors.length > 0 ? (
+            <div className="space-y-2">
+              <p className="text-xs font-semibold">Fill by color</p>
+              <div className="grid gap-2">
+                {colors.map((color) => groupSelect("filament_color_id", color, `Assign ${color}`))}
+              </div>
+            </div>
+          ) : null}
           <div className="space-y-2">
             <p className="text-xs font-semibold">Fill by role</p>
             <div className="grid gap-2">
@@ -142,7 +201,7 @@ export default function AcceptedPlateAssignmentForm({
             <div className="min-w-0">
               <p className="truncate text-sm font-medium">{unit.object_name}</p>
               <p className="truncate text-xs text-muted-foreground">
-                {unit.source_layer} · {unit.role}
+                {unit.source_layer} · {unit.role}{unit.source_directory ? ` · ${unit.source_directory}` : ""}
               </p>
             </div>
             <label className="grid gap-1 text-xs font-medium">
@@ -155,6 +214,7 @@ export default function AcceptedPlateAssignmentForm({
                   ...current,
                   [unit.token]: event.target.value || null,
                 }))}
+                onInput={() => { assignmentsEdited.current = true; }}
               >
                 <option value="">Unassigned</option>
                 {workspace.printers.map((printer) => (

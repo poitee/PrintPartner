@@ -18,6 +18,7 @@ import {
   useInitializeAcceptedPlatesMutation,
   useMoveAcceptedPlateUnitMutation,
 } from "../../../queries/acceptedPlates";
+import { useProductionSetup } from "../../../queries/productionSetup";
 import { settingsPrintersRoute } from "../../../lib/routes";
 import { Button } from "../../ui/button";
 import {
@@ -57,6 +58,7 @@ function selectionIdentity(selectedTokens: ReadonlySet<string> | undefined): str
 
 export default function AcceptedPlateSection({ profileId, enabled, selectedTokens }: Props) {
   const queryClient = useQueryClient();
+  const productionSetup = useProductionSetup(profileId, enabled);
   const query = useAcceptedPlateWorkspaceQuery(profileId, enabled);
   const initialize = useInitializeAcceptedPlatesMutation(profileId);
   const move = useMoveAcceptedPlateUnitMutation(profileId);
@@ -250,6 +252,7 @@ export default function AcceptedPlateSection({ profileId, enabled, selectedToken
               <Link className="text-sm underline" to={settingsPrintersRoute()}>Add a Printer in Settings</Link>
             ) : null}
             <AcceptedPlateAssignmentForm
+              rules={productionSetup.data?.rules}
               key={`${assignmentIdentity(workspace)}:${selectionIdentity(selectedTokens)}`}
               workspace={workspace}
               submitting={initialize.isPending}
@@ -260,6 +263,7 @@ export default function AcceptedPlateSection({ profileId, enabled, selectedToken
         ) : null}
         {workspace?.kind === "ready" && reassigning ? (
           <AcceptedPlateAssignmentForm
+            rules={productionSetup.data?.rules}
             key={assignmentIdentity(workspace)}
             workspace={workspace}
             submitting={initialize.isPending}
@@ -269,6 +273,7 @@ export default function AcceptedPlateSection({ profileId, enabled, selectedToken
         ) : null}
         {workspace?.kind === "ready" && !reassigning && workspace.unassigned.length > 0 ? (
           <AcceptedPlateAssignmentForm
+            rules={productionSetup.data?.rules}
             key={`${assignmentIdentity(workspace)}:unassigned:${selectionIdentity(selectedTokens)}`}
             workspace={workspace}
             submitting={initialize.isPending}

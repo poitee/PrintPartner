@@ -146,7 +146,14 @@ function mapPrinterState(raw: string | undefined): PrinterHostStatus["state"] {
 type PrusaFileMeta = { name?: string; display_name?: string; path?: string };
 
 type PrusaStatusBody = {
-  printer?: { state?: string; status?: string };
+  printer?: {
+    state?: string;
+    status?: string;
+    temp_nozzle?: number;
+    target_nozzle?: number;
+    temp_bed?: number;
+    target_bed?: number;
+  };
   job?: {
     progress?: number;
     file?: PrusaFileMeta;
@@ -250,6 +257,11 @@ async function readStatus(config: IntegrationConfig): Promise<PrinterHostStatus>
     progress: state === "printing" || state === "paused" ? progress : undefined,
     filename,
     eta_seconds: eta,
+    ip_address: new URL(baseUrl).hostname,
+    nozzle_temperature_c: body.printer?.temp_nozzle,
+    nozzle_target_c: body.printer?.target_nozzle,
+    bed_temperature_c: body.printer?.temp_bed,
+    bed_target_c: body.printer?.target_bed,
     message:
       state === "printing" && filename
         ? `Printing ${filename}`

@@ -1,16 +1,21 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type SetStateAction } from "react";
 import type { RequiredUnitToken } from "@print-partner/contracts";
 import {
   initialProductionSelection,
   type ProductionSelectableUnit,
 } from "../lib/productionSelection";
+import { useProductionSetup } from "../queries/productionSetup";
 
 export function useProductionSelection(
   units: readonly ProductionSelectableUnit[],
   select: string | null,
   profileId: number | null,
+  persist = true,
 ) {
-  const identity = `${profileId ?? ""}:${select ?? ""}:${units.map((unit) => unit.token).sort().join(",")}`;
+  const setup = useProductionSetup(profileId, persist);
+  const setupRef = useRef(setup.data);
+  setupRef.current = setup.data;
+  const identity = `${profileId ?? ""}:${select ?? ""}:${setup.data?.updated_at ?? "loading"}:${units.map((unit) => unit.token).sort().join(",")}`;
   const previousIdentity = useRef(identity);
   const [selection, setSelection] = useState<ReadonlySet<RequiredUnitToken>>(() =>
     initialProductionSelection(units, select),
@@ -19,8 +24,45 @@ export function useProductionSelection(
   useEffect(() => {
     if (previousIdentity.current === identity) return;
     previousIdentity.current = identity;
+    if (select) {
+      setSelection(initialProductionSelection(units, select));
+      return;
+    }
+    if (setup.data?.selection.mode === "custom") {
+      const available = new Set(units.map((unit) => unit.token));
+      setSelection(new Set(setup.data.selection.selected_unit_tokens.filter((token) =>
+        available.has(token as RequiredUnitToken)
+      ) as RequiredUnitToken[]));
+      return;
+    }
+    if (setup.data?.selection.mode === "all_incomplete") {
+      setSelection(new Set(units.filter((unit) => !unit.completed).map((unit) => unit.token)));
+      return;
+    }
     setSelection(initialProductionSelection(units, select));
-  }, [identity, select, units]);
+  }, [identity, select, setup.data, units]);
 
-  return { selection, setSelection };
+  const setPersistedSelection = useCallback((action: SetStateAction<ReadonlySet<RequiredUnitToken>>) => {
+    setSelection((current) => {
+      const next = typeof action === "function" ? action(current) : action;
+      const currentSetup = setupRef.current;
+      if (persist && profileId != null && currentSetup) {
+        void setup.save({
+          preferred_slicer_instance_id: currentSetup.preferred_slicer_instance_id,
+          selection: { mode: "custom", selected_unit_tokens: [...next] },
+          rules: currentSetup.rules,
+        }).catch(() => undefined);
+      }
+      return next;
+    });
+  }, [persist, profileId, setup]);
+
+  return {
+    selection,
+    setSelection: setPersistedSelection,
+    setup: setup.data,
+    setupLoading: setup.isPending,
+    setupSaving: setup.saving,
+    setupError: setup.error ?? setup.saveError,
+  };
 }
