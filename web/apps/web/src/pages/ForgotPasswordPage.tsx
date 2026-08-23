@@ -22,13 +22,13 @@ function isSafeAppUrl(url: string): boolean {
 }
 
 export default function ForgotPasswordPage() {
-  const { user, multiUser, loading } = useAuth();
+  const { user, authRequired, loading } = useAuth();
   const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
   const [sent, setSent] = useState(false);
   const [devResetUrl, setDevResetUrl] = useState<string | null>(null);
 
-  if (!loading && !multiUser) {
+  if (!loading && !authRequired) {
     return <Navigate to="/" replace />;
   }
 

@@ -11,9 +11,9 @@ import {
 import { useAuth } from "../context/AuthContext";
 
 export default function UserMenu() {
-  const { user, multiUser, logout } = useAuth();
+  const { user, authRequired, logout } = useAuth();
 
-  if (!multiUser || !user) return null;
+  if (!authRequired || !user) return null;
 
   return (
     <DropdownMenu>

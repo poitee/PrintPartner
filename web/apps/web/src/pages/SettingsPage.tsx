@@ -142,7 +142,7 @@ export default function SettingsPage() {
     error: engineError,
   });
   const engineReady = engineState === "ready";
-  const { user, multiUser } = useAuth();
+  const { user, authRequired } = useAuth();
   const { format: dateFormat, setFormat: setDateFormat } = useDateFormat();
   const { updateCheck, refresh: refreshUpdateCheck } = useAppUpdateCheck(engineReady);
   const [updateCheckRefreshing, setUpdateCheckRefreshing] = useState(false);
@@ -878,7 +878,7 @@ export default function SettingsPage() {
         </Card>
       </SettingsSection>
 
-      {multiUser && user?.provider === "email" ? (
+      {authRequired && user?.provider === "email" ? (
         <SettingsSection title="Account">
           <AccountPasswordCard />
         </SettingsSection>

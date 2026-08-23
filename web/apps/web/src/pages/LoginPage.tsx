@@ -13,7 +13,7 @@ import { useAuth } from "../context/AuthContext";
 import { authOAuthUrl } from "../api/engine";
 
 export default function LoginPage() {
-  const { user, multiUser, loading, loginEmail, registerEmail } = useAuth();
+  const { user, authRequired, registrationOpen, loading, loginEmail, registerEmail } = useAuth();
   const location = useLocation();
   const [mode, setMode] = useState<"login" | "register">("login");
   const [email, setEmail] = useState("");
@@ -23,7 +23,7 @@ export default function LoginPage() {
 
   const from = (location.state as { from?: string } | null)?.from ?? "/";
 
-  if (!loading && !multiUser) {
+  if (!loading && !authRequired) {
     return <Navigate to="/" replace />;
   }
 
@@ -124,7 +124,7 @@ export default function LoginPage() {
                 Forgot password?
               </Link>
             )}
-            <button
+            {registrationOpen && <button
               type="button"
               className="w-full text-center text-sm text-primary hover:underline"
               onClick={() => setMode(mode === "login" ? "register" : "login")}
@@ -132,7 +132,7 @@ export default function LoginPage() {
               {mode === "login"
                 ? "Need an account? Register"
                 : "Already have an account? Sign in"}
-            </button>
+            </button>}
           </form>
         </CardContent>
       </Card>

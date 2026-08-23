@@ -18,7 +18,9 @@ services:
       STATIC_DIR: "/app/web/apps/web/dist"
       DEPLOY_MODE: "self-host"
       MULTI_USER: "${MULTI_USER:-0}"
+      SINGLE_USER_AUTH: "${SINGLE_USER_AUTH:-0}"
       SESSION_SECRET: "${SESSION_SECRET:-}"
+      SESSION_COOKIE_SECURE: "${SESSION_COOKIE_SECURE:-0}"
       # Optional: require API key for /api/v1 automation (slicers, scripts)
       # PRINT_PARTNER_API_KEY: "change-me-to-a-long-random-secret"
       # Optional: expose Swagger UI at /api/v1/docs in production (useful for integrations and MCP tool testing)

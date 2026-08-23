@@ -10,6 +10,7 @@ import {
   requestPublicOrigin,
 } from "../services/password-reset-mail.js";
 import { toPublicUser, type SessionUser } from "./auth-types.js";
+import type { AuthIdentityProvider } from "./auth-types.js";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -23,12 +24,12 @@ export { toPublicUser } from "./auth-types.js";
 
 const authRateLimit = { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } };
 
-function setSessionCookie(reply: FastifyReply, rawToken: string): void {
+function setSessionCookie(reply: FastifyReply, rawToken: string, secure: boolean): void {
   reply.setCookie("pp_session", rawToken, {
     httpOnly: true,
     path: "/",
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
+    secure,
     maxAge: 60 * 60 * 24 * 14,
   });
 }
@@ -38,11 +39,22 @@ function finishOAuthLogin(
   user: ReturnType<AuthStore["upsertOAuthUser"]>,
   reply: FastifyReply,
   redirectUrl: string,
+  secure: boolean,
 ): void {
   const raw = authStore.createSession(user.id);
-  setSessionCookie(reply, raw);
+  setSessionCookie(reply, raw, secure);
   reply.clearCookie("oauth_state", { path: "/" });
   reply.redirect(redirectUrl);
+}
+
+function singleUserOAuthCanContinue(
+  config: ServerConfig,
+  authStore: AuthStore,
+  provider: AuthIdentityProvider,
+  providerUserId: string,
+): boolean {
+  if (!config.singleUserAuth || authStore.countUsers() === 0) return true;
+  return Boolean(authStore.findIdentity(provider, providerUserId));
 }
 
 export function registerAuthRoutes(
@@ -52,7 +64,7 @@ export function registerAuthRoutes(
 ): void {
   app.get("/auth/me", async (request, reply) => {
     if (!request.sessionUser) {
-      if (!config.multiUser && config.deployMode === "self-host") {
+      if (!config.multiUser && !config.singleUserAuth && config.deployMode === "self-host") {
         return {
           user: {
             user_id: "local",
@@ -77,8 +89,11 @@ export function registerAuthRoutes(
     return { ok: true };
   });
 
-  if (config.multiUser && authStore) {
+  if ((config.multiUser || config.singleUserAuth) && authStore) {
     app.post("/auth/register", authRateLimit, async (request, reply) => {
+      if (config.singleUserAuth && authStore.countUsers() > 0) {
+        return reply.status(403).send({ detail: "The single-user administrator already exists" });
+      }
       const body = request.body as { email?: unknown; password?: unknown; display_name?: unknown };
       const emailRaw = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
       const password = typeof body.password === "string" ? body.password : "";
@@ -97,7 +112,7 @@ export function registerAuthRoutes(
       const passwordHash = hashPassword(password);
       const user = authStore.createUser({ email: emailRaw, displayName, passwordHash });
       const raw = authStore.createSession(user.id);
-      setSessionCookie(reply, raw);
+      setSessionCookie(reply, raw, config.sessionCookieSecure);
       const sessionUser: SessionUser = {
         user_id: user.id,
         tenant_id: user.id,
@@ -122,7 +137,7 @@ export function registerAuthRoutes(
         return reply.status(401).send({ detail: "Invalid email or password" });
       }
       const raw = authStore.createSession(user.id);
-      setSessionCookie(reply, raw);
+      setSessionCookie(reply, raw, config.sessionCookieSecure);
       return {
         user: toPublicUser({
           user_id: user.id,
@@ -185,7 +200,7 @@ export function registerAuthRoutes(
       if (!user) return reply.status(500).send({ detail: "User not found" });
 
       const raw = authStore.createSession(user.id);
-      setSessionCookie(reply, raw);
+      setSessionCookie(reply, raw, config.sessionCookieSecure);
       return {
         ok: true,
         user: toPublicUser({
@@ -238,7 +253,7 @@ export function registerAuthRoutes(
       reply.setCookie("oauth_state", state, {
         httpOnly: true,
         path: "/",
-        secure: process.env.NODE_ENV === "production",
+        secure: config.sessionCookieSecure,
         maxAge: 600,
       });
       return reply.redirect(`https://github.com/login/oauth/authorize?${params}`);
@@ -278,13 +293,16 @@ export function registerAuthRoutes(
         const emails = (await emailsRes.json()) as Array<{ email: string; primary?: boolean; verified?: boolean }>;
         email = emails.find((e) => e.primary && e.verified)?.email ?? emails[0]?.email ?? null;
       }
+      if (!singleUserOAuthCanContinue(config, authStore, "github", providerUserId)) {
+        return reply.status(403).send({ detail: "The single-user administrator already exists" });
+      }
       const user = authStore.upsertOAuthUser({
         provider: "github",
         providerUserId,
         displayName: ghUser.name ?? login,
         email,
       });
-      finishOAuthLogin(authStore, user, reply, config.authSuccessRedirect);
+      finishOAuthLogin(authStore, user, reply, config.authSuccessRedirect, config.sessionCookieSecure);
     });
   } else {
     app.get("/auth/github", async (_request, reply) => {
@@ -310,7 +328,7 @@ export function registerAuthRoutes(
       reply.setCookie("oauth_state", state, {
         httpOnly: true,
         path: "/",
-        secure: process.env.NODE_ENV === "production",
+        secure: config.sessionCookieSecure,
         maxAge: 600,
       });
       return reply.redirect(`https://discord.com/api/oauth2/authorize?${params}`);
@@ -348,13 +366,24 @@ export function registerAuthRoutes(
         email?: string | null;
       };
       const login = dcUser.username ?? "discord-user";
+      const providerUserId = dcUser.id ?? login;
+      if (
+        !singleUserOAuthCanContinue(
+          config,
+          authStore,
+          "discord",
+          providerUserId,
+        )
+      ) {
+        return reply.status(403).send({ detail: "The single-user administrator already exists" });
+      }
       const user = authStore.upsertOAuthUser({
         provider: "discord",
-        providerUserId: dcUser.id ?? login,
+        providerUserId,
         displayName: dcUser.global_name ?? login,
         email: dcUser.email ?? null,
       });
-      finishOAuthLogin(authStore, user, reply, config.authSuccessRedirect);
+      finishOAuthLogin(authStore, user, reply, config.authSuccessRedirect, config.sessionCookieSecure);
     });
   } else {
     app.get("/auth/discord", async (_request, reply) => {
@@ -364,7 +393,7 @@ export function registerAuthRoutes(
 
   if (process.env.NODE_ENV !== "production") {
     app.post("/auth/dev-login", async (request, reply) => {
-      if (config.deployMode !== "saas" && !config.multiUser) {
+      if (config.deployMode !== "saas" && !config.multiUser && !config.singleUserAuth) {
         return reply.status(404).send({ detail: "Not available" });
       }
       if (!authStore) return reply.status(503).send({ detail: "Auth store unavailable" });
@@ -374,7 +403,7 @@ export function registerAuthRoutes(
         displayName: body.login ?? "dev",
       });
       const raw = authStore.createSession(user.id);
-      setSessionCookie(reply, raw);
+      setSessionCookie(reply, raw, config.sessionCookieSecure);
       return {
         user: toPublicUser({
           user_id: user.id,
@@ -395,7 +424,7 @@ export function resolveRequestAuth(
   config: ServerConfig,
   authStore: AuthStore | null,
 ): SessionUser | null {
-  if (!config.multiUser && config.deployMode === "self-host") {
+  if (!config.multiUser && !config.singleUserAuth && config.deployMode === "self-host") {
     return {
       user_id: "local",
       tenant_id: "default",

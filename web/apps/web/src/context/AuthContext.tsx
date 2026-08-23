@@ -20,6 +20,8 @@ import {
 type AuthContextValue = {
   user: AuthUser | null;
   multiUser: boolean;
+  authRequired: boolean;
+  registrationOpen: boolean;
   loading: boolean;
   loginEmail: (email: string, password: string) => Promise<void>;
   registerEmail: (email: string, password: string, displayName: string) => Promise<void>;
@@ -32,13 +34,20 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [multiUser, setMultiUser] = useState(false);
+  const [authRequired, setAuthRequired] = useState(false);
+  const [registrationOpen, setRegistrationOpen] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
     try {
       const health = await fetchHealth();
       setMultiUser(Boolean(health.multi_user));
-      if (!health.multi_user) {
+      const requiresAuthentication = Boolean(
+        health.authentication_required ?? health.multi_user,
+      );
+      setAuthRequired(requiresAuthentication);
+      setRegistrationOpen(Boolean(health.registration_open ?? health.multi_user));
+      if (!requiresAuthentication) {
         setUser(null);
         return;
       }
@@ -59,10 +68,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     setEngineUnauthorizedHandler(() => {
-      if (multiUser) setUser(null);
+      if (authRequired) setUser(null);
     });
     return () => setEngineUnauthorizedHandler(null);
-  }, [multiUser]);
+  }, [authRequired]);
 
   const loginEmail = useCallback(async (email: string, password: string) => {
     const res = await loginWithEmail(email, password);
@@ -80,19 +89,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = useCallback(async () => {
     await apiLogout();
     setUser(null);
-  }, []);
+    await refresh();
+  }, [refresh]);
 
   const value = useMemo(
     () => ({
       user,
       multiUser,
+      authRequired,
+      registrationOpen,
       loading,
       loginEmail,
       registerEmail,
       logout,
       refresh,
     }),
-    [user, multiUser, loading, loginEmail, registerEmail, logout, refresh],
+    [user, multiUser, authRequired, registrationOpen, loading, loginEmail, registerEmail, logout, refresh],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

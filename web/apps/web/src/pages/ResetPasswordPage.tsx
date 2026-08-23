@@ -13,7 +13,7 @@ import { useAuth } from "../context/AuthContext";
 import { resetPasswordWithToken } from "../api/engine";
 
 export default function ResetPasswordPage() {
-  const { multiUser, loading, refresh } = useAuth();
+  const { authRequired, loading, refresh } = useAuth();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const token = searchParams.get("token") ?? "";
@@ -21,7 +21,7 @@ export default function ResetPasswordPage() {
   const [confirm, setConfirm] = useState("");
   const [busy, setBusy] = useState(false);
 
-  if (!loading && !multiUser) {
+  if (!loading && !authRequired) {
     return <Navigate to="/" replace />;
   }
 

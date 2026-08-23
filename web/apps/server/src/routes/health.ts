@@ -5,11 +5,13 @@ import { pingBundle } from "../db/database.js";
 import type { SaasDbStore } from "../adapters/saas/index.js";
 import { deploymentCapability } from "../lib/deployment-capability.js";
 import { getVersionInfo, getBuildSemver } from "../lib/version.js";
+import type { AuthStore } from "../services/auth-store.js";
 
 export async function registerHealthRoutes(
   app: FastifyInstance,
   config: ServerConfig,
   ports: AppPorts,
+  authStore: AuthStore | null = null,
 ): Promise<void> {
   app.get("/health", async () => {
     let dbOk = false;
@@ -41,6 +43,9 @@ export async function registerHealthRoutes(
       release: config.releaseIdentity,
       deploy_mode: config.deployMode,
       multi_user: config.multiUser,
+      authentication_required: config.authRequired,
+      registration_open:
+        config.multiUser || (config.singleUserAuth && (authStore?.countUsers() ?? 0) === 0),
       data_dir: config.dataDir,
       port: config.port,
       api_version: "v1",
@@ -52,6 +57,7 @@ export async function registerHealthRoutes(
         "fleet_presets",
         "integrations_api",
         ...(config.multiUser ? ["multi_user_auth", "plan_sharing"] : []),
+        ...(config.singleUserAuth ? ["single_user_auth"] : []),
         ...(config.smtpConfigured ? ["password_reset_email"] : []),
         "mcp_http",
         ...(config.googleClientId ? ["google_drive_manifest"] : []),

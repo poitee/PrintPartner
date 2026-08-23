@@ -51,6 +51,9 @@ The app service has a healthcheck that polls `GET /health` every 30s using Node'
 | `PP_VERSION` | `3.2.0-web` (baked into release images) | Health payload version |
 | `PP_COMMIT` / `PP_TAG` / `PP_BUILD_DATE` | baked into release images | Read-only release provenance reported by `GET /health`; source builds report a development identity |
 | `BASIC_AUTH_USER` / `BASIC_AUTH_PASS` | unset | Optional HTTP Basic protection |
+| `SINGLE_USER_AUTH` | `0` | Set to `1` to require login with one administrator account. The first registration claims existing self-host data. |
+| `SESSION_SECRET` | unset | Required in production when `SINGLE_USER_AUTH=1` or `MULTI_USER=1`. Use a long random value. |
+| `SESSION_COOKIE_SECURE` | `0` | Set to `1` when the self-hosted site is served through HTTPS. Leave at `0` for a plain HTTP LAN address. |
 | `UPLOAD_MAX_BYTES` | `536870912` | Multipart upload limit (512 MiB) |
 | `SOURCE_DOCS_MAX_BYTES` | `1073741824` | Per-source budget for synced markdown/PDF docs (~1 GiB). Operator escape hatch only. |
 | `PRINT_PARTNER_API_KEY` | unset | When set, requires Bearer or `X-Print-Partner-Api-Key` on `/api/v1/*`. **Required for `/api/v1/mcp` unless `HOST` is loopback** (Docker uses `0.0.0.0`) |
@@ -206,8 +209,9 @@ and authentication protect the shared interface.
 | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | With S3 | S3 credentials (the RustFS development stack reads `PP_DEV_S3_ACCESS_KEY` / `PP_DEV_S3_SECRET_KEY`) |
 | `S3_ENDPOINT` | S3-compatible dev | Custom S3 endpoint URL (e.g. `http://rustfs:9000`) |
 | `S3_FORCE_PATH_STYLE` | S3-compatible dev | Set `1` for path-style URLs (RustFS, MinIO, Garage, etc.) |
-| `MULTI_USER` | Optional | `1` enables login (self-host or saas); first registered user claims existing data |
-| `SESSION_SECRET` | Multi-user / OAuth / prod | Required when `MULTI_USER=1` or OAuth in production |
+| `MULTI_USER` | Optional | `1` enables multiple accounts and sharing; first registered user claims existing data |
+| `SINGLE_USER_AUTH` | Optional | `1` enables one self-host administrator account without multi-user sharing |
+| `SESSION_SECRET` | Login / OAuth / prod | Required when `SINGLE_USER_AUTH=1`, `MULTI_USER=1`, or OAuth in production |
 | `PP_BIND_ADDRESS` | Compose only | Host bind for app/Postgres/RustFS ports; defaults to loopback (`127.0.0.1`) |
 | `PP_DEV_MULTI_USER` / `PP_DEV_SESSION_SECRET` | Development Compose | Override the single-user mode and development-only session secret |
 | `ALLOWED_ORIGINS` | Prod | Comma-separated CORS origins (alias: `CORS_ORIGIN`) |
@@ -227,7 +231,7 @@ and authentication protect the shared interface.
 | `GET /auth/callback` | GitHub OAuth callback |
 | `GET /auth/discord` | Start Discord OAuth |
 | `GET /auth/discord/callback` | Discord OAuth callback |
-| `POST /auth/register` | Email + password registration (`MULTI_USER=1`) |
+| `POST /auth/register` | Email + password registration; single-user mode closes registration after its administrator exists |
 | `POST /auth/login` | Email + password login |
 | `POST /auth/forgot-password` | Request a password reset email |
 | `POST /auth/reset-password` | Set a new password using a reset token |

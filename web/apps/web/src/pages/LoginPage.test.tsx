@@ -15,6 +15,8 @@ vi.mock("../context/AuthContext", () => ({
   useAuth: () => ({
     user: null,
     multiUser: true,
+    authRequired: true,
+    registrationOpen: true,
     loading: false,
     loginEmail: auth.loginEmail,
     registerEmail: auth.registerEmail,

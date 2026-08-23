@@ -72,7 +72,7 @@ function resolveRepository(ports: RuntimePorts): AppRepository | null {
 }
 
 function resolveAuthStore(ports: RuntimePorts, config: ServerConfig): AuthStore | null {
-  if (!config.multiUser) return null;
+  if (!config.multiUser && !config.singleUserAuth) return null;
   const db = ports.db;
   if ("sqlite" in db) {
     const sqlite = (db as SelfHostDbStore).sqlite;
@@ -166,7 +166,7 @@ export async function buildApp(config: ServerConfig, ports: RuntimePorts) {
     });
   }
 
-  await registerHealthRoutes(app, config, ports);
+  await registerHealthRoutes(app, config, ports, authStore);
   await registerOpenApi(app, config);
 
   if (repository) {

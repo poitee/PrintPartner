@@ -40,6 +40,8 @@ export type ServerConfig = {
   postgresExperimental: boolean;
   /** When true, require user login (self-host or saas). Default off in self-host. */
   multiUser: boolean;
+  /** Require one authenticated administrator without enabling multi-user sharing. */
+  singleUserAuth: boolean;
   discordClientId: string | null;
   discordClientSecret: string | null;
   discordCallbackUrl: string | null;
@@ -48,6 +50,7 @@ export type ServerConfig = {
   saasAllowAnonymous: boolean;
   authRequired: boolean;
   sessionSecret: string | null;
+  sessionCookieSecure: boolean;
   githubClientId: string | null;
   githubClientSecret: string | null;
   githubCallbackUrl: string | null;
@@ -147,8 +150,8 @@ function resolveBasicAuth(): string | null {
 export function validateProductionConfig(config: ServerConfig): void {
   const isProd = process.env.NODE_ENV === "production";
   if (!isProd) return;
-  if (config.multiUser && !config.sessionSecret) {
-    throw new Error("SESSION_SECRET is required when MULTI_USER is enabled");
+  if ((config.multiUser || config.singleUserAuth) && !config.sessionSecret) {
+    throw new Error("SESSION_SECRET is required when login authentication is enabled");
   }
   if (config.deployMode === "saas" && !config.sessionSecret && config.githubOAuthConfigured) {
     throw new Error("SESSION_SECRET is required in production SaaS mode with OAuth enabled");
@@ -245,12 +248,13 @@ export function loadConfig(): ServerConfig {
   const discordCallbackUrl = process.env.DISCORD_CALLBACK_URL ?? null;
   const multiUser =
     process.env.MULTI_USER === "1" || (deployMode === "saas" && process.env.MULTI_USER !== "0");
+  const singleUserAuth = deployMode === "self-host" && process.env.SINGLE_USER_AUTH === "1";
 
   const saasBasicAuth = resolveBasicAuth();
   const saasAllowAnonymous = process.env.SAAS_ALLOW_ANONYMOUS === "1";
   const oauthConfigured = Boolean(githubClientId || discordClientId);
   const authRequired =
-    multiUser ||
+    multiUser || singleUserAuth ||
     (deployMode === "saas" &&
       !saasAllowAnonymous &&
       Boolean(saasBasicAuth || oauthConfigured));
@@ -297,6 +301,7 @@ export function loadConfig(): ServerConfig {
     databaseUrl: process.env.DATABASE_URL ?? null,
     postgresExperimental: process.env.POSTGRES_EXPERIMENTAL === "1",
     multiUser,
+    singleUserAuth,
     discordClientId,
     discordClientSecret,
     discordCallbackUrl,
@@ -305,6 +310,9 @@ export function loadConfig(): ServerConfig {
     saasAllowAnonymous,
     authRequired,
     sessionSecret: process.env.SESSION_SECRET ?? null,
+    sessionCookieSecure:
+      process.env.SESSION_COOKIE_SECURE === "1" ||
+      (deployMode === "saas" && process.env.SESSION_COOKIE_SECURE !== "0"),
     githubClientId,
     githubClientSecret,
     githubCallbackUrl,

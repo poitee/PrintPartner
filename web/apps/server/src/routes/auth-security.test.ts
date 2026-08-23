@@ -15,6 +15,7 @@ async function makeProductionApp(dir: string) {
     multiUser: true,
     authRequired: true,
     sessionSecret: "test-session-secret",
+    sessionCookieSecure: true,
   };
   const ports = createSelfHostPorts(dir);
   await ports.db.connect();
@@ -83,6 +84,7 @@ describe("production authentication routes", () => {
       multiUser: true,
       authRequired: true,
       sessionSecret: "test-session-secret",
+      sessionCookieSecure: true,
       githubClientId: "github-client",
       githubClientSecret: "github-secret",
       githubCallbackUrl: "https://app.example.com/auth/callback",

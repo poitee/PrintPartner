@@ -2,7 +2,7 @@ import { Navigate, Outlet, useLocation } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 
 export default function AuthGate() {
-  const { user, multiUser, loading } = useAuth();
+  const { user, authRequired, loading } = useAuth();
   const location = useLocation();
 
   if (loading) {
@@ -13,7 +13,7 @@ export default function AuthGate() {
     );
   }
 
-  if (multiUser && !user) {
+  if (authRequired && !user) {
     return (
       <Navigate
         to="/login"

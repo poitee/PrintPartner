@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import AuthGate from "./AuthGate";
 
 vi.mock("../context/AuthContext", () => ({
-  useAuth: () => ({ user: null, multiUser: true, loading: false }),
+  useAuth: () => ({ user: null, multiUser: true, authRequired: true, loading: false }),
 }));
 
 function LoginLocation() {

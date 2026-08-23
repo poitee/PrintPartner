@@ -2,6 +2,27 @@ import { describe, expect, it } from "vitest";
 import { loadConfig, validateProductionConfig } from "./config.js";
 
 describe("loadConfig", () => {
+  it("enables authenticated single-user mode without enabling sharing", () => {
+    const previous = {
+      DEPLOY_MODE: process.env.DEPLOY_MODE,
+      SINGLE_USER_AUTH: process.env.SINGLE_USER_AUTH,
+      MULTI_USER: process.env.MULTI_USER,
+    };
+    process.env.DEPLOY_MODE = "self-host";
+    process.env.SINGLE_USER_AUTH = "1";
+    process.env.MULTI_USER = "0";
+
+    const config = loadConfig();
+    expect(config.singleUserAuth).toBe(true);
+    expect(config.multiUser).toBe(false);
+    expect(config.authRequired).toBe(true);
+
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+
   it("enables proxy trust only when explicitly configured", () => {
     const previous = process.env.TRUST_PROXY;
     delete process.env.TRUST_PROXY;
