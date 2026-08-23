@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { randomBytes } from "node:crypto";
 import type { ServerConfig } from "../config.js";
 import { isBrowserDocumentNavigation, isSpaClientPath, isStaticAssetPath } from "../lib/spa-nav.js";
+import { isMcpTransportRequest } from "../lib/mcp-transport-path.js";
 import { hashPassword, validatePasswordStrength, verifyPassword } from "../services/password.js";
 import type { AuthStore } from "../services/auth-store.js";
 import {
@@ -504,7 +505,18 @@ export function registerTenantMiddleware(
       }
     }
 
-    if (!user && config.authRequired) {
+    // Single-user self-host exposes MCP to bearer-key clients that have no
+    // browser session. Only the exact transport route skips the session gate;
+    // the API-key hook and the MCP pre-handler still authorise the request, and
+    // multi-user/SaaS deployments keep their session requirement so tenant
+    // resolution is never bypassed.
+    const mcpTransport =
+      config.deployMode === "self-host" &&
+      config.singleUserAuth &&
+      !config.multiUser &&
+      isMcpTransportRequest(request.method, path);
+
+    if (!user && config.authRequired && !mcpTransport) {
       return reply.status(401).send({ detail: "Authentication required" });
     }
   });
