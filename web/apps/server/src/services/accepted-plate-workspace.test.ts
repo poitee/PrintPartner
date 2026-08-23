@@ -24,8 +24,11 @@ const setupInput = {
   expectedPlateRevisionId: null,
   units: [{
     token,
+    partId: null,
     objectName: `bracket__${token}`,
     filename: "bracket.stl",
+    relativePath: "parts/bracket.stl",
+    sourceDirectory: "parts",
     sourceLayer: "base:test",
     role: "primary",
     filamentColorId: "black",
@@ -43,6 +46,7 @@ function dependencies(): AcceptedPlateWorkspaceDependencies & {
     repository: {
       readAcceptedPlateWorkspaceInput: vi.fn(() => setupInput),
       publishAcceptedPlates: publish,
+      getSetting: vi.fn<() => string | null>(() => null),
     },
     reposDir: "/tmp/unused-accepted-workspace",
     limits: {
@@ -112,6 +116,7 @@ function publishingDependencies(machineChange: Record<string, unknown> = {}) {
     repository: {
       readAcceptedPlateWorkspaceInput: read,
       publishAcceptedPlates: publish,
+      getSetting: vi.fn<() => string | null>(() => null),
     },
     reposDir: "/tmp/unused-accepted-workspace",
     limits: {
@@ -166,8 +171,11 @@ describe("accepted Plate workspace", () => {
         }],
         units: [{
           token,
+          part_id: null,
           object_name: `bracket__${token}`,
           filename: "bracket.stl",
+          relative_path: "parts/bracket.stl",
+          source_directory: "parts",
           source_layer: "base:test",
           role: "primary",
           filament_color_id: "black",
