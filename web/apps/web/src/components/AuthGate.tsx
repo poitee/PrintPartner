@@ -2,7 +2,7 @@ import { Navigate, Outlet, useLocation } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 
 export default function AuthGate() {
-  const { user, authRequired, loading } = useAuth();
+  const { user, multiUser, authRequired, registrationOpen, loading } = useAuth();
   const location = useLocation();
 
   if (loading) {
@@ -16,7 +16,7 @@ export default function AuthGate() {
   if (authRequired && !user) {
     return (
       <Navigate
-        to="/login"
+        to={!multiUser && registrationOpen ? "/setup" : "/login"}
         replace
         state={{ from: location.pathname + location.search + location.hash }}
       />

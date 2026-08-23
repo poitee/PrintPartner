@@ -2,6 +2,32 @@ import { describe, expect, it } from "vitest";
 import { loadConfig, validateProductionConfig } from "./config.js";
 
 describe("loadConfig", () => {
+  it("does not require an unused session secret for self-host single-user auth", () => {
+    const previous = {
+      NODE_ENV: process.env.NODE_ENV,
+      DEPLOY_MODE: process.env.DEPLOY_MODE,
+      SINGLE_USER_AUTH: process.env.SINGLE_USER_AUTH,
+      SESSION_SECRET: process.env.SESSION_SECRET,
+    };
+
+    try {
+      process.env.NODE_ENV = "production";
+      process.env.DEPLOY_MODE = "self-host";
+      process.env.SINGLE_USER_AUTH = "1";
+      delete process.env.SESSION_SECRET;
+
+      const config = loadConfig();
+      expect(config.authRequired).toBe(true);
+      expect(config.sessionSecret).toBeNull();
+      expect(() => validateProductionConfig(config)).not.toThrow();
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
   it("enables authenticated single-user mode without enabling sharing", () => {
     const previous = {
       DEPLOY_MODE: process.env.DEPLOY_MODE,

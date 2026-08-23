@@ -457,7 +457,7 @@ export function resolveRequestAuth(
   const sid = request.cookies?.pp_session;
   if (sid && authStore) {
     const user = authStore.resolveSession(sid);
-    if (user) return user;
+    if (user) return config.singleUserAuth ? { ...user, tenant_id: "default" } : user;
   }
 
   if (config.saasAllowAnonymous && config.deployMode === "saas") {

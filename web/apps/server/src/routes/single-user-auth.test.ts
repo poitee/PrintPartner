@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import Database from "better-sqlite3";
 import { buildApp } from "../app.js";
 import { createSelfHostPorts } from "../adapters/self-host/index.js";
 import { loadConfig } from "../config.js";
@@ -34,6 +35,18 @@ describe("authenticated single-user mode", () => {
       },
     });
     expect(createdPrinter.statusCode).toBe(200);
+    const createdSource = await legacyApp.inject({
+      method: "POST",
+      url: "/sources",
+      payload: { name: "Existing source", source_kind: "local" },
+    });
+    expect(createdSource.statusCode).toBe(200);
+    const createdPlan = await legacyApp.inject({
+      method: "POST",
+      url: "/plans",
+      payload: { name: "Existing build" },
+    });
+    expect(createdPlan.statusCode).toBe(200);
     await legacyApp.close();
 
     const app = await buildApp(
@@ -72,6 +85,17 @@ describe("authenticated single-user mode", () => {
     expect(registration.statusCode).toBe(200);
     const sessionCookie = registration.cookies.find((cookie) => cookie.name === "pp_session");
     expect(sessionCookie).toBeDefined();
+    const database = new Database(join(dir, "print-partner.db"), { readonly: true });
+    try {
+      expect(database.prepare("SELECT DISTINCT tenant_id FROM projects").pluck().all()).toEqual([
+        "default",
+      ]);
+      expect(
+        database.prepare("SELECT DISTINCT tenant_id FROM build_profiles").pluck().all(),
+      ).toEqual(["default"]);
+    } finally {
+      database.close();
+    }
     expect((await app.inject({ method: "GET", url: "/health" })).json()).toMatchObject({
       registration_open: false,
     });
@@ -91,6 +115,16 @@ describe("authenticated single-user mode", () => {
     expect(printers.statusCode).toBe(200);
     expect(printers.json()).toMatchObject({
       printers: [{ name: "Existing printer", model: "Voron 2.4" }],
+    });
+
+    const plans = await app.inject({
+      method: "GET",
+      url: "/plans",
+      cookies: { pp_session: sessionCookie?.value ?? "" },
+    });
+    expect(plans.statusCode).toBe(200);
+    expect(plans.json()).toMatchObject({
+      profiles: [{ name: "Existing build" }],
     });
 
     const secondRegistration = await app.inject({

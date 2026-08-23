@@ -52,7 +52,7 @@ The app service has a healthcheck that polls `GET /health` every 30s using Node'
 | `PP_COMMIT` / `PP_TAG` / `PP_BUILD_DATE` | baked into release images | Read-only release provenance reported by `GET /health`; source builds report a development identity |
 | `BASIC_AUTH_USER` / `BASIC_AUTH_PASS` | unset | Optional HTTP Basic protection |
 | `SINGLE_USER_AUTH` | `0` | Set to `1` to require login with one administrator account. The first registration claims existing self-host data. |
-| `SESSION_SECRET` | unset | Required in production when `SINGLE_USER_AUTH=1` or `MULTI_USER=1`. Use a long random value. |
+| `SESSION_SECRET` | unset | Not needed for single-user auth. Required when `MULTI_USER=1`. |
 | `SESSION_COOKIE_SECURE` | `0` | Set to `1` when the self-hosted site is served through HTTPS. Leave at `0` for a plain HTTP LAN address. |
 | `UPLOAD_MAX_BYTES` | `536870912` | Multipart upload limit (512 MiB) |
 | `SOURCE_DOCS_MAX_BYTES` | `1073741824` | Per-source budget for synced markdown/PDF docs (~1 GiB). Operator escape hatch only. |
@@ -211,7 +211,7 @@ and authentication protect the shared interface.
 | `S3_FORCE_PATH_STYLE` | S3-compatible dev | Set `1` for path-style URLs (RustFS, MinIO, Garage, etc.) |
 | `MULTI_USER` | Optional | `1` enables multiple accounts and sharing; first registered user claims existing data |
 | `SINGLE_USER_AUTH` | Optional | `1` enables one self-host administrator account without multi-user sharing |
-| `SESSION_SECRET` | Login / OAuth / prod | Required when `SINGLE_USER_AUTH=1`, `MULTI_USER=1`, or OAuth in production |
+| `SESSION_SECRET` | Multi-user / OAuth / prod | Not needed for `SINGLE_USER_AUTH=1`. Supply it for `MULTI_USER=1` or OAuth in production. |
 | `PP_BIND_ADDRESS` | Compose only | Host bind for app/Postgres/RustFS ports; defaults to loopback (`127.0.0.1`) |
 | `PP_DEV_MULTI_USER` / `PP_DEV_SESSION_SECRET` | Development Compose | Override the single-user mode and development-only session secret |
 | `ALLOWED_ORIGINS` | Prod | Comma-separated CORS origins (alias: `CORS_ORIGIN`) |

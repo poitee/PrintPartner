@@ -82,6 +82,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     async (email: string, password: string, displayName: string) => {
       const res = await registerWithEmail(email, password, displayName);
       setUser(res.user);
+      setRegistrationOpen(false);
     },
     [],
   );

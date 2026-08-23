@@ -73,15 +73,18 @@ function resolveRepository(ports: RuntimePorts): AppRepository | null {
 
 function resolveAuthStore(ports: RuntimePorts, config: ServerConfig): AuthStore | null {
   if (!config.multiUser && !config.singleUserAuth) return null;
+  const options = { claimDefaultTenantForFirstUser: !config.singleUserAuth };
   const db = ports.db;
   if ("sqlite" in db) {
     const sqlite = (db as SelfHostDbStore).sqlite;
-    if (sqlite?.drizzle) return createAuthStore(getDb(sqlite), "sqlite");
+    if (sqlite?.drizzle) return createAuthStore(getDb(sqlite), "sqlite", options);
   }
   if ("bundle" in db) {
     const bundle = (db as SaasDbStore).bundle;
-    if (bundle.postgres?.drizzle) return createAuthStore(bundle.postgres.drizzle, "postgres");
-    if (bundle.sqlite?.drizzle) return createAuthStore(getDb(bundle.sqlite), "sqlite");
+    if (bundle.postgres?.drizzle) {
+      return createAuthStore(bundle.postgres.drizzle, "postgres", options);
+    }
+    if (bundle.sqlite?.drizzle) return createAuthStore(getDb(bundle.sqlite), "sqlite", options);
   }
   return null;
 }

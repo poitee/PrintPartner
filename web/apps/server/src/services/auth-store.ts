@@ -67,10 +67,16 @@ function rowToSessionUser(user: DbUser, provider: SessionUser["provider"]): Sess
 export class AuthStore {
   private readonly db: DrizzleDb;
   private readonly schema: AuthSchemaBundle;
+  private readonly claimDefaultTenantForFirstUser: boolean;
 
-  constructor(db: AppDrizzleDb, schema: AuthSchemaBundle = sqliteSchema) {
+  constructor(
+    db: AppDrizzleDb,
+    schema: AuthSchemaBundle = sqliteSchema,
+    claimDefaultTenantForFirstUser = true,
+  ) {
     this.db = asSyncDb(db);
     this.schema = schema;
+    this.claimDefaultTenantForFirstUser = claimDefaultTenantForFirstUser;
   }
 
   countUsers(): number {
@@ -129,7 +135,7 @@ export class AuthStore {
       .returning()
       .get() as DbUser;
     if (!user) throw new Error("Failed to create user");
-    if (isFirst) this.reassignDefaultTenant(id);
+    if (isFirst && this.claimDefaultTenantForFirstUser) this.reassignDefaultTenant(id);
     return mapUser(user);
   }
 
@@ -383,6 +389,14 @@ export class AuthStore {
   }
 }
 
-export function createAuthStore(db: AppDrizzleDb, driver: "sqlite" | "postgres"): AuthStore {
-  return new AuthStore(db, driver === "postgres" ? pgSchema : sqliteSchema);
+export function createAuthStore(
+  db: AppDrizzleDb,
+  driver: "sqlite" | "postgres",
+  options: { claimDefaultTenantForFirstUser?: boolean } = {},
+): AuthStore {
+  return new AuthStore(
+    db,
+    driver === "postgres" ? pgSchema : sqliteSchema,
+    options.claimDefaultTenantForFirstUser,
+  );
 }

@@ -150,8 +150,8 @@ function resolveBasicAuth(): string | null {
 export function validateProductionConfig(config: ServerConfig): void {
   const isProd = process.env.NODE_ENV === "production";
   if (!isProd) return;
-  if ((config.multiUser || config.singleUserAuth) && !config.sessionSecret) {
-    throw new Error("SESSION_SECRET is required when login authentication is enabled");
+  if (config.multiUser && !config.sessionSecret) {
+    throw new Error("SESSION_SECRET is required when MULTI_USER is enabled");
   }
   if (config.deployMode === "saas" && !config.sessionSecret && config.githubOAuthConfigured) {
     throw new Error("SESSION_SECRET is required in production SaaS mode with OAuth enabled");
@@ -309,7 +309,7 @@ export function loadConfig(): ServerConfig {
     saasBasicAuth,
     saasAllowAnonymous,
     authRequired,
-    sessionSecret: process.env.SESSION_SECRET ?? null,
+    sessionSecret: process.env.SESSION_SECRET?.trim() || null,
     sessionCookieSecure:
       process.env.SESSION_COOKIE_SECURE === "1" ||
       (deployMode === "saas" && process.env.SESSION_COOKIE_SECURE !== "0"),
