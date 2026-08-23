@@ -8,6 +8,14 @@ import CheckoffPage from "./CheckoffPage";
 
 const testState = vi.hoisted(() => ({
   onUnattributedUpdate: undefined as ((count?: number) => void) | undefined,
+  onLiveStateChange: undefined as
+    | ((state: {
+        anyPrinting: boolean;
+        activeIntegrationIds: string[];
+        idleIntegrationIds: string[];
+        hostCount: number;
+      }) => void)
+    | undefined,
 }));
 
 const api = vi.hoisted(() => ({
@@ -133,8 +141,12 @@ vi.mock("../api/engine", async (importOriginal) => {
   return { ...actual, ...api };
 });
 vi.mock("../components/checkoff/PrinterLiveStrip", () => ({
-  default: (props: { onUnattributedUpdate?: (count?: number) => void }) => {
+  default: (props: {
+    onUnattributedUpdate?: (count?: number) => void;
+    onLiveStateChange?: typeof testState.onLiveStateChange;
+  }) => {
     testState.onUnattributedUpdate = props.onUnattributedUpdate;
+    testState.onLiveStateChange = props.onLiveStateChange;
     return null;
   },
 }));
@@ -188,10 +200,38 @@ vi.mock("../components/PlanSpecialRequestLine", () => ({
 describe("CheckoffPage unattributed print reconciliation", () => {
   beforeEach(() => {
     testState.onUnattributedUpdate = undefined;
+    testState.onLiveStateChange = undefined;
     api.fetchUnattributedPrints.mockReset();
     api.fetchUnattributedPrints.mockResolvedValue([stalePrint]);
     localStorage.clear();
     localStorage.setItem("print-partner.checkoff.ui.v1", JSON.stringify({ filter: "all" }));
+  });
+
+  it("does not refetch printer suggestions when the idle printer set is unchanged", async () => {
+    render(
+      <MemoryRouter>
+        <CheckoffPage />
+      </MemoryRouter>,
+    );
+
+    const idleState = {
+      anyPrinting: false,
+      activeIntegrationIds: [],
+      idleIntegrationIds: ["printer-a", "printer-b"],
+      hostCount: 2,
+    };
+    await waitFor(() => expect(testState.onLiveStateChange).toBeTypeOf("function"));
+    act(() => testState.onLiveStateChange?.(idleState));
+    await waitFor(() => expect(api.fetchPrinterQueueSuggestions).toHaveBeenCalledOnce());
+
+    act(() =>
+      testState.onLiveStateChange?.({
+        ...idleState,
+        idleIntegrationIds: [...idleState.idleIntegrationIds],
+      }),
+    );
+
+    await waitFor(() => expect(api.fetchPrinterQueueSuggestions).toHaveBeenCalledOnce());
   });
 
   afterEach(() => {

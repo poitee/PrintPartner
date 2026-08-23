@@ -32,6 +32,24 @@ import type { PrinterLiveStripState } from "../components/checkoff/PrinterLiveSt
 import PrintVerifyPanel, {
   type PrintVerifyQueueState,
 } from "../components/checkoff/PrintVerifyPanel";
+
+function haveSameIds(left: readonly string[], right: readonly string[]): boolean {
+  if (left.length !== right.length) return false;
+  const rightIds = new Set(right);
+  return left.every((id) => rightIds.has(id));
+}
+
+function isSameLiveStripState(
+  current: PrinterLiveStripState,
+  next: PrinterLiveStripState,
+): boolean {
+  return (
+    current.anyPrinting === next.anyPrinting &&
+    current.hostCount === next.hostCount &&
+    haveSameIds(current.activeIntegrationIds, next.activeIntegrationIds) &&
+    haveSameIds(current.idleIntegrationIds, next.idleIntegrationIds)
+  );
+}
 import UnattributedPrintCard from "../components/checkoff/UnattributedPrintCard";
 // Lazy: PrinterSendQueuePanel (heavy printer queue UI)
 const PrinterSendQueuePanel = lazy(() => import("../components/export/PrinterSendQueuePanel"));
@@ -254,6 +272,9 @@ export default function CheckoffPage() {
     idleIntegrationIds: [],
     hostCount: 0,
   });
+  const updateLiveStrip = useCallback((next: PrinterLiveStripState) => {
+    setLiveStrip((current) => (isSameLiveStripState(current, next) ? current : next));
+  }, []);
   const [verifyQueue, setVerifyQueue] = useState<PrintVerifyQueueState>({
     awaitingCount: 0,
     watchingCount: 0,
@@ -983,7 +1004,7 @@ export default function CheckoffPage() {
           <Suspense fallback={null}>
             <PrinterLiveStrip
               engineReady={Boolean(health?.ok)}
-              onLiveStateChange={setLiveStrip}
+              onLiveStateChange={updateLiveStrip}
               onCheckoffUpdate={(profileId) => {
                 if (selectedProfileId != null && profileId === selectedProfileId) {
                   setVerifyRefreshKey((k) => k + 1);
