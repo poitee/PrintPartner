@@ -158,6 +158,44 @@ describe("accepted Plan revision backfill", () => {
     reopened.close();
   });
 
+  it("repairs a recorded v30 accepted Plate unit table that is missing edit columns", () => {
+    const { dir, database } = createDatabase();
+    const raw = rawDatabase(database);
+    raw.exec(`
+      DROP TABLE accepted_plate_units;
+      CREATE TABLE accepted_plate_units (
+        tenant_id TEXT NOT NULL,
+        revision_id INTEGER NOT NULL REFERENCES accepted_plate_revisions(id) ON DELETE CASCADE,
+        plate_id TEXT NOT NULL,
+        required_unit_token TEXT NOT NULL REFERENCES required_units(token) ON DELETE CASCADE,
+        x_um INTEGER NOT NULL CHECK (x_um BETWEEN 0 AND 2147483647),
+        y_um INTEGER NOT NULL CHECK (y_um BETWEEN 0 AND 2147483647),
+        width_um INTEGER NOT NULL CHECK (width_um BETWEEN 1 AND 2147483647),
+        depth_um INTEGER NOT NULL CHECK (depth_um BETWEEN 1 AND 2147483647),
+        height_um INTEGER NOT NULL CHECK (height_um BETWEEN 1 AND 2147483647),
+        placement TEXT NOT NULL DEFAULT 'auto' CHECK (placement IN ('auto', 'manual', 'unplaced')),
+        CONSTRAINT pk_accepted_plate_units
+          PRIMARY KEY (tenant_id, revision_id, required_unit_token)
+      );
+      UPDATE app_settings SET value = '30'
+       WHERE tenant_id = 'default' AND key = 'schema_version';
+    `);
+    database.close();
+
+    const migrated = new SqliteDatabase(dir);
+    migrated.connect();
+    const migratedRaw = rawDatabase(migrated);
+    const columns = migratedRaw.pragma("table_info(accepted_plate_units)") as { name: string }[];
+
+    expect(columns.map((column) => column.name)).toContain("pinned");
+    expect(
+      migratedRaw
+        .prepare("SELECT value FROM app_settings WHERE tenant_id = 'default' AND key = 'schema_version'")
+        .get(),
+    ).toEqual({ value: String(ACCEPTED_PLATE_EDIT_SCHEMA_VERSION) });
+    migrated.close();
+  });
+
   it("upgrades a populated v18-shaped Build", () => {
     const { dir, database } = createDatabase();
     const raw = rawDatabase(database);

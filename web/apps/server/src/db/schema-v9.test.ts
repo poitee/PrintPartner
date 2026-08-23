@@ -442,7 +442,7 @@ describe("database schema migrations (SQLite)", () => {
     });
   });
 
-  it("creates the current schema and records schema version 30", () => {
+  it("creates the current schema and records schema version 31", () => {
     withSqlite((sqlite) => {
       const tables = sqliteTableNames(sqlite);
       for (const table of [
@@ -462,7 +462,7 @@ describe("database schema migrations (SQLite)", () => {
         rawSqlite(sqlite)
           .prepare("SELECT value FROM app_settings WHERE tenant_id = ? AND key = ?")
           .get("default", "schema_version") as { value: string },
-      ).toMatchObject({ value: "30" });
+      ).toMatchObject({ value: "31" });
       expect(sqliteColumnNames(sqlite, "projects")).toContain(
         "current_source_revision_id",
       );
@@ -846,7 +846,7 @@ describe("database schema migrations (SQLite)", () => {
         rawSqlite(upgraded)
           .prepare("SELECT value FROM app_settings WHERE tenant_id = 'default' AND key = 'schema_version'")
           .get(),
-      ).toEqual({ value: "30" });
+      ).toEqual({ value: "31" });
       upgraded.close();
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -941,7 +941,7 @@ describe("database schema migrations (SQLite)", () => {
       ).toEqual([]);
       expect(
         upgradedRaw.prepare("SELECT value FROM app_settings WHERE tenant_id = 'default' AND key = 'schema_version'").get(),
-      ).toEqual({ value: "30" });
+      ).toEqual({ value: "31" });
       expect(Object.fromEntries(
         V27_TABLES.map((table) => [table, upgradedRaw.prepare(`SELECT * FROM ${table} ORDER BY 1`).all()]),
       )).toEqual(acceptedBefore);
@@ -1264,8 +1264,8 @@ function pgAddedColumns(table: string): string[] {
 
 describe("database schema migrations (Postgres DDL parity)", () => {
   it("keeps SQLite and Postgres schema_version constants in lockstep", () => {
-    expect(sqliteSchema.currentSchemaVersion).toBe(30);
-    expect(pgSchema.currentSchemaVersion).toBe(30);
+    expect(sqliteSchema.currentSchemaVersion).toBe(31);
+    expect(pgSchema.currentSchemaVersion).toBe(31);
   });
 
   it("uses the same exact legacy print Plan key grammar in SQLite and Postgres", () => {

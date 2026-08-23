@@ -1,7 +1,7 @@
 import type Database from "better-sqlite3";
 import { schemaVersionKey } from "./schema.js";
 
-export const ACCEPTED_PLATE_EDIT_SCHEMA_VERSION = 30;
+export const ACCEPTED_PLATE_EDIT_SCHEMA_VERSION = 31;
 
 type ColumnInfo = Readonly<{ name: string }>;
 
