@@ -172,7 +172,7 @@ export default function ShareImportSetupPanel({
             })}
           </ul>
           <Button size="sm" variant="ghost" className="mt-2" asChild>
-            <Link to={sourcesRoute()}>Manage on Sources</Link>
+            <Link to={sourcesRoute()}>Manage in Source Library</Link>
           </Button>
         </div>
       )}

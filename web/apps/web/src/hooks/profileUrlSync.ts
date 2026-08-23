@@ -6,6 +6,11 @@ export function parseProfileParam(raw: string | null): number | null {
   return Number.isFinite(id) && id > 0 ? id : null;
 }
 
+/** Global Production spans every build, so it must not inherit the selected build. */
+export function shouldSyncProfileToPath(pathname: string): boolean {
+  return pathname !== "/production";
+}
+
 /** When URL profile differs from selection, return the id to apply; else undefined. */
 export function profileIdFromUrl(
   urlId: number | null,

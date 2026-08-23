@@ -81,6 +81,7 @@ export default function PrintersPage() {
   const [statusById, setStatusById] = useState<Record<string, PrinterHostStatus>>({});
   const [checkoffLinks, setCheckoffLinks] = useState<PrinterCheckoffLink[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [rosterLoading, setRosterLoading] = useState(true);
   const requestId = useRef(0);
   const linkedRef = useRef(linked);
   linkedRef.current = linked;
@@ -97,8 +98,10 @@ export default function PrintersPage() {
       setStatusById({});
       setCheckoffLinks([]);
       setLoadError(null);
+      setRosterLoading(false);
       return;
     }
+    setRosterLoading(true);
     try {
       const [fleet, integrations, checkoff] = await Promise.all([
         fetchPrinters(),
@@ -131,6 +134,8 @@ export default function PrintersPage() {
       setLoadError(e instanceof Error ? e.message : String(e));
       setLinked([]);
       setCheckoffLinks([]);
+    } finally {
+      setRosterLoading(false);
     }
   }, [engineReady]);
 
@@ -215,14 +220,23 @@ export default function PrintersPage() {
       />
 
       {loadError && (
-        <p className="text-sm text-destructive">Could not load printers: {loadError}</p>
+        <p className="text-sm text-destructive" role="alert">
+          Could not load printers: {loadError}
+        </p>
       )}
 
       {!engineReady ? (
-        <p className="text-sm text-muted-foreground">
+        <p
+          className="text-sm text-muted-foreground"
+          role={engineState === "loading" ? "status" : undefined}
+        >
           {engineState === "offline"
             ? "Engine offline — start the print-partner engine to view printers."
             : "Connecting to the engine…"}
+        </p>
+      ) : rosterLoading ? (
+        <p className="text-sm text-muted-foreground" role="status">
+          Loading printers…
         </p>
       ) : linked.length === 0 ? (
         <Card>

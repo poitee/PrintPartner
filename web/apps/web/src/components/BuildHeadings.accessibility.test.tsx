@@ -102,6 +102,31 @@ describe("Build heading hierarchy", () => {
     ).toBe("H2");
   });
 
+  it("names the global source-management destination Source Library", () => {
+    render(
+      <MemoryRouter>
+        <ShareImportSetupPanel
+          unmatchedSources={[
+            {
+              name: "Voron parts",
+              url: "https://github.com/example/voron-parts",
+              branch: "main",
+              source_kind: "github",
+              role: "base",
+              import_rules: [],
+            },
+          ]}
+          warnings={[]}
+          profileId={7}
+        />
+      </MemoryRouter>,
+    );
+
+    expect(
+      screen.getByRole("link", { name: "Manage in Source Library" }).getAttribute("href"),
+    ).toBe("/library");
+  });
+
   it("nests the compact source preview below its source heading without visible help", async () => {
     render(
       <MemoryRouter>

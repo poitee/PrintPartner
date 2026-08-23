@@ -529,7 +529,7 @@ export function buildEvidenceFromUploadedSource(input: {
 function evidenceTerms(evidence: BuildEvidence): string[] {
   const parsed = new URL(evidence.normalized_url);
   return parsed.pathname
-    .split(/[\/_.-]+/)
+    .split(/[/_.-]+/)
     .map((term) => term.toLowerCase())
     .filter((term) => term.length >= 3 && !["github", "repository", "repo"].includes(term));
 }

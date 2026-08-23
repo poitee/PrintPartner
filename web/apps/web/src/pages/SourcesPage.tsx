@@ -834,7 +834,7 @@ export default function SourcesPage() {
         </Button>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button size="sm" variant="ghost" aria-label="Source actions">
+            <Button size="sm" variant="ghost" aria-label={`Source actions for ${s.name}`}>
               <MoreHorizontal className="h-4 w-4" />
             </Button>
           </DropdownMenuTrigger>
@@ -866,9 +866,13 @@ export default function SourcesPage() {
     return (
       <div className="space-y-4">
         <RouteBreadcrumbs items={[{ label: "Library" }]} />
+        <h1 className="text-xl font-semibold tracking-tight">Library</h1>
         <Card>
           <CardContent className="pt-6">
-            <p className="text-sm text-muted-foreground">
+            <p
+              className="text-sm text-muted-foreground"
+              role={engineState === "offline" ? "alert" : "status"}
+            >
               {engineState === "offline"
                 ? "Engine offline — start the print-partner engine to use Library."
                 : "Connecting to the engine…"}
@@ -1079,7 +1083,10 @@ export default function SourcesPage() {
             />
 
             {(pageLoadError || categoryError || reposImportNote || reposImportSyncNote) && (
-              <div className="space-y-1 text-sm">
+              <div
+                className="space-y-1 text-sm"
+                role={pageLoadError || categoryError ? "alert" : undefined}
+              >
                 {pageLoadError && <p className="text-destructive">{pageLoadError}</p>}
                 {categoryError && <p className="text-destructive">{categoryError}</p>}
                 {reposImportNote && <p className="text-muted-foreground">{reposImportNote}</p>}
@@ -1091,7 +1098,11 @@ export default function SourcesPage() {
 
             {showSourceSkeletons ? (
               viewMode === "grid" ? (
-                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                <div
+                  className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3"
+                  role="status"
+                  aria-label="Loading Source Library"
+                >
                   {Array.from({ length: 6 }, (_, i) => (
                     <div
                       key={i}
@@ -1107,7 +1118,11 @@ export default function SourcesPage() {
                   ))}
                 </div>
               ) : (
-                <div className="space-y-2">
+                <div
+                  className="space-y-2"
+                  role="status"
+                  aria-label="Loading Source Library"
+                >
                   {Array.from({ length: 6 }, (_, i) => (
                     <div
                       key={i}
@@ -1186,6 +1201,7 @@ export default function SourcesPage() {
             One repo per line: <code className="font-mono">name,url,branch</code> or a GitHub URL.
           </p>
           <textarea
+            aria-label="Repository list"
             className="min-h-40 w-full rounded-md border border-border bg-background px-3 py-2 font-mono text-xs"
             value={reposImportText}
             onChange={(e) => setReposImportText(e.target.value)}
@@ -1228,14 +1244,14 @@ export default function SourcesPage() {
               />
             </div>
             <div className="space-y-1">
-              <Label>Platform</Label>
+              <Label htmlFor="source-platform">Platform</Label>
               <Select
                 value={form.source_kind}
                 onValueChange={(v) =>
                   setForm((f) => ({ ...f, source_kind: v as SourceKind }))
                 }
               >
-                <SelectTrigger>
+                <SelectTrigger id="source-platform">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -1257,7 +1273,7 @@ export default function SourcesPage() {
               </Select>
             </div>
             <div className="space-y-1">
-              <Label>Category</Label>
+              <Label htmlFor="source-category">Category</Label>
               <Select
                 value={form.category || UNCategorized_FILTER}
                 onValueChange={(v) =>
@@ -1267,7 +1283,7 @@ export default function SourcesPage() {
                   }))
                 }
               >
-                <SelectTrigger>
+                <SelectTrigger id="source-category">
                   <SelectValue placeholder={sourceCategoryLabel(null)} />
                 </SelectTrigger>
                 <SelectContent>

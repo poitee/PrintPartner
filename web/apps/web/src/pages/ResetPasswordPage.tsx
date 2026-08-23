@@ -59,33 +59,41 @@ export default function ResetPasswordPage() {
           <CardDescription>Enter a new password for your account.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <label className="block text-sm">
-            <span className="mb-1 block text-muted-foreground">New password</span>
-            <input
-              type="password"
-              className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              autoComplete="new-password"
-            />
-          </label>
-          <label className="block text-sm">
-            <span className="mb-1 block text-muted-foreground">Confirm password</span>
-            <input
-              type="password"
-              className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
-              value={confirm}
-              onChange={(e) => setConfirm(e.target.value)}
-              autoComplete="new-password"
-            />
-          </label>
-          <Button
-            className="w-full"
-            disabled={busy || password.length < 8 || !confirm}
-            onClick={onSubmit}
+          <form
+            className="space-y-4"
+            onSubmit={(event) => {
+              event.preventDefault();
+              onSubmit();
+            }}
           >
-            {busy ? "Saving…" : "Update password"}
-          </Button>
+            <label className="block text-sm">
+              <span className="mb-1 block text-muted-foreground">New password</span>
+              <input
+                type="password"
+                className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                autoComplete="new-password"
+              />
+            </label>
+            <label className="block text-sm">
+              <span className="mb-1 block text-muted-foreground">Confirm password</span>
+              <input
+                type="password"
+                className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+                value={confirm}
+                onChange={(e) => setConfirm(e.target.value)}
+                autoComplete="new-password"
+              />
+            </label>
+            <Button
+              type="submit"
+              className="w-full"
+              disabled={busy || password.length < 8 || !confirm}
+            >
+              {busy ? "Saving…" : "Update password"}
+            </Button>
+          </form>
           <Link
             to="/login"
             className="block text-center text-sm text-primary hover:underline"

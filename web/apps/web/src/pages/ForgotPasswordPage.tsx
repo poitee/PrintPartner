@@ -67,7 +67,13 @@ export default function ForgotPasswordPage() {
         </CardHeader>
         <CardContent className="space-y-4">
           {!sent ? (
-            <>
+            <form
+              className="space-y-4"
+              onSubmit={(event) => {
+                event.preventDefault();
+                onSubmit();
+              }}
+            >
               <label className="block text-sm">
                 <span className="mb-1 block text-muted-foreground">Email</span>
                 <input
@@ -78,10 +84,10 @@ export default function ForgotPasswordPage() {
                   autoComplete="email"
                 />
               </label>
-              <Button className="w-full" disabled={busy || !email.trim()} onClick={onSubmit}>
+              <Button type="submit" className="w-full" disabled={busy || !email.trim()}>
                 {busy ? "Sending…" : "Send reset link"}
               </Button>
-            </>
+            </form>
           ) : (
             <p className="text-sm text-muted-foreground">
               If an account exists for that address, a link was sent. The link expires in one hour.

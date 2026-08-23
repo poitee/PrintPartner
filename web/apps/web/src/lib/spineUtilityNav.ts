@@ -2,11 +2,18 @@ import { globalSectionPath } from "./siteMap";
 import {
   buildsRoute,
   helpRoute,
+  libraryRoute,
   printersRoute,
   settingsRoute,
 } from "./routes";
 
-export type SpineUtilityId = "builds" | "production" | "printers" | "settings" | "help";
+export type SpineUtilityId =
+  | "builds"
+  | "library"
+  | "production"
+  | "printers"
+  | "settings"
+  | "help";
 
 export type SpineUtilityNavItem = {
   id: SpineUtilityId;
@@ -21,9 +28,15 @@ export function spineUtilityNavItems(
   return [
     { id: "builds", to: buildsRoute(profileId), label: "Builds", path: "/builds" },
     {
+      id: "library",
+      to: libraryRoute(),
+      label: "Source Library",
+      path: "/library",
+    },
+    {
       id: "production",
       to: globalSectionPath("production"),
-      label: "Production",
+      label: "All Production",
       path: "/production",
     },
     { id: "printers", to: printersRoute(), label: "Printers", path: "/printers" },

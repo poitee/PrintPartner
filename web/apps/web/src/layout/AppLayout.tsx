@@ -1,6 +1,14 @@
 import { type MouseEvent, useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
-import { BookOpen, Factory, Layers, MoreHorizontal, Printer, Settings } from "lucide-react";
+import {
+  BookOpen,
+  Factory,
+  Layers,
+  Library,
+  MoreHorizontal,
+  Printer,
+  Settings,
+} from "lucide-react";
 import CommandPalette from "../components/CommandPalette";
 import ErrorBoundary from "../components/ErrorBoundary";
 import JobTray from "../components/JobTray";
@@ -51,6 +59,7 @@ import { TooltipProvider } from "../components/ui/tooltip";
 
 const UTILITY_ICONS: Record<SpineUtilityId, typeof Layers> = {
   builds: Layers,
+  library: Library,
   production: Factory,
   printers: Printer,
   settings: Settings,
@@ -193,7 +202,12 @@ export default function AppLayout() {
                         <NavLink
                           to={item.to}
                           onClick={(e) => onPipelineNavigate(item.to, e)}
-                          className="flex w-full cursor-pointer items-center gap-2"
+                          className={({ isActive }) =>
+                            cn(
+                              "flex w-full cursor-pointer items-center gap-2",
+                              isActive && "bg-accent font-semibold text-accent-foreground",
+                            )
+                          }
                         >
                           <item.icon className="h-4 w-4" />
                           {item.label}

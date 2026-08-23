@@ -175,7 +175,7 @@ export default function LibrarySourceCard({
                 size="sm"
                 variant="ghost"
                 className="h-7 w-7 shrink-0 p-0"
-                aria-label="Source actions"
+                aria-label={`Source actions for ${source.name}`}
               >
                 <MoreHorizontal className="h-4 w-4" />
               </Button>

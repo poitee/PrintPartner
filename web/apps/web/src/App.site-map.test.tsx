@@ -152,15 +152,15 @@ describe("accepted site map routes", () => {
     );
   });
 
-  it("sends a profile on /production to Build Production", async () => {
+  it("keeps stale profile links on All Production", async () => {
     render(
       <MemoryRouter initialEntries={["/production?profile=7"]}>
         <App />
       </MemoryRouter>,
     );
 
-    expect((await screen.findByRole("heading", { name: "Build Production" })).textContent).toBe(
-      "Build Production",
+    expect((await screen.findByRole("heading", { name: "Global Production" })).textContent).toBe(
+      "Global Production",
     );
   });
 
@@ -174,5 +174,19 @@ describe("accepted site map routes", () => {
     expect((await screen.findByRole("heading", { name: "Global Production" })).textContent).toBe(
       "Global Production",
     );
+  });
+
+  it("shows recovery links for an unknown authenticated route", async () => {
+    render(
+      <MemoryRouter initialEntries={["/missing-page"]}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { name: "Page not found" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Go to Builds" }).getAttribute("href")).toBe(
+      "/builds",
+    );
+    expect(screen.getByRole("link", { name: "Open Help" }).getAttribute("href")).toBe("/help");
   });
 });

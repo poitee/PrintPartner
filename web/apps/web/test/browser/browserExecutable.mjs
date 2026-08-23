@@ -1,8 +1,18 @@
 import { existsSync } from "node:fs";
 import process from "node:process";
+import { chromium } from "playwright-core";
+
+function configuredPlaywrightChromium() {
+  try {
+    return chromium.executablePath();
+  } catch {
+    return undefined;
+  }
+}
 
 const candidates = [
   process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE,
+  configuredPlaywrightChromium(),
   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
   "/usr/local/bin/google-chrome",
   "/usr/bin/google-chrome",

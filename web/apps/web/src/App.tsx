@@ -11,7 +11,7 @@ import { SaveStatusProvider } from "./context/SaveStatusContext";
 import { AuthProvider } from "./context/AuthContext";
 import AuthGate from "./components/AuthGate";
 import AppLayout from "./layout/AppLayout";
-import { buildSourcesRoute, productionRoute } from "./lib/routes";
+import { buildSourcesRoute } from "./lib/routes";
 
 // ─── Lazy page bundles ────────────────────────────────────────────────────────
 // Each page is split into its own async chunk so browsers only download what
@@ -30,6 +30,7 @@ const PlansPage      = lazy(() => import("./pages/PlansPage"));
 const PrintersPage   = lazy(() => import("./pages/PrintersPage"));
 const SettingsPage   = lazy(() => import("./pages/SettingsPage"));
 const SourcesPage    = lazy(() => import("./pages/SourcesPage"));
+const NotFoundPage   = lazy(() => import("./pages/NotFoundPage"));
 
 // ─── Minimal page-transition fallback ─────────────────────────────────────────
 // Shown only on first load of a chunk — cached chunks render instantly.
@@ -69,15 +70,6 @@ function PreserveSearchRedirect({ to }: { to: string }) {
 
 function IndexRedirect() {
   return <PreserveSearchRedirect to="/builds" />;
-}
-
-function GlobalProductionRoute() {
-  const location = useLocation();
-  const id = Number(new URLSearchParams(location.search).get("profile"));
-  if (Number.isSafeInteger(id) && id > 0) {
-    return <Navigate to={productionRoute(id)} replace />;
-  }
-  return <GlobalProductionPage />;
 }
 
 export default function App() {
@@ -128,7 +120,7 @@ export default function App() {
                               element={<PreserveSearchRedirect to="/progress" />}
                             />
 
-                            <Route path="production" element={<GlobalProductionRoute />} />
+                            <Route path="production" element={<GlobalProductionPage />} />
                             <Route path="export" element={<ExportPage />} />
 
                             <Route path="plans/:planId/studio" element={<LegacyStudioRedirect />} />
@@ -144,6 +136,7 @@ export default function App() {
                             <Route path="printers" element={<PrintersPage />} />
                             <Route path="settings" element={<SettingsPage />} />
                             <Route path="help" element={<HelpPage />} />
+                            <Route path="*" element={<NotFoundPage />} />
                           </Route>
                         </Route>
                       </Routes>

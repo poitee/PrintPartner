@@ -3,6 +3,7 @@ import {
   parseProfileParam,
   profileIdFromUrl,
   searchParamsWithProfile,
+  shouldSyncProfileToPath,
 } from "./profileUrlSync";
 
 describe("parseProfileParam", () => {
@@ -16,6 +17,13 @@ describe("parseProfileParam", () => {
     expect(parseProfileParam("0")).toBeNull();
     expect(parseProfileParam("-1")).toBeNull();
     expect(parseProfileParam("abc")).toBeNull();
+  });
+});
+
+describe("shouldSyncProfileToPath", () => {
+  it("keeps global Production independent from the selected build", () => {
+    expect(shouldSyncProfileToPath("/production")).toBe(false);
+    expect(shouldSyncProfileToPath("/export")).toBe(true);
   });
 });
 

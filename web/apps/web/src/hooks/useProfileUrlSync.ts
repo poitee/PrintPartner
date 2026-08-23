@@ -1,16 +1,18 @@
 import { useEffect, useRef } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useLocation, useSearchParams } from "react-router-dom";
 import { useProfileSelection } from "../context/ProfileContext";
 import { shouldBlockUrlProfileSync } from "./profileSelection";
 import {
   parseProfileParam,
   profileIdFromUrl,
   searchParamsWithProfile,
+  shouldSyncProfileToPath,
 } from "./profileUrlSync";
 
 /** Bidirectional sync between selected plan and ?profile= URL param. */
 export function useProfileUrlSync() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const location = useLocation();
   const {
     profiles,
     selectedProfileId,
@@ -56,6 +58,7 @@ export function useProfileUrlSync() {
   // setSearchParams on a no-op still replaces history and drops location.state
   // (e.g. the kit-import payload passed to the Build page).
   useEffect(() => {
+    if (!shouldSyncProfileToPath(location.pathname)) return;
     const next = searchParamsWithProfile(searchParamsRef.current, selectedProfileId);
     if (next) {
       setSearchParams(next, { replace: true });
@@ -66,5 +69,5 @@ export function useProfileUrlSync() {
     ) {
       clearPendingSelection(selectedProfileId);
     }
-  }, [selectedProfileId, setSearchParams, clearPendingSelection]);
+  }, [location.pathname, selectedProfileId, setSearchParams, clearPendingSelection]);
 }

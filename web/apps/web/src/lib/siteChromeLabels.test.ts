@@ -9,7 +9,8 @@ describe("site chrome labels", () => {
     expect([...BUILD_SECTIONS]).toEqual(["sources", "plan", "checkoff", "production"]);
     expect(spineUtilityNavItems(null).map((item) => item.label)).toEqual([
       "Builds",
-      "Production",
+      "Source Library",
+      "All Production",
       "Printers",
       "Settings",
       "Help",

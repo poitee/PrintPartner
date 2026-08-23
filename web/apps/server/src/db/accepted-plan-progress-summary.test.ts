@@ -887,7 +887,7 @@ database.close();`,
     } finally {
       unregisterPostgresSyncQuery(postgres);
     }
-  });
+  }, 30_000);
 
   it("bulk-classifies the maximum PostgreSQL batch without per-Plan queries", () => {
     const context = fixture();

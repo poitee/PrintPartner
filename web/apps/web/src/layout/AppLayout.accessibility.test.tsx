@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import AppLayout from "./AppLayout";
@@ -55,6 +55,7 @@ describe("application shell accessibility", () => {
   });
 
   afterEach(() => {
+    cleanup();
     document.documentElement.style.removeProperty("--app-sidebar-width");
     document.documentElement.style.removeProperty("--mobile-stage-height");
   });
@@ -80,5 +81,23 @@ describe("application shell accessibility", () => {
     expect(skipLink.getAttribute("href")).toBe("#main-content");
     expect(skipLink.classList.contains("skip-link")).toBe(true);
     expect(main.id).toBe("main-content");
+  });
+
+  it("marks the current destination in the mobile utility menu", async () => {
+    render(
+      <MemoryRouter initialEntries={["/library"]}>
+        <Routes>
+          <Route element={<AppLayout />}>
+            <Route path="library" element={<h1>Library</h1>} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "More" }));
+
+    const link = await screen.findByRole("menuitem", { name: "Source Library" });
+    expect(link.getAttribute("aria-current")).toBe("page");
+    expect(link.className).toContain("bg-accent");
   });
 });

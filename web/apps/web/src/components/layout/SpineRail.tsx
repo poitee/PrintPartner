@@ -4,6 +4,7 @@ import {
   BookOpen,
   Factory,
   Layers,
+  Library,
   PanelLeftClose,
   PanelLeftOpen,
   Printer,
@@ -42,6 +43,7 @@ const UTILITY_ICONS: Record<
   typeof Layers
 > = {
   builds: Layers,
+  library: Library,
   production: Factory,
   printers: Printer,
   settings: Settings,
