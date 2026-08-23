@@ -167,6 +167,8 @@ function setupUnit(unit: AcceptedPlateSetupUnit): AcceptedPlateSetupUnitContract
     source_layer: unit.sourceLayer,
     role: unit.role,
     filament_color_id: unit.filamentColorId,
+    ...(unit.filamentCustomHex == null ? {} : { filament_custom_hex: unit.filamentCustomHex }),
+    ...(unit.filamentHex == null ? {} : { filament_hex: unit.filamentHex }),
     completed: unit.completed ?? false,
   };
 }

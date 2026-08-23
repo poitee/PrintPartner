@@ -68,6 +68,8 @@ const acceptedPlateSetupUnitSchema = z.strictObject({
   source_layer: z.string().max(500),
   role: z.string().max(200),
   filament_color_id: z.string().min(1).max(200).nullable(),
+  filament_custom_hex: z.string().trim().max(100).nullable().optional(),
+  filament_hex: z.string().trim().max(100).nullable().optional(),
   completed: z.boolean().default(false),
 }).superRefine((value, context) => {
   if (!value.object_name.endsWith(`__${value.token}`)) {

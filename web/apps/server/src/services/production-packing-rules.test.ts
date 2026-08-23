@@ -44,4 +44,19 @@ describe("production packing rules", () => {
       { id: "materials", enabled: true, kind: "separate_by", field: "material" },
     ])).toEqual([["a", "b"], ["c"]]);
   });
+
+  it("separates custom hex colors and normalizes their spelling", () => {
+    const customHexUnits = [
+      { ...units[0], token: "hex-a", filamentColorId: null, filamentCustomHex: "#FF6600" },
+      { ...units[1], token: "hex-b", filamentColorId: null, filamentCustomHex: "ff6600" },
+      { ...units[2], token: "hex-c", filamentColorId: null, filamentCustomHex: "#008000" },
+    ];
+
+    expect(productionPackingBuckets(customHexUnits, [
+      { id: "custom-colors", enabled: true, kind: "separate_by", field: "color" },
+    ]).map((bucket) => bucket.map((unit) => unit.token))).toEqual([
+      ["hex-a", "hex-b"],
+      ["hex-c"],
+    ]);
+  });
 });

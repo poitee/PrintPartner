@@ -14,6 +14,7 @@ import {
 import AcceptedPlatePositionEditor from "./AcceptedPlatePositionEditor";
 import AcceptedPlateUnitActions from "./AcceptedPlateUnitActions";
 import AcceptedPlate3DPreview from "./AcceptedPlate3DPreview";
+import { acceptedPlateUnitColor } from "../../../lib/acceptedPlateColor";
 
 type ReadyWorkspace = Extract<AcceptedPlateWorkspace, { kind: "ready" }>;
 
@@ -209,6 +210,16 @@ export default function AcceptedPlateBed({
             <stop offset="0%" stopColor="rgb(74 222 128)" stopOpacity="0.72" />
             <stop offset="100%" stopColor="rgb(14 165 233)" stopOpacity="0.42" />
           </linearGradient>
+          {plate.units.map((unit) => {
+            const color = acceptedPlateUnitColor(unit);
+            if (!color) return null;
+            return (
+              <linearGradient key={unit.token} id={`part-fill-${plate.plate_id}-${unit.token}`} x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0%" stopColor={color} stopOpacity="0.82" />
+                <stop offset="100%" stopColor={color} stopOpacity="0.46" />
+              </linearGradient>
+            );
+          })}
           <filter id={`part-glow-${plate.plate_id}`} x="-30%" y="-30%" width="160%" height="160%">
             <feDropShadow dx="0" dy="0" stdDeviation="1800" floodColor="rgb(56 189 248)" floodOpacity="0.5" />
           </filter>
@@ -235,7 +246,7 @@ export default function AcceptedPlateBed({
                 width={unit.width_um}
                 height={unit.depth_um}
                 rx={1_500}
-                fill={`url(#part-fill-${plate.plate_id})`}
+                fill={`url(#part-fill-${plate.plate_id}${acceptedPlateUnitColor(unit) ? `-${unit.token}` : ""})`}
                 stroke={selectedUnit ? "rgb(186 230 253)" : "rgb(56 189 248)"}
                 filter={selectedUnit ? `url(#part-glow-${plate.plate_id})` : undefined}
                 className="cursor-grab active:cursor-grabbing"

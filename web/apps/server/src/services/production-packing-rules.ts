@@ -12,16 +12,33 @@ export type ProductionPackingUnit = Readonly<{
   sourceLayer: string;
   role: string;
   filamentColorId: string | null;
+  filamentCustomHex?: string | null;
   materialType?: string | null;
 }>;
 
+function colorValue(value: string | null | undefined): string {
+  const trimmed = value?.trim() ?? "";
+  if (!trimmed) return "unassigned";
+  const hex = trimmed.replace(/^#/, "").toLowerCase();
+  return /^[0-9a-f]{6}(?:[0-9a-f]{2})?$/.test(hex)
+    ? `hex:${hex}`
+    : `id:${trimmed}`;
+}
+
 function fieldValue(unit: ProductionPackingUnit, field: ProductionGroupingField): string {
   if (field === "material") return unit.materialType ?? "unassigned";
-  if (field === "color") return unit.filamentColorId ?? "unassigned";
+  if (field === "color") {
+    const catalogColor = unit.filamentColorId?.trim();
+    return colorValue(catalogColor || unit.filamentCustomHex);
+  }
   if (field === "source_directory") return unit.sourceDirectory || "unassigned";
   if (field === "source_layer") return unit.sourceLayer || "unassigned";
   if (field === "role") return unit.role || "unassigned";
   return unit.objectName || unit.filename;
+}
+
+function ruleFieldValue(field: ProductionGroupingField, value: string): string {
+  return field === "color" ? colorValue(value) : value;
 }
 
 function withAssignedMaterial(
@@ -29,7 +46,8 @@ function withAssignedMaterial(
   rules: readonly ProductionGroupingRule[],
 ): ProductionPackingUnit {
   const materialRule = rules.find((rule) =>
-    rule.enabled && rule.kind === "set_material" && fieldValue(unit, rule.field) === rule.value
+    rule.enabled && rule.kind === "set_material" &&
+    fieldValue(unit, rule.field) === ruleFieldValue(rule.field, rule.value)
   );
   return materialRule?.kind === "set_material"
     ? { ...unit, materialType: materialRule.material_type }
@@ -51,7 +69,9 @@ export function productionPackingBuckets<T extends ProductionPackingUnit>(
     const key = groupingRules.map((rule) => {
       const value = fieldValue(effectiveUnit, rule.field);
       if (rule.kind === "separate_by") return `${rule.id}:value:${value}`;
-      return value === rule.value ? `${rule.id}:match` : `${rule.id}:other`;
+      return value === ruleFieldValue(rule.field, rule.value)
+        ? `${rule.id}:match`
+        : `${rule.id}:other`;
     }).join("\u0000");
     const bucket = buckets.get(key) ?? [];
     bucket.push(unit);

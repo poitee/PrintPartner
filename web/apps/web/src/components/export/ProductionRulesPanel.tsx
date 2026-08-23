@@ -6,6 +6,12 @@ import type {
 } from "@print-partner/contracts";
 import { toast } from "sonner";
 import { fetchPrinters, type PrinterMachine } from "../../api/engine";
+import { isAcceptedPlateStaleError } from "../../api/endpoints/acceptedPlates";
+import {
+  useAcceptedPlateRevisionPending,
+  useAcceptedPlateWorkspaceQuery,
+  useInitializeAcceptedPlatesMutation,
+} from "../../queries/acceptedPlates";
 import { useProductionSetup } from "../../queries/productionSetup";
 import { Button } from "../ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui/card";
@@ -30,6 +36,9 @@ function newId(): string {
 
 export default function ProductionRulesPanel({ profileId }: { profileId: number }) {
   const setup = useProductionSetup(profileId);
+  const workspaceQuery = useAcceptedPlateWorkspaceQuery(profileId);
+  const initialize = useInitializeAcceptedPlatesMutation(profileId);
+  const revisionWritePending = useAcceptedPlateRevisionPending(profileId);
   const [kind, setKind] = useState<ProductionGroupingRule["kind"]>("separate_by");
   const [field, setField] = useState<ProductionGroupingField>("material");
   const [value, setValue] = useState("");
@@ -37,6 +46,40 @@ export default function ProductionRulesPanel({ profileId }: { profileId: number 
   const [materialType, setMaterialType] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [printers, setPrinters] = useState<PrinterMachine[]>([]);
+
+  const regeneratePlates = async () => {
+    const workspace = workspaceQuery.data;
+    if (workspace?.kind !== "ready") return;
+    if (workspace.unassigned.length > 0) {
+      toast.error("Assign every unit to a printer before regenerating Plates.");
+      return;
+    }
+    const assignments = [
+      ...workspace.plates.flatMap((plate) => plate.units.map((unit) => ({
+        token: unit.token,
+        printer_id: plate.printer.id,
+      }))),
+      ...workspace.unplaced.map((unit) => ({
+        token: unit.token,
+        printer_id: unit.printer_id,
+      })),
+    ];
+    try {
+      await initialize.mutateAsync({
+        expected: workspace.basis,
+        expected_plate_revision_id: workspace.plate_revision_id,
+        assignments,
+      });
+      toast.success("Plates regenerated using the current rules.");
+    } catch (error) {
+      if (isAcceptedPlateStaleError(error)) {
+        await workspaceQuery.refetch();
+        toast.error("Newer Plate state replaced this edit. Refresh and try again.");
+        return;
+      }
+      toast.error(error instanceof Error ? error.message : "Could not regenerate Plates.");
+    }
+  };
 
   useEffect(() => {
     void fetchPrinters().then(setPrinters).catch(() => setPrinters([]));
@@ -128,6 +171,33 @@ export default function ProductionRulesPanel({ profileId }: { profileId: number 
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4 pt-0">
+        {workspaceQuery.data?.kind === "ready" ? (
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-muted/30 p-3">
+            <div className="space-y-1">
+              <p className="text-sm font-medium">Apply rules to the current Plates</p>
+              <p className="text-xs text-muted-foreground">
+                Regeneration repacks every assigned unit and replaces manual Plate positions.
+                {workspaceQuery.data.unassigned.length > 0
+                  ? " Assign all units first."
+                  : " Your current printer assignments are preserved."}
+              </p>
+            </div>
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => void regeneratePlates()}
+              disabled={
+                setup.saving ||
+                initialize.isPending ||
+                revisionWritePending ||
+                workspaceQuery.data.unassigned.length > 0
+              }
+              loading={initialize.isPending}
+            >
+              Regenerate plates
+            </Button>
+          </div>
+        ) : null}
         <div className="grid gap-2 md:grid-cols-[1.15fr_1fr_1.4fr_auto]">
           <Select value={kind} onValueChange={(next) => setKind(next as ProductionGroupingRule["kind"])}>
             <SelectTrigger><SelectValue /></SelectTrigger>

@@ -13,6 +13,7 @@ import {
 } from "./accepted-plan-operational.js";
 import { acceptedPlanBasis, type AcceptedPlanBasis } from "./accepted-plan-progress.js";
 import { parseRequiredUnitToken, type RequiredUnitToken } from "../services/required-units.js";
+import { resolvePartFilamentHex } from "../services/filament-catalog.js";
 
 export const MAX_ACCEPTED_PLATE_UM = 2_147_483_647;
 export const ACCEPTED_PLATE_LAYOUT_FORMAT = 2;
@@ -206,6 +207,8 @@ export type AcceptedPlateSetupUnit = Readonly<{
   sourceLayer: string;
   role: string;
   filamentColorId: string | null;
+  filamentCustomHex?: string | null;
+  filamentHex?: string | null;
   completed?: boolean;
   artifact: AcceptedOperationalArtifact;
 }>;
@@ -832,6 +835,8 @@ function acceptedPlateSetupUnits(snapshot: AcceptedPlanOperationalSnapshot): Acc
         sourceLayer: part.sourceLayer,
         role: part.effectiveRole,
         filamentColorId: part.filamentColorId,
+        filamentCustomHex: part.filamentCustomHex,
+        filamentHex: resolvePartFilamentHex(part),
         completed: unit.completed,
         artifact: part.artifact,
       })));

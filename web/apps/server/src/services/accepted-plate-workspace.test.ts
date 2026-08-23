@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { parseAcceptedStlMesh } from "@print-partner/domain";
-import type { AcceptedPlateInput } from "../db/accepted-plates.js";
+import type { AcceptedPlateInput, AcceptedPlateSetupUnit } from "../db/accepted-plates.js";
 import { parseRequiredUnitToken } from "./required-units.js";
 import {
   initializeAcceptedPlates,
@@ -18,22 +18,23 @@ const basis = {
 
 const token = parseRequiredUnitToken("ppu_00000000000000000000000000000001");
 const secondToken = parseRequiredUnitToken("ppu_00000000000000000000000000000002");
+const setupUnit: AcceptedPlateSetupUnit = {
+  token,
+  partId: null,
+  objectName: `bracket__${token}`,
+  filename: "bracket.stl",
+  relativePath: "parts/bracket.stl",
+  sourceDirectory: "parts",
+  sourceLayer: "base:test",
+  role: "primary",
+  filamentColorId: "black",
+  artifact: { kind: "unavailable", reason: "untracked_source" },
+};
 const setupInput = {
   kind: "setup" as const,
   basis,
   expectedPlateRevisionId: null,
-  units: [{
-    token,
-    partId: null,
-    objectName: `bracket__${token}`,
-    filename: "bracket.stl",
-    relativePath: "parts/bracket.stl",
-    sourceDirectory: "parts",
-    sourceLayer: "base:test",
-    role: "primary",
-    filamentColorId: "black",
-    artifact: { kind: "unavailable" as const, reason: "untracked_source" as const },
-  }],
+  units: [setupUnit],
 };
 
 function dependencies(): AcceptedPlateWorkspaceDependencies & {
@@ -313,6 +314,55 @@ describe("accepted Plate workspace", () => {
     vi.mocked(deps.repository.readAcceptedPlateWorkspaceInput).mockReturnValue({
       ...setupInput,
       units: [...setupInput.units, secondUnit],
+    });
+    deps.repository.getSetting = vi.fn(() => JSON.stringify({
+      format: "production-setup-v1",
+      profile_id: 7,
+      preferred_slicer_instance_id: null,
+      selection: { mode: "all_incomplete" },
+      rules: [{ id: "colors", enabled: true, kind: "separate_by", field: "color" }],
+      updated_at: "2026-08-23T00:00:00.000Z",
+    }));
+    deps.loadGeometry.mockResolvedValue({
+      kind: "ready",
+      geometryByToken: new Map([[token, geometry()], [secondToken, geometry()]]),
+    });
+
+    await initializeAcceptedPlates(deps, {
+      profileId: 7,
+      expected: basis,
+      expectedPlateRevisionId: null,
+      assignments: [
+        { token, printerId: "printer-one" },
+        { token: secondToken, printerId: "printer-one" },
+      ],
+    });
+
+    expect(deps.publish).toHaveBeenCalledWith(expect.objectContaining({
+      plates: [
+        expect.objectContaining({ units: [expect.objectContaining({ token })] }),
+        expect.objectContaining({ units: [expect.objectContaining({ token: secondToken })] }),
+      ],
+    }));
+  });
+
+  it("publishes separate Plates when custom hex colors are separated", async () => {
+    const deps = publishingDependencies();
+    const firstUnit = {
+      ...setupInput.units[0],
+      filamentColorId: null,
+      filamentCustomHex: "#FF6600",
+    };
+    const secondUnit = {
+      ...firstUnit,
+      token: secondToken,
+      objectName: `clip__${secondToken}`,
+      filename: "clip.stl",
+      filamentCustomHex: "#008000",
+    };
+    vi.mocked(deps.repository.readAcceptedPlateWorkspaceInput).mockReturnValue({
+      ...setupInput,
+      units: [firstUnit, secondUnit],
     });
     deps.repository.getSetting = vi.fn(() => JSON.stringify({
       format: "production-setup-v1",

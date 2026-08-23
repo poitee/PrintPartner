@@ -4,11 +4,14 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
 import { partMeshUrl } from "../../../api/engine";
+import { acceptedPlateUnitColor } from "../../../lib/acceptedPlateColor";
 
 const MAX_PREVIEW_PARTS = 40;
 const MAX_MESH_BYTES = 15 * 1024 * 1024;
 
-function unitColor(index: number): THREE.Color {
+function unitColor(unit: { filament_hex?: string | null; filament_custom_hex?: string | null; filament_color_id?: string | null }, index: number): THREE.Color {
+  const selected = acceptedPlateUnitColor(unit);
+  if (selected) return new THREE.Color(selected);
   const colors = [0x38bdf8, 0x4ade80, 0xfb923c, 0xc084fc, 0xfacc15];
   return new THREE.Color(colors[index % colors.length]);
 }
@@ -122,7 +125,7 @@ export default function AcceptedPlate3DPreview({
           geometry.translate(-bounds.min.x, -bounds.min.y, -bounds.min.z);
           geometry.computeVertexNormals();
           const material = new THREE.MeshStandardMaterial({
-            color: unitColor(index),
+            color: unitColor(unit, index),
             roughness: 0.34,
             metalness: 0.08,
           });
