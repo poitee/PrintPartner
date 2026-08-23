@@ -299,9 +299,15 @@ function sendMoveFailure(reply: FastifyReply, result: Exclude<ReturnType<AppRepo
 
 function sendIntegrityFailure(request: FastifyRequest, reply: FastifyReply, error: unknown) {
   if (error instanceof AcceptedPlateIntegrityError || error instanceof AcceptedPlanOperationalIntegrityError) {
-    request.log.error({ operation: "accepted_plate", code: error.code }, "Accepted Plate integrity failure");
+    request.log.error(
+      { err: error, operation: "accepted_plate", code: error.code },
+      "Accepted Plate integrity failure",
+    );
   } else {
-    request.log.error({ operation: "accepted_plate", failure: "unexpected" }, "Accepted Plate request failed");
+    request.log.error(
+      { err: error, operation: "accepted_plate", failure: "unexpected" },
+      "Accepted Plate request failed",
+    );
   }
   return sendError(reply, 500, "internal_error", "Accepted Plate data is inconsistent");
 }
