@@ -95,7 +95,13 @@ describe("AcceptedPlateAssignmentForm", () => {
       }],
     });
     if (workspace.kind !== "ready") throw new Error("Expected ready workspace");
-    render(<AcceptedPlateAssignmentForm workspace={workspace} submitting={false} onSubmit={vi.fn()} />);
+    render(
+      <AcceptedPlateAssignmentForm
+        workspace={workspace}
+        submitting={false}
+        onSubmit={vi.fn()}
+      />,
+    );
 
     const select = screen.getByRole("combobox", { name: "Printer" });
     const rearrange = screen.getByRole("button", { name: "Rearrange Plates" });
@@ -170,6 +176,51 @@ describe("AcceptedPlateAssignmentForm", () => {
         { token: thirdToken, printer_id: "printer-two" },
       ],
     })));
+  });
+
+  it("reflects part search filters in the group printer controls", () => {
+    const secondToken = `ppu_${"d".repeat(32)}`;
+    const workspace = parseAcceptedPlateWorkspace({
+      kind: "setup",
+      basis,
+      expected_plate_revision_id: null,
+      printers: [printer],
+      units: [
+        unit,
+        {
+          ...unit,
+          token: secondToken,
+          object_name: `clip__${secondToken}`,
+          source_layer: "Controls",
+        },
+      ],
+    });
+    if (workspace.kind !== "setup") throw new Error("Expected setup workspace");
+    render(
+      <AcceptedPlateAssignmentForm
+        workspace={workspace}
+        savedAssignments={[{ token, printer_id: printer.id }]}
+        submitting={false}
+        onSubmit={vi.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search Plate assignments" }), {
+      target: { value: "Controls" },
+    });
+
+    expect(screen.getByRole("combobox", { name: "Assign Controls Source layer" })).toBeDefined();
+    expect(screen.queryByRole("combobox", { name: "Assign Hardware Source layer" })).toBeNull();
+
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search Plate assignments" }), {
+      target: { value: "" },
+    });
+    fireEvent.change(screen.getByRole("combobox", { name: "Filter Plate assignments" }), {
+      target: { value: "assigned" },
+    });
+
+    expect(screen.getByRole("combobox", { name: "Assign Hardware Source layer" })).toBeDefined();
+    expect(screen.queryByRole("combobox", { name: "Assign Controls Source layer" })).toBeNull();
   });
 
   it("submits only selected Required units", async () => {
