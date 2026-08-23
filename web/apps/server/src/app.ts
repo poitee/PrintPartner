@@ -42,6 +42,7 @@ import { getDb } from "./db/client.js";
 import { createAuthStore, type AuthStore } from "./services/auth-store.js";
 import { validateApiKey } from "./services/api-key-manager.js";
 import { migrateLegacySelfHostExports } from "./services/legacy-export-migration.js";
+import { prepareSqliteUpgrade } from "./db/upgrade-guard.js";
 
 export type RuntimePorts = AppPorts & {
   repository?: AppRepository;
@@ -336,6 +337,17 @@ export async function buildApp(config: ServerConfig, ports: RuntimePorts) {
 
 export async function startServer(config: ServerConfig) {
   validateProductionConfig(config);
+  if (!config.databaseUrl) {
+    const preparation = await prepareSqliteUpgrade({
+      dataDir: config.dataDir,
+      appVersion: config.version,
+    });
+    if (preparation.kind === "backup-created") {
+      console.info(
+        `[upgrade] protected schema ${preparation.fromVersion} at ${preparation.backupPath} before starting schema ${preparation.toVersion}`,
+      );
+    }
+  }
   const ports = createPorts(config);
   await ports.db.connect();
 

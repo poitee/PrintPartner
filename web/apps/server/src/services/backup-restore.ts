@@ -14,6 +14,16 @@ import type { ReadEntry } from "tar";
 import Database from "better-sqlite3";
 import type { SqliteDatabase } from "../db/client.js";
 
+export type BackupDatabase = {
+  readonly dbPath: string;
+  ping(): boolean;
+  backupToFile(destinationPath: string): Promise<void>;
+};
+
+export type CreateBackupOptions = Readonly<{
+  includeDataDirectories?: boolean;
+}>;
+
 export type BackupMetadata = {
   version: string;
   createdAt: string;
@@ -242,10 +252,11 @@ async function extractValidatedBackup(
  * Uses SQLite's backup API to ensure consistency.
  */
 export async function createBackup(
-  sqlite: SqliteDatabase | null,
+  sqlite: BackupDatabase | null,
   dataDir: string,
   appVersion: string,
   outputPath: string,
+  options: CreateBackupOptions = {},
 ): Promise<void> {
   if (!sqlite) {
     throw new Error("SQLite database not available; backups require self-host mode");
@@ -281,7 +292,7 @@ export async function createBackup(
     );
 
     const archiveEntries: string[] = [];
-    for (const directory of BACKUP_DIRECTORIES) {
+    for (const directory of options.includeDataDirectories === false ? [] : BACKUP_DIRECTORIES) {
       const source = join(dataDir, directory);
       try {
         const stats = await fs.lstat(source);

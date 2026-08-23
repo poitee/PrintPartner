@@ -40,7 +40,7 @@ export default function UpdateAvailableBanner({
   const releaseUrl = updateCheck.release_url ?? updateCheck.release_notes_url;
   const dockerHint =
     updateCheck.deploy_mode === "self-host"
-      ? " Upgrade with docker compose pull && docker compose up --build."
+      ? " Upgrade with docker compose pull && docker compose up -d. Print Partner backs up the database before migration."
       : "";
 
   return (

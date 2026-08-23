@@ -35,6 +35,8 @@ docker compose pull
 docker compose up -d
 ```
 
+On first startup of each new release, Print Partner creates and validates a database backup in `/data/backups` before it runs migrations. If backup creation or validation fails, the server does not modify the database or start. Repeated starts of the same release reuse the existing pre-update backup.
+
 Open [http://localhost:8080](http://localhost:8080). Check the service if the page does not load:
 
 ```bash
@@ -134,7 +136,7 @@ If you build locally, replace `docker compose pull` with:
 docker compose build --pull
 ```
 
-Back up the data volume before a major upgrade.
+Create and download a full backup before a storage change or major import. The automatic pre-update backup contains the database. A full backup also contains stored source files and generated assets.
 
 ## Change the port
 

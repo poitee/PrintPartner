@@ -100,6 +100,11 @@ export class SqliteDatabase {
           )?.value,
         )
       : 0;
+    if (versionBeforeMigration > currentSchemaVersion) {
+      throw new Error(
+        `Database schema version ${versionBeforeMigration} is newer than supported version ${currentSchemaVersion}`,
+      );
+    }
     for (const stmt of schemaMigrations) {
       try {
         this.sqlite.exec(stmt);

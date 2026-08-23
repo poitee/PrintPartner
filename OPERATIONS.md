@@ -78,13 +78,17 @@ Test restore procedures on a disposable copy before depending on them for recove
 
 ## Update
 
-Read [CHANGELOG.md](CHANGELOG.md), create a backup, then update:
+Read [CHANGELOG.md](CHANGELOG.md), then update:
 
 ```bash
 git pull --ff-only
 docker compose pull
 docker compose up -d
 ```
+
+Before Print Partner opens an existing SQLite database with a new application release, it creates and validates a database backup under `/data/backups`. Startup stops before migration if the backup fails. The backup filename identifies the target application and schema versions. Restarting the same release reuses the backup instead of creating duplicates.
+
+This automatic backup protects database records during an update. Continue to create and download a full backup before storage changes or major imports. Full backups also contain source files, exports, thumbnails, and covers.
 
 Watch startup and migration logs:
 
@@ -93,6 +97,8 @@ docker compose logs -f print-partner
 ```
 
 Confirm the reported version and open an existing Build before considering the upgrade complete.
+
+Print Partner refuses to open a database whose schema is newer than the application supports. To roll back across a schema change, restore the matching pre-update backup instead of starting an older image against the migrated database.
 
 If you build locally:
 
