@@ -121,9 +121,8 @@ export default function SourceCategoryManager({ engineReady }: Props) {
   );
 
   useEffect(() => {
-    if (sameCategories(draft, categories)) draftDirtyRef.current = false;
     if (!draftDirtyRef.current) setDraft(categories);
-  }, [categories, draft]);
+  }, [categories]);
 
   const queryError =
     categoriesQuery.error instanceof Error
@@ -143,15 +142,21 @@ export default function SourceCategoryManager({ engineReady }: Props) {
       setLoadError("That category already exists.");
       return;
     }
-    draftDirtyRef.current = true;
-    setDraft((prev) => [...prev, name]);
+    setDraft((prev) => {
+      const next = [...prev, name];
+      draftDirtyRef.current = !sameCategories(next, categories);
+      return next;
+    });
     setNewName("");
     setLoadError(null);
   };
 
   const onRename = (index: number, value: string) => {
-    draftDirtyRef.current = true;
-    setDraft((prev) => prev.map((c, i) => (i === index ? value : c)));
+    setDraft((prev) => {
+      const next = prev.map((c, i) => (i === index ? value : c));
+      draftDirtyRef.current = !sameCategories(next, categories);
+      return next;
+    });
   };
 
   const onRemove = (index: number) => {
@@ -159,8 +164,11 @@ export default function SourceCategoryManager({ engineReady }: Props) {
       setLoadError("Keep at least one category.");
       return;
     }
-    draftDirtyRef.current = true;
-    setDraft((prev) => prev.filter((_, i) => i !== index));
+    setDraft((prev) => {
+      const next = prev.filter((_, i) => i !== index);
+      draftDirtyRef.current = !sameCategories(next, categories);
+      return next;
+    });
     setLoadError(null);
   };
 
@@ -170,8 +178,11 @@ export default function SourceCategoryManager({ engineReady }: Props) {
     const oldIndex = Number(String(active.id).replace(/^cat-/, ""));
     const newIndex = Number(String(over.id).replace(/^cat-/, ""));
     if (!Number.isFinite(oldIndex) || !Number.isFinite(newIndex)) return;
-    draftDirtyRef.current = true;
-    setDraft((prev) => moveItem(prev, oldIndex, newIndex));
+    setDraft((prev) => {
+      const next = moveItem(prev, oldIndex, newIndex);
+      draftDirtyRef.current = !sameCategories(next, categories);
+      return next;
+    });
     setSaveNote(null);
   };
 

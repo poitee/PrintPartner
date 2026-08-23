@@ -107,7 +107,11 @@ describe("SourceCategoryManager", () => {
       expect((firstCategory as HTMLInputElement).value).toBe("External"),
     );
 
-    fireEvent.change(firstCategory, { target: { value: "Saved external" } });
+    const refreshedCategory = screen.getByRole("textbox", { name: "Category 1" });
+    fireEvent.change(refreshedCategory, { target: { value: "Saved external" } });
+    await waitFor(() =>
+      expect((refreshedCategory as HTMLInputElement).value).toBe("Saved external"),
+    );
     fireEvent.click(screen.getByRole("button", { name: "Save categories" }));
 
     await waitFor(() =>
