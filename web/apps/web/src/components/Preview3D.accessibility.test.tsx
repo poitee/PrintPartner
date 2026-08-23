@@ -131,6 +131,14 @@ describe("Preview3D accessibility", () => {
     expect(instructions?.textContent).toMatch(/arrow keys/i);
   });
 
+  it("applies the dark studio treatment only when requested", async () => {
+    const { container } = render(
+      <Preview3D partId={7} filename="gantry.stl" appearance="studio" />,
+    );
+
+    await waitFor(() => expect(container.querySelector(".preview3d-studio")).not.toBeNull());
+  });
+
   it("rotates the real preview camera with arrow keys", async () => {
     render(<Preview3D partId={7} filename="gantry.stl" />);
     const preview = await screen.findByRole("application");

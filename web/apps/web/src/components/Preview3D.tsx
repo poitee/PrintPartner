@@ -35,6 +35,8 @@ type Props = {
   className?: string;
   /** Keep full controls discoverable without persistent copy in compact surfaces. */
   instructions?: "visible" | "sr-only";
+  /** Dark, lit presentation used by the expanded model dialog. */
+  appearance?: "adaptive" | "studio";
 };
 
 const DEFAULT_COLOR = "#c41230";
@@ -204,6 +206,7 @@ export default function Preview3D({
   meshColor = DEFAULT_COLOR,
   className = "",
   instructions = "visible",
+  appearance = "adaptive",
 }: Props) {
   const mountRef = useRef<HTMLDivElement>(null);
   const materialRef = useRef<THREE.MeshStandardMaterial | null>(null);
@@ -233,8 +236,12 @@ export default function Preview3D({
     const material = materialRef.current;
     if (material) material.color.set(resolvedColor);
     const scene = sceneRef.current;
-    if (scene) scene.background = new THREE.Color(contrastBackground(resolvedColor));
-  }, [resolvedColor]);
+    if (scene) {
+      scene.background = appearance === "studio"
+        ? null
+        : new THREE.Color(contrastBackground(resolvedColor));
+    }
+  }, [appearance, resolvedColor]);
 
   useEffect(() => {
     showDimsRef.current = showDims;
@@ -262,6 +269,8 @@ export default function Preview3D({
     let controls: OrbitControls | null = null;
     let resizeObserver: ResizeObserver | null = null;
     let geometry: THREE.BufferGeometry | null = null;
+    let groundGeometry: THREE.PlaneGeometry | null = null;
+    let groundMaterial: THREE.ShadowMaterial | null = null;
 
     const cleanupThree = () => {
       if (frameId) cancelAnimationFrame(frameId);
@@ -270,6 +279,10 @@ export default function Preview3D({
       cameraRef.current = null;
       geometry?.dispose();
       geometry = null;
+      groundGeometry?.dispose();
+      groundGeometry = null;
+      groundMaterial?.dispose();
+      groundMaterial = null;
       materialRef.current?.dispose();
       materialRef.current = null;
       if (dimsGroupRef.current) {
@@ -365,14 +378,17 @@ export default function Preview3D({
 
         const material = new THREE.MeshStandardMaterial({
           color: new THREE.Color(resolvedColor),
-          metalness: 0.15,
-          roughness: 0.65,
+          metalness: appearance === "studio" ? 0.08 : 0.15,
+          roughness: appearance === "studio" ? 0.5 : 0.65,
         });
         materialRef.current = material;
         const mesh = new THREE.Mesh(geometry, material);
+        mesh.castShadow = appearance === "studio";
 
         const scene = new THREE.Scene();
-        scene.background = new THREE.Color(contrastBackground(resolvedColor));
+        scene.background = appearance === "studio"
+          ? null
+          : new THREE.Color(contrastBackground(resolvedColor));
         sceneRef.current = scene;
         scene.add(mesh);
 
@@ -382,19 +398,62 @@ export default function Preview3D({
         dimsGroupRef.current = dimsGroup;
         setDims({ x: size.x, y: size.y, z: size.z });
 
-        scene.add(new THREE.AmbientLight(0xffffff, 0.55));
-        const key = new THREE.DirectionalLight(0xffffff, 0.85);
+        scene.add(
+          appearance === "studio"
+            ? new THREE.HemisphereLight(0xdbeafe, 0x111827, 1.35)
+            : new THREE.AmbientLight(0xffffff, 0.55),
+        );
+        const key = new THREE.DirectionalLight(
+          appearance === "studio" ? 0xfff1dc : 0xffffff,
+          appearance === "studio" ? 2.5 : 0.85,
+        );
         key.position.set(1, 1.2, 0.8);
-        const fill = new THREE.DirectionalLight(0xffffff, 0.35);
+        const fill = new THREE.DirectionalLight(
+          appearance === "studio" ? 0x8fb7ff : 0xffffff,
+          appearance === "studio" ? 1.15 : 0.35,
+        );
         fill.position.set(-0.8, 0.4, -1);
         scene.add(key, fill);
+        if (appearance === "studio") {
+          key.castShadow = true;
+          key.shadow.mapSize.set(1024, 1024);
+          key.shadow.camera.left = -maxDim * 2;
+          key.shadow.camera.right = maxDim * 2;
+          key.shadow.camera.top = maxDim * 2;
+          key.shadow.camera.bottom = -maxDim * 2;
+          key.shadow.camera.near = 0.1;
+          key.shadow.camera.far = maxDim * 8;
+
+          const rim = new THREE.DirectionalLight(0x60a5fa, 2.1);
+          rim.position.set(-1.4, 1.1, 1.6);
+          scene.add(rim);
+
+          groundGeometry = new THREE.PlaneGeometry(maxDim * 6, maxDim * 6);
+          groundMaterial = new THREE.ShadowMaterial({ opacity: 0.28 });
+          const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+          ground.rotation.x = -Math.PI / 2;
+          ground.position.y = -size.y / 2 - maxDim * 0.035;
+          ground.receiveShadow = true;
+          scene.add(ground);
+        }
 
         const camera = new THREE.PerspectiveCamera(45, 1, 0.1, maxDim * 20);
         camera.position.set(maxDim * 1.4, maxDim * 1.1, maxDim * 1.6);
         cameraRef.current = camera;
 
-        renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+        renderer = new THREE.WebGLRenderer({
+          antialias: true,
+          alpha: appearance === "studio",
+        });
         renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        if (appearance === "studio") {
+          renderer.shadowMap.enabled = true;
+          renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+          renderer.outputColorSpace = THREE.SRGBColorSpace;
+          renderer.toneMapping = THREE.ACESFilmicToneMapping;
+          renderer.toneMappingExposure = 1.08;
+          renderer.setClearColor(0x000000, 0);
+        }
         mount.appendChild(renderer.domElement);
 
         labelRenderer = new CSS2DRenderer();
@@ -462,7 +521,15 @@ export default function Preview3D({
       resizeObserver?.disconnect();
       cleanupThree();
     };
-  }, [target, targetKind, targetPartId, targetSourceId, targetRelativePath, resolvedColor]);
+  }, [
+    appearance,
+    target,
+    targetKind,
+    targetPartId,
+    targetSourceId,
+    targetRelativePath,
+    resolvedColor,
+  ]);
 
   useEffect(() => {
     if (target == null || mode !== "png") return;
@@ -547,7 +614,9 @@ export default function Preview3D({
   }
 
   return (
-    <div className={`preview3d ${className}`.trim()}>
+    <div
+      className={`preview3d ${appearance === "studio" ? "preview3d-studio" : ""} ${className}`.trim()}
+    >
       <p
         className="sr-only"
         role="status"

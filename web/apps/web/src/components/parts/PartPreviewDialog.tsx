@@ -43,13 +43,18 @@ export default function PartPreviewDialog({ part, onClose, size = "default" }: P
         if (!open) onClose();
       }}
     >
-      <DialogContent className={cn(size === "large" ? "max-w-4xl" : "max-w-2xl")}>
+      <DialogContent
+        className={cn(
+          "part-preview-dialog overflow-hidden border-white/10 bg-[#080b11] text-slate-100 shadow-2xl shadow-black/60",
+          size === "large" ? "max-w-4xl" : "max-w-2xl",
+        )}
+      >
         {part && (
           <>
             <DialogHeader>
               <DialogTitle className="break-all pr-8 text-base">{part.filename}</DialogTitle>
             </DialogHeader>
-            <p className="text-xs text-muted-foreground">
+            <p className="text-xs text-slate-400">
               Drag to rotate · scroll or pinch to zoom
             </p>
             <Suspense fallback={<div className="flex items-center justify-center" style={{minHeight: 160}}>Loading 3D…</div>}>
@@ -59,6 +64,7 @@ export default function PartPreviewDialog({ part, onClose, size = "default" }: P
                 relativePath={sourceMode ? part.relativePath : null}
                 preferSource={sourceMode}
                 meshColor={part.filament_hex || undefined}
+                appearance="studio"
                 className={size === "large" ? "min-h-[420px]" : undefined}
               />
             </Suspense>
