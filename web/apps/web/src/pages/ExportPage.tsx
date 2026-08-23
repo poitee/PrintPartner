@@ -17,6 +17,7 @@ const PrinterSendPanel = lazy(() => import("../components/export/PrinterSendPane
 import ShareBuildExportDialog from "../components/share/ShareBuildExportDialog";
 import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
 import { usePlanWorkspace } from "../context/PlanWorkspaceContext";
 import { useProfileSelection } from "../context/ProfileContext";
 import { useEngineHealth } from "../hooks/useEngineHealth";
@@ -42,13 +43,19 @@ import {
   shouldMountPlanTools,
 } from "../lib/workflowState";
 
+type ProductionStage = "parts" | "plates" | "export" | "send";
+
+function productionStage(value: string | null): ProductionStage {
+  return value === "plates" || value === "export" || value === "send" ? value : "parts";
+}
+
 /**
  * Export — printer Send panel binds to the active spine plan (GRE-232).
  * Slicer-input file cards (STL, 3MF, share, manifest) stay plan-gated below.
  * Farm-queue verbs (Send ready / Send now / Remove) live on Progress, not here.
  */
 export default function ExportPage() {
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { health, error: engineError, loading: healthLoading } = useEngineHealth();
   const {
     selectedProfileId,
@@ -119,6 +126,13 @@ export default function ExportPage() {
     selectedProfileId,
   );
   const selectedTokens = selectedProductionTokens(selectableUnits, selection);
+  const activeStage = productionStage(searchParams.get("stage"));
+  const setActiveStage = (stage: string) => {
+    const next = productionStage(stage);
+    const params = new URLSearchParams(searchParams);
+    params.set("stage", next);
+    setSearchParams(params, { replace: true });
+  };
 
   const planIdentity =
     planName && includedParts.length > 0
@@ -189,112 +203,111 @@ export default function ExportPage() {
         </Card>
       ) : (
         <>
-          <div className="space-y-3">
-            <h2 className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-              1 · Choose slicer input
-            </h2>
+          <Tabs value={activeStage} onValueChange={setActiveStage}>
+            <TabsList className="grid h-auto w-full grid-cols-2 gap-1 p-1 sm:grid-cols-4">
+              <TabsTrigger value="parts">1. Parts</TabsTrigger>
+              <TabsTrigger value="plates">2. Plates &amp; printers</TabsTrigger>
+              <TabsTrigger value="export">3. Review &amp; export</TabsTrigger>
+              <TabsTrigger value="send">4. Send G-code</TabsTrigger>
+            </TabsList>
 
-            <SlicerLinksPanel />
-            {setupSaving ? <p className="text-xs text-muted-foreground" role="status">Saving production setup…</p> : null}
-            {setupError ? (
-              <p className="text-sm text-destructive" role="alert">
-                Production choices could not be saved: {setupError instanceof Error ? setupError.message : String(setupError)}
-              </p>
-            ) : null}
-            {selectableUnits.length > 0 ? (
-              <ProductionSelectionPanel
-                units={selectableUnits}
-                selection={selection}
-                onToggle={(token) => setSelection((current) => toggleProductionUnit(current, token))}
-                onClearGroup={(field, value) => setSelection((current) =>
-                  clearProductionSelectionGroup(current, selectableUnits, field, value)
-                )}
-                onSelectAll={() => setSelection(new Set(selectableUnits.map((unit) => unit.token)))}
-                onSelectIncomplete={() => setSelection(new Set(
-                  selectableUnits.filter((unit) => !unit.completed).map((unit) => unit.token),
-                ))}
-                onClearAll={() => setSelection(new Set())}
-              />
-            ) : null}
-            <h2 className="pt-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-              2 · Set grouping and arrange Plates
-            </h2>
-            {selectedProfileId != null ? <ProductionRulesPanel profileId={selectedProfileId} /> : null}
-            {selectedProfileId != null ? (
-              <AcceptedPlateSection
-                profileId={selectedProfileId}
-                enabled={engineState === "ready"}
-                selectedTokens={new Set(selectedTokens)}
-              />
-            ) : null}
-            <h2 className="pt-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-              3 · Export the saved Plate layout
-            </h2>
-            <SlicerHandoffPanel />
-
-            {loading && !review ? (
-              <Card>
-                <CardContent className="pt-6">
-                  <p className="text-sm text-muted-foreground">Loading plan…</p>
-                </CardContent>
-              </Card>
-            ) : planError && !review ? (
-              <Card>
-                <CardContent className="pt-6 space-y-3">
-                  <p className="text-sm text-destructive">
-                    Could not load this plan: {planError}
-                  </p>
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    onClick={() => {
-                      if (selectedProfileId != null) void refresh();
-                    }}
-                  >
-                    Retry
-                  </Button>
-                </CardContent>
-              </Card>
-            ) : (
-              <div
-                className={cn(
-                  "grid gap-4",
-                  "lg:grid-cols-[minmax(0,1fr)_minmax(16rem,18.75rem)]",
-                )}
-              >
-                <div className="min-w-0">
-                  <ExportActionCards
-                    onShare={() => setShareOpen(true)}
-                    roleFilaments={roleFilaments}
-                    selectedTokens={selectedTokens}
-                  />
-                </div>
-                <ExportRecentPanel />
+            <TabsContent value="parts" className="space-y-3">
+              <SlicerLinksPanel />
+              {setupSaving ? <p className="text-xs text-muted-foreground" role="status">Saving production setup…</p> : null}
+              {setupError ? (
+                <p className="text-sm text-destructive" role="alert">
+                  Production choices could not be saved: {setupError instanceof Error ? setupError.message : String(setupError)}
+                </p>
+              ) : null}
+              {selectableUnits.length > 0 ? (
+                <ProductionSelectionPanel
+                  units={selectableUnits}
+                  selection={selection}
+                  onToggle={(token) => setSelection((current) => toggleProductionUnit(current, token))}
+                  onClearGroup={(field, value) => setSelection((current) =>
+                    clearProductionSelectionGroup(current, selectableUnits, field, value)
+                  )}
+                  onSelectAll={() => setSelection(new Set(selectableUnits.map((unit) => unit.token)))}
+                  onSelectIncomplete={() => setSelection(new Set(
+                    selectableUnits.filter((unit) => !unit.completed).map((unit) => unit.token),
+                  ))}
+                  onClearAll={() => setSelection(new Set())}
+                />
+              ) : null}
+              <div className="flex justify-end">
+                <Button onClick={() => setActiveStage("plates")}>Continue to Plates</Button>
               </div>
-            )}
+            </TabsContent>
 
-            <PartsManifestTransfer
-              review={review}
-              sources={sources}
-              onApplied={async () => {
-                await Promise.all([refresh(), roleFilamentsQuery.refetch()]);
-              }}
-            />
-          </div>
+            <TabsContent value="plates" className="space-y-3">
+              {selectedProfileId != null ? <ProductionRulesPanel profileId={selectedProfileId} /> : null}
+              {selectedProfileId != null ? (
+                <AcceptedPlateSection
+                  profileId={selectedProfileId}
+                  enabled={engineState === "ready"}
+                  selectedTokens={new Set(selectedTokens)}
+                />
+              ) : null}
+              <div className="flex flex-wrap justify-between gap-2">
+                <Button variant="outline" onClick={() => setActiveStage("parts")}>Back to Parts</Button>
+                <Button onClick={() => setActiveStage("export")}>Continue to Review &amp; export</Button>
+              </div>
+            </TabsContent>
 
-          <div className="space-y-3">
-            <h2 className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-              4 · Send sliced G-code
-            </h2>
-            <Suspense fallback={<div className="h-32 animate-pulse rounded-lg bg-muted" />}>
-              <PrinterSendPanel
-                remainingParts={remainingParts}
-                profileId={selectedProfileId}
-                planName={planName}
-                engineReady={engineState === "ready"}
+            <TabsContent value="export" className="space-y-3">
+              <SlicerHandoffPanel />
+              {loading && !review ? (
+                <Card>
+                  <CardContent className="pt-6">
+                    <p className="text-sm text-muted-foreground">Loading plan…</p>
+                  </CardContent>
+                </Card>
+              ) : planError && !review ? (
+                <Card>
+                  <CardContent className="space-y-3 pt-6">
+                    <p className="text-sm text-destructive">Could not load this plan: {planError}</p>
+                    <Button size="sm" variant="secondary" onClick={() => {
+                      if (selectedProfileId != null) void refresh();
+                    }}>Retry</Button>
+                  </CardContent>
+                </Card>
+              ) : (
+                <div className={cn("grid gap-4", "lg:grid-cols-[minmax(0,1fr)_minmax(16rem,18.75rem)]")}>
+                  <div className="min-w-0">
+                    <ExportActionCards
+                      onShare={() => setShareOpen(true)}
+                      roleFilaments={roleFilaments}
+                      selectedTokens={selectedTokens}
+                    />
+                  </div>
+                  <ExportRecentPanel />
+                </div>
+              )}
+              <PartsManifestTransfer
+                review={review}
+                sources={sources}
+                onApplied={async () => {
+                  await Promise.all([refresh(), roleFilamentsQuery.refetch()]);
+                }}
               />
-            </Suspense>
-          </div>
+              <div className="flex flex-wrap justify-between gap-2">
+                <Button variant="outline" onClick={() => setActiveStage("plates")}>Back to Plates</Button>
+                <Button onClick={() => setActiveStage("send")}>Continue to Send G-code</Button>
+              </div>
+            </TabsContent>
+
+            <TabsContent value="send" className="space-y-3">
+              <Suspense fallback={<div className="h-32 animate-pulse rounded-lg bg-muted" />}>
+                <PrinterSendPanel
+                  remainingParts={remainingParts}
+                  profileId={selectedProfileId}
+                  planName={planName}
+                  engineReady={engineState === "ready"}
+                />
+              </Suspense>
+              <Button variant="outline" onClick={() => setActiveStage("export")}>Back to Review &amp; export</Button>
+            </TabsContent>
+          </Tabs>
 
           <div className="flex flex-wrap gap-2">
             <Button variant="ghost" size="sm" asChild>

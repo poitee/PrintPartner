@@ -145,6 +145,7 @@ export default function SlicerHandoffPanel() {
     void productionSetup.save({
       preferred_slicer_instance_id: nextId,
       selection: current.selection,
+      printer_assignments: current.printer_assignments,
       rules: current.rules,
     }).catch((error: unknown) => {
       toast.error(error instanceof Error ? error.message : "Could not save slicer choice.");

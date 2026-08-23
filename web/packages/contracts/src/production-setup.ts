@@ -53,9 +53,15 @@ export const productionSelectionSchema = z.discriminatedUnion("mode", [
   }),
 ]);
 
+export const productionPrinterAssignmentSchema = z.object({
+  token: z.string().trim().min(1).max(500),
+  printer_id: z.string().trim().min(1).max(200),
+});
+
 export const productionSetupInputSchema = z.object({
   preferred_slicer_instance_id: z.string().trim().min(1).max(200).nullable(),
   selection: productionSelectionSchema,
+  printer_assignments: z.array(productionPrinterAssignmentSchema).max(20_000).default([]),
   rules: z.array(productionGroupingRuleSchema).max(200),
 });
 
@@ -68,6 +74,7 @@ export const productionSetupSchema = productionSetupInputSchema.extend({
 export type ProductionGroupingField = z.infer<typeof productionGroupingFieldSchema>;
 export type ProductionGroupingRule = z.infer<typeof productionGroupingRuleSchema>;
 export type ProductionSelection = z.infer<typeof productionSelectionSchema>;
+export type ProductionPrinterAssignment = z.infer<typeof productionPrinterAssignmentSchema>;
 export type ProductionSetupInput = z.infer<typeof productionSetupInputSchema>;
 export type ProductionSetup = z.infer<typeof productionSetupSchema>;
 
@@ -77,6 +84,7 @@ export function defaultProductionSetup(profileId: number): ProductionSetup {
     profile_id: profileId,
     preferred_slicer_instance_id: null,
     selection: { mode: "all_incomplete" },
+    printer_assignments: [],
     rules: [],
     updated_at: null,
   };

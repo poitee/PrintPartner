@@ -28,7 +28,7 @@ import {
   CardHeader,
   CardTitle,
 } from "../../ui/card";
-import AcceptedPlateAssignmentForm from "./AcceptedPlateAssignmentForm";
+import AcceptedPlateAssignmentForm, { type PrinterAssignmentDraft } from "./AcceptedPlateAssignmentForm";
 import AcceptedPlateGallery from "./AcceptedPlateGallery";
 
 type Props = Readonly<{
@@ -66,6 +66,27 @@ export default function AcceptedPlateSection({ profileId, enabled, selectedToken
   const revisionWritePending = useAcceptedPlateRevisionPending(profileId);
   const [reassigning, setReassigning] = useState(false);
   const workspace = query.data;
+
+  const saveAssignmentDraft = (changes: readonly PrinterAssignmentDraft[]) => {
+    const current = productionSetup.data;
+    if (!current) return;
+    const changedTokens = new Set(changes.map((assignment) => assignment.token));
+    const printerAssignments = [
+      ...current.printer_assignments.filter((assignment) => !changedTokens.has(assignment.token)),
+      ...changes.flatMap((assignment) => assignment.printer_id == null ? [] : [{
+        token: assignment.token,
+        printer_id: assignment.printer_id,
+      }]),
+    ];
+    void productionSetup.save({
+      preferred_slicer_instance_id: current.preferred_slicer_instance_id,
+      selection: current.selection,
+      printer_assignments: printerAssignments,
+      rules: current.rules,
+    }).catch((error: unknown) => {
+      toast.error(error instanceof Error ? error.message : "Could not save printer assignments.");
+    });
+  };
 
   const submitAssignments = async (request: InitializeAcceptedPlatesRequest) => {
     try {
@@ -253,27 +274,32 @@ export default function AcceptedPlateSection({ profileId, enabled, selectedToken
             ) : null}
             <AcceptedPlateAssignmentForm
               rules={productionSetup.data?.rules}
+              savedAssignments={productionSetup.data?.printer_assignments}
               key={`${assignmentIdentity(workspace)}:${selectionIdentity(selectedTokens)}`}
               workspace={workspace}
               submitting={initialize.isPending}
               selectedTokens={selectedTokens}
               onSubmit={submitAssignments}
+              onAssignmentsChange={saveAssignmentDraft}
             />
           </>
         ) : null}
         {workspace?.kind === "ready" && reassigning ? (
           <AcceptedPlateAssignmentForm
             rules={productionSetup.data?.rules}
+            savedAssignments={productionSetup.data?.printer_assignments}
             key={assignmentIdentity(workspace)}
             workspace={workspace}
             submitting={initialize.isPending}
             onSubmit={submitAssignments}
+            onAssignmentsChange={saveAssignmentDraft}
             onCancel={() => setReassigning(false)}
           />
         ) : null}
         {workspace?.kind === "ready" && !reassigning && workspace.unassigned.length > 0 ? (
           <AcceptedPlateAssignmentForm
             rules={productionSetup.data?.rules}
+            savedAssignments={productionSetup.data?.printer_assignments}
             key={`${assignmentIdentity(workspace)}:unassigned:${selectionIdentity(selectedTokens)}`}
             workspace={workspace}
             submitting={initialize.isPending}
@@ -283,6 +309,7 @@ export default function AcceptedPlateSection({ profileId, enabled, selectedToken
                 .map((unit) => unit.token),
             )}
             onSubmit={submitAssignments}
+            onAssignmentsChange={saveAssignmentDraft}
           />
         ) : null}
         {workspace?.kind === "ready" && !reassigning ? (

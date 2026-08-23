@@ -5,18 +5,37 @@ import type {
   InitializeAcceptedPlatesRequest,
   ProductionGroupingField,
   ProductionGroupingRule,
+  ProductionPrinterAssignment,
 } from "@print-partner/contracts";
 import { Button } from "../../ui/button";
+import { Input } from "../../ui/input";
 
 type AssignmentWorkspace = Extract<AcceptedPlateWorkspace, { kind: "setup" | "ready" }>;
 const EMPTY_RULES: readonly ProductionGroupingRule[] = [];
+const EMPTY_ASSIGNMENTS: readonly ProductionPrinterAssignment[] = [];
+const PART_PAGE_SIZE = 50;
+
+type AssignmentGroupField = "source_layer" | "role" | "source_directory" | "filament_color_id";
+type AssignmentFilter = "needs_printer" | "assigned" | "all";
+export type PrinterAssignmentDraft = Readonly<{ token: string; printer_id: string | null }>;
+
+function isAssignmentGroupField(value: string): value is AssignmentGroupField {
+  return value === "source_layer" || value === "role" ||
+    value === "source_directory" || value === "filament_color_id";
+}
+
+function isAssignmentFilter(value: string): value is AssignmentFilter {
+  return value === "needs_printer" || value === "assigned" || value === "all";
+}
 
 type Props = Readonly<{
   workspace: AssignmentWorkspace;
   rules?: readonly ProductionGroupingRule[];
+  savedAssignments?: readonly ProductionPrinterAssignment[];
   submitting: boolean;
   selectedTokens?: ReadonlySet<string>;
   onSubmit: (request: InitializeAcceptedPlatesRequest) => Promise<void>;
+  onAssignmentsChange?: (assignments: readonly PrinterAssignmentDraft[]) => void;
   onCancel?: () => void;
 }>;
 
@@ -69,9 +88,11 @@ function assignmentRows(workspace: AssignmentWorkspace) {
 export default function AcceptedPlateAssignmentForm({
   workspace,
   rules = EMPTY_RULES,
+  savedAssignments = EMPTY_ASSIGNMENTS,
   submitting,
   selectedTokens,
   onSubmit,
+  onAssignmentsChange,
   onCancel,
 }: Props) {
   const assignmentsEdited = useRef(false);
@@ -80,12 +101,21 @@ export default function AcceptedPlateAssignmentForm({
     if (selectedTokens == null) return all;
     return all.filter((row) => selectedTokens.has(row.unit.token));
   }, [selectedTokens, workspace]);
+  const savedAssignmentByToken = useMemo(
+    () => new Map(savedAssignments.map((assignment) => [assignment.token, assignment.printer_id])),
+    [savedAssignments],
+  );
   const [assignments, setAssignments] = useState<Record<string, string | null>>(() =>
     Object.fromEntries(rows.map((row) => [
       row.unit.token,
-      row.printerId ?? suggestedPrinter(row.unit, rules),
+      row.printerId ?? savedAssignmentByToken.get(row.unit.token) ?? suggestedPrinter(row.unit, rules),
     ])),
   );
+  const [groupField, setGroupField] = useState<AssignmentGroupField>("source_layer");
+  const [filter, setFilter] = useState<AssignmentFilter>(() => rows.length > 30 ? "needs_printer" : "all");
+  const [search, setSearch] = useState("");
+  const [showParts, setShowParts] = useState(rows.length <= 30);
+  const [visibleLimit, setVisibleLimit] = useState(PART_PAGE_SIZE);
   const sourceLayers = useMemo(() => [...new Set(rows.map((row) => row.unit.source_layer))], [rows]);
   const roles = useMemo(() => [...new Set(rows.map((row) => row.unit.role))], [rows]);
   const directories = useMemo(() => [...new Set(rows.map((row) => row.unit.source_directory).filter(Boolean))], [rows]);
@@ -94,12 +124,33 @@ export default function AcceptedPlateAssignmentForm({
     if (assignmentsEdited.current) return;
     setAssignments((current) => Object.fromEntries(rows.map((row) => [
       row.unit.token,
-      current[row.unit.token] ?? suggestedPrinter(row.unit, rules),
+      current[row.unit.token] ?? savedAssignmentByToken.get(row.unit.token) ?? suggestedPrinter(row.unit, rules),
     ])));
-  }, [rows, rules]);
+  }, [rows, rules, savedAssignmentByToken]);
   const complete = rows.length > 0 && rows.every((row) => {
     const printerId = assignments[row.unit.token];
     return printerId != null && workspace.printers.some((printer) => printer.id === printerId);
+  });
+  const assignedCount = rows.filter((row) => assignments[row.unit.token] != null).length;
+  const groupValues: Readonly<Record<AssignmentGroupField, readonly string[]>> = {
+    source_layer: sourceLayers,
+    source_directory: directories,
+    filament_color_id: colors,
+    role: roles,
+  };
+  const normalizedSearch = search.trim().toLocaleLowerCase();
+  const filteredRows = rows.filter((row) => {
+    const printerId = assignments[row.unit.token];
+    if (filter === "needs_printer" && printerId != null) return false;
+    if (filter === "assigned" && printerId == null) return false;
+    if (!normalizedSearch) return true;
+    return [
+      row.unit.object_name,
+      row.unit.filename,
+      row.unit.source_layer,
+      row.unit.source_directory,
+      row.unit.role,
+    ].some((value) => value.toLocaleLowerCase().includes(normalizedSearch));
   });
 
   const submit = async () => {
@@ -117,37 +168,62 @@ export default function AcceptedPlateAssignmentForm({
   };
 
   const fillGroup = (
-    field: "source_layer" | "role" | "source_directory" | "filament_color_id",
+    field: AssignmentGroupField,
     value: string,
     printerId: string | null,
   ) => {
     assignmentsEdited.current = true;
-    setAssignments((current) => Object.fromEntries(rows.map((row) => [
+    const next = Object.fromEntries(rows.map((row) => [
       row.unit.token,
-      row.unit[field] === value ? printerId : current[row.unit.token] ?? null,
-    ])));
+      row.unit[field] === value ? printerId : assignments[row.unit.token] ?? null,
+    ]));
+    setAssignments(next);
+    onAssignmentsChange?.(rows.map((row) => ({
+      token: row.unit.token,
+      printer_id: next[row.unit.token] ?? null,
+    })));
+  };
+
+  const groupAssignment = (field: AssignmentGroupField, value: string) => {
+    const matching = rows.filter((row) => row.unit[field] === value);
+    const assigned = new Set(matching.map((row) => assignments[row.unit.token] ?? ""));
+    return {
+      value: assigned.size === 1 ? [...assigned][0] ?? "" : "",
+      mixed: assigned.size > 1,
+    };
   };
 
   const groupSelect = (
-    field: "source_layer" | "role" | "source_directory" | "filament_color_id",
+    field: AssignmentGroupField,
     value: string,
     label: string,
-  ) => (
+  ) => {
+    const current = groupAssignment(field, value);
+    const ariaLabel = field === "source_layer"
+      ? `Assign ${value || "Unlabelled"} Source layer`
+      : field === "source_directory"
+        ? `Assign ${value}`
+        : field === "filament_color_id"
+          ? `Assign ${value} color`
+          : `Assign ${value || "Unlabelled"} role`;
+    return (
     <label key={`${field}:${value}`} className="grid gap-1 text-xs font-medium">
       {label}
       <select
         className="h-9 rounded-md border border-border bg-background px-2 text-sm"
-        value=""
+        value={current.value}
+        aria-label={ariaLabel}
         disabled={submitting}
         onChange={(event) => fillGroup(field, value, event.target.value || null)}
       >
-        <option value="">Choose Printer</option>
+        <option value="">{current.mixed ? "Mixed assignments" : "Unassigned"}</option>
         {workspace.printers.map((printer) => (
           <option key={printer.id} value={printer.id}>{printer.name} · {printer.model}</option>
         ))}
       </select>
     </label>
-  );
+    );
+  };
 
   return (
     <div className="space-y-4">
@@ -160,43 +236,72 @@ export default function AcceptedPlateAssignmentForm({
         <p className="text-sm text-muted-foreground">No eligible Printers are configured.</p>
       ) : null}
       {workspace.printers.length > 0 ? (
-        <div className="grid gap-3 rounded-md border border-border bg-muted/30 p-3 lg:grid-cols-2">
-          <div className="space-y-2">
-            <p className="text-xs font-semibold">Fill by Source layer</p>
-            <div className="grid gap-2">
-              {sourceLayers.map((sourceLayer) => groupSelect(
-                "source_layer",
-                sourceLayer,
-                `Assign ${sourceLayer || "Unlabelled"} Source layer`,
-              ))}
-            </div>
+        <div className="space-y-3 rounded-md border border-border bg-muted/30 p-3">
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <label className="grid gap-1 text-xs font-medium">
+              Assign groups by
+              <select
+                className="h-9 rounded-md border border-border bg-background px-2 text-sm"
+                value={groupField}
+                onChange={(event) => {
+                  if (isAssignmentGroupField(event.target.value)) setGroupField(event.target.value);
+                }}
+              >
+                <option value="source_layer">Source layer</option>
+                {directories.length > 0 ? <option value="source_directory">Source directory</option> : null}
+                {colors.length > 0 ? <option value="filament_color_id">Color</option> : null}
+                <option value="role">Role</option>
+              </select>
+            </label>
+            <p className="text-xs text-muted-foreground">
+              {assignedCount} of {rows.length} parts assigned
+            </p>
           </div>
-          {directories.length > 0 ? (
-            <div className="space-y-2">
-              <p className="text-xs font-semibold">Fill by source directory</p>
-              <div className="grid gap-2">
-                {directories.map((directory) => groupSelect("source_directory", directory, `Assign ${directory}`))}
-              </div>
-            </div>
-          ) : null}
-          {colors.length > 0 ? (
-            <div className="space-y-2">
-              <p className="text-xs font-semibold">Fill by color</p>
-              <div className="grid gap-2">
-                {colors.map((color) => groupSelect("filament_color_id", color, `Assign ${color}`))}
-              </div>
-            </div>
-          ) : null}
-          <div className="space-y-2">
-            <p className="text-xs font-semibold">Fill by role</p>
-            <div className="grid gap-2">
-              {roles.map((role) => groupSelect("role", role, `Assign ${role || "Unlabelled"} role`))}
-            </div>
+          <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+            {groupValues[groupField].map((value) => groupSelect(
+              groupField,
+              value,
+              `${value || "Unlabelled"} · ${rows.filter((row) => row.unit[groupField] === value).length} parts`,
+            ))}
           </div>
         </div>
       ) : null}
-      <div className="divide-y divide-border rounded-md border border-border">
-        {rows.map(({ unit }) => (
+      <div className="space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <Button type="button" size="sm" variant="outline" onClick={() => setShowParts((current) => !current)}>
+            {showParts ? "Hide individual parts" : `Review individual parts (${rows.length})`}
+          </Button>
+          {!complete ? <span className="text-xs text-amber-700 dark:text-amber-300">{rows.length - assignedCount} still need a printer</span> : null}
+        </div>
+        {showParts ? (
+          <>
+            <div className="grid gap-2 sm:grid-cols-[minmax(12rem,1fr)_12rem]">
+              <Input
+                type="search"
+                value={search}
+                onChange={(event) => {
+                  setSearch(event.target.value);
+                  setVisibleLimit(PART_PAGE_SIZE);
+                }}
+                placeholder="Search part, layer, directory, or role"
+                aria-label="Search Plate assignments"
+              />
+              <select
+                className="h-9 rounded-md border border-border bg-background px-2 text-sm"
+                value={filter}
+                aria-label="Filter Plate assignments"
+                onChange={(event) => {
+                  if (isAssignmentFilter(event.target.value)) setFilter(event.target.value);
+                  setVisibleLimit(PART_PAGE_SIZE);
+                }}
+              >
+                <option value="needs_printer">Needs printer</option>
+                <option value="assigned">Assigned</option>
+                <option value="all">All parts</option>
+              </select>
+            </div>
+            <div className="divide-y divide-border rounded-md border border-border">
+        {filteredRows.slice(0, visibleLimit).map(({ unit }) => (
           <div key={unit.token} className="grid gap-2 p-3 sm:grid-cols-[minmax(0,1fr)_14rem] sm:items-center">
             <div className="min-w-0">
               <p className="truncate text-sm font-medium">{unit.object_name}</p>
@@ -210,11 +315,18 @@ export default function AcceptedPlateAssignmentForm({
                 className="h-9 rounded-md border border-border bg-background px-2 text-sm"
                 value={assignments[unit.token] ?? ""}
                 disabled={submitting}
-                onChange={(event) => setAssignments((current) => ({
-                  ...current,
-                  [unit.token]: event.target.value || null,
-                }))}
-                onInput={() => { assignmentsEdited.current = true; }}
+                onChange={(event) => {
+                  assignmentsEdited.current = true;
+                  const next = {
+                    ...assignments,
+                    [unit.token]: event.target.value || null,
+                  };
+                  setAssignments(next);
+                  onAssignmentsChange?.(rows.map((row) => ({
+                    token: row.unit.token,
+                    printer_id: next[row.unit.token] ?? null,
+                  })));
+                }}
               >
                 <option value="">Unassigned</option>
                 {workspace.printers.map((printer) => (
@@ -226,6 +338,17 @@ export default function AcceptedPlateAssignmentForm({
             </label>
           </div>
         ))}
+              {filteredRows.length === 0 ? (
+                <p className="p-4 text-sm text-muted-foreground">No parts match this view.</p>
+              ) : null}
+            </div>
+            {filteredRows.length > visibleLimit ? (
+              <Button type="button" size="sm" variant="outline" onClick={() => setVisibleLimit((current) => current + PART_PAGE_SIZE)}>
+                Show {Math.min(PART_PAGE_SIZE, filteredRows.length - visibleLimit)} more
+              </Button>
+            ) : null}
+          </>
+        ) : null}
       </div>
       <div className="flex flex-wrap gap-2">
         <Button onClick={() => void submit()} disabled={!complete || submitting} loading={submitting}>

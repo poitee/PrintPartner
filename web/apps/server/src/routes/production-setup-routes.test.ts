@@ -34,6 +34,7 @@ describe("production setup routes", () => {
       const setup = {
         preferred_slicer_instance_id: "orca-main",
         selection: { mode: "custom", selected_unit_tokens: ["unit:a:1"] },
+        printer_assignments: [{ token: "unit:a:1", printer_id: "printer-one" }],
         rules: [
           {
             id: "rule-xy",
@@ -75,6 +76,7 @@ describe("production setup routes", () => {
         profile_id: duplicated.json().id,
         preferred_slicer_instance_id: "orca-main",
         selection: setup.selection,
+        printer_assignments: setup.printer_assignments,
         rules: setup.rules,
       });
       const removed = await app.inject({ method: "DELETE", url: `/plans/${duplicated.json().id}` });
@@ -87,6 +89,7 @@ describe("production setup routes", () => {
         profile_id: second.id,
         preferred_slicer_instance_id: null,
         selection: { mode: "all_incomplete" },
+        printer_assignments: [],
         rules: [],
       });
     } finally {

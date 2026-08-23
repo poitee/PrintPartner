@@ -90,4 +90,41 @@ describe("ProductionSelectionPanel", () => {
     fireEvent.click(screen.getByRole("checkbox", { name: `bracket__${token}` }));
     expect(onToggle).toHaveBeenCalledWith(token);
   });
+
+  it("keeps large part sets compact and reveals them in bounded pages", () => {
+    const workspace = parseAcceptedPlateWorkspace({
+      kind: "setup",
+      basis,
+      expected_plate_revision_id: null,
+      printers: [printer],
+      units: Array.from({ length: 60 }, (_, index) => {
+        const unitToken = `ppu_${index.toString(16).padStart(32, "0")}`;
+        return {
+          token: unitToken,
+          object_name: `part-${index + 1}__${unitToken}`,
+          filename: `part-${index + 1}.stl`,
+          source_layer: "Hardware",
+          role: "primary",
+          filament_color_id: null,
+        };
+      }),
+    });
+    const units = productionSelectableUnits(workspace);
+    render(
+      <ProductionSelectionPanel
+        units={units}
+        selection={initialMissingSelection(units)}
+        onToggle={vi.fn()}
+        onClearGroup={vi.fn()}
+        onSelectAll={vi.fn()}
+        onSelectIncomplete={vi.fn()}
+        onClearAll={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryAllByRole("checkbox")).toHaveLength(0);
+    fireEvent.click(screen.getByRole("button", { name: "Review individual parts (60)" }));
+    expect(screen.getAllByRole("checkbox")).toHaveLength(50);
+    expect(screen.getByRole("button", { name: "Show 10 more" })).toBeTruthy();
+  });
 });

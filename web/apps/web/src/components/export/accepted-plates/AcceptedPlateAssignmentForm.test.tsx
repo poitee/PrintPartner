@@ -46,7 +46,15 @@ describe("AcceptedPlateAssignmentForm", () => {
     });
     if (workspace.kind !== "setup") throw new Error("Expected setup workspace");
     const onSubmit = vi.fn().mockResolvedValue(undefined);
-    render(<AcceptedPlateAssignmentForm workspace={workspace} submitting={false} onSubmit={onSubmit} />);
+    const onAssignmentsChange = vi.fn();
+    render(
+      <AcceptedPlateAssignmentForm
+        workspace={workspace}
+        submitting={false}
+        onSubmit={onSubmit}
+        onAssignmentsChange={onAssignmentsChange}
+      />,
+    );
 
     const select = screen.getByRole("combobox", { name: "Printer" });
     if (!(select instanceof HTMLSelectElement)) throw new Error("Expected Printer select");
@@ -55,6 +63,7 @@ describe("AcceptedPlateAssignmentForm", () => {
     expect(select.value).toBe("");
     expect(arrange.disabled).toBe(true);
     fireEvent.change(select, { target: { value: printer.id } });
+    expect(onAssignmentsChange).toHaveBeenLastCalledWith([{ token, printer_id: printer.id }]);
     fireEvent.click(screen.getByRole("button", { name: "Arrange Plates" }));
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledWith({
@@ -119,17 +128,36 @@ describe("AcceptedPlateAssignmentForm", () => {
     });
     if (workspace.kind !== "setup") throw new Error("Expected setup workspace");
     const onSubmit = vi.fn().mockResolvedValue(undefined);
-    render(<AcceptedPlateAssignmentForm workspace={workspace} submitting={false} onSubmit={onSubmit} />);
+    const onAssignmentsChange = vi.fn();
+    render(
+      <AcceptedPlateAssignmentForm
+        workspace={workspace}
+        submitting={false}
+        onSubmit={onSubmit}
+        onAssignmentsChange={onAssignmentsChange}
+      />,
+    );
 
-    fireEvent.change(screen.getByRole("combobox", { name: "Assign Hardware Source layer" }), {
+    const hardwareGroup = screen.getByRole("combobox", { name: "Assign Hardware Source layer" });
+    fireEvent.change(hardwareGroup, {
       target: { value: "printer-one" },
     });
+    if (!(hardwareGroup instanceof HTMLSelectElement)) throw new Error("Expected Source-layer select");
+    expect(hardwareGroup.value).toBe("printer-one");
     const rowSelects = screen.getAllByRole("combobox", { name: "Printer" });
     expect(rowSelects.map((select) => select instanceof HTMLSelectElement ? select.value : null)).toEqual([
       "printer-one",
       "printer-one",
       "",
     ]);
+    expect(onAssignmentsChange).toHaveBeenLastCalledWith([
+      { token, printer_id: "printer-one" },
+      { token: secondToken, printer_id: "printer-one" },
+      { token: thirdToken, printer_id: null },
+    ]);
+    fireEvent.change(screen.getByRole("combobox", { name: "Assign groups by" }), {
+      target: { value: "role" },
+    });
     fireEvent.change(screen.getByRole("combobox", { name: "Assign secondary role" }), {
       target: { value: "printer-two" },
     });

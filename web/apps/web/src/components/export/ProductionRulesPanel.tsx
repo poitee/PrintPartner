@@ -49,6 +49,7 @@ export default function ProductionRulesPanel({ profileId }: { profileId: number 
       await setup.save({
         preferred_slicer_instance_id: current.preferred_slicer_instance_id,
         selection: current.selection,
+        printer_assignments: current.printer_assignments,
         rules,
       });
     } catch (error) {

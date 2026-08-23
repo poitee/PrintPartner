@@ -50,6 +50,7 @@ export function useProductionSelection(
         void setup.save({
           preferred_slicer_instance_id: currentSetup.preferred_slicer_instance_id,
           selection: { mode: "custom", selected_unit_tokens: [...next] },
+          printer_assignments: currentSetup.printer_assignments,
           rules: currentSetup.rules,
         }).catch(() => undefined);
       }

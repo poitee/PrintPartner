@@ -1,6 +1,15 @@
+import { useState } from "react";
 import type { RequiredUnitToken } from "@print-partner/contracts";
 import type { ProductionSelectableUnit } from "../../lib/productionSelection";
 import { Button } from "../ui/button";
+import { Input } from "../ui/input";
+
+type SelectionFilter = "selected" | "not_selected" | "all";
+const UNIT_PAGE_SIZE = 50;
+
+function isSelectionFilter(value: string): value is SelectionFilter {
+  return value === "selected" || value === "not_selected" || value === "all";
+}
 
 type Props = Readonly<{
   units: readonly ProductionSelectableUnit[];
@@ -21,8 +30,21 @@ export default function ProductionSelectionPanel({
   onSelectIncomplete,
   onClearAll,
 }: Props) {
+  const [showUnits, setShowUnits] = useState(units.length <= 30);
+  const [search, setSearch] = useState("");
+  const [filter, setFilter] = useState<SelectionFilter>(() => units.length > 30 ? "selected" : "all");
+  const [visibleLimit, setVisibleLimit] = useState(UNIT_PAGE_SIZE);
   const sourceLayers = [...new Set(units.map((unit) => unit.source_layer))];
   const selectedCount = units.filter((unit) => selection.has(unit.token)).length;
+  const normalizedSearch = search.trim().toLocaleLowerCase();
+  const visibleUnits = units.filter((unit) => {
+    const selected = selection.has(unit.token);
+    if (filter === "selected" && !selected) return false;
+    if (filter === "not_selected" && selected) return false;
+    if (!normalizedSearch) return true;
+    return [unit.object_name, unit.source_layer, unit.source_directory, unit.role]
+      .some((value) => value.toLocaleLowerCase().includes(normalizedSearch));
+  });
 
   return (
     <div className="space-y-3">
@@ -31,7 +53,7 @@ export default function ProductionSelectionPanel({
           Required units
         </h2>
         <p className="font-mono text-[11px] text-muted-foreground">
-          {selectedCount} selected
+          {selectedCount} of {units.length} selected
         </p>
       </div>
       {sourceLayers.length > 1 ? (
@@ -42,9 +64,12 @@ export default function ProductionSelectionPanel({
               type="button"
               size="sm"
               variant="outline"
+              aria-label={`Clear ${sourceLayer || "Unlabelled"}`}
               onClick={() => onClearGroup("source_layer", sourceLayer)}
             >
-              Clear {sourceLayer || "Unlabelled"}
+              Clear {sourceLayer || "Unlabelled"} ({units.filter((unit) =>
+                unit.source_layer === sourceLayer && selection.has(unit.token)
+              ).length}/{units.filter((unit) => unit.source_layer === sourceLayer).length})
             </Button>
           ))}
         </div>
@@ -53,9 +78,39 @@ export default function ProductionSelectionPanel({
         <Button type="button" size="sm" variant="secondary" onClick={onSelectIncomplete}>Select incomplete</Button>
         <Button type="button" size="sm" variant="outline" onClick={onSelectAll}>Select all</Button>
         <Button type="button" size="sm" variant="ghost" onClick={onClearAll}>Clear all</Button>
+        <Button type="button" size="sm" variant="outline" onClick={() => setShowUnits((current) => !current)}>
+          {showUnits ? "Hide individual parts" : `Review individual parts (${units.length})`}
+        </Button>
       </div>
-      <div className="divide-y divide-border rounded-md border border-border">
-        {units.map((unit) => (
+      {showUnits ? (
+        <div className="space-y-3">
+          <div className="grid gap-2 sm:grid-cols-[minmax(12rem,1fr)_12rem]">
+            <Input
+              type="search"
+              value={search}
+              aria-label="Search production parts"
+              placeholder="Search part, layer, directory, or role"
+              onChange={(event) => {
+                setSearch(event.target.value);
+                setVisibleLimit(UNIT_PAGE_SIZE);
+              }}
+            />
+            <select
+              className="h-9 rounded-md border border-border bg-background px-2 text-sm"
+              value={filter}
+              aria-label="Filter production parts"
+              onChange={(event) => {
+                if (isSelectionFilter(event.target.value)) setFilter(event.target.value);
+                setVisibleLimit(UNIT_PAGE_SIZE);
+              }}
+            >
+              <option value="selected">Selected</option>
+              <option value="not_selected">Not selected</option>
+              <option value="all">All parts</option>
+            </select>
+          </div>
+          <div className="divide-y divide-border rounded-md border border-border">
+        {visibleUnits.slice(0, visibleLimit).map((unit) => (
           <label
             key={unit.token}
             className="flex cursor-pointer items-start gap-3 p-3"
@@ -77,7 +132,17 @@ export default function ProductionSelectionPanel({
             </span>
           </label>
         ))}
-      </div>
+            {visibleUnits.length === 0 ? (
+              <p className="p-4 text-sm text-muted-foreground">No parts match this view.</p>
+            ) : null}
+          </div>
+          {visibleUnits.length > visibleLimit ? (
+            <Button type="button" size="sm" variant="outline" onClick={() => setVisibleLimit((current) => current + UNIT_PAGE_SIZE)}>
+              Show {Math.min(UNIT_PAGE_SIZE, visibleUnits.length - visibleLimit)} more
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }
