@@ -58,7 +58,7 @@ describe("service worker fetch routing", () => {
     },
   );
 
-  it("continues to intercept checkoff mutations for the offline queue", () => {
+  it("does not persist authenticated checkoff mutations outside the active session", () => {
     const listener = loadFetchListener();
     const respondWith = vi.fn();
 
@@ -69,6 +69,6 @@ describe("service worker fetch routing", () => {
       respondWith,
     });
 
-    expect(respondWith).toHaveBeenCalledOnce();
+    expect(respondWith).not.toHaveBeenCalled();
   });
 });

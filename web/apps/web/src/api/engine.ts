@@ -856,12 +856,17 @@ export async function fetchSourceCategories(): Promise<string[]> {
   return body.categories;
 }
 
-export async function saveSourceCategories(categories: string[]): Promise<string[]> {
+export type SaveSourceCategoriesInput = {
+  categories: string[];
+  replacements?: Record<string, string | null>;
+};
+
+export async function saveSourceCategories(input: SaveSourceCategoriesInput): Promise<string[]> {
   const body = await engineFetch<{ categories: string[] }>(
     "/settings/source-categories",
     {
       method: "PUT",
-      body: JSON.stringify({ categories }),
+      body: JSON.stringify(input),
     },
   );
   return body.categories;
@@ -2331,6 +2336,7 @@ export type KitBundleUnmatchedSource = {
   tag?: string | null;
   source_kind?: string;
   role?: string;
+  category?: string;
   import_rules?: string[];
   manifest_community_slug?: string | null;
   /** Which layer slot this source filled in the shared plan (base/addon). */

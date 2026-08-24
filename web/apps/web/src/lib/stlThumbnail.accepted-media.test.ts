@@ -134,6 +134,38 @@ describe("accepted STL thumbnail mesh loading", () => {
     if (concurrencyError !== undefined) throw concurrencyError;
   });
 
+  it("does not join an obsolete in-flight render after the thumbnail version changes", async () => {
+    let settleFirst!: (response: Response) => void;
+    let settleSecond!: (response: Response) => void;
+    runtime.fetchWithRetry
+      .mockImplementationOnce(
+        () =>
+          new Promise<Response>((resolve) => {
+            settleFirst = resolve;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise<Response>((resolve) => {
+            settleSecond = resolve;
+          }),
+      );
+
+    const oldRender = generatePartThumbnail(601, { cacheVersion: 0 });
+    const newRender = generatePartThumbnail(601, { cacheVersion: 1 });
+
+    let concurrencyError: unknown;
+    try {
+      await vi.waitFor(() => expect(runtime.fetchWithRetry).toHaveBeenCalledTimes(2));
+    } catch (error) {
+      concurrencyError = error;
+    }
+    settleFirst(new Response(null, { status: 404 }));
+    settleSecond?.(new Response(null, { status: 404 }));
+    await expect(Promise.all([oldRender, newRender])).resolves.toEqual([null, null]);
+    if (concurrencyError !== undefined) throw concurrencyError;
+  });
+
   it("renders a shared mesh basis once for concurrent different Parts", async () => {
     const sharedBasis = "c".repeat(64);
 

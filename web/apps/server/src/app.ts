@@ -112,6 +112,12 @@ export async function buildApp(config: ServerConfig, ports: RuntimePorts) {
     bodyLimit: config.uploadMaxBytes,
     trustProxy: config.trustProxy,
   });
+  app.addHook("onSend", async (_request, reply, payload) => {
+    if (!reply.hasHeader("Cache-Control")) {
+      reply.header("Cache-Control", "private, no-store");
+    }
+    return payload;
+  });
   const authStore = resolveAuthStore(ports, config);
   const repository = resolveRepository(ports);
 

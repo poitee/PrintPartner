@@ -1,5 +1,15 @@
 import { UNCategorized_FILTER } from "../components/sources/sourceLabels";
 
+export function reconcileSourceCategoryFilter(
+  categoryFilter: string,
+  categories: readonly string[],
+): string {
+  if (categoryFilter === "all" || categoryFilter === UNCategorized_FILTER) {
+    return categoryFilter;
+  }
+  return categories.includes(categoryFilter) ? categoryFilter : "all";
+}
+
 /** Bucket key used by Library counts / Uncategorised filter (`null` = uncategorised). */
 export function sourceCategoryBucket(
   category: string | null | undefined,

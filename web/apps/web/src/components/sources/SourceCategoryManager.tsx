@@ -37,6 +37,12 @@ type Props = {
   engineReady: boolean;
 };
 
+type DraftCategory = {
+  id: string;
+  originalName: string | null;
+  name: string;
+};
+
 type SortableRowProps = {
   id: string;
   name: string;
@@ -104,11 +110,21 @@ function sameCategories(left: readonly string[], right: readonly string[]): bool
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
+function categoryRows(categories: readonly string[]): DraftCategory[] {
+  return categories.map((name, index) => ({
+    id: `saved-${index}`,
+    originalName: name,
+    name,
+  }));
+}
+
 export default function SourceCategoryManager({ engineReady }: Props) {
   const categoriesQuery = useSourceCategoriesQuery(engineReady);
   const saveCategoriesMutation = useSaveSourceCategoriesMutation();
   const categories = categoriesQuery.data ?? EMPTY_CATEGORIES;
-  const [draft, setDraft] = useState<string[]>(() => categories);
+  const [draft, setDraft] = useState<DraftCategory[]>(() => categoryRows(categories));
+  const baselineRef = useRef<string[]>(categories);
+  const nextRowIdRef = useRef(0);
   const draftDirtyRef = useRef(false);
   const [newName, setNewName] = useState("");
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -121,8 +137,17 @@ export default function SourceCategoryManager({ engineReady }: Props) {
   );
 
   useEffect(() => {
-    if (!draftDirtyRef.current) setDraft(categories);
-  }, [categories]);
+    const draftNames = draft.map((category) => category.name);
+    if (sameCategories(draftNames, categories)) {
+      draftDirtyRef.current = false;
+      baselineRef.current = categories;
+      return;
+    }
+    if (!draftDirtyRef.current) {
+      baselineRef.current = categories;
+      setDraft(categoryRows(categories));
+    }
+  }, [categories, draft]);
 
   const queryError =
     categoriesQuery.error instanceof Error
@@ -132,31 +157,35 @@ export default function SourceCategoryManager({ engineReady }: Props) {
         : null;
   const visibleError = loadError ?? queryError;
 
-  const dirty = !sameCategories(draft, categories);
+  const dirty = !sameCategories(
+    draft.map((category) => category.name),
+    categories,
+  );
 
   const onAdd = () => {
     const name = newName.trim();
     if (!name) return;
     const key = name.toLowerCase();
-    if (draft.some((c) => c.toLowerCase() === key)) {
+    if (draft.some((category) => category.name.toLowerCase() === key)) {
       setLoadError("That category already exists.");
       return;
     }
-    setDraft((prev) => {
-      const next = [...prev, name];
-      draftDirtyRef.current = !sameCategories(next, categories);
-      return next;
-    });
+    draftDirtyRef.current = true;
+    setDraft((prev) => [
+      ...prev,
+      { id: `new-${nextRowIdRef.current++}`, originalName: null, name },
+    ]);
     setNewName("");
     setLoadError(null);
   };
 
   const onRename = (index: number, value: string) => {
-    setDraft((prev) => {
-      const next = prev.map((c, i) => (i === index ? value : c));
-      draftDirtyRef.current = !sameCategories(next, categories);
-      return next;
-    });
+    draftDirtyRef.current = true;
+    setDraft((prev) =>
+      prev.map((category, i) =>
+        i === index ? { ...category, name: value } : category,
+      ),
+    );
   };
 
   const onRemove = (index: number) => {
@@ -164,25 +193,19 @@ export default function SourceCategoryManager({ engineReady }: Props) {
       setLoadError("Keep at least one category.");
       return;
     }
-    setDraft((prev) => {
-      const next = prev.filter((_, i) => i !== index);
-      draftDirtyRef.current = !sameCategories(next, categories);
-      return next;
-    });
+    draftDirtyRef.current = true;
+    setDraft((prev) => prev.filter((_, i) => i !== index));
     setLoadError(null);
   };
 
   const onDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
     if (!over || active.id === over.id) return;
-    const oldIndex = Number(String(active.id).replace(/^cat-/, ""));
-    const newIndex = Number(String(over.id).replace(/^cat-/, ""));
-    if (!Number.isFinite(oldIndex) || !Number.isFinite(newIndex)) return;
-    setDraft((prev) => {
-      const next = moveItem(prev, oldIndex, newIndex);
-      draftDirtyRef.current = !sameCategories(next, categories);
-      return next;
-    });
+    const oldIndex = draft.findIndex((category) => category.id === active.id);
+    const newIndex = draft.findIndex((category) => category.id === over.id);
+    if (oldIndex < 0 || newIndex < 0) return;
+    draftDirtyRef.current = true;
+    setDraft((prev) => moveItem(prev, oldIndex, newIndex));
     setSaveNote(null);
   };
 
@@ -191,14 +214,42 @@ export default function SourceCategoryManager({ engineReady }: Props) {
     setSaveNote(null);
     setLoadError(null);
     try {
-      const normalized = draft.map((c) => c.trim()).filter(Boolean);
-      if (normalized.length === 0) {
+      const normalizedRows = draft.map((category) => ({
+        ...category,
+        name: category.name.trim(),
+      }));
+      if (normalizedRows.length === 0) {
         setLoadError("At least one category is required.");
         return;
       }
-      const saved = await saveCategoriesMutation.mutateAsync(normalized);
+      if (normalizedRows.some((category) => !category.name)) {
+        setLoadError("Category names cannot be empty.");
+        return;
+      }
+      const normalized = normalizedRows.map((category) => category.name);
+      if (new Set(normalized.map((name) => name.toLowerCase())).size !== normalized.length) {
+        setLoadError("Category names must be unique.");
+        return;
+      }
+      const replacements: Record<string, string | null> = {};
+      const retainedOriginals = new Set<string>();
+      for (const category of normalizedRows) {
+        if (category.originalName === null) continue;
+        retainedOriginals.add(category.originalName);
+        if (category.name !== category.originalName) {
+          replacements[category.originalName] = category.name;
+        }
+      }
+      for (const originalName of baselineRef.current) {
+        if (!retainedOriginals.has(originalName)) replacements[originalName] = null;
+      }
+      const saved = await saveCategoriesMutation.mutateAsync({
+        categories: normalized,
+        replacements,
+      });
       draftDirtyRef.current = false;
-      setDraft(saved);
+      baselineRef.current = saved;
+      setDraft(categoryRows(saved));
       setSaveNote("Categories saved.");
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : String(e));
@@ -207,8 +258,7 @@ export default function SourceCategoryManager({ engineReady }: Props) {
     }
   };
 
-  // Index-based ids stay stable through mid-edit renames (names may collide briefly).
-  const sortableIds = draft.map((_, index) => `cat-${index}`);
+  const sortableIds = draft.map((category) => category.id);
 
   return (
     <Card className="shadow-none">
@@ -238,11 +288,11 @@ export default function SourceCategoryManager({ engineReady }: Props) {
           >
             <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
               <ul className="space-y-2" aria-label="Reorderable source categories">
-                {draft.map((name, index) => (
+                {draft.map((category, index) => (
                   <SortableCategoryRow
-                    key={sortableIds[index]}
-                    id={sortableIds[index]!}
-                    name={name}
+                    key={category.id}
+                    id={category.id}
+                    name={category.name}
                     index={index}
                     disabled={!engineReady || saving}
                     canRemove={draft.length > 1}

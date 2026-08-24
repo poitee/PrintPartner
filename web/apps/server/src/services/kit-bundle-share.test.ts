@@ -3,6 +3,7 @@ import {
   collectKitBundleSourceRefs,
   kitSourceRefFromRecord,
   kitSourceRefToExportRecord,
+  kitMatchedSourcePatch,
   kitUnmatchedSourceFromRef,
 } from "./kit-bundle-share.js";
 
@@ -116,5 +117,23 @@ describe("kit-bundle-share", () => {
     });
     expect(refs).toHaveLength(1);
     expect(refs[0]?.tag).toBe("v2.4.3");
+  });
+
+  it("keeps plan role and library category as separate fields during import", () => {
+    const ref = kitSourceRefFromRecord({
+      name: "Mod",
+      url: "https://github.com/a/mod",
+      role: "addon",
+      category: "Upgrades",
+    })!;
+
+    expect(kitUnmatchedSourceFromRef(ref)).toMatchObject({
+      role: "addon",
+      category: "Upgrades",
+    });
+    expect(kitMatchedSourcePatch(ref)).toMatchObject({
+      role: "addon",
+      metadata: { category: "Upgrades" },
+    });
   });
 });

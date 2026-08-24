@@ -87,6 +87,7 @@ import {
 import {
   countSourcesByCategory,
   matchesSourceCategoryFilter,
+  reconcileSourceCategoryFilter,
   sourceCategoryLabel,
 } from "../lib/sourceCategoryAssignment";
 import { librarySourceDragId } from "../lib/sourceCategoryDnD";
@@ -119,6 +120,7 @@ import {
 
 type SourceDetailTab = "docs" | "rules" | "naming";
 type SourcesLocationState = { stlSearch?: boolean };
+const EMPTY_SOURCE_CATEGORIES: string[] = [];
 
 type WizardForm = {
   name: string;
@@ -221,7 +223,7 @@ export default function SourcesPage() {
     refetch: refetchSources,
   } = useSourcesQuery(engineReady);
   const categoriesQuery = useSourceCategoriesQuery(engineReady);
-  const categories = categoriesQuery.data ?? [];
+  const categories = categoriesQuery.data ?? EMPTY_SOURCE_CATEGORIES;
   const saveCategoriesMutation = useSaveSourceCategoriesMutation();
   const createSourceMutation = useCreateSourceMutation();
   const updateSourceMutation = useUpdateSourceMutation();
@@ -270,6 +272,12 @@ export default function SourcesPage() {
   }, [viewMode, categoryFilter, syncFilter, platformFilter]);
 
   useEffect(() => {
+    if (!categoriesQuery.isSuccess) return;
+    const reconciled = reconcileSourceCategoryFilter(categoryFilter, categories);
+    if (reconciled !== categoryFilter) setCategoryFilter(reconciled);
+  }, [categories, categoriesQuery.isSuccess, categoryFilter]);
+
+  useEffect(() => {
     if (searchSaveTimer.current) clearTimeout(searchSaveTimer.current);
     searchSaveTimer.current = setTimeout(() => {
       savePersistedSourcesUi({
@@ -293,7 +301,7 @@ export default function SourcesPage() {
 
   const onCategoriesReorder = useCallback(async (next: string[]) => {
     try {
-      await saveCategoriesMutation.mutateAsync(next);
+      await saveCategoriesMutation.mutateAsync({ categories: next });
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Could not reorder categories");
     }

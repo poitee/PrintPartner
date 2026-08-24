@@ -13,7 +13,7 @@ vi.mock("../../api/engine", async (importOriginal) => {
   return {
     ...actual,
     fetchSourceCategories: vi.fn().mockResolvedValue(["Frames"]),
-    saveSourceCategories: vi.fn(async (categories: string[]) => categories),
+    saveSourceCategories: vi.fn(async (input: { categories: string[] }) => input.categories),
   };
 });
 
@@ -23,7 +23,10 @@ function SavedCategories() {
 }
 
 describe("SourceCategoryManager", () => {
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+  });
 
   it("keeps an unsaved draft local and publishes a successful save to shared state", async () => {
     const queryClient = new QueryClient({
@@ -107,15 +110,45 @@ describe("SourceCategoryManager", () => {
       expect((firstCategory as HTMLInputElement).value).toBe("External"),
     );
 
-    const refreshedCategory = screen.getByRole("textbox", { name: "Category 1" });
-    fireEvent.change(refreshedCategory, { target: { value: "Saved external" } });
-    await waitFor(() =>
-      expect((refreshedCategory as HTMLInputElement).value).toBe("Saved external"),
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Save categories" }));
+    fireEvent.change(firstCategory, { target: { value: "Saved external" } });
+    const saveButton = screen.getByRole("button", { name: "Save categories" });
+    await waitFor(() => {
+      expect((firstCategory as HTMLInputElement).value).toBe("Saved external");
+      expect((saveButton as HTMLButtonElement).disabled).toBe(false);
+    });
+    fireEvent.click(saveButton);
 
     await waitFor(() =>
       expect(screen.getByTestId("saved-categories").textContent).toBe("Saved external"),
+    );
+  });
+
+  it("sends stable rename and removal mappings with the saved category order", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Number.POSITIVE_INFINITY } },
+    });
+    queryClient.setQueryData(queryKeys.sourceCategories, ["Frames", "Mods", "Other"]);
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <SourceCategoryManager engineReady />
+      </QueryClientProvider>,
+    );
+
+    fireEvent.change(await screen.findByRole("textbox", { name: "Category 2" }), {
+      target: { value: "Upgrades" },
+    });
+    fireEvent.click(screen.getAllByRole("button", { name: "Remove" })[2]!);
+    fireEvent.click(screen.getByRole("button", { name: "Save categories" }));
+
+    await waitFor(() =>
+      expect(saveSourceCategories).toHaveBeenCalledWith(
+        {
+          categories: ["Frames", "Upgrades"],
+          replacements: { Mods: "Upgrades", Other: null },
+        },
+        expect.anything(),
+      ),
     );
   });
 });

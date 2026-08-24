@@ -5,9 +5,17 @@ import {
   matchesSourceCategoryFilter,
   sourceCategoryBucket,
   sourceCategoryLabel,
+  reconcileSourceCategoryFilter,
 } from "./sourceCategoryAssignment";
 
 describe("sourceCategoryAssignment", () => {
+  it("resets a persisted filter whose category no longer exists", () => {
+    expect(reconcileSourceCategoryFilter("Mods", ["Hardware"])).toBe("all");
+    expect(reconcileSourceCategoryFilter("Hardware", ["Hardware"])).toBe("Hardware");
+    expect(reconcileSourceCategoryFilter(UNCategorized_FILTER, ["Hardware"])).toBe(
+      UNCategorized_FILTER,
+    );
+  });
   it("buckets blank categories as uncategorised", () => {
     expect(sourceCategoryBucket(null)).toBe(null);
     expect(sourceCategoryBucket("")).toBe(null);

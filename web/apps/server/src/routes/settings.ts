@@ -74,8 +74,16 @@ export async function registerSettingsRoutes(app: FastifyInstance, deps: RouteDe
 
   app.put("/settings/source-categories", async (request, reply) => {
     try {
-      const body = request.body as { categories?: string[] };
-      return { categories: deps.repo.saveSourceCategories(body.categories ?? []) };
+      const body = request.body as {
+        categories?: string[];
+        replacements?: Record<string, string | null>;
+      };
+      return {
+        categories: deps.repo.saveSourceCategories(
+          body.categories ?? [],
+          body.replacements ?? {},
+        ),
+      };
     } catch (e) {
       return reply.status(400).send({ detail: e instanceof Error ? e.message : String(e) });
     }

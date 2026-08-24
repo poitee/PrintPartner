@@ -36,6 +36,52 @@ function insertIncludedPart(db: DrizzleDb, profileId: number, filename = "bracke
 }
 
 describe("AppRepository", () => {
+  it("reconciles explicit and legacy source categories when a category is renamed", () => {
+    withRepo((repo, db) => {
+      const explicit = repo.createSource({
+        name: "Explicit mod",
+        metadata: { category: "Mods" },
+      });
+      const legacy = repo.createSource({ name: "Legacy addon", role: "addon" });
+
+      expect(repo.saveSourceCategories(["Hardware"], { Mods: "Hardware" })).toEqual([
+        "Hardware",
+      ]);
+      expect(repo.getSource(explicit.id)?.category).toBe("Hardware");
+      expect(repo.getSource(legacy.id)?.category).toBe("Hardware");
+      expect(repo.getSource(legacy.id)?.role).toBe("addon");
+
+      const row = db
+        .select({ metadataJson: schema.projects.metadataJson })
+        .from(schema.projects)
+        .where(eq(schema.projects.id, legacy.id))
+        .get();
+      expect(JSON.parse(row?.metadataJson ?? "{}")).toMatchObject({ category: "Hardware" });
+    });
+  });
+
+  it("uncategorises assigned sources when their category is removed", () => {
+    withRepo((repo) => {
+      const source = repo.createSource({
+        name: "Old category",
+        metadata: { category: "Mods" },
+      });
+
+      repo.saveSourceCategories(["Hardware"], { Mods: null });
+
+      expect(repo.getSource(source.id)?.category).toBeNull();
+    });
+  });
+
+  it("rejects a category replacement that is absent from the saved list", () => {
+    withRepo((repo) => {
+      expect(() =>
+        repo.saveSourceCategories(["Hardware"], { Mods: "Missing" }),
+      ).toThrow("Replacement category must be in the saved category list");
+      expect(repo.getSourceCategories()).toContain("Mods");
+    });
+  });
+
   it("creates and lists sources and plans", () => {
     withRepo((repo) => {
       expect(repo.listSources()).toEqual([]);

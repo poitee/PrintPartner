@@ -19,6 +19,7 @@ export type UnmatchedSource = {
   tag?: string | null;
   source_kind: string;
   role: string;
+  category?: string;
   import_rules: string[];
   manifest_community_slug?: string | null;
   layer_type?: string;
@@ -67,7 +68,7 @@ export default function ShareImportSetupPanel({
         branch: s.branch || "main",
         tag,
         source_kind: s.source_kind || "github",
-        category: s.role && s.role !== "unassigned" ? s.role : null,
+        category: s.category && s.category !== "unassigned" ? s.category : null,
       });
       if (s.import_rules.length > 0) {
         await saveImportRules(created.id, s.import_rules);

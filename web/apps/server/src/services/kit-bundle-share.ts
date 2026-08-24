@@ -35,6 +35,7 @@ export type KitBundleUnmatchedSource = {
   tag: string | null;
   source_kind: string;
   role: string;
+  category: string;
   import_rules: string[];
   manifest_community_slug?: string | null;
   /** Which layer slot to re-attach this source to on import (base/addon). */
@@ -102,7 +103,15 @@ export function kitSourceRefFromRecord(raw: Record<string, unknown>): KitBundleS
   const name = String(raw.name ?? "").trim();
   const url = String(raw.url ?? "").trim();
   if (!name && !url) return null;
-  const category = String(raw.category ?? raw.role ?? "unassigned").trim() || "unassigned";
+  const rawRole = String(raw.role ?? "unassigned").trim() || "unassigned";
+  const roleKey = rawRole.toLowerCase();
+  const role =
+    roleKey === "base" || roleKey === "addon" || roleKey === "unassigned"
+      ? roleKey
+      : "unassigned";
+  const category =
+    String(raw.category ?? (role === "unassigned" ? rawRole : "unassigned")).trim() ||
+    "unassigned";
   const slugRaw = raw.manifest_community_slug;
   const manifestSlug =
     typeof slugRaw === "string" && slugRaw.trim() ? slugRaw.trim() : null;
@@ -115,7 +124,7 @@ export function kitSourceRefFromRecord(raw: Record<string, unknown>): KitBundleS
     tag,
     source_kind: String(raw.source_kind ?? "github").trim() || "github",
     source_type: String(raw.source_type ?? "git").trim() || "git",
-    role: String(raw.role ?? category).trim() || category,
+    role,
     category,
     import_rules: rulesFromRaw(raw.import_rules),
     manifest_community_slug: manifestSlug,
@@ -183,7 +192,8 @@ export function kitUnmatchedSourceFromRef(ref: KitBundleSourceRef): KitBundleUnm
     branch: ref.branch,
     tag: ref.tag,
     source_kind: ref.source_kind,
-    role: ref.category !== "unassigned" ? ref.category : ref.role,
+    role: ref.role,
+    category: ref.category,
     import_rules: ref.import_rules,
     layer_type: ref.layer_type ?? "addon",
     ...(ref.manifest_community_slug
@@ -199,6 +209,7 @@ export function kitMatchedSourcePatch(
   tag?: string | null;
   source_kind?: string;
   role?: string;
+  metadata?: Record<string, unknown>;
   manifest_community_slug?: string | null;
 } {
   const patch: {
@@ -206,13 +217,16 @@ export function kitMatchedSourcePatch(
     tag?: string | null;
     source_kind?: string;
     role?: string;
+    metadata?: Record<string, unknown>;
     manifest_community_slug?: string | null;
   } = {};
   if (ref.branch) patch.branch = ref.branch;
   if (ref.tag) patch.tag = ref.tag;
   if (ref.source_kind) patch.source_kind = ref.source_kind;
-  const role = ref.category !== "unassigned" ? ref.category : ref.role;
-  if (role && role !== "unassigned") patch.role = role;
+  if (ref.role && ref.role !== "unassigned") patch.role = ref.role;
+  if (ref.category && ref.category !== "unassigned") {
+    patch.metadata = { category: ref.category };
+  }
   if (ref.manifest_community_slug) {
     patch.manifest_community_slug = ref.manifest_community_slug;
   }

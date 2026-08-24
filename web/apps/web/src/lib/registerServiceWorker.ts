@@ -1,6 +1,6 @@
 /**
- * registerServiceWorker — registers /sw.js and wires up sync-complete
- * messages so open windows can refetch after coming back online.
+ * Register the navigation-only service worker. updateViaCache is disabled so
+ * cache-safety fixes reach browsers even when an intermediary cached sw.js.
  *
  * Call once at app startup (main.tsx).
  */
@@ -9,20 +9,16 @@ export function registerServiceWorker() {
 
   window.addEventListener("load", () => {
     navigator.serviceWorker
-      .register("/sw.js", { scope: "/" })
+      .register("/sw.js", { scope: "/", updateViaCache: "none" })
       .then((reg) => {
         console.debug("[PWA] Service worker registered", reg.scope);
+        void reg.update().catch((err: unknown) => {
+          console.warn("[PWA] Service worker update check failed", err);
+        });
       })
       .catch((err) => {
         console.warn("[PWA] Service worker registration failed", err);
       });
 
-    // Listen for sync-complete messages from the SW and dispatch a custom
-    // DOM event that React Query listeners can subscribe to.
-    navigator.serviceWorker.addEventListener("message", (event) => {
-      if (event.data?.type === "PP_SYNC_COMPLETE") {
-        window.dispatchEvent(new CustomEvent("pp:sync-complete"));
-      }
-    });
   });
 }

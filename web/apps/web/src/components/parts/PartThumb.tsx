@@ -69,6 +69,7 @@ export default memo(function PartThumb({
     let cancelled = false;
     let objectUrl: string | null = null;
     let probe: HTMLImageElement | null = null;
+    setSrc(null);
 
     const priority = intersecting ? 1 : 0;
 
@@ -79,7 +80,7 @@ export default memo(function PartThumb({
     };
 
     const renderClientSide = () => {
-      void generatePartThumbnail(partId, { priority }).then((url) => {
+      void generatePartThumbnail(partId, { priority, cacheVersion }).then((url) => {
         if (cancelled) {
           if (url) URL.revokeObjectURL(url);
           return;

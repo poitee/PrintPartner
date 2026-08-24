@@ -5143,7 +5143,6 @@ export async function applyAssistantAction(
         if (!source) return { ok: false, detail: `Source not found: ${sourceName}` };
         if (!category) return { ok: false, detail: "category required" };
         deps.repo.updateSource(source.id, {
-          role: category,
           metadata: { category },
         });
         const optionGroups = (action.params.option_groups ?? {}) as Record<string, string>;

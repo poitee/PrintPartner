@@ -2584,10 +2584,70 @@ export class AppRepository {
     return loadSourceCategories(this.getSetting(SOURCE_CATEGORIES_KEY));
   }
 
-  saveSourceCategories(categories: string[]): string[] {
+  saveSourceCategories(
+    categories: string[],
+    replacements: Readonly<Record<string, string | null>> = {},
+  ): string[] {
     const normalized = normalizeSourceCategories(categories);
-    this.setSetting(SOURCE_CATEGORIES_KEY, JSON.stringify(normalized));
-    return normalized;
+    const previousByKey = new Map(
+      this.getSourceCategories().map((category) => [category.toLowerCase(), category]),
+    );
+    const nextByKey = new Map(
+      normalized.map((category) => [category.toLowerCase(), category]),
+    );
+    const replacementByKey = new Map<string, string | null>();
+
+    for (const [rawSource, rawTarget] of Object.entries(replacements)) {
+      const source = previousByKey.get(rawSource.trim().toLowerCase());
+      if (!source) throw new Error(`Unknown source category: ${rawSource}`);
+      if (rawTarget === null) {
+        replacementByKey.set(source.toLowerCase(), null);
+        continue;
+      }
+      const target = nextByKey.get(rawTarget.trim().toLowerCase());
+      if (!target) {
+        throw new Error("Replacement category must be in the saved category list");
+      }
+      replacementByKey.set(source.toLowerCase(), target);
+    }
+
+    return this.transaction(() => {
+      const rows = this.db
+        .select()
+        .from(this.schema.projects)
+        .where(eq(this.schema.projects.tenantId, this.tenantId))
+        .all();
+
+      for (const row of rows) {
+        const current = resolveSourceCategory(row.metadataJson, row.role);
+        const key = current?.toLowerCase() ?? null;
+        const replacement = key === null ? null : replacementByKey.get(key);
+        const category =
+          key === null
+            ? ""
+            : replacementByKey.has(key)
+              ? replacement ?? ""
+              : nextByKey.get(key) ?? "";
+        const metadata = parseProjectMetadata(row.metadataJson) ?? {};
+        const hasExplicitCategory = Object.prototype.hasOwnProperty.call(metadata, "category");
+        const explicitCategory =
+          typeof metadata.category === "string" ? metadata.category.trim() : "";
+        if (hasExplicitCategory && explicitCategory === category) continue;
+        this.db
+          .update(this.schema.projects)
+          .set({ metadataJson: JSON.stringify({ ...metadata, category }) })
+          .where(
+            and(
+              eq(this.schema.projects.tenantId, this.tenantId),
+              eq(this.schema.projects.id, row.id),
+            ),
+          )
+          .run();
+      }
+
+      this.setSetting(SOURCE_CATEGORIES_KEY, JSON.stringify(normalized));
+      return normalized;
+    }, "immediate");
   }
 
   listSources(): SourceSummary[] {

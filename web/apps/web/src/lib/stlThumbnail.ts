@@ -234,7 +234,7 @@ class RenderQueue {
 }
 
 const renderQueue = new RenderQueue();
-const inFlightPartThumbnails = new Map<number, Promise<Blob | null>>();
+const inFlightPartThumbnails = new Map<string, Promise<Blob | null>>();
 const inFlightBlobRenders = new Map<string, Promise<Blob | null>>();
 
 async function readResponseBounded(
@@ -381,9 +381,10 @@ async function renderAcceptedMeshBlob(
 
 export function generatePartThumbnail(
   partId: number,
-  options?: { priority?: number },
+  options?: { priority?: number; cacheVersion?: number },
 ): Promise<string | null> {
-  const existing = inFlightPartThumbnails.get(partId);
+  const requestKey = `${partId}:${options?.cacheVersion ?? 0}`;
+  const existing = inFlightPartThumbnails.get(requestKey);
   if (existing) {
     return existing.then((blob) => (blob ? URL.createObjectURL(blob) : null));
   }
@@ -407,12 +408,12 @@ export function generatePartThumbnail(
     void uploadPartThumbnail(partId, blob, mesh.basis).catch(() => {});
     return blob;
   })();
-  inFlightPartThumbnails.set(partId, render);
+  inFlightPartThumbnails.set(requestKey, render);
   return render
     .then((blob) => (blob ? URL.createObjectURL(blob) : null))
     .finally(() => {
-      if (inFlightPartThumbnails.get(partId) === render) {
-        inFlightPartThumbnails.delete(partId);
+      if (inFlightPartThumbnails.get(requestKey) === render) {
+        inFlightPartThumbnails.delete(requestKey);
       }
     });
 }
