@@ -83,4 +83,21 @@ describe("PartThumb accepted server object URL lifecycle", () => {
       );
     },
   );
+
+  it("renders locally without decoding an explicit server placeholder", async () => {
+    runtime.fetchWithRetry.mockResolvedValueOnce(
+      new Response("png", {
+        status: 200,
+        headers: {
+          "Content-Type": "image/png",
+          "X-Thumbnail-Placeholder": "1",
+        },
+      }),
+    );
+
+    render(<PartThumb partId={7} eager />);
+
+    await waitFor(() => expect(runtime.generatePartThumbnail).toHaveBeenCalledOnce());
+    expect(URL.createObjectURL).not.toHaveBeenCalled();
+  });
 });

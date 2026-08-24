@@ -24,4 +24,10 @@ describe("PWA icon assets", () => {
       ).toBe(true);
     }
   });
+
+  it("describes the application for search results and link previews", () => {
+    const html = readFileSync(resolve(webRoot, "index.html"), "utf8");
+
+    expect(html).toMatch(/<meta\s+name=["']description["']\s+content=["'][^"']+["']/i);
+  });
 });

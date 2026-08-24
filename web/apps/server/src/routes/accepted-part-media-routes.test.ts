@@ -178,6 +178,7 @@ describe("accepted Part media routes", () => {
       expect(placeholder.rawPayload).toEqual(PLACEHOLDER_PNG);
       expect(placeholder.headers.etag).toBeUndefined();
       expect(placeholder.headers["cache-control"]).toBe("no-store");
+      expect(placeholder.headers["x-thumbnail-placeholder"]).toBe("1");
       expect(placeholder.headers["x-accepted-render-hex"]).toBe("#112233");
       expect(acceptedReads).toBe(5);
 

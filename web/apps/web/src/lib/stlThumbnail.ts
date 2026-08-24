@@ -235,6 +235,7 @@ class RenderQueue {
 
 const renderQueue = new RenderQueue();
 const inFlightPartThumbnails = new Map<number, Promise<Blob | null>>();
+const inFlightBlobRenders = new Map<string, Promise<Blob | null>>();
 
 async function readResponseBounded(
   res: Response,
@@ -345,6 +346,39 @@ export async function loadAcceptedMeshBuffer(
   return null;
 }
 
+async function renderAcceptedMeshBlob(
+  mesh: AcceptedMeshBuffer,
+  resolvedHex: string,
+  priority: number,
+): Promise<Blob | null> {
+  const cachedBlob = getCachedBlob(mesh.basis, resolvedHex);
+  if (cachedBlob) return cachedBlob;
+
+  const cacheKey = blobCacheKey(mesh.basis, resolvedHex);
+  const existing = inFlightBlobRenders.get(cacheKey);
+  if (existing) return existing;
+
+  const render = renderQueue.enqueue(async () => {
+    // Another queued Part may have rendered the same artifact and color while
+    // this task waited for the shared canvas.
+    const queuedCacheHit = getCachedBlob(mesh.basis, resolvedHex);
+    if (queuedCacheHit) return queuedCacheHit;
+
+    const blob = await renderBufferToBlob(mesh.buffer, resolvedHex);
+    if (blob) rememberBlob(mesh.basis, resolvedHex, blob);
+    return blob;
+  }, priority);
+  inFlightBlobRenders.set(cacheKey, render);
+
+  try {
+    return await render;
+  } finally {
+    if (inFlightBlobRenders.get(cacheKey) === render) {
+      inFlightBlobRenders.delete(cacheKey);
+    }
+  }
+}
+
 export function generatePartThumbnail(
   partId: number,
   options?: { priority?: number },
@@ -354,27 +388,25 @@ export function generatePartThumbnail(
     return existing.then((blob) => (blob ? URL.createObjectURL(blob) : null));
   }
 
-  const render = renderQueue.enqueue(async () => {
+  const render = (async () => {
     const mesh = await loadAcceptedMeshBuffer(partId);
     if (!mesh) return null;
     const resolvedHex = mesh.renderHex ?? DEFAULT_COLOR;
-    const cachedBlob = getCachedBlob(mesh.basis, resolvedHex);
-    if (cachedBlob) {
-      return cachedBlob;
-    }
 
     let blob: Blob | null;
     try {
-      blob = await renderBufferToBlob(mesh.buffer, resolvedHex);
+      // Mesh I/O and cache work can overlap across Parts. Only the shared
+      // WebGL canvas render and capture must run one at a time. Render work is
+      // also shared by different Parts that resolve to the same basis/color.
+      blob = await renderAcceptedMeshBlob(mesh, resolvedHex, options?.priority ?? 0);
     } catch {
       return null;
     }
     if (!blob) return null;
 
-    rememberBlob(mesh.basis, resolvedHex, blob);
     void uploadPartThumbnail(partId, blob, mesh.basis).catch(() => {});
     return blob;
-  }, options?.priority ?? 0);
+  })();
   inFlightPartThumbnails.set(partId, render);
   return render
     .then((blob) => (blob ? URL.createObjectURL(blob) : null))

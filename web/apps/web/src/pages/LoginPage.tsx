@@ -90,7 +90,7 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center gap-6 bg-background p-4">
+    <main className="flex min-h-screen flex-col items-center justify-center gap-6 bg-background p-4">
       <div className="flex items-center gap-2.5" aria-hidden>
         <LayeredSheetMark />
         <span className="font-serif text-[17px] font-semibold tracking-[-0.01em] text-foreground">
@@ -199,6 +199,6 @@ export default function LoginPage() {
           </form>
         </CardContent>
       </Card>
-    </div>
+    </main>
   );
 }

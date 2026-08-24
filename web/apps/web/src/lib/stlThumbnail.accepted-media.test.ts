@@ -1,3 +1,5 @@
+// @vitest-environment jsdom
+
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as THREE from "three";
 
@@ -6,7 +8,39 @@ const runtime = vi.hoisted(() => ({
   getCachedMeshBuffer: vi.fn(),
   cacheMeshBuffer: vi.fn(),
   uploadPartThumbnail: vi.fn(),
+  render: vi.fn(),
+  deferBlob: false,
+  blobCallbacks: [] as BlobCallback[],
 }));
+
+vi.mock("three", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("three")>();
+  class TestWebGLRenderer {
+    readonly domElement: HTMLCanvasElement;
+
+    constructor(options: { canvas: HTMLCanvasElement }) {
+      this.domElement = options.canvas;
+      Object.defineProperty(this.domElement, "toBlob", {
+        configurable: true,
+        value: (callback: BlobCallback) => {
+          if (runtime.deferBlob) {
+            runtime.blobCallbacks.push(callback);
+            return;
+          }
+          callback(new Blob(["png"], { type: "image/png" }));
+        },
+      });
+    }
+
+    setPixelRatio() {}
+    setSize() {}
+    render() {
+      runtime.render();
+    }
+  }
+
+  return { ...actual, WebGLRenderer: TestWebGLRenderer };
+});
 
 vi.mock("./fetchWithRetry.js", () => ({
   fetchWithRetry: runtime.fetchWithRetry,
@@ -50,6 +84,13 @@ describe("accepted STL thumbnail mesh loading", () => {
     runtime.getCachedMeshBuffer.mockReset().mockResolvedValue(null);
     runtime.cacheMeshBuffer.mockReset().mockResolvedValue(undefined);
     runtime.uploadPartThumbnail.mockReset().mockResolvedValue(undefined);
+    runtime.render.mockReset();
+    runtime.deferBlob = false;
+    runtime.blobCallbacks.length = 0;
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      value: vi.fn(() => "blob:thumbnail"),
+    });
   });
 
   it("keeps decimated STL positions grouped into complete triangles", () => {
@@ -60,6 +101,83 @@ describe("accepted STL thumbnail mesh loading", () => {
     const decimated = decimateGeometryForThumbnail(geometry);
 
     expect(decimated.getAttribute("position")?.count % 3).toBe(0);
+  });
+
+  it("loads different Part meshes concurrently before serialized rendering", async () => {
+    function deferredResponse() {
+      let settle!: (response: Response) => void;
+      const promise = new Promise<Response>((resolve) => {
+        settle = resolve;
+      });
+      return { promise, settle };
+    }
+
+    const firstResponse = deferredResponse();
+    const secondResponse = deferredResponse();
+    runtime.fetchWithRetry
+      .mockImplementationOnce(() => firstResponse.promise)
+      .mockImplementationOnce(() => secondResponse.promise);
+
+    const first = generatePartThumbnail(401);
+    const second = generatePartThumbnail(402);
+
+    let concurrencyError: unknown;
+    try {
+      await vi.waitFor(() => expect(runtime.fetchWithRetry).toHaveBeenCalledTimes(2));
+    } catch (error) {
+      concurrencyError = error;
+    }
+    firstResponse.settle(new Response(null, { status: 404 }));
+    secondResponse.settle(new Response(null, { status: 404 }));
+
+    await expect(Promise.all([first, second])).resolves.toEqual([null, null]);
+    if (concurrencyError !== undefined) throw concurrencyError;
+  });
+
+  it("renders a shared mesh basis once for concurrent different Parts", async () => {
+    const sharedBasis = "c".repeat(64);
+
+    function binaryStl(): Uint8Array<ArrayBuffer> {
+      const bytes = new Uint8Array(84 + 50);
+      const view = new DataView(bytes.buffer);
+      view.setUint32(80, 1, true);
+      const vertices = [
+        [0, 0, 0],
+        [1, 0, 0],
+        [0, 1, 0],
+      ];
+      let offset = 96;
+      for (const vertex of vertices) {
+        for (const coordinate of vertex) {
+          view.setFloat32(offset, coordinate, true);
+          offset += 4;
+        }
+      }
+      return bytes;
+    }
+
+    runtime.deferBlob = true;
+    runtime.fetchWithRetry
+      .mockResolvedValueOnce(meshResponse(200, binaryStl(), sharedBasis))
+      .mockResolvedValueOnce(meshResponse(200, binaryStl(), sharedBasis));
+
+    const first = generatePartThumbnail(501);
+    const second = generatePartThumbnail(502);
+
+    await vi.waitFor(() => expect(runtime.fetchWithRetry).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(runtime.render).toHaveBeenCalledTimes(1));
+    runtime.deferBlob = false;
+    for (const callback of runtime.blobCallbacks.splice(0)) {
+      callback(new Blob(["png"], { type: "image/png" }));
+    }
+
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      "blob:thumbnail",
+      "blob:thumbnail",
+    ]);
+    expect(runtime.render).toHaveBeenCalledTimes(1);
+    expect(runtime.uploadPartThumbnail).toHaveBeenCalledTimes(2);
+    expect(runtime.uploadPartThumbnail.mock.calls.map(([partId]) => partId)).toEqual([501, 502]);
   });
 
   it("refetches unconditionally when a 304 basis has no local bytes", async () => {

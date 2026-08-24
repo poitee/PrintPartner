@@ -171,7 +171,10 @@ async function sendPartImage(
     );
     const cached = readAcceptedMediaPng({ thumbsDir: deps.thumbsDir, basis });
     if (!cached) {
-      reply.header("Content-Type", "image/png").header("Cache-Control", "no-store");
+      reply
+        .header("Content-Type", "image/png")
+        .header("Cache-Control", "no-store")
+        .header("X-Thumbnail-Placeholder", "1");
       if (hex) reply.header("X-Accepted-Render-Hex", hex);
       return reply.send(PLACEHOLDER_PNG);
     }

@@ -48,6 +48,7 @@ describe("authentication page headings", () => {
     );
 
     expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Reset password");
+    expect(screen.getByRole("main")).toBeTruthy();
   });
 
   it("uses an h1 for the reset-password page title", () => {
@@ -60,6 +61,7 @@ describe("authentication page headings", () => {
     expect(screen.getByRole("heading", { level: 1 }).textContent).toBe(
       "Choose a new password",
     );
+    expect(screen.getByRole("main")).toBeTruthy();
   });
 
   it("submits the forgot-password form with Enter", async () => {

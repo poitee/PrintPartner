@@ -30,6 +30,17 @@ describe("AuthProvider", () => {
       authentication_required: true,
       authenticated: false,
     });
+    api.fetchAuthMe.mockResolvedValue({
+      user: {
+        user_id: "unexpected-user",
+        login: "unexpected@example.com",
+        display_name: "Unexpected",
+        email: "unexpected@example.com",
+        provider: "email",
+        is_admin: false,
+      },
+      multi_user: true,
+    });
     const client = new QueryClient();
     const wrapper = ({ children }: { children: ReactNode }) => (
       <QueryClientProvider client={client}>

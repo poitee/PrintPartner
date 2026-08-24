@@ -101,6 +101,9 @@ export default memo(function PartThumb({
           retryStatuses: [502, 503, 504],
         });
         if (!response.ok && response.status !== 304) return renderClientSide();
+        if (response.headers.get("X-Thumbnail-Placeholder") === "1") {
+          return renderClientSide();
+        }
         let metadata = acceptedPartMediaMetadata(response);
         let blob =
           response.status === 304 ? acceptedThumbnailBlobCache.get(metadata.basis) : null;

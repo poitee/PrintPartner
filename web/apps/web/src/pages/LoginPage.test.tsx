@@ -68,6 +68,7 @@ describe("LoginPage", () => {
     );
 
     expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Print Partner");
+    expect(screen.getByRole("main")).toBeTruthy();
   });
 
   it("acknowledges an existing single-user administrator", () => {
