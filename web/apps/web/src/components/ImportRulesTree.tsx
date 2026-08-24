@@ -27,7 +27,7 @@ import { findDuplicateBasenames } from "../lib/importRuleConflicts";
 import { libraryFileDragId } from "../lib/sourceCategoryDnD";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
-import { cn } from "../lib/utils";
+import { cn } from "@/lib/utils";
 
 type Props = {
   projectId: number;
@@ -474,20 +474,28 @@ export default function ImportRulesTree({
         onChange={(e) => setFilter(e.target.value)}
         className="tree-filter"
       />
-      <button type="button" onClick={() => applyNodes(setAllChecked(nodes, false))} disabled={disabled}>
-        Clear all
-      </button>
-      <button type="button" onClick={() => void reload()} disabled={disabled}>
-        Reload
-      </button>
-      <button
+      <Button
         type="button"
+        variant="outline"
+        size="sm"
+        onClick={() => applyNodes(setAllChecked(nodes, false))}
+        disabled={disabled}
+      >
+        Clear all
+      </Button>
+      <Button type="button" variant="outline" size="sm" onClick={() => void reload()} disabled={disabled}>
+        Reload
+      </Button>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
         onClick={suggestFromFolders}
         disabled={disabled || nodes.length === 0}
         title="Check top-level folders (excludes Library, Manual, .github, images, …)"
       >
         Suggest from top-level folders
-      </button>
+      </Button>
     </div>
   );
 

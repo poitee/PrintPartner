@@ -15,6 +15,10 @@ const spineRail = readFileSync(
   join(root, "components/layout/SpineRail.tsx"),
   "utf8",
 );
+const brandMark = readFileSync(
+  join(root, "components/layout/BrandMark.tsx"),
+  "utf8",
+);
 const appCss = readFileSync(join(root, "App.css"), "utf8");
 const themeContext = readFileSync(join(root, "context/ThemeContext.tsx"), "utf8");
 
@@ -85,6 +89,41 @@ describe("GRE-234 branding tokens", () => {
   });
 });
 
+describe("elevation, scrim, and status system", () => {
+  it("locks AA-passing dark status hues with soft counterparts", () => {
+    expect(darkTokens).toMatch(/--success:\s*hsl\(152\s+42%\s+56%\)/);
+    expect(darkTokens).toMatch(/--warning:\s*hsl\(38\s+68%\s+58%\)/);
+    expect(darkTokens).toMatch(/--info:\s*hsl\(200\s+55%\s+60%\)/);
+    expect(darkTokens).toMatch(/--destructive:\s*hsl\(0\s+66%\s+65%\)/);
+    // Bright dark-mode fills take dark ink, like --primary-foreground.
+    expect(darkTokens).toMatch(/--destructive-foreground:\s*hsl\(32\s+20%\s+10%\)/);
+    for (const tokens of [lightTokens, darkTokens]) {
+      for (const tone of ["success", "warning", "info", "destructive"]) {
+        expect(tokens).toMatch(new RegExp(`--${tone}-soft:\\s*hsl\\(`));
+      }
+      expect(tokens).toMatch(/--overlay:\s*hsl\(/);
+    }
+  });
+
+  it("wires Tailwind shadow utilities to the elevation tokens", () => {
+    for (const tokens of [lightTokens, darkTokens]) {
+      expect(tokens).toMatch(/--elevation-sm:/);
+      expect(tokens).toMatch(/--elevation-md:/);
+      expect(tokens).toMatch(/--elevation-lg:/);
+      expect(tokens).not.toMatch(/--shadow-(sm|md|lg|card):/);
+    }
+    expect(indexCss).toMatch(/--shadow-sm:\s*var\(--elevation-sm\)/);
+    expect(indexCss).toMatch(/--shadow-md:\s*var\(--elevation-md\)/);
+    expect(indexCss).toMatch(/--shadow-lg:\s*var\(--elevation-lg\)/);
+    expect(indexCss).toMatch(/--color-overlay:\s*var\(--overlay\)/);
+  });
+
+  it("defines the micro type scale", () => {
+    expect(indexCss).toMatch(/--text-2xs:\s*0\.6875rem/);
+    expect(indexCss).toMatch(/--text-3xs:\s*0\.625rem/);
+  });
+});
+
 describe("GRE-234 type", () => {
   it("loads Source Sans 3 + Source Serif 4 + IBM Plex Mono and drops DM Sans", () => {
     for (const source of [indexHtml, indexCss]) {
@@ -109,10 +148,12 @@ describe("GRE-234 spine brand chrome", () => {
   });
 
   it("collapsed mark is layered sheets, not printer icon or PP", () => {
-    expect(spineRail).toMatch(/aria-hidden/);
-    expect(spineRail).toMatch(/<rect[\s\S]*width=["']10["'][\s\S]*height=["']12["']/);
-    expect(spineRail.match(/<rect[\s\S]*?width=["']10["'][\s\S]*?height=["']12["']/g)?.length).toBeGreaterThanOrEqual(2);
-    expect(spineRail).not.toMatch(/BrandMark[\s\S]*?<Printer\b/);
+    expect(brandMark).toMatch(/aria-hidden/);
+    expect(brandMark).toMatch(/<rect[\s\S]*width=["']10["'][\s\S]*height=["']12["']/);
+    expect(brandMark.match(/<rect[\s\S]*?width=["']10["'][\s\S]*?height=["']12["']/g)?.length).toBeGreaterThanOrEqual(2);
+    expect(brandMark).not.toMatch(/<Printer\b/);
+    expect(brandMark).not.toMatch(/>\s*PP\s*</);
+    expect(spineRail).toMatch(/LayeredSheetMark/);
     expect(spineRail).not.toMatch(/>\s*PP\s*</);
   });
 
@@ -120,6 +161,15 @@ describe("GRE-234 spine brand chrome", () => {
     expect(spineRail).toMatch(/font-serif|Source Serif 4|font-\[family/);
     expect(spineRail).toMatch(/text-\[15px\]|15px/);
     expect(spineRail).toMatch(/tracking-\[-0\.01em\]|-0\.01em/);
+  });
+});
+
+describe("brand assets", () => {
+  it("keeps PWA chrome on the desk ink brand color", () => {
+    const manifest = readFileSync(join(root, "../public/manifest.json"), "utf8");
+    expect(manifest).toMatch(/"theme_color":\s*"#191714"/);
+    expect(manifest).toMatch(/"background_color":\s*"#191714"/);
+    expect(indexHtml).toMatch(/<meta name="theme-color" content="#191714"/);
   });
 });
 

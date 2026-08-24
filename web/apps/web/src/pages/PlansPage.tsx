@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import type { AcceptedProgressSummary } from "@print-partner/contracts";
 import { Link, useNavigate } from "react-router-dom";
 import {
   Archive,
@@ -11,7 +12,7 @@ import {
 import PageHeader from "../components/layout/PageHeader";
 import PageHeaderActions from "../components/layout/PageHeaderActions";
 import EmptyState from "../components/layout/EmptyState";
-import RouteBreadcrumbs from "../components/layout/RouteBreadcrumbs";
+import PageShell from "../components/layout/PageShell";
 import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";
 import {
@@ -34,8 +35,8 @@ import {
   type PlansListFilter,
   type PlansListSort,
 } from "../lib/plansList";
-import { buildsRoute, planRoute, productionRoute, progressRoute } from "../lib/routes";
-import { cn } from "../lib/utils";
+import { planRoute, productionRoute, progressRoute } from "../lib/routes";
+import { cn } from "@/lib/utils";
 import {
   getBackgroundError,
   resolveEngineState,
@@ -144,13 +145,11 @@ export default function PlansPage() {
   const emptyFilter = profilesState === "ready" && profiles.length > 0 && rows.length === 0;
 
   return (
-    <div className="space-y-4">
-      <RouteBreadcrumbs
-        items={[{ label: "Builds", to: buildsRoute(selectedProfileId) }]}
-      />
+    <PageShell width="list">
       <PageHeader
         icon={Layers}
         accent
+        eyebrow="Workshop"
         title="Builds"
         description="Open a Build into Plan, or start a new one. New Build asks only for a name."
         actions={engineState === "ready" && profilesState === "ready" && profiles.length > 0 ? (
@@ -291,7 +290,10 @@ export default function PlansPage() {
                           </div>
                           <div className="flex flex-wrap gap-x-4 gap-y-1 font-mono text-xs text-muted-foreground">
                             <span>{planStatusLabel(plan)}</span>
-                            <span>{planProgressLabel(plan.accepted_progress)}</span>
+                            <span className="inline-flex items-center gap-2">
+                              <PlanProgressBar progress={plan.accepted_progress} />
+                              {planProgressLabel(plan.accepted_progress)}
+                            </span>
                             <span>{plan.part_count} parts</span>
                             {plan.build_stale ? (
                               <span className="text-warning">stale</span>
@@ -353,7 +355,10 @@ export default function PlansPage() {
                           {planStatusLabel(plan)}
                         </td>
                         <td className="py-2.5 pr-3 font-mono tabular-nums text-muted-foreground">
-                          {planProgressLabel(plan.accepted_progress)}
+                          <span className="inline-flex items-center gap-2">
+                            <PlanProgressBar progress={plan.accepted_progress} />
+                            {planProgressLabel(plan.accepted_progress)}
+                          </span>
                         </td>
                         <td className="py-2.5 pr-3 font-mono tabular-nums text-muted-foreground">
                           {plan.part_count}
@@ -397,7 +402,24 @@ export default function PlansPage() {
           )}
         </>
       )}
-    </div>
+    </PageShell>
+  );
+}
+
+function PlanProgressBar({ progress }: { progress: AcceptedProgressSummary }) {
+  if (progress.kind !== "ready" || progress.total_units <= 0) return null;
+  const done = progress.total_units - progress.remaining_units;
+  const percent = Math.round((done / progress.total_units) * 100);
+  return (
+    <span
+      className="inline-block h-1.5 w-16 overflow-hidden rounded-full bg-muted align-middle"
+      aria-hidden
+    >
+      <span
+        className="block h-full rounded-full bg-success"
+        style={{ width: `${percent}%` }}
+      />
+    </span>
   );
 }
 

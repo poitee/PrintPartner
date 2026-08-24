@@ -14,7 +14,7 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { cn } from "../../lib/utils";
+import { cn } from "@/lib/utils";
 import { moveItemById } from "../../lib/reorderList";
 import { UNCategorized_FILTER } from "./sourceLabels";
 import { categorySwatch } from "../../lib/librarySourceMeta";
@@ -153,13 +153,13 @@ function SortableCategoryNavItem({
             />
             <span
               className={cn(
-                "min-w-0 flex-1 truncate text-[12.5px]",
+                "min-w-0 flex-1 truncate text-xs",
                 active ? "font-semibold" : "font-medium",
               )}
             >
               {row.name}
             </span>
-            <span className="ml-auto font-mono text-[10.5px] tabular-nums text-muted-foreground">
+            <span className="ml-auto font-mono text-2xs tabular-nums text-muted-foreground">
               {row.count}
             </span>
           </button>
@@ -225,13 +225,13 @@ export default function LibraryCategoryRail({
           />
           <span
             className={cn(
-              "min-w-0 flex-1 truncate text-[12.5px]",
+              "min-w-0 flex-1 truncate text-xs",
               active ? "font-semibold" : "font-medium",
             )}
           >
             {row.name}
           </span>
-          <span className="ml-auto font-mono text-[10.5px] tabular-nums text-muted-foreground">
+          <span className="ml-auto font-mono text-2xs tabular-nums text-muted-foreground">
             {row.count}
           </span>
         </button>
@@ -269,12 +269,12 @@ export default function LibraryCategoryRail({
       )}
     >
       <div className="flex items-center gap-2">
-        <span className="font-mono text-[9.5px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+        <span className="font-mono text-3xs font-medium uppercase tracking-[0.08em] text-muted-foreground">
           Categories
         </span>
         <button
           type="button"
-          className="ml-auto text-[11.5px] font-semibold text-primary hover:underline"
+          className="ml-auto text-2xs font-semibold text-primary hover:underline"
           onClick={onManageCategories}
         >
           Edit
@@ -296,7 +296,7 @@ export default function LibraryCategoryRail({
       )}
 
       <div className="mt-auto border-t border-border pt-3">
-        <span className="font-mono text-[9.5px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+        <span className="font-mono text-3xs font-medium uppercase tracking-[0.08em] text-muted-foreground">
           Add source
         </span>
         <div className="mt-1.5 flex flex-col gap-0.5">
@@ -304,7 +304,7 @@ export default function LibraryCategoryRail({
             <button
               key={action.id}
               type="button"
-              className="rounded-md px-1 py-1 text-left text-[12.5px] text-muted-foreground transition-colors hover:bg-accent/70 hover:text-foreground"
+              className="rounded-md px-1 py-1 text-left text-xs text-muted-foreground transition-colors hover:bg-accent/70 hover:text-foreground"
               onClick={() => onAddSource(action.kind)}
             >
               {action.label}

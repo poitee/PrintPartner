@@ -9,7 +9,7 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "../ui/empty";
-import { cn } from "../../lib/utils";
+import { cn } from "@/lib/utils";
 
 type Props = {
   icon: LucideIcon;

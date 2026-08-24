@@ -65,11 +65,11 @@ export default function UnattributedPrintCard({ print, onClaimed, onDismissed }:
   const shortFilename = print.filename.split("/").pop() ?? print.filename;
 
   return (
-    <Card className="border-amber-500/40 bg-amber-500/5">
+    <Card className="border-warning/30 bg-warning-soft">
       <CardContent className="flex flex-col gap-2 pt-4 pb-3">
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
-            <p className="text-sm font-medium text-amber-900 dark:text-amber-200">
+            <p className="text-sm font-medium text-warning">
               Unclaimed print detected
             </p>
             <p className="text-xs text-muted-foreground truncate" title={print.filename}>

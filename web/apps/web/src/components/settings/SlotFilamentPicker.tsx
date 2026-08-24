@@ -9,7 +9,7 @@ import { allCatalogColors, catalogColorGroups } from "../FilamentSwatch";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
-import { cn } from "../../lib/utils";
+import { cn } from "@/lib/utils";
 
 type Props = {
   slot: number;
@@ -104,7 +104,7 @@ export default function SlotFilamentPicker({
             ) : (
               filtered.map((group) => (
                 <div key={group.label}>
-                  <p className="mb-1 text-[11px] font-medium text-muted-foreground">{group.label}</p>
+                  <p className="mb-1 text-2xs font-medium text-muted-foreground">{group.label}</p>
                   <div className="space-y-0.5">
                     {group.colors.map((c) => {
                       const active = filamentColorId === c.id;

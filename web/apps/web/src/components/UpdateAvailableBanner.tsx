@@ -2,7 +2,7 @@ import { ExternalLink, X } from "lucide-react";
 import { Link } from "react-router-dom";
 import type { AppUpdateCheckResponse } from "@print-partner/contracts";
 import { Button } from "./ui/button";
-import { cn } from "../lib/utils";
+import { cn } from "@/lib/utils";
 
 const DISMISS_PREFIX = "pp-update-banner-dismissed:";
 

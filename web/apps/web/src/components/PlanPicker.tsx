@@ -4,7 +4,7 @@ import { Check, ChevronsUpDown, Layers, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { buildRoute, isPlansPath } from "../lib/routes";
 import { partitionPlanPickerGroups } from "../lib/planPickerGroups";
-import { cn } from "../lib/utils";
+import { cn } from "@/lib/utils";
 import { usePlanActions } from "../context/PlanActionsContext";
 import { useProfileSelection } from "../context/ProfileContext";
 import {

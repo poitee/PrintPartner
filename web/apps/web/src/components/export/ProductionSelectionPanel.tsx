@@ -49,10 +49,10 @@ export default function ProductionSelectionPanel({
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h2 className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+        <h2 className="text-2xs font-medium uppercase tracking-wide text-muted-foreground">
           Required units
         </h2>
-        <p className="font-mono text-[11px] text-muted-foreground">
+        <p className="font-mono text-2xs text-muted-foreground">
           {selectedCount} of {units.length} selected
         </p>
       </div>

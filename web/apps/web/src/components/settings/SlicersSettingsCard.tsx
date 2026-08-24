@@ -322,7 +322,7 @@ export default function SlicersSettingsCard({ engineReady }: SlicersSettingsCard
                   </div>
                 ) : null}
                 {logsById[row.id]?.length ? (
-                  <pre className="max-h-40 overflow-auto rounded bg-muted p-2 text-[11px] leading-snug">
+                  <pre className="max-h-40 overflow-auto rounded bg-muted p-2 text-2xs leading-snug">
                     {logsById[row.id]!.join("\n")}
                   </pre>
                 ) : null}

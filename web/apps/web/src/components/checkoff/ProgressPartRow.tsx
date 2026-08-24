@@ -11,7 +11,7 @@ import {
 } from "../../lib/checkoffProgress";
 import { folderKeyFromRelativePath } from "../../lib/checkoffGroups";
 import { sourceLabelFromLayer } from "../../lib/reviewParts";
-import { cn } from "../../lib/utils";
+import { cn } from "@/lib/utils";
 import { SortableDragHandle } from "../dnd/SortableDragHandle";
 import PartThumbExpandButton from "../parts/PartThumbExpandButton";
 import { Button } from "../ui/button";
@@ -96,7 +96,7 @@ function AssembledToggles({
           <label
             key={idx}
             className={cn(
-              "flex items-center gap-1.5 rounded-full border border-border bg-muted/40 px-2 py-0.5 text-[11px] font-medium text-muted-foreground",
+              "flex items-center gap-1.5 rounded-full border border-border bg-muted/40 px-2 py-0.5 text-2xs font-medium text-muted-foreground",
               isAssembled && "border-success/40 bg-success/10 text-success",
             )}
           >
@@ -135,16 +135,16 @@ function StatusBadges({
     <>
       {/* Awaiting verify (green) — takes precedence over printing */}
       {awaitingVerify && (
-        <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:text-emerald-300">
+        <span className="inline-flex items-center gap-1 rounded-full border border-success/30 bg-success-soft px-2 py-0.5 text-2xs font-medium text-success">
           <span aria-hidden>✓</span> Finished on {awaitingVerify} — verify
         </span>
       )}
 
       {/* Actively printing (sky) — only when not already awaiting verify */}
       {!awaitingVerify && printingOn && (
-        <span className="inline-flex items-center gap-1.5 rounded-full border border-sky-500/40 bg-sky-500/10 px-2 py-0.5 text-[11px] font-medium text-sky-700 dark:text-sky-300">
+        <span className="inline-flex items-center gap-1.5 rounded-full border border-info/30 bg-info-soft px-2 py-0.5 text-2xs font-medium text-info">
           <span
-            className="inline-block h-2 w-2 rounded-full bg-sky-500 animate-pulse"
+            className="inline-block h-2 w-2 rounded-full bg-info animate-pulse"
             aria-hidden
           />
           Printing on {printingOn}
@@ -153,7 +153,7 @@ function StatusBadges({
 
       {/* Suggested printer from unattributed print (amber) */}
       {suggestedPrinter && !printingOn && !awaitingVerify && (
-        <span className="inline-flex flex-wrap items-center gap-1.5 rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-300">
+        <span className="inline-flex flex-wrap items-center gap-1.5 rounded-full border border-warning/30 bg-warning-soft px-2 py-0.5 text-2xs font-medium text-warning">
           <span aria-hidden>⚡</span>
           <span>
             Possibly on {suggestedPrinter.hostName} [{truncateFilename(suggestedPrinter.filename)}]
@@ -161,7 +161,7 @@ function StatusBadges({
           <button
             type="button"
             className={cn(
-              "rounded border border-amber-500/50 bg-amber-500/20 px-1.5 py-0 text-[10px] font-semibold text-amber-800 hover:bg-amber-500/30 dark:text-amber-200",
+              "rounded border border-warning/30 bg-warning-soft px-1.5 py-0 text-3xs font-semibold text-warning hover:bg-warning/20",
               inCompact ? "h-5" : "h-4",
             )}
             disabled={busy}
@@ -223,7 +223,7 @@ const ProgressPartRow = memo(function ProgressPartRow({
         className={cn(
           "flex items-center gap-3 rounded-[10px] border border-border bg-card p-3 shadow-sm",
           tone === "done" && "border-success/40 bg-success/5",
-          awaitingVerify && "border-emerald-500/30 bg-emerald-500/5",
+          awaitingVerify && "border-success/30 bg-success-soft",
         )}
       >
         {handle}
@@ -292,7 +292,7 @@ const ProgressPartRow = memo(function ProgressPartRow({
       className={cn(
         "flex items-center gap-3 rounded-lg border border-border bg-card px-3 py-2.5 shadow-sm",
         tone === "done" && "border-success/40 bg-success/5",
-        awaitingVerify && "border-emerald-500/30 bg-emerald-500/5",
+        awaitingVerify && "border-success/30 bg-success-soft",
       )}
     >
       {handle}
@@ -304,7 +304,7 @@ const ProgressPartRow = memo(function ProgressPartRow({
         >
           {part.filename}
         </span>
-        <span className="truncate text-[11px] text-muted-foreground">{sourceLine(part)}</span>
+        <span className="truncate text-2xs text-muted-foreground">{sourceLine(part)}</span>
         <StatusBadges
           inCompact={false}
           printingOn={printingOn}
@@ -353,7 +353,7 @@ const ProgressPartRow = memo(function ProgressPartRow({
         </Button>
         <span
           className={cn(
-            "w-[3.25rem] text-center font-mono text-[13px] font-medium tabular-nums",
+            "w-[3.25rem] text-center font-mono text-sm font-medium tabular-nums",
             toneCountClass[tone],
           )}
         >

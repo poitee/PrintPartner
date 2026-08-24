@@ -138,7 +138,7 @@ export default function LoggingManagementCard() {
       </CardHeader>
       <CardContent className="space-y-6">
         {error && (
-          <div className="flex gap-2 rounded-lg bg-red-50 p-3 text-sm text-red-700">
+          <div className="flex gap-2 rounded-lg bg-destructive-soft p-3 text-sm text-destructive">
             <AlertCircle className="h-4 w-4 flex-shrink-0" />
             <span>{error}</span>
           </div>
@@ -248,7 +248,7 @@ export default function LoggingManagementCard() {
             onClick={handleClearLogs}
             variant="outline"
             size="sm"
-            className="w-full text-red-600 hover:text-red-700"
+            className="w-full text-destructive hover:text-destructive"
           >
             <Trash2 className="mr-2 h-4 w-4" />
             Clear All Logs

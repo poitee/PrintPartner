@@ -3,7 +3,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { FileArchive } from "lucide-react";
 import DeskNextStep from "../components/layout/DeskNextStep";
 import PageHeader from "../components/layout/PageHeader";
-import RouteBreadcrumbs from "../components/layout/RouteBreadcrumbs";
+import PageShell from "../components/layout/PageShell";
 import ExportActionCards from "../components/export/ExportActionCards";
 import ExportRecentPanel from "../components/export/ExportRecentPanel";
 import PartsManifestTransfer from "../components/export/PartsManifestTransfer";
@@ -35,7 +35,7 @@ import {
   selectedProductionTokens,
   toggleProductionUnit,
 } from "../lib/productionSelection";
-import { cn } from "../lib/utils";
+import { cn } from "@/lib/utils";
 import {
   getBackgroundError,
   resolveEngineState,
@@ -140,17 +140,11 @@ export default function ExportPage() {
       : planName;
 
   return (
-    <div className="space-y-4">
-      <RouteBreadcrumbs
-        items={[
-          { label: "Plan", to: planRoute(selectedProfileId) },
-          { label: "Production" },
-        ]}
-      />
+    <PageShell>
       <PageHeader
         icon={FileArchive}
         accent
-        eyebrow={planIdentity}
+        eyebrow={planIdentity ? `Stage 4 of 4 · ${planIdentity}` : "Stage 4 of 4"}
         title="Production"
         description="Choose parts, arrange editable Plates, export to your slicer, then send sliced G-code to a printer."
       />
@@ -204,7 +198,7 @@ export default function ExportPage() {
       ) : (
         <>
           <Tabs value={activeStage} onValueChange={setActiveStage}>
-            <TabsList className="grid h-auto w-full grid-cols-2 gap-1 p-1 sm:grid-cols-4">
+            <TabsList className="sticky top-0 z-10 grid h-auto w-full grid-cols-2 gap-1 p-1 shadow-sm sm:grid-cols-4">
               <TabsTrigger value="parts">1. Parts</TabsTrigger>
               <TabsTrigger value="plates">2. Plates &amp; printers</TabsTrigger>
               <TabsTrigger value="export">3. Review &amp; export</TabsTrigger>
@@ -324,6 +318,6 @@ export default function ExportPage() {
           profileId={selectedProfileId}
         />
       )}
-    </div>
+    </PageShell>
   );
 }

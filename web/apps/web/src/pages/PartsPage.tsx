@@ -16,7 +16,7 @@ import DeskNextStep from "../components/layout/DeskNextStep";
 import EmptyState from "../components/layout/EmptyState";
 import PageHeader from "../components/layout/PageHeader";
 import PageHeaderActions from "../components/layout/PageHeaderActions";
-import RouteBreadcrumbs from "../components/layout/RouteBreadcrumbs";
+import PageShell from "../components/layout/PageShell";
 import ReviewPartsSheet, {
   type ReviewPartsSheetHandle,
 } from "../components/review/ReviewPartsSheet";
@@ -64,6 +64,8 @@ export default function PartsPage() {
     review,
     loading,
     error: workspaceError,
+    draftError,
+    draftLoading,
     refresh,
   } = usePlanWorkspace();
   const { banner: stlBanner, runSync: runStlSync, busy: stlSyncBusy } =
@@ -160,14 +162,9 @@ export default function PartsPage() {
   }, []);
 
   return (
-    <div className="space-y-4">
-      <RouteBreadcrumbs
-        items={[
-          { label: "Sources", to: buildSourcesRoute(selectedProfileId) },
-          { label: "Plan" },
-        ]}
-      />
+    <PageShell>
       <PageHeader
+        eyebrow="Stage 2 of 4"
         icon={Package}
         accent
         title="Plan"
@@ -210,6 +207,7 @@ export default function PartsPage() {
       )}
 
       {loadError && <p className="text-sm text-destructive">{loadError}</p>}
+      {draftError && <p className="text-sm text-destructive" role="alert">{draftError}</p>}
 
       {engineState !== "ready" ? (
         <Card>
@@ -242,7 +240,7 @@ export default function PartsPage() {
           />
 
           {(mergeConflicts.length > 0 || blockers.length > 0 || warnings.length > 0) && (
-            <section className="section-card space-y-3">
+            <section className="space-y-3 rounded-lg border border-border bg-card p-4 shadow-sm">
               <h2 className="text-sm font-semibold">Issues</h2>
               {mergeConflicts.length > 0 && (
                 <div
@@ -344,7 +342,7 @@ export default function PartsPage() {
             </section>
           )}
 
-          <section className="section-card">
+          <section className="rounded-lg border border-border bg-card p-4 shadow-sm">
             <h2 className="mb-2 text-sm font-semibold">Sources</h2>
             <ul className="space-y-2 text-sm">
               {review.layers.map((layer) => (
@@ -374,7 +372,7 @@ export default function PartsPage() {
             ref={sheetRef}
             review={review}
             planName={planName}
-            disabled={!engineReady || loading}
+            disabled={!engineReady || loading || draftLoading}
             folderRules={folderRules}
           />
 
@@ -388,6 +386,6 @@ export default function PartsPage() {
           </div>
         </>
       ) : null}
-    </div>
+    </PageShell>
   );
 }

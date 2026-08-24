@@ -6,7 +6,7 @@ import { planHasUnsetRoleColors } from "../../lib/roleColorSet";
 import { settingsRoute } from "../../lib/routes";
 import { Button } from "../ui/button";
 import { FieldDescription, FieldSet } from "../ui/field";
-import { cn } from "../../lib/utils";
+import { cn } from "@/lib/utils";
 
 type Props = {
   profileId: number;
@@ -39,11 +39,11 @@ export default function PlanRolesCard({
         className,
       )}
     >
-      <span className="font-mono text-[9.5px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+      <span className="font-mono text-3xs font-medium uppercase tracking-[0.08em] text-muted-foreground">
         Filament roles
       </span>
       {colorsUnset ? (
-        <FieldDescription className="text-[12.5px] text-foreground">
+        <FieldDescription className="text-xs text-foreground">
           Assign colors, then Export remaining.
         </FieldDescription>
       ) : null}
@@ -55,7 +55,7 @@ export default function PlanRolesCard({
         onUpdated={onUpdated}
         density="compact"
       />
-      <FieldDescription className="text-[11px]">
+      <FieldDescription className="text-2xs">
         Roles come from STL filenames and folder rules
         {DEFAULT_STL_NAMING_PROFILE.roles.some((r) => r.markers.length > 0)
           ? ` (e.g. ${DEFAULT_STL_NAMING_PROFILE.roles
@@ -65,7 +65,7 @@ export default function PlanRolesCard({
               .join("; ")})`
           : ""}
         .{" "}
-        <Button variant="link" className="h-auto p-0 text-[11px]" asChild>
+        <Button variant="link" className="h-auto p-0 text-2xs" asChild>
           <Link to={`${settingsRoute()}#stl-naming`}>Customize in Settings</Link>
         </Button>
       </FieldDescription>

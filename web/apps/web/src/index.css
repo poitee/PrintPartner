@@ -42,28 +42,33 @@
 
   --destructive: hsl(0 62% 42%);
   --destructive-foreground: hsl(36 30% 98%);
+  --destructive-soft: hsl(0 55% 95%);
 
   --success: hsl(152 40% 32%);
+  --success-foreground: hsl(36 30% 98%);
+  --success-soft: hsl(152 40% 93%);
   --warning: hsl(34 70% 36%);
+  --warning-foreground: hsl(36 30% 98%);
+  --warning-soft: hsl(38 60% 95%);
   --info: hsl(200 45% 38%);
   --info-foreground: hsl(36 30% 98%);
+  --info-soft: hsl(200 45% 93%);
 
   --border: hsl(32 12% 84%);
   --input: hsl(32 12% 84%);
   --ring: hsl(34 52% 38%);
 
   --surface-sunken: hsl(36 20% 94%);
+  --surface-raised: hsl(0 0% 100%);
   --media-bg: hsl(32 12% 90%);
 
-  /* Flat desk chrome — no gradient header / accent bars (GRE-234). */
-  --gradient-header: var(--card);
-  --gradient-surface: var(--card);
-  --gradient-accent: var(--primary);
+  /* Single warm scrim behind dialogs / sheets / backdrops. */
+  --overlay: hsl(32 25% 12% / 0.45);
 
-  --shadow-sm: 0 1px 2px hsl(32 20% 40% / 0.06);
-  --shadow-md: 0 1px 3px hsl(32 20% 40% / 0.08), 0 4px 12px hsl(32 16% 30% / 0.06);
-  --shadow-lg: 0 2px 8px hsl(32 20% 40% / 0.1), 0 12px 28px hsl(32 16% 30% / 0.1);
-  --shadow-card: var(--shadow-md);
+
+  --elevation-sm: 0 1px 2px hsl(32 20% 40% / 0.06);
+  --elevation-md: 0 1px 3px hsl(32 20% 40% / 0.08), 0 4px 12px hsl(32 16% 30% / 0.06);
+  --elevation-lg: 0 2px 8px hsl(32 20% 40% / 0.1), 0 12px 28px hsl(32 16% 30% / 0.1);
 
   --radius: 0.5rem;
 
@@ -97,7 +102,7 @@
   --foreground: hsl(36 18% 93%);
   --card: hsl(32 8% 13%);
   --card-foreground: hsl(36 18% 93%);
-  --popover: hsl(32 8% 13%);
+  --popover: hsl(32 8% 17%);
   --popover-foreground: hsl(36 18% 93%);
 
   --primary: hsl(36 48% 52%);
@@ -115,29 +120,36 @@
   --accent: hsl(32 8% 18%);
   --accent-foreground: hsl(36 18% 93%);
 
-  --destructive: hsl(0 58% 52%);
-  --destructive-foreground: hsl(36 18% 93%);
+  /* Status hues sit high enough to pass AA as text on bg/card; solid fills
+     take dark ink foregrounds (same pattern as --primary-foreground). */
+  --destructive: hsl(0 66% 65%);
+  --destructive-foreground: hsl(32 20% 10%);
+  --destructive-soft: hsl(0 32% 16%);
 
-  --success: hsl(152 40% 42%);
-  --warning: hsl(36 55% 48%);
-  --info: hsl(200 40% 48%);
+  --success: hsl(152 42% 56%);
+  --success-foreground: hsl(152 30% 8%);
+  --success-soft: hsl(152 30% 15%);
+  --warning: hsl(38 68% 58%);
+  --warning-foreground: hsl(38 30% 8%);
+  --warning-soft: hsl(38 32% 15%);
+  --info: hsl(200 55% 60%);
   --info-foreground: hsl(32 20% 10%);
+  --info-soft: hsl(202 32% 16%);
 
   --border: hsl(32 8% 20%);
   --input: hsl(32 8% 18%);
   --ring: hsl(36 48% 52%);
 
   --surface-sunken: hsl(32 10% 7%);
+  --surface-raised: hsl(32 8% 17%);
   --media-bg: hsl(32 10% 6%);
 
-  --gradient-header: var(--card);
-  --gradient-surface: var(--card);
-  --gradient-accent: var(--primary);
+  --overlay: hsl(30 25% 3% / 0.65);
 
-  --shadow-sm: 0 1px 2px hsl(32 20% 4% / 0.35);
-  --shadow-md: 0 1px 0 hsl(32 8% 24% / 0.35), 0 4px 12px hsl(32 20% 4% / 0.45);
-  --shadow-lg: 0 2px 8px hsl(32 20% 4% / 0.5), 0 16px 32px hsl(32 20% 2% / 0.55);
-  --shadow-card: var(--shadow-md);
+
+  --elevation-sm: 0 1px 2px hsl(32 20% 4% / 0.35);
+  --elevation-md: 0 1px 0 hsl(32 8% 24% / 0.35), 0 4px 12px hsl(32 20% 4% / 0.45);
+  --elevation-lg: 0 2px 8px hsl(32 20% 4% / 0.5), 0 16px 32px hsl(32 20% 2% / 0.55);
 }
 
 /* Fonts + radii are emitted as real custom properties (used by var() in CSS). */
@@ -149,6 +161,12 @@
   --radius-lg: var(--radius);
   --radius-md: calc(var(--radius) - 2px);
   --radius-sm: calc(var(--radius) - 4px);
+
+  /* Micro type scale — replaces ad-hoc text-[Npx] sizes below text-sm. */
+  --text-3xs: 0.625rem;
+  --text-3xs--line-height: 0.875rem;
+  --text-2xs: 0.6875rem;
+  --text-2xs--line-height: 1rem;
 }
 
 /* Map Tailwind color utilities onto the semantic theme variables above. */
@@ -177,15 +195,33 @@
 
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
+  --color-destructive-soft: var(--destructive-soft);
 
   --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-success-soft: var(--success-soft);
   --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-warning-soft: var(--warning-soft);
   --color-info: var(--info);
   --color-info-foreground: var(--info-foreground);
+  --color-info-soft: var(--info-soft);
 
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
+
+  --color-overlay: var(--overlay);
+  --color-surface-raised: var(--surface-raised);
+  --color-surface-sunken: var(--surface-sunken);
+  --color-media: var(--media-bg);
+
+  /* Wire Tailwind shadow utilities to the warm elevation tokens so every
+     shadow-* call site casts the same desk shadow. */
+  --shadow-sm: var(--elevation-sm);
+  --shadow-md: var(--elevation-md);
+  --shadow-lg: var(--elevation-lg);
+  --shadow-xl: var(--elevation-lg);
 }
 
 @layer base {
@@ -254,45 +290,13 @@
     position: relative;
   }
 
-  .stat-tile {
-    @apply rounded-lg border border-border bg-card p-3 transition-shadow;
-    box-shadow: var(--shadow-sm);
-  }
 
-  .stat-tile:hover {
-    box-shadow: var(--shadow-md);
-  }
 
-  .section-card {
-    @apply rounded-lg border border-border bg-card p-4;
-    box-shadow: var(--shadow-sm);
-    background: var(--gradient-surface);
-  }
 
-  .source-card {
-    @apply overflow-hidden rounded-lg border border-border bg-card text-card-foreground transition-colors;
-    box-shadow: var(--shadow-card);
-  }
 
-  .source-card:hover {
-    @apply border-primary/50;
-    box-shadow: var(--shadow-md);
-  }
 
-  .source-card__body {
-    @apply p-4;
-  }
 
-  .drawer-panel {
-    @apply fixed inset-y-0 right-0 z-40 flex w-full max-w-xl flex-col border-l border-border bg-card text-card-foreground;
-    max-width: min(36rem, 100vw);
-    box-shadow: var(--shadow-lg);
-  }
 
-  .card {
-    @apply rounded-lg border border-border bg-card text-card-foreground;
-    box-shadow: var(--shadow-sm);
-  }
 
   .table-scroll {
     margin-left: -0.25rem;
@@ -337,7 +341,7 @@
     border-radius: var(--radius);
     outline: 2px solid var(--ring);
     outline-offset: 2px;
-    box-shadow: var(--shadow-lg);
+    box-shadow: var(--elevation-lg);
   }
 }
 

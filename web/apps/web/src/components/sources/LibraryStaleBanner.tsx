@@ -1,4 +1,4 @@
-import { cn } from "../../lib/utils";
+import { cn } from "@/lib/utils";
 
 type Props = {
   staleCount: number;
@@ -26,21 +26,21 @@ export default function LibraryStaleBanner({
       type="button"
       onClick={onSeeChanges}
       className={cn(
-        "flex w-full items-center gap-2.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2.5 text-left transition-colors hover:bg-amber-500/15",
+        "flex w-full items-center gap-2.5 rounded-lg border border-warning/30 bg-warning-soft px-3 py-2.5 text-left transition-colors hover:bg-warning/20",
         className,
       )}
     >
       <span
-        className="h-2 w-2 shrink-0 rotate-45 bg-amber-600 dark:bg-amber-400"
+        className="h-2 w-2 shrink-0 rotate-45 bg-warning"
         aria-hidden
       />
-      <span className="min-w-0 flex-1 text-[12.5px] text-amber-900 dark:text-amber-100">
+      <span className="min-w-0 flex-1 text-xs text-warning">
         <strong className="font-semibold">
           {staleCount} source{staleCount === 1 ? "" : "s"} moved upstream.
         </strong>
         {detail}
       </span>
-      <span className="shrink-0 text-xs font-semibold text-amber-700 dark:text-amber-300">
+      <span className="shrink-0 text-xs font-semibold text-warning">
         See what changed
       </span>
     </button>

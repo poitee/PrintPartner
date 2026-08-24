@@ -1,10 +1,12 @@
 import { Link } from "react-router-dom";
+import LayeredSheetMark from "../components/layout/BrandMark";
 import { Button } from "../components/ui/button";
 import { buildsRoute, helpRoute } from "../lib/routes";
 
 export default function NotFoundPage() {
   return (
     <div className="mx-auto flex max-w-lg flex-col items-start gap-4 py-12">
+      <LayeredSheetMark className="h-6 w-6" />
       <div className="space-y-2">
         <p className="font-mono text-sm text-muted-foreground">404</p>
         <h1 className="text-2xl font-semibold tracking-tight">Page not found</h1>

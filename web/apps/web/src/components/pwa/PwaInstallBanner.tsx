@@ -20,22 +20,22 @@ export default function PwaInstallBanner() {
   if (!canInstall || dismissed || isStandalone) return null;
 
   return (
-    <div className="flex items-center gap-3 rounded-lg border border-sky-500/30 bg-sky-950/40 px-4 py-3 text-sm text-sky-200 shadow-sm">
-      <Download className="h-4 w-4 shrink-0 text-sky-400" />
+    <div className="flex items-center gap-3 rounded-lg border border-info/30 bg-info-soft px-4 py-3 text-sm text-info shadow-sm">
+      <Download className="h-4 w-4 shrink-0 text-info" />
       <span className="flex-1">
         Install <strong>Print Partner</strong> for offline floor use
       </span>
       <Button
         size="sm"
         variant="outline"
-        className="border-sky-500/50 text-sky-300 hover:bg-sky-900/60"
+        className="border-info/30 text-info hover:bg-info-soft"
         onClick={promptInstall}
       >
         Install
       </Button>
       <button
         aria-label="Dismiss install prompt"
-        className="ml-1 text-sky-500 hover:text-sky-300"
+        className="ml-1 text-info hover:text-info"
         onClick={() => setDismissed(true)}
       >
         ✕

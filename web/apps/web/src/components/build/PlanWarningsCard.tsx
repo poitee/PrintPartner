@@ -1,4 +1,4 @@
-import { cn } from "../../lib/utils";
+import { cn } from "@/lib/utils";
 
 type Props = {
   warnings: string[];
@@ -12,16 +12,16 @@ export default function PlanWarningsCard({ warnings, className }: Props) {
   return (
     <div
       className={cn(
-        "flex flex-col gap-2 rounded-lg border border-amber-300/80 bg-amber-50 p-3.5 dark:border-amber-700/50 dark:bg-amber-950/35",
+        "flex flex-col gap-2 rounded-lg border border-warning/30 bg-warning-soft p-3.5",
         className,
       )}
     >
       <div className="flex items-center gap-2">
         <span
-          className="inline-block h-2 w-2 shrink-0 rotate-45 bg-amber-700 dark:bg-amber-400"
+          className="inline-block h-2 w-2 shrink-0 rotate-45 bg-warning"
           aria-hidden
         />
-        <span className="text-[12.5px] font-semibold text-amber-950 dark:text-amber-100">
+        <span className="text-xs font-semibold text-warning">
           Rebuild plan
         </span>
       </div>
@@ -29,10 +29,10 @@ export default function PlanWarningsCard({ warnings, className }: Props) {
         {warnings.map((line, idx) => (
           <li
             key={`${idx}-${line}`}
-            className="flex items-baseline gap-1.5 text-xs leading-snug text-amber-950/90 dark:text-amber-100/90"
+            className="flex items-baseline gap-1.5 text-xs leading-snug text-warning"
           >
             <span
-              className="mt-1.5 inline-block h-1 w-1 shrink-0 rounded-full bg-amber-700 dark:bg-amber-400"
+              className="mt-1.5 inline-block h-1 w-1 shrink-0 rounded-full bg-warning"
               aria-hidden
             />
             <span>{line}</span>

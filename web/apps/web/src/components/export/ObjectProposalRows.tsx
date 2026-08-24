@@ -2,7 +2,7 @@
  * Shared proposal row list for Export preview and Progress verify chrome.
  * Preview only — no checkboxes. Unlabeled rows are gray and not confirmable.
  */
-import { cn } from "../../lib/utils";
+import { cn } from "@/lib/utils";
 import type { ObjectPreviewRow } from "../../lib/proposeCheckoffFromObjects";
 
 type Props = {
@@ -43,7 +43,7 @@ export default function ObjectProposalRows({ rows, printing = false, className }
               </span>
             </span>
             {printing ? (
-              <span className="shrink-0 text-xs font-medium text-sky-700 dark:text-sky-300">
+              <span className="shrink-0 text-xs font-medium text-info">
                 printing
               </span>
             ) : null}

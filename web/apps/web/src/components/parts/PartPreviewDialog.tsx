@@ -1,7 +1,7 @@
 import { lazy, Suspense } from "react";
 const Preview3D = lazy(() => import("../Preview3D"));
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../ui/dialog";
-import { cn } from "../../lib/utils";
+import { cn } from "@/lib/utils";
 
 export type PreviewDialogPart = {
   id?: number;
@@ -45,7 +45,7 @@ export default function PartPreviewDialog({ part, onClose, size = "default" }: P
     >
       <DialogContent
         className={cn(
-          "part-preview-dialog overflow-hidden border-white/10 bg-[#080b11] text-slate-100 shadow-2xl shadow-black/60",
+          "part-preview-dialog overflow-hidden border-white/10 bg-[#080b10] text-white/90 shadow-2xl shadow-black/60",
           size === "large" ? "max-w-4xl" : "max-w-2xl",
         )}
       >
@@ -54,7 +54,7 @@ export default function PartPreviewDialog({ part, onClose, size = "default" }: P
             <DialogHeader>
               <DialogTitle className="break-all pr-8 text-base">{part.filename}</DialogTitle>
             </DialogHeader>
-            <p className="text-xs text-slate-400">
+            <p className="text-xs text-white/60">
               Drag to rotate · scroll or pinch to zoom
             </p>
             <Suspense fallback={<div className="flex items-center justify-center" style={{minHeight: 160}}>Loading 3D…</div>}>

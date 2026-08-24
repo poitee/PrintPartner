@@ -144,7 +144,7 @@ export default function BackupManagementCard() {
       </CardHeader>
       <CardContent className="space-y-4">
         {error && (
-          <div className="flex gap-2 rounded-lg bg-red-50 p-3 text-sm text-red-700">
+          <div className="flex gap-2 rounded-lg bg-destructive-soft p-3 text-sm text-destructive">
             <AlertCircle className="h-4 w-4 flex-shrink-0" />
             <span>{error}</span>
           </div>
@@ -209,7 +209,7 @@ export default function BackupManagementCard() {
                       onClick={() => handleDelete(backup.name)}
                       size="sm"
                       variant="outline"
-                      className="text-red-600 hover:text-red-700"
+                      className="text-destructive hover:text-destructive"
                     >
                       <Trash2 className="h-4 w-4" />
                     </Button>

@@ -555,10 +555,10 @@ export default function PrinterSendPanel({
     <div className="flex flex-col gap-3">
       <Card className="border-border shadow-sm">
         <CardHeader className="space-y-1.5 pb-2">
-          <CardTitle className="text-[13.5px] font-semibold leading-snug">
+          <CardTitle className="text-sm font-semibold leading-snug">
             Send to printer
           </CardTitle>
-          <CardDescription className="text-[12.5px] leading-relaxed">
+          <CardDescription className="text-xs leading-relaxed">
             Export remaining STLs, slice in your slicer, choose the .gcode here.
           </CardDescription>
         </CardHeader>
@@ -599,7 +599,7 @@ export default function PrinterSendPanel({
                 </select>
                 <Badge
                   variant={statusBadgeVariant(selectedHostStatus)}
-                  className="shrink-0 rounded-full px-2 py-0.5 font-mono text-[10.5px] font-normal"
+                  className="shrink-0 rounded-full px-2 py-0.5 font-mono text-2xs font-normal"
                 >
                   {statusLabel(selectedHostStatus)}
                 </Badge>
@@ -686,23 +686,23 @@ export default function PrinterSendPanel({
                 </div>
               ) : null}
 
-              <p className="text-[11.5px] leading-relaxed text-muted-foreground">
+              <p className="text-2xs leading-relaxed text-muted-foreground">
                 {planBind.line}
               </p>
               {planBind.canSend ? (
-                <p className="text-[11.5px] leading-relaxed text-muted-foreground">
+                <p className="text-2xs leading-relaxed text-muted-foreground">
                   Send from here to track these parts on Progress.
                 </p>
               ) : null}
               {selectedPrinterBusy ? (
-                <p className="text-[11.5px] leading-relaxed text-muted-foreground">
+                <p className="text-2xs leading-relaxed text-muted-foreground">
                   Printer is busy. Send still works. Or wait until Idle.
                 </p>
               ) : null}
             </>
           ) : (
             <div className="flex flex-col gap-2">
-              <p className="text-[12.5px] leading-relaxed text-muted-foreground">
+              <p className="text-xs leading-relaxed text-muted-foreground">
                 No linked printers yet. Add a Klipper or Prusa printer in Settings to Send
                 and Start print.
               </p>
@@ -710,7 +710,7 @@ export default function PrinterSendPanel({
                 <Link to={settingsPrintersRoute()}>Add printers in Settings</Link>
               </Button>
               {!hasBambuLinked ? (
-                <p className="text-[11px] leading-relaxed text-muted-foreground">
+                <p className="text-2xs leading-relaxed text-muted-foreground">
                   Bambu Connect is available after you link a Bambu host. It never starts a
                   print from here.
                 </p>
@@ -723,10 +723,10 @@ export default function PrinterSendPanel({
       {hasBambuLinked ? (
         <Card className="border-border shadow-sm">
           <CardHeader className="space-y-1.5 pb-2">
-            <CardTitle className="text-[13.5px] font-semibold leading-snug">
+            <CardTitle className="text-sm font-semibold leading-snug">
               Bambu Connect
             </CardTitle>
-            <CardDescription className="text-[12.5px] leading-relaxed">
+            <CardDescription className="text-xs leading-relaxed">
               Does not start a print from here.
             </CardDescription>
           </CardHeader>
@@ -768,10 +768,10 @@ export default function PrinterSendPanel({
             >
               {bambuBusy ? "Handing off…" : "Open in Bambu Connect"}
             </Button>
-            <p className="text-[11.5px] leading-relaxed text-muted-foreground">
+            <p className="text-2xs leading-relaxed text-muted-foreground">
               {planBind.line}
             </p>
-            <p className="text-[11.5px] leading-relaxed text-muted-foreground">
+            <p className="text-2xs leading-relaxed text-muted-foreground">
               Opens Bambu Connect with the sliced file. Does not start a print from here.
             </p>
           </CardContent>

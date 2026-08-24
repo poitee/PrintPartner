@@ -1,4 +1,4 @@
-import { cn } from "../../lib/utils";
+import { cn } from "@/lib/utils";
 
 type Props = {
   children: string | null | undefined;
@@ -11,7 +11,7 @@ export default function DeskNextStep({ children, className }: Props) {
   return (
     <p
       className={cn(
-        "text-[12.5px] leading-snug text-muted-foreground",
+        "text-xs leading-snug text-muted-foreground",
         className,
       )}
       data-testid="desk-next-step"

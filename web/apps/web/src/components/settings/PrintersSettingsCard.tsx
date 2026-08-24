@@ -44,7 +44,7 @@ import {
 } from "../ui/select";
 import PrinterProfileAssignmentSection from "./PrinterProfileAssignmentSection";
 import SlotFilamentPicker from "./SlotFilamentPicker";
-import { cn } from "../../lib/utils";
+import { cn } from "@/lib/utils";
 import {
   PRINTER_STATUS_POLL_SECONDS_OPTIONS,
   readPrinterStatusPollSeconds,
@@ -329,13 +329,13 @@ function statusPillLabel(status: PrinterHostStatus | null | undefined): string {
 function statusPillClass(state: PrinterHostStatus["state"] | undefined): string {
   switch (state) {
     case "idle":
-      return "bg-emerald-500/15 text-emerald-800 dark:text-emerald-300";
+      return "bg-success-soft text-success";
     case "printing":
-      return "bg-sky-500/15 text-sky-800 dark:text-sky-300";
+      return "bg-info-soft text-info";
     case "paused":
-      return "bg-amber-500/15 text-amber-800 dark:text-amber-300";
+      return "bg-warning-soft text-warning";
     case "complete":
-      return "bg-emerald-500/15 text-emerald-800 dark:text-emerald-300";
+      return "bg-success-soft text-success";
     case "error":
       return "bg-destructive/15 text-destructive";
     case "offline":

@@ -9,7 +9,7 @@ import {
 } from "../api/engine";
 import UnattributedPrintCard from "../components/checkoff/UnattributedPrintCard";
 import PageHeader from "../components/layout/PageHeader";
-import RouteBreadcrumbs from "../components/layout/RouteBreadcrumbs";
+import PageShell from "../components/layout/PageShell";
 import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";
 import { useProfileSelection } from "../context/ProfileContext";
@@ -139,13 +139,13 @@ export default function GlobalProductionPage() {
   );
 
   return (
-    <div className="space-y-6">
-      <RouteBreadcrumbs items={[{ label: "Production", to: "/production" }]} />
+    <PageShell width="list" className="space-y-6">
       <PageHeader
         icon={Factory}
         accent
-        title="Production"
-        description="Live printers, work awaiting verification, failures, and remaining Checkoff across Builds."
+        eyebrow="Workshop"
+        title="All Production"
+        description="Print jobs and farm status across all Builds. Production for a single Build lives in that Build's Production stage."
       />
 
       {profilesBackgroundError && (
@@ -292,6 +292,6 @@ export default function GlobalProductionPage() {
           </ul>
         </section>
       )}
-    </div>
+    </PageShell>
   );
 }

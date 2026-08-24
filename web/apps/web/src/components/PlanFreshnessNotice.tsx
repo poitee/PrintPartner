@@ -2,7 +2,7 @@ import type { PlanFreshness, PlanStaleReason, PlanUntrackedReason } from "@print
 import { AlertTriangle, CircleHelp, RefreshCw } from "lucide-react";
 import { Link } from "react-router-dom";
 import { Button } from "./ui/button";
-import { cn } from "../lib/utils";
+import { cn } from "@/lib/utils";
 
 type Action =
   | { kind: "rebuild"; onRebuild: () => void; busy?: boolean }
@@ -53,12 +53,12 @@ export default function PlanFreshnessNotice({ freshness, action, className }: Pr
   return (
     <div
       className={cn(
-        "flex flex-wrap items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm print:hidden",
+        "flex flex-wrap items-start gap-2 rounded-lg border border-warning/30 bg-warning-soft px-3 py-2 text-sm print:hidden",
         className,
       )}
       role="status"
     >
-      <Icon className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" aria-hidden />
+      <Icon className="mt-0.5 h-4 w-4 shrink-0 text-warning" aria-hidden />
       <div className="min-w-0 flex-1">
         <p className="font-medium text-foreground">
           {freshness.status === "stale" ? "Plan rebuild needed" : "Plan inputs are not tracked"}

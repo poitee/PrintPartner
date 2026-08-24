@@ -24,7 +24,7 @@ import type { ReviewPart } from "../../api/engine";
 import type { PhaseProgress } from "../../lib/phaseManifest";
 import { nextUnlockedPhase } from "../../lib/phaseManifest";
 import { isProgressRowBusy } from "../../lib/checkoffProgress";
-import { cn } from "../../lib/utils";
+import { cn } from "@/lib/utils";
 
 // ---------------------------------------------------------------------------
 // Phase header badge
@@ -147,7 +147,7 @@ function PhaseCard({
               {partsPrinted}/{partsTotal} parts printed
             </span>
             {blocked && (
-              <span className="ml-1 rounded bg-destructive/10 px-1.5 py-0.5 text-[11px] font-semibold text-destructive">
+              <span className="ml-1 rounded bg-destructive/10 px-1.5 py-0.5 text-2xs font-semibold text-destructive">
                 BLOCKED
               </span>
             )}
@@ -155,7 +155,7 @@ function PhaseCard({
 
           <PhaseBar percent={totals.percent} blocked={blocked} />
 
-          <span className="font-mono text-[11px] text-muted-foreground">
+          <span className="font-mono text-2xs text-muted-foreground">
             {totals.percent}% · {totals.remainingUnits} unit{totals.remainingUnits === 1 ? "" : "s"} remaining
           </span>
         </div>
@@ -163,7 +163,7 @@ function PhaseCard({
 
       {/* Blocked detail */}
       {blocked && (
-        <div className="border-t border-destructive/20 bg-destructive/5 px-3 py-2 text-[12px] text-destructive">
+        <div className="border-t border-destructive/20 bg-destructive/5 px-3 py-2 text-xs text-destructive">
           <span className="font-semibold">Waiting on: </span>
           {blockingPhases.map((dep, i) => {
             // Count missing parts in the dep phase — we don't have it here,

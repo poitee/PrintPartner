@@ -9,7 +9,7 @@ import { usePlanWorkspace } from "../context/PlanWorkspaceContext";
 import { useProfileSelection } from "../context/ProfileContext";
 import { useFlushBuildPageSaves } from "../hooks/useFlushBuildPageSaves";
 import { exportRoute, isExportPath, isSourcesPath, planRoute } from "../lib/routes";
-import { cn } from "../lib/utils";
+import { cn } from "@/lib/utils";
 import { planPrintTotals } from "../lib/workflowStages";
 import { countMissingStls } from "../lib/stlAutoSync";
 import { useStlAutoSync } from "../context/StlAutoSyncContext";
@@ -132,13 +132,13 @@ export default function PlanTray() {
           !expanded && "opacity-90",
         )}
       >
-        <span className="hidden font-mono text-[9.5px] font-medium uppercase tracking-[0.08em] text-muted-foreground sm:inline">
+        <span className="hidden font-mono text-3xs font-medium uppercase tracking-[0.08em] text-muted-foreground sm:inline">
           Plan tray
         </span>
         <div className="flex min-w-0 shrink items-baseline gap-2">
           <span className="truncate text-sm font-semibold">{partLabel}</span>
           {sourceLabel ? (
-            <span className="hidden font-mono text-[11.5px] text-muted-foreground md:inline">
+            <span className="hidden font-mono text-2xs text-muted-foreground md:inline">
               {sourceLabel}
             </span>
           ) : null}
@@ -161,14 +161,14 @@ export default function PlanTray() {
                     fallbackLabel={partFilenameInitials(part.filename)}
                   />
                 </Suspense>
-                <span className="absolute -bottom-0.5 -right-0.5 z-[1] rounded bg-foreground px-0.5 font-mono text-[9px] font-medium leading-tight text-background">
+                <span className="absolute -bottom-0.5 -right-0.5 z-[1] rounded bg-foreground px-0.5 font-mono text-3xs font-medium leading-tight text-background">
                   {part.quantity_effective}
                 </span>
               </span>
             ))}
             {overflowCount > 0 ? (
               <span
-                className="flex h-[34px] w-[34px] items-center justify-center rounded-[4px] border border-dashed border-border font-mono text-[10px] font-medium text-muted-foreground"
+                className="flex h-[34px] w-[34px] items-center justify-center rounded-[4px] border border-dashed border-border font-mono text-3xs font-medium text-muted-foreground"
                 title={`${overflowCount} more included parts`}
               >
                 +{overflowCount}
@@ -178,22 +178,22 @@ export default function PlanTray() {
         ) : null}
 
         {expanded && !loading && !hasParts ? (
-          <span className="hidden min-w-0 truncate text-[11.5px] text-muted-foreground md:inline">
+          <span className="hidden min-w-0 truncate text-2xs text-muted-foreground md:inline">
             Pick STLs in Library or open Plan to assemble parts
           </span>
         ) : null}
 
         {stlSyncBusy ? null : missingStlCount > 0 ? (
-          <div className="hidden items-center gap-1.5 rounded-md border border-amber-300/80 bg-amber-50 px-2.5 py-1 dark:border-amber-700/60 dark:bg-amber-950/40 sm:flex">
-            <span className="inline-block h-1.5 w-1.5 rotate-45 bg-amber-600 dark:bg-amber-400" />
-            <span className="text-[11.5px] text-amber-900 dark:text-amber-200">
+          <div className="hidden items-center gap-1.5 rounded-md border border-warning/30 bg-warning-soft px-2.5 py-1 sm:flex">
+            <span className="inline-block h-1.5 w-1.5 rotate-45 bg-warning" />
+            <span className="text-2xs text-warning">
               {missingStlCount} STL missing
             </span>
           </div>
         ) : otherWarnCount > 0 ? (
-          <div className="hidden items-center gap-1.5 rounded-md border border-amber-300/80 bg-amber-50 px-2.5 py-1 dark:border-amber-700/60 dark:bg-amber-950/40 sm:flex">
-            <span className="inline-block h-1.5 w-1.5 rotate-45 bg-amber-600 dark:bg-amber-400" />
-            <span className="text-[11.5px] text-amber-900 dark:text-amber-200">
+          <div className="hidden items-center gap-1.5 rounded-md border border-warning/30 bg-warning-soft px-2.5 py-1 sm:flex">
+            <span className="inline-block h-1.5 w-1.5 rotate-45 bg-warning" />
+            <span className="text-2xs text-warning">
               {otherWarnCount} warning{otherWarnCount === 1 ? "" : "s"}
             </span>
           </div>
@@ -201,7 +201,7 @@ export default function PlanTray() {
 
         <div className="ml-auto flex items-center gap-2 sm:gap-3">
           {totals.totalUnits > 0 ? (
-            <span className="hidden font-mono text-[11.5px] text-muted-foreground sm:inline">
+            <span className="hidden font-mono text-2xs text-muted-foreground sm:inline">
               {totals.printedUnits} / {totals.totalUnits} units printed
             </span>
           ) : null}

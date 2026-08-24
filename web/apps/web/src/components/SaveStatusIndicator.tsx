@@ -1,6 +1,6 @@
 import { Check, Loader2, AlertCircle } from "lucide-react";
 import { useSaveStatusRegistry } from "../context/SaveStatusContext";
-import { cn } from "../lib/utils";
+import { cn } from "@/lib/utils";
 
 export default function SaveStatusIndicator() {
   const { entries } = useSaveStatusRegistry();
@@ -19,7 +19,7 @@ export default function SaveStatusIndicator() {
           ? "bg-destructive/10 text-destructive"
           : saving
             ? "bg-muted text-muted-foreground"
-            : "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
+            : "bg-success-soft text-success",
       )}
       role="status"
       aria-live="polite"

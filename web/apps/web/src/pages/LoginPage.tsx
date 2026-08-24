@@ -1,4 +1,5 @@
 import { type FormEvent, useState } from "react";
+import LayeredSheetMark from "../components/layout/BrandMark";
 import { Link, Navigate, useLocation } from "react-router-dom";
 import { toast } from "sonner";
 import { Button } from "../components/ui/button";
@@ -34,7 +35,13 @@ export default function LoginPage() {
 
   if (createdAccountEmail) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-background p-4">
+      <div className="flex min-h-screen flex-col items-center justify-center gap-6 bg-background p-4">
+      <div className="flex items-center gap-2.5" aria-hidden>
+        <LayeredSheetMark />
+        <span className="font-serif text-[17px] font-semibold tracking-[-0.01em] text-foreground">
+          Print Partner
+        </span>
+      </div>
         <Card className="w-full max-w-md">
           <CardHeader>
             <CardTitle asChild>
@@ -83,7 +90,13 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background p-4">
+    <div className="flex min-h-screen flex-col items-center justify-center gap-6 bg-background p-4">
+      <div className="flex items-center gap-2.5" aria-hidden>
+        <LayeredSheetMark />
+        <span className="font-serif text-[17px] font-semibold tracking-[-0.01em] text-foreground">
+          Print Partner
+        </span>
+      </div>
       <Card className="w-full max-w-md">
         <CardHeader>
           <CardTitle asChild>

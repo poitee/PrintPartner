@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { DEFAULT_FILAMENT_HEX } from "@/lib/colorPresets";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Check, ChevronDown, Download, MoreHorizontal, Search, Upload } from "lucide-react";
@@ -41,7 +42,7 @@ import { Field, FieldLabel } from "./ui/field";
 import { Input } from "./ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { Spinner } from "./ui/spinner";
-import { cn } from "../lib/utils";
+import { cn } from "@/lib/utils";
 import { publishRoleFilaments } from "../queries/roleFilaments";
 import { filterFilamentSpools, formatSpoolOptionLabel } from "../lib/spoolPickerUtils";
 import {
@@ -54,7 +55,7 @@ const ROLE_LABELS = Object.fromEntries(
   DEFAULT_STL_NAMING_PROFILE.roles.map((r) => [r.id, r.label]),
 ) as Record<StlNamingRoleId, string>;
 
-const DEFAULT_HEX = "#c41230";
+const DEFAULT_HEX = DEFAULT_FILAMENT_HEX;
 const CHECKER_BG =
   "repeating-conic-gradient(rgba(120,120,120,0.25) 0% 25%, transparent 0% 50%)";
 
@@ -221,12 +222,12 @@ function RoleColorRow({
               {compact ? (
                 <>
                   <span className="flex items-center gap-2">
-                    <span className="text-[12.5px] font-semibold">{label}</span>
+                    <span className="text-xs font-semibold">{label}</span>
                     {saveLabel && (
                       <span
                         className={cn(
-                          "text-[10px] font-medium",
-                          saveStatus === "saved" && "text-emerald-600 dark:text-emerald-400",
+                          "text-3xs font-medium",
+                          saveStatus === "saved" && "text-success",
                           saveStatus === "error" && "text-destructive",
                           saveStatus === "saving" && "text-muted-foreground",
                         )}
@@ -236,7 +237,7 @@ function RoleColorRow({
                       </span>
                     )}
                   </span>
-                  <span className="block truncate font-mono text-[10.5px] font-normal text-muted-foreground">
+                  <span className="block truncate font-mono text-2xs font-normal text-muted-foreground">
                     {row.filament_display || (hasColor ? row.filament_hex : "No color set")}
                   </span>
                 </>
@@ -250,8 +251,8 @@ function RoleColorRow({
                     {saveLabel && (
                       <span
                         className={cn(
-                          "text-[10px] font-medium",
-                          saveStatus === "saved" && "text-emerald-600 dark:text-emerald-400",
+                          "text-3xs font-medium",
+                          saveStatus === "saved" && "text-success",
                           saveStatus === "error" && "text-destructive",
                           saveStatus === "saving" && "text-muted-foreground",
                         )}
@@ -268,7 +269,7 @@ function RoleColorRow({
               )}
             </span>
             {compact ? (
-              <span className="ml-auto shrink-0 font-mono text-[11.5px] font-medium text-foreground">
+              <span className="ml-auto shrink-0 font-mono text-2xs font-medium text-foreground">
                 {row.part_count}
               </span>
             ) : (

@@ -229,7 +229,7 @@ export default function AcceptedPlateAssignmentForm({
   return (
     <div className="space-y-4">
       {workspace.kind === "ready" ? (
-        <p className="rounded-md border border-amber-300/60 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800/60 dark:bg-amber-950/40 dark:text-amber-100">
+        <p className="rounded-md border border-warning/30 bg-warning-soft p-3 text-sm text-warning">
           Rearranging replaces all manual Plate positions.
         </p>
       ) : null}
@@ -304,7 +304,7 @@ export default function AcceptedPlateAssignmentForm({
           <Button type="button" size="sm" variant="outline" onClick={() => setShowParts((current) => !current)}>
             {showParts ? "Hide individual parts" : `Review individual parts (${rows.length})`}
           </Button>
-          {!complete ? <span className="text-xs text-amber-700 dark:text-amber-300">{rows.length - assignedCount} still need a printer</span> : null}
+          {!complete ? <span className="text-xs text-warning">{rows.length - assignedCount} still need a printer</span> : null}
         </div>
         {showParts ? (
           <>

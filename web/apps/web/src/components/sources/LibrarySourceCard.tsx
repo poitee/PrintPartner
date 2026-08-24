@@ -10,7 +10,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
-import { cn } from "../../lib/utils";
+import { cn } from "@/lib/utils";
 import type { LibraryCardMeta } from "../../lib/librarySourceMeta";
 import { sourceCategoryLabel } from "../../lib/sourceCategoryAssignment";
 import { librarySourceDragId } from "../../lib/sourceCategoryDnD";
@@ -35,11 +35,11 @@ type Props = {
 function barClass(tone: LibraryCardMeta["barTone"]): string {
   switch (tone) {
     case "syncing":
-      return "bg-sky-500";
+      return "bg-info";
     case "update":
-      return "bg-amber-500";
+      return "bg-warning";
     case "local":
-      return "bg-emerald-600 dark:bg-emerald-500";
+      return "bg-success";
     case "attached":
       return "bg-primary";
     default:
@@ -50,9 +50,9 @@ function barClass(tone: LibraryCardMeta["barTone"]): string {
 function borderClass(tone: LibraryCardMeta["borderTone"]): string {
   switch (tone) {
     case "syncing":
-      return "border-sky-400/70";
+      return "border-info/30";
     case "update":
-      return "border-amber-500/50";
+      return "border-warning/30";
     default:
       return "border-border";
   }
@@ -61,11 +61,11 @@ function borderClass(tone: LibraryCardMeta["borderTone"]): string {
 function stateClass(tone: LibraryCardMeta["stateTone"]): string {
   switch (tone) {
     case "warning":
-      return "text-amber-700 dark:text-amber-300";
+      return "text-warning";
     case "sync":
-      return "text-sky-600 dark:text-sky-400";
+      return "text-info";
     case "success":
-      return "text-emerald-700 dark:text-emerald-400";
+      return "text-success";
     default:
       return "text-muted-foreground";
   }
@@ -153,19 +153,19 @@ export default function LibrarySourceCard({
             onClick={onOpen}
             aria-label={`Open ${source.name} (${meta.slug}, ${sourceCategoryLabel(source.category)})`}
           >
-            <span className="block truncate text-[13px] font-semibold tracking-tight">
+            <span className="block truncate text-sm font-semibold tracking-tight">
               {source.name}
             </span>
-            <span className="block truncate font-mono text-[10.5px] text-muted-foreground">
+            <span className="block truncate font-mono text-2xs text-muted-foreground">
               {meta.slug}
             </span>
-            <span className="mt-0.5 block truncate text-[10.5px] text-muted-foreground">
+            <span className="mt-0.5 block truncate text-2xs text-muted-foreground">
               {sourceCategoryLabel(source.category)}
             </span>
           </button>
           <Badge
             variant="muted"
-            className="mt-0.5 shrink-0 rounded-full px-1.5 py-0 text-[10px] font-medium"
+            className="mt-0.5 shrink-0 rounded-full px-1.5 py-0 text-3xs font-medium"
           >
             {kindLabel(source.source_kind)}
           </Badge>
@@ -204,10 +204,10 @@ export default function LibrarySourceCard({
         </div>
 
         <div className="flex items-center gap-1.5 border-t border-border/70 pt-2">
-          <span className={cn("min-w-0 truncate text-[11.5px]", stateClass(meta.stateTone))}>
+          <span className={cn("min-w-0 truncate text-2xs", stateClass(meta.stateTone))}>
             {meta.stateLabel}
           </span>
-          <span className="ml-auto shrink-0 font-mono text-[11px] font-medium tabular-nums text-foreground">
+          <span className="ml-auto shrink-0 font-mono text-2xs font-medium tabular-nums text-foreground">
             {meta.pickLabel}
           </span>
         </div>

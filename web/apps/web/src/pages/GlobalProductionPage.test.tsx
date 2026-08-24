@@ -117,7 +117,7 @@ describe("GlobalProductionPage", () => {
       </MemoryRouter>,
     );
 
-    expect(screen.getByRole("heading", { name: "Production" }).textContent).toBe("Production");
+    expect(screen.getByRole("heading", { name: "All Production" }).textContent).toBe("All Production");
     expect(screen.getByText(/6 remaining/).textContent).toContain("6 remaining");
     expect(screen.getByRole("link", { name: "Open Voron in Production" }).getAttribute("href")).toBe(
       "/export?profile=7",

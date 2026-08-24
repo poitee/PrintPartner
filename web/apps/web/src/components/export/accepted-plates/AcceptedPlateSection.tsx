@@ -260,7 +260,7 @@ export default function AcceptedPlateSection({ profileId, enabled, selectedToken
         ) : null}
         {query.isFetching && workspace ? <p className="text-xs text-muted-foreground">Checking for updates…</p> : null}
         {query.isError && workspace ? (
-          <p className="text-sm text-amber-700 dark:text-amber-300" role="alert">
+          <p className="text-sm text-warning" role="alert">
             Could not check for Plate updates. The saved revision remains available.
           </p>
         ) : null}

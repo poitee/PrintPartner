@@ -5,7 +5,7 @@ import PartThumbExpandButton from "../parts/PartThumbExpandButton";
 import PartSpoolPicker from "../PartSpoolPicker";
 import SpoolRemainingBadge from "../SpoolRemainingBadge";
 import { Button } from "../ui/button";
-import { cn } from "../../lib/utils";
+import { cn } from "@/lib/utils";
 
 type Props = {
   part: ReviewPart;

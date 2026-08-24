@@ -13,8 +13,8 @@ import {
 import CreatePlanButton from "../CreatePlanButton";
 import PlanPicker from "../PlanPicker";
 import SupportCta from "../SupportCta";
-import ThemePreferenceControl from "../ThemePreferenceControl";
 import WorkflowProgress from "../WorkflowProgress";
+import LayeredSheetMark from "./BrandMark";
 import { Button } from "../ui/button";
 import { Separator } from "../ui/separator";
 import {
@@ -25,8 +25,9 @@ import {
 import {
   spineUtilityNavItems,
   type SpineUtilityId,
+  type SpineUtilityNavItem,
 } from "../../lib/spineUtilityNav";
-import { cn } from "../../lib/utils";
+import { cn } from "@/lib/utils";
 import type { WorkflowStage, WorkflowStageId } from "../../lib/workflowStages";
 import { useProfileSelection } from "../../context/ProfileContext";
 
@@ -50,22 +51,10 @@ const UTILITY_ICONS: Record<
   help: BookOpen,
 };
 
-function LayeredSheetMark({ className }: { className?: string }) {
-  return (
-    <svg
-      className={cn("text-primary", className)}
-      width="20"
-      height="20"
-      viewBox="0 0 20 20"
-      aria-hidden="true"
-      focusable="false"
-    >
-      {/* Two offset 10×12 rounded rects — layered-sheet mark (not printer / not PP). */}
-      <rect x="1" y="5" width="10" height="12" rx="2" fill="currentColor" opacity="0.45" />
-      <rect x="7" y="2" width="10" height="12" rx="2" fill="currentColor" />
-    </svg>
-  );
-}
+/* The six utility destinations render as two sidebar groups: workshop-wide
+   pages in the body, support pages in the footer. The item list itself stays
+   flat and ordered in spineUtilityNav.ts (locked by siteChromeLabels tests). */
+const WORKSHOP_IDS: SpineUtilityId[] = ["builds", "library", "production", "printers"];
 
 function SidebarTooltip({
   label,
@@ -85,6 +74,67 @@ function SidebarTooltip({
   );
 }
 
+function GroupHeading({ collapsed, children }: { collapsed: boolean; children: ReactNode }) {
+  if (collapsed) return <Separator className="mx-1" />;
+  return (
+    <p className="px-1 font-mono text-3xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+      {children}
+    </p>
+  );
+}
+
+function UtilityLink({
+  link,
+  collapsed,
+  onStageNavigate,
+}: {
+  link: SpineUtilityNavItem & { icon: typeof Layers; match: boolean };
+  collapsed: boolean;
+  onStageNavigate: Props["onStageNavigate"];
+}) {
+  if (collapsed) {
+    return (
+      <SidebarTooltip label={link.label} collapsed>
+        <NavLink
+          to={link.to}
+          onClick={(e) => onStageNavigate(link.to, e)}
+          className={cn(
+            "relative flex items-center justify-center rounded-md p-2.5 transition-colors",
+            link.match
+              ? "bg-primary/12 text-primary"
+              : "text-muted-foreground hover:bg-accent/70 hover:text-foreground",
+          )}
+          aria-label={link.label}
+        >
+          <link.icon className="h-4 w-4" />
+        </NavLink>
+      </SidebarTooltip>
+    );
+  }
+  return (
+    <NavLink
+      to={link.to}
+      onClick={(e) => onStageNavigate(link.to, e)}
+      className={cn(
+        "relative flex items-center gap-2.5 rounded-md px-2.5 py-2 transition-colors",
+        link.match
+          ? "bg-primary/12 text-primary"
+          : "text-muted-foreground hover:bg-accent/70 hover:text-foreground",
+      )}
+    >
+      <link.icon className="h-4 w-4 shrink-0" />
+      <span
+        className={cn(
+          "min-w-0 flex-1 text-sm font-medium",
+          link.match && "font-semibold",
+        )}
+      >
+        {link.label}
+      </span>
+    </NavLink>
+  );
+}
+
 export default function SpineRail({
   collapsed,
   onToggleCollapsed,
@@ -99,6 +149,8 @@ export default function SpineRail({
     icon: UTILITY_ICONS[item.id],
     match: location.pathname === item.path,
   }));
+  const workshopLinks = utilityLinks.filter((l) => WORKSHOP_IDS.includes(l.id));
+  const supportLinks = utilityLinks.filter((l) => !WORKSHOP_IDS.includes(l.id));
 
   return (
     <aside
@@ -122,6 +174,7 @@ export default function SpineRail({
       </div>
 
       <div className={cn("flex flex-1 flex-col gap-3 overflow-y-auto", collapsed ? "p-2" : "p-3")}>
+        <GroupHeading collapsed={collapsed}>Current build</GroupHeading>
         {!collapsed ? (
           <div className="space-y-2 rounded-md border border-border bg-muted/30 p-2">
             <PlanPicker className="w-full" />
@@ -147,73 +200,41 @@ export default function SpineRail({
           onNavigate={onStageNavigate}
         />
 
-        <Separator className={cn(collapsed && "mx-1")} />
+        <GroupHeading collapsed={collapsed}>Workshop</GroupHeading>
 
         {/* Stage-weight utility rows (not desk-loop / WorkflowProgress). Flush via onStageNavigate. */}
         <nav
           className={cn("flex flex-col", collapsed && "gap-1")}
           aria-label="Utility"
         >
-          {utilityLinks.map((link) => {
-            if (collapsed) {
-              return (
-                <SidebarTooltip key={link.id} label={link.label} collapsed>
-                  <NavLink
-                    to={link.to}
-                    onClick={(e) => onStageNavigate(link.to, e)}
-                    className={cn(
-                      "relative flex items-center justify-center rounded-md p-2.5 transition-colors",
-                      link.match
-                        ? "bg-primary/12 text-primary"
-                        : "text-muted-foreground hover:bg-accent/70 hover:text-foreground",
-                    )}
-                    aria-label={link.label}
-                  >
-                    <link.icon className="h-4 w-4" />
-                  </NavLink>
-                </SidebarTooltip>
-              );
-            }
-            return (
-              <NavLink
-                key={link.id}
-                to={link.to}
-                onClick={(e) => onStageNavigate(link.to, e)}
-                className={cn(
-                  "relative flex items-center gap-2.5 rounded-md px-2.5 py-2 transition-colors",
-                  link.match
-                    ? "bg-primary/12 text-primary"
-                    : "text-muted-foreground hover:bg-accent/70 hover:text-foreground",
-                )}
-              >
-                <link.icon className="h-4 w-4 shrink-0" />
-                <span
-                  className={cn(
-                    "min-w-0 flex-1 text-[13px] font-medium",
-                    link.match && "font-semibold",
-                  )}
-                >
-                  {link.label}
-                </span>
-              </NavLink>
-            );
-          })}
+          {workshopLinks.map((link) => (
+            <UtilityLink
+              key={link.id}
+              link={link}
+              collapsed={collapsed}
+              onStageNavigate={onStageNavigate}
+            />
+          ))}
         </nav>
       </div>
 
-      <div className={cn("mt-auto space-y-2 border-t border-border", collapsed ? "p-2" : "p-3")}>
-        {!collapsed && (
-          <>
-            <div className="px-1">
-              <p className="mb-1.5 text-xs font-medium text-muted-foreground">Theme</p>
-              <ThemePreferenceControl compact className="w-full" />
-            </div>
-            <SupportCta
-              variant="ghost"
-              size="sm"
-              className="w-full justify-start text-muted-foreground"
+      <div className={cn("mt-auto space-y-1 border-t border-border", collapsed ? "p-2" : "p-3")}>
+        <nav className={cn("flex flex-col", collapsed && "gap-1")} aria-label="Support">
+          {supportLinks.map((link) => (
+            <UtilityLink
+              key={link.id}
+              link={link}
+              collapsed={collapsed}
+              onStageNavigate={onStageNavigate}
             />
-          </>
+          ))}
+        </nav>
+        {!collapsed && (
+          <SupportCta
+            variant="ghost"
+            size="sm"
+            className="w-full justify-start text-muted-foreground"
+          />
         )}
 
         <Button

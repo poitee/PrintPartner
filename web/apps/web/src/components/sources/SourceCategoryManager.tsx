@@ -20,7 +20,7 @@ import {
   useSourceCategoriesQuery,
 } from "../../queries/sourceCategories";
 import { moveItem } from "../../lib/reorderList";
-import { cn } from "../../lib/utils";
+import { cn } from "@/lib/utils";
 import { SortableDragHandle } from "../dnd/SortableDragHandle";
 import { Button } from "../ui/button";
 import {

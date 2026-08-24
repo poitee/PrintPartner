@@ -1,5 +1,5 @@
 import { Spinner } from "./ui/spinner";
-import { cn } from "../lib/utils";
+import { cn } from "@/lib/utils";
 import type { StlSyncBannerMode } from "../lib/stlAutoSync";
 
 type Props = {

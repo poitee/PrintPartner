@@ -1,14 +1,14 @@
 import { Loader2, X } from "lucide-react";
 import { useJobContext } from "../context/JobContext";
 import { jobKindLabel } from "../lib/jobLabels";
-import { cn } from "../lib/utils";
+import { cn } from "@/lib/utils";
 import { Button } from "./ui/button";
 
 const STATUS_STYLES: Record<string, string> = {
-  pending: "text-amber-400",
-  running: "text-sky-400",
-  done: "text-emerald-400",
-  error: "text-red-400",
+  pending: "text-warning",
+  running: "text-info",
+  done: "text-success",
+  error: "text-destructive",
   cancelled: "text-muted-foreground",
 };
 

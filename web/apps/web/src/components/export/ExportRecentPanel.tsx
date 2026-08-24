@@ -69,17 +69,17 @@ export default function ExportRecentPanel() {
 
   return (
     <aside className="flex flex-col gap-3 rounded-lg border border-border bg-card p-3.5 shadow-sm">
-      <span className="font-mono text-[9.5px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+      <span className="font-mono text-3xs font-medium uppercase tracking-[0.08em] text-muted-foreground">
         Recent accepted Plate exports
       </span>
       {history.isError ? (
-        <p className="text-xs text-amber-700 dark:text-amber-300">Could not refresh recent exports.</p>
+        <p className="text-xs text-warning">Could not refresh recent exports.</p>
       ) : null}
       <ul className="flex flex-col gap-0">
         {[...runningContext].reverse().map((job) => (
           <li key={job.jobId} className="border-b border-border/60 py-2.5 first:pt-0">
             <div className="flex items-center gap-1.5">
-              <Loader2 className="h-3.5 w-3.5 animate-spin text-sky-600" />
+              <Loader2 className="h-3.5 w-3.5 animate-spin text-info" />
               <span className="text-xs">{job.message || "Exporting accepted Plates…"}</span>
             </div>
           </li>
@@ -87,7 +87,7 @@ export default function ExportRecentPanel() {
         {runningHistory.map((job) => (
           <li key={job.job_id} className="border-b border-border/60 py-2.5 first:pt-0">
             <div className="flex items-center gap-1.5">
-              <Loader2 className="h-3.5 w-3.5 animate-spin text-sky-600" />
+              <Loader2 className="h-3.5 w-3.5 animate-spin text-info" />
               <span className="text-xs">{job.message || "Exporting accepted Plates…"}</span>
             </div>
           </li>
@@ -104,7 +104,7 @@ export default function ExportRecentPanel() {
             : acceptedPlateRevisionLabel(result.plate_revision_number, displayedRevision);
           return (
             <li key={job.job_id} className="flex flex-col gap-1 border-b border-border/60 py-2.5 last:border-b-0 last:pb-0 first:pt-0">
-              <span className="text-[12.5px] font-semibold">Accepted Plate 3MF</span>
+              <span className="text-xs font-semibold">Accepted Plate 3MF</span>
               {revisionLabel ? <span className="text-xs text-muted-foreground">{revisionLabel}</span> : null}
               {result ? (
                 <a className="text-xs font-medium text-primary underline" href={result.download_url} download>
@@ -117,7 +117,7 @@ export default function ExportRecentPanel() {
           );
         })}
       </ul>
-      <p className="text-[10.5px] leading-relaxed text-muted-foreground">
+      <p className="text-2xs leading-relaxed text-muted-foreground">
         Job metadata survives reload for about 24 hours, but disappears when the server restarts. Download retention is separate.
       </p>
     </aside>

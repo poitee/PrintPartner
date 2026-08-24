@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { DEFAULT_FILAMENT_HEX } from "@/lib/colorPresets";
 import { useLocation } from "react-router-dom";
 import {
   CalendarClock,
@@ -35,7 +36,7 @@ import {
 import { useDateFormat } from "../context/DateFormatContext";
 import PageHeader from "../components/layout/PageHeader";
 import PageHeaderActions from "../components/layout/PageHeaderActions";
-import RouteBreadcrumbs from "../components/layout/RouteBreadcrumbs";
+import PageShell from "../components/layout/PageShell";
 import { StlNamingSettingsCard } from "../components/settings/StlNamingEditor";
 import IntegrationsSettingsCard from "../components/settings/IntegrationsSettingsCard";
 import PrintersSettingsCard from "../components/settings/PrintersSettingsCard";
@@ -151,7 +152,7 @@ export default function SettingsPage() {
   const [filaments, setFilaments] = useState<CustomFilament[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [newFilamentName, setNewFilamentName] = useState("");
-  const [newFilamentHex, setNewFilamentHex] = useState("#c41230");
+  const [newFilamentHex, setNewFilamentHex] = useState(DEFAULT_FILAMENT_HEX);
   const [githubPat, setGithubPat] = useState<GitHubPatSettings | null>(null);
   const [patInput, setPatInput] = useState("");
   const [patMessage, setPatMessage] = useState<string | null>(null);
@@ -346,8 +347,7 @@ export default function SettingsPage() {
     "rounded-md border border-input bg-background px-2 py-1.5 text-sm";
 
   return (
-    <div className="space-y-6">
-      <RouteBreadcrumbs items={[{ label: "Settings" }]} />
+    <PageShell width="list" className="space-y-6">
       <PageHeader
         icon={Settings}
         accent
@@ -375,6 +375,33 @@ export default function SettingsPage() {
       {patMessage && <p className="text-sm text-muted-foreground">{patMessage}</p>}
       {updateMessage && <p className="text-sm text-muted-foreground">{updateMessage}</p>}
 
+      <div className="gap-8 lg:grid lg:grid-cols-[190px_minmax(0,1fr)] lg:items-start">
+        <nav
+          aria-label="Settings sections"
+          className="mb-4 flex flex-wrap gap-1.5 lg:sticky lg:top-4 lg:mb-0 lg:flex-col lg:gap-0.5"
+        >
+          {[
+            { id: "printers", label: "Printers" },
+            { id: "slicers", label: "Slicers" },
+            { id: "library", label: "Library" },
+            { id: "build-tracking", label: "Build Tracking" },
+            { id: "appearance", label: "Appearance" },
+            ...(authRequired && user?.provider === "email"
+              ? [{ id: "account", label: "Account" }]
+              : []),
+            ...(recoveryToolsReady ? [{ id: "data", label: "Data & System" }] : []),
+          ].map((item) => (
+            <a
+              key={item.id}
+              href={`#${item.id}`}
+              className="rounded-md border border-border px-2.5 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-accent/70 hover:text-foreground lg:border-transparent"
+            >
+              {item.label}
+            </a>
+          ))}
+        </nav>
+
+        <div className="min-w-0 space-y-6">
       <AboutUpdatesCard
         updateCheck={updateCheck}
         onRefresh={onCheckAppUpdates}
@@ -389,7 +416,7 @@ export default function SettingsPage() {
         <SlicersSettingsCard engineReady={engineReady} />
       </SettingsSection>
 
-      <SettingsSection title="Library">
+      <SettingsSection id="library" title="Library">
         <div id="source-categories">
           <SourceCategoryManager engineReady={engineReady} />
         </div>
@@ -821,7 +848,7 @@ export default function SettingsPage() {
         </Card>
       </SettingsSection>
 
-      <SettingsSection title="Appearance">
+      <SettingsSection id="appearance" title="Appearance">
         <Card>
           <CardHeader accent>
             <div className="flex items-start gap-3">
@@ -879,7 +906,7 @@ export default function SettingsPage() {
       </SettingsSection>
 
       {authRequired && user?.provider === "email" ? (
-        <SettingsSection title="Account">
+        <SettingsSection id="account" title="Account">
           <AccountPasswordCard />
         </SettingsSection>
       ) : null}
@@ -891,6 +918,8 @@ export default function SettingsPage() {
           <LoggingManagementCard />
         </SettingsSection>
       )}
+        </div>
+      </div>
 
       <Dialog
         open={deleteFilamentId != null}
@@ -929,6 +958,6 @@ export default function SettingsPage() {
           </div>
         </DialogContent>
       </Dialog>
-    </div>
+    </PageShell>
   );
 }

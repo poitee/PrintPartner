@@ -164,7 +164,7 @@ export default function ProductionRulesPanel({ profileId }: { profileId: number 
   return (
     <Card className="border-border shadow-sm">
       <CardHeader className="gap-1 pb-3">
-        <CardTitle level={3} className="text-[13.5px] font-semibold">Plate grouping rules</CardTitle>
+        <CardTitle level={3} className="text-sm font-semibold">Plate grouping rules</CardTitle>
         <CardDescription>
           Rules are saved per Build. Order matters, and drag or exact-position edits remain available after arranging.
           A keep-together group gets dedicated Plates; if it cannot fit on one Plate, it is split across as few Plates as possible.

@@ -18,18 +18,18 @@ export default function DirectExportCard({ tokenCount, busy, onExport }: Props) 
   return (
     <Card className="flex flex-col border-border shadow-sm">
       <CardHeader className="space-y-2 pb-2">
-        <CardTitle level={3} className="text-[13.5px] font-semibold leading-snug">
+        <CardTitle level={3} className="text-sm font-semibold leading-snug">
           Direct export
         </CardTitle>
-        <CardDescription className="text-[12.5px] leading-relaxed">
+        <CardDescription className="text-xs leading-relaxed">
           Skip Printer allocation and arrangement. Download one unarranged named-object 3MF
           for the selected units.
         </CardDescription>
         <div className="flex flex-wrap gap-1.5 pt-0.5">
-          <Badge variant="muted" className="rounded-full px-2 py-0.5 font-mono text-[10.5px] font-normal">
+          <Badge variant="muted" className="rounded-full px-2 py-0.5 font-mono text-2xs font-normal">
             {tokenCount > 0 ? `${tokenCount} units` : "none selected"}
           </Badge>
-          <Badge variant="muted" className="rounded-full px-2 py-0.5 font-mono text-[10.5px] font-normal">
+          <Badge variant="muted" className="rounded-full px-2 py-0.5 font-mono text-2xs font-normal">
             no arrangement
           </Badge>
         </div>

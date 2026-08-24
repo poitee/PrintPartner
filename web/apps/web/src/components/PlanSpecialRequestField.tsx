@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Input } from "./ui/input";
 import { useUpdateProfileMutation } from "../queries/profiles";
-import { cn } from "../lib/utils";
+import { cn } from "@/lib/utils";
 
 type Props = {
   profileId: number;

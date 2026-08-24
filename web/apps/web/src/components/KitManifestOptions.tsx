@@ -15,7 +15,7 @@ import {
 import { ChevronDown } from "lucide-react";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
-import { cn } from "../lib/utils";
+import { cn } from "@/lib/utils";
 
 type Props = {
   profileId: number;
@@ -195,7 +195,7 @@ export default function KitManifestOptions({
   }
 
   const staleHint = buildStale ? (
-    <p className="text-xs text-amber-700 dark:text-amber-300">
+    <p className="text-xs text-warning">
       Run <strong className="font-medium text-foreground">Rebuild plan</strong> to apply variant
       parts to Review and Checkoff.
     </p>
@@ -211,7 +211,7 @@ export default function KitManifestOptions({
               <span
                 className={cn(
                   "text-muted-foreground",
-                  status === "saved" && "text-emerald-600 dark:text-emerald-400",
+                  status === "saved" && "text-success",
                   status === "error" && "text-destructive",
                 )}
               >
@@ -294,7 +294,7 @@ export default function KitManifestOptions({
           <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" />
         </summary>
         <div className="space-y-2 border-t border-border px-3 pb-3 pt-2">
-          <p className="text-[11px] text-muted-foreground">
+          <p className="text-2xs text-muted-foreground">
             Pick one per group, then{" "}
             <strong className="font-medium text-foreground">Rebuild plan</strong>.{" "}
             <Link to="/help#kit-variants" className="text-primary hover:underline">

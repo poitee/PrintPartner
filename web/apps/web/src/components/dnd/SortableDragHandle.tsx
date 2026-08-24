@@ -1,7 +1,7 @@
 import type { DraggableAttributes, DraggableSyntheticListeners } from "@dnd-kit/core";
 import { GripVertical } from "lucide-react";
 import type { CSSProperties, ReactNode } from "react";
-import { cn } from "../../lib/utils";
+import { cn } from "@/lib/utils";
 
 type Props = {
   listeners?: DraggableSyntheticListeners;

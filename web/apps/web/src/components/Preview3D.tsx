@@ -7,6 +7,7 @@ import {
   type KeyboardEvent,
 } from "react";
 import { Loader2, Ruler } from "lucide-react";
+import { DEFAULT_FILAMENT_HEX } from "@/lib/colorPresets";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
@@ -39,7 +40,7 @@ type Props = {
   appearance?: "adaptive" | "studio";
 };
 
-const DEFAULT_COLOR = "#c41230";
+const DEFAULT_COLOR = DEFAULT_FILAMENT_HEX;
 const MESH_MAX_BYTES = 15 * 1024 * 1024;
 
 const DARK_BG = "#0a0e14";

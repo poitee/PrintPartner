@@ -1,6 +1,6 @@
 import { type MouseEvent } from "react";
 import { NavLink } from "react-router-dom";
-import { cn } from "../lib/utils";
+import { cn } from "@/lib/utils";
 import {
   spineFillIndex,
   spineFillStageCount,
@@ -56,15 +56,15 @@ export default function WorkflowProgress({
                     active
                       ? "bg-primary"
                       : stage.warn
-                        ? "bg-amber-500"
+                        ? "bg-warning"
                         : stage.done
-                          ? "bg-emerald-500"
+                          ? "bg-success"
                           : "bg-border",
                   )}
                 />
                 <span
                   className={cn(
-                    "truncate text-[10px] font-medium sm:text-[11px]",
+                    "truncate text-3xs font-medium sm:text-2xs",
                     active && "font-semibold",
                     stage.dim && !active && "opacity-60",
                   )}
@@ -73,12 +73,12 @@ export default function WorkflowProgress({
                 </span>
               </span>
               {(stage.meta || stage.warn) && (
-                <span className="flex items-center gap-1 font-mono text-[10px] tabular-nums">
+                <span className="flex items-center gap-1 font-mono text-3xs tabular-nums">
                   {stage.meta ? (
                     <span
                       className={cn(
                         stage.warn
-                          ? "text-amber-700 dark:text-amber-300"
+                          ? "text-warning"
                           : "text-muted-foreground",
                         active && !stage.warn && "text-primary",
                       )}
@@ -88,7 +88,7 @@ export default function WorkflowProgress({
                   ) : null}
                   {stage.warn ? (
                     <span
-                      className="inline-block h-1.5 w-1.5 rotate-45 bg-amber-600 dark:bg-amber-400"
+                      className="inline-block h-1.5 w-1.5 rotate-45 bg-warning"
                       aria-label="Warning"
                     />
                   ) : null}
@@ -136,14 +136,14 @@ export default function WorkflowProgress({
                   active
                     ? "bg-primary ring-primary/40"
                     : stage.warn
-                      ? "bg-amber-500"
+                      ? "bg-warning"
                       : stage.done
-                        ? "bg-emerald-500"
+                        ? "bg-success"
                         : "bg-border",
                 )}
               />
               {stage.warn ? (
-                <span className="absolute right-1 top-1 h-1.5 w-1.5 rotate-45 bg-amber-600" />
+                <span className="absolute right-1 top-1 h-1.5 w-1.5 rotate-45 bg-warning" />
               ) : null}
             </NavLink>
           );
@@ -187,15 +187,15 @@ export default function WorkflowProgress({
                 active
                   ? "bg-primary ring-primary/30"
                   : stage.warn
-                    ? "bg-amber-500 ring-amber-500/30"
+                    ? "bg-warning ring-warning/30"
                     : stage.done
-                      ? "bg-emerald-500"
+                      ? "bg-success"
                       : "bg-border",
               )}
             />
             <span
               className={cn(
-                "min-w-0 flex-1 text-[13px]",
+                "min-w-0 flex-1 text-sm",
                 active
                   ? "font-semibold text-primary"
                   : stage.dim
@@ -209,9 +209,9 @@ export default function WorkflowProgress({
               {stage.meta ? (
                 <span
                   className={cn(
-                    "font-mono text-[11px] tabular-nums",
+                    "font-mono text-2xs tabular-nums",
                     stage.warn
-                      ? "text-amber-700 dark:text-amber-300"
+                      ? "text-warning"
                       : active
                         ? "text-primary"
                         : "text-muted-foreground",
@@ -222,7 +222,7 @@ export default function WorkflowProgress({
               ) : null}
               {stage.warn ? (
                 <span
-                  className="inline-block h-1.5 w-1.5 rotate-45 bg-amber-600 dark:bg-amber-400"
+                  className="inline-block h-1.5 w-1.5 rotate-45 bg-warning"
                   aria-label="Warning"
                 />
               ) : null}

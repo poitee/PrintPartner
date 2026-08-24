@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Archive, Box, FolderOpen, GitBranch, Globe } from "lucide-react";
 import { sourceCoverUrl } from "../api/engine";
-import { cn } from "../lib/utils";
+import { cn } from "@/lib/utils";
 
 type SourceKind = string;
 
@@ -145,7 +145,7 @@ export default function SourceCardCover({
       />
       <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-card via-card/30 to-transparent" />
       {!hideKindBadge ? (
-        <div className="absolute bottom-2 left-2 rounded-md border border-border/60 bg-card/80 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground backdrop-blur-sm">
+        <div className="absolute bottom-2 left-2 rounded-md border border-border/60 bg-card/80 px-1.5 py-0.5 text-3xs font-medium uppercase tracking-wide text-muted-foreground backdrop-blur-sm">
           {sourceKind === "github" ? "GitHub" : sourceKind}
         </div>
       ) : null}

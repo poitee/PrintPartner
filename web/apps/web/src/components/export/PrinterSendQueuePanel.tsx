@@ -8,7 +8,7 @@ import {
   type PrinterSendQueueItem,
 } from "../../api/engine";
 import { Button } from "../ui/button";
-import { cn } from "../../lib/utils";
+import { cn } from "@/lib/utils";
 
 type Props = {
   engineReady: boolean;

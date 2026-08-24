@@ -1,4 +1,5 @@
 import { useState } from "react";
+import LayeredSheetMark from "../components/layout/BrandMark";
 import { Link, Navigate } from "react-router-dom";
 import { toast } from "sonner";
 import { Button } from "../components/ui/button";
@@ -53,7 +54,13 @@ export default function ForgotPasswordPage() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background p-4">
+    <div className="flex min-h-screen flex-col items-center justify-center gap-6 bg-background p-4">
+      <div className="flex items-center gap-2.5" aria-hidden>
+        <LayeredSheetMark />
+        <span className="font-serif text-[17px] font-semibold tracking-[-0.01em] text-foreground">
+          Print Partner
+        </span>
+      </div>
       <Card className="w-full max-w-md">
         <CardHeader>
           <CardTitle asChild>
@@ -94,8 +101,8 @@ export default function ForgotPasswordPage() {
             </p>
           )}
           {devResetUrl && isSafeAppUrl(devResetUrl) && (
-            <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
-              <p className="font-medium text-amber-900 dark:text-amber-100">Dev reset link</p>
+            <div className="rounded-md border border-warning/30 bg-warning-soft p-3 text-sm">
+              <p className="font-medium text-warning">Dev reset link</p>
               <p className="mt-1 break-all text-muted-foreground">
                 SMTP is not configured — use this link locally:
               </p>

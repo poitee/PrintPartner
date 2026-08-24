@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { DEFAULT_FILAMENT_HEX } from "./colorPresets";
 import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
 import {
   acceptedPartMediaMetadata,
@@ -11,7 +12,7 @@ import { getCachedMeshBuffer, cacheMeshBuffer } from "./meshCache.js";
 
 const SIZE = 256;
 const MESH_MAX_BYTES = 15 * 1024 * 1024;
-const DEFAULT_COLOR = "#c41230";
+const DEFAULT_COLOR = DEFAULT_FILAMENT_HEX;
 const MESH_CACHE_MAX = 48;
 const BLOB_CACHE_MAX = 96;
 const DECIMATE_THRESHOLD = 80_000;

@@ -83,7 +83,7 @@ describe("application shell accessibility", () => {
     expect(main.id).toBe("main-content");
   });
 
-  it("marks the current destination in the mobile utility menu", async () => {
+  it("marks the current destination in the mobile nav drawer", async () => {
     render(
       <MemoryRouter initialEntries={["/library"]}>
         <Routes>
@@ -94,9 +94,11 @@ describe("application shell accessibility", () => {
       </MemoryRouter>,
     );
 
-    fireEvent.pointerDown(screen.getByRole("button", { name: "More" }));
+    fireEvent.click(screen.getByRole("button", { name: "Menu" }));
 
-    const link = await screen.findByRole("menuitem", { name: "Source Library" });
+    const nav = await screen.findByRole("navigation", { name: "Workshop" });
+    expect(nav).toBeTruthy();
+    const link = await screen.findByRole("link", { name: "Source Library" });
     expect(link.getAttribute("aria-current")).toBe("page");
     expect(link.className).toContain("bg-accent");
   });

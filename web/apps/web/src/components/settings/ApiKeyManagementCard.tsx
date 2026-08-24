@@ -128,7 +128,7 @@ export default function ApiKeyManagementCard() {
       </CardHeader>
       <CardContent className="space-y-4">
         {error && (
-          <div className="flex gap-2 rounded-lg bg-red-50 p-3 text-sm text-red-700">
+          <div className="flex gap-2 rounded-lg bg-destructive-soft p-3 text-sm text-destructive">
             <AlertCircle className="h-4 w-4 flex-shrink-0" />
             <span>{error}</span>
           </div>
@@ -156,7 +156,7 @@ export default function ApiKeyManagementCard() {
                     <span
                       className={`text-xs px-2 py-1 rounded ${
                         key.isActive
-                          ? "bg-green-100 text-green-800"
+                          ? "bg-success-soft text-success"
                           : "bg-gray-100 text-gray-600"
                       }`}
                     >
@@ -183,7 +183,7 @@ export default function ApiKeyManagementCard() {
                         onClick={() => handleRevokeKey(key.id)}
                         size="sm"
                         variant="outline"
-                        className="text-red-600 hover:text-red-700"
+                        className="text-destructive hover:text-destructive"
                       >
                         <Trash2 className="h-4 w-4" />
                       </Button>
@@ -263,7 +263,7 @@ export default function ApiKeyManagementCard() {
                   </div>
                 </div>
 
-                <div className="rounded-lg bg-amber-50 p-3 text-sm text-amber-800">
+                <div className="rounded-lg bg-warning-soft p-3 text-sm text-warning">
                   <strong>Save your key now.</strong> You won't be able to see
                   it again. If you lose it, generate a new key and revoke this
                   one.

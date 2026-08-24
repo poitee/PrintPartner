@@ -2,7 +2,7 @@ import { AlertTriangle } from "lucide-react";
 import {
   PLAN_CONFLICT_HINT,
 } from "../lib/mergeConflictCopy";
-import { cn } from "../lib/utils";
+import { cn } from "@/lib/utils";
 
 type Props = {
   conflictCount: number;

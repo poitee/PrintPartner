@@ -1,4 +1,4 @@
-import { cn } from "../../lib/utils";
+import { cn } from "@/lib/utils";
 import { categorySwatch } from "../../lib/librarySourceMeta";
 import CategoryDropTarget from "../sources/CategoryDropTarget";
 
@@ -21,7 +21,7 @@ export default function PlanCategoryDropStrip({
       className={cn("flex flex-wrap items-center gap-1.5", className)}
       aria-label="Drop sources onto a category"
     >
-      <span className="font-mono text-[9.5px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+      <span className="font-mono text-3xs font-medium uppercase tracking-[0.08em] text-muted-foreground">
         Drop onto
       </span>
       {categories.map((name) => (
@@ -31,7 +31,7 @@ export default function PlanCategoryDropStrip({
           onDropSource={onDropSourceCategory}
           className="rounded-md"
         >
-          <span className="inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-2 py-1 text-[11.5px] text-foreground">
+          <span className="inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-2 py-1 text-2xs text-foreground">
             <span
               className="h-[7px] w-[7px] shrink-0 rounded-[2px]"
               style={{ background: categorySwatch(name) }}
@@ -46,7 +46,7 @@ export default function PlanCategoryDropStrip({
         onDropSource={onDropSourceCategory}
         className="rounded-md"
       >
-        <span className="inline-flex items-center gap-1.5 rounded-md border border-dashed border-border px-2 py-1 text-[11.5px] text-muted-foreground">
+        <span className="inline-flex items-center gap-1.5 rounded-md border border-dashed border-border px-2 py-1 text-2xs text-muted-foreground">
           Uncategorised
         </span>
       </CategoryDropTarget>

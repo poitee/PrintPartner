@@ -1,7 +1,7 @@
 import { Plus } from "lucide-react";
 import { Button } from "./ui/button";
 import { usePlanActions } from "../context/PlanActionsContext";
-import { cn } from "../lib/utils";
+import { cn } from "@/lib/utils";
 
 type Props = {
   variant?: "default" | "secondary" | "outline" | "ghost";

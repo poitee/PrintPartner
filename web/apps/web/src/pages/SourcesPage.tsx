@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
-import { ChevronDown, FolderGit2, MoreHorizontal, Search } from "lucide-react";
+import { ChevronDown, FolderGit2, Library, MoreHorizontal, Search } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   importReposTxt,
@@ -24,7 +24,8 @@ import { usePlanWorkspace } from "../context/PlanWorkspaceContext";
 import { useProfileSelection } from "../context/ProfileContext";
 import EmptyState from "../components/layout/EmptyState";
 import DeskNextStep from "../components/layout/DeskNextStep";
-import RouteBreadcrumbs from "../components/layout/RouteBreadcrumbs";
+import PageHeader from "../components/layout/PageHeader";
+import PageShell from "../components/layout/PageShell";
 import GlobalStlSearch from "../components/sources/GlobalStlSearch";
 import LibraryCategoryRail, {
   type LibraryAddKind,
@@ -101,7 +102,7 @@ import {
   savePersistedSourcesUi,
 } from "../lib/persistedSourcesUi";
 import { toastJobResult } from "../lib/jobToasts";
-import { cn } from "../lib/utils";
+import { cn } from "@/lib/utils";
 import { resolveEngineState } from "../lib/workflowState";
 import {
   invalidateSourceDependents,
@@ -783,8 +784,8 @@ export default function SourcesPage() {
         }}
         className={cn(
           "flex flex-col gap-2 rounded-lg border bg-card px-4 py-3 sm:flex-row sm:flex-wrap sm:items-center",
-          meta.borderTone === "update" && "border-amber-500/50",
-          meta.borderTone === "syncing" && "border-sky-400/70",
+          meta.borderTone === "update" && "border-warning/30",
+          meta.borderTone === "syncing" && "border-info/30",
           isSelected && "ring-2 ring-primary border-primary/60",
           !busy && "cursor-grab active:cursor-grabbing",
         )}
@@ -864,9 +865,8 @@ export default function SourcesPage() {
 
   if (!engineReady) {
     return (
-      <div className="space-y-4">
-        <RouteBreadcrumbs items={[{ label: "Library" }]} />
-        <h1 className="text-xl font-semibold tracking-tight">Library</h1>
+      <PageShell>
+        <PageHeader icon={Library} accent eyebrow="Workshop" title="Library" />
         <Card>
           <CardContent className="pt-6">
             <p
@@ -879,15 +879,118 @@ export default function SourcesPage() {
             </p>
           </CardContent>
         </Card>
-      </div>
+      </PageShell>
     );
   }
 
-  return (
-    <div className={detailSource != null ? "lg:pl-[min(42rem,100%)]" : undefined}>
-      <RouteBreadcrumbs items={[{ label: "Library" }]} />
+  const headerActions = (
+    <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            className="flex min-h-9 min-w-0 flex-1 items-center gap-2 rounded-md border border-border bg-background px-2.5 py-1.5 text-left text-xs text-muted-foreground transition-colors hover:bg-accent/60 sm:max-w-[230px] sm:flex-none"
+            onClick={() => {
+              setStlSearchExpanded(true);
+              setStlSearchFocus(true);
+            }}
+          >
+            <Search className="h-3.5 w-3.5 shrink-0" aria-hidden />
+            <span className="min-w-0 truncate">Search STLs everywhere</span>
+            <kbd className="ml-auto hidden font-mono text-3xs text-muted-foreground sm:inline">
+              ⌘K
+            </kbd>
+          </button>
 
-      <div className="-mx-1 overflow-hidden rounded-xl border border-border bg-background sm:-mx-0 lg:grid lg:min-h-[min(70vh,720px)] lg:grid-cols-[178px_minmax(0,1fr)]">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button className="min-h-9" disabled={!engineReady}>
+                Add source
+                <ChevronDown className="ml-1.5 h-3.5 w-3.5 opacity-80" aria-hidden />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => openAddWizard("github")}>
+                GitHub repo
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => openAddWizard("local")}>
+                Local folder
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => openAddWizard("archive")}>
+                Zip upload
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => openAddWizard("printables")}>
+                Printables
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => openAddWizard("makerworld")}>
+                MakerWorld
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => openAddWizard("self")}>
+                Another instance / URL
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => void importSharedBuild()}>
+                Plan bundle…
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" className="min-h-9" disabled={!engineReady}>
+                More
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem
+                onClick={() => syncSources()}
+                disabled={busy || updateBusy || sources.length === 0}
+              >
+                {busy ? "Syncing…" : "Sync all"}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={checkUpdates}
+                disabled={busy || updateBusy || sources.length === 0}
+              >
+                {updateBusy ? "Checking…" : "Check updates"}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() => void refresh()}
+                disabled={busy || updateBusy}
+              >
+                Refresh list
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => setReposImportOpen(true)}>
+                Import repos.txt…
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onSelect={(e) => {
+                  e.preventDefault();
+                  document.getElementById("repos-txt-file-input")?.click();
+                }}
+              >
+                Choose repos.txt file…
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setCategoriesSheetOpen(true)}>
+                Manage categories…
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+    </div>
+  );
+
+  return (
+    <div className={cn("space-y-4", detailSource != null && "lg:pl-[min(42rem,100%)]")}>
+      <PageHeader
+        icon={Library}
+        accent
+        eyebrow="Workshop"
+        title="Library"
+        description={headerSubtitle}
+        actions={headerActions}
+      />
+      <DeskNextStep>{libraryNextStep}</DeskNextStep>
+
+      <div className="overflow-hidden rounded-xl border border-border bg-background lg:grid lg:min-h-[min(70vh,720px)] lg:grid-cols-[178px_minmax(0,1fr)]">
         <LibraryCategoryRail
           className="hidden lg:flex"
           categories={categories}
@@ -905,105 +1008,6 @@ export default function SourcesPage() {
         />
 
         <div className="flex min-w-0 flex-col">
-          <header className="flex flex-col gap-3 border-b border-border bg-card px-4 py-3.5 sm:flex-row sm:items-center sm:gap-3.5 sm:px-5">
-            <div className="min-w-0 flex-1">
-              <h1 className="text-xl font-semibold tracking-tight">Library</h1>
-              <p className="text-[12.5px] text-muted-foreground">{headerSubtitle}</p>
-              <DeskNextStep className="mt-1">{libraryNextStep}</DeskNextStep>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                className="flex min-h-9 min-w-0 flex-1 items-center gap-2 rounded-md border border-border bg-background px-2.5 py-1.5 text-left text-[12.5px] text-muted-foreground transition-colors hover:bg-accent/60 sm:max-w-[230px] sm:flex-none"
-                onClick={() => {
-                  setStlSearchExpanded(true);
-                  setStlSearchFocus(true);
-                }}
-              >
-                <Search className="h-3.5 w-3.5 shrink-0" aria-hidden />
-                <span className="min-w-0 truncate">Search STLs everywhere</span>
-                <kbd className="ml-auto hidden font-mono text-[10px] text-muted-foreground sm:inline">
-                  ⌘K
-                </kbd>
-              </button>
-
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button className="min-h-9" disabled={!engineReady}>
-                    Add source
-                    <ChevronDown className="ml-1.5 h-3.5 w-3.5 opacity-80" aria-hidden />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
-                  <DropdownMenuItem onClick={() => openAddWizard("github")}>
-                    GitHub repo
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => openAddWizard("local")}>
-                    Local folder
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => openAddWizard("archive")}>
-                    Zip upload
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => openAddWizard("printables")}>
-                    Printables
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => openAddWizard("makerworld")}>
-                    MakerWorld
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => openAddWizard("self")}>
-                    Another instance / URL
-                  </DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem onClick={() => void importSharedBuild()}>
-                    Plan bundle…
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="ghost" className="min-h-9" disabled={!engineReady}>
-                    More
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
-                  <DropdownMenuItem
-                    onClick={() => syncSources()}
-                    disabled={busy || updateBusy || sources.length === 0}
-                  >
-                    {busy ? "Syncing…" : "Sync all"}
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onClick={checkUpdates}
-                    disabled={busy || updateBusy || sources.length === 0}
-                  >
-                    {updateBusy ? "Checking…" : "Check updates"}
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onClick={() => void refresh()}
-                    disabled={busy || updateBusy}
-                  >
-                    Refresh list
-                  </DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem onClick={() => setReposImportOpen(true)}>
-                    Import repos.txt…
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onSelect={(e) => {
-                      e.preventDefault();
-                      document.getElementById("repos-txt-file-input")?.click();
-                    }}
-                  >
-                    Choose repos.txt file…
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => setCategoriesSheetOpen(true)}>
-                    Manage categories…
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </div>
-          </header>
 
           <div className="flex flex-1 flex-col gap-3 overflow-auto p-3.5 sm:px-5 sm:py-3.5">
             {(stlSearchExpanded || stlSearchFocus) && (

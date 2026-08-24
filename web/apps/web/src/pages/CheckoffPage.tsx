@@ -19,7 +19,7 @@ import { toast } from "sonner";
 import PlanFreshnessNotice from "../components/PlanFreshnessNotice";
 import PageHeader from "../components/layout/PageHeader";
 import PageHeaderActions from "../components/layout/PageHeaderActions";
-import RouteBreadcrumbs from "../components/layout/RouteBreadcrumbs";
+import PageShell from "../components/layout/PageShell";
 import DeskNextStep from "../components/layout/DeskNextStep";
 import EmptyState from "../components/layout/EmptyState";
 import PlanSpecialRequestLine from "../components/PlanSpecialRequestLine";
@@ -110,7 +110,7 @@ import { useProfileSelection } from "../context/ProfileContext";
 import { usePlanWorkspace } from "../context/PlanWorkspaceContext";
 import { useEngineHealth } from "../hooks/useEngineHealth";
 import { useMediaQuery } from "../hooks/useMediaQuery";
-import { cn } from "../lib/utils";
+import { cn } from "@/lib/utils";
 import { waitForSheetThumbnails } from "../lib/waitForSheetThumbnails";
 import {
   clearAuxiliaryError,
@@ -714,12 +714,13 @@ export default function CheckoffPage() {
         ? "printing"
         : "idle";
 
-  const progressEyebrow =
+  const progressMeta =
     selectedProfileId != null && includedParts.length > 0
       ? `${planName} · ${includedParts.length} part${includedParts.length === 1 ? "" : "s"}`
       : selectedProfileId != null
         ? planName
         : null;
+  const progressEyebrow = progressMeta ? `Stage 3 of 4 · ${progressMeta}` : "Stage 3 of 4";
 
   /**
    * CoS lock: Progress units are operator-ticked only.
@@ -905,14 +906,7 @@ export default function CheckoffPage() {
     }
 
     return (
-      <div className="space-y-4">
-        <RouteBreadcrumbs
-          items={[
-            { label: "Sources", to: buildSourcesRoute(selectedProfileId) },
-            { label: "Plan", to: planRoute(selectedProfileId) },
-            { label: "Checkoff" },
-          ]}
-        />
+      <PageShell>
         <PageHeader
           icon={CheckSquare}
           accent
@@ -921,20 +915,13 @@ export default function CheckoffPage() {
           description={progressDescription}
         />
         {stateContent}
-      </div>
+      </PageShell>
     );
   }
 
   return (
-    <div className="space-y-4">
+    <PageShell>
       <div className="no-print space-y-4">
-        <RouteBreadcrumbs
-          items={[
-            { label: "Sources", to: buildSourcesRoute(selectedProfileId) },
-            { label: "Plan", to: planRoute(selectedProfileId) },
-            { label: "Checkoff" },
-          ]}
-        />
         <PageHeader
           icon={CheckSquare}
           accent
@@ -988,7 +975,7 @@ export default function CheckoffPage() {
                   style={{ width: `${totals.percent}%` }}
                 />
               </span>
-              <span className="font-mono text-[11px] text-muted-foreground">
+              <span className="font-mono text-2xs text-muted-foreground">
                 {totals.percent}% · {totals.remainingUnits} remaining
               </span>
             </div>
@@ -1133,12 +1120,13 @@ export default function CheckoffPage() {
         </div>
       </div>
 
-      <div className="no-print">
+      <div className="no-print flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-sm font-semibold tracking-wide">Print worklist</h2>
         <Button
           type="button"
           variant="secondary"
           size="sm"
-          className="mb-2 h-9 px-3"
+          className="h-9 px-3"
           disabled={toggleBusy}
           onClick={onAddBagBar}
         >
@@ -1307,6 +1295,6 @@ export default function CheckoffPage() {
       )}
 
       <PartPreviewDialog part={previewPart} onClose={() => setPreviewPart(null)} />
-    </div>
+    </PageShell>
   );
 }

@@ -14,7 +14,7 @@ import {
   type PrinterQueueSuggestion,
 } from "../../api/engine";
 import { Button } from "../ui/button";
-import { cn } from "../../lib/utils";
+import { cn } from "@/lib/utils";
 
 type Props = {
   suggestions: PrinterQueueSuggestion[];
@@ -58,7 +58,7 @@ function SuggestionRow({
 }) {
   const filaments = filamentSummary(suggestion);
   return (
-    <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg border border-sky-500/30 bg-sky-500/8 px-3 py-2 text-sm text-sky-950 dark:text-sky-100">
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg border border-info/30 bg-info-soft px-3 py-2 text-sm text-info">
       <Printer className="h-4 w-4 shrink-0 opacity-80" aria-hidden />
       <div className="min-w-0 flex-1 leading-snug">
         <p className="font-medium">{suggestion.printer_name} — Idle</p>
@@ -82,7 +82,7 @@ function SuggestionRow({
         <Button
           size="sm"
           variant="ghost"
-          className="h-7 w-7 p-0 text-sky-700 hover:text-sky-900 dark:text-sky-300 dark:hover:text-sky-100"
+          className="h-7 w-7 p-0 text-info hover:text-info"
           onClick={onDismiss}
           disabled={busy}
           aria-label={`Dismiss suggestion for ${suggestion.printer_name}`}

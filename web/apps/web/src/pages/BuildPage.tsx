@@ -24,7 +24,7 @@ import DeskNextStep from "../components/layout/DeskNextStep";
 import EmptyState from "../components/layout/EmptyState";
 import PageHeader from "../components/layout/PageHeader";
 import PageHeaderActions from "../components/layout/PageHeaderActions";
-import RouteBreadcrumbs from "../components/layout/RouteBreadcrumbs";
+import PageShell from "../components/layout/PageShell";
 import KitManifestOptions from "../components/KitManifestOptions";
 import SourceCategorySheet from "../components/sources/SourceCategorySheet";
 import SourceFilePickerCard from "../components/SourceFilePickerCard";
@@ -71,7 +71,7 @@ import {
   useReplacePlanLayerMutation,
   useSetPlanBaseLayerMutation,
 } from "../queries/planLayers";
-import { buildSourcesRoute, exportRoute, libraryRoute } from "../lib/routes";
+import { exportRoute, libraryRoute } from "../lib/routes";
 import { groupMergeConflictsByFilename } from "../lib/mergeConflictGroups";
 import { takeKitImportResult } from "../lib/kitImportStash";
 import { deskNextStepLine } from "../lib/deskNextStep";
@@ -674,11 +674,11 @@ function BuildPageContent() {
   };
 
   return (
-    <div className="space-y-4">
-      <RouteBreadcrumbs items={[{ label: "Sources", to: buildSourcesRoute(selectedProfileId) }]} />
+    <PageShell>
       <PageHeader
         icon={Hammer}
         accent
+        eyebrow="Stage 1 of 4"
         title="Sources"
         description={headerSubtitle}
         actions={workspaceReady ? (
@@ -741,8 +741,6 @@ function BuildPageContent() {
       />
 
       <DeskNextStep>{planNextStep}</DeskNextStep>
-
-      <BuildPlanningCard planId={selectedProfileId} />
 
       {(profilesBackgroundError ||
         profileDataBackgroundError ||
@@ -1056,24 +1054,12 @@ function BuildPageContent() {
         )}
 
       {workspaceReady && selectedProfileId != null && (
-        <div className="space-y-4">
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-            <PlanRolesCard
-              profileId={selectedProfileId}
-              disabled={!engineReady || busy}
-              refreshKey={filamentRefreshKey}
-              roleFilaments={roleFilaments}
-              onRolesChange={setRoleFilaments}
-              onUpdated={onRoleFilamentsUpdated}
-            />
-            <PlanWarningsCard warnings={planWarnings} />
-          </div>
-
+        <div className="space-y-6">
           <section className="space-y-3">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="font-mono text-[9.5px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+              <h2 className="text-sm font-semibold tracking-wide">
                 Attached sources
-              </span>
+              </h2>
               <div className="ml-auto flex flex-wrap items-center gap-2">
                 <BuildSourcesPanel
                   profileId={selectedProfileId}
@@ -1216,6 +1202,38 @@ function BuildPageContent() {
                 </Button>
               </div>
             )}
+            <div className="flex justify-end border-t border-border pt-3">
+              <Button
+                onClick={() => void onUpdateBuild()}
+                disabled={selectedProfileId == null || busy || !engineReady}
+                loading={busy}
+              >
+                {busy ? "Rebuilding…" : "Rebuild plan"}
+              </Button>
+            </div>
+          </section>
+
+          <section className="space-y-3">
+            <h2 className="text-sm font-semibold tracking-wide">Planning</h2>
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              <PlanRolesCard
+                profileId={selectedProfileId}
+                disabled={!engineReady || busy}
+                refreshKey={filamentRefreshKey}
+                roleFilaments={roleFilaments}
+                onRolesChange={setRoleFilaments}
+                onUpdated={onRoleFilamentsUpdated}
+              />
+              <PlanWarningsCard warnings={planWarnings} />
+            </div>
+            <details className="group" open={partCount === 0}>
+              <summary className="cursor-pointer select-none text-sm text-muted-foreground transition-colors hover:text-foreground">
+                AI Build planning
+              </summary>
+              <div className="mt-3">
+                <BuildPlanningCard planId={selectedProfileId} />
+              </div>
+            </details>
           </section>
 
           <BuildRecipePanel profileId={selectedProfileId} />
@@ -1227,6 +1245,6 @@ function BuildPageContent() {
         onOpenChange={setCategoriesSheetOpen}
         engineReady={engineReady}
       />
-    </div>
+    </PageShell>
   );
 }

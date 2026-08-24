@@ -15,7 +15,7 @@ import {
 } from "../../lib/proposeCheckoffFromObjects";
 import ObjectProposalRows from "../export/ObjectProposalRows";
 import { Button } from "../ui/button";
-import { cn } from "../../lib/utils";
+import { cn } from "@/lib/utils";
 
 const REJECT_REASONS: { value: PrintRejectReason; label: string }[] = [
   { value: "bed_adhesion", label: "Bed adhesion" },
@@ -260,7 +260,7 @@ export default function PrintVerifyPanel({
             return (
               <div
                 key={`watching:${link.id}`}
-                className="rounded-lg border border-sky-500/35 bg-sky-500/10 px-4 py-4 text-sm shadow-sm"
+                className="rounded-lg border border-info/30 bg-info-soft px-4 py-4 text-sm shadow-sm"
                 role="status"
                 aria-label={`Printing proposed parts from ${link.filename}`}
               >
@@ -284,7 +284,7 @@ export default function PrintVerifyPanel({
           return (
             <div
               key={link.id}
-              className="rounded-lg border border-orange-500/35 bg-orange-500/5 px-4 py-4 text-sm shadow-sm"
+              className="rounded-lg border border-warning/35 bg-warning-soft px-4 py-4 text-sm shadow-sm"
               role="region"
               aria-label={`Confirm these parts from ${link.filename}`}
             >

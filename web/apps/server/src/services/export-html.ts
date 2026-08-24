@@ -68,7 +68,7 @@ function renderChecklist(input: Readonly<{
   const generatedAt = formatTimestamp(input.generatedAt, input.dateFormat);
   let thumbCount = 0;
   let html = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>${escapeHtml(input.profile.name)} checklist</title>
-<style>body{font-family:system-ui,sans-serif;margin:1.5rem;}table{border-collapse:collapse;width:100%;}th,td{border:1px solid #ccc;padding:.4rem .6rem;text-align:left;}
+<style>body{font-family:system-ui,sans-serif;margin:1.5rem;background:#faf7f2;color:#2b241c;}h1{color:#2b241c;}a{color:#8f6a2e;}table{border-collapse:collapse;width:100%;}th{background:#f1ebe1;}th,td{border:1px solid #ddd4c5;padding:.4rem .6rem;text-align:left;}
 .swatch{display:inline-block;width:12px;height:12px;border-radius:50%;margin-right:.35rem;vertical-align:middle;}
 .thumb{width:48px;height:48px;object-fit:contain;vertical-align:middle;margin-right:.35rem;}</style></head><body>`;
   html += `<h1>${escapeHtml(input.profile.name)}</h1>`;

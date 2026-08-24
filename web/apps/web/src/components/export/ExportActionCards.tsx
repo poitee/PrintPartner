@@ -133,7 +133,7 @@ export default function ExportActionCards({
 
   return (
     <div className="space-y-2">
-      {colorsUnset ? <p className="text-[12.5px] text-muted-foreground">Colors remain Unassigned on the Plan.</p> : null}
+      {colorsUnset ? <p className="text-xs text-muted-foreground">Colors remain Unassigned on the Plan.</p> : null}
       <div className="grid gap-3 sm:grid-cols-2">
         <DirectExportCard
           tokenCount={directTokens.length}
@@ -143,11 +143,11 @@ export default function ExportActionCards({
         {cards.map((card) => (
           <Card key={card.key} className="flex flex-col border-border shadow-sm">
             <CardHeader className="space-y-2 pb-2">
-              <CardTitle level={3} className="text-[13.5px] font-semibold leading-snug">{card.title}</CardTitle>
-              <CardDescription className="text-[12.5px] leading-relaxed">{card.description}</CardDescription>
+              <CardTitle level={3} className="text-sm font-semibold leading-snug">{card.title}</CardTitle>
+              <CardDescription className="text-xs leading-relaxed">{card.description}</CardDescription>
               <div className="flex flex-wrap gap-1.5 pt-0.5">
                 {card.chips.map((chip) => (
-                  <Badge key={chip} variant="muted" className="rounded-full px-2 py-0.5 font-mono text-[10.5px] font-normal">
+                  <Badge key={chip} variant="muted" className="rounded-full px-2 py-0.5 font-mono text-2xs font-normal">
                     {chip}
                   </Badge>
                 ))}
@@ -173,12 +173,12 @@ export default function ExportActionCards({
         ))}
         <Card className="flex flex-col border-border shadow-sm">
           <CardHeader className="space-y-2 pb-2">
-            <CardTitle level={3} className="text-[13.5px] font-semibold leading-snug">Share Plan</CardTitle>
-            <CardDescription className="text-[12.5px] leading-relaxed">
+            <CardTitle level={3} className="text-sm font-semibold leading-snug">Share Plan</CardTitle>
+            <CardDescription className="text-xs leading-relaxed">
               Sources, choices, roles, and quantities. STL files stay private.
             </CardDescription>
             <div className="flex flex-wrap gap-1.5 pt-0.5">
-              <Badge variant="muted" className="rounded-full px-2 py-0.5 font-mono text-[10.5px] font-normal">no STLs</Badge>
+              <Badge variant="muted" className="rounded-full px-2 py-0.5 font-mono text-2xs font-normal">no STLs</Badge>
             </div>
           </CardHeader>
           <CardContent className="mt-auto pt-1">

@@ -24,7 +24,7 @@ import {
   shouldShowImportRulesRetry,
 } from "../lib/importRulesSave";
 import { librarySourceDragId } from "../lib/sourceCategoryDnD";
-import { cn } from "../lib/utils";
+import { cn } from "@/lib/utils";
 
 type Props = {
   sourceId: number;
@@ -258,8 +258,8 @@ export default function SourceFilePickerCard({
         "flex flex-col gap-2.5 rounded-lg border bg-card px-3.5 py-2.5 shadow-[0_1px_2px_rgba(89,115,166,0.06)]",
         updateWarn || syncBusy
           ? syncBusy
-            ? "border-sky-300/80 dark:border-sky-700/50"
-            : "border-amber-300/80 dark:border-amber-700/50"
+            ? "border-info/30"
+            : "border-warning/30"
           : "border-border",
         expanded && dirty && "border-primary/40",
         !disabled && "cursor-grab active:cursor-grabbing",
@@ -275,20 +275,20 @@ export default function SourceFilePickerCard({
         />
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <Badge variant={layerType} className="h-5 px-1.5 text-[10px]">
+            <Badge variant={layerType} className="h-5 px-1.5 text-3xs">
               {layerType}
             </Badge>
-            <h2 className="truncate text-[13px] font-semibold">{sourceName}</h2>
+            <h2 className="truncate text-sm font-semibold">{sourceName}</h2>
             {source ? (
-              <span className="truncate text-[11px] text-muted-foreground">
+              <span className="truncate text-2xs text-muted-foreground">
                 {source.category?.trim() || "Uncategorised"}
               </span>
             ) : null}
             {saveStatusLabel && (
               <span
                 className={cn(
-                  "text-[10px] font-medium",
-                  status === "saved" && "text-emerald-600 dark:text-emerald-400",
+                  "text-3xs font-medium",
+                  status === "saved" && "text-success",
                   status === "error" && "text-destructive",
                   (status === "pending" || status === "saving") && "text-muted-foreground",
                 )}
@@ -300,9 +300,9 @@ export default function SourceFilePickerCard({
           </div>
           <p
             className={cn(
-              "font-mono text-[10.5px] font-normal",
-              state.tone === "warn" && "text-amber-700 dark:text-amber-400",
-              state.tone === "sync" && "text-sky-700 dark:text-sky-400",
+              "font-mono text-2xs font-normal",
+              state.tone === "warn" && "text-warning",
+              state.tone === "sync" && "text-info",
               state.tone === "muted" && "text-muted-foreground",
             )}
           >
@@ -310,7 +310,7 @@ export default function SourceFilePickerCard({
           </p>
         </div>
         <div className="ml-auto flex w-full flex-wrap items-center gap-3 sm:w-auto sm:flex-nowrap">
-          <span className="font-mono text-[11.5px] font-medium tabular-nums">{pickLabel}</span>
+          <span className="font-mono text-2xs font-medium tabular-nums">{pickLabel}</span>
           {(source?.local_path || source?.source_kind === "github") && (
             <button
               type="button"
@@ -342,7 +342,7 @@ export default function SourceFilePickerCard({
           </button>
           {allSources && onChangeSource && (
             <select
-              className="max-w-[140px] rounded-md border border-input bg-background px-1.5 py-1 text-[11px]"
+              className="max-w-[140px] rounded-md border border-input bg-background px-1.5 py-1 text-2xs"
               value={sourceId}
               disabled={disabled}
               aria-label={`Change ${layerType} source`}
@@ -375,11 +375,11 @@ export default function SourceFilePickerCard({
         <div className="flex items-center gap-2">
           <span className="block h-1 flex-1 overflow-hidden rounded-full bg-muted">
             <span
-              className="block h-full bg-sky-600 transition-[width] dark:bg-sky-400"
+              className="block h-full bg-info transition-[width]"
               style={{ width: `${syncProgress ?? 56}%` }}
             />
           </span>
-          <span className="shrink-0 font-mono text-[10.5px] text-sky-700 dark:text-sky-400">
+          <span className="shrink-0 font-mono text-2xs text-info">
             {activeSync?.message || "syncing"}
           </span>
         </div>

@@ -21,7 +21,7 @@ import {
 } from "../api/engine";
 import SupportCta from "../components/SupportCta";
 import PageHeader from "../components/layout/PageHeader";
-import RouteBreadcrumbs from "../components/layout/RouteBreadcrumbs";
+import PageShell from "../components/layout/PageShell";
 import {
   Card,
   CardContent,
@@ -193,8 +193,7 @@ export default function HelpPage() {
   }, [engineReady]);
 
   return (
-    <div className="space-y-4">
-      <RouteBreadcrumbs items={[{ label: "Help" }]} />
+    <PageShell width="reading">
       <PageHeader
         icon={BookOpen}
         accent
@@ -466,6 +465,6 @@ export default function HelpPage() {
           </Tabs>
         </CardContent>
       </Card>
-    </div>
+    </PageShell>
   );
 }

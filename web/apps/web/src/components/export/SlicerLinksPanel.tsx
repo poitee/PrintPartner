@@ -63,8 +63,8 @@ export default function SlicerLinksPanel() {
   return (
     <Card className="border-border shadow-sm">
       <CardHeader className="gap-1 pb-2">
-        <CardTitle level={3} className="text-[13.5px] font-semibold leading-snug">Open a slicer</CardTitle>
-        <CardDescription className="text-[12.5px] leading-relaxed">
+        <CardTitle level={3} className="text-sm font-semibold leading-snug">Open a slicer</CardTitle>
+        <CardDescription className="text-xs leading-relaxed">
           Jump into the running slicer GUI to inspect or tweak a plate directly.
         </CardDescription>
       </CardHeader>

@@ -13,7 +13,7 @@ import {
 } from "../api/engine";
 import PageHeader from "../components/layout/PageHeader";
 import PageHeaderActions from "../components/layout/PageHeaderActions";
-import RouteBreadcrumbs from "../components/layout/RouteBreadcrumbs";
+import PageShell from "../components/layout/PageShell";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import {
@@ -38,7 +38,7 @@ import {
 } from "../lib/printerPlanBind";
 import { usePrinterStatusPollMs } from "../hooks/usePrinterStatusPollMs";
 import { exportRoute, settingsPrintersRoute } from "../lib/routes";
-import { cn } from "../lib/utils";
+import { cn } from "@/lib/utils";
 
 const HOST_TYPES = new Set<LiveStripHostType>(["moonraker", "prusalink", "bambu"]);
 
@@ -227,11 +227,11 @@ export default function PrintersPage() {
   }, [engineReady, linked, refreshStatuses, pollMs]);
 
   return (
-    <div className="space-y-4">
-      <RouteBreadcrumbs items={[{ label: "Printers" }]} />
+    <PageShell width="list">
       <PageHeader
         icon={Printer}
         accent
+        eyebrow="Workshop"
         title="Printers"
         description="Live status for linked printers. Add and manage them in Settings."
         actions={
@@ -299,7 +299,7 @@ export default function PrintersPage() {
                       <Badge
                         variant={toneBadgeVariant(tone)}
                         className={cn(
-                          "shrink-0 rounded-full px-2 py-0.5 font-mono text-[10.5px] font-normal",
+                          "shrink-0 rounded-full px-2 py-0.5 font-mono text-2xs font-normal",
                         )}
                       >
                         {formatPrinterStatusPill(status)}
@@ -357,7 +357,7 @@ export default function PrintersPage() {
                     </dl>
                     {status?.progress != null ? (
                       <div className="space-y-1" aria-label={`Print progress ${status.progress}%`}>
-                        <div className="flex justify-between text-[11px] text-muted-foreground">
+                        <div className="flex justify-between text-2xs text-muted-foreground">
                           <span>Progress</span><span className="font-mono">{status.progress}%</span>
                         </div>
                         <div className="h-1.5 overflow-hidden rounded-full bg-muted">
@@ -371,7 +371,7 @@ export default function PrintersPage() {
                           <Link to={exportRoute()}>Send from Production</Link>
                         </Button>
                       ) : (
-                        <p className="text-[11px] leading-relaxed text-muted-foreground">
+                        <p className="text-2xs leading-relaxed text-muted-foreground">
                           Use Bambu Connect from Production.
                         </p>
                       )}
@@ -383,6 +383,6 @@ export default function PrintersPage() {
           })}
         </ul>
       )}
-    </div>
+    </PageShell>
   );
 }

@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import type { LucideIcon } from "lucide-react";
-import { cn } from "../../lib/utils";
+import { cn } from "@/lib/utils";
 
 type Props = {
   title: string;
@@ -42,7 +42,7 @@ export default function PageHeader({
           )}
           <div className="min-w-0 flex-1">
             {eyebrow ? (
-              <p className="mb-1 font-mono text-[11px] uppercase tracking-wide text-muted-foreground">
+              <p className="mb-1 font-mono text-2xs uppercase tracking-wide text-muted-foreground">
                 {eyebrow}
               </p>
             ) : null}

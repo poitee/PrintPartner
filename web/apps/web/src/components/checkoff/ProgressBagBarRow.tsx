@@ -1,6 +1,6 @@
 import type { DraggableAttributes, DraggableSyntheticListeners } from "@dnd-kit/core";
 import { SortableDragHandle } from "../dnd/SortableDragHandle";
-import { cn } from "../../lib/utils";
+import { cn } from "@/lib/utils";
 
 type Props = {
   label: string;
@@ -49,7 +49,7 @@ export default function ProgressBagBarRow({
         type="text"
         className={cn(
           "min-w-0 flex-1 border-0 bg-transparent font-medium text-foreground outline-none placeholder:text-muted-foreground focus-visible:ring-0",
-          compact ? "text-sm" : "text-[13px]",
+          compact ? "text-sm" : "text-sm",
         )}
         value={label}
         placeholder="Bag 1"

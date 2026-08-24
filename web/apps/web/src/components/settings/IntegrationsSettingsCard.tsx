@@ -207,7 +207,7 @@ export default function IntegrationsSettingsCard({ engineReady }: Props) {
         </div>
 
         {spoolmanItems.length > 0 && !defaultId && (
-          <p className="text-sm text-amber-700 dark:text-amber-400">
+          <p className="text-sm text-warning">
             Choose an integration under Use for filament picker so Spoolman filaments appear on
             Build. After picking a Spoolman filament, choose a physical spool when multiple are
             in stock; remaining weight appears in Review.

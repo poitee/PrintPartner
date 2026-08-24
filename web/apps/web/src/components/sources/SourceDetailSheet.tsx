@@ -283,7 +283,7 @@ export default function SourceDetailSheet({
                 <div className="mt-2 max-w-[220px] space-y-1">
                   <Label
                     htmlFor={`source-detail-category-${source.id}`}
-                    className="text-[11px] text-muted-foreground"
+                    className="text-2xs text-muted-foreground"
                   >
                     Category
                   </Label>
@@ -386,7 +386,7 @@ export default function SourceDetailSheet({
                               {d.kind === "pdf" &&
                               d.extract_status &&
                               d.extract_status !== "ready" ? (
-                                <span className="mt-0.5 block text-[10px] text-muted-foreground">
+                                <span className="mt-0.5 block text-3xs text-muted-foreground">
                                   PDF · {d.extract_status}
                                 </span>
                               ) : null}

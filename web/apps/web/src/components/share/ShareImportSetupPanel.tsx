@@ -100,7 +100,7 @@ export default function ShareImportSetupPanel({
   };
 
   return (
-    <section className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-4 space-y-3">
+    <section className="rounded-lg border border-warning/30 bg-warning-soft p-4 space-y-3">
       <h2 className="text-sm font-semibold">Share import setup</h2>
       {unmatchedSources.length > 0 && (
         <div>

@@ -19,7 +19,7 @@ import {
 } from "../../lib/printerLiveStrip";
 import { quietPrinterLoadError, quietPrinterStatusMessage } from "../../lib/printerErrorCopy";
 import { usePrinterStatusPollMs } from "../../hooks/usePrinterStatusPollMs";
-import { cn } from "../../lib/utils";
+import { cn } from "@/lib/utils";
 
 const LIVE_STRIP_HOST_TYPES = new Set<LiveStripHostType>([
   "moonraker",
@@ -58,13 +58,13 @@ type Props = {
 function toneClass(tone: ReturnType<typeof printerLiveStripTone>): string {
   switch (tone) {
     case "idle":
-      return "border-emerald-500/30 bg-emerald-500/10 text-emerald-900 dark:text-emerald-200";
+      return "border-success/30 bg-success-soft text-success";
     case "printing":
-      return "border-sky-500/35 bg-sky-500/10 text-sky-950 dark:text-sky-100";
+      return "border-info/30 bg-info-soft text-info";
     case "paused":
-      return "border-amber-500/35 bg-amber-500/10 text-amber-950 dark:text-amber-100";
+      return "border-warning/30 bg-warning-soft text-warning";
     case "complete":
-      return "border-emerald-500/40 bg-emerald-500/15 text-emerald-950 dark:text-emerald-100";
+      return "border-success/30 bg-success-soft text-success";
     case "error":
       return "border-destructive/40 bg-destructive/10 text-destructive";
     case "offline":
@@ -77,12 +77,12 @@ function toneClass(tone: ReturnType<typeof printerLiveStripTone>): string {
 function pillClass(tone: ReturnType<typeof printerLiveStripTone>): string {
   switch (tone) {
     case "printing":
-      return "border-sky-500/40 bg-sky-500/20 text-sky-950 dark:text-sky-50";
+      return "border-info/30 bg-info-soft text-info";
     case "paused":
-      return "border-amber-500/40 bg-amber-500/20 text-amber-950 dark:text-amber-50";
+      return "border-warning/30 bg-warning-soft text-warning";
     case "complete":
     case "idle":
-      return "border-emerald-500/40 bg-emerald-500/20 text-emerald-950 dark:text-emerald-50";
+      return "border-success/30 bg-success-soft text-success";
     case "error":
       return "border-destructive/40 bg-destructive/15 text-destructive";
     default:
@@ -357,7 +357,7 @@ export default function PrinterLiveStrip({
             </div>
             <span
               className={cn(
-                "inline-flex shrink-0 items-center rounded-md border px-2 py-0.5 font-mono text-[11px] font-medium tabular-nums",
+                "inline-flex shrink-0 items-center rounded-md border px-2 py-0.5 font-mono text-2xs font-medium tabular-nums",
                 pillClass(tone),
               )}
             >
