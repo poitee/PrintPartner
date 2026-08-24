@@ -14,6 +14,7 @@ import {
   saveDateFormatSetting,
   type DateFormatId,
 } from "../api/engine";
+import { useAuth } from "./AuthContext";
 
 type DateFormatContextValue = {
   format: DateFormatId;
@@ -24,9 +25,13 @@ type DateFormatContextValue = {
 const DateFormatContext = createContext<DateFormatContextValue | null>(null);
 
 export function DateFormatProvider({ children }: { children: ReactNode }) {
+  const { user, multiUser, loading: authLoading } = useAuth();
   const [format, setFormatState] = useState<DateFormatId>(DATE_FORMAT_DEFAULT);
+  const canLoadSetting = !authLoading && (!multiUser || user !== null);
 
   useEffect(() => {
+    if (!canLoadSetting) return;
+
     let cancelled = false;
     void fetchDateFormatSetting()
       .then((res) => {
@@ -38,7 +43,7 @@ export function DateFormatProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [canLoadSetting]);
 
   const setFormat = useCallback((next: DateFormatId) => {
     setFormatState(next);

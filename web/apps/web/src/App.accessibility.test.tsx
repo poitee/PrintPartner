@@ -8,6 +8,7 @@ import App from "./App";
 
 vi.mock("./context/AuthContext", () => ({
   AuthProvider: ({ children }: { children: ReactNode }) => children,
+  useAuth: () => ({ user: { id: 1 }, multiUser: false, loading: false }),
 }));
 vi.mock("./context/JobContext", () => ({
   JobProvider: ({ children }: { children: ReactNode }) => children,

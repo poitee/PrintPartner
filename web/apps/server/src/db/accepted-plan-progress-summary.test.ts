@@ -856,6 +856,10 @@ database.close();`,
     });
   });
 
+  // This deliberately exercises 10,001 rows through the SQLite-backed PostgreSQL
+  // bridge. It takes nearly the suite-wide 15s budget on its own and is slower
+  // when the full server suite is contending for CPU, so keep the stress-test
+  // budget explicit instead of making unrelated tests more permissive.
   it("reads 10,001 units through bounded PostgreSQL pages without approaching the bridge cap", () => {
     const context = fixture();
     const profile = context.repo.createProfile("Large summary");

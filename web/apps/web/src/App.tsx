@@ -9,6 +9,7 @@ import { ImportRulesSaveProvider } from "./context/ImportRulesSaveContext";
 import { KitManifestSaveProvider } from "./context/KitManifestSaveContext";
 import { SaveStatusProvider } from "./context/SaveStatusContext";
 import { AuthProvider } from "./context/AuthContext";
+import { DateFormatProvider } from "./context/DateFormatContext";
 import AuthGate from "./components/AuthGate";
 import AppLayout from "./layout/AppLayout";
 import { buildSourcesRoute } from "./lib/routes";
@@ -75,16 +76,17 @@ function IndexRedirect() {
 export default function App() {
   return (
     <AuthProvider>
-      <JobProvider>
-        <ProfileProvider>
-          <PlanActionsProvider>
-            <PlanWorkspaceProvider>
-              <StlAutoSyncProvider>
-              <SaveStatusProvider>
-                <ImportRulesSaveProvider>
-                  <KitManifestSaveProvider>
-                    <Suspense fallback={<PageLoader />}>
-                      <Routes>
+      <DateFormatProvider>
+        <JobProvider>
+          <ProfileProvider>
+            <PlanActionsProvider>
+              <PlanWorkspaceProvider>
+                <StlAutoSyncProvider>
+                <SaveStatusProvider>
+                  <ImportRulesSaveProvider>
+                    <KitManifestSaveProvider>
+                      <Suspense fallback={<PageLoader />}>
+                        <Routes>
                         <Route path="/login" element={<LoginPage />} />
                         <Route path="/setup" element={<LoginPage />} />
                         <Route path="/forgot-password" element={<ForgotPasswordPage />} />
@@ -140,16 +142,17 @@ export default function App() {
                             <Route path="*" element={<NotFoundPage />} />
                           </Route>
                         </Route>
-                      </Routes>
-                    </Suspense>
-                  </KitManifestSaveProvider>
-                </ImportRulesSaveProvider>
-              </SaveStatusProvider>
-              </StlAutoSyncProvider>
-            </PlanWorkspaceProvider>
-          </PlanActionsProvider>
-        </ProfileProvider>
-      </JobProvider>
+                        </Routes>
+                      </Suspense>
+                    </KitManifestSaveProvider>
+                  </ImportRulesSaveProvider>
+                </SaveStatusProvider>
+                </StlAutoSyncProvider>
+              </PlanWorkspaceProvider>
+            </PlanActionsProvider>
+          </ProfileProvider>
+        </JobProvider>
+      </DateFormatProvider>
     </AuthProvider>
   );
 }

@@ -14,6 +14,7 @@ import { useEngineHealth } from "../hooks/useEngineHealth";
 import { reconcileSelectedProfileId } from "../hooks/profileSelection";
 import { queryKeys } from "../queries/keys";
 import { useProfilesQuery } from "../queries/profiles";
+import { useAuth } from "./AuthContext";
 
 const STORAGE_KEY = "pp-selected-profile-id";
 
@@ -48,7 +49,10 @@ function readStoredId(): number | null {
 }
 
 export function ProfileProvider({ children }: { children: ReactNode }) {
+  const { user, multiUser, loading: authLoading } = useAuth();
   const { health } = useEngineHealth();
+  const canLoadProfiles =
+    !authLoading && Boolean(health?.ok) && (!multiUser || user !== null);
   const qc = useQueryClient();
   const {
     data: profiles = [],
@@ -56,7 +60,7 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
     isSuccess,
     error: queryError,
     refetch,
-  } = useProfilesQuery(Boolean(health?.ok));
+  } = useProfilesQuery(canLoadProfiles);
 
   const [selectedProfileId, setSelectedProfileIdState] = useState<number | null>(readStoredId);
   const [pendingSelectionId, setPendingSelectionId] = useState<number | null>(null);
@@ -99,10 +103,10 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
   }, [isSuccess, profiles, selectedProfileId, setSelectedProfileId]);
 
   const reloadProfiles = useCallback(async () => {
-    if (!health?.ok) return;
+    if (!canLoadProfiles) return;
     await qc.invalidateQueries({ queryKey: queryKeys.profiles });
     await refetch();
-  }, [health?.ok, qc, refetch]);
+  }, [canLoadProfiles, qc, refetch]);
 
   const value = useMemo(
     (): ProfileContextValue => ({
