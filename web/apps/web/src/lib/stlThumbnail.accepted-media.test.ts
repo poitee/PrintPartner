@@ -93,14 +93,41 @@ describe("accepted STL thumbnail mesh loading", () => {
     });
   });
 
-  it("keeps decimated STL positions grouped into complete triangles", () => {
+  it("keeps nearly all faces when a mesh is just over the decimation threshold", () => {
     const geometry = new THREE.BufferGeometry();
     const positions = new Float32Array(80_001 * 3);
     geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
 
     const decimated = decimateGeometryForThumbnail(geometry);
+    const decimatedCount = decimated.getAttribute("position")?.count ?? 0;
 
-    expect(decimated.getAttribute("position")?.count % 3).toBe(0);
+    expect(decimatedCount % 3).toBe(0);
+    expect(80_001 - decimatedCount).toBe(3);
+  });
+
+  it("rejects a declared oversized mesh without retrying and cancels its body", async () => {
+    vi.useFakeTimers();
+    try {
+      const oversized = new Response(new Uint8Array([1]), {
+        status: 200,
+        headers: {
+          ETag: `"${basis}"`,
+          "Content-Length": String(15 * 1024 * 1024 + 1),
+          "X-Accepted-Render-Hex": "#112233",
+        },
+      });
+      const cancel = vi.spyOn(oversized.body!, "cancel");
+      runtime.fetchWithRetry.mockResolvedValue(oversized);
+
+      const loaded = loadAcceptedMeshBuffer(93);
+      await vi.runAllTimersAsync();
+
+      await expect(loaded).resolves.toBeNull();
+      expect(runtime.fetchWithRetry).toHaveBeenCalledTimes(1);
+      expect(cancel).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("loads different Part meshes concurrently before serialized rendering", async () => {

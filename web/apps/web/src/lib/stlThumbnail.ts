@@ -128,12 +128,12 @@ export function decimateGeometryForThumbnail(geometry: THREE.BufferGeometry): TH
   // decimation never leaves Three.js with an incomplete face.
   const triangleCount = Math.floor(pos.count / 3);
   const maxTriangles = Math.floor(DECIMATE_THRESHOLD / 3);
-  const step = Math.max(1, Math.ceil(triangleCount / maxTriangles));
-  const keptTriangles = Math.floor(triangleCount / step);
+  const keptTriangles = Math.min(triangleCount, maxTriangles);
   const newPos = new Float32Array(keptTriangles * 9);
   const source = pos as THREE.BufferAttribute;
   for (let triangle = 0; triangle < keptTriangles; triangle++) {
-    const sourceVertex = triangle * step * 3;
+    const sourceTriangle = Math.floor((triangle * triangleCount) / keptTriangles);
+    const sourceVertex = sourceTriangle * 3;
     const outputVertex = triangle * 9;
     for (let vertex = 0; vertex < 3; vertex++) {
       const sourceIndex = sourceVertex + vertex;
@@ -237,23 +237,32 @@ const renderQueue = new RenderQueue();
 const inFlightPartThumbnails = new Map<string, Promise<Blob | null>>();
 const inFlightBlobRenders = new Map<string, Promise<Blob | null>>();
 
+type BoundedReadResult =
+  | { readonly kind: "loaded"; readonly buffer: ArrayBuffer }
+  | { readonly kind: "retryable" }
+  | { readonly kind: "rejected" };
+
 async function readResponseBounded(
   res: Response,
   maxBytes: number,
-): Promise<ArrayBuffer | null> {
+): Promise<BoundedReadResult> {
   const declared = res.headers.get("content-length");
   if (declared != null) {
     const n = Number(declared);
-    if (Number.isFinite(n) && (n <= 0 || n > maxBytes)) return null;
+    if (Number.isFinite(n) && (n <= 0 || n > maxBytes)) {
+      await res.body?.cancel().catch(() => undefined);
+      return { kind: "rejected" };
+    }
   }
 
   if (!res.body) {
     try {
       const buffer = await res.arrayBuffer();
-      if (buffer.byteLength === 0 || buffer.byteLength > maxBytes) return null;
-      return buffer;
+      if (buffer.byteLength > maxBytes) return { kind: "rejected" };
+      if (buffer.byteLength === 0) return { kind: "retryable" };
+      return { kind: "loaded", buffer };
     } catch {
-      return null;
+      return { kind: "retryable" };
     }
   }
 
@@ -268,23 +277,23 @@ async function readResponseBounded(
       total += value.byteLength;
       if (total > maxBytes) {
         await reader.cancel().catch(() => undefined);
-        return null;
+        return { kind: "rejected" };
       }
       chunks.push(value);
     }
   } catch {
     await reader.cancel().catch(() => undefined);
-    return null;
+    return { kind: "retryable" };
   }
 
-  if (total === 0) return null;
+  if (total === 0) return { kind: "retryable" };
   const out = new Uint8Array(total);
   let offset = 0;
   for (const chunk of chunks) {
     out.set(chunk, offset);
     offset += chunk.byteLength;
   }
-  return out.buffer;
+  return { kind: "loaded", buffer: out.buffer };
 }
 
 type AcceptedMeshBuffer = {
@@ -334,8 +343,10 @@ export async function loadAcceptedMeshBuffer(
     }
     const metadata = optionalAcceptedPartMediaMetadata(res);
     if (!metadata) return null;
-    const buffer = await readResponseBounded(res, MESH_MAX_BYTES);
-    if (!buffer) continue;
+    const read = await readResponseBounded(res, MESH_MAX_BYTES);
+    if (read.kind === "rejected") return null;
+    if (read.kind === "retryable") continue;
+    const { buffer } = read;
 
     rememberCurrentBasis(partId, metadata.basis);
     rememberMeshBuffer(metadata.basis, buffer);
