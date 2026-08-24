@@ -100,6 +100,15 @@ export type CompatibilityFinding = {
   evidence_ids: string[];
 };
 
+export type BuildChecklistItem = {
+  id: string;
+  title: string;
+  detail?: string;
+  category: "test_fit" | "wiring" | "safety" | "pre_print" | "other";
+  required: boolean;
+  completed: boolean;
+};
+
 export type BuildPlanningBrief = {
   version: typeof BUILD_PLANNING_VERSION;
   build_id: number;
@@ -111,6 +120,7 @@ export type BuildPlanningBrief = {
   differences: BuildDifference[];
   resolutions: Record<string, DifferenceGroupResolution>;
   role_filaments: RoleFilamentAssignment[];
+  checklist_items?: BuildChecklistItem[];
   managed_source_ids?: number[];
   draft_source_revisions?: Record<string, string>;
   draft_id?: number;
@@ -401,6 +411,14 @@ function isCompatibilityFinding(value: unknown): value is CompatibilityFinding {
     ["unverified", "satisfied", "incompatible", "user_waived"].includes(String(value.status));
 }
 
+function isChecklistItem(value: unknown): value is BuildChecklistItem {
+  if (!isRecord(value)) return false;
+  return typeof value.id === "string" && typeof value.title === "string" &&
+    ["test_fit", "wiring", "safety", "pre_print", "other"].includes(String(value.category)) &&
+    typeof value.required === "boolean" && typeof value.completed === "boolean" &&
+    (value.detail === undefined || typeof value.detail === "string");
+}
+
 function isBuildDifference(value: unknown): value is BuildDifference {
   if (!isRecord(value)) return false;
   return ["id", "group_id", "family", "source_a", "source_b", "detail"].every((key) => typeof value[key] === "string") &&
@@ -435,6 +453,7 @@ function isBuildPlanningBrief(value: unknown): value is BuildPlanningBrief {
     Array.isArray(value.differences) && value.differences.every(isBuildDifference) &&
     isRecord(value.resolutions) && Object.values(value.resolutions).every(isResolution) &&
     Array.isArray(value.role_filaments) && value.role_filaments.every(isFilamentAssignment) &&
+    (value.checklist_items === undefined || (Array.isArray(value.checklist_items) && value.checklist_items.every(isChecklistItem))) &&
     (value.managed_source_ids === undefined ||
       (Array.isArray(value.managed_source_ids) && value.managed_source_ids.every((id) => Number.isSafeInteger(id)))) &&
     (value.draft_source_revisions === undefined ||
@@ -765,6 +784,11 @@ export function deriveBuildPlanningReadiness(
       });
     }
   }
+  for (const item of brief.checklist_items ?? []) {
+    if (item.required && !item.completed) {
+      blockers.push({ code: "checklist_incomplete", detail: item.title });
+    }
+  }
   for (const detail of brief.draft_review_blockers)
     blockers.push({ code: "draft_review", detail });
   if (brief.draft_id == null)
@@ -811,6 +835,7 @@ export function newBuildPlanningBrief(
     differences: [],
     resolutions: {},
     role_filaments: [],
+    checklist_items: [],
     managed_source_ids: [],
     draft_source_revisions: {},
     draft_review_blockers: [],

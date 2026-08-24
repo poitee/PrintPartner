@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createSelfHostPorts } from "../adapters/self-host/index.js";
 import { InProcessJobRunner } from "../routes/jobs.js";
+import { encodeAcceptedPlate3mf, type StlMesh } from "@print-partner/domain";
 import { invokeAssistantTool, applyAssistantAction } from "./tools.js";
 import { inferStackPresetId, summarizeOtherBuildsAsExamples } from "./example-builds.js";
 import { buildAssistantSystemPrompt } from "./assistant-context.js";
@@ -43,6 +44,111 @@ describe("assistant tools + example builds", () => {
 
     const sources = JSON.parse((await invokeAssistantTool("list_sources", {}, { repo })).content);
     expect(sources.sources.some((s: { name: string }) => s.name === "Voron-2")).toBe(true);
+  });
+
+  it("exposes plan option groups and searchable Source inventory", async () => {
+    const source = repo.createSource({ name: "Options", source_kind: "local" });
+    const sourcePath = join(dataDir, "options");
+    mkdirSync(join(sourcePath, "STLs", "screen"), { recursive: true });
+    writeFileSync(join(sourcePath, "STLs", "screen", "screen_rail.stl"), "solid screen");
+    writeFileSync(join(sourcePath, "README.md"), "Screen options");
+    repo.updateSource(source.id, { local_path: sourcePath, last_synced_at: new Date().toISOString(), last_commit_sha: "a".repeat(64) });
+    const plan = repo.createProfile("Options plan", source.id);
+    const optionGroups = JSON.parse((await invokeAssistantTool("get_plan_option_groups", { plan_id: plan.id }, { repo })).content);
+    expect(optionGroups.plan_id).toBe(plan.id);
+    expect(optionGroups.sources).toEqual(expect.arrayContaining([expect.objectContaining({ source_id: source.id })]));
+    const inventory = JSON.parse((await invokeAssistantTool("get_source_inventory", { source_id: source.id }, { repo })).content);
+    expect(inventory.sync.synchronized).toBe(true);
+    expect(inventory.artifacts).toEqual(expect.arrayContaining([expect.objectContaining({ path: "STLs/screen/screen_rail.stl" })]));
+    const found = JSON.parse((await invokeAssistantTool("search_source_files", { source_id: source.id, query: "screen_rail" }, { repo })).content);
+    expect(found.files).toEqual([{ path: "STLs/screen/screen_rail.stl", byte_size: 12 }]);
+  });
+
+  it("proposes and confirms Source metadata changes", async () => {
+    const source = repo.createSource({ name: "Before", url: "https://example.com/before.git", source_kind: "git" });
+    const proposal = await invokeAssistantTool("propose_update_source", {
+      source_id: source.id,
+      patch: { name: "After", branch: "release", metadata: { vendor: "Example" } },
+    }, { repo });
+    expect(JSON.parse(proposal.content).status).toBe("proposed");
+    expect(repo.getSource(source.id)?.name).toBe("Before");
+    const applied = await applyAssistantAction(proposal.proposedAction!, { repo, jobs: { start: async () => "unused" } as never });
+    expect(applied.ok).toBe(true);
+    expect(repo.getSource(source.id)).toEqual(expect.objectContaining({ name: "After", branch: "release" }));
+    expect(repo.getSource(source.id)?.metadata).toEqual(expect.objectContaining({ vendor: "Example" }));
+  });
+
+  it("publishes confirmed MCP file imports as a Source revision", async () => {
+    const source = repo.createSource({ name: "Uploads", source_kind: "local" });
+    const content = Buffer.from("solid uploaded").toString("base64");
+    const proposal = await invokeAssistantTool("propose_import_source_files", {
+      source_id: source.id,
+      files: [{ path: "parts/uploaded.stl", content_base64: content }],
+    }, { repo });
+    expect(JSON.parse(proposal.content).status).toBe("proposed");
+    const applied = await applyAssistantAction(proposal.proposedAction!, {
+      repo,
+      dataDir,
+      jobs: { start: async () => "unused" } as never,
+    });
+    expect(applied.ok).toBe(true);
+    expect(repo.getSource(source.id)?.last_commit_sha).toMatch(/^[a-f0-9]{64}$/);
+    expect(applied.result?.artifacts).toEqual(expect.arrayContaining([expect.objectContaining({ path: "parts/uploaded.stl" })]));
+  });
+
+  it("imports an incompatible-slicer 3MF into verify-first checkoff and exposes progress", async () => {
+    const source = repo.createSource({ name: "Checkoff parts", source_kind: "local" });
+    const sourcePath = join(dataDir, "checkoff-source");
+    mkdirSync(sourcePath, { recursive: true });
+    writeFileSync(join(sourcePath, "bracket.stl"), `solid bracket\n  facet normal 0 0 1\n    outer loop\n      vertex 0 0 0\n      vertex 10 0 0\n      vertex 0 10 0\n    endloop\n  endfacet\nendsolid bracket\n`);
+    repo.updateSource(source.id, { local_path: sourcePath, last_synced_at: new Date().toISOString(), last_commit_sha: "d".repeat(64) });
+    repo.updateImportRules(source.id, ["bracket.stl"]);
+    const plan = repo.createProfile("3MF checkoff plan", source.id);
+    acceptPlanForTest(repo, plan.id);
+    const accepted = repo.readAcceptedPlanOperationalSnapshot(plan.id);
+    expect(accepted.kind).toBe("ready");
+    if (accepted.kind !== "ready") return;
+    const part = accepted.snapshot.parts.find((candidate) => candidate.included && candidate.units.length > 0);
+    expect(part).toBeDefined();
+    if (!part) return;
+    const unit = part.units[0]!;
+    const mesh: StlMesh = {
+      vertices: [[0, 0, 0], [10, 0, 0], [0, 10, 0]],
+      faces: [[0, 1, 2]],
+      bounds: { minX: 0, minY: 0, minZ: 0, maxX: 10, maxY: 10, maxZ: 0, widthMm: 10, depthMm: 10, heightMm: 0 },
+    };
+    const threeMf = Buffer.from(encodeAcceptedPlate3mf([{ token: unit.token, objectName: unit.objectName, xUm: 0, yUm: 0, mesh }])).toString("base64");
+
+    const before = JSON.parse((await invokeAssistantTool("get_plan_checkoff", { plan_id: plan.id }, { repo })).content);
+    expect(before.state).toBe("ready");
+    expect(before.parts.find((row: { part_id: number }) => row.part_id === part.projectionPartId).printed_count).toBe(0);
+
+    const imported = await invokeAssistantTool("propose_import_3mf_checkoff", { plan_id: plan.id, filename: "foreign-slicer.3mf", content_base64: threeMf }, { repo });
+    const importedApplied = await applyAssistantAction(imported.proposedAction!, { repo, dataDir, jobs: { start: async () => "unused" } as never });
+    expect(importedApplied.ok).toBe(true);
+    const link = importedApplied.result?.link as { id: string; state: string; units: unknown[] };
+    expect(link.state).toBe("awaiting_verify");
+    expect(link.units).toHaveLength(1);
+
+    const verified = await invokeAssistantTool("propose_verify_printer_checkoff", { link_id: link.id, decisions: [{ part_id: part.projectionPartId, unit_index: unit.unitIndex, result: "confirmed" }] }, { repo });
+    const verifiedApplied = await applyAssistantAction(verified.proposedAction!, { repo, jobs: { start: async () => "unused" } as never });
+    expect(verifiedApplied.ok).toBe(true);
+    const after = JSON.parse((await invokeAssistantTool("get_plan_checkoff", { plan_id: plan.id }, { repo })).content);
+    expect(after.parts.find((row: { part_id: number }) => row.part_id === part.projectionPartId).printed_count).toBe(1);
+  });
+
+  it("persists confirmed checklist items and named custom filament", async () => {
+    const plan = repo.createProfile("Checklist plan");
+    saveBuildPlanningBrief(repo, newBuildPlanningBrief(plan.id, "Build it", []));
+    const checklist = await invokeAssistantTool("propose_add_build_checklist_items", { plan_id: plan.id, items: [{ title: "Test fit the panels", category: "test_fit" }] }, { repo });
+    const checklistResult = await applyAssistantAction(checklist.proposedAction!, { repo, jobs: { start: async () => "unused" } as never });
+    expect(checklistResult.ok).toBe(true);
+    expect(readBuildPlanningBrief(repo, plan.id)?.checklist_items).toEqual([expect.objectContaining({ title: "Test fit the panels", required: true, completed: false })]);
+
+    const filament = await invokeAssistantTool("propose_add_custom_filament", { display_name: "Customer Orange", hex: "#ff6600", product_line: "External" }, { repo });
+    expect(repo.getSetting("custom_filament_probe")).toBeNull();
+    const filamentResult = await applyAssistantAction(filament.proposedAction!, { repo, dataDir, jobs: { start: async () => "unused" } as never });
+    expect(filamentResult).toMatchObject({ ok: true, result: { filament: { display_name: "Customer Orange", hex: "#ff6600" } } });
   });
 
   it("mutating tools only propose actions", async () => {

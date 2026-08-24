@@ -137,6 +137,8 @@ export function createProductMcpServer(deps: ProductMcpDeps): Server {
     const runtime = resolveAssistantRuntime(repo, config);
     return {
       repo,
+      tenantId,
+      jobs,
       activePlanId: defaultPlanId,
       useOtherBuildsAsExamples: runtime.useOtherBuildsAsExamples,
       dataDir: config.dataDir,
@@ -178,7 +180,7 @@ export function createProductMcpServer(deps: ProductMcpDeps): Server {
           role: "user" as const,
           content: {
             type: "text" as const,
-              text: `Plan this Build without choosing between conflicting sources on my behalf.\n\n${customerRequest}\n\nAnalyze the request and links first. Treat Printables, MakerWorld, and other model pages as provenance. If their printable files are not already attached, ask me to download and upload them. For uploaded ZIP, STL, 3MF, or supporting files, attach the completed Source by source_id with propose_import_build_inputs. Use the kit catalog's functional slots to propose path-scoped Source contributions with evidence and confidence; keep Library Source categories organizational only. Propose every persistent change and wait for confirm_apply. Sync and pin repository and uploaded Source evidence, record all overlapping-source differences, and ask me to resolve every group. Verify compatibility and exact filament inventory. Rebuild and review the draft. Apply only when get_build_planning_state reports ready. Do not start printing, exporting, or queueing.`,
+              text: `Plan this Build without choosing between conflicting sources on my behalf.\n\n${customerRequest}\n\nAnalyze the request and links first. Treat Printables, MakerWorld, and other model pages as provenance. If their printable files are not already attached, ask me to download and upload them. For uploaded ZIP, STL, 3MF, or supporting files, attach the completed Source by source_id with propose_import_build_inputs. If a sliced 3MF comes from a slicer that cannot integrate with Print Partner, use propose_import_3mf_checkoff to map its objects into the verify-first checkoff flow, then expose the result with get_plan_checkoff and get_printer_checkoff. Use the kit catalog's functional slots to propose path-scoped Source contributions with evidence and confidence; keep Library Source categories organizational only. Propose every persistent change and wait for confirm_apply. Sync and pin repository and uploaded Source evidence, record all overlapping-source differences, and ask me to resolve every group. Verify compatibility and exact filament inventory. Rebuild and review the draft. Apply only when get_build_planning_state reports ready. Do not start printing, exporting, or queueing.`,
           },
         },
       ],
@@ -312,6 +314,7 @@ export function createProductMcpServer(deps: ProductMcpDeps): Server {
             repo: getRepo(),
             jobs,
             tenantId,
+            dataDir: config.dataDir,
           });
           if (!result.ok) {
             // Restore so the client can retry or dismiss.

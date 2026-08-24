@@ -2,13 +2,16 @@ import type { PlanReview, ReviewPart } from "../../api/engine";
 import { partSourceNote } from "../../lib/partsGroups";
 import { partWarningNote } from "../../lib/partWarnings";
 import PartThumbExpandButton from "../parts/PartThumbExpandButton";
-import { cn } from "../../lib/utils";
+import { Button } from "../ui/button";
+import { cn } from "@/lib/utils";
 
 type Props = {
   part: ReviewPart;
   review: PlanReview;
   busy: boolean;
   onQtyChange: (part: ReviewPart, qty: number) => void;
+  onRemove: (part: ReviewPart) => void;
+  onRestore: (part: ReviewPart) => void;
   onPreview: (part: ReviewPart) => void;
 };
 
@@ -20,6 +23,8 @@ export default function PartsGridCard({
   review,
   busy,
   onQtyChange,
+  onRemove,
+  onRestore,
   onPreview,
 }: Props) {
   const qty = part.quantity_override ?? part.quantity_effective;
@@ -38,20 +43,20 @@ export default function PartsGridCard({
         <div className="flex h-[84px] items-center justify-center p-1">
           <PartThumbExpandButton part={part} sizePx={72} onExpand={onPreview} />
         </div>
-        <span className="absolute right-1.5 top-1.5 rounded bg-foreground px-1.5 py-0.5 font-mono text-[10px] font-medium text-background">
+        <span className="absolute right-1.5 top-1.5 rounded bg-foreground px-1.5 py-0.5 font-mono text-3xs font-medium text-background">
           ×{qty}
         </span>
       </div>
       <div className="flex flex-col gap-1 p-2">
         <p
-          className="truncate font-mono text-[10.5px] leading-tight"
+          className="truncate font-mono text-2xs leading-tight"
           title={part.relative_path || part.filename}
         >
           {part.filename.replace(/\.stl$/i, "")}
         </p>
         <p
           className={cn(
-            "truncate text-[10.5px]",
+            "truncate text-2xs",
             warn ? "text-warning" : "text-muted-foreground",
           )}
           title={note}
@@ -83,6 +88,16 @@ export default function PartsGridCard({
             </button>
           </div>
         )}
+        <Button
+          type="button"
+          variant={part.included ? "sheetRemove" : "sheetRestore"}
+          size="sm"
+          className="mt-1 w-full"
+          disabled={busy}
+          onClick={() => (part.included ? onRemove(part) : onRestore(part))}
+        >
+          {part.included ? "Remove" : "Restore"}
+        </Button>
       </div>
     </article>
   );

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Verify PrintPartner"
+  short_description: "Prove changes through the real PrintPartner app"
+  default_prompt: "Use $verify-printpartner to verify this change through the real PrintPartner app."

@@ -197,6 +197,7 @@ export async function registerAssistantRoutes(
           repo: deps.repo,
           jobs: deps.jobs,
           tenantId: request.tenantId,
+          dataDir: deps.config.dataDir,
         });
       } catch {
         request.log.error(

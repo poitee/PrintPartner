@@ -177,9 +177,10 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
     }
   }, [selectedProfileId, storeWorkspace]);
 
-  const editActivePlanDraft = useCallback(async (decisions: PlanDraftPartDecisionContract[]) => {
-    const workspace = currentDraftWorkspace();
-    if (!workspace) throw new Error("Rebuild the Plan to create a saved draft first");
+  const editWorkspaceParts = useCallback(async (
+    workspace: PlanDraftWorkspace,
+    decisions: PlanDraftPartDecisionContract[],
+  ) => {
     try {
       return storeWorkspace(await editPlanDraftParts({
         profileId: workspace.profile_id,
@@ -195,7 +196,13 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
       setDraftMutationError(message);
       throw new Error(message, { cause: error });
     }
-  }, [currentDraftWorkspace, replaceFromConflict, storeWorkspace]);
+  }, [replaceFromConflict, storeWorkspace]);
+
+  const editActivePlanDraft = useCallback(async (decisions: PlanDraftPartDecisionContract[]) => {
+    const workspace = currentDraftWorkspace();
+    if (!workspace) throw new Error("Rebuild the Plan to create a saved draft first");
+    return editWorkspaceParts(workspace, decisions);
+  }, [currentDraftWorkspace, editWorkspaceParts]);
 
   const editDraft = useCallback(async (
     partId: number,
@@ -203,14 +210,16 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
     decision: "included" | "quantity",
     value: boolean | number,
   ) => {
-    const workspace = currentDraftWorkspace();
-    if (!workspace) throw new Error("Rebuild the Plan to create a saved draft first");
-    const matches = workspace.parts.filter((part) => part.part_key === partKey);
-    if (matches.length !== 1) throw new Error("The saved draft no longer has one matching Part");
     setBusyPartId(partId);
     setDraftMutationError(null);
     try {
-      await editActivePlanDraft([
+      // The Plan section is also an editing surface. If the user has not opened
+      // a draft yet, create one on demand before applying the proposed change.
+      // Accepted Plan rows remain unchanged until the explicit Apply action.
+      const workspace = currentDraftWorkspace() ?? await startPlanDraft();
+      const matches = workspace.parts.filter((part) => part.part_key === partKey);
+      if (matches.length !== 1) throw new Error("The saved draft no longer has one matching Part");
+      await editWorkspaceParts(workspace, [
         decision === "included"
           ? { kind: "set_included", draft_part_ids: [matches[0]!.draft_part_id], value: Boolean(value) }
           : { kind: "set_quantity_override", draft_part_ids: [matches[0]!.draft_part_id], value: Number(value) },
@@ -222,7 +231,7 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
     } finally {
       setBusyPartId(null);
     }
-  }, [currentDraftWorkspace, editActivePlanDraft]);
+  }, [currentDraftWorkspace, editWorkspaceParts, startPlanDraft]);
 
   const setQuantity = useCallback(
     async (partId: number, partKey: string, qty: number) => {

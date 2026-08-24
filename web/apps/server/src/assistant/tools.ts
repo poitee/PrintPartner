@@ -1,8 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
-import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, readSync, statSync, readdirSync, lstatSync, mkdtempSync, rmSync } from "node:fs";
+import { join, relative, resolve, sep } from "node:path";
+import { tmpdir } from "node:os";
 import type { AssistantActionType, AssistantProposedAction, PrinterHostStatus } from "@print-partner/contracts";
 import { isAssistantUiAction } from "@print-partner/contracts";
-import { listStlRelativePaths, safeRepoPath } from "@print-partner/domain";
+import { importRulesForProject, listStlRelativePaths, safeRepoPath, parseStlMesh, stlMeshDimensionsUm, mergeNamingProfiles, namingProfileFromDict, previewParse } from "@print-partner/domain";
 import type { AcceptedProfileProgress, AppRepository } from "../db/repository.js";
 import {
   AcceptedPlanOperationalIntegrityError,
@@ -36,6 +38,7 @@ import type { AssistantPort } from "./types.js";
 import type { AssistantRuntimeConfig } from "./resolve-assistant.js";
 import type { InProcessJobRunner } from "../routes/jobs.js";
 import { deriveBuildRecipe, recipeToReplaySteps } from "../services/build-recipe.js";
+import { parseRequiredUnitToken } from "../services/required-units.js";
 import {
   createPlanSnapshot,
   getPlanSnapshot,
@@ -49,6 +52,20 @@ import { decisionFingerprint, isDismissedFingerprint } from "./preferences-diges
 import { getLogger } from "../services/logger.js";
 import { suggestSourceContributions } from "../services/source-contribution-suggestions.js";
 import { listPrintableArtifactPaths, scanSourceArtifacts } from "../services/source-artifacts.js";
+import { buildPlanManifestBuilder } from "../services/plan-manifest-builder.js";
+import { finalizeUploadedSource, writeUploadedFiles, writeUploadedZip } from "../services/archive-import.js";
+import { indexSourceDocsFromDisk } from "../services/source-docs-index.js";
+import { publishLocalSourceWorkingTree } from "../services/local-source-revision.js";
+import { resolveStoredSnapshotPath } from "../db/stored-snapshot-path.js";
+import { addCustomFilament, listCustomFilaments } from "../services/custom-filaments.js";
+import { extractThreeMfMeshes } from "../services/three-mf-import.js";
+import {
+  getPrinterCheckoffLink,
+  loadPrinterCheckoffLinks,
+  updatePrinterCheckoffLink,
+} from "../services/printer-checkoff-store.js";
+import { verifyPrinterCheckoff } from "../services/printer-checkoff-verify.js";
+import { listUnattributedPrints } from "../services/unattributed-print-store.js";
 import {
   analyzeBuildRequest,
   buildPlanningApplyBlockers,
@@ -241,6 +258,108 @@ export const ASSISTANT_TOOL_SPECS: AssistantToolSpec[] = [
     tier: "read",
   },
   {
+    name: "get_plan_option_groups",
+    description: "Return the actual option groups and variants available to a plan, including source provenance and current selections.",
+    input_schema: {
+      type: "object",
+      properties: { plan_id: { type: "number" } },
+      required: ["plan_id"],
+    },
+    tier: "read",
+  },
+  {
+    name: "search_source_files",
+    description: "Search a synchronized Source for exact filenames and paths without reading untrusted file contents.",
+    input_schema: {
+      type: "object",
+      properties: {
+        source_id: { type: "number" },
+        source_name: { type: "string" },
+        query: { type: "string" },
+        limit: { type: "number", minimum: 1, maximum: 200 },
+      },
+      required: ["query"],
+    },
+    tier: "read",
+  },
+  {
+    name: "get_source_inventory",
+    description: "Return complete synchronized Source metadata, revisions, artifacts, import rules, naming, docs, notes, and sync state.",
+    input_schema: {
+      type: "object",
+      properties: { source_id: { type: "number" }, source_name: { type: "string" } },
+    },
+    tier: "read",
+  },
+  {
+    name: "get_job_status",
+    description: "Inspect a background synchronization or document-processing job, or list recent jobs when job_id is omitted.",
+    input_schema: {
+      type: "object",
+      properties: {
+        job_id: { type: "string" },
+        status: { type: "string", enum: ["pending", "running", "done", "error", "cancelled"] },
+        profile_id: { type: "number" },
+        since: { type: "string" },
+      },
+    },
+    tier: "read",
+  },
+  {
+    name: "compare_source_revisions",
+    description: "Compare two pinned Source revisions and list added, removed, changed, and renamed files.",
+    input_schema: { type: "object", properties: { source_id: { type: "number" }, revision_a_id: { type: "number" }, revision_b_id: { type: "number" } }, required: ["source_id", "revision_a_id", "revision_b_id"] },
+    tier: "read",
+  },
+  {
+    name: "preview_source_naming",
+    description: "Preview inferred role, quantity, and slug for Source file paths using global or supplied naming rules.",
+    input_schema: { type: "object", properties: { source_id: { type: "number" }, paths: { type: "array", items: { type: "string" } }, profile: { type: "object" } }, required: ["paths"] },
+    tier: "read",
+  },
+  {
+    name: "audit_source_provenance",
+    description: "Audit Source author, URL, hashes, pinned revisions, license evidence, and commercial-print permission signals.",
+    input_schema: { type: "object", properties: { source_id: { type: "number" }, source_name: { type: "string" } } },
+    tier: "read",
+  },
+  {
+    name: "analyze_stl_mesh",
+    description: "Inspect an STL's dimensions, triangle count, shells, watertightness, and mesh validity without modifying it.",
+    input_schema: { type: "object", properties: { source_id: { type: "number" }, path: { type: "string" } }, required: ["path"] },
+    tier: "read",
+  },
+  {
+    name: "audit_build_coverage",
+    description: "Check whether each customer requirement is represented by the selected printable-part draft.",
+    input_schema: { type: "object", properties: { plan_id: { type: "number" }, draft_id: { type: "number" } }, required: ["plan_id"] },
+    tier: "read",
+  },
+  {
+    name: "check_hardware_interfaces",
+    description: "Compare declared mounting patterns, envelopes, connectors, voltages, and clearances for compatibility conflicts.",
+    input_schema: { type: "object", properties: { interfaces: { type: "array", items: { type: "object" } } }, required: ["interfaces"] },
+    tier: "read",
+  },
+  {
+    name: "propose_add_build_checklist_items",
+    description: "PROPOSE durable test-fit, wiring, safety, and pre-print checklist items for a Build.",
+    input_schema: { type: "object", properties: { plan_id: { type: "number" }, items: { type: "array", items: { type: "object" } } }, required: ["plan_id", "items"] },
+    tier: "mutate",
+  },
+  {
+    name: "propose_add_custom_filament",
+    description: "PROPOSE adding a named external filament color without claiming inventory or stock tracking.",
+    input_schema: { type: "object", properties: { display_name: { type: "string" }, hex: { type: "string" }, product_line: { type: "string" } }, required: ["display_name", "hex"] },
+    tier: "mutate",
+  },
+  {
+    name: "propose_update_source_naming",
+    description: "PROPOSE Source-specific role and quantity naming rules, or restore global defaults.",
+    input_schema: { type: "object", properties: { source_id: { type: "number" }, source_name: { type: "string" }, use_defaults: { type: "boolean" }, profile: { type: "object" } }, required: [] },
+    tier: "mutate",
+  },
+  {
     name: "propose_create_build",
     description: "PROPOSE atomically creating a Build with its verbatim and normalized customer request.",
     input_schema: {
@@ -344,6 +463,59 @@ export const ASSISTANT_TOOL_SPECS: AssistantToolSpec[] = [
     tier: "mutate",
   },
   {
+    name: "propose_update_source",
+    description: "PROPOSE changing a Source URL, kind, type, branch, tag, role, or metadata after reviewing its current identity.",
+    input_schema: {
+      type: "object",
+      properties: {
+        source_id: { type: "number" },
+        source_name: { type: "string" },
+        patch: { type: "object" },
+      },
+      required: ["patch"],
+    },
+    tier: "mutate",
+  },
+  {
+    name: "propose_import_source_files",
+    description: "PROPOSE uploading base64-encoded ZIP/STL/3MF/document files into an existing Source and publishing a pinned Source revision.",
+    input_schema: {
+      type: "object",
+      properties: {
+        source_id: { type: "number" },
+        archive_base64: { type: "string", description: "A ZIP archive encoded as base64." },
+        files: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              path: { type: "string" },
+              content_base64: { type: "string" },
+            },
+            required: ["path", "content_base64"],
+          },
+        },
+      },
+      required: ["source_id"],
+    },
+    tier: "mutate",
+  },
+  {
+    name: "propose_edit_plan_draft_parts",
+    description: "PROPOSE including or excluding draft parts and setting exact quantities with optimistic snapshot protection.",
+    input_schema: {
+      type: "object",
+      properties: {
+        plan_id: { type: "number" },
+        draft_id: { type: "number" },
+        expected_snapshot_digest: { type: "string" },
+        parts: { type: "array", items: { type: "object" } },
+      },
+      required: ["plan_id", "draft_id", "parts"],
+    },
+    tier: "mutate",
+  },
+  {
     name: "propose_rebuild_plan",
     description: "PROPOSE recomputing and recording a printable-part draft for planning review.",
     input_schema: {
@@ -423,6 +595,95 @@ export const ASSISTANT_TOOL_SPECS: AssistantToolSpec[] = [
       required: ["plan_id"],
     },
     tier: "read",
+  },
+  {
+    name: "get_plan_checkoff",
+    description:
+      "Return the complete accepted-plan Progress/checkoff state, including the accepted basis, per-part counts, and per-unit printed and assembled flags.",
+    input_schema: {
+      type: "object",
+      properties: { plan_id: { type: "number", description: "Plan / profile id" } },
+      required: ["plan_id"],
+    },
+    tier: "read",
+  },
+  {
+    name: "get_printer_checkoff",
+    description:
+      "Return printer checkoff links and unattributed completed prints, optionally filtered by plan, state, or integration.",
+    input_schema: {
+      type: "object",
+      properties: {
+        plan_id: { type: "number" },
+        state: { type: "string", enum: ["watching", "awaiting_verify", "host_failed", "dismissed", "verified"] },
+        integration_id: { type: "string" },
+      },
+    },
+    tier: "read",
+  },
+  {
+    name: "propose_import_3mf_checkoff",
+    description:
+      "PROPOSE importing a sliced 3MF from an incompatible slicer, mapping its mesh objects to accepted Plan units, and placing the result in the normal verify-first checkoff queue. The 3MF bytes are used for attribution; preserve the original file separately with propose_import_source_files when audit storage is needed.",
+    input_schema: {
+      type: "object",
+      properties: {
+        plan_id: { type: "number" },
+        filename: { type: "string", description: "Original .3mf filename" },
+        content_base64: { type: "string", description: "Base64-encoded 3MF bytes" },
+        source_id: { type: "number", description: "Alternative to content_base64: synchronized Source containing the 3MF" },
+        path: { type: "string", description: "3MF path inside source_id" },
+        integration_id: { type: "string", description: "Optional label for the incompatible slicer" },
+        printer_id: { type: "string", description: "Optional printer label" },
+        host_name: { type: "string", description: "Optional display name" },
+      },
+      required: ["plan_id"],
+    },
+    tier: "mutate",
+  },
+  {
+    name: "propose_set_plan_progress",
+    description:
+      "PROPOSE setting accepted Plan printed counts for one or more parts. Counts fill lower units first and never bypass the accepted-plan basis.",
+    input_schema: {
+      type: "object",
+      properties: {
+        plan_id: { type: "number" },
+        rows: { type: "array", items: { type: "object" } },
+      },
+      required: ["plan_id", "rows"],
+    },
+    tier: "mutate",
+  },
+  {
+    name: "propose_set_plan_assembly",
+    description:
+      "PROPOSE marking one accepted Plan unit assembled or not assembled after its print checkoff.",
+    input_schema: {
+      type: "object",
+      properties: {
+        plan_id: { type: "number" },
+        part_id: { type: "number" },
+        unit_index: { type: "number" },
+        assembled: { type: "boolean" },
+      },
+      required: ["plan_id", "part_id", "unit_index", "assembled"],
+    },
+    tier: "mutate",
+  },
+  {
+    name: "propose_verify_printer_checkoff",
+    description:
+      "PROPOSE confirming or rejecting pending units on an awaiting printer checkoff link. Rejections require a reason and all changes remain confirmation-gated.",
+    input_schema: {
+      type: "object",
+      properties: {
+        link_id: { type: "string" },
+        decisions: { type: "array", items: { type: "object" } },
+      },
+      required: ["link_id", "decisions"],
+    },
+    tier: "mutate",
   },
   {
     name: "get_plan_review",
@@ -1102,6 +1363,8 @@ export const ASSISTANT_TOOL_SPECS: AssistantToolSpec[] = [
 
 export type ToolContext = {
   repo: AppRepository;
+  tenantId?: string;
+  jobs?: InProcessJobRunner;
   activePlanId?: number | null;
   useOtherBuildsAsExamples?: boolean;
   dataDir?: string | null;
@@ -1123,6 +1386,66 @@ function asInt(raw: unknown): number | null {
     return Math.trunc(Number(raw));
   }
   return null;
+}
+
+const MCP_THREE_MF_MAX_BYTES = 64 * 1024 * 1024;
+
+type ThreeMfCheckoffInput = Readonly<{
+  content_base64?: unknown;
+  source_id?: unknown;
+  path?: unknown;
+  filename?: unknown;
+}>;
+
+function readThreeMfCheckoffBytes(
+  repo: AppRepository,
+  input: ThreeMfCheckoffInput,
+): { readonly bytes: Buffer; readonly filename: string } | { readonly error: string } {
+  const encoded = typeof input.content_base64 === "string" ? input.content_base64.trim() : "";
+  const sourceId = asInt(input.source_id);
+  const path = typeof input.path === "string" ? input.path.trim() : "";
+  if (encoded && (sourceId != null || path)) {
+    return { error: "Provide either content_base64 or source_id plus path, not both" };
+  }
+  let bytes: Buffer;
+  let filename = typeof input.filename === "string" ? input.filename.trim() : "imported.3mf";
+  if (encoded) {
+    if (!/^[A-Za-z0-9+/=\r\n]+$/.test(encoded)) return { error: "content_base64 must be valid base64" };
+    bytes = Buffer.from(encoded, "base64");
+  } else {
+    if (sourceId == null || !path) return { error: "content_base64 or source_id plus path is required" };
+    const source = repo.getSource(sourceId);
+    if (!source?.local_path) return { error: "Source is not synchronized" };
+    const absolute = safeRepoPath(source.local_path, path);
+    if (!absolute || !existsSync(absolute)) return { error: "3MF path not found" };
+    filename = path.split(/[\\/]/).pop() || filename;
+    try {
+      const stat = statSync(absolute);
+      if (!stat.isFile()) return { error: "3MF path is not a file" };
+      if (stat.size > MCP_THREE_MF_MAX_BYTES) return { error: "3MF exceeds the 64 MiB MCP limit" };
+      bytes = readFileSync(absolute);
+    } catch (error) {
+      return { error: error instanceof Error ? error.message : "Unable to read 3MF" };
+    }
+  }
+  if (!filename.toLowerCase().endsWith(".3mf")) filename = `${filename}.3mf`;
+  if (bytes.length === 0) return { error: "3MF is empty" };
+  if (bytes.length > MCP_THREE_MF_MAX_BYTES) return { error: "3MF exceeds the 64 MiB MCP limit" };
+  return { bytes, filename };
+}
+
+function inspectThreeMfCheckoff(
+  bytes: Buffer,
+  filename: string,
+): { readonly files: ReturnType<typeof extractThreeMfMeshes>["files"] } | { readonly error: string } {
+  const tempRoot = mkdtempSync(join(tmpdir(), "pp-mcp-3mf-"));
+  try {
+    return { files: extractThreeMfMeshes(bytes, tempRoot, filename).files };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "Unable to parse 3MF" };
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
 }
 
 function resolvePlanId(input: Record<string, unknown>, ctx: ToolContext, validateRequested = true): number | null {
@@ -1197,6 +1520,65 @@ function sourceNotFoundError(repo: AppRepository, sourceName: string, hint: stri
   return JSON.stringify({
     error: `Source not found: "${sourceName}".${didYouMean} ${hint}`,
   });
+}
+
+function listSourceFiles(localPath: string): Array<{ path: string; byte_size: number }> {
+  const root = resolve(localPath);
+  const files: Array<{ path: string; byte_size: number }> = [];
+  const pending = [root];
+  while (pending.length > 0) {
+    const directory = pending.pop();
+    if (!directory) continue;
+    let entries;
+    try {
+      entries = readdirSync(directory, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (entry.name === ".git" || entry.name === "node_modules" || entry.name === ".docs-text") continue;
+      const absolute = join(directory, entry.name);
+      try {
+        if (lstatSync(absolute).isSymbolicLink()) continue;
+        if (entry.isDirectory()) {
+          pending.push(absolute);
+          continue;
+        }
+        if (!entry.isFile()) continue;
+        files.push({
+          path: relative(root, absolute).split(sep).join("/"),
+          byte_size: statSync(absolute).size,
+        });
+      } catch {
+        /* Ignore files that disappear while a source is being inspected. */
+      }
+    }
+  }
+  return files.sort((a, b) => a.path.localeCompare(b.path));
+}
+
+function compareSourceRoots(rootA: string, rootB: string): Array<Record<string, unknown>> {
+  const hashFiles = (root: string) => new Map(listSourceFiles(root).map((file) => [file.path, createHash("sha256").update(readFileSync(join(root, file.path))).digest("hex")]));
+  const a = hashFiles(rootA);
+  const b = hashFiles(rootB);
+  const differences: Array<Record<string, unknown>> = [];
+  const removed: Array<[string, string]> = [];
+  const added: Array<[string, string]> = [];
+  for (const [path, hash] of a) {
+    if (!b.has(path)) removed.push([path, hash]);
+    else if (b.get(path) !== hash) differences.push({ kind: "changed", path_a: path, path_b: path });
+  }
+  for (const [path, hash] of b) if (!a.has(path)) added.push([path, hash]);
+  for (let i = removed.length - 1; i >= 0; i -= 1) {
+    const match = added.findIndex(([, hash]) => hash === removed[i]![1]);
+    if (match < 0) continue;
+    differences.push({ kind: "renamed", path_a: removed[i]![0], path_b: added[match]![0] });
+    removed.splice(i, 1);
+    added.splice(match, 1);
+  }
+  differences.push(...removed.map(([path]) => ({ kind: "removed", path_a: path })));
+  differences.push(...added.map(([path]) => ({ kind: "added", path_b: path })));
+  return differences.sort((left, right) => String(left.path_a ?? left.path_b).localeCompare(String(right.path_a ?? right.path_b)));
 }
 
 const UNTRUSTED_TREE_BANNER =
@@ -1578,6 +1960,181 @@ export async function invokeAssistantTool(
           }),
         };
       }
+      case "get_plan_option_groups": {
+        const planId = resolvePlanId(input, ctx, false);
+        if (planId == null) return { content: JSON.stringify({ error: "plan_id required" }) };
+        if (!ctx.repo.getOwnedProfileIdentity(planId)) return { content: JSON.stringify({ error: "Plan not found" }) };
+        const manifest = buildPlanManifestBuilder(ctx.repo, planId);
+        return {
+          content: JSON.stringify({
+            plan_id: planId,
+            selections: loadKitManifest(ctx.repo, planId).selections,
+            option_groups: manifest.merged_option_groups,
+            sources: manifest.sources.map((source) => ({
+              source_id: source.source_id,
+              name: source.name,
+              layer_type: source.layer_type,
+              exists: source.exists,
+              scanned_part_count: Array.isArray(source.scanned_parts) ? source.scanned_parts.length : 0,
+            })),
+          }),
+        };
+      }
+      case "search_source_files": {
+        const sourceId = asInt(input.source_id);
+        const sourceName = typeof input.source_name === "string" ? input.source_name.trim() : "";
+        const source = sourceId != null ? ctx.repo.getSource(sourceId) : sourceName ? sourceByName(ctx.repo, sourceName) : null;
+        if (!source) return { content: JSON.stringify({ error: "source_id or source_name required" }) };
+        if (!source.local_path || !existsSync(source.local_path)) return { content: JSON.stringify({ error: "Source is not synchronized" }) };
+        const query = String(input.query ?? "").trim().toLowerCase();
+        if (!query) return { content: JSON.stringify({ error: "query required" }) };
+        const limit = Math.min(200, Math.max(1, asInt(input.limit) ?? 50));
+        const files = listSourceFiles(source.local_path).filter((file) => file.path.toLowerCase().includes(query));
+        return {
+          content: JSON.stringify({
+            source: { id: source.id, name: source.name, last_commit_sha: source.last_commit_sha },
+            query,
+            files: files.slice(0, limit),
+            total_matches: files.length,
+            truncated: files.length > limit,
+          }),
+        };
+      }
+      case "get_source_inventory": {
+        const sourceId = asInt(input.source_id);
+        const sourceName = typeof input.source_name === "string" ? input.source_name.trim() : "";
+        const source = sourceId != null ? ctx.repo.getSource(sourceId) : sourceName ? sourceByName(ctx.repo, sourceName) : null;
+        if (!source) return { content: JSON.stringify({ error: "source_id or source_name required" }) };
+        const row = ctx.repo.getProjectRow(source.id);
+        if (!row) return { content: JSON.stringify({ error: "Source not found" }) };
+        const artifacts = source.local_path ? scanSourceArtifacts(source.local_path) : [];
+        const files = source.local_path ? listSourceFiles(source.local_path) : [];
+        return {
+          content: JSON.stringify({
+            source,
+            sync: {
+              synchronized: Boolean(source.local_path && source.last_synced_at && source.last_commit_sha),
+              last_synced_at: source.last_synced_at,
+              last_commit_sha: source.last_commit_sha,
+              update_status: source.update_status,
+              update_checked_at: source.update_checked_at,
+              current_revision_id: source.current_source_revision_id,
+              errors: source.metadata && typeof source.metadata.sync_error === "string" ? [source.metadata.sync_error] : [],
+            },
+            revisions: ctx.repo.listSourceRevisions(source.id),
+            artifacts,
+            file_count: files.length,
+            import_rules: importRulesForProject(row.importedPaths) ?? [],
+            naming: ctx.repo.getSourceNaming(source.id),
+            docs: ctx.repo.listSourceDocs(source.id),
+            notes: ctx.repo.listSourceNotes(source.id),
+          }),
+        };
+      }
+      case "get_job_status": {
+        const jobId = typeof input.job_id === "string" ? input.job_id.trim() : "";
+        const tenantId = ctx.tenantId ?? "default";
+        if (!ctx.jobs) return { content: JSON.stringify({ error: "Job status is unavailable in this context" }) };
+        if (jobId) {
+          const job = await ctx.jobs.get(jobId, tenantId);
+          if (!job) return { content: JSON.stringify({ error: "Job not found" }) };
+          return { content: JSON.stringify({ job }) };
+        }
+        const jobs = ctx.jobs.listJobs({
+          status: typeof input.status === "string" ? input.status as never : undefined,
+          profile_id: asInt(input.profile_id) ?? undefined,
+          since: typeof input.since === "string" ? input.since : undefined,
+        }, tenantId);
+        return { content: JSON.stringify({ jobs }) };
+      }
+      case "compare_source_revisions": {
+        const sourceId = asInt(input.source_id);
+        const revisionAId = asInt(input.revision_a_id);
+        const revisionBId = asInt(input.revision_b_id);
+        if (sourceId == null || revisionAId == null || revisionBId == null) return { content: JSON.stringify({ error: "source_id and both revision ids are required" }) };
+        const source = ctx.repo.getSource(sourceId);
+        const revisionA = ctx.repo.getSourceRevision(revisionAId);
+        const revisionB = ctx.repo.getSourceRevision(revisionBId);
+        if (!source || !revisionA || !revisionB || revisionA.source_id !== sourceId || revisionB.source_id !== sourceId) return { content: JSON.stringify({ error: "Source revisions not found for Source" }) };
+        const rootA = resolveStoredSnapshotPath(ctx.repo.reposDir, revisionA.snapshot_locator);
+        const rootB = resolveStoredSnapshotPath(ctx.repo.reposDir, revisionB.snapshot_locator);
+        if (!rootA || !rootB || !existsSync(rootA) || !existsSync(rootB)) return { content: JSON.stringify({ error: "Source revision snapshots are unavailable" }) };
+        const differences = compareSourceRoots(rootA, rootB);
+        const counts: Record<string, number> = {};
+        for (const item of differences) { const key = String(item.kind); counts[key] = (counts[key] ?? 0) + 1; }
+        return { content: JSON.stringify({ source: { id: source.id, name: source.name }, revision_a: revisionA, revision_b: revisionB, differences, counts }) };
+      }
+      case "preview_source_naming": {
+        if (!Array.isArray(input.paths) || input.paths.length === 0) return { content: JSON.stringify({ error: "paths required" }) };
+        try {
+          const sourceId = asInt(input.source_id);
+          const base = sourceId != null ? ctx.repo.getSourceNaming(sourceId) : null;
+          const global = ctx.repo.getGlobalNaming();
+          const supplied = input.profile && typeof input.profile === "object" ? mergeNamingProfiles(global, input.profile as Record<string, unknown>) : global;
+          const profile = namingProfileFromDict(base?.kind === "found" && !input.profile ? base.settings.effective : supplied);
+          const results = input.paths.filter((path): path is string => typeof path === "string").map((path) => ({ path, ...previewParse(path, profile) }));
+          return { content: JSON.stringify({ results, effective: profile.toDict ? profile.toDict() : supplied }) };
+        } catch (error) {
+          return { content: JSON.stringify({ error: error instanceof Error ? error.message : String(error) }) };
+        }
+      }
+      case "audit_source_provenance": {
+        const sourceId = asInt(input.source_id);
+        const sourceName = typeof input.source_name === "string" ? input.source_name.trim() : "";
+        const source = sourceId != null ? ctx.repo.getSource(sourceId) : sourceName ? sourceByName(ctx.repo, sourceName) : null;
+        if (!source) return { content: JSON.stringify({ error: "source_id or source_name required" }) };
+        const files = source.local_path ? listSourceFiles(source.local_path) : [];
+        const licenseFiles = files.filter((file) => /(^|\/)(license|copying|notice)(\.|$)/i.test(file.path)).map((file) => file.path);
+        const authorSignals = source.local_path ? (localReadmeText(source.local_path)?.match(/(?:author|maintainer|copyright)[:\s]+[^\n]+/i)?.[0] ?? null) : null;
+        return { content: JSON.stringify({ source, revisions: ctx.repo.listSourceRevisions(source.id), provenance: { url: source.url || null, pinned_revision: source.last_commit_sha, manifest_hashes: ctx.repo.listSourceRevisions(source.id).map((revision) => revision.manifest_digest), author_signal: authorSignals, license_files: licenseFiles, commercial_print_permission: licenseFiles.length > 0 ? "review_license_file" : "unknown", confidence: source.last_commit_sha ? "revision_pinned" : "unverified" } }) };
+      }
+      case "analyze_stl_mesh": {
+        const path = String(input.path ?? "").trim();
+        if (!path) return { content: JSON.stringify({ error: "path required" }) };
+        let absolute: string | null = null;
+        const sourceId = asInt(input.source_id);
+        if (sourceId != null) {
+          const source = ctx.repo.getSource(sourceId);
+          if (!source?.local_path) return { content: JSON.stringify({ error: "Source is not synchronized" }) };
+          absolute = safeRepoPath(source.local_path, path);
+        }
+        if (!absolute || !existsSync(absolute)) return { content: JSON.stringify({ error: "STL path not found" }) };
+        try {
+          const mesh = parseStlMesh(readFileSync(absolute));
+          if (!mesh) return { content: JSON.stringify({ path, valid: false, error: "STL mesh could not be parsed" }) };
+          const edges = new Map<string, number>();
+          for (const [a, b, c] of mesh.faces) for (const [left, right] of [[a, b], [b, c], [c, a]]) { const va = mesh.vertices[left]!, vb = mesh.vertices[right]!; const first = `${va[0]},${va[1]},${va[2]}`; const second = `${vb[0]},${vb[1]},${vb[2]}`; const key = first < second ? `${first}|${second}` : `${second}|${first}`; edges.set(key, (edges.get(key) ?? 0) + 1); }
+          const boundaryEdges = [...edges.values()].filter((count) => count === 1).length;
+          return { content: JSON.stringify({ path, valid: true, triangles: mesh.faces.length, vertices: mesh.vertices.length, bounds_mm: mesh.bounds, dimensions_um: stlMeshDimensionsUm(mesh), shells_estimate: boundaryEdges === 0 ? 1 : null, watertight: boundaryEdges === 0, boundary_edges: boundaryEdges }) };
+        } catch (error) { return { content: JSON.stringify({ error: error instanceof Error ? error.message : String(error) }) }; }
+      }
+      case "audit_build_coverage": {
+        const planId = resolvePlanId(input, ctx, false);
+        if (planId == null) return { content: JSON.stringify({ error: "plan_id required" }) };
+        const brief = readBuildPlanningBrief(ctx.repo, planId);
+        if (!brief) return { content: JSON.stringify({ error: "Build planning brief not found" }) };
+        const draftId = asInt(input.draft_id) ?? brief.draft_id;
+        const draft = draftId == null ? null : ctx.repo.getPlanDraft(planId, draftId);
+        const included = draft?.parts.filter((part) => part.included) ?? [];
+        const coverage = brief.requirements.map((requirement) => {
+          const key = `${requirement.key} ${requirement.value}`.toLowerCase();
+          const matches = included.filter((part) => `${part.filename} ${part.relativePath} ${part.requirement ?? ""}`.toLowerCase().split(/\s+/).some((token) => token.length > 2 && key.includes(token)));
+          return { requirement, represented: matches.length > 0, part_ids: matches.map((part) => part.id), evidence: matches.slice(0, 10).map((part) => part.relativePath) };
+        });
+        return { content: JSON.stringify({ plan_id: planId, draft_id: draftId, coverage, uncovered: coverage.filter((item) => !item.represented).map((item) => item.requirement.key) }) };
+      }
+      case "check_hardware_interfaces": {
+        if (!Array.isArray(input.interfaces)) return { content: JSON.stringify({ error: "interfaces required" }) };
+        const interfaces = input.interfaces.filter((value): value is Record<string, unknown> => Boolean(value) && typeof value === "object" && !Array.isArray(value));
+        const conflicts: Array<Record<string, unknown>> = [];
+        for (let i = 0; i < interfaces.length; i += 1) for (let j = i + 1; j < interfaces.length; j += 1) {
+          const left = interfaces[i]!, right = interfaces[j]!;
+          for (const key of ["mounting_pattern", "connector", "voltage", "envelope", "clearance"]) {
+            if (left[key] != null && right[key] != null && JSON.stringify(left[key]) !== JSON.stringify(right[key])) conflicts.push({ field: key, left: left.name ?? `interface_${i}`, right: right.name ?? `interface_${j}`, left_value: left[key], right_value: right[key], status: "review_required" });
+          }
+        }
+        return { content: JSON.stringify({ interfaces, conflicts, compatible: conflicts.length === 0 }) };
+      }
       case "find_filament_matches": {
         const query = String(input.name ?? "")
           .trim()
@@ -1649,6 +2206,101 @@ export async function invokeAssistantTool(
           return { ...row, url, branch: inspected.ref };
         }));
         return propose("propose_import_build_inputs", planId, "import build inputs", "Create or reuse Sources and attach the confirmed evidence.", { ...input, inputs });
+      }
+      case "propose_update_source": {
+        const sourceId = asInt(input.source_id);
+        const sourceName = typeof input.source_name === "string" ? input.source_name.trim() : "";
+        const source = sourceId != null ? ctx.repo.getSource(sourceId) : sourceName ? sourceByName(ctx.repo, sourceName) : null;
+        if (!source) return { content: JSON.stringify({ error: "source_id or source_name required" }) };
+        if (!input.patch || typeof input.patch !== "object" || Array.isArray(input.patch)) {
+          return { content: JSON.stringify({ error: "patch required" }) };
+        }
+        const patch = input.patch as Record<string, unknown>;
+        const allowed = ["name", "url", "branch", "tag", "source_kind", "source_type", "role", "metadata", "manifest_community_slug"];
+        const clean: Record<string, unknown> = {};
+        for (const key of allowed) {
+          if (patch[key] !== undefined) clean[key] = patch[key];
+        }
+        if (Object.keys(clean).length === 0) return { content: JSON.stringify({ error: "patch has no supported fields" }) };
+        return propose("propose_update_source", 0, `update Source ${source.name}`, "Apply the reviewed Source metadata change.", {
+          source_id: source.id,
+          patch: clean,
+        });
+      }
+      case "propose_import_source_files": {
+        const sourceId = asInt(input.source_id);
+        if (sourceId == null || !ctx.repo.getSource(sourceId)) return { content: JSON.stringify({ error: "source_id must reference an existing Source" }) };
+        const archive = typeof input.archive_base64 === "string" ? input.archive_base64.trim() : "";
+        const files = Array.isArray(input.files) ? input.files : [];
+        if ((!archive && files.length === 0) || (archive && files.length > 0)) {
+          return { content: JSON.stringify({ error: "provide exactly one of archive_base64 or files" }) };
+        }
+        const encoded = archive || files.map((value) => {
+          if (!value || typeof value !== "object") throw new Error("Invalid file");
+          const row = value as Record<string, unknown>;
+          const path = String(row.path ?? "").trim();
+          const content = String(row.content_base64 ?? "").trim();
+          if (!path || !content) throw new Error("Each file requires path and content_base64");
+          if (path.startsWith("/") || path.split(/[\\/]/).includes("..")) throw new Error("File path escapes Source root");
+          return content;
+        }).join("");
+        if (!/^[A-Za-z0-9+/=\r\n]+$/.test(encoded)) return { content: JSON.stringify({ error: "content must be base64" }) };
+        const approxBytes = Math.floor((encoded.replace(/\s/g, "").length * 3) / 4);
+        if (approxBytes > 256 * 1024 * 1024) return { content: JSON.stringify({ error: "upload exceeds the 256 MiB MCP limit" }) };
+        return propose("propose_import_source_files", 0, "import Source files", "Publish the confirmed upload as a pinned Source revision.", {
+          source_id: sourceId,
+          ...(archive ? { archive_base64: archive } : { files }),
+        });
+      }
+      case "propose_edit_plan_draft_parts": {
+        const planId = resolvePlanId(input, ctx, false);
+        const draftId = asInt(input.draft_id);
+        if (planId == null || draftId == null) return { content: JSON.stringify({ error: "plan_id and draft_id required" }) };
+        if (!readBuildPlanningBrief(ctx.repo, planId)) return { content: JSON.stringify({ error: "Build planning brief not found" }) };
+        const draft = ctx.repo.getPlanDraft(planId, draftId);
+        if (!draft) return { content: JSON.stringify({ error: "Plan draft not found" }) };
+        if (!Array.isArray(input.parts) || input.parts.length === 0) return { content: JSON.stringify({ error: "parts required" }) };
+        const parts = input.parts.map((value) => {
+          if (!value || typeof value !== "object") throw new Error("Invalid draft part edit");
+          const row = value as Record<string, unknown>;
+          const partId = asInt(row.part_id ?? row.id);
+          if (partId == null || !draft.parts.some((part) => part.id === partId)) throw new Error(`Draft part not found: ${partId ?? "missing"}`);
+          const edit: Record<string, unknown> = { part_id: partId };
+          if (typeof row.included === "boolean") edit.included = row.included;
+          if (row.quantity_override === null || (typeof row.quantity_override === "number" && Number.isSafeInteger(row.quantity_override) && row.quantity_override >= 0)) {
+            edit.quantity_override = row.quantity_override;
+          }
+          if (edit.included === undefined && edit.quantity_override === undefined) throw new Error("Each edit must set included or quantity_override");
+          return edit;
+        });
+        return propose("propose_edit_plan_draft_parts", planId, "edit plan draft parts", "Apply the reviewed part inclusion and quantity changes.", {
+          plan_id: planId,
+          draft_id: draftId,
+          expected_snapshot_digest: typeof input.expected_snapshot_digest === "string" ? input.expected_snapshot_digest : draft.snapshotDigest,
+          parts,
+        });
+      }
+      case "propose_update_source_naming": {
+        const sourceId = asInt(input.source_id);
+        const sourceName = typeof input.source_name === "string" ? input.source_name.trim() : "";
+        const source = sourceId != null ? ctx.repo.getSource(sourceId) : sourceName ? sourceByName(ctx.repo, sourceName) : null;
+        if (!source) return { content: JSON.stringify({ error: "source_id or source_name required" }) };
+        if (input.use_defaults !== true && (!input.profile || typeof input.profile !== "object")) return { content: JSON.stringify({ error: "use_defaults or profile required" }) };
+        let profile: Record<string, unknown> | undefined;
+        try { if (input.use_defaults !== true) profile = namingProfileFromDict(mergeNamingProfiles(ctx.repo.getGlobalNaming(), input.profile as Record<string, unknown>)).toDict(); } catch (error) { return { content: JSON.stringify({ error: error instanceof Error ? error.message : String(error) }) }; }
+        return propose("propose_update_source_naming", 0, `update naming for ${source.name}`, "Apply the reviewed Source naming rules.", { source_id: source.id, use_defaults: input.use_defaults === true, ...(profile ? { profile } : {}) });
+      }
+      case "propose_add_build_checklist_items": {
+        const planId = resolvePlanId(input, ctx, false);
+        if (planId == null || !readBuildPlanningBrief(ctx.repo, planId)) return { content: JSON.stringify({ error: "Build planning brief not found" }) };
+        if (!Array.isArray(input.items) || input.items.length === 0) return { content: JSON.stringify({ error: "items required" }) };
+        return propose("propose_add_build_checklist_items", planId, "add Build checklist items", "Persist the reviewed pre-print checklist.", { plan_id: planId, items: input.items });
+      }
+      case "propose_add_custom_filament": {
+        const displayName = String(input.display_name ?? "").trim();
+        const hex = String(input.hex ?? "").trim();
+        if (!displayName || !/^#?[0-9a-f]{6}$/i.test(hex)) return { content: JSON.stringify({ error: "display_name and a six-digit hex color are required" }) };
+        return propose("propose_add_custom_filament", 0, `add custom filament ${displayName}`, "Add a named external filament without stock tracking.", { display_name: displayName, hex, product_line: typeof input.product_line === "string" ? input.product_line : undefined });
       }
       case "propose_update_build_brief":
       case "propose_set_build_source_roles":
@@ -1760,6 +2412,182 @@ export async function invokeAssistantTool(
             part_count: parts.length,
           }),
         };
+      }
+
+      case "get_plan_checkoff": {
+        const planId = resolvePlanId(input, ctx, false);
+        if (planId == null) return { content: JSON.stringify({ error: "plan_id required" }) };
+        const read = readAcceptedPlanForAssistant(ctx.repo, planId);
+        if (read.kind === "missing") return { content: JSON.stringify({ error: "Plan not found" }) };
+        if (read.kind === "failure") return { content: JSON.stringify({ error: read.detail }) };
+        if (read.accepted.kind === "empty") {
+          return { content: JSON.stringify({ plan_id: planId, state: "empty", parts: [] }) };
+        }
+        if (read.accepted.kind !== "ready") {
+          return {
+            content: JSON.stringify({
+              plan_id: planId,
+              state: "unavailable",
+              reason: read.accepted.kind,
+            }),
+          };
+        }
+        const snapshot = read.accepted.snapshot;
+        const basis = acceptedPlanBasis(snapshot);
+        const parts = snapshot.parts.filter((part) => part.included).map((part) => {
+          const units = part.units.map((unit) => ({
+            unit_index: unit.unitIndex,
+            token: unit.token,
+            object_name: unit.objectName,
+            required: unit.required,
+            completed: unit.completed,
+            assembled: unit.assembled,
+          }));
+          return {
+            part_id: part.projectionPartId,
+            filename: part.filename,
+            relative_path: part.relativePath,
+            role: part.effectiveRole,
+            quantity_effective: part.quantityEffective,
+            printed_count: units.filter((unit) => unit.completed).length,
+            assembled_count: units.filter((unit) => unit.assembled).length,
+            missing: units.some((unit) => unit.required && !unit.completed),
+            units,
+          };
+        });
+        const { totalUnits, remainingUnits } = acceptedProgressSummary(snapshot);
+        return {
+          content: JSON.stringify({
+            plan_id: planId,
+            plan_name: snapshot.profile.name,
+            state: "ready",
+            accepted_basis: basis,
+            printed_units: totalUnits - remainingUnits,
+            total_units: totalUnits,
+            remaining_units: remainingUnits,
+            parts,
+          }),
+        };
+      }
+
+      case "get_printer_checkoff": {
+        const planId = asInt(input.plan_id);
+        const state = typeof input.state === "string" ? input.state.trim() : "";
+        const integrationId = typeof input.integration_id === "string" ? input.integration_id.trim() : "";
+        const allowedStates = new Set(["watching", "awaiting_verify", "host_failed", "dismissed", "verified"]);
+        if (state && !allowedStates.has(state)) return { content: JSON.stringify({ error: "invalid checkoff state" }) };
+        const links = loadPrinterCheckoffLinks(ctx.repo).filter((link) =>
+          (planId == null || link.profile_id === planId) &&
+          (!state || link.state === state) &&
+          (!integrationId || link.integration_id === integrationId),
+        );
+        const unattributed = listUnattributedPrints(ctx.repo).filter((print) =>
+          planId == null || print.claimed_profile_id === planId,
+        );
+        return {
+          content: JSON.stringify({
+            links,
+            unattributed,
+            pending_verification: links.filter((link) => link.state === "awaiting_verify").length,
+          }),
+        };
+      }
+
+      case "propose_import_3mf_checkoff": {
+        const planId = resolvePlanId(input, ctx, false);
+        if (planId == null) return { content: JSON.stringify({ error: "plan_id required" }) };
+        const read = readAcceptedPlanForAssistant(ctx.repo, planId);
+        if (read.kind !== "read") return { content: JSON.stringify({ error: read.kind === "missing" ? "Plan not found" : read.detail }) };
+        const accepted = read.accepted;
+        if (accepted.kind !== "ready") return { content: JSON.stringify({ error: accepted.kind === "empty" ? "Accepted Plan has no required units" : "Accepted Plan state is unavailable" }) };
+        const sourceInput = readThreeMfCheckoffBytes(ctx.repo, input);
+        if ("error" in sourceInput) return { content: JSON.stringify({ error: sourceInput.error }) };
+        const parsed = inspectThreeMfCheckoff(sourceInput.bytes, sourceInput.filename);
+        if ("error" in parsed) return { content: JSON.stringify({ error: parsed.error }) };
+        const unitsByToken = new Map(accepted.snapshot.parts.flatMap((part) => part.units.map((unit) => [unit.token.toLowerCase(), unit] as const)));
+        const objects = parsed.files.map((file) => {
+          const tokenUnit = file.partNumber ? unitsByToken.get(file.partNumber.toLowerCase()) : undefined;
+          return {
+            relative_path: file.relativePath,
+            object_name: file.objectName,
+            part_number: file.partNumber ?? null,
+            mapped_object_name: tokenUnit?.objectName ?? file.objectName,
+            mapped_part_id: tokenUnit ? accepted.snapshot.parts.find((part) => part.units.some((unit) => unit.token === tokenUnit.token))?.projectionPartId ?? null : null,
+            mapped_unit_index: tokenUnit?.unitIndex ?? null,
+          };
+        });
+        const mappedNames = objects.map((object) => object.mapped_object_name);
+        return propose(
+          "propose_import_3mf_checkoff",
+          planId,
+          `import 3MF checkoff for ${sourceInput.filename}`,
+          "Create a verify-first checkoff link from the imported sliced 3MF.",
+          {
+            plan_id: planId,
+            filename: sourceInput.filename,
+            ...(typeof input.content_base64 === "string" ? { content_base64: input.content_base64.trim() } : {}),
+            ...(asInt(input.source_id) != null ? { source_id: asInt(input.source_id), path: String(input.path ?? "") } : {}),
+            integration_id: typeof input.integration_id === "string" && input.integration_id.trim() ? input.integration_id.trim() : "mcp-3mf",
+            printer_id: typeof input.printer_id === "string" && input.printer_id.trim() ? input.printer_id.trim() : "mcp-3mf",
+            host_name: typeof input.host_name === "string" && input.host_name.trim() ? input.host_name.trim() : "Imported 3MF",
+            object_names: mappedNames,
+            accepted_basis: acceptedPlanBasis(accepted.snapshot),
+          },
+          { objects, object_count: objects.length },
+        );
+      }
+
+      case "propose_set_plan_progress": {
+        const planId = resolvePlanId(input, ctx, false);
+        if (planId == null) return { content: JSON.stringify({ error: "plan_id required" }) };
+        const read = readAcceptedPlanForAssistant(ctx.repo, planId);
+        if (read.kind !== "read") return { content: JSON.stringify({ error: "Plan not found" }) };
+        const accepted = read.accepted;
+        if (accepted.kind !== "ready") return { content: JSON.stringify({ error: "Accepted Plan is not ready" }) };
+        if (!Array.isArray(input.rows) || input.rows.length === 0) return { content: JSON.stringify({ error: "rows required" }) };
+        const rows = input.rows.map((value) => {
+          if (!value || typeof value !== "object") throw new Error("Invalid progress row");
+          const row = value as Record<string, unknown>;
+          const partId = asInt(row.part_id);
+          const printedCount = asInt(row.printed_count);
+          const part = partId == null ? undefined : accepted.snapshot.parts.find((candidate) => candidate.projectionPartId === partId);
+          if (!part || printedCount == null || printedCount < 0 || printedCount > part.units.length) throw new Error("Invalid progress row");
+          return { part_id: partId, printed_count: printedCount };
+        });
+        return propose("propose_set_plan_progress", planId, "update Plan print progress", "Apply the reviewed printed-unit counts.", {
+          plan_id: planId,
+          rows,
+          accepted_basis: acceptedPlanBasis(accepted.snapshot),
+        });
+      }
+
+      case "propose_set_plan_assembly": {
+        const planId = resolvePlanId(input, ctx, false);
+        const partId = asInt(input.part_id);
+        const unitIndex = asInt(input.unit_index);
+        if (planId == null || partId == null || unitIndex == null || typeof input.assembled !== "boolean") return { content: JSON.stringify({ error: "plan_id, part_id, unit_index, and assembled are required" }) };
+        const read = readAcceptedPlanForAssistant(ctx.repo, planId);
+        if (read.kind !== "read" || read.accepted.kind !== "ready") return { content: JSON.stringify({ error: "Accepted Plan is not ready" }) };
+        const part = read.accepted.snapshot.parts.find((candidate) => candidate.projectionPartId === partId);
+        const unit = part?.units.find((candidate) => candidate.unitIndex === unitIndex);
+        if (!unit) return { content: JSON.stringify({ error: "part_id and unit_index are not in the accepted Plan" }) };
+        return propose("propose_set_plan_assembly", planId, "update Plan assembly checkoff", "Apply the reviewed assembly state.", {
+          plan_id: planId,
+          part_id: partId,
+          unit_index: unitIndex,
+          assembled: input.assembled,
+          accepted_basis: acceptedPlanBasis(read.accepted.snapshot),
+          token: unit.token,
+        });
+      }
+
+      case "propose_verify_printer_checkoff": {
+        const linkId = typeof input.link_id === "string" ? input.link_id.trim() : "";
+        if (!linkId || !Array.isArray(input.decisions) || input.decisions.length === 0) return { content: JSON.stringify({ error: "link_id and decisions are required" }) };
+        const link = getPrinterCheckoffLink(ctx.repo, linkId);
+        if (!link) return { content: JSON.stringify({ error: "Checkoff link not found" }) };
+        if (link.state !== "awaiting_verify") return { content: JSON.stringify({ error: "Checkoff link is not awaiting verification" }) };
+        return propose("propose_verify_printer_checkoff", link.profile_id, `verify printer checkoff ${link.filename}`, "Apply the reviewed confirmed or rejected unit decisions.", { link_id: linkId, decisions: input.decisions });
       }
 
       case "get_plan_review": {
@@ -3224,6 +4052,8 @@ export type ApplyActionDeps = {
   repo: AppRepository;
   jobs: InProcessJobRunner;
   tenantId?: string;
+  dataDir?: string;
+  sourcesDir?: string;
 };
 
 /** Merge confirmed Apply-card `suggested_excludes` into kit-manifest exclude (no auto-exclude). */
@@ -3274,6 +4104,10 @@ export async function applyAssistantAction(
     action.type === "propose_source_mapping" ||
     action.type === "start_sync" ||
     action.type === "propose_add_source" ||
+    action.type === "propose_update_source" ||
+    action.type === "propose_import_source_files" ||
+    action.type === "propose_update_source_naming" ||
+    action.type === "propose_add_custom_filament" ||
     action.type === "import_guide_notes";
   if (!skipPlanCheck && action.type === "archive_plan") {
     try {
@@ -3334,6 +4168,247 @@ export async function applyAssistantAction(
           ok: true,
           result: { plan_id: created.id, name: created.name },
         };
+        break;
+      }
+      case "propose_update_source": {
+        const sourceId = asInt(action.params.source_id);
+        if (sourceId == null) return { ok: false, detail: "source_id required" };
+        const source = deps.repo.getSource(sourceId);
+        if (!source) return { ok: false, detail: "Source not found" };
+        const rawPatch = action.params.patch;
+        if (!rawPatch || typeof rawPatch !== "object" || Array.isArray(rawPatch)) return { ok: false, detail: "patch required" };
+        const patch = rawPatch as Record<string, unknown>;
+        const allowed = new Set(["name", "url", "branch", "tag", "source_kind", "source_type", "role", "metadata", "manifest_community_slug"]);
+        const clean: Record<string, unknown> = {};
+        for (const [key, value] of Object.entries(patch)) if (allowed.has(key)) clean[key] = value;
+        if (Object.keys(clean).length === 0) return { ok: false, detail: "patch has no supported fields" };
+        if (clean.metadata != null && (typeof clean.metadata !== "object" || Array.isArray(clean.metadata))) return { ok: false, detail: "metadata must be an object" };
+        const updated = deps.repo.updateSource(sourceId, clean as Parameters<AppRepository["updateSource"]>[1]);
+        outcome = { ok: true, result: { source: updated, previous_source: source } };
+        break;
+      }
+      case "propose_update_source_naming": {
+        const sourceId = asInt(action.params.source_id);
+        if (sourceId == null) return { ok: false, detail: "source_id required" };
+        const command = action.params.use_defaults === true
+          ? { kind: "use_defaults" as const }
+          : { kind: "override" as const, profile: action.params.profile as Parameters<typeof namingProfileFromDict>[0] };
+        if (command.kind === "override") namingProfileFromDict(command.profile);
+        const saved = deps.repo.saveSourceNaming(sourceId, command);
+        if (saved.kind !== "saved") return { ok: false, detail: saved.kind === "source_not_found" ? "Source not found" : "Source naming changed; retry from the current settings" };
+        outcome = { ok: true, result: { source_id: sourceId, naming: saved.settings } };
+        break;
+      }
+      case "propose_add_build_checklist_items": {
+        const brief = readBuildPlanningBrief(deps.repo, planId);
+        if (!brief || !Array.isArray(action.params.items)) return { ok: false, detail: "Build planning brief and items required" };
+        const existing = brief.checklist_items ?? [];
+        const seen = new Set(existing.map((item) => item.id));
+        const items = action.params.items.map((value, index) => {
+          if (!value || typeof value !== "object") throw new Error("Invalid checklist item");
+          const row = value as Record<string, unknown>;
+          const title = String(row.title ?? "").trim();
+          if (!title) throw new Error("Checklist item title is required");
+          const category = String(row.category ?? "other");
+          if (!["test_fit", "wiring", "safety", "pre_print", "other"].includes(category)) throw new Error("Invalid checklist category");
+          const id = String(row.id ?? `check-${createHash("sha256").update(`${title}\0${index}`).digest("hex").slice(0, 16)}`);
+          return { id, title, detail: typeof row.detail === "string" ? row.detail : undefined, category: category as "test_fit" | "wiring" | "safety" | "pre_print" | "other", required: row.required !== false, completed: row.completed === true };
+        }).filter((item) => { if (seen.has(item.id)) return false; seen.add(item.id); return true; });
+        saveBuildPlanningBrief(deps.repo, { ...brief, checklist_items: [...existing, ...items] });
+        outcome = { ok: true, result: { added: items, total: existing.length + items.length } };
+        break;
+      }
+      case "propose_add_custom_filament": {
+        if (!deps.dataDir) return { ok: false, detail: "Custom filament storage is unavailable" };
+        try {
+          const displayName = String(action.params.display_name ?? "").trim();
+          const hex = String(action.params.hex ?? "").trim().replace(/^#/, "").toLowerCase();
+          const productLine = typeof action.params.product_line === "string" ? action.params.product_line.trim() : "Custom";
+          const existing = listCustomFilaments(deps.dataDir).find((entry) => entry.display_name.toLowerCase() === displayName.toLowerCase() && entry.hex.replace(/^#/, "").toLowerCase() === hex && entry.product_line.toLowerCase() === productLine.toLowerCase());
+          const filament = existing ?? addCustomFilament(deps.dataDir, { display_name: displayName, hex, product_line: productLine });
+          outcome = { ok: true, result: { filament, inventory_tracking: "external_named_color_only", idempotent_replay: Boolean(existing) } };
+        } catch (error) { return { ok: false, detail: error instanceof Error ? error.message : String(error) }; }
+        break;
+      }
+      case "propose_import_3mf_checkoff": {
+        const sourceInput = readThreeMfCheckoffBytes(deps.repo, action.params);
+        if ("error" in sourceInput) return { ok: false, detail: sourceInput.error };
+        const parsed = inspectThreeMfCheckoff(sourceInput.bytes, sourceInput.filename);
+        if ("error" in parsed) return { ok: false, detail: parsed.error };
+        const accepted = deps.repo.readAcceptedPlanOperationalSnapshot(planId);
+        if (accepted.kind !== "ready") {
+          return { ok: false, detail: accepted.kind === "empty" ? "Accepted Plan has no required units" : "Accepted Plan state is unavailable" };
+        }
+        const expected = parseAcceptedPlanBasis(action.params.accepted_basis);
+        if (!expected || JSON.stringify(expected) !== JSON.stringify(acceptedPlanBasis(accepted.snapshot))) {
+          return { ok: false, detail: "Accepted Plan changed; reload the checkoff and retry" };
+        }
+        const unitsByToken = new Map(accepted.snapshot.parts.flatMap((part) => part.units.map((unit) => [unit.token.toLowerCase(), unit] as const)));
+        const objectNames = parsed.files.map((file) => unitsByToken.get(file.partNumber?.toLowerCase() ?? "")?.objectName ?? file.objectName);
+        const created = deps.repo.materializeAcceptedPrinterLink({
+          kind: "create",
+          profileId: planId,
+          objectNames,
+          fallbackFilename: sourceInput.filename,
+          link: {
+            integrationId: String(action.params.integration_id ?? "mcp-3mf"),
+            printerId: String(action.params.printer_id ?? "mcp-3mf"),
+            hostName: String(action.params.host_name ?? "Imported 3MF"),
+            filename: sourceInput.filename,
+            started: true,
+          },
+        });
+        if (created.kind !== "created") {
+          return { ok: false, detail: created.kind === "no_match" ? "3MF objects did not match incomplete accepted Plan units" : `3MF checkoff import failed: ${created.kind}` };
+        }
+        const awaiting = updatePrinterCheckoffLink(
+          deps.repo,
+          created.link.id,
+          {
+            state: "awaiting_verify",
+            host_outcome: "success",
+            saw_active: true,
+            last_progress: 100,
+            completed_at: new Date().toISOString(),
+          },
+          { requireState: "watching" },
+        );
+        if (!awaiting) return { ok: false, detail: "3MF checkoff link changed concurrently" };
+        outcome = {
+          ok: true,
+          result: {
+            link: awaiting,
+            attribution: created.attribution,
+            object_count: parsed.files.length,
+            source_filename: sourceInput.filename,
+          },
+        };
+        break;
+      }
+      case "propose_set_plan_progress": {
+        const expected = parseAcceptedPlanBasis(action.params.accepted_basis);
+        const rows = Array.isArray(action.params.rows)
+          ? action.params.rows.flatMap((value) => {
+              if (!value || typeof value !== "object") return [];
+              const row = value as Record<string, unknown>;
+              const partId = asInt(row.part_id);
+              const printedCount = asInt(row.printed_count);
+              return partId != null && printedCount != null ? [{ partId, printedCount }] : [];
+            })
+          : [];
+        if (!expected || rows.length === 0) return { ok: false, detail: "Accepted basis and rows are required" };
+        const result = deps.repo.setAcceptedPrintedCounts({ expected, rows });
+        if (result.kind !== "updated") return { ok: false, detail: `Progress update failed: ${result.kind}` };
+        outcome = { ok: true, result: { updated_parts: result.updatedParts, rows } };
+        break;
+      }
+      case "propose_set_plan_assembly": {
+        const expected = parseAcceptedPlanBasis(action.params.accepted_basis);
+        const partId = asInt(action.params.part_id);
+        const unitIndex = asInt(action.params.unit_index);
+        const assembled = action.params.assembled;
+        const token = typeof action.params.token === "string" ? action.params.token : "";
+        if (!expected || partId == null || unitIndex == null || typeof assembled !== "boolean" || !token) return { ok: false, detail: "Accepted basis and assembly target are required" };
+        const result = deps.repo.setAcceptedUnitAssembly({ expected, token: parseRequiredUnitToken(token), assembled });
+        if (result.kind !== "updated") return { ok: false, detail: `Assembly update failed: ${result.kind}` };
+        outcome = { ok: true, result: result.body };
+        break;
+      }
+      case "propose_verify_printer_checkoff": {
+        const linkId = typeof action.params.link_id === "string" ? action.params.link_id.trim() : "";
+        const result = verifyPrinterCheckoff(deps.repo, linkId, action.params.decisions);
+        if ("error" in result) return { ok: false, status: result.status, detail: result.error };
+        outcome = { ok: true, result };
+        break;
+      }
+      case "propose_import_source_files": {
+        const sourceId = asInt(action.params.source_id);
+        if (sourceId == null) return { ok: false, detail: "source_id required" };
+        const source = deps.repo.getSource(sourceId);
+        if (!source) return { ok: false, detail: "Source not found" };
+        const archive = typeof action.params.archive_base64 === "string" ? action.params.archive_base64.trim() : "";
+        const rawFiles = Array.isArray(action.params.files) ? action.params.files : [];
+        if ((!archive && rawFiles.length === 0) || (archive && rawFiles.length > 0)) return { ok: false, detail: "provide exactly one of archive_base64 or files" };
+        const sourcesDir = deps.sourcesDir ?? (deps.dataDir ? join(deps.dataDir, "sources") : join(deps.repo.reposDir, "..", "sources"));
+        let workingTree: string;
+        let importedFiles = 0;
+        let stlCount = 0;
+        let suggestedRules: string[] = [];
+        try {
+          if (archive) {
+            const buffer = Buffer.from(archive, "base64");
+            if (buffer.length > 256 * 1024 * 1024) return { ok: false, detail: "upload exceeds the 256 MiB MCP limit" };
+            workingTree = writeUploadedZip(buffer, sourcesDir, sourceId);
+            const finalized = finalizeUploadedSource(workingTree);
+            importedFiles = 1;
+            stlCount = finalized.stlCount;
+            suggestedRules = finalized.suggestedImportRules;
+          } else {
+            const files = rawFiles.map((value, index) => {
+              if (!value || typeof value !== "object") throw new Error("Invalid file");
+              const row = value as Record<string, unknown>;
+              const relativePath = String(row.path ?? "").trim().replace(/\\/g, "/");
+              const encoded = String(row.content_base64 ?? "").trim();
+              if (!relativePath || relativePath.startsWith("/") || relativePath.split("/").includes("..")) throw new Error(`Unsafe file path at index ${index}`);
+              if (!encoded || !/^[A-Za-z0-9+/=\r\n]+$/.test(encoded)) throw new Error(`Invalid base64 content at index ${index}`);
+              return { relativePath, buffer: Buffer.from(encoded, "base64") };
+            });
+            const totalBytes = files.reduce((total, file) => total + file.buffer.length, 0);
+            if (totalBytes > 256 * 1024 * 1024) return { ok: false, detail: "upload exceeds the 256 MiB MCP limit" };
+            const written = writeUploadedFiles(files, sourcesDir, sourceId);
+            workingTree = written.extractDir;
+            importedFiles = written.fileCount;
+            stlCount = written.stlCount;
+            suggestedRules = written.suggestedImportRules;
+          }
+          const updated = await publishLocalSourceWorkingTree({ repo: deps.repo, reposDir: deps.repo.reposDir, sourceId, workingTree });
+          const existingRules = deps.repo.getProjectRow(sourceId)?.importedPaths;
+          if ((!existingRules || existingRules === "[]") && suggestedRules.length > 0) deps.repo.updateImportRules(sourceId, suggestedRules);
+          indexSourceDocsFromDisk(deps.repo, sourceId, updated.local_path ?? workingTree);
+          outcome = {
+            ok: true,
+            result: {
+              source: updated,
+              imported_files: importedFiles,
+              stl_count: stlCount,
+              artifacts: updated.local_path ? scanSourceArtifacts(updated.local_path) : [],
+              suggested_import_rules: suggestedRules,
+            },
+          };
+        } catch (error) {
+          return { ok: false, detail: error instanceof Error ? error.message : String(error) };
+        }
+        break;
+      }
+      case "propose_edit_plan_draft_parts": {
+        const draftId = asInt(action.params.draft_id);
+        if (draftId == null || !Array.isArray(action.params.parts)) return { ok: false, detail: "draft_id and parts required" };
+        const draft = deps.repo.getPlanDraft(planId, draftId);
+        if (!draft) return { ok: false, detail: "Plan draft not found" };
+        const included = new Map<number, boolean>();
+        const quantities = new Map<number, number | null>();
+        for (const value of action.params.parts) {
+          if (!value || typeof value !== "object") return { ok: false, detail: "Invalid draft part edit" };
+          const row = value as Record<string, unknown>;
+          const partId = asInt(row.part_id ?? row.id);
+          if (partId == null || !draft.parts.some((part) => part.id === partId)) return { ok: false, detail: `Draft part not found: ${partId ?? "missing"}` };
+          if (typeof row.included === "boolean") included.set(partId, row.included);
+          if (row.quantity_override === null || (typeof row.quantity_override === "number" && Number.isSafeInteger(row.quantity_override) && row.quantity_override >= 0)) quantities.set(partId, row.quantity_override as number | null);
+        }
+        const decisions: Array<
+          | { kind: "set_included"; partIds: number[]; value: boolean }
+          | { kind: "set_quantity_override"; partIds: number[]; value: number | null }
+        > = [
+          ...(included.size ? [{ kind: "set_included" as const, partIds: [...included.keys()], value: true }] : []),
+          ...(quantities.size ? [{ kind: "set_quantity_override" as const, partIds: [...quantities.keys()], value: null }] : []),
+        ];
+        // Decisions may contain different values, so retain one decision per value group.
+        decisions.length = 0;
+        for (const [value, ids] of new Map([...included.entries()].reduce((map, [id, next]) => { const key = String(next); const group = map.get(key) ?? []; group.push(id); map.set(key, group); return map; }, new Map<string, number[]>())).entries()) decisions.push({ kind: "set_included", partIds: ids, value: value === "true" });
+        for (const [value, ids] of new Map([...quantities.entries()].reduce((map, [id, next]) => { const key = next === null ? "null" : String(next); const group = map.get(key) ?? []; group.push(id); map.set(key, group); return map; }, new Map<string, number[]>())).entries()) decisions.push({ kind: "set_quantity_override", partIds: ids, value: value === "null" ? null : Number(value) });
+        const result = deps.repo.editPlanDraftPartsBatch({ profileId: planId, draftId, expectedSnapshotDigest: String(action.params.expected_snapshot_digest ?? draft.snapshotDigest), decisions });
+        if (result.kind !== "updated" && result.kind !== "unchanged") return { ok: false, detail: `Plan draft edit failed: ${result.kind}`, result: { draft: "draft" in result ? result.draft : undefined } };
+        outcome = { ok: true, result: { edit_result: result.kind, draft: result.draft } };
         break;
       }
       case "propose_update_build_brief": {

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
-import { render, screen } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import type { PlanReview } from "../../api/engine";
 import { REVIEW_PARTS_UI_STORAGE_KEY } from "../../lib/persistedReviewPartsUi";
@@ -51,6 +51,8 @@ const review: PlanReview = {
 };
 
 describe("ReviewPartsSheet accessibility", () => {
+  afterEach(() => cleanup());
+
   beforeEach(() => {
     localStorage.clear();
     queryMocks.usePlanReviewQuery.mockClear();
@@ -170,5 +172,76 @@ describe("ReviewPartsSheet accessibility", () => {
     expect(screen.getByRole("columnheader", { name: "Proposed qty" })).toBeTruthy();
     expect(screen.getByRole("spinbutton", { name: "Quantity for bracket.stl" }).getAttribute("value")).toBe("4");
     expect(screen.getByText(/Accepted: qty 2, included/)).toBeTruthy();
+  });
+
+  it("offers removal from the default grid layout", () => {
+    const acceptedReview: PlanReview = {
+      ...review,
+      totals: { ...review.totals, included_parts: 1, total_print_units: 1 },
+      part_groups: [{
+        folder: "frame",
+        source_layer: "base:Voron",
+        parts: [{
+          id: 42,
+          match_key: "frame/bracket.stl",
+          relative_path: "frame/bracket.stl",
+          filename: "bracket.stl",
+          source_layer: "base:Voron",
+          status: "ok",
+          role: "structural",
+          requirement: null,
+          option_group_id: null,
+          included: true,
+          filament_color_id: null,
+          quantity_auto: 1,
+          quantity_override: null,
+          quantity_effective: 1,
+          printed_count: 0,
+          print_units: [false],
+          missing: true,
+          filament_display: "",
+        }],
+      }],
+    };
+    queryMocks.usePlanWorkspace.mockReturnValue({
+      draftWorkspace: {
+        profile_id: 7,
+        draft: {
+          draft_id: 9,
+          state: "open",
+          lifecycle_version: 0,
+          snapshot_digest: "a".repeat(64),
+          base: { revision_id: 3, plan_version: 1 },
+        },
+        parts: [{
+          draft_part_id: 17,
+          base_revision_part_id: 42,
+          part_key: "frame/bracket.stl",
+          filename: "bracket.stl",
+          relative_path: "frame/bracket.stl",
+          source_layer: "base:Voron",
+          role: "structural",
+          quantity_inferred: 1,
+          quantity_override: null,
+          quantity_effective: 1,
+          included: true,
+        }],
+        diff: { base_is_current: true, added: [], removed: [], changed: [] },
+        reconciliation: { kind: "ready", reused_units: 0, new_units: 0, surplus_units: 0 },
+      },
+      setQuantity: vi.fn(),
+      setIncluded: vi.fn(),
+      setSpoolmanSpool: vi.fn(),
+      toggleUnit: vi.fn(),
+      busyPartId: null,
+    });
+
+    render(
+      <MemoryRouter>
+        <ReviewPartsSheet review={acceptedReview} planName="Voron" />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByRole("button", { name: "Remove" })).toBeTruthy();
   });
 });

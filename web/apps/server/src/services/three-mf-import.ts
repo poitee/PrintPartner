@@ -21,6 +21,8 @@ export type ThreeMfImportedFile = Readonly<{
   relativePath: string;
   objectId: string;
   objectName: string;
+  /** Optional slicer/object token carried in the 3MF `partnumber` attribute. */
+  partNumber?: string;
   triangleCount: number;
   byteSize: number;
 }>;
@@ -193,6 +195,7 @@ export function extractThreeMfMeshes(
     const objectAttributes = attributes(object[1]!);
     const objectId = objectAttributes.get("id") ?? String(objectIndex + 1);
     const objectName = objectAttributes.get("name") ?? objectAttributes.get("partnumber") ?? `object-${objectId}`;
+    const partNumber = objectAttributes.get("partnumber") || undefined;
     const vertices = [...object[2]!.matchAll(/<vertex\b([^>]*)\/?\s*>/gi)].map((match) => {
       const attrs = attributes(match[1]!);
       return [
@@ -228,7 +231,7 @@ export function extractThreeMfMeshes(
       bounds.maxOutputBytes - totalOutputBytes,
     );
     totalOutputBytes += byteSize;
-    files.push({ relativePath, objectId, objectName, triangleCount: faces.length, byteSize });
+    files.push({ relativePath, objectId, objectName, ...(partNumber ? { partNumber } : {}), triangleCount: faces.length, byteSize });
   }
   if (!files.length) throw new Error("3MF contains no non-empty printable mesh objects");
   return { objectCount: files.length, files };

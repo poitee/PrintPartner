@@ -9,6 +9,7 @@ import {
   applyPlanDraft,
   editPlanDraftParts,
   EngineHttpError,
+  recomputePlanDraft,
   rebasePlanDraft,
   type PlanDraftWorkspace,
   type PlanReview,
@@ -47,6 +48,11 @@ const replacementWorkspace: PlanDraftWorkspace = {
   draft: { ...savedWorkspace.draft, snapshot_digest: "b".repeat(64) },
 };
 
+const draftQueryState = vi.hoisted(() => ({
+  hasOpenDraft: true,
+  hasWorkspace: true,
+}));
+
 vi.mock("../api/engine", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api/engine")>();
   return {
@@ -84,12 +90,14 @@ vi.mock("../queries/profiles", () => ({
 
 vi.mock("../queries/planDraft", () => ({
   usePlanDraftListQuery: () => ({
-    data: [savedWorkspace.draft],
+    data: draftQueryState.hasOpenDraft ? [savedWorkspace.draft] : [],
     isLoading: false,
     error: null,
   }),
   usePlanDraftWorkspaceQuery: vi.fn((_profileId: number | null, draftId: number | null) => ({
-    data: draftId === savedWorkspace.draft.draft_id ? savedWorkspace : undefined,
+    data: draftQueryState.hasWorkspace && draftId === savedWorkspace.draft.draft_id
+      ? savedWorkspace
+      : undefined,
     isLoading: false,
     error: null,
   })),
@@ -111,6 +119,8 @@ afterEach(() => {
 });
 
 beforeEach(() => {
+  draftQueryState.hasOpenDraft = true;
+  draftQueryState.hasWorkspace = true;
   vi.mocked(applyPlanDraft).mockResolvedValue({
     profile_id: 7,
     draft_id: 9,
@@ -137,6 +147,52 @@ beforeEach(() => {
 });
 
 describe("PlanWorkspaceProvider saved draft lifecycle", () => {
+  it("starts a saved draft before editing inclusion from the Plan section", async () => {
+    const freshWorkspace: PlanDraftWorkspace = {
+      ...savedWorkspace,
+      draft: {
+        ...savedWorkspace.draft,
+        draft_id: 11,
+        snapshot_digest: "c".repeat(64),
+      },
+      parts: [{
+        draft_part_id: 17,
+        base_revision_part_id: 42,
+        part_key: "frame/bracket.stl",
+        filename: "bracket.stl",
+        relative_path: "frame/bracket.stl",
+        source_layer: "base:Voron",
+        role: "structural",
+        quantity_inferred: 1,
+        quantity_override: null,
+        quantity_effective: 1,
+        included: true,
+      }],
+    };
+    draftQueryState.hasOpenDraft = false;
+    draftQueryState.hasWorkspace = false;
+    vi.mocked(recomputePlanDraft).mockResolvedValue(freshWorkspace);
+    vi.mocked(editPlanDraftParts).mockResolvedValue({
+      ...freshWorkspace,
+      parts: [{ ...freshWorkspace.parts[0]!, included: false }],
+    });
+
+    const client = new QueryClient();
+    const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(client) });
+
+    await act(async () => {
+      await hook.result.current.setIncluded(42, "frame/bracket.stl", false);
+    });
+
+    expect(recomputePlanDraft).toHaveBeenCalledWith(7);
+    expect(editPlanDraftParts).toHaveBeenCalledWith({
+      profileId: 7,
+      draftId: 11,
+      expectedSnapshotDigest: "c".repeat(64),
+      decisions: [{ kind: "set_included", draft_part_ids: [17], value: false }],
+    });
+  });
+
   it("refetches the persisted open draft after each mount", async () => {
     const firstClient = new QueryClient();
     const first = renderHook(usePlanWorkspace, { wrapper: wrapper(firstClient) });

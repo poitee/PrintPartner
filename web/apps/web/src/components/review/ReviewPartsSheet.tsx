@@ -48,7 +48,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "../ui/dialog";
-import { cn } from "../../lib/utils";
+import { cn } from "@/lib/utils";
 
 type Props = {
   review: PlanReview;
@@ -107,7 +107,7 @@ function QuantityStepper({
         </button>
       </div>
       {belowPrinted && (
-        <span className="text-xs text-amber-600">
+        <span className="text-xs text-warning">
           {part.printed_count} unit{part.printed_count === 1 ? "" : "s"} already printed
         </span>
       )}
@@ -582,6 +582,8 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
           review={review}
           busy={busyPartId === part.id || Boolean(disabled)}
           onQtyChange={onQtyChange}
+          onRemove={onRemove}
+          onRestore={onRestore}
           onPreview={setPreviewPart}
         />
       ))}
@@ -629,7 +631,7 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
             >
               Warnings only
               {warningCount > 0 && (
-                <span className="ml-1 font-mono text-[11px] text-warning">{warningCount}</span>
+                <span className="ml-1 font-mono text-2xs text-warning">{warningCount}</span>
               )}
             </Button>
           </div>
@@ -840,7 +842,7 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
                       aria-hidden
                     />
                     <h3 className="text-sm font-semibold">{group.title}</h3>
-                    <span className="font-mono text-[11.5px] text-muted-foreground">
+                    <span className="font-mono text-2xs text-muted-foreground">
                       {group.meta}
                     </span>
                   </div>
