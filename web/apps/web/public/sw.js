@@ -9,7 +9,7 @@
  * Cache names embed a version string so old caches are purged on activate.
  */
 
-const SW_VERSION = "v3";
+const SW_VERSION = "v4";
 const SHELL_CACHE = `pp-shell-${SW_VERSION}`;
 const DATA_CACHE  = `pp-data-${SW_VERSION}`;
 const SYNC_TAG    = "pp-checkoff-sync";
@@ -59,14 +59,17 @@ self.addEventListener("fetch", (event) => {
   // proceed directly to the network unless they use the checkoff sync queue.
   if (request.method !== "GET") return;
 
-  // Parts list & checkoff GET data → network-first, cache fallback
-  if (isDataEndpoint(url.pathname)) {
-    event.respondWith(networkFirst(request, DATA_CACHE));
+  // Only the app shell (exact precached routes + hashed /assets/ files) is
+  // safe to serve cache-first — those are immutable per build. Every other
+  // GET (API/data endpoints of any kind) defaults to network-first so a
+  // response cached before login/data existed can never get stuck serving
+  // stale results indefinitely.
+  if (isShellAsset(url.pathname)) {
+    event.respondWith(cacheFirst(request, SHELL_CACHE));
     return;
   }
 
-  // Everything else (assets, shell HTML) → cache-first
-  event.respondWith(cacheFirst(request, SHELL_CACHE));
+  event.respondWith(networkFirst(request, DATA_CACHE));
 });
 
 // ── Background Sync ──────────────────────────────────────────────────────────
@@ -94,12 +97,8 @@ function isCheckoffPath(pathname) {
   );
 }
 
-function isDataEndpoint(pathname) {
-  return (
-    pathname.startsWith("/printer-checkoff") ||
-    pathname.startsWith("/parts") ||
-    pathname.startsWith("/plans/")
-  );
+function isShellAsset(pathname) {
+  return pathname.startsWith("/assets/") || SHELL_URLS.includes(pathname);
 }
 
 async function cacheFirst(request, cacheName) {

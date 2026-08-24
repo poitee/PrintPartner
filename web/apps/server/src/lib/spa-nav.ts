@@ -4,6 +4,7 @@ import type { FastifyRequest } from "fastify";
 const SPA_PATHS = new Set([
   "/",
   "/login",
+  "/setup",
   "/forgot-password",
   "/reset-password",
   "/sources",

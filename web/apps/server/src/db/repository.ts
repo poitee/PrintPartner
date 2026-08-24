@@ -5534,7 +5534,8 @@ export class AppRepository {
       if (
         draftHeader.lifecycleVersion !== command.expectedLifecycleVersion ||
         draftHeader.snapshotDigest !== expectedSnapshotDigest ||
-        draftHeader.digestFormat !== PLAN_DRAFT_SELECTION_DIGEST_FORMAT
+        (draftHeader.digestFormat !== PLAN_DRAFT_DIGEST_FORMAT &&
+          draftHeader.digestFormat !== PLAN_DRAFT_SELECTION_DIGEST_FORMAT)
       ) {
         return { kind: "draft_changed" };
       }
