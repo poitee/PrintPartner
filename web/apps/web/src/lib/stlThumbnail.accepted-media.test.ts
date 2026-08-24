@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as THREE from "three";
 
 const runtime = vi.hoisted(() => ({
   fetchWithRetry: vi.fn(),
@@ -21,7 +22,11 @@ vi.mock("../api/engine.js", async (importOriginal) => ({
   uploadPartThumbnail: runtime.uploadPartThumbnail,
 }));
 
-import { generatePartThumbnail, loadAcceptedMeshBuffer } from "./stlThumbnail";
+import {
+  decimateGeometryForThumbnail,
+  generatePartThumbnail,
+  loadAcceptedMeshBuffer,
+} from "./stlThumbnail";
 
 const basis = "a".repeat(64);
 
@@ -45,6 +50,16 @@ describe("accepted STL thumbnail mesh loading", () => {
     runtime.getCachedMeshBuffer.mockReset().mockResolvedValue(null);
     runtime.cacheMeshBuffer.mockReset().mockResolvedValue(undefined);
     runtime.uploadPartThumbnail.mockReset().mockResolvedValue(undefined);
+  });
+
+  it("keeps decimated STL positions grouped into complete triangles", () => {
+    const geometry = new THREE.BufferGeometry();
+    const positions = new Float32Array(80_001 * 3);
+    geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+
+    const decimated = decimateGeometryForThumbnail(geometry);
+
+    expect(decimated.getAttribute("position")?.count % 3).toBe(0);
   });
 
   it("refetches unconditionally when a 304 basis has no local bytes", async () => {

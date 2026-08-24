@@ -120,17 +120,28 @@ function rememberBlob(basis: string, hex: string, blob: Blob): void {
   if (oldestKey != null) blobCache.delete(oldestKey);
 }
 
-function decimateGeometry(geometry: THREE.BufferGeometry): THREE.BufferGeometry {
+export function decimateGeometryForThumbnail(geometry: THREE.BufferGeometry): THREE.BufferGeometry {
   const pos = geometry.getAttribute("position");
   if (!pos || pos.count <= DECIMATE_THRESHOLD) return geometry;
 
-  const step = Math.ceil(pos.count / DECIMATE_THRESHOLD);
-  const kept = Math.floor(pos.count / step);
-  const newPos = new Float32Array(kept * 3);
-  for (let i = 0; i < kept; i++) {
-    newPos[i * 3 + 0] = (pos as THREE.BufferAttribute).getX(i * step);
-    newPos[i * 3 + 1] = (pos as THREE.BufferAttribute).getY(i * step);
-    newPos[i * 3 + 2] = (pos as THREE.BufferAttribute).getZ(i * step);
+  // STLLoader emits a non-indexed triangle list. Sample whole triangles so
+  // decimation never leaves Three.js with an incomplete face.
+  const triangleCount = Math.floor(pos.count / 3);
+  const maxTriangles = Math.floor(DECIMATE_THRESHOLD / 3);
+  const step = Math.max(1, Math.ceil(triangleCount / maxTriangles));
+  const keptTriangles = Math.floor(triangleCount / step);
+  const newPos = new Float32Array(keptTriangles * 9);
+  const source = pos as THREE.BufferAttribute;
+  for (let triangle = 0; triangle < keptTriangles; triangle++) {
+    const sourceVertex = triangle * step * 3;
+    const outputVertex = triangle * 9;
+    for (let vertex = 0; vertex < 3; vertex++) {
+      const sourceIndex = sourceVertex + vertex;
+      const outputIndex = outputVertex + vertex * 3;
+      newPos[outputIndex + 0] = source.getX(sourceIndex);
+      newPos[outputIndex + 1] = source.getY(sourceIndex);
+      newPos[outputIndex + 2] = source.getZ(sourceIndex);
+    }
   }
   const slim = new THREE.BufferGeometry();
   slim.setAttribute("position", new THREE.BufferAttribute(newPos, 3));
@@ -141,7 +152,7 @@ function renderBufferToBlob(buffer: ArrayBuffer, hex: string): Promise<Blob | nu
   const renderer = getRenderer();
   const loader = (sharedLoader ??= new STLLoader());
   let geometry = loader.parse(buffer);
-  geometry = decimateGeometry(geometry);
+  geometry = decimateGeometryForThumbnail(geometry);
   geometry.center();
   geometry.computeVertexNormals();
   geometry.computeBoundingBox();
@@ -189,7 +200,9 @@ class RenderQueue {
     priority: number;
   }> = [];
   private active = 0;
-  private readonly maxConcurrent = 4;
+  // Rendering and toBlob both use the shared canvas. Concurrent jobs can
+  // overwrite one another before the previous capture completes.
+  private readonly maxConcurrent = 1;
 
   enqueue<T>(task: () => Promise<T>, priority = 0): Promise<T> {
     return new Promise((resolve, reject) => {
@@ -221,6 +234,7 @@ class RenderQueue {
 }
 
 const renderQueue = new RenderQueue();
+const inFlightPartThumbnails = new Map<number, Promise<Blob | null>>();
 
 async function readResponseBounded(
   res: Response,
@@ -335,13 +349,18 @@ export function generatePartThumbnail(
   partId: number,
   options?: { priority?: number },
 ): Promise<string | null> {
-  return renderQueue.enqueue(async () => {
+  const existing = inFlightPartThumbnails.get(partId);
+  if (existing) {
+    return existing.then((blob) => (blob ? URL.createObjectURL(blob) : null));
+  }
+
+  const render = renderQueue.enqueue(async () => {
     const mesh = await loadAcceptedMeshBuffer(partId);
     if (!mesh) return null;
     const resolvedHex = mesh.renderHex ?? DEFAULT_COLOR;
     const cachedBlob = getCachedBlob(mesh.basis, resolvedHex);
     if (cachedBlob) {
-      return URL.createObjectURL(cachedBlob);
+      return cachedBlob;
     }
 
     let blob: Blob | null;
@@ -354,6 +373,14 @@ export function generatePartThumbnail(
 
     rememberBlob(mesh.basis, resolvedHex, blob);
     void uploadPartThumbnail(partId, blob, mesh.basis).catch(() => {});
-    return URL.createObjectURL(blob);
+    return blob;
   }, options?.priority ?? 0);
+  inFlightPartThumbnails.set(partId, render);
+  return render
+    .then((blob) => (blob ? URL.createObjectURL(blob) : null))
+    .finally(() => {
+      if (inFlightPartThumbnails.get(partId) === render) {
+        inFlightPartThumbnails.delete(partId);
+      }
+    });
 }
