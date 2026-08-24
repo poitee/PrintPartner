@@ -21,11 +21,45 @@ vi.mock("sonner", () => ({
 }));
 
 afterEach(() => {
+  vi.useRealTimers();
   cleanup();
   vi.clearAllMocks();
 });
 
 describe("PrinterLiveStrip", () => {
+  it("does not overlap reconcile polls for one printer", async () => {
+    vi.useFakeTimers();
+    api.fetchPrinters.mockResolvedValue([
+      {
+        id: "core-one",
+        name: "Core One",
+        integration_id: "prusa-1",
+      },
+    ]);
+    api.fetchIntegrations.mockResolvedValue([
+      {
+        id: "prusa-1",
+        name: "Core One",
+        type: "prusalink",
+        config: { enabled: true },
+      },
+    ]);
+    api.reconcilePrinterCheckoff.mockReturnValue(new Promise(() => {}));
+
+    render(
+      <MemoryRouter>
+        <PrinterLiveStrip engineReady />
+      </MemoryRouter>,
+    );
+
+    await vi.waitFor(() => {
+      expect(api.reconcilePrinterCheckoff).toHaveBeenCalledTimes(1);
+    });
+    await vi.advanceTimersByTimeAsync(180_000);
+
+    expect(api.reconcilePrinterCheckoff).toHaveBeenCalledTimes(1);
+  });
+
   it("notifies Progress when reconcile discovers a currently printing link", async () => {
     api.fetchPrinters.mockResolvedValue([
       {

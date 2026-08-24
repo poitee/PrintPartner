@@ -108,6 +108,7 @@ export default function PrinterLiveStrip({
   const [statusById, setStatusById] = useState<Record<string, PrinterHostStatus>>({});
   const [loadError, setLoadError] = useState<string | null>(null);
   const requestId = useRef(0);
+  const refreshPending = useRef(false);
   const hostsRef = useRef(hosts);
   hostsRef.current = hosts;
   const toastedLinks = useRef(new Set<string>());
@@ -158,77 +159,83 @@ export default function PrinterLiveStrip({
   }, [engineReady]);
 
   const refreshStatuses = useCallback(async (linked: LinkedHost[]) => {
-    const id = ++requestId.current;
-    if (!linked.length) {
-      if (id === requestId.current) setStatusById({});
-      return;
-    }
-    // Prune status map to only currently linked printers, keeping existing values so
-    // nothing flashes offline while we wait for slow reconcile responses.
-    // Do NOT clear to {} first — that's what causes the offline flash.
-    if (id === requestId.current) {
-      const linkedIds = new Set(linked.map((h) => h.integrationId));
-      setStatusById((prev) => {
-        const next: Record<string, PrinterHostStatus> = {};
-        for (const [k, v] of Object.entries(prev)) {
-          if (linkedIds.has(k)) next[k] = v;
-        }
-        return next;
-      });
-    }
-    let receivedReconcileResult = false;
-    await Promise.allSettled(
-      linked.map(async (h) => {
-        try {
-          let status: PrinterHostStatus;
-          if (!h.reconcileCheckoff) {
-            status = await fetchIntegrationStatus(h.integrationId);
-          } else {
-            const reconcileResult = await reconcilePrinterCheckoff({
-              integration_id: h.integrationId,
-            });
-            const { updates, created_links: createdLinks, status: s } = reconcileResult;
-            status = s;
-            for (const row of updates ?? []) {
-              if (toastedLinks.current.has(row.link_id)) continue;
-              toastedLinks.current.add(row.link_id);
-              if (row.event === "awaiting_verify") {
-                toast.success("Print finished — see highlighted parts");
-              } else {
-                toast.error(
-                  `${row.host_name} ${row.host_outcome === "cancelled" ? "cancelled" : "failed"} ${row.filename} — review send`,
-                );
+    if (refreshPending.current) return;
+    refreshPending.current = true;
+    try {
+      const id = ++requestId.current;
+      if (!linked.length) {
+        if (id === requestId.current) setStatusById({});
+        return;
+      }
+      // Prune status map to only currently linked printers, keeping existing values so
+      // nothing flashes offline while we wait for slow reconcile responses.
+      // Do NOT clear to {} first — that's what causes the offline flash.
+      if (id === requestId.current) {
+        const linkedIds = new Set(linked.map((h) => h.integrationId));
+        setStatusById((prev) => {
+          const next: Record<string, PrinterHostStatus> = {};
+          for (const [k, v] of Object.entries(prev)) {
+            if (linkedIds.has(k)) next[k] = v;
+          }
+          return next;
+        });
+      }
+      let receivedReconcileResult = false;
+      await Promise.allSettled(
+        linked.map(async (h) => {
+          try {
+            let status: PrinterHostStatus;
+            if (!h.reconcileCheckoff) {
+              status = await fetchIntegrationStatus(h.integrationId);
+            } else {
+              const reconcileResult = await reconcilePrinterCheckoff({
+                integration_id: h.integrationId,
+              });
+              const { updates, created_links: createdLinks, status: s } = reconcileResult;
+              status = s;
+              for (const row of updates ?? []) {
+                if (toastedLinks.current.has(row.link_id)) continue;
+                toastedLinks.current.add(row.link_id);
+                if (row.event === "awaiting_verify") {
+                  toast.success("Print finished — see highlighted parts");
+                } else {
+                  toast.error(
+                    `${row.host_name} ${row.host_outcome === "cancelled" ? "cancelled" : "failed"} ${row.filename} — review send`,
+                  );
+                }
+                onCheckoffUpdateRef.current?.(row.profile_id);
               }
-              onCheckoffUpdateRef.current?.(row.profile_id);
+              for (const link of createdLinks ?? []) {
+                onCheckoffUpdateRef.current?.(link.profile_id);
+              }
+              // A per-host result is only a hint to refresh the authoritative global list.
+              const unattributed = (reconcileResult as Record<string, unknown>).unattributed;
+              if (Array.isArray(unattributed)) {
+                receivedReconcileResult = true;
+              }
             }
-            for (const link of createdLinks ?? []) {
-              onCheckoffUpdateRef.current?.(link.profile_id);
+            if (id === requestId.current) {
+              setStatusById((prev) => ({ ...prev, [h.integrationId]: status }));
             }
-            // A per-host result is only a hint to refresh the authoritative global list.
-            const unattributed = (reconcileResult as Record<string, unknown>).unattributed;
-            if (Array.isArray(unattributed)) {
-              receivedReconcileResult = true;
+          } catch (e) {
+            const raw = e instanceof Error ? e.message : String(e);
+            if (id === requestId.current) {
+              setStatusById((prev) => ({
+                ...prev,
+                [h.integrationId]: {
+                  state: "offline" as const,
+                  message: quietPrinterStatusMessage(raw) ?? "Unavailable",
+                },
+              }));
             }
           }
-          if (id === requestId.current) {
-            setStatusById((prev) => ({ ...prev, [h.integrationId]: status }));
-          }
-        } catch (e) {
-          const raw = e instanceof Error ? e.message : String(e);
-          if (id === requestId.current) {
-            setStatusById((prev) => ({
-              ...prev,
-              [h.integrationId]: {
-                state: "offline" as const,
-                message: quietPrinterStatusMessage(raw) ?? "Unavailable",
-              },
-            }));
-          }
-        }
-      }),
-    );
-    if (id === requestId.current && receivedReconcileResult) {
-      onUnattributedUpdateRef.current?.();
+        }),
+      );
+      if (id === requestId.current && receivedReconcileResult) {
+        onUnattributedUpdateRef.current?.();
+      }
+    } finally {
+      refreshPending.current = false;
     }
   }, []);
 

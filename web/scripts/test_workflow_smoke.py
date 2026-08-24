@@ -35,12 +35,14 @@ class SmokeHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(encoded)
 
+    def _json_body(self) -> object:
+        length = int(self.headers.get("Content-Length", "0"))
+        return json.loads(self.rfile.read(length))
+
     def do_GET(self) -> None:
         path = urlparse(self.path).path
         if path == "/health":
             self._send({"ok": True})
-        elif path == "/jobs/recompute-job":
-            self._send({"status": "done", "result": {"part_count": self.parts}})
         elif path == "/jobs/export-job":
             self._send({"status": "done", "result": {"file_total": self.exports}})
         elif path == "/plans/1/parts":
@@ -64,19 +66,58 @@ class SmokeHandler(BaseHTTPRequestHandler):
         elif path == "/plans":
             self._send({"id": 1})
         elif path == "/plans/1/drafts/recompute":
+            digest = "a" * 64
+            if (
+                self.headers.get("Idempotency-Key") != "smoke-recompute-1"
+                or self._json_body() != {"apply_manifest": True}
+            ):
+                self._send({"detail": "invalid draft request"}, 400)
+                return
             self._send(
                 {
                     "profile_id": 1,
                     "draft": {
                         "draft_id": 7,
-                        "snapshot_digest": "a" * 64,
+                        "state": "open",
                         "lifecycle_version": 0,
+                        "snapshot_digest": digest,
                         "base": {"revision_id": None, "plan_version": 0},
+                    },
+                    "parts": [],
+                    "diff": {
+                        "base_is_current": True,
+                        "added": [],
+                        "removed": [],
+                        "changed": [],
+                    },
+                    "reconciliation": {
+                        "kind": "ready",
+                        "reused_units": 0,
+                        "new_units": self.parts,
+                        "surplus_units": 0,
                     },
                 }
             )
         elif path == "/plans/1/drafts/7/apply":
-            self._send({"profile_id": 1, "draft_id": 7, "plan_version": 1})
+            if (
+                self.headers.get("Idempotency-Key") != "smoke-apply-1-7"
+                or self._json_body()
+                != {
+                    "expected_snapshot_digest": "a" * 64,
+                    "expected_lifecycle_version": 0,
+                    "expected_base": {"revision_id": None, "plan_version": 0},
+                }
+            ):
+                self._send({"detail": "invalid apply request"}, 400)
+                return
+            self._send(
+                {
+                    "profile_id": 1,
+                    "draft_id": 7,
+                    "revision_id": 3,
+                    "plan_version": 1,
+                }
+            )
         elif path == "/jobs/export-stl-pack":
             self._send({"job_id": "export-job"})
         else:

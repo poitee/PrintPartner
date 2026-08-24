@@ -1,5 +1,6 @@
 import { acceptPlanForTest, editAcceptedPartsForTest } from "../test/accept-plan.js";
 import Fastify from "fastify";
+import rateLimit from "@fastify/rate-limit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -65,6 +66,7 @@ async function setup() {
 
   const integrations = createIntegrationPort({ repo, getAdapter: getIntegrationAdapter });
   const app = Fastify();
+  await app.register(rateLimit, { global: false });
   await registerPrinterCheckoffRoutes(app, { repo, integrations });
   await app.register(
     async (v1) => registerPrinterCheckoffRoutes(v1, { repo, integrations }),
@@ -99,6 +101,23 @@ function acceptedPrintUnits(repo: AppRepository, profileId: number, partId: numb
 }
 
 describe("printer progress route", () => {
+  it("allows the default polling load from two browsers and three printers", async () => {
+    const { app } = await setup();
+    vi.stubGlobal("fetch", vi.fn(async () => response({ printer: { state: "IDLE" } })));
+
+    const statuses: number[] = [];
+    for (let requestNumber = 0; requestNumber < 72; requestNumber += 1) {
+      const reconcile = await app.inject({
+        method: "POST",
+        url: "/printer-checkoff/reconcile",
+        payload: { integration_id: "prusa-1" },
+      });
+      statuses.push(reconcile.statusCode);
+    }
+
+    expect(statuses).toEqual(Array.from({ length: 72 }, () => 200));
+  });
+
   it("maps a currently printing Required-unit Object name without mutable Part reads", async () => {
     const { app, repo, plan, acceptedPart } = await setup();
     const mutableParts = vi.spyOn(repo, "getProfilePartRows");

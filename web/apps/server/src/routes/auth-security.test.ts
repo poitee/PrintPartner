@@ -76,6 +76,38 @@ describe("production authentication routes", () => {
     }
   });
 
+  it("reports whether the health request has an authenticated session", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pp-auth-production-health-"));
+    const { app, ports } = await makeProductionApp(dir);
+
+    try {
+      const anonymous = await app.inject({ method: "GET", url: "/health" });
+      expect(anonymous.json()).toMatchObject({ multi_user: true, authenticated: false });
+
+      const registration = await app.inject({
+        method: "POST",
+        url: "/auth/register",
+        payload: {
+          email: "health@example.com",
+          password: "correct-horse-battery",
+          display_name: "Health Session",
+        },
+      });
+      const cookie = String(registration.headers["set-cookie"]).split(";", 1)[0];
+      const authenticated = await app.inject({
+        method: "GET",
+        url: "/health",
+        headers: { cookie },
+      });
+
+      expect(authenticated.json()).toMatchObject({ multi_user: true, authenticated: true });
+    } finally {
+      await app.close();
+      ports.db.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("marks production OAuth state cookies Secure", async () => {
     const dir = mkdtempSync(join(tmpdir(), "pp-auth-production-oauth-cookie-"));
     const config = {

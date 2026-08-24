@@ -1,3 +1,4 @@
+import { useQueryClient } from "@tanstack/react-query";
 import {
   createContext,
   useCallback,
@@ -32,11 +33,17 @@ type AuthContextValue = {
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
+  const queryClient = useQueryClient();
   const [user, setUser] = useState<AuthUser | null>(null);
   const [multiUser, setMultiUser] = useState(false);
   const [authRequired, setAuthRequired] = useState(false);
   const [registrationOpen, setRegistrationOpen] = useState(false);
   const [loading, setLoading] = useState(true);
+
+  const replaceUser = useCallback((nextUser: AuthUser | null) => {
+    queryClient.clear();
+    setUser(nextUser);
+  }, [queryClient]);
 
   const refresh = useCallback(async () => {
     try {
@@ -48,15 +55,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setAuthRequired(requiresAuthentication);
       setRegistrationOpen(Boolean(health.registration_open ?? health.multi_user));
       if (!requiresAuthentication) {
-        setUser(null);
+        replaceUser(null);
+        return;
+      }
+      if (health.authenticated === false) {
+        replaceUser(null);
         return;
       }
       const me = await fetchAuthMe();
-      setUser(me.user);
+      replaceUser(me.user);
     } catch {
-      setUser(null);
+      replaceUser(null);
     }
-  }, []);
+  }, [replaceUser]);
 
   useEffect(() => {
     void (async () => {
@@ -68,30 +79,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     setEngineUnauthorizedHandler(() => {
-      if (authRequired) setUser(null);
+      if (authRequired) replaceUser(null);
     });
     return () => setEngineUnauthorizedHandler(null);
-  }, [authRequired]);
+  }, [authRequired, replaceUser]);
 
   const loginEmail = useCallback(async (email: string, password: string) => {
     const res = await loginWithEmail(email, password);
-    setUser(res.user);
-  }, []);
+    replaceUser(res.user);
+  }, [replaceUser]);
 
   const registerEmail = useCallback(
     async (email: string, password: string, displayName: string) => {
       const res = await registerWithEmail(email, password, displayName);
-      setUser(res.user);
+      replaceUser(res.user);
       setRegistrationOpen(false);
     },
-    [],
+    [replaceUser],
   );
 
   const logout = useCallback(async () => {
     await apiLogout();
-    setUser(null);
+    replaceUser(null);
     await refresh();
-  }, [refresh]);
+  }, [refresh, replaceUser]);
 
   const value = useMemo(
     () => ({

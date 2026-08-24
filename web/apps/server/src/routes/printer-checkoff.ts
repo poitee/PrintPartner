@@ -219,7 +219,7 @@ export async function registerPrinterCheckoffRoutes(
 
   app.post(
     "/printer-checkoff/reconcile",
-    { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } },
+    { config: { rateLimit: { max: 300, timeWindow: "1 minute" } } },
     async (request, reply) => {
       const body = request.body as { integration_id?: string };
       const integrationId = String(body.integration_id ?? "").trim();

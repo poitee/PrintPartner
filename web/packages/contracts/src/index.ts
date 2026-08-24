@@ -404,6 +404,8 @@ export type HealthResponse = {
   version: string;
   deploy_mode: DeployMode;
   multi_user?: boolean;
+  /** Whether this request carried a valid user session. */
+  authenticated?: boolean;
   authentication_required?: boolean;
   registration_open?: boolean;
   data_dir: string;

@@ -42,12 +42,6 @@ import SpoolRemainingBadge from "../SpoolRemainingBadge";
 import PartsGridCard from "./PartsGridCard";
 import ReviewSheetMobileCard from "./ReviewSheetMobileCard";
 import { Button } from "../ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "../ui/dialog";
 import { cn } from "@/lib/utils";
 
 type Props = {
@@ -330,7 +324,6 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
     spoolmanConfigured && Boolean(integrationId),
   );
   const roleFilaments = roleFilamentsQuery.data ?? [];
-  const [removeTarget, setRemoveTarget] = useState<ReviewPart | null>(null);
   const [previewPart, setPreviewPart] = useState<ReviewPart | null>(null);
   const [printPrep, setPrintPrep] = useState(false);
   const sheetArticleRef = useRef<HTMLElement>(null);
@@ -443,13 +436,8 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
     void setQuantity(part.id, part.match_key, next);
   };
 
-  const onRemove = (part: ReviewPart) => setRemoveTarget(part);
-
-  const confirmRemove = () => {
-    if (!removeTarget) return;
-    const target = removeTarget;
-    setRemoveTarget(null);
-    void setIncluded(target.id, target.match_key, false);
+  const onRemove = (part: ReviewPart) => {
+    void setIncluded(part.id, part.match_key, false);
   };
 
   const onRestore = (part: ReviewPart) => {
@@ -868,27 +856,6 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
           )}
         </article>
       )}
-
-      <Dialog open={removeTarget != null} onOpenChange={(open) => !open && setRemoveTarget(null)}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Remove from build?</DialogTitle>
-          </DialogHeader>
-          <p className="text-sm text-muted-foreground">
-            {removeTarget
-              ? `Exclude “${removeTarget.filename}” from this plan? Use the Included filter to restore it later.`
-              : ""}
-          </p>
-          <div className="flex justify-end gap-2">
-            <Button variant="secondary" onClick={() => setRemoveTarget(null)}>
-              Cancel
-            </Button>
-            <Button variant="ghost" disabled={busyPartId != null} onClick={() => void confirmRemove()}>
-              {busyPartId != null ? "Saving…" : "Remove"}
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
 
       <PartPreviewDialog part={previewPart} onClose={() => setPreviewPart(null)} />
     </section>

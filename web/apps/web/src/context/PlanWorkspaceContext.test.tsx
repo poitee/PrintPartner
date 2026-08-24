@@ -38,7 +38,19 @@ const savedWorkspace: PlanDraftWorkspace = {
     snapshot_digest: "a".repeat(64),
     base: { revision_id: 3, plan_version: 1 },
   },
-  parts: [],
+  parts: [{
+    draft_part_id: 17,
+    base_revision_part_id: 42,
+    part_key: "frame/bracket.stl",
+    filename: "bracket.stl",
+    relative_path: "frame/bracket.stl",
+    source_layer: "base:Voron",
+    role: "structural",
+    quantity_inferred: 1,
+    quantity_override: null,
+    quantity_effective: 1,
+    included: true,
+  }],
   diff: { base_is_current: true, added: [], removed: [], changed: [] },
   reconciliation: { kind: "ready", reused_units: 0, new_units: 0, surplus_units: 0 },
 };
@@ -52,6 +64,12 @@ const draftQueryState = vi.hoisted(() => ({
   hasOpenDraft: true,
   hasWorkspace: true,
 }));
+
+const editedWorkspace: PlanDraftWorkspace = {
+  ...replacementWorkspace,
+  draft: { ...replacementWorkspace.draft, snapshot_digest: "c".repeat(64) },
+  parts: replacementWorkspace.parts.map((part) => ({ ...part, included: false })),
+};
 
 vi.mock("../api/engine", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api/engine")>();
@@ -121,6 +139,7 @@ afterEach(() => {
 beforeEach(() => {
   draftQueryState.hasOpenDraft = true;
   draftQueryState.hasWorkspace = true;
+  vi.mocked(editPlanDraftParts).mockReset();
   vi.mocked(applyPlanDraft).mockResolvedValue({
     profile_id: 7,
     draft_id: 9,
@@ -191,6 +210,33 @@ describe("PlanWorkspaceProvider saved draft lifecycle", () => {
       expectedSnapshotDigest: "c".repeat(64),
       decisions: [{ kind: "set_included", draft_part_ids: [17], value: false }],
     });
+  });
+
+  it("retries one inclusion edit after replacing a stale draft", async () => {
+    const client = new QueryClient();
+    const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(client) });
+    await waitFor(() => expect(hook.result.current.draftWorkspace?.draft.draft_id).toBe(9));
+    vi.mocked(editPlanDraftParts)
+      .mockRejectedValueOnce(new EngineHttpError(
+        "Draft changed",
+        409,
+        { code: "draft_changed", workspace: replacementWorkspace },
+      ))
+      .mockResolvedValueOnce(editedWorkspace);
+
+    await act(async () => {
+      await hook.result.current.setIncluded(42, "frame/bracket.stl", false);
+    });
+
+    expect(editPlanDraftParts).toHaveBeenCalledTimes(2);
+    expect(editPlanDraftParts).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      expectedSnapshotDigest: "a".repeat(64),
+    }));
+    expect(editPlanDraftParts).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      expectedSnapshotDigest: "b".repeat(64),
+    }));
+    expect(client.getQueryData(queryKeys.planDraft(7, 9))).toEqual(editedWorkspace);
+    expect(hook.result.current.draftError).toBeNull();
   });
 
   it("refetches the persisted open draft after each mount", async () => {

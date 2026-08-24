@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { cleanup, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import type { PlanReview } from "../../api/engine";
@@ -174,7 +175,8 @@ describe("ReviewPartsSheet accessibility", () => {
     expect(screen.getByText(/Accepted: qty 2, included/)).toBeTruthy();
   });
 
-  it("offers removal from the default grid layout", () => {
+  it("removes a proposed part with one click", async () => {
+    const setIncluded = vi.fn();
     const acceptedReview: PlanReview = {
       ...review,
       totals: { ...review.totals, included_parts: 1, total_print_units: 1 },
@@ -230,7 +232,7 @@ describe("ReviewPartsSheet accessibility", () => {
         reconciliation: { kind: "ready", reused_units: 0, new_units: 0, surplus_units: 0 },
       },
       setQuantity: vi.fn(),
-      setIncluded: vi.fn(),
+      setIncluded,
       setSpoolmanSpool: vi.fn(),
       toggleUnit: vi.fn(),
       busyPartId: null,
@@ -242,6 +244,8 @@ describe("ReviewPartsSheet accessibility", () => {
       </MemoryRouter>,
     );
 
-    expect(screen.getByRole("button", { name: "Remove" })).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "Remove" }));
+
+    expect(setIncluded).toHaveBeenCalledWith(42, "frame/bracket.stl", false);
   });
 });

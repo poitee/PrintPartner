@@ -13,7 +13,7 @@ export async function registerHealthRoutes(
   ports: AppPorts,
   authStore: AuthStore | null = null,
 ): Promise<void> {
-  app.get("/health", async () => {
+  app.get("/health", async (request) => {
     let dbOk = false;
     let postgresOk: boolean | null = null;
 
@@ -43,6 +43,7 @@ export async function registerHealthRoutes(
       release: config.releaseIdentity,
       deploy_mode: config.deployMode,
       multi_user: config.multiUser,
+      authenticated: request.sessionUser !== null,
       authentication_required: config.authRequired,
       registration_open:
         config.multiUser || (config.singleUserAuth && (authStore?.countUsers() ?? 0) === 0),

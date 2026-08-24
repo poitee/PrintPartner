@@ -177,17 +177,22 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
     }
   }, [selectedProfileId, storeWorkspace]);
 
+  const persistDraftEdit = useCallback(async (
+    workspace: PlanDraftWorkspace,
+    decisions: PlanDraftPartDecisionContract[],
+  ) => storeWorkspace(await editPlanDraftParts({
+    profileId: workspace.profile_id,
+    draftId: workspace.draft.draft_id,
+    expectedSnapshotDigest: workspace.draft.snapshot_digest,
+    decisions,
+  })), [storeWorkspace]);
+
   const editWorkspaceParts = useCallback(async (
     workspace: PlanDraftWorkspace,
     decisions: PlanDraftPartDecisionContract[],
   ) => {
     try {
-      return storeWorkspace(await editPlanDraftParts({
-        profileId: workspace.profile_id,
-        draftId: workspace.draft.draft_id,
-        expectedSnapshotDigest: workspace.draft.snapshot_digest,
-        decisions,
-      }));
+      return await persistDraftEdit(workspace, decisions);
     } catch (error) {
       const replaced = replaceFromConflict(error);
       const message = replaced
@@ -196,7 +201,7 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
       setDraftMutationError(message);
       throw new Error(message, { cause: error });
     }
-  }, [replaceFromConflict, storeWorkspace]);
+  }, [persistDraftEdit, replaceFromConflict]);
 
   const editActivePlanDraft = useCallback(async (decisions: PlanDraftPartDecisionContract[]) => {
     const workspace = currentDraftWorkspace();
@@ -213,25 +218,36 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
     setBusyPartId(partId);
     setDraftMutationError(null);
     try {
-      // The Plan section is also an editing surface. If the user has not opened
-      // a draft yet, create one on demand before applying the proposed change.
-      // Accepted Plan rows remain unchanged until the explicit Apply action.
-      const workspace = currentDraftWorkspace() ?? await startPlanDraft();
-      const matches = workspace.parts.filter((part) => part.part_key === partKey);
-      if (matches.length !== 1) throw new Error("The saved draft no longer has one matching Part");
-      await editWorkspaceParts(workspace, [
-        decision === "included"
-          ? { kind: "set_included", draft_part_ids: [matches[0]!.draft_part_id], value: Boolean(value) }
-          : { kind: "set_quantity_override", draft_part_ids: [matches[0]!.draft_part_id], value: Number(value) },
-      ]);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setDraftMutationError(message);
-      throw error;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        // The Plan section is also an editing surface. Create a draft on the
+        // first attempt when the user has not opened one yet.
+        const workspace = currentDraftWorkspace() ?? (attempt === 0 ? await startPlanDraft() : null);
+        if (!workspace) throw new Error("Rebuild the Plan to create a saved draft first");
+        const matches = workspace.parts.filter((part) => part.part_key === partKey);
+        if (matches.length !== 1) {
+          throw new Error("The saved draft no longer has one matching Part");
+        }
+        try {
+          await persistDraftEdit(workspace, [
+            decision === "included"
+              ? { kind: "set_included", draft_part_ids: [matches[0]!.draft_part_id], value: Boolean(value) }
+              : { kind: "set_quantity_override", draft_part_ids: [matches[0]!.draft_part_id], value: Number(value) },
+          ]);
+          return;
+        } catch (error) {
+          const replaced = replaceFromConflict(error);
+          if (replaced && attempt === 0) continue;
+          const message = replaced
+            ? "The saved draft changed. Review it and retry this edit."
+            : error instanceof Error ? error.message : String(error);
+          setDraftMutationError(message);
+          throw new Error(message, { cause: error });
+        }
+      }
     } finally {
       setBusyPartId(null);
     }
-  }, [currentDraftWorkspace, editWorkspaceParts, startPlanDraft]);
+  }, [currentDraftWorkspace, persistDraftEdit, replaceFromConflict, startPlanDraft]);
 
   const setQuantity = useCallback(
     async (partId: number, partKey: string, qty: number) => {

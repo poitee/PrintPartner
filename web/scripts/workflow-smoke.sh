@@ -97,23 +97,24 @@ echo "HTTP:$(echo "$LAYER_RESP" | http_code)"
 
 echo "== 5. POST /plans/$PLAN_ID/drafts/recompute =="
 DRAFT_RESP=$(request -s -w "\nHTTP:%{http_code}" -X POST "$BASE/plans/$PLAN_ID/drafts/recompute" \
+  -H "Idempotency-Key: smoke-recompute-$PLAN_ID" \
   -H 'Content-Type: application/json' \
-  -H "Idempotency-Key: workflow-smoke-recompute-$PLAN_ID" \
-  -d '{"apply_manifest": true}')
+  -d '{"apply_manifest":true}')
 echo "$DRAFT_RESP" | body_only
 echo "HTTP:$(echo "$DRAFT_RESP" | http_code)"
-DRAFT_BODY=$(echo "$DRAFT_RESP" | body_only)
-DRAFT_ID=$(echo "$DRAFT_BODY" | python3 -c "import sys,json; print(json.load(sys.stdin)['draft']['draft_id'])")
-APPLY_BODY=$(echo "$DRAFT_BODY" | python3 -c \
-  'import sys,json; workspace=json.load(sys.stdin); draft=workspace["draft"]; print(json.dumps({"expected_snapshot_digest":draft["snapshot_digest"],"expected_lifecycle_version":draft["lifecycle_version"],"expected_base":draft["base"]},separators=(",",":")))')
+DRAFT_ID=$(echo "$DRAFT_RESP" | body_only | python3 -c "import sys,json; print(json.load(sys.stdin)['draft']['draft_id'])")
+DRAFT_DIGEST=$(echo "$DRAFT_RESP" | body_only | python3 -c "import sys,json; print(json.load(sys.stdin)['draft']['snapshot_digest'])")
+DRAFT_LIFECYCLE=$(echo "$DRAFT_RESP" | body_only | python3 -c "import sys,json; print(json.load(sys.stdin)['draft']['lifecycle_version'])")
+DRAFT_BASE=$(echo "$DRAFT_RESP" | body_only | python3 -c "import sys,json; print(json.dumps(json.load(sys.stdin)['draft']['base'],separators=(',',':')))")
 
 echo "== 5b. POST /plans/$PLAN_ID/drafts/$DRAFT_ID/apply =="
 APPLY_RESP=$(request -s -w "\nHTTP:%{http_code}" -X POST "$BASE/plans/$PLAN_ID/drafts/$DRAFT_ID/apply" \
+  -H "Idempotency-Key: smoke-apply-$PLAN_ID-$DRAFT_ID" \
   -H 'Content-Type: application/json' \
-  -H "Idempotency-Key: workflow-smoke-apply-$PLAN_ID" \
-  -d "$APPLY_BODY")
+  -d "{\"expected_snapshot_digest\":\"$DRAFT_DIGEST\",\"expected_lifecycle_version\":$DRAFT_LIFECYCLE,\"expected_base\":$DRAFT_BASE}")
 echo "$APPLY_RESP" | body_only
 echo "HTTP:$(echo "$APPLY_RESP" | http_code)"
+echo "$APPLY_RESP" | body_only | python3 -c "import sys,json; print('accepted revision', json.load(sys.stdin)['revision_id'])"
 
 echo "== 6. GET /plans/$PLAN_ID/parts =="
 PARTS_RESP=$(request -s -w "\nHTTP:%{http_code}" "$BASE/plans/$PLAN_ID/parts?limit=3")
