@@ -9,7 +9,7 @@
  * Cache names embed a version string so old caches are purged on activate.
  */
 
-const SW_VERSION = "v2";
+const SW_VERSION = "v3";
 const SHELL_CACHE = `pp-shell-${SW_VERSION}`;
 const DATA_CACHE  = `pp-data-${SW_VERSION}`;
 const SYNC_TAG    = "pp-checkoff-sync";
