@@ -3005,6 +3005,28 @@ describe("saved Plan drafts", () => {
     database.close();
   });
 
+  it("reports missing reconciliation for an unchanged v1 draft", () => {
+    const { database, profile, repo, draft } = editableDraftFixture();
+
+    expect(
+      repo.applyPlanChanges({
+        profileId: profile.id,
+        draftId: draft.id,
+        expectedSnapshotDigest: draft.snapshotDigest,
+        expectedLifecycleVersion: draft.lifecycleVersion,
+        expectedBase: {
+          kind: "revision",
+          revisionId: draft.baseRevisionId ?? 0,
+          planVersion: draft.basePlanVersion,
+        },
+        actorId: "test:user",
+        idempotencyKey: "apply-v1-draft-without-reconciliation",
+      }),
+    ).toEqual({ kind: "reconciliation_required", reason: "missing" });
+
+    database.close();
+  });
+
   it("replays a historical receipt after a later accepted Plan", () => {
     const first = readyTrackedApplyFixture();
     expect(first.repo.applyPlanChanges(first.command)).toMatchObject({ kind: "applied" });
