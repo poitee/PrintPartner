@@ -55,6 +55,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   fall back to source layer plus relative path, and every failure reports through
   the Plan page alert.
 
+- **MCP clients dropped while idle** - HTTP MCP sessions now refresh before the
+  idle sweep, a session holding an open SSE stream is never evicted, and an
+  unknown session id answers 404 so clients re-initialize silently instead of
+  surfacing a protocol error.
+
 ### Removed
 
 - **Legacy Plate and auto-slice APIs** - removed mutable `print-plan`,

@@ -7,6 +7,14 @@
  * cannot list/confirm/dismiss another's.
  * Sessions are bounded (max count + idle/absolute TTL); evict closes transport.
  * New sessions reserve capacity synchronously before async init.
+ *
+ * Session liveness rules (these keep long-lived clients connected):
+ * - A request for a session refreshes it BEFORE the prune sweep, so a client
+ *   returning from an idle stretch is never evicted by its own request.
+ * - A session holding an open standalone SSE stream is never idle-evicted; the
+ *   stream is the client, and closing it under them reads as a dropped server.
+ * - An unknown/expired session id answers 404, which the MCP spec defines as
+ *   "start a new session" — clients re-initialize silently instead of erroring.
  */
 
 import { randomUUID } from "node:crypto";
@@ -38,14 +46,18 @@ type McpSession = {
   pending: Map<string, AssistantProposedAction>;
   createdAt: number;
   lastAccessAt: number;
+  /** Open standalone SSE streams (GET). Non-zero means a client is attached. */
+  openStreams: number;
 };
 
 /** Max concurrent HTTP MCP sessions per process. */
 export const MCP_HTTP_SESSION_MAX = 64;
-/** Evict after this much idle time (ms). */
+/** Evict after this much idle time (ms). Streams held open do not count as idle. */
 export const MCP_HTTP_SESSION_IDLE_MS = 30 * 60 * 1000;
 /** Evict after this absolute age (ms), even if active. */
 export const MCP_HTTP_SESSION_ABSOLUTE_MS = 8 * 60 * 60 * 1000;
+/** Background sweep cadence, so abandoned sessions are reclaimed without traffic. */
+export const MCP_HTTP_SWEEP_MS = 60 * 1000;
 
 export { createMcpSessionCapacity } from "./http-session-capacity.js";
 
@@ -87,6 +99,15 @@ export function assertMcpHttpAllowed(
   return false;
 }
 
+/** Read `mcp-session-id` whether Fastify hands it back as a string or a repeated header. */
+export function readMcpSessionId(
+  header: string | string[] | undefined,
+): string {
+  if (typeof header === "string") return header.trim();
+  if (Array.isArray(header) && header[0]) return String(header[0]).trim();
+  return "";
+}
+
 function closeSession(session: McpSession): void {
   try {
     void session.transport.close();
@@ -100,8 +121,16 @@ function closeSession(session: McpSession): void {
   }
 }
 
+/** An attached SSE stream is a live client, even with no recent request. */
+function hasOpenStream(session: McpSession): boolean {
+  return (session.openStreams ?? 0) > 0;
+}
+
 /**
- * Drop expired sessions and enforce max count (oldest lastAccess first).
+ * Drop expired sessions and enforce max count.
+ * Idle expiry skips sessions holding an open SSE stream; the absolute cap still
+ * applies to everything. Over-capacity evicts stream-less sessions first, then
+ * oldest lastAccess.
  * Exported for unit tests.
  */
 export function pruneMcpSessions(
@@ -119,7 +148,7 @@ export function pruneMcpSessions(
   let evicted = 0;
 
   for (const [id, session] of sessions) {
-    const idle = now - session.lastAccessAt >= idleMs;
+    const idle = !hasOpenStream(session) && now - session.lastAccessAt >= idleMs;
     const absolute = now - session.createdAt >= absoluteMs;
     if (idle || absolute) {
       sessions.delete(id);
@@ -129,9 +158,12 @@ export function pruneMcpSessions(
   }
 
   if (sessions.size > max) {
-    const ranked = [...sessions.entries()].sort(
-      (a, b) => a[1].lastAccessAt - b[1].lastAccessAt,
-    );
+    const ranked = [...sessions.entries()].sort((a, b) => {
+      const aAttached = hasOpenStream(a[1]) ? 1 : 0;
+      const bAttached = hasOpenStream(b[1]) ? 1 : 0;
+      if (aAttached !== bAttached) return aAttached - bAttached;
+      return a[1].lastAccessAt - b[1].lastAccessAt;
+    });
     while (sessions.size > max && ranked.length) {
       const [id, session] = ranked.shift()!;
       if (!sessions.has(id)) continue;
@@ -142,6 +174,33 @@ export function pruneMcpSessions(
   }
 
   return evicted;
+}
+
+/**
+ * Refresh the caller's session, then sweep, then hand back whatever survived.
+ * Touch-before-prune is what stops a client's own request from evicting the
+ * very session it just asked for after an idle stretch.
+ * Exported for unit tests.
+ */
+export function resolveMcpSession(
+  sessions: Map<string, McpSession>,
+  sessionId: string,
+  now = Date.now(),
+  opts?: { max?: number; idleMs?: number; absoluteMs?: number },
+): McpSession | undefined {
+  const existing = sessionId ? sessions.get(sessionId) : undefined;
+  if (existing) existing.lastAccessAt = now;
+  pruneMcpSessions(sessions, now, opts);
+  return sessionId ? sessions.get(sessionId) : undefined;
+}
+
+/** Unknown or expired session id. 404 is the spec's "re-initialize" signal. */
+function replyUnknownSession(reply: FastifyReply) {
+  return reply.status(404).send({
+    jsonrpc: "2.0",
+    error: { code: -32001, message: "Session not found" },
+    id: null,
+  });
 }
 
 export async function registerMcpHttpRoutes(
@@ -160,33 +219,41 @@ export async function registerMcpHttpRoutes(
     session.lastAccessAt = Date.now();
   };
 
+  const resolveSession = (sessionId: string): McpSession | undefined =>
+    resolveMcpSession(sessions, sessionId);
+
+  const sweep = setInterval(() => {
+    pruneMcpSessions(sessions);
+  }, MCP_HTTP_SWEEP_MS);
+  sweep.unref?.();
+
+  app.addHook("onClose", async () => {
+    clearInterval(sweep);
+    for (const [id, session] of sessions) {
+      sessions.delete(id);
+      closeSession(session);
+    }
+  });
+
   const mcpAuth = async (request: FastifyRequest, reply: FastifyReply) => {
     if (!assertMcpHttpAllowed(deps.config, request, reply, deps.validateApiKey)) return reply;
   };
 
   app.post("/mcp", { preHandler: mcpAuth }, async (request, reply) => {
-    pruneMcpSessions(sessions);
-
-    const sessionHeader = request.headers["mcp-session-id"];
-    const sessionId =
-      typeof sessionHeader === "string" && sessionHeader.trim()
-        ? sessionHeader.trim()
-        : Array.isArray(sessionHeader) && sessionHeader[0]
-          ? String(sessionHeader[0]).trim()
-          : "";
+    const sessionId = readMcpSessionId(request.headers["mcp-session-id"]);
 
     try {
-      const existing = sessionId ? sessions.get(sessionId) : undefined;
+      const existing = resolveSession(sessionId);
 
       if (!existing) {
-        if (sessionId || !isInitializeRequest(request.body)) {
+        // Expired/unknown id: 404 tells a spec-compliant client to re-initialize.
+        if (sessionId) return replyUnknownSession(reply);
+        if (!isInitializeRequest(request.body)) {
           return reply.status(400).send({
             jsonrpc: "2.0",
             error: {
               code: -32000,
-              message: sessionId
-                ? "Bad Request: Unknown MCP session"
-                : "Bad Request: No valid session ID provided",
+              message: "Bad Request: No valid session ID provided",
             },
             id: null,
           });
@@ -226,8 +293,20 @@ export async function registerMcpHttpRoutes(
               pending,
               createdAt: now,
               lastAccessAt: Date.now(),
+              openStreams: 0,
             });
             releaseReservation();
+          },
+          onsessionclosed: (id) => {
+            const sess = sessions.get(id);
+            sessions.delete(id);
+            if (sess) {
+              try {
+                void sess.server.close();
+              } catch {
+                /* ignore */
+              }
+            }
           },
         });
         transport.onclose = () => {
@@ -258,70 +337,80 @@ export async function registerMcpHttpRoutes(
         return;
       }
 
-      touch(existing);
       reply.hijack();
       await existing.transport.handleRequest(request.raw, reply.raw, request.body);
+      touch(existing);
     } catch (err) {
-      console.error("[mcp-http]", err);
-      if (!reply.raw.headersSent) {
-        try {
-          reply.raw.writeHead(500, { "Content-Type": "application/json" });
-          reply.raw.end(
-            JSON.stringify({
-              jsonrpc: "2.0",
-              error: { code: -32603, message: "Internal server error" },
-              id: null,
-            }),
-          );
-        } catch {
-          /* response already committed */
-        }
-      }
+      failHijacked(reply, err);
     }
   });
 
   app.get("/mcp", { preHandler: mcpAuth }, async (request, reply) => {
-    pruneMcpSessions(sessions);
-    const sessionHeader = request.headers["mcp-session-id"];
-    const sessionId =
-      typeof sessionHeader === "string" && sessionHeader.trim()
-        ? sessionHeader.trim()
-        : "";
-    const session = sessionId ? sessions.get(sessionId) : undefined;
-    if (!session) {
-      return reply.status(405).send({
-        jsonrpc: "2.0",
-        error: { code: -32000, message: "Method not allowed." },
-        id: null,
-      });
+    const sessionId = readMcpSessionId(request.headers["mcp-session-id"]);
+    const session = resolveSession(sessionId);
+    if (!session) return replyUnknownSession(reply);
+
+    // Count the stream while it is attached so the idle sweep leaves it alone.
+    session.openStreams = (session.openStreams ?? 0) + 1;
+    let released = false;
+    const releaseStream = () => {
+      if (released) return;
+      released = true;
+      session.openStreams = Math.max(0, (session.openStreams ?? 1) - 1);
+      touch(session);
+    };
+    reply.raw.on("close", releaseStream);
+
+    try {
+      reply.hijack();
+      await session.transport.handleRequest(request.raw, reply.raw);
+    } catch (err) {
+      releaseStream();
+      failHijacked(reply, err);
     }
-    touch(session);
-    reply.hijack();
-    await session.transport.handleRequest(request.raw, reply.raw);
   });
 
   app.delete("/mcp", { preHandler: mcpAuth }, async (request, reply) => {
-    pruneMcpSessions(sessions);
-    const sessionHeader = request.headers["mcp-session-id"];
-    const sessionId =
-      typeof sessionHeader === "string" && sessionHeader.trim()
-        ? sessionHeader.trim()
-        : "";
-    const session = sessionId ? sessions.get(sessionId) : undefined;
-    if (!session) {
-      return reply.status(404).send({
-        jsonrpc: "2.0",
-        error: { code: -32001, message: "Session not found" },
-        id: null,
-      });
-    }
-    reply.hijack();
-    await session.transport.handleRequest(request.raw, reply.raw);
-    sessions.delete(sessionId);
+    const sessionId = readMcpSessionId(request.headers["mcp-session-id"]);
+    const session = resolveSession(sessionId);
+    if (!session) return replyUnknownSession(reply);
+
     try {
-      void session.server.close();
-    } catch {
-      /* ignore */
+      reply.hijack();
+      await session.transport.handleRequest(request.raw, reply.raw);
+    } catch (err) {
+      failHijacked(reply, err);
+    } finally {
+      sessions.delete(sessionId);
+      try {
+        void session.server.close();
+      } catch {
+        /* ignore */
+      }
     }
   });
+}
+
+/**
+ * After reply.hijack() Fastify no longer owns the socket, so an unhandled throw
+ * would leave the client waiting forever. Always terminate the raw response.
+ */
+function failHijacked(reply: FastifyReply, err: unknown): void {
+  console.error("[mcp-http]", err);
+  try {
+    if (!reply.raw.headersSent) {
+      reply.raw.writeHead(500, { "Content-Type": "application/json" });
+      reply.raw.end(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          error: { code: -32603, message: "Internal server error" },
+          id: null,
+        }),
+      );
+      return;
+    }
+    reply.raw.end();
+  } catch {
+    /* response already committed */
+  }
 }
