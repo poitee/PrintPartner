@@ -11,7 +11,6 @@ import { formatSpoolSummaryBadge } from "../integrations/spoolman-client.js";
 import { observeAcceptedMediaPng } from "../lib/accepted-media-cache.js";
 import { observeAcceptedArtifact, observeAcceptedSnapshotRoot } from "./accepted-artifacts.js";
 import {
-  ACCEPTED_PART_MESH_MAX_BYTES,
   acceptedPartMediaIdentity,
 } from "./accepted-part-media.js";
 import { getColorById, resolvePartFilamentHex } from "./filament-catalog.js";
@@ -392,7 +391,6 @@ function observeAcceptedPlanReview(input: {
       observeAcceptedArtifact({
         reposDir: input.reposDir,
         artifact: part.artifact,
-        maxBytes: ACCEPTED_PART_MESH_MAX_BYTES,
       }).kind !== "available";
     let thumbEmpty = false;
     if (!artifactMissing && part.artifact.kind === "tracked") {

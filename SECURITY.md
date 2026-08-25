@@ -52,12 +52,12 @@ Review every integration URL before saving it. Keep printer firmware and unauthe
 
 ## Uploads and archives
 
-Zip files, source archives, backups, and print artifacts are untrusted input. The server applies upload size limits, normalizes filenames, and resolves extracted files under controlled directories.
+Zip files, source archives, backups, and print artifacts are untrusted input. The server does not cap upload size — it normalizes filenames and resolves extracted files under controlled directories. Disk space is the only bound on an upload.
 
 Operators should also:
 
-- keep `UPLOAD_MAX_BYTES` no larger than needed
-- monitor free disk space under `/data`
+- monitor free disk space under `/data`, which bounds upload size
+- put a request body limit on the reverse proxy if you need one
 - avoid importing archives from unknown sources
 - keep antivirus or malware scanning at the host boundary when required by local policy
 

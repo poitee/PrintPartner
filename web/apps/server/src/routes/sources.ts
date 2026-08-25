@@ -249,14 +249,8 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
     const data = await request.file();
     if (!data) return reply.status(400).send({ detail: "ZIP file required" });
     const chunks: Buffer[] = [];
-    let uploadedBytes = 0;
     for await (const chunk of data.file) {
-      const buffered = Buffer.from(chunk);
-      uploadedBytes += buffered.length;
-      if (uploadedBytes > MAX_UPLOAD_REQUEST_BYTES) {
-        return reply.status(413).send({ detail: "Upload exceeds the 256 MiB request limit" });
-      }
-      chunks.push(buffered);
+      chunks.push(Buffer.from(chunk));
     }
     const buffer = Buffer.concat(chunks);
     let extractDir: string;
@@ -302,7 +296,6 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
     if (!row) return reply.status(404).send({ detail: "Source not found" });
 
     const uploads: Array<{ relativePath: string; buffer: Buffer }> = [];
-    let uploadedBytes = 0;
     let relativePaths: string[] = [];
     for await (const part of request.parts({ limits: { files: 100, parts: 101 } })) {
       if (part.type === "field" && part.fieldname === "relative_paths") {
@@ -320,12 +313,7 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
       if (part.type !== "file" || part.fieldname !== "files") continue;
       const chunks: Buffer[] = [];
       for await (const chunk of part.file) {
-        const buffered = Buffer.from(chunk);
-        uploadedBytes += buffered.length;
-        if (uploadedBytes > MAX_UPLOAD_REQUEST_BYTES) {
-          return reply.status(413).send({ detail: "Upload exceeds the 256 MiB request limit" });
-        }
-        chunks.push(buffered);
+        chunks.push(Buffer.from(chunk));
       }
       const buffer = Buffer.concat(chunks);
       uploads.push({
@@ -642,4 +630,3 @@ export async function syncProjectById(
   repo.markSourceSynced(projectId, row.lastCommitSha);
   return { stl_count: 0, downloaded: 0, doc_count: 0, docs_downloaded: 0 };
 }
-const MAX_UPLOAD_REQUEST_BYTES = 256 * 1024 * 1024;

@@ -7,7 +7,6 @@ import { partMeshUrl } from "../../../api/engine";
 import { acceptedPlateUnitColor } from "../../../lib/acceptedPlateColor";
 
 const MAX_PREVIEW_PARTS = 40;
-const MAX_MESH_BYTES = 15 * 1024 * 1024;
 
 function unitColor(unit: { filament_hex?: string | null; filament_custom_hex?: string | null; filament_color_id?: string | null }, index: number): THREE.Color {
   const selected = acceptedPlateUnitColor(unit);
@@ -111,10 +110,7 @@ export default function AcceptedPlate3DPreview({
           if (!buffer) {
             const response = await fetch(await partMeshUrl(unit.part_id), { credentials: "include" });
             if (!response.ok) return;
-            const length = Number(response.headers.get("content-length") ?? 0);
-            if (length > MAX_MESH_BYTES) return;
             buffer = await response.arrayBuffer();
-            if (buffer.byteLength > MAX_MESH_BYTES) return;
             buffers.set(unit.part_id, buffer);
           }
           if (cancelled) return;

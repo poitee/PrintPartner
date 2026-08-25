@@ -8,12 +8,10 @@ import {
   loadAcceptedArtifactGeometry,
   type AcceptedArtifactGeometryLimit,
 } from "./accepted-artifact-geometry.js";
-import { ACCEPTED_PART_MESH_MAX_BYTES } from "./accepted-part-media.js";
 import { parseRequiredUnitToken, type RequiredUnitToken } from "./required-units.js";
 import type { AcceptedOperationalArtifact } from "../db/accepted-plan-operational.js";
 
 export const DIRECT_EXPORT_3MF_LIMITS = {
-  maxArtifactBytes: ACCEPTED_PART_MESH_MAX_BYTES,
   maxTotalSourceBytes: 256 * 1024 * 1024,
   maxObjects: 10_000,
   maxTriangles: 5_000_000,

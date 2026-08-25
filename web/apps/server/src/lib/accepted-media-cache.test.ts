@@ -16,7 +16,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  ACCEPTED_MEDIA_PNG_MAX_BYTES,
   acceptedMediaBasis,
   acceptedMediaCachePath,
   observeAcceptedMediaPng,
@@ -158,26 +157,12 @@ describe("accepted media PNG cache", () => {
     expect(read.mock.calls[0]?.[1].byteLength).toBe(8);
   });
 
-  it("accepts the exact observation limit and rejects one byte beyond it", () => {
-    const thumbsDir = cacheFixture();
-    mkdirSync(thumbsDir);
-    const exact = Buffer.concat([png.subarray(0, 8), Buffer.alloc(24)]);
-    writeFileSync(acceptedMediaCachePath({ thumbsDir, basis }), exact);
-
-    expect(observeAcceptedMediaPng({ thumbsDir, basis, maxBytes: exact.length })).toEqual({
-      kind: "present",
-    });
-    expect(observeAcceptedMediaPng({ thumbsDir, basis, maxBytes: exact.length - 1 })).toEqual({
-      kind: "missing",
-    });
-  });
-
   it("does not retry a stable invalid signature during observation", () => {
     const thumbsDir = cacheFixture();
     mkdirSync(thumbsDir);
     writeFileSync(
       acceptedMediaCachePath({ thumbsDir, basis }),
-      Buffer.alloc(ACCEPTED_MEDIA_PNG_MAX_BYTES, 0x41),
+      Buffer.alloc(5 * 1024 * 1024, 0x41),
     );
     const read = vi.mocked(readSync);
     read.mockClear();
@@ -275,12 +260,12 @@ describe("accepted media PNG cache", () => {
     expect(readFileSync(outsideTarget)).toEqual(png);
   });
 
-  it("reads a maximum-size invalid signature only once", () => {
+  it("reads a large invalid signature only once", () => {
     const thumbsDir = cacheFixture();
     mkdirSync(thumbsDir);
     writeFileSync(
       acceptedMediaCachePath({ thumbsDir, basis }),
-      Buffer.alloc(ACCEPTED_MEDIA_PNG_MAX_BYTES, 0x41),
+      Buffer.alloc(5 * 1024 * 1024, 0x41),
     );
     const read = vi.mocked(readSync);
     read.mockClear();
@@ -446,7 +431,7 @@ describe("accepted media PNG cache", () => {
     rmSync(path);
 
     writeFileSync(path, png);
-    expect(readAcceptedMediaPng({ thumbsDir, basis, maxBytes: png.length - 1 })).toBeNull();
+    expect(readAcceptedMediaPng({ thumbsDir, basis })).toEqual(png);
   });
 
   it("rejects invalid writes before creating a cache directory", () => {
@@ -460,15 +445,19 @@ describe("accepted media PNG cache", () => {
       }),
     ).toThrow("Invalid accepted media PNG");
     expect(existsSync(thumbsDir)).toBe(false);
-    expect(() =>
-      writeAcceptedMediaPng({
-        thumbsDir,
-        basis,
-        png,
-        maxBytes: png.length - 1,
-      }),
-    ).toThrow("exceeds size limit");
-    expect(existsSync(thumbsDir)).toBe(false);
+  });
+
+  it("round-trips a PNG far past the retired 5 MiB thumbnail limit", () => {
+    const thumbsDir = cacheFixture();
+    const large = Buffer.concat([png, Buffer.alloc(20 * 1024 * 1024, 0x41)]);
+
+    writeAcceptedMediaPng({ thumbsDir, basis, png: large });
+
+    expect(observeAcceptedMediaPng({ thumbsDir, basis })).toEqual({ kind: "present" });
+    const read = readAcceptedMediaPng({ thumbsDir, basis });
+    // Compare by length + Buffer.equals: a deep-equal diff on 20 MiB is ruinous.
+    expect(read?.length).toBe(large.length);
+    expect(read?.equals(large)).toBe(true);
   });
 
   it("rejects malformed basis paths without touching the filesystem", () => {

@@ -24,7 +24,7 @@ export type AcceptedPlate3mfLimit =
   | "plates";
 
 export type AcceptedPlate3mfLimits = Readonly<{
-  maxArtifactBytes: number;
+  maxArtifactBytes?: number;
   maxTotalSourceBytes: number;
   maxObjects: number;
   maxTriangles: number;

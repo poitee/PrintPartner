@@ -11,7 +11,6 @@ import { fetchWithRetry } from "./fetchWithRetry.js";
 import { getCachedMeshBuffer, cacheMeshBuffer } from "./meshCache.js";
 
 const SIZE = 256;
-const MESH_MAX_BYTES = 15 * 1024 * 1024;
 const DEFAULT_COLOR = DEFAULT_FILAMENT_HEX;
 const MESH_CACHE_MAX = 48;
 const BLOB_CACHE_MAX = 96;
@@ -242,14 +241,11 @@ type BoundedReadResult =
   | { readonly kind: "retryable" }
   | { readonly kind: "rejected" };
 
-async function readResponseBounded(
-  res: Response,
-  maxBytes: number,
-): Promise<BoundedReadResult> {
+async function readResponseBuffer(res: Response): Promise<BoundedReadResult> {
   const declared = res.headers.get("content-length");
   if (declared != null) {
     const n = Number(declared);
-    if (Number.isFinite(n) && (n <= 0 || n > maxBytes)) {
+    if (Number.isFinite(n) && n <= 0) {
       await res.body?.cancel().catch(() => undefined);
       return { kind: "rejected" };
     }
@@ -258,7 +254,6 @@ async function readResponseBounded(
   if (!res.body) {
     try {
       const buffer = await res.arrayBuffer();
-      if (buffer.byteLength > maxBytes) return { kind: "rejected" };
       if (buffer.byteLength === 0) return { kind: "retryable" };
       return { kind: "loaded", buffer };
     } catch {
@@ -275,10 +270,6 @@ async function readResponseBounded(
       if (done) break;
       if (!value?.byteLength) continue;
       total += value.byteLength;
-      if (total > maxBytes) {
-        await reader.cancel().catch(() => undefined);
-        return { kind: "rejected" };
-      }
       chunks.push(value);
     }
   } catch {
@@ -343,7 +334,7 @@ export async function loadAcceptedMeshBuffer(
     }
     const metadata = optionalAcceptedPartMediaMetadata(res);
     if (!metadata) return null;
-    const read = await readResponseBounded(res, MESH_MAX_BYTES);
+    const read = await readResponseBuffer(res);
     if (read.kind === "rejected") return null;
     if (read.kind === "retryable") continue;
     const { buffer } = read;

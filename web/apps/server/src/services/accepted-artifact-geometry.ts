@@ -16,7 +16,7 @@ export type AcceptedArtifactGeometryLimit =
   | "triangles";
 
 export type AcceptedArtifactGeometryLimits = Readonly<{
-  maxArtifactBytes: number;
+  maxArtifactBytes?: number;
   maxTotalSourceBytes: number;
   maxObjects: number;
   maxTriangles: number;

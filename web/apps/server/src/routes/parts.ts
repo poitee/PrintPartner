@@ -10,13 +10,11 @@ import { AcceptedPlanOperationalIntegrityError } from "../db/accepted-plan-opera
 import { toAcceptedPartAssembledView } from "../services/accepted-plan-views.js";
 import { openVerifiedAcceptedArtifact } from "../services/accepted-artifacts.js";
 import {
-  ACCEPTED_MEDIA_PNG_MAX_BYTES,
   readAcceptedMediaPng,
   removeAcceptedMediaPng,
   writeAcceptedMediaPng,
 } from "../lib/accepted-media-cache.js";
 import {
-  ACCEPTED_PART_MESH_MAX_BYTES,
   acceptedPartMediaIdentity,
 } from "../services/accepted-part-media.js";
 import { acceptedPlanBasis, type AcceptedProgressFailure } from "../db/accepted-plan-progress.js";
@@ -156,7 +154,6 @@ async function sendPartImage(
     const verified = openVerifiedAcceptedArtifact({
       reposDir: deps.reposDir,
       artifact: part.artifact,
-      maxBytes: ACCEPTED_PART_MESH_MAX_BYTES,
     });
     if (verified.kind !== "verified") {
       if (verified.kind === "unavailable") {
@@ -435,16 +432,10 @@ export async function registerPartRoutes(app: FastifyInstance, deps: RouteDeps):
       const opened = openVerifiedAcceptedArtifact({
         reposDir: deps.reposDir,
         artifact: part.artifact,
-        maxBytes: ACCEPTED_PART_MESH_MAX_BYTES,
       });
       if (opened.kind !== "verified") {
         if (opened.kind === "unavailable") {
           return reply.status(409).send({ detail: "Accepted Part media is unavailable" });
-        }
-        if (opened.reason === "too_large") {
-          return reply.status(413).send({
-            detail: `STL exceeds ${ACCEPTED_PART_MESH_MAX_BYTES / (1024 * 1024)}MB mesh limit`,
-          });
         }
         return reply.status(409).send({ detail: "Accepted Part artifact is unavailable" });
       }
@@ -534,12 +525,9 @@ export async function registerPartRoutes(app: FastifyInstance, deps: RouteDeps):
       if (typeof ifMatch !== "string" || !/^"[0-9a-f]{64}"$/.test(ifMatch)) {
         return reply.status(400).send({ detail: "Strong If-Match header required" });
       }
-      const file = await request.file({ limits: { fileSize: ACCEPTED_MEDIA_PNG_MAX_BYTES } });
+      const file = await request.file();
       if (!file) return reply.status(400).send({ detail: "PNG file required" });
       const buf = await file.toBuffer();
-      if (file.file.truncated || buf.length > ACCEPTED_MEDIA_PNG_MAX_BYTES) {
-        return reply.status(413).send({ detail: "PNG exceeds 5MB thumbnail limit" });
-      }
 
       const accepted = deps.repo.readAcceptedPlanOperationalSnapshot(profileId);
       if (accepted.kind === "empty") {
@@ -564,7 +552,6 @@ export async function registerPartRoutes(app: FastifyInstance, deps: RouteDeps):
       const verified = openVerifiedAcceptedArtifact({
         reposDir: deps.reposDir,
         artifact: part.artifact,
-        maxBytes: ACCEPTED_PART_MESH_MAX_BYTES,
       });
       if (verified.kind !== "verified") {
         return reply.status(409).send({ detail: "Accepted Part artifact is unavailable" });
@@ -575,9 +562,6 @@ export async function registerPartRoutes(app: FastifyInstance, deps: RouteDeps):
         writeAcceptedMediaPng({ thumbsDir: deps.thumbsDir, basis: thumbnailBasis, png: buf });
       } catch (error) {
         const message = error instanceof Error ? error.message : "";
-        if (message.includes("size limit")) {
-          return reply.status(413).send({ detail: "PNG exceeds 5MB thumbnail limit" });
-        }
         if (message.includes("Invalid accepted media PNG")) {
           return reply.status(400).send({ detail: "Expected PNG image" });
         }
@@ -585,13 +569,6 @@ export async function registerPartRoutes(app: FastifyInstance, deps: RouteDeps):
       }
       return { saved: true, digest: thumbnailBasis };
     } catch (error) {
-      if (
-        error instanceof Error &&
-        "code" in error &&
-        error.code === "FST_REQ_FILE_TOO_LARGE"
-      ) {
-        return reply.status(413).send({ detail: "PNG exceeds 5MB thumbnail limit" });
-      }
       if (error instanceof AcceptedPlanOperationalIntegrityError) {
         request.log.error(
           { code: error.code, profileId, partId: id },

@@ -41,7 +41,6 @@ type Props = {
 };
 
 const DEFAULT_COLOR = DEFAULT_FILAMENT_HEX;
-const MESH_MAX_BYTES = 15 * 1024 * 1024;
 
 const DARK_BG = "#0a0e14";
 const LIGHT_BG = "#dfe4ea";
@@ -358,10 +357,6 @@ export default function Preview3D({
 
         const buffer = await response.arrayBuffer();
         if (cancelled) return;
-        if (buffer.byteLength > MESH_MAX_BYTES) {
-          await showPngFallback(413);
-          return;
-        }
 
         const mount = mountRef.current;
         if (!mount) return;

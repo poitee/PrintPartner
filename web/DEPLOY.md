@@ -54,7 +54,6 @@ The app service has a healthcheck that polls `GET /health` every 30s using Node'
 | `SINGLE_USER_AUTH` | `0` | Set to `1` to require login with one administrator account. The first registration claims existing self-host data. |
 | `SESSION_SECRET` | unset | Not needed for single-user auth. Required when `MULTI_USER=1`. |
 | `SESSION_COOKIE_SECURE` | `0` | Set to `1` when the self-hosted site is served through HTTPS. Leave at `0` for a plain HTTP LAN address. |
-| `UPLOAD_MAX_BYTES` | `536870912` | Multipart upload limit (512 MiB) |
 | `SOURCE_DOCS_MAX_BYTES` | `1073741824` | Per-source budget for synced markdown/PDF docs (~1 GiB). Operator escape hatch only. |
 | `PRINT_PARTNER_API_KEY` | unset | When set, requires Bearer or `X-Print-Partner-Api-Key` on `/api/v1/*`. **Required for `/api/v1/mcp` unless `HOST` is loopback** (Docker uses `0.0.0.0`) |
 | `OPENAPI_UI` | unset | Set to `1` to expose `/api/v1/docs` in production |
@@ -221,7 +220,6 @@ and authentication protect the shared interface.
 | `GOOGLE_CLIENT_ID` | Optional | Public Google OAuth **Web** client id for parts-manifest Drive open/save (SPA GIS + Drive API). Not a secret; exposed on `GET /health`. Enable Drive API and add your app origin to Authorized JavaScript origins. Dev SPA fallback: `VITE_GOOGLE_CLIENT_ID`. |
 | `SAAS_ALLOW_ANONYMOUS` | Optional | `1` to allow unauthenticated API (dev only) |
 | `REDIS_URL` | Optional | BullMQ-backed job queue for horizontal scaling |
-| `UPLOAD_MAX_BYTES` | Optional | Request body / upload size limit |
 
 ### Auth routes
 

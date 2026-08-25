@@ -105,29 +105,25 @@ describe("accepted STL thumbnail mesh loading", () => {
     expect(80_001 - decimatedCount).toBe(3);
   });
 
-  it("rejects a declared oversized mesh without retrying and cancels its body", async () => {
-    vi.useFakeTimers();
-    try {
-      const oversized = new Response(new Uint8Array([1]), {
-        status: 200,
-        headers: {
-          ETag: `"${basis}"`,
-          "Content-Length": String(15 * 1024 * 1024 + 1),
-          "X-Accepted-Render-Hex": "#112233",
-        },
-      });
-      const cancel = vi.spyOn(oversized.body!, "cancel");
-      runtime.fetchWithRetry.mockResolvedValue(oversized);
+  it("loads a mesh declared far past the retired 15 MiB cap in one fetch", async () => {
+    const bigBasis = "d".repeat(64);
+    const bytes = new Uint8Array(15 * 1024 * 1024 + 1);
+    bytes[0] = 7;
+    const oversized = new Response(bytes, {
+      status: 200,
+      headers: {
+        ETag: `"${bigBasis}"`,
+        "Content-Length": String(bytes.length),
+        "X-Accepted-Render-Hex": "#112233",
+      },
+    });
+    runtime.fetchWithRetry.mockResolvedValue(oversized);
 
-      const loaded = loadAcceptedMeshBuffer(93);
-      await vi.runAllTimersAsync();
+    const loaded = await loadAcceptedMeshBuffer(93);
 
-      await expect(loaded).resolves.toBeNull();
-      expect(runtime.fetchWithRetry).toHaveBeenCalledTimes(1);
-      expect(cancel).toHaveBeenCalledTimes(1);
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(runtime.fetchWithRetry).toHaveBeenCalledTimes(1);
+    expect(loaded).toMatchObject({ basis: bigBasis, renderHex: "#112233" });
+    expect(loaded?.buffer.byteLength).toBe(bytes.length);
   });
 
   it("loads different Part meshes concurrently before serialized rendering", async () => {

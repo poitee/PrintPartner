@@ -13,6 +13,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   deterministic Required-unit 3MF identity, revision-keyed downloads, and
   local slicer handoff. The Export page uses this state on desktop and mobile.
 
+### Changed
+
+- **Upload size caps removed** - the server no longer enforces request-body,
+  multipart, STL mesh, or PNG thumbnail byte limits, and `UPLOAD_MAX_BYTES` is
+  no longer read. Free disk space is the only bound; put a request body limit
+  on the reverse proxy if you need one.
+
 ### Removed
 
 - **Legacy Plate and auto-slice APIs** - removed mutable `print-plan`,

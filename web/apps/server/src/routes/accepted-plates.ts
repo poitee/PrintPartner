@@ -3,7 +3,6 @@ import type { AppRepository } from "../db/repository.js";
 import type { AcceptedPlanBasis } from "../db/accepted-plan-progress.js";
 import { AcceptedPlateIntegrityError, MAX_ACCEPTED_PLATE_UM, type AcceptedPlateInput } from "../db/accepted-plates.js";
 import { AcceptedPlanOperationalIntegrityError } from "../db/accepted-plan-operational.js";
-import { ACCEPTED_PART_MESH_MAX_BYTES } from "../services/accepted-part-media.js";
 import {
   acceptedPrinter,
   arrangeAcceptedPlates,
@@ -21,7 +20,6 @@ type RouteDependencies = Readonly<{
 }>;
 
 const WORKSPACE_LIMITS = {
-  maxArtifactBytes: ACCEPTED_PART_MESH_MAX_BYTES,
   maxTotalSourceBytes: 256 * 1024 * 1024,
   maxObjects: 10_000,
   maxTriangles: 5_000_000,

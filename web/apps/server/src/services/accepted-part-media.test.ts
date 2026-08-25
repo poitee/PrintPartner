@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AcceptedOperationalPart } from "../db/accepted-plan-operational.js";
 import {
-  ACCEPTED_PART_MESH_MAX_BYTES,
   acceptedPartMediaIdentity,
 } from "./accepted-part-media.js";
 
@@ -33,10 +32,6 @@ function part(
 }
 
 describe("acceptedPartMediaIdentity", () => {
-  it("owns the accepted mesh byte limit", () => {
-    expect(ACCEPTED_PART_MESH_MAX_BYTES).toBe(15 * 1024 * 1024);
-  });
-
   it("returns the normalized accepted custom color and full derivative basis", () => {
     expect(
       acceptedPartMediaIdentity(

@@ -5,8 +5,6 @@ import {
 } from "../lib/accepted-media-cache.js";
 import { getColorById } from "./filament-catalog.js";
 
-export const ACCEPTED_PART_MESH_MAX_BYTES = 15 * 1024 * 1024;
-
 type AcceptedPartMediaFields = Pick<
   AcceptedOperationalPart,
   "artifact" | "effectiveRole" | "filamentColorId" | "filamentCustomHex"

@@ -16,7 +16,6 @@ import type { AcceptedPlanBasis } from "../db/accepted-plan-progress.js";
 import type { AppRepository } from "../db/repository.js";
 import type { RequiredUnitToken } from "./required-units.js";
 import type { AcceptedArtifactVerificationFailure } from "./accepted-artifacts.js";
-import { ACCEPTED_PART_MESH_MAX_BYTES } from "./accepted-part-media.js";
 import {
   generateAcceptedPlate3mfArtifacts,
   type AcceptedPlate3mfLimit,
@@ -25,7 +24,6 @@ import {
 import { MAX_ACCEPTED_PLATES } from "@print-partner/domain";
 
 export const ACCEPTED_PLATE_EXPORT_LIMITS: AcceptedPlate3mfLimits = {
-  maxArtifactBytes: ACCEPTED_PART_MESH_MAX_BYTES,
   maxTotalSourceBytes: 256 * 1024 * 1024,
   maxObjects: 10_000,
   maxTriangles: 5_000_000,

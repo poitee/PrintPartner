@@ -264,20 +264,6 @@ describe("accepted Part media routes", () => {
       expect(invalidPng.statusCode).toBe(400);
       expect(invalidPng.json()).toEqual({ detail: "Expected PNG image" });
 
-      const oversizedBoundary = "accepted-media-oversized-png";
-      const oversized = await app.inject({
-        method: "POST",
-        url: `/parts/${part.id}/thumbnail`,
-        headers: {
-          "content-type": `multipart/form-data; boundary=${oversizedBoundary}`,
-          "if-match": `"${expectedBasis}"`,
-        },
-        payload: multipartPng(oversizedBoundary, Buffer.alloc(5 * 1024 * 1024 + 1, 0x89)),
-      });
-      expect(oversized.statusCode).toBe(413);
-      expect(oversized.json()).toEqual({ detail: "PNG exceeds 5MB thumbnail limit" });
-      expect(acceptedReads).toBe(10);
-
       const previewPlaceholder = await app.inject({
         method: "GET",
         url: `/parts/${part.id}/preview`,

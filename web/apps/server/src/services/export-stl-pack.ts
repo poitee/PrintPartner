@@ -20,7 +20,6 @@ import { Zip, ZipPassThrough } from "fflate";
 import { acceptedPlateZipEpoch, folderKeyFromRelativePath } from "@print-partner/domain";
 import type { AcceptedPlanBasis } from "../db/accepted-plan-progress.js";
 import { openVerifiedAcceptedArtifact } from "./accepted-artifacts.js";
-import { ACCEPTED_PART_MESH_MAX_BYTES } from "./accepted-part-media.js";
 import type {
   AcceptedExportPart,
   CaptureAcceptedOperationalExportResult,
@@ -451,7 +450,6 @@ export async function materializeAcceptedStlBundle(input: Readonly<{
       const opened = openVerifiedAcceptedArtifact({
         reposDir: input.reposDir,
         artifact: entry.part.artifact,
-        maxBytes: ACCEPTED_PART_MESH_MAX_BYTES,
       });
       if (opened.kind !== "verified") {
         warnings.push({

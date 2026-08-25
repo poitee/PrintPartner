@@ -27,7 +27,6 @@ export type AcceptedMediaBasisInput = {
 
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-export const ACCEPTED_MEDIA_PNG_MAX_BYTES = 5 * 1024 * 1024;
 const ACCEPTED_MEDIA_READ_ATTEMPTS = 8;
 
 function normalizedRole(value: string): string {
@@ -57,15 +56,7 @@ export function acceptedMediaBasis(input: AcceptedMediaBasisInput): string {
   return createHash("sha256").update(payload).digest("hex");
 }
 
-function validatedLimit(value: number): number {
-  if (!Number.isSafeInteger(value) || value < PNG_SIGNATURE.length) {
-    throw new Error("Invalid accepted media PNG limit");
-  }
-  return value;
-}
-
-function validatePng(png: Buffer, maxBytes: number): void {
-  if (png.length > maxBytes) throw new Error("Accepted media PNG exceeds size limit");
+function validatePng(png: Buffer): void {
   if (png.length < PNG_SIGNATURE.length || !png.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE)) {
     throw new Error("Invalid accepted media PNG");
   }
@@ -82,7 +73,6 @@ export function acceptedMediaCachePath(input: {
 type ReadAcceptedMediaPngInput = {
   readonly thumbsDir: string;
   readonly basis: string;
-  readonly maxBytes?: number;
 };
 
 export type AcceptedMediaPngObservation =
@@ -114,7 +104,6 @@ function isRenameWindowError(error: unknown): boolean {
 function openAcceptedMediaPngDescriptor(input: {
   readonly thumbsDir: string;
   readonly path: string;
-  readonly maxBytes: number;
 }): AcceptedMediaDescriptorResult {
   let descriptor: number | null = null;
   try {
@@ -122,9 +111,7 @@ function openAcceptedMediaPngDescriptor(input: {
     if (rootStats.isSymbolicLink() || !rootStats.isDirectory()) return { status: "miss" };
     const beforeOpen = lstatSync(input.path);
     if (beforeOpen.isSymbolicLink() || !beforeOpen.isFile()) return { status: "miss" };
-    if (beforeOpen.size < PNG_SIGNATURE.length || beforeOpen.size > input.maxBytes) {
-      return { status: "miss" };
-    }
+    if (beforeOpen.size < PNG_SIGNATURE.length) return { status: "miss" };
 
     try {
       descriptor = openSync(input.path, constants.O_RDONLY | constants.O_NOFOLLOW);
@@ -168,7 +155,6 @@ function descriptorStayedStable(
 function readAcceptedMediaPngOnce(input: {
   readonly thumbsDir: string;
   readonly path: string;
-  readonly maxBytes: number;
 }): AcceptedMediaPngReadResult {
   const opened = openAcceptedMediaPngDescriptor(input);
   if (opened.status !== "opened") return opened;
@@ -189,7 +175,7 @@ function readAcceptedMediaPngOnce(input: {
     if (!descriptorStayedStable(opened.descriptor, opened.stats)) {
       return { status: "retryable_race" };
     }
-    validatePng(png, input.maxBytes);
+    validatePng(png);
     return { status: "found", png };
   } catch {
     return { status: "miss" };
@@ -201,7 +187,6 @@ function readAcceptedMediaPngOnce(input: {
 function observeAcceptedMediaPngOnce(input: {
   readonly thumbsDir: string;
   readonly path: string;
-  readonly maxBytes: number;
 }): Exclude<AcceptedMediaPngReadResult, { readonly status: "found" }> | { readonly status: "found" } {
   const opened = openAcceptedMediaPngDescriptor(input);
   if (opened.status !== "opened") return opened;
@@ -226,10 +211,9 @@ function observeAcceptedMediaPngOnce(input: {
 export function observeAcceptedMediaPng(
   input: ReadAcceptedMediaPngInput,
 ): AcceptedMediaPngObservation {
-  const maxBytes = validatedLimit(input.maxBytes ?? ACCEPTED_MEDIA_PNG_MAX_BYTES);
   const path = acceptedMediaCachePath(input);
   for (let attempt = 0; attempt < ACCEPTED_MEDIA_READ_ATTEMPTS; attempt += 1) {
-    const result = observeAcceptedMediaPngOnce({ thumbsDir: input.thumbsDir, path, maxBytes });
+    const result = observeAcceptedMediaPngOnce({ thumbsDir: input.thumbsDir, path });
     if (result.status === "found") return { kind: "present" };
     if (result.status === "miss") return { kind: "missing" };
   }
@@ -237,10 +221,9 @@ export function observeAcceptedMediaPng(
 }
 
 export function readAcceptedMediaPng(input: ReadAcceptedMediaPngInput): Buffer | null {
-  const maxBytes = validatedLimit(input.maxBytes ?? ACCEPTED_MEDIA_PNG_MAX_BYTES);
   const path = acceptedMediaCachePath(input);
   for (let attempt = 0; attempt < ACCEPTED_MEDIA_READ_ATTEMPTS; attempt += 1) {
-    const result = readAcceptedMediaPngOnce({ thumbsDir: input.thumbsDir, path, maxBytes });
+    const result = readAcceptedMediaPngOnce({ thumbsDir: input.thumbsDir, path });
     if (result.status === "found") return result.png;
     if (result.status === "miss") return null;
   }
@@ -273,10 +256,8 @@ export function writeAcceptedMediaPng(input: {
   readonly thumbsDir: string;
   readonly basis: string;
   readonly png: Buffer;
-  readonly maxBytes?: number;
 }): void {
-  const maxBytes = validatedLimit(input.maxBytes ?? ACCEPTED_MEDIA_PNG_MAX_BYTES);
-  validatePng(input.png, maxBytes);
+  validatePng(input.png);
   const root = resolve(input.thumbsDir);
   const target = acceptedMediaCachePath(input);
   mkdirSync(root, { recursive: true, mode: 0o700 });

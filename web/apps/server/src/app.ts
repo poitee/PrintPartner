@@ -109,7 +109,8 @@ function isAdministrativeRoute(url: string): boolean {
 export async function buildApp(config: ServerConfig, ports: RuntimePorts) {
   const app = Fastify({
     logger: true,
-    bodyLimit: config.uploadMaxBytes,
+    // No request body ceiling — uploads are bounded by disk, not by policy.
+    bodyLimit: Number.MAX_SAFE_INTEGER,
     trustProxy: config.trustProxy,
   });
   app.addHook("onSend", async (_request, reply, payload) => {
@@ -148,7 +149,7 @@ export async function buildApp(config: ServerConfig, ports: RuntimePorts) {
   await app.register(websocket);
   await app.register(multipart, {
     limits: {
-      fileSize: config.uploadMaxBytes,
+      fileSize: Infinity,
       files: 100,
       parts: 101,
     },
