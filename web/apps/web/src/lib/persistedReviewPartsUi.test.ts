@@ -15,6 +15,7 @@ describe("parsePersistedReviewPartsUi", () => {
         printFilter: "partial",
         viewMode: "print",
         compactMode: true,
+        textOnlyPrint: true,
         groupMode: "source",
         layoutMode: "table",
       }),
@@ -23,6 +24,7 @@ describe("parsePersistedReviewPartsUi", () => {
     expect(ui.printFilter).toBe("partial");
     expect(ui.viewMode).toBe("print");
     expect(ui.compactMode).toBe(true);
+    expect(ui.textOnlyPrint).toBe(true);
     expect(ui.groupMode).toBe("source");
     expect(ui.layoutMode).toBe("table");
   });
@@ -31,5 +33,6 @@ describe("parsePersistedReviewPartsUi", () => {
     const ui = parsePersistedReviewPartsUi(JSON.stringify({ search: "x" }));
     expect(ui.groupMode).toBe("role");
     expect(ui.layoutMode).toBe("grid");
+    expect(ui.textOnlyPrint).toBe(false);
   });
 });

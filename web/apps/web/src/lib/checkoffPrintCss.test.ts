@@ -55,6 +55,13 @@ describe("checkoff print CSS (GRE-233)", () => {
     expect(printCss).toMatch(/\.sheet-header\s*\{[^}]*break-after:\s*avoid/s);
   });
 
+  it("drops thumbnails from the text-only sheet on print but not on screen", () => {
+    expect(printCss).toMatch(
+      /\.checkoff-sheet-text-only\s+\.sheet-thumb-btn[\s\S]*?\{[^}]*display:\s*none\s*!important/s,
+    );
+    expect(screenCss).not.toMatch(/\.checkoff-sheet-text-only/);
+  });
+
   it("hides Progress print-only sheet on screen", () => {
     expect(screenCss).toMatch(
       /\.checkoff-sheet-print-only:not\(\.is-print-prep\)\s*\{[^}]*display:\s*none\s*!important/s,

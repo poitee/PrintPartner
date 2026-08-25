@@ -338,12 +338,12 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
           requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
         });
         const sheet = sheetArticleRef.current;
-        if (sheet) await waitForSheetThumbnails(sheet);
+        if (sheet && !ui.textOnlyPrint) await waitForSheetThumbnails(sheet);
         window.print();
         setPrintPrep(false);
       },
     }),
-    [],
+    [ui.textOnlyPrint],
   );
 
   useEffect(() => {
@@ -796,6 +796,16 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
               Compact rows
             </label>
           )}
+          {!isMobileLayout && (
+            <label className="flex items-center gap-2 text-muted-foreground">
+              <input
+                type="checkbox"
+                checked={ui.textOnlyPrint}
+                onChange={(e) => patchUi({ textOnlyPrint: e.target.checked })}
+              />
+              Text-only print (no thumbnails)
+            </label>
+          )}
           <span className="text-muted-foreground">{summary}</span>
         </div>
       </div>
@@ -810,6 +820,7 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
             ui.compactMode && !isMobileLayout && "compact",
             isMobileLayout && "checkoff-sheet-mobile",
             printPrep && "checkoff-sheet-print-continuous",
+            ui.textOnlyPrint && "checkoff-sheet-text-only",
           )}
         >
           <header className="sheet-header">

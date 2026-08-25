@@ -16,6 +16,8 @@ export type PersistedCheckoffUi = {
   compactMode: boolean;
   /** When true, print uses continuous layout (fewer forced page breaks). */
   continuousPrintLayout: boolean;
+  /** When true, print omits part thumbnails — a plain text list that saves paper. */
+  textOnlyPrint: boolean;
   /**
    * Per-plan Progress row order (part ids). Legacy — migrated into
    * progressRowsByPlanId on read when the new field is absent.
@@ -35,6 +37,7 @@ const DEFAULT: PersistedCheckoffUi = {
   filter: "missing",
   compactMode: false,
   continuousPrintLayout: false,
+  textOnlyPrint: false,
   partOrderByPlanId: {},
   bagBarsByPlanId: {},
   progressRowsByPlanId: {},
@@ -140,6 +143,10 @@ export function parsePersistedCheckoffUi(raw: string | null): PersistedCheckoffU
         typeof parsed.continuousPrintLayout === "boolean"
           ? parsed.continuousPrintLayout
           : DEFAULT.continuousPrintLayout,
+      textOnlyPrint:
+        typeof parsed.textOnlyPrint === "boolean"
+          ? parsed.textOnlyPrint
+          : DEFAULT.textOnlyPrint,
       partOrderByPlanId: parsePartOrderByPlanId(parsed.partOrderByPlanId),
       bagBarsByPlanId: parseBagBarsByPlanId(parsed.bagBarsByPlanId),
       progressRowsByPlanId: parseProgressRowsByPlanId(parsed.progressRowsByPlanId),

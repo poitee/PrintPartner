@@ -131,6 +131,7 @@ function CheckoffSheetRow({
   busy,
   compact,
   eagerThumbs,
+  showThumb,
   onToggleUnit,
   onPreview,
 }: {
@@ -138,6 +139,8 @@ function CheckoffSheetRow({
   busy: boolean;
   compact: boolean;
   eagerThumbs?: boolean;
+  /** Text-only sheets drop the thumbnail entirely — no image fetch, no ink. */
+  showThumb: boolean;
   onToggleUnit: (part: ReviewPart, unitIndex: number) => void;
   onPreview: (part: ReviewPart) => void;
 }) {
@@ -146,12 +149,14 @@ function CheckoffSheetRow({
     <tr className={cn("sheet-row", done && "sheet-row-done")}>
       <td className="sheet-cell-part">
         <div className="sheet-part">
-          <PartThumbExpandButton
-            part={part}
-            compact={compact}
-            eager={eagerThumbs}
-            onExpand={onPreview}
-          />
+          {showThumb && (
+            <PartThumbExpandButton
+              part={part}
+              compact={compact}
+              eager={eagerThumbs}
+              onExpand={onPreview}
+            />
+          )}
           <div className="sheet-part-meta">
             <span className="sheet-filename" title={part.relative_path || part.filename}>
               {part.filename}
@@ -245,6 +250,7 @@ export default function CheckoffPage() {
   const [continuousPrintLayout, setContinuousPrintLayout] = useState(
     persistedUi.continuousPrintLayout,
   );
+  const [textOnlyPrint, setTextOnlyPrint] = useState(persistedUi.textOnlyPrint);
   const [progressRowsByPlanId, setProgressRowsByPlanId] = useState<
     Record<string, PersistedProgressRow[]>
   >(() => {
@@ -386,9 +392,9 @@ export default function CheckoffPage() {
       setPrintPrep(false);
       return;
     }
-    await waitForSheetThumbnails(sheet);
+    if (!textOnlyPrint) await waitForSheetThumbnails(sheet);
     window.print();
-  }, []);
+  }, [textOnlyPrint]);
 
   useEffect(() => {
     if (!health?.ok) return;
@@ -472,6 +478,7 @@ export default function CheckoffPage() {
       filter,
       compactMode,
       continuousPrintLayout,
+      textOnlyPrint,
     };
     for (const [planKey, rows] of Object.entries(progressRowsByPlanId)) {
       const planId = Number(planKey);
@@ -479,7 +486,7 @@ export default function CheckoffPage() {
       next = withProgressRowsForPlan(next, planId, rows);
     }
     savePersistedCheckoffUi(next);
-  }, [filter, compactMode, continuousPrintLayout, progressRowsByPlanId]);
+  }, [filter, compactMode, continuousPrintLayout, textOnlyPrint, progressRowsByPlanId]);
 
   const planName =
     profiles.find((p) => p.id === selectedProfileId)?.name ??
@@ -1096,6 +1103,14 @@ export default function CheckoffPage() {
                 />
                 Continuous layout when printing
               </label>
+              <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                <input
+                  type="checkbox"
+                  checked={textOnlyPrint}
+                  onChange={(e) => setTextOnlyPrint(e.target.checked)}
+                />
+                Text-only sheet (no thumbnails)
+              </label>
             </>
           )}
           </div>
@@ -1229,6 +1244,7 @@ export default function CheckoffPage() {
                 "checkoff-sheet checkoff-sheet-print-only",
                 compactMode && "compact",
                 continuousPrintLayout && "checkoff-sheet-print-continuous",
+                textOnlyPrint && "checkoff-sheet-text-only",
                 printPrep && "is-print-prep",
                 printPrep
                   ? "pointer-events-none fixed top-0 left-0 -z-10 w-[880px] opacity-0 print:pointer-events-auto print:relative print:z-auto print:w-auto print:opacity-100"
@@ -1268,7 +1284,8 @@ export default function CheckoffPage() {
                                 part={part}
                                 busy={busyPartId === part.id || toggleBusy}
                                 compact={compactMode}
-                                eagerThumbs={printPrep}
+                                eagerThumbs={printPrep && !textOnlyPrint}
+                                showThumb={!textOnlyPrint}
                                 onToggleUnit={onToggleUnit}
                                 onPreview={setPreviewPart}
                               />

@@ -1556,6 +1556,39 @@
     flex-wrap: wrap;
   }
 
+  /* Text-only sheet: no thumbnails, one line per part — a paper-saving list. */
+  .checkoff-sheet.checkoff-sheet-text-only .sheet-thumb-btn,
+  .checkoff-sheet.checkoff-sheet-text-only .sheet-thumb {
+    display: none !important;
+  }
+
+  .checkoff-sheet.checkoff-sheet-text-only .sheet-part {
+    gap: 0;
+  }
+
+  .checkoff-sheet.checkoff-sheet-text-only .sheet-part-meta {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.3cm;
+    padding-top: 0;
+  }
+
+  .checkoff-sheet.checkoff-sheet-text-only .sheet-filename {
+    font-size: 0.82rem;
+  }
+
+  .checkoff-sheet.checkoff-sheet-text-only .sheet-table td {
+    padding-top: 0.03cm;
+    padding-bottom: 0.03cm;
+  }
+
+  .checkoff-sheet.checkoff-sheet-text-only .sheet-table .sheet-cell-part {
+    vertical-align: middle;
+    padding-top: 0.03cm;
+    padding-bottom: 0.03cm;
+  }
+
   .sheet-table .sheet-cell-printed {
     width: 20%;
     min-width: 0;

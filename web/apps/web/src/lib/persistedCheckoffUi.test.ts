@@ -16,6 +16,7 @@ describe("persistedCheckoffUi", () => {
       filter: "missing",
       compactMode: false,
       continuousPrintLayout: false,
+      textOnlyPrint: false,
       partOrderByPlanId: {},
       bagBarsByPlanId: {},
       progressRowsByPlanId: {},
@@ -27,6 +28,7 @@ describe("persistedCheckoffUi", () => {
       filter: "done" as const,
       compactMode: true,
       continuousPrintLayout: true,
+      textOnlyPrint: true,
       partOrderByPlanId: { "12": [3, 1, 2] },
       bagBarsByPlanId: { "12": [{ id: "b1", label: "Bag 1" }] },
       progressRowsByPlanId: {
@@ -94,6 +96,13 @@ describe("persistedCheckoffUi", () => {
     ]);
     expect(getPartOrderForPlan(next, 3)).toEqual([10]);
     expect(getBagBarsForPlan(next, 3)).toEqual([{ id: "b1", label: "Bag 1" }]);
+  });
+
+  it("defaults textOnlyPrint to false when stored state predates it", () => {
+    const parsed = parsePersistedCheckoffUi(
+      JSON.stringify({ filter: "all", continuousPrintLayout: true }),
+    );
+    expect(parsed.textOnlyPrint).toBe(false);
   });
 
   it("uses stable storage key", () => {

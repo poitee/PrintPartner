@@ -22,6 +22,8 @@ export type PersistedReviewPartsUi = {
   sort: ReviewSortKey;
   viewMode: ReviewViewMode;
   compactMode: boolean;
+  /** When true, print omits part thumbnails — a plain text list that saves paper. */
+  textOnlyPrint: boolean;
   groupMode: PartsGroupMode;
   layoutMode: PartsLayoutMode;
   functionalFilter: ReviewFunctionalFilter;
@@ -39,6 +41,7 @@ const DEFAULT: PersistedReviewPartsUi = {
   sort: "folder",
   viewMode: "edit",
   compactMode: false,
+  textOnlyPrint: false,
   groupMode: "role",
   layoutMode: "grid",
   functionalFilter: "all",
@@ -104,6 +107,8 @@ export function parsePersistedReviewPartsUi(raw: string | null): PersistedReview
       viewMode: isViewMode(parsed.viewMode) ? parsed.viewMode : DEFAULT.viewMode,
       compactMode:
         typeof parsed.compactMode === "boolean" ? parsed.compactMode : DEFAULT.compactMode,
+      textOnlyPrint:
+        typeof parsed.textOnlyPrint === "boolean" ? parsed.textOnlyPrint : DEFAULT.textOnlyPrint,
       groupMode: isGroupMode(parsed.groupMode) ? parsed.groupMode : DEFAULT.groupMode,
       layoutMode: isLayoutMode(parsed.layoutMode) ? parsed.layoutMode : DEFAULT.layoutMode,
       functionalFilter: isFunctionalFilter(parsed.functionalFilter)

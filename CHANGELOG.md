@@ -23,6 +23,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `list_sources` takes a `category` filter (with `include_subcategories`), and a
   `print-partner://source-categories` resource serves the tree.
 
+- **Text-only print sheet** - Progress and Plan can print the checkoff sheet as a
+  plain text list instead of thumbnail rows, fitting far more parts per page.
+  The toggle is remembered per browser and only affects print output; the
+  on-screen sheet keeps its thumbnails.
+
 - **Accepted Plate workflow** - accepted Plans now publish immutable Plate
   revisions with explicit Printer allocation, saved fixed-point placement,
   deterministic Required-unit 3MF identity, revision-keyed downloads, and
