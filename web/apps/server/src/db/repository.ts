@@ -4380,6 +4380,25 @@ export class AppRepository {
         if (this.capturePlanInputs(input.profileId).fingerprint !== prepared.capture.fingerprint) {
           return { kind: "inputs_changed" };
         }
+        // A recompute supersedes any older open draft. Leaving them open
+        // strands the Plan sheet after the newer draft is applied: the sheet
+        // falls back to the stale survivor, whose base version can never
+        // match again, and every edit 409s. Abandoned drafts stay resumable
+        // while their base still matches.
+        this.db
+          .update(this.schema.planDrafts)
+          .set({
+            state: "abandoned",
+            lifecycleVersion: sql`${this.schema.planDrafts.lifecycleVersion} + 1`,
+          })
+          .where(
+            and(
+              eq(this.schema.planDrafts.tenantId, this.tenantId),
+              eq(this.schema.planDrafts.profileId, input.profileId),
+              eq(this.schema.planDrafts.state, "open"),
+            ),
+          )
+          .run();
         const inserted = this.db
           .insert(this.schema.planDrafts)
           .values({

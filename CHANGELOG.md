@@ -48,6 +48,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Plan sheet could wedge on a stale draft** - rebuilding the plan twice left
+  two open drafts; applying the newer one stranded the sheet on the older,
+  whose base version could never match again, so every edit failed with a
+  conflict. A recompute now abandons the open drafts it supersedes.
+
 - **Console 404s on Library and Checkoff** - a source without a cover image now
   answers 204 instead of 404 (and the card probes covers silently), and
   `GET /plans/:id/phase-manifest` is served (has_phases false without a

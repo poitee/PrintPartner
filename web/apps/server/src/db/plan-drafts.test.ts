@@ -409,6 +409,41 @@ describe("saved Plan drafts", () => {
     database.close();
   });
 
+  it("abandons the previous open draft when a recompute creates a newer one", () => {
+    const { database, repo } = fixture();
+    const sourceRoot = join(database.reposDir, "supersede-source");
+    mkdirSync(join(sourceRoot, "parts"), { recursive: true });
+    writeFileSync(join(sourceRoot, "parts", "bracket.stl"), "solid bracket");
+    const source = repo.createSource({
+      name: "Supersede source",
+      source_kind: "local",
+      local_path: sourceRoot,
+    });
+    const profile = repo.createProfile("Supersede Build", source.id);
+
+    const first = repo.recomputePlanDraft({
+      profileId: profile.id,
+      actor: "test:user",
+      idempotencyKey: "supersede-1",
+    });
+    expect(first.kind).toBe("created");
+    if (first.kind !== "created") throw new Error("first test draft was not created");
+    const second = repo.recomputePlanDraft({
+      profileId: profile.id,
+      actor: "test:user",
+      idempotencyKey: "supersede-2",
+    });
+    expect(second.kind).toBe("created");
+    if (second.kind !== "created") throw new Error("second test draft was not created");
+
+    // Only the newest proposal stays open. If the older one survived, applying
+    // the newer draft would strand the Plan sheet on the stale sibling, whose
+    // base version can never match again, and every edit would 409.
+    expect(repo.getPlanDraft(profile.id, first.draft.id)?.state).toBe("abandoned");
+    expect(repo.getPlanDraft(profile.id, second.draft.id)?.state).toBe("open");
+    database.close();
+  });
+
   it("persists accepted-baseline planning fields and duplicate-key diff across restart", () => {
     const { database, raw, repo } = fixture();
     const sourceRoot = join(database.reposDir, "accepted-source");
