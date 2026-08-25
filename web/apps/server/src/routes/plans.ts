@@ -1,4 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type {
   AcceptedProfileProgress,
   AcceptedProfileSummary,
@@ -37,6 +39,41 @@ type RouteDeps = { repo: AppRepository; dataDir: string; reposDir: string; thumb
 export type PlanSummaryContract = "accepted" | "legacy-v1";
 
 type PlanRouteOptions = { readonly summaryContract?: PlanSummaryContract };
+
+/**
+ * Parse a source's pp-phases.json. Accepts a bare array or {phases:[...]};
+ * every entry needs a name and a folders list. Order and dependency edges are
+ * normalized so the client always receives the full shape.
+ */
+function parsePhaseManifestText(text: string): Array<Record<string, unknown>> | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  const rawPhases = Array.isArray(parsed)
+    ? parsed
+    : parsed && typeof parsed === "object" && Array.isArray((parsed as { phases?: unknown }).phases)
+      ? ((parsed as { phases: unknown[] }).phases)
+      : null;
+  if (!rawPhases || !rawPhases.length) return null;
+  const phases: Array<Record<string, unknown>> = [];
+  for (const [index, entry] of rawPhases.entries()) {
+    if (!entry || typeof entry !== "object") return null;
+    const phase = entry as Record<string, unknown>;
+    if (typeof phase.name !== "string" || !phase.name.trim()) return null;
+    if (!Array.isArray(phase.folders) || phase.folders.some((f) => typeof f !== "string")) return null;
+    phases.push({
+      ...phase,
+      order: typeof phase.order === "number" ? phase.order : index,
+      depends_on: Array.isArray(phase.depends_on)
+        ? phase.depends_on.filter((d) => typeof d === "string")
+        : [],
+    });
+  }
+  return phases;
+}
 
 function presentProfile(summary: AcceptedProfileSummary, contract: PlanSummaryContract) {
   if (contract === "accepted") return { kind: "ready" as const, profile: toProfileSummary(summary) };
@@ -487,6 +524,27 @@ export async function registerPlanRoutes(
     const id = Number((request.params as { id: string }).id);
     if (!deps.repo.getOwnedProfileIdentity(id)) return reply.status(404).send({ detail: "Profile not found" });
     return { profile_id: id, layers: deps.repo.getProfileLayers(id) };
+  });
+
+  app.get("/plans/:id/phase-manifest", async (request, reply) => {
+    const id = Number((request.params as { id: string }).id);
+    if (!deps.repo.getOwnedProfileIdentity(id)) return reply.status(404).send({ detail: "Profile not found" });
+    for (const layer of deps.repo.getProfileLayers(id)) {
+      if (layer.project_id == null) continue;
+      const row = deps.repo.getProjectRow(layer.project_id);
+      if (!row?.localPath) continue;
+      let text: string;
+      try {
+        text = readFileSync(join(row.localPath, "pp-phases.json"), "utf8");
+      } catch {
+        continue;
+      }
+      const phases = parsePhaseManifestText(text);
+      if (phases) return { profile_id: id, has_phases: true, phases };
+    }
+    // The flat parts list is the normal case; answering 200 here keeps the
+    // Progress view from logging a 404 on every load.
+    return { profile_id: id, has_phases: false, phases: [] };
   });
 
   app.put("/plans/:id/layers/base", async (request, reply) => {

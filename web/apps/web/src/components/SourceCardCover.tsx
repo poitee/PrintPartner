@@ -79,13 +79,27 @@ export default function SourceCardCover({
 
   useEffect(() => {
     let cancelled = false;
+    let objectUrl: string | null = null;
     setFailed(false);
     setCoverSrc(null);
-    void sourceCoverUrl(sourceId).then((url) => {
-      if (!cancelled) setCoverSrc(url);
-    });
+    // Probe with fetch instead of an <img> src: most sources have no cover,
+    // and an <img> 404 logs a console error on every Library render.
+    void sourceCoverUrl(sourceId)
+      .then((url) => fetch(url, { credentials: "include" }))
+      .then(async (res) => {
+        // 200 carries the image; 204 means "no cover for this source".
+        if (res.status !== 200) throw new Error(String(res.status));
+        const blob = await res.blob();
+        if (cancelled) return;
+        objectUrl = URL.createObjectURL(blob);
+        setCoverSrc(objectUrl);
+      })
+      .catch(() => {
+        if (!cancelled) setFailed(true);
+      });
     return () => {
       cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
   }, [sourceId, name, sourceKind]);
 

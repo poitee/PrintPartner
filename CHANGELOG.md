@@ -48,6 +48,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Console 404s on Library and Checkoff** - a source without a cover image now
+  answers 204 instead of 404 (and the card probes covers silently), and
+  `GET /plans/:id/phase-manifest` is served (has_phases false without a
+  pp-phases.json, the parsed phases when a source ships one) instead of
+  falling through to the API 404 handler on every Progress load.
+
 - **Plan Remove/Restore did nothing** - the Plan sheet resolved a row to the
   saved draft by `part_key` alone and required exactly one match, so a duplicate
   key or a draft that no longer carried the key threw before any error was

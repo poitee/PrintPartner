@@ -389,9 +389,11 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
     if (!row) return reply.status(404).send({ detail: "Source not found" });
     const coverRel = `source_${id}.img`;
     const ready = await ensureSourceCover(deps.coversDir, toCoverProject(row));
-    if (!ready) return reply.status(404).send({ detail: "No cover image for source" });
+    // 204, not 404: most sources have no cover, and the Library probes this
+    // route for every card — a 404 would log a console error per card.
+    if (!ready) return reply.status(204).send();
     const stream = createReadStreamUnderRoot(deps.coversDir, coverRel);
-    if (!stream) return reply.status(404).send({ detail: "No cover image for source" });
+    if (!stream) return reply.status(204).send();
     return reply.header("Content-Type", coverMediaType(coverRel)).send(stream);
   });
 
