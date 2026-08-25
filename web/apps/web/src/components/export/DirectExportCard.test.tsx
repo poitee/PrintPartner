@@ -7,11 +7,11 @@ import DirectExportCard from "./DirectExportCard";
 afterEach(cleanup);
 
 describe("DirectExportCard", () => {
-  it("exports an unarranged 3MF for selected units", () => {
+  it("exports a single named-object 3MF for selected units", () => {
     const onExport = vi.fn();
     render(<DirectExportCard tokenCount={2} busy={false} onExport={onExport} />);
     expect(screen.getByText("Direct export")).toBeTruthy();
-    expect(screen.getByText(/unarranged named-object 3MF/)).toBeTruthy();
+    expect(screen.getByText(/named-object 3MF/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Direct 3MF" }));
     expect(onExport).toHaveBeenCalledTimes(1);
   });

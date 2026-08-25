@@ -22,15 +22,15 @@ export default function DirectExportCard({ tokenCount, busy, onExport }: Props) 
           Direct export
         </CardTitle>
         <CardDescription className="text-xs leading-relaxed">
-          Skip Printer allocation and arrangement. Download one unarranged named-object 3MF
-          for the selected units.
+          Skip Printer allocation. Download one named-object 3MF holding every selected
+          unit, laid out the way the Plates step showed them.
         </CardDescription>
         <div className="flex flex-wrap gap-1.5 pt-0.5">
           <Badge variant="muted" className="rounded-full px-2 py-0.5 font-mono text-2xs font-normal">
             {tokenCount > 0 ? `${tokenCount} units` : "none selected"}
           </Badge>
           <Badge variant="muted" className="rounded-full px-2 py-0.5 font-mono text-2xs font-normal">
-            no arrangement
+            Plate layout
           </Badge>
         </div>
       </CardHeader>

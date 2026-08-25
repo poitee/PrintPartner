@@ -1,5 +1,11 @@
 import { createHash } from "node:crypto";
-import { encodeAcceptedPlate3mf, safePlanSlug } from "@print-partner/domain";
+import {
+  encodeAcceptedPlate3mf,
+  layOutDirectExportUnits,
+  safePlanSlug,
+  type DirectExportPlacement,
+  type DirectExportPlate,
+} from "@print-partner/domain";
 import type { AcceptedPlanBasis } from "../db/accepted-plan-progress.js";
 import { acceptedPlanBasis } from "../db/accepted-plan-progress.js";
 import type { AppRepository } from "../db/repository.js";
@@ -48,7 +54,10 @@ export type MaterializeDirectExport3mfResult =
   | { readonly kind: "output_failure" };
 
 export type MaterializeDirectExport3mfDependencies = Readonly<{
-  repository: Pick<AppRepository, "getOwnedProfileIdentity" | "readAcceptedPlanOperationalSnapshot">;
+  repository: Pick<
+    AppRepository,
+    "getOwnedProfileIdentity" | "readAcceptedPlanOperationalSnapshot" | "readAcceptedPlateWorkspaceInput"
+  >;
   reposDir: string;
   tenantExportsDir: string;
   limits?: typeof DIRECT_EXPORT_3MF_LIMITS;
@@ -75,6 +84,37 @@ function uniqueTokens(values: readonly string[]): RequiredUnitToken[] | { token:
     tokens.push(token);
   }
   return tokens;
+}
+
+/**
+ * The arrangement the Plates step put in front of the user. Direct export skips
+ * Printer allocation, so this is best effort: before Plates are published there
+ * is nothing to mirror and every unit falls through to the spaced-out strip.
+ */
+function shownArrangement(
+  repository: MaterializeDirectExport3mfDependencies["repository"],
+  profileId: number,
+): Readonly<{
+  plates: readonly DirectExportPlate[];
+  placements: ReadonlyMap<string, DirectExportPlacement>;
+}> {
+  const workspace = repository.readAcceptedPlateWorkspaceInput(profileId);
+  if (workspace.kind !== "ready") return { plates: [], placements: new Map() };
+  const placements = new Map<string, DirectExportPlacement>();
+  for (const plate of workspace.plates) {
+    for (const unit of plate.units) {
+      if (unit.placement === "unplaced") continue;
+      placements.set(unit.token, { plateOrdinal: plate.ordinal, xUm: unit.xUm, yUm: unit.yUm });
+    }
+  }
+  return {
+    plates: workspace.plates.map((plate) => ({
+      ordinal: plate.ordinal,
+      bedWidthUm: plate.bedWidthUm,
+      bedDepthUm: plate.bedDepthUm,
+    })),
+    placements,
+  };
 }
 
 export async function materializeDirectExport3mf(
@@ -126,15 +166,29 @@ export async function materializeDirectExport3mf(
   }
   if (loaded.kind !== "ready") return loaded;
 
-  const bytes = encodeAcceptedPlate3mf(selected.map((unit) => {
-    const geometry = loaded.geometryByToken.get(unit.token);
+  const geometryOf = (token: RequiredUnitToken) => {
+    const geometry = loaded.geometryByToken.get(token);
     if (!geometry) throw new Error("Direct export mesh is missing");
+    return geometry;
+  };
+  const arrangement = shownArrangement(dependencies.repository, command.profileId);
+  const positions = layOutDirectExportUnits({
+    units: selected.map((unit) => ({
+      token: unit.token,
+      widthUm: geometryOf(unit.token).dimensions.widthUm,
+      depthUm: geometryOf(unit.token).dimensions.depthUm,
+    })),
+    placements: arrangement.placements,
+    plates: arrangement.plates,
+  });
+  const bytes = encodeAcceptedPlate3mf(selected.map((unit) => {
+    const position = positions.get(unit.token) ?? { xUm: 0, yUm: 0 };
     return {
       token: unit.token,
       objectName: unit.objectName,
-      xUm: 0,
-      yUm: 0,
-      mesh: geometry.mesh,
+      xUm: position.xUm,
+      yUm: position.yUm,
+      mesh: geometryOf(unit.token).mesh,
     };
   }));
   if (bytes.byteLength > limits.maxOutputBytes) {

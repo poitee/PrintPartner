@@ -35,6 +35,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   no longer read. Free disk space is the only bound; put a request body limit
   on the reverse proxy if you need one.
 
+- **Direct export mirrors the Plates arrangement** - the named-object 3MF from
+  Direct Export places each unit exactly where the published Plates showed it,
+  falling back to a spaced strip for units without a saved placement. Plate
+  meshes are welded on shared edges, and the Export page's Recent panel links
+  each Plate's 3MF plus a zip of all of them.
+
 ### Removed
 
 - **Legacy Plate and auto-slice APIs** - removed mutable `print-plan`,

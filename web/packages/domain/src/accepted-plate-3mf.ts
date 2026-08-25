@@ -43,15 +43,59 @@ function number(value: number): string {
   return Object.is(value, -0) ? "0" : String(value);
 }
 
+type WeldedMesh = Readonly<{
+  vertices: readonly string[];
+  triangles: readonly (readonly [number, number, number])[];
+}>;
+
+/**
+ * 3MF meshes are indexed, not triangle soup: a shared edge has to be the same
+ * pair of vertex indices in both of its triangles. STL carries three fresh
+ * vertices per facet, so emitting its vertices verbatim leaves every edge
+ * unshared - slicers read that as a shell of disconnected facets. Weld vertices
+ * that serialize to identical coordinates, and drop the zero-area facets that
+ * welding collapses (3MF requires a triangle's three indices to be distinct).
+ */
+function weldMesh(object: AcceptedPlate3mfObject): WeldedMesh {
+  const { mesh } = object;
+  const xMm = object.xUm / 1_000;
+  const yMm = object.yUm / 1_000;
+  const coordinates = new Map<string, number>();
+  const vertices: string[] = [];
+  const triangles: Array<readonly [number, number, number]> = [];
+  const coordinate = (index: number): string | null => {
+    const vertex = mesh.vertices[index];
+    if (!vertex) return null;
+    const [x, y, z] = vertex;
+    return `x="${number(xMm + (x - mesh.bounds.minX))}" y="${number(yMm + (y - mesh.bounds.minY))}" z="${number(z - mesh.bounds.minZ)}"`;
+  };
+  const intern = (key: string): number => {
+    const existing = coordinates.get(key);
+    if (existing !== undefined) return existing;
+    const id = vertices.length;
+    coordinates.set(key, id);
+    vertices.push(key);
+    return id;
+  };
+  for (const [a, b, c] of mesh.faces) {
+    const first = coordinate(a);
+    const second = coordinate(b);
+    const third = coordinate(c);
+    if (first === null || second === null || third === null) continue;
+    if (first === second || second === third || first === third) continue;
+    triangles.push([intern(first), intern(second), intern(third)]);
+  }
+  return { vertices, triangles };
+}
+
 function modelXml(objects: readonly AcceptedPlate3mfObject[]): string {
   const resources = objects.map((object, index) => {
     const id = index + 1;
-    const xMm = object.xUm / 1_000;
-    const yMm = object.yUm / 1_000;
-    const vertices = object.mesh.vertices
-      .map(([x, y, z]) => `        <vertex x="${number(xMm + (x - object.mesh.bounds.minX))}" y="${number(yMm + (y - object.mesh.bounds.minY))}" z="${number(z - object.mesh.bounds.minZ)}"/>`)
+    const welded = weldMesh(object);
+    const vertices = welded.vertices
+      .map((vertex) => `        <vertex ${vertex}/>`)
       .join("\n");
-    const triangles = object.mesh.faces
+    const triangles = welded.triangles
       .map(([v1, v2, v3]) => `        <triangle v1="${v1}" v2="${v2}" v3="${v3}"/>`)
       .join("\n");
     return `    <object id="${id}" name="${xml(object.objectName)}" partnumber="${xml(object.token)}" type="model">

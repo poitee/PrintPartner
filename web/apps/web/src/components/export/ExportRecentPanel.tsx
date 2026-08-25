@@ -107,9 +107,29 @@ export default function ExportRecentPanel() {
               <span className="text-xs font-semibold">Accepted Plate 3MF</span>
               {revisionLabel ? <span className="text-xs text-muted-foreground">{revisionLabel}</span> : null}
               {result ? (
-                <a className="text-xs font-medium text-primary underline" href={result.download_url} download>
-                  Download 3MF
-                </a>
+                <div className="flex flex-col gap-1">
+                  {result.plates.map((plate) => (
+                    <a
+                      key={plate.plate_id}
+                      className="text-xs font-medium text-primary underline"
+                      href={plate.download_url}
+                      download={plate.filename}
+                    >
+                      {result.plates.length === 1
+                        ? "Download 3MF"
+                        : `Plate ${plate.ordinal} 3MF`}
+                    </a>
+                  ))}
+                  {result.plates.length > 1 ? (
+                    <a
+                      className="text-xs text-muted-foreground underline"
+                      href={result.bundle_download_url}
+                      download
+                    >
+                      All {result.plates.length} Plates (.zip)
+                    </a>
+                  ) : null}
+                </div>
               ) : (
                 <span className="text-xs text-destructive">{job.error || job.status}</span>
               )}

@@ -41,6 +41,32 @@ describe("encodeAcceptedPlate3mf", () => {
     expect(header.readUInt16LE(12)).toBe(33);
   });
 
+  it("welds duplicate vertices and drops zero-area facets", () => {
+    // A square split into two triangles, carried the way an STL carries it:
+    // six vertices, of which two pairs coincide, plus one degenerate facet.
+    const corners: Array<[number, number, number]> = [[0, 0, 0], [4, 0, 0], [4, 4, 0], [0, 4, 0]];
+    const soup = {
+      vertices: [
+        corners[0]!, corners[1]!, corners[2]!,
+        corners[0]!, corners[2]!, corners[3]!,
+        corners[0]!, corners[1]!, corners[1]!,
+      ] as Array<[number, number, number]>,
+      faces: [[0, 1, 2], [3, 4, 5], [6, 7, 8]] as Array<[number, number, number]>,
+      bounds: { minX: 0, minY: 0, minZ: 0, maxX: 4, maxY: 4, maxZ: 0, widthMm: 4, depthMm: 4, heightMm: 0 },
+    };
+    const xml = strFromU8(unzipSync(encodeAcceptedPlate3mf([{
+      token: "ppu_00000000000000000000000000000002",
+      objectName: "Square",
+      xUm: 0,
+      yUm: 0,
+      mesh: soup,
+    }]))["3D/3dmodel.model"]!);
+    expect([...xml.matchAll(/<vertex /g)]).toHaveLength(4);
+    expect([...xml.matchAll(/<triangle /g)].length).toBe(2);
+    expect(xml).toContain('<triangle v1="0" v2="1" v3="2"/>');
+    expect(xml).toContain('<triangle v1="0" v2="2" v3="3"/>');
+  });
+
   it("assigns local IDs and emits byte-identical packages", () => {
     const objects = [1, 2].map((index) => ({
       token: `ppu_${index.toString(16).padStart(32, "0")}`,

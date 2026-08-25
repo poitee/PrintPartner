@@ -195,7 +195,7 @@ describe("accepted Plate export delivery routes", () => {
     expect(xml).toContain('vertex x="0" y="0" z="0"');
   });
 
-  it("still exports an unarranged 3MF after Plates are published", async () => {
+  it("mirrors the published Plate layout in the direct 3MF", async () => {
     const { app, profile, token } = await fixture();
     const started = await app.inject({
       method: "POST",
@@ -212,7 +212,9 @@ describe("accepted Plate export delivery routes", () => {
     });
     const xml = modelXml(downloaded.rawPayload);
     expect(xml).toContain(`partnumber="${token}"`);
-    expect(xml).toContain('vertex x="0" y="0" z="0"');
+    // The fixture's Plate places this unit 4mm in from the bed origin.
+    expect(xml).toContain('vertex x="4" y="4" z="0"');
+    expect(xml).not.toContain('vertex x="0" y="0" z="0"');
   });
 
   it("returns root and v1 jobs with byte-exact download URLs", async () => {
