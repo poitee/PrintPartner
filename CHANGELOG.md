@@ -35,6 +35,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Compressed responses and immutable asset caching** - the server now serves
+  brotli/gzip for pages, assets, and API JSON (event streams stay unbuffered),
+  and content-hashed assets cache for a year. First-load JS drops from ~1 MB
+  to ~350 KB on the wire.
+
 - **Upload size caps removed** - the server no longer enforces request-body,
   multipart, STL mesh, or PNG thumbnail byte limits, and `UPLOAD_MAX_BYTES` is
   no longer read. Free disk space is the only bound; put a request body limit

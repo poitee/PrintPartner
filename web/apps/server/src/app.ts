@@ -1,6 +1,7 @@
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
+import compress from "@fastify/compress";
 import multipart from "@fastify/multipart";
 import cookie from "@fastify/cookie";
 import rateLimit from "@fastify/rate-limit";
@@ -145,6 +146,14 @@ export async function buildApp(config: ServerConfig, ports: RuntimePorts) {
     cache: 10000, // Store limit info for max 10k IPs
     allowList: ["/health"], // Skip rate limiting for health checks
     redis: undefined, // Use in-memory store for single-instance deployments
+  });
+  // Compress SPA assets and API JSON; event streams are excluded so MCP and
+  // job streams stay unbuffered. Uncompressed JS alone is ~1 MB on first load.
+  await app.register(compress, {
+    global: true,
+    encodings: ["br", "gzip"],
+    customTypes:
+      /^application\/(json|javascript|manifest\+json|xml|wasm)|^text\/(?!event-stream)|^image\/svg\+xml|^font\/ttf/,
   });
   await app.register(websocket);
   await app.register(multipart, {
@@ -308,7 +317,9 @@ export async function buildApp(config: ServerConfig, ports: RuntimePorts) {
         // Vite content-hashes all asset filenames (index-AbCdEf.js) so they
         // are safe to cache forever. index.html must NOT be cached (no hash).
         setHeaders: (reply, filePath) => {
-          if (/\/assets\/[^/]+\.[a-f0-9]{8,}\.(js|css|woff2?|png|svg|webp)$/i.test(filePath)) {
+          // Vite hashes look like index-BGIfkiEk.js — a base64ish suffix after
+          // a dash, not dot-separated hex.
+          if (/\/assets\/[^/]+-[\w-]{8,}\.(js|css|woff2?|png|svg|webp)$/i.test(filePath)) {
             void reply.header("Cache-Control", "public, max-age=31536000, immutable");
           } else {
             void reply.header("Cache-Control", "no-cache");
