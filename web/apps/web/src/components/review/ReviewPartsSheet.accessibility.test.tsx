@@ -59,10 +59,10 @@ describe("ReviewPartsSheet accessibility", () => {
     queryMocks.usePlanReviewQuery.mockClear();
     queryMocks.usePlanWorkspace.mockReturnValue({
       draftWorkspace: null,
-      setQuantity: vi.fn(),
-      setIncluded: vi.fn(),
-      setSpoolmanSpool: vi.fn(),
-      toggleUnit: vi.fn(),
+      setQuantity: vi.fn(async () => {}),
+      setIncluded: vi.fn(async () => {}),
+      setSpoolmanSpool: vi.fn(async () => {}),
+      toggleUnit: vi.fn(async () => {}),
       busyPartId: null,
     });
   });
@@ -156,10 +156,10 @@ describe("ReviewPartsSheet accessibility", () => {
         diff: { base_is_current: true, added: [], removed: [], changed: [] },
         reconciliation: { kind: "ready", reused_units: 0, new_units: 0, surplus_units: 0 },
       },
-      setQuantity: vi.fn(),
-      setIncluded: vi.fn(),
-      setSpoolmanSpool: vi.fn(),
-      toggleUnit: vi.fn(),
+      setQuantity: vi.fn(async () => {}),
+      setIncluded: vi.fn(async () => {}),
+      setSpoolmanSpool: vi.fn(async () => {}),
+      toggleUnit: vi.fn(async () => {}),
       busyPartId: null,
     });
 
@@ -176,7 +176,7 @@ describe("ReviewPartsSheet accessibility", () => {
   });
 
   it("removes a proposed part with one click", async () => {
-    const setIncluded = vi.fn();
+    const setIncluded = vi.fn(async () => {});
     const acceptedReview: PlanReview = {
       ...review,
       totals: { ...review.totals, included_parts: 1, total_print_units: 1 },
@@ -231,10 +231,10 @@ describe("ReviewPartsSheet accessibility", () => {
         diff: { base_is_current: true, added: [], removed: [], changed: [] },
         reconciliation: { kind: "ready", reused_units: 0, new_units: 0, surplus_units: 0 },
       },
-      setQuantity: vi.fn(),
+      setQuantity: vi.fn(async () => {}),
       setIncluded,
-      setSpoolmanSpool: vi.fn(),
-      toggleUnit: vi.fn(),
+      setSpoolmanSpool: vi.fn(async () => {}),
+      toggleUnit: vi.fn(async () => {}),
       busyPartId: null,
     });
 
@@ -246,6 +246,9 @@ describe("ReviewPartsSheet accessibility", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Remove" }));
 
-    expect(setIncluded).toHaveBeenCalledWith(42, "frame/bracket.stl", false);
+    expect(setIncluded).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 42, match_key: "frame/bracket.stl" }),
+      false,
+    );
   });
 });

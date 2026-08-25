@@ -55,6 +55,15 @@ const savedWorkspace: PlanDraftWorkspace = {
   reconciliation: { kind: "ready", reused_units: 0, new_units: 0, surplus_units: 0 },
 };
 
+/** The Plan row the user clicks — identity the draft is resolved against. */
+const planRow = {
+  id: 42,
+  match_key: "frame/bracket.stl",
+  relative_path: "frame/bracket.stl",
+  source_layer: "base:Voron",
+  filename: "bracket.stl",
+};
+
 const replacementWorkspace: PlanDraftWorkspace = {
   ...savedWorkspace,
   draft: { ...savedWorkspace.draft, snapshot_digest: "b".repeat(64) },
@@ -200,7 +209,7 @@ describe("PlanWorkspaceProvider saved draft lifecycle", () => {
     const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(client) });
 
     await act(async () => {
-      await hook.result.current.setIncluded(42, "frame/bracket.stl", false);
+      await hook.result.current.setIncluded(planRow, false);
     });
 
     expect(recomputePlanDraft).toHaveBeenCalledWith(7);
@@ -225,7 +234,7 @@ describe("PlanWorkspaceProvider saved draft lifecycle", () => {
       .mockResolvedValueOnce(editedWorkspace);
 
     await act(async () => {
-      await hook.result.current.setIncluded(42, "frame/bracket.stl", false);
+      await hook.result.current.setIncluded(planRow, false);
     });
 
     expect(editPlanDraftParts).toHaveBeenCalledTimes(2);

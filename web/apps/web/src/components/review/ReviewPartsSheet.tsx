@@ -432,16 +432,18 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
     setUi((prev) => ({ ...prev, ...patch }));
   }, []);
 
+  // Draft edits report failures through draftError (rendered by the Plan page),
+  // so swallowing the rejection here does not hide the outcome.
   const onQtyChange = (part: ReviewPart, next: number) => {
-    void setQuantity(part.id, part.match_key, next);
+    void setQuantity(part, next).catch(() => {});
   };
 
   const onRemove = (part: ReviewPart) => {
-    void setIncluded(part.id, part.match_key, false);
+    void setIncluded(part, false).catch(() => {});
   };
 
   const onRestore = (part: ReviewPart) => {
-    void setIncluded(part.id, part.match_key, true);
+    void setIncluded(part, true).catch(() => {});
   };
 
   const onSpoolChange = (partId: number, spoolman_spool_id: string | null) => {

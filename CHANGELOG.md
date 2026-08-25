@@ -46,6 +46,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   meshes are welded on shared edges, and the Export page's Recent panel links
   each Plate's 3MF plus a zip of all of them.
 
+### Fixed
+
+- **Plan Remove/Restore did nothing** - the Plan sheet resolved a row to the
+  saved draft by `part_key` alone and required exactly one match, so a duplicate
+  key or a draft that no longer carried the key threw before any error was
+  recorded. The click discarded that rejection, leaving a dead button. Rows now
+  fall back to source layer plus relative path, and every failure reports through
+  the Plan page alert.
+
 ### Removed
 
 - **Legacy Plate and auto-slice APIs** - removed mutable `print-plan`,

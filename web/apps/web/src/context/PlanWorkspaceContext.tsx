@@ -35,7 +35,18 @@ import {
 import { invalidateProfiles } from "../queries/profiles";
 import { queryKeys } from "../queries/keys";
 import { usePlanDraftListQuery, usePlanDraftWorkspaceQuery } from "../queries/planDraft";
+import {
+  draftPartMatchError,
+  resolveDraftPart,
+  type PlanRowIdentity,
+} from "../lib/planDraftPartMatch";
 import { useProfileSelection } from "./ProfileContext";
+
+/** The Plan row being edited — enough identity to find it in the saved draft. */
+export type PlanEditablePart = PlanRowIdentity & {
+  readonly id: number;
+  readonly filename: string;
+};
 
 type PlanWorkspaceValue = {
   review: PlanReview | null;
@@ -51,8 +62,8 @@ type PlanWorkspaceValue = {
   rebaseActivePlanDraft: () => Promise<PlanDraftWorkspace>;
   reconcileActivePlanDraft: (decisions: RequiredUnitDecisionContract[]) => Promise<PlanDraftWorkspace>;
   editActivePlanDraft: (decisions: PlanDraftPartDecisionContract[]) => Promise<PlanDraftWorkspace>;
-  setQuantity: (partId: number, partKey: string, qty: number) => Promise<void>;
-  setIncluded: (partId: number, partKey: string, included: boolean) => Promise<void>;
+  setQuantity: (part: PlanEditablePart, qty: number) => Promise<void>;
+  setIncluded: (part: PlanEditablePart, included: boolean) => Promise<void>;
   setSpoolmanSpool: (partId: number, spoolman_spool_id: string | null) => Promise<void>;
   toggleUnit: (partId: number, unitIndex: number, completed: boolean) => Promise<void>;
   toggleAssembled: (partId: number, unitIndex: number, assembled: boolean) => Promise<void>;
@@ -210,28 +221,33 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
   }, [currentDraftWorkspace, editWorkspaceParts]);
 
   const editDraft = useCallback(async (
-    partId: number,
-    partKey: string,
+    part: PlanEditablePart,
     decision: "included" | "quantity",
     value: boolean | number,
   ) => {
-    setBusyPartId(partId);
+    setBusyPartId(part.id);
     setDraftMutationError(null);
+    // Every exit reports through draftMutationError: a Plan click that fails
+    // silently reads to the user as a dead button.
+    // Explicit annotation so TypeScript narrows on the `never` return.
+    const fail: (message: string) => never = (message) => {
+      setDraftMutationError(message);
+      throw new Error(message);
+    };
     try {
       for (let attempt = 0; attempt < 2; attempt += 1) {
         // The Plan section is also an editing surface. Create a draft on the
         // first attempt when the user has not opened one yet.
         const workspace = currentDraftWorkspace() ?? (attempt === 0 ? await startPlanDraft() : null);
-        if (!workspace) throw new Error("Rebuild the Plan to create a saved draft first");
-        const matches = workspace.parts.filter((part) => part.part_key === partKey);
-        if (matches.length !== 1) {
-          throw new Error("The saved draft no longer has one matching Part");
-        }
+        if (!workspace) fail("Rebuild the Plan to create a saved draft first");
+        const match = resolveDraftPart(workspace.parts, part);
+        if (match.kind !== "resolved") fail(draftPartMatchError(match, part.filename));
+        const draftPartId = match.part.draft_part_id;
         try {
           await persistDraftEdit(workspace, [
             decision === "included"
-              ? { kind: "set_included", draft_part_ids: [matches[0]!.draft_part_id], value: Boolean(value) }
-              : { kind: "set_quantity_override", draft_part_ids: [matches[0]!.draft_part_id], value: Number(value) },
+              ? { kind: "set_included", draft_part_ids: [draftPartId], value: Boolean(value) }
+              : { kind: "set_quantity_override", draft_part_ids: [draftPartId], value: Number(value) },
           ]);
           return;
         } catch (error) {
@@ -250,18 +266,18 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
   }, [currentDraftWorkspace, persistDraftEdit, replaceFromConflict, startPlanDraft]);
 
   const setQuantity = useCallback(
-    async (partId: number, partKey: string, qty: number) => {
+    async (part: PlanEditablePart, qty: number) => {
       if (!review) return;
       const clamped = Math.max(1, Math.floor(qty));
-      await editDraft(partId, partKey, "quantity", clamped);
+      await editDraft(part, "quantity", clamped);
     },
     [review, editDraft],
   );
 
   const setIncluded = useCallback(
-    async (partId: number, partKey: string, included: boolean) => {
+    async (part: PlanEditablePart, included: boolean) => {
       if (!review) return;
-      await editDraft(partId, partKey, "included", included);
+      await editDraft(part, "included", included);
     },
     [review, editDraft],
   );
