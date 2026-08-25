@@ -28,6 +28,76 @@ describe("SourceCategoryManager", () => {
     vi.clearAllMocks();
   });
 
+  it("nests a new subcategory under its category and saves the full path", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Number.POSITIVE_INFINITY } },
+    });
+    queryClient.setQueryData(queryKeys.sourceCategories, ["Voron"]);
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <SourceCategoryManager engineReady />
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Add subcategory under Voron" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Subcategory 2" }), {
+      target: { value: "Voron 2.4" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save categories" }));
+
+    await waitFor(() => expect(vi.mocked(saveSourceCategories)).toHaveBeenCalled());
+    expect(vi.mocked(saveSourceCategories).mock.calls[0]?.[0]).toEqual({
+      categories: ["Voron", "Voron/Voron 2.4"],
+      replacements: {},
+    });
+  });
+
+  it("moves a renamed category's subcategories with it", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Number.POSITIVE_INFINITY } },
+    });
+    queryClient.setQueryData(queryKeys.sourceCategories, ["Voron", "Voron/Trident"]);
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <SourceCategoryManager engineReady />
+      </QueryClientProvider>,
+    );
+
+    fireEvent.change(await screen.findByRole("textbox", { name: "Category 1" }), {
+      target: { value: "Voron kits" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save categories" }));
+
+    await waitFor(() => expect(vi.mocked(saveSourceCategories)).toHaveBeenCalled());
+    expect(vi.mocked(saveSourceCategories).mock.calls[0]?.[0]).toEqual({
+      categories: ["Voron kits", "Voron kits/Trident"],
+      replacements: { Voron: "Voron kits", "Voron/Trident": "Voron kits/Trident" },
+    });
+  });
+
+  it("rejects a slash typed into a category name", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Number.POSITIVE_INFINITY } },
+    });
+    queryClient.setQueryData(queryKeys.sourceCategories, ["Voron"]);
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <SourceCategoryManager engineReady />
+      </QueryClientProvider>,
+    );
+
+    fireEvent.change(await screen.findByRole("textbox", { name: "Category 1" }), {
+      target: { value: "Voron/Trident" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save categories" }));
+
+    expect(await screen.findByText(/use Add sub to nest one/)).toBeTruthy();
+    expect(vi.mocked(saveSourceCategories)).not.toHaveBeenCalled();
+  });
+
   it("keeps an unsaved draft local and publishes a successful save to shared state", async () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, staleTime: Number.POSITIVE_INFINITY } },

@@ -73,6 +73,84 @@ describe("AppRepository", () => {
     });
   });
 
+  it("moves sources under a renamed parent category and its subcategories", () => {
+    withRepo((repo) => {
+      repo.saveSourceCategories(["Voron", "Voron/Trident", "Toolheads"]);
+      const parent = repo.createSource({ name: "Voron docs", metadata: { category: "Voron" } });
+      const child = repo.createSource({
+        name: "Trident frame",
+        metadata: { category: "Voron/Trident" },
+      });
+
+      repo.saveSourceCategories(["Voron kits", "Voron kits/Trident", "Toolheads"], {
+        Voron: "Voron kits",
+        "Voron/Trident": "Voron kits/Trident",
+      });
+
+      expect(repo.getSource(parent.id)?.category).toBe("Voron kits");
+      expect(repo.getSource(child.id)?.category).toBe("Voron kits/Trident");
+    });
+  });
+
+  it("keeps subcategory sources with the surviving parent when the subcategory is deleted", () => {
+    withRepo((repo) => {
+      repo.saveSourceCategories(["Voron", "Voron/Trident"]);
+      const source = repo.createSource({
+        name: "Trident frame",
+        metadata: { category: "Voron/Trident" },
+      });
+
+      repo.saveSourceCategories(["Voron"]);
+
+      expect(repo.getSource(source.id)?.category).toBe("Voron");
+    });
+  });
+
+  it("uncategorises subcategory sources when the whole tree is removed", () => {
+    withRepo((repo) => {
+      repo.saveSourceCategories(["Voron", "Voron/Trident", "Toolheads"]);
+      const source = repo.createSource({
+        name: "Trident frame",
+        metadata: { category: "Voron/Trident" },
+      });
+
+      repo.saveSourceCategories(["Toolheads"]);
+
+      expect(repo.getSource(source.id)?.category).toBeNull();
+    });
+  });
+
+  it("saves a subcategory without its parent by filling the parent in", () => {
+    withRepo((repo) => {
+      expect(repo.saveSourceCategories(["Voron/Trident"])).toEqual(["Voron", "Voron/Trident"]);
+      expect(repo.getSourceCategoryTree()).toMatchObject([
+        { path: "Voron", children: [{ path: "Voron/Trident", name: "Trident", depth: 1 }] },
+      ]);
+    });
+  });
+
+  it("canonicalizes a category path assigned to a source", () => {
+    withRepo((repo) => {
+      repo.saveSourceCategories(["Voron", "Voron/Trident"]);
+      const source = repo.createSource({ name: "Trident frame" });
+
+      repo.updateSource(source.id, { metadata: { category: " Voron / Trident " } });
+
+      expect(repo.getSource(source.id)?.category).toBe("Voron/Trident");
+    });
+  });
+
+  it("refuses to move a category inside its own subtree", () => {
+    withRepo((repo) => {
+      repo.saveSourceCategories(["Voron", "Voron/Trident"]);
+      expect(() =>
+        repo.saveSourceCategories(["Voron/Trident", "Voron/Trident/Voron"], {
+          Voron: "Voron/Trident/Voron",
+        }),
+      ).toThrow(/inside itself/);
+    });
+  });
+
   it("rejects a category replacement that is absent from the saved list", () => {
     withRepo((repo) => {
       expect(() =>

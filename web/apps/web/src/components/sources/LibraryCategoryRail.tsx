@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   DndContext,
   KeyboardSensor,
@@ -14,9 +15,18 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+import { ChevronDown, ChevronRight } from "lucide-react";
+import {
+  buildSourceCategoryTree,
+  categoryParentPath,
+  flattenSourceCategoryTree,
+  isCategoryPathWithin,
+  type SourceCategoryNode,
+} from "@print-partner/contracts";
 import { cn } from "@/lib/utils";
 import { moveItemById } from "../../lib/reorderList";
 import { UNCategorized_FILTER } from "./sourceLabels";
+import { rollupCategoryCount } from "../../lib/sourceCategoryAssignment";
 import { categorySwatch } from "../../lib/librarySourceMeta";
 import type { SourceKind } from "./sourceLabels";
 import { SortableDragHandle, SortableShell } from "../dnd/SortableDragHandle";
@@ -29,20 +39,27 @@ export type LibraryAddKind =
 
 type CategoryRow = {
   id: string;
+  /** Full category path; `"all"` / the Uncategorised sentinel for the fixed rows. */
   name: string;
+  /** Leaf name shown in the rail. */
+  label: string;
+  depth: number;
   count: number;
   swatch: string;
   sortable: boolean;
+  hasChildren: boolean;
+  collapsed: boolean;
 };
 
 type Props = {
+  /** Flat, ordered category paths ("Printers", "Printers/Frame"). */
   categories: string[];
   sourcesByCategory: Map<string | null, number>;
   totalCount: number;
   categoryFilter: string;
   onCategoryFilterChange: (value: string) => void;
   onManageCategories: () => void;
-  /** Persist a new flat category order (API has no nesting / parent grouping). */
+  /** Persist a new order. Categories only move among their own siblings. */
   onCategoriesReorder?: (categories: string[]) => void;
   /** Drop a Library source (or file-from-source) onto this category. */
   onDropSourceCategory?: (sourceId: number, category: string | null) => void;
@@ -50,35 +67,111 @@ type Props = {
   className?: string;
 };
 
+/**
+ * Rail rows for the category tree, skipping anything inside a collapsed parent.
+ * Counts roll up, so "Printers" shows its own Sources plus every subcategory's.
+ */
 function buildRows(
-  categories: string[],
+  tree: SourceCategoryNode[],
   sourcesByCategory: Map<string | null, number>,
   totalCount: number,
+  collapsed: ReadonlySet<string>,
 ): CategoryRow[] {
   const uncategorized = sourcesByCategory.get(null) ?? 0;
+  const categoryRows: CategoryRow[] = [];
+
+  for (const node of flattenSourceCategoryTree(tree)) {
+    const hiddenByParent = [...collapsed].some(
+      (path) => path !== node.path && isCategoryPathWithin(node.path, path),
+    );
+    if (hiddenByParent) continue;
+    categoryRows.push({
+      id: node.path,
+      name: node.path,
+      label: node.name,
+      depth: node.depth,
+      count: rollupCategoryCount(sourcesByCategory, node.path),
+      swatch: categorySwatch(node.path),
+      sortable: true,
+      hasChildren: node.children.length > 0,
+      collapsed: collapsed.has(node.path),
+    });
+  }
+
   return [
     {
       id: "all",
-      name: "All sources",
+      name: "all",
+      label: "All sources",
+      depth: 0,
       count: totalCount,
       swatch: "var(--primary)",
       sortable: false,
+      hasChildren: false,
+      collapsed: false,
     },
-    ...categories.map((name) => ({
-      id: name,
-      name,
-      count: sourcesByCategory.get(name) ?? 0,
-      swatch: categorySwatch(name),
-      sortable: true,
-    })),
+    ...categoryRows,
     {
       id: UNCategorized_FILTER,
-      name: "Uncategorised",
+      name: UNCategorized_FILTER,
+      label: "Uncategorised",
+      depth: 0,
       count: uncategorized,
       swatch: "var(--border)",
       sortable: false,
+      hasChildren: false,
+      collapsed: false,
     },
   ];
+}
+
+/** Reorder `active` next to `over` when both share a parent; otherwise no-op. */
+function reorderWithinSiblings(
+  categories: readonly string[],
+  activePath: string,
+  overPath: string,
+): string[] | null {
+  const parent = categoryParentPath(activePath);
+  if (parent !== categoryParentPath(overPath)) return null;
+
+  const tree = buildSourceCategoryTree(categories);
+  const siblings = parent
+    ? flattenSourceCategoryTree(tree).find((node) => node.path === parent)?.children
+    : tree;
+  if (!siblings) return null;
+
+  const order = moveItemById(
+    siblings.map((node) => node.path),
+    activePath,
+    overPath,
+  );
+  const ordered = order.map(
+    (path) => siblings.find((node) => node.path === path)!,
+  );
+
+  // Rebuild the flat list, replacing this sibling group with its new order and
+  // keeping every subtree intact.
+  const emit = (nodes: readonly SourceCategoryNode[], out: string[]) => {
+    for (const node of nodes) {
+      out.push(node.path);
+      emit(node.children, out);
+    }
+  };
+  const next: string[] = [];
+  const walk = (nodes: readonly SourceCategoryNode[]) => {
+    for (const node of nodes) {
+      next.push(node.path);
+      if (node.path === parent) {
+        emit(ordered, next);
+        continue;
+      }
+      walk(node.children);
+    }
+  };
+  if (parent) walk(tree);
+  else emit(ordered, next);
+
+  return next;
 }
 
 const ADD_ACTIONS: Array<{ id: string; kind: LibraryAddKind; label: string }> = [
@@ -90,17 +183,83 @@ const ADD_ACTIONS: Array<{ id: string; kind: LibraryAddKind; label: string }> = 
   { id: "self", kind: "self", label: "Another instance" },
 ];
 
+/** Indent one level per nesting step, leaving room for the expand chevron. */
+function indentStyle(depth: number) {
+  return depth > 0 ? { paddingLeft: `${depth * 0.75}rem` } : undefined;
+}
+
+function CategoryRowBody({
+  row,
+  active,
+  onSelect,
+  onToggleCollapsed,
+}: {
+  row: CategoryRow;
+  active: boolean;
+  onSelect: () => void;
+  onToggleCollapsed?: (path: string) => void;
+}) {
+  return (
+    <div className="flex min-w-0 flex-1 items-center" style={indentStyle(row.depth)}>
+      {row.hasChildren && onToggleCollapsed ? (
+        <button
+          type="button"
+          className="flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground"
+          aria-expanded={!row.collapsed}
+          aria-label={`${row.collapsed ? "Expand" : "Collapse"} ${row.label}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleCollapsed(row.name);
+          }}
+        >
+          {row.collapsed ? (
+            <ChevronRight className="size-3" aria-hidden />
+          ) : (
+            <ChevronDown className="size-3" aria-hidden />
+          )}
+        </button>
+      ) : (
+        <span className="w-5 shrink-0" aria-hidden />
+      )}
+      <button
+        type="button"
+        onClick={onSelect}
+        className="flex min-w-0 flex-1 items-center gap-2 rounded-md py-1.5 pr-2.5 text-left transition-colors"
+      >
+        <span
+          className="h-[7px] w-[7px] shrink-0 rounded-[2px]"
+          style={{ background: row.swatch }}
+          aria-hidden
+        />
+        <span
+          className={cn(
+            "min-w-0 flex-1 truncate text-xs",
+            active ? "font-semibold" : "font-medium",
+          )}
+        >
+          {row.label}
+        </span>
+        <span className="ml-auto font-mono text-2xs tabular-nums text-muted-foreground">
+          {row.count}
+        </span>
+      </button>
+    </div>
+  );
+}
+
 function SortableCategoryNavItem({
   row,
   active,
   reorderEnabled,
   onSelect,
+  onToggleCollapsed,
   onDropSourceCategory,
 }: {
   row: CategoryRow;
   active: boolean;
   reorderEnabled: boolean;
   onSelect: () => void;
+  onToggleCollapsed: (path: string) => void;
   onDropSourceCategory?: (sourceId: number, category: string | null) => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
@@ -111,13 +270,10 @@ function SortableCategoryNavItem({
     transition,
   };
 
-  const dropCategory =
-    row.id === "all" ? undefined : row.id === UNCategorized_FILTER ? null : row.name;
-
   return (
     <SortableShell style={style} isDragging={isDragging} className="rounded-md">
       <CategoryDropTarget
-        category={dropCategory}
+        category={row.name}
         onDropSource={onDropSourceCategory}
         className="rounded-md"
       >
@@ -128,7 +284,7 @@ function SortableCategoryNavItem({
             active ? "bg-primary/10 text-primary" : "text-foreground hover:bg-accent/70",
           )}
         >
-          {reorderEnabled && row.sortable ? (
+          {reorderEnabled ? (
             <SortableDragHandle
               attributes={attributes}
               listeners={listeners}
@@ -138,31 +294,12 @@ function SortableCategoryNavItem({
           ) : (
             <span className="w-1.5 shrink-0" aria-hidden />
           )}
-          <button
-            type="button"
-            onClick={onSelect}
-            className={cn(
-              "flex min-w-0 flex-1 items-center gap-2 rounded-md py-1.5 pr-2.5 text-left transition-colors",
-              reorderEnabled && row.sortable ? "pl-0" : "pl-2.5",
-            )}
-          >
-            <span
-              className="h-[7px] w-[7px] shrink-0 rounded-[2px]"
-              style={{ background: row.swatch }}
-              aria-hidden
-            />
-            <span
-              className={cn(
-                "min-w-0 flex-1 truncate text-xs",
-                active ? "font-semibold" : "font-medium",
-              )}
-            >
-              {row.name}
-            </span>
-            <span className="ml-auto font-mono text-2xs tabular-nums text-muted-foreground">
-              {row.count}
-            </span>
-          </button>
+          <CategoryRowBody
+            row={row}
+            active={active}
+            onSelect={onSelect}
+            onToggleCollapsed={onToggleCollapsed}
+          />
         </div>
       </CategoryDropTarget>
     </SortableShell>
@@ -182,9 +319,20 @@ export default function LibraryCategoryRail({
   onAddSource,
   className,
 }: Props) {
-  const rows = buildRows(categories, sourcesByCategory, totalCount);
-  const sortableIds = categories;
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set<string>());
+  const tree = buildSourceCategoryTree(categories);
+  const rows = buildRows(tree, sourcesByCategory, totalCount, collapsed);
+  const sortableIds = rows.filter((row) => row.sortable).map((row) => row.id);
   const reorderEnabled = Boolean(onCategoriesReorder) && categories.length > 1;
+
+  const toggleCollapsed = (path: string) => {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  };
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
@@ -195,14 +343,14 @@ export default function LibraryCategoryRail({
     if (!onCategoriesReorder) return;
     const { active, over } = event;
     if (!over || active.id === over.id) return;
-    const next = moveItemById(categories, String(active.id), String(over.id));
-    if (next === categories) return;
-    onCategoriesReorder(next);
+    // Dragging across nesting levels would silently re-parent a category; the
+    // category manager is where moves belong.
+    const next = reorderWithinSiblings(categories, String(active.id), String(over.id));
+    if (next) onCategoriesReorder(next);
   };
 
   const renderStaticRow = (row: CategoryRow, active: boolean) => {
-    const dropCategory =
-      row.id === "all" ? undefined : row.id === UNCategorized_FILTER ? null : row.name;
+    const dropCategory = row.id === "all" ? undefined : null;
     return (
       <CategoryDropTarget
         key={row.id}
@@ -210,31 +358,18 @@ export default function LibraryCategoryRail({
         onDropSource={onDropSourceCategory}
         className="rounded-md"
       >
-        <button
-          type="button"
-          onClick={() => onCategoryFilterChange(row.id === "all" ? "all" : row.id)}
+        <div
           className={cn(
-            "flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left transition-colors",
+            "flex items-center gap-0.5 rounded-md pl-2.5",
             active ? "bg-primary/10 text-primary" : "text-foreground hover:bg-accent/70",
           )}
         >
-          <span
-            className="h-[7px] w-[7px] shrink-0 rounded-[2px]"
-            style={{ background: row.swatch }}
-            aria-hidden
+          <CategoryRowBody
+            row={row}
+            active={active}
+            onSelect={() => onCategoryFilterChange(row.id === "all" ? "all" : row.id)}
           />
-          <span
-            className={cn(
-              "min-w-0 flex-1 truncate text-xs",
-              active ? "font-semibold" : "font-medium",
-            )}
-          >
-            {row.name}
-          </span>
-          <span className="ml-auto font-mono text-2xs tabular-nums text-muted-foreground">
-            {row.count}
-          </span>
-        </button>
+        </div>
       </CategoryDropTarget>
     );
   };
@@ -244,16 +379,15 @@ export default function LibraryCategoryRail({
       {rows.map((row) => {
         const active =
           row.id === "all" ? categoryFilter === "all" : categoryFilter === row.id;
-        if (!reorderEnabled || !row.sortable) {
-          return renderStaticRow(row, active);
-        }
+        if (!row.sortable) return renderStaticRow(row, active);
         return (
           <SortableCategoryNavItem
             key={row.id}
             row={row}
             active={active}
-            reorderEnabled
+            reorderEnabled={reorderEnabled}
             onSelect={() => onCategoryFilterChange(row.id)}
+            onToggleCollapsed={toggleCollapsed}
             onDropSourceCategory={onDropSourceCategory}
           />
         );

@@ -6,15 +6,17 @@ import {
   DropdownMenuSubTrigger,
 } from "../ui/dropdown-menu";
 import { UNCategorized_FILTER } from "./sourceLabels";
+import { categoryMenuOptions } from "../../lib/sourceCategoryOptions";
 
 type Props = {
+  /** Flat, ordered category paths; subcategories render indented. */
   categories: string[];
   current: string | null | undefined;
   onAssign: (category: string | null) => void;
   disabled?: boolean;
 };
 
-/** Nested menu to assign a source to a single library category. */
+/** Nested menu to file a source under a single library category or subcategory. */
 export default function SourceCategoryAssignSubmenu({
   categories,
   current,
@@ -22,6 +24,7 @@ export default function SourceCategoryAssignSubmenu({
   disabled,
 }: Props) {
   const value = current?.trim() ? current.trim() : UNCategorized_FILTER;
+  const options = categoryMenuOptions(categories);
 
   return (
     <DropdownMenuSub>
@@ -36,13 +39,15 @@ export default function SourceCategoryAssignSubmenu({
           <DropdownMenuRadioItem value={UNCategorized_FILTER}>
             Uncategorized
           </DropdownMenuRadioItem>
-          {categories
-            .filter((name) => name.trim() && name.trim() !== UNCategorized_FILTER)
-            .map((name) => (
-              <DropdownMenuRadioItem key={name} value={name}>
-                {name}
-              </DropdownMenuRadioItem>
-            ))}
+          {options.map((option) => (
+            <DropdownMenuRadioItem
+              key={option.path}
+              value={option.path}
+              style={option.indentStyle}
+            >
+              {option.label}
+            </DropdownMenuRadioItem>
+          ))}
         </DropdownMenuRadioGroup>
       </DropdownMenuSubContent>
     </DropdownMenuSub>

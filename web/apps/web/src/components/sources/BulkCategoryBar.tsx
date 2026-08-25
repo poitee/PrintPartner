@@ -6,11 +6,12 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
-import { UNCategorized_FILTER } from "./sourceLabels";
 import { selectionSummaryLabel } from "../../lib/sourceSelection";
+import { categoryMenuOptions } from "../../lib/sourceCategoryOptions";
 
 type Props = {
   count: number;
+  /** Flat, ordered category paths; subcategories render indented. */
   categories: string[];
   busy?: boolean;
   onAssign: (category: string | null) => void;
@@ -62,13 +63,15 @@ export default function BulkCategoryBar({
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="max-h-72 overflow-y-auto">
           <DropdownMenuItem onClick={() => onAssign(null)}>Uncategorized</DropdownMenuItem>
-          {categories
-            .filter((name) => name.trim() && name.trim() !== UNCategorized_FILTER)
-            .map((name) => (
-              <DropdownMenuItem key={name} onClick={() => onAssign(name)}>
-                {name}
-              </DropdownMenuItem>
-            ))}
+          {categoryMenuOptions(categories).map((option) => (
+            <DropdownMenuItem
+              key={option.path}
+              style={option.indentStyle}
+              onClick={() => onAssign(option.path)}
+            >
+              {option.label}
+            </DropdownMenuItem>
+          ))}
         </DropdownMenuContent>
       </DropdownMenu>
       <Button

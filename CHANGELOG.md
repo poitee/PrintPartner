@@ -8,6 +8,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Source subcategories** - library categories now nest. A category is a
+  "/"-separated path, so "Voron" can hold "Voron/Voron 2.4" and
+  "Voron/Stealthburner". The Settings manager gains an "Add sub" action per row,
+  the Library rail nests and collapses with rolled-up counts, and selecting a
+  category also shows everything filed beneath it. Renaming or moving a category
+  carries its subcategories and their Sources; deleting one drops its Sources to
+  the surviving parent, or Uncategorised at the top level. The saved list stays a
+  flat array of paths, so existing flat categories load unchanged.
+
+- **Categories over MCP** - new `list_source_categories`, plus propose-and-
+  confirm `propose_set_source_category`, `propose_create_source_category`,
+  `propose_rename_source_category`, and `propose_delete_source_category` tools.
+  `list_sources` takes a `category` filter (with `include_subcategories`), and a
+  `print-partner://source-categories` resource serves the tree.
+
 - **Accepted Plate workflow** - accepted Plans now publish immutable Plate
   revisions with explicit Printer allocation, saved fixed-point placement,
   deterministic Required-unit 3MF identity, revision-keyed downloads, and

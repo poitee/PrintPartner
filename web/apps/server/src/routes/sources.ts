@@ -5,6 +5,7 @@ import {
   DEFAULT_STL_SEARCH_LIMIT,
   searchSourceStls,
 } from "@print-partner/domain";
+import { normalizeCategoryPath } from "@print-partner/contracts";
 import type { JobSnapshot } from "@print-partner/contracts";
 import type { AppRepository } from "../db/repository.js";
 import {
@@ -188,8 +189,14 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
     if (ids.length === 0) {
       return reply.status(400).send({ detail: "source_ids must be a non-empty array" });
     }
+    // Category values are "/"-separated paths ("Printers/Frame"); canonicalize
+    // spacing so drag-drop and typed input land in the same bucket.
     const category =
-      typeof body.category === "string" ? body.category.trim() : body.category === null ? null : "";
+      typeof body.category === "string"
+        ? normalizeCategoryPath(body.category)
+        : body.category === null
+          ? null
+          : "";
     const results: Array<{ source_id: number; ok: boolean; detail?: string }> = [];
     const updated: Array<ReturnType<typeof deps.repo.getSource>> = [];
     for (const id of ids) {

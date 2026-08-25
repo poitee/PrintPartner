@@ -3,8 +3,22 @@ import { closeSync, existsSync, openSync, readFileSync, readSync, statSync, read
 import { join, relative, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
 import type { AssistantActionType, AssistantProposedAction, PrinterHostStatus } from "@print-partner/contracts";
-import { isAssistantUiAction } from "@print-partner/contracts";
+import {
+  buildSourceCategoryTree,
+  categoryDepth,
+  categoryLeafName,
+  categoryParentPath,
+  isAssistantUiAction,
+  isCategoryPathWithin,
+  normalizeCategoryPath,
+} from "@print-partner/contracts";
 import { importRulesForProject, listStlRelativePaths, safeRepoPath, parseStlMesh, stlMeshDimensionsUm, mergeNamingProfiles, namingProfileFromDict, previewParse } from "@print-partner/domain";
+import {
+  addSourceCategoryPath,
+  deleteSourceCategoryPath,
+  findSourceCategoryPath,
+  moveSourceCategoryPath,
+} from "@print-partner/domain";
 import type { AcceptedProfileProgress, AppRepository } from "../db/repository.js";
 import {
   AcceptedPlanOperationalIntegrityError,
@@ -562,9 +576,98 @@ export const ASSISTANT_TOOL_SPECS: AssistantToolSpec[] = [
   },
   {
     name: "list_sources",
-    description: "List synced sources available to this user (name, sync status).",
+    description:
+      "List synced sources available to this user (name, sync status, library category path).",
+    input_schema: {
+      type: "object",
+      properties: {
+        category: {
+          type: "string",
+          description:
+            'Only list Sources filed under this category path, e.g. "Printers" or "Printers/Frame". Use "__uncategorized__" for unfiled Sources.',
+        },
+        include_subcategories: {
+          type: "boolean",
+          description: "Include Sources in subcategories of `category` (default true).",
+        },
+      },
+    },
+    tier: "read",
+  },
+  {
+    name: "list_source_categories",
+    description:
+      'Library category tree with Source counts. Categories nest as "/"-separated paths, e.g. "Printers" with subcategories "Printers/Frame" and "Printers/Toolhead".',
     input_schema: { type: "object", properties: {} },
     tier: "read",
+  },
+  {
+    name: "propose_set_source_category",
+    description:
+      "PROPOSE filing a Library Source under a category or subcategory path. Organizational only — it does not change plan roles, layers, or kit slots.",
+    input_schema: {
+      type: "object",
+      properties: {
+        source_id: { type: "number" },
+        source_name: { type: "string" },
+        category: {
+          type: "string",
+          description:
+            'Full path such as "Printers/Frame". Empty string clears the category (Uncategorised).',
+        },
+      },
+      required: ["category"],
+    },
+    tier: "mutate",
+  },
+  {
+    name: "propose_create_source_category",
+    description:
+      'PROPOSE adding a library category or subcategory. Pass a full path ("Printers/Frame") or `name` plus `parent`; missing parents are created.',
+    input_schema: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: 'Full path, e.g. "Printers/Frame"' },
+        name: { type: "string", description: "Leaf name, used with `parent`" },
+        parent: { type: "string", description: "Parent path; omit for a top-level category" },
+      },
+    },
+    tier: "mutate",
+  },
+  {
+    name: "propose_rename_source_category",
+    description:
+      "PROPOSE renaming a library category or moving it under another one. Its subcategories and the Sources filed under them move with it.",
+    input_schema: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "Existing category path" },
+        new_name: { type: "string", description: "New leaf name (keeps its place in the tree)" },
+        new_parent: {
+          type: "string",
+          description: 'New parent path; empty string moves it to the top level',
+        },
+      },
+      required: ["path"],
+    },
+    tier: "mutate",
+  },
+  {
+    name: "propose_delete_source_category",
+    description:
+      "PROPOSE deleting a library category and its subcategories. Sources move to `reassign_to`, else to the surviving parent, else Uncategorised.",
+    input_schema: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "Category path to delete" },
+        reassign_to: {
+          type: "string",
+          description: "Category path that keeps the Sources; omit to fall back to the parent",
+        },
+      },
+      required: ["path"],
+    },
+    tier: "mutate",
   },
   {
     name: "list_plans",
@@ -1547,6 +1650,62 @@ function similarSourceNames(repo: AppRepository, name: string, limit = 5): strin
     .map((x) => x.name);
 }
 
+/** Sentinel accepted by `list_sources` for Sources with no category. */
+const UNCATEGORIZED_CATEGORY = "__uncategorized__";
+
+/** Resolve the Source named by `source_id` / `source_name` tool args. */
+function resolveSourceArg(input: Record<string, unknown>, ctx: ToolContext) {
+  const sourceId = asInt(input.source_id);
+  if (sourceId != null) return ctx.repo.getSource(sourceId);
+  const sourceName = typeof input.source_name === "string" ? input.source_name.trim() : "";
+  return sourceName ? sourceByName(ctx.repo, sourceName) : null;
+}
+
+function categoryNotFoundError(repo: AppRepository, requested: string): string {
+  return JSON.stringify({
+    error: `Unknown library category: "${requested}". Call list_source_categories, or create it with propose_create_source_category.`,
+    categories: repo.getSourceCategories(),
+  });
+}
+
+/** Sources filed under `path` or any of its subcategories. */
+function countSourcesUnderCategory(repo: AppRepository, path: string): number {
+  return repo.listSources().filter((s) => isCategoryPathWithin(s.category ?? "", path)).length;
+}
+
+/** Library category tree plus per-category Source counts, for MCP callers. */
+function summarizeSourceCategories(repo: AppRepository) {
+  const paths = repo.getSourceCategories();
+  const sources = repo.listSources();
+  const direct = new Map<string, number>();
+  let uncategorized = 0;
+  for (const source of sources) {
+    const path = normalizeCategoryPath(source.category ?? "");
+    if (!path) {
+      uncategorized += 1;
+      continue;
+    }
+    const key = path.toLowerCase();
+    direct.set(key, (direct.get(key) ?? 0) + 1);
+  }
+  return {
+    separator: "/",
+    note: 'Categories nest as "/"-separated paths; a Source stores one full path.',
+    categories: paths.map((path) => ({
+      path,
+      name: categoryLeafName(path),
+      parent: categoryParentPath(path),
+      depth: categoryDepth(path),
+      sources: direct.get(path.toLowerCase()) ?? 0,
+      sources_including_subcategories: sources.filter((s) =>
+        isCategoryPathWithin(s.category ?? "", path),
+      ).length,
+    })),
+    tree: buildSourceCategoryTree(paths),
+    uncategorized_sources: uncategorized,
+  };
+}
+
 function sourceNotFoundError(repo: AppRepository, sourceName: string, hint: string): string {
   const suggestions = similarSourceNames(repo, sourceName);
   const didYouMean = suggestions.length ? ` Did you mean: ${suggestions.map((n) => `"${n}"`).join(", ")}?` : "";
@@ -2375,17 +2534,194 @@ export async function invokeAssistantTool(
         return { content: summarizeKitCatalog(loadKitCatalog(ctx.dataDir)) };
 
       case "list_sources": {
-        const sources = ctx.repo.listSources().map((s) => ({
-          id: s.id,
-          name: s.name,
-          kind: s.source_kind,
-          synced: Boolean(s.local_path && s.last_synced_at),
-          last_synced_at: s.last_synced_at,
-          update_status: s.update_status ?? null,
-          doc_count: s.doc_count ?? 0,
-          category: s.category,
-        }));
+        const rawCategory = typeof input.category === "string" ? input.category.trim() : "";
+        const wantUncategorized = rawCategory === UNCATEGORIZED_CATEGORY;
+        const categoryPath = wantUncategorized ? "" : normalizeCategoryPath(rawCategory);
+        const includeSubcategories = input.include_subcategories !== false;
+        if (categoryPath && !findSourceCategoryPath(ctx.repo.getSourceCategories(), categoryPath)) {
+          return { content: categoryNotFoundError(ctx.repo, rawCategory) };
+        }
+        const sources = ctx.repo
+          .listSources()
+          .filter((s) => {
+            if (!rawCategory) return true;
+            const current = normalizeCategoryPath(s.category ?? "");
+            if (wantUncategorized) return !current;
+            return includeSubcategories
+              ? isCategoryPathWithin(current, categoryPath)
+              : current.toLowerCase() === categoryPath.toLowerCase();
+          })
+          .map((s) => ({
+            id: s.id,
+            name: s.name,
+            kind: s.source_kind,
+            synced: Boolean(s.local_path && s.last_synced_at),
+            last_synced_at: s.last_synced_at,
+            update_status: s.update_status ?? null,
+            doc_count: s.doc_count ?? 0,
+            category: s.category,
+          }));
         return { content: JSON.stringify({ sources }, null, 0) };
+      }
+
+      case "list_source_categories":
+        return { content: JSON.stringify(summarizeSourceCategories(ctx.repo), null, 0) };
+
+      case "propose_set_source_category": {
+        const planId = resolvePlanId(input, ctx);
+        const source = resolveSourceArg(input, ctx);
+        if (!source) {
+          const named = typeof input.source_name === "string" ? input.source_name.trim() : "";
+          return {
+            content: named
+              ? sourceNotFoundError(ctx.repo, named, "Call list_sources first.")
+              : JSON.stringify({ error: "source_id or source_name required" }),
+          };
+        }
+        const requested = typeof input.category === "string" ? input.category : "";
+        const wanted = normalizeCategoryPath(requested);
+        let category = "";
+        if (wanted) {
+          const saved = findSourceCategoryPath(ctx.repo.getSourceCategories(), wanted);
+          if (!saved) return { content: categoryNotFoundError(ctx.repo, requested) };
+          category = saved;
+        }
+        const current = normalizeCategoryPath(source.category ?? "");
+        if (current.toLowerCase() === category.toLowerCase()) {
+          return {
+            content: JSON.stringify({
+              status: "unchanged",
+              source: { id: source.id, name: source.name },
+              category: category || null,
+            }),
+          };
+        }
+        return proposeChecked(
+          ctx,
+          "propose_set_source_category",
+          planId ?? 0,
+          category ? `File ${source.name} under ${category}` : `Uncategorise ${source.name}`,
+          category
+            ? `Move Library Source “${source.name}” from ${current || "Uncategorised"} to “${category}”. Organizational only.`
+            : `Clear the Library category on “${source.name}” (currently ${current || "Uncategorised"}).`,
+          { source_id: source.id, source_name: source.name, category },
+        );
+      }
+
+      case "propose_create_source_category": {
+        const planId = resolvePlanId(input, ctx);
+        const explicitPath = typeof input.path === "string" ? input.path : "";
+        const name = typeof input.name === "string" ? input.name : "";
+        const parent = typeof input.parent === "string" ? input.parent : "";
+        const path = normalizeCategoryPath(explicitPath || [parent, name].filter(Boolean).join("/"));
+        if (!path) {
+          return { content: JSON.stringify({ error: "path (or name) required" }) };
+        }
+        const categories = ctx.repo.getSourceCategories();
+        let edit;
+        try {
+          edit = addSourceCategoryPath(categories, path);
+        } catch (e) {
+          return {
+            content: JSON.stringify({
+              error: e instanceof Error ? e.message : String(e),
+              categories,
+            }),
+          };
+        }
+        const parentPath = categoryParentPath(path);
+        return proposeChecked(
+          ctx,
+          "propose_create_source_category",
+          planId ?? 0,
+          `Add category ${path}`,
+          parentPath
+            ? `Add “${categoryLeafName(path)}” as a subcategory of “${parentPath}”.`
+            : `Add “${path}” as a top-level library category.`,
+          { path },
+          { resulting_categories: edit.categories },
+        );
+      }
+
+      case "propose_rename_source_category": {
+        const planId = resolvePlanId(input, ctx);
+        const categories = ctx.repo.getSourceCategories();
+        const rawPath = typeof input.path === "string" ? input.path : "";
+        if (!normalizeCategoryPath(rawPath)) {
+          return { content: JSON.stringify({ error: "path required" }) };
+        }
+        const options = {
+          newName: typeof input.new_name === "string" ? input.new_name : null,
+          ...(typeof input.new_parent === "string" ? { newParent: input.new_parent } : {}),
+        };
+        let edit;
+        try {
+          edit = moveSourceCategoryPath(categories, rawPath, options);
+        } catch (e) {
+          return {
+            content: JSON.stringify({
+              error: e instanceof Error ? e.message : String(e),
+              categories,
+            }),
+          };
+        }
+        const from = findSourceCategoryPath(categories, rawPath)!;
+        const to = edit.replacements[from] ?? from;
+        if (to === from) {
+          return { content: JSON.stringify({ status: "unchanged", category: from }) };
+        }
+        const moved = countSourcesUnderCategory(ctx.repo, from);
+        return proposeChecked(
+          ctx,
+          "propose_rename_source_category",
+          planId ?? 0,
+          `Rename category ${from} → ${to}`,
+          `Rename “${from}” to “${to}”, moving ${Object.keys(edit.replacements).length} category path(s) and ${moved} Source(s).`,
+          {
+            path: from,
+            ...(options.newName ? { new_name: options.newName } : {}),
+            ...(typeof input.new_parent === "string" ? { new_parent: input.new_parent } : {}),
+          },
+          { resulting_categories: edit.categories },
+        );
+      }
+
+      case "propose_delete_source_category": {
+        const planId = resolvePlanId(input, ctx);
+        const categories = ctx.repo.getSourceCategories();
+        const rawPath = typeof input.path === "string" ? input.path : "";
+        if (!normalizeCategoryPath(rawPath)) {
+          return { content: JSON.stringify({ error: "path required" }) };
+        }
+        const reassignTo = typeof input.reassign_to === "string" ? input.reassign_to : undefined;
+        let edit;
+        try {
+          edit = deleteSourceCategoryPath(categories, rawPath, reassignTo);
+        } catch (e) {
+          return {
+            content: JSON.stringify({
+              error: e instanceof Error ? e.message : String(e),
+              categories,
+            }),
+          };
+        }
+        const path = findSourceCategoryPath(categories, rawPath)!;
+        const affected = countSourcesUnderCategory(ctx.repo, path);
+        const target = edit.replacements[path];
+        const destination = target
+          ? `“${target}”`
+          : categoryParentPath(path)
+            ? `“${categoryParentPath(path)}”`
+            : "Uncategorised";
+        return proposeChecked(
+          ctx,
+          "propose_delete_source_category",
+          planId ?? 0,
+          `Delete category ${path}`,
+          `Delete “${path}” and its subcategories; ${affected} Source(s) move to ${destination}.`,
+          { path, ...(reassignTo === undefined ? {} : { reassign_to: reassignTo }) },
+          { resulting_categories: edit.categories },
+        );
       }
 
       case "list_plans": {
@@ -4142,6 +4478,11 @@ export async function applyAssistantAction(
   const skipPlanCheck =
     action.type === "propose_create_build" ||
     action.type === "propose_source_mapping" ||
+    // Library categories are not plan-scoped.
+    action.type === "propose_set_source_category" ||
+    action.type === "propose_create_source_category" ||
+    action.type === "propose_rename_source_category" ||
+    action.type === "propose_delete_source_category" ||
     action.type === "start_sync" ||
     action.type === "propose_add_source" ||
     action.type === "propose_update_source" ||
@@ -5201,6 +5542,71 @@ export async function applyAssistantAction(
             option_groups: optionGroups,
           },
         };
+        break;
+      }
+      case "propose_set_source_category": {
+        const sourceId = asInt(action.params.source_id);
+        const sourceName = String(action.params.source_name ?? "");
+        const source = sourceId != null ? deps.repo.getSource(sourceId) : sourceByName(deps.repo, sourceName);
+        if (!source) return { ok: false, detail: `Source not found: ${sourceName || sourceId}` };
+        const category = normalizeCategoryPath(String(action.params.category ?? ""));
+        if (category && !findSourceCategoryPath(deps.repo.getSourceCategories(), category)) {
+          return { ok: false, detail: `Unknown library category: ${category}` };
+        }
+        deps.repo.updateSource(source.id, { metadata: { category } });
+        outcome = {
+          ok: true,
+          result: { source: deps.repo.getSource(source.id), category: category || null },
+        };
+        break;
+      }
+      case "propose_create_source_category": {
+        const path = normalizeCategoryPath(String(action.params.path ?? ""));
+        if (!path) return { ok: false, detail: "path required" };
+        try {
+          const edit = addSourceCategoryPath(deps.repo.getSourceCategories(), path);
+          const categories = deps.repo.saveSourceCategories(edit.categories, edit.replacements);
+          outcome = { ok: true, result: { path, categories } };
+        } catch (e) {
+          return { ok: false, detail: e instanceof Error ? e.message : String(e) };
+        }
+        break;
+      }
+      case "propose_rename_source_category": {
+        const path = String(action.params.path ?? "");
+        if (!normalizeCategoryPath(path)) return { ok: false, detail: "path required" };
+        try {
+          const current = deps.repo.getSourceCategories();
+          const edit = moveSourceCategoryPath(current, path, {
+            newName: typeof action.params.new_name === "string" ? action.params.new_name : null,
+            ...(typeof action.params.new_parent === "string"
+              ? { newParent: action.params.new_parent }
+              : {}),
+          });
+          const categories = deps.repo.saveSourceCategories(edit.categories, edit.replacements);
+          outcome = {
+            ok: true,
+            result: { renamed: edit.replacements, categories },
+          };
+        } catch (e) {
+          return { ok: false, detail: e instanceof Error ? e.message : String(e) };
+        }
+        break;
+      }
+      case "propose_delete_source_category": {
+        const path = String(action.params.path ?? "");
+        if (!normalizeCategoryPath(path)) return { ok: false, detail: "path required" };
+        try {
+          const edit = deleteSourceCategoryPath(
+            deps.repo.getSourceCategories(),
+            path,
+            typeof action.params.reassign_to === "string" ? action.params.reassign_to : undefined,
+          );
+          const categories = deps.repo.saveSourceCategories(edit.categories, edit.replacements);
+          outcome = { ok: true, result: { deleted: normalizeCategoryPath(path), categories } };
+        } catch (e) {
+          return { ok: false, detail: e instanceof Error ? e.message : String(e) };
+        }
         break;
       }
       case "apply_build_recipe": {

@@ -12,11 +12,12 @@ import {
   GetPromptRequestSchema,
   ListPromptsRequestSchema,
   ListResourceTemplatesRequestSchema,
+  ListResourcesRequestSchema,
   ListToolsRequestSchema,
   ReadResourceRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import type { AssistantProposedAction } from "@print-partner/contracts";
-import { isAssistantUiAction } from "@print-partner/contracts";
+import { buildSourceCategoryTree, isAssistantUiAction } from "@print-partner/contracts";
 import { join } from "node:path";
 import type { ServerConfig } from "../config.js";
 import { createAssistantPort } from "../assistant/create-assistant.js";
@@ -90,6 +91,9 @@ export function jsonSchemaToMcp(spec: (typeof ASSISTANT_TOOL_SPECS)[number]) {
     },
   };
 }
+
+/** Static resource: the library category tree. */
+const SOURCE_CATEGORIES_URI = "print-partner://source-categories";
 
 export type ProductMcpDeps = {
   getRepo: () => AppRepository;
@@ -187,6 +191,18 @@ export function createProductMcpServer(deps: ProductMcpDeps): Server {
     };
   });
 
+  server.setRequestHandler(ListResourcesRequestSchema, async () => ({
+    resources: [
+      {
+        uri: SOURCE_CATEGORIES_URI,
+        name: "Library source categories",
+        description:
+          'Library category tree — categories and their subcategories as "/"-separated paths',
+        mimeType: "application/json",
+      },
+    ],
+  }));
+
   server.setRequestHandler(ListResourceTemplatesRequestSchema, async () => ({
     resourceTemplates: [
       {
@@ -199,6 +215,22 @@ export function createProductMcpServer(deps: ProductMcpDeps): Server {
   }));
 
   server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
+    if (request.params.uri === SOURCE_CATEGORIES_URI) {
+      const categories = getRepo().getSourceCategories();
+      return {
+        contents: [
+          {
+            uri: request.params.uri,
+            mimeType: "application/json",
+            text: JSON.stringify(
+              { separator: "/", categories, tree: buildSourceCategoryTree(categories) },
+              null,
+              2,
+            ),
+          },
+        ],
+      };
+    }
     const match = /^print-partner:\/\/build-planning\/(\d+)$/.exec(request.params.uri);
     if (!match) throw new Error("Unknown Build planning resource URI");
     const storedBrief = readBuildPlanningBrief(getRepo(), Number(match[1]));

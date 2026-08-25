@@ -800,7 +800,7 @@ export default function SettingsPage() {
             <CardDescription>
               Adds an Assembled toggle to each completed part - useful for multi-week builds where
               you want to track which printed parts have been physically installed. Tracks
-              printed-but-not-yet-installed state for complex builds like Voron.
+              printed-but-not-yet-installed state for builds with many parts.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">

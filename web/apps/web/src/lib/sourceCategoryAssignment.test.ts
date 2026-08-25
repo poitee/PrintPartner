@@ -3,6 +3,7 @@ import { UNCategorized_FILTER } from "../components/sources/sourceLabels";
 import {
   countSourcesByCategory,
   matchesSourceCategoryFilter,
+  rollupCategoryCount,
   sourceCategoryBucket,
   sourceCategoryLabel,
   reconcileSourceCategoryFilter,
@@ -44,6 +45,27 @@ describe("sourceCategoryAssignment", () => {
     expect(counts.get("Mods")).toBe(2);
     expect(counts.get("Hardware")).toBe(1);
     expect(counts.get(null)).toBe(2);
+  });
+
+  it("includes subcategories when filtering on a parent category", () => {
+    expect(matchesSourceCategoryFilter("Voron/Trident", "Voron")).toBe(true);
+    expect(matchesSourceCategoryFilter("Voron", "Voron")).toBe(true);
+    expect(matchesSourceCategoryFilter("Voron/Trident", "Voron/Trident")).toBe(true);
+    expect(matchesSourceCategoryFilter("Voron", "Voron/Trident")).toBe(false);
+    expect(matchesSourceCategoryFilter("Voron 2/Trident", "Voron")).toBe(false);
+  });
+
+  it("rolls subcategory counts up into their parent", () => {
+    const counts = countSourcesByCategory([
+      { category: "Voron" },
+      { category: "Voron/Trident" },
+      { category: "Voron/Trident/Mods" },
+      { category: "Toolheads" },
+      { category: null },
+    ]);
+    expect(rollupCategoryCount(counts, "Voron")).toBe(3);
+    expect(rollupCategoryCount(counts, "Voron/Trident")).toBe(2);
+    expect(rollupCategoryCount(counts, "Toolheads")).toBe(1);
   });
 
   it("labels blank as Uncategorised", () => {

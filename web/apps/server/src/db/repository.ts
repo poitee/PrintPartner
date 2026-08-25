@@ -43,6 +43,15 @@ import {
 import { getColorById, resolvePartFilamentHex } from "../services/filament-catalog.js";
 import type { EditableKitRecipe } from "../services/export-kit.js";
 import { REMOTE_CHECKED_AT_KEY, REMOTE_UPDATE_STATUS_KEY } from "../services/source-update-check.js";
+import {
+  buildSourceCategoryTree,
+  categoryAncestorPaths,
+  isCategoryPathWithin,
+  joinCategoryPath,
+  categoryPathSegments,
+  normalizeCategoryPath,
+  type SourceCategoryNode,
+} from "@print-partner/contracts";
 import type {
   PartRow,
   PlanDecision,
@@ -2580,12 +2589,27 @@ export class AppRepository {
     return { kind: "conflict" };
   }
 
+  /** Saved categories as a flat, ordered list of "/"-separated paths. */
   getSourceCategories(): string[] {
     return loadSourceCategories(this.getSetting(SOURCE_CATEGORIES_KEY));
   }
 
+  /** The same categories as a nested tree, for rails, menus, and MCP callers. */
+  getSourceCategoryTree(): SourceCategoryNode[] {
+    return buildSourceCategoryTree(this.getSourceCategories());
+  }
+
+  /**
+   * Replace the saved category list and move every affected source with it.
+   *
+   * `replacements` maps an old path to its new path (or `null` to uncategorise)
+   * and always wins. Paths with no replacement follow the subtree: a source
+   * under a renamed ancestor moves along with it, and a source whose category
+   * disappeared falls back to the nearest surviving ancestor before it is
+   * uncategorised — deleting "Printers/Frame" leaves its sources under "Printers".
+   */
   saveSourceCategories(
-    categories: string[],
+    categories: readonly string[],
     replacements: Readonly<Record<string, string | null>> = {},
   ): string[] {
     const normalized = normalizeSourceCategories(categories);
@@ -2598,18 +2622,50 @@ export class AppRepository {
     const replacementByKey = new Map<string, string | null>();
 
     for (const [rawSource, rawTarget] of Object.entries(replacements)) {
-      const source = previousByKey.get(rawSource.trim().toLowerCase());
+      const source = previousByKey.get(normalizeCategoryPath(rawSource).toLowerCase());
       if (!source) throw new Error(`Unknown source category: ${rawSource}`);
       if (rawTarget === null) {
         replacementByKey.set(source.toLowerCase(), null);
         continue;
       }
-      const target = nextByKey.get(rawTarget.trim().toLowerCase());
+      const target = nextByKey.get(normalizeCategoryPath(rawTarget).toLowerCase());
       if (!target) {
         throw new Error("Replacement category must be in the saved category list");
       }
+      if (isCategoryPathWithin(target, source)) {
+        throw new Error(`Cannot move “${source}” inside itself`);
+      }
       replacementByKey.set(source.toLowerCase(), target);
     }
+
+    /** Where a source sitting at `current` belongs after the save; "" = uncategorised. */
+    const nextCategoryFor = (current: string | null): string => {
+      if (current === null) return "";
+      const key = current.toLowerCase();
+      if (replacementByKey.has(key)) return replacementByKey.get(key) ?? "";
+
+      // Deepest replaced ancestor first, so an inner move beats an outer one.
+      const ancestors = categoryAncestorPaths(current).reverse();
+      for (const ancestor of ancestors) {
+        const ancestorKey = ancestor.toLowerCase();
+        if (!replacementByKey.has(ancestorKey)) continue;
+        const target = replacementByKey.get(ancestorKey) ?? null;
+        if (target === null) return "";
+        const remainder = categoryPathSegments(current).slice(
+          categoryPathSegments(ancestor).length,
+        );
+        const moved = joinCategoryPath([...categoryPathSegments(target), ...remainder]);
+        return nextByKey.get(moved.toLowerCase()) ?? target;
+      }
+
+      const kept = nextByKey.get(key);
+      if (kept) return kept;
+      for (const ancestor of categoryAncestorPaths(current).reverse()) {
+        const survivor = nextByKey.get(ancestor.toLowerCase());
+        if (survivor) return survivor;
+      }
+      return "";
+    };
 
     return this.transaction(() => {
       const rows = this.db
@@ -2620,14 +2676,7 @@ export class AppRepository {
 
       for (const row of rows) {
         const current = resolveSourceCategory(row.metadataJson, row.role);
-        const key = current?.toLowerCase() ?? null;
-        const replacement = key === null ? null : replacementByKey.get(key);
-        const category =
-          key === null
-            ? ""
-            : replacementByKey.has(key)
-              ? replacement ?? ""
-              : nextByKey.get(key) ?? "";
+        const category = nextCategoryFor(current === null ? null : normalizeCategoryPath(current));
         const metadata = parseProjectMetadata(row.metadataJson) ?? {};
         const hasExplicitCategory = Object.prototype.hasOwnProperty.call(metadata, "category");
         const explicitCategory =
@@ -3447,7 +3496,13 @@ export class AppRepository {
     if (patch.last_commit_sha !== undefined) updates.lastCommitSha = patch.last_commit_sha;
     if (patch.metadata != null) {
       const base = parseProjectMetadata(row.metadataJson) ?? {};
-      updates.metadataJson = JSON.stringify({ ...base, ...patch.metadata });
+      const merged = { ...base, ...patch.metadata };
+      // Categories are "/"-separated paths; canonicalize here so every caller
+      // (REST, bulk assign, MCP apply, importers) stores the same spelling.
+      if (typeof merged.category === "string") {
+        merged.category = normalizeCategoryPath(merged.category);
+      }
+      updates.metadataJson = JSON.stringify(merged);
     }
     if (patch.manifest_community_slug !== undefined) {
       updates.manifestCommunitySlug = patch.manifest_community_slug;

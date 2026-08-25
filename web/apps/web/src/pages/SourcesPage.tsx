@@ -91,6 +91,7 @@ import {
   sourceCategoryLabel,
 } from "../lib/sourceCategoryAssignment";
 import { librarySourceDragId } from "../lib/sourceCategoryDnD";
+import { categoryMenuOptions } from "../lib/sourceCategoryOptions";
 import {
   applySelectionClick,
   isAllVisibleSelected,
@@ -223,7 +224,10 @@ export default function SourcesPage() {
     refetch: refetchSources,
   } = useSourcesQuery(engineReady);
   const categoriesQuery = useSourceCategoriesQuery(engineReady);
+  /** Flat, ordered category paths — "Printers" and "Printers/Frame" alike. */
   const categories = categoriesQuery.data ?? EMPTY_SOURCE_CATEGORIES;
+  /** Same list as pickable options: leaf label, indent, full path as value. */
+  const categoryOptions = useMemo(() => categoryMenuOptions(categories), [categories]);
   const saveCategoriesMutation = useSaveSourceCategoriesMutation();
   const createSourceMutation = useCreateSourceMutation();
   const updateSourceMutation = useUpdateSourceMutation();
@@ -1038,16 +1042,17 @@ export default function SourcesPage() {
               >
                 All ({sources.length})
               </Button>
-              {categories.map((c) => (
+              {categoryOptions.map((option) => (
                 <Button
-                  key={c}
+                  key={option.path}
                   type="button"
                   size="sm"
                   className="shrink-0"
-                  variant={categoryFilter === c ? "secondary" : "ghost"}
-                  onClick={() => setCategoryFilter(c)}
+                  variant={categoryFilter === option.path ? "secondary" : "ghost"}
+                  onClick={() => setCategoryFilter(option.path)}
+                  title={option.path}
                 >
-                  {c}
+                  {option.parentLabel ? `${option.parentLabel} › ${option.label}` : option.label}
                 </Button>
               ))}
               <Button
@@ -1302,9 +1307,13 @@ export default function SourcesPage() {
                   <SelectItem value={UNCategorized_FILTER}>
                     {sourceCategoryLabel(null)}
                   </SelectItem>
-                  {categories.map((c) => (
-                    <SelectItem key={c} value={c}>
-                      {c}
+                  {categoryOptions.map((option) => (
+                    <SelectItem
+                      key={option.path}
+                      value={option.path}
+                      style={option.indentStyle}
+                    >
+                      {option.label}
                     </SelectItem>
                   ))}
                 </SelectContent>

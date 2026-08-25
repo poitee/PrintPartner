@@ -1,6 +1,7 @@
 /** Shared API types between web client and server. */
 
 export * from "./source-naming.js";
+export * from "./source-category-tree.js";
 export * from "./accepted-plates.js";
 export * from "./plan-drafts.js";
 export * from "./production-setup.js";
@@ -703,6 +704,10 @@ export type AssistantActionType =
   | "start_recompute"
   | "start_sync"
   | "propose_source_mapping"
+  | "propose_set_source_category"
+  | "propose_create_source_category"
+  | "propose_rename_source_category"
+  | "propose_delete_source_category"
   | "set_source_git_ref"
   | "apply_build_recipe"
   | "restore_plan_snapshot"

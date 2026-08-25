@@ -1,4 +1,16 @@
-/** User-managed source library categories (ported from Python source_categories.py). */
+/**
+ * User-managed source library categories (ported from Python source_categories.py).
+ *
+ * A category is a "/"-separated path, so `"Printers"` and `"Printers/Frame"` are a
+ * category and its subcategory. The saved list stays a flat, ordered array of
+ * those paths — see `@print-partner/contracts/source-category-tree` for why.
+ */
+
+import {
+  MAX_CATEGORY_DEPTH,
+  categoryPathSegments,
+  normalizeSourceCategoryPaths,
+} from "@print-partner/contracts";
 
 export const SOURCE_CATEGORIES_KEY = "source_categories";
 
@@ -22,36 +34,29 @@ export function loadSourceCategories(raw: string | null | undefined): string[] {
   try {
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return [...DEFAULT_SOURCE_CATEGORIES];
-    const out: string[] = [];
-    const seen = new Set<string>();
-    for (const item of parsed) {
-      if (typeof item !== "string") continue;
-      const name = item.trim();
-      if (!name) continue;
-      const key = name.toLowerCase();
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push(name);
-    }
+    const out = normalizeSourceCategoryPaths(parsed);
     return out.length ? out : [...DEFAULT_SOURCE_CATEGORIES];
   } catch {
     return [...DEFAULT_SOURCE_CATEGORIES];
   }
 }
 
-export function normalizeSourceCategories(categories: string[]): string[] {
+/**
+ * Validate a category list on the way in (save paths), rejecting the mistakes a
+ * lenient load would silently swallow. Missing ancestors are filled in, so
+ * saving just `"Printers/Frame"` also creates `"Printers"`.
+ */
+export function normalizeSourceCategories(categories: readonly unknown[]): string[] {
   if (!categories.length) throw new Error("At least one category is required");
-  const out: string[] = [];
-  const seen = new Set<string>();
   for (const item of categories) {
     if (typeof item !== "string") throw new Error("Each category must be a string");
-    const name = item.trim();
-    if (!name) throw new Error("Category names cannot be empty");
-    const key = name.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(name);
+    const segments = categoryPathSegments(item);
+    if (!segments.length) throw new Error("Category names cannot be empty");
+    if (segments.length - 1 > MAX_CATEGORY_DEPTH) {
+      throw new Error(`Categories cannot nest deeper than ${MAX_CATEGORY_DEPTH} levels`);
+    }
   }
+  const out = normalizeSourceCategoryPaths(categories);
   if (!out.length) throw new Error("At least one category is required");
   return out;
 }

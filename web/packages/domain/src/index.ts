@@ -6,6 +6,7 @@ export * from "./merge.js";
 export * from "./print-progress.js";
 export * from "./checkoff-missing.js";
 export * from "./source-categories.js";
+export * from "./source-category-edits.js";
 export * from "./path-tree.js";
 export * from "./stl-tree.js";
 export * from "./source-stl-search.js";

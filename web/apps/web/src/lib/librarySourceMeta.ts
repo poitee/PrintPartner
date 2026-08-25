@@ -1,3 +1,4 @@
+import { categoryPathSegments } from "@print-partner/contracts";
 import type { PlanReview, SourceSummary } from "../api/engine";
 
 export type LibraryCardTone = "default" | "update" | "syncing" | "attached" | "local";
@@ -177,8 +178,13 @@ const CATEGORY_SWATCHES = [
   "hsl(340 55% 45%)",
 ];
 
-export function categorySwatch(name: string): string {
+/**
+ * Colour for a category path. Subcategories inherit their top-level category's
+ * swatch, so a "Printers" family reads as one colour down the rail.
+ */
+export function categorySwatch(path: string): string {
+  const root = categoryPathSegments(path)[0] ?? path;
   let h = 0;
-  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) % 997;
+  for (let i = 0; i < root.length; i++) h = (h * 31 + root.charCodeAt(i)) % 997;
   return CATEGORY_SWATCHES[h % CATEGORY_SWATCHES.length]!;
 }

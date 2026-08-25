@@ -4,6 +4,7 @@ import type { AppRepository } from "../db/repository.js";
 import {
   DATE_FORMAT_DEFAULT,
   DATE_FORMAT_PRESETS,
+  buildSourceCategoryTree,
   SourceNamingContractError,
   invalidSourceNaming,
   invalidSourceNamingState,
@@ -68,8 +69,11 @@ export async function registerSettingsRoutes(app: FastifyInstance, deps: RouteDe
     return checkAppUpdate(deps.config);
   });
 
+  // `categories` is the wire format: a flat, ordered list of "/"-separated
+  // paths. `tree` is the same data nested, so clients need not rebuild it.
   app.get("/settings/source-categories", async () => ({
     categories: deps.repo.getSourceCategories(),
+    tree: deps.repo.getSourceCategoryTree(),
   }));
 
   app.put("/settings/source-categories", async (request, reply) => {
@@ -78,12 +82,11 @@ export async function registerSettingsRoutes(app: FastifyInstance, deps: RouteDe
         categories?: string[];
         replacements?: Record<string, string | null>;
       };
-      return {
-        categories: deps.repo.saveSourceCategories(
-          body.categories ?? [],
-          body.replacements ?? {},
-        ),
-      };
+      const categories = deps.repo.saveSourceCategories(
+        body.categories ?? [],
+        body.replacements ?? {},
+      );
+      return { categories, tree: buildSourceCategoryTree(categories) };
     } catch (e) {
       return reply.status(400).send({ detail: e instanceof Error ? e.message : String(e) });
     }

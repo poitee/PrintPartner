@@ -15,6 +15,7 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+import { CATEGORY_PATH_SEPARATOR, MAX_CATEGORY_DEPTH } from "@print-partner/contracts";
 import {
   useSaveSourceCategoriesMutation,
   useSourceCategoriesQuery,
@@ -37,37 +38,48 @@ type Props = {
   engineReady: boolean;
 };
 
+/**
+ * One editable row. `parentId` is the row id of its parent, so a rename of a
+ * parent carries its children without rewriting their state, and `originalPath`
+ * remembers where the row's sources currently live.
+ */
 type DraftCategory = {
   id: string;
-  originalName: string | null;
+  parentId: string | null;
+  originalPath: string | null;
   name: string;
 };
 
 type SortableRowProps = {
-  id: string;
-  name: string;
+  row: DraftCategory;
+  depth: number;
   index: number;
   disabled: boolean;
   canRemove: boolean;
-  onRename: (index: number, value: string) => void;
-  onRemove: (index: number) => void;
+  canNest: boolean;
+  onRename: (id: string, value: string) => void;
+  onRemove: (id: string) => void;
+  onAddChild: (id: string) => void;
 };
 
 function SortableCategoryRow({
-  id,
-  name,
+  row,
+  depth,
   index,
   disabled,
   canRemove,
+  canNest,
   onRename,
   onRemove,
+  onAddChild,
 }: SortableRowProps) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
-    useSortable({ id, disabled });
+    useSortable({ id: row.id, disabled });
 
   const style = {
     transform: CSS.Transform.toString(transform),
     transition,
+    ...(depth > 0 ? { marginLeft: `${depth * 1.25}rem` } : {}),
   };
 
   return (
@@ -83,20 +95,30 @@ function SortableCategoryRow({
         attributes={attributes}
         listeners={listeners}
         disabled={disabled}
-        label={`Reorder category ${name || index + 1}`}
+        label={`Reorder category ${row.name || index + 1}`}
       />
       <Input
-        value={name}
-        onChange={(e) => onRename(index, e.target.value)}
+        value={row.name}
+        onChange={(e) => onRename(row.id, e.target.value)}
         disabled={disabled}
-        aria-label={`Category ${index + 1}`}
+        aria-label={depth > 0 ? `Subcategory ${index + 1}` : `Category ${index + 1}`}
       />
       <Button
         type="button"
         variant="ghost"
         size="sm"
+        disabled={disabled || !canNest}
+        onClick={() => onAddChild(row.id)}
+        aria-label={`Add subcategory under ${row.name || `category ${index + 1}`}`}
+      >
+        Add sub
+      </Button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
         disabled={disabled || !canRemove}
-        onClick={() => onRemove(index)}
+        onClick={() => onRemove(row.id)}
       >
         Remove
       </Button>
@@ -110,12 +132,81 @@ function sameCategories(left: readonly string[], right: readonly string[]): bool
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
+/** Split a saved path list into parent-linked rows, preserving list order. */
 function categoryRows(categories: readonly string[]): DraftCategory[] {
-  return categories.map((name, index) => ({
-    id: `saved-${index}`,
-    originalName: name,
-    name,
-  }));
+  const rows: DraftCategory[] = [];
+  const idByPath = new Map<string, string>();
+  categories.forEach((path, index) => {
+    const segments = path.split(CATEGORY_PATH_SEPARATOR);
+    const name = segments[segments.length - 1] ?? path;
+    const parentPath = segments.slice(0, -1).join(CATEGORY_PATH_SEPARATOR);
+    const id = `saved-${index}`;
+    idByPath.set(path, id);
+    rows.push({
+      id,
+      parentId: parentPath ? idByPath.get(parentPath) ?? null : null,
+      originalPath: path,
+      name,
+    });
+  });
+  return rows;
+}
+
+/** Depth-first row order — children immediately after their parent. */
+function orderedRows(draft: readonly DraftCategory[]): DraftCategory[] {
+  const out: DraftCategory[] = [];
+  const walk = (parentId: string | null) => {
+    for (const row of draft) {
+      if (row.parentId !== parentId) continue;
+      out.push(row);
+      walk(row.id);
+    }
+  };
+  walk(null);
+  return out;
+}
+
+function rowDepth(draft: readonly DraftCategory[], row: DraftCategory): number {
+  let depth = 0;
+  let current = row;
+  while (current.parentId) {
+    const parent = draft.find((candidate) => candidate.id === current.parentId);
+    if (!parent) break;
+    current = parent;
+    depth += 1;
+  }
+  return depth;
+}
+
+/** Current path of a row, from the names its ancestors hold right now. */
+function rowPath(draft: readonly DraftCategory[], row: DraftCategory): string {
+  const segments = [row.name.trim()];
+  let current = row;
+  while (current.parentId) {
+    const parent = draft.find((candidate) => candidate.id === current.parentId);
+    if (!parent) break;
+    segments.unshift(parent.name.trim());
+    current = parent;
+  }
+  return segments.filter(Boolean).join(CATEGORY_PATH_SEPARATOR);
+}
+
+/** Flat path list in display order — exactly what the API stores. */
+function draftPaths(draft: readonly DraftCategory[]): string[] {
+  return orderedRows(draft).map((row) => rowPath(draft, row));
+}
+
+function descendantIds(draft: readonly DraftCategory[], id: string): string[] {
+  const out: string[] = [];
+  const walk = (parentId: string) => {
+    for (const row of draft) {
+      if (row.parentId !== parentId) continue;
+      out.push(row.id);
+      walk(row.id);
+    }
+  };
+  walk(id);
+  return out;
 }
 
 export default function SourceCategoryManager({ engineReady }: Props) {
@@ -137,8 +228,7 @@ export default function SourceCategoryManager({ engineReady }: Props) {
   );
 
   useEffect(() => {
-    const draftNames = draft.map((category) => category.name);
-    if (sameCategories(draftNames, categories)) {
+    if (sameCategories(draftPaths(draft), categories)) {
       draftDirtyRef.current = false;
       baselineRef.current = categories;
       return;
@@ -157,52 +247,64 @@ export default function SourceCategoryManager({ engineReady }: Props) {
         : null;
   const visibleError = loadError ?? queryError;
 
-  const dirty = !sameCategories(
-    draft.map((category) => category.name),
-    categories,
-  );
+  const dirty = !sameCategories(draftPaths(draft), categories);
+
+  const addRow = (parentId: string | null, name: string) => {
+    draftDirtyRef.current = true;
+    setDraft((prev) => [
+      ...prev,
+      { id: `new-${nextRowIdRef.current++}`, parentId, originalPath: null, name },
+    ]);
+    setLoadError(null);
+  };
 
   const onAdd = () => {
     const name = newName.trim();
     if (!name) return;
     const key = name.toLowerCase();
-    if (draft.some((category) => category.name.toLowerCase() === key)) {
+    if (draft.some((row) => row.parentId === null && row.name.trim().toLowerCase() === key)) {
       setLoadError("That category already exists.");
       return;
     }
-    draftDirtyRef.current = true;
-    setDraft((prev) => [
-      ...prev,
-      { id: `new-${nextRowIdRef.current++}`, originalName: null, name },
-    ]);
+    addRow(null, name);
     setNewName("");
-    setLoadError(null);
   };
 
-  const onRename = (index: number, value: string) => {
+  const onAddChild = (parentId: string) => {
+    const parent = draft.find((row) => row.id === parentId);
+    if (!parent) return;
+    if (rowDepth(draft, parent) + 1 > MAX_CATEGORY_DEPTH) {
+      setLoadError(`Categories cannot nest deeper than ${MAX_CATEGORY_DEPTH} levels.`);
+      return;
+    }
+    addRow(parentId, "");
+  };
+
+  const onRename = (id: string, value: string) => {
     draftDirtyRef.current = true;
-    setDraft((prev) =>
-      prev.map((category, i) =>
-        i === index ? { ...category, name: value } : category,
-      ),
-    );
+    setDraft((prev) => prev.map((row) => (row.id === id ? { ...row, name: value } : row)));
   };
 
-  const onRemove = (index: number) => {
-    if (draft.length <= 1) {
+  const onRemove = (id: string) => {
+    const doomed = new Set([id, ...descendantIds(draft, id)]);
+    if (draft.length - doomed.size < 1) {
       setLoadError("Keep at least one category.");
       return;
     }
     draftDirtyRef.current = true;
-    setDraft((prev) => prev.filter((_, i) => i !== index));
+    setDraft((prev) => prev.filter((row) => !doomed.has(row.id)));
     setLoadError(null);
   };
 
+  /** Drag reorders within one parent only; re-parenting is an explicit action. */
   const onDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
     if (!over || active.id === over.id) return;
-    const oldIndex = draft.findIndex((category) => category.id === active.id);
-    const newIndex = draft.findIndex((category) => category.id === over.id);
+    const activeRow = draft.find((row) => row.id === active.id);
+    const overRow = draft.find((row) => row.id === over.id);
+    if (!activeRow || !overRow || activeRow.parentId !== overRow.parentId) return;
+    const oldIndex = draft.findIndex((row) => row.id === active.id);
+    const newIndex = draft.findIndex((row) => row.id === over.id);
     if (oldIndex < 0 || newIndex < 0) return;
     draftDirtyRef.current = true;
     setDraft((prev) => moveItem(prev, oldIndex, newIndex));
@@ -214,37 +316,46 @@ export default function SourceCategoryManager({ engineReady }: Props) {
     setSaveNote(null);
     setLoadError(null);
     try {
-      const normalizedRows = draft.map((category) => ({
-        ...category,
-        name: category.name.trim(),
-      }));
-      if (normalizedRows.length === 0) {
+      const rows = orderedRows(draft);
+      if (rows.length === 0) {
         setLoadError("At least one category is required.");
         return;
       }
-      if (normalizedRows.some((category) => !category.name)) {
+      if (rows.some((row) => !row.name.trim())) {
         setLoadError("Category names cannot be empty.");
         return;
       }
-      const normalized = normalizedRows.map((category) => category.name);
-      if (new Set(normalized.map((name) => name.toLowerCase())).size !== normalized.length) {
-        setLoadError("Category names must be unique.");
+      if (rows.some((row) => row.name.includes(CATEGORY_PATH_SEPARATOR))) {
+        setLoadError(
+          `Category names cannot contain “${CATEGORY_PATH_SEPARATOR}” — use Add sub to nest one.`,
+        );
         return;
       }
+      const paths = rows.map((row) => rowPath(draft, row));
+      if (new Set(paths.map((path) => path.toLowerCase())).size !== paths.length) {
+        setLoadError("Category names must be unique within their parent.");
+        return;
+      }
+
+      // Only moved rows need a replacement; removals fall back to the surviving
+      // parent (or Uncategorised at the top level) server-side.
       const replacements: Record<string, string | null> = {};
       const retainedOriginals = new Set<string>();
-      for (const category of normalizedRows) {
-        if (category.originalName === null) continue;
-        retainedOriginals.add(category.originalName);
-        if (category.name !== category.originalName) {
-          replacements[category.originalName] = category.name;
-        }
+      for (const row of rows) {
+        if (row.originalPath === null) continue;
+        retainedOriginals.add(row.originalPath);
+        const path = rowPath(draft, row);
+        if (path !== row.originalPath) replacements[row.originalPath] = path;
       }
-      for (const originalName of baselineRef.current) {
-        if (!retainedOriginals.has(originalName)) replacements[originalName] = null;
+      for (const originalPath of baselineRef.current) {
+        if (retainedOriginals.has(originalPath)) continue;
+        // A removed parent's descendants disappear with it; the server moves
+        // their sources to whatever survives above them.
+        if (!replacements[originalPath]) replacements[originalPath] = null;
       }
+
       const saved = await saveCategoriesMutation.mutateAsync({
-        categories: normalized,
+        categories: paths,
         replacements,
       });
       draftDirtyRef.current = false;
@@ -258,15 +369,18 @@ export default function SourceCategoryManager({ engineReady }: Props) {
     }
   };
 
-  const sortableIds = draft.map((category) => category.id);
+  const rows = orderedRows(draft);
+  const sortableIds = rows.map((row) => row.id);
 
   return (
     <Card className="shadow-none">
       <CardHeader>
         <CardTitle level={3} className="text-base">Source categories</CardTitle>
         <CardDescription>
-          Organize your library. Drag to reorder (flat list — nesting is not
-          supported). Plans still use base vs addon layers separately.
+          Organize your library. Use “Add sub” to nest a subcategory under a
+          category — “Printers” with “Frame” and “Toolhead” beneath it.
+          Drag to reorder within the same parent. Plans still use base vs addon
+          layers separately.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -276,7 +390,7 @@ export default function SourceCategoryManager({ engineReady }: Props) {
           <p className="text-sm text-muted-foreground">Waiting for engine…</p>
         ) : categoriesQuery.isLoading ? (
           <p className="text-sm text-muted-foreground">Loading categories…</p>
-        ) : draft.length === 0 ? (
+        ) : rows.length === 0 ? (
           <p className="text-sm text-muted-foreground">
             {visibleError ? "Could not load categories." : "No categories yet. Add one below."}
           </p>
@@ -288,16 +402,18 @@ export default function SourceCategoryManager({ engineReady }: Props) {
           >
             <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
               <ul className="space-y-2" aria-label="Reorderable source categories">
-                {draft.map((category, index) => (
+                {rows.map((row, index) => (
                   <SortableCategoryRow
-                    key={category.id}
-                    id={category.id}
-                    name={category.name}
+                    key={row.id}
+                    row={row}
+                    depth={rowDepth(draft, row)}
                     index={index}
                     disabled={!engineReady || saving}
-                    canRemove={draft.length > 1}
+                    canRemove={rows.length > 1}
+                    canNest={rowDepth(draft, row) + 1 <= MAX_CATEGORY_DEPTH}
                     onRename={onRename}
                     onRemove={onRemove}
+                    onAddChild={onAddChild}
                   />
                 ))}
               </ul>
@@ -311,7 +427,7 @@ export default function SourceCategoryManager({ engineReady }: Props) {
             </Label>
             <Input
               id="new-source-category"
-              placeholder="e.g. Extruders"
+              placeholder="e.g. Printers"
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
               onKeyDown={(e) => {

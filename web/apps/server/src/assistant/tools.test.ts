@@ -70,6 +70,120 @@ describe("assistant tools + example builds", () => {
     expect(found.files).toEqual([{ path: "STLs/screen/screen_rail.stl", byte_size: 12 }]);
   });
 
+  it("lists the library category tree with subcategory counts", async () => {
+    repo.saveSourceCategories(["Voron", "Voron/Trident", "Toolheads"]);
+    repo.createSource({ name: "Trident frame", metadata: { category: "Voron/Trident" } });
+    repo.createSource({ name: "Voron guide", metadata: { category: "Voron" } });
+    repo.createSource({ name: "Loose part", metadata: { category: "" } });
+
+    const listed = JSON.parse(
+      (await invokeAssistantTool("list_source_categories", {}, { repo })).content,
+    );
+    expect(listed.categories).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: "Voron",
+          name: "Voron",
+          parent: null,
+          sources: 1,
+          sources_including_subcategories: 2,
+        }),
+        expect.objectContaining({ path: "Voron/Trident", parent: "Voron", depth: 1, sources: 1 }),
+      ]),
+    );
+    expect(listed.uncategorized_sources).toBe(1);
+    expect(listed.tree[0]).toMatchObject({ path: "Voron", children: [{ path: "Voron/Trident" }] });
+  });
+
+  it("filters list_sources by category, including subcategories by default", async () => {
+    repo.saveSourceCategories(["Voron", "Voron/Trident", "Toolheads"]);
+    repo.createSource({ name: "Trident frame", metadata: { category: "Voron/Trident" } });
+    repo.createSource({ name: "Voron guide", metadata: { category: "Voron" } });
+    repo.createSource({ name: "Dragon", metadata: { category: "Toolheads" } });
+
+    const names = async (args: Record<string, unknown>) =>
+      JSON.parse((await invokeAssistantTool("list_sources", args, { repo })).content).sources.map(
+        (s: { name: string }) => s.name,
+      );
+
+    expect((await names({ category: "Voron" })).sort()).toEqual(["Trident frame", "Voron guide"]);
+    expect(await names({ category: "Voron", include_subcategories: false })).toEqual([
+      "Voron guide",
+    ]);
+    expect(await names({ category: "voron/trident" })).toEqual(["Trident frame"]);
+    const unknown = JSON.parse(
+      (await invokeAssistantTool("list_sources", { category: "Nope" }, { repo })).content,
+    );
+    expect(unknown.error).toMatch(/Unknown library category/);
+  });
+
+  it("proposes and confirms filing a Source under a subcategory", async () => {
+    repo.saveSourceCategories(["Voron", "Voron/Trident"]);
+    const source = repo.createSource({ name: "Trident frame" });
+
+    const rejected = JSON.parse(
+      (await invokeAssistantTool(
+        "propose_set_source_category",
+        { source_id: source.id, category: "Voron/Nope" },
+        { repo },
+      )).content,
+    );
+    expect(rejected.error).toMatch(/Unknown library category/);
+
+    const proposal = await invokeAssistantTool(
+      "propose_set_source_category",
+      { source_id: source.id, category: " voron / trident " },
+      { repo },
+    );
+    expect(JSON.parse(proposal.content).status).toBe("proposed");
+    expect(repo.getSource(source.id)?.category).toBeNull();
+
+    const applied = await applyAssistantAction(proposal.proposedAction!, { repo, jobs: { start: async () => "unused" } as never });
+    expect(applied.ok).toBe(true);
+    expect(repo.getSource(source.id)?.category).toBe("Voron/Trident");
+  });
+
+  it("proposes and confirms creating, renaming, and deleting subcategories", async () => {
+    repo.saveSourceCategories(["Voron", "Toolheads"]);
+    const jobs = { start: async () => "unused" } as never;
+
+    const created = await invokeAssistantTool(
+      "propose_create_source_category",
+      { name: "Trident", parent: "Voron" },
+      { repo },
+    );
+    expect(repo.getSourceCategories()).not.toContain("Voron/Trident");
+    expect((await applyAssistantAction(created.proposedAction!, { repo, jobs })).ok).toBe(true);
+    expect(repo.getSourceCategories()).toEqual(["Voron", "Voron/Trident", "Toolheads"]);
+
+    const source = repo.createSource({
+      name: "Trident frame",
+      metadata: { category: "Voron/Trident" },
+    });
+
+    const renamed = await invokeAssistantTool(
+      "propose_rename_source_category",
+      { path: "Voron", new_name: "Voron kits" },
+      { repo },
+    );
+    expect((await applyAssistantAction(renamed.proposedAction!, { repo, jobs })).ok).toBe(true);
+    expect(repo.getSourceCategories()).toEqual([
+      "Voron kits",
+      "Voron kits/Trident",
+      "Toolheads",
+    ]);
+    expect(repo.getSource(source.id)?.category).toBe("Voron kits/Trident");
+
+    const deleted = await invokeAssistantTool(
+      "propose_delete_source_category",
+      { path: "Voron kits/Trident" },
+      { repo },
+    );
+    expect((await applyAssistantAction(deleted.proposedAction!, { repo, jobs })).ok).toBe(true);
+    expect(repo.getSourceCategories()).toEqual(["Voron kits", "Toolheads"]);
+    expect(repo.getSource(source.id)?.category).toBe("Voron kits");
+  });
+
   it("proposes and confirms Source metadata changes", async () => {
     const source = repo.createSource({ name: "Before", url: "https://example.com/before.git", source_kind: "git" });
     const proposal = await invokeAssistantTool("propose_update_source", {
