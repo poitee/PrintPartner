@@ -30,18 +30,18 @@ Users pick an approved manifest in the community registry or rely on the repo-ro
 A plan with base + addons exports as source references (URLs + rules), not embedded STLs:
 
 ```yaml
-# Example: LDO 2.4 + Stealthburner + Tap (see manifests/community/ldo-2.4-sb-tap/)
+# Example: a vendor kit stack (community manifests live under manifests/community/<slug>/)
 base:
-  source: LDOVoron2
-  url: https://github.com/MotorDynamics2/LDOVoron2
+  source: Example-Printer
+  url: https://github.com/ExampleOrg/Example-Printer
 addons:
-  - source: Voron-Stealthburner
-    url: https://github.com/VoronDesign/Voron-Stealthburner
-  - source: Voron-Tap
-    url: https://github.com/VoronDesign/Voron-Tap
+  - source: Example-Toolhead
+    url: https://github.com/ExampleOrg/Example-Toolhead
+  - source: Example-Probe
+    url: https://github.com/ExampleOrg/Example-Probe
 selections:
-  toolhead: stealthburner
-  probe: voron_tap
+  toolhead: example_toolhead
+  probe: example_probe
 ```
 
 See `docs/kit-catalog.yaml` → `stack_presets` for reference preset ids.

@@ -1,7 +1,13 @@
 # Community manifest catalog. status: proposed | approved | deprecated
-entries:
-  - slug: ldo-2.4-sb-tap
-    target_repo: LDOVoron2
-    title: LDO 2.4 + Stealthburner + Tap
-    manifest_file: ldo-2.4-sb-tap/manifest.yaml
-    status: proposed
+#
+# Ships empty: shared stack manifests describe particular projects, and Print
+# Partner stays agnostic about which ones you build. Add entries here, or in
+# `<PRINT_PARTNER_DATA_DIR>/manifests/`, alongside the manifest files they name.
+#
+# entries:
+#   - slug: example-kit-r2
+#     target_repo: Example-Printer
+#     title: Example Kit R2
+#     manifest_file: example-kit-r2/manifest.yaml
+#     status: proposed
+entries: []
