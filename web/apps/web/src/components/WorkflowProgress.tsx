@@ -1,5 +1,6 @@
 import { type MouseEvent } from "react";
 import { NavLink } from "react-router-dom";
+import { ClipboardList, Import, ListChecks, PackageCheck } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   spineFillIndex,
@@ -7,6 +8,16 @@ import {
   type WorkflowStage,
   type WorkflowStageId,
 } from "../lib/workflowStages";
+
+/* Collapsed rail has no room for labels, so each stage needs its own glyph —
+   a column of identical status dots is unreadable. Distinct from the utility
+   icons in SpineRail (Production stage vs. Factory for All Production). */
+const STAGE_ICONS: Record<WorkflowStageId, typeof Import> = {
+  sources: Import,
+  plan: ClipboardList,
+  checkoff: ListChecks,
+  production: PackageCheck,
+};
 
 type Props = {
   stages: WorkflowStage[];
@@ -116,6 +127,7 @@ export default function WorkflowProgress({
       <nav className={cn("relative flex flex-col gap-1", className)} aria-label="Workflow stages">
         {stages.map((stage) => {
           const active = stage.id === activeId;
+          const Icon = STAGE_ICONS[stage.id];
           return (
             <NavLink
               key={stage.id}
@@ -128,22 +140,20 @@ export default function WorkflowProgress({
                 active
                   ? "bg-primary/12 text-primary"
                   : "text-muted-foreground hover:bg-accent/70 hover:text-foreground",
+                stage.dim && !active && "opacity-60",
               )}
             >
-              <span
-                className={cn(
-                  "h-2.5 w-2.5 rounded-full ring-2 ring-card",
-                  active
-                    ? "bg-primary ring-primary/40"
-                    : stage.warn
-                      ? "bg-warning"
-                      : stage.done
-                        ? "bg-success"
-                        : "bg-border",
-                )}
-              />
+              <Icon className="h-4 w-4" />
               {stage.warn ? (
-                <span className="absolute right-1 top-1 h-1.5 w-1.5 rotate-45 bg-warning" />
+                <span
+                  className="absolute right-1 top-1 h-1.5 w-1.5 rotate-45 bg-warning"
+                  aria-hidden
+                />
+              ) : stage.done ? (
+                <span
+                  className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-success ring-2 ring-card"
+                  aria-hidden
+                />
               ) : null}
             </NavLink>
           );

@@ -75,7 +75,7 @@ function SidebarTooltip({
 }
 
 function GroupHeading({ collapsed, children }: { collapsed: boolean; children: ReactNode }) {
-  if (collapsed) return <Separator className="mx-1" />;
+  if (collapsed) return <Separator className="mx-1 w-auto" />;
   return (
     <p className="px-1 font-mono text-3xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">
       {children}
