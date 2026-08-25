@@ -69,6 +69,7 @@ export type MaterializeAcceptedPrinterLinkCommand =
       kind: "claim";
       profileId: number;
       expectedPrint: Readonly<UnattributedPrint>;
+      objectNames?: readonly string[];
     }>;
 
 export type MaterializeAcceptedPrinterLinkResult =

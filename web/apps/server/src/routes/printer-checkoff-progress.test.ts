@@ -639,6 +639,18 @@ describe("printer progress route", () => {
     expect(listUnattributedPrints(repo).find((row) => row.id === print.id)).toMatchObject({
       claimed_profile_id: plan.id,
     });
+    expect(acceptedPrintUnits(repo, plan.id, bracket.id)).toEqual([false]);
+
+    const verify = await app.inject({
+      method: "POST",
+      url: "/printer-checkoff/verify",
+      payload: {
+        link_id: claim.json().link.id,
+        decisions: [{ part_id: bracket.id, unit_index: 0, result: "confirmed" }],
+      },
+    });
+    expect(verify.statusCode).toBe(200);
+    expect(acceptedPrintUnits(repo, plan.id, bracket.id)).toEqual([true]);
     expect(JSON.parse(repo.getSetting("printer.plan_bindings") ?? "[]")).toEqual([
       expect.objectContaining({ integration_id: "prusa-1", profile_id: plan.id }),
     ]);

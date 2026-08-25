@@ -1303,7 +1303,7 @@ export class AppRepository {
           return { kind: "print_changed" as const };
         }
         claimPrint = current;
-        objectNames = current.gcode_objects;
+        objectNames = command.objectNames ?? current.gcode_objects;
         fallbackFilename = current.filename;
       }
 

@@ -502,11 +502,20 @@ export async function registerPrinterCheckoffRoutes(
     { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } },
     async (request, reply) => {
       const { id } = request.params as { id: string };
-      const body = request.body as { profile_id?: unknown };
+      const body = request.body as {
+        profile_id?: unknown;
+        selected_stl_basenames?: unknown;
+      };
       const profileId = Number(body.profile_id);
       if (!Number.isInteger(profileId) || profileId <= 0) {
         return sendProblem(reply, 400, "Bad Request", "profile_id is required");
       }
+      const selectedStlBasenames = Array.isArray(body.selected_stl_basenames)
+        ? body.selected_stl_basenames
+            .filter((value): value is string => typeof value === "string")
+            .map((value) => value.trim().toLowerCase())
+            .filter(Boolean)
+        : null;
 
       const allPrints = listUnattributedPrints(deps.repo);
       const print = allPrints.find((p) => p.id === id);
@@ -517,12 +526,28 @@ export async function registerPrinterCheckoffRoutes(
         return sendProblem(reply, 409, "Conflict", "Print already claimed");
       }
 
+      let objectNames: string[] | undefined;
+      if (selectedStlBasenames != null) {
+        if (selectedStlBasenames.length === 0) {
+          return sendProblem(reply, 400, "Bad Request", "Select at least one plate file");
+        }
+        const selected = new Set(selectedStlBasenames);
+        const grouped = groupObjectsByPart(print.gcode_objects);
+        objectNames = [...grouped.values()]
+          .filter((group) => selected.has(group.stlBasename.toLowerCase()))
+          .flatMap((group) => group.objects.map((object) => object.name));
+        if (objectNames.length === 0) {
+          return sendProblem(reply, 400, "Bad Request", "Selected files are not on this plate");
+        }
+      }
+
       let materialized: ReturnType<AppRepository["materializeAcceptedPrinterLink"]>;
       try {
         materialized = deps.repo.materializeAcceptedPrinterLink({
           kind: "claim",
           profileId,
           expectedPrint: print,
+          objectNames,
         });
       } catch (error) {
         if (error instanceof AcceptedPlanOperationalIntegrityError) {

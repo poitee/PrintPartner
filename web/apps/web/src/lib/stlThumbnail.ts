@@ -14,7 +14,6 @@ const SIZE = 256;
 const DEFAULT_COLOR = DEFAULT_FILAMENT_HEX;
 const MESH_CACHE_MAX = 48;
 const BLOB_CACHE_MAX = 96;
-const DECIMATE_THRESHOLD = 80_000;
 const MAX_FETCH_ATTEMPTS = 3;
 
 let sharedRenderer: THREE.WebGLRenderer | null = null;
@@ -120,31 +119,10 @@ function rememberBlob(basis: string, hex: string, blob: Blob): void {
 }
 
 export function decimateGeometryForThumbnail(geometry: THREE.BufferGeometry): THREE.BufferGeometry {
-  const pos = geometry.getAttribute("position");
-  if (!pos || pos.count <= DECIMATE_THRESHOLD) return geometry;
-
-  // STLLoader emits a non-indexed triangle list. Sample whole triangles so
-  // decimation never leaves Three.js with an incomplete face.
-  const triangleCount = Math.floor(pos.count / 3);
-  const maxTriangles = Math.floor(DECIMATE_THRESHOLD / 3);
-  const keptTriangles = Math.min(triangleCount, maxTriangles);
-  const newPos = new Float32Array(keptTriangles * 9);
-  const source = pos as THREE.BufferAttribute;
-  for (let triangle = 0; triangle < keptTriangles; triangle++) {
-    const sourceTriangle = Math.floor((triangle * triangleCount) / keptTriangles);
-    const sourceVertex = sourceTriangle * 3;
-    const outputVertex = triangle * 9;
-    for (let vertex = 0; vertex < 3; vertex++) {
-      const sourceIndex = sourceVertex + vertex;
-      const outputIndex = outputVertex + vertex * 3;
-      newPos[outputIndex + 0] = source.getX(sourceIndex);
-      newPos[outputIndex + 1] = source.getY(sourceIndex);
-      newPos[outputIndex + 2] = source.getZ(sourceIndex);
-    }
-  }
-  const slim = new THREE.BufferGeometry();
-  slim.setAttribute("position", new THREE.BufferAttribute(newPos, 3));
-  return slim;
+  // Plan thumbnails must represent the accepted STL exactly. Earlier thumbnail
+  // decimation sampled triangles from large meshes, which made detailed models
+  // appear broken even though the source geometry was valid.
+  return geometry;
 }
 
 function renderBufferToBlob(buffer: ArrayBuffer, hex: string): Promise<Blob | null> {

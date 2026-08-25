@@ -3259,10 +3259,11 @@ export async function fetchUnattributedPrints(): Promise<UnattributedPrint[]> {
 export async function claimUnattributedPrint(
   id: string,
   profile_id: number,
-): Promise<{ ok: boolean }> {
+  options?: { selected_stl_basenames?: string[] },
+): Promise<{ ok: boolean; link: PrinterCheckoffLink }> {
   return engineFetch(`/printer-checkoff/unattributed/${encodeURIComponent(id)}/claim`, {
     method: "POST",
-    body: JSON.stringify({ profile_id }),
+    body: JSON.stringify({ profile_id, ...options }),
   });
 }
 

@@ -93,16 +93,16 @@ describe("accepted STL thumbnail mesh loading", () => {
     });
   });
 
-  it("keeps nearly all faces when a mesh is just over the decimation threshold", () => {
+  it("preserves every STL triangle so plan thumbnails do not show malformed models", () => {
     const geometry = new THREE.BufferGeometry();
     const positions = new Float32Array(80_001 * 3);
     geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
 
-    const decimated = decimateGeometryForThumbnail(geometry);
-    const decimatedCount = decimated.getAttribute("position")?.count ?? 0;
+    const thumbnailGeometry = decimateGeometryForThumbnail(geometry);
+    const thumbnailCount = thumbnailGeometry.getAttribute("position")?.count ?? 0;
 
-    expect(decimatedCount % 3).toBe(0);
-    expect(80_001 - decimatedCount).toBe(3);
+    expect(thumbnailGeometry).toBe(geometry);
+    expect(thumbnailCount).toBe(80_001);
   });
 
   it("loads a mesh declared far past the retired 15 MiB cap in one fetch", async () => {

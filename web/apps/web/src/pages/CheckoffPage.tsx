@@ -937,6 +937,33 @@ export default function CheckoffPage() {
           description={progressDescription}
           actions={
             <PageHeaderActions>
+              <div className="col-span-2 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-border bg-card px-3 py-2 text-xs text-muted-foreground sm:w-auto sm:border-0 sm:bg-transparent sm:px-0 sm:py-0">
+                <span className="font-medium text-foreground">Print PDF:</span>
+                <label className="flex items-center gap-1.5">
+                  <input
+                    type="checkbox"
+                    checked={compactMode}
+                    onChange={(e) => setCompactMode(e.target.checked)}
+                  />
+                  Compact rows
+                </label>
+                <label className="flex items-center gap-1.5">
+                  <input
+                    type="checkbox"
+                    checked={continuousPrintLayout}
+                    onChange={(e) => setContinuousPrintLayout(e.target.checked)}
+                  />
+                  Continuous
+                </label>
+                <label className="flex items-center gap-1.5">
+                  <input
+                    type="checkbox"
+                    checked={textOnlyPrint}
+                    onChange={(e) => setTextOnlyPrint(e.target.checked)}
+                  />
+                  Text only, no thumbnails
+                </label>
+              </div>
               <Button
                 variant="ghost"
                 className="min-h-10 w-full sm:w-auto"
@@ -1018,6 +1045,7 @@ export default function CheckoffPage() {
                   print={print}
                   onClaimed={() => {
                     void refreshUnattributedPrints();
+                    refreshWatchingLinks();
                     setVerifyRefreshKey((k) => k + 1);
                   }}
                   onDismissed={() => void refreshUnattributedPrints()}
@@ -1085,34 +1113,6 @@ export default function CheckoffPage() {
               }))}
             />
           </div>
-          {!isMobileLayout && (
-            <>
-              <label className="flex items-center gap-2 text-sm text-muted-foreground">
-                <input
-                  type="checkbox"
-                  checked={compactMode}
-                  onChange={(e) => setCompactMode(e.target.checked)}
-                />
-                Compact print rows
-              </label>
-              <label className="flex items-center gap-2 text-sm text-muted-foreground">
-                <input
-                  type="checkbox"
-                  checked={continuousPrintLayout}
-                  onChange={(e) => setContinuousPrintLayout(e.target.checked)}
-                />
-                Continuous layout when printing
-              </label>
-              <label className="flex items-center gap-2 text-sm text-muted-foreground">
-                <input
-                  type="checkbox"
-                  checked={textOnlyPrint}
-                  onChange={(e) => setTextOnlyPrint(e.target.checked)}
-                />
-                Text-only sheet (no thumbnails)
-              </label>
-            </>
-          )}
           </div>
         </div>
 
