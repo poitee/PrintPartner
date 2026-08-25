@@ -112,7 +112,7 @@ export function assembledEligibleUnitIndices(printUnits: boolean[]): number[] {
  * Checkoff and assembled mutations are scoped to a single part on both the
  * client and the server, so only the row actually being saved should be
  * disabled. Returning a global "any save in flight" flag here would churn the
- * props of every memoised row on each toggle — on a Voron-scale plan (100+
+ * props of every memoised row on each toggle — on a large plan (100+
  * parts, many completed-but-not-assembled units) that re-renders the whole
  * list twice per click and blocks the user from checking off the next part
  * while the previous request is still in flight.

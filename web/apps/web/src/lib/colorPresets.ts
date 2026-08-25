@@ -121,5 +121,5 @@ export async function applyColorPreset(profileId: number, preset: ColorPreset): 
   return applied;
 }
 
-/** Default hex for a filament with no assigned color (classic Voron red). */
+/** Default hex for a filament with no assigned color. */
 export const DEFAULT_FILAMENT_HEX = "#c41230";

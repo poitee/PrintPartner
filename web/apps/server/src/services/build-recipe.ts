@@ -108,12 +108,15 @@ export type RecipeReplayStep = {
 };
 
 /** Catalog base_tag/base_branch when the live recipe omitted a git ref. */
-function catalogRefForPreset(presetId: string | null | undefined): {
+function catalogRefForPreset(
+  presetId: string | null | undefined,
+  dataDir?: string | null,
+): {
   tag?: string;
   branch?: string;
 } {
   if (!presetId) return {};
-  const catalog = loadKitCatalog() as Record<string, unknown>;
+  const catalog = loadKitCatalog(dataDir) as Record<string, unknown>;
   const presets = catalog.stack_presets as
     | Record<string, { base_tag?: string; base_branch?: string; label?: string }>
     | undefined;
@@ -123,9 +126,13 @@ function catalogRefForPreset(presetId: string | null | undefined): {
   return stackPresetBaseRef(presets[resolved] ?? {});
 }
 
-function pushBaseStep(steps: RecipeReplayStep[], recipe: BuildRecipe): void {
+function pushBaseStep(
+  steps: RecipeReplayStep[],
+  recipe: BuildRecipe,
+  dataDir?: string | null,
+): void {
   if (!recipe.base.source_name) return;
-  const catalogRef = catalogRefForPreset(recipe.stack_preset);
+  const catalogRef = catalogRefForPreset(recipe.stack_preset, dataDir);
   const tag = recipe.base.tag ?? catalogRef.tag ?? null;
   const branch = recipe.base.branch ?? (!tag ? catalogRef.branch ?? null : null);
   const hasRef = Boolean(tag || branch);
@@ -171,7 +178,10 @@ function pushKitSteps(steps: RecipeReplayStep[], recipe: BuildRecipe): void {
  * are not dropped by the preset-only early return. Catalog `base_tag` fills in when the
  * live recipe has no git ref yet (e.g. ldo_trident_r2 → VTr2).
  */
-export function recipeToReplaySteps(recipe: BuildRecipe): RecipeReplayStep[] {
+export function recipeToReplaySteps(
+  recipe: BuildRecipe,
+  dataDir?: string | null,
+): RecipeReplayStep[] {
   const steps: RecipeReplayStep[] = [];
 
   if (recipe.stack_preset) {
@@ -183,13 +193,13 @@ export function recipeToReplaySteps(recipe: BuildRecipe): RecipeReplayStep[] {
     });
     // Presets now set catalog base_tag on apply; still keep explicit set_base when a
     // tag/branch is known (live recipe or catalog) so Sync → Update stays targeted.
-    pushBaseStep(steps, recipe);
+    pushBaseStep(steps, recipe, dataDir);
     pushAddonSteps(steps, recipe);
     pushKitSteps(steps, recipe);
     return steps;
   }
 
-  pushBaseStep(steps, recipe);
+  pushBaseStep(steps, recipe, dataDir);
   pushAddonSteps(steps, recipe);
   pushKitSteps(steps, recipe);
   return steps;

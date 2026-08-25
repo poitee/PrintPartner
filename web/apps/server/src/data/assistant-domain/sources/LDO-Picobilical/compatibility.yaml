@@ -1,9 +1,0 @@
-schema: print-partner/compat@1
-source_name: LDO-Picobilical
-kind: addon_electronics
-attaches_to: [{base: Voron-0, ref: Voron0.2r1, note: "'designed specifically for the Voron0 series printers'"}]
-replaces: ["cable-chain / drag-chain toolhead wiring", "external 5V buck for the Pi (on-board 24->5V)"]
-conflicts: ["Voron-Hardware V0-Umbilical", "voron_0_pancake_board"]
-pairing_rules:
-  - "pairs with LDOVoron0@v02r1 STLs/Picobilical_Toolhead strain-relief parts"
-  - "spacer choice: toolhead_spacer_v02.stl for V0.2 builds"

@@ -28,13 +28,13 @@ export const GOLDEN_EVAL_FIXTURES: GoldenEvalCase[] = [
   {
     id: "recommend-known-stack-preset",
     description: "Recommend a catalog stack preset by proposing apply_stack_preset",
-    question: "Set up my plan like Voron 2.4 stock with Stealthburner and Tap",
+    question: "Set up my plan using the Example Kit R2 preset",
     expected_tool: "apply_stack_preset",
-    tool_input: { preset_id: "voron_2.4_stock_sb_tap" },
+    tool_input: { preset_id: "example_kit_r2" },
     expect: {
       proposes_action: true,
       action_type: "apply_stack_preset",
-      content_includes: ["proposed", "voron_2.4_stock_sb_tap"],
+      content_includes: ["proposed", "example_kit_r2"],
     },
   },
   {
@@ -92,7 +92,7 @@ export const GOLDEN_EVAL_FIXTURES: GoldenEvalCase[] = [
     tool_input: {},
     expect: {
       proposes_action: false,
-      content_includes: ["Stack presets", "voron_2.4_stock_sb_tap"],
+      content_includes: ["Stack presets", "example_kit_r2"],
     },
   },
 ];

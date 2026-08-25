@@ -82,7 +82,7 @@ const DEFAULT_URLS: Record<"moonraker" | "prusalink", string> = {
   prusalink: "http://192.168.1.50",
 };
 
-const DEFAULT_PRESET_ID = "preset-voron-250";
+const DEFAULT_PRESET_ID = "preset-prusa-mk4";
 const CUSTOM_PRESET_ID = "custom";
 
 const HOST_TYPE_LABELS: Record<HostType, string> = {
@@ -804,7 +804,7 @@ export default function PrintersSettingsCard({ engineReady }: Props) {
 
   const inputClass = INPUT_CLASS;
 
-  const namePlaceholder = "Shop Voron";
+  const namePlaceholder = "Shop Printer";
 
   const linkedPrinters = printers.filter((p) => {
     const id = p.integration_id?.trim();

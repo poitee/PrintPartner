@@ -603,21 +603,42 @@ function classifyEvidenceFromRequest(
   return evidence;
 }
 
+/**
+ * Requirements read off a build request by *shape*, not by product name.
+ *
+ * Naming specific machines, toolheads or boards here would bias every request
+ * toward one ecosystem; the slot vocabulary comes from the kit catalog instead,
+ * and anything unrecognised is still captured as a requested feature below.
+ */
 const REQUIREMENT_PATTERNS: Array<[string, RegExp]> = [
-  ["printer", /\b(voron\s*(?:2\.4(?=r|\b)|trident\b|0\.2(?=r|\b))|switchwire\b)/i],
-  ["revision", /(?:\b(?:2\.4|0\.2))(r\d+)\b|\b(r\d+|v\d+(?:\.\d+)+)\b/i],
-  ["size", /\b(250|300|350)\s*mm\b/i],
-  ["controller", /\b(octopus(?:\s*pro)?|leviathan|skr[^,.;]*)\b/i],
-  ["toolhead", /\b(stealthburner|afterburner|dragonburner)\b/i],
-  ["extruder", /\b(galileo\s*2(?:\s*(?:extruder|e))?|clockwork\s*2?)\b/i],
-  ["hotend", /\b(rapido\s*2[^,.;]*|dragon\s*(?:hf|uhf)?|revo[^,.;]*)\b/i],
-  ["probe", /\b(beacon(?:\s*h)?|tap|klicky)\b/i],
-  ["toolhead_board", /\b(ebb\s*36|ebb\s*42|sb2209|nighthawk)\b/i],
-  ["transport", /\b(usb|can(?:bus)?)\b/i],
+  // "2.4r2" attaches the revision straight onto the version, so allow both.
+  ["revision", /\d(r\d+)\b|\b(r\d+|v\d+(?:\.\d+)+|rev\s*\d+)\b/i],
+  ["size", /\b(\d{3})\s*mm\b/i],
+  ["transport", /\b(usb|can(?:bus)?|ethernet|wifi)\b/i],
   ["umbilical", /\b(usb|can(?:bus)?)\s+umbilical\b/i],
 ];
 
-export function analyzeBuildRequest(request: string, urls: string[]) {
+/** Catalog slot ids the request names directly ("… for the probe slot"). */
+function slotRequirementsFromRequest(request: string, knownSlots: readonly string[]): BuildRequirement[] {
+  const found: BuildRequirement[] = [];
+  for (const slot of knownSlots) {
+    const label = slot.replace(/[_-]+/g, "[ _-]?");
+    // Stop at a conjunction or punctuation so "probe X and toolhead Y" splits.
+    const m = new RegExp(
+      `\\b${label}\\b\\s*[:=]?\\s*([\\w][\\w .+-]{0,40}?)(?=\\s+and\\s|\\s*[,;]|\\.(?!\\d)|$)`,
+      "i",
+    ).exec(request);
+    const value = m?.[1]?.trim().replace(/[.,;]+$/, "");
+    if (value) found.push({ key: slot, value, status: "unverified" });
+  }
+  return found;
+}
+
+export function analyzeBuildRequest(
+  request: string,
+  urls: string[],
+  knownSlots: readonly string[] = [],
+) {
   const requirements: BuildRequirement[] = [];
   for (const [key, pattern] of REQUIREMENT_PATTERNS) {
     const match = request.match(pattern);
@@ -625,6 +646,7 @@ export function analyzeBuildRequest(request: string, urls: string[]) {
     if (value)
       requirements.push({ key, value: value.trim(), status: "unverified" });
   }
+  requirements.push(...slotRequirementsFromRequest(request, knownSlots));
   const colorMatches = request.matchAll(
     /\b(primary|accent)\s+color\s+(?:is|[:=])\s*(.+?)(?=\s+and\s+(?:primary|accent)\s+color|[,.;]|$)/gi,
   );
@@ -638,11 +660,11 @@ export function analyzeBuildRequest(request: string, urls: string[]) {
       status: "unverified",
     });
   }
-  if (!requirements.some((requirement) => requirement.key === "printer")) {
-    const project = /\b(?:build|print|make)\s+(?:(?:a|an|the)\s+)?(.+?)(?=\s+with\b|\s+using\b|\s+from\b|[,.;]|$)/i.exec(request)?.[1]?.trim();
-    if (project && !/^(?:this|that|these|those)\b/i.test(project)) {
-      requirements.unshift({ key: "project", value: project, status: "unverified" });
-    }
+  // What the user said they are building, in their own words — the only
+  // project identifier available without a built-in machine list.
+  const project = /\b(?:build|print|make)\s+(?:(?:a|an|the)\s+)?(.+?)(?=\s+with\b|\s+using\b|\s+from\b|[,;]|\.(?!\d)|$)/i.exec(request)?.[1]?.trim();
+  if (project && !/^(?:this|that|these|those)\b/i.test(project)) {
+    requirements.unshift({ key: "project", value: project, status: "unverified" });
   }
   const featureMatches = request.matchAll(/\b(?:with|include|including|needs?|must have)\s+(.+?)(?=\s+(?:with|include|including|needs?|must have)\b|[,.;]|$)/gi);
   let featureIndex = 0;
@@ -821,8 +843,9 @@ export function newBuildPlanningBrief(
   buildId: number,
   request: string,
   urls: string[],
+  knownSlots: readonly string[] = [],
 ): BuildPlanningBrief {
-  const analyzed = analyzeBuildRequest(request, urls);
+  const analyzed = analyzeBuildRequest(request, urls, knownSlots);
   const now = new Date().toISOString();
   return {
     version: BUILD_PLANNING_VERSION,

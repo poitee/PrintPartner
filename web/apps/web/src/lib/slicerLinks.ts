@@ -25,7 +25,7 @@ export const SLICER_LINKS: SlicerLink[] = [
     slicer: "orca",
     label: "OrcaSlicer",
     url: "http://orca.home",
-    hint: "Klipper / Voron plates route here",
+    hint: "Klipper plates route here",
   },
   {
     slicer: "prusa",

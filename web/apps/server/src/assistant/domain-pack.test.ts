@@ -1,6 +1,7 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { createSelfHostPorts } from "../adapters/self-host/index.js";
 import {
@@ -9,6 +10,11 @@ import {
   importAssistantDomainPack,
   loadAssistantDomainPack,
 } from "./domain-pack.js";
+
+const FIXTURE = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "../test-fixtures/kit-workspace",
+);
 
 describe("assistant domain pack", () => {
   const dirs: string[] = [];
@@ -22,22 +28,32 @@ describe("assistant domain pack", () => {
     }
   });
 
-  it("loads seed alias map from shipped assistant-domain data", () => {
-    const pack = loadAssistantDomainPack();
+  it("ships no curated pack content of its own", () => {
+    // Print Partner is agnostic about what you build: the pack format ships,
+    // the entries do not.
+    expect(loadAssistantDomainPack()).toBe("");
+  });
+
+  it("renders a supplied pack from the data directory", () => {
+    const pack = loadAssistantDomainPack({
+      dataDir: FIXTURE,
+      sourceNames: ["Example-Printer", "Example-Toolhead", "Example-Probe"],
+    });
     expect(pack).toContain("Domain pack");
-    expect(pack).toContain("LDO Trident R2");
-    expect(pack).toContain("Voron-Trident");
-    expect(pack).toContain("VTr2");
+    expect(pack).toContain("example_kit_r2");
+    expect(pack).toMatch(/base=Example-Printer@EX-R2/);
     // Research-format aliases must not render as empty phrases
     expect(pack).not.toMatch(/"" →/);
-    expect(pack).toMatch(/base=Voron-Trident@VTr2/);
     expect(pack).toContain("### Source digests");
-    // Capped workflow / pitfalls excerpts from on-disk research md
-    expect(pack).toMatch(/workflow:/);
-    expect(pack).toMatch(/pitfalls:/);
-    // Compatibility digest lines from print-partner/compat@1
     expect(pack).toMatch(/compat:/);
     expect(pack).toMatch(/conflicts=/);
+  });
+
+  it("omits stacks and aliases whose sources are not synced here", () => {
+    const pack = loadAssistantDomainPack({ dataDir: FIXTURE, sourceNames: ["Unrelated-Source"] });
+    expect(pack).not.toContain("example_kit_r2");
+    expect(pack).not.toContain("Example-Printer");
+    expect(pack).not.toContain("### Phrase aliases");
   });
 
   it("normalizes research-format alias and stack YAML", () => {
@@ -205,10 +221,13 @@ describe("assistant domain pack", () => {
     const ports = createSelfHostPorts(dataDir);
     await ports.db.connect();
     const repo = ports.repository!;
-    // Shipped pack includes Voron-Trident workflow.md etc.
+    // Copy a fixture pack into this workspace's data dir, then backfill from it.
+    cpSync(join(FIXTURE, "assistant-domain"), join(dataDir, "assistant-domain"), {
+      recursive: true,
+    });
     const source = repo.createSource({
-      name: "Voron-Trident",
-      url: "https://github.com/VoronDesign/Voron-Trident",
+      name: "Example-Probe",
+      url: "https://example.com/probe.git",
       source_kind: "github",
     });
 

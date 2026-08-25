@@ -229,7 +229,7 @@ export type FeedbackScores = {
 };
 
 const TOKEN_RE = /\b([a-z][a-z0-9_]{2,}(?:\.[a-z0-9_]+)?)\b/gi;
-/** Hyphenated source names (Voron-Trident, LDOVoronTrident, etc.). */
+/** Hyphenated or camel-cased source names (Example-Printer, ExampleVendorKit, etc.). */
 const SOURCE_NAME_RE = /\b([A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+)\b/g;
 
 const THUMBS_PREFER_MIN = 2;

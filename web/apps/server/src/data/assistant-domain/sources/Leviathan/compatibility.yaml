@@ -1,9 +1,0 @@
-schema: print-partner/compat@1
-source_name: Leviathan
-kind: addon_electronics
-attaches_to:
-  - {base: Voron-2, evidence: Klipper_config/voron2_leviathan.cfg}
-  - {base: Voron-Trident, evidence: Klipper_config/trident_leviathan.cfg}
-replaces: ["Octopus/SKR-class controller selection (electronics_bay controller mount choice changes accordingly)"]
-conflicts: []
-ldo_pairing: "Standard controller in newer LDO V2/Trident kit revisions; LDOVoron2/LDOVoronTrident ship leviathan-*.cfg firmware configs referencing it"

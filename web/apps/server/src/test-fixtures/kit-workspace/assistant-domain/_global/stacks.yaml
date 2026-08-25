@@ -1,0 +1,7 @@
+stacks:
+  example_kit_r2:
+    label: Example Kit R2
+    base_source: Example-Printer
+    base_tag: EX-R2
+    catalog_base_id: example_printer
+    addon_sources: [Example-Toolhead, Example-Probe]

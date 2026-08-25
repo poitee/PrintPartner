@@ -23,6 +23,7 @@ import { resolveFilamentDisplay } from "../services/filament-resolve.js";
 import { applyStackPresetToProfile, resolveStackPresetId } from "../services/stack-preset.js";
 import { conflictsForStack, explainSource, replacementsWhenAdding } from "../services/interaction-graph.js";
 import { extractGuideAdvice, fetchWebPageText, ingestGuideText, ingestGuideUrl } from "../services/guide-ingest.js";
+import { buildKitVocabulary } from "../services/kit-vocabulary.js";
 import { searchOverridesFromRuntime, searchWeb } from "../services/search/index.js";
 import { fetchGithubRepoTreeSummary, parseGithubUrl } from "../services/github-sync.js";
 import { walkSourceDocs } from "../services/source-docs-scan.js";
@@ -768,7 +769,7 @@ export const ASSISTANT_TOOL_SPECS: AssistantToolSpec[] = [
   {
     name: "set_base",
     description:
-      "PROPOSE setting the base layer source for a plan. Optionally set GitHub tag/branch (e.g. Voron-Trident tag VTr2 for R2). Requires user confirmation; tag changes need Sync.",
+      "PROPOSE setting the base layer source for a plan. Optionally set the GitHub tag/branch that identifies a kit revision. Requires user confirmation; tag changes need Sync.",
     input_schema: {
       type: "object",
       properties: {
@@ -776,7 +777,7 @@ export const ASSISTANT_TOOL_SPECS: AssistantToolSpec[] = [
         source_name: { type: "string" },
         tag: {
           type: "string",
-          description: "Optional GitHub tag to set on the source (e.g. VTr2 for Trident R2).",
+          description: "Optional GitHub tag to set on the source, when a kit revision is published as a tag.",
         },
         branch: {
           type: "string",
@@ -790,7 +791,7 @@ export const ASSISTANT_TOOL_SPECS: AssistantToolSpec[] = [
   {
     name: "set_source_git_ref",
     description:
-      "PROPOSE setting a source's GitHub branch and/or tag (e.g. Voron-Trident tag=VTr2). User must Sync after applying.",
+      "PROPOSE setting a source's GitHub branch and/or tag. User must Sync after applying.",
     input_schema: {
       type: "object",
       properties: {
@@ -1147,7 +1148,7 @@ export const ASSISTANT_TOOL_SPECS: AssistantToolSpec[] = [
         query: { type: "string", description: "Search query" },
         site: {
           type: "string",
-          description: "Optional site: filter host (e.g. github.com, docs.vorondesign.com)",
+          description: "Optional site: filter host (e.g. github.com, a vendor documentation domain)",
         },
       },
       required: ["query"],
@@ -1456,6 +1457,38 @@ function resolvePlanId(input: Record<string, unknown>, ctx: ToolContext, validat
   return ctx.activePlanId != null ? ctx.activePlanId : null;
 }
 
+/** Slot id → catalog product/variant names, for path-based contribution slotting. */
+function catalogSlotAliases(catalog: Record<string, unknown>): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  const categories = (catalog.addon_categories ?? {}) as Record<
+    string,
+    { sources?: Array<{ name?: string; variant_id?: string; label?: string }> }
+  >;
+  for (const [slot, category] of Object.entries(categories)) {
+    const aliases: string[] = [];
+    for (const source of category?.sources ?? []) {
+      for (const raw of [source?.name, source?.variant_id, source?.label]) {
+        if (typeof raw !== "string") continue;
+        const alias = raw.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+        if (alias.length >= 3 && !aliases.includes(alias)) aliases.push(alias);
+      }
+    }
+    if (aliases.length) out.set(slot, aliases);
+  }
+  return out;
+}
+
+/**
+ * Names guide ingest is allowed to resolve to: the tenant's kit catalog plus
+ * whatever they have actually synced. Nothing else can become an Apply card.
+ */
+function guideVocabulary(ctx: ToolContext) {
+  return buildKitVocabulary({
+    catalog: loadKitCatalog(ctx.dataDir),
+    sourceNames: ctx.repo.listSources().map((s) => s.name),
+  });
+}
+
 function sourceByName(repo: AppRepository, name: string) {
   const needle = name.trim();
   if (!needle) return null;
@@ -1465,13 +1498,13 @@ function sourceByName(repo: AppRepository, name: string) {
   const lower = needle.toLowerCase();
   const ci = sources.find((s) => s.name.toLowerCase() === lower);
   if (ci) return ci;
-  // "Voron Trident" → "Voron-Trident", "LDO Trident" → "LDOVoronTrident"
+  // Separator-insensitive: "Example Repo" → "Example-Repo".
   const compact = lower.replace(/[\s_-]+/g, "");
   const fuzzy = sources.find((s) => s.name.toLowerCase().replace(/[\s_-]+/g, "") === compact);
   if (fuzzy) return fuzzy;
-  // Model often appends release suffixes ("Voron-Trident R2-0", "Voron-Trident @ VTr2").
+  // Model often appends release suffixes ("Example-Repo R2-0", "Example-Repo @ v2.1").
   // Match when either string contains the other after separator normalization; prefer the
-  // longest source name so "Voron-Trident R2" resolves to Voron-Trident, not Voron-2.
+  // longest source name so a suffixed name resolves to the most specific source.
   const norm = (s: string) =>
     s
       .toLowerCase()
@@ -1722,12 +1755,16 @@ async function resolveRepoTreeSummary(
   };
 }
 
-function planSnapshotJson(repo: AppRepository, planId: number): Record<string, unknown> {
+function planSnapshotJson(
+  repo: AppRepository,
+  planId: number,
+  dataDir?: string | null,
+): Record<string, unknown> {
   const profile = repo.getProfileHeader(planId);
   if (!profile) return { error: "Plan not found" };
   const layers = repo.getProfileLayers(planId);
   const kit = loadKitManifest(repo, planId);
-  const catalog = loadKitCatalog();
+  const catalog = loadKitCatalog(dataDir);
   const base = layers.find((l) => l.layer_type === "base");
   const addons = layers.filter((l) => l.layer_type !== "base");
   const addonNames = addons.map((l) => l.project_name).filter(Boolean) as string[];
@@ -1821,7 +1858,7 @@ export async function invokeAssistantTool(
           : [];
         if (!request.trim()) return { content: JSON.stringify({ error: "request required" }) };
         const analysis = analyzeBuildRequest(request, urls);
-        const catalog = loadKitCatalog();
+        const catalog = loadKitCatalog(ctx.dataDir);
         const categories = catalog.addon_categories;
         return {
           content: JSON.stringify({
@@ -1896,7 +1933,7 @@ export async function invokeAssistantTool(
         const source = ctx.repo.getSource(evidence.source_id);
         if (!source?.local_path || !source.last_synced_at || !source.last_commit_sha)
           return { content: JSON.stringify({ error: "Source must be synchronized and pinned first" }) };
-        const catalog = loadKitCatalog();
+        const catalog = loadKitCatalog(ctx.dataDir);
         const categories = catalog.addon_categories;
         const knownSlots = categories && typeof categories === "object" ? Object.keys(categories) : [];
         const suggestions = suggestSourceContributions({
@@ -1904,6 +1941,7 @@ export async function invokeAssistantTool(
           sourceName: source.name,
           printablePaths: listPrintableArtifactPaths(source.local_path),
           knownSlots,
+          slotAliases: catalogSlotAliases(catalog),
         });
         return {
           content: JSON.stringify({
@@ -2334,7 +2372,7 @@ export async function invokeAssistantTool(
         );
       }
       case "get_kit_catalog":
-        return { content: summarizeKitCatalog(loadKitCatalog()) };
+        return { content: summarizeKitCatalog(loadKitCatalog(ctx.dataDir)) };
 
       case "list_sources": {
         const sources = ctx.repo.listSources().map((s) => ({
@@ -2363,7 +2401,7 @@ export async function invokeAssistantTool(
       case "get_plan_snapshot": {
         const planId = resolvePlanId(input, ctx);
         if (planId == null) return { content: JSON.stringify({ error: "plan_id required" }) };
-        return { content: JSON.stringify(planSnapshotJson(ctx.repo, planId)) };
+        return { content: JSON.stringify(planSnapshotJson(ctx.repo, planId, ctx.dataDir)) };
       }
 
       case "get_remaining": {
@@ -2759,7 +2797,7 @@ export async function invokeAssistantTool(
         if (!ctx.repo.getOwnedProfileIdentity(planId)) {
           return { content: JSON.stringify({ error: "Plan not found" }) };
         }
-        const catalog = loadKitCatalog() as Record<string, unknown>;
+        const catalog = loadKitCatalog(ctx.dataDir) as Record<string, unknown>;
         const presets = (catalog.stack_presets ?? {}) as Record<string, { label?: string }>;
         const resolved = resolveStackPresetId(rawPresetId, presets);
         if (!resolved) {
@@ -3270,7 +3308,7 @@ export async function invokeAssistantTool(
             }),
           };
         }
-        const steps = recipeToReplaySteps(recipe);
+        const steps = recipeToReplaySteps(recipe, ctx.dataDir);
         if (!steps.length) {
           return {
             content: JSON.stringify({
@@ -3428,6 +3466,7 @@ export async function invokeAssistantTool(
         const result = await ingestGuideUrl(url, {
           maxBytes,
           llm: ctx.assistant?.configured ? ctx.assistant : null,
+          vocabulary: guideVocabulary(ctx),
         });
         return { content: JSON.stringify(result) };
       }
@@ -3577,6 +3616,7 @@ export async function invokeAssistantTool(
           content: JSON.stringify(
             await ingestGuideText(text, {
               llm: ctx.assistant?.configured ? ctx.assistant : null,
+              vocabulary: guideVocabulary(ctx),
             }),
           ),
         };
@@ -3613,7 +3653,7 @@ export async function invokeAssistantTool(
             const readme = localReadmeText(source.local_path);
             if (readme) {
               guideText = readme;
-              guideExtract = extractGuideAdvice(readme);
+              guideExtract = extractGuideAdvice(readme, { vocabulary: guideVocabulary(ctx) });
             }
           }
         }
@@ -4961,7 +5001,7 @@ export async function applyAssistantAction(
       }
       case "apply_stack_preset": {
         const presetId = String(action.params.preset_id ?? "");
-        const result = applyStackPresetToProfile(deps.repo, planId, presetId);
+        const result = applyStackPresetToProfile(deps.repo, planId, presetId, deps.dataDir);
         const excludeMerged = mergeConfirmedSuggestedExcludes(deps.repo, planId, action.params ?? {});
         outcome = {
           ok: true,

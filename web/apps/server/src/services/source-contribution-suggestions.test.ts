@@ -28,13 +28,13 @@ describe("Source contribution suggestions", () => {
     ]);
   });
 
-  it("reuses known slots when path vocabulary identifies the responsibility", () => {
+  it("reuses known slots when the path names the slot's function", () => {
     const suggestions = suggestSourceContributions({
       evidenceId: "printer-mod",
       sourceName: "Toolhead mods",
       printablePaths: [
-        "STLs/Stealthburner/Printheads/Rapido_UHF/front.stl",
-        "STLs/Stealthburner/Printheads/Rapido_UHF/rear.stl",
+        "STLs/toolhead/hotend_mount/front.stl",
+        "STLs/toolhead/hotend_mount/rear.stl",
       ],
       knownSlots: ["toolhead", "hotend", "extruder"],
     });
@@ -43,7 +43,41 @@ describe("Source contribution suggestions", () => {
       expect.objectContaining({
         slot: "hotend",
         confidence: "high",
-        path_scopes: ["STLs/Stealthburner/Printheads/Rapido_UHF/**"],
+        path_scopes: ["STLs/toolhead/hotend_mount/**"],
+      }),
+    ]);
+  });
+
+  it("matches product names only when the catalog supplies them", () => {
+    const paths = [
+      "STLs/Stealthburner/Rapido_UHF/front.stl",
+      "STLs/Stealthburner/Rapido_UHF/rear.stl",
+    ];
+    const knownSlots = ["toolhead", "hotend", "extruder"];
+
+    // No catalog aliases: fall back to the first meaningful folder name rather
+    // than guessing a functional slot from a product name.
+    expect(suggestSourceContributions({
+      evidenceId: "printer-mod",
+      sourceName: "Toolhead mods",
+      printablePaths: paths,
+      knownSlots,
+    })).toEqual([
+      expect.objectContaining({ slot: "stealthburner", confidence: "medium" }),
+    ]);
+
+    // With the catalog naming that product for a slot, it resolves.
+    expect(suggestSourceContributions({
+      evidenceId: "printer-mod",
+      sourceName: "Toolhead mods",
+      printablePaths: paths,
+      knownSlots,
+      slotAliases: new Map([["hotend", ["rapido"]]]),
+    })).toEqual([
+      expect.objectContaining({
+        slot: "hotend",
+        confidence: "high",
+        path_scopes: ["STLs/Stealthburner/Rapido_UHF/**"],
       }),
     ]);
   });

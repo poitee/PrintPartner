@@ -6,6 +6,13 @@ import {
 import type { ToolContext } from "./tools.js";
 import type { AssistantProposedAction } from "@print-partner/contracts";
 import type { BuildDecision } from "./build-decisions.js";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const FIXTURE = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "../test-fixtures/kit-workspace",
+);
 
 describe("appendBuildDecisionHints", () => {
   it("soft-proposes update_kit_selections + ui_focus when model narrates only", () => {
@@ -130,18 +137,18 @@ describe("stripWrongBaseProposalsForAttachedKit (generic)", () => {
         id: "1",
         type: "add_addon",
         plan_id: 9,
-        label: "Add Voron-Trident",
+        label: "Add Example-Printer",
         summary: "x",
-        params: { source_name: "Voron-Trident" },
+        params: { source_name: "Example-Printer" },
       },
     ];
     const toolCtx = {
       activePlanId: 9,
-      dataDir: null,
+      dataDir: FIXTURE,
       repo: {
-        getOwnedProfileIdentity: () => ({ id: 9, name: "EMU", archivedAt: null }),
-        getProfileLayers: () => [{ layer_type: "base", project_name: "DW-Tas/emu" }],
-        listSources: () => [{ name: "DW-Tas/emu" }, { name: "Voron-Trident" }],
+        getOwnedProfileIdentity: () => ({ id: 9, name: "MMU", archivedAt: null }),
+        getProfileLayers: () => [{ layer_type: "base", project_name: "Example-MMU" }],
+        listSources: () => [{ name: "Example-MMU" }, { name: "Example-Printer" }],
       },
     } as unknown as ToolContext;
 

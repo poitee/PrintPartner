@@ -304,7 +304,7 @@ describe("Build planning", () => {
     expect(hydrateBuildPlanningBrief({ listSources: () => [] }, hydrated).differences).toHaveLength(1);
   });
 
-  it("extracts the complete Formbot Voron request", () => {
+  it("extracts a complete vendor-overlay request without a built-in machine list", () => {
     const result = analyzeBuildRequest(
       "Build a Voron 2.4r2 350mm using the official Voron repository as the structural base and the Formbot repository as the vendor-kit overlay. Use Stealthburner, Galileo 2 Extruder, Rapido 2 Fiber UHF, Beacon H over USB, EBB36 over USB with a USB umbilical, and an Octopus controller. Primary color is Forest Green and accent color is KB3D Bright Orange.",
       [
@@ -315,7 +315,8 @@ describe("Build planning", () => {
 
     expect(result.requirements).toEqual(
       expect.arrayContaining([
-        { key: "printer", value: "Voron 2.4", status: "unverified" },
+        // No hard-coded machine names: the project is whatever the user said.
+        { key: "project", value: "Voron 2.4r2 350mm", status: "unverified" },
         { key: "revision", value: "r2", status: "unverified" },
         { key: "size", value: "350", status: "unverified" },
         { key: "umbilical", value: "USB", status: "unverified" },
@@ -341,17 +342,39 @@ describe("Build planning", () => {
       ["https://github.com/VoronDesign/Voron-2/"],
     );
     expect(result.special_request).toContain("Voron 2.4");
+    // Shape-based requirements only — no product vocabulary is compiled in.
     expect(result.requirements).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ key: "printer", status: "unverified" }),
-        expect.objectContaining({ key: "toolhead", value: "Stealthburner" }),
-        expect.objectContaining({ key: "toolhead_board", value: "EBB36" }),
+        expect.objectContaining({ key: "revision", value: "r2" }),
+        expect.objectContaining({ key: "size", value: "350" }),
+        expect.objectContaining({ key: "transport", value: "USB" }),
       ]),
     );
+    // Everything else the user asked for is still captured verbatim.
+    expect(
+      result.requirements.some(
+        (r) => r.key.startsWith("requested_feature_") && /Stealthburner/.test(r.value),
+      ),
+    ).toBe(true);
+    expect(result.requirements.some((r) => r.key === "printer")).toBe(false);
     expect(result.evidence[0]).toMatchObject({
       kind: "mod",
       sync_status: "pending",
     });
+  });
+
+  it("names a requirement after a catalog slot the request mentions", () => {
+    const result = analyzeBuildRequest(
+      "Build an Example Printer with probe Example-Probe and toolhead Example-Toolhead",
+      [],
+      ["probe", "toolhead"],
+    );
+    expect(result.requirements).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ key: "probe", value: "Example-Probe" }),
+        expect.objectContaining({ key: "toolhead", value: "Example-Toolhead" }),
+      ]),
+    );
   });
 
   it("normalizes URLs for source deduplication", () => {

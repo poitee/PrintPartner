@@ -215,7 +215,7 @@ export function classifyPartFunctional(
   filename: string,
   folderRules: readonly StlNamingFolderRule[],
 ): PartFunctionalClass {
-  // _optional_ in filename -> cosmetic (Voron convention)
+  // _optional_ in filename -> cosmetic (common upstream convention)
   if (filename.toLowerCase().includes("_optional_")) return "cosmetic";
 
   const normalizedPath = relativePath.replace(/\\/g, "/").toLowerCase();

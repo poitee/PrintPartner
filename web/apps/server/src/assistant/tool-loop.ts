@@ -117,9 +117,9 @@ function dedupeProposedActions(actions: AssistantProposedAction[]): AssistantPro
   return out;
 }
 
-function catalogBaseSourceNameSet(): Set<string> {
+function catalogBaseSourceNameSet(dataDir?: string | null): Set<string> {
   try {
-    const catalog = loadKitCatalog() as Record<string, unknown>;
+    const catalog = loadKitCatalog(dataDir) as Record<string, unknown>;
     const bases = (catalog.bases ?? {}) as Record<string, { source_name?: string }>;
     const names = new Set<string>();
     for (const b of Object.values(bases)) {
@@ -133,9 +133,12 @@ function catalogBaseSourceNameSet(): Set<string> {
   }
 }
 
-function resolvePresetBaseSourceName(presetId: string): string | null {
+function resolvePresetBaseSourceName(
+  presetId: string,
+  dataDir?: string | null,
+): string | null {
   try {
-    const catalog = loadKitCatalog() as Record<string, unknown>;
+    const catalog = loadKitCatalog(dataDir) as Record<string, unknown>;
     const presets = catalog.stack_presets as Record<string, { base?: string }> | undefined;
     const bases = catalog.bases as Record<string, { source_name?: string }> | undefined;
     const baseKey = presets?.[presetId]?.base;
@@ -219,7 +222,7 @@ export function appendAliasDrivenHints(
 
   const liveSources = toolCtx.repo.listSources();
   const liveNames = new Set(liveSources.map((s) => s.name));
-  const catalogBases = catalogBaseSourceNameSet();
+  const catalogBases = catalogBaseSourceNameSet(toolCtx.dataDir);
   const layers =
     toolCtx.repo.getOwnedProfileIdentity(planId) != null
       ? toolCtx.repo.getProfileLayers(planId)
@@ -344,7 +347,7 @@ export function stripWrongBaseProposalsForAttachedKit(
   if (!baseName) return;
   if (userAskedToSwitchBase(userText)) return;
 
-  const catalogBases = catalogBaseSourceNameSet();
+  const catalogBases = catalogBaseSourceNameSet(toolCtx.dataDir);
   const identity = findIdentityForSource(baseName, toolCtx.dataDir);
   const role = identity?.role?.trim() ?? null;
   const baseIsStandalone = role === "standalone_mmu";
@@ -377,7 +380,7 @@ export function stripWrongBaseProposalsForAttachedKit(
     if (a.type === "apply_stack_preset") {
       const preset =
         typeof a.params?.preset_id === "string" ? a.params.preset_id.trim() : "";
-      const presetBase = preset ? resolvePresetBaseSourceName(preset) : null;
+      const presetBase = preset ? resolvePresetBaseSourceName(preset, toolCtx.dataDir) : null;
       const explicitSrc =
         typeof a.params?.source_name === "string" ? a.params.source_name.trim() : "";
       const target = explicitSrc || presetBase;

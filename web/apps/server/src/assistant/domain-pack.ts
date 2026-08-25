@@ -234,15 +234,12 @@ export function backfillAdvisorNotesFromDomainPack(
   return { notes_upserted: notesUpserted, sources_matched: sourcesMatched };
 }
 
-const KNOWN_BRANCH_REFS = new Set([
-  "main",
-  "master",
-  "develop",
-  "Voron2.4",
-  "Voron0.2r1",
-  "v02r1",
-  "s1",
-]);
+/**
+ * Refs that are branches on essentially every git host. Anything else is
+ * treated as a tag — a project-specific branch name belongs in the pack's own
+ * data (alias `branch:`), not in a list compiled into the product.
+ */
+const KNOWN_BRANCH_REFS = new Set(["main", "master", "develop", "trunk"]);
 
 function splitAddonNames(addons: unknown): string[] {
   if (!Array.isArray(addons)) return [];
@@ -516,9 +513,43 @@ export function normalizeConflict(raw: unknown): {
   };
 }
 
-function formatAliasLines(aliases: AliasEntry[], noteMax = 72): string[] {
+/**
+ * Which source names this workspace actually has synced.
+ *
+ * The domain pack ships curated notes for many projects; injecting all of them
+ * would put another project's stacks and phrase aliases in front of the model
+ * regardless of what the user is building. `matchAll` preserves the old
+ * behaviour for callers that have no repository to ask.
+ */
+export type LiveSourceFilter = { has: (name: string | null | undefined) => boolean };
+
+export const MATCH_ALL_SOURCES: LiveSourceFilter = { has: () => true };
+
+/** Case- and separator-insensitive so `DW-Tas-emu` matches `DW-Tas/emu`. */
+export function liveSourceFilter(sourceNames?: readonly string[] | null): LiveSourceFilter {
+  if (!sourceNames) return MATCH_ALL_SOURCES;
+  const compact = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const live = new Set(sourceNames.map(compact).filter(Boolean));
+  return {
+    has: (name) => {
+      if (!name) return false;
+      const key = compact(name);
+      return key.length > 0 && live.has(key);
+    },
+  };
+}
+
+function formatAliasLines(
+  aliases: AliasEntry[],
+  live: LiveSourceFilter,
+  noteMax = 72,
+): string[] {
+  const relevant = aliases.filter(
+    (a) => live.has(a.resolve?.source_name) || (a.resolve?.addons ?? []).some((n) => live.has(n)),
+  );
+  if (!relevant.length) return [];
   const lines: string[] = ["### Phrase aliases → exact sources"];
-  for (const a of aliases.slice(0, 48)) {
+  for (const a of relevant.slice(0, 48)) {
     const phrases = (a.phrases ?? []).slice(0, 4).join(" / ");
     const r = a.resolve ?? {};
     const bits = [
@@ -534,11 +565,15 @@ function formatAliasLines(aliases: AliasEntry[], noteMax = 72): string[] {
   return lines;
 }
 
-function formatStacksSection(dataDir: string | null): string[] {
+function formatStacksSection(dataDir: string | null, live: LiveSourceFilter): string[] {
   const stacksPath = findFile(dataDir, "_global", "stacks.yaml");
   if (!stacksPath) return [];
   const raw = loadYamlFile(stacksPath) as { stacks?: unknown } | null;
-  const entries = normalizeStacks(raw?.stacks ?? {}).slice(0, 12);
+  const entries = normalizeStacks(raw?.stacks ?? {})
+    // A recipe whose base is not synced here is noise at best and a nudge
+    // toward an unrelated project at worst.
+    .filter(({ stack }) => live.has(stack.base_source))
+    .slice(0, 12);
   if (!entries.length) return [];
   const lines = ["### Stack recipes"];
   for (const { id, stack: s } of entries) {
@@ -564,7 +599,7 @@ function formatConflictsSection(dataDir: string | null): string[] {
   return lines;
 }
 
-function formatSourceDigestsSection(dataDir: string | null): string[] {
+function formatSourceDigestsSection(dataDir: string | null, live: LiveSourceFilter): string[] {
   for (const root of candidateRoots(dataDir)) {
     const sourcesRoot = join(root, "sources");
     if (!existsSync(sourcesRoot)) continue;
@@ -577,10 +612,11 @@ function formatSourceDigestsSection(dataDir: string | null): string[] {
     } catch {
       continue;
     }
-    if (!dirs.length) continue;
+    const scoped = dirs.filter((name) => live.has(name));
+    if (!scoped.length) continue;
     const lines = ["### Source digests"];
     let mdExcerptCount = 0;
-    for (const name of dirs.slice(0, 14)) {
+    for (const name of scoped.slice(0, 14)) {
       const dir = join(sourcesRoot, name);
       const identity = loadYamlFile(join(dir, "identity.yaml")) as Record<
         string,
@@ -632,7 +668,8 @@ function formatSourceDigestsSection(dataDir: string | null): string[] {
 function formatPackPitfallsSection(dataDir: string | null): string[] {
   const pitfallsPath = findFile(dataDir, "_global", "pitfalls.md");
   if (!pitfallsPath) return [];
-  const text = readText(pitfallsPath);
+  // Strip authoring comments so a documented-but-empty stub renders as nothing.
+  const text = readText(pitfallsPath)?.replace(/<!--[\s\S]*?-->/g, "");
   if (!text?.trim()) return [];
   return ["### Pack pitfalls", text.trim().slice(0, 800)];
 }
@@ -663,19 +700,22 @@ function joinUnderBudget(header: string, priority: string[][], aliases: string[]
 export function loadAssistantDomainPack(options?: {
   dataDir?: string | null;
   maxChars?: number;
+  /** Live source names; omit to include the whole pack (no repository available). */
+  sourceNames?: readonly string[] | null;
 }): string {
   const dataDir = options?.dataDir ?? null;
   const maxChars = options?.maxChars ?? MAX_DOMAIN_PACK_CHARS;
+  const live = liveSourceFilter(options?.sourceNames);
   const header = "## Domain pack (curated — not training)";
 
   let aliasLines: string[] = [];
   const aliases = loadAliasEntries(dataDir);
-  if (aliases.length) aliasLines = formatAliasLines(aliases);
+  if (aliases.length) aliasLines = formatAliasLines(aliases, live);
 
   const priority = [
-    formatStacksSection(dataDir),
+    formatStacksSection(dataDir, live),
     formatConflictsSection(dataDir),
-    formatSourceDigestsSection(dataDir),
+    formatSourceDigestsSection(dataDir, live),
     formatPackPitfallsSection(dataDir),
   ].filter((s) => s.length > 0);
 

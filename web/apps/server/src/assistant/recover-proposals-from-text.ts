@@ -54,11 +54,10 @@ function looksLikeProseStackNarration(content: string): boolean {
     /use the following command/i.test(content) ||
     /run the following/i.test(content) ||
     /you can (?:use|run|execute) the following/i.test(content) ||
-    /to add (?:the )?(?:ldo|leviathan|addon|stealthburner|a4t)/i.test(content) ||
+    /to add (?:the )?(?:following )?(?:addons?|layers?|sources?)/i.test(content) ||
     /add(?:ing)? (?:the )?(?:following )?addons?/i.test(content) ||
     /attach(?:ing)? .{0,40} as (?:an )?addon/i.test(content) ||
-    /set(?:ting)? (?:the )?base to/i.test(content) ||
-    /voron[- ]?trident.{0,40}(?:r2|vtr2)/i.test(content)
+    /set(?:ting)? (?:the )?base to/i.test(content)
   );
 }
 
@@ -66,14 +65,44 @@ function compact(s: string): string {
   return s.toLowerCase().replace(/[\s_-]+/g, "");
 }
 
+/** Same-sentence gap that tolerates a period inside a version number. */
+const GAP = "(?:[^.!?\\n]|\\.(?=\\d))";
+
+/** Separator-insensitive: `Example-Repo` also matches "Example Repo"/"Example_Repo". */
+function namePattern(sourceName: string): string {
+  return sourceName
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("[-_ ]?");
+}
+
 /**
- * Find live sources mentioned in prose (exact name, compact match, or common phrases).
+ * A git ref the prose attaches to this source: "Example-Repo @ v2.1",
+ * "Example-Repo at tag REL3". Shape-based, so any project's naming works.
+ */
+function tagNear(content: string, sourceName: string): string | undefined {
+  const m = new RegExp(
+    `\\b${namePattern(sourceName)}\\b\\s*(?:@|\\bat\\b|\\bon\\b)?\\s*(?:tag|branch|ref|release)?\\s*[\`"']?([A-Za-z0-9][\\w.\\-/]{1,38})[\`"']?`,
+    "i",
+  ).exec(content);
+  const value = m?.[1]?.replace(/[.,;:)]+$/, "");
+  // Only accept something that looks like a ref, not the next prose word.
+  if (!value || !/\d/.test(value)) return undefined;
+  return value;
+}
+
+/**
+ * Find live sources mentioned in prose (exact name or compact match).
+ *
+ * Only names this workspace has synced can come out of here — there is no
+ * built-in list of products, so nothing gets proposed that the user does not
+ * already have.
  */
 export function extractMentionedSourceNames(
   content: string,
   liveNames: string[],
 ): { base?: { source_name: string; tag?: string }; addons: string[] } {
-  const byCompact = new Map(liveNames.map((n) => [compact(n), n]));
   const addons: string[] = [];
   const pushAddon = (name: string | undefined) => {
     if (!name) return;
@@ -81,47 +110,37 @@ export function extractMentionedSourceNames(
   };
 
   for (const name of liveNames) {
-    const esc = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    if (new RegExp(`\\b${esc}\\b`, "i").test(content)) {
-      // Prefer classifying as addon unless clearly base context for Trident/Voron-2/etc.
+    if (new RegExp(`\\b${namePattern(name)}\\b`, "i").test(content)) {
+      // Default to addon; the base pass below promotes one if the prose says so.
       pushAddon(name);
     } else if (content.toLowerCase().includes(compact(name)) && compact(name).length >= 8) {
       pushAddon(name);
     }
   }
 
-  // Phrase → known kit pieces (only if live)
-  const phraseMap: Array<{ re: RegExp; names: string[] }> = [
-    {
-      // Full LDO Trident R2 stack (matches domain stacks.yaml)
-      re: /ldo\s*(?:voron\s*)?trident\s*r2|trident\s*r2.{0,40}ldo|ldo\s*addons?/i,
-      names: ["LDOVoronTrident", "Voron-Stealthburner"],
-    },
-    { re: /\bleviathan\b/i, names: ["Leviathan"] },
-    { re: /\bstealthburner\b/i, names: ["Voron-Stealthburner"] },
-    { re: /\ba4t\b/i, names: ["A4T", "a4t_toolhead", "A4T-Toolhead"] },
-    { re: /\btap\b|voron[- ]?tap/i, names: ["Voron-Tap"] },
-    { re: /\bklicky\b/i, names: ["Klicky-Probe"] },
-  ];
-  for (const p of phraseMap) {
-    if (!p.re.test(content)) continue;
-    for (const n of p.names) {
-      const live = byCompact.get(compact(n)) ?? liveNames.find((x) => compact(x) === compact(n));
-      pushAddon(live);
-    }
-  }
-
+  // Whichever mentioned source the prose frames as the base becomes the base;
+  // the rest stay addons. Read from the text, never from a built-in name list.
+  // When several names sit near a "base" cue, the nearest one wins, so
+  // "set the base to A, then attach B" picks A rather than list order.
   let base: { source_name: string; tag?: string } | undefined;
-  if (/voron[- ]?trident/i.test(content)) {
-    const trident = byCompact.get("vorontrident") ?? liveNames.find((n) => /trident/i.test(n) && !/ldo/i.test(n));
-    if (trident) {
-      const tag = /(?:\br2\b|vtr2)/i.test(content) ? "VTr2" : undefined;
-      base = { source_name: trident, ...(tag ? { tag } : {}) };
-      // Trident as base shouldn't stay only in addons list
-      const idx = addons.indexOf(trident);
-      if (idx >= 0) addons.splice(idx, 1);
-    }
+  let bestGap = Number.POSITIVE_INFINITY;
+  for (const name of addons) {
+    const esc = namePattern(name);
+    const lead = new RegExp(
+      `(?:base|structural base|start(?:ing)? (?:from|with)|built on|on top of)\\b(${GAP}{0,60}?)\\b${esc}\\b`,
+      "i",
+    ).exec(content);
+    const trail = new RegExp(
+      `\\b${esc}\\b(${GAP}{0,40}?)\\bas (?:the )?base\\b`,
+      "i",
+    ).exec(content);
+    const gap = Math.min(lead?.[1]?.length ?? Infinity, trail?.[1]?.length ?? Infinity);
+    if (gap >= bestGap) continue;
+    bestGap = gap;
+    const tag = tagNear(content, name);
+    base = { source_name: name, ...(tag ? { tag } : {}) };
   }
+  if (base) addons.splice(addons.indexOf(base.source_name), 1);
 
   return { base, addons };
 }
@@ -251,7 +270,7 @@ export async function recoverProposedActionsFromText(
   } else if (looksLikeFakeApplyPitch(content) || looksLikeProseStackNarration(content)) {
     cleaned =
       (cleaned ? `${cleaned}\n\n` : "") +
-      "I couldn’t turn that into Apply cards (missing or unknown sources). Ask me to list synced sources and use exact names (e.g. Voron-Trident @ VTr2, LDOVoronTrident, Leviathan). A4T only works if that source is registered.";
+      "I couldn’t turn that into Apply cards (missing or unknown sources). Ask me to list synced sources and use their exact names — a source has to be registered here before I can put it on a plan.";
   }
 
   return { actions, cleanedContent: cleaned };

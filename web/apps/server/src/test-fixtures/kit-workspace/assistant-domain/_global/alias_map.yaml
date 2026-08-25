@@ -1,0 +1,7 @@
+aliases:
+  - phrases: ["the example r2", "example kit r2"]
+    resolve:
+      source_name: Example-Printer
+      tag: EX-R2
+      addons: [Example-Toolhead, Example-Probe]
+      notes: Fixture alias used by domain-pack tests.

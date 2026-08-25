@@ -10,11 +10,12 @@ import type { AppRepository } from "../db/repository.js";
 import { createJobRunner } from "../routes/jobs.js";
 import { createProductMcpServer } from "./product-mcp.js";
 
-const request = `Build a Voron 2.4r2 350mm using the official Voron repository as the structural base and the Formbot repository as the vendor-kit overlay. Use Stealthburner, Galileo 2 Extruder, Rapido 2 Fiber UHF, Beacon H over USB, EBB36 over USB with a USB umbilical, and an Octopus controller. Primary color is Forest Green and accent color is KB3D Bright Orange. Do not choose between conflicting source files without asking me.`;
+const request = `Build an Example Printer R2 350mm using the upstream repository as the structural base and the vendor repository as the vendor-kit overlay. Use the Example Toolhead, Example Extruder, Example Hotend, Example Probe over USB, and an Example Controller with a USB umbilical. Primary color is Forest Green and accent color is Bright Orange. Do not choose between conflicting source files without asking me.`;
 
+// Replace with the two repos you want the demo to reason about.
 const urls = [
-  "https://github.com/VoronDesign/Voron-2",
-  "https://github.com/FORMBOT/Voron-2.4",
+  "https://github.com/ExampleOrg/Example-Printer",
+  "https://github.com/ExampleVendor/Example-Printer-Kit",
 ];
 
 function text(result: unknown): string {
@@ -60,7 +61,7 @@ async function main(): Promise<void> {
     });
     const proposal = await client.callTool({
       name: "propose_create_build",
-      arguments: { name: "Formbot Voron 2.4r2 350", request, urls, idempotency_key: "demo-formbot-v24r2" },
+      arguments: { name: "Example Printer R2 350", request, urls, idempotency_key: "demo-example-r2-350" },
     });
     const proposed = JSON.parse(text(proposal)) as { action: { id: string } };
     const beforeConfirm = await client.callTool({ name: "list_plans", arguments: {} });

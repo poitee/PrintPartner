@@ -1,0 +1,3 @@
+source_name: Example-Probe
+role: addon
+summary: Fixture probe mod used by interaction-graph tests.

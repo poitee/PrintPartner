@@ -333,7 +333,7 @@ export default function PrinterSendPanel({
     writeStickyId(BAMBU_PRINTER_ID_STORAGE_KEY, id);
   };
 
-  /** `Shop Voron · Moonraker` when the integration type is known. */
+  /** `Shop Printer · Moonraker` when the integration type is known. */
   const printerLabel = (p: PrinterMachine): string => {
     const hostType = hostTypeByPrinterId[p.id];
     return hostType ? `${p.name} · ${printerHostTypeLabel(hostType)}` : p.name;

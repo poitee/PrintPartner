@@ -149,8 +149,8 @@ function loadMergeConflicts(dataDir?: string | null): InteractionGraph["mergeCon
   return [];
 }
 
-function buildCatalogSlots(): Map<string, { category: string; peers: string[] }> {
-  const catalog = loadKitCatalog();
+function buildCatalogSlots(dataDir?: string | null): Map<string, { category: string; peers: string[] }> {
+  const catalog = loadKitCatalog(dataDir);
   const cats = (catalog.addon_categories ?? {}) as Record<
     string,
     { rule?: string; replaces_slot?: string; sources?: Array<{ name?: string }> }
@@ -174,7 +174,7 @@ function buildCatalogSlots(): Map<string, { category: string; peers: string[] }>
 export function loadInteractionGraph(options?: { dataDir?: string | null }): InteractionGraph {
   return {
     bySource: loadAllCompatibility(options?.dataDir),
-    catalogSlots: buildCatalogSlots(),
+    catalogSlots: buildCatalogSlots(options?.dataDir),
     mergeConflicts: loadMergeConflicts(options?.dataDir),
   };
 }
@@ -182,10 +182,11 @@ export function loadInteractionGraph(options?: { dataDir?: string | null }): Int
 function catalogSlotForSource(
   catalogSlots: Map<string, { category: string; peers: string[] }>,
   sourceName: string,
+  dataDir?: string | null,
 ): { category: string; slot: string; peers: string[] } | null {
   const entry = catalogSlots.get(sourceName);
   if (!entry) return null;
-  const catalog = loadKitCatalog();
+  const catalog = loadKitCatalog(dataDir);
   const cats = (catalog.addon_categories ?? {}) as Record<
     string,
     { replaces_slot?: string }
@@ -208,7 +209,7 @@ export function explainSource(
     );
   if (!resolved && !graph.catalogSlots.has(sourceName)) {
     // try catalog-only
-    const cat = catalogSlotForSource(graph.catalogSlots, sourceName);
+    const cat = catalogSlotForSource(graph.catalogSlots, sourceName, options?.dataDir);
     if (!cat) return null;
     return {
       source_name: sourceName,
@@ -225,7 +226,7 @@ export function explainSource(
     };
   }
   const name = resolved?.source_name ?? sourceName;
-  const cat = catalogSlotForSource(graph.catalogSlots, name);
+  const cat = catalogSlotForSource(graph.catalogSlots, name, options?.dataDir);
   const mergeIds = graph.mergeConflicts
     .filter((m) => {
       const hay = `${m.id} ${m.sources.join(" ")} ${m.resolution}`.toLowerCase();
@@ -569,7 +570,7 @@ export function findCatalogDomainMismatches(options?: {
     const stacksPath = join(root, "_global", "stacks.yaml");
     if (!existsSync(stacksPath)) continue;
     const raw = loadYaml(stacksPath) as { stacks?: unknown } | null;
-    const catalog = loadKitCatalog();
+    const catalog = loadKitCatalog(options?.dataDir);
     const presets = (catalog.stack_presets ?? {}) as Record<
       string,
       { base?: string; addon_sources?: string[] }

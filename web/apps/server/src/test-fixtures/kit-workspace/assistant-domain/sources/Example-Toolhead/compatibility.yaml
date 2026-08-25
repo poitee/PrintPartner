@@ -1,0 +1,6 @@
+schema: print-partner/compat@1
+source_name: Example-Toolhead
+kind: addon_toolhead
+attaches_to:
+  - base: Example-Printer
+conflicts: []

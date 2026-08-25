@@ -46,7 +46,7 @@ const PRINTER_PROFILES: PrinterProfileDef[] = [
       extruder_count: 1,
       printer_model: "Generic Klipper",
       printer_variant: "0.4",
-      description: "Generic Klipper/Voron-class machine profile (0.4mm nozzle).",
+      description: "Generic Klipper machine profile (0.4mm nozzle).",
     },
   },
   {

@@ -1,8 +1,0 @@
-schema: print-partner/compat@1
-source_name: West3D-Micron
-kind: addon_kit_supplement
-attaches_to: [{base: Micron, ref: main, size: "180 (Micron+) only per Readme"}]
-replaces: ["Micron bowden tube entry parts when ECAS variant chosen"]
-conflicts: []
-pairing_rules:
-  - "West3D Micron+ kit == Micron@main (180 files) + West3D-Micron@main (+ Klicky/G2 options per Readme)"

@@ -1,0 +1,70 @@
+# Fixture catalog for tests. Deliberately uses invented names so the tests
+# prove the machinery, not any shipped content.
+version: 1
+
+bases:
+  example_printer:
+    label: Example Printer
+    source_name: Example-Printer
+    default_addons:
+      - Example-Toolhead
+    compatible_addons: [toolhead, extruder, probe, skirts_panels]
+  example_vendor_printer:
+    label: Example Vendor Printer
+    source_name: Example-Vendor-Kit
+    compatible_addons: [toolhead, probe]
+
+addon_categories:
+  toolhead:
+    label: Toolhead
+    rule: pick_one
+    replaces_slot: toolhead
+    sources:
+      - name: Example-Toolhead
+        variant_id: example_toolhead
+        compatible_bases: [example_printer]
+  extruder:
+    label: Extruder / filament path
+    rule: pick_one
+    replaces_slot: extruder
+    sources:
+      - name: Example-Extruder
+        variant_id: example_extruder
+        compatible_bases: [example_printer]
+  hotend:
+    label: Hotend mount
+    rule: pick_one
+    replaces_slot: hotend
+    sources: []
+  toolhead_electronics:
+    label: Toolhead electronics
+    rule: pick_one
+    replaces_slot: toolhead_electronics
+    sources: []
+  probe:
+    label: Z probe
+    rule: pick_one
+    replaces_slot: probe
+    sources:
+      - name: Example-Probe
+        variant_id: example_probe
+        compatible_bases: [example_printer]
+      - name: Example-Alt-Probe
+        variant_id: example_alt_probe
+        compatible_bases: [example_printer]
+  skirts_panels:
+    label: Skirts / screen / panels
+    rule: pick_any
+    sources: []
+
+stack_presets:
+  example_kit_r2:
+    label: Example Kit R2
+    base: example_printer
+    base_tag: EX-R2
+    addon_sources:
+      - Example-Toolhead
+      - Example-Probe
+    default_selections:
+      toolhead: example_toolhead
+      probe: example_probe

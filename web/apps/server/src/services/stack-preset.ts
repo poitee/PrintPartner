@@ -3,7 +3,7 @@ import { loadKitCatalog } from "./kit-catalog.js";
 
 type StackPreset = {
   base: string;
-  /** Optional GitHub tag to set on the base source when applying (e.g. VTr2 for R2). */
+  /** Optional GitHub tag to set on the base source when applying. */
   base_tag?: string | null;
   /** Optional GitHub branch to set on the base source when applying. */
   base_branch?: string | null;
@@ -14,7 +14,7 @@ type StackPreset = {
 type CatalogBase = { source_name: string };
 type CatalogAddonCategory = { rule?: string; sources: Array<{ name: string }> };
 
-/** Map invented / alias preset ids (e.g. voron_trident_r2) onto catalog keys. */
+/** Resolve a loosely-typed preset id onto a catalog key (id or label match). */
 export function resolveStackPresetId(
   raw: string,
   presets: Record<string, { label?: string } | StackPreset>,
@@ -22,13 +22,6 @@ export function resolveStackPresetId(
   const needle = raw.trim();
   if (!needle) return null;
   if (presets[needle]) return needle;
-  const aliases: Record<string, string> = {
-    voron_trident_r2: "ldo_trident_r2",
-    trident_r2: "ldo_trident_r2",
-    ldo_voron_trident_r2: "ldo_trident_r2",
-  };
-  const alias = aliases[needle.toLowerCase()];
-  if (alias && presets[alias]) return alias;
 
   const compact = (s: string) => s.toLowerCase().replace(/[\s_-]+/g, "");
   const want = compact(needle);
@@ -38,10 +31,6 @@ export function resolveStackPresetId(
     if (label && compact(label) === want) return id;
     if (label && compact(label).includes(want)) return id;
     if (want.includes(compact(id))) return id;
-  }
-  // Prefer LDO Trident R2 when the model invents a Trident R2 id
-  if (/trident.*r2|r2.*trident/i.test(needle) && presets.ldo_trident_r2) {
-    return "ldo_trident_r2";
   }
   return null;
 }
@@ -85,6 +74,7 @@ export function applyStackPresetToProfile(
   repo: AppRepository,
   profileId: number,
   presetId: string,
+  dataDir?: string | null,
 ): {
   profile_id: number;
   preset_id: string;
@@ -96,7 +86,7 @@ export function applyStackPresetToProfile(
   branch: string | null;
   needs_sync: boolean;
 } {
-  const catalog = loadKitCatalog() as Record<string, unknown>;
+  const catalog = loadKitCatalog(dataDir) as Record<string, unknown>;
   const presets = catalog.stack_presets as Record<string, StackPreset> | undefined;
   const resolvedId =
     presets != null ? resolveStackPresetId(presetId, presets) : null;

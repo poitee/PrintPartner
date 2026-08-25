@@ -430,7 +430,7 @@ export function StlNamingSettingsCard({ engineReady }: SettingsCardProps) {
         <CardTitle level={3} className="text-base">STL naming rules</CardTitle>
         <CardDescription>
           How the scanner detects part role, quantity, and slug from STL paths. Defaults match
-          Voron-style{" "}
+          the common{" "}
           <code className="text-xs">[a]</code>/<code className="text-xs">[c]</code>/
           <code className="text-xs">[o]</code> markers and <code className="text-xs">_x4</code>{" "}
           quantities.

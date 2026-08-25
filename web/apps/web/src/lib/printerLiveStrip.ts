@@ -45,7 +45,7 @@ export function printerDeskTypeLabel(type: LiveStripHostType): string {
   }
 }
 
-/** `Shop Voron · Moonraker` */
+/** `Shop Printer · Moonraker` */
 export function formatPrinterHostCaption(name: string, type: LiveStripHostType): string {
   return `${name} · ${printerHostTypeLabel(type)}`;
 }
@@ -122,7 +122,7 @@ export function formatPrinterStatusPill(
 
 /**
  * One-line summary for a linked host on Progress (legacy / tests).
- * Example: `Shop Voron · Printing frame_x.gcode · 34% · ETA ~12m`
+ * Example: `Shop Printer · Printing frame_x.gcode · 34% · ETA ~12m`
  */
 export function formatPrinterLiveLine(opts: {
   name: string;

@@ -278,7 +278,7 @@ export default function HelpPage() {
             </li>
             <li>
               Stack presets (when configured) attach base + addon layers and pre-fill variant
-              choices — see the workflow guide below for Voron / LDO examples.
+              choices — see the workflow guide below for how to define them.
             </li>
           </ul>
           <p className="text-xs">

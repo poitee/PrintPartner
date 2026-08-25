@@ -1,12 +1,18 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createSelfHostPorts } from "../adapters/self-host/index.js";
 import { GOLDEN_EVAL_FIXTURES } from "./golden-eval.fixtures.js";
 import { invokeAssistantTool } from "./tools.js";
 import { runAssistantTurn } from "./tool-loop.js";
 import type { AssistantPort } from "./types.js";
+
+const FIXTURE = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "../test-fixtures/kit-workspace",
+);
 
 describe("golden kit-advisor evals (no live LLM)", () => {
   let dataDir: string;
@@ -19,6 +25,11 @@ describe("golden kit-advisor evals (no live LLM)", () => {
     await ports.db.connect();
     repo = ports.repository!;
 
+    repo.createSource({
+      name: "Example-Printer",
+      url: "https://example.com/example-printer.git",
+      source_kind: "github",
+    });
     const synced = repo.createSource({
       name: "SyncedKit",
       url: "https://example.com/synced.git",
@@ -52,7 +63,7 @@ describe("golden kit-advisor evals (no live LLM)", () => {
       const result = await invokeAssistantTool(
         toolName,
         { plan_id: planId, ...(fixture.tool_input ?? {}) },
-        { repo, activePlanId: planId, useOtherBuildsAsExamples: useOther },
+        { repo, activePlanId: planId, useOtherBuildsAsExamples: useOther, dataDir: FIXTURE },
       );
 
       if (fixture.expect.proposes_action) {
@@ -95,7 +106,7 @@ describe("golden kit-advisor evals (no live LLM)", () => {
         if (params.messages.some((m) => m.role === "tool")) {
           return {
             content:
-              "I recommend the Voron 2.4 stock + Stealthburner + Tap stack preset.",
+              "I recommend the Example Kit R2 stack preset.",
             toolCalls: [],
             stopReason: "end_turn",
           };
@@ -106,7 +117,7 @@ describe("golden kit-advisor evals (no live LLM)", () => {
             {
               id: "call_1",
               name: "apply_stack_preset",
-              input: { plan_id: planId, preset_id: "voron_2.4_stock_sb_tap" },
+              input: { plan_id: planId, preset_id: "example_kit_r2" },
             },
           ],
           stopReason: "tool_use",
@@ -120,19 +131,19 @@ describe("golden kit-advisor evals (no live LLM)", () => {
       messages: [
         {
           role: "user",
-          content: "Recommend a known stack preset for stock 2.4 + SB + Tap",
+          content: "Recommend a known stack preset for the Example Printer",
         },
       ],
       model: "mock",
       maxTokens: 256,
-      toolCtx: { repo, activePlanId: planId, useOtherBuildsAsExamples: true },
+      toolCtx: { repo, activePlanId: planId, useOtherBuildsAsExamples: true, dataDir: FIXTURE },
     });
 
     expect(turn.toolsDegraded).toBe(false);
     expect(turn.proposedActions.some((a) => a.type === "apply_stack_preset")).toBe(
       true,
     );
-    expect(turn.content.toLowerCase()).toMatch(/stealthburner|stack preset|tap/);
+    expect(turn.content.toLowerCase()).toMatch(/example kit|stack preset/);
   });
 
   it("tool-loop does not invent sources when set_base fails", async () => {

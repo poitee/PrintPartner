@@ -1,7 +1,8 @@
 import { acceptPlanForTest } from "../test/accept-plan.js";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createSelfHostPorts } from "../adapters/self-host/index.js";
 import { InProcessJobRunner } from "../routes/jobs.js";
@@ -10,6 +11,11 @@ import { invokeAssistantTool, applyAssistantAction } from "./tools.js";
 import { inferStackPresetId, summarizeOtherBuildsAsExamples } from "./example-builds.js";
 import { buildAssistantSystemPrompt } from "./assistant-context.js";
 import { hydrateBuildPlanningBrief, newBuildPlanningBrief, readBuildPlanningBrief, saveBuildPlanningBrief } from "../services/build-planning.js";
+
+const FIXTURE = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "../test-fixtures/kit-workspace",
+);
 
 describe("assistant tools + example builds", () => {
   let dataDir: string;
@@ -153,18 +159,18 @@ describe("assistant tools + example builds", () => {
 
   it("mutating tools only propose actions", async () => {
     const source = repo.createSource({
-      name: "Voron-2",
-      url: "https://example.com/v2.git",
+      name: "Example-Printer",
+      url: "https://example.com/p.git",
       source_kind: "github",
     });
     const plan = repo.createProfile("Plan", source.id);
     const { content, proposedAction } = await invokeAssistantTool(
       "apply_stack_preset",
-      { plan_id: plan.id, preset_id: "voron_2.4_stock_sb_tap" },
-      { repo },
+      { plan_id: plan.id, preset_id: "example_kit_r2" },
+      { repo, dataDir: FIXTURE },
     );
     expect(proposedAction?.type).toBe("apply_stack_preset");
-    expect(proposedAction?.params.preset_id).toBe("voron_2.4_stock_sb_tap");
+    expect(proposedAction?.params.preset_id).toBe("example_kit_r2");
     expect(JSON.parse(content).status).toBe("proposed");
     // Layers unchanged until apply
     expect(repo.getProfileLayers(plan.id).length).toBeGreaterThanOrEqual(1);
@@ -739,9 +745,23 @@ describe("assistant tools + example builds", () => {
   });
 
   it("system prompt includes domain pack aliases for tag resolution", () => {
-    const prompt = buildAssistantSystemPrompt({ repo, toolsAvailable: true });
+    repo.createSource({
+      name: "Example-Printer",
+      url: "https://example.com/p.git",
+      source_kind: "github",
+    });
+    const prompt = buildAssistantSystemPrompt({ repo, toolsAvailable: true, dataDir: FIXTURE });
     expect(prompt).toContain("Domain pack");
-    expect(prompt).toContain('"LDO Trident R2" → source=Voron-Trident tag=VTr2');
+    expect(prompt).toContain('"the example r2 / example kit r2" → source=Example-Printer tag=EX-R2');
+  });
+
+  it("system prompt ships no curated pack or catalog content of its own", () => {
+    const prompt = buildAssistantSystemPrompt({ repo, toolsAvailable: true });
+    // The pack format is documented in the rules; no curated entries render.
+    expect(prompt).not.toContain("### Phrase aliases");
+    expect(prompt).not.toContain("### Stack recipes");
+    expect(prompt).not.toContain("### Source digests");
+    expect(prompt).not.toMatch(/\bvoron\b|\btrident\b|\bklicky\b|\bstealthburner\b/i);
   });
 
   it("start_sync proposes and apply enqueues a sync job", async () => {
@@ -849,18 +869,18 @@ describe("assistant tools + example builds", () => {
 
   it("check_stack_compatibility warns on dual probes", async () => {
     const base = repo.createSource({
-      name: "Voron-Trident",
+      name: "Example-Printer",
       url: "https://example.com/t.git",
       source_kind: "github",
     });
     const tap = repo.createSource({
-      name: "Voron-Tap",
-      url: "https://example.com/tap.git",
+      name: "Example-Probe",
+      url: "https://example.com/probe.git",
       source_kind: "github",
     });
     const klicky = repo.createSource({
-      name: "Klicky-Probe",
-      url: "https://example.com/k.git",
+      name: "Example-Alt-Probe",
+      url: "https://example.com/alt.git",
       source_kind: "github",
     });
     for (const s of [base, tap, klicky]) {
@@ -875,7 +895,7 @@ describe("assistant tools + example builds", () => {
         await invokeAssistantTool(
           "check_stack_compatibility",
           { plan_id: plan.id },
-          { repo },
+          { repo, dataDir: FIXTURE },
         )
       ).content,
     );
@@ -893,18 +913,18 @@ describe("assistant tools + example builds", () => {
 
   it("add_addon soft-enforcement includes warnings for conflicting probe", async () => {
     const base = repo.createSource({
-      name: "Voron-2",
+      name: "Example-Printer",
       url: "https://example.com/v2.git",
       source_kind: "github",
     });
     const tap = repo.createSource({
-      name: "Voron-Tap",
-      url: "https://example.com/tap.git",
+      name: "Example-Probe",
+      url: "https://example.com/probe.git",
       source_kind: "github",
     });
     const klicky = repo.createSource({
-      name: "Klicky-Probe",
-      url: "https://example.com/k.git",
+      name: "Example-Alt-Probe",
+      url: "https://example.com/alt.git",
       source_kind: "github",
     });
     for (const s of [base, tap, klicky]) {
@@ -919,8 +939,8 @@ describe("assistant tools + example builds", () => {
 
     const { content, proposedAction } = await invokeAssistantTool(
       "add_addon",
-      { plan_id: plan.id, source_name: "Klicky-Probe" },
-      { repo },
+      { plan_id: plan.id, source_name: "Example-Alt-Probe" },
+      { repo, dataDir: FIXTURE },
     );
     expect(proposedAction?.type).toBe("add_addon");
     const parsed = JSON.parse(content);
@@ -1102,6 +1122,9 @@ describe("assistant tools + example builds", () => {
   });
 
   it("ingest_guide_text tool returns GuideExtract", async () => {
+    // Vocabulary comes from this workspace's own sources.
+    repo.createSource({ name: "Voron-Trident", url: "https://example.com/t.git", source_kind: "github" });
+    repo.createSource({ name: "Voron-Tap", url: "https://example.com/tap.git", source_kind: "github" });
     const raw = JSON.parse(
       (
         await invokeAssistantTool(

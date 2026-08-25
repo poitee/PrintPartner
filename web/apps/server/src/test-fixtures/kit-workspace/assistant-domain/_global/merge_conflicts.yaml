@@ -1,0 +1,4 @@
+conflicts:
+  - slug_or_path: power_inlet.stl
+    sources: [Example-Printer, Example-Vendor-Kit]
+    resolution: Prefer the vendor copy; it matches the supplied PSU cutout.
