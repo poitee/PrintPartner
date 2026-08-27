@@ -1,18 +1,14 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "react-router-dom";
-import { toast } from "sonner";
 import {
-  AlertTriangle,
-  Box,
-  Layers,
-  Package,
-  Printer,
-  RefreshCw,
-  XCircle,
-} from "lucide-react";
-import PlanFreshnessNotice from "../components/PlanFreshnessNotice";
-import StlSyncBanner from "../components/StlSyncBanner";
-import BuildWorkflowNextAction from "../components/build/BuildWorkflowNextAction";
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type RefObject,
+} from "react";
+import { Link } from "react-router-dom";
+import { Package, Printer } from "lucide-react";
+import BuildSummaryHeader from "../components/build/BuildSummaryHeader";
 import WorkingPlanReviewCard from "../components/build/WorkingPlanReviewCard";
 import EmptyState from "../components/layout/EmptyState";
 import PageHeader from "../components/layout/PageHeader";
@@ -21,58 +17,125 @@ import PageShell from "../components/layout/PageShell";
 import ReviewPartsSheet, {
   type ReviewPartsSheetHandle,
 } from "../components/review/ReviewPartsSheet";
-import { Badge } from "../components/ui/badge";
+import {
+  PlanAcceptanceProvider,
+  usePlanAcceptance,
+} from "../components/review/PlanAcceptanceContext";
+import PlanAcceptanceActionCard from "../components/review/PlanAcceptanceActionCard";
+import PlanAcceptanceConfirmation from "../components/review/PlanAcceptanceConfirmation";
+import PlanAcceptedRevisionCard from "../components/review/PlanAcceptedRevisionCard";
+import PlanFinalReviewCard from "../components/review/PlanFinalReviewCard";
+import PlanIssuesSection from "../components/review/PlanIssuesSection";
+import PlanRequiredUnitImpactCard from "../components/review/PlanRequiredUnitImpactCard";
 import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";
 import type { StlNamingFolderRule } from "@print-partner/contracts";
 import { startSync } from "../api/endpoints/jobs";
 import { fetchStlNaming } from "../api/endpoints/stlNaming";
-import {
-  buildSourcesRoute,
-  exportRoute,
-  libraryRoute,
-} from "../lib/routes";
-import {
-  PARTS_CONFLICT_CTA,
-  PARTS_CONFLICT_HINT,
-} from "../lib/mergeConflictCopy";
-import { countNonMissingPartWarnings } from "../lib/partWarnings";
-import { partsSummaryLine } from "../lib/partsGroups";
-import { flattenReviewParts } from "../lib/reviewParts";
-import { groupMergeConflictsByFilename } from "../lib/mergeConflictGroups";
+import { buildSourcesRoute, productionRoute, progressRoute } from "../lib/routes";
+import { planHeaderSummary } from "../lib/planAcceptanceModel";
 import { useProfileSelection } from "../context/ProfileContext";
 import { usePlanWorkspace } from "../context/PlanWorkspaceContext";
-import { useStlAutoSync } from "../context/StlAutoSyncContext";
 import { useEngineHealth } from "../hooks/useEngineHealth";
 import { useJobRunner } from "../hooks/useJobRunner";
 import { resolveEngineState } from "../lib/workflowState";
 
-function hintRoute(hint: string | null | undefined, profileId: number | null) {
-  if (hint === "sources") return libraryRoute();
-  if (hint === "build" && profileId != null) return buildSourcesRoute(profileId);
-  return null;
+/** Steps 4 to 7 plus the downstream routes, in the order the user reads them. */
+function PlanReviewSections({
+  sheetRef,
+  folderRules,
+  disabled,
+}: {
+  sheetRef: RefObject<ReviewPartsSheetHandle | null>;
+  folderRules: StlNamingFolderRule[];
+  disabled: boolean;
+}) {
+  const { model, buildId } = usePlanAcceptance();
+  const { review } = usePlanWorkspace();
+  const { profiles } = useProfileSelection();
+  if (!review) return null;
+  const planName = profiles.find((p) => p.id === buildId)?.name ?? review.plan_name ?? "Plan";
+
+  return (
+    <>
+      <PlanAcceptedRevisionCard />
+      <WorkingPlanReviewCard />
+      <PlanIssuesSection />
+
+      <section id="plan-parts" aria-labelledby="plan-parts-heading" className="space-y-2">
+        <div>
+          <h2 id="plan-parts-heading" className="text-sm font-semibold">
+            Parts and quantities
+          </h2>
+          {!model.working && (
+            <p className="text-sm text-muted-foreground">
+              These are the values of the Accepted revision.
+            </p>
+          )}
+        </div>
+        <ReviewPartsSheet
+          ref={sheetRef}
+          review={review}
+          planName={planName}
+          disabled={disabled}
+          folderRules={folderRules}
+        />
+      </section>
+
+      <PlanRequiredUnitImpactCard />
+      <PlanFinalReviewCard />
+      <PlanAcceptanceActionCard />
+
+      <section aria-labelledby="plan-downstream-heading" className="space-y-2 print:hidden">
+        <h2 id="plan-downstream-heading" className="text-sm font-semibold">
+          Where this work continues
+        </h2>
+        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+          {model.downstream.map((link) => (
+            <Button
+              key={link.id}
+              className="min-h-11 w-full sm:w-auto"
+              variant={link.qualifier || link.id === "checkoff" ? "secondary" : "default"}
+              asChild
+            >
+              <Link to={link.id === "production" ? productionRoute(buildId) : progressRoute(buildId)}>
+                {link.qualifier ? `${link.label} (${link.qualifier})` : link.label}
+              </Link>
+            </Button>
+          ))}
+          <Button className="min-h-11 w-full sm:w-auto" variant="ghost" asChild>
+            <Link to={buildSourcesRoute(buildId)}>Back to Sources</Link>
+          </Button>
+        </div>
+      </section>
+    </>
+  );
 }
 
 /**
- * Parts stage — validate quantities, group by filament role, surface warnings.
- * Heavy export actions live on `/export`; Progress owns checkoff.
+ * Plan — the review and acceptance checkpoint.
+ *
+ * The page answers two questions in a fixed order: what will this revision
+ * require, and am I ready to accept it? Accepted state comes first, then the
+ * working changes, then everything that is still open, then the parts, then the
+ * effect on printed work, then one summary and one action.
  */
 export default function PartsPage() {
   const { health, error: engineError, loading: healthLoading } = useEngineHealth();
-  const { selectedProfileId, profiles } = useProfileSelection();
+  const { selectedProfileId } = useProfileSelection();
   const {
     review,
     loading,
     error: workspaceError,
     draftError,
     draftLoading,
+    draftWorkspace,
     refresh,
   } = usePlanWorkspace();
-  const { banner: stlBanner, runSync: runStlSync, busy: stlSyncBusy } =
-    useStlAutoSync();
   const syncJob = useJobRunner("sync");
   const sheetRef = useRef<ReviewPartsSheetHandle>(null);
   const [folderRules, setFolderRules] = useState<StlNamingFolderRule[]>([]);
+  const [syncError, setSyncError] = useState<string | null>(null);
   const engineState = resolveEngineState({
     health,
     loading: healthLoading,
@@ -80,71 +143,40 @@ export default function PartsPage() {
   });
   const engineReady = engineState === "ready";
 
-  const selectedProfile = profiles.find((p) => p.id === selectedProfileId);
-
   useEffect(() => {
-    void fetchStlNaming().then((profile) => {
-      setFolderRules(
-        (profile.folder_rules ?? []).filter((r) => r.functional_class != null),
-      );
-    }).catch(() => {/* silently ignore – filter just won't work */});
+    void fetchStlNaming()
+      .then((profile) => {
+        setFolderRules(
+          (profile.folder_rules ?? []).filter((r) => r.functional_class != null),
+        );
+      })
+      .catch(() => {/* the functional-class filter is optional */});
   }, []);
-  const syncUnsyncedLayers = () => {
-    const unsynced = review?.layers.filter((l) => !l.synced && l.project_id != null) ?? [];
+
+  const syncSources = useCallback(() => {
+    const unsynced = review?.layers.filter((l) => l.project_id != null) ?? [];
     const ids = [...new Set(unsynced.map((l) => l.project_id!).filter(Boolean))];
     if (ids.length === 0) return;
+    setSyncError(null);
     void syncJob.runJob(
       () => startSync(ids),
       (snap) => {
         if (snap.status === "error") {
-          toast.error(snap.message || "Sync failed");
+          setSyncError(snap.message || "Source sync failed. Try again.");
           return;
         }
         if (selectedProfileId != null) void refresh();
       },
     );
-  };
+  }, [refresh, review, selectedProfileId, syncJob]);
 
-  const loadError = workspaceError;
-  const planName =
-    profiles.find((p) => p.id === selectedProfileId)?.name ??
-    review?.plan_name ??
-    "Plan";
-
-  const blockers = useMemo(
-    () =>
-      review?.issues.filter(
-        (i) => i.severity === "blocker" && i.code !== "missing_stl",
-      ) ?? [],
-    [review],
-  );
-  const warnings = useMemo(
-    () => review?.issues.filter((i) => i.severity === "warning") ?? [],
-    [review],
-  );
-  const mergeConflicts = useMemo(
-    () => review?.issues.filter((i) => i.code === "merge_conflict") ?? [],
-    [review],
-  );
-  const mergeConflictGroups = useMemo(
-    () => groupMergeConflictsByFilename(mergeConflicts),
-    [mergeConflicts],
+  const headerSummary = useMemo(
+    () => planHeaderSummary({ review, draft: draftWorkspace }),
+    [draftWorkspace, review],
   );
 
-  const hasIncludedParts = useMemo(() => {
-    if (!review) return false;
-    return flattenReviewParts(review.part_groups).some((p) => p.included);
-  }, [review]);
-
-  const summaryLine = useMemo(() => {
-    if (!review) return null;
-    const parts = flattenReviewParts(review.part_groups);
-    const warnCount = countNonMissingPartWarnings(
-      parts.filter((p) => p.included),
-      review,
-    );
-    return partsSummaryLine(parts, review.totals.by_role, warnCount);
-  }, [review]);
+  const hasParts = (draftWorkspace?.parts.length ?? 0) > 0
+    || (review?.part_groups.some((group) => group.parts.length > 0) ?? false);
 
   const onPrint = useCallback(() => {
     void sheetRef.current?.print();
@@ -157,17 +189,14 @@ export default function PartsPage() {
         icon={Package}
         accent
         title="Plan"
-        description={
-          summaryLine ??
-          "Review quantities and resolve issues before accepting changes."
-        }
+        description={headerSummary}
         actions={
           <PageHeaderActions>
             <Button
               variant="ghost"
-              className="min-h-10 w-full sm:w-auto"
+              className="min-h-11 w-full sm:w-auto"
               onClick={onPrint}
-              disabled={selectedProfileId == null || !hasIncludedParts}
+              disabled={selectedProfileId == null || !hasParts}
             >
               <Printer className="mr-1 h-4 w-4" />
               Print
@@ -176,197 +205,54 @@ export default function PartsPage() {
         }
       />
 
-      <BuildWorkflowNextAction currentStageId="plan" />
+      <BuildSummaryHeader currentStageId="plan" />
 
-      <WorkingPlanReviewCard />
+      <PlanAcceptanceProvider
+        onSyncSources={syncSources}
+        syncBusy={syncJob.busy}
+      >
+        <PlanAcceptanceConfirmation />
 
-      {selectedProfile && (
-        <PlanFreshnessNotice
-          freshness={selectedProfile.freshness}
-          action={{ kind: "review", href: buildSourcesRoute(selectedProfileId) }}
-        />
-      )}
+        {workspaceError && (
+          <p className="text-sm text-destructive" role="alert">{workspaceError}</p>
+        )}
+        {draftError && (
+          <p className="text-sm text-destructive" role="alert">{draftError}</p>
+        )}
+        {syncError && (
+          <p className="text-sm text-destructive" role="alert">{syncError}</p>
+        )}
 
-      {loadError && <p className="text-sm text-destructive">{loadError}</p>}
-      {draftError && <p className="text-sm text-destructive" role="alert">{draftError}</p>}
-
-      {engineState !== "ready" ? (
-        <Card>
-          <CardContent className="pt-6">
-            <p className="text-sm text-muted-foreground">
-              {engineState === "offline"
-                ? "Engine offline — start the print-partner engine to review this plan."
-                : "Connecting to the engine…"}
-            </p>
-          </CardContent>
-        </Card>
-      ) : selectedProfileId == null ? (
-        <EmptyState
-          icon={Package}
-          title="No plan selected"
-          description="Choose a plan in the header or create one to validate parts and quantities."
-        />
-      ) : loading && !review ? (
-        <Card>
-          <CardContent className="pt-6">
-            <p className="text-sm text-muted-foreground">Loading parts…</p>
-          </CardContent>
-        </Card>
-      ) : review ? (
-        <>
-          <StlSyncBanner
-            mode={stlBanner}
-            onSync={runStlSync}
-            syncDisabled={stlSyncBusy || syncJob.busy}
+        {engineState !== "ready" ? (
+          <Card>
+            <CardContent className="pt-6">
+              <p className="text-sm text-muted-foreground">
+                {engineState === "offline"
+                  ? "Engine offline. Start the print-partner engine to review this Plan."
+                  : "Connecting to the engine…"}
+              </p>
+            </CardContent>
+          </Card>
+        ) : selectedProfileId == null ? (
+          <EmptyState
+            icon={Package}
+            title="No Build selected"
+            description="Choose a Build in the header, or create one, to review its Plan."
           />
-
-          {(mergeConflicts.length > 0 || blockers.length > 0 || warnings.length > 0) && (
-            <section className="space-y-3 rounded-lg border border-border bg-card p-4 shadow-sm">
-              <h2 className="text-sm font-semibold">Issues</h2>
-              {mergeConflicts.length > 0 && (
-                <div
-                  className="flex gap-2 rounded-md border border-warning bg-warning/15 px-3 py-2.5 text-sm"
-                  role="alert"
-                >
-                  <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-warning" aria-hidden />
-                  <div>
-                    <p className="font-medium">
-                      Duplicate parts detected ({mergeConflicts.length} conflict
-                      {mergeConflicts.length === 1 ? "" : "s"})
-                    </p>
-                    <p className="mt-1 text-muted-foreground">{PARTS_CONFLICT_HINT}</p>
-                    <ul className="mt-2 space-y-1 text-xs">
-                      {mergeConflictGroups.map(([filename, count]) => (
-                        <li key={filename} className="flex flex-wrap items-center gap-2">
-                          <span className="font-mono text-foreground">{filename}</span>
-                          <span className="text-muted-foreground">
-                            — {count} variant{count === 1 ? "" : "s"}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                    <Link
-                      to={buildSourcesRoute(selectedProfileId)}
-                      className="mt-2 inline-block text-xs text-primary underline"
-                    >
-                      {PARTS_CONFLICT_CTA}
-                    </Link>
-                  </div>
-                </div>
-              )}
-              {blockers.map((issue, i) => (
-                <div
-                  key={`b-${i}`}
-                  className="flex gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm"
-                >
-                  <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" aria-hidden />
-                  <div>
-                    <p>{issue.message}</p>
-                    {issue.link_hint && hintRoute(issue.link_hint, selectedProfileId) && (
-                      <div className="mt-1 flex flex-wrap gap-2">
-                        <Link
-                          to={hintRoute(issue.link_hint, selectedProfileId)!}
-                          className="text-xs text-primary underline"
-                        >
-                          {issue.link_hint === "sources" ? "Go to Library" : "Fix on Plan"}
-                        </Link>
-                        {issue.link_hint === "sources" &&
-                          review.layers.some((l) => !l.synced) && (
-                            <button
-                              type="button"
-                              className="text-xs text-primary underline"
-                              onClick={syncUnsyncedLayers}
-                              disabled={stlSyncBusy || syncJob.busy}
-                            >
-                              {stlSyncBusy || syncJob.busy ? "Syncing…" : "Sync sources"}
-                            </button>
-                          )}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              ))}
-              {warnings
-                .filter((i) => i.code !== "merge_conflict")
-                .map((issue, i) => (
-                  <div
-                    key={`w-${i}`}
-                    className="flex gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-sm"
-                  >
-                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" aria-hidden />
-                    <div>
-                      <p>{issue.message}</p>
-                      {issue.link_hint && hintRoute(issue.link_hint, selectedProfileId) && (
-                        <div className="mt-1 flex flex-wrap gap-2">
-                          <Link
-                            to={hintRoute(issue.link_hint, selectedProfileId)!}
-                            className="text-xs text-primary underline"
-                          >
-                            {issue.link_hint === "sources" ? "Go to Library" : "Fix on Plan"}
-                          </Link>
-                          {issue.link_hint === "sources" &&
-                            review.layers.some((l) => !l.synced) && (
-                              <button
-                                type="button"
-                                className="text-xs text-primary underline"
-                                onClick={syncUnsyncedLayers}
-                                disabled={stlSyncBusy || syncJob.busy}
-                              >
-                                {stlSyncBusy || syncJob.busy ? "Syncing…" : "Sync sources"}
-                              </button>
-                            )}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                ))}
-            </section>
-          )}
-
-          <section className="rounded-lg border border-border bg-card p-4 shadow-sm">
-            <h2 className="mb-2 text-sm font-semibold">Sources</h2>
-            <ul className="space-y-2 text-sm">
-              {review.layers.map((layer) => (
-                <li key={layer.id} className="flex flex-wrap items-center gap-2">
-                  <Badge
-                    variant={layer.layer_type === "base" ? "base" : "addon"}
-                    icon={layer.layer_type === "base" ? Layers : Box}
-                  >
-                    {layer.layer_type}
-                  </Badge>
-                  <span>{layer.project_name ?? "—"}</span>
-                  {layer.synced ? (
-                    <Badge variant="success" icon={RefreshCw}>
-                      synced
-                    </Badge>
-                  ) : (
-                    <Badge variant="warning" icon={AlertTriangle}>
-                      not synced
-                    </Badge>
-                  )}
-                </li>
-              ))}
-            </ul>
-          </section>
-
-          <ReviewPartsSheet
-            ref={sheetRef}
-            review={review}
-            planName={planName}
-            disabled={!engineReady || loading || draftLoading}
+        ) : loading && !review ? (
+          <Card>
+            <CardContent className="pt-6">
+              <p className="text-sm text-muted-foreground">Loading this Plan…</p>
+            </CardContent>
+          </Card>
+        ) : review ? (
+          <PlanReviewSections
+            sheetRef={sheetRef}
             folderRules={folderRules}
+            disabled={!engineReady || loading || draftLoading}
           />
-
-          <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
-            <Button className="min-h-10 w-full sm:w-auto" variant="ghost" asChild>
-              <Link to={buildSourcesRoute(selectedProfileId)}>Back to Sources</Link>
-            </Button>
-            <Button className="min-h-10 w-full sm:w-auto" variant="secondary" asChild>
-              <Link to={exportRoute(selectedProfileId)}>Open Production</Link>
-            </Button>
-          </div>
-        </>
-      ) : null}
+        ) : null}
+      </PlanAcceptanceProvider>
     </PageShell>
   );
 }

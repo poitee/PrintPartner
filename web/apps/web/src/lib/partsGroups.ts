@@ -70,30 +70,6 @@ export function groupPartsByRole(parts: ReviewPart[]): PartsRoleGroup[] {
     });
 }
 
-/** Compact subtitle for the Parts page header. */
-export function partsSummaryLine(
-  parts: ReviewPart[],
-  byRole: Record<string, number>,
-  warningCount: number,
-): string {
-  const included = parts.filter((p) => p.included);
-  const roleBits = Object.entries(byRole)
-    .sort((a, b) => {
-      const ka = roleSortKey(a[0]);
-      const kb = roleSortKey(b[0]);
-      return ka[0] - kb[0] || ka[1].localeCompare(kb[1]);
-    })
-    .map(([role, n]) => `${n} ${role}`);
-  const bits = [
-    `${included.length} part${included.length === 1 ? "" : "s"}`,
-    ...roleBits,
-  ];
-  if (warningCount > 0) {
-    bits.push(`${warningCount} warning${warningCount === 1 ? "" : "s"}`);
-  }
-  return bits.join(" · ");
-}
-
 export function partSourceNote(part: ReviewPart): string {
   const source = sourceLabelFromLayer(part.source_layer);
   const folder = folderKeyFromRelativePath(part.relative_path || part.filename);

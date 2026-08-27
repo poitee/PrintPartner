@@ -1,6 +1,7 @@
-import type { PlanFreshness, PlanStaleReason, PlanUntrackedReason } from "@print-partner/contracts";
+import type { PlanFreshness } from "@print-partner/contracts";
 import { AlertTriangle, CircleHelp, RefreshCw } from "lucide-react";
 import { Link } from "react-router-dom";
+import { planFreshnessMessages } from "../lib/planAcceptanceModel";
 import { Button } from "./ui/button";
 import { cn } from "@/lib/utils";
 
@@ -14,40 +15,10 @@ type Props = {
   className?: string;
 };
 
-function staleReasonText(reason: PlanStaleReason): string {
-  switch (reason.kind) {
-    case "source_revision_changed":
-      return `${reason.source_name} has a newer synced revision.`;
-    case "source_revision_unavailable":
-      return `${reason.source_name}'s accepted revision is no longer available.`;
-    case "naming_rules_changed":
-      return `${reason.source_name}'s part naming rules changed.`;
-    case "plan_inputs_invalid":
-      return "The Plan has duplicate or missing Source assignments.";
-    case "plan_configuration_changed":
-      return "The Plan's source selection or file rules changed.";
-  }
-}
-
-function untrackedReasonText(reason: PlanUntrackedReason): string {
-  switch (reason.kind) {
-    case "no_accepted_inputs":
-      return "This Plan has not recorded the source revisions used to build its parts yet.";
-    case "source_revision_untracked":
-      return `${reason.source_name} does not have a tracked source revision.`;
-  }
-}
-
 export default function PlanFreshnessNotice({ freshness, action, className }: Props) {
   if (freshness.status === "current") return null;
 
-  const messages =
-    freshness.status === "stale"
-      ? [
-          ...freshness.reasons.map(staleReasonText),
-          ...freshness.untracked_sources.map(untrackedReasonText),
-        ]
-      : freshness.reasons.map(untrackedReasonText);
+  const messages = planFreshnessMessages(freshness);
   const Icon = freshness.status === "stale" ? AlertTriangle : CircleHelp;
 
   return (
@@ -81,7 +52,7 @@ export default function PlanFreshnessNotice({ freshness, action, className }: Pr
             className={cn("mr-1.5 h-3.5 w-3.5", action.busy && "animate-spin")}
             aria-hidden
           />
-          {action.busy ? "Building…" : "Build Working Plan"}
+          {action.busy ? "Updating…" : "Update Working Plan"}
         </Button>
       ) : (
         <Button type="button" size="sm" variant="secondary" asChild>

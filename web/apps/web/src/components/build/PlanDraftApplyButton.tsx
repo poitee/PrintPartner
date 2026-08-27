@@ -1,43 +1,37 @@
-import type { PlanDraftWorkspace } from "@print-partner/contracts";
+import type { PlanAcceptanceDecision } from "../../lib/planAcceptanceModel";
 import { Button } from "../ui/button";
 
 type PlanDraftApplyButtonProps = {
-  workspace: PlanDraftWorkspace;
-  busy: boolean;
-  onApply: () => void;
-  onRebase: () => void;
+  readonly decision: PlanAcceptanceDecision;
+  readonly busy: boolean;
+  readonly onAccept: () => void;
 };
 
+/**
+ * The one action of the Plan checkpoint. It states its own outcome, and when it
+ * is unavailable the reason is written next to it rather than implied by a
+ * greyed-out control.
+ */
 export default function PlanDraftApplyButton({
-  workspace,
+  decision,
   busy,
-  onApply,
-  onRebase,
+  onAccept,
 }: PlanDraftApplyButtonProps) {
   return (
-    <div className="flex flex-wrap gap-2">
-      {!workspace.diff.base_is_current && (
-        <Button
-          type="button"
-          variant="secondary"
-          disabled={busy}
-          onClick={onRebase}
-        >
-          Refresh Working Plan
-        </Button>
-      )}
+    <div className="flex flex-col items-start gap-2">
       <Button
         type="button"
-        disabled={
-          busy ||
-          !workspace.diff.base_is_current ||
-          workspace.reconciliation.kind !== "ready"
-        }
+        className="min-h-11 w-full sm:w-auto"
+        aria-describedby="plan-accept-reason"
+        disabled={busy || !decision.canAccept}
         loading={busy}
-        onClick={onApply}
+        onClick={onAccept}
       >
-        Accept Working Plan
+        {decision.label}
       </Button>
+      <p id="plan-accept-reason" className="text-sm text-muted-foreground">
+        {decision.reason}
+      </p>
     </div>
   );
 }

@@ -91,17 +91,3 @@ export function countPartWarnings(
 ): number {
   return parts.reduce((n, p) => n + (hasPartWarning(p, review) ? 1 : 0), 0);
 }
-
-/**
- * Parts header summary — excludes STL-missing-only (desk-loop banner + tray).
- * Still counts parts that have any non-missing warning.
- */
-export function countNonMissingPartWarnings(
-  parts: ReviewPart[],
-  review?: PlanReview | null,
-): number {
-  return parts.reduce(
-    (n, p) => n + (partWarningNote(p, review) != null ? 1 : 0),
-    0,
-  );
-}

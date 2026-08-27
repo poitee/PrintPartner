@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ReviewPart } from "../api/endpoints/planManifests";
-import { groupPartsByRole, partsSummaryLine, partSourceNote } from "./partsGroups";
+import { groupPartsByRole, partSourceNote } from "./partsGroups";
 
 function part(overrides: Partial<ReviewPart> & { id: number }): ReviewPart {
   return {
@@ -43,26 +43,6 @@ describe("groupPartsByRole", () => {
     const groups = groupPartsByRole([part({ id: 1, role: null })]);
     expect(groups[0]!.roleKey).toBe("unassigned");
     expect(groups[0]!.title).toContain("Unassigned");
-  });
-});
-
-describe("partsSummaryLine", () => {
-  it("includes role counts and non-missing warnings", () => {
-    const line = partsSummaryLine(
-      [part({ id: 1 }), part({ id: 2, role: "accent", included: true })],
-      { primary: 1, accent: 1 },
-      3,
-    );
-    expect(line).toBe("2 parts · 1 primary · 1 accent · 3 warnings");
-  });
-
-  it("omits warnings when count is zero (missing STLs are desk-loop / tray only)", () => {
-    const line = partsSummaryLine(
-      [part({ id: 1, missing: true }), part({ id: 2, role: "accent", missing: true })],
-      { primary: 1, accent: 1 },
-      0,
-    );
-    expect(line).toBe("2 parts · 1 primary · 1 accent");
   });
 });
 

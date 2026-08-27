@@ -1,278 +1,137 @@
-import type { RequiredUnitDecisionContract } from "@print-partner/contracts";
-import { useEffect, useMemo, useState } from "react";
-import { toast } from "sonner";
 import { usePlanWorkspace } from "../../context/PlanWorkspaceContext";
-import {
-  planDraftProductionBlockFromError,
-  planDraftRevisionPartLabels,
-  type ProductionBlock,
-} from "../../lib/planDraftUi";
-import { Button } from "../ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "../ui/card";
-import PlanDraftApplyButton from "./PlanDraftApplyButton";
+import { workingChangeFieldLabels } from "../../lib/planAcceptanceModel";
+import { usePlanAcceptance } from "../review/PlanAcceptanceContext";
 
-const NO_CHANGED_FIELDS: string[] = [];
+type ChangeRow = {
+  readonly key: string;
+  readonly filename: string;
+  readonly path: string;
+  readonly change: string;
+  readonly quantity: string;
+  readonly inclusion: string;
+};
 
+/**
+ * Step 2 of the Plan checkpoint: what the Working Plan would change.
+ *
+ * "Working Plan changes" replaces the old "Saved Plan draft" wording. The user
+ * is comparing two revisions of their own Build, not managing a draft record.
+ */
 export default function WorkingPlanReviewCard() {
-  const {
-    draftWorkspace,
-    applyActivePlanDraft,
-    rebaseActivePlanDraft,
-    reconcileActivePlanDraft,
-  } = usePlanWorkspace();
-  const [busy, setBusy] = useState(false);
-  const [conflictChoices, setConflictChoices] = useState<Record<string, string>>({});
-  const [productionBlock, setProductionBlock] = useState<ProductionBlock | null>(null);
+  const { model } = usePlanAcceptance();
+  const { draftWorkspace } = usePlanWorkspace();
+  const working = model.working;
 
-  useEffect(() => {
-    setConflictChoices({});
-    setProductionBlock(null);
-  }, [draftWorkspace?.draft.snapshot_digest]);
-
-  const acceptedRevisionPartLabels = useMemo(
-    () => draftWorkspace
-      ? planDraftRevisionPartLabels(draftWorkspace)
-      : new Map<number, string>(),
-    [draftWorkspace],
-  );
-  const proposedPartChanges = useMemo(() => {
-    if (!draftWorkspace) return [];
-    const added = draftWorkspace.diff.added.map((part) => ({
-      part,
-      label: "Added",
-      fields: NO_CHANGED_FIELDS,
-    }));
-    const changed = draftWorkspace.diff.changed.map((change) => ({
-      part: change.after,
-      label: "Changed",
-      fields: change.fields,
-    }));
-    return [...added, ...changed];
-  }, [draftWorkspace]);
-
-  if (!draftWorkspace) return null;
-
-  const onAccept = async (options?: { remapCheckoffLinks?: boolean }) => {
-    setBusy(true);
-    try {
-      const receipt = await applyActivePlanDraft(options);
-      setProductionBlock(null);
-      toast.success(`Accepted Plan version ${receipt.plan_version}`);
-    } catch (error) {
-      const blocked = planDraftProductionBlockFromError(error);
-      if (blocked) {
-        setProductionBlock(blocked);
-        toast.error(
-          `${blocked.checkoffLinkCount} Checkoff record(s) are linked to the Accepted Plan. Remap them during acceptance or resolve Production first.`,
-        );
-      } else {
-        toast.error(error instanceof Error ? error.message : String(error));
-      }
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const onRefresh = async () => {
-    setBusy(true);
-    try {
-      await rebaseActivePlanDraft();
-      toast.success("Working Plan refreshed from the Accepted Plan");
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : String(error));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const onResolve = async () => {
-    if (draftWorkspace.reconciliation.kind !== "unresolved") return;
-    const decisions: RequiredUnitDecisionContract[] = [];
-    for (const conflict of draftWorkspace.reconciliation.conflicts) {
-      const key = `${conflict.kind}:${conflict.target_draft_part_id}`;
-      const choice = conflictChoices[key];
-      if (!choice) {
-        toast.error("Choose how to resolve every Required-unit conflict");
-        return;
-      }
-      if (choice === "replace") {
-        decisions.push({
-          kind: "replace",
-          target_draft_part_id: conflict.target_draft_part_id,
-        });
-      } else if (conflict.kind === "ambiguous_exact_match") {
-        decisions.push({
-          kind: "select_exact_predecessor",
-          target_draft_part_id: conflict.target_draft_part_id,
-          predecessor_revision_part_id: Number(choice),
-        });
-      } else {
-        decisions.push({
-          kind: "accept_prior_completion",
-          target_draft_part_id: conflict.target_draft_part_id,
-          predecessor_revision_part_id: conflict.predecessor_revision_part_id,
-        });
-      }
-    }
-    setBusy(true);
-    try {
-      await reconcileActivePlanDraft(decisions);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : String(error));
-    } finally {
-      setBusy(false);
-    }
-  };
+  const rows: ChangeRow[] = draftWorkspace
+    ? [
+        ...draftWorkspace.diff.added.map((part) => ({
+          key: `added-${part.draft_part_id}`,
+          filename: part.filename,
+          path: part.relative_path,
+          change: "Added",
+          quantity: String(part.quantity_effective),
+          inclusion: part.included ? "Included" : "Excluded",
+        })),
+        ...draftWorkspace.diff.changed.map((change) => ({
+          key: `changed-${change.after.draft_part_id}`,
+          filename: change.after.filename,
+          path: change.after.relative_path,
+          change:
+            change.fields.length > 0
+              ? `Changed ${workingChangeFieldLabels(change.fields).join(", ")}`
+              : "Changed",
+          quantity: String(change.after.quantity_effective),
+          inclusion: change.after.included ? "Included" : "Excluded",
+        })),
+        ...draftWorkspace.diff.removed.map((part) => ({
+          key: `removed-${part.revision_part_id}`,
+          filename: part.filename,
+          path: part.relative_path,
+          change: "Removed",
+          quantity: "Not applicable",
+          inclusion: "Removed",
+        })),
+      ]
+    : [];
 
   return (
-    <Card className="border-primary/40">
-      <CardHeader className="pb-2">
-        <CardTitle level={3} className="text-base">Working Plan</CardTitle>
-        <CardDescription>
-          Review these changes before acceptance. The Accepted Plan and Checkoff stay unchanged until then.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        <p className="text-sm">
-          {draftWorkspace.diff.added.length} added, {draftWorkspace.diff.changed.length} changed, {draftWorkspace.diff.removed.length} removed
+    <section
+      id="plan-working-changes"
+      aria-labelledby="plan-working-changes-heading"
+      className="rounded-lg border border-border bg-card p-4 shadow-sm"
+    >
+      <h2 id="plan-working-changes-heading" className="text-sm font-semibold">
+        Working Plan changes
+      </h2>
+      {working ? (
+        <p className="mt-1 text-sm text-muted-foreground">
+          Not accepted yet. Production and Checkoff keep using the Accepted revision until you
+          accept.
         </p>
-        {(proposedPartChanges.length > 0 || draftWorkspace.diff.removed.length > 0) && (
-          <div className="overflow-x-auto rounded-md border border-border">
+      ) : (
+        <p className="mt-1 text-sm text-muted-foreground">
+          No working changes. Production and Checkoff are using the Accepted revision.
+        </p>
+      )}
+
+      {working && (
+        <dl className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+          {[
+            { label: "Added", value: working.added },
+            { label: "Changed", value: working.changed },
+            { label: "Removed", value: working.removed },
+            { label: "Unaffected", value: working.unaffected },
+          ].map((cell) => (
+            <div key={cell.label}>
+              <dt className="text-xs text-muted-foreground">{cell.label}</dt>
+              <dd className="text-lg font-semibold tabular-nums">{cell.value}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+
+      {rows.length > 0 && (
+        <>
+          <ul className="mt-3 space-y-2 md:hidden">
+            {rows.map((row) => (
+              <li key={row.key} className="rounded-md border border-border p-3 text-sm">
+                <p className="font-medium">{row.filename}</p>
+                <p className="text-xs text-muted-foreground">{row.path}</p>
+                <p className="mt-1">{row.change}</p>
+                <p className="text-xs text-muted-foreground">
+                  Working quantity {row.quantity} · {row.inclusion}
+                </p>
+              </li>
+            ))}
+          </ul>
+          <div className="mt-3 hidden overflow-x-auto rounded-md border border-border md:block">
             <table className="w-full text-left text-sm">
+              <caption className="sr-only">Parts changed by the Working Plan</caption>
               <thead className="bg-muted/40 text-xs text-muted-foreground">
                 <tr>
-                  <th className="px-3 py-2 font-medium">Working Plan Part</th>
-                  <th className="px-3 py-2 font-medium">Change</th>
-                  <th className="px-3 py-2 font-medium">Proposed qty</th>
-                  <th className="px-3 py-2 font-medium">Proposed inclusion</th>
+                  <th scope="col" className="px-3 py-2 font-medium">Part</th>
+                  <th scope="col" className="px-3 py-2 font-medium">Change</th>
+                  <th scope="col" className="px-3 py-2 font-medium">Working quantity</th>
+                  <th scope="col" className="px-3 py-2 font-medium">Working inclusion</th>
                 </tr>
               </thead>
               <tbody>
-                {proposedPartChanges.map(({ part, label, fields }) => (
-                  <tr key={`proposed-${part.draft_part_id}`} className="border-t border-border">
+                {rows.map((row) => (
+                  <tr key={row.key} className="border-t border-border">
                     <td className="px-3 py-2">
-                      <span className="font-medium">{part.filename}</span>
-                      <span className="block text-xs text-muted-foreground">{part.relative_path}</span>
+                      <span className="font-medium">{row.filename}</span>
+                      <span className="block text-xs text-muted-foreground">{row.path}</span>
                     </td>
-                    <td className="px-3 py-2">
-                      {label}{fields.length > 0 ? `: ${fields.join(", ")}` : ""}
-                    </td>
-                    <td className="px-3 py-2">{part.quantity_effective}</td>
-                    <td className="px-3 py-2">{part.included ? "Included" : "Excluded"}</td>
-                  </tr>
-                ))}
-                {draftWorkspace.diff.removed.map((part) => (
-                  <tr key={`removed-${part.revision_part_id}`} className="border-t border-border">
-                    <td className="px-3 py-2">
-                      <span className="font-medium">{part.filename}</span>
-                      <span className="block text-xs text-muted-foreground">{part.relative_path}</span>
-                    </td>
-                    <td className="px-3 py-2">Removed</td>
-                    <td className="px-3 py-2">Not applicable</td>
-                    <td className="px-3 py-2">Removed</td>
+                    <td className="px-3 py-2">{row.change}</td>
+                    <td className="px-3 py-2 tabular-nums">{row.quantity}</td>
+                    <td className="px-3 py-2">{row.inclusion}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-        )}
-        {!draftWorkspace.diff.base_is_current && (
-          <p className="text-sm text-destructive" role="alert">
-            The Accepted Plan changed after this Working Plan was saved. Refresh it before acceptance.
-          </p>
-        )}
-        {draftWorkspace.reconciliation.kind === "unresolved" && (
-          <div className="space-y-2 rounded-md border border-warning/40 bg-warning/5 p-3">
-            <p className="text-sm">
-              Resolve {draftWorkspace.reconciliation.conflicts.length} Required-unit conflict(s) before acceptance.
-            </p>
-            <div className="space-y-2">
-              {draftWorkspace.reconciliation.conflicts.map((conflict) => {
-                const key = `${conflict.kind}:${conflict.target_draft_part_id}`;
-                const target = draftWorkspace.parts.find(
-                  (part) => part.draft_part_id === conflict.target_draft_part_id,
-                );
-                return (
-                  <label key={key} className="block space-y-1 text-sm">
-                    <span className="block font-medium">
-                      {target?.filename ?? `Working Plan Part ${conflict.target_draft_part_id}`}
-                    </span>
-                    <select
-                      className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
-                      value={conflictChoices[key] ?? ""}
-                      disabled={busy}
-                      onChange={(event) => setConflictChoices((current) => ({
-                        ...current,
-                        [key]: event.target.value,
-                      }))}
-                    >
-                      <option value="">Choose a resolution</option>
-                      {conflict.kind === "ambiguous_exact_match" && conflict.candidate_revision_part_ids.map((candidateId) => (
-                        <option key={candidateId} value={String(candidateId)}>
-                          Reuse {acceptedRevisionPartLabels.get(candidateId) ?? `Accepted Plan Part ${candidateId}`}
-                        </option>
-                      ))}
-                      {conflict.kind === "unsafe_predecessor" && (
-                        <option value={String(conflict.predecessor_revision_part_id)}>
-                          Keep prior completed units
-                        </option>
-                      )}
-                      <option value="replace">Print as new units</option>
-                    </select>
-                  </label>
-                );
-              })}
-              <Button
-                type="button"
-                size="sm"
-                variant="secondary"
-                disabled={busy || draftWorkspace.reconciliation.conflicts.some((conflict) => (
-                  !conflictChoices[`${conflict.kind}:${conflict.target_draft_part_id}`]
-                ))}
-                onClick={() => void onResolve()}
-              >
-                Save conflict decisions
-              </Button>
-            </div>
-          </div>
-        )}
-        {productionBlock && (
-          <div className="space-y-2 rounded-md border border-destructive/40 bg-destructive/5 p-3">
-            <p className="text-sm text-destructive" role="alert">
-              {productionBlock.checkoffLinkCount} Checkoff record(s)
-              {productionBlock.sendQueueItemCount > 0
-                ? ` and ${productionBlock.sendQueueItemCount} send-queue item(s)`
-                : ""}{" "}
-              are linked to the Accepted Plan. Acceptance is blocked to protect that progress.
-            </p>
-            <p className="text-sm text-muted-foreground">
-              Remapping moves matching Checkoff records to the Working Plan during acceptance. Acceptance still fails if a printed file was removed or its printed count exceeds the new quantity.
-            </p>
-            <Button
-              type="button"
-              size="sm"
-              variant="secondary"
-              disabled={busy}
-              loading={busy}
-              onClick={() => void onAccept({ remapCheckoffLinks: true })}
-            >
-              Remap and accept
-            </Button>
-          </div>
-        )}
-        <PlanDraftApplyButton
-          workspace={draftWorkspace}
-          busy={busy}
-          onApply={() => void onAccept()}
-          onRebase={() => void onRefresh()}
-        />
-      </CardContent>
-    </Card>
+        </>
+      )}
+    </section>
   );
 }

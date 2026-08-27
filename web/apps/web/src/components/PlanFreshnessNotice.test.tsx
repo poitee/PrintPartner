@@ -34,7 +34,7 @@ describe("PlanFreshnessNotice", () => {
     );
 
     expect(screen.getByText(/Voron Trident has a newer synced revision/i)).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Build Working Plan" }));
+    fireEvent.click(screen.getByRole("button", { name: "Update Working Plan" }));
     expect(onRebuild).toHaveBeenCalledTimes(1);
   });
 
@@ -48,7 +48,7 @@ describe("PlanFreshnessNotice", () => {
       </MemoryRouter>,
     );
 
-    expect(screen.queryByRole("button", { name: "Build Working Plan" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Update Working Plan" })).toBeNull();
     expect(screen.getByRole("link", { name: "Review Sources" }).getAttribute("href")).toBe(
       "/build/4/plan",
     );

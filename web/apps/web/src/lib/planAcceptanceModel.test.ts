@@ -1,0 +1,435 @@
+import { describe, expect, it } from "vitest";
+import type { PlanDraftWorkspace } from "@print-partner/contracts";
+import type { PlanReview, ReviewPart } from "../api/endpoints/planManifests";
+import {
+  acceptedRevisionSummary,
+  acceptanceDecision,
+  downstreamLinks,
+  planAcceptanceModel,
+  planConfirmationCopy,
+  planHeaderSummary,
+  planIssues,
+  preservedVerifiedUnits,
+  requiredUnitImpact,
+  workingChangeFieldLabels,
+  workingChangeSummary,
+} from "./planAcceptanceModel";
+
+function reviewPart(over: Partial<ReviewPart> & { id: number }): ReviewPart {
+  return {
+    match_key: `stls/part-${over.id}.stl`,
+    relative_path: `STLs/part-${over.id}.stl`,
+    filename: `part-${over.id}.stl`,
+    source_layer: "base:Voron",
+    status: "base",
+    role: "primary",
+    requirement: null,
+    option_group_id: null,
+    included: true,
+    filament_color_id: null,
+    quantity_auto: 1,
+    quantity_override: null,
+    quantity_effective: 1,
+    printed_count: 0,
+    print_units: [false],
+    missing: true,
+    filament_display: "",
+    ...over,
+  } as ReviewPart;
+}
+
+function review(over: Partial<PlanReview> = {}): PlanReview {
+  return {
+    profile_id: 1,
+    accepted_basis: {
+      profile_id: 1,
+      plan_version: 4,
+      plan_revision_id: 4,
+      plan_revision_digest: "d".repeat(64),
+      required_unit_mapping_digest: "e".repeat(64),
+    },
+    plan_name: "Voron 2.4 Workshop",
+    layers: [],
+    totals: { included_parts: 0, total_print_units: 0, by_role: {}, by_filament: {} },
+    issues: [],
+    has_blockers: false,
+    part_groups: [],
+    ...over,
+  } as PlanReview;
+}
+
+function draftPart(over: Partial<PlanDraftWorkspace["parts"][number]> & { draft_part_id: number }) {
+  return {
+    base_revision_part_id: null,
+    part_key: `stls/part-${over.draft_part_id}.stl`,
+    filename: `part-${over.draft_part_id}.stl`,
+    relative_path: `STLs/part-${over.draft_part_id}.stl`,
+    source_layer: "base:Voron",
+    role: "primary",
+    quantity_inferred: 1,
+    quantity_override: null,
+    quantity_effective: 1,
+    included: true,
+    ...over,
+  };
+}
+
+function draft(over: Partial<PlanDraftWorkspace> = {}): PlanDraftWorkspace {
+  return {
+    profile_id: 1,
+    draft: {
+      draft_id: 9,
+      state: "open",
+      lifecycle_version: 0,
+      snapshot_digest: "a".repeat(64),
+      base: { revision_id: 4, plan_version: 4 },
+    },
+    parts: [draftPart({ draft_part_id: 1 }), draftPart({ draft_part_id: 2 })],
+    diff: { base_is_current: true, added: [], removed: [], changed: [] },
+    reconciliation: { kind: "ready", reused_units: 11, new_units: 7, surplus_units: 0 },
+    ...over,
+  };
+}
+
+describe("accepted revision summary", () => {
+  it("counts Required and verified units from the accepted revision", () => {
+    const summary = acceptedRevisionSummary(review({
+      part_groups: [{
+        folder: "STLs",
+        source_layer: "base:Voron",
+        parts: [
+          reviewPart({ id: 1, quantity_effective: 4, printed_count: 2 }),
+          reviewPart({ id: 2, quantity_effective: 8, printed_count: 0 }),
+          reviewPart({ id: 3, quantity_effective: 5, printed_count: 5, included: false }),
+        ],
+      }],
+    }));
+    expect(summary.heading).toBe("Plan revision 4 accepted");
+    expect(summary.requiredUnits).toBe(12);
+    expect(summary.verifiedUnits).toBe(2);
+    expect(summary.remainingUnits).toBe(10);
+    expect(summary.partCount).toBe(2);
+  });
+
+  it("says so when no revision has been accepted", () => {
+    expect(acceptedRevisionSummary(review({ accepted_basis: null })).heading).toBe(
+      "No Plan revision accepted yet",
+    );
+  });
+});
+
+describe("header part count", () => {
+  it("reports the Working Plan total when the accepted revision is still empty", () => {
+    // The old header read the accepted revision only, so it said "0 parts"
+    // while the Working Plan held six.
+    expect(planHeaderSummary({
+      review: review({ accepted_basis: null }),
+      draft: draft({
+        parts: [1, 2, 3, 4, 5, 6].map((id) => draftPart({ draft_part_id: id, quantity_effective: 2 })),
+      }),
+    })).toBe("6 parts in the Working Plan · 6 included · 12 Required units when accepted");
+  });
+
+  it("reports accepted totals when there are no working changes", () => {
+    expect(planHeaderSummary({
+      review: review({
+        part_groups: [{
+          folder: "STLs",
+          source_layer: "base:Voron",
+          parts: [reviewPart({ id: 1, quantity_effective: 4, printed_count: 1 })],
+        }],
+      }),
+      draft: null,
+    })).toBe("1 part · 4 Required units · 1 verified");
+  });
+});
+
+describe("working change summary", () => {
+  it("counts added, changed, removed and unaffected parts", () => {
+    const workspace = draft({
+      parts: [1, 2, 3, 4].map((id) => draftPart({ draft_part_id: id })),
+      diff: {
+        base_is_current: true,
+        added: [draftPart({ draft_part_id: 4 })],
+        removed: [{
+          revision_part_id: 90,
+          filename: "gone.stl",
+          relative_path: "STLs/gone.stl",
+          source_layer: "base:Voron",
+        }],
+        changed: [{
+          before: {
+            revision_part_id: 91,
+            filename: "part-1.stl",
+            relative_path: "STLs/part-1.stl",
+            source_layer: "base:Voron",
+          },
+          after: draftPart({ draft_part_id: 1, quantity_effective: 8 }),
+          fields: ["quantityOverride", "quantityEffective"],
+        }],
+      },
+    });
+    expect(workingChangeSummary(workspace)).toEqual({
+      added: 1,
+      changed: 1,
+      removed: 1,
+      unaffected: 2,
+      total: 4,
+      changeCount: 3,
+    });
+    expect(workingChangeSummary(null)).toBeNull();
+  });
+
+  it("names changed fields in the user's words", () => {
+    expect(workingChangeFieldLabels(["quantityOverride", "quantityEffective", "included"]))
+      .toEqual(["quantity", "inclusion"]);
+  });
+});
+
+describe("issue grouping and routes", () => {
+  it("sends a Build-scoped issue to the Build's Sources workspace, not the Library", () => {
+    const issues = planIssues({
+      review: review({
+        issues: [{
+          code: "unsynced_source",
+          message: 'Source "Voron 2.4 LDO Kit" is not synced to a local folder.',
+          severity: "blocker",
+          link_hint: "sources",
+        }],
+      }),
+      draft: null,
+      buildId: 1,
+    });
+    expect(issues).toHaveLength(1);
+    expect(issues[0]!.group).toBe("review_recommended");
+    expect(issues[0]!.statusLabel).toBe("Blocks Production");
+    expect(issues[0]!.action).toEqual({
+      kind: "route",
+      label: "Open Sources",
+      to: "/sources?profile=1",
+    });
+  });
+
+  it("falls back to the Source Library only when no Build is selected", () => {
+    const issues = planIssues({
+      review: review({
+        issues: [{ code: "unsynced_source", message: "x", severity: "blocker", link_hint: "sources" }],
+      }),
+      draft: null,
+      buildId: null,
+    });
+    expect(issues[0]!.action).toEqual({
+      kind: "route",
+      label: "Open Source Library",
+      to: "/library",
+    });
+  });
+
+  it("puts one must-resolve decision beside every Required-unit conflict", () => {
+    const issues = planIssues({
+      review: review(),
+      draft: draft({
+        reconciliation: {
+          kind: "unresolved",
+          conflicts: [
+            { kind: "unsafe_predecessor", target_draft_part_id: 1, predecessor_revision_part_id: 5 },
+            { kind: "ambiguous_exact_match", target_draft_part_id: 2, candidate_revision_part_ids: [5, 6] },
+          ],
+        },
+      }),
+      buildId: 1,
+    });
+    expect(issues.map((issue) => issue.id)).toEqual([
+      "plan-issue-required-unit-1",
+      "plan-issue-required-unit-2",
+    ]);
+    expect(issues.every((issue) => issue.group === "must_resolve")).toBe(true);
+    expect(issues[0]!.title).toBe("part-1.stl: choose what happens to units already printed");
+  });
+
+  it("blocks acceptance while the Accepted Plan has moved on", () => {
+    const issues = planIssues({
+      review: review(),
+      draft: draft({
+        diff: { base_is_current: false, added: [], removed: [], changed: [] },
+      }),
+      buildId: 1,
+    });
+    expect(issues[0]!.id).toBe("plan-issue-working-plan-behind");
+    expect(issues[0]!.action).toEqual({
+      kind: "refresh_working_plan",
+      label: "Refresh Working Plan",
+    });
+  });
+
+  it("gathers missing STL files into one reviewable issue", () => {
+    const issues = planIssues({
+      review: review({
+        issues: [
+          { code: "missing_stl", message: "STL not found on disk: a.stl", severity: "blocker", link_hint: "sources" },
+          { code: "missing_stl", message: "STL not found on disk: b.stl", severity: "blocker", link_hint: "sources" },
+        ],
+      }),
+      draft: null,
+      buildId: 1,
+    });
+    expect(issues).toHaveLength(1);
+    expect(issues[0]!.title).toBe("2 STL files are not on disk");
+    expect(issues[0]!.detail).toBe("a.stl, b.stl");
+  });
+
+  it("lists printed files by name when their records cannot move", () => {
+    const issues = planIssues({
+      review: review(),
+      draft: draft(),
+      buildId: 1,
+      failure: {
+        kind: "unsafe_records",
+        units: [{ filename: "skirt_panel_x6.stl", outcome: "printed count is higher than the new quantity" }],
+      },
+    });
+    expect(issues[0]!.group).toBe("must_resolve");
+    expect(issues[0]!.detail).toContain("skirt_panel_x6.stl");
+    expect(issues[0]!.detail).toContain("printed count is higher than the new quantity");
+  });
+});
+
+describe("acceptance decision", () => {
+  it("blocks while any must-resolve issue is open and says why", () => {
+    const model = planAcceptanceModel({
+      review: review(),
+      draft: draft({
+        reconciliation: {
+          kind: "unresolved",
+          conflicts: [
+            { kind: "unsafe_predecessor", target_draft_part_id: 1, predecessor_revision_part_id: 5 },
+          ],
+        },
+      }),
+      buildId: 1,
+    });
+    expect(model.decision.label).toBe("Accept Plan revision");
+    expect(model.decision.canAccept).toBe(false);
+    expect(model.decision.reason).toBe(
+      'Acceptance is blocked. Resolve 1 item under "Must resolve" first.',
+    );
+  });
+
+  it("allows acceptance and names the revision it will create", () => {
+    const model = planAcceptanceModel({ review: review(), draft: draft(), buildId: 1 });
+    expect(model.decision.canAccept).toBe(true);
+    expect(model.decision.reason).toBe(
+      "Accepting saves these changes as Plan revision 5. Verified units that still match are kept.",
+    );
+  });
+
+  it("has nothing to accept without working changes", () => {
+    expect(acceptanceDecision({
+      draft: null,
+      issues: [],
+      accepted: acceptedRevisionSummary(review()),
+    })).toEqual({
+      label: "Accept Plan revision",
+      canAccept: false,
+      reason: "There are no Working Plan changes to accept.",
+      blockingCount: 0,
+    });
+  });
+});
+
+describe("Required-unit impact", () => {
+  it("splits preserved work from work that must be printed again", () => {
+    expect(requiredUnitImpact(draft({
+      parts: [
+        draftPart({ draft_part_id: 1, quantity_effective: 10 }),
+        draftPart({ draft_part_id: 2, quantity_effective: 8 }),
+        draftPart({ draft_part_id: 3, quantity_effective: 3, included: false }),
+      ],
+    }))).toEqual({
+      kind: "ready",
+      preservedUnits: 11,
+      printAgainUnits: 7,
+      retiredUnits: 0,
+      requiredUnitsAfter: 18,
+    });
+  });
+
+  it("waits for the Required-unit answers", () => {
+    const impact = requiredUnitImpact(draft({
+      reconciliation: { kind: "unresolved", conflicts: [] },
+    }));
+    expect(impact).toEqual({
+      kind: "unavailable",
+      reason: "Answer the Required-unit decisions above to see what acceptance preserves.",
+    });
+  });
+});
+
+describe("preserved verification", () => {
+  it("never claims more verified units than the Build had", () => {
+    const accepted = acceptedRevisionSummary(review({
+      part_groups: [{
+        folder: "STLs",
+        source_layer: "base:Voron",
+        parts: [reviewPart({ id: 1, quantity_effective: 4, printed_count: 2 })],
+      }],
+    }));
+    // 11 units keep their identity, but only 2 were ever verified.
+    expect(preservedVerifiedUnits({ accepted, draft: draft() })).toBe(2);
+  });
+
+  it("preserves nothing while the Required-unit answers are open", () => {
+    expect(preservedVerifiedUnits({
+      accepted: acceptedRevisionSummary(review()),
+      draft: draft({ reconciliation: { kind: "unresolved", conflicts: [] } }),
+    })).toBe(0);
+  });
+});
+
+describe("downstream destinations", () => {
+  it("labels Production and Checkoff with the revision they use while changes are unaccepted", () => {
+    const links = downstreamLinks({
+      draft: draft(),
+      accepted: acceptedRevisionSummary(review()),
+    });
+    expect(links.map((link) => link.qualifier)).toEqual([
+      "uses Accepted revision 4",
+      "uses Accepted revision 4",
+    ]);
+  });
+
+  it("drops the qualifier once everything is accepted", () => {
+    const links = downstreamLinks({
+      draft: null,
+      accepted: acceptedRevisionSummary(review()),
+    });
+    expect(links.every((link) => link.qualifier === null)).toBe(true);
+  });
+});
+
+describe("acceptance confirmation", () => {
+  it("reads as a receipt", () => {
+    expect(planConfirmationCopy({
+      planVersion: 5,
+      requiredUnits: 18,
+      verifiedUnits: 11,
+      remainingUnits: 7,
+      unmoved: [],
+    })).toEqual({
+      heading: "Plan revision 5 accepted",
+      detail: "18 Required units are current. 11 verified units were preserved.",
+      prepareLabel: "Prepare 7 remaining units",
+      checkoffLabel: "View Checkoff",
+    });
+  });
+
+  it("offers no preparation link when every unit is verified", () => {
+    expect(planConfirmationCopy({
+      planVersion: 6,
+      requiredUnits: 4,
+      verifiedUnits: 4,
+      remainingUnits: 0,
+      unmoved: [],
+    }).prepareLabel).toBeNull();
+  });
+});
