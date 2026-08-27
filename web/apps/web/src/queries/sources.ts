@@ -4,14 +4,14 @@ import {
   useQueryClient,
   type QueryClient,
 } from "@tanstack/react-query";
+import type { SourceSummary } from "@print-partner/contracts";
 import {
   bulkAssignSourceCategory,
   createSource,
   deleteSource,
   fetchSources,
   updateSource,
-  type SourceSummary,
-} from "../api/engine";
+} from "../api/endpoints/sources";
 import { queryKeys } from "./keys";
 
 function upsertSources(

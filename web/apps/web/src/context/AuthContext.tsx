@@ -8,15 +8,15 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { setEngineUnauthorizedHandler } from "../api/contractRequest";
 import {
   fetchAuthMe,
-  fetchHealth,
   loginWithEmail,
   logout as apiLogout,
   registerWithEmail,
-  setEngineUnauthorizedHandler,
   type AuthUser,
-} from "../api/engine";
+} from "../api/endpoints/auth";
+import { fetchHealth } from "../api/endpoints/help";
 
 type AuthContextValue = {
   user: AuthUser | null;

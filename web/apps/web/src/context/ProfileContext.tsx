@@ -9,7 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import type { ProfileSummary } from "../api/engine";
+import type { ProfileSummary } from "@print-partner/contracts";
 import { useEngineHealth } from "../hooks/useEngineHealth";
 import { reconcileSelectedProfileId } from "../hooks/profileSelection";
 import { queryKeys } from "../queries/keys";

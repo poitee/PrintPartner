@@ -4,16 +4,16 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { PlanDraftWorkspace } from "@print-partner/contracts";
+import { EngineHttpError } from "../api/engineTransport";
 import {
   abandonPlanDraft,
   applyPlanDraft,
   editPlanDraftParts,
-  EngineHttpError,
   recomputePlanDraft,
   rebasePlanDraft,
-  type PlanDraftWorkspace,
-  type PlanReview,
-} from "../api/engine";
+} from "../api/endpoints/planDrafts";
+import type { PlanReview } from "../api/endpoints/planManifests";
 import { queryKeys } from "../queries/keys";
 import { usePlanDraftWorkspaceQuery } from "../queries/planDraft";
 import { PlanWorkspaceProvider, usePlanWorkspace } from "./PlanWorkspaceContext";
@@ -80,18 +80,14 @@ const editedWorkspace: PlanDraftWorkspace = {
   parts: replacementWorkspace.parts.map((part) => ({ ...part, included: false })),
 };
 
-vi.mock("../api/engine", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../api/engine")>();
-  return {
-    ...actual,
-    applyPlanDraft: vi.fn(),
-    abandonPlanDraft: vi.fn(),
-    editPlanDraftParts: vi.fn(),
-    reconcilePlanDraft: vi.fn(),
-    recomputePlanDraft: vi.fn(),
-    rebasePlanDraft: vi.fn(),
-  };
-});
+vi.mock("../api/endpoints/planDrafts", () => ({
+  applyPlanDraft: vi.fn(),
+  abandonPlanDraft: vi.fn(),
+  editPlanDraftParts: vi.fn(),
+  reconcilePlanDraft: vi.fn(),
+  recomputePlanDraft: vi.fn(),
+  rebasePlanDraft: vi.fn(),
+}));
 
 vi.mock("../hooks/useEngineHealth", () => ({
   useEngineHealth: () => ({ health: { ok: true } }),

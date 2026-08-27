@@ -1,6 +1,6 @@
 import { QueryClient } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
-import type { JobSnapshot } from "../api/engine";
+import type { JobSnapshot } from "@print-partner/contracts";
 import { invalidateAfterJob } from "./invalidation";
 import { queryKeys } from "./keys";
 

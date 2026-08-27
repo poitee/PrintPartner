@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
-import { setProfileBaseLayer, type ProfileLayer } from "../api/engine";
+import { setProfileBaseLayer, type ProfileLayer } from "../api/endpoints/plans";
 import { queryKeys } from "./keys";
 import {
   useDeletePlanLayerMutation,
@@ -19,16 +19,12 @@ const baseLayer = (projectId: number): ProfileLayer => ({
   project_name: `Source ${projectId}`,
 });
 
-vi.mock("../api/engine", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../api/engine")>();
-  return {
-    ...actual,
-    setProfileBaseLayer: vi.fn(async (_profileId: number, sourceId: number) => [
-      baseLayer(sourceId),
-    ]),
-    deleteProfileLayer: vi.fn().mockResolvedValue(undefined),
-  };
-});
+vi.mock("../api/endpoints/plans", () => ({
+  setProfileBaseLayer: vi.fn(async (_profileId: number, sourceId: number) => [
+    baseLayer(sourceId),
+  ]),
+  deleteProfileLayer: vi.fn().mockResolvedValue(undefined),
+}));
 
 function wrapper(queryClient: QueryClient) {
   return ({ children }: { children: ReactNode }) => (

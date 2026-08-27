@@ -1,5 +1,5 @@
 import type { QueryClient } from "@tanstack/react-query";
-import type { JobSnapshot } from "../api/engine";
+import type { JobSnapshot } from "@print-partner/contracts";
 import { queryKeys } from "./keys";
 import { invalidateProfiles } from "./profiles";
 import { invalidateSources } from "./sources";

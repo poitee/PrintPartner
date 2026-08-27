@@ -1,7 +1,8 @@
 import { useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
-import { importKitBundle, pickKitBundle } from "../api/engine";
+import { pickKitBundle } from "../api/endpoints/browserFiles";
+import { uploadKitBundle } from "../api/endpoints/imports";
 import { useProfileSelection } from "../context/ProfileContext";
 import { buildRoute } from "../lib/routes";
 import { stashKitImportResult } from "../lib/kitImportStash";
@@ -18,7 +19,7 @@ export function useImportSharedBuild() {
       return;
     }
     try {
-      const result = await importKitBundle(picked);
+      const result = await uploadKitBundle(picked);
       if (!result.profile_id) {
         toast.error("Import did not create a plan");
         return;

@@ -9,20 +9,22 @@ import {
   type ReactNode,
 } from "react";
 import {
-  abandonPlanDraft,
-  applyPlanDraft,
-  editPlanDraftParts,
-  EngineHttpError,
-  reconcilePlanDraft,
-  rebasePlanDraft,
-  recomputePlanDraft,
+  parsePlanDraftWorkspace,
   type ApplyPlanDraftReceipt,
   type PlanDraftPartDecisionContract,
   type PlanDraftWorkspace,
-  type PlanReview,
   type RequiredUnitDecisionContract,
-} from "../api/engine";
-import { parsePlanDraftWorkspace } from "@print-partner/contracts";
+} from "@print-partner/contracts";
+import { EngineHttpError } from "../api/engineTransport";
+import {
+  abandonPlanDraft,
+  applyPlanDraft,
+  editPlanDraftParts,
+  reconcilePlanDraft,
+  rebasePlanDraft,
+  recomputePlanDraft,
+} from "../api/endpoints/planDrafts";
+import type { PlanReview } from "../api/endpoints/planManifests";
 import { formatCheckoffSummary } from "../lib/checkoffProgress";
 import { useEngineHealth } from "../hooks/useEngineHealth";
 import {
