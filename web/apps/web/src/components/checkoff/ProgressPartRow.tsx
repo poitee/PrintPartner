@@ -1,7 +1,8 @@
 import { memo } from "react";
 import type { DraggableAttributes, DraggableSyntheticListeners } from "@dnd-kit/core";
 import { Minus, Plus } from "lucide-react";
-import type { ReviewPart } from "../../api/engine";
+import type { ReviewPart } from "../../api/endpoints/planManifests";
+import type { SuggestedPrinterClaim } from "../../lib/checkoffPrinterActivity";
 import {
   assembledEligibleUnitIndices,
   lastCompletedUnit,
@@ -27,14 +28,14 @@ type Props = {
   /** Printer host name if this part's print has finished and awaits verify. */
   awaitingVerify?: string;
   /** Suggested printer from an unattributed print candidate. */
-  suggestedPrinter?: { hostName: string; printId: string; filename: string };
+  suggestedPrinter?: SuggestedPrinterClaim;
   /** Global "Enable assembly tracking" setting (Settings > Build Tracking). */
   assemblyTrackingEnabled?: boolean;
   onIncrement: (part: ReviewPart) => void;
   onDecrement: (part: ReviewPart) => void;
   onPreview: (part: ReviewPart) => void;
   /** Called when user clicks Claim on a suggested printer. */
-  onClaim?: (printId: string) => void;
+  onClaim?: (suggestion: SuggestedPrinterClaim) => void;
   /** Called when the user toggles the Assembled switch for a completed unit. */
   onToggleAssembled?: (part: ReviewPart, unitIndex: number) => void;
   /** When set, shows a grip handle for Progress list reorder. */
@@ -127,9 +128,9 @@ function StatusBadges({
   inCompact: boolean;
   printingOn?: string;
   awaitingVerify?: string;
-  suggestedPrinter?: { hostName: string; printId: string; filename: string };
+  suggestedPrinter?: SuggestedPrinterClaim;
   busy: boolean;
-  onClaim?: (printId: string) => void;
+  onClaim?: (suggestion: SuggestedPrinterClaim) => void;
 }) {
   return (
     <>
@@ -167,7 +168,7 @@ function StatusBadges({
             disabled={busy}
             onClick={(e) => {
               e.stopPropagation();
-              onClaim?.(suggestedPrinter.printId);
+              onClaim?.(suggestedPrinter);
             }}
           >
             Claim

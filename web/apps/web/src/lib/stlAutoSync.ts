@@ -1,4 +1,4 @@
-import type { PlanReview, ReviewPart } from "../api/engine";
+import type { PlanReview, ReviewPart } from "../api/endpoints/planManifests";
 
 /** Auto-start / banner triggers for GRE-235 (not Progress ticks / Library no-plan). */
 export type StlAutoSyncTrigger =

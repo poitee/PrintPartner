@@ -1,5 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
-import { ensureEngineRunning, fetchHealth, type HealthResponse } from "../api/engine";
+import type { HealthResponse } from "@print-partner/contracts";
+import { fetchHealth } from "../api/endpoints/help";
+import { ensureEngineRunning } from "../api/endpoints/runtime";
 import { queryKeys } from "./keys";
 
 const HEALTH_POLL_MS = 8000;

@@ -9,11 +9,13 @@ import {
 } from "react";
 import {
   DATE_FORMAT_DEFAULT,
-  fetchDateFormatSetting,
   formatTimestamp,
-  saveDateFormatSetting,
   type DateFormatId,
-} from "../api/engine";
+} from "@print-partner/contracts";
+import {
+  fetchDateFormatSetting,
+  saveDateFormatSetting,
+} from "../api/endpoints/settings";
 import { useAuth } from "./AuthContext";
 
 type DateFormatContextValue = {

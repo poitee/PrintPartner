@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Archive, Box, FolderOpen, GitBranch, Globe } from "lucide-react";
-import { sourceCoverUrl } from "../api/engine";
+import { sourceCoverUrl } from "../api/endpoints/media";
 import { cn } from "@/lib/utils";
 
 type SourceKind = string;

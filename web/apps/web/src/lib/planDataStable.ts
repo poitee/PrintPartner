@@ -1,4 +1,5 @@
-import type { PartRow, ProfileLayer } from "../api/engine";
+import type { PartRow } from "@print-partner/contracts";
+import type { ProfileLayer } from "../api/endpoints/plans";
 
 /** Shallow compare fields that affect Kit Studio UI. */
 export function partRowsEqual(a: PartRow[], b: PartRow[]): boolean {

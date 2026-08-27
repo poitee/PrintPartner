@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react";
 import { useJobContext } from "../context/JobContext";
-import type { JobSnapshot } from "../api/engine";
+import type { JobSnapshot } from "@print-partner/contracts";
 
 export function useJobRunner(kind = "job", profileId?: number | null) {
   const { activeJobs, isJobKindRunning, runJob: runContextJob } = useJobContext();

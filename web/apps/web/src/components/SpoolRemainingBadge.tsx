@@ -1,4 +1,4 @@
-import type { ReviewPart } from "../api/engine";
+import type { ReviewPart } from "../api/endpoints/planManifests";
 
 type Props = {
   part: Pick<ReviewPart, "spool_badge">;

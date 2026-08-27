@@ -86,6 +86,7 @@ describe("known accepted media production caller inventory", () => {
       ),
     }).toEqual({
       readAcceptedPlanOperationalSnapshot: [
+        "assistant/accepted-plan-reader.ts",
         "assistant/tools.ts",
         "routes/parts.ts",
         "routes/plans.ts",

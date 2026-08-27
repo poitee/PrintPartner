@@ -1,4 +1,4 @@
-import type { CatalogColor, FilamentCatalog } from "../api/engine";
+import type { CatalogColor, FilamentCatalog } from "../api/endpoints/filaments";
 
 type Props = {
   hex?: string | null;

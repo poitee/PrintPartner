@@ -2,12 +2,13 @@
 
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { EngineHttpError, type PlanDraftWorkspace } from "../api/engine";
+import type { PlanDraftWorkspace } from "@print-partner/contracts";
+import { EngineHttpError } from "../api/engineTransport";
+import PlanDraftApplyButton from "../components/build/PlanDraftApplyButton";
 import {
-  PlanDraftApplyButton,
   planDraftProductionBlockFromError,
   planDraftRevisionPartLabels,
-} from "./BuildPage";
+} from "../lib/planDraftUi";
 
 const readyWorkspace: PlanDraftWorkspace = {
   profile_id: 7,

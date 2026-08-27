@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { catalogColorGroups } from "./FilamentSwatch";
-import type { FilamentCatalog } from "../api/engine";
+import type { FilamentCatalog } from "../api/endpoints/filaments";
 
 describe("catalogColorGroups", () => {
   it("includes Spoolman optgroup when spoolman_colors present", () => {

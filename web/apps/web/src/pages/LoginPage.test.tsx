@@ -19,7 +19,7 @@ const auth = vi.hoisted(() => ({
 vi.mock("../context/AuthContext", () => ({
   useAuth: () => auth,
 }));
-vi.mock("../api/engine", () => ({
+vi.mock("../api/endpoints/auth", () => ({
   authOAuthUrl: (provider: string) => `/auth/${provider}`,
 }));
 vi.mock("sonner", () => ({

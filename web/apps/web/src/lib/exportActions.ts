@@ -1,5 +1,5 @@
 import { toast } from "sonner";
-import { downloadExport } from "../api/engine";
+import { downloadExport } from "../api/endpoints/browserFiles";
 
 export type ExportJobResult = Record<string, unknown> | null | undefined;
 

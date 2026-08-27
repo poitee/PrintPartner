@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { ProfileSummary } from "@print-partner/contracts";
 import {
   archiveProfile,
   createProfile,
@@ -7,8 +8,7 @@ import {
   fetchProfiles,
   touchProfileLastUsed,
   updateProfile,
-  type ProfileSummary,
-} from "../api/engine";
+} from "../api/endpoints/plans";
 import { queryKeys } from "./keys";
 
 function asSummary(

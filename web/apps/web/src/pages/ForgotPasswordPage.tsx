@@ -11,16 +11,8 @@ import {
   CardTitle,
 } from "../components/ui/card";
 import { useAuth } from "../context/AuthContext";
-import { requestPasswordReset } from "../api/engine";
-
-function isSafeAppUrl(url: string): boolean {
-  try {
-    const parsed = new URL(url);
-    return parsed.protocol === "http:" || parsed.protocol === "https:";
-  } catch {
-    return false;
-  }
-}
+import { requestPasswordReset } from "../api/endpoints/auth";
+import { isSafeAppUrl } from "../lib/authPageModel";
 
 export default function ForgotPasswordPage() {
   const { user, authRequired, loading } = useAuth();

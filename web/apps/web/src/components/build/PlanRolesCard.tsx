@@ -1,7 +1,7 @@
 import { Link } from "react-router-dom";
 import RoleFilamentPicker from "../RoleFilamentPicker";
-import type { RoleFilamentRow } from "../../api/engine";
-import { DEFAULT_STL_NAMING_PROFILE } from "../../api/engine";
+import { DEFAULT_STL_NAMING_PROFILE } from "@print-partner/contracts";
+import type { RoleFilamentRow } from "../../api/endpoints/filaments";
 import { planHasUnsetRoleColors } from "../../lib/roleColorSet";
 import { settingsRoute } from "../../lib/routes";
 import { Button } from "../ui/button";

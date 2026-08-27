@@ -4,11 +4,8 @@ import type {
   PlanDecision,
   PlanSnapshotSummary,
 } from "@print-partner/contracts";
-import {
-  fetchPlanDecisions,
-  fetchPlanRecipe,
-  fetchPlanSnapshots,
-} from "../api/engine";
+import { fetchPlanDecisions } from "../api/endpoints/assistant";
+import { fetchPlanRecipe, fetchPlanSnapshots } from "../api/endpoints/planSnapshots";
 import { queryKeys } from "./keys";
 
 export type PlanRecipeBundle = {

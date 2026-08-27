@@ -1,18 +1,15 @@
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { fetchIntegrationStatus, fetchIntegrations } from "../../api/endpoints/integrations";
+import { fetchPrinters, type PrinterMachine } from "../../api/endpoints/printers";
 import {
   bambuConnectDownloadUrl,
-  fetchIntegrationStatus,
-  fetchIntegrations,
-  fetchPrinters,
   startBambuConnectHandoff,
   startPrinterUpload,
-  type IntegrationSummary,
-  type PrinterHostStatus,
-  type PrinterMachine,
-  type ReviewPart,
-} from "../../api/engine";
+} from "../../api/endpoints/productionSend";
+import type { ReviewPart } from "../../api/endpoints/planManifests";
+import type { PrinterHostStatus } from "@print-partner/contracts";
 import { useJobRunner } from "../../hooks/useJobRunner";
 import {
   parseSlicedObjectsFile,
@@ -24,6 +21,14 @@ import {
   type ProposeCheckoffResult,
 } from "../../lib/proposeCheckoffFromObjects";
 import { printerHostTypeLabel, type LiveStripHostType } from "../../lib/printerLiveStrip";
+import {
+  isAllowedBambuConnectFile,
+  isAllowedGcode,
+  partitionPrinterSendFleet,
+  printerSendStatusLabel,
+  printerSendStatusVariant,
+  resolveStickyPrinterId,
+} from "../../lib/printerSendModel";
 import { usePrinterStatusPollMs } from "../../hooks/usePrinterStatusPollMs";
 import { settingsPrintersRoute } from "../../lib/routes";
 import { Badge } from "../ui/badge";
@@ -40,6 +45,7 @@ import PlateApprovalCard from "./PlateApprovalCard";
 import {
   sendPlanBindCopy,
 } from "../../lib/printerPlanBind";
+import { readStickyId, writeStickyId } from "../../lib/stickyIdStorage";
 
 const PRINTER_ID_STORAGE_KEY = "pp-export-printer-id";
 const BAMBU_PRINTER_ID_STORAGE_KEY = "pp-export-bambu-printer-id";
@@ -52,87 +58,6 @@ type Props = {
   planName?: string | null;
   engineReady: boolean;
 };
-
-function readStickyId(key: string): string {
-  try {
-    return localStorage.getItem(key)?.trim() ?? "";
-  } catch {
-    return "";
-  }
-}
-
-function writeStickyId(key: string, id: string): void {
-  try {
-    if (id) localStorage.setItem(key, id);
-    else localStorage.removeItem(key);
-  } catch {
-    /* ignore quota / private mode */
-  }
-}
-
-function isAllowedGcode(name: string): boolean {
-  const lower = name.toLowerCase();
-  return lower.endsWith(".gcode") || lower.endsWith(".bgcode") || lower.endsWith(".gco");
-}
-
-function isAllowedBambuConnectFile(name: string): boolean {
-  const lower = name.toLowerCase();
-  return (
-    lower.endsWith(".gcode.3mf") ||
-    lower.endsWith(".3mf") ||
-    lower.endsWith(".gcode") ||
-    lower.endsWith(".gco")
-  );
-}
-
-function statusLabel(status: PrinterHostStatus | undefined): string {
-  if (!status) return "…";
-  switch (status.state) {
-    case "idle":
-      return "Idle";
-    case "printing":
-      return status.progress != null ? `Printing ${Math.round(status.progress)}%` : "Printing";
-    case "paused":
-      return "Paused";
-    case "complete":
-      return "Complete";
-    case "error":
-      return "Error";
-    case "offline":
-      return "Offline";
-    default:
-      return status.state;
-  }
-}
-
-function statusBadgeVariant(
-  status: PrinterHostStatus | undefined,
-): "success" | "muted" | "default" | "warning" | "error" {
-  if (!status) return "muted";
-  switch (status.state) {
-    case "idle":
-    case "complete":
-      return "success";
-    case "printing":
-      return "default";
-    case "paused":
-      return "warning";
-    case "error":
-    case "offline":
-      return "error";
-    default:
-      return "muted";
-  }
-}
-
-/** Resolve sticky pick if still in list; otherwise first printer. Never jumps to Idle. */
-function resolveStickyPrinterId(printers: PrinterMachine[], sticky: string, prev: string): string {
-  if (prev && printers.some((p) => p.id === prev)) return prev;
-  if (sticky && printers.some((p) => p.id === sticky)) return sticky;
-  return printers[0]?.id ?? "";
-}
-
-const SEND_HOST_TYPES = new Set<LiveStripHostType>(["moonraker", "prusalink"]);
 
 /**
  * Primary Export Send UI — Send / Start print for Moonraker/PrusaLink,
@@ -192,39 +117,17 @@ export default function PrinterSendPanel({
           fetchIntegrations(),
         ]);
         if (cancelled) return;
-        const byId = new Map<string, IntegrationSummary>(
-          integrations.map((i) => [i.id, i]),
-        );
-        const linkedForSend = printers.filter((p) => {
-          const id = p.integration_id?.trim();
-          if (!id) return false;
-          const host = byId.get(id);
-          return Boolean(
-            host && SEND_HOST_TYPES.has(host.type as LiveStripHostType) && host.config.enabled !== false,
-          );
-        });
-        const linkedBambu = printers.filter((p) => {
-          const id = p.integration_id?.trim();
-          if (!id) return false;
-          const host = byId.get(id);
-          return Boolean(host && host.type === "bambu" && host.config.enabled !== false);
-        });
-        setLinkedPrinters(linkedForSend);
-        setBambuPrinters(linkedBambu);
-        const typeMap: Record<string, LiveStripHostType> = {};
-        for (const p of [...linkedForSend, ...linkedBambu]) {
-          const id = p.integration_id?.trim();
-          const host = id ? byId.get(id) : undefined;
-          if (host) typeMap[p.id] = host.type as LiveStripHostType;
-        }
-        setHostTypeByPrinterId(typeMap);
+        const fleet = partitionPrinterSendFleet(printers, integrations);
+        setLinkedPrinters(fleet.sendPrinters);
+        setBambuPrinters(fleet.bambuPrinters);
+        setHostTypeByPrinterId(fleet.hostTypeByPrinterId);
         const stickySend = readStickyId(PRINTER_ID_STORAGE_KEY);
         const stickyBambu = readStickyId(BAMBU_PRINTER_ID_STORAGE_KEY);
         setSelectedPrinterId((prev) =>
-          resolveStickyPrinterId(linkedForSend, stickySend, prev),
+          resolveStickyPrinterId(fleet.sendPrinters, stickySend, prev),
         );
         setSelectedBambuPrinterId((prev) =>
-          resolveStickyPrinterId(linkedBambu, stickyBambu, prev),
+          resolveStickyPrinterId(fleet.bambuPrinters, stickyBambu, prev),
         );
       } catch {
         if (cancelled) return;
@@ -598,10 +501,10 @@ export default function PrinterSendPanel({
                   ))}
                 </select>
                 <Badge
-                  variant={statusBadgeVariant(selectedHostStatus)}
+                  variant={printerSendStatusVariant(selectedHostStatus)}
                   className="shrink-0 rounded-full px-2 py-0.5 font-mono text-2xs font-normal"
                 >
-                  {statusLabel(selectedHostStatus)}
+                  {printerSendStatusLabel(selectedHostStatus)}
                 </Badge>
               </div>
 
@@ -747,7 +650,7 @@ export default function PrinterSendPanel({
             >
               {bambuPrinters.map((p) => {
                 const integrationId = p.integration_id?.trim() ?? "";
-                const label = statusLabel(hostStatusByIntegration[integrationId]);
+                const label = printerSendStatusLabel(hostStatusByIntegration[integrationId]);
                 return (
                   <option key={p.id} value={p.id}>
                     {printerLabel(p)} · {label}

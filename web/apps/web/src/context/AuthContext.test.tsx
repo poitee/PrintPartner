@@ -16,7 +16,20 @@ const api = vi.hoisted(() => ({
   setEngineUnauthorizedHandler: vi.fn(),
 }));
 
-vi.mock("../api/engine", () => api);
+vi.mock("../api/contractRequest", () => ({
+  setEngineUnauthorizedHandler: api.setEngineUnauthorizedHandler,
+}));
+
+vi.mock("../api/endpoints/auth", () => ({
+  fetchAuthMe: api.fetchAuthMe,
+  loginWithEmail: api.loginWithEmail,
+  logout: api.logout,
+  registerWithEmail: api.registerWithEmail,
+}));
+
+vi.mock("../api/endpoints/help", () => ({
+  fetchHealth: api.fetchHealth,
+}));
 
 afterEach(() => {
   cleanup();

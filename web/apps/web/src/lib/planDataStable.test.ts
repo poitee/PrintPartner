@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { partRowsEqual } from "./planDataStable";
-import type { PartRow } from "../api/engine";
+import type { PartRow } from "@print-partner/contracts";
 
 const samplePart = (id: number): PartRow => ({
   id,

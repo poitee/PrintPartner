@@ -23,8 +23,9 @@ import ReviewPartsSheet, {
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";
-import { fetchStlNaming, startSync } from "../api/engine";
-import type { StlNamingFolderRule } from "../api/engine";
+import type { StlNamingFolderRule } from "@print-partner/contracts";
+import { startSync } from "../api/endpoints/jobs";
+import { fetchStlNaming } from "../api/endpoints/stlNaming";
 import {
   buildSourcesRoute,
   exportRoute,

@@ -1,4 +1,4 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { AcceptedProfileProgress, AppRepository } from "../db/repository.js";
 import { loadFleet } from "../services/printer-fleet.js";
 import type { IntegrationPort } from "../integrations/store.js";
@@ -54,8 +54,8 @@ export async function registerMetricsRoutes(
     } else {
       httpMetrics.httpSuccessTotal++;
     }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const duration = Date.now() - ((request as any).startTime || Date.now());
+    const startTime = (request as FastifyRequest & { readonly startTime?: number }).startTime;
+    const duration = Date.now() - (startTime ?? Date.now());
     httpMetrics.httpRequestDurationMs.push(duration);
     if (httpMetrics.httpRequestDurationMs.length > 1000) {
       httpMetrics.httpRequestDurationMs.shift();

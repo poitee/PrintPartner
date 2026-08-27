@@ -21,11 +21,12 @@ import { acceptedPlanBasis, type AcceptedProgressFailure } from "../db/accepted-
 import {
   liveAssignmentFrom,
   resolveFilamentAssignment,
-  type AssignAcceptedFilamentResult,
 } from "../db/accepted-part-filament.js";
 import { getColorById, resolvePartFilamentHex } from "../services/filament-catalog.js";
 import type { PartRow } from "@print-partner/contracts";
 import { parseRequiredUnitToken } from "../services/required-units.js";
+import { acceptedStateDetail } from "./accepted-state-detail.js";
+import { sendAcceptedFilamentFailure } from "./accepted-filament-failure.js";
 
 type RouteDeps = {
   repo: AppRepository;
@@ -60,12 +61,6 @@ function readAcceptedPartRequest(deps: RouteDeps, partId: number): AcceptedPartR
     : { kind: "part_not_found" };
 }
 
-function acceptedStateDetail(reason: "compatibility_dirty" | "uninitialized"): string {
-  return reason === "compatibility_dirty"
-    ? "Accepted Plan requires compatibility repair"
-    : "Accepted Plan operational state is not initialized";
-}
-
 function toPartRow(part: AcceptedOperationalPart): PartRow {
   const color = part.filamentColorId ? getColorById(part.filamentColorId) : null;
   return {
@@ -88,25 +83,6 @@ function toPartRow(part: AcceptedOperationalPart): PartRow {
     quantity_override: part.quantityOverride,
     quantity_effective: part.quantityEffective,
   };
-}
-
-function sendAcceptedFilamentFailure(reply: FastifyReply, failure: AssignAcceptedFilamentResult) {
-  if (failure.kind === "updated") {
-    throw new Error("Accepted filament success cannot be sent as a failure");
-  }
-  if (failure.kind === "accepted_state_unavailable") {
-    return reply.status(409).send({ detail: acceptedStateDetail(failure.reason) });
-  }
-  if (failure.kind === "stale_accepted_plan") {
-    return reply.status(409).send({ detail: "Accepted Plan changed; reload and retry" });
-  }
-  if (failure.kind === "transaction_unavailable") {
-    return reply.status(503).send({ detail: "Accepted Plan update is unavailable" });
-  }
-  if (failure.kind === "plan_archived") {
-    return reply.status(409).send({ detail: "Archived Plan Progress cannot be changed" });
-  }
-  return reply.status(404).send({ detail: "Part not found" });
 }
 
 function sendAcceptedProgressFailure(reply: FastifyReply, failure: AcceptedProgressFailure) {

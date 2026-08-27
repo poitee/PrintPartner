@@ -3,7 +3,7 @@ import {
   isSpoolmanIntegrationActive,
   isSpoolmanIntegrationConfigured,
 } from "./useSpoolmanEnabled";
-import type { FilamentCatalog } from "../api/engine";
+import type { FilamentCatalog } from "../api/endpoints/filaments";
 
 function catalog(partial: Partial<FilamentCatalog>): FilamentCatalog {
   return {

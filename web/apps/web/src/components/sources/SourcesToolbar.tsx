@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { ChevronDown, ChevronUp, LayoutGrid, List, SlidersHorizontal, Tags } from "lucide-react";
-import type { SourceSummary } from "../../api/engine";
+import type { SourceSummary } from "@print-partner/contracts";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";

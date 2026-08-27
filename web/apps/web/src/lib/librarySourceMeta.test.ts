@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { PlanReview, SourceSummary } from "../api/engine";
+import type { SourceSummary } from "@print-partner/contracts";
+import type { PlanReview } from "../api/endpoints/planManifests";
 import {
   attachedSourceIds,
   buildLibraryCardMeta,

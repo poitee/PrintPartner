@@ -1,4 +1,4 @@
-import type { ReviewPart } from "../api/engine";
+import type { ReviewPart } from "../api/endpoints/planManifests";
 import { sourceLabelFromLayer } from "./reviewParts";
 
 const ROOT_FOLDER = "(root)";

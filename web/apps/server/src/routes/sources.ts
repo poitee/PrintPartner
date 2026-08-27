@@ -17,11 +17,8 @@ import { listGithubBranches, listGithubTags, syncGithubSource } from "../service
 import { writeUploadedZip, writeUploadedFiles, finalizeUploadedSource } from "../services/archive-import.js";
 import { PLACEHOLDER_PNG } from "../lib/thumbnails.js";
 import { importReposTxt, parseReposTxtText } from "../services/repos-txt.js";
-import {
-  coverMediaType,
-  ensureSourceCover,
-  type SourceCoverProject,
-} from "../lib/source-cover.js";
+import { coverMediaType, ensureSourceCover } from "../lib/source-cover.js";
+import { toCoverProject } from "./source-cover-route-model.js";
 import {
   extractPendingPdfsForSource,
   indexSourceDocsFromDisk,
@@ -44,18 +41,6 @@ type RouteDeps = {
   coversDir: string;
   jobs?: import("./jobs.js").InProcessJobRunner;
 };
-
-function toCoverProject(row: NonNullable<ReturnType<AppRepository["getProjectRow"]>>): SourceCoverProject {
-  return {
-    id: row.id,
-    url: row.url,
-    sourceKind: row.sourceKind,
-    sourceType: row.sourceType,
-    localPath: row.localPath,
-    lastSyncedAt: row.lastSyncedAt,
-    metadataJson: row.metadataJson,
-  };
-}
 
 async function prefetchSourceCover(deps: RouteDeps, sourceId: number): Promise<void> {
   const row = deps.repo.getProjectRow(sourceId);

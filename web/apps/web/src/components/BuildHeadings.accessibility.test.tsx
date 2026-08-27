@@ -7,8 +7,8 @@ import KitManifestOptions from "./KitManifestOptions";
 import ShareImportSetupPanel from "./share/ShareImportSetupPanel";
 import SourceFilePickerCard from "./SourceFilePickerCard";
 
-vi.mock("../api/engine", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../api/engine")>();
+vi.mock("../api/endpoints/sources", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../api/endpoints/sources")>();
   return {
     ...actual,
     fetchStlTree: vi.fn().mockResolvedValue({
@@ -17,6 +17,13 @@ vi.mock("../api/engine", async (importOriginal) => {
       tree: [],
       rules: [],
     }),
+  };
+});
+
+vi.mock("../api/endpoints/planManifests", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../api/endpoints/planManifests")>();
+  return {
+    ...actual,
     fetchPlanManifestBuilder: vi.fn().mockResolvedValue({
       merged_option_groups: {
         size: {

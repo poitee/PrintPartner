@@ -1,6 +1,6 @@
 import { useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import type { HealthResponse } from "../api/engine";
+import type { HealthResponse } from "@print-partner/contracts";
 import { useHealthQuery } from "../queries/health";
 import { queryKeys } from "../queries/keys";
 

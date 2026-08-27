@@ -1,4 +1,4 @@
-import type { PlanReview, ReviewPart } from "../../api/engine";
+import type { PlanReview, ReviewPart } from "../../api/endpoints/planManifests";
 import { partSourceNote } from "../../lib/partsGroups";
 import { partWarningNote } from "../../lib/partWarnings";
 import PartThumbExpandButton from "../parts/PartThumbExpandButton";

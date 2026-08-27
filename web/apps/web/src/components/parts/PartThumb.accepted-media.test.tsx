@@ -10,7 +10,7 @@ const runtime = vi.hoisted(() => ({
   probeResult: "invalid" as "invalid" | "error",
 }));
 
-vi.mock("../../api/engine", () => ({
+vi.mock("../../api/endpoints/media", () => ({
   acceptedPartMediaMetadata: () => ({ basis: "a".repeat(64), renderHex: "#112233" }),
   acceptedPartMediaRevalidationHeaders: () => ({}),
   partThumbnailUrl: () => "/parts/7/thumbnail",

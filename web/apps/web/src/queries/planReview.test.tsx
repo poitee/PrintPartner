@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
-import type { PlanReview } from "../api/engine";
+import type { PlanReview } from "../api/endpoints/planManifests";
 import { queryKeys } from "./keys";
 import {
   usePatchPartAssembledMutation,
@@ -54,22 +54,26 @@ const review: PlanReview = {
   ],
 };
 
-vi.mock("../api/engine", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../api/engine")>();
-  return {
-    ...actual,
-    patchPartProgress: vi.fn().mockResolvedValue({
-      printed_count: 1,
-      print_units: [true],
-      assembled_units: [],
-      missing: false,
-    }),
-    patchPartAssembled: vi.fn().mockResolvedValue({
-      assembled_count: 1,
-      assembled_units: [true],
-    }),
-  };
-});
+vi.mock("../api/endpoints/checkoff", () => ({
+  patchPartProgress: vi.fn().mockResolvedValue({
+    printed_count: 1,
+    print_units: [true],
+    assembled_units: [],
+    missing: false,
+  }),
+  patchPartAssembled: vi.fn().mockResolvedValue({
+    assembled_count: 1,
+    assembled_units: [true],
+  }),
+}));
+
+vi.mock("../api/endpoints/plans", () => ({
+  patchPart: vi.fn(),
+}));
+
+vi.mock("../api/endpoints/planManifests", () => ({
+  fetchPlanReview: vi.fn(),
+}));
 
 function wrapper(queryClient: QueryClient) {
   return ({ children }: { children: ReactNode }) => (

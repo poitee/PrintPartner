@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
-import { fetchRoleFilaments, type RoleFilamentRow } from "../api/engine";
+import { fetchRoleFilaments, type RoleFilamentRow } from "../api/endpoints/filaments";
 import { queryKeys } from "./keys";
 import {
   invalidateRoleFilaments,
@@ -21,13 +21,9 @@ const role = (profileId: number): RoleFilamentRow => ({
   filament_hex: null,
 });
 
-vi.mock("../api/engine", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../api/engine")>();
-  return {
-    ...actual,
-    fetchRoleFilaments: vi.fn(async (profileId: number) => [role(profileId)]),
-  };
-});
+vi.mock("../api/endpoints/filaments", () => ({
+  fetchRoleFilaments: vi.fn(async (profileId: number) => [role(profileId)]),
+}));
 
 function wrapper(queryClient: QueryClient) {
   return ({ children }: { children: ReactNode }) => (

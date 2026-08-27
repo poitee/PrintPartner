@@ -4,7 +4,7 @@
  */
 import { useMemo, useState } from "react";
 import { Check, Search } from "lucide-react";
-import type { CatalogColor, FilamentCatalog } from "../../api/engine";
+import type { CatalogColor, FilamentCatalog } from "../../api/endpoints/filaments";
 import { allCatalogColors, catalogColorGroups } from "../FilamentSwatch";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";

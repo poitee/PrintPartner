@@ -1,11 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  fetchPlanReview,
-  patchPart,
-  patchPartAssembled,
-  patchPartProgress,
-  type PlanReview,
-} from "../api/engine";
+import { patchPart } from "../api/endpoints/plans";
+import { fetchPlanReview, type PlanReview } from "../api/endpoints/planManifests";
+import { patchPartAssembled, patchPartProgress } from "../api/endpoints/checkoff";
 import {
   optimisticReviewCacheKey,
   rollbackOptimisticCache,

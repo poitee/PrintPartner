@@ -1,11 +1,12 @@
 import { memo } from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import type { ReviewPart } from "../../api/engine";
+import type { ReviewPart } from "../../api/endpoints/planManifests";
 import { SortableShell } from "../dnd/SortableDragHandle";
 import CheckoffMobilePartCard from "./CheckoffMobilePartCard";
 import ProgressBagBarRow from "./ProgressBagBarRow";
 import ProgressPartRow from "./ProgressPartRow";
+import type { SuggestedPrinterClaim } from "../../lib/checkoffPrinterActivity";
 import { bagRowId, partRowId } from "../../lib/progressListOrder";
 
 type PartProps = {
@@ -19,14 +20,14 @@ type PartProps = {
   /** Printer host name if this part's print has finished and awaits verify. */
   awaitingVerify?: string;
   /** Suggested printer from an unattributed print candidate. */
-  suggestedPrinter?: { hostName: string; printId: string; filename: string };
+  suggestedPrinter?: SuggestedPrinterClaim;
   /** Global "Enable assembly tracking" setting (Settings > Build Tracking). */
   assemblyTrackingEnabled?: boolean;
   onToggleUnit: (part: ReviewPart, unitIndex: number) => void;
   onIncrement: (part: ReviewPart) => void;
   onDecrement: (part: ReviewPart) => void;
   onPreview: (part: ReviewPart) => void;
-  onClaim?: (printId: string) => void;
+  onClaim?: (suggestion: SuggestedPrinterClaim) => void;
   /** Called when the user toggles the Assembled switch for a completed unit. */
   onToggleAssembled?: (part: ReviewPart, unitIndex: number) => void;
 };

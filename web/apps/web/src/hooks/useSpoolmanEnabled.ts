@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { fetchFilamentCatalog, type FilamentCatalog } from "../api/engine";
+import { fetchFilamentCatalog, type FilamentCatalog } from "../api/endpoints/filaments";
 
 export type SpoolmanCatalogState = {
   catalog: FilamentCatalog | null;

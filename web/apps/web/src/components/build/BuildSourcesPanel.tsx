@@ -2,11 +2,9 @@ import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { RefreshCw, Plus, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
-import {
-  startSync,
-  type ProfileLayer,
-  type SourceSummary,
-} from "../../api/engine";
+import type { SourceSummary } from "@print-partner/contracts";
+import { startSync } from "../../api/endpoints/jobs";
+import type { ProfileLayer } from "../../api/endpoints/plans";
 import { sourcesRoute } from "../../lib/routes";
 import { useSourcesQuery } from "../../queries/sources";
 import { useJobRunner } from "../../hooks/useJobRunner";
@@ -34,7 +32,7 @@ import {
   SheetTrigger,
 } from "../ui/sheet";
 import { Badge } from "../ui/badge";
-import { formatSyncTime } from "../../api/engine";
+import { formatSyncTime } from "../../api/endpoints/runtime";
 
 type Props = {
   profileId: number;

@@ -1,23 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
-import { ChevronDown, FolderGit2, Library, MoreHorizontal, Search } from "lucide-react";
+import { ChevronDown, FolderGit2, Library, Search } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
+import type { SourceSummary } from "@print-partner/contracts";
+import { pickLocalDirectory, pickLocalFiles, pickZipArchive } from "../api/endpoints/browserFiles";
+import { startSync, waitForJobDone } from "../api/endpoints/jobs";
+import { startCheckSourceUpdates } from "../api/endpoints/sourceContent";
 import {
   importReposTxt,
   importSourceArchive,
   importSourceFiles,
-  pickLocalDirectory,
-  pickLocalFiles,
-  pickZipArchive,
-  startCheckSourceUpdates,
-  startImportScan,
-  startSync,
-  waitForJobDone,
-  type SourceSummary,
-  type StlSearchHit,
-} from "../api/engine";
-import GitHubRefField, { type GithubRefType } from "../components/GitHubRefField";
+} from "../api/endpoints/sourceArtifacts";
+import { startImportScan, type StlSearchHit } from "../api/endpoints/sources";
+import GitHubRefField from "../components/GitHubRefField";
 import { useDateFormat } from "../context/DateFormatContext";
 import { useJobContext } from "../context/JobContext";
 import { usePlanWorkspace } from "../context/PlanWorkspaceContext";
@@ -31,10 +27,10 @@ import LibraryCategoryRail, {
   type LibraryAddKind,
 } from "../components/sources/LibraryCategoryRail";
 import LibrarySourceCard from "../components/sources/LibrarySourceCard";
+import LibrarySourceRow from "../components/sources/LibrarySourceRow";
 import BulkCategoryBar from "../components/sources/BulkCategoryBar";
 import LibraryStaleBanner from "../components/sources/LibraryStaleBanner";
 import SourceDetailSheet from "../components/sources/SourceDetailSheet";
-import SourceCategoryAssignSubmenu from "../components/sources/SourceCategoryAssignSubmenu";
 import SourceCategorySheet from "../components/sources/SourceCategorySheet";
 import SourcesToolbar, {
   type SourceViewMode,
@@ -42,7 +38,6 @@ import SourcesToolbar, {
 } from "../components/sources/SourcesToolbar";
 import { kindLabel, type SourceKind } from "../components/sources/sourceLabels";
 import { UNCategorized_FILTER } from "../components/sources/sourceLabels";
-import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";
 import { Skeleton } from "../components/ui/skeleton";
@@ -86,11 +81,16 @@ import {
 } from "../lib/librarySourceMeta";
 import {
   countSourcesByCategory,
-  matchesSourceCategoryFilter,
   reconcileSourceCategoryFilter,
   sourceCategoryLabel,
 } from "../lib/sourceCategoryAssignment";
-import { librarySourceDragId } from "../lib/sourceCategoryDnD";
+import { filterSourceLibrary } from "../lib/sourceLibraryFilters";
+import { sourceSavePayloadFromDraft } from "../lib/sourceSaveDraft";
+import {
+  newSourceWizardDraft,
+  sourceWizardDraftFromSource,
+  type SourceWizardDraft,
+} from "../lib/sourceWizardDraft";
 import { categoryMenuOptions } from "../lib/sourceCategoryOptions";
 import {
   applySelectionClick,
@@ -104,6 +104,16 @@ import {
   savePersistedSourcesUi,
 } from "../lib/persistedSourcesUi";
 import { toastJobResult } from "../lib/jobToasts";
+import {
+  createdSourcesFromReposImport,
+  formatReposImportMessage,
+  formatReposSyncSummary,
+  missingSourceUploadMessage,
+  sourceCanUpload,
+  sourceIsSyncing,
+  sourceKindNeedsArchiveUpload,
+  sourceSyncLabel,
+} from "../lib/sourceImportModel";
 import { cn } from "@/lib/utils";
 import { resolveEngineState } from "../lib/workflowState";
 import {
@@ -123,50 +133,7 @@ type SourceDetailTab = "docs" | "rules" | "naming";
 type SourcesLocationState = { stlSearch?: boolean };
 const EMPTY_SOURCE_CATEGORIES: string[] = [];
 
-type WizardForm = {
-  name: string;
-  url: string;
-  refType: GithubRefType;
-  branch: string;
-  tag: string;
-  source_kind: SourceKind;
-  category: string;
-  pendingFiles: File[];
-  pendingZip: File | null;
-};
-
-const emptyForm = (categories: string[]): WizardForm => ({
-  name: "",
-  url: "",
-  refType: "branch",
-  branch: "main",
-  tag: "",
-  source_kind: "github",
-  category: categories[0] ?? "",
-  pendingFiles: [],
-  pendingZip: null,
-});
-
-function matchesFilters(
-  source: SourceSummary,
-  search: string,
-  categoryFilter: string,
-  syncFilter: SyncFilter,
-  platformFilter: string,
-): boolean {
-  const q = search.trim().toLowerCase();
-  if (q) {
-    const hay = `${source.name} ${source.url}`.toLowerCase();
-    if (!hay.includes(q)) return false;
-  }
-  if (!matchesSourceCategoryFilter(source.category, categoryFilter)) {
-    return false;
-  }
-  if (syncFilter === "synced" && !source.last_synced_at) return false;
-  if (syncFilter === "unsynced" && source.last_synced_at) return false;
-  if (platformFilter !== "all" && source.source_kind !== platformFilter) return false;
-  return true;
-}
+type WizardForm = SourceWizardDraft;
 
 export default function SourcesPage() {
   const location = useLocation();
@@ -183,7 +150,7 @@ export default function SourcesPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [wizardOpen, setWizardOpen] = useState(false);
   const [editId, setEditId] = useState<number | null>(null);
-  const [form, setForm] = useState<WizardForm>(emptyForm([]));
+  const [form, setForm] = useState<WizardForm>(newSourceWizardDraft([]));
   const [detailSourceId, setDetailSourceId] = useState<number | null>(null);
   const [detailTab, setDetailTab] = useState<SourceDetailTab>("docs");
   const [highlightPath, setHighlightPath] = useState<string | null>(null);
@@ -313,9 +280,12 @@ export default function SourcesPage() {
 
   const filtered = useMemo(
     () =>
-      sources.filter((s) =>
-        matchesFilters(s, search, categoryFilter, syncFilter, platformFilter),
-      ),
+      filterSourceLibrary(sources, {
+        search,
+        categoryFilter,
+        syncFilter,
+        platformFilter,
+      }),
     [sources, search, categoryFilter, syncFilter, platformFilter],
   );
 
@@ -437,12 +407,7 @@ export default function SourcesPage() {
 
   const syncSources = (ids?: number[]) => {
     setSyncingSourceIds(ids && ids.length > 0 ? ids : "all");
-    const label =
-      ids?.length === 1
-        ? "Source synced"
-        : ids && ids.length > 1
-          ? `Synced ${ids.length} sources`
-          : "All sources synced";
+    const label = sourceSyncLabel(ids);
     void runJob(
       () => startSync(ids),
       (snap) => {
@@ -464,9 +429,7 @@ export default function SourcesPage() {
   };
 
   const openAddWizard = (kind?: SourceKind) => {
-    const next = emptyForm(categories);
-    if (kind) next.source_kind = kind;
-    setForm(next);
+    setForm(newSourceWizardDraft(categories, kind));
     setEditId(null);
     setWizardOpen(true);
   };
@@ -493,17 +456,7 @@ export default function SourcesPage() {
   };
 
   const openEditWizard = (s: SourceSummary) => {
-    setForm({
-      name: s.name,
-      url: s.url,
-      refType: s.tag ? "tag" : "branch",
-      branch: s.branch || "main",
-      tag: s.tag ?? "",
-      source_kind: (s.source_kind as SourceKind) || "github",
-      category: s.category ?? "",
-      pendingFiles: [],
-      pendingZip: null,
-    });
+    setForm(sourceWizardDraftFromSource(s));
     setEditId(s.id);
     setWizardOpen(true);
   };
@@ -548,17 +501,11 @@ export default function SourcesPage() {
       return true;
     }
 
-    const needsZip =
-      kind === "archive" || kind === "printables" || kind === "makerworld";
-    if (!needsZip) return false;
+    if (!sourceKindNeedsArchiveUpload(kind)) return false;
 
     const zip = pendingZip ?? (await pickZipArchive());
     if (!zip) {
-      throw new Error(
-        kind === "archive"
-          ? "A ZIP archive is required for this source."
-          : "Upload the model archive you downloaded from the site.",
-      );
+      throw new Error(missingSourceUploadMessage(kind));
     }
     const result = await importSourceArchive(sourceId, zip);
     toast.success(
@@ -571,28 +518,9 @@ export default function SourcesPage() {
   const saveSource = async () => {
     setLoadError(null);
     try {
-      const category = form.category.trim() || null;
-      if (form.source_kind === "github" && form.refType === "tag" && !form.tag.trim()) {
-        throw new Error("Enter a tag or switch back to Branch.");
-      }
-      const refFields =
-        form.source_kind === "github" && form.refType === "tag"
-          ? { branch: form.branch.trim() || "main", tag: form.tag.trim() }
-          : { branch: form.branch.trim() || "main", tag: null };
+      const payload = sourceSavePayloadFromDraft(form);
       if (editId == null) {
-        if (
-          (form.source_kind === "printables" || form.source_kind === "makerworld") &&
-          !form.url.trim()
-        ) {
-          throw new Error("Enter the model page URL from Printables or MakerWorld.");
-        }
-        const created = await createSourceMutation.mutateAsync({
-          name: form.name.trim(),
-          url: form.url.trim(),
-          ...refFields,
-          source_kind: form.source_kind,
-          category,
-        });
+        const created = await createSourceMutation.mutateAsync(payload);
         const uploaded = await uploadPendingContent(
           created.id,
           form.source_kind,
@@ -605,13 +533,7 @@ export default function SourcesPage() {
       } else {
         await updateSourceMutation.mutateAsync({
           id: editId,
-          body: {
-            name: form.name.trim(),
-            url: form.url.trim(),
-            ...refFields,
-            source_kind: form.source_kind,
-            category,
-          },
+          body: payload,
         });
         const uploaded =
           form.pendingFiles.length > 0 || form.pendingZip
@@ -664,13 +586,9 @@ export default function SourcesPage() {
         );
       }
     }
-    if (failures.length > 0) {
-      setReposImportSyncNote(
-        `Sync finished with ${failures.length} failure(s): ${failures.slice(0, 3).join("; ")}${failures.length > 3 ? "…" : ""}`,
-      );
-    } else if (entries.length > 0) {
-      setReposImportSyncNote(`Synced ${entries.length} new source(s).`);
-    }
+    setReposImportSyncNote(
+      formatReposSyncSummary({ total: entries.length, failures }),
+    );
   };
 
   const runReposImport = async (text: string) => {
@@ -679,16 +597,10 @@ export default function SourcesPage() {
     setReposImportSyncNote(null);
     try {
       const result = await importReposTxt({ text });
-      const skipped =
-        result.skipped > 0
-          ? ` Skipped ${result.skipped} line(s) without URL${result.skipped_names.length ? `: ${result.skipped_names.join(", ")}` : ""}.`
-          : "";
-      const importMsg = `Imported ${result.created} new and updated ${result.updated} source(s).${skipped}`;
+      const importMsg = formatReposImportMessage(result);
       setReposImportNote(importMsg);
       toast.success(importMsg.trim());
-      const newSources = result.results
-        .filter((r) => r.action === "created" && r.source_id != null)
-        .map((r) => ({ source_id: r.source_id as number, name: r.name }));
+      const newSources = createdSourcesFromReposImport(result);
       setReposImportOpen(false);
       setReposImportText("");
       await Promise.all([
@@ -714,17 +626,8 @@ export default function SourcesPage() {
     });
   };
 
-  const isSourceSyncing = (sourceId: number) => {
-    if (!busy || syncingSourceIds == null) return false;
-    if (syncingSourceIds === "all") return true;
-    return syncingSourceIds.includes(sourceId);
-  };
-
-  const canUpload = (s: SourceSummary) =>
-    s.source_kind === "local" ||
-    s.source_kind === "archive" ||
-    s.source_kind === "printables" ||
-    s.source_kind === "makerworld";
+  const isSourceSyncing = (sourceId: number) =>
+    sourceIsSyncing({ busy, syncingSourceIds, sourceId });
 
   const runUpload = (s: SourceSummary) => {
     void (async () => {
@@ -766,7 +669,7 @@ export default function SourcesPage() {
         onOpen={() => openDetail(s, "docs")}
         onEdit={() => openEditWizard(s)}
         onSync={s.source_kind === "github" ? () => syncSources([s.id]) : undefined}
-        onUpload={canUpload(s) ? () => runUpload(s) : undefined}
+        onUpload={sourceCanUpload(s) ? () => runUpload(s) : undefined}
         onDelete={() => setDeleteTarget(s)}
         onAssignCategory={(category) => void assignSourceCategory(s, category)}
         selected={selectedSourceIds.has(s.id)}
@@ -787,91 +690,21 @@ export default function SourcesPage() {
       formatDate,
     });
     return (
-      <div
+      <LibrarySourceRow
         key={s.id}
-        draggable={!busy}
-        onDragStart={(e) => {
-          e.dataTransfer.setData("text/plain", librarySourceDragId(s.id));
-          e.dataTransfer.effectAllowed = "move";
-        }}
-        className={cn(
-          "flex flex-col gap-2 rounded-lg border bg-card px-4 py-3 sm:flex-row sm:flex-wrap sm:items-center",
-          meta.borderTone === "update" && "border-warning/30",
-          meta.borderTone === "syncing" && "border-info/30",
-          isSelected && "ring-2 ring-primary border-primary/60",
-          !busy && "cursor-grab active:cursor-grabbing",
-        )}
-        title="Drag onto a category"
-      >
-        <input
-          type="checkbox"
-          className="h-4 w-4 shrink-0 accent-primary"
-          checked={isSelected}
-          aria-label={`Select ${s.name}`}
-          onChange={() => {}}
-          onClick={(e) => {
-            e.stopPropagation();
-            onSourceSelectClick(s.id, {
-              shiftKey: e.shiftKey,
-              metaKey: e.metaKey,
-              ctrlKey: e.ctrlKey,
-            });
-          }}
-        />
-        <button
-          type="button"
-          className="min-w-0 flex-1 text-left"
-          onClick={(e) => {
-            if (e.shiftKey || e.metaKey || e.ctrlKey) {
-              onSourceSelectClick(s.id, {
-                shiftKey: e.shiftKey,
-                metaKey: e.metaKey,
-                ctrlKey: e.ctrlKey,
-              });
-              return;
-            }
-            openDetail(s, "docs");
-          }}
-        >
-          <p className="font-medium">{s.name}</p>
-          <p className="truncate font-mono text-xs text-muted-foreground">{meta.slug}</p>
-          <p className="truncate text-xs text-muted-foreground">
-            {sourceCategoryLabel(s.category)}
-          </p>
-        </button>
-        <span className="text-xs text-muted-foreground">{meta.stateLabel}</span>
-        <span className="font-mono text-xs font-medium tabular-nums">{meta.pickLabel}</span>
-        <Badge variant="muted">{kindLabel(s.source_kind)}</Badge>
-        <Button size="sm" variant="secondary" onClick={() => openDetail(s, "docs")}>
-          Open
-        </Button>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button size="sm" variant="ghost" aria-label={`Source actions for ${s.name}`}>
-              <MoreHorizontal className="h-4 w-4" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuItem onClick={() => openEditWizard(s)}>Edit</DropdownMenuItem>
-            <SourceCategoryAssignSubmenu
-              categories={categories}
-              current={s.category}
-              onAssign={(category) => void assignSourceCategory(s, category)}
-              disabled={busy}
-            />
-            {canUpload(s) && (
-              <DropdownMenuItem onClick={() => runUpload(s)}>Upload files…</DropdownMenuItem>
-            )}
-            {s.source_kind === "github" && (
-              <DropdownMenuItem onClick={() => syncSources([s.id])} disabled={busy}>
-                Sync
-              </DropdownMenuItem>
-            )}
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={() => setDeleteTarget(s)}>Delete</DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
+        source={s}
+        meta={meta}
+        categories={categories}
+        busy={busy}
+        selected={isSelected}
+        onOpen={() => openDetail(s, "docs")}
+        onEdit={() => openEditWizard(s)}
+        onSync={s.source_kind === "github" ? () => syncSources([s.id]) : undefined}
+        onUpload={sourceCanUpload(s) ? () => runUpload(s) : undefined}
+        onDelete={() => setDeleteTarget(s)}
+        onAssignCategory={(category) => void assignSourceCategory(s, category)}
+        onSelectClick={(mods) => onSourceSelectClick(s.id, mods)}
+      />
     );
   };
 

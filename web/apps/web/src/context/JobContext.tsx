@@ -7,12 +7,9 @@ import {
   type ReactNode,
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import {
-  connectJobWebSocket,
-  fetchJob,
-  type JobEvent,
-  type JobSnapshot,
-} from "../api/engine";
+import type { JobEvent, JobSnapshot } from "@print-partner/contracts";
+import { fetchJob } from "../api/endpoints/jobs";
+import { connectJobWebSocket } from "../api/jobWebSocket";
 import { invalidateAfterJob } from "../queries/invalidation";
 import { invalidateAcceptedPlateExportJobs } from "../queries/acceptedPlates";
 

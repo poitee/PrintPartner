@@ -6,7 +6,7 @@ import {
   acceptedPartMediaRevalidationHeaders,
   partMeshUrl,
   uploadPartThumbnail,
-} from "../api/engine.js";
+} from "../api/endpoints/media.js";
 import { fetchWithRetry } from "./fetchWithRetry.js";
 import { getCachedMeshBuffer, cacheMeshBuffer } from "./meshCache.js";
 

@@ -11,7 +11,7 @@ import {
   CardTitle,
 } from "../components/ui/card";
 import { useAuth } from "../context/AuthContext";
-import { resetPasswordWithToken } from "../api/engine";
+import { resetPasswordWithToken } from "../api/endpoints/auth";
 
 export default function ResetPasswordPage() {
   const { authRequired, loading, refresh } = useAuth();

@@ -4,18 +4,18 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
-import { connectJobWebSocket, fetchJob } from "../api/engine";
+import { fetchJob } from "../api/endpoints/jobs";
+import { connectJobWebSocket } from "../api/jobWebSocket";
 import { queryKeys } from "../queries/keys";
 import { JobProvider, useJobContext } from "./JobContext";
 
-vi.mock("../api/engine", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../api/engine")>();
-  return {
-    ...actual,
-    connectJobWebSocket: vi.fn(() => vi.fn()),
-    fetchJob: vi.fn(),
-  };
-});
+vi.mock("../api/endpoints/jobs", () => ({
+  fetchJob: vi.fn(),
+}));
+
+vi.mock("../api/jobWebSocket", () => ({
+  connectJobWebSocket: vi.fn(() => vi.fn()),
+}));
 
 afterEach(() => {
   cleanup();

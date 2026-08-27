@@ -1,4 +1,5 @@
-import type { PlanReview, ProfileSummary, SourceSummary } from "../api/engine";
+import type { ProfileSummary, SourceSummary } from "@print-partner/contracts";
+import type { PlanReview } from "../api/endpoints/planManifests";
 
 /**
  * Desk-loop Plan warnings only (freshness, upstream changes, and review

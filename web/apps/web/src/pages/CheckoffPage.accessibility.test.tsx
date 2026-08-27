@@ -3,7 +3,7 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
-import type { PlanReview } from "../api/engine";
+import type { PlanReview } from "../api/endpoints/planManifests";
 import CheckoffPage from "./CheckoffPage";
 
 const state = vi.hoisted(() => ({
@@ -98,13 +98,27 @@ vi.mock("../queries/buildTracking", () => ({
   }),
 }));
 vi.mock("../lib/useSyncComplete", () => ({ useSyncComplete: vi.fn() }));
-vi.mock("../api/engine", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../api/engine")>();
+vi.mock("../api/endpoints/checkoff", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../api/endpoints/checkoff")>();
   return {
     ...actual,
     fetchUnattributedPrints: vi.fn().mockResolvedValue([]),
     fetchPrinterCheckoffLinks: vi.fn().mockResolvedValue({ links: [] }),
+  };
+});
+
+vi.mock("../api/endpoints/planManifests", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../api/endpoints/planManifests")>();
+  return {
+    ...actual,
     fetchPlanPhaseManifest: vi.fn().mockResolvedValue(null),
+  };
+});
+
+vi.mock("../api/endpoints/productionSend", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../api/endpoints/productionSend")>();
+  return {
+    ...actual,
     fetchPrinterQueueSuggestions: vi.fn().mockResolvedValue({ suggestions: [] }),
   };
 });

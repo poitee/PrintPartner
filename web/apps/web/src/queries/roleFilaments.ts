@@ -1,5 +1,5 @@
 import { useQuery, type QueryClient } from "@tanstack/react-query";
-import { fetchRoleFilaments, type RoleFilamentRow } from "../api/engine";
+import { fetchRoleFilaments, type RoleFilamentRow } from "../api/endpoints/filaments";
 import { queryKeys } from "./keys";
 
 export function useRoleFilamentsQuery(profileId: number | null, enabled = true) {

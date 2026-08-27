@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   fetchSourceCategories,
   saveSourceCategories,
-} from "../api/engine";
+} from "../api/endpoints/sources";
 import { queryKeys } from "./keys";
 
 export function useSourceCategoriesQuery(enabled = true) {

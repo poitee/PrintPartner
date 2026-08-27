@@ -1,5 +1,5 @@
-import { categoryPathSegments } from "@print-partner/contracts";
-import type { PlanReview, SourceSummary } from "../api/engine";
+import { categoryPathSegments, type SourceSummary } from "@print-partner/contracts";
+import type { PlanReview } from "../api/endpoints/planManifests";
 
 export type LibraryCardTone = "default" | "update" | "syncing" | "attached" | "local";
 

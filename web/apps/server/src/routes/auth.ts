@@ -12,6 +12,11 @@ import {
 } from "../services/password-reset-mail.js";
 import { toPublicUser, type SessionUser } from "./auth-types.js";
 import type { AuthIdentityProvider } from "./auth-types.js";
+import {
+  defaultDisplayName,
+  isValidEmailInput,
+  normalizeEmailInput,
+} from "./auth-route-model.js";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -96,13 +101,13 @@ export function registerAuthRoutes(
         return reply.status(403).send({ detail: "The single-user administrator already exists" });
       }
       const body = request.body as { email?: unknown; password?: unknown; display_name?: unknown };
-      const emailRaw = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
+      const emailRaw = normalizeEmailInput(body.email);
       const password = typeof body.password === "string" ? body.password : "";
-      const displayName =
-        (typeof body.display_name === "string" ? body.display_name.trim() : "") ||
-        emailRaw.split("@")[0] ||
-        "User";
-      if (!emailRaw || !emailRaw.includes("@")) {
+      const displayName = defaultDisplayName({
+        displayName: body.display_name,
+        email: emailRaw,
+      });
+      if (!isValidEmailInput(emailRaw)) {
         return reply.status(400).send({ detail: "Valid email is required" });
       }
       const pwErr = validatePasswordStrength(password);
@@ -128,7 +133,7 @@ export function registerAuthRoutes(
 
     app.post("/auth/login", authRateLimit, async (request, reply) => {
       const body = request.body as { email?: unknown; password?: unknown };
-      const emailRaw = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
+      const emailRaw = normalizeEmailInput(body.email);
       const password = typeof body.password === "string" ? body.password : "";
       if (!emailRaw || !password) {
         return reply.status(400).send({ detail: "Email and password are required" });
@@ -154,8 +159,8 @@ export function registerAuthRoutes(
 
     app.post("/auth/forgot-password", authRateLimit, async (request, reply) => {
       const body = request.body as { email?: unknown };
-      const emailRaw = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
-      if (!emailRaw || !emailRaw.includes("@")) {
+      const emailRaw = normalizeEmailInput(body.email);
+      if (!isValidEmailInput(emailRaw)) {
         return reply.status(400).send({ detail: "Valid email is required" });
       }
 

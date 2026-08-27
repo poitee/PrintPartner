@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { fetchAppUpdateCheck, type AppUpdateCheckResponse } from "../api/engine";
+import type { AppUpdateCheckResponse } from "@print-partner/contracts";
+import { fetchAppUpdateCheck } from "../api/endpoints/help";
 
 const DEBOUNCE_MS = 1500;
 

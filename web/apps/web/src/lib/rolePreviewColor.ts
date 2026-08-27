@@ -1,4 +1,5 @@
-import type { RoleFilamentRow, StlNamingProfile } from "../api/engine";
+import type { StlNamingProfile } from "@print-partner/contracts";
+import type { RoleFilamentRow } from "../api/endpoints/filaments";
 
 type PartRole = "primary" | "accent" | "clear" | "opaque";
 

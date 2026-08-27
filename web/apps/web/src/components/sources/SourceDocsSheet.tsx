@@ -8,7 +8,7 @@ import {
   fetchSourceReadme,
   updateSourceNote,
   type SourceNote,
-} from "../../api/engine";
+} from "../../api/endpoints/sourceContent";
 import { useProfileSelection } from "../../context/ProfileContext";
 import { Button } from "../ui/button";
 import { Field, FieldLabel } from "../ui/field";

@@ -14,7 +14,7 @@ type Props = {
   children: ReactNode;
 };
 
-/** HTML5 drop target for Library/Plan source → category assignment. */
+/** HTML5 drop target for assigning a Source to a Library category. */
 export default function CategoryDropTarget({
   category,
   onDropSource,

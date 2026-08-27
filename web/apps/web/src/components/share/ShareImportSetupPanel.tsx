@@ -3,13 +3,12 @@ import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { Button } from "../ui/button";
 import { buildRoute, sourcesRoute } from "../../lib/routes";
+import { startSync } from "../../api/endpoints/jobs";
 import {
   addProfileAddonLayer,
-  createSource,
-  saveImportRules,
   setProfileBaseLayer,
-  startSync,
-} from "../../api/engine";
+} from "../../api/endpoints/plans";
+import { createSource, saveImportRules } from "../../api/endpoints/sources";
 
 export type UnmatchedSource = {
   name: string;

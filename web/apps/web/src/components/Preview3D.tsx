@@ -22,8 +22,16 @@ import {
   sourceStlMeshUrl,
   sourceStlPreviewUrl,
   uploadPartThumbnail,
-} from "../api/engine";
+} from "../api/endpoints/media";
 import { fetchWithRetry } from "../lib/fetchWithRetry";
+import {
+  contrastBackground,
+  formatMm,
+  normalizedRenderHex,
+  previewErrorMessage,
+  previewTarget,
+  previewUrlWithColor,
+} from "../lib/preview3dModel";
 
 type Props = {
   partId: number | null;
@@ -41,30 +49,6 @@ type Props = {
 };
 
 const DEFAULT_COLOR = DEFAULT_FILAMENT_HEX;
-
-const DARK_BG = "#0a0e14";
-const LIGHT_BG = "#dfe4ea";
-
-/** Perceived luminance (0..1) of a hex color like "#1a2b3c". */
-function perceivedLuminance(hex: string): number {
-  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
-  if (!m) return 0.5;
-  const n = parseInt(m[1], 16);
-  const r = (n >> 16) & 0xff;
-  const g = (n >> 8) & 0xff;
-  const b = n & 0xff;
-  return (0.299 * r + 0.587 * g + 0.114 * b) / 255;
-}
-
-/** Dark parts get a light backdrop; light parts keep the dark one. */
-function contrastBackground(meshHex: string): string {
-  return perceivedLuminance(meshHex) < 0.4 ? LIGHT_BG : DARK_BG;
-}
-
-/** STL units are millimeters by convention. */
-function formatMm(value: number): string {
-  return value >= 100 ? value.toFixed(0) : value.toFixed(1);
-}
 
 /**
  * Dimension markers for the bounding box: a faint box outline plus X/Y/Z
@@ -142,51 +126,6 @@ function disposeDimensionGroup(group: THREE.Group) {
     }
   });
   group.clear();
-}
-
-type PreviewTarget =
-  | { kind: "part"; partId: number }
-  | { kind: "source"; sourceId: number; relativePath: string };
-
-function previewTarget(
-  partId: number | null,
-  sourceId: number | null | undefined,
-  relativePath: string | null | undefined,
-  preferSource = false,
-): PreviewTarget | null {
-  if (preferSource && sourceId != null && relativePath) {
-    return { kind: "source", sourceId, relativePath };
-  }
-  if (partId != null) return { kind: "part", partId };
-  if (sourceId != null && relativePath) {
-    return { kind: "source", sourceId, relativePath };
-  }
-  return null;
-}
-
-function previewErrorMessage(status: number, kind: "mesh" | "png"): string {
-  if (status === 404 && kind === "mesh") {
-    return "STL not ready yet — source may still be syncing. Wait a moment and try again.";
-  }
-  if (status === 413) {
-    return "STL is too large for live 3D preview — showing PNG instead.";
-  }
-  if (status === 404) {
-    return "Preview image not available for this part.";
-  }
-  return `Preview unavailable (HTTP ${status}).`;
-}
-
-function previewUrlWithColor(url: string, meshColor: string): string {
-  const hex = meshColor.trim();
-  if (!hex) return url;
-  const sep = url.includes("?") ? "&" : "?";
-  return `${url}${sep}hex=${encodeURIComponent(hex)}`;
-}
-
-function normalizedRenderHex(value: string): string | null {
-  const hex = value.trim().toLowerCase();
-  return /^#[0-9a-f]{6}$/.test(hex) ? hex : null;
 }
 
 function optionalAcceptedPartMediaMetadata(response: Response) {

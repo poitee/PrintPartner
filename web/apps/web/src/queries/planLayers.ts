@@ -7,11 +7,11 @@ import {
 import {
   addProfileAddonLayer,
   deleteProfileLayer,
-  fetchPlanLayers,
   replaceProfileLayer,
   setProfileBaseLayer,
   type ProfileLayer,
-} from "../api/engine";
+} from "../api/endpoints/plans";
+import { fetchPlanLayers } from "../api/endpoints/planManifests";
 import { queryKeys } from "./keys";
 import { invalidatePlanReview } from "./planReview";
 import { invalidateProfiles } from "./profiles";

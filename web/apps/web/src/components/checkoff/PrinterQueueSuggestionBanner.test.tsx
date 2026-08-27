@@ -9,8 +9,8 @@ const api = vi.hoisted(() => ({
   drainPrinterSendQueue: vi.fn(),
 }));
 
-vi.mock("../../api/engine", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../api/engine")>()),
+vi.mock("../../api/endpoints/productionSend", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../api/endpoints/productionSend")>()),
   ...api,
 }));
 

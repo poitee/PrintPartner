@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import {
   createPlanSnapshotApi,
   restorePlanSnapshotApi,
-} from "../../api/engine";
+} from "../../api/endpoints/planSnapshots";
 import { invalidatePlanStructure } from "../../queries/planLayers";
 import {
   invalidatePlanRecipe,

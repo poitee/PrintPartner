@@ -3,22 +3,28 @@ import { X } from "lucide-react";
 import { toast } from "sonner";
 import {
   DEFAULT_STL_NAMING_PROFILE,
-  fetchImportRules,
-  fetchSourceDocMarkdown,
-  fetchSourceDocs,
-  fetchSourceNotes,
-  fetchSourceNaming,
-  fetchStlNaming,
-  isSourceNamingNotFoundError,
-  mergeStlNamingProfiles,
-  saveImportRules,
-  saveSourceNaming,
-  sourceNamingErrorMessage,
-  type SourceNote,
   type SourceSummary,
   type StlNamingProfile,
   type StlNamingProfileOverride,
-} from "../../api/engine";
+} from "@print-partner/contracts";
+import {
+  fetchImportRules,
+  saveImportRules,
+} from "../../api/endpoints/sources";
+import {
+  fetchSourceDocMarkdown,
+  fetchSourceDocs,
+  fetchSourceNotes,
+  type SourceNote,
+} from "../../api/endpoints/sourceContent";
+import {
+  fetchSourceNaming,
+  isSourceNamingNotFoundError,
+  saveSourceNaming,
+  sourceNamingErrorMessage,
+} from "../../api/endpoints/sourceNaming";
+import { fetchStlNaming, mergeStlNamingProfiles } from "../../api/endpoints/stlNaming";
+import { sourceNamingDirty } from "../../lib/sourceDetailModel";
 import { StlNamingEditorEmbedded } from "../settings/StlNamingEditor";
 import ImportRulesTree from "../ImportRulesTree";
 const Preview3D = lazy(() => import("../Preview3D"));
@@ -105,11 +111,13 @@ export default function SourceDetailSheet({
     [useDefaults, globalNaming, overrideDraft],
   );
 
-  const namingDirty =
-    useDefaults !== savedUseDefaults ||
-    (!useDefaults &&
-      JSON.stringify(overrideDraft) !==
-        JSON.stringify(mergeStlNamingProfiles(globalNaming, savedOverride)));
+  const namingDirty = sourceNamingDirty({
+    useDefaults,
+    savedUseDefaults,
+    overrideDraft,
+    globalNaming,
+    savedOverride,
+  });
 
   const loadNaming = useCallback(async (sourceId: number) => {
     setNamingLoadError(null);

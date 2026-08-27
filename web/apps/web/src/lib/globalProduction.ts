@@ -1,4 +1,4 @@
-import type { PrinterCheckoffLink, PrinterCheckoffLinkState } from "../api/engine";
+import type { PrinterCheckoffLink, PrinterCheckoffLinkState } from "../api/endpoints/checkoff";
 import { progressRoute } from "./routes";
 
 export const GLOBAL_PRODUCTION_ACTIVE_STATES = [

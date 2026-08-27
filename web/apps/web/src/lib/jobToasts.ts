@@ -1,5 +1,5 @@
 import { toast } from "sonner";
-import type { JobSnapshot } from "../api/engine";
+import type { JobSnapshot } from "@print-partner/contracts";
 
 export function toastJobResult(
   snap: JobSnapshot,

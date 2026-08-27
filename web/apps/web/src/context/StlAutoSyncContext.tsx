@@ -9,11 +9,9 @@ import {
   type ReactNode,
 } from "react";
 import { useLocation } from "react-router-dom";
-import {
-  regeneratePlanThumbnails,
-  startSync,
-  type PlanReview,
-} from "../api/engine";
+import { regeneratePlanThumbnails } from "../api/endpoints/media";
+import type { PlanReview } from "../api/endpoints/planManifests";
+import { startSync } from "../api/endpoints/jobs";
 import { usePlanWorkspace } from "./PlanWorkspaceContext";
 import { useProfileSelection } from "./ProfileContext";
 import { useJobRunner } from "../hooks/useJobRunner";

@@ -3,13 +3,13 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { saveSourceCategories } from "../../api/engine";
+import { saveSourceCategories } from "../../api/endpoints/sources";
 import { queryKeys } from "../../queries/keys";
 import { useSourceCategoriesQuery } from "../../queries/sourceCategories";
 import SourceCategoryManager from "./SourceCategoryManager";
 
-vi.mock("../../api/engine", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../api/engine")>();
+vi.mock("../../api/endpoints/sources", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../api/endpoints/sources")>();
   return {
     ...actual,
     fetchSourceCategories: vi.fn().mockResolvedValue(["Frames"]),

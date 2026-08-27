@@ -41,17 +41,20 @@ import { getLogger } from "../services/logger.js";
 import {
   ACCEPTED_PLATE_EXPORT_LIMITS,
   materializeAcceptedPlateExport,
-  type MaterializeAcceptedPlateExportResult,
 } from "../services/accepted-plate-export-delivery.js";
 import {
   AcceptedOperationalExportPublicError,
   acceptedOperationalExportPublicError,
   captureAcceptedOperationalExport,
 } from "../services/accepted-operational-export.js";
+import { materializeDirectExport3mf } from "../services/accepted-direct-export-3mf.js";
+import { isRecord, positiveSafeInteger } from "./job-route-inputs.js";
 import {
-  materializeDirectExport3mf,
-  type MaterializeDirectExport3mfResult,
-} from "../services/accepted-direct-export-3mf.js";
+  ACCEPTED_PLATE_EXPORT_ERRORS,
+  AcceptedPlateExportPublicError,
+  acceptedPlateExportError,
+  directExportError,
+} from "./accepted-export-job-errors.js";
 
 export type JobHandler = (
   jobId: string,
@@ -83,77 +86,6 @@ export const COMPLETED_JOB_GLOBAL_MAX = 10_000;
 export const COMPLETED_JOB_RETENTION_MS = 24 * 60 * 60 * 1_000;
 const EMPTY_TENANT_JOB_BUCKET = Symbol("empty-tenant-job-bucket");
 const STARTABLE_JOB_KINDS = new Set<string>(JOB_KINDS);
-
-const ACCEPTED_PLATE_EXPORT_ERRORS = {
-  plate_revision_changed: "Plate layout changed. Refresh and export again.",
-  unplaced_units: "Arrange every Required unit on a Plate before exporting.",
-  accepted_state: "Accepted Plan state is unavailable. Refresh the Plan.",
-  artifact: "A verified accepted artifact is unavailable.",
-  limit: "Accepted Plate export exceeds the configured limit.",
-  transaction: "Accepted Plate export is temporarily unavailable.",
-  output: "The stored export for this Plate revision failed integrity verification.",
-  unexpected: "Accepted Plate export failed.",
-} as const;
-
-class AcceptedPlateExportPublicError extends Error {}
-
-function positiveSafeInteger(value: unknown): number | null {
-  return Number.isSafeInteger(value) && Number(value) > 0 ? Number(value) : null;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function acceptedPlateExportError(result: Exclude<
-  MaterializeAcceptedPlateExportResult,
-  { readonly kind: "materialized" }
->): string {
-  switch (result.kind) {
-    case "plate_revision_changed":
-      return ACCEPTED_PLATE_EXPORT_ERRORS.plate_revision_changed;
-    case "unplaced_units":
-      return ACCEPTED_PLATE_EXPORT_ERRORS.unplaced_units;
-    case "empty_plan":
-    case "plates_not_published":
-    case "stale_accepted_plan":
-    case "accepted_state_unavailable":
-    case "profile_not_found":
-      return ACCEPTED_PLATE_EXPORT_ERRORS.accepted_state;
-    case "artifact_unavailable":
-    case "invalid_stl":
-    case "artifact_geometry_mismatch":
-      return ACCEPTED_PLATE_EXPORT_ERRORS.artifact;
-    case "limit_exceeded":
-      return ACCEPTED_PLATE_EXPORT_ERRORS.limit;
-    case "transaction_unavailable":
-      return ACCEPTED_PLATE_EXPORT_ERRORS.transaction;
-    case "output_conflict":
-      return ACCEPTED_PLATE_EXPORT_ERRORS.output;
-  }
-}
-
-function directExportError(result: Exclude<
-  MaterializeDirectExport3mfResult,
-  { readonly kind: "materialized" }
->): string {
-  switch (result.kind) {
-    case "empty_plan":
-    case "accepted_state_unavailable":
-    case "profile_not_found":
-      return ACCEPTED_PLATE_EXPORT_ERRORS.accepted_state;
-    case "unknown_token":
-      return "A selected Required unit is not on this Plan.";
-    case "artifact_unavailable":
-    case "invalid_stl":
-    case "artifact_geometry_mismatch":
-      return ACCEPTED_PLATE_EXPORT_ERRORS.artifact;
-    case "limit_exceeded":
-      return "Direct export exceeds the configured limit.";
-    case "output_failure":
-      return "Direct export could not be published safely.";
-  }
-}
 
 export type JobRunnerOptions = {
   completedJobMax?: number;

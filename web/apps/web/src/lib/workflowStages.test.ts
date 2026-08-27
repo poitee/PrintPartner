@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ProfileSummary } from "../api/engine";
+import type { ProfileSummary } from "@print-partner/contracts";
 import { buildWorkflowStages, stageIdFromPath } from "./workflowStages";
 
 const voron = {

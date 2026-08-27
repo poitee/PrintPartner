@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ReviewPart } from "../api/engine";
+import type { ReviewPart } from "../api/endpoints/planManifests";
 import {
   incompleteUnitsForParts,
   incompleteUnitsForSelectedParts,

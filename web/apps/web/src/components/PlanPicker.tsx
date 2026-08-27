@@ -3,7 +3,11 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { Check, ChevronsUpDown, Layers, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { buildRoute, isPlansPath } from "../lib/routes";
-import { partitionPlanPickerGroups } from "../lib/planPickerGroups";
+import {
+  duplicatePlanName,
+  partitionPlanPickerGroups,
+  shouldPromptBeforeSwitchingPlan,
+} from "../lib/planPickerGroups";
 import { cn } from "@/lib/utils";
 import { usePlanActions } from "../context/PlanActionsContext";
 import { useProfileSelection } from "../context/ProfileContext";
@@ -128,7 +132,7 @@ export default function PlanPicker({
       if (id == null) return;
       const plan = profiles.find((p) => p.id === id);
       setActionTargetId(id);
-      setDuplicateName(`${plan?.name ?? "Plan"} (copy)`);
+      setDuplicateName(duplicatePlanName(plan?.name));
       setDuplicateClearCheckoff(false);
       setDuplicateOpen(true);
     });
@@ -159,11 +163,6 @@ export default function PlanPicker({
     setActionTargetId(null);
   };
 
-  const shouldAskToSwitch = () => {
-    if (selectedProfileId == null) return false;
-    return (selected?.part_count ?? 0) > 0;
-  };
-
   const activatePlan = (id: number) => {
     setSelectedProfileId(id);
     touchMutation.mutate(id);
@@ -178,7 +177,13 @@ export default function PlanPicker({
   };
 
   const offerSwitchOrActivate = (targetId: number, targetName: string) => {
-    if (shouldAskToSwitch() && selectedProfileId !== targetId) {
+    if (
+      shouldPromptBeforeSwitchingPlan({
+        selectedProfileId,
+        selectedPartCount: selected?.part_count,
+        targetId,
+      })
+    ) {
       setSwitchPrompt({ targetId, targetName });
       return;
     }

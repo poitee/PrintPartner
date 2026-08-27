@@ -1,12 +1,12 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { Factory } from "lucide-react";
+import type { UnattributedPrint } from "@print-partner/contracts";
 import {
   fetchPrinterCheckoffLinks,
   fetchUnattributedPrints,
   type PrinterCheckoffLink,
-  type UnattributedPrint,
-} from "../api/engine";
+} from "../api/endpoints/checkoff";
 import UnattributedPrintCard from "../components/checkoff/UnattributedPrintCard";
 import PageHeader from "../components/layout/PageHeader";
 import PageShell from "../components/layout/PageShell";

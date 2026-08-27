@@ -36,6 +36,7 @@ import {
   type PlansListSort,
 } from "../lib/plansList";
 import { planRoute, productionRoute, progressRoute } from "../lib/routes";
+import { isPlansListEmpty, plansLoadingAnnouncement } from "../lib/plansPageModel";
 import { cn } from "@/lib/utils";
 import {
   getBackgroundError,
@@ -82,12 +83,7 @@ export default function PlansPage() {
     profilesError,
     profiles.length > 0,
   );
-  const loadingAnnouncement =
-    engineState === "loading"
-      ? "Connecting to the engine…"
-      : profilesState === "loading"
-        ? "Loading builds…"
-        : "";
+  const loadingAnnouncement = plansLoadingAnnouncement({ engineState, profilesState });
 
   const rows = useMemo(
     () => filterPlansList(profiles, filter, query, sort),
@@ -141,8 +137,12 @@ export default function PlansPage() {
   };
 
   // Profiles query is disabled until health.ok; treat that as not-yet-loaded, not empty.
-  const emptyAll = engineState === "ready" && profilesState === "ready" && profiles.length === 0;
-  const emptyFilter = profilesState === "ready" && profiles.length > 0 && rows.length === 0;
+  const { emptyAll, emptyFilter } = isPlansListEmpty({
+    engineState,
+    profilesState,
+    profileCount: profiles.length,
+    rowCount: rows.length,
+  });
 
   return (
     <PageShell width="list">

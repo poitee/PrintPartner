@@ -3,7 +3,7 @@
 import type { ReactNode } from "react";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { UnattributedPrint } from "../../api/engine";
+import type { UnattributedPrint } from "@print-partner/contracts";
 import UnattributedPrintCard from "./UnattributedPrintCard";
 
 const api = vi.hoisted(() => ({
@@ -12,9 +12,15 @@ const api = vi.hoisted(() => ({
   dismissUnattributedPrint: vi.fn(),
 }));
 
-vi.mock("../../api/engine", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../api/engine")>()),
-  ...api,
+vi.mock("../../api/endpoints/plans", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../api/endpoints/plans")>()),
+  fetchProfiles: api.fetchProfiles,
+}));
+
+vi.mock("../../api/endpoints/checkoff", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../api/endpoints/checkoff")>()),
+  claimUnattributedPrint: api.claimUnattributedPrint,
+  dismissUnattributedPrint: api.dismissUnattributedPrint,
 }));
 
 vi.mock("../ui/select", () => ({

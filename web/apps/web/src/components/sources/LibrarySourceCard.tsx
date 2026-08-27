@@ -1,5 +1,5 @@
 import { MoreHorizontal } from "lucide-react";
-import type { SourceSummary } from "../../api/engine";
+import type { SourceSummary } from "@print-partner/contracts";
 import SourceCardCover from "../SourceCardCover";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";

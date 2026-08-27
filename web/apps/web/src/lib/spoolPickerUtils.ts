@@ -1,4 +1,4 @@
-import type { SpoolmanSpoolRow } from "../api/engine";
+import type { SpoolmanSpoolRow } from "../api/endpoints/filaments";
 import { parseSpoolmanFilamentId } from "./spoolmanIds";
 
 export function formatSpoolOptionLabel(spool: SpoolmanSpoolRow): string {

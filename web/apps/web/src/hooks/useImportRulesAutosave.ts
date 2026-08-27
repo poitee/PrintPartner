@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { saveImportRules } from "../api/engine";
+import { saveImportRules } from "../api/endpoints/sources";
 import {
   IMPORT_RULES_SAVED_CLEAR_MS,
   rulesEqual,

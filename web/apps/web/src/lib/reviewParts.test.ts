@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { PartRow, PlanReview } from "../api/engine";
+import type { PartRow } from "@print-partner/contracts";
+import type { PlanReview } from "../api/endpoints/planManifests";
 import {
   filterPartsByQuery,
   mergeAssembledIntoReview,

@@ -3,7 +3,7 @@ import {
   fetchBuildTrackingSettings,
   saveBuildTrackingSettings,
   type BuildTrackingSettings,
-} from "../api/engine";
+} from "../api/endpoints/settings";
 import { queryKeys } from "./keys";
 
 /**

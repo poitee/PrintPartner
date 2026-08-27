@@ -51,8 +51,8 @@ vi.mock("./meshCache.js", () => ({
   cacheMeshBuffer: runtime.cacheMeshBuffer,
 }));
 
-vi.mock("../api/engine.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../api/engine.js")>()),
+vi.mock("../api/endpoints/media.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../api/endpoints/media.js")>()),
   uploadPartThumbnail: runtime.uploadPartThumbnail,
 }));
 

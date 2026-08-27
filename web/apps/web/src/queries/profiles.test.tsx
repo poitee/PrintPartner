@@ -4,22 +4,18 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
-import type { ProfileSummary } from "../api/engine";
-import { touchProfileLastUsed, updateProfile } from "../api/engine";
+import type { ProfileSummary } from "@print-partner/contracts";
+import { touchProfileLastUsed, updateProfile } from "../api/endpoints/plans";
 import { queryKeys } from "./keys";
 import {
   useTouchProfileLastUsedMutation,
   useUpdateProfileMutation,
 } from "./profiles";
 
-vi.mock("../api/engine", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../api/engine")>();
-  return {
-    ...actual,
-    touchProfileLastUsed: vi.fn(),
-    updateProfile: vi.fn(),
-  };
-});
+vi.mock("../api/endpoints/plans", () => ({
+  touchProfileLastUsed: vi.fn(),
+  updateProfile: vi.fn(),
+}));
 
 const profile: ProfileSummary = {
   id: 7,

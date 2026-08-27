@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ProductionSetup, ProductionSetupInput } from "@print-partner/contracts";
-import { fetchProductionSetup, saveProductionSetup } from "../api/engine";
+import { fetchProductionSetup, saveProductionSetup } from "../api/endpoints/productionSetup";
 
 export const productionSetupKey = (profileId: number | null) =>
   ["production-setup", profileId] as const;

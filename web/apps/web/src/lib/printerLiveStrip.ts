@@ -1,4 +1,4 @@
-import type { PrinterHostStatus } from "../api/engine";
+import type { PrinterHostStatus } from "@print-partner/contracts";
 import { quietPrinterStatusMessage } from "./printerErrorCopy";
 
 export type LiveStripHostType = "moonraker" | "prusalink" | "bambu";

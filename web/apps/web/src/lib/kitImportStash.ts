@@ -1,4 +1,4 @@
-import type { KitImportJobResult } from "../api/engine";
+import type { KitImportJobResult } from "../api/endpoints/imports";
 
 /**
  * Durable hand-off for a kit-import result between the import action and the

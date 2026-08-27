@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_STL_NAMING_PROFILE, type RoleFilamentRow } from "../api/engine";
+import { DEFAULT_STL_NAMING_PROFILE } from "@print-partner/contracts";
+import type { RoleFilamentRow } from "../api/endpoints/filaments";
 import { meshColorForStlPath, parseStlRole } from "./rolePreviewColor";
 
 describe("meshColorForStlPath", () => {

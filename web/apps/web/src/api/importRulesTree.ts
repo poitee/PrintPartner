@@ -1,4 +1,4 @@
-import { fetchStlTree, type StlTreeNode } from "./engine";
+import { fetchStlTree, type StlTreeNode } from "./endpoints/sources";
 
 export { fetchStlTree };
 export type { StlTreeNode };

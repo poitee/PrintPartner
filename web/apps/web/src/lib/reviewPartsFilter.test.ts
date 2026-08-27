@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { PlanReview, ReviewPart } from "../api/engine";
+import type { PlanReview, ReviewPart } from "../api/endpoints/planManifests";
 import { filterReviewParts } from "./reviewPartsFilter";
 
 function part(overrides: Partial<ReviewPart> & { id: number }): ReviewPart {

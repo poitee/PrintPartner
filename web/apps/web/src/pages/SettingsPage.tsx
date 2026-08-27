@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { DEFAULT_FILAMENT_HEX } from "@/lib/colorPresets";
 import { useLocation } from "react-router-dom";
 import {
@@ -8,26 +8,27 @@ import {
   Settings,
   SunMoon,
 } from "lucide-react";
+import { DATE_FORMAT_PRESETS, type DateFormatId } from "@print-partner/contracts";
 import {
   createCustomFilament,
-  DATE_FORMAT_PRESETS,
   deleteCustomFilament,
   fetchCustomFilaments,
+  type CustomFilament,
+} from "../api/endpoints/filaments";
+import {
   fetchGitHubPatSettings,
   fetchSourceUpdateCheckSettings,
   saveGitHubPat,
   saveSourceUpdateCheckInterval,
   startCheckSourceUpdates,
-  type CustomFilament,
-  type DateFormatId,
   type GitHubPatSettings,
-} from "../api/engine";
+} from "../api/endpoints/sourceContent";
 import {
   fetchDiscordNotifySettings,
   saveDiscordNotifySettings,
   testDiscordNotify,
   type DiscordNotifySettings,
-} from "../api/engine";
+} from "../api/endpoints/settings";
 import { validateDiscordWebhookUrl } from "@print-partner/contracts";
 import {
   useBuildTrackingSettingsQuery,
@@ -42,6 +43,8 @@ import IntegrationsSettingsCard from "../components/settings/IntegrationsSetting
 import PrintersSettingsCard from "../components/settings/PrintersSettingsCard";
 import SlicersSettingsCard from "../components/settings/SlicersSettingsCard";
 import AboutUpdatesCard from "../components/settings/AboutUpdatesCard";
+import SettingsSection from "../components/settings/SettingsSection";
+import SourceUpdateIntervalSelect from "../components/settings/SourceUpdateIntervalSelect";
 import AccountPasswordCard from "../components/settings/AccountPasswordCard";
 import BackupManagementCard from "../components/settings/BackupManagementCard";
 import ApiKeyManagementCard from "../components/settings/ApiKeyManagementCard";
@@ -75,64 +78,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../components/ui/select";
+import { resolveEngineState } from "../lib/workflowState";
 import {
-  canUseRecoveryTools,
-  canUseSettingsResource,
-  resolveEngineState,
-  resolveSettingsResourceDisplay,
-} from "../lib/workflowState";
-
-const UPDATE_INTERVAL_OPTIONS = [
-  { value: "0", label: "Off (manual only)" },
-  { value: "1", label: "Every hour" },
-  { value: "6", label: "Every 6 hours" },
-  { value: "24", label: "Every 24 hours" },
-  { value: "168", label: "Weekly" },
-] as const;
-
-type SettingsResource =
-  | "filaments"
-  | "githubPat"
-  | "sourceUpdates"
-  | "discord";
-
-type SettingsResourceLoad = {
-  loading: boolean;
-  loaded: boolean;
-  error: string | null;
-};
-
-const INITIAL_RESOURCE_LOAD: SettingsResourceLoad = {
-  loading: false,
-  loaded: false,
-  error: null,
-};
-
-const INITIAL_SETTINGS_LOADS: Record<SettingsResource, SettingsResourceLoad> = {
-  filaments: INITIAL_RESOURCE_LOAD,
-  githubPat: INITIAL_RESOURCE_LOAD,
-  sourceUpdates: INITIAL_RESOURCE_LOAD,
-  discord: INITIAL_RESOURCE_LOAD,
-};
-
-function SettingsSection({
-  id,
-  title,
-  children,
-}: {
-  id?: string;
-  title: string;
-  children: ReactNode;
-}) {
-  return (
-    <section id={id} className="scroll-mt-4 space-y-3">
-      <h2 className="text-sm font-semibold tracking-wide text-muted-foreground">
-        {title}
-      </h2>
-      <div className="space-y-4">{children}</div>
-    </section>
-  );
-}
+  INITIAL_SETTINGS_LOADS,
+  settingsResourceSummary,
+  type SettingsResource,
+} from "../lib/settingsPageModel";
 
 export default function SettingsPage() {
   const location = useLocation();
@@ -232,27 +183,16 @@ export default function SettingsPage() {
     void refresh();
   }, [refresh]);
 
-  const resourceReady = (resource: SettingsResource) =>
-    canUseSettingsResource(engineState, {
-      loading: resourceLoads[resource].loading,
-      error: resourceLoads[resource].error,
-      hasData: resourceLoads[resource].loaded,
-    });
-  const resourceDisplay = (resource: SettingsResource) =>
-    resolveSettingsResourceDisplay({
-      loading: resourceLoads[resource].loading,
-      error: resourceLoads[resource].error,
-      hasData: resourceLoads[resource].loaded,
-    });
-  const filamentsReady = resourceReady("filaments");
-  const githubPatReady = resourceReady("githubPat");
-  const sourceUpdatesReady = resourceReady("sourceUpdates");
-  const discordReady = resourceReady("discord");
-  const recoveryToolsReady = canUseRecoveryTools(engineState);
-  const filamentsDisplay = resourceDisplay("filaments");
-  const githubPatDisplay = resourceDisplay("githubPat");
-  const sourceUpdatesDisplay = resourceDisplay("sourceUpdates");
-  const discordDisplay = resourceDisplay("discord");
+  const resourceSummary = settingsResourceSummary(engineState, resourceLoads);
+  const filamentsReady = resourceSummary.ready.filaments;
+  const githubPatReady = resourceSummary.ready.githubPat;
+  const sourceUpdatesReady = resourceSummary.ready.sourceUpdates;
+  const discordReady = resourceSummary.ready.discord;
+  const recoveryToolsReady = resourceSummary.recoveryToolsReady;
+  const filamentsDisplay = resourceSummary.display.filaments;
+  const githubPatDisplay = resourceSummary.display.githubPat;
+  const sourceUpdatesDisplay = resourceSummary.display.sourceUpdates;
+  const discordDisplay = resourceSummary.display.discord;
 
   // Scroll to hash targets (e.g. /settings#printers) after layout.
   useEffect(() => {
@@ -537,22 +477,11 @@ export default function SettingsPage() {
             )}
             <label className="block text-sm">
               <span className="mb-1 block text-muted-foreground">Check interval</span>
-              <Select
+              <SourceUpdateIntervalSelect
                 value={updateIntervalHours}
-                onValueChange={(v) => void onUpdateIntervalChange(v)}
+                onChange={(value) => void onUpdateIntervalChange(value)}
                 disabled={!sourceUpdatesReady || updateIntervalSaving || updateBusy}
-              >
-                <SelectTrigger className="min-h-10 w-full max-w-none sm:max-w-xs">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {UPDATE_INTERVAL_OPTIONS.map((opt) => (
-                    <SelectItem key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              />
             </label>
             <Button
               variant="secondary"

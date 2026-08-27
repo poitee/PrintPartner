@@ -10,7 +10,7 @@ import {
   applyPlanVariantSelection,
   fetchPlanVariantDimensions,
   type PlanVariantDimensionsResponse,
-} from "../api/engine";
+} from "../api/endpoints/planVariants";
 
 type Props = {
   profileId: number;

@@ -22,7 +22,7 @@ const api = vi.hoisted(() => ({
   resetPasswordWithToken: vi.fn(),
 }));
 
-vi.mock("../api/engine", () => ({
+vi.mock("../api/endpoints/auth", () => ({
   requestPasswordReset: api.requestPasswordReset,
   resetPasswordWithToken: api.resetPasswordWithToken,
 }));
