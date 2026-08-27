@@ -3,7 +3,6 @@ import type {
   BuildWorkflowStageStatus,
   BuildWorkflowWorkspace,
 } from "@print-partner/contracts";
-import type { PlanReview } from "../api/endpoints/planManifests";
 import {
   buildSourcesRoute,
   planRoute,
@@ -97,41 +96,4 @@ export function stageIdFromPath(pathname: string): WorkflowStageId | null {
   if (pathname === "/export") return "production";
   if (pathname === "/progress" || pathname === "/checkoff") return "checkoff";
   return null;
-}
-
-function printedProgress(review: PlanReview | null | undefined): {
-  pct: number;
-  printedUnits: number;
-  totalUnits: number;
-  partCount: number;
-  warnCount: number;
-} {
-  if (!review) {
-    return { pct: 0, printedUnits: 0, totalUnits: 0, partCount: 0, warnCount: 0 };
-  }
-  const parts = review.part_groups.flatMap((group) => group.parts).filter((part) => part.included);
-  const totalUnits = parts.reduce(
-    (sum, part) => sum + Math.max(1, part.quantity_effective),
-    0,
-  );
-  const printedUnits = parts.reduce((sum, part) => sum + part.printed_count, 0);
-  const pct = totalUnits > 0
-    ? Math.min(100, Math.round((printedUnits / totalUnits) * 100))
-    : 0;
-  const issueWarnCount = review.issues?.filter(
-    (issue) => issue.severity === "warning" || issue.severity === "blocker",
-  ).length ?? 0;
-  const warnCount = issueWarnCount + parts.filter((part) => part.missing).length;
-  return {
-    pct,
-    printedUnits,
-    totalUnits,
-    partCount: parts.length,
-    warnCount,
-  };
-}
-
-/** Shared printed-unit totals for the Plan tray. */
-export function planPrintTotals(review: PlanReview | null | undefined) {
-  return printedProgress(review);
 }

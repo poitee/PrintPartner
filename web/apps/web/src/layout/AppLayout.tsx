@@ -3,7 +3,6 @@ import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import CommandPalette from "../components/CommandPalette";
 import ErrorBoundary from "../components/ErrorBoundary";
 import JobTray from "../components/JobTray";
-import PlanTray from "../components/PlanTray";
 import SupportCta from "../components/SupportCta";
 import { Toaster } from "../components/ui/sonner";
 import SaveStatusIndicator from "../components/SaveStatusIndicator";
@@ -60,12 +59,14 @@ export default function AppLayout() {
     document.documentElement.style.setProperty("--app-sidebar-width", width);
   }, [sidebarCollapsed]);
 
+  // One persistent mobile navigation row. Its height is published so the job
+  // strip and page padding can clear it without hard-coded guesses.
   useEffect(() => {
     const mq = window.matchMedia("(min-width: 1024px)");
     const apply = () => {
       document.documentElement.style.setProperty(
         "--mobile-stage-height",
-        mq.matches ? "0px" : "3.25rem",
+        mq.matches ? "0px" : "4rem",
       );
     };
     apply();
@@ -148,7 +149,10 @@ export default function AppLayout() {
               id="main-content"
               tabIndex={-1}
               className={cn(
-                "flex-1 overflow-x-hidden overflow-y-auto p-3 pb-28 sm:p-5 sm:pb-24 lg:pb-20 print:overflow-visible print:p-0",
+                "flex-1 overflow-x-hidden overflow-y-auto p-3 sm:p-5 print:overflow-visible print:p-0",
+                // Reserve the fixed chrome so a running job or the mobile nav row
+                // never covers the end of the page.
+                "pb-[calc(var(--mobile-stage-height,0px)+var(--job-tray-height,0px)+2rem)]",
               )}
             >
               <ErrorBoundary key={location.pathname}>
@@ -161,7 +165,7 @@ export default function AppLayout() {
               stages={stages}
               activeId={activeId}
               onNavigate={onPipelineNavigate}
-              className="fixed bottom-[var(--plan-tray-height,0px)] left-0 right-0 z-30 lg:hidden"
+              className="fixed bottom-0 left-0 right-0 z-30 lg:hidden"
             />
 
             {updateCheck && (
@@ -174,7 +178,6 @@ export default function AppLayout() {
           </div>
 
           <JobTray sidebarCollapsed={sidebarCollapsed} />
-          <PlanTray />
           <CommandPalette />
           <Toaster position="bottom-right" richColors closeButton />
         </div>

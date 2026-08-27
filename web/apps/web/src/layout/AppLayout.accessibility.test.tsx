@@ -7,7 +7,6 @@ import AppLayout from "./AppLayout";
 
 vi.mock("../components/CommandPalette", () => ({ default: () => null }));
 vi.mock("../components/JobTray", () => ({ default: () => null }));
-vi.mock("../components/PlanTray", () => ({ default: () => null }));
 vi.mock("../components/SupportCta", () => ({ default: () => null }));
 vi.mock("../components/CreatePlanButton", () => ({ default: () => <button type="button">Create</button> }));
 vi.mock("../components/SaveStatusIndicator", () => ({ default: () => null }));

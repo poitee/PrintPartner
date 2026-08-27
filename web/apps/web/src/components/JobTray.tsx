@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { Loader2, X } from "lucide-react";
 import { useJobContext } from "../context/JobContext";
 import { jobKindLabel } from "../lib/jobLabels";
@@ -17,18 +18,50 @@ type Props = {
   sidebarCollapsed?: boolean;
 };
 
-/** Async job status strip — stacks above PlanTray via --plan-tray-height. */
+/**
+ * Async job status strip. Sits above the mobile navigation row.
+ *
+ * The strip is fixed, so it publishes its measured height as
+ * `--job-tray-height`. The main scroll area reserves that space instead of
+ * letting a running job cover the bottom of the page.
+ *
+ * The footer stays mounted while empty so the live region exists before its
+ * first message. A live region that mounts together with its content is not
+ * reliably announced.
+ */
 export default function JobTray({ sidebarCollapsed = false }: Props) {
   const { activeJobs, clearJob } = useJobContext();
-  if (activeJobs.length === 0) return null;
+  const trayRef = useRef<HTMLElement | null>(null);
+  const hasJobs = activeJobs.length > 0;
+
+  useEffect(() => {
+    const root = document.documentElement;
+    const node = trayRef.current;
+    if (!node || !hasJobs) {
+      root.style.setProperty("--job-tray-height", "0px");
+      return;
+    }
+    const publish = () => {
+      root.style.setProperty("--job-tray-height", `${node.offsetHeight}px`);
+    };
+    publish();
+    const observer = new ResizeObserver(publish);
+    observer.observe(node);
+    return () => {
+      observer.disconnect();
+      root.style.setProperty("--job-tray-height", "0px");
+    };
+  }, [hasJobs]);
 
   return (
     <footer
+      ref={trayRef}
       className={cn(
         "job-tray fixed left-0 right-0 z-50 border-t border-border bg-card/95 backdrop-blur-sm",
-        "bottom-[calc(var(--plan-tray-height,0px)+var(--mobile-stage-height,0px))]",
+        "bottom-[var(--mobile-stage-height,0px)]",
         "lg:left-[var(--app-sidebar-width,14rem)]",
         sidebarCollapsed && "lg:left-[4.25rem]",
+        !hasJobs && "hidden",
       )}
       role="status"
       aria-live="polite"

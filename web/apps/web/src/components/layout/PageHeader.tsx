@@ -26,7 +26,7 @@ export default function PageHeader({
     <header
       className={cn(
         "relative flex flex-col gap-3 pb-4 sm:flex-row sm:flex-wrap sm:items-start sm:justify-between",
-        accent && "page-accent-bar pt-1",
+        accent && "pt-1",
         className,
       )}
     >
@@ -42,13 +42,11 @@ export default function PageHeader({
           )}
           <div className="min-w-0 flex-1">
             {eyebrow ? (
-              <p className="mb-1 font-mono text-2xs uppercase tracking-wide text-muted-foreground">
-                {eyebrow}
-              </p>
+              <p className="eyebrow mb-1 text-muted-foreground">{eyebrow}</p>
             ) : null}
-            <h1 className="text-xl font-semibold tracking-tight">{title}</h1>
+            <h1 className="text-section">{title}</h1>
             {description && (
-              <p className="mt-1 text-sm text-muted-foreground">{description}</p>
+              <p className="mt-1 text-body text-muted-foreground">{description}</p>
             )}
           </div>
         </div>

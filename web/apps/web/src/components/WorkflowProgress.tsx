@@ -66,6 +66,11 @@ function statusTextClass(stage: WorkflowStage, active: boolean): string {
   }
 }
 
+/** Outstanding task count for a stage, used as the mobile badge number. */
+function stageTaskCount(stage: WorkflowStage): number {
+  return "task_count" in stage.status ? stage.status.task_count : 0;
+}
+
 function stageAriaLabel(stage: WorkflowStage): string {
   return `${stage.label}, ${workflowStatusLabel(stage.status.kind)}. ${stage.status.summary}`;
 }
@@ -82,7 +87,7 @@ export default function WorkflowProgress({
     return (
       <nav
         className={cn(
-          "flex shrink-0 gap-0.5 border-t border-border bg-card/95 px-1.5 py-1.5 backdrop-blur-sm print:hidden sm:gap-1 sm:px-2",
+          "flex shrink-0 gap-1 border-t border-border bg-card/95 px-2 py-1.5 backdrop-blur-sm print:hidden",
           className,
         )}
         aria-label="Build Workflow"
@@ -90,46 +95,49 @@ export default function WorkflowProgress({
         {stages.map((stage, index) => {
           const active = stage.id === activeId;
           const startsMake = index > 0 && stages[index - 1]?.group !== stage.group;
+          const Icon = STAGE_ICONS[stage.id];
+          const attention = isAttention(stage);
           return (
             <NavLink
               key={stage.id}
               to={stage.to}
               onClick={(event) => onNavigate?.(stage.to, event)}
-              title={stage.status.summary}
               aria-label={stageAriaLabel(stage)}
+              aria-current={active ? "page" : undefined}
               className={cn(
-                "flex min-w-0 flex-1 flex-col items-center gap-0.5 rounded-md px-0.5 py-1.5 text-center transition-colors sm:px-1",
+                // WCAG 2.2 target size: each destination keeps a 44px tall target.
+                "relative flex min-h-11 min-w-0 flex-1 flex-col items-center justify-center gap-0.5 rounded-md px-1 py-1 text-center transition-colors",
                 startsMake && "border-l border-border",
                 active
                   ? "bg-primary/12 text-primary"
                   : "text-muted-foreground hover:bg-accent/70 hover:text-foreground",
               )}
             >
-              <span className="flex items-center gap-1">
-                <span
-                  className={cn(
-                    "h-1.5 w-1.5 shrink-0 rounded-full",
-                    statusDotClass(stage, active),
-                  )}
-                  aria-hidden
-                />
-                <span
-                  className={cn(
-                    "truncate text-3xs font-medium sm:text-2xs",
-                    active && "font-semibold",
-                    stage.status.kind === "not_started" && !active && "opacity-60",
-                  )}
-                >
-                  {stage.label}
-                </span>
+              <span className="relative">
+                <Icon className="h-5 w-5" aria-hidden />
+                {/* A count, not a bare colour: the number carries the meaning and
+                    the tone only reinforces it (WCAG G14). */}
+                {attention ? (
+                  <span
+                    className={cn(
+                      "absolute -right-2 -top-1 min-w-4 rounded-full px-1 text-3xs font-semibold leading-4 ring-2 ring-card",
+                      stage.status.kind === "error"
+                        ? "bg-destructive text-destructive-foreground"
+                        : "bg-warning text-warning-foreground",
+                    )}
+                    aria-hidden
+                  >
+                    {stageTaskCount(stage)}
+                  </span>
+                ) : null}
               </span>
               <span
                 className={cn(
-                  "truncate text-3xs",
-                  statusTextClass(stage, active),
+                  "w-full truncate text-2xs font-medium",
+                  active && "font-semibold",
                 )}
               >
-                {workflowStatusLabel(stage.status.kind)}
+                {stage.label}
               </span>
             </NavLink>
           );

@@ -2,6 +2,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useState,
   type ReactNode,
@@ -50,6 +51,18 @@ type JobContextValue = {
 const JobContext = createContext<JobContextValue | null>(null);
 
 const JOB_TERMINAL = new Set(["done", "error", "cancelled"]);
+
+/**
+ * How long a finished job keeps its row in the job strip.
+ *
+ * A job that succeeded is background work the user did not ask to read. Leaving
+ * "Complete 100%" pinned to the bottom of the screen costs a fixed bar for the
+ * rest of the session and, on a phone, covers real content. A failed or
+ * cancelled job stays until the user dismisses it, because that one still needs
+ * a decision.
+ */
+const DONE_JOB_LINGER_MS = 4_000;
+
 let localFailureSequence = 0;
 
 async function pollJobUntilTerminal(
@@ -104,6 +117,17 @@ export function JobProvider({ children }: { children: ReactNode }) {
       setActiveJobs([]);
     }
   }, []);
+
+  // Retire succeeded jobs on their own. Failures and cancellations stay.
+  useEffect(() => {
+    const settled = activeJobs.filter((job) => job.status === "done");
+    if (settled.length === 0) return;
+    const timer = setTimeout(() => {
+      const ids = new Set(settled.map((job) => job.jobId));
+      setActiveJobs((prev) => prev.filter((job) => !ids.has(job.jobId)));
+    }, DONE_JOB_LINGER_MS);
+    return () => clearTimeout(timer);
+  }, [activeJobs]);
 
   const isJobKindRunning = useCallback(
     (kind: string, sourceId?: number) =>

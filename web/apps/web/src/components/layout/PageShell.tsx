@@ -19,12 +19,14 @@ const WIDTHS = {
 } as const;
 
 /**
- * Standard page frame. AppLayout's <main> owns the outer padding; pages own
- * only rhythm: space-y-4 between page-level blocks, space-y-3 within sections.
+ * Standard page frame. AppLayout's <main> owns the outer padding; the shell owns
+ * page rhythm through `.stack-page`, so pages do not hand-pick `space-y-*`.
+ * Inside a page, use `.stack-section` between blocks and `.stack-row` inside a
+ * block. See `docs/design-system.md`.
  */
 export default function PageShell({ width = "work", className, children }: Props) {
   return (
-    <div className={cn("mx-auto w-full space-y-4", WIDTHS[width], className)}>
+    <div className={cn("stack-page mx-auto w-full", WIDTHS[width], className)}>
       {children}
     </div>
   );
