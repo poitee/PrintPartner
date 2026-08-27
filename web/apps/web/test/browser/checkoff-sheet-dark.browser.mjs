@@ -25,19 +25,49 @@ try {
   await page.goto(new URL("test/browser/checkoff-sheet-dark.html", baseUrl).toString());
 
   const screenSheet = page.locator(".checkoff-sheet");
-  const screenBg = await screenSheet.evaluate((element) => {
-    const style = element.ownerDocument.defaultView.getComputedStyle(element);
-    return style.backgroundColor;
+
+  // Assert the intent, not a fixed colour: on screen the sheet takes the theme's
+  // card surface and stays dark. Matching a literal rgb() range broke every time
+  // the palette was tuned, even when the behaviour was still correct.
+  const surfaces = await screenSheet.evaluate((element) => {
+    const view = element.ownerDocument.defaultView;
+    const probe = element.ownerDocument.createElement("div");
+    probe.style.backgroundColor = "var(--card)";
+    element.parentElement.appendChild(probe);
+    const cardToken = view.getComputedStyle(probe).backgroundColor;
+    probe.remove();
+    return {
+      sheet: view.getComputedStyle(element).backgroundColor,
+      cardToken,
+      page: view.getComputedStyle(element.ownerDocument.body).backgroundColor,
+    };
   });
-  assert.notEqual(
-    screenBg,
-    "rgb(255, 255, 255)",
-    `dark screen sheet should not use paper white, got ${screenBg}`,
+
+  function channels(color) {
+    const parsed = color.match(/\d+(\.\d+)?/g);
+    assert.ok(parsed && parsed.length >= 3, `could not read a colour from ${color}`);
+    return parsed.slice(0, 3).map(Number);
+  }
+
+  /** Perceived lightness, 0 (black) to 255 (white). */
+  function lightness(color) {
+    const [r, g, b] = channels(color);
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  }
+
+  assert.equal(
+    surfaces.sheet,
+    surfaces.cardToken,
+    `dark screen sheet must use the --card surface, got ${surfaces.sheet}`,
   );
-  assert.match(
-    screenBg,
-    /rgb\(3[0-9], 3[0-9], 3[0-9]\)/,
-    `expected dark card-like background, got ${screenBg}`,
+  assert.ok(
+    lightness(surfaces.sheet) < 128,
+    `dark screen sheet must stay dark, got ${surfaces.sheet}`,
+  );
+  assert.notEqual(
+    surfaces.sheet,
+    surfaces.page,
+    "the sheet must read as a raised surface, not the page background",
   );
 
   const printBg = await screenSheet.evaluate((element) => {

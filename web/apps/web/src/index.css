@@ -8,20 +8,29 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 /*
-  GRE-234 — desk ink / paper / brass. Single palette; remaining shadcn tokens
-  are derived from the locked set (no second accent family).
+  Desk ink / paper / brass. One palette; the remaining shadcn tokens are
+  derived from the locked set (no second accent family).
 
   - `:root` = light (shop daylight); `.dark` = dark desk (product default).
-  - Paper token group is theme-independent GRE-233 printable white.
-  - Flat surfaces only — no gradient header / accent bars.
+  - Surfaces run on a four-step ladder: sunken -> base -> raised -> overlay.
+  - Paper token group is theme-independent printable white.
+  - Measured contrast ratios live in docs/design-system.md.
 */
 :root {
   /* ---- Light theme (shop daylight) ---- */
-  --background: hsl(36 28% 97%);
+
+  /* Surface ladder. sunken = wells and table headers, base = the page,
+     raised = cards and panels, overlay = popovers, menus, dialogs, sheets. */
+  --surface-sunken: hsl(36 20% 92%);
+  --surface-base: hsl(36 28% 97%);
+  --surface-raised: hsl(36 30% 99%);
+  --surface-overlay: hsl(0 0% 100%);
+
+  --background: var(--surface-base);
   --foreground: hsl(32 16% 14%);
-  --card: hsl(36 30% 99%);
+  --card: var(--surface-raised);
   --card-foreground: hsl(32 16% 14%);
-  --popover: hsl(36 30% 99%);
+  --popover: var(--surface-overlay);
   --popover-foreground: hsl(32 16% 14%);
 
   --primary: hsl(34 52% 38%);
@@ -31,13 +40,13 @@
   --accent-brand: hsl(34 52% 38%);
   --accent-brand-foreground: hsl(36 30% 98%);
 
-  --secondary: hsl(32 12% 92%);
+  --secondary: hsl(32 12% 91%);
   --secondary-foreground: hsl(32 16% 14%);
 
-  --muted: hsl(32 12% 92%);
+  --muted: hsl(32 12% 91%);
   --muted-foreground: hsl(32 10% 38%);
 
-  --accent: hsl(32 12% 90%);
+  --accent: hsl(32 12% 88%);
   --accent-foreground: hsl(32 16% 14%);
 
   --destructive: hsl(0 62% 42%);
@@ -47,30 +56,41 @@
   --success: hsl(152 40% 32%);
   --success-foreground: hsl(36 30% 98%);
   --success-soft: hsl(152 40% 93%);
-  --warning: hsl(34 70% 36%);
+  --warning: hsl(34 72% 34%);
   --warning-foreground: hsl(36 30% 98%);
   --warning-soft: hsl(38 60% 95%);
   --info: hsl(200 45% 38%);
   --info-foreground: hsl(36 30% 98%);
   --info-soft: hsl(200 45% 93%);
 
-  --border: hsl(32 12% 84%);
-  --input: hsl(32 12% 84%);
+  /* --border draws hairlines between blocks. --border-strong draws the
+     boundary of a control and clears 3:1 on every surface (WCAG 1.4.11). */
+  --border: hsl(32 12% 78%);
+  --border-strong: hsl(32 12% 48%);
+  --input: var(--border-strong);
   --ring: hsl(34 52% 38%);
 
-  --surface-sunken: hsl(36 20% 94%);
-  --surface-raised: hsl(0 0% 100%);
   --media-bg: hsl(32 12% 90%);
 
   /* Single warm scrim behind dialogs / sheets / backdrops. */
   --overlay: hsl(32 25% 12% / 0.45);
 
-
-  --elevation-sm: 0 1px 2px hsl(32 20% 40% / 0.06);
-  --elevation-md: 0 1px 3px hsl(32 20% 40% / 0.08), 0 4px 12px hsl(32 16% 30% / 0.06);
-  --elevation-lg: 0 2px 8px hsl(32 20% 40% / 0.1), 0 12px 28px hsl(32 16% 30% / 0.1);
+  --elevation-sm: 0 1px 2px hsl(32 20% 30% / 0.14), 0 2px 4px hsl(32 16% 30% / 0.06);
+  --elevation-md: 0 1px 3px hsl(32 20% 30% / 0.16), 0 6px 16px hsl(32 16% 30% / 0.1);
+  --elevation-lg: 0 2px 8px hsl(32 20% 30% / 0.18), 0 16px 36px hsl(32 16% 30% / 0.18);
 
   --radius: 0.5rem;
+
+  /* ---- Motion ---- */
+  --motion-fast: 110ms;
+  --motion-base: 170ms;
+  --motion-slow: 260ms;
+  --motion-ease: cubic-bezier(0.2, 0, 0, 1);
+
+  /* ---- Rhythm ---- */
+  --space-row: 0.5rem;
+  --space-section: 1rem;
+  --space-page: 1.25rem;
 
   /* ---- Paper token group (printable sheet — theme-independent) ---- */
   --paper-bg: #ffffff;
@@ -98,11 +118,16 @@
 
 /* ---- Dark theme (desk default) ---- */
 .dark {
-  --background: hsl(32 10% 9%);
+  --surface-sunken: hsl(32 12% 4%);
+  --surface-base: hsl(32 10% 9%);
+  --surface-raised: hsl(32 9% 16%);
+  --surface-overlay: hsl(32 9% 19%);
+
+  --background: var(--surface-base);
   --foreground: hsl(36 18% 93%);
-  --card: hsl(32 8% 13%);
+  --card: var(--surface-raised);
   --card-foreground: hsl(36 18% 93%);
-  --popover: hsl(32 8% 17%);
+  --popover: var(--surface-overlay);
   --popover-foreground: hsl(36 18% 93%);
 
   --primary: hsl(36 48% 52%);
@@ -111,18 +136,18 @@
   --accent-brand: hsl(36 48% 52%);
   --accent-brand-foreground: hsl(32 20% 10%);
 
-  --secondary: hsl(32 8% 18%);
+  --secondary: hsl(32 8% 21%);
   --secondary-foreground: hsl(36 18% 93%);
 
-  --muted: hsl(32 8% 16%);
-  --muted-foreground: hsl(32 8% 62%);
+  --muted: hsl(32 8% 21%);
+  --muted-foreground: hsl(32 8% 66%);
 
-  --accent: hsl(32 8% 18%);
+  --accent: hsl(32 8% 25%);
   --accent-foreground: hsl(36 18% 93%);
 
-  /* Status hues sit high enough to pass AA as text on bg/card; solid fills
-     take dark ink foregrounds (same pattern as --primary-foreground). */
-  --destructive: hsl(0 66% 65%);
+  /* Status hues sit high enough to pass AA as text on every surface up to
+     the overlay step; solid fills take dark ink foregrounds. */
+  --destructive: hsl(0 66% 70%);
   --destructive-foreground: hsl(32 20% 10%);
   --destructive-soft: hsl(0 32% 16%);
 
@@ -136,23 +161,21 @@
   --info-foreground: hsl(32 20% 10%);
   --info-soft: hsl(202 32% 16%);
 
-  --border: hsl(32 8% 20%);
-  --input: hsl(32 8% 18%);
+  --border: hsl(32 8% 30%);
+  --border-strong: hsl(32 8% 52%);
+  --input: var(--border-strong);
   --ring: hsl(36 48% 52%);
 
-  --surface-sunken: hsl(32 10% 7%);
-  --surface-raised: hsl(32 8% 17%);
   --media-bg: hsl(32 10% 6%);
 
   --overlay: hsl(30 25% 3% / 0.65);
 
-
-  --elevation-sm: 0 1px 2px hsl(32 20% 4% / 0.35);
-  --elevation-md: 0 1px 0 hsl(32 8% 24% / 0.35), 0 4px 12px hsl(32 20% 4% / 0.45);
-  --elevation-lg: 0 2px 8px hsl(32 20% 4% / 0.5), 0 16px 32px hsl(32 20% 2% / 0.55);
+  --elevation-sm: 0 1px 2px hsl(0 0% 0% / 0.4);
+  --elevation-md: 0 1px 0 hsl(32 8% 30% / 0.5), 0 4px 14px hsl(0 0% 0% / 0.5);
+  --elevation-lg: 0 1px 0 hsl(32 8% 34% / 0.5), 0 18px 40px hsl(0 0% 0% / 0.6);
 }
 
-/* Fonts + radii are emitted as real custom properties (used by var() in CSS). */
+/* Fonts, radii, type scale, motion defaults. */
 @theme {
   --font-sans: "Source Sans 3", system-ui, sans-serif;
   --font-serif: "Source Serif 4", ui-serif, Georgia, serif;
@@ -162,11 +185,34 @@
   --radius-md: calc(var(--radius) - 2px);
   --radius-sm: calc(var(--radius) - 4px);
 
-  /* Micro type scale — replaces ad-hoc text-[Npx] sizes below text-sm. */
-  --text-3xs: 0.625rem;
-  --text-3xs--line-height: 0.875rem;
+  /*
+   * Named type scale. Use these instead of raw text-[Npx].
+   * 11px is the floor and is reserved for micro labels (eyebrows, units).
+   */
+  --text-micro: 0.6875rem;
+  --text-micro--line-height: 1rem;
+  --text-meta: 0.8125rem;
+  --text-meta--line-height: 1.125rem;
+  --text-body: 0.875rem;
+  --text-body--line-height: 1.375rem;
+  --text-lead: 1rem;
+  --text-lead--line-height: 1.5rem;
+  --text-title: 1.125rem;
+  --text-title--line-height: 1.5rem;
+  --text-section: 1.375rem;
+  --text-section--line-height: 1.75rem;
+  --text-page: 1.75rem;
+  --text-page--line-height: 2.125rem;
+
+  /* Legacy micro aliases. Both now resolve to the 11px floor. */
+  --text-3xs: 0.6875rem;
+  --text-3xs--line-height: 1rem;
   --text-2xs: 0.6875rem;
   --text-2xs--line-height: 1rem;
+
+  /* Every transition-* utility inherits the desk motion tokens. */
+  --default-transition-duration: var(--motion-base);
+  --default-transition-timing-function: var(--motion-ease);
 }
 
 /* Map Tailwind color utilities onto the semantic theme variables above. */
@@ -208,12 +254,15 @@
   --color-info-soft: var(--info-soft);
 
   --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
   --color-input: var(--input);
   --color-ring: var(--ring);
 
   --color-overlay: var(--overlay);
+  --color-surface-base: var(--surface-base);
   --color-surface-raised: var(--surface-raised);
   --color-surface-sunken: var(--surface-sunken);
+  --color-surface-overlay: var(--surface-overlay);
   --color-media: var(--media-bg);
 
   /* Wire Tailwind shadow utilities to the warm elevation tokens so every
@@ -240,9 +289,11 @@
     color-scheme: dark;
   }
 
+  /* Serif is the brand voice: wordmark and page titles only. */
   h1 {
-    @apply text-foreground font-bold tracking-tight text-balance;
-    letter-spacing: -0.025em;
+    @apply text-foreground font-semibold tracking-tight text-balance;
+    font-family: var(--font-serif);
+    letter-spacing: -0.015em;
   }
 
   h2 {
@@ -260,13 +311,29 @@
     letter-spacing: -0.01em;
   }
 
+  /* Numbers must not jitter while counts update. */
+  code,
+  kbd,
+  samp,
+  pre,
+  time,
+  [class*="font-mono"],
+  input[type="number"] {
+    font-variant-numeric: tabular-nums;
+  }
+
   /* Legacy App.css pages use .muted — align with design tokens */
   .muted,
   .subtitle {
     color: var(--muted-foreground);
   }
 
-  /* Consistent, visible keyboard focus across native + custom controls */
+  /*
+   * One focus treatment for every control: a 2px brass outline offset from
+   * the control, so the ring sits on the surface behind it and stays visible
+   * on brass buttons, inside cards, and inside dialogs. Primitives must not
+   * set focus-visible:outline-none.
+   */
   :focus-visible {
     outline: 2px solid var(--ring);
     outline-offset: 2px;
@@ -285,18 +352,47 @@
 }
 
 @layer components {
-  /* GRE-234: no accent bar stripe — flat desk chrome. */
-  .page-accent-bar {
-    position: relative;
+  /*
+   * Shared vertical rhythm. Pages stack sections with .stack-page, a section
+   * stacks its blocks with .stack-section, and a block stacks its rows with
+   * .stack-row. Use these instead of hand-picked space-y-* per page.
+   */
+  .stack-page,
+  .stack-section,
+  .stack-row {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
   }
 
+  .stack-page {
+    gap: var(--space-page);
+  }
 
+  .stack-section {
+    gap: var(--space-section);
+  }
 
+  .stack-row {
+    gap: var(--space-row);
+  }
 
+  /* A section label + the content it introduces. */
+  .section-heading {
+    font-size: var(--text-title);
+    line-height: var(--text-title--line-height);
+    font-weight: 600;
+    letter-spacing: -0.015em;
+  }
 
-
-
-
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: var(--text-micro);
+    line-height: var(--text-micro--line-height);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted-foreground);
+  }
 
   .table-scroll {
     margin-left: -0.25rem;
@@ -345,7 +441,22 @@
   }
 }
 
+/* Wider desks get more air between sections; phones stay tight. */
+@media (min-width: 1024px) {
+  :root {
+    --space-row: 0.625rem;
+    --space-section: 1.25rem;
+    --space-page: 1.75rem;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-fast: 0.01ms;
+    --motion-base: 0.01ms;
+    --motion-slow: 0.01ms;
+  }
+
   *,
   *::before,
   *::after {

@@ -44,23 +44,34 @@ const darkTokens = ruleBody(indexCss, ".dark");
 
 describe("GRE-234 branding tokens", () => {
   it("locks dark desk ink / paper / brass", () => {
-    expect(darkTokens).toMatch(/--background:\s*hsl\(32\s+10%\s+9%\)/);
-    expect(darkTokens).toMatch(/--card:\s*hsl\(32\s+8%\s+13%\)/);
+    expect(darkTokens).toMatch(/--surface-base:\s*hsl\(32\s+10%\s+9%\)/);
+    expect(darkTokens).toMatch(/--background:\s*var\(--surface-base\)/);
+    expect(darkTokens).toMatch(/--card:\s*var\(--surface-raised\)/);
     expect(darkTokens).toMatch(/--foreground:\s*hsl\(36\s+18%\s+93%\)/);
     expect(darkTokens).toMatch(/--primary:\s*hsl\(36\s+48%\s+52%\)/);
     expect(darkTokens).toMatch(/--primary-foreground:\s*hsl\(32\s+20%\s+10%\)/);
-    expect(darkTokens).toMatch(/--muted-foreground:\s*hsl\(32\s+8%\s+62%\)/);
-    expect(darkTokens).toMatch(/--border:\s*hsl\(32\s+8%\s+20%\)/);
+    expect(darkTokens).toMatch(/--muted-foreground:\s*hsl\(32\s+8%\s+66%\)/);
   });
 
   it("locks light shop daylight tokens", () => {
-    expect(lightTokens).toMatch(/--background:\s*hsl\(36\s+28%\s+97%\)/);
+    expect(lightTokens).toMatch(/--surface-base:\s*hsl\(36\s+28%\s+97%\)/);
+    expect(lightTokens).toMatch(/--background:\s*var\(--surface-base\)/);
+    expect(lightTokens).toMatch(/--card:\s*var\(--surface-raised\)/);
     expect(lightTokens).toMatch(/--foreground:\s*hsl\(32\s+16%\s+14%\)/);
-    expect(lightTokens).toMatch(/--card:\s*hsl\(36\s+30%\s+99%\)/);
     expect(lightTokens).toMatch(/--primary:\s*hsl\(34\s+52%\s+38%\)/);
     expect(lightTokens).toMatch(/--primary-foreground:\s*hsl\(36\s+30%\s+98%\)/);
     expect(lightTokens).toMatch(/--muted-foreground:\s*hsl\(32\s+10%\s+38%\)/);
-    expect(lightTokens).toMatch(/--border:\s*hsl\(32\s+12%\s+84%\)/);
+  });
+
+  it("gives both themes the four-step surface ladder", () => {
+    for (const tokens of [lightTokens, darkTokens]) {
+      for (const step of ["sunken", "base", "raised", "overlay"]) {
+        expect(tokens).toMatch(new RegExp(`--surface-${step}:\\s*hsl\\(`));
+      }
+      // Controls need a boundary that clears 3:1; hairlines stay quiet.
+      expect(tokens).toMatch(/--border-strong:\s*hsl\(/);
+      expect(tokens).toMatch(/--input:\s*var\(--border-strong\)/);
+    }
   });
 
   it("keeps print paper tokens pure white (no brass bleed)", () => {
@@ -94,7 +105,7 @@ describe("elevation, scrim, and status system", () => {
     expect(darkTokens).toMatch(/--success:\s*hsl\(152\s+42%\s+56%\)/);
     expect(darkTokens).toMatch(/--warning:\s*hsl\(38\s+68%\s+58%\)/);
     expect(darkTokens).toMatch(/--info:\s*hsl\(200\s+55%\s+60%\)/);
-    expect(darkTokens).toMatch(/--destructive:\s*hsl\(0\s+66%\s+65%\)/);
+    expect(darkTokens).toMatch(/--destructive:\s*hsl\(0\s+66%\s+70%\)/);
     // Bright dark-mode fills take dark ink, like --primary-foreground.
     expect(darkTokens).toMatch(/--destructive-foreground:\s*hsl\(32\s+20%\s+10%\)/);
     for (const tokens of [lightTokens, darkTokens]) {
@@ -118,9 +129,30 @@ describe("elevation, scrim, and status system", () => {
     expect(indexCss).toMatch(/--color-overlay:\s*var\(--overlay\)/);
   });
 
-  it("defines the micro type scale", () => {
+  it("keeps the type scale above the 11px floor", () => {
+    // text-3xs used to be 10px. Both micro aliases now resolve to 11px.
+    expect(indexCss).toMatch(/--text-micro:\s*0\.6875rem/);
     expect(indexCss).toMatch(/--text-2xs:\s*0\.6875rem/);
-    expect(indexCss).toMatch(/--text-3xs:\s*0\.625rem/);
+    expect(indexCss).toMatch(/--text-3xs:\s*0\.6875rem/);
+    for (const step of ["meta", "body", "lead", "title", "section", "page"]) {
+      expect(indexCss).toMatch(new RegExp(`--text-${step}:\\s*\\d`));
+      expect(indexCss).toMatch(new RegExp(`--text-${step}--line-height:\\s*\\d`));
+    }
+  });
+
+  it("publishes motion and rhythm tokens instead of per-page guesses", () => {
+    expect(indexCss).toMatch(/--motion-fast:\s*\d+ms/);
+    expect(indexCss).toMatch(/--motion-base:\s*\d+ms/);
+    expect(indexCss).toMatch(/--motion-slow:\s*\d+ms/);
+    expect(indexCss).toMatch(/--default-transition-duration:\s*var\(--motion-base\)/);
+    expect(indexCss).toMatch(/--space-row:/);
+    expect(indexCss).toMatch(/--space-section:/);
+    expect(indexCss).toMatch(/--space-page:/);
+    expect(indexCss).toMatch(/@media \(prefers-reduced-motion: reduce\)/);
+  });
+
+  it("drops the dead accent-bar rule", () => {
+    expect(indexCss).not.toMatch(/\.page-accent-bar\s*\{/);
   });
 });
 

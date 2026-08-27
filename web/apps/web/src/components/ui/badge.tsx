@@ -1,4 +1,5 @@
 import type { LucideIcon } from "lucide-react";
+import { statusTone } from "@/lib/statusTone";
 import { cn } from "@/lib/utils";
 
 type Props = React.HTMLAttributes<HTMLSpanElement> & {
@@ -15,25 +16,29 @@ type Props = React.HTMLAttributes<HTMLSpanElement> & {
   icon?: LucideIcon;
 };
 
+/**
+ * A label chip. For workflow state use `StatusBadge` instead: it always pairs
+ * the color with an icon shape and words.
+ */
 export function Badge({ className, variant = "default", icon: Icon, children, ...props }: Props) {
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium transition-colors",
-        variant === "default" && "border border-primary/30 bg-primary/15 text-primary",
-        variant === "base" && "border border-success/25 bg-success-soft text-success",
-        variant === "addon" && "border border-warning/25 bg-warning-soft text-warning",
-        variant === "muted" && "border border-border bg-muted text-muted-foreground",
-        variant === "outline" && "border border-border bg-transparent text-foreground",
-        variant === "success" && "border border-success/30 bg-success-soft text-success",
-        variant === "warning" && "border border-warning/30 bg-warning-soft text-warning",
-        variant === "error" && "border border-destructive/30 bg-destructive-soft text-destructive",
-        variant === "info" && "border border-info/30 bg-info-soft text-info",
+        "inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-meta font-medium tabular transition-colors",
+        variant === "default" && "border-primary/40 bg-primary/15 text-primary",
+        variant === "base" && statusTone({ tone: "success", emphasis: "soft" }),
+        variant === "addon" && statusTone({ tone: "warning", emphasis: "soft" }),
+        variant === "muted" && statusTone({ tone: "neutral", emphasis: "soft" }),
+        variant === "outline" && "border-border-strong/60 bg-transparent text-foreground",
+        variant === "success" && statusTone({ tone: "success", emphasis: "soft" }),
+        variant === "warning" && statusTone({ tone: "warning", emphasis: "soft" }),
+        variant === "error" && statusTone({ tone: "error", emphasis: "soft" }),
+        variant === "info" && statusTone({ tone: "info", emphasis: "soft" }),
         className,
       )}
       {...props}
     >
-      {Icon && <Icon className="h-3 w-3 shrink-0" aria-hidden />}
+      {Icon && <Icon className="h-3.5 w-3.5 shrink-0" aria-hidden />}
       {children}
     </span>
   );
