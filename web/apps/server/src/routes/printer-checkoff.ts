@@ -30,8 +30,8 @@ import {
   listUnattributedPrints,
   saveUnattributedPrint,
 } from "../services/unattributed-print-store.js";
-import type { UnattributedPrint } from "../services/unattributed-print-store.js";
 import { normalizePrinterFilename } from "../services/printer-checkoff.js";
+import { filterLinkedUnattributedPrints } from "./printer-checkoff-route-model.js";
 import { loadFleet } from "../services/printer-fleet.js";
 import { deductSpoolmanFilamentAfterVerify } from "../services/spoolman-deduct.js";
 
@@ -100,44 +100,6 @@ function repairEmptyAwaitingLinks(
     beforeRepair(link);
     const repaired = repo.materializeAcceptedPrinterLink({ kind: "repair", expectedLink: link });
     return repaired.kind === "repaired" ? repaired.link : link;
-  });
-}
-
-function linkedCheckoffLinks(
-  repo: AppRepository,
-  integrationId?: string,
-): PrinterCheckoffLink[] {
-  const eligibleStates = new Set<PrinterCheckoffLink["state"]>([
-    "watching",
-    "awaiting_verify",
-    "verified",
-  ]);
-  return loadPrinterCheckoffLinks(repo).filter(
-    (link) =>
-      eligibleStates.has(link.state) &&
-      (!integrationId || link.integration_id === integrationId),
-  );
-}
-
-function printMatchesLink(
-  print: UnattributedPrint,
-  link: PrinterCheckoffLink,
-): boolean {
-  return (
-    link.integration_id === print.integration_id &&
-    normalizePrinterFilename(link.filename) === normalizePrinterFilename(print.filename)
-  );
-}
-
-function filterLinkedUnattributedPrints(
-  repo: AppRepository,
-  prints: UnattributedPrint[],
-  integrationId?: string,
-): UnattributedPrint[] {
-  const links = linkedCheckoffLinks(repo, integrationId);
-  return prints.filter((print) => {
-    if (integrationId && print.integration_id !== integrationId) return false;
-    return !links.some((link) => printMatchesLink(print, link));
   });
 }
 
@@ -276,8 +238,8 @@ export async function registerPrinterCheckoffRoutes(
       }
 
       const openUnattributed = filterLinkedUnattributedPrints(
-        deps.repo,
         listOpenUnattributedPrints(deps.repo),
+        loadPrinterCheckoffLinks(deps.repo),
         integrationId,
       );
 
@@ -491,8 +453,8 @@ export async function registerPrinterCheckoffRoutes(
 
   app.get("/printer-checkoff/unattributed", async () => {
     const prints = filterLinkedUnattributedPrints(
-      deps.repo,
       listOpenUnattributedPrints(deps.repo),
+      loadPrinterCheckoffLinks(deps.repo),
     );
     return { prints };
   });

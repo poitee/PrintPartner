@@ -25,55 +25,21 @@ import {
 } from "../services/build-planning.js";
 import {
   filamentAssignmentColumns,
-  resolveFilamentAssignment,
-  type AssignAcceptedFilamentResult,
-  type FilamentAssignment,
 } from "../db/accepted-part-filament.js";
 import {
   toLegacyProfileSummary,
   toProfileSummary,
   type LegacyProgressFailure,
 } from "./plan-summary-presenter.js";
+import { acceptedStateDetail } from "./accepted-state-detail.js";
+import { parsePhaseManifestText } from "./phase-manifest-route-model.js";
+import { completeRoleAssignment } from "./plan-role-assignment-model.js";
+import { sendAcceptedFilamentFailure } from "./accepted-filament-failure.js";
 
 type RouteDeps = { repo: AppRepository; dataDir: string; reposDir: string; thumbsDir: string };
 export type PlanSummaryContract = "accepted" | "legacy-v1";
 
 type PlanRouteOptions = { readonly summaryContract?: PlanSummaryContract };
-
-/**
- * Parse a source's pp-phases.json. Accepts a bare array or {phases:[...]};
- * every entry needs a name and a folders list. Order and dependency edges are
- * normalized so the client always receives the full shape.
- */
-function parsePhaseManifestText(text: string): Array<Record<string, unknown>> | null {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    return null;
-  }
-  const rawPhases = Array.isArray(parsed)
-    ? parsed
-    : parsed && typeof parsed === "object" && Array.isArray((parsed as { phases?: unknown }).phases)
-      ? ((parsed as { phases: unknown[] }).phases)
-      : null;
-  if (!rawPhases || !rawPhases.length) return null;
-  const phases: Array<Record<string, unknown>> = [];
-  for (const [index, entry] of rawPhases.entries()) {
-    if (!entry || typeof entry !== "object") return null;
-    const phase = entry as Record<string, unknown>;
-    if (typeof phase.name !== "string" || !phase.name.trim()) return null;
-    if (!Array.isArray(phase.folders) || phase.folders.some((f) => typeof f !== "string")) return null;
-    phases.push({
-      ...phase,
-      order: typeof phase.order === "number" ? phase.order : index,
-      depends_on: Array.isArray(phase.depends_on)
-        ? phase.depends_on.filter((d) => typeof d === "string")
-        : [],
-    });
-  }
-  return phases;
-}
 
 function presentProfile(summary: AcceptedProfileSummary, contract: PlanSummaryContract) {
   if (contract === "accepted") return { kind: "ready" as const, profile: toProfileSummary(summary) };
@@ -106,46 +72,6 @@ function sendLegacyFailure(
     "Accepted Plan progress unavailable",
   );
   return reply.status(409).send({ detail: acceptedStateDetail(failure.reason) });
-}
-
-function acceptedStateDetail(reason: "compatibility_dirty" | "uninitialized"): string {
-  return reason === "compatibility_dirty"
-    ? "Accepted Plan requires compatibility repair"
-    : "Accepted Plan operational state is not initialized";
-}
-
-function sendAcceptedFilamentFailure(reply: FastifyReply, failure: AssignAcceptedFilamentResult) {
-  if (failure.kind === "updated") {
-    throw new Error("Accepted filament success cannot be sent as a failure");
-  }
-  if (failure.kind === "accepted_state_unavailable") {
-    return reply.status(409).send({ detail: acceptedStateDetail(failure.reason) });
-  }
-  if (failure.kind === "stale_accepted_plan") {
-    return reply.status(409).send({ detail: "Accepted Plan changed; reload and retry" });
-  }
-  if (failure.kind === "transaction_unavailable") {
-    return reply.status(503).send({ detail: "Accepted Plan update is unavailable" });
-  }
-  if (failure.kind === "plan_archived") {
-    return reply.status(409).send({ detail: "Archived Plan Progress cannot be changed" });
-  }
-  return reply.status(404).send({ detail: "Part not found" });
-}
-
-function completeRoleAssignment(body: {
-  filament_color_id?: string | null;
-  filament_custom_hex?: string | null;
-  spoolman_spool_id?: string | null;
-}): FilamentAssignment {
-  return resolveFilamentAssignment(
-    { color: { kind: "unset" }, spoolmanSpoolId: null },
-    {
-      colorId: body.filament_color_id ?? null,
-      customHex: body.filament_custom_hex ?? null,
-      spoolmanSpoolId: body.spoolman_spool_id ?? null,
-    },
-  );
 }
 
 function archiveAcceptedPlan(

@@ -656,6 +656,39 @@ describe("printer progress route", () => {
     ]);
   });
 
+  it("claims only selected unattributed plate files", async () => {
+    const { app, repo, plan, bracket, acceptedPart } = await setup();
+    const print = createUnattributedPrint(
+      "prusa-1",
+      "core-one",
+      "Core One",
+      "mixed.bgcode",
+      [acceptedPart.units[0]!.objectName, "unknown.stl"],
+      [],
+    );
+    saveUnattributedPrint(repo, print);
+
+    const claim = await app.inject({
+      method: "POST",
+      url: `/printer-checkoff/unattributed/${print.id}/claim`,
+      payload: {
+        profile_id: plan.id,
+        selected_stl_basenames: [acceptedPart.units[0]!.objectName.toLowerCase()],
+      },
+    });
+
+    expect(claim.statusCode).toBe(200);
+    expect(claim.json()).toMatchObject({
+      ok: true,
+      link: {
+        state: "awaiting_verify",
+        units: [{ part_id: bracket.id, unit_index: 0 }],
+      },
+    });
+    expect(claim.json().link).not.toHaveProperty("unlabeled_names");
+    expect(acceptedPrintUnits(repo, plan.id, bracket.id)).toEqual([false]);
+  });
+
   it.each([
     [{ kind: "empty" } as const, "Accepted Plan has no required units"],
     [

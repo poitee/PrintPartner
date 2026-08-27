@@ -9,6 +9,7 @@
  */
 
 import type { FastifyInstance } from "fastify";
+import type { ServerConfig } from "../config.js";
 import type { AppRepository } from "../db/repository.js";
 import type { IntegrationPort } from "../integrations/store.js";
 import { loadFleet } from "../services/printer-fleet.js";
@@ -32,13 +33,11 @@ export async function registerDiscordDigestRoute(
     const logger = getLogger();
 
     // Auth check: session or API key (same pattern as /metrics)
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const sessionUser = (request as any).sessionUser;
+    const sessionUser = request.sessionUser;
     const authHeader = request.headers["authorization"];
     const apiKey = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
     if (!sessionUser && !apiKey) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { config } = app as any;
+      const { config } = app as FastifyInstance & { readonly config?: ServerConfig };
       if (config?.authRequired) {
         return reply.status(401).send({ detail: "Authentication required" });
       }

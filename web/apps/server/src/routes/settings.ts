@@ -37,16 +37,9 @@ import {
 } from "../integrations/spoolman-client.js";
 import { WORKFLOW_GUIDE } from "./workflow-guide.js";
 import { sendDiscordNotification } from "../services/discord-notify.js";
+import { sourceIdFromParams } from "./settings-route-model.js";
 
 type RouteDeps = { repo: AppRepository; dataDir: string; config?: ServerConfig };
-
-function sourceIdFromParams(params: unknown): number | null {
-  if (typeof params !== "object" || params === null || !("id" in params)) return null;
-  const value = params.id;
-  if (typeof value !== "string" || !/^\d+$/.test(value)) return null;
-  const sourceId = Number(value);
-  return Number.isSafeInteger(sourceId) && sourceId > 0 ? sourceId : null;
-}
 
 export async function registerSettingsRoutes(app: FastifyInstance, deps: RouteDeps): Promise<void> {
   app.get("/settings/update-check", async (request) => {
