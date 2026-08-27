@@ -182,6 +182,14 @@ export default function ExportPage() {
   const workspace = workspaceQuery.data;
   const printerCount =
     workspace && workspace.kind !== "empty_plan" ? workspace.printers.length : 0;
+  const printerAssignmentStatus = printerCount === 0
+    ? "Printer required"
+    : workspace?.kind === "ready" && workspace.unassigned.length === 0
+      ? "Assigned"
+      : "Choose printers";
+  const plateLayoutStatus = workspace?.kind === "ready"
+    ? `Revision ${workspace.plate_revision_number}`
+    : "Build after assignment";
   const tasks = useMemo(() => {
     if (!projection.bench) return [];
     return productionTasks({
@@ -294,8 +302,33 @@ export default function ExportPage() {
 
   const preparePlatesPanel = (
     <div className="space-y-4">
+      <nav
+        aria-label="Plate builder"
+        className="grid gap-2 rounded-lg border border-border bg-card p-2 shadow-sm sm:grid-cols-3"
+      >
+        {[
+          { href: "#plate-builder-units", step: "1", label: "Units", status: `${selectedTokens.length} selected` },
+          { href: "#plate-builder-printers", step: "2", label: "Printers", status: printerAssignmentStatus },
+          { href: "#plate-builder-layout", step: "3", label: "Plate layout", status: plateLayoutStatus },
+        ].map((item) => (
+          <a
+            key={item.href}
+            href={item.href}
+            className="flex min-h-14 items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full border border-border bg-background font-mono text-xs font-semibold">
+              {item.step}
+            </span>
+            <span className="min-w-0">
+              <span className="block font-medium text-foreground">{item.label}</span>
+              <span className="block truncate text-xs text-muted-foreground">{item.status}</span>
+            </span>
+          </a>
+        ))}
+      </nav>
       <section
-        className="space-y-3 rounded-lg border border-border bg-card p-4"
+        id="plate-builder-units"
+        className="scroll-mt-4 space-y-3 rounded-lg border border-border bg-card p-4"
         aria-labelledby="production-choose-units-heading"
       >
         <div className="space-y-1">
@@ -335,6 +368,7 @@ export default function ExportPage() {
       {selectedProfileId != null ? (
         <>
           <AcceptedPlateSection
+            sectionId="plate-builder-printers"
             profileId={selectedProfileId}
             enabled={engineState === "ready"}
             selectedTokens={new Set(selectedTokens)}
@@ -364,6 +398,7 @@ export default function ExportPage() {
           </details>
 
           <AcceptedPlateSection
+            sectionId="plate-builder-layout"
             profileId={selectedProfileId}
             enabled={engineState === "ready"}
             selectedTokens={new Set(selectedTokens)}

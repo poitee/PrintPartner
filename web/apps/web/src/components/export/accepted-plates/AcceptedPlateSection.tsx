@@ -77,6 +77,7 @@ function plateErrorMessage(error: unknown): string | null {
 }
 
 type Props = Readonly<{
+  sectionId?: string;
   profileId: number;
   enabled: boolean;
   selectedTokens?: ReadonlySet<string>;
@@ -112,6 +113,7 @@ function selectionIdentity(selectedTokens: ReadonlySet<string> | undefined): str
 }
 
 export default function AcceptedPlateSection({
+  sectionId,
   profileId,
   enabled,
   selectedTokens,
@@ -331,7 +333,7 @@ export default function AcceptedPlateSection({
   };
 
   return (
-    <Card className="border-border shadow-sm">
+    <Card id={sectionId} className="scroll-mt-4 border-border shadow-sm">
       <CardHeader className="gap-1">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="space-y-1">

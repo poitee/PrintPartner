@@ -129,7 +129,19 @@ export default function AcceptedPlateAssignmentForm({
     const printerId = assignments[row.unit.token];
     return printerId != null && workspace.printers.some((printer) => printer.id === printerId);
   });
-  const assignedCount = rows.filter((row) => assignments[row.unit.token] != null).length;
+  const eligiblePrinterIds = new Set(workspace.printers.map((printer) => printer.id));
+  const assignedCount = rows.filter((row) => {
+    const printerId = assignments[row.unit.token];
+    return printerId != null && eligiblePrinterIds.has(printerId);
+  }).length;
+  const assignedPrinterIds = new Set(rows.flatMap((row) => {
+    const printerId = assignments[row.unit.token];
+    return printerId != null && eligiblePrinterIds.has(printerId) ? [printerId] : [];
+  }));
+  const allSelectedPrinterId = complete && assignedPrinterIds.size === 1
+    ? [...assignedPrinterIds][0] ?? ""
+    : "";
+  const missingAssignmentCount = rows.length - assignedCount;
   const normalizedSearch = search.trim().toLocaleLowerCase();
   const filteredRows = rows.filter((row) => {
     const printerId = assignments[row.unit.token];
@@ -185,6 +197,16 @@ export default function AcceptedPlateAssignmentForm({
     })));
   };
 
+  const fillAll = (printerId: string) => {
+    assignmentsEdited.current = true;
+    const next = Object.fromEntries(rows.map((row) => [row.unit.token, printerId]));
+    setAssignments(next);
+    onAssignmentsChange?.(rows.map((row) => ({
+      token: row.unit.token,
+      printer_id: printerId,
+    })));
+  };
+
   const groupAssignment = (field: AssignmentGroupField, value: string) => {
     const matching = rows.filter((row) => unitRuleValue(row.unit, field) === value);
     const assigned = new Set(matching.map((row) => assignments[row.unit.token] ?? ""));
@@ -237,44 +259,69 @@ export default function AcceptedPlateAssignmentForm({
         <p className="text-sm text-muted-foreground">No eligible Printers are configured.</p>
       ) : null}
       {workspace.printers.length > 0 ? (
-        <div className="space-y-3 rounded-md border border-border bg-muted/30 p-3">
+        <div className="space-y-3 rounded-md border border-border bg-muted/30 p-4">
           <div className="flex flex-wrap items-end justify-between gap-3">
             <div className="space-y-1">
-              <p className="text-sm font-medium">Bulk assignment</p>
+              <p className="text-sm font-medium">Printer assignment</p>
               <p className="text-xs text-muted-foreground">
-                Group the selected parts, then choose a printer for each group.
+                Start with one printer for the whole selection. Split the work only when you need to.
               </p>
             </div>
             <p className="text-xs text-muted-foreground">
-              {assignedCount} of {rows.length} parts assigned
+              {assignedCount} of {rows.length} selected units assigned
             </p>
           </div>
-          <label className="grid max-w-56 gap-1 text-xs font-medium">
-            Bulk assign by
+          <label className="grid max-w-md gap-1 text-xs font-medium">
+            Assign all selected units
             <select
               className="h-9 rounded-md border border-border bg-background px-2 text-sm"
-              value={groupField}
+              value={allSelectedPrinterId}
+              disabled={submitting || rows.length === 0}
               onChange={(event) => {
-                if (isAssignmentGroupField(event.target.value)) setGroupField(event.target.value);
+                if (event.target.value) fillAll(event.target.value);
               }}
             >
-              <option value="source_layer">Source layer</option>
-              {groupValues.source_directory.length > 0 || groupField === "source_directory"
-                ? <option value="source_directory">Source directory</option>
-                : null}
-              {groupValues.filament_color_id.length > 0 || groupField === "filament_color_id"
-                ? <option value="filament_color_id">Color</option>
-                : null}
-              <option value="role">Role</option>
+              <option value="">
+                {complete ? "Multiple printers assigned" : assignedCount > 0 ? "Keep current assignments" : "Choose a printer"}
+              </option>
+              {workspace.printers.map((printer) => (
+                <option key={printer.id} value={printer.id}>{printer.name} · {printer.model}</option>
+              ))}
             </select>
           </label>
-          <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-            {groupValues[groupField].map((value) => groupSelect(
-              groupField,
-              value,
-              `${value || "Unlabelled"} · ${rows.filter((row) => unitRuleValue(row.unit, groupField) === value).length} parts`,
-            ))}
-          </div>
+          <details className="rounded-md border border-border bg-background">
+            <summary className="cursor-pointer px-3 py-2 text-sm font-medium">
+              Split selected units across printers
+            </summary>
+            <div className="space-y-3 border-t border-border p-3">
+              <label className="grid max-w-56 gap-1 text-xs font-medium">
+                Group selected units by
+                <select
+                  className="h-9 rounded-md border border-border bg-background px-2 text-sm"
+                  value={groupField}
+                  onChange={(event) => {
+                    if (isAssignmentGroupField(event.target.value)) setGroupField(event.target.value);
+                  }}
+                >
+                  <option value="source_layer">Source layer</option>
+                  {groupValues.source_directory.length > 0 || groupField === "source_directory"
+                    ? <option value="source_directory">Source directory</option>
+                    : null}
+                  {groupValues.filament_color_id.length > 0 || groupField === "filament_color_id"
+                    ? <option value="filament_color_id">Color</option>
+                    : null}
+                  <option value="role">Role</option>
+                </select>
+              </label>
+              <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+                {groupValues[groupField].map((value) => groupSelect(
+                  groupField,
+                  value,
+                  `${value || "Unlabelled"} · ${rows.filter((row) => unitRuleValue(row.unit, groupField) === value).length} units`,
+                ))}
+              </div>
+            </div>
+          </details>
         </div>
       ) : null}
       <div className="space-y-3">
@@ -364,13 +411,26 @@ export default function AcceptedPlateAssignmentForm({
           </>
         ) : null}
       </div>
-      <div className="flex flex-wrap gap-2">
-        <Button onClick={() => void submit()} disabled={!complete || submitting} loading={submitting}>
-          {workspace.kind === "ready" ? "Save and rebuild Plates" : "Build Plates"}
-        </Button>
+      <div className="sticky bottom-2 z-10 flex flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-card/95 p-3 shadow-sm backdrop-blur">
+        <p className={complete ? "text-sm text-foreground" : "text-sm text-warning"} role="status" aria-live="polite">
+          {complete
+            ? `${rows.length} selected ${rows.length === 1 ? "unit" : "units"} assigned across ${assignedPrinterIds.size} ${assignedPrinterIds.size === 1 ? "printer" : "printers"}. Ready to build Plates.`
+            : workspace.printers.length === 0
+              ? "Add a printer to assign the selected units."
+              : rows.length === 0
+                ? "Choose at least one unit above to build Plates."
+                : `${missingAssignmentCount} selected ${missingAssignmentCount === 1 ? "unit still needs" : "units still need"} a printer.`}
+        </p>
+        <div className="flex flex-wrap gap-2">
+          <Button onClick={() => void submit()} disabled={!complete || submitting} loading={submitting}>
+            {workspace.kind === "ready"
+              ? `Rebuild Plates for ${rows.length} selected ${rows.length === 1 ? "unit" : "units"}`
+              : `Build Plates for ${rows.length} selected ${rows.length === 1 ? "unit" : "units"}`}
+          </Button>
         {onCancel ? (
           <Button variant="ghost" onClick={onCancel} disabled={submitting}>Cancel</Button>
         ) : null}
+        </div>
       </div>
     </div>
   );

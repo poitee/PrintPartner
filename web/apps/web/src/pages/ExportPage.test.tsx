@@ -225,6 +225,13 @@ describe("ExportPage work packages", () => {
 
   it("keeps the old numbered stage links working as aliases", async () => {
     renderAt("/export?stage=parts");
+    const plateBuilderNav = screen.getByRole("navigation", { name: "Plate builder" });
+    expect(within(plateBuilderNav).getByRole("link", { name: /Units.*2 selected/ }).getAttribute("href"))
+      .toBe("#plate-builder-units");
+    expect(within(plateBuilderNav).getByRole("link", { name: /Printers.*Assigned/ }).getAttribute("href"))
+      .toBe("#plate-builder-printers");
+    expect(within(plateBuilderNav).getByRole("link", { name: /Plate layout.*Revision 2/ }).getAttribute("href"))
+      .toBe("#plate-builder-layout");
     expect(screen.getByTestId("panel-selection")).toBeTruthy();
     expect(screen.getByTestId("panel-plates-assign")).toBeTruthy();
     expect(screen.getByTestId("panel-plates-arrange")).toBeTruthy();

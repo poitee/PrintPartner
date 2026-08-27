@@ -50,7 +50,7 @@ export default function ProductionSelectionPanel({
     <div className="space-y-3">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h2 className="text-2xs font-medium uppercase tracking-wide text-muted-foreground">
-          Required units
+          Units in this Plate build
         </h2>
         <p className="font-mono text-2xs text-muted-foreground">
           {selectedCount} of {units.length} selected
@@ -75,11 +75,11 @@ export default function ProductionSelectionPanel({
         </div>
       ) : null}
       <div className="flex flex-wrap gap-2">
-        <Button type="button" size="sm" variant="secondary" onClick={onSelectIncomplete}>Select incomplete</Button>
-        <Button type="button" size="sm" variant="outline" onClick={onSelectAll}>Select all</Button>
-        <Button type="button" size="sm" variant="ghost" onClick={onClearAll}>Clear all</Button>
+        <Button type="button" size="sm" variant="secondary" onClick={onSelectIncomplete}>Use incomplete units</Button>
+        <Button type="button" size="sm" variant="outline" onClick={onSelectAll}>Use all units</Button>
+        <Button type="button" size="sm" variant="ghost" onClick={onClearAll}>Clear selection</Button>
         <Button type="button" size="sm" variant="outline" onClick={() => setShowUnits((current) => !current)}>
-          {showUnits ? "Hide individual parts" : `Review individual parts (${units.length})`}
+          {showUnits ? "Hide individual selection" : `Edit individual selection (${units.length})`}
         </Button>
       </div>
       {showUnits ? (
