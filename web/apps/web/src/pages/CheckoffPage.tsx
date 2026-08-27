@@ -1,98 +1,100 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import {
-  DndContext,
-  KeyboardSensor,
-  PointerSensor,
-  closestCenter,
-  type DragEndEvent,
-  useSensor,
-  useSensors,
-} from "@dnd-kit/core";
-import {
-  SortableContext,
-  sortableKeyboardCoordinates,
-  verticalListSortingStrategy,
-} from "@dnd-kit/sortable";
-import { ClipboardCheck, CheckSquare, Printer } from "lucide-react";
-import { toast } from "sonner";
+import { CheckSquare } from "lucide-react";
 import PlanFreshnessNotice from "../components/PlanFreshnessNotice";
 import PageHeader from "../components/layout/PageHeader";
 import PageHeaderActions from "../components/layout/PageHeaderActions";
 import PageShell from "../components/layout/PageShell";
-import BuildWorkflowNextAction from "../components/build/BuildWorkflowNextAction";
-import EmptyState from "../components/layout/EmptyState";
+import BuildSummaryHeader from "../components/build/BuildSummaryHeader";
 import PlanSpecialRequestLine from "../components/PlanSpecialRequestLine";
 // Lazy: PrinterLiveStrip starts polling on mount — defer until rendered
 const PrinterLiveStrip = lazy(() => import("../components/checkoff/PrinterLiveStrip"));
-const PrinterQueueSuggestionBanner = lazy(
-  () => import("../components/checkoff/PrinterQueueSuggestionBanner"),
-);
 import type { PrinterLiveStripState } from "../components/checkoff/PrinterLiveStrip";
-import PrintVerifyPanel, {
-  type PrintVerifyQueueState,
-} from "../components/checkoff/PrintVerifyPanel";
-
-import UnattributedPrintCard from "../components/checkoff/UnattributedPrintCard";
-// Lazy: PrinterSendQueuePanel (heavy printer queue UI)
-const PrinterSendQueuePanel = lazy(() => import("../components/export/PrinterSendQueuePanel"));
-import SortableProgressPart from "../components/checkoff/SortableProgressPart";
+import type { PrintVerifyQueueState } from "../components/checkoff/PrintVerifyPanel";
 import PhaseProgressView from "../components/checkoff/PhaseProgressView";
 import PartPreviewDialog from "../components/parts/PartPreviewDialog";
-import CheckoffSheetRow from "../components/checkoff/CheckoffSheetRow";
+import CheckoffAttentionView from "../components/checkoff/CheckoffAttentionView";
+import CheckoffCompletionCard from "../components/checkoff/CheckoffCompletionCard";
+import CheckoffConsoleErrors from "../components/checkoff/CheckoffConsoleErrors";
+import CheckoffEmptyState from "../components/checkoff/CheckoffEmptyState";
+import CheckoffCorrectionDialog, {
+  type CheckoffCorrectionTarget,
+} from "../components/checkoff/CheckoffCorrectionDialog";
+import CheckoffMoveToDialog, {
+  type CheckoffMoveTarget,
+} from "../components/checkoff/CheckoffMoveToDialog";
+import CheckoffPrinterStatusCard from "../components/checkoff/CheckoffPrinterStatusCard";
+import CheckoffPrintSheet from "../components/checkoff/CheckoffPrintSheet";
+import CheckoffPrintSheetButton, {
+  type PrintSheetLayout,
+} from "../components/checkoff/CheckoffPrintSheetButton";
+import CheckoffStateNotice from "../components/checkoff/CheckoffStateNotice";
+import CheckoffViewTabs from "../components/checkoff/CheckoffViewTabs";
+import CheckoffWorklist from "../components/checkoff/CheckoffWorklist";
 import { Button } from "../components/ui/button";
-import { Card, CardContent } from "../components/ui/card";
-import { SegmentedControl } from "../components/ui/segmented-control";
-import { Spinner } from "../components/ui/spinner";
-import type { UnattributedPrint } from "@print-partner/contracts";
-import {
-  claimUnattributedPrint,
-  fetchPrinterCheckoffLinks,
-  fetchUnattributedPrints,
-  type PrinterCheckoffLink,
-} from "../api/endpoints/checkoff";
-import { fetchPrinterQueueSuggestions, type PrinterQueueSuggestion } from "../api/endpoints/productionSend";
-import { fetchPlanPhaseManifest, type PlanPhaseManifestResponse } from "../api/endpoints/planVariants";
+import { claimUnattributedPrint } from "../api/endpoints/checkoff";
 import type { ReviewPart } from "../api/endpoints/planManifests";
 import { useBuildTrackingSettingsQuery } from "../queries/buildTracking";
-import { buildSourcesRoute, planRoute, prepareMissingPartsRoute } from "../lib/routes";
+import { useBuildWorkflowQuery } from "../queries/buildWorkflow";
+import {
+  buildSourcesRoute,
+  planRoute,
+  prepareMissingPartsRoute,
+  productionRoute,
+} from "../lib/routes";
 import { groupCheckoffParts } from "../lib/checkoffGroups";
 import {
   checkoffUnitTotals,
   formatPrintedUnitsLine,
-  isProgressRowBusy,
   lastCompletedUnit,
   nextUnitToComplete,
 } from "../lib/checkoffProgress";
 import {
-  CHECKOFF_FILTER_MODES,
   checkoffProgressDescription,
   checkoffProgressEyebrow,
   checkoffProgressMeta,
-  checkoffProgressMode,
-  filterCheckoffParts,
   filterProgressRows,
   isSameLiveStripState,
   orderedPartsFromRows,
+  searchCheckoffParts,
 } from "../lib/checkoffPageModel";
+import { useCheckoffPrinterActivity } from "../lib/checkoffConsoleActivity";
+import { useCheckoffProgressMutations } from "../lib/checkoffConsoleMutations";
 import {
-  computePhaseProgress,
-} from "../lib/phaseManifest";
+  buildCheckoffAttentionItems,
+  checkoffConsoleHeadline,
+  checkoffViewCounts,
+  partsForCheckoffView,
+  resolveCheckoffCompletion,
+  resolveCheckoffView,
+  type CheckoffViewId,
+} from "../lib/checkoffConsoleModel";
 import {
-  getProgressRowsForPlan,
+  checkoffCorrectionImpact,
+  checkoffCorrectionNeedsReason,
+  type CheckoffCorrectionReason,
+} from "../lib/checkoffConsoleCorrection";
+import { moveCheckoffRowToPosition } from "../lib/checkoffConsoleReorder";
+import { checkoffRowErrorSummary } from "../lib/checkoffConsoleRowErrors";
+import {
+  getCheckoffCompletedAt,
+  getCheckoffCorrections,
+  getCheckoffSearch,
+  latestCorrectionsByPart,
+  loadCheckoffConsolePreferences,
+  saveCheckoffConsolePreferences,
+  withCheckoffCompletedAt,
+  withCheckoffCorrection,
+  withCheckoffSearch,
+} from "../lib/checkoffConsolePreferences";
+import { useCheckoffWorklistOrder } from "../lib/checkoffConsoleOrder";
+import { computePhaseProgress } from "../lib/phaseManifest";
+import {
   loadPersistedCheckoffUi,
   savePersistedCheckoffUi,
-  withProgressRowsForPlan,
-  type CheckoffFilterMode,
-  type PersistedProgressRow,
 } from "../lib/persistedCheckoffUi";
-import { moveItemById } from "../lib/reorderList";
 import {
-  defaultBagBarLabel,
   mergeVisibleProgressReorder,
-  newBagBarId,
-  progressRowSortableId,
-  reconcileProgressRows,
   type ProgressRowRef,
 } from "../lib/progressListOrder";
 import { buildCheckoffPrinterActivityParts } from "../lib/checkoffPrinterActivity";
@@ -101,14 +103,7 @@ import { useProfileSelection } from "../context/ProfileContext";
 import { usePlanWorkspace } from "../context/PlanWorkspaceContext";
 import { useEngineHealth } from "../hooks/useEngineHealth";
 import { useMediaQuery } from "../hooks/useMediaQuery";
-import { cn } from "@/lib/utils";
 import { waitForSheetThumbnails } from "../lib/waitForSheetThumbnails";
-import {
-  clearAuxiliaryError,
-  currentAuxiliaryError,
-  setAuxiliaryError,
-  type AuxiliaryErrors,
-} from "../lib/auxiliaryErrors";
 import {
   getBackgroundError,
   resolveEngineState,
@@ -117,9 +112,21 @@ import {
 import PwaInstallBanner from "../components/pwa/PwaInstallBanner";
 import { useSyncComplete } from "../lib/useSyncComplete";
 
+/**
+ * Checkoff: the operator console beside the printer.
+ *
+ * It answers one question — what physical result needs my attention? — and
+ * splits the answer into three views, so a finished printer job never competes
+ * with the manual worklist. Queue dispatch belongs to Production; this page
+ * reports printer status and links there.
+ *
+ * View selection, grouping, row state, correction rules, and recovery live in
+ * `lib/checkoffConsole*`. This file is composition.
+ */
 export default function CheckoffPage() {
   const navigate = useNavigate();
   const { health, error: engineError, loading: healthLoading } = useEngineHealth();
+  const engineReady = Boolean(health?.ok);
   const {
     selectedProfileId,
     profiles,
@@ -137,45 +144,55 @@ export default function CheckoffPage() {
     busyPartId,
   } = usePlanWorkspace();
   const isMobileLayout = useMediaQuery("(max-width: 767px)");
-  const {
-    data: buildTrackingSettings,
-    error: buildTrackingError,
-  } = useBuildTrackingSettingsQuery(Boolean(health?.ok));
+  const { data: buildTrackingSettings, error: buildTrackingError } =
+    useBuildTrackingSettingsQuery(engineReady);
   const assemblyTrackingEnabled = buildTrackingSettings?.assembly_tracking ?? false;
+  const { data: workflow } = useBuildWorkflowQuery(selectedProfileId, engineReady);
+
+  const trackingError = useMemo(
+    () => ({
+      key: "assembly-tracking",
+      message: buildTrackingError
+        ? `Could not load assembly tracking settings: ${
+            buildTrackingError instanceof Error
+              ? buildTrackingError.message
+              : String(buildTrackingError)
+          }`
+        : null,
+    }),
+    [buildTrackingError],
+  );
+
+  const activity = useCheckoffPrinterActivity({
+    engineReady,
+    profileId: selectedProfileId,
+    externalError: trackingError,
+  });
 
   // Re-fetch when the service worker flushes its offline checkoff queue
-  useSyncComplete(useCallback(() => {
-    if (selectedProfileId != null) void refresh();
-  }, [refresh, selectedProfileId]));
-  const persistedUi = useMemo(() => loadPersistedCheckoffUi(), []);
-  const [filter, setFilter] = useState<CheckoffFilterMode>(persistedUi.filter);
-  const [search, setSearch] = useState("");
-  const [compactMode, setCompactMode] = useState(persistedUi.compactMode);
-  const [continuousPrintLayout, setContinuousPrintLayout] = useState(
-    persistedUi.continuousPrintLayout,
+  useSyncComplete(
+    useCallback(() => {
+      if (selectedProfileId != null) void refresh();
+    }, [refresh, selectedProfileId]),
   );
-  const [textOnlyPrint, setTextOnlyPrint] = useState(persistedUi.textOnlyPrint);
-  const [progressRowsByPlanId, setProgressRowsByPlanId] = useState<
-    Record<string, PersistedProgressRow[]>
-  >(() => {
-    const initial: Record<string, PersistedProgressRow[]> = {
-      ...persistedUi.progressRowsByPlanId,
-    };
-    for (const key of Object.keys(persistedUi.partOrderByPlanId)) {
-      if (!initial[key]?.length) {
-        initial[key] = getProgressRowsForPlan(persistedUi, Number(key));
-      }
-    }
-    for (const key of Object.keys(persistedUi.bagBarsByPlanId)) {
-      if (!initial[key]?.length) {
-        initial[key] = getProgressRowsForPlan(persistedUi, Number(key));
-      }
-    }
-    return initial;
+
+  const persistedUi = useMemo(() => loadPersistedCheckoffUi(), []);
+  const [printLayout, setPrintLayout] = useState<PrintSheetLayout>({
+    compactMode: persistedUi.compactMode,
+    continuousPrintLayout: persistedUi.continuousPrintLayout,
+    textOnlyPrint: persistedUi.textOnlyPrint,
   });
+  const [consolePrefs, setConsolePrefs] = useState(() => loadCheckoffConsolePreferences());
+  const [requestedView, setRequestedView] = useState<CheckoffViewId | null>(
+    () => consolePrefs.view,
+  );
+  const search = getCheckoffSearch(consolePrefs, selectedProfileId);
   const [previewPart, setPreviewPart] = useState<ReviewPart | null>(null);
   const [printPrep, setPrintPrep] = useState(false);
   const [verifyRefreshKey, setVerifyRefreshKey] = useState(0);
+  const [correctionTarget, setCorrectionTarget] =
+    useState<CheckoffCorrectionTarget | null>(null);
+  const [moveTarget, setMoveTarget] = useState<CheckoffMoveTarget | null>(null);
   const [liveStrip, setLiveStrip] = useState<PrinterLiveStripState>({
     anyPrinting: false,
     activeIntegrationIds: [],
@@ -190,91 +207,9 @@ export default function CheckoffPage() {
     watchingCount: 0,
     primaryHostName: null,
   });
-  /** Farm send-queue active count (panel still reports; idle banner removed). */
   const sheetRef = useRef<HTMLElement>(null);
-  const [unattributedPrints, setUnattributedPrints] = useState<UnattributedPrint[]>([]);
-  const unattributedRequestId = useRef(0);
-  const [watchingLinks, setWatchingLinks] = useState<PrinterCheckoffLink[]>([]);
-  const [awaitingLinks, setAwaitingLinks] = useState<PrinterCheckoffLink[]>([]);
-  const [failedLinks, setFailedLinks] = useState<PrinterCheckoffLink[]>([]);
-  const [phaseManifest, setPhaseManifest] = useState<PlanPhaseManifestResponse | null>(null);
-  const [queueSuggestions, setQueueSuggestions] = useState<PrinterQueueSuggestion[]>([]);
-  const [auxiliaryErrors, setAuxiliaryErrors] = useState<AuxiliaryErrors>({});
-  const auxiliaryError = currentAuxiliaryError(auxiliaryErrors);
-  const reportAuxiliaryError = useCallback((key: string, message: string) => {
-    setAuxiliaryErrors((errors) => setAuxiliaryError(errors, key, message));
-  }, []);
-  const markAuxiliarySuccess = useCallback((key: string) => {
-    setAuxiliaryErrors((errors) => clearAuxiliaryError(errors, key));
-  }, []);
-  const refreshUnattributedPrints = useCallback(async () => {
-    const requestId = ++unattributedRequestId.current;
-    try {
-      const prints = await fetchUnattributedPrints();
-      if (requestId !== unattributedRequestId.current) return;
-      setUnattributedPrints(prints);
-      markAuxiliarySuccess("printer-activity");
-    } catch (e) {
-      if (requestId !== unattributedRequestId.current) return;
-      reportAuxiliaryError(
-        "printer-activity",
-        `Could not refresh printer activity: ${
-          e instanceof Error ? e.message : String(e)
-        }`,
-      );
-    }
-  }, [markAuxiliarySuccess, reportAuxiliaryError]);
-
-  useEffect(() => {
-    if (buildTrackingError) {
-      reportAuxiliaryError(
-        "assembly-tracking",
-        `Could not load assembly tracking settings: ${
-          buildTrackingError instanceof Error
-            ? buildTrackingError.message
-            : String(buildTrackingError)
-        }`,
-      );
-    } else if (buildTrackingSettings) {
-      markAuxiliarySuccess("assembly-tracking");
-    }
-  }, [
-    buildTrackingError,
-    buildTrackingSettings,
-    markAuxiliarySuccess,
-    reportAuxiliaryError,
-  ]);
-
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
-  );
-
-  // Fetch queue suggestions whenever idle printer set changes.
-  useEffect(() => {
-    const ids = liveStrip.idleIntegrationIds;
-    if (!ids.length) {
-      setQueueSuggestions([]);
-      markAuxiliarySuccess("printer-suggestions");
-      return;
-    }
-    void fetchPrinterQueueSuggestions({ idle_integration_ids: ids })
-      .then(({ suggestions }) => {
-        setQueueSuggestions(suggestions);
-        markAuxiliarySuccess("printer-suggestions");
-      })
-      .catch((e) => {
-        setQueueSuggestions([]);
-        reportAuxiliaryError(
-          "printer-suggestions",
-          `Could not refresh printer suggestions: ${e instanceof Error ? e.message : String(e)}`,
-        );
-      });
-  }, [
-    liveStrip.idleIntegrationIds,
-    markAuxiliarySuccess,
-    reportAuxiliaryError,
-  ]);
+  const mutations = useCheckoffProgressMutations();
+  const { runMutation, retryRow, clearAll: clearRowErrors } = mutations;
 
   useEffect(() => {
     const onBeforePrint = () => setPrintPrep(true);
@@ -297,123 +232,31 @@ export default function CheckoffPage() {
       setPrintPrep(false);
       return;
     }
-    if (!textOnlyPrint) await waitForSheetThumbnails(sheet);
+    if (!printLayout.textOnlyPrint) await waitForSheetThumbnails(sheet);
     window.print();
-  }, [textOnlyPrint]);
-
-  useEffect(() => {
-    if (!health?.ok) return;
-    void refreshUnattributedPrints();
-  }, [health?.ok, refreshUnattributedPrints]);
-
-  // Load phase manifest whenever the selected plan changes
-  useEffect(() => {
-    if (!health?.ok || selectedProfileId == null) {
-      setPhaseManifest(null);
-      return;
-    }
-    void fetchPlanPhaseManifest(selectedProfileId)
-      .then((manifest) => {
-        setPhaseManifest(manifest);
-        markAuxiliarySuccess("phase-progress");
-      })
-      .catch((e) => {
-        reportAuxiliaryError(
-          "phase-progress",
-          `Could not load phase progress: ${e instanceof Error ? e.message : String(e)}`,
-        );
-      });
-  }, [
-    health?.ok,
-    selectedProfileId,
-    markAuxiliarySuccess,
-    reportAuxiliaryError,
-  ]);
-
-  const refreshWatchingLinks = useCallback(() => {
-    if (!health?.ok) return;
-    void fetchPrinterCheckoffLinks({
-      state: "watching",
-      profile_id: selectedProfileId ?? undefined,
-    })
-      .then((res) => {
-        setWatchingLinks(res.links ?? []);
-        markAuxiliarySuccess("watching-links");
-      })
-      .catch((e) =>
-        reportAuxiliaryError(
-          "watching-links",
-          `Could not refresh printer activity: ${e instanceof Error ? e.message : String(e)}`,
-        ),
-      );
-    void fetchPrinterCheckoffLinks({
-      state: "awaiting_verify",
-      profile_id: selectedProfileId ?? undefined,
-    })
-      .then((res) => {
-        setAwaitingLinks(res.links ?? []);
-        markAuxiliarySuccess("awaiting-links");
-      })
-      .catch((e) =>
-        reportAuxiliaryError(
-          "awaiting-links",
-          `Could not refresh printer activity: ${e instanceof Error ? e.message : String(e)}`,
-        ),
-      );
-    void fetchPrinterCheckoffLinks({
-      state: "host_failed",
-      profile_id: selectedProfileId ?? undefined,
-    })
-      .then((res) => {
-        setFailedLinks(res.links ?? []);
-        markAuxiliarySuccess("failed-links");
-      })
-      .catch((e) =>
-        reportAuxiliaryError(
-          "failed-links",
-          `Could not refresh printer activity: ${e instanceof Error ? e.message : String(e)}`,
-        ),
-      );
-  }, [
-    health?.ok,
-    selectedProfileId,
-    markAuxiliarySuccess,
-    reportAuxiliaryError,
-  ]);
-
-  useEffect(() => {
-    refreshWatchingLinks();
-  }, [refreshWatchingLinks]);
+  }, [printLayout.textOnlyPrint]);
 
   useEffect(() => {
     setVerifyQueue({ awaitingCount: 0, watchingCount: 0, primaryHostName: null });
-    setAuxiliaryErrors({});
-  }, [selectedProfileId]);
+    clearRowErrors();
+  }, [clearRowErrors, selectedProfileId]);
 
   useEffect(() => {
-    let next = loadPersistedCheckoffUi();
-    next = {
-      ...next,
-      filter,
-      compactMode,
-      continuousPrintLayout,
-      textOnlyPrint,
-    };
-    for (const [planKey, rows] of Object.entries(progressRowsByPlanId)) {
-      const planId = Number(planKey);
-      if (!Number.isFinite(planId)) continue;
-      next = withProgressRowsForPlan(next, planId, rows);
-    }
-    savePersistedCheckoffUi(next);
-  }, [filter, compactMode, continuousPrintLayout, textOnlyPrint, progressRowsByPlanId]);
+    savePersistedCheckoffUi({
+      ...loadPersistedCheckoffUi(),
+      compactMode: printLayout.compactMode,
+      continuousPrintLayout: printLayout.continuousPrintLayout,
+      textOnlyPrint: printLayout.textOnlyPrint,
+    });
+  }, [printLayout]);
 
-  const planName =
-    profiles.find((p) => p.id === selectedProfileId)?.name ??
-    review?.plan_name ??
-    "Checkoff";
-  const specialRequest =
-    profiles.find((p) => p.id === selectedProfileId)?.special_request ?? null;
+  useEffect(() => {
+    saveCheckoffConsolePreferences(consolePrefs);
+  }, [consolePrefs]);
+
   const selectedProfile = profiles.find((p) => p.id === selectedProfileId);
+  const planName = selectedProfile?.name ?? review?.plan_name ?? "Checkoff";
+  const specialRequest = selectedProfile?.special_request ?? null;
 
   const includedParts = useMemo(() => {
     if (!review) return [];
@@ -423,12 +266,12 @@ export default function CheckoffPage() {
   const { printingPartIds, awaitingPartIds, suggestedPartIds } = useMemo(
     () =>
       buildCheckoffPrinterActivityParts({
-        watchingLinks,
-        awaitingLinks,
-        unattributedPrints,
+        watchingLinks: activity.watchingLinks,
+        awaitingLinks: activity.awaitingLinks,
+        unattributedPrints: activity.unattributedPrints,
         includedParts,
       }),
-    [watchingLinks, awaitingLinks, unattributedPrints, includedParts],
+    [activity.watchingLinks, activity.awaitingLinks, activity.unattributedPrints, includedParts],
   );
 
   const partsById = useMemo(() => {
@@ -437,116 +280,123 @@ export default function CheckoffPage() {
     return map;
   }, [includedParts]);
 
-  const planProgressRows = useMemo(() => {
-    const preferred: ProgressRowRef[] =
-      selectedProfileId == null
-        ? []
-        : (progressRowsByPlanId[String(selectedProfileId)] ?? []);
-    const bags = preferred
-      .filter((r): r is Extract<ProgressRowRef, { kind: "bag" }> => r.kind === "bag")
-      .map((r) => ({ id: r.id, label: r.label }));
-    return reconcileProgressRows(
-      preferred,
-      includedParts.map((p) => p.id),
-      bags,
-    );
-  }, [includedParts, progressRowsByPlanId, selectedProfileId]);
+  const includedPartIds = useMemo(() => includedParts.map((p) => p.id), [includedParts]);
+  const worklistOrder = useCheckoffWorklistOrder({
+    planId: selectedProfileId,
+    partIds: includedPartIds,
+  });
+  const planProgressRows = worklistOrder.rows;
+
+  const attentionItems = useMemo(
+    () =>
+      buildCheckoffAttentionItems({
+        awaitingLinks: activity.awaitingLinks,
+        failedLinks: activity.failedLinks,
+        unattributedPrints: activity.unattributedPrints,
+      }),
+    [activity.awaitingLinks, activity.failedLinks, activity.unattributedPrints],
+  );
+
+  const viewCounts = useMemo(
+    () => checkoffViewCounts({ attentionItems, parts: includedParts }),
+    [attentionItems, includedParts],
+  );
+  const view = resolveCheckoffView({ requested: requestedView, counts: viewCounts });
 
   const filteredParts = useMemo(
-    () => filterCheckoffParts({ parts: includedParts, filter, search }),
-    [includedParts, filter, search],
+    () =>
+      searchCheckoffParts({
+        parts: partsForCheckoffView({ parts: includedParts, view }),
+        search,
+      }),
+    [includedParts, search, view],
   );
 
-  const filteredRows = useMemo(
-    () => filterProgressRows({
-      rows: planProgressRows,
-      visiblePartIds: new Set(filteredParts.map((part) => part.id)),
-      search,
-    }),
-    [filteredParts, planProgressRows, search],
-  );
+  const filteredRows = useMemo(() => {
+    const visiblePartIds = new Set(filteredParts.map((part) => part.id));
+    const rows = filterProgressRows({ rows: planProgressRows, visiblePartIds, search });
+    return view === "remaining" ? rows : rows.filter((row) => row.kind === "part");
+  }, [filteredParts, planProgressRows, search, view]);
 
-  const filtered = useMemo(
+  const orderedParts = useMemo(
     () => orderedPartsFromRows({ rows: filteredRows, partsById }),
     [filteredRows, partsById],
   );
 
-  const setPlanProgressRows = useCallback(
-    (rows: ProgressRowRef[]) => {
+  const setWorklistRows = worklistOrder.setRows;
+  const onReorderVisibleRows = useCallback(
+    (nextVisible: ProgressRowRef[]) => {
+      setWorklistRows(
+        mergeVisibleProgressReorder(planProgressRows, filteredRows, nextVisible),
+      );
+    },
+    [filteredRows, planProgressRows, setWorklistRows],
+  );
+
+  const setSearch = useCallback(
+    (value: string) => {
       if (selectedProfileId == null) return;
-      setProgressRowsByPlanId((prev) => ({
-        ...prev,
-        [String(selectedProfileId)]: rows,
-      }));
+      setConsolePrefs((prev) => withCheckoffSearch(prev, selectedProfileId, value));
     },
     [selectedProfileId],
   );
 
-  const onProgressDragEnd = useCallback(
-    (event: DragEndEvent) => {
-      if (selectedProfileId == null) return;
-      const { active, over } = event;
-      if (!over || active.id === over.id) return;
-      const visibleBefore = filteredRows;
-      const visibleIds = visibleBefore.map(progressRowSortableId);
-      const movedIds = moveItemById(visibleIds, String(active.id), String(over.id));
-      if (movedIds === visibleIds) return;
-      const byId = new Map(visibleBefore.map((r) => [progressRowSortableId(r), r]));
-      const visibleAfter = movedIds
-        .map((id) => byId.get(id))
-        .filter((r): r is ProgressRowRef => r != null);
-      const nextOrder = mergeVisibleProgressReorder(
-        planProgressRows,
-        visibleBefore,
-        visibleAfter,
-      );
-      setPlanProgressRows(nextOrder);
-    },
-    [filteredRows, planProgressRows, selectedProfileId, setPlanProgressRows],
-  );
+  const onSelectView = useCallback((next: CheckoffViewId) => {
+    setRequestedView(next);
+    setConsolePrefs((prev) => ({ ...prev, view: next }));
+  }, []);
 
-  const onAddBagBar = useCallback(() => {
-    if (selectedProfileId == null) return;
-    const bags = planProgressRows.filter((r) => r.kind === "bag");
-    setPlanProgressRows([
-      ...planProgressRows,
-      { kind: "bag", id: newBagBarId(), label: defaultBagBarLabel(bags.length) },
-    ]);
-  }, [planProgressRows, selectedProfileId, setPlanProgressRows]);
-
-  const onBagLabelChange = useCallback(
-    (bagId: string, label: string) => {
-      setPlanProgressRows(
-        planProgressRows.map((row) =>
-          row.kind === "bag" && row.id === bagId ? { ...row, label } : row,
-        ),
-      );
-    },
-    [planProgressRows, setPlanProgressRows],
-  );
-
-  const onRemoveBagBar = useCallback(
-    (bagId: string) => {
-      setPlanProgressRows(planProgressRows.filter((row) => !(row.kind === "bag" && row.id === bagId)));
-    },
-    [planProgressRows, setPlanProgressRows],
-  );
-
-  const grouped = useMemo(() => groupCheckoffParts(filtered), [filtered]);
+  const grouped = useMemo(() => groupCheckoffParts(orderedParts), [orderedParts]);
   const phaseProgress = useMemo(() => {
-    if (!phaseManifest?.has_phases || phaseManifest.phases.length === 0) return null;
+    const manifest = activity.phaseManifest;
+    if (!manifest?.has_phases || manifest.phases.length === 0) return null;
     return computePhaseProgress(
       {
-        profile_id: phaseManifest.profile_id,
-        has_phases: phaseManifest.has_phases,
-        phases: phaseManifest.phases,
+        profile_id: manifest.profile_id,
+        has_phases: manifest.has_phases,
+        phases: manifest.phases,
       },
       includedParts,
     );
-  }, [phaseManifest, includedParts]);
+  }, [activity.phaseManifest, includedParts]);
   const totals = useMemo(() => checkoffUnitTotals(includedParts), [includedParts]);
   const printedLine = useMemo(() => formatPrintedUnitsLine(includedParts), [includedParts]);
   const toggleBusy = busyPartId != null;
+
+  const acceptedPlan = workflow?.accepted_plan;
+  const completion = useMemo(
+    () =>
+      resolveCheckoffCompletion({
+        totalUnits: totals.totalUnits,
+        printedUnits: totals.printedUnits,
+        partCount: includedParts.length,
+        completedAt: getCheckoffCompletedAt(consolePrefs, selectedProfileId),
+        planVersion: acceptedPlan?.kind === "ready" ? acceptedPlan.plan_version : null,
+        revisionId: acceptedPlan?.kind === "ready" ? acceptedPlan.revision_id : null,
+      }),
+    [acceptedPlan, consolePrefs, includedParts.length, selectedProfileId, totals],
+  );
+
+  // Record when the Build first reached "every Required unit verified".
+  useEffect(() => {
+    if (selectedProfileId == null) return;
+    if (completion.kind === "complete") {
+      const at = new Date().toISOString();
+      setConsolePrefs((prev) => withCheckoffCompletedAt(prev, selectedProfileId, at));
+      return;
+    }
+    setConsolePrefs((prev) =>
+      getCheckoffCompletedAt(prev, selectedProfileId) == null
+        ? prev
+        : withCheckoffCompletedAt(prev, selectedProfileId, null),
+    );
+  }, [completion.kind, selectedProfileId]);
+
+  const correctionsByPart = useMemo(
+    () => latestCorrectionsByPart(getCheckoffCorrections(consolePrefs, selectedProfileId)),
+    [consolePrefs, selectedProfileId],
+  );
+
   const engineState = resolveEngineState({
     health,
     loading: healthLoading,
@@ -562,120 +412,141 @@ export default function CheckoffPage() {
     error: workspaceError,
     hasData: review != null,
   });
-  const profilesBackgroundError = getBackgroundError(
-    profilesError,
-    profiles.length > 0,
-  );
-  const reviewBackgroundError = getBackgroundError(workspaceError, review != null);
 
   const suppressIntegrationIds = useMemo(
     () => new Set(liveStrip.activeIntegrationIds),
     [liveStrip.activeIntegrationIds],
   );
 
-  const progressMode = checkoffProgressMode({ liveStrip, verifyQueue });
-  const progressMeta = checkoffProgressMeta({
-    selectedProfileId,
-    planName,
-    includedPartCount: includedParts.length,
-  });
-  const progressEyebrow = checkoffProgressEyebrow(progressMeta);
+  const progressEyebrow = checkoffProgressEyebrow(
+    checkoffProgressMeta({
+      selectedProfileId,
+      planName,
+      includedPartCount: includedParts.length,
+    }),
+  );
   const progressDescription = checkoffProgressDescription(includedParts.length);
 
   const onToggleUnit = useCallback(
     (part: ReviewPart, unitIndex: number) => {
       const next = !part.print_units[unitIndex];
-      void toggleUnit(part.id, unitIndex, next).catch((e) => {
-        toast.error("Could not update print progress", {
-          description: e instanceof Error ? e.message : String(e),
-        });
+      runMutation({
+        part,
+        action: next ? "checkoff" : "correction",
+        run: () => toggleUnit(part.id, unitIndex, next),
       });
     },
-    [toggleUnit],
+    [runMutation, toggleUnit],
   );
 
   const onToggleAssembled = useCallback(
     (part: ReviewPart, unitIndex: number) => {
       const next = !(part.assembled_units?.[unitIndex] ?? false);
-      void toggleAssembled(part.id, unitIndex, next).catch((e) => {
-        toast.error("Could not update assembly progress", {
-          description: e instanceof Error ? e.message : String(e),
-        });
+      runMutation({
+        part,
+        action: "assembly",
+        run: () => toggleAssembled(part.id, unitIndex, next),
       });
     },
-    [toggleAssembled],
+    [runMutation, toggleAssembled],
   );
 
   const onIncrement = useCallback(
     (part: ReviewPart) => {
       const idx = nextUnitToComplete(part.print_units);
-      if (idx >= 0) {
-        void toggleUnit(part.id, idx, true).catch((e) => {
-          toast.error("Could not update print progress", {
-            description: e instanceof Error ? e.message : String(e),
-          });
-        });
-      }
+      if (idx < 0) return;
+      runMutation({ part, action: "checkoff", run: () => toggleUnit(part.id, idx, true) });
     },
-    [toggleUnit],
+    [runMutation, toggleUnit],
+  );
+
+  const decrementPart = useCallback(
+    (part: ReviewPart) => {
+      const idx = lastCompletedUnit(part.print_units);
+      if (idx < 0) return;
+      runMutation({ part, action: "correction", run: () => toggleUnit(part.id, idx, false) });
+    },
+    [runMutation, toggleUnit],
   );
 
   const onDecrement = useCallback(
     (part: ReviewPart) => {
-      const idx = lastCompletedUnit(part.print_units);
-      if (idx >= 0) {
-        void toggleUnit(part.id, idx, false).catch((e) => {
-          toast.error("Could not update print progress", {
-            description: e instanceof Error ? e.message : String(e),
-          });
-        });
+      if (lastCompletedUnit(part.print_units) < 0) return;
+      const impact = checkoffCorrectionImpact({
+        printingOn: printingPartIds.get(part.id),
+        awaitingVerify: awaitingPartIds.get(part.id),
+        filamentDisplay: part.filament_display,
+      });
+      if (!checkoffCorrectionNeedsReason(impact)) {
+        decrementPart(part);
+        return;
       }
+      setCorrectionTarget({
+        partId: part.id,
+        filename: part.filename,
+        printedCount: part.printed_count,
+        impact,
+      });
     },
-    [toggleUnit],
+    [awaitingPartIds, decrementPart, printingPartIds],
   );
 
-  const renderEmpty = () => {
-    if (selectedProfileId == null) {
-      return (
-        <EmptyState
-          icon={ClipboardCheck}
-          title="No Build selected"
-          description="Pick a Build to track remaining print work."
-          action={{
-            label: "Open Plan",
-            onClick: () => navigate(planRoute(null)),
-          }}
-        />
-      );
-    }
-    if (!review || includedParts.length === 0) {
-      return (
-        <EmptyState
-          icon={ClipboardCheck}
-          title="No parts yet"
-          description="Pick a Build, then track remaining on Checkoff."
-          action={{
-            label: "Open Plan",
-            onClick: () => navigate(planRoute(selectedProfileId)),
-          }}
-        />
-      );
-    }
-    return (
-      <EmptyState
-        icon={ClipboardCheck}
-        title="No parts match"
-        description="Try a different filter or clear your search."
-        action={{
-          label: "Show all",
-          onClick: () => {
-            setFilter("all");
-            setSearch("");
-          },
-        }}
-      />
-    );
-  };
+  const onConfirmCorrection = useCallback(
+    (input: { reason: CheckoffCorrectionReason | null; note: string }) => {
+      const target = correctionTarget;
+      setCorrectionTarget(null);
+      if (!target) return;
+      const part = partsById.get(target.partId);
+      if (!part) return;
+      const reason = input.reason;
+      if (reason && selectedProfileId != null) {
+        setConsolePrefs((prev) =>
+          withCheckoffCorrection(prev, selectedProfileId, {
+            partId: part.id,
+            unitIndex: lastCompletedUnit(part.print_units),
+            reason,
+            note: input.note,
+            at: new Date().toISOString(),
+          }),
+        );
+      }
+      decrementPart(part);
+    },
+    [correctionTarget, decrementPart, partsById, selectedProfileId],
+  );
+
+  const onClaimSuggestion = useCallback(
+    (suggestion: { printId: string; stlBasename: string }) => {
+      if (selectedProfileId == null) return;
+      void claimUnattributedPrint(suggestion.printId, selectedProfileId, {
+        selected_stl_basenames: [suggestion.stlBasename],
+      })
+        .then(() => {
+          activity.markSuccess("claim-printer-activity");
+          void activity.refreshUnattributed();
+          activity.refreshLinks();
+        })
+        .catch((e) =>
+          activity.reportError(
+            "claim-printer-activity",
+            `Could not claim printer activity: ${e instanceof Error ? e.message : String(e)}`,
+          ),
+        );
+    },
+    [activity, selectedProfileId],
+  );
+
+  const renderEmpty = () => (
+    <CheckoffEmptyState
+      planSelected={selectedProfileId != null}
+      hasParts={review != null && includedParts.length > 0}
+      searching={search.trim().length > 0}
+      view={view}
+      onOpenPlan={() => navigate(planRoute(selectedProfileId))}
+      onClearSearch={() => setSearch("")}
+      onSelectView={onSelectView}
+    />
+  );
 
   if (
     engineState !== "ready" ||
@@ -683,74 +554,6 @@ export default function CheckoffPage() {
     selectedProfileId == null ||
     reviewState !== "ready"
   ) {
-    let stateContent;
-    if (engineState !== "ready") {
-      stateContent = (
-        <Card className="no-print">
-          <CardContent className="pt-6">
-            <p
-              className="text-sm text-muted-foreground"
-              role={engineState === "loading" ? "status" : undefined}
-              aria-live={engineState === "loading" ? "polite" : undefined}
-              aria-atomic={engineState === "loading" ? "true" : undefined}
-            >
-              {engineState === "offline"
-                ? "Engine offline. Start the print-partner engine to use Checkoff."
-                : "Connecting to the engine…"}
-            </p>
-          </CardContent>
-        </Card>
-      );
-    } else if (profilesState === "error") {
-      stateContent = (
-        <Card className="no-print border-destructive/40 bg-destructive/5 shadow-none">
-          <CardContent className="space-y-3 pt-6">
-            <p className="text-sm text-destructive" role="alert">
-              Could not load plans: {profilesError}
-            </p>
-            <Button size="sm" variant="secondary" onClick={() => void reloadProfiles()}>
-              Retry
-            </Button>
-          </CardContent>
-        </Card>
-      );
-    } else if (profilesState === "loading" || reviewState === "loading") {
-      stateContent = (
-        <Card className="no-print border-border shadow-sm">
-          <CardContent
-            className="flex items-center gap-2 pt-6"
-            role="status"
-            aria-live="polite"
-            aria-atomic="true"
-          >
-            <Spinner className="size-4" aria-hidden="true" />
-            <p className="text-sm text-muted-foreground">Loading progress…</p>
-          </CardContent>
-        </Card>
-      );
-    } else if (reviewState === "error") {
-      stateContent = (
-        <Card className="no-print border-destructive/40 bg-destructive/5 shadow-none">
-          <CardContent className="space-y-3 pt-6">
-            <p className="text-sm text-destructive" role="alert">
-              Could not load Checkoff: {workspaceError}
-            </p>
-            <Button
-              size="sm"
-              variant="secondary"
-              onClick={() => {
-                if (selectedProfileId != null) void refresh();
-              }}
-            >
-              Retry
-            </Button>
-          </CardContent>
-        </Card>
-      );
-    } else {
-      stateContent = <div className="no-print">{renderEmpty()}</div>;
-    }
-
     return (
       <PageShell>
         <PageHeader
@@ -760,11 +563,28 @@ export default function CheckoffPage() {
           title="Checkoff"
           description={progressDescription}
         />
-        <BuildWorkflowNextAction currentStageId="checkoff" className="no-print" />
-        {stateContent}
+        <BuildSummaryHeader currentStageId="checkoff" className="no-print" />
+        <CheckoffStateNotice
+          engineState={engineState}
+          profilesState={profilesState}
+          reviewState={reviewState}
+          profilesError={profilesError}
+          workspaceError={workspaceError}
+          onReloadProfiles={() => void reloadProfiles()}
+          onRetryReview={() => {
+            if (selectedProfileId != null) void refresh();
+          }}
+          emptyState={renderEmpty()}
+        />
       </PageShell>
     );
   }
+
+  const headline = checkoffConsoleHeadline({
+    counts: viewCounts,
+    printingJobs: workflow?.active_work.printing_jobs ?? verifyQueue.watchingCount,
+    remainingUnits: totals.remainingUnits,
+  });
 
   return (
     <PageShell>
@@ -776,51 +596,22 @@ export default function CheckoffPage() {
           title="Checkoff"
           description={progressDescription}
           actions={
-            <PageHeaderActions>
-              <div className="col-span-2 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-border bg-card px-3 py-2 text-xs text-muted-foreground sm:w-auto sm:border-0 sm:bg-transparent sm:px-0 sm:py-0">
-                <span className="font-medium text-foreground">Print PDF:</span>
-                <label className="flex items-center gap-1.5">
-                  <input
-                    type="checkbox"
-                    checked={compactMode}
-                    onChange={(e) => setCompactMode(e.target.checked)}
-                  />
-                  Compact rows
-                </label>
-                <label className="flex items-center gap-1.5">
-                  <input
-                    type="checkbox"
-                    checked={continuousPrintLayout}
-                    onChange={(e) => setContinuousPrintLayout(e.target.checked)}
-                  />
-                  Continuous
-                </label>
-                <label className="flex items-center gap-1.5">
-                  <input
-                    type="checkbox"
-                    checked={textOnlyPrint}
-                    onChange={(e) => setTextOnlyPrint(e.target.checked)}
-                  />
-                  Text only, no thumbnails
-                </label>
-              </div>
-              <Button
-                variant="ghost"
-                className="min-h-10 w-full sm:w-auto"
-                onClick={() => void onPrint()}
-                disabled={selectedProfileId == null || filtered.length === 0}
-              >
-                <Printer className="mr-1 h-4 w-4" />
-                Print sheet
-              </Button>
-              <Button className="min-h-10 w-full sm:w-auto" asChild>
-                <Link to={prepareMissingPartsRoute(selectedProfileId)}>Production</Link>
-              </Button>
-            </PageHeaderActions>
+            /* On a phone the sheet is a bench task, so it sits with the other
+               low-frequency actions at the end of the page. */
+            isMobileLayout ? undefined : (
+              <PageHeaderActions>
+                <CheckoffPrintSheetButton
+                  layout={printLayout}
+                  onLayoutChange={setPrintLayout}
+                  onPrint={() => void onPrint()}
+                  disabled={orderedParts.length === 0}
+                />
+              </PageHeaderActions>
+            )
           }
         />
 
-        <BuildWorkflowNextAction currentStageId="checkoff" className="no-print" />
+        <BuildSummaryHeader currentStageId="checkoff" className="no-print" />
 
         <PwaInstallBanner />
 
@@ -833,166 +624,110 @@ export default function CheckoffPage() {
           />
         )}
 
-        {includedParts.length > 0 && (
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:gap-4">
-            <div className="flex min-w-0 flex-1 flex-col gap-1.5 sm:max-w-xs">
+        {completion.kind === "complete" ? (
+          <CheckoffCompletionCard
+            buildName={planName}
+            totalUnits={completion.totalUnits}
+            partCount={completion.partCount}
+            completedAt={completion.completedAt}
+            planVersion={completion.planVersion}
+            revisionId={completion.revisionId}
+            planHref={planRoute(selectedProfileId)}
+            productionHref={productionRoute(selectedProfileId)}
+            onPrintSheet={() => void onPrint()}
+          />
+        ) : null}
+
+        <div className="flex flex-col gap-1 sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-3">
+          <p className="min-w-0 flex-1 text-sm font-medium text-foreground" role="status">
+            {headline}
+          </p>
+          {includedParts.length > 0 && (
+            <span className="flex items-center gap-3">
               <span
-                className="h-1.5 overflow-hidden rounded-full bg-muted"
+                className="h-1.5 w-16 overflow-hidden rounded-full bg-muted"
                 role="progressbar"
                 aria-valuenow={totals.percent}
                 aria-valuemin={0}
                 aria-valuemax={100}
-                aria-label={`${totals.percent}% of print units completed`}
+                aria-label={`${totals.percent}% of print units verified`}
               >
                 <span
                   className="block h-full rounded-full bg-success transition-[width]"
                   style={{ width: `${totals.percent}%` }}
                 />
               </span>
-              <span className="font-mono text-2xs text-muted-foreground">
-                {totals.percent}% · {totals.remainingUnits} remaining
+              <span className="font-mono text-xs tabular-nums text-muted-foreground">
+                {totals.printedUnits} / {totals.totalUnits} verified
               </span>
-            </div>
-            {isMobileLayout && (
-              <span className="ml-auto font-mono text-sm tabular-nums text-muted-foreground">
-                {totals.printedUnits} / {totals.totalUnits}
-              </span>
-            )}
-          </div>
-        )}
-
-        <div className="checkoff-sticky flex flex-col gap-2">
-          <Suspense fallback={null}>
-            <PrinterLiveStrip
-              engineReady={Boolean(health?.ok)}
-              onLiveStateChange={updateLiveStrip}
-              onCheckoffUpdate={(profileId) => {
-                if (selectedProfileId != null && profileId === selectedProfileId) {
-                  setVerifyRefreshKey((k) => k + 1);
-                }
-                refreshWatchingLinks();
-              }}
-              onUnattributedUpdate={() => {
-                void refreshUnattributedPrints();
-              }}
-            />
-          </Suspense>
-          {unattributedPrints.length > 0 && (
-            <div className="flex flex-col gap-2">
-              {unattributedPrints.map((print) => (
-                <UnattributedPrintCard
-                  key={print.id}
-                  print={print}
-                  onClaimed={() => {
-                    void refreshUnattributedPrints();
-                    refreshWatchingLinks();
-                    setVerifyRefreshKey((k) => k + 1);
-                  }}
-                  onDismissed={() => void refreshUnattributedPrints()}
-                />
-              ))}
-            </div>
+            </span>
           )}
-          {queueSuggestions.length > 0 && (
-            <Suspense fallback={null}>
-              <PrinterQueueSuggestionBanner
-                suggestions={queueSuggestions}
-                onDrained={(printerId) =>
-                  setQueueSuggestions((current) =>
-                    printerId === undefined
-                      ? []
-                      : current.filter(
-                          (suggestion) => suggestion.printer_id !== printerId,
-                        ),
-                  )
-                }
-                onDismiss={() => setQueueSuggestions([])}
-              />
-            </Suspense>
-          )}
-          <PrintVerifyPanel
-            engineReady={Boolean(health?.ok)}
-            profileId={selectedProfileId}
-            parts={includedParts}
-            refreshKey={verifyRefreshKey}
-            activityLinks={{ watching: watchingLinks, awaiting: awaitingLinks, failed: failedLinks }}
-            onActivityRefresh={refreshWatchingLinks}
-            suppressIntegrationIds={suppressIntegrationIds}
-            onQueueChange={setVerifyQueue}
-            onVerified={() => {
-              if (selectedProfileId != null) void refresh();
-              refreshWatchingLinks();
-            }}
-          />
-          <Suspense fallback={null}>
-            <PrinterSendQueuePanel
-              engineReady={Boolean(health?.ok)}
-              emphasizeSendReady={progressMode === "idle"}
-            />
-          </Suspense>
-          <div className="flex flex-col gap-3 rounded-lg border border-border bg-card p-3 sm:flex-row sm:flex-wrap sm:items-center sm:gap-2">
-          <input
-            type="search"
-            aria-label="Search progress parts"
-            className="checkoff-search w-full min-w-0 rounded-md border border-input bg-background px-3 py-2.5 text-base sm:flex-1 sm:py-1.5 sm:text-sm"
-            placeholder="Search parts…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            disabled={toggleBusy}
-          />
-          <div
-            className={cn(
-              isMobileLayout ? "w-full" : "shrink-0",
-            )}
-          >
-            <SegmentedControl
-              aria-label="Filter"
-              className={cn(isMobileLayout ? "w-full" : undefined)}
-              value={filter}
-              onValueChange={(value) => setFilter(value)}
-              options={CHECKOFF_FILTER_MODES.map(({ mode, label }) => ({
-                value: mode,
-                label,
-              }))}
-            />
-          </div>
-          </div>
         </div>
 
-        <div>
-          {profilesBackgroundError && (
-            <p className="text-sm text-destructive" role="alert">
-              Could not refresh plans: {profilesBackgroundError}
-            </p>
-          )}
-          {reviewBackgroundError && (
-            <p className="text-sm text-destructive" role="alert">
-              Could not refresh Checkoff: {reviewBackgroundError}
-            </p>
-          )}
-          {auxiliaryError && (
-            <p className="text-sm text-destructive" role="alert">
-              {auxiliaryError}
-            </p>
-          )}
-        </div>
+        <CheckoffViewTabs value={view} counts={viewCounts} onValueChange={onSelectView} />
+
+        <CheckoffConsoleErrors
+          profilesError={getBackgroundError(profilesError, profiles.length > 0)}
+          reviewError={getBackgroundError(workspaceError, review != null)}
+          auxiliaryError={activity.auxiliaryError}
+          rowErrors={checkoffRowErrorSummary(mutations.rowErrors)}
+        />
       </div>
 
-      <div className="no-print flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-sm font-semibold tracking-wide">Print worklist</h2>
-        <Button
-          type="button"
-          variant="secondary"
-          size="sm"
-          className="h-9 px-3"
-          disabled={toggleBusy}
-          onClick={onAddBagBar}
-        >
-          Add bag/sort
-        </Button>
-      </div>
+      {view === "attention" ? (
+        <CheckoffAttentionView
+          items={attentionItems}
+          engineReady={engineReady}
+          profileId={selectedProfileId}
+          parts={includedParts}
+          refreshKey={verifyRefreshKey}
+          links={{
+            watching: activity.watchingLinks,
+            awaiting: activity.awaitingLinks,
+            failed: activity.failedLinks,
+          }}
+          unattributedPrints={activity.unattributedPrints}
+          suppressIntegrationIds={suppressIntegrationIds}
+          onActivityRefresh={activity.refreshLinks}
+          onQueueChange={setVerifyQueue}
+          onVerified={() => {
+            void refresh();
+            activity.refreshLinks();
+          }}
+          onClaimed={() => {
+            void activity.refreshUnattributed();
+            activity.refreshLinks();
+            setVerifyRefreshKey((k) => k + 1);
+          }}
+          onDismissed={() => void activity.refreshUnattributed()}
+          onOpenWorklist={() => onSelectView("remaining")}
+        />
+      ) : (
+        <>
+          <div className="no-print flex items-center gap-2">
+            <input
+              type="search"
+              aria-label="Search progress parts"
+              className="checkoff-search min-h-11 min-w-0 flex-1 rounded-md border border-input bg-background px-3 text-base sm:text-sm"
+              placeholder="Search parts…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              disabled={toggleBusy}
+            />
+            {view === "remaining" && (
+              <Button
+                type="button"
+                variant="secondary"
+                className="min-h-11 shrink-0 px-3"
+                disabled={toggleBusy}
+                onClick={worklistOrder.addBagBar}
+              >
+                Add bag
+              </Button>
+            )}
+          </div>
 
-      {phaseProgress ? (
+          {view === "remaining" && phaseProgress ? (
             <PhaseProgressView
               phases={phaseProgress}
               busyPartId={busyPartId}
@@ -1004,157 +739,114 @@ export default function CheckoffPage() {
               printingPartIds={printingPartIds}
               awaitingPartIds={awaitingPartIds}
             />
-          ) : filteredRows.length === 0 ? (
-            <div className="no-print">{renderEmpty()}</div>
           ) : (
-            <DndContext
-              sensors={sensors}
-              collisionDetection={closestCenter}
-              onDragEnd={onProgressDragEnd}
-            >
-              <SortableContext
-                items={filteredRows.map(progressRowSortableId)}
-                strategy={verticalListSortingStrategy}
-              >
-                <div
-                  className="no-print flex flex-col gap-2 sm:gap-2"
-                  aria-label="Reorderable progress parts"
-                >
-                  {filteredRows.map((row) => {
-                    if (row.kind === "bag") {
-                      return (
-                        <SortableProgressPart
-                          key={progressRowSortableId(row)}
-                          kind="bag"
-                          bagId={row.id}
-                          label={row.label}
-                          mobile={isMobileLayout}
-                          busy={toggleBusy}
-                          disabled={toggleBusy}
-                          onLabelChange={(label) => onBagLabelChange(row.id, label)}
-                          onRemove={() => onRemoveBagBar(row.id)}
-                        />
-                      );
-                    }
-                    const part = partsById.get(row.id);
-                    if (!part) return null;
-                    return (
-                      <SortableProgressPart
-                        key={progressRowSortableId(row)}
-                        kind="part"
-                        part={part}
-                        mobile={isMobileLayout}
-                        busy={isProgressRowBusy(busyPartId, part.id)}
-                        disabled={toggleBusy}
-                        printingOn={printingPartIds.get(part.id)}
-                        awaitingVerify={awaitingPartIds.get(part.id)}
-                        suggestedPrinter={suggestedPartIds.get(part.id)}
-                        assemblyTrackingEnabled={assemblyTrackingEnabled}
-                        onToggleUnit={onToggleUnit}
-                        onIncrement={onIncrement}
-                        onDecrement={onDecrement}
-                        onPreview={setPreviewPart}
-                        onToggleAssembled={onToggleAssembled}
-                        onClaim={(suggestion) => {
-                          if (selectedProfileId == null) return;
-                          void claimUnattributedPrint(suggestion.printId, selectedProfileId, {
-                            selected_stl_basenames: [suggestion.stlBasename],
-                          })
-                            .then(() => {
-                              markAuxiliarySuccess("claim-printer-activity");
-                              void refreshUnattributedPrints();
-                              refreshWatchingLinks();
-                            })
-                            .catch((e) =>
-                              reportAuxiliaryError(
-                                "claim-printer-activity",
-                                `Could not claim printer activity: ${e instanceof Error ? e.message : String(e)}`,
-                              ),
-                            );
-                        }}
-                      />
-                    );
-                  })}
-                </div>
-              </SortableContext>
-            </DndContext>
+            <CheckoffWorklist
+              rows={filteredRows}
+              partsById={partsById}
+              mobile={isMobileLayout}
+              busyPartId={busyPartId}
+              toggleBusy={toggleBusy}
+              assemblyTrackingEnabled={assemblyTrackingEnabled}
+              printingPartIds={printingPartIds}
+              awaitingPartIds={awaitingPartIds}
+              suggestedPartIds={suggestedPartIds}
+              rowErrors={mutations.rowErrors}
+              correctionsByPart={correctionsByPart}
+              reorderable={view === "remaining"}
+              emptyState={<div className="no-print">{renderEmpty()}</div>}
+              onReorder={onReorderVisibleRows}
+              onMoveTo={setMoveTarget}
+              onToggleUnit={onToggleUnit}
+              onIncrement={onIncrement}
+              onDecrement={onDecrement}
+              onPreview={setPreviewPart}
+              onClaim={onClaimSuggestion}
+              onToggleAssembled={onToggleAssembled}
+              onRetryRow={retryRow}
+              onBagLabelChange={worklistOrder.renameBagBar}
+              onRemoveBagBar={worklistOrder.removeBagBar}
+            />
           )}
+        </>
+      )}
 
-          {/* Printable sheet — paper tokens; print-only on Progress (GRE-233). Label: Print sheet. */}
-          {filtered.length > 0 ? (
-            <article
-              ref={sheetRef}
-              aria-hidden={!printPrep}
-              className={cn(
-                "checkoff-sheet checkoff-sheet-print-only",
-                compactMode && "compact",
-                continuousPrintLayout && "checkoff-sheet-print-continuous",
-                textOnlyPrint && "checkoff-sheet-text-only",
-                printPrep && "is-print-prep",
-                printPrep
-                  ? "pointer-events-none fixed top-0 left-0 -z-10 w-[880px] opacity-0 print:pointer-events-auto print:relative print:z-auto print:w-auto print:opacity-100"
-                  : null,
-              )}
-            >
-              <header className="sheet-header">
-                <h2 className="sheet-title">{planName}</h2>
-                <p className="sheet-subtitle">
-                  {filtered.length} part{filtered.length === 1 ? "" : "s"} · {printedLine}
-                </p>
-              </header>
+      <CheckoffPrinterStatusCard
+        className="no-print"
+        printingJobs={workflow?.active_work.printing_jobs ?? 0}
+        queuedJobs={workflow?.active_work.queued_jobs ?? 0}
+        failedJobs={workflow?.active_work.failed_jobs ?? 0}
+        productionRoute={productionRoute(selectedProfileId)}
+      >
+        <Suspense fallback={null}>
+          <PrinterLiveStrip
+            engineReady={engineReady}
+            onLiveStateChange={updateLiveStrip}
+            onCheckoffUpdate={(profileId) => {
+              if (profileId === selectedProfileId) setVerifyRefreshKey((k) => k + 1);
+              activity.refreshLinks();
+            }}
+            onUnattributedUpdate={() => {
+              void activity.refreshUnattributed();
+            }}
+          />
+        </Suspense>
+      </CheckoffPrinterStatusCard>
 
-              {grouped.map((repo) => (
-                <section key={repo.repoLayer} className="sheet-repo">
-                  <h3 className="sheet-repo-title">
-                    {repo.repoLabel}
-                    <span className="sheet-repo-count">{repo.partCount}</span>
-                  </h3>
-                  {repo.folders.map((group) => (
-                    <div key={group.folder} className="sheet-folder">
-                      <h4 className="sheet-folder-title">{group.folder}</h4>
-                      <div className="sheet-table-wrap">
-                        <table className="sheet-table">
-                          <thead>
-                            <tr>
-                              <th className="sheet-cell-part">Part</th>
-                              <th className="sheet-cell-qty">Qty</th>
-                              <th className="sheet-cell-printed">Printed</th>
-                              <th className="sheet-cell-notes">Notes</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {group.parts.map((part) => (
-                              <CheckoffSheetRow
-                                key={part.id}
-                                part={part}
-                                busy={busyPartId === part.id || toggleBusy}
-                                compact={compactMode}
-                                eagerThumbs={printPrep && !textOnlyPrint}
-                                showThumb={!textOnlyPrint}
-                                onToggleUnit={onToggleUnit}
-                                onPreview={setPreviewPart}
-                              />
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-                  ))}
-                </section>
-              ))}
-            </article>
-          ) : null}
+      {orderedParts.length > 0 ? (
+        <CheckoffPrintSheet
+          sheetRef={sheetRef}
+          planName={planName}
+          partCount={orderedParts.length}
+          printedLine={printedLine}
+          groups={grouped}
+          layout={printLayout}
+          printPrep={printPrep}
+          busyPartId={busyPartId}
+          toggleBusy={toggleBusy}
+          onToggleUnit={onToggleUnit}
+          onPreview={setPreviewPart}
+        />
+      ) : null}
 
       {review && (
         <div className="no-print flex flex-col gap-2 sm:flex-row sm:flex-wrap">
-          <Button className="min-h-10 w-full sm:w-auto" variant="ghost" asChild>
+          {isMobileLayout && (
+            <CheckoffPrintSheetButton
+              layout={printLayout}
+              onLayoutChange={setPrintLayout}
+              onPrint={() => void onPrint()}
+              disabled={orderedParts.length === 0}
+            />
+          )}
+          <Button className="min-h-11 w-full sm:w-auto" variant="ghost" asChild>
             <Link to={planRoute(selectedProfileId)}>Back to Plan</Link>
           </Button>
-          <Button className="min-h-10 w-full sm:w-auto" variant="ghost" asChild>
-            <Link to={prepareMissingPartsRoute(selectedProfileId)}>Prepare missing parts</Link>
+          <Button className="min-h-11 w-full sm:w-auto" variant="ghost" asChild>
+            <Link to={prepareMissingPartsRoute(selectedProfileId)}>
+              Prepare remaining units in Production
+            </Link>
           </Button>
         </div>
       )}
+
+      <CheckoffCorrectionDialog
+        target={correctionTarget}
+        busy={toggleBusy}
+        onCancel={() => setCorrectionTarget(null)}
+        onConfirm={onConfirmCorrection}
+      />
+
+      <CheckoffMoveToDialog
+        target={moveTarget}
+        onCancel={() => setMoveTarget(null)}
+        onMove={(position) => {
+          if (!moveTarget) return;
+          onReorderVisibleRows(
+            moveCheckoffRowToPosition(filteredRows, moveTarget.sortableId, position),
+          );
+          setMoveTarget(null);
+        }}
+      />
 
       <PartPreviewDialog part={previewPart} onClose={() => setPreviewPart(null)} />
     </PageShell>

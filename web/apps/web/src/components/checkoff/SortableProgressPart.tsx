@@ -2,10 +2,12 @@ import { memo } from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import type { ReviewPart } from "../../api/endpoints/planManifests";
+import type { CheckoffRowError } from "../../lib/checkoffConsoleRowErrors";
 import { SortableShell } from "../dnd/SortableDragHandle";
 import CheckoffMobilePartCard from "./CheckoffMobilePartCard";
 import ProgressBagBarRow from "./ProgressBagBarRow";
 import ProgressPartRow from "./ProgressPartRow";
+import type { CheckoffRowMoveControls } from "./CheckoffRowActionsMenu";
 import type { SuggestedPrinterClaim } from "../../lib/checkoffPrinterActivity";
 import { bagRowId, partRowId } from "../../lib/progressListOrder";
 
@@ -23,6 +25,11 @@ type PartProps = {
   suggestedPrinter?: SuggestedPrinterClaim;
   /** Global "Enable assembly tracking" setting (Settings > Build Tracking). */
   assemblyTrackingEnabled?: boolean;
+  /** Non-drag ordering controls (WCAG 2.2 dragging movements). */
+  moveControls?: CheckoffRowMoveControls;
+  rowError?: CheckoffRowError | null;
+  onRetry?: () => void;
+  correctionNote?: string;
   onToggleUnit: (part: ReviewPart, unitIndex: number) => void;
   onIncrement: (part: ReviewPart) => void;
   onDecrement: (part: ReviewPart) => void;
@@ -39,6 +46,7 @@ type BagProps = {
   busy: boolean;
   mobile: boolean;
   disabled?: boolean;
+  moveControls?: CheckoffRowMoveControls;
   onLabelChange: (label: string) => void;
   onRemove: () => void;
 };
@@ -72,6 +80,7 @@ export default memo(function SortableProgressPart(props: Props) {
             label={props.label}
             busy={props.busy}
             compact={props.mobile}
+            moveControls={props.moveControls}
             onLabelChange={props.onLabelChange}
             onRemove={props.onRemove}
             dragHandle={dragHandle}
@@ -86,9 +95,12 @@ export default memo(function SortableProgressPart(props: Props) {
             awaitingVerify={props.awaitingVerify}
             suggestedPrinter={props.suggestedPrinter}
             assemblyTrackingEnabled={props.assemblyTrackingEnabled}
+            moveControls={props.moveControls}
+            rowError={props.rowError}
+            onRetry={props.onRetry}
+            correctionNote={props.correctionNote}
             onClaim={props.onClaim}
             onToggleAssembled={props.onToggleAssembled}
-            dragHandle={dragHandle}
           />
         ) : (
           <ProgressPartRow
@@ -101,6 +113,10 @@ export default memo(function SortableProgressPart(props: Props) {
             awaitingVerify={props.awaitingVerify}
             suggestedPrinter={props.suggestedPrinter}
             assemblyTrackingEnabled={props.assemblyTrackingEnabled}
+            moveControls={props.moveControls}
+            rowError={props.rowError}
+            onRetry={props.onRetry}
+            correctionNote={props.correctionNote}
             onClaim={props.onClaim}
             onToggleAssembled={props.onToggleAssembled}
             dragHandle={dragHandle}

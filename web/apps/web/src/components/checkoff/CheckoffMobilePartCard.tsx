@@ -1,10 +1,12 @@
 import type { DraggableAttributes, DraggableSyntheticListeners } from "@dnd-kit/core";
 import type { ReviewPart } from "../../api/endpoints/planManifests";
+import type { CheckoffRowError } from "../../lib/checkoffConsoleRowErrors";
 import {
   lastCompletedUnit,
   nextUnitToComplete,
 } from "../../lib/checkoffProgress";
 import ProgressPartRow from "./ProgressPartRow";
+import type { CheckoffRowMoveControls } from "./CheckoffRowActionsMenu";
 import type { SuggestedPrinterClaim } from "../../lib/checkoffPrinterActivity";
 
 type Props = {
@@ -18,6 +20,10 @@ type Props = {
   suggestedPrinter?: SuggestedPrinterClaim;
   /** Global "Enable assembly tracking" setting (Settings > Build Tracking). */
   assemblyTrackingEnabled?: boolean;
+  moveControls?: CheckoffRowMoveControls;
+  rowError?: CheckoffRowError | null;
+  onRetry?: () => void;
+  correctionNote?: string;
   onToggleUnit: (part: ReviewPart, unitIndex: number) => void;
   onPreview: (part: ReviewPart) => void;
   onClaim?: (suggestion: SuggestedPrinterClaim) => void;
@@ -30,7 +36,10 @@ type Props = {
   };
 };
 
-/** Phone-first Progress row (shop floor). Matches Workflow mock density. */
+/**
+ * Phone Checkoff row. Drag is left out on touch: the row reorders through the
+ * Move controls in its actions menu instead.
+ */
 export default function CheckoffMobilePartCard({
   part,
   busy,
@@ -38,11 +47,14 @@ export default function CheckoffMobilePartCard({
   awaitingVerify,
   suggestedPrinter,
   assemblyTrackingEnabled,
+  moveControls,
+  rowError,
+  onRetry,
+  correctionNote,
   onToggleUnit,
   onPreview,
   onClaim,
   onToggleAssembled,
-  dragHandle,
 }: Props) {
   return (
     <ProgressPartRow
@@ -53,9 +65,12 @@ export default function CheckoffMobilePartCard({
       awaitingVerify={awaitingVerify}
       suggestedPrinter={suggestedPrinter}
       assemblyTrackingEnabled={assemblyTrackingEnabled}
+      moveControls={moveControls}
+      rowError={rowError}
+      onRetry={onRetry}
+      correctionNote={correctionNote}
       onClaim={onClaim}
       onToggleAssembled={onToggleAssembled}
-      dragHandle={dragHandle}
       onIncrement={(p) => {
         const idx = nextUnitToComplete(p.print_units);
         if (idx >= 0) onToggleUnit(p, idx);

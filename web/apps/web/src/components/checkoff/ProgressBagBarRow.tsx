@@ -1,11 +1,16 @@
 import type { DraggableAttributes, DraggableSyntheticListeners } from "@dnd-kit/core";
 import { SortableDragHandle } from "../dnd/SortableDragHandle";
+import CheckoffRowActionsMenu, {
+  type CheckoffRowMoveControls,
+} from "./CheckoffRowActionsMenu";
+import CheckoffRowMoveButtons from "./CheckoffRowMoveButtons";
 import { cn } from "@/lib/utils";
 
 type Props = {
   label: string;
   busy?: boolean;
   compact?: boolean;
+  moveControls?: CheckoffRowMoveControls;
   onLabelChange: (label: string) => void;
   onRemove: () => void;
   dragHandle?: {
@@ -16,26 +21,29 @@ type Props = {
 };
 
 /**
- * Quiet free-text bag/sort bar on Progress remaining list.
+ * Quiet free-text bag/sort bar on the Checkoff worklist.
  * This-plan labeling only — not shop stock bins.
  */
 export default function ProgressBagBarRow({
   label,
   busy = false,
   compact = false,
+  moveControls,
   onLabelChange,
   onRemove,
   dragHandle,
 }: Props) {
-  const handle = dragHandle ? (
-    <SortableDragHandle
-      attributes={dragHandle.attributes}
-      listeners={dragHandle.listeners}
-      disabled={dragHandle.disabled || busy}
-      label={`Reorder ${label.trim() || "bag bar"}`}
-      className={compact ? "size-10" : "size-7"}
-    />
-  ) : null;
+  const rowLabel = label.trim() || "bag bar";
+  const handle =
+    dragHandle && !compact ? (
+      <SortableDragHandle
+        attributes={dragHandle.attributes}
+        listeners={dragHandle.listeners}
+        disabled={dragHandle.disabled || busy}
+        label={`Reorder ${rowLabel}`}
+        className="size-7"
+      />
+    ) : null;
 
   return (
     <article
@@ -45,27 +53,32 @@ export default function ProgressBagBarRow({
       )}
     >
       {handle}
+      {moveControls && !compact ? (
+        <CheckoffRowMoveButtons rowLabel={rowLabel} move={moveControls} disabled={busy} />
+      ) : null}
       <input
         type="text"
-        className={cn(
-          "min-w-0 flex-1 border-0 bg-transparent font-medium text-foreground outline-none placeholder:text-muted-foreground focus-visible:ring-0",
-          compact ? "text-sm" : "text-sm",
-        )}
+        className="min-w-0 flex-1 border-0 bg-transparent text-sm font-medium text-foreground outline-none placeholder:text-muted-foreground focus-visible:ring-0"
         value={label}
         placeholder="Bag 1"
         aria-label="Bag or sort label"
         disabled={busy}
         onChange={(e) => onLabelChange(e.target.value)}
       />
-      <button
-        type="button"
-        className="shrink-0 px-1.5 text-xs text-muted-foreground hover:text-foreground disabled:opacity-40"
+      <CheckoffRowActionsMenu
+        large={compact}
+        rowLabel={rowLabel}
+        move={moveControls}
+        actions={[
+          {
+            id: "remove",
+            label: "Remove this bag bar",
+            disabled: busy,
+            onSelect: onRemove,
+          },
+        ]}
         disabled={busy}
-        aria-label="Remove bag bar"
-        onClick={onRemove}
-      >
-        Remove
-      </button>
+      />
     </article>
   );
 }

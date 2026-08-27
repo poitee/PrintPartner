@@ -25,8 +25,11 @@ const state = vi.hoisted(() => ({
 vi.mock("../hooks/useEngineHealth", () => ({
   useEngineHealth: () => ({ health: { ok: true }, error: null, loading: false }),
 }));
-vi.mock("../components/build/BuildWorkflowNextAction", () => ({
+vi.mock("../components/build/BuildSummaryHeader", () => ({
   default: () => null,
+}));
+vi.mock("../queries/buildWorkflow", () => ({
+  useBuildWorkflowQuery: () => ({ data: undefined, error: null }),
 }));
 vi.mock("../context/ProfileContext", () => ({
   useProfileSelection: () => ({
@@ -126,12 +129,6 @@ vi.mock("../api/endpoints/productionSend", async (importOriginal) => {
   };
 });
 vi.mock("../components/checkoff/PrinterLiveStrip", () => ({
-  default: () => null,
-}));
-vi.mock("../components/checkoff/PrinterQueueSuggestionBanner", () => ({
-  default: () => null,
-}));
-vi.mock("../components/export/PrinterSendQueuePanel", () => ({
   default: () => null,
 }));
 vi.mock("../components/checkoff/PrintVerifyPanel", () => ({

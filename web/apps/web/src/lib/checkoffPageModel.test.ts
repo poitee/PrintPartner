@@ -1,15 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
-  CHECKOFF_FILTER_MODES,
   checkoffProgressDescription,
   checkoffProgressEyebrow,
   checkoffProgressMeta,
-  checkoffProgressMode,
-  filterCheckoffParts,
   filterProgressRows,
-  haveSameIds,
   isSameLiveStripState,
   orderedPartsFromRows,
+  searchCheckoffParts,
 } from "./checkoffPageModel";
 import type { ReviewPart } from "../api/endpoints/planManifests";
 
@@ -38,27 +35,15 @@ function part(overrides: Partial<ReviewPart>): ReviewPart {
 }
 
 describe("checkoffPageModel", () => {
-  it("defines the page filter labels in display order", () => {
-    expect(CHECKOFF_FILTER_MODES).toEqual([
-      { mode: "missing", label: "Remaining" },
-      { mode: "done", label: "Done" },
-      { mode: "all", label: "All" },
-    ]);
-  });
-
-
   it("compares live strip state by ids regardless of order", () => {
-    expect(haveSameIds(["a", "b"], ["b", "a"])).toBe(true);
+    expect(isSameLiveStripState(
+      { anyPrinting: true, hostCount: 2, activeIntegrationIds: ["a"], idleIntegrationIds: ["b"] },
+      { anyPrinting: true, hostCount: 2, activeIntegrationIds: ["b"], idleIntegrationIds: ["a"] },
+    )).toBe(false);
     expect(isSameLiveStripState(
       { anyPrinting: true, hostCount: 2, activeIntegrationIds: ["a"], idleIntegrationIds: ["b"] },
       { anyPrinting: true, hostCount: 2, activeIntegrationIds: ["a"], idleIntegrationIds: ["b"] },
     )).toBe(true);
-  });
-
-  it("keeps verify-first progress mode", () => {
-    expect(checkoffProgressMode({ liveStrip: { anyPrinting: true }, verifyQueue: { awaitingCount: 1, watchingCount: 0 } })).toBe("verify");
-    expect(checkoffProgressMode({ liveStrip: { anyPrinting: true }, verifyQueue: { awaitingCount: 0, watchingCount: 0 } })).toBe("printing");
-    expect(checkoffProgressMode({ liveStrip: { anyPrinting: false }, verifyQueue: { awaitingCount: 0, watchingCount: 0 } })).toBe("idle");
   });
 
   it("formats progress header copy", () => {
@@ -69,12 +54,13 @@ describe("checkoffPageModel", () => {
     expect(checkoffProgressDescription(1)).toContain("Verify");
   });
 
-  it("filters parts and progress rows", () => {
+  it("searches parts and keeps bag bars that match", () => {
     const parts = [
       part({ id: 1, filename: "gear.stl", missing: true }),
       part({ id: 2, filename: "cover.stl", missing: false, filament_display: "Blue PLA" }),
     ];
-    const filtered = filterCheckoffParts({ parts, filter: "done", search: "blue" });
+    expect(searchCheckoffParts({ parts, search: "  " }).map((row) => row.id)).toEqual([1, 2]);
+    const filtered = searchCheckoffParts({ parts, search: "blue" });
     expect(filtered.map((row) => row.id)).toEqual([2]);
 
     const visibleRows = filterProgressRows({

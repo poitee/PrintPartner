@@ -3,8 +3,8 @@ import type { DraggableAttributes, DraggableSyntheticListeners } from "@dnd-kit/
 import { Minus, Plus } from "lucide-react";
 import type { ReviewPart } from "../../api/endpoints/planManifests";
 import type { SuggestedPrinterClaim } from "../../lib/checkoffPrinterActivity";
+import type { CheckoffRowError } from "../../lib/checkoffConsoleRowErrors";
 import {
-  assembledEligibleUnitIndices,
   lastCompletedUnit,
   nextUnitToComplete,
   partProgressPercent,
@@ -16,12 +16,18 @@ import { cn } from "@/lib/utils";
 import { SortableDragHandle } from "../dnd/SortableDragHandle";
 import PartThumbExpandButton from "../parts/PartThumbExpandButton";
 import { Button } from "../ui/button";
-import { Switch } from "../ui/switch";
+import CheckoffRowActionsMenu, {
+  type CheckoffRowAction,
+  type CheckoffRowMoveControls,
+} from "./CheckoffRowActionsMenu";
+import { AssembledToggles, StatusBadges } from "./CheckoffRowStatus";
+import CheckoffRowMoveButtons from "./CheckoffRowMoveButtons";
+import CheckoffRowErrorNotice from "./CheckoffRowErrorNotice";
 
 type Props = {
   part: ReviewPart;
   busy: boolean;
-  /** Dense phone layout: larger steppers, no inline bar. */
+  /** Dense phone layout: one large primary action, rare actions in a menu. */
   compact?: boolean;
   /** Printer host name if this part is currently being printed. */
   printingOn?: string;
@@ -31,6 +37,13 @@ type Props = {
   suggestedPrinter?: SuggestedPrinterClaim;
   /** Global "Enable assembly tracking" setting (Settings > Build Tracking). */
   assemblyTrackingEnabled?: boolean;
+  /** Non-drag ordering controls (WCAG 2.2 dragging movements). */
+  moveControls?: CheckoffRowMoveControls;
+  /** Persistent failure from the last progress mutation on this row. */
+  rowError?: CheckoffRowError | null;
+  onRetry?: () => void;
+  /** Provenance for a corrected row, shown in the Completed view. */
+  correctionNote?: string;
   onIncrement: (part: ReviewPart) => void;
   onDecrement: (part: ReviewPart) => void;
   onPreview: (part: ReviewPart) => void;
@@ -65,126 +78,23 @@ const toneBarClass: Record<ReturnType<typeof partProgressTone>, string> = {
   done: "bg-success",
 };
 
-function truncateFilename(name: string, maxLen = 20): string {
-  if (name.length <= maxLen) return name;
-  return name.slice(0, maxLen - 1) + "…";
+/** Text state for the row. Never rely on the colour alone. */
+function unitStateLabel(printed: number, quantity: number): string {
+  if (quantity <= 0) return "No units required";
+  if (printed <= 0) return `0 of ${quantity} printed`;
+  if (printed >= quantity) return `Complete, ${printed} of ${quantity} printed`;
+  return `${printed} of ${quantity} printed`;
 }
 
 /**
- * Assembled toggles — one per completed unit, only rendered when the global
- * Assembled Tracking setting is on. Hidden entirely when there is nothing
- * completed yet, since "assembled" tracks installed-but-already-printed state.
- */
-function AssembledToggles({
-  part,
-  busy,
-  onToggleAssembled,
-}: {
-  part: ReviewPart;
-  busy: boolean;
-  onToggleAssembled: (part: ReviewPart, unitIndex: number) => void;
-}) {
-  const assembledUnits = part.assembled_units ?? [];
-  const completedIndices = assembledEligibleUnitIndices(part.print_units);
-  if (completedIndices.length === 0) return null;
-  const showUnitNumber = part.print_units.length > 1;
-  return (
-    <div className="flex flex-wrap items-center gap-1.5" data-testid="assembled-toggles">
-      {completedIndices.map((idx) => {
-        const isAssembled = assembledUnits[idx] ?? false;
-        const label = showUnitNumber ? `Assembled #${idx + 1}` : "Assembled";
-        return (
-          <label
-            key={idx}
-            className={cn(
-              "flex items-center gap-1.5 rounded-full border border-border bg-muted/40 px-2 py-0.5 text-2xs font-medium text-muted-foreground",
-              isAssembled && "border-success/40 bg-success/10 text-success",
-            )}
-          >
-            <Switch
-              checked={isAssembled}
-              disabled={busy}
-              onCheckedChange={() => onToggleAssembled(part, idx)}
-              aria-label={`${label} for ${part.filename}`}
-              className="h-4 w-7 [&>span]:size-3 [&>span]:data-[state=checked]:translate-x-3"
-            />
-            <span>{label}</span>
-          </label>
-        );
-      })}
-    </div>
-  );
-}
-
-/** Status badges rendered under the filename. At most one printing/awaiting badge shows. */
-function StatusBadges({
-  inCompact,
-  printingOn,
-  awaitingVerify,
-  suggestedPrinter,
-  busy,
-  onClaim,
-}: {
-  inCompact: boolean;
-  printingOn?: string;
-  awaitingVerify?: string;
-  suggestedPrinter?: SuggestedPrinterClaim;
-  busy: boolean;
-  onClaim?: (suggestion: SuggestedPrinterClaim) => void;
-}) {
-  return (
-    <>
-      {/* Awaiting verify (green) — takes precedence over printing */}
-      {awaitingVerify && (
-        <span className="inline-flex items-center gap-1 rounded-full border border-success/30 bg-success-soft px-2 py-0.5 text-2xs font-medium text-success">
-          <span aria-hidden>✓</span> Finished on {awaitingVerify} — verify
-        </span>
-      )}
-
-      {/* Actively printing (sky) — only when not already awaiting verify */}
-      {!awaitingVerify && printingOn && (
-        <span className="inline-flex items-center gap-1.5 rounded-full border border-info/30 bg-info-soft px-2 py-0.5 text-2xs font-medium text-info">
-          <span
-            className="inline-block h-2 w-2 rounded-full bg-info animate-pulse"
-            aria-hidden
-          />
-          Printing on {printingOn}
-        </span>
-      )}
-
-      {/* Suggested printer from unattributed print (amber) */}
-      {suggestedPrinter && !printingOn && !awaitingVerify && (
-        <span className="inline-flex flex-wrap items-center gap-1.5 rounded-full border border-warning/30 bg-warning-soft px-2 py-0.5 text-2xs font-medium text-warning">
-          <span aria-hidden>⚡</span>
-          <span>
-            Possibly on {suggestedPrinter.hostName} [{truncateFilename(suggestedPrinter.filename)}]
-          </span>
-          <button
-            type="button"
-            className={cn(
-              "rounded border border-warning/30 bg-warning-soft px-1.5 py-0 text-3xs font-semibold text-warning hover:bg-warning/20",
-              inCompact ? "h-5" : "h-4",
-            )}
-            disabled={busy}
-            onClick={(e) => {
-              e.stopPropagation();
-              onClaim?.(suggestedPrinter);
-            }}
-          >
-            Claim
-          </button>
-        </span>
-      )}
-    </>
-  );
-}
-
-/**
- * Screen Progress row — thumb, path, filament swatch, bar, −/+ steppers
- * (matches Workflow mock Progress / phone checkoff density).
+ * One Required part on the Checkoff worklist.
  *
- * Memoised so checking off one unit only re-renders the affected row,
- * not all 145 rows in the list.
+ * The phone layout leads with what the operator holds: the part image, the
+ * filename, the current state in words, and one large primary action. Rare
+ * actions (take a unit back off, reorder, preview) move into a menu, so the
+ * row stays usable one-handed beside a running printer.
+ *
+ * Memoised so checking off one unit only re-renders the affected row.
  */
 const ProgressPartRow = memo(function ProgressPartRow({
   part,
@@ -194,6 +104,10 @@ const ProgressPartRow = memo(function ProgressPartRow({
   awaitingVerify,
   suggestedPrinter,
   assemblyTrackingEnabled,
+  moveControls,
+  rowError,
+  onRetry,
+  correctionNote,
   onIncrement,
   onDecrement,
   onPreview,
@@ -207,6 +121,21 @@ const ProgressPartRow = memo(function ProgressPartRow({
   const canInc = nextUnitToComplete(part.print_units) >= 0;
   const canDec = lastCompletedUnit(part.print_units) >= 0;
   const countLabel = `${part.printed_count} of ${qty}`;
+  const stateLabel = unitStateLabel(part.printed_count, qty);
+
+  const menuActions: CheckoffRowAction[] = [
+    {
+      id: "decrement",
+      label: "Take one off the printed count",
+      disabled: busy || !canDec,
+      onSelect: () => onDecrement(part),
+    },
+    {
+      id: "preview",
+      label: "Preview the 3D model",
+      onSelect: () => onPreview(part),
+    },
+  ];
 
   const handle = dragHandle ? (
     <SortableDragHandle
@@ -214,76 +143,81 @@ const ProgressPartRow = memo(function ProgressPartRow({
       listeners={dragHandle.listeners}
       disabled={dragHandle.disabled || busy}
       label={`Reorder ${part.filename}`}
-      className={compact ? "size-10" : "size-7"}
+      className="size-7"
     />
   ) : null;
+
+  const errorNotice =
+    rowError && onRetry ? (
+      <CheckoffRowErrorNotice error={rowError} onRetry={onRetry} busy={busy} />
+    ) : null;
 
   if (compact) {
     return (
       <article
         className={cn(
-          "flex items-center gap-3 rounded-[10px] border border-border bg-card p-3 shadow-sm",
+          "flex flex-col gap-2 rounded-[10px] border border-border bg-card p-3 shadow-sm",
           tone === "done" && "border-success/40 bg-success/5",
           awaitingVerify && "border-success/30 bg-success-soft",
+          rowError && "border-destructive/50",
         )}
       >
-        {handle}
-        <PartThumbExpandButton part={part} sizePx={72} onExpand={onPreview} />
-        <div className="flex min-w-0 flex-1 flex-col gap-1">
-          <span
-            className="truncate font-mono text-xs"
-            title={part.relative_path || part.filename}
-          >
-            {part.filename}
-          </span>
-          <StatusBadges
-            inCompact
-            printingOn={printingOn}
-            awaitingVerify={awaitingVerify}
-            suggestedPrinter={suggestedPrinter}
-            busy={busy}
-            onClaim={onClaim}
-          />
-          <div className="flex items-center gap-2">
-            {part.filament_hex ? (
-              <span
-                className="size-2.5 shrink-0 rounded-sm border border-black/15"
-                style={{ background: part.filament_hex }}
-                title={part.filament_display || undefined}
-              />
-            ) : null}
-            <span className={cn("font-mono text-xs font-medium tabular-nums", toneCountClass[tone])}>
-              {countLabel}
-            </span>
-          </div>
-          {assemblyTrackingEnabled && onToggleAssembled && (
-            <AssembledToggles part={part} busy={busy} onToggleAssembled={onToggleAssembled} />
-          )}
-        </div>
+        {/* Filename first: it is what the operator reads off the part. */}
+        <span
+          className="truncate font-mono text-sm text-foreground"
+          title={part.relative_path || part.filename}
+        >
+          {part.filename}
+        </span>
         <div className="flex items-center gap-2">
+          <PartThumbExpandButton part={part} sizePx={52} onExpand={onPreview} />
+          <div className="flex min-w-0 flex-1 flex-col gap-1">
+            <span className="flex items-center gap-2">
+              {part.filament_hex ? (
+                <span
+                  className="size-2.5 shrink-0 rounded-sm border border-black/15"
+                  style={{ background: part.filament_hex }}
+                  title={part.filament_display || undefined}
+                />
+              ) : null}
+              <span className={cn("text-xs font-medium tabular-nums", toneCountClass[tone])}>
+                {stateLabel}
+              </span>
+            </span>
+            <StatusBadges
+              inCompact
+              printingOn={printingOn}
+              awaitingVerify={awaitingVerify}
+              suggestedPrinter={suggestedPrinter}
+              busy={busy}
+              onClaim={onClaim}
+            />
+          </div>
           <Button
             type="button"
-            variant="outline"
-            size="icon"
-            className="size-11 rounded-[10px]"
-            disabled={busy || !canDec}
-            aria-label={`Decrease printed count for ${part.filename}`}
-            onClick={() => onDecrement(part)}
-          >
-            <Minus className="size-5" />
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            size="icon"
-            className="size-11 rounded-[10px] border-primary bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary"
+            className="h-12 min-w-[4.5rem] shrink-0 gap-1 rounded-[10px] px-3 text-sm"
             disabled={busy || !canInc}
-            aria-label={`Increase printed count for ${part.filename}`}
+            aria-label={`Mark one ${part.filename} printed. ${stateLabel}`}
             onClick={() => onIncrement(part)}
           >
-            <Plus className="size-5" />
+            <Plus className="size-5" aria-hidden />
+            Printed
           </Button>
+          <CheckoffRowActionsMenu
+            large
+            rowLabel={part.filename}
+            move={moveControls}
+            actions={menuActions}
+            disabled={busy}
+          />
         </div>
+        {correctionNote ? (
+          <p className="text-2xs text-muted-foreground">{correctionNote}</p>
+        ) : null}
+        {assemblyTrackingEnabled && onToggleAssembled && (
+          <AssembledToggles part={part} busy={busy} onToggleAssembled={onToggleAssembled} />
+        )}
+        {errorNotice}
       </article>
     );
   }
@@ -291,87 +225,107 @@ const ProgressPartRow = memo(function ProgressPartRow({
   return (
     <article
       className={cn(
-        "flex items-center gap-3 rounded-lg border border-border bg-card px-3 py-2.5 shadow-sm",
+        "flex flex-col gap-2 rounded-lg border border-border bg-card px-3 py-2.5 shadow-sm",
         tone === "done" && "border-success/40 bg-success/5",
         awaitingVerify && "border-success/30 bg-success-soft",
+        rowError && "border-destructive/50",
       )}
     >
-      {handle}
-      <PartThumbExpandButton part={part} sizePx={72} onExpand={onPreview} />
-      <div className="flex w-[min(100%,20rem)] min-w-0 flex-col gap-0.5 self-center">
-        <span
-          className="truncate font-mono text-xs"
-          title={part.relative_path || part.filename}
-        >
-          {part.filename}
-        </span>
-        <span className="truncate text-2xs text-muted-foreground">{sourceLine(part)}</span>
-        <StatusBadges
-          inCompact={false}
-          printingOn={printingOn}
-          awaitingVerify={awaitingVerify}
-          suggestedPrinter={suggestedPrinter}
-          busy={busy}
-          onClaim={onClaim}
-        />
-        {assemblyTrackingEnabled && onToggleAssembled && (
-          <AssembledToggles part={part} busy={busy} onToggleAssembled={onToggleAssembled} />
-        )}
-      </div>
-      {part.filament_hex ? (
-        <span
-          className="size-3.5 shrink-0 rounded border border-black/15"
-          style={{ background: part.filament_hex }}
-          title={part.filament_display || undefined}
-        />
-      ) : (
-        <span className="size-3.5 shrink-0" aria-hidden />
-      )}
-      <span
-        className="hidden h-1.5 max-w-[14rem] flex-1 overflow-hidden rounded-full bg-muted sm:block"
-        role="progressbar"
-        aria-valuenow={pct}
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-label={`${part.filename} ${pct}% printed`}
-      >
-        <span
-          className={cn("block h-full rounded-full transition-[width]", toneBarClass[tone])}
-          style={{ width: `${pct}%` }}
-        />
-      </span>
-      <div className="ml-auto flex items-center gap-2">
-        <Button
-          type="button"
-          variant="outline"
-          size="icon"
-          className="size-7 rounded-md"
-          disabled={busy || !canDec}
-          aria-label={`Decrease printed count for ${part.filename}`}
-          onClick={() => onDecrement(part)}
-        >
-          <Minus className="size-3.5" />
-        </Button>
-        <span
-          className={cn(
-            "w-[3.25rem] text-center font-mono text-sm font-medium tabular-nums",
-            toneCountClass[tone],
+      <div className="flex items-center gap-3">
+        {handle}
+        {moveControls ? (
+          <CheckoffRowMoveButtons
+            rowLabel={part.filename}
+            move={moveControls}
+            disabled={busy}
+          />
+        ) : null}
+        <PartThumbExpandButton part={part} sizePx={72} onExpand={onPreview} />
+        <div className="flex w-[min(100%,20rem)] min-w-0 flex-col gap-0.5 self-center">
+          <span
+            className="truncate font-mono text-xs"
+            title={part.relative_path || part.filename}
+          >
+            {part.filename}
+          </span>
+          <span className="truncate text-2xs text-muted-foreground">{sourceLine(part)}</span>
+          <StatusBadges
+            inCompact={false}
+            printingOn={printingOn}
+            awaitingVerify={awaitingVerify}
+            suggestedPrinter={suggestedPrinter}
+            busy={busy}
+            onClaim={onClaim}
+          />
+          {correctionNote ? (
+            <span className="text-2xs text-muted-foreground">{correctionNote}</span>
+          ) : null}
+          {assemblyTrackingEnabled && onToggleAssembled && (
+            <AssembledToggles part={part} busy={busy} onToggleAssembled={onToggleAssembled} />
           )}
+        </div>
+        {part.filament_hex ? (
+          <span
+            className="size-3.5 shrink-0 rounded border border-black/15"
+            style={{ background: part.filament_hex }}
+            title={part.filament_display || undefined}
+          />
+        ) : (
+          <span className="size-3.5 shrink-0" aria-hidden />
+        )}
+        <span
+          className="hidden h-1.5 max-w-[14rem] flex-1 overflow-hidden rounded-full bg-muted sm:block"
+          role="progressbar"
+          aria-valuenow={pct}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-label={`${part.filename} ${pct}% printed`}
         >
-          {countLabel}
+          <span
+            className={cn("block h-full rounded-full transition-[width]", toneBarClass[tone])}
+            style={{ width: `${pct}%` }}
+          />
         </span>
-        <Button
-          type="button"
-          variant="outline"
-          size="icon"
-          className="size-7 rounded-md border-primary bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary"
-          disabled={busy || !canInc}
-          aria-label={`Increase printed count for ${part.filename}`}
-          onClick={() => onIncrement(part)}
-        >
-          <Plus className="size-3.5" />
-        </Button>
+        <div className="ml-auto flex items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            className="size-9 rounded-md"
+            disabled={busy || !canDec}
+            aria-label={`Take one off the printed count for ${part.filename}`}
+            onClick={() => onDecrement(part)}
+          >
+            <Minus className="size-4" aria-hidden />
+          </Button>
+          <span
+            className={cn(
+              "w-[3.25rem] text-center font-mono text-sm font-medium tabular-nums",
+              toneCountClass[tone],
+            )}
+          >
+            {countLabel}
+          </span>
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            className="size-9 rounded-md border-primary bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary"
+            disabled={busy || !canInc}
+            aria-label={`Mark one ${part.filename} printed. ${stateLabel}`}
+            onClick={() => onIncrement(part)}
+          >
+            <Plus className="size-4" aria-hidden />
+          </Button>
+          <CheckoffRowActionsMenu
+            rowLabel={part.filename}
+            move={moveControls}
+            actions={menuActions}
+            disabled={busy}
+          />
+        </div>
       </div>
+      {errorNotice}
     </article>
   );
 });

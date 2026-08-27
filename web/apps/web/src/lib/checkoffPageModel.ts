@@ -1,19 +1,8 @@
 import type { ReviewPart } from "../api/endpoints/planManifests";
 import type { PrinterLiveStripState } from "../components/checkoff/PrinterLiveStrip";
-import type { PrintVerifyQueueState } from "../components/checkoff/PrintVerifyPanel";
-import type { CheckoffFilterMode } from "./persistedCheckoffUi";
 import type { ProgressRowRef } from "./progressListOrder";
 
-export const CHECKOFF_FILTER_MODES: readonly {
-  mode: CheckoffFilterMode;
-  label: string;
-}[] = [
-  { mode: "missing", label: "Remaining" },
-  { mode: "done", label: "Done" },
-  { mode: "all", label: "All" },
-];
-
-export function haveSameIds(left: readonly string[], right: readonly string[]): boolean {
+function haveSameIds(left: readonly string[], right: readonly string[]): boolean {
   if (left.length !== right.length) return false;
   const rightIds = new Set(right);
   return left.every((id) => rightIds.has(id));
@@ -29,16 +18,6 @@ export function isSameLiveStripState(
     haveSameIds(current.activeIntegrationIds, next.activeIntegrationIds) &&
     haveSameIds(current.idleIntegrationIds, next.idleIntegrationIds)
   );
-}
-
-/** Prefer verify when any finished job awaits; printing only when nothing needs confirmation. */
-export function checkoffProgressMode(input: {
-  liveStrip: Pick<PrinterLiveStripState, "anyPrinting">;
-  verifyQueue: Pick<PrintVerifyQueueState, "awaitingCount" | "watchingCount">;
-}): "printing" | "verify" | "idle" {
-  if (input.verifyQueue.awaitingCount > 0) return "verify";
-  if (input.liveStrip.anyPrinting || input.verifyQueue.watchingCount > 0) return "printing";
-  return "idle";
 }
 
 export function checkoffProgressMeta(input: {
@@ -60,20 +39,20 @@ export function checkoffProgressEyebrow(progressMeta: string | null): string {
 export function checkoffProgressDescription(includedPartCount: number): string {
   return includedPartCount === 0
     ? "Mark each unit as you finish it on the shop floor."
-    : "Verify when a print finishes. Remaining parts stay below.";
+    : "Verify what came off the printer.";
 }
 
-export function filterCheckoffParts(input: {
+/**
+ * Search within a view. The Checkoff console splits Remaining from Completed
+ * with its own views, so search is the only filter left on a part list.
+ */
+export function searchCheckoffParts(input: {
   parts: ReviewPart[];
-  filter: CheckoffFilterMode;
   search: string;
 }): ReviewPart[] {
-  let rows = input.parts;
-  if (input.filter === "missing") rows = rows.filter((part) => part.missing);
-  if (input.filter === "done") rows = rows.filter((part) => !part.missing);
   const query = input.search.trim().toLowerCase();
-  if (!query) return rows;
-  return rows.filter(
+  if (!query) return input.parts;
+  return input.parts.filter(
     (part) =>
       part.filename.toLowerCase().includes(query) ||
       part.relative_path.toLowerCase().includes(query) ||

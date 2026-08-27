@@ -55,8 +55,11 @@ function deferred<T>() {
 vi.mock("../hooks/useEngineHealth", () => ({
   useEngineHealth: () => ({ health: { ok: true }, error: null, loading: false }),
 }));
-vi.mock("../components/build/BuildWorkflowNextAction", () => ({
+vi.mock("../components/build/BuildSummaryHeader", () => ({
   default: () => null,
+}));
+vi.mock("../queries/buildWorkflow", () => ({
+  useBuildWorkflowQuery: () => ({ data: undefined, error: null }),
 }));
 vi.mock("../context/ProfileContext", () => ({
   useProfileSelection: () => ({
@@ -184,12 +187,6 @@ vi.mock("../components/checkoff/SortableProgressPart", () => ({
       </div>
     ) : null,
 }));
-vi.mock("../components/checkoff/PrinterQueueSuggestionBanner", () => ({
-  default: () => null,
-}));
-vi.mock("../components/export/PrinterSendQueuePanel", () => ({
-  default: () => null,
-}));
 vi.mock("../components/checkoff/PrintVerifyPanel", () => ({
   default: () => null,
 }));
@@ -223,39 +220,36 @@ describe("CheckoffPage unattributed print reconciliation", () => {
     api.fetchUnattributedPrints.mockResolvedValue([stalePrint]);
     api.claimUnattributedPrint.mockClear();
     localStorage.clear();
-    localStorage.setItem("print-partner.checkoff.ui.v1", JSON.stringify({ filter: "all" }));
   });
 
-  it("does not refetch printer suggestions when the idle printer set is unchanged", async () => {
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  it("opens on Needs attention and never dispatches the send queue", async () => {
     render(
       <MemoryRouter>
         <CheckoffPage />
       </MemoryRouter>,
     );
 
-    const idleState = {
-      anyPrinting: false,
-      activeIntegrationIds: [],
-      idleIntegrationIds: ["printer-a", "printer-b"],
-      hostCount: 2,
-    };
+    expect(await screen.findByText(/Unclaimed print detected/)).toBeTruthy();
     await waitFor(() => expect(testState.onLiveStateChange).toBeTypeOf("function"));
-    act(() => testState.onLiveStateChange?.(idleState));
-    await waitFor(() => expect(api.fetchPrinterQueueSuggestions).toHaveBeenCalledOnce());
-
     act(() =>
       testState.onLiveStateChange?.({
-        ...idleState,
-        idleIntegrationIds: [...idleState.idleIntegrationIds],
+        anyPrinting: false,
+        activeIntegrationIds: [],
+        idleIntegrationIds: ["printer-a", "printer-b"],
+        hostCount: 2,
       }),
     );
 
-    await waitFor(() => expect(api.fetchPrinterQueueSuggestions).toHaveBeenCalledOnce());
-  });
-
-  afterEach(() => {
-    cleanup();
-    vi.clearAllMocks();
+    // Queue dispatch belongs to Production.
+    await waitFor(() =>
+      expect(api.fetchPrinterQueueSuggestions).not.toHaveBeenCalled(),
+    );
+    expect(screen.getByRole("link", { name: "Go to Production" })).toBeTruthy();
   });
 
   it("keeps printer A's unclaimed print when printer B reports zero", async () => {
@@ -266,14 +260,12 @@ describe("CheckoffPage unattributed print reconciliation", () => {
     );
 
     expect(await screen.findByText(/Unclaimed print detected/)).toBeTruthy();
-    expect(screen.getByText(/Possibly on Core One Fixed/)).toBeTruthy();
 
     act(() => testState.onUnattributedUpdate?.(0));
 
     await waitFor(() => {
       expect(api.fetchUnattributedPrints).toHaveBeenCalledTimes(2);
       expect(screen.getByText(/Unclaimed print detected/)).toBeTruthy();
-      expect(screen.getByText(/Possibly on Core One Fixed/)).toBeTruthy();
     });
   });
 
@@ -284,7 +276,11 @@ describe("CheckoffPage unattributed print reconciliation", () => {
       </MemoryRouter>,
     );
 
-    fireEvent.click(await screen.findByRole("button", { name: "Claim suggested" }));
+    expect(await screen.findByText(/Unclaimed print detected/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /^Completed/ }));
+
+    expect(await screen.findByText(/Possibly on Core One Fixed/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Claim suggested" }));
 
     await waitFor(() => {
       expect(api.claimUnattributedPrint).toHaveBeenCalledWith("stale-print", 7, {
@@ -310,7 +306,6 @@ describe("CheckoffPage unattributed print reconciliation", () => {
     act(() => testState.onUnattributedUpdate?.(1));
 
     expect(await screen.findByText(/Unclaimed print detected/)).toBeTruthy();
-    expect(screen.getByText(/Possibly on Core One Fixed/)).toBeTruthy();
   });
 
   it("ignores an older global response that resolves after a newer empty response", async () => {
@@ -346,7 +341,6 @@ describe("CheckoffPage unattributed print reconciliation", () => {
 
     await waitFor(() => {
       expect(screen.queryByText(/Unclaimed print detected/)).toBeNull();
-      expect(screen.queryByText(/Possibly on Core One Fixed/)).toBeNull();
     });
   });
 });

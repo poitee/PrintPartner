@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { toast } from "sonner";
 import { queryKeys } from "../../queries/keys";
 import { Check, X } from "lucide-react";
 import {
@@ -15,7 +14,18 @@ import {
   buildPreviewRowsFromUnits,
   type ObjectPreviewRow,
 } from "../../lib/proposeCheckoffFromObjects";
+import {
+  checkoffLinkErrorKey,
+  clearCheckoffRowError,
+  describeCheckoffMutationFailure,
+  getCheckoffRowError,
+  NO_CHECKOFF_ROW_ERRORS,
+  setCheckoffRowError,
+  type CheckoffMutationAction,
+  type CheckoffRowErrors,
+} from "../../lib/checkoffConsoleRowErrors";
 import ObjectProposalRows from "../export/ObjectProposalRows";
+import CheckoffRowErrorNotice from "./CheckoffRowErrorNotice";
 import { Button } from "../ui/button";
 import { cn } from "@/lib/utils";
 
@@ -106,6 +116,12 @@ export default function PrintVerifyPanel({
   } | null>(null);
   const [rejectReason, setRejectReason] = useState<PrintRejectReason>("bed_adhesion");
   const [rejectNote, setRejectNote] = useState("");
+  /** Persistent per-job failures. A toast is gone before the operator reacts. */
+  const [linkErrors, setLinkErrors] = useState<CheckoffRowErrors>(NO_CHECKOFF_ROW_ERRORS);
+  const retryHandlers = useRef(new Map<string, () => void>());
+  const [readError, setReadError] = useState<string | null>(null);
+  /** Polite confirmation of the last verification, kept beside the queue. */
+  const [notice, setNotice] = useState<string | null>(null);
   const onQueueChangeRef = useRef(onQueueChange);
   onQueueChangeRef.current = onQueueChange;
 
@@ -131,8 +147,11 @@ export default function PrintVerifyPanel({
       setWatchingLinks(watching.links);
       setLinks(awaiting.links);
       setFailedLinks(failed.links);
+      setReadError(null);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e));
+      setReadError(
+        `Could not read the verification queue: ${e instanceof Error ? e.message : String(e)}`,
+      );
     }
   }, [activityLinks, engineReady, onActivityRefresh, profileId]);
 
@@ -161,23 +180,57 @@ export default function PrintVerifyPanel({
     }
   }, [displayLinks, rejectTarget, suppressedHosts]);
 
+  const recordFailure = (input: {
+    linkId: string;
+    filename: string;
+    action: CheckoffMutationAction;
+    cause: unknown;
+    retry: () => void;
+  }) => {
+    retryHandlers.current.set(input.linkId, input.retry);
+    setLinkErrors((errors) =>
+      setCheckoffRowError(errors, checkoffLinkErrorKey(input.linkId), {
+        message: describeCheckoffMutationFailure({
+          action: input.action,
+          filename: input.filename,
+          cause: input.cause,
+        }),
+        retryLabel: "Retry",
+        at: new Date().toISOString(),
+      }),
+    );
+  };
+
+  const clearFailure = (linkId: string) => {
+    retryHandlers.current.delete(linkId);
+    setLinkErrors((errors) => clearCheckoffRowError(errors, checkoffLinkErrorKey(linkId)));
+  };
+
+  /**
+   * Retry reruns the same decisions, so the operator keeps the reason and note
+   * they already chose. It never restarts the verification.
+   */
   const runVerify = async (
-    linkId: string,
+    link: PrinterCheckoffLink,
     decisions: Parameters<typeof verifyPrinterCheckoff>[0]["decisions"],
+    action: CheckoffMutationAction,
   ) => {
     setBusy(true);
     try {
-      const result = await verifyPrinterCheckoff({ link_id: linkId, decisions });
+      const result = await verifyPrinterCheckoff({ link_id: link.id, decisions });
+      const parts: string[] = [];
       if (result.units_confirmed > 0) {
-        toast.success(
+        parts.push(
           `Confirmed ${result.units_confirmed} unit${result.units_confirmed === 1 ? "" : "s"} printed`,
         );
       }
       if (result.units_rejected > 0) {
-        toast.message(
+        parts.push(
           `Logged ${result.units_rejected} reject${result.units_rejected === 1 ? "" : "s"}`,
         );
       }
+      setNotice(parts.length ? `${parts.join(". ")}.` : null);
+      clearFailure(link.id);
       setRejectTarget(null);
       setRejectNote("");
       await reload();
@@ -188,7 +241,13 @@ export default function PrintVerifyPanel({
       }
       onVerified?.();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e));
+      recordFailure({
+        linkId: link.id,
+        filename: link.filename,
+        action,
+        cause: e,
+        retry: () => void runVerify(link, decisions, action),
+      });
     } finally {
       setBusy(false);
     }
@@ -198,12 +257,13 @@ export default function PrintVerifyPanel({
     const units = pendingUnits(link);
     if (!units.length) return;
     void runVerify(
-      link.id,
+      link,
       units.map((u) => ({
         part_id: u.part_id,
         unit_index: u.unit_index,
         result: "confirmed" as const,
       })),
+      "verification",
     );
   };
 
@@ -214,7 +274,7 @@ export default function PrintVerifyPanel({
     const units = pendingUnits(link);
     if (!units.length) return;
     void runVerify(
-      link.id,
+      link,
       units.map((u) => ({
         part_id: u.part_id,
         unit_index: u.unit_index,
@@ -222,13 +282,15 @@ export default function PrintVerifyPanel({
         reason: rejectReason,
         note: rejectNote.trim() || undefined,
       })),
+      "rejection",
     );
   };
 
-  const onDismissFailed = async (linkId: string) => {
+  const onDismissFailed = async (link: PrinterCheckoffLink) => {
     setBusy(true);
     try {
-      await dismissPrinterCheckoff({ link_id: linkId });
+      await dismissPrinterCheckoff({ link_id: link.id });
+      clearFailure(link.id);
       await reload();
       if (profileId != null) {
         void queryClient.invalidateQueries({
@@ -236,11 +298,19 @@ export default function PrintVerifyPanel({
         });
       }
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e));
+      recordFailure({
+        linkId: link.id,
+        filename: link.filename,
+        action: "dismissal",
+        cause: e,
+        retry: () => void onDismissFailed(link),
+      });
     } finally {
       setBusy(false);
     }
   };
+
+  const retryLink = (linkId: string) => retryHandlers.current.get(linkId)?.();
 
   if (!engineReady || profileId == null) return null;
 
@@ -252,12 +322,33 @@ export default function PrintVerifyPanel({
   const showWatching = watchingForDisplay.length > 0;
   const showVerify = actionableLinks.length > 0;
 
-  if (!showFailed && !showVerify && !showWatching) {
+  const errorFor = (linkId: string) =>
+    getCheckoffRowError(linkErrors, checkoffLinkErrorKey(linkId));
+
+  if (!showFailed && !showVerify && !showWatching && !readError) {
     return null;
   }
 
   return (
     <div className={cn("flex flex-col gap-2 print:hidden", className)}>
+      {readError ? (
+        <div
+          className="flex flex-wrap items-center gap-2 rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm"
+          role="alert"
+        >
+          <span className="min-w-0 flex-1 text-destructive">{readError}</span>
+          <Button size="sm" variant="secondary" className="min-h-9" onClick={() => void reload()}>
+            Retry
+          </Button>
+        </div>
+      ) : null}
+
+      {notice ? (
+        <p className="text-sm text-muted-foreground" role="status">
+          {notice}
+        </p>
+      ) : null}
+
       {displayFailedLinks.map((link) => (
         <div
           key={link.id}
@@ -273,12 +364,21 @@ export default function PrintVerifyPanel({
             <Button
               size="sm"
               variant="outline"
+              className="min-h-9"
               disabled={busy}
-              onClick={() => void onDismissFailed(link.id)}
+              onClick={() => void onDismissFailed(link)}
             >
               Dismiss
             </Button>
           </div>
+          {errorFor(link.id) ? (
+            <CheckoffRowErrorNotice
+              className="mt-2"
+              error={errorFor(link.id)!}
+              busy={busy}
+              onRetry={() => retryLink(link.id)}
+            />
+          ) : null}
         </div>
       ))}
 
@@ -330,8 +430,7 @@ export default function PrintVerifyPanel({
                 </div>
                 <div className="flex shrink-0 flex-wrap gap-2">
                   <Button
-                    size="sm"
-                    className="min-h-10"
+                    className="min-h-11"
                     disabled={busy || units.length === 0}
                     onClick={() => onConfirmAll(link)}
                   >
@@ -339,9 +438,8 @@ export default function PrintVerifyPanel({
                     Confirm
                   </Button>
                   <Button
-                    size="sm"
                     variant="outline"
-                    className="min-h-10"
+                    className="min-h-11"
                     disabled={busy || units.length === 0}
                     onClick={() => {
                       setRejectReason("bed_adhesion");
@@ -353,6 +451,13 @@ export default function PrintVerifyPanel({
                     Reject…
                   </Button>
                 </div>
+                {errorFor(link.id) ? (
+                  <CheckoffRowErrorNotice
+                    error={errorFor(link.id)!}
+                    busy={busy}
+                    onRetry={() => retryLink(link.id)}
+                  />
+                ) : null}
               </div>
             </div>
           );
@@ -366,7 +471,7 @@ export default function PrintVerifyPanel({
         >
           <p className="mb-2 font-medium">Why did these units fail?</p>
           <select
-            className="mb-2 min-h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+            className="mb-2 min-h-11 w-full rounded-md border border-input bg-background px-2 text-sm"
             value={rejectReason}
             onChange={(e) => setRejectReason(e.target.value as PrintRejectReason)}
             aria-label="Reject reason"
@@ -379,19 +484,19 @@ export default function PrintVerifyPanel({
           </select>
           <input
             type="text"
-            className="mb-2 min-h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+            className="mb-2 min-h-11 w-full rounded-md border border-input bg-background px-2 text-sm"
             placeholder="Optional note"
             value={rejectNote}
             onChange={(e) => setRejectNote(e.target.value)}
             maxLength={500}
           />
           <div className="flex flex-wrap gap-2">
-            <Button size="sm" disabled={busy} onClick={onSubmitReject}>
+            <Button className="min-h-11" disabled={busy} onClick={onSubmitReject}>
               Save reject
             </Button>
             <Button
-              size="sm"
               variant="ghost"
+              className="min-h-11"
               disabled={busy}
               onClick={() => setRejectTarget(null)}
             >
