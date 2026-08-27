@@ -2,16 +2,15 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import type {
-  IntegrationSummary,
-  PrinterDetailsInput,
-  PrinterMachine,
-} from "../../api/engine";
+import type { IntegrationSummary } from "../../api/endpoints/integrations";
+import type { PrinterDetailsInput, PrinterMachine } from "../../api/endpoints/printers";
 import PrintersSettingsCard from "./PrintersSettingsCard";
 
 const api = vi.hoisted(() => ({
   addPrinter: vi.fn(),
   createIntegration: vi.fn(),
+  deleteIntegration: vi.fn(),
+  deletePrinter: vi.fn(),
   fetchFilamentCatalog: vi.fn(),
   fetchIntegrationStatus: vi.fn(),
   fetchIntegrations: vi.fn(),
@@ -22,13 +21,48 @@ const api = vi.hoisted(() => ({
   fetchProfiles: vi.fn(),
   fetchSlicerProfileOptions: vi.fn(),
   savePrinterFleet: vi.fn(),
+  savePrinterPlanBinding: vi.fn(),
+  testIntegration: vi.fn(),
   updateIntegration: vi.fn(),
   updatePrinterDetails: vi.fn(),
+  updatePrinterSlicer: vi.fn(),
 }));
 
-vi.mock("../../api/engine", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../api/engine")>()),
-  ...api,
+vi.mock("../../api/endpoints/filaments", () => ({
+  fetchFilamentCatalog: api.fetchFilamentCatalog,
+}));
+
+vi.mock("../../api/endpoints/integrations", () => ({
+  createIntegration: api.createIntegration,
+  deleteIntegration: api.deleteIntegration,
+  fetchIntegrationStatus: api.fetchIntegrationStatus,
+  fetchIntegrations: api.fetchIntegrations,
+  testIntegration: api.testIntegration,
+  updateIntegration: api.updateIntegration,
+}));
+
+vi.mock("../../api/endpoints/plans", () => ({
+  fetchProfiles: api.fetchProfiles,
+}));
+
+vi.mock("../../api/endpoints/printerSettings", () => ({
+  fetchPrinterPlanBindings: api.fetchPrinterPlanBindings,
+  fetchPrinterProfileAssignment: api.fetchPrinterProfileAssignment,
+  savePrinterPlanBinding: api.savePrinterPlanBinding,
+}));
+
+vi.mock("../../api/endpoints/printers", () => ({
+  addPrinter: api.addPrinter,
+  deletePrinter: api.deletePrinter,
+  fetchPrinterPresets: api.fetchPrinterPresets,
+  fetchPrinters: api.fetchPrinters,
+  savePrinterFleet: api.savePrinterFleet,
+  updatePrinterDetails: api.updatePrinterDetails,
+  updatePrinterSlicer: api.updatePrinterSlicer,
+}));
+
+vi.mock("../../api/endpoints/slicers", () => ({
+  fetchSlicerProfileOptions: api.fetchSlicerProfileOptions,
 }));
 
 afterEach(cleanup);

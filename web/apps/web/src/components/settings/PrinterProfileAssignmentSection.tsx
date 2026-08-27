@@ -1,13 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
+import { fetchSlicerProfileOptions, type SlicerProfileOptions } from "../../api/endpoints/slicers";
+import { formatSyncTime } from "../../api/endpoints/runtime";
+import type { PrinterMachine } from "../../api/endpoints/printers";
 import {
   fetchPrinterProfileAssignment,
-  fetchSlicerProfileOptions,
-  formatSyncTime,
   savePrinterProfileAssignment,
-  type PrinterMachine,
   type PrinterProfileAssignment,
-  type SlicerProfileOptions,
-} from "../../api/engine";
+} from "../../api/endpoints/printerSettings";
 import { Button } from "../ui/button";
 import {
   Select,

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { toast } from "sonner";
 import { KeyRound } from "lucide-react";
-import { changePassword } from "../../api/engine";
+import { changePassword } from "../../api/endpoints/auth";
 import { Button } from "../ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui/card";
 

@@ -11,14 +11,9 @@ import {
   Workflow,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import {
-  engineBaseUrl,
-  fetchHealth,
-  fetchLegalDocument,
-  fetchManifestRegistry,
-  fetchWorkflowGuide,
-  type ManifestRegistryEntry,
-} from "../api/engine";
+import { fetchHealth, fetchLegalDocument, fetchWorkflowGuide } from "../api/endpoints/help";
+import { fetchManifestRegistry, type ManifestRegistryEntry } from "../api/endpoints/planManifests";
+import { engineBaseUrl } from "../api/endpoints/runtime";
 import SupportCta from "../components/SupportCta";
 import PageHeader from "../components/layout/PageHeader";
 import PageShell from "../components/layout/PageShell";
@@ -33,60 +28,16 @@ import { Skeleton } from "../components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
 import { useProfileSelection } from "../context/ProfileContext";
 import { useEngineHealth } from "../hooks/useEngineHealth";
-import { buildSourcesRoute, checkoffRoute, exportRoute, planRoute } from "../lib/routes";
+import {
+  LEGAL_TABS,
+  WORKFLOW_STEPS,
+  renderMarkdownLite,
+  workflowStepPaths,
+  type LegalTab,
+} from "../lib/helpPageModel";
 import { resolveEngineState } from "../lib/workflowState";
 
-type LegalTab = "summary" | "license" | "attribution" | "third-party";
-
-const LEGAL_TABS: { id: LegalTab; label: string }[] = [
-  { id: "summary", label: "License overview" },
-  { id: "license", label: "Full license" },
-  { id: "attribution", label: "Attribution" },
-  { id: "third-party", label: "Third-party notices" },
-];
-
 const WORKFLOW_STEP_ICONS: LucideIcon[] = [FolderGit2, Hammer, ClipboardCheck, FileArchive];
-
-const WORKFLOW_STEPS = [
-  {
-    num: 1,
-    label: "Sources",
-    path: null as string | null,
-    description: "Attach sources, pick STLs, and set role colors for this Build",
-  },
-  {
-    num: 2,
-    label: "Plan",
-    path: null as string | null,
-    description: "Review quantities and warnings, then apply Plan changes",
-  },
-  {
-    num: 3,
-    label: "Checkoff",
-    path: null as string | null,
-    description: "Track printed units and bag completed work",
-  },
-  {
-    num: 4,
-    label: "Production",
-    path: null as string | null,
-    description: "Allocate printers, edit plates, download, and verify jobs",
-  },
-] as const;
-
-function renderMarkdownLite(text: string): string {
-  return text
-    .replace(/^### (.+)$/gm, "<h4>$1</h4>")
-    .replace(/^## (.+)$/gm, "<h3>$1</h3>")
-    .replace(/^# (.+)$/gm, "<h2>$1</h2>")
-    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
-    .replace(/^- (.+)$/gm, "<li>$1</li>")
-    .replace(/(<li>.*<\/li>\n?)+/g, (block) => `<ul>${block}</ul>`)
-    .replace(/\n\n/g, "</p><p>")
-    .replace(/^(.+)$/gm, (line) =>
-      line.startsWith("<") ? line : `<p>${line}</p>`,
-    );
-}
 
 function HelpLoadingSkeleton() {
   return (
@@ -121,14 +72,7 @@ export default function HelpPage() {
   const [registryEntries, setRegistryEntries] = useState<ManifestRegistryEntry[]>([]);
   const [registryError, setRegistryError] = useState<string | null>(null);
 
-  const stepPaths = WORKFLOW_STEPS.map((step) => {
-    if (step.path) return step.path;
-    if (step.label === "Sources") return buildSourcesRoute(selectedProfileId);
-    if (step.label === "Plan") return planRoute(selectedProfileId);
-    if (step.label === "Checkoff") return checkoffRoute(selectedProfileId);
-    if (step.label === "Production") return exportRoute(selectedProfileId);
-    return planRoute(selectedProfileId);
-  });
+  const stepPaths = workflowStepPaths(selectedProfileId);
 
   useEffect(() => {
     if (!engineReady) {

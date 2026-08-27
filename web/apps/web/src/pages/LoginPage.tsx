@@ -11,7 +11,7 @@ import {
   CardTitle,
 } from "../components/ui/card";
 import { useAuth } from "../context/AuthContext";
-import { authOAuthUrl } from "../api/engine";
+import { authOAuthUrl } from "../api/endpoints/auth";
 
 export default function LoginPage() {
   const { user, multiUser, authRequired, registrationOpen, loading, loginEmail, registerEmail } = useAuth();

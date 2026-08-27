@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
-import { acceptPlanShare, fetchIncomingShares, type IncomingShare } from "@/api/engine";
+import { acceptPlanShare, fetchIncomingShares, type IncomingShare } from "@/api/endpoints/auth";
 import { useAuth } from "@/context/AuthContext";
 import { useProfileSelection } from "@/context/ProfileContext";
 import { buildRoute } from "@/lib/routes";

@@ -4,12 +4,14 @@ import {
   createIntegration,
   deleteIntegration,
   fetchIntegrations,
-  fetchSpoolmanDefaultSettings,
-  saveSpoolmanDefaultIntegration,
   testIntegration,
   updateIntegration,
   type IntegrationSummary,
-} from "../../api/engine";
+} from "../../api/endpoints/integrations";
+import {
+  fetchSpoolmanDefaultSettings,
+  saveSpoolmanDefaultIntegration,
+} from "../../api/endpoints/filaments";
 import { Button } from "../ui/button";
 import {
   Select,

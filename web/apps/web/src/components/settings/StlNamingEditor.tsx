@@ -1,16 +1,18 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
-  DEFAULT_QUANTITY_REGEX,
   DEFAULT_STL_NAMING_PROFILE,
-  fetchStlNaming,
-  previewStlNaming,
-  saveStlNaming,
   type StlNamingFolderRule,
   type StlNamingProfile,
   type StlNamingRole,
   type StlNamingRoleId,
-} from "../../api/engine";
+} from "@print-partner/contracts";
+import {
+  DEFAULT_QUANTITY_REGEX,
+  fetchStlNaming,
+  previewStlNaming,
+  saveStlNaming,
+} from "../../api/endpoints/stlNaming";
 import { DataTable } from "../DataTable";
 import { Button } from "../ui/button";
 import {
@@ -24,29 +26,12 @@ import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { invalidateProfiles } from "../../queries/profiles";
 import { queryClient } from "../../queries/queryClient";
-
-const ROLE_LABELS: Record<StlNamingRoleId, string> = {
-  primary: "Primary",
-  accent: "Accent",
-  clear: "Clear",
-  opaque: "Opaque",
-};
-
-function markersToInput(markers: string[]): string {
-  return markers.join(", ");
-}
-
-function parseMarkersInput(value: string): string[] {
-  return value
-    .split(",")
-    .map((m) => m.trim())
-    .filter(Boolean);
-}
-
-function isEngineNotFoundError(error: unknown): boolean {
-  const msg = error instanceof Error ? error.message : String(error);
-  return msg.includes("404");
-}
+import {
+  STL_NAMING_ROLE_LABELS,
+  isEngineNotFoundError,
+  markersToInput,
+  parseMarkersInput,
+} from "../../lib/stlNamingSettingsModel";
 
 type EditorBodyProps = {
   profile: StlNamingProfile;
@@ -164,7 +149,9 @@ function StlNamingEditorBody({
             <tbody>
               {profile.roles.map((role: StlNamingRole) => (
                 <tr key={role.id}>
-                  <td className="text-muted-foreground">{ROLE_LABELS[role.id] ?? role.label}</td>
+                  <td className="text-muted-foreground">
+                    {STL_NAMING_ROLE_LABELS[role.id] ?? role.label}
+                  </td>
                   <td>
                     <Input
                       className={inputClass}
@@ -232,7 +219,7 @@ function StlNamingEditorBody({
                   className="flex items-center gap-2 rounded-md border border-border px-2 py-1.5 text-sm"
                 >
                   <span className="min-w-[5rem] text-muted-foreground">
-                    {index + 1}. {ROLE_LABELS[roleId]}
+                    {index + 1}. {STL_NAMING_ROLE_LABELS[roleId]}
                   </span>
                   <div className="ml-auto flex gap-1">
                     <Button
@@ -241,7 +228,7 @@ function StlNamingEditorBody({
                       size="sm"
                       disabled={disabled || index === 0}
                       onClick={() => moveRoleOrder(index, -1)}
-                      aria-label={`Move ${ROLE_LABELS[roleId]} up`}
+                      aria-label={`Move ${STL_NAMING_ROLE_LABELS[roleId]} up`}
                     >
                       ↑
                     </Button>
@@ -251,7 +238,7 @@ function StlNamingEditorBody({
                       size="sm"
                       disabled={disabled || index === profile.export_role_order.length - 1}
                       onClick={() => moveRoleOrder(index, 1)}
-                      aria-label={`Move ${ROLE_LABELS[roleId]} down`}
+                      aria-label={`Move ${STL_NAMING_ROLE_LABELS[roleId]} down`}
                     >
                       ↓
                     </Button>
@@ -293,9 +280,9 @@ function StlNamingEditorBody({
                         updateFolderRule(index, { role_id: e.target.value as StlNamingRoleId })
                       }
                     >
-                      {(Object.keys(ROLE_LABELS) as StlNamingRoleId[]).map((id) => (
+                      {(Object.keys(STL_NAMING_ROLE_LABELS) as StlNamingRoleId[]).map((id) => (
                         <option key={id} value={id}>
-                          {ROLE_LABELS[id]}
+                          {STL_NAMING_ROLE_LABELS[id]}
                         </option>
                       ))}
                     </select>
@@ -349,7 +336,7 @@ function StlNamingEditorBody({
         {preview && !previewError && (
           <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm">
             <dt className="text-muted-foreground">Role</dt>
-            <dd>{ROLE_LABELS[preview.role as StlNamingRoleId] ?? preview.role}</dd>
+            <dd>{STL_NAMING_ROLE_LABELS[preview.role as StlNamingRoleId] ?? preview.role}</dd>
             <dt className="text-muted-foreground">Quantity</dt>
             <dd>{preview.quantity}</dd>
             <dt className="text-muted-foreground">Part slug</dt>

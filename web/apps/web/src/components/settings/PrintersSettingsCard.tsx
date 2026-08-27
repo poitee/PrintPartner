@@ -1,32 +1,34 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Printer } from "lucide-react";
+import { fetchFilamentCatalog, type FilamentCatalog } from "../../api/endpoints/filaments";
 import {
-  addPrinter,
   createIntegration,
   deleteIntegration,
-  deletePrinter,
   fetchIntegrationStatus,
   fetchIntegrations,
-  fetchPrinterPlanBindings,
-  fetchPrinterPresets,
-  fetchFilamentCatalog,
-  fetchPrinters,
-  fetchProfiles,
-  savePrinterFleet,
-  type FilamentCatalog,
-  savePrinterPlanBinding,
   testIntegration,
   updateIntegration,
+  type IntegrationSummary,
+} from "../../api/endpoints/integrations";
+import type { PrinterHostStatus, ProfileSummary } from "@print-partner/contracts";
+import { fetchProfiles } from "../../api/endpoints/plans";
+import {
+  addPrinter,
+  deletePrinter,
+  fetchPrinterPresets,
+  fetchPrinters,
+  savePrinterFleet,
   updatePrinterDetails,
   updatePrinterSlicer,
-  type IntegrationSummary,
-  type PrinterHostStatus,
-  type PrinterMachine,
   type PrinterDetailsInput,
-  type PrinterPlanBinding,
+  type PrinterMachine,
   type PrinterPreset,
-  type ProfileSummary,
-} from "../../api/engine";
+} from "../../api/endpoints/printers";
+import {
+  fetchPrinterPlanBindings,
+  savePrinterPlanBinding,
+  type PrinterPlanBinding,
+} from "../../api/endpoints/printerSettings";
 import { Button } from "../ui/button";
 import {
   Card,
@@ -44,6 +46,10 @@ import {
 } from "../ui/select";
 import PrinterProfileAssignmentSection from "./PrinterProfileAssignmentSection";
 import SlotFilamentPicker from "./SlotFilamentPicker";
+import PrinterDetailsEditor, {
+  CUSTOM_PRESET_ID,
+  type PrinterDetailsTextField,
+} from "./PrinterDetailsEditor";
 import { cn } from "@/lib/utils";
 import {
   PRINTER_STATUS_POLL_SECONDS_OPTIONS,
@@ -51,304 +57,34 @@ import {
   writePrinterStatusPollSeconds,
   type PrinterStatusPollSeconds,
 } from "../../lib/persistedPrinterStatusPoll";
+import {
+  DEFAULT_PRINTER_HOST_URLS,
+  PRINTER_HOST_TYPE_LABELS,
+  SLICER_OVERRIDE_LABELS,
+  SLICER_OVERRIDES,
+  isPrinterHostType,
+  linkedPrinters,
+  orphanPrinters,
+  parsePrinterDetailsDraft,
+  pickDefaultPresetId,
+  printerDetailsDraft,
+  printerHostConnectionReady,
+  printerSettingsCanAdd,
+  statusPillClass,
+  statusPillLabel,
+  type HostType,
+  type PrinterDetailsDraft,
+  type SlicerOverride,
+} from "../../lib/printerSettingsModel";
 
 type Props = {
   engineReady: boolean;
 };
 
-type HostType = "moonraker" | "prusalink" | "bambu";
-
-type PrinterDetailsDraft = {
-  name: string;
-  model: string;
-  bedWidth: string;
-  bedDepth: string;
-  bedHeight: string;
-  margin: string;
-  maxFilamentSlots: string;
-  presetId: string | null;
-};
-
-type PrinterDetailsTextField = Exclude<keyof PrinterDetailsDraft, "presetId">;
-
-const HOST_TYPES = new Set(["moonraker", "prusalink", "bambu"]);
-
-function isHostType(value: unknown): value is HostType {
-  return typeof value === "string" && HOST_TYPES.has(value);
-}
-
-const DEFAULT_URLS: Record<"moonraker" | "prusalink", string> = {
-  moonraker: "http://192.168.1.40:7125",
-  prusalink: "http://192.168.1.50",
-};
-
 const DEFAULT_PRESET_ID = "preset-prusa-mk4";
-const CUSTOM_PRESET_ID = "custom";
-
-const HOST_TYPE_LABELS: Record<HostType, string> = {
-  moonraker: "Klipper",
-  prusalink: "Prusa",
-  bambu: "Bambu",
-};
-
-type SlicerOverride = "orca" | "prusa" | "bambu";
-
-const SLICER_OVERRIDE_LABELS: Record<SlicerOverride, string> = {
-  orca: "OrcaSlicer",
-  prusa: "PrusaSlicer",
-  bambu: "BambuStudio",
-};
 
 const INPUT_CLASS =
   "rounded-md border border-input bg-background px-2 py-1.5 text-sm w-full";
-
-function printerDetailsDraft(printer: PrinterMachine): PrinterDetailsDraft {
-  return {
-    name: printer.name,
-    model: printer.model,
-    bedWidth: String(printer.bed_width_mm),
-    bedDepth: String(printer.bed_depth_mm),
-    bedHeight: printer.bed_height_mm == null ? "" : String(printer.bed_height_mm),
-    margin: String(printer.margin_mm),
-    maxFilamentSlots: String(printer.max_filament_slots),
-    presetId: printer.preset_id?.trim() || null,
-  };
-}
-
-function parsePrinterDetailsDraft(draft: PrinterDetailsDraft): PrinterDetailsInput {
-  const name = draft.name.trim();
-  if (!name) throw new Error("Enter a printer name.");
-  const model = draft.model.trim();
-  if (!model) throw new Error("Enter a printer model.");
-  const bedWidth = Number(draft.bedWidth);
-  const bedDepth = Number(draft.bedDepth);
-  if (
-    !Number.isFinite(bedWidth) ||
-    bedWidth <= 0 ||
-    !Number.isFinite(bedDepth) ||
-    bedDepth <= 0
-  ) {
-    throw new Error("Bed width and depth must be greater than 0.");
-  }
-  const bedHeight = draft.bedHeight.trim() ? Number(draft.bedHeight) : null;
-  if (bedHeight !== null && (!Number.isFinite(bedHeight) || bedHeight <= 0)) {
-    throw new Error("Bed height must be blank or greater than 0.");
-  }
-  const margin = Number(draft.margin);
-  if (!Number.isFinite(margin) || margin < 0) {
-    throw new Error("Bed margin must be 0 or greater.");
-  }
-  if (margin * 2 >= Math.min(bedWidth, bedDepth)) {
-    throw new Error("Bed margin must be less than half of bed width and depth.");
-  }
-  const maxFilamentSlots = Number(draft.maxFilamentSlots);
-  if (
-    !Number.isInteger(maxFilamentSlots) ||
-    maxFilamentSlots < 1 ||
-    maxFilamentSlots > 4
-  ) {
-    throw new Error("Filament slots must be an integer from 1 to 4.");
-  }
-  return {
-    name,
-    model,
-    bed_width_mm: bedWidth,
-    bed_depth_mm: bedDepth,
-    bed_height_mm: bedHeight,
-    margin_mm: margin,
-    max_filament_slots: maxFilamentSlots,
-    preset_id: draft.presetId,
-  };
-}
-
-type PrinterDetailsEditorProps = {
-  draft: PrinterDetailsDraft;
-  presets: PrinterPreset[];
-  disabled: boolean;
-  onChange: (field: PrinterDetailsTextField, value: string) => void;
-  onPresetChange: (presetId: string | null) => void;
-  onSave: () => void;
-  onCancel: () => void;
-};
-
-function PrinterDetailsEditor({
-  draft,
-  presets,
-  disabled,
-  onChange,
-  onPresetChange,
-  onSave,
-  onCancel,
-}: PrinterDetailsEditorProps) {
-  const unavailablePresetId =
-    draft.presetId && !presets.some((preset) => preset.id === draft.presetId)
-      ? draft.presetId
-      : null;
-  return (
-    <div className="space-y-3 border-t border-border pt-3">
-      <label className="block text-sm">
-        <span className="mb-1 block text-muted-foreground">Geometry source</span>
-        <select
-          className={INPUT_CLASS}
-          aria-label="Edit printer preset"
-          value={draft.presetId ?? CUSTOM_PRESET_ID}
-          disabled={disabled}
-          onChange={(event) =>
-            onPresetChange(
-              event.target.value === CUSTOM_PRESET_ID ? null : event.target.value,
-            )
-          }
-        >
-          {unavailablePresetId && (
-            <option value={unavailablePresetId}>
-              Retired preset (unavailable): {unavailablePresetId}
-            </option>
-          )}
-          {presets.map((preset) => (
-            <option key={preset.id} value={preset.id}>
-              {preset.name} ({preset.bed_width_mm}×{preset.bed_depth_mm} mm)
-            </option>
-          ))}
-          <option value={CUSTOM_PRESET_ID}>Custom</option>
-        </select>
-      </label>
-      <div className="grid gap-2 sm:grid-cols-2">
-        <label className="block text-sm">
-          <span className="mb-1 block text-muted-foreground">Name</span>
-          <input
-            className={INPUT_CLASS}
-            aria-label="Edit printer name"
-            value={draft.name}
-            disabled={disabled}
-            onChange={(event) => onChange("name", event.target.value)}
-          />
-        </label>
-        <label className="block text-sm">
-          <span className="mb-1 block text-muted-foreground">Model</span>
-          <input
-            className={INPUT_CLASS}
-            aria-label="Edit printer model"
-            value={draft.model}
-            disabled={disabled}
-            onChange={(event) => onChange("model", event.target.value)}
-          />
-        </label>
-      </div>
-      <div className="grid gap-2 sm:grid-cols-3">
-        <label className="block text-sm">
-          <span className="mb-1 block text-muted-foreground">Width (mm)</span>
-          <input
-            className={INPUT_CLASS}
-            aria-label="Edit bed width (mm)"
-            inputMode="decimal"
-            value={draft.bedWidth}
-            disabled={disabled}
-            onChange={(event) => onChange("bedWidth", event.target.value)}
-          />
-        </label>
-        <label className="block text-sm">
-          <span className="mb-1 block text-muted-foreground">Depth (mm)</span>
-          <input
-            className={INPUT_CLASS}
-            aria-label="Edit bed depth (mm)"
-            inputMode="decimal"
-            value={draft.bedDepth}
-            disabled={disabled}
-            onChange={(event) => onChange("bedDepth", event.target.value)}
-          />
-        </label>
-        <label className="block text-sm">
-          <span className="mb-1 block text-muted-foreground">Height (mm)</span>
-          <input
-            className={INPUT_CLASS}
-            aria-label="Edit bed height (mm)"
-            inputMode="decimal"
-            value={draft.bedHeight}
-            disabled={disabled}
-            onChange={(event) => onChange("bedHeight", event.target.value)}
-          />
-          <span className="mt-1 block text-xs text-muted-foreground">
-            Blank is send-only; Plate planning requires a positive height.
-          </span>
-        </label>
-      </div>
-      <div className="grid gap-2 sm:grid-cols-2">
-        <label className="block text-sm">
-          <span className="mb-1 block text-muted-foreground">Bed margin (mm)</span>
-          <input
-            className={INPUT_CLASS}
-            aria-label="Edit bed margin (mm)"
-            inputMode="decimal"
-            value={draft.margin}
-            disabled={disabled}
-            onChange={(event) => onChange("margin", event.target.value)}
-          />
-        </label>
-        <label className="block text-sm">
-          <span className="mb-1 block text-muted-foreground">Filament slots</span>
-          <input
-            className={INPUT_CLASS}
-            aria-label="Edit filament slots"
-            inputMode="numeric"
-            value={draft.maxFilamentSlots}
-            disabled={disabled}
-            onChange={(event) => onChange("maxFilamentSlots", event.target.value)}
-          />
-        </label>
-      </div>
-      <p className="text-xs text-muted-foreground">
-        {draft.presetId
-          ? `Preset reference: ${draft.presetId}`
-          : "Custom geometry"}
-      </p>
-      <div className="flex flex-wrap gap-2">
-        <Button size="sm" disabled={disabled} onClick={onSave}>
-          Save printer details
-        </Button>
-        <Button variant="outline" size="sm" disabled={disabled} onClick={onCancel}>
-          Cancel editing
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-function statusPillLabel(status: PrinterHostStatus | null | undefined): string {
-  if (!status) return "…";
-  if (status.state === "printing" && status.progress != null) {
-    return `Printing ${Math.round(status.progress)}%`;
-  }
-  if (status.state === "idle") return "Idle";
-  if (status.state === "paused") return "Paused";
-  if (status.state === "complete") return "Complete";
-  if (status.state === "error") return "Error";
-  if (status.state === "offline") return "Offline";
-  return status.message ?? status.state;
-}
-
-function statusPillClass(state: PrinterHostStatus["state"] | undefined): string {
-  switch (state) {
-    case "idle":
-      return "bg-success-soft text-success";
-    case "printing":
-      return "bg-info-soft text-info";
-    case "paused":
-      return "bg-warning-soft text-warning";
-    case "complete":
-      return "bg-success-soft text-success";
-    case "error":
-      return "bg-destructive/15 text-destructive";
-    case "offline":
-      return "bg-muted text-muted-foreground";
-    default:
-      return "bg-muted text-muted-foreground";
-  }
-}
-
-function pickDefaultPresetId(presets: PrinterPreset[]): string {
-  if (presets.some((p) => p.id === DEFAULT_PRESET_ID)) return DEFAULT_PRESET_ID;
-  return presets[0]?.id ?? "";
-}
 
 export default function PrintersSettingsCard({ engineReady }: Props) {
   const [printers, setPrinters] = useState<PrinterMachine[]>([]);
@@ -378,7 +114,7 @@ export default function PrintersSettingsCard({ engineReady }: Props) {
 
   const [hostType, setHostType] = useState<HostType>("moonraker");
   const [newName, setNewName] = useState("");
-  const [newUrl, setNewUrl] = useState(DEFAULT_URLS.moonraker);
+  const [newUrl, setNewUrl] = useState(DEFAULT_PRINTER_HOST_URLS.moonraker);
   const [apiKey, setApiKey] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -451,8 +187,8 @@ export default function PrintersSettingsCard({ engineReady }: Props) {
         ]);
       setPrinters(fleet);
       setPresets(presetRows);
-      setHosts(integrations.filter((i) => HOST_TYPES.has(i.type)));
-      setPresetId((prev) => prev || pickDefaultPresetId(presetRows));
+      setHosts(integrations.filter((i) => isPrinterHostType(i.type)));
+      setPresetId((prev) => prev || pickDefaultPresetId(presetRows, DEFAULT_PRESET_ID));
       setPlanBindings(bindings);
       setProfiles(profileList);
       setCatalog(filamentCatalog);
@@ -470,14 +206,14 @@ export default function PrintersSettingsCard({ engineReady }: Props) {
   useEffect(() => {
     if (hostType === "moonraker") {
       setNewUrl((prev) =>
-        prev === DEFAULT_URLS.prusalink || prev.includes("prusa")
-          ? DEFAULT_URLS.moonraker
+        prev === DEFAULT_PRINTER_HOST_URLS.prusalink || prev.includes("prusa")
+          ? DEFAULT_PRINTER_HOST_URLS.moonraker
           : prev,
       );
     } else if (hostType === "prusalink") {
       setNewUrl((prev) =>
-        prev === DEFAULT_URLS.moonraker || prev.includes(":7125")
-          ? DEFAULT_URLS.prusalink
+        prev === DEFAULT_PRINTER_HOST_URLS.moonraker || prev.includes(":7125")
+          ? DEFAULT_PRINTER_HOST_URLS.prusalink
           : prev,
       );
     }
@@ -485,7 +221,7 @@ export default function PrintersSettingsCard({ engineReady }: Props) {
 
   useEffect(() => {
     if (!presets.length) return;
-    setPresetId((prev) => prev || pickDefaultPresetId(presets));
+    setPresetId((prev) => prev || pickDefaultPresetId(presets, DEFAULT_PRESET_ID));
   }, [presets]);
 
   const createHost = async (
@@ -787,37 +523,31 @@ export default function PrintersSettingsCard({ engineReady }: Props) {
     }
   };
 
-  const customReady =
-    Number(customWidth) > 0 && Number(customDepth) > 0 && Number(customHeight) > 0;
-  const canAdd =
-    engineReady &&
-    !busy &&
-    Boolean(newName.trim()) &&
-    (presetId === CUSTOM_PRESET_ID ? customReady : Boolean(presetId));
-  const connectionReady =
-    hostType === "bambu"
-      ? Boolean(bambuHost.trim()) &&
-        Boolean(accessCode.trim()) &&
-        Boolean(serial.trim())
-      : Boolean(newUrl.trim()) &&
-        (hostType === "moonraker" || Boolean(password.trim()));
+  const canAdd = printerSettingsCanAdd({
+    engineReady,
+    busy,
+    name: newName,
+    presetId,
+    customPresetId: CUSTOM_PRESET_ID,
+    customWidth,
+    customDepth,
+    customHeight,
+  });
+  const connectionReady = printerHostConnectionReady({
+    hostType,
+    url: newUrl,
+    password,
+    bambuHost,
+    accessCode,
+    serial,
+  });
 
   const inputClass = INPUT_CLASS;
 
   const namePlaceholder = "Shop Printer";
 
-  const linkedPrinters = printers.filter((p) => {
-    const id = p.integration_id?.trim();
-    if (!id) return false;
-    const host = hostsById.get(id);
-    return Boolean(host && HOST_TYPES.has(host.type));
-  });
-
-  const orphanPrinters = printers.filter((p) => {
-    const id = p.integration_id?.trim();
-    if (!id) return true;
-    return !hostsById.has(id);
-  });
+  const linkedPrinterList = linkedPrinters(printers, hostsById);
+  const orphanPrinterList = orphanPrinters(printers, hostsById);
 
   return (
     <Card>
@@ -946,11 +676,11 @@ export default function PrintersSettingsCard({ engineReady }: Props) {
         </div>
 
         <ul className="space-y-3">
-          {linkedPrinters.map((printer) => {
+          {linkedPrinterList.map((printer) => {
             const linkedId = printer.integration_id?.trim() || "";
             const host = hostsById.get(linkedId);
-            const hostTypeKey = isHostType(host?.type) ? host.type : "moonraker";
-            const typeLabel = HOST_TYPE_LABELS[hostTypeKey] ?? host?.type ?? "Printer";
+            const hostTypeKey = isPrinterHostType(host?.type) ? host.type : "moonraker";
+            const typeLabel = PRINTER_HOST_TYPE_LABELS[hostTypeKey] ?? host?.type ?? "Printer";
             const enabled = host?.config.enabled !== false;
             const status = linkedId ? statusByIntegration[linkedId] : null;
             const detail =
@@ -1040,7 +770,7 @@ export default function PrintersSettingsCard({ engineReady }: Props) {
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="auto">Auto</SelectItem>
-                        {(Object.keys(SLICER_OVERRIDE_LABELS) as SlicerOverride[]).map((k) => (
+                        {SLICER_OVERRIDES.map((k) => (
                           <SelectItem key={k} value={k}>
                             {SLICER_OVERRIDE_LABELS[k]}
                           </SelectItem>
@@ -1124,7 +854,7 @@ export default function PrintersSettingsCard({ engineReady }: Props) {
               Planning printers
             </p>
             <ul className="space-y-2">
-              {orphanPrinters.map((printer) => {
+              {orphanPrinterList.map((printer) => {
                 const attaching = connectingId === printer.id;
                 return (
                   <li
@@ -1197,7 +927,7 @@ export default function PrintersSettingsCard({ engineReady }: Props) {
                           <Select
                             value={hostType}
                             onValueChange={(value) => {
-                              if (isHostType(value)) setHostType(value);
+                              if (isPrinterHostType(value)) setHostType(value);
                             }}
                             disabled={!engineReady || busy}
                           >
