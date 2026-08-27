@@ -1,0 +1,4 @@
+interface:
+  display_name: "Autopilot"
+  short_description: "Take the current PR to merge-ready"
+  default_prompt: "Use $autopilot to get this pull request merge-ready."
