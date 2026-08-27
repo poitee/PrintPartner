@@ -14,7 +14,8 @@ import {
   SheetHeader,
   SheetTitle,
 } from "./ui/sheet";
-import { fetchStlTree, type SourceSummary } from "../api/engine";
+import type { SourceSummary } from "@print-partner/contracts";
+import { fetchStlTree } from "../api/endpoints/sources";
 import { useDateFormat } from "../context/DateFormatContext";
 import { useJobContext } from "../context/JobContext";
 import { useImportRulesAutosave } from "../hooks/useImportRulesAutosave";
@@ -25,6 +26,7 @@ import {
 } from "../lib/importRulesSave";
 import { librarySourceDragId } from "../lib/sourceCategoryDnD";
 import { cn } from "@/lib/utils";
+import { attachedSourceStateLabel } from "../lib/sourceFilePickerModel";
 
 type Props = {
   sourceId: number;
@@ -40,42 +42,9 @@ type Props = {
   expandedExtra?: ReactNode;
   /** Resolve mesh color from the selected STL path (role filament defaults). */
   meshColorForPath?: (relativePath: string) => string | undefined;
-  /** Assign this source to a category (Plan compose). */
+  /** Assign this Source to a Library category. Categories do not affect Plan composition. */
   onAssignCategory?: (category: string | null) => void;
 };
-
-function attachedStateLabel(
-  source: SourceSummary | null | undefined,
-  formatDate: (iso: string | null | undefined) => string,
-  selectedCount: number,
-  totalFiles: number,
-  syncing: boolean,
-  syncMessage: string,
-): { text: string; tone: "muted" | "warn" | "sync" } {
-  if (syncing) {
-    return { text: syncMessage || "syncing", tone: "sync" };
-  }
-  if (source?.update_status === "updates_available") {
-    return { text: "update available", tone: "warn" };
-  }
-  if (source?.source_kind === "local") {
-    const picks =
-      totalFiles > 0 ? ` · ${selectedCount} of ${totalFiles} files` : selectedCount > 0 ? ` · ${selectedCount} picks` : "";
-    return { text: `local folder · always current${picks}`, tone: "muted" };
-  }
-  if (!source?.last_synced_at) {
-    return { text: "not synced", tone: "warn" };
-  }
-  const formatted = formatDate(source.last_synced_at);
-  const syncBit = formatted ? `synced ${formatted}` : "synced";
-  const picks =
-    totalFiles > 0
-      ? ` · ${selectedCount} of ${totalFiles} files`
-      : selectedCount > 0
-        ? ` · ${selectedCount} picks`
-        : "";
-  return { text: `${syncBit}${picks}`, tone: "muted" };
-}
 
 export default function SourceFilePickerCard({
   sourceId,
@@ -229,14 +198,14 @@ export default function SourceFilePickerCard({
     return meshColorForPath(selectedFilePath);
   }, [selectedFilePath, meshColorForPath]);
 
-  const state = attachedStateLabel(
+  const state = attachedSourceStateLabel({
     source,
     formatDate,
     selectedCount,
     totalFiles,
-    syncBusy,
-    activeSync?.message ?? "syncing",
-  );
+    syncing: syncBusy,
+    syncMessage: activeSync?.message ?? "syncing",
+  });
   const updateWarn = source?.update_status === "updates_available" || !source?.last_synced_at;
   const pickLabel =
     selectedCount > 0 ? String(selectedCount) : totalFiles > 0 ? "0" : "—";

@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider, useQueryClient } from "@tanstack/reac
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
-import type { SourceSummary } from "../api/engine";
+import type { SourceSummary } from "@print-partner/contracts";
 import { queryKeys } from "../queries/keys";
 import SourcesPage from "./SourcesPage";
 
@@ -34,8 +34,8 @@ const { api, engineHealth, source } = vi.hoisted(() => ({
   }),
 }));
 
-vi.mock("../api/engine", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../api/engine")>();
+vi.mock("../api/endpoints/sources", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../api/endpoints/sources")>();
   return {
     ...actual,
     fetchSources: api.fetchSources,

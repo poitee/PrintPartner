@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Search } from "lucide-react";
-import { searchSourceStls, type StlSearchHit } from "../../api/engine";
+import { searchSourceStls, type StlSearchHit } from "../../api/endpoints/sources";
 import { Badge } from "../ui/badge";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";

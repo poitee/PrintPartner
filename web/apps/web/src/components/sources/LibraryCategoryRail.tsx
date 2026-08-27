@@ -16,40 +16,22 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { ChevronDown, ChevronRight } from "lucide-react";
-import {
-  buildSourceCategoryTree,
-  categoryParentPath,
-  flattenSourceCategoryTree,
-  isCategoryPathWithin,
-  type SourceCategoryNode,
-} from "@print-partner/contracts";
+import { buildSourceCategoryTree } from "@print-partner/contracts";
 import { cn } from "@/lib/utils";
-import { moveItemById } from "../../lib/reorderList";
-import { UNCategorized_FILTER } from "./sourceLabels";
-import { rollupCategoryCount } from "../../lib/sourceCategoryAssignment";
-import { categorySwatch } from "../../lib/librarySourceMeta";
-import type { SourceKind } from "./sourceLabels";
+import {
+  LIBRARY_ADD_ACTIONS,
+  buildLibraryCategoryRows,
+  categoryRailIndentStyle,
+  reorderCategoriesWithinSiblings,
+  type LibraryAddKind,
+  type LibraryCategoryRow,
+} from "../../lib/libraryCategoryRailModel";
 import { SortableDragHandle, SortableShell } from "../dnd/SortableDragHandle";
 import CategoryDropTarget from "./CategoryDropTarget";
 
-export type LibraryAddKind =
-  | SourceKind
-  | "plan_bundle"
-  | "repos_txt";
+export type { LibraryAddKind } from "../../lib/libraryCategoryRailModel";
 
-type CategoryRow = {
-  id: string;
-  /** Full category path; `"all"` / the Uncategorised sentinel for the fixed rows. */
-  name: string;
-  /** Leaf name shown in the rail. */
-  label: string;
-  depth: number;
-  count: number;
-  swatch: string;
-  sortable: boolean;
-  hasChildren: boolean;
-  collapsed: boolean;
-};
+type CategoryRow = LibraryCategoryRow;
 
 type Props = {
   /** Flat, ordered category paths ("Printers", "Printers/Frame"). */
@@ -67,127 +49,6 @@ type Props = {
   className?: string;
 };
 
-/**
- * Rail rows for the category tree, skipping anything inside a collapsed parent.
- * Counts roll up, so "Printers" shows its own Sources plus every subcategory's.
- */
-function buildRows(
-  tree: SourceCategoryNode[],
-  sourcesByCategory: Map<string | null, number>,
-  totalCount: number,
-  collapsed: ReadonlySet<string>,
-): CategoryRow[] {
-  const uncategorized = sourcesByCategory.get(null) ?? 0;
-  const categoryRows: CategoryRow[] = [];
-
-  for (const node of flattenSourceCategoryTree(tree)) {
-    const hiddenByParent = [...collapsed].some(
-      (path) => path !== node.path && isCategoryPathWithin(node.path, path),
-    );
-    if (hiddenByParent) continue;
-    categoryRows.push({
-      id: node.path,
-      name: node.path,
-      label: node.name,
-      depth: node.depth,
-      count: rollupCategoryCount(sourcesByCategory, node.path),
-      swatch: categorySwatch(node.path),
-      sortable: true,
-      hasChildren: node.children.length > 0,
-      collapsed: collapsed.has(node.path),
-    });
-  }
-
-  return [
-    {
-      id: "all",
-      name: "all",
-      label: "All sources",
-      depth: 0,
-      count: totalCount,
-      swatch: "var(--primary)",
-      sortable: false,
-      hasChildren: false,
-      collapsed: false,
-    },
-    ...categoryRows,
-    {
-      id: UNCategorized_FILTER,
-      name: UNCategorized_FILTER,
-      label: "Uncategorised",
-      depth: 0,
-      count: uncategorized,
-      swatch: "var(--border)",
-      sortable: false,
-      hasChildren: false,
-      collapsed: false,
-    },
-  ];
-}
-
-/** Reorder `active` next to `over` when both share a parent; otherwise no-op. */
-function reorderWithinSiblings(
-  categories: readonly string[],
-  activePath: string,
-  overPath: string,
-): string[] | null {
-  const parent = categoryParentPath(activePath);
-  if (parent !== categoryParentPath(overPath)) return null;
-
-  const tree = buildSourceCategoryTree(categories);
-  const siblings = parent
-    ? flattenSourceCategoryTree(tree).find((node) => node.path === parent)?.children
-    : tree;
-  if (!siblings) return null;
-
-  const order = moveItemById(
-    siblings.map((node) => node.path),
-    activePath,
-    overPath,
-  );
-  const ordered = order.map(
-    (path) => siblings.find((node) => node.path === path)!,
-  );
-
-  // Rebuild the flat list, replacing this sibling group with its new order and
-  // keeping every subtree intact.
-  const emit = (nodes: readonly SourceCategoryNode[], out: string[]) => {
-    for (const node of nodes) {
-      out.push(node.path);
-      emit(node.children, out);
-    }
-  };
-  const next: string[] = [];
-  const walk = (nodes: readonly SourceCategoryNode[]) => {
-    for (const node of nodes) {
-      next.push(node.path);
-      if (node.path === parent) {
-        emit(ordered, next);
-        continue;
-      }
-      walk(node.children);
-    }
-  };
-  if (parent) walk(tree);
-  else emit(ordered, next);
-
-  return next;
-}
-
-const ADD_ACTIONS: Array<{ id: string; kind: LibraryAddKind; label: string }> = [
-  { id: "github", kind: "github", label: "GitHub repo" },
-  { id: "local-folder", kind: "local", label: "Local folder" },
-  { id: "archive", kind: "archive", label: "Zip upload" },
-  { id: "single-stl", kind: "local", label: "Single STL" },
-  { id: "plan-bundle", kind: "plan_bundle", label: "Plan bundle" },
-  { id: "self", kind: "self", label: "Another instance" },
-];
-
-/** Indent one level per nesting step, leaving room for the expand chevron. */
-function indentStyle(depth: number) {
-  return depth > 0 ? { paddingLeft: `${depth * 0.75}rem` } : undefined;
-}
-
 function CategoryRowBody({
   row,
   active,
@@ -200,7 +61,7 @@ function CategoryRowBody({
   onToggleCollapsed?: (path: string) => void;
 }) {
   return (
-    <div className="flex min-w-0 flex-1 items-center" style={indentStyle(row.depth)}>
+    <div className="flex min-w-0 flex-1 items-center" style={categoryRailIndentStyle(row.depth)}>
       {row.hasChildren && onToggleCollapsed ? (
         <button
           type="button"
@@ -321,7 +182,7 @@ export default function LibraryCategoryRail({
 }: Props) {
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set<string>());
   const tree = buildSourceCategoryTree(categories);
-  const rows = buildRows(tree, sourcesByCategory, totalCount, collapsed);
+  const rows = buildLibraryCategoryRows(tree, sourcesByCategory, totalCount, collapsed);
   const sortableIds = rows.filter((row) => row.sortable).map((row) => row.id);
   const reorderEnabled = Boolean(onCategoriesReorder) && categories.length > 1;
 
@@ -345,7 +206,7 @@ export default function LibraryCategoryRail({
     if (!over || active.id === over.id) return;
     // Dragging across nesting levels would silently re-parent a category; the
     // category manager is where moves belong.
-    const next = reorderWithinSiblings(categories, String(active.id), String(over.id));
+    const next = reorderCategoriesWithinSiblings(categories, String(active.id), String(over.id));
     if (next) onCategoriesReorder(next);
   };
 
@@ -434,7 +295,7 @@ export default function LibraryCategoryRail({
           Add source
         </span>
         <div className="mt-1.5 flex flex-col gap-0.5">
-          {ADD_ACTIONS.map((action) => (
+          {LIBRARY_ADD_ACTIONS.map((action) => (
             <button
               key={action.id}
               type="button"

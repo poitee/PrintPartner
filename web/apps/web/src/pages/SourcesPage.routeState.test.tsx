@@ -6,8 +6,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import SourcesPage from "./SourcesPage";
 
-vi.mock("../api/engine", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../api/engine")>();
+vi.mock("../api/endpoints/sources", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../api/endpoints/sources")>();
   return {
     ...actual,
     fetchSources: vi.fn().mockResolvedValue([]),

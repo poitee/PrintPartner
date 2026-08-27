@@ -6,7 +6,7 @@ import {
   startExportStlPack,
   startSync,
   type StlPackGroupBy,
-} from "../api/engine";
+} from "../api/endpoints/jobs";
 import { usePlanActions } from "../context/PlanActionsContext";
 import { usePlanWorkspace } from "../context/PlanWorkspaceContext";
 import { useProfileSelection } from "../context/ProfileContext";
