@@ -10,9 +10,7 @@ import type { WorkPackage } from "./workPackageProjection";
  * unfinished task.
  */
 export const PRODUCTION_TASK_IDS = [
-  "select-work",
-  "assign-printers",
-  "arrange-plates",
+  "prepare-plates",
   "export-for-slicing",
   "add-sliced-file",
   "send-or-start",
@@ -36,10 +34,16 @@ export type ProductionTask = Readonly<{
  * "Prepare missing parts" link keep working.
  */
 const STAGE_ALIASES: Readonly<Record<string, ProductionTaskId>> = {
-  parts: "select-work",
-  plates: "assign-printers",
+  parts: "prepare-plates",
+  plates: "prepare-plates",
   export: "export-for-slicing",
   send: "send-or-start",
+};
+
+const SPLIT_TASK_ALIASES: Readonly<Record<string, ProductionTaskId>> = {
+  "select-work": "prepare-plates",
+  "assign-printers": "prepare-plates",
+  "arrange-plates": "prepare-plates",
 };
 
 export function productionTaskFromParam(value: string | null): ProductionTaskId | null {
@@ -47,14 +51,15 @@ export function productionTaskFromParam(value: string | null): ProductionTaskId 
   if ((PRODUCTION_TASK_IDS as readonly string[]).includes(value)) {
     return value as ProductionTaskId;
   }
-  return STAGE_ALIASES[value] ?? null;
+  return STAGE_ALIASES[value] ?? SPLIT_TASK_ALIASES[value] ?? null;
 }
 
 /** The `?stage=` value that still points at a task, for backward-compatible links. */
 export function productionStageAlias(task: ProductionTaskId): string {
+  if (task === "prepare-plates") return "plates";
   const entry = Object.entries(STAGE_ALIASES).find(([, id]) => id === task);
   if (entry) return entry[0];
-  return task === "arrange-plates" ? "plates" : "send";
+  return "send";
 }
 
 export type ProductionTaskInput = Readonly<{
@@ -89,97 +94,49 @@ export function productionTasks(input: ProductionTaskInput): ProductionTask[] {
   const selected = input.selectedCount > 0;
   const assigned = ready != null && unassigned === 0;
   const arranged = assigned && unplaced === 0;
+  const prepared = selected && input.printerCount > 0 && arranged && !isSetup;
   const exported = links.exportArtifact != null;
   const sliced = links.slicedFile != null;
   const sent = sliced
     ? input.dispatchedFilenames.includes(links.slicedFile?.name ?? "")
     : input.dispatchedFilenames.length > 0;
 
-  const selectWork: ProductionTask = {
-    id: "select-work",
-    label: "Select work",
+  const preparationFailed = input.assignError != null || input.plateError != null;
+  const preparePlates: ProductionTask = {
+    id: "prepare-plates",
+    label: "Prepare Plates",
     hint: noPlan
       ? "No accepted Required units yet."
-      : selected
-        ? `${plural(input.selectedCount, "Required unit", "Required units")} of ${input.totalUnitCount} chosen.`
-        : "Choose which Required units this package makes.",
-    state: noPlan ? "blocked" : selected ? "complete" : "needs_attention",
+      : !selected
+        ? "Choose the Required units this package will make."
+        : input.printerCount === 0
+          ? `${plural(input.selectedCount, "unit", "units")} chosen. Add a printer in Settings to continue.`
+          : !assigned
+            ? unassigned > 0
+              ? `${plural(unassigned, "unit needs", "units need")} a printer. Assign by Source layer, directory, color, role, or part.`
+              : "Assign by Source layer, directory, color, role, or part, then build the Plates."
+            : unplaced > 0
+              ? `${plural(unplaced, "unit does", "units do")} not fit where they are. Review the Plate layout.`
+              : ready
+                ? `Plate revision ${ready.plate_revision_number} has ${plural(ready.plates.length, "Plate", "Plates")} ready to export.`
+                : "Choose units, assign printers, and review the Plate layout.",
+    state: noPlan
+      ? "blocked"
+      : preparationFailed
+        ? "error"
+        : prepared
+          ? "complete"
+          : "needs_attention",
     statusLabel: noPlan
       ? "Unavailable"
-      : selected
-        ? "Complete"
-        : "Needs your decision",
+      : preparationFailed
+        ? "Failed, retry available"
+        : prepared
+          ? "Complete"
+          : "Needs your decision",
     disabledReason: noPlan
       ? "Accept a Plan revision with Required units on the Plan workspace first."
       : null,
-  };
-
-  const assignPrinters: ProductionTask = {
-    id: "assign-printers",
-    label: "Assign printers",
-    hint: input.printerCount === 0
-      ? "No printer is set up yet."
-      : assigned
-        ? `Every chosen unit has a printer. ${plural(ready?.plates.length ?? 0, "Plate", "Plates")} in the revision.`
-        : unassigned > 0
-          ? `${plural(unassigned, "unit has", "units have")} no printer yet.`
-          : "Give each chosen unit a printer, then save the Plate revision.",
-    state: noPlan || !selected
-      ? "blocked"
-      : input.printerCount === 0
-        ? "blocked"
-        : input.assignError
-          ? "error"
-          : assigned
-            ? "complete"
-            : unassigned > 0
-              ? "needs_attention"
-              : isSetup
-                ? "not_started"
-                : "in_progress",
-    statusLabel: noPlan || !selected
-      ? "Unavailable"
-      : input.printerCount === 0
-        ? "Unavailable"
-        : input.assignError
-          ? "Failed, retry available"
-          : assigned
-            ? "Complete"
-            : "Needs your decision",
-    disabledReason: noPlan
-      ? "Accept a Plan revision first."
-      : !selected
-        ? "Select the work for this package first."
-        : input.printerCount === 0
-          ? "Add a printer in Settings before you assign Plates."
-          : null,
-  };
-
-  const arrangePlates: ProductionTask = {
-    id: "arrange-plates",
-    label: "Arrange Plates",
-    hint: !assigned
-      ? "Available after printers are assigned."
-      : unplaced > 0
-        ? `${plural(unplaced, "unit does", "units do")} not fit where they are. Arrange or transfer them.`
-        : ready
-          ? `Plate revision ${ready.plate_revision_number} holds ${plural(ready.plates.length, "Plate", "Plates")}.`
-          : "Place every unit on a Plate.",
-    state: !assigned
-      ? "blocked"
-      : input.plateError
-        ? "error"
-        : unplaced > 0
-          ? "needs_attention"
-          : "complete",
-    statusLabel: !assigned
-      ? "Unavailable"
-      : input.plateError
-        ? "Failed, retry available"
-        : unplaced > 0
-          ? "Needs your decision"
-          : "Complete",
-    disabledReason: !assigned ? "Assign printers before you arrange Plates." : null,
   };
 
   const exportForSlicing: ProductionTask = {
@@ -262,9 +219,7 @@ export function productionTasks(input: ProductionTaskInput): ProductionTask[] {
   };
 
   return [
-    selectWork,
-    assignPrinters,
-    arrangePlates,
+    preparePlates,
     exportForSlicing,
     addSlicedFile,
     sendOrStart,
@@ -282,7 +237,7 @@ export function firstUnfinishedProductionTask(
   const unfinished = tasks.find((task) => task.state !== "complete" && task.state !== "blocked");
   if (unfinished) return unfinished.id;
   const blocked = tasks.find((task) => task.state === "blocked");
-  return blocked?.id ?? tasks[tasks.length - 1]?.id ?? "select-work";
+  return blocked?.id ?? tasks[tasks.length - 1]?.id ?? "prepare-plates";
 }
 
 /** A task is openable unless it is genuinely blocked. */

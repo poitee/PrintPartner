@@ -81,8 +81,8 @@ type Props = Readonly<{
   enabled: boolean;
   selectedTokens?: ReadonlySet<string>;
   /**
-   * Which half of the Plate work to show. Production splits printer assignment
-   * and Plate arrangement into two resumable tasks. Leave unset to show both.
+   * Which part of the Plate-preparation workspace to show. Leave unset to show
+   * assignment and layout together.
    */
   view?: "assign" | "arrange";
   /**
@@ -335,11 +335,19 @@ export default function AcceptedPlateSection({
       <CardHeader className="gap-1">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="space-y-1">
-            <CardTitle level={2}>{view === "assign" ? "Printer assignments" : "Plates"}</CardTitle>
+            <CardTitle level={2}>
+              {view === "assign"
+                ? "2. Assign printers and build Plates"
+                : view === "arrange"
+                  ? "3. Review Plate layout"
+                  : "Plates"}
+            </CardTitle>
             <CardDescription>
               {view === "assign"
-                ? "Give every chosen Required unit a printer. PrintPartner then saves a Plate revision."
-                : "PrintPartner preserves Source orientation. Rotate parts in your slicer."}
+                ? "Assign selected units by Source layer, directory, color, role, or individual part. PrintPartner uses those assignments to build Plates."
+                : view === "arrange"
+                  ? "Confirm that every unit fits. Transfer or arrange units before export; rotate parts in your slicer."
+                  : "PrintPartner preserves Source orientation. Rotate parts in your slicer."}
             </CardDescription>
           </div>
           {showAssign && workspace?.kind === "ready" && !reassigning ? (

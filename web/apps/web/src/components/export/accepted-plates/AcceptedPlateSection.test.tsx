@@ -136,6 +136,7 @@ describe("AcceptedPlateSection assignment draft identity", () => {
       </QueryClientProvider>,
     );
 
+    fireEvent.click(screen.getByRole("button", { name: /Review individual parts/ }));
     expect(screen.getByText(`clip__${otherToken}`)).toBeTruthy();
     expect(screen.queryByText(`bracket__${token}`)).toBeNull();
   });
@@ -147,6 +148,9 @@ describe("AcceptedPlateSection assignment draft identity", () => {
     );
     const rendered = render(<AcceptedPlateSection profileId={7} enabled />, { wrapper });
     const rowPrinter = () => {
+      if (!screen.queryByRole("combobox", { name: "Printer" })) {
+        fireEvent.click(screen.getByRole("button", { name: /Review individual parts/ }));
+      }
       const select = screen.getByRole("combobox", { name: "Printer" });
       if (!(select instanceof HTMLSelectElement)) throw new Error("Expected row Printer select");
       return select;

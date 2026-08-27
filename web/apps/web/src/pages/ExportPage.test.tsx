@@ -199,14 +199,12 @@ describe("ExportPage work packages", () => {
     expect(screen.queryByText("4. Send G-code")).toBeNull();
   });
 
-  it("names one work package status and lists the six resumable tasks", () => {
+  it("names one work package status and lists the four resumable tasks", () => {
     renderAt("/export");
     expect(screen.getByText("Ready to slice")).toBeTruthy();
     const list = screen.getByLabelText("Prepare this work package");
     for (const label of [
-      "Select work",
-      "Assign printers",
-      "Arrange Plates",
+      "Prepare Plates",
       "Export for slicing",
       "Add sliced file",
       "Send or start",
@@ -228,10 +226,14 @@ describe("ExportPage work packages", () => {
   it("keeps the old numbered stage links working as aliases", async () => {
     renderAt("/export?stage=parts");
     expect(screen.getByTestId("panel-selection")).toBeTruthy();
+    expect(screen.getByTestId("panel-plates-assign")).toBeTruthy();
+    expect(screen.getByTestId("panel-plates-arrange")).toBeTruthy();
 
     cleanup();
     renderAt("/export?stage=plates");
+    expect(screen.getByTestId("panel-selection")).toBeTruthy();
     expect(screen.getByTestId("panel-plates-assign")).toBeTruthy();
+    expect(screen.getByTestId("panel-plates-arrange")).toBeTruthy();
 
     cleanup();
     renderAt("/export?stage=export");
@@ -256,8 +258,10 @@ describe("ExportPage work packages", () => {
     renderAt("/export");
     const list = screen.getByLabelText("Prepare this work package");
     expect(within(list).getByText("Add a sliced file before you send.")).toBeTruthy();
-    fireEvent.click(within(list).getAllByRole("button", { name: "Review" })[0]!);
+    fireEvent.click(within(list).getByRole("button", { name: "Review Plates" }));
     expect(screen.getByTestId("panel-selection")).toBeTruthy();
+    expect(screen.getByTestId("panel-plates-assign")).toBeTruthy();
+    expect(screen.getByTestId("panel-plates-arrange")).toBeTruthy();
   });
 
   it("shows a sent package with its status and a route to Checkoff", () => {

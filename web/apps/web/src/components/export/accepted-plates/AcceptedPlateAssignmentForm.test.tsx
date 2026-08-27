@@ -35,6 +35,10 @@ const unit = {
 
 afterEach(cleanup);
 
+function reviewIndividualParts() {
+  fireEvent.click(screen.getByRole("button", { name: /Review individual parts/ }));
+}
+
 describe("AcceptedPlateAssignmentForm", () => {
   it("starts setup rows unassigned and sends one explicit assignment per token", async () => {
     const workspace = parseAcceptedPlateWorkspace({
@@ -56,15 +60,16 @@ describe("AcceptedPlateAssignmentForm", () => {
       />,
     );
 
+    reviewIndividualParts();
     const select = screen.getByRole("combobox", { name: "Printer" });
     if (!(select instanceof HTMLSelectElement)) throw new Error("Expected Printer select");
-    const arrange = screen.getByRole("button", { name: "Arrange Plates" });
-    if (!(arrange instanceof HTMLButtonElement)) throw new Error("Expected Arrange Plates button");
+    const arrange = screen.getByRole("button", { name: "Build Plates" });
+    if (!(arrange instanceof HTMLButtonElement)) throw new Error("Expected Build Plates button");
     expect(select.value).toBe("");
     expect(arrange.disabled).toBe(true);
     fireEvent.change(select, { target: { value: printer.id } });
     expect(onAssignmentsChange).toHaveBeenLastCalledWith([{ token, printer_id: printer.id }]);
-    fireEvent.click(screen.getByRole("button", { name: "Arrange Plates" }));
+    fireEvent.click(screen.getByRole("button", { name: "Build Plates" }));
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledWith({
       expected: basis,
@@ -103,13 +108,14 @@ describe("AcceptedPlateAssignmentForm", () => {
       />,
     );
 
+    reviewIndividualParts();
     const select = screen.getByRole("combobox", { name: "Printer" });
-    const rearrange = screen.getByRole("button", { name: "Rearrange Plates" });
+    const rearrange = screen.getByRole("button", { name: "Save and rebuild Plates" });
     if (!(select instanceof HTMLSelectElement)) throw new Error("Expected Printer select");
-    if (!(rearrange instanceof HTMLButtonElement)) throw new Error("Expected Rearrange Plates button");
+    if (!(rearrange instanceof HTMLButtonElement)) throw new Error("Expected rebuild Plates button");
     expect(select.value).toBe("");
     expect(rearrange.disabled).toBe(true);
-    expect(screen.getByText("Rearranging replaces all manual Plate positions.")).toBeDefined();
+    expect(screen.getByText("Rebuilding Plates replaces all manual Plate positions.")).toBeDefined();
   });
 
   it("fills only the chosen Source-layer or role group and still submits every token", async () => {
@@ -150,6 +156,7 @@ describe("AcceptedPlateAssignmentForm", () => {
     });
     if (!(hardwareGroup instanceof HTMLSelectElement)) throw new Error("Expected Source-layer select");
     expect(hardwareGroup.value).toBe("printer-one");
+    reviewIndividualParts();
     const rowSelects = screen.getAllByRole("combobox", { name: "Printer" });
     expect(rowSelects.map((select) => select instanceof HTMLSelectElement ? select.value : null)).toEqual([
       "printer-one",
@@ -161,13 +168,13 @@ describe("AcceptedPlateAssignmentForm", () => {
       { token: secondToken, printer_id: "printer-one" },
       { token: thirdToken, printer_id: null },
     ]);
-    fireEvent.change(screen.getByRole("combobox", { name: "Assign groups by" }), {
+    fireEvent.change(screen.getByRole("combobox", { name: "Bulk assign by" }), {
       target: { value: "role" },
     });
     fireEvent.change(screen.getByRole("combobox", { name: "Assign secondary role" }), {
       target: { value: "printer-two" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Arrange Plates" }));
+    fireEvent.click(screen.getByRole("button", { name: "Build Plates" }));
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({
       assignments: [
@@ -178,7 +185,7 @@ describe("AcceptedPlateAssignmentForm", () => {
     })));
   });
 
-  it("reflects part search filters in the group printer controls", () => {
+  it("keeps bulk groups stable while filters narrow individual parts", () => {
     const secondToken = `ppu_${"d".repeat(32)}`;
     const workspace = parseAcceptedPlateWorkspace({
       kind: "setup",
@@ -205,12 +212,15 @@ describe("AcceptedPlateAssignmentForm", () => {
       />,
     );
 
+    reviewIndividualParts();
     fireEvent.change(screen.getByRole("searchbox", { name: "Search Plate assignments" }), {
       target: { value: "Controls" },
     });
 
     expect(screen.getByRole("combobox", { name: "Assign Controls Source layer" })).toBeDefined();
-    expect(screen.queryByRole("combobox", { name: "Assign Hardware Source layer" })).toBeNull();
+    expect(screen.getByRole("combobox", { name: "Assign Hardware Source layer" })).toBeDefined();
+    expect(screen.getByText(`clip__${secondToken}`)).toBeDefined();
+    expect(screen.queryByText(unit.object_name)).toBeNull();
 
     fireEvent.change(screen.getByRole("searchbox", { name: "Search Plate assignments" }), {
       target: { value: "" },
@@ -220,7 +230,9 @@ describe("AcceptedPlateAssignmentForm", () => {
     });
 
     expect(screen.getByRole("combobox", { name: "Assign Hardware Source layer" })).toBeDefined();
-    expect(screen.queryByRole("combobox", { name: "Assign Controls Source layer" })).toBeNull();
+    expect(screen.getByRole("combobox", { name: "Assign Controls Source layer" })).toBeDefined();
+    expect(screen.getByText(unit.object_name)).toBeDefined();
+    expect(screen.queryByText(`clip__${secondToken}`)).toBeNull();
   });
 
   it("submits only selected Required units", async () => {
@@ -252,7 +264,7 @@ describe("AcceptedPlateAssignmentForm", () => {
     fireEvent.change(screen.getByRole("combobox", { name: "Assign Hardware Source layer" }), {
       target: { value: printer.id },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Arrange Plates" }));
+    fireEvent.click(screen.getByRole("button", { name: "Build Plates" }));
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({
       assignments: [
@@ -300,12 +312,13 @@ describe("AcceptedPlateAssignmentForm", () => {
       />,
     );
 
+    reviewIndividualParts();
     expect(screen.getByText(`clip__${leftover}`)).toBeTruthy();
     expect(screen.queryByText(unit.object_name)).toBeNull();
     fireEvent.change(screen.getByRole("combobox", { name: "Printer" }), {
       target: { value: printer.id },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Rearrange Plates" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save and rebuild Plates" }));
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledWith({
       expected: basis,
@@ -350,8 +363,9 @@ describe("AcceptedPlateAssignmentForm", () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined);
     render(<AcceptedPlateAssignmentForm workspace={workspace} submitting={false} onSubmit={onSubmit} />);
 
+    reviewIndividualParts();
     expect(screen.getByText(`clip__${unplacedToken}`)).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Rearrange Plates" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save and rebuild Plates" }));
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledWith({
       expected: basis,

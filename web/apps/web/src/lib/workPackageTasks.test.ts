@@ -92,11 +92,9 @@ const byId = (tasks: ReturnType<typeof productionTasks>, id: string) =>
   tasks.find((task) => task.id === id)!;
 
 describe("productionTasks", () => {
-  it("returns the six Production tasks in order", () => {
+  it("keeps Plate preparation together in a four-part Production flow", () => {
     expect(productionTasks(input()).map((task) => task.id)).toEqual([
-      "select-work",
-      "assign-printers",
-      "arrange-plates",
+      "prepare-plates",
       "export-for-slicing",
       "add-sliced-file",
       "send-or-start",
@@ -105,16 +103,14 @@ describe("productionTasks", () => {
 
   it("blocks only genuinely blocked tasks and gives each one a reason", () => {
     const tasks = productionTasks(input({ selectedCount: 0 }));
-    expect(byId(tasks, "select-work").state).toBe("needs_attention");
-    expect(byId(tasks, "assign-printers").state).toBe("blocked");
-    expect(byId(tasks, "assign-printers").disabledReason).toBe(
-      "Select the work for this package first.",
-    );
+    expect(byId(tasks, "prepare-plates").state).toBe("needs_attention");
+    expect(byId(tasks, "prepare-plates").disabledReason).toBeNull();
   });
 
-  it("blocks Assign printers when no printer exists and says where to go", () => {
+  it("keeps Plate preparation open when no printer exists and says where to go", () => {
     const tasks = productionTasks(input({ printerCount: 0 }));
-    expect(byId(tasks, "assign-printers").disabledReason).toContain("Add a printer in Settings");
+    expect(byId(tasks, "prepare-plates").state).toBe("needs_attention");
+    expect(byId(tasks, "prepare-plates").hint).toContain("Add a printer in Settings");
   });
 
   it("marks Arrange Plates as needing a decision while units are unplaced", () => {
@@ -139,7 +135,7 @@ describe("productionTasks", () => {
       ],
     } as never);
     const tasks = productionTasks(input({ workspace }));
-    expect(byId(tasks, "arrange-plates").state).toBe("needs_attention");
+    expect(byId(tasks, "prepare-plates").state).toBe("needs_attention");
     expect(byId(tasks, "export-for-slicing").state).toBe("blocked");
   });
 
@@ -164,8 +160,8 @@ describe("productionTasks", () => {
 
   it("turns a failed operation into an error state, not a blocked task", () => {
     const tasks = productionTasks(input({ plateError: "Plate conflict" }));
-    expect(byId(tasks, "arrange-plates").state).toBe("error");
-    expect(byId(tasks, "arrange-plates").statusLabel).toBe("Failed, retry available");
+    expect(byId(tasks, "prepare-plates").state).toBe("error");
+    expect(byId(tasks, "prepare-plates").statusLabel).toBe("Failed, retry available");
   });
 
   it("blocks Send when no printer is linked to a host and names the fix", () => {
@@ -209,7 +205,7 @@ describe("productionTasks", () => {
 describe("firstUnfinishedProductionTask", () => {
   it("resumes at the first task that still needs work", () => {
     expect(firstUnfinishedProductionTask(productionTasks(input({ selectedCount: 0 }))))
-      .toBe("select-work");
+      .toBe("prepare-plates");
     expect(firstUnfinishedProductionTask(productionTasks(input()))).toBe("export-for-slicing");
     expect(
       firstUnfinishedProductionTask(
@@ -232,12 +228,15 @@ describe("firstUnfinishedProductionTask", () => {
 
 describe("productionTaskFromParam", () => {
   it("accepts the new task ids", () => {
-    expect(productionTaskFromParam("arrange-plates")).toBe("arrange-plates");
+    expect(productionTaskFromParam("prepare-plates")).toBe("prepare-plates");
   });
 
-  it("keeps the old numbered stage values working as aliases", () => {
-    expect(productionTaskFromParam("parts")).toBe("select-work");
-    expect(productionTaskFromParam("plates")).toBe("assign-printers");
+  it("keeps the old numbered stages and split-task ids working as aliases", () => {
+    expect(productionTaskFromParam("parts")).toBe("prepare-plates");
+    expect(productionTaskFromParam("plates")).toBe("prepare-plates");
+    expect(productionTaskFromParam("select-work")).toBe("prepare-plates");
+    expect(productionTaskFromParam("assign-printers")).toBe("prepare-plates");
+    expect(productionTaskFromParam("arrange-plates")).toBe("prepare-plates");
     expect(productionTaskFromParam("export")).toBe("export-for-slicing");
     expect(productionTaskFromParam("send")).toBe("send-or-start");
   });
@@ -248,7 +247,6 @@ describe("productionTaskFromParam", () => {
   });
 
   it("maps a task back to a stage value old links understand", () => {
-    expect(productionStageAlias("select-work")).toBe("parts");
-    expect(productionStageAlias("arrange-plates")).toBe("plates");
+    expect(productionStageAlias("prepare-plates")).toBe("plates");
   });
 });

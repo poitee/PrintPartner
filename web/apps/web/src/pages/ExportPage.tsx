@@ -63,9 +63,10 @@ type OperationFailure = Readonly<{ message: string; retry: () => void }>;
  * The old four numbered tabs promised one uninterrupted pass. The real task
  * leaves the product: export, slice somewhere else, come back later with
  * G-code, send it, wait, then verify in Checkoff. So this page shows work
- * packages with a durable status and a resumable task list projected from real
+ * packages with a durable status and four resumable tasks projected from real
  * records (production setup, Plate revision, export jobs, printer checkoff
- * links), not from a `?stage=` URL parameter.
+ * links), not from a `?stage=` URL parameter. Choosing units, assigning printers,
+ * and arranging Plates stay together because they produce one Plate revision.
  *
  * The old `?stage=` and `?select=` links still work as aliases.
  */
@@ -220,7 +221,7 @@ export default function ExportPage() {
   const requestedTask = productionTaskFromParam(
     searchParams.get("task") ?? searchParams.get("stage"),
   );
-  const resumeTask = tasks.length > 0 ? firstUnfinishedProductionTask(tasks) : "select-work";
+  const resumeTask = tasks.length > 0 ? firstUnfinishedProductionTask(tasks) : "prepare-plates";
   /**
    * An old link may point at a task that is genuinely blocked now. The link
    * still works, but it opens the resume task and says what is missing rather
@@ -248,8 +249,7 @@ export default function ExportPage() {
   };
 
   const taskFailure = (taskId: ProductionTaskId): OperationFailure | null => {
-    if (taskId === "assign-printers") return assignFailure;
-    if (taskId === "arrange-plates") return plateFailure;
+    if (taskId === "prepare-plates") return assignFailure ?? plateFailure;
     if (taskId === "export-for-slicing") return exportFailure;
     if (taskId === "send-or-start") return sendFailure;
     return null;
@@ -269,7 +269,11 @@ export default function ExportPage() {
       disabledReason: task.disabledReason ?? undefined,
       onAction: task.state === "blocked" ? undefined : () => openTask(task.id),
       actionLabel:
-        task.state === "complete" ? "Review" : task.id === activeTaskId ? "Open below" : "Open",
+        task.id === activeTaskId
+          ? "Open below"
+          : task.id === "prepare-plates"
+            ? task.state === "complete" ? "Review Plates" : "Prepare Plates"
+            : task.state === "complete" ? "Review" : task.label,
       error: failure
         ? {
             message: failure.message,
@@ -288,66 +292,89 @@ export default function ExportPage() {
       ? `${planName} · ${includedParts.length} part${includedParts.length === 1 ? "" : "s"}`
       : planName;
 
-  const selectWorkPanel = (
-    <>
-      <SlicerLinksPanel />
-      {setupSaving ? (
-        <p className="text-xs text-muted-foreground" role="status">Saving production setup…</p>
+  const preparePlatesPanel = (
+    <div className="space-y-4">
+      <section
+        className="space-y-3 rounded-lg border border-border bg-card p-4"
+        aria-labelledby="production-choose-units-heading"
+      >
+        <div className="space-y-1">
+          <h4 id="production-choose-units-heading" className="text-sm font-semibold">
+            1. Choose what to make
+          </h4>
+          <p className="text-xs text-muted-foreground">
+            Select the Required units for this work package. Completed units stay out unless you choose them again.
+          </p>
+        </div>
+        {setupSaving ? (
+          <p className="text-xs text-muted-foreground" role="status">Saving production setup…</p>
+        ) : null}
+        {setupError ? (
+          <p className="text-sm text-destructive" role="alert">
+            Production choices could not be saved:{" "}
+            {setupError instanceof Error ? setupError.message : String(setupError)}
+          </p>
+        ) : null}
+        {selectableUnits.length > 0 ? (
+          <ProductionSelectionPanel
+            units={selectableUnits}
+            selection={selection}
+            onToggle={(token) => setSelection((current) => toggleProductionUnit(current, token))}
+            onClearGroup={(field, value) => setSelection((current) =>
+              clearProductionSelectionGroup(current, selectableUnits, field, value)
+            )}
+            onSelectAll={() => setSelection(new Set(selectableUnits.map((unit) => unit.token)))}
+            onSelectIncomplete={() => setSelection(new Set(
+              selectableUnits.filter((unit) => !unit.completed).map((unit) => unit.token),
+            ))}
+            onClearAll={() => setSelection(new Set())}
+          />
+        ) : null}
+      </section>
+
+      {selectedProfileId != null ? (
+        <>
+          <AcceptedPlateSection
+            profileId={selectedProfileId}
+            enabled={engineState === "ready"}
+            selectedTokens={new Set(selectedTokens)}
+            view="assign"
+            onFailure={setAssignFailure}
+          />
+          {printerCount === 0 ? (
+            <div className="rounded-lg border border-warning/35 bg-warning-soft p-4 text-sm text-warning">
+              No printer is set up.{" "}
+              <Link className="font-medium underline underline-offset-2" to={settingsPrintersRoute()}>
+                Add a printer in Settings
+              </Link>{" "}
+              to assign the selected units and build Plates.
+            </div>
+          ) : null}
+
+          <details className="rounded-lg border border-border bg-card">
+            <summary className="cursor-pointer px-4 py-3 text-sm font-medium">
+              Advanced Plate rules
+            </summary>
+            <div className="border-t border-border p-3">
+              <p className="mb-3 text-xs text-muted-foreground">
+                Save repeatable grouping, material, or printer rules for this Build. Most work packages only need the bulk assignment controls above.
+              </p>
+              <ProductionRulesPanel profileId={selectedProfileId} />
+            </div>
+          </details>
+
+          <AcceptedPlateSection
+            profileId={selectedProfileId}
+            enabled={engineState === "ready"}
+            selectedTokens={new Set(selectedTokens)}
+            view="arrange"
+            onFailure={setPlateFailure}
+          />
+          <SlicerLinksPanel />
+        </>
       ) : null}
-      {setupError ? (
-        <p className="text-sm text-destructive" role="alert">
-          Production choices could not be saved:{" "}
-          {setupError instanceof Error ? setupError.message : String(setupError)}
-        </p>
-      ) : null}
-      {selectableUnits.length > 0 ? (
-        <ProductionSelectionPanel
-          units={selectableUnits}
-          selection={selection}
-          onToggle={(token) => setSelection((current) => toggleProductionUnit(current, token))}
-          onClearGroup={(field, value) => setSelection((current) =>
-            clearProductionSelectionGroup(current, selectableUnits, field, value)
-          )}
-          onSelectAll={() => setSelection(new Set(selectableUnits.map((unit) => unit.token)))}
-          onSelectIncomplete={() => setSelection(new Set(
-            selectableUnits.filter((unit) => !unit.completed).map((unit) => unit.token),
-          ))}
-          onClearAll={() => setSelection(new Set())}
-        />
-      ) : null}
-    </>
+    </div>
   );
-
-  const assignPrintersPanel = selectedProfileId != null ? (
-    <>
-      <ProductionRulesPanel profileId={selectedProfileId} />
-      <AcceptedPlateSection
-        profileId={selectedProfileId}
-        enabled={engineState === "ready"}
-        selectedTokens={new Set(selectedTokens)}
-        view="assign"
-        onFailure={setAssignFailure}
-      />
-      {printerCount === 0 ? (
-        <p className="text-sm text-muted-foreground">
-          No printer is set up.{" "}
-          <Link className="underline underline-offset-2" to={settingsPrintersRoute()}>
-            Add a printer in Settings
-          </Link>
-        </p>
-      ) : null}
-    </>
-  ) : null;
-
-  const arrangePlatesPanel = selectedProfileId != null ? (
-    <AcceptedPlateSection
-      profileId={selectedProfileId}
-      enabled={engineState === "ready"}
-      selectedTokens={new Set(selectedTokens)}
-      view="arrange"
-      onFailure={setPlateFailure}
-    />
-  ) : null;
 
   const exportPanel = (
     <>
@@ -404,12 +431,8 @@ export default function ExportPage() {
 
   const panelFor = (taskId: ProductionTaskId) => {
     switch (taskId) {
-      case "select-work":
-        return selectWorkPanel;
-      case "assign-printers":
-        return assignPrintersPanel;
-      case "arrange-plates":
-        return arrangePlatesPanel;
+      case "prepare-plates":
+        return preparePlatesPanel;
       case "export-for-slicing":
         return exportPanel;
       case "add-sliced-file":
@@ -425,7 +448,7 @@ export default function ExportPage() {
         accent
         eyebrow={planIdentity ? `Make · ${planIdentity}` : "Make"}
         title="Production"
-        description="What you are making next, and where it is now."
+        description="Choose units, assign them to printers, build Plates, and send them to print."
       />
       <BuildSummaryHeader currentStageId="production" />
 
@@ -502,7 +525,7 @@ export default function ExportPage() {
             >
               <TaskList
                 title="Prepare this work package"
-                description="Do these in the order that suits you. The page reopens at the first unfinished task."
+                description="Plate preparation stays together. Production reopens at the first unfinished task."
                 tasks={taskRows}
               />
               {blockedRequest ? (
@@ -533,7 +556,7 @@ export default function ExportPage() {
                 setSelection(new Set(
                   selectableUnits.filter((unit) => !unit.completed).map((unit) => unit.token),
                 ));
-                openTask("select-work");
+                openTask("prepare-plates");
               }}
             >
               Prepare more units
