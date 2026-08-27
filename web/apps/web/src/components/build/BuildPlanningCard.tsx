@@ -12,6 +12,27 @@ import {
   CardTitle,
 } from "../ui/card";
 
+function planningPhaseDescription(phase: BuildPlanningState["planning_phase"]): string {
+  switch (phase.kind) {
+    case "preparing":
+      return "No reviewed draft yet";
+    case "draft":
+      return `Draft ${phase.draft_id}`;
+    case "applied":
+      return phase.revision_id == null
+        ? `Applied draft ${phase.draft_id}`
+        : `Applied draft ${phase.draft_id} as Plan revision ${phase.revision_id}`;
+    case "abandoned":
+      return `Abandoned draft ${phase.draft_id}`;
+    case "missing_draft":
+      return `Draft ${phase.draft_id} is unavailable`;
+    default: {
+      const exhaustive: never = phase;
+      return exhaustive;
+    }
+  }
+}
+
 export default function BuildPlanningCard({
   planId,
 }: {
@@ -51,22 +72,28 @@ export default function BuildPlanningCard({
   }
   if (!state) return null;
 
-  const { brief, readiness } = state;
+  const { brief, planning_phase: planningPhase, readiness } = state;
+  const phaseBadge = planningPhase.kind === "applied"
+    ? { label: "Applied", variant: "success" as const }
+    : planningPhase.kind === "abandoned"
+      ? { label: "Draft abandoned", variant: "warning" as const }
+      : planningPhase.kind === "missing_draft"
+        ? { label: "Draft unavailable", variant: "error" as const }
+        : {
+            label: readiness.ready
+              ? "Ready to apply"
+              : `${readiness.blockers.length} blockers`,
+            variant: readiness.ready ? "success" as const : "warning" as const,
+          };
   return (
     <Card>
       <CardHeader>
         <div className="flex flex-wrap items-center justify-between gap-2">
           <CardTitle>AI Build planning</CardTitle>
-          <Badge variant={readiness.ready ? "success" : "warning"}>
-            {readiness.ready
-              ? "Ready to apply"
-              : `${readiness.blockers.length} blockers`}
-          </Badge>
+          <Badge variant={phaseBadge.variant}>{phaseBadge.label}</Badge>
         </div>
         <CardDescription>
-          {brief.draft_id == null
-            ? "No reviewed draft yet"
-            : `Draft ${brief.draft_id}`}{" "}
+          {planningPhaseDescription(planningPhase)}{" "}
           · {state.difference_count} source differences in{" "}
           {state.grouped_difference_count} groups
         </CardDescription>

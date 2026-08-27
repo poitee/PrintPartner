@@ -126,6 +126,18 @@ export class PlanDraftWorkspaceService {
     return { kind: "ready", workspace: this.workspace(draft) };
   }
 
+  prepareForApply(input: {
+    readonly profileId: number;
+    readonly draftId: number;
+    readonly actorId: string;
+  }): PlanDraftWorkspaceResult {
+    if (!this.repo.canMutateAcceptedPlan()) return { kind: "transaction_unavailable" };
+    if (!this.repo.getOwnedProfileIdentity(input.profileId)) return { kind: "profile_not_found" };
+    const draft = this.repo.getPlanDraft(input.profileId, input.draftId);
+    if (!draft) return { kind: "draft_not_found" };
+    return this.autoReconcile(draft, input.actorId);
+  }
+
   recompute(input: {
     readonly profileId: number;
     readonly actorId: string;

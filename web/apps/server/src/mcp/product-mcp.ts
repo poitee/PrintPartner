@@ -32,7 +32,12 @@ import type { InProcessJobRunner } from "../routes/jobs.js";
 import type { AppRepository } from "../db/repository.js";
 import { createIntegrationPort, type IntegrationPort } from "../integrations/store.js";
 import { getIntegrationAdapter } from "../integrations/registry.js";
-import { deriveBuildPlanningReadiness, hydrateBuildPlanningBrief, readBuildPlanningBrief } from "../services/build-planning.js";
+import {
+  deriveBuildPlanningPhase,
+  deriveBuildPlanningReadiness,
+  hydrateBuildPlanningBrief,
+  readBuildPlanningBrief,
+} from "../services/build-planning.js";
 
 export const META_TOOLS = [
   {
@@ -233,15 +238,25 @@ export function createProductMcpServer(deps: ProductMcpDeps): Server {
     }
     const match = /^print-partner:\/\/build-planning\/(\d+)$/.exec(request.params.uri);
     if (!match) throw new Error("Unknown Build planning resource URI");
-    const storedBrief = readBuildPlanningBrief(getRepo(), Number(match[1]));
+    const repo = getRepo();
+    const storedBrief = readBuildPlanningBrief(repo, Number(match[1]));
     if (!storedBrief) throw new Error("Build planning brief not found");
-    const brief = hydrateBuildPlanningBrief(getRepo(), storedBrief);
+    const brief = hydrateBuildPlanningBrief(repo, storedBrief);
+    const planningPhase = deriveBuildPlanningPhase(repo, brief);
     return {
       contents: [
         {
           uri: request.params.uri,
           mimeType: "application/json",
-          text: JSON.stringify({ brief, readiness: deriveBuildPlanningReadiness(brief) }, null, 2),
+          text: JSON.stringify(
+            {
+              brief,
+              planning_phase: planningPhase,
+              readiness: deriveBuildPlanningReadiness(brief),
+            },
+            null,
+            2,
+          ),
         },
       ],
     };

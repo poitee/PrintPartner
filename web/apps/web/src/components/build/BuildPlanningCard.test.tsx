@@ -15,6 +15,7 @@ describe("BuildPlanningCard", () => {
 
   it("shows planning provenance, uploaded artifacts, and blockers", async () => {
     fetchBuildPlanningState.mockResolvedValue({
+      planning_phase: { kind: "preparing" },
       brief: {
         special_request: "Print this linked project",
         requirements: [{ key: "size", value: "350", status: "unverified" }],
@@ -46,5 +47,27 @@ describe("BuildPlanningCard", () => {
     expect(screen.getByText("1 blockers")).toBeTruthy();
     expect(screen.getByText(/project\.3mf/)).toBeTruthy();
     expect(screen.getAllByText("size: 350")).toHaveLength(2);
+  });
+
+  it("shows a consumed MCP draft as an applied Plan revision", async () => {
+    fetchBuildPlanningState.mockResolvedValue({
+      planning_phase: { kind: "applied", draft_id: 11, revision_id: 4 },
+      brief: {
+        special_request: "Print this linked project",
+        requirements: [],
+        evidence: [],
+        contributions: [],
+        role_filaments: [],
+        draft_id: 11,
+      },
+      readiness: { ready: true, blockers: [] },
+      grouped_difference_count: 0,
+      difference_count: 0,
+    });
+
+    render(<BuildPlanningCard planId={12} />);
+    expect(await screen.findByText("Applied")).toBeTruthy();
+    expect(screen.getByText(/Applied draft 11 as Plan revision 4/)).toBeTruthy();
+    expect(screen.queryByText("Ready to apply")).toBeNull();
   });
 });

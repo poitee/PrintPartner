@@ -541,6 +541,70 @@ describe("assistant tools + example builds", () => {
     expect(repo.getPlanDraft(plan.id, refreshedBrief.draft_id!)?.parts).toHaveLength(2);
   });
 
+  it("reports an MCP-applied planning draft as applied", async () => {
+    const source = repo.createSource({ name: "Applied project", source_kind: "local" });
+    const sourcePath = join(dataDir, "applied-project");
+    mkdirSync(sourcePath, { recursive: true });
+    writeFileSync(join(sourcePath, "bracket.stl"), "solid bracket\nendsolid bracket\n");
+    repo.updateSource(source.id, {
+      local_path: sourcePath,
+      last_synced_at: new Date().toISOString(),
+      last_commit_sha: "a".repeat(40),
+    });
+    const plan = repo.createProfile("Applied project", source.id);
+    const brief = newBuildPlanningBrief(plan.id, "Print the bracket", []);
+    brief.requirements = brief.requirements.map((requirement) => ({
+      ...requirement,
+      status: "satisfied",
+    }));
+    brief.evidence.push({
+      id: "printable",
+      url: `printpartner:source:${source.id}`,
+      normalized_url: `printpartner:source:${source.id}`,
+      kind: "model_source",
+      input_kind: "upload",
+      source_id: source.id,
+      source_role: "structural_base",
+    });
+    saveBuildPlanningBrief(repo, hydrateBuildPlanningBrief(repo, brief));
+
+    const rebuilt = await applyAssistantAction({
+      id: "rebuild-before-apply",
+      type: "propose_rebuild_plan",
+      plan_id: plan.id,
+      label: "Rebuild",
+      summary: "test",
+      params: {},
+    }, { repo, jobs: { start: async () => "unused" } as never });
+    expect(rebuilt).toMatchObject({ ok: true, result: { draft_id: expect.any(Number) } });
+    if (!rebuilt.ok || !rebuilt.result || typeof rebuilt.result.draft_id !== "number") {
+      throw new Error("test planning draft was not rebuilt");
+    }
+
+    const proposal = await invokeAssistantTool(
+      "propose_apply_plan_draft",
+      { plan_id: plan.id, draft_id: rebuilt.result.draft_id },
+      { repo },
+    );
+    const applied = await applyAssistantAction(proposal.proposedAction!, {
+      repo,
+      jobs: { start: async () => "unused" } as never,
+    });
+    expect(applied).toMatchObject({ ok: true });
+    expect(repo.getPlanDraft(plan.id, rebuilt.result.draft_id)?.state).toBe("consumed");
+
+    const planningState = JSON.parse((await invokeAssistantTool(
+      "get_build_planning_state",
+      { plan_id: plan.id },
+      { repo },
+    )).content);
+    expect(planningState.planning_phase).toEqual({
+      kind: "applied",
+      draft_id: rebuilt.result.draft_id,
+      revision_id: expect.any(Number),
+    });
+  });
+
   it("rolls back planning layer changes when rebuild fails", async () => {
     const original = repo.createSource({ name: "Original", source_kind: "local" });
     const originalPath = join(dataDir, "original");

@@ -260,6 +260,12 @@ export type BuildPlanningEvidence = {
 };
 
 export type BuildPlanningState = {
+  planning_phase:
+    | { kind: "preparing" }
+    | { kind: "draft"; draft_id: number }
+    | { kind: "applied"; draft_id: number; revision_id: number | null }
+    | { kind: "abandoned"; draft_id: number }
+    | { kind: "missing_draft"; draft_id: number };
   brief: {
     special_request: string;
     requirements: Array<{ key: string; value: string; status: string; detail?: string }>;

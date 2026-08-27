@@ -19,6 +19,7 @@ import { AcceptedPlanOperationalIntegrityError } from "../db/accepted-plan-opera
 import { toAcceptedCheckoffView } from "../services/accepted-plan-views.js";
 import { acceptedPlanBasis } from "../db/accepted-plan-progress.js";
 import {
+  deriveBuildPlanningPhase,
   deriveBuildPlanningReadiness,
   hydrateBuildPlanningBrief,
   readBuildPlanningBrief,
@@ -182,6 +183,7 @@ export async function registerPlanRoutes(
     return {
       planning: {
         brief,
+        planning_phase: deriveBuildPlanningPhase(deps.repo, brief),
         readiness: deriveBuildPlanningReadiness(brief),
         grouped_difference_count: groupIds.size,
         difference_count: brief.differences.length,

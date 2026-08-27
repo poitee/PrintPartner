@@ -83,6 +83,7 @@ import {
 import { suggestSourceContributions } from "../services/source-contribution-suggestions.js";
 import { listPrintableArtifactPaths, scanSourceArtifacts } from "../services/source-artifacts.js";
 import { buildPlanManifestBuilder } from "../services/plan-manifest-builder.js";
+import { PlanDraftWorkspaceService } from "../services/plan-draft-workspace.js";
 import { finalizeUploadedSource, writeUploadedFiles, writeUploadedZip } from "../services/archive-import.js";
 import { indexSourceDocsFromDisk } from "../services/source-docs-index.js";
 import { publishLocalSourceWorkingTree } from "../services/local-source-revision.js";
@@ -100,6 +101,7 @@ import {
   analyzeBuildRequest,
   buildPlanningApplyBlockers,
   buildEvidenceFromUploadedSource,
+  deriveBuildPlanningPhase,
   deriveBuildPlanningReadiness,
   hydrateBuildPlanningBrief,
   newBuildPlanningBrief,
@@ -1804,6 +1806,7 @@ export async function invokeAssistantTool(
         return {
           content: JSON.stringify({
             brief,
+            planning_phase: deriveBuildPlanningPhase(ctx.repo, brief),
             readiness: deriveBuildPlanningReadiness(brief),
             grouped_difference_count: groupIds.length,
             difference_count: brief.differences.length,
@@ -1904,6 +1907,7 @@ export async function invokeAssistantTool(
         return {
           content: JSON.stringify({
             draft,
+            planning_phase: deriveBuildPlanningPhase(ctx.repo, brief),
             readiness: deriveBuildPlanningReadiness(brief),
           }),
         };
@@ -5100,23 +5104,38 @@ export async function applyAssistantAction(
           };
         const draft = deps.repo.getPlanDraft(planId, draftId);
         if (!draft) return { ok: false, detail: "Selected planning draft not found" };
-        const applied = deps.repo.applyPlanChanges({
+        const workspaceService = new PlanDraftWorkspaceService(deps.repo);
+        const prepared = workspaceService.prepareForApply({
           profileId: planId,
           draftId,
-          expectedSnapshotDigest: draft.snapshotDigest,
-          expectedLifecycleVersion: draft.lifecycleVersion,
-          expectedBase:
-            draft.baseRevisionId == null
-              ? { kind: "empty", planVersion: 0 }
-              : {
-                  kind: "revision",
-                  revisionId: draft.baseRevisionId,
-                  planVersion: draft.basePlanVersion,
-                },
+          actorId: "mcp:build-planning",
+        });
+        if (prepared.kind !== "ready") {
+          return {
+            ok: false,
+            detail: `Plan Apply preparation failed: ${prepared.kind}`,
+            result: { preparation_result: prepared },
+          };
+        }
+        if (prepared.workspace.reconciliation.kind !== "ready") {
+          return {
+            ok: false,
+            detail: "Plan Apply requires required-unit decisions",
+            result: { reconciliation: prepared.workspace.reconciliation },
+          };
+        }
+        const applied = workspaceService.apply({
+          profileId: planId,
+          draftId,
           actorId: "mcp:build-planning",
           idempotencyKey: action.id,
+          request: {
+            expected_snapshot_digest: prepared.workspace.draft.snapshot_digest,
+            expected_lifecycle_version: prepared.workspace.draft.lifecycle_version,
+            expected_base: prepared.workspace.draft.base,
+          },
         });
-        if (applied.kind !== "applied" && applied.kind !== "existing" && applied.kind !== "already_applied") {
+        if (applied.kind !== "applied") {
           return {
             ok: false,
             detail: `Plan Apply failed: ${applied.kind}`,
@@ -5125,7 +5144,14 @@ export async function applyAssistantAction(
         }
         outcome = {
           ok: true,
-          result: { apply_result: applied, readiness: { ready: true, blockers: [] } },
+          result: {
+            apply_result: applied,
+            planning_phase: {
+              kind: "applied",
+              draft_id: applied.receipt.draftId,
+              revision_id: applied.receipt.revisionId,
+            },
+          },
         };
         break;
       }

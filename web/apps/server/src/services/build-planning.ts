@@ -134,6 +134,17 @@ export type BuildPlanningReadiness = {
   blockers: Array<{ code: string; detail: string }>;
 };
 
+export type BuildPlanningPhase =
+  | { readonly kind: "preparing" }
+  | { readonly kind: "draft"; readonly draft_id: number }
+  | {
+      readonly kind: "applied";
+      readonly draft_id: number;
+      readonly revision_id: number | null;
+    }
+  | { readonly kind: "abandoned"; readonly draft_id: number }
+  | { readonly kind: "missing_draft"; readonly draft_id: number };
+
 type SourceTree = { name: string; root: string };
 type PlanningSource = {
   id: number;
@@ -819,6 +830,31 @@ export function deriveBuildPlanningReadiness(
       detail: "Rebuild and review a plan draft",
     });
   return { ready: blockers.length === 0, blockers };
+}
+
+export function deriveBuildPlanningPhase(
+  repo: Pick<AppRepository, "getPlanDraft">,
+  brief: BuildPlanningBrief,
+): BuildPlanningPhase {
+  if (brief.draft_id == null) return { kind: "preparing" };
+  const draft = repo.getPlanDraft(brief.build_id, brief.draft_id);
+  if (!draft) return { kind: "missing_draft", draft_id: brief.draft_id };
+  switch (draft.state) {
+    case "open":
+      return { kind: "draft", draft_id: draft.id };
+    case "consumed":
+      return {
+        kind: "applied",
+        draft_id: draft.id,
+        revision_id: draft.consumedRevisionId ?? null,
+      };
+    case "abandoned":
+      return { kind: "abandoned", draft_id: draft.id };
+    default: {
+      const exhaustive: never = draft.state;
+      return exhaustive;
+    }
+  }
 }
 
 export function buildPlanningApplyBlockers(
