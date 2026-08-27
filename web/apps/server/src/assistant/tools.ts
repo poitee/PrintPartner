@@ -4,8 +4,6 @@ import { join, relative, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
 import type { AssistantActionType, AssistantProposedAction, PrinterHostStatus } from "@print-partner/contracts";
 import {
-  buildSourceCategoryTree,
-  categoryDepth,
   categoryLeafName,
   categoryParentPath,
   isAssistantUiAction,
@@ -19,12 +17,9 @@ import {
   findSourceCategoryPath,
   moveSourceCategoryPath,
 } from "@print-partner/domain";
-import type { AcceptedProfileProgress, AppRepository } from "../db/repository.js";
-import {
-  AcceptedPlanOperationalIntegrityError,
-  type ReadAcceptedPlanOperationalSnapshotResult,
-} from "../db/accepted-plan-operational.js";
-import { acceptedPlanBasis, acceptedProgressSummary, type AcceptedPlanBasis } from "../db/accepted-plan-progress.js";
+import type { AppRepository } from "../db/repository.js";
+import { AcceptedPlanOperationalIntegrityError } from "../db/accepted-plan-operational.js";
+import { acceptedPlanBasis, acceptedProgressSummary } from "../db/accepted-plan-progress.js";
 import type { IntegrationPort } from "../integrations/store.js";
 import { loadKitCatalog } from "../services/kit-catalog.js";
 import { loadKitManifest, saveKitManifest } from "../services/kit-manifest-store.js";
@@ -63,8 +58,28 @@ import {
 import { comparePlans } from "../services/plan-compare.js";
 import { appendPlanDecision, logAppliedAction } from "../services/plan-decisions.js";
 import { buildSyncAction } from "./sync-action.js";
-import { decisionFingerprint, isDismissedFingerprint } from "./preferences-digest.js";
+import {
+  proposeAssistantAction,
+  proposeAssistantActionUnlessDismissed,
+  type ToolInvokeResult,
+} from "./proposed-actions.js";
+import { readAcceptedPlanForAssistant } from "./accepted-plan-reader.js";
+import { mergeConfirmedSuggestedExcludes } from "./kit-manifest-actions.js";
+import { asInt, resolvePlanId } from "./tool-inputs.js";
+import {
+  parseAcceptedPlanBasis,
+  printStatsAcceptedProgress,
+  type PrintStatsAcceptedProgress,
+} from "./accepted-plan-tool-model.js";
 import { getLogger } from "../services/logger.js";
+import {
+  UNCATEGORIZED_CATEGORY,
+  categoryNotFoundError,
+  countSourcesUnderCategory,
+  sourceByName,
+  sourceNotFoundError,
+  summarizeSourceCategories,
+} from "./source-tool-model.js";
 import { suggestSourceContributions } from "../services/source-contribution-suggestions.js";
 import { listPrintableArtifactPaths, scanSourceArtifacts } from "../services/source-artifacts.js";
 import { buildPlanManifestBuilder } from "../services/plan-manifest-builder.js";
@@ -97,106 +112,6 @@ import {
 } from "../services/build-planning.js";
 
 const GITHUB_PAT_KEY = "github_pat";
-const SHA256_DIGEST_PATTERN = /^[0-9a-f]{64}$/;
-
-type PrintStatsAcceptedProgress =
-  | {
-      readonly kind: "ready";
-      readonly total_units: number;
-      readonly remaining_units: number;
-    }
-  | { readonly kind: "empty" }
-  | {
-      readonly kind: "unavailable";
-      readonly reason: "compatibility_dirty" | "uninitialized" | "integrity" | "concurrent_update";
-    };
-
-function printStatsAcceptedProgress(progress: AcceptedProfileProgress): PrintStatsAcceptedProgress {
-  switch (progress.kind) {
-    case "ready":
-      return {
-        kind: "ready",
-        total_units: progress.totalUnits,
-        remaining_units: progress.remainingUnits,
-      };
-    case "empty":
-      return { kind: "empty" };
-    case "unavailable":
-      return { kind: "unavailable", reason: progress.reason };
-    case "integrity_failure":
-      return { kind: "unavailable", reason: "integrity" };
-    case "concurrent_update":
-      return { kind: "unavailable", reason: "concurrent_update" };
-  }
-}
-
-function parseAcceptedPlanBasis(value: unknown): AcceptedPlanBasis | null {
-  if (!value || typeof value !== "object") return null;
-  const row = value as Record<string, unknown>;
-  const profileId = row.profileId;
-  const planVersion = row.planVersion;
-  const revisionId = row.revisionId;
-  const revisionDigest = row.revisionDigest;
-  const requiredUnitMappingDigest = row.requiredUnitMappingDigest;
-  if (
-    typeof profileId !== "number" ||
-    !Number.isSafeInteger(profileId) ||
-    profileId <= 0 ||
-    typeof planVersion !== "number" ||
-    !Number.isSafeInteger(planVersion) ||
-    planVersion <= 0 ||
-    typeof revisionId !== "number" ||
-    !Number.isSafeInteger(revisionId) ||
-    revisionId <= 0 ||
-    typeof revisionDigest !== "string" ||
-    !SHA256_DIGEST_PATTERN.test(revisionDigest) ||
-    typeof requiredUnitMappingDigest !== "string" ||
-    !SHA256_DIGEST_PATTERN.test(requiredUnitMappingDigest)
-  ) {
-    return null;
-  }
-  return {
-    profileId,
-    planVersion,
-    revisionId,
-    revisionDigest,
-    requiredUnitMappingDigest,
-  };
-}
-
-function readAcceptedPlanForAssistant(
-  repo: AppRepository,
-  profileId: number,
-):
-  | {
-      readonly kind: "read";
-      readonly identity: {
-        readonly id: number;
-        readonly name: string;
-        readonly archivedAt: string | null;
-      };
-      readonly accepted: ReadAcceptedPlanOperationalSnapshotResult;
-    }
-  | { readonly kind: "missing" }
-  | { readonly kind: "failure"; readonly detail: string } {
-  try {
-    const identity = repo.getOwnedProfileIdentity(profileId);
-    if (!identity) return { kind: "missing" };
-    return {
-      kind: "read",
-      identity,
-      accepted: repo.readAcceptedPlanOperationalSnapshot(profileId),
-    };
-  } catch (error) {
-    return {
-      kind: "failure",
-      detail:
-        error instanceof AcceptedPlanOperationalIntegrityError
-          ? "Accepted Plan data is inconsistent"
-          : "Internal Server Error",
-    };
-  }
-}
 
 export type AssistantToolSpec = {
   name: string;
@@ -1484,14 +1399,6 @@ export type ToolContext = {
   integrations?: IntegrationPort | null;
 };
 
-function asInt(raw: unknown): number | null {
-  if (typeof raw === "number" && Number.isFinite(raw)) return Math.trunc(raw);
-  if (typeof raw === "string" && raw.trim() && Number.isFinite(Number(raw))) {
-    return Math.trunc(Number(raw));
-  }
-  return null;
-}
-
 const MCP_THREE_MF_MAX_BYTES = 64 * 1024 * 1024;
 
 type ThreeMfCheckoffInput = Readonly<{
@@ -1552,14 +1459,6 @@ function inspectThreeMfCheckoff(
   }
 }
 
-function resolvePlanId(input: Record<string, unknown>, ctx: ToolContext, validateRequested = true): number | null {
-  const requested = asInt(input.plan_id);
-  if (requested != null && (!validateRequested || ctx.repo.getOwnedProfileIdentity(requested))) {
-    return requested;
-  }
-  return ctx.activePlanId != null ? ctx.activePlanId : null;
-}
-
 /** Slot id → catalog product/variant names, for path-based contribution slotting. */
 function catalogSlotAliases(catalog: Record<string, unknown>): Map<string, string[]> {
   const out = new Map<string, string[]>();
@@ -1592,126 +1491,12 @@ function guideVocabulary(ctx: ToolContext) {
   });
 }
 
-function sourceByName(repo: AppRepository, name: string) {
-  const needle = name.trim();
-  if (!needle) return null;
-  const sources = repo.listSources();
-  const exact = sources.find((s) => s.name === needle);
-  if (exact) return exact;
-  const lower = needle.toLowerCase();
-  const ci = sources.find((s) => s.name.toLowerCase() === lower);
-  if (ci) return ci;
-  // Separator-insensitive: "Example Repo" → "Example-Repo".
-  const compact = lower.replace(/[\s_-]+/g, "");
-  const fuzzy = sources.find((s) => s.name.toLowerCase().replace(/[\s_-]+/g, "") === compact);
-  if (fuzzy) return fuzzy;
-  // Model often appends release suffixes ("Example-Repo R2-0", "Example-Repo @ v2.1").
-  // Match when either string contains the other after separator normalization; prefer the
-  // longest source name so a suffixed name resolves to the most specific source.
-  const norm = (s: string) =>
-    s
-      .toLowerCase()
-      .replace(/[\s_-]+/g, " ")
-      .trim();
-  const needleNorm = norm(needle);
-  const contains = sources.filter((s) => {
-    const n = norm(s.name);
-    return needleNorm.includes(n) || n.includes(needleNorm);
-  });
-  if (contains.length === 1) return contains[0]!;
-  if (contains.length > 1) {
-    return contains.reduce((best, s) => (s.name.length > best.name.length ? s : best));
-  }
-  return null;
-}
-
-/** Closest source names for "did you mean" hints in tool errors (bigram Dice similarity). */
-function similarSourceNames(repo: AppRepository, name: string, limit = 5): string[] {
-  const compact = (s: string) => s.toLowerCase().replace(/[\s_-]+/g, "");
-  const bigrams = (s: string) => {
-    const out = new Set<string>();
-    for (let i = 0; i < s.length - 1; i++) out.add(s.slice(i, i + 2));
-    return out;
-  };
-  const needle = bigrams(compact(name));
-  if (!needle.size) return [];
-  return repo
-    .listSources()
-    .map((s) => {
-      const target = bigrams(compact(s.name));
-      let shared = 0;
-      for (const b of needle) if (target.has(b)) shared++;
-      const score = (2 * shared) / (needle.size + target.size);
-      return { name: s.name, score };
-    })
-    .filter((x) => x.score >= 0.3)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, limit)
-    .map((x) => x.name);
-}
-
-/** Sentinel accepted by `list_sources` for Sources with no category. */
-const UNCATEGORIZED_CATEGORY = "__uncategorized__";
-
 /** Resolve the Source named by `source_id` / `source_name` tool args. */
 function resolveSourceArg(input: Record<string, unknown>, ctx: ToolContext) {
   const sourceId = asInt(input.source_id);
   if (sourceId != null) return ctx.repo.getSource(sourceId);
   const sourceName = typeof input.source_name === "string" ? input.source_name.trim() : "";
   return sourceName ? sourceByName(ctx.repo, sourceName) : null;
-}
-
-function categoryNotFoundError(repo: AppRepository, requested: string): string {
-  return JSON.stringify({
-    error: `Unknown library category: "${requested}". Call list_source_categories, or create it with propose_create_source_category.`,
-    categories: repo.getSourceCategories(),
-  });
-}
-
-/** Sources filed under `path` or any of its subcategories. */
-function countSourcesUnderCategory(repo: AppRepository, path: string): number {
-  return repo.listSources().filter((s) => isCategoryPathWithin(s.category ?? "", path)).length;
-}
-
-/** Library category tree plus per-category Source counts, for MCP callers. */
-function summarizeSourceCategories(repo: AppRepository) {
-  const paths = repo.getSourceCategories();
-  const sources = repo.listSources();
-  const direct = new Map<string, number>();
-  let uncategorized = 0;
-  for (const source of sources) {
-    const path = normalizeCategoryPath(source.category ?? "");
-    if (!path) {
-      uncategorized += 1;
-      continue;
-    }
-    const key = path.toLowerCase();
-    direct.set(key, (direct.get(key) ?? 0) + 1);
-  }
-  return {
-    separator: "/",
-    note: 'Categories nest as "/"-separated paths; a Source stores one full path.',
-    categories: paths.map((path) => ({
-      path,
-      name: categoryLeafName(path),
-      parent: categoryParentPath(path),
-      depth: categoryDepth(path),
-      sources: direct.get(path.toLowerCase()) ?? 0,
-      sources_including_subcategories: sources.filter((s) =>
-        isCategoryPathWithin(s.category ?? "", path),
-      ).length,
-    })),
-    tree: buildSourceCategoryTree(paths),
-    uncategorized_sources: uncategorized,
-  };
-}
-
-function sourceNotFoundError(repo: AppRepository, sourceName: string, hint: string): string {
-  const suggestions = similarSourceNames(repo, sourceName);
-  const didYouMean = suggestions.length ? ` Did you mean: ${suggestions.map((n) => `"${n}"`).join(", ")}?` : "";
-  return JSON.stringify({
-    error: `Source not found: "${sourceName}".${didYouMean} ${hint}`,
-  });
 }
 
 function listSourceFiles(localPath: string): Array<{ path: string; byte_size: number }> {
@@ -1945,33 +1730,6 @@ function planSnapshotJson(
   };
 }
 
-function propose(
-  type: AssistantActionType,
-  planId: number,
-  label: string,
-  summary: string,
-  params: Record<string, unknown>,
-  extras?: Record<string, unknown>,
-): ToolInvokeResult {
-  const action: AssistantProposedAction = {
-    id: randomUUID(),
-    type,
-    plan_id: planId,
-    label,
-    summary,
-    params,
-  };
-  return {
-    proposedAction: action,
-    content: JSON.stringify({
-      status: "proposed",
-      note: "Not applied yet — user must confirm via Apply in the UI.",
-      action,
-      ...(extras ?? {}),
-    }),
-  };
-}
-
 /** Propose a mutating action, hard-blocking fingerprints dismissed on this plan. */
 function proposeChecked(
   ctx: ToolContext,
@@ -1982,23 +1740,16 @@ function proposeChecked(
   params: Record<string, unknown>,
   extras?: Record<string, unknown>,
 ): ToolInvokeResult {
-  if (planId > 0 && !isAssistantUiAction(type) && isDismissedFingerprint(ctx.repo, planId, type, params)) {
-    return {
-      content: JSON.stringify({
-        error: "user_dismissed",
-        detail: "User dismissed this action fingerprint on this plan. Ask before re-proposing the same change.",
-        fingerprint: decisionFingerprint(type, params),
-        action_type: type,
-      }),
-    };
-  }
-  return propose(type, planId, label, summary, params, extras);
+  return proposeAssistantActionUnlessDismissed({
+    repo: ctx.repo,
+    type,
+    planId,
+    label,
+    summary,
+    params,
+    extras,
+  });
 }
-
-export type ToolInvokeResult = {
-  content: string;
-  proposedAction?: AssistantProposedAction;
-};
 
 /** Execute a tool: reads run immediately; mutates only propose. */
 export async function invokeAssistantTool(
@@ -2369,18 +2120,18 @@ export async function invokeAssistantTool(
             content: JSON.stringify({ error: "name and request required" }),
           };
         analyzeBuildRequest(request, urls);
-        return propose(
-          "propose_create_build",
-          0,
-          `Create Build ${buildName}`,
-          "Create the Build and preserve the customer request verbatim.",
-          {
+        return proposeAssistantAction({
+          type: "propose_create_build",
+          planId: 0,
+          label: `Create Build ${buildName}`,
+          summary: "Create the Build and preserve the customer request verbatim.",
+          params: {
             name: buildName,
             request,
             urls,
             idempotency_key: typeof input.idempotency_key === "string" ? input.idempotency_key : undefined,
           },
-        );
+        });
       }
       case "propose_import_build_inputs": {
         const planId = resolvePlanId(input, ctx, false);
@@ -2402,7 +2153,13 @@ export async function invokeAssistantTool(
           const inspected = await fetchGithubRepoTreeSummary(url, null, ctx.repo.getSetting(GITHUB_PAT_KEY));
           return { ...row, url, branch: inspected.ref };
         }));
-        return propose("propose_import_build_inputs", planId, "import build inputs", "Create or reuse Sources and attach the confirmed evidence.", { ...input, inputs });
+        return proposeAssistantAction({
+          type: "propose_import_build_inputs",
+          planId,
+          label: "import build inputs",
+          summary: "Create or reuse Sources and attach the confirmed evidence.",
+          params: { ...input, inputs },
+        });
       }
       case "propose_update_source": {
         const sourceId = asInt(input.source_id);
@@ -2419,9 +2176,12 @@ export async function invokeAssistantTool(
           if (patch[key] !== undefined) clean[key] = patch[key];
         }
         if (Object.keys(clean).length === 0) return { content: JSON.stringify({ error: "patch has no supported fields" }) };
-        return propose("propose_update_source", 0, `update Source ${source.name}`, "Apply the reviewed Source metadata change.", {
-          source_id: source.id,
-          patch: clean,
+        return proposeAssistantAction({
+          type: "propose_update_source",
+          planId: 0,
+          label: `update Source ${source.name}`,
+          summary: "Apply the reviewed Source metadata change.",
+          params: { source_id: source.id, patch: clean },
         });
       }
       case "propose_import_source_files": {
@@ -2444,9 +2204,15 @@ export async function invokeAssistantTool(
         if (!/^[A-Za-z0-9+/=\r\n]+$/.test(encoded)) return { content: JSON.stringify({ error: "content must be base64" }) };
         const approxBytes = Math.floor((encoded.replace(/\s/g, "").length * 3) / 4);
         if (approxBytes > 256 * 1024 * 1024) return { content: JSON.stringify({ error: "upload exceeds the 256 MiB MCP limit" }) };
-        return propose("propose_import_source_files", 0, "import Source files", "Publish the confirmed upload as a pinned Source revision.", {
-          source_id: sourceId,
-          ...(archive ? { archive_base64: archive } : { files }),
+        return proposeAssistantAction({
+          type: "propose_import_source_files",
+          planId: 0,
+          label: "import Source files",
+          summary: "Publish the confirmed upload as a pinned Source revision.",
+          params: {
+            source_id: sourceId,
+            ...(archive ? { archive_base64: archive } : { files }),
+          },
         });
       }
       case "propose_edit_plan_draft_parts": {
@@ -2470,11 +2236,17 @@ export async function invokeAssistantTool(
           if (edit.included === undefined && edit.quantity_override === undefined) throw new Error("Each edit must set included or quantity_override");
           return edit;
         });
-        return propose("propose_edit_plan_draft_parts", planId, "edit plan draft parts", "Apply the reviewed part inclusion and quantity changes.", {
-          plan_id: planId,
-          draft_id: draftId,
-          expected_snapshot_digest: typeof input.expected_snapshot_digest === "string" ? input.expected_snapshot_digest : draft.snapshotDigest,
-          parts,
+        return proposeAssistantAction({
+          type: "propose_edit_plan_draft_parts",
+          planId,
+          label: "edit plan draft parts",
+          summary: "Apply the reviewed part inclusion and quantity changes.",
+          params: {
+            plan_id: planId,
+            draft_id: draftId,
+            expected_snapshot_digest: typeof input.expected_snapshot_digest === "string" ? input.expected_snapshot_digest : draft.snapshotDigest,
+            parts,
+          },
         });
       }
       case "propose_update_source_naming": {
@@ -2485,19 +2257,37 @@ export async function invokeAssistantTool(
         if (input.use_defaults !== true && (!input.profile || typeof input.profile !== "object")) return { content: JSON.stringify({ error: "use_defaults or profile required" }) };
         let profile: Record<string, unknown> | undefined;
         try { if (input.use_defaults !== true) profile = namingProfileFromDict(mergeNamingProfiles(ctx.repo.getGlobalNaming(), input.profile as Record<string, unknown>)).toDict(); } catch (error) { return { content: JSON.stringify({ error: error instanceof Error ? error.message : String(error) }) }; }
-        return propose("propose_update_source_naming", 0, `update naming for ${source.name}`, "Apply the reviewed Source naming rules.", { source_id: source.id, use_defaults: input.use_defaults === true, ...(profile ? { profile } : {}) });
+        return proposeAssistantAction({
+          type: "propose_update_source_naming",
+          planId: 0,
+          label: `update naming for ${source.name}`,
+          summary: "Apply the reviewed Source naming rules.",
+          params: { source_id: source.id, use_defaults: input.use_defaults === true, ...(profile ? { profile } : {}) },
+        });
       }
       case "propose_add_build_checklist_items": {
         const planId = resolvePlanId(input, ctx, false);
         if (planId == null || !readBuildPlanningBrief(ctx.repo, planId)) return { content: JSON.stringify({ error: "Build planning brief not found" }) };
         if (!Array.isArray(input.items) || input.items.length === 0) return { content: JSON.stringify({ error: "items required" }) };
-        return propose("propose_add_build_checklist_items", planId, "add Build checklist items", "Persist the reviewed pre-print checklist.", { plan_id: planId, items: input.items });
+        return proposeAssistantAction({
+          type: "propose_add_build_checklist_items",
+          planId,
+          label: "add Build checklist items",
+          summary: "Persist the reviewed pre-print checklist.",
+          params: { plan_id: planId, items: input.items },
+        });
       }
       case "propose_add_custom_filament": {
         const displayName = String(input.display_name ?? "").trim();
         const hex = String(input.hex ?? "").trim();
         if (!displayName || !/^#?[0-9a-f]{6}$/i.test(hex)) return { content: JSON.stringify({ error: "display_name and a six-digit hex color are required" }) };
-        return propose("propose_add_custom_filament", 0, `add custom filament ${displayName}`, "Add a named external filament without stock tracking.", { display_name: displayName, hex, product_line: typeof input.product_line === "string" ? input.product_line : undefined });
+        return proposeAssistantAction({
+          type: "propose_add_custom_filament",
+          planId: 0,
+          label: `add custom filament ${displayName}`,
+          summary: "Add a named external filament without stock tracking.",
+          params: { display_name: displayName, hex, product_line: typeof input.product_line === "string" ? input.product_line : undefined },
+        });
       }
       case "propose_update_build_brief":
       case "propose_set_build_source_roles":
@@ -2522,13 +2312,13 @@ export async function invokeAssistantTool(
               error: "group_id and rationale required",
             }),
           };
-        return propose(
-          name,
+        return proposeAssistantAction({
+          type: name,
           planId,
-          name.replace(/^propose_/, "").replaceAll("_", " "),
-          "Apply the confirmed Build planning change.",
-          input,
-        );
+          label: name.replace(/^propose_/, "").replaceAll("_", " "),
+          summary: "Apply the confirmed Build planning change.",
+          params: input,
+        });
       }
       case "get_kit_catalog":
         return { content: summarizeKitCatalog(loadKitCatalog(ctx.dataDir)) };
@@ -2891,12 +2681,12 @@ export async function invokeAssistantTool(
           };
         });
         const mappedNames = objects.map((object) => object.mapped_object_name);
-        return propose(
-          "propose_import_3mf_checkoff",
+        return proposeAssistantAction({
+          type: "propose_import_3mf_checkoff",
           planId,
-          `import 3MF checkoff for ${sourceInput.filename}`,
-          "Create a verify-first checkoff link from the imported sliced 3MF.",
-          {
+          label: `import 3MF checkoff for ${sourceInput.filename}`,
+          summary: "Create a verify-first checkoff link from the imported sliced 3MF.",
+          params: {
             plan_id: planId,
             filename: sourceInput.filename,
             ...(typeof input.content_base64 === "string" ? { content_base64: input.content_base64.trim() } : {}),
@@ -2907,8 +2697,8 @@ export async function invokeAssistantTool(
             object_names: mappedNames,
             accepted_basis: acceptedPlanBasis(accepted.snapshot),
           },
-          { objects, object_count: objects.length },
-        );
+          extras: { objects, object_count: objects.length },
+        });
       }
 
       case "propose_set_plan_progress": {
@@ -2928,10 +2718,12 @@ export async function invokeAssistantTool(
           if (!part || printedCount == null || printedCount < 0 || printedCount > part.units.length) throw new Error("Invalid progress row");
           return { part_id: partId, printed_count: printedCount };
         });
-        return propose("propose_set_plan_progress", planId, "update Plan print progress", "Apply the reviewed printed-unit counts.", {
-          plan_id: planId,
-          rows,
-          accepted_basis: acceptedPlanBasis(accepted.snapshot),
+        return proposeAssistantAction({
+          type: "propose_set_plan_progress",
+          planId,
+          label: "update Plan print progress",
+          summary: "Apply the reviewed printed-unit counts.",
+          params: { plan_id: planId, rows, accepted_basis: acceptedPlanBasis(accepted.snapshot) },
         });
       }
 
@@ -2945,13 +2737,19 @@ export async function invokeAssistantTool(
         const part = read.accepted.snapshot.parts.find((candidate) => candidate.projectionPartId === partId);
         const unit = part?.units.find((candidate) => candidate.unitIndex === unitIndex);
         if (!unit) return { content: JSON.stringify({ error: "part_id and unit_index are not in the accepted Plan" }) };
-        return propose("propose_set_plan_assembly", planId, "update Plan assembly checkoff", "Apply the reviewed assembly state.", {
-          plan_id: planId,
-          part_id: partId,
-          unit_index: unitIndex,
-          assembled: input.assembled,
-          accepted_basis: acceptedPlanBasis(read.accepted.snapshot),
-          token: unit.token,
+        return proposeAssistantAction({
+          type: "propose_set_plan_assembly",
+          planId,
+          label: "update Plan assembly checkoff",
+          summary: "Apply the reviewed assembly state.",
+          params: {
+            plan_id: planId,
+            part_id: partId,
+            unit_index: unitIndex,
+            assembled: input.assembled,
+            accepted_basis: acceptedPlanBasis(read.accepted.snapshot),
+            token: unit.token,
+          },
         });
       }
 
@@ -2961,7 +2759,13 @@ export async function invokeAssistantTool(
         const link = getPrinterCheckoffLink(ctx.repo, linkId);
         if (!link) return { content: JSON.stringify({ error: "Checkoff link not found" }) };
         if (link.state !== "awaiting_verify") return { content: JSON.stringify({ error: "Checkoff link is not awaiting verification" }) };
-        return propose("propose_verify_printer_checkoff", link.profile_id, `verify printer checkoff ${link.filename}`, "Apply the reviewed confirmed or rejected unit decisions.", { link_id: linkId, decisions: input.decisions });
+        return proposeAssistantAction({
+          type: "propose_verify_printer_checkoff",
+          planId: link.profile_id,
+          label: `verify printer checkoff ${link.filename}`,
+          summary: "Apply the reviewed confirmed or rejected unit decisions.",
+          params: { link_id: linkId, decisions: input.decisions },
+        });
       }
 
       case "get_plan_review": {
@@ -3104,7 +2908,7 @@ export async function invokeAssistantTool(
           planId ?? 0,
           `Map ${sourceName} → ${category}`,
           rationale ||
-            `Set source category/role to “${category}”${
+            `Set Library category to “${category}”${
               Object.keys(cleanGroups).length
                 ? ` and propose kit selections ${Object.entries(cleanGroups)
                     .map(([k, v]) => `${k}=${v}`)
@@ -4431,21 +4235,6 @@ export type ApplyActionDeps = {
   dataDir?: string;
   sourcesDir?: string;
 };
-
-/** Merge confirmed Apply-card `suggested_excludes` into kit-manifest exclude (no auto-exclude). */
-function mergeConfirmedSuggestedExcludes(
-  repo: AppRepository,
-  planId: number,
-  params: Record<string, unknown>,
-): string[] | null {
-  if (!Array.isArray(params.suggested_excludes)) return null;
-  const excludes = params.suggested_excludes.map((x) => String(x).trim()).filter(Boolean);
-  if (!excludes.length) return null;
-  const current = loadKitManifest(repo, planId);
-  const merged = [...new Set([...(current.exclude ?? []), ...excludes])];
-  saveKitManifest(repo, planId, { ...current, exclude: merged });
-  return merged;
-}
 
 /** Apply a user-confirmed proposed action. */
 export async function applyAssistantAction(
