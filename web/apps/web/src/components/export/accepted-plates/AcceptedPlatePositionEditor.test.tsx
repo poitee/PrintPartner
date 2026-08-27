@@ -97,4 +97,38 @@ describe("AcceptedPlatePositionEditor", () => {
     expect(document.activeElement).toBe(x);
     expect(calls).toEqual(["refresh"]);
   });
+
+  it("moves a unit with buttons only, so no dragging is needed", async () => {
+    const onMove = vi.fn().mockResolvedValue(true);
+    render(
+      <AcceptedPlatePositionEditor
+        unit={placedUnit}
+        printer={printer}
+        disabled={false}
+        onMove={onMove}
+        onStaleMove={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Move right 5 millimetres" }));
+    await waitFor(() => expect(onMove).toHaveBeenCalledWith(9_000, 5_000));
+  });
+
+  it("uses the chosen step and stops at the edge of the printable area", async () => {
+    const onMove = vi.fn().mockResolvedValue(true);
+    render(
+      <AcceptedPlatePositionEditor
+        unit={placedUnit}
+        printer={printer}
+        disabled={false}
+        onMove={onMove}
+        onStaleMove={vi.fn()}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText("Move step in millimetres"), { target: { value: "10" } });
+    fireEvent.click(screen.getByRole("button", { name: "Move left 10 millimetres" }));
+    await waitFor(() =>
+      expect(screen.getByText("Move left stopped at the edge of the printable area.")).toBeTruthy(),
+    );
+    expect(onMove).not.toHaveBeenCalled();
+  });
 });

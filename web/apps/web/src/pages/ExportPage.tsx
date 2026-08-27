@@ -1,9 +1,10 @@
 import { lazy, Suspense, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { FileArchive } from "lucide-react";
-import BuildWorkflowNextAction from "../components/build/BuildWorkflowNextAction";
+import BuildSummaryHeader from "../components/build/BuildSummaryHeader";
 import PageHeader from "../components/layout/PageHeader";
 import PageShell from "../components/layout/PageShell";
+import TaskList, { type WorkflowTask } from "../components/layout/TaskList";
 import ExportActionCards from "../components/export/ExportActionCards";
 import ExportRecentPanel from "../components/export/ExportRecentPanel";
 import PartsManifestTransfer from "../components/export/PartsManifestTransfer";
@@ -11,28 +12,41 @@ import ProductionSelectionPanel from "../components/export/ProductionSelectionPa
 import ProductionRulesPanel from "../components/export/ProductionRulesPanel";
 import SlicerLinksPanel from "../components/export/SlicerLinksPanel";
 import SlicerHandoffPanel from "../components/export/SlicerHandoffPanel";
+import WorkPackageCard from "../components/export/WorkPackageCard";
+import { useProductionCheckoffLinks } from "../components/export/useProductionCheckoffLinks";
+import { useProductionSendFleet } from "../components/export/useProductionSendFleet";
 import AcceptedPlateSection from "../components/export/accepted-plates/AcceptedPlateSection";
 // Lazy: PrinterSendPanel pulls in heavy printer integration + dnd-kit
 const PrinterSendPanel = lazy(() => import("../components/export/PrinterSendPanel"));
 import ShareBuildExportDialog from "../components/share/ShareBuildExportDialog";
 import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
 import { usePlanWorkspace } from "../context/PlanWorkspaceContext";
 import { useProfileSelection } from "../context/ProfileContext";
 import { useEngineHealth } from "../hooks/useEngineHealth";
 import { useProductionSelection } from "../hooks/useProductionSelection";
 import { useSourcesQuery } from "../queries/sources";
 import { useRoleFilamentsQuery } from "../queries/roleFilaments";
-import { useAcceptedPlateWorkspaceQuery } from "../queries/acceptedPlates";
+import {
+  useAcceptedPlateExportJobsQuery,
+  useAcceptedPlateWorkspaceQuery,
+} from "../queries/acceptedPlates";
 import { flattenReviewParts } from "../lib/reviewParts";
-import { planRoute } from "../lib/routes";
+import { planRoute, progressRoute, settingsPrintersRoute } from "../lib/routes";
 import {
   clearProductionSelectionGroup,
   productionSelectableUnits,
   selectedProductionTokens,
   toggleProductionUnit,
 } from "../lib/productionSelection";
+import { projectWorkPackages } from "../lib/workPackageProjection";
+import {
+  firstUnfinishedProductionTask,
+  productionStageAlias,
+  productionTaskFromParam,
+  productionTasks,
+  type ProductionTaskId,
+} from "../lib/workPackageTasks";
 import { cn } from "@/lib/utils";
 import {
   getBackgroundError,
@@ -41,16 +55,19 @@ import {
   shouldMountPlanTools,
 } from "../lib/workflowState";
 
-type ProductionStage = "parts" | "plates" | "export" | "send";
-
-function productionStage(value: string | null): ProductionStage {
-  return value === "plates" || value === "export" || value === "send" ? value : "parts";
-}
+type OperationFailure = Readonly<{ message: string; retry: () => void }>;
 
 /**
- * Export — printer Send panel binds to the active spine plan (GRE-232).
- * Slicer-input file cards (STL, 3MF, share, manifest) stay plan-gated below.
- * Farm-queue verbs (Send ready / Send now / Remove) live on Progress, not here.
+ * Production — the Build's work packages.
+ *
+ * The old four numbered tabs promised one uninterrupted pass. The real task
+ * leaves the product: export, slice somewhere else, come back later with
+ * G-code, send it, wait, then verify in Checkoff. So this page shows work
+ * packages with a durable status and a resumable task list projected from real
+ * records (production setup, Plate revision, export jobs, printer checkoff
+ * links), not from a `?stage=` URL parameter.
+ *
+ * The old `?stage=` and `?select=` links still work as aliases.
  */
 export default function ExportPage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -62,10 +79,14 @@ export default function ExportPage() {
     error: profilesError,
     reloadProfiles,
   } = useProfileSelection();
-  const { review, refresh, loading, error: planError } =
-    usePlanWorkspace();
+  const { review, refresh, loading, error: planError } = usePlanWorkspace();
   const { data: sources = [] } = useSourcesQuery();
   const [shareOpen, setShareOpen] = useState(false);
+  const [slicedFile, setSlicedFile] = useState<Readonly<{ name: string }> | null>(null);
+  const [assignFailure, setAssignFailure] = useState<OperationFailure | null>(null);
+  const [plateFailure, setPlateFailure] = useState<OperationFailure | null>(null);
+  const [exportFailure, setExportFailure] = useState<OperationFailure | null>(null);
+  const [sendFailure, setSendFailure] = useState<OperationFailure | null>(null);
   const roleFilamentsQuery = useRoleFilamentsQuery(
     selectedProfileId,
     Boolean(health?.ok),
@@ -111,29 +132,291 @@ export default function ExportPage() {
     selectedProfileId,
     selectedProfileId != null && engineState === "ready",
   );
+  const exportJobsQuery = useAcceptedPlateExportJobsQuery(
+    selectedProfileId,
+    selectedProfileId != null && engineState === "ready",
+  );
+  const checkoffLinksQuery = useProductionCheckoffLinks(
+    selectedProfileId,
+    engineState === "ready",
+  );
+  const sendFleetQuery = useProductionSendFleet(engineState === "ready");
   const selectableUnits = useMemo(
     () => productionSelectableUnits(workspaceQuery.data ?? { kind: "empty_plan" }),
     [workspaceQuery.data],
   );
   const selectParam = searchParams.get("select");
-  const { selection, setSelection, setupSaving, setupError } = useProductionSelection(
+  const { selection, setSelection, setupSaving, setupError, setup } = useProductionSelection(
     selectableUnits,
     selectParam,
     selectedProfileId,
   );
   const selectedTokens = selectedProductionTokens(selectableUnits, selection);
-  const activeStage = productionStage(searchParams.get("stage"));
-  const setActiveStage = (stage: string) => {
-    const next = productionStage(stage);
+
+  const projection = useMemo(
+    () =>
+      projectWorkPackages({
+        profileId: selectedProfileId,
+        workspace: workspaceQuery.data,
+        setup,
+        selectedTokens,
+        exportRecords: exportJobsQuery.data ?? [],
+        checkoffLinks: checkoffLinksQuery.data ?? [],
+        slicedFile,
+        printer: null,
+        exportFailed: exportFailure != null,
+      }),
+    [
+      checkoffLinksQuery.data,
+      exportFailure,
+      exportJobsQuery.data,
+      selectedProfileId,
+      selectedTokens,
+      setup,
+      slicedFile,
+      workspaceQuery.data,
+    ],
+  );
+
+  const workspace = workspaceQuery.data;
+  const printerCount =
+    workspace && workspace.kind !== "empty_plan" ? workspace.printers.length : 0;
+  const tasks = useMemo(() => {
+    if (!projection.bench) return [];
+    return productionTasks({
+      pkg: projection.bench,
+      workspace,
+      selectedCount: selectedTokens.length,
+      totalUnitCount: selectableUnits.length,
+      printerCount,
+      sendPrinterCount: sendFleetQuery.data?.sendCount ?? 0,
+      dispatchedFilenames: [...projection.active, ...projection.recent].map(
+        (entry) => entry.title,
+      ),
+      exportError: exportFailure?.message ?? null,
+      sendError: sendFailure?.message ?? null,
+      plateError: plateFailure?.message ?? null,
+      assignError: assignFailure?.message ?? null,
+    });
+  }, [
+    assignFailure,
+    exportFailure,
+    plateFailure,
+    printerCount,
+    projection,
+    selectableUnits.length,
+    selectedTokens.length,
+    sendFailure,
+    sendFleetQuery.data,
+    workspace,
+  ]);
+
+  /**
+   * Resume point. With no task in the URL the page opens the first unfinished
+   * task, so a reload or a move to another device lands where the work stopped.
+   * An explicit `?task=` or legacy `?stage=` still wins, so old links work and
+   * the user can jump to any available task.
+   */
+  const requestedTask = productionTaskFromParam(
+    searchParams.get("task") ?? searchParams.get("stage"),
+  );
+  const resumeTask = tasks.length > 0 ? firstUnfinishedProductionTask(tasks) : "select-work";
+  /**
+   * An old link may point at a task that is genuinely blocked now. The link
+   * still works, but it opens the resume task and says what is missing rather
+   * than pretending the blocked task is available.
+   */
+  const blockedRequest = requestedTask
+    ? tasks.find((task) => task.id === requestedTask && task.state === "blocked")
+    : undefined;
+  const activeTaskId: ProductionTaskId =
+    requestedTask && !blockedRequest ? requestedTask : resumeTask;
+  const activeTask = tasks.find((task) => task.id === activeTaskId);
+
+  const openTask = (taskId: ProductionTaskId) => {
     const params = new URLSearchParams(searchParams);
-    params.set("stage", next);
+    params.set("task", taskId);
+    params.set("stage", productionStageAlias(taskId));
     setSearchParams(params, { replace: true });
   };
+
+  const resumeHere = () => {
+    const params = new URLSearchParams(searchParams);
+    params.delete("task");
+    params.delete("stage");
+    setSearchParams(params, { replace: true });
+  };
+
+  const taskFailure = (taskId: ProductionTaskId): OperationFailure | null => {
+    if (taskId === "assign-printers") return assignFailure;
+    if (taskId === "arrange-plates") return plateFailure;
+    if (taskId === "export-for-slicing") return exportFailure;
+    if (taskId === "send-or-start") return sendFailure;
+    return null;
+  };
+
+  const taskRows: WorkflowTask[] = tasks.map((task) => {
+    const failure = taskFailure(task.id);
+    return {
+      id: task.id,
+      label: task.label,
+      hint: task.hint,
+      state: task.state,
+      statusLabel:
+        task.id === activeTaskId && task.state !== "complete" && task.state !== "blocked"
+          ? `${task.statusLabel} · open`
+          : task.statusLabel,
+      disabledReason: task.disabledReason ?? undefined,
+      onAction: task.state === "blocked" ? undefined : () => openTask(task.id),
+      actionLabel:
+        task.state === "complete" ? "Review" : task.id === activeTaskId ? "Open below" : "Open",
+      error: failure
+        ? {
+            message: failure.message,
+            onRetry: () => {
+              const retry = failure.retry;
+              openTask(task.id);
+              retry();
+            },
+          }
+        : undefined,
+    };
+  });
 
   const planIdentity =
     planName && includedParts.length > 0
       ? `${planName} · ${includedParts.length} part${includedParts.length === 1 ? "" : "s"}`
       : planName;
+
+  const selectWorkPanel = (
+    <>
+      <SlicerLinksPanel />
+      {setupSaving ? (
+        <p className="text-xs text-muted-foreground" role="status">Saving production setup…</p>
+      ) : null}
+      {setupError ? (
+        <p className="text-sm text-destructive" role="alert">
+          Production choices could not be saved:{" "}
+          {setupError instanceof Error ? setupError.message : String(setupError)}
+        </p>
+      ) : null}
+      {selectableUnits.length > 0 ? (
+        <ProductionSelectionPanel
+          units={selectableUnits}
+          selection={selection}
+          onToggle={(token) => setSelection((current) => toggleProductionUnit(current, token))}
+          onClearGroup={(field, value) => setSelection((current) =>
+            clearProductionSelectionGroup(current, selectableUnits, field, value)
+          )}
+          onSelectAll={() => setSelection(new Set(selectableUnits.map((unit) => unit.token)))}
+          onSelectIncomplete={() => setSelection(new Set(
+            selectableUnits.filter((unit) => !unit.completed).map((unit) => unit.token),
+          ))}
+          onClearAll={() => setSelection(new Set())}
+        />
+      ) : null}
+    </>
+  );
+
+  const assignPrintersPanel = selectedProfileId != null ? (
+    <>
+      <ProductionRulesPanel profileId={selectedProfileId} />
+      <AcceptedPlateSection
+        profileId={selectedProfileId}
+        enabled={engineState === "ready"}
+        selectedTokens={new Set(selectedTokens)}
+        view="assign"
+        onFailure={setAssignFailure}
+      />
+      {printerCount === 0 ? (
+        <p className="text-sm text-muted-foreground">
+          No printer is set up.{" "}
+          <Link className="underline underline-offset-2" to={settingsPrintersRoute()}>
+            Add a printer in Settings
+          </Link>
+        </p>
+      ) : null}
+    </>
+  ) : null;
+
+  const arrangePlatesPanel = selectedProfileId != null ? (
+    <AcceptedPlateSection
+      profileId={selectedProfileId}
+      enabled={engineState === "ready"}
+      selectedTokens={new Set(selectedTokens)}
+      view="arrange"
+      onFailure={setPlateFailure}
+    />
+  ) : null;
+
+  const exportPanel = (
+    <>
+      <SlicerHandoffPanel onFailure={setExportFailure} />
+      {loading && !review ? (
+        <Card>
+          <CardContent className="pt-6">
+            <p className="text-sm text-muted-foreground">Loading plan…</p>
+          </CardContent>
+        </Card>
+      ) : planError && !review ? (
+        <Card>
+          <CardContent className="space-y-3 pt-6">
+            <p className="text-sm text-destructive">Could not load this plan: {planError}</p>
+            <Button size="sm" variant="secondary" onClick={() => {
+              if (selectedProfileId != null) void refresh();
+            }}>Retry</Button>
+          </CardContent>
+        </Card>
+      ) : (
+        <div className={cn("grid gap-4", "lg:grid-cols-[minmax(0,1fr)_minmax(16rem,18.75rem)]")}>
+          <div className="min-w-0">
+            <ExportActionCards
+              onShare={() => setShareOpen(true)}
+              roleFilaments={roleFilaments}
+              selectedTokens={selectedTokens}
+            />
+          </div>
+          <ExportRecentPanel />
+        </div>
+      )}
+      <PartsManifestTransfer
+        review={review}
+        sources={sources}
+        onApplied={async () => {
+          await Promise.all([refresh(), roleFilamentsQuery.refetch()]);
+        }}
+      />
+    </>
+  );
+
+  const sendPanel = (
+    <Suspense fallback={<div className="h-32 animate-pulse rounded-lg bg-muted" />}>
+      <PrinterSendPanel
+        remainingParts={remainingParts}
+        profileId={selectedProfileId}
+        planName={planName}
+        engineReady={engineState === "ready"}
+        onSlicedFileChange={setSlicedFile}
+        onFailure={setSendFailure}
+      />
+    </Suspense>
+  );
+
+  const panelFor = (taskId: ProductionTaskId) => {
+    switch (taskId) {
+      case "select-work":
+        return selectWorkPanel;
+      case "assign-printers":
+        return assignPrintersPanel;
+      case "arrange-plates":
+        return arrangePlatesPanel;
+      case "export-for-slicing":
+        return exportPanel;
+      case "add-sliced-file":
+      case "send-or-start":
+        return sendPanel;
+    }
+  };
 
   return (
     <PageShell>
@@ -142,9 +425,9 @@ export default function ExportPage() {
         accent
         eyebrow={planIdentity ? `Make · ${planIdentity}` : "Make"}
         title="Production"
-        description="Choose parts, arrange editable Plates, export to your slicer, then send sliced G-code to a printer."
+        description="What you are making next, and where it is now."
       />
-      <BuildWorkflowNextAction currentStageId="production" />
+      <BuildSummaryHeader currentStageId="production" />
 
       {(profilesBackgroundError || roleFilamentError || (planError && review)) && (
         <div className="space-y-1 text-sm text-destructive" role="alert">
@@ -192,119 +475,90 @@ export default function ExportPage() {
           </CardContent>
         </Card>
       ) : (
-        <>
-          <Tabs value={activeStage} onValueChange={setActiveStage}>
-            <TabsList className="sticky top-0 z-10 grid h-auto w-full grid-cols-2 gap-1 p-1 shadow-sm sm:grid-cols-4">
-              <TabsTrigger value="parts">1. Parts</TabsTrigger>
-              <TabsTrigger value="plates">2. Plates &amp; printers</TabsTrigger>
-              <TabsTrigger value="export">3. Review &amp; export</TabsTrigger>
-              <TabsTrigger value="send">4. Send G-code</TabsTrigger>
-            </TabsList>
+        <div className="space-y-6">
+          {projection.active.length > 0 ? (
+            <section className="space-y-2" aria-labelledby="production-active-heading">
+              <h2 id="production-active-heading" className="text-sm font-semibold">
+                Work packages at a printer
+              </h2>
+              <div className="space-y-2">
+                {projection.active.map((entry) => (
+                  <WorkPackageCard key={entry.id} pkg={entry} />
+                ))}
+              </div>
+            </section>
+          ) : null}
 
-            <TabsContent value="parts" className="space-y-3">
-              <SlicerLinksPanel />
-              {setupSaving ? <p className="text-xs text-muted-foreground" role="status">Saving production setup…</p> : null}
-              {setupError ? (
-                <p className="text-sm text-destructive" role="alert">
-                  Production choices could not be saved: {setupError instanceof Error ? setupError.message : String(setupError)}
+          {projection.bench ? (
+            <WorkPackageCard
+              pkg={projection.bench}
+              actions={
+                requestedTask ? (
+                  <Button size="sm" variant="ghost" className="min-h-9" onClick={resumeHere}>
+                    Resume where I stopped
+                  </Button>
+                ) : null
+              }
+            >
+              <TaskList
+                title="Prepare this work package"
+                description="Do these in the order that suits you. The page reopens at the first unfinished task."
+                tasks={taskRows}
+              />
+              {blockedRequest ? (
+                <p className="text-sm text-muted-foreground" role="status">
+                  {blockedRequest.label} is not available yet. {blockedRequest.disabledReason}{" "}
+                  Opened {activeTask?.label ?? "the next task"} instead.
                 </p>
               ) : null}
-              {selectableUnits.length > 0 ? (
-                <ProductionSelectionPanel
-                  units={selectableUnits}
-                  selection={selection}
-                  onToggle={(token) => setSelection((current) => toggleProductionUnit(current, token))}
-                  onClearGroup={(field, value) => setSelection((current) =>
-                    clearProductionSelectionGroup(current, selectableUnits, field, value)
-                  )}
-                  onSelectAll={() => setSelection(new Set(selectableUnits.map((unit) => unit.token)))}
-                  onSelectIncomplete={() => setSelection(new Set(
-                    selectableUnits.filter((unit) => !unit.completed).map((unit) => unit.token),
-                  ))}
-                  onClearAll={() => setSelection(new Set())}
-                />
+              {activeTask ? (
+                <section className="space-y-3" aria-labelledby="production-open-task-heading">
+                  <h3
+                    id="production-open-task-heading"
+                    className="text-sm font-semibold text-foreground"
+                  >
+                    {activeTask.label}
+                  </h3>
+                  {panelFor(activeTaskId)}
+                </section>
               ) : null}
-              <div className="flex justify-end">
-                <Button onClick={() => setActiveStage("plates")}>Continue to Plates</Button>
-              </div>
-            </TabsContent>
-
-            <TabsContent value="plates" className="space-y-3">
-              {selectedProfileId != null ? <ProductionRulesPanel profileId={selectedProfileId} /> : null}
-              {selectedProfileId != null ? (
-                <AcceptedPlateSection
-                  profileId={selectedProfileId}
-                  enabled={engineState === "ready"}
-                  selectedTokens={new Set(selectedTokens)}
-                />
-              ) : null}
-              <div className="flex flex-wrap justify-between gap-2">
-                <Button variant="outline" onClick={() => setActiveStage("parts")}>Back to Parts</Button>
-                <Button onClick={() => setActiveStage("export")}>Continue to Review &amp; export</Button>
-              </div>
-            </TabsContent>
-
-            <TabsContent value="export" className="space-y-3">
-              <SlicerHandoffPanel />
-              {loading && !review ? (
-                <Card>
-                  <CardContent className="pt-6">
-                    <p className="text-sm text-muted-foreground">Loading plan…</p>
-                  </CardContent>
-                </Card>
-              ) : planError && !review ? (
-                <Card>
-                  <CardContent className="space-y-3 pt-6">
-                    <p className="text-sm text-destructive">Could not load this plan: {planError}</p>
-                    <Button size="sm" variant="secondary" onClick={() => {
-                      if (selectedProfileId != null) void refresh();
-                    }}>Retry</Button>
-                  </CardContent>
-                </Card>
-              ) : (
-                <div className={cn("grid gap-4", "lg:grid-cols-[minmax(0,1fr)_minmax(16rem,18.75rem)]")}>
-                  <div className="min-w-0">
-                    <ExportActionCards
-                      onShare={() => setShareOpen(true)}
-                      roleFilaments={roleFilaments}
-                      selectedTokens={selectedTokens}
-                    />
-                  </div>
-                  <ExportRecentPanel />
-                </div>
-              )}
-              <PartsManifestTransfer
-                review={review}
-                sources={sources}
-                onApplied={async () => {
-                  await Promise.all([refresh(), roleFilamentsQuery.refetch()]);
-                }}
-              />
-              <div className="flex flex-wrap justify-between gap-2">
-                <Button variant="outline" onClick={() => setActiveStage("plates")}>Back to Plates</Button>
-                <Button onClick={() => setActiveStage("send")}>Continue to Send G-code</Button>
-              </div>
-            </TabsContent>
-
-            <TabsContent value="send" className="space-y-3">
-              <Suspense fallback={<div className="h-32 animate-pulse rounded-lg bg-muted" />}>
-                <PrinterSendPanel
-                  remainingParts={remainingParts}
-                  profileId={selectedProfileId}
-                  planName={planName}
-                  engineReady={engineState === "ready"}
-                />
-              </Suspense>
-              <Button variant="outline" onClick={() => setActiveStage("export")}>Back to Review &amp; export</Button>
-            </TabsContent>
-          </Tabs>
+            </WorkPackageCard>
+          ) : null}
 
           <div className="flex flex-wrap gap-2">
+            <Button
+              variant="secondary"
+              className="min-h-11"
+              onClick={() => {
+                setSelection(new Set(
+                  selectableUnits.filter((unit) => !unit.completed).map((unit) => unit.token),
+                ));
+                openTask("select-work");
+              }}
+            >
+              Prepare more units
+            </Button>
+            <Button variant="ghost" size="sm" asChild>
+              <Link to={progressRoute(selectedProfileId)}>Open Checkoff</Link>
+            </Button>
             <Button variant="ghost" size="sm" asChild>
               <Link to={planRoute(selectedProfileId)}>Back to Plan</Link>
             </Button>
           </div>
-        </>
+
+          {projection.recent.length > 0 ? (
+            <section className="space-y-2" aria-labelledby="production-recent-heading">
+              <h2 id="production-recent-heading" className="text-sm font-semibold">
+                Finished work packages
+              </h2>
+              <div className="space-y-2">
+                {projection.recent.map((entry) => (
+                  <WorkPackageCard key={entry.id} pkg={entry} />
+                ))}
+              </div>
+            </section>
+          ) : null}
+        </div>
       )}
 
       {selectedProfileId != null && (

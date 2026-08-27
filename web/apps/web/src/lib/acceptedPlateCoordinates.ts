@@ -40,6 +40,30 @@ function clamp(value: number, minimum: number, maximum: number): number {
   return Math.min(maximum, Math.max(minimum, value));
 }
 
+/**
+ * Moves a placed unit by a fixed step and clamps it into the printable area.
+ *
+ * WCAG 2.2 requires a single-pointer alternative to every drag movement. The
+ * Plate bed supports dragging; these steps give the same result from a button
+ * or a keyboard, with no dragging at all.
+ */
+export function nudgeAcceptedPlatePosition(
+  input: PrintableBounds & Readonly<{
+    xUm: number;
+    yUm: number;
+    deltaXUm: number;
+    deltaYUm: number;
+  }>,
+): Readonly<{ xUm: number; yUm: number }> | null {
+  const maximumX = input.bedWidthUm - input.marginUm - input.unitWidthUm;
+  const maximumY = input.bedDepthUm - input.marginUm - input.unitDepthUm;
+  if (maximumX < input.marginUm || maximumY < input.marginUm) return null;
+  return {
+    xUm: Math.round(clamp(input.xUm + input.deltaXUm, input.marginUm, maximumX)),
+    yUm: Math.round(clamp(input.yUm + input.deltaYUm, input.marginUm, maximumY)),
+  };
+}
+
 export function pointerToAcceptedPlateOrigin(
   input: PointerOriginInput,
 ): Readonly<{ xUm: number; yUm: number }> | null {

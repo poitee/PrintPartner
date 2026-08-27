@@ -32,6 +32,7 @@ describe("toGlobalProductionJob", () => {
       hostName: "Core One",
       filename: "plate-01.gcode",
       checkoffHref: "/progress?profile=7",
+      productionHref: "/export?profile=7",
     });
   });
 
@@ -111,6 +112,6 @@ it("keeps the newest verified work", () => {
 
 it("labels live states", () => {
   expect(globalProductionJobLabel("watching")).toBe("Printing");
-  expect(globalProductionJobLabel("awaiting_verify")).toBe("Awaiting verification");
+  expect(globalProductionJobLabel("awaiting_verify")).toBe("Needs verification");
   expect(globalProductionJobLabel("host_failed")).toBe("Failed");
 });

@@ -95,7 +95,18 @@ function handoffFailureMessage(error: unknown): string {
   }
 }
 
-export default function SlicerHandoffPanel() {
+/** A recoverable export or handoff failure. Retry reruns only that operation. */
+export type SlicerHandoffFailure = Readonly<{ message: string; retry: () => void }>;
+
+type Props = Readonly<{
+  /**
+   * Reports the current recoverable failure so the Production task list can show
+   * it beside "Export for slicing" instead of losing it with a toast.
+   */
+  onFailure?: (failure: SlicerHandoffFailure | null) => void;
+}>;
+
+export default function SlicerHandoffPanel({ onFailure }: Props = {}) {
   const { health } = useEngineHealth();
   const { selectedProfileId } = useProfileSelection();
   const queryClient = useQueryClient();
@@ -108,6 +119,12 @@ export default function SlicerHandoffPanel() {
   const [exchangeStatus, setExchangeStatus] = useState<"ready" | "not_configured" | "unavailable">("unavailable");
   const [handoffPending, setHandoffPending] = useState(false);
   const [manualGuiUrl, setManualGuiUrl] = useState<string | null>(null);
+  const [failure, setFailureState] = useState<SlicerHandoffFailure | null>(null);
+
+  const setFailure = (next: SlicerHandoffFailure | null) => {
+    setFailureState(next);
+    onFailure?.(next);
+  };
 
   useEffect(() => {
     if (!health?.ok) return;
@@ -148,7 +165,10 @@ export default function SlicerHandoffPanel() {
       printer_assignments: current.printer_assignments,
       rules: current.rules,
     }).catch((error: unknown) => {
-      toast.error(error instanceof Error ? error.message : "Could not save slicer choice.");
+      setFailure({
+        message: error instanceof Error ? error.message : "Could not save your slicer choice.",
+        retry: () => chooseInstance(nextId),
+      });
     });
   };
 
@@ -177,9 +197,17 @@ export default function SlicerHandoffPanel() {
       (snapshot) => {
         const downloaded = downloadAcceptedPlateExport(snapshot);
         if (downloaded.kind === "invalid_result") {
-          toast.error("PrintPartner returned an invalid accepted Plate export.");
+          setFailure({
+            message: "PrintPartner returned an invalid accepted Plate export.",
+            retry: () => void exportAndDownload(localApp),
+          });
         } else if (downloaded.kind === "job_failed") {
-          toast.error(snapshot.error || "Accepted Plate export failed.");
+          setFailure({
+            message: snapshot.error || "The accepted Plate export failed.",
+            retry: () => void exportAndDownload(localApp),
+          });
+        } else {
+          setFailure(null);
         }
       },
       { profileId: capability.profileId },
@@ -196,6 +224,7 @@ export default function SlicerHandoffPanel() {
         profile_id: capability.profileId,
         expected_plate_revision_id: capability.plateRevisionId,
       });
+      setFailure(null);
       toast.success("Accepted Plates staged for the slicer", {
         description: result.inbox_relative_path,
       });
@@ -205,9 +234,12 @@ export default function SlicerHandoffPanel() {
       popup?.close();
       if (isAcceptedPlateStaleError(error)) {
         await invalidateAcceptedPlateWorkspace(queryClient, capability.profileId);
-        toast.error("Newer accepted Plate state replaced this handoff request.");
+        setFailure({
+          message: "Newer accepted Plate state replaced this handoff request. Check the Plate revision, then try again.",
+          retry: () => void managedOpen(),
+        });
       } else {
-        toast.error(handoffFailureMessage(error));
+        setFailure({ message: handoffFailureMessage(error), retry: () => void managedOpen() });
       }
     } finally {
       setHandoffPending(false);
@@ -225,6 +257,26 @@ export default function SlicerHandoffPanel() {
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3 pt-0">
+        {failure ? (
+          <div
+            className="flex flex-wrap items-center gap-3 rounded-md border border-destructive/35 bg-destructive-soft px-3 py-2"
+            role="alert"
+          >
+            <p className="min-w-0 flex-1 text-sm text-destructive">{failure.message}</p>
+            <Button
+              size="sm"
+              variant="secondary"
+              className="min-h-9"
+              onClick={() => {
+                const retry = failure.retry;
+                setFailure(null);
+                retry();
+              }}
+            >
+              Retry
+            </Button>
+          </div>
+        ) : null}
         {instances.length === 0 ? (
           <p className="text-sm text-muted-foreground">
             No managed slicer is enabled. <Link className="underline" to={`${settingsRoute()}#slicers`}>Open Slicer settings</Link>

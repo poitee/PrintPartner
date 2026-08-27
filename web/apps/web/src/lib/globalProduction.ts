@@ -1,5 +1,6 @@
 import type { PrinterCheckoffLink, PrinterCheckoffLinkState } from "../api/endpoints/checkoff";
-import { progressRoute } from "./routes";
+import { productionRoute, progressRoute } from "./routes";
+import { WORK_PACKAGE_STATUS_LABEL } from "./workPackageProjection";
 
 export const GLOBAL_PRODUCTION_ACTIVE_STATES = [
   "watching",
@@ -17,6 +18,7 @@ export type GlobalProductionJob = {
   hostName: string;
   filename: string;
   checkoffHref: string;
+  productionHref: string;
 };
 
 export type GlobalProductionRecentJob = {
@@ -53,6 +55,7 @@ export function toGlobalProductionJob(
     hostName: link.host_name,
     filename: link.filename,
     checkoffHref: progressRoute(link.profile_id),
+    productionHref: productionRoute(link.profile_id),
   };
 }
 
@@ -100,13 +103,17 @@ export function recentVerifiedJobs(
     }));
 }
 
+/**
+ * The same status words a Production work package uses, so a job reads the same
+ * whether the user looks at one Build or the whole workshop.
+ */
 export function globalProductionJobLabel(state: GlobalProductionJobState): string {
   switch (state) {
     case "watching":
-      return "Printing";
+      return WORK_PACKAGE_STATUS_LABEL.printing;
     case "awaiting_verify":
-      return "Awaiting verification";
+      return WORK_PACKAGE_STATUS_LABEL.needs_verification;
     case "host_failed":
-      return "Failed";
+      return WORK_PACKAGE_STATUS_LABEL.failed;
   }
 }

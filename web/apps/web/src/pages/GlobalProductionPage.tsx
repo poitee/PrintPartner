@@ -47,13 +47,25 @@ function JobList({ title, jobs }: { title: string; jobs: GlobalProductionJob[] }
                     {job.hostName} · {job.filename}
                   </p>
                 </div>
-                <Link
-                  className="text-xs underline-offset-2 hover:underline"
-                  to={job.checkoffHref}
-                  aria-label={`${globalProductionJobLabel(job.state)} for ${job.planName}`}
-                >
-                  Checkoff
-                </Link>
+                <div className="flex flex-wrap items-center gap-3 text-xs">
+                  <span className="rounded-md border border-border bg-muted px-2 py-0.5 font-medium text-muted-foreground">
+                    {globalProductionJobLabel(job.state)}
+                  </span>
+                  <Link
+                    className="min-h-11 content-center underline-offset-2 hover:underline"
+                    to={job.checkoffHref}
+                    aria-label={`${globalProductionJobLabel(job.state)} for ${job.planName}`}
+                  >
+                    Checkoff
+                  </Link>
+                  <Link
+                    className="min-h-11 content-center underline-offset-2 hover:underline"
+                    to={job.productionHref}
+                    aria-label={`Open ${job.planName} work packages in Production`}
+                  >
+                    Production
+                  </Link>
+                </div>
               </CardContent>
             </Card>
           </li>
@@ -145,7 +157,7 @@ export default function GlobalProductionPage() {
         accent
         eyebrow="Workshop"
         title="All Production"
-        description="Print jobs and farm status across all Builds. Production for a single Build lives in that Build's Production stage."
+        description="Work packages and farm status across all Builds. Queue dispatch and printer preparation stay in each Build's Production workspace."
       />
 
       {profilesBackgroundError && (
@@ -195,7 +207,7 @@ export default function GlobalProductionPage() {
             </section>
           )}
 
-          <JobList title="Awaiting verification" jobs={buckets.awaiting} />
+          <JobList title="Needs verification" jobs={buckets.awaiting} />
           <JobList title="Failed" jobs={buckets.failed} />
           <JobList title="Printing" jobs={buckets.watching} />
 

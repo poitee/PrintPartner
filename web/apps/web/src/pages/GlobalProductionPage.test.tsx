@@ -118,18 +118,22 @@ describe("GlobalProductionPage", () => {
     );
 
     expect(screen.getByRole("heading", { name: "All Production" }).textContent).toBe("All Production");
-    expect(screen.getByText(/6 remaining/).textContent).toContain("6 remaining");
+    expect(screen.getByText(/6 of 30 remaining/).textContent).toContain(
+      "6 of 30 remaining",
+    );
     expect(screen.getByRole("link", { name: "Open Voron in Production" }).getAttribute("href")).toBe(
       "/export?profile=7",
     );
     expect(screen.getByRole("link", { name: "Checkoff for Voron" }).getAttribute("href")).toBe(
       "/progress?profile=7",
     );
-    expect(screen.getByText("Not applied").textContent).toBe("Not applied");
+    expect(screen.getByText("No Accepted Plan yet").textContent).toBe(
+      "No Accepted Plan yet",
+    );
     await waitFor(() => {
       expect(
         screen
-          .getByRole("link", { name: "Awaiting verification for Voron" })
+          .getByRole("link", { name: "Needs verification for Voron" })
           .getAttribute("href"),
       ).toBe("/progress?profile=7");
     });

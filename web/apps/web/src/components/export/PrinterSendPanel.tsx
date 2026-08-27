@@ -50,6 +50,9 @@ import { readStickyId, writeStickyId } from "../../lib/stickyIdStorage";
 const PRINTER_ID_STORAGE_KEY = "pp-export-printer-id";
 const BAMBU_PRINTER_ID_STORAGE_KEY = "pp-export-bambu-printer-id";
 
+/** A recoverable send failure. Retry reruns the send with the same file. */
+export type PrinterSendFailure = Readonly<{ message: string; retry: () => void }>;
+
 type Props = {
   /** Remaining incomplete review parts for local object → unit proposal. */
   remainingParts: ReviewPart[];
@@ -57,6 +60,10 @@ type Props = {
   /** Active spine plan name for quiet “For [Plan].” bind line. */
   planName?: string | null;
   engineReady: boolean;
+  /** Reports the sliced file the work package is holding, or null when cleared. */
+  onSlicedFileChange?: (file: Readonly<{ name: string }> | null) => void;
+  /** Reports the current recoverable send failure for the Production task list. */
+  onFailure?: (failure: PrinterSendFailure | null) => void;
 };
 
 /**
@@ -71,6 +78,8 @@ export default function PrinterSendPanel({
   profileId,
   planName = null,
   engineReady,
+  onSlicedFileChange,
+  onFailure,
 }: Props) {
   const printerUploadJob = useJobRunner("printer-upload");
   const pollMs = usePrinterStatusPollMs();
@@ -90,12 +99,31 @@ export default function PrinterSendPanel({
   const [hostStatusByIntegration, setHostStatusByIntegration] = useState<
     Record<string, PrinterHostStatus>
   >({});
-  const [chosenFile, setChosenFile] = useState<File | null>(null);
+  const [chosenFile, setChosenFileState] = useState<File | null>(null);
+  const [sendFailure, setSendFailureState] = useState<PrinterSendFailure | null>(null);
   const [objectParse, setObjectParse] = useState<ParseSlicedObjectsResult | null>(null);
   const [objectPropose, setObjectPropose] = useState<ProposeCheckoffResult | null>(null);
   const [parseBusy, setParseBusy] = useState(false);
   const [bambuBusy, setBambuBusy] = useState(false);
   const [printersLoading, setPrintersLoading] = useState(true);
+
+  /**
+   * The sliced file is the work package's handoff back from the slicer, so the
+   * page above needs to know it arrived. Reported from event handlers only.
+   */
+  const setChosenFile = (file: File | null) => {
+    setChosenFileState(file);
+    onSlicedFileChange?.(file ? { name: file.name } : null);
+  };
+
+  /**
+   * A send that does not reach the printer stays on the page beside the task it
+   * broke. Retry reruns the same upload with the same file and printer.
+   */
+  const setSendFailure = (failure: PrinterSendFailure | null) => {
+    setSendFailureState(failure);
+    onFailure?.(failure);
+  };
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const bambuFileInputRef = useRef<HTMLInputElement>(null);
@@ -243,28 +271,33 @@ export default function PrinterSendPanel({
   };
 
   const runUpload = (file: File, start: boolean) => {
+    const retry = () => runUpload(file, start);
     if (!planBind.canSend || profileId == null) {
-      toast.error("Pick a plan to bind this send.");
+      setSendFailure({ message: "Pick a Build before you send this file.", retry });
       return;
     }
     if (!selectedPrinterId) {
-      toast.error("No linked printer", {
-        description: "Add a Moonraker or PrusaLink host in Settings, then link it to a machine.",
+      setSendFailure({
+        message: "No linked printer. Add a Moonraker or PrusaLink host in Settings, then link it to a machine.",
+        retry,
       });
       return;
     }
     if (start && selectedPrinterBusy) {
-      toast.error("Printer is busy", {
-        description: "Send still works. Start print is available when Idle.",
+      setSendFailure({
+        message: "The printer is busy. Send still works. Start print is available when it is idle.",
+        retry,
       });
       return;
     }
     if (start && selectedPrinterUnavailable) {
-      toast.error("Printer not ready", {
-        description: selectedHostStatus?.message?.trim() || "Host is offline or in error.",
+      setSendFailure({
+        message: selectedHostStatus?.message?.trim() || "The printer host is offline or in error.",
+        retry,
       });
       return;
     }
+    setSendFailure(null);
 
     const units =
       effectiveCheckoffUnits.length > 0 ? effectiveCheckoffUnits : undefined;
@@ -286,9 +319,13 @@ export default function PrinterSendPanel({
         }),
       (snap) => {
         if (snap.status === "error") {
-          toast.error(snap.message || "Send to printer failed");
+          setSendFailure({
+            message: snap.message || `Could not send ${file.name} to ${printerName}.`,
+            retry,
+          });
           return;
         }
+        setSendFailure(null);
         const mapped =
           typeof snap.result?.checkoff_units === "number"
             ? snap.result.checkoff_units
@@ -309,6 +346,7 @@ export default function PrinterSendPanel({
     setChosenFile(null);
     setObjectParse(null);
     setObjectPropose(null);
+    setSendFailure(null);
   };
 
   const ensureFileThen = (action: "send" | "start") => {
@@ -353,12 +391,14 @@ export default function PrinterSendPanel({
       return;
     }
     if (!isAllowedGcode(file.name)) {
-      toast.error("Wrong file type", {
-        description: "Choose a sliced .gcode, .gco, or .bgcode file.",
+      setSendFailure({
+        message: "Wrong file type. Choose a sliced .gcode, .gco, or .bgcode file.",
+        retry: () => fileInputRef.current?.click(),
       });
       pendingActionRef.current = null;
       return;
     }
+    setSendFailure(null);
     setChosenFile(file);
     const pending = pendingActionRef.current;
     pendingActionRef.current = null;
@@ -467,6 +507,26 @@ export default function PrinterSendPanel({
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-2.5 pt-1">
+          {sendFailure ? (
+            <div
+              className="flex flex-wrap items-center gap-3 rounded-md border border-destructive/35 bg-destructive-soft px-3 py-2"
+              role="alert"
+            >
+              <p className="min-w-0 flex-1 text-sm text-destructive">{sendFailure.message}</p>
+              <Button
+                size="sm"
+                variant="secondary"
+                className="min-h-11"
+                onClick={() => {
+                  const retry = sendFailure.retry;
+                  setSendFailure(null);
+                  retry();
+                }}
+              >
+                Retry
+              </Button>
+            </div>
+          ) : null}
           <input
             ref={fileInputRef}
             type="file"
@@ -542,6 +602,7 @@ export default function PrinterSendPanel({
                 <Button
                   size="sm"
                   variant="outline"
+                  className="min-h-11 min-w-11"
                   disabled={busy || parseBusy}
                   loading={parseBusy}
                   onClick={() => {
@@ -559,6 +620,7 @@ export default function PrinterSendPanel({
                   <Button
                     size="sm"
                     variant="outline"
+                    className="min-h-11 min-w-11"
                     disabled={busy || !selectedPrinterId || !planBind.canSend}
                     title={!planBind.canSend ? planBind.line : undefined}
                     onClick={() => ensureFileThen("send")}
@@ -567,6 +629,7 @@ export default function PrinterSendPanel({
                   </Button>
                   <Button
                     size="sm"
+                    className="min-h-11 min-w-11"
                     disabled={
                       busy ||
                       !selectedPrinterId ||

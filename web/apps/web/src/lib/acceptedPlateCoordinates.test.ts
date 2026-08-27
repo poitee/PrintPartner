@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   acceptedPlatePositionInBounds,
+  nudgeAcceptedPlatePosition,
   parseMillimetresToMicrometres,
   pointerToAcceptedPlateOrigin,
 } from "./acceptedPlateCoordinates";
@@ -70,5 +71,40 @@ describe("accepted Plate coordinates", () => {
     expect(acceptedPlatePositionInBounds({ ...bounds, xUm: 4_000, yUm: 4_000 })).toBe(true);
     expect(acceptedPlatePositionInBounds({ ...bounds, xUm: 216_000, yUm: 186_000 })).toBe(true);
     expect(acceptedPlatePositionInBounds({ ...bounds, xUm: 216_001, yUm: 186_000 })).toBe(false);
+  });
+
+  it("steps a placed unit without dragging and clamps it to the printable area", () => {
+    const bounds = {
+      bedWidthUm: 250_000,
+      bedDepthUm: 210_000,
+      marginUm: 4_000,
+      unitWidthUm: 30_000,
+      unitDepthUm: 20_000,
+    };
+    expect(
+      nudgeAcceptedPlatePosition({ ...bounds, xUm: 50_000, yUm: 50_000, deltaXUm: 5_000, deltaYUm: 0 }),
+    ).toEqual({ xUm: 55_000, yUm: 50_000 });
+    expect(
+      nudgeAcceptedPlatePosition({ ...bounds, xUm: 4_000, yUm: 4_000, deltaXUm: -10_000, deltaYUm: -10_000 }),
+    ).toEqual({ xUm: 4_000, yUm: 4_000 });
+    expect(
+      nudgeAcceptedPlatePosition({ ...bounds, xUm: 216_000, yUm: 186_000, deltaXUm: 10_000, deltaYUm: 10_000 }),
+    ).toEqual({ xUm: 216_000, yUm: 186_000 });
+  });
+
+  it("refuses to step a unit that cannot fit the printable area", () => {
+    expect(
+      nudgeAcceptedPlatePosition({
+        bedWidthUm: 50_000,
+        bedDepthUm: 50_000,
+        marginUm: 4_000,
+        unitWidthUm: 60_000,
+        unitDepthUm: 10_000,
+        xUm: 4_000,
+        yUm: 4_000,
+        deltaXUm: 1_000,
+        deltaYUm: 0,
+      }),
+    ).toBeNull();
   });
 });
