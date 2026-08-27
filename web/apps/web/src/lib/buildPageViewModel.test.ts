@@ -55,7 +55,7 @@ const review: PlanReview = {
 };
 
 describe("buildPageDerivedState", () => {
-  it("builds header, warnings, next step, and archive state", () => {
+  it("builds the header line and archive state", () => {
     const state = buildPageDerivedState({
       selectedProfile: profile,
       review,
@@ -67,9 +67,8 @@ describe("buildPageDerivedState", () => {
 
     expect(state.partCount).toBe(2);
     expect(state.headerSubtitle).toContain("2 parts");
-    expect(state.planNextStep == null || typeof state.planNextStep === "string").toBe(true);
+    expect(state.headerSubtitle).toContain("1 source");
     expect(state.archiveAllowed).toBe(false);
-    expect(Array.isArray(state.planWarnings)).toBe(true);
   });
 
   it("falls back to review part totals when the profile count is absent", () => {

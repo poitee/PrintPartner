@@ -1,10 +1,8 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { PlanDraftWorkspace } from "@print-partner/contracts";
 import { EngineHttpError } from "../api/engineTransport";
-import PlanDraftApplyButton from "../components/build/PlanDraftApplyButton";
 import {
   planDraftProductionBlockFromError,
   planDraftRevisionPartLabels,
@@ -24,7 +22,11 @@ const readyWorkspace: PlanDraftWorkspace = {
   reconciliation: { kind: "ready", reused_units: 0, new_units: 0, surplus_units: 0 },
 };
 
-describe("Working Plan acceptance control", () => {
+/**
+ * Sources no longer owns Working Plan acceptance — Plan does. What remains here
+ * are the pure helpers that read a Working Plan for either workspace.
+ */
+describe("Working Plan helpers", () => {
   it("recognizes a production block that can be retried with remapping", () => {
     expect(planDraftProductionBlockFromError(new EngineHttpError(
       "Production is active",
@@ -81,41 +83,5 @@ describe("Working Plan acceptance control", () => {
       [31, "accepted-before.stl"],
       [32, "accepted-removed.stl"],
     ]));
-  });
-
-  it("is disabled for unresolved reconciliation and a stale accepted base", () => {
-    const onApply = vi.fn();
-    const onRebase = vi.fn();
-    const unresolved: PlanDraftWorkspace = {
-      ...readyWorkspace,
-      reconciliation: { kind: "unresolved", conflicts: [] },
-    };
-    const first = render(
-      <PlanDraftApplyButton
-        workspace={unresolved}
-        busy={false}
-        onApply={onApply}
-        onRebase={onRebase}
-      />,
-    );
-    expect(screen.getByRole("button", { name: "Accept Working Plan" }).hasAttribute("disabled")).toBe(true);
-    first.unmount();
-
-    const stale: PlanDraftWorkspace = {
-      ...readyWorkspace,
-      diff: { ...readyWorkspace.diff, base_is_current: false },
-    };
-    render(
-      <PlanDraftApplyButton
-        workspace={stale}
-        busy={false}
-        onApply={onApply}
-        onRebase={onRebase}
-      />,
-    );
-    expect(screen.getByRole("button", { name: "Accept Working Plan" }).hasAttribute("disabled")).toBe(true);
-    fireEvent.click(screen.getByRole("button", { name: "Refresh Working Plan" }));
-    expect(onRebase).toHaveBeenCalledOnce();
-    expect(onApply).not.toHaveBeenCalled();
   });
 });

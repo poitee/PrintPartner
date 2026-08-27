@@ -11,27 +11,26 @@ import {
   Pencil,
   Trash2,
 } from "lucide-react";
-import PlanFreshnessNotice from "../components/PlanFreshnessNotice";
 import MergeConflictBanner from "../components/MergeConflictBanner";
 import PlanSpecialRequestField from "../components/PlanSpecialRequestField";
 import BuildSourcesPanel from "../components/build/BuildSourcesPanel";
 import BuildRecipePanel from "../components/build/BuildRecipePanel";
 import PlanRolesCard from "../components/build/PlanRolesCard";
-import PlanWarningsCard from "../components/build/PlanWarningsCard";
-import PlanCategoryDropStrip from "../components/build/PlanCategoryDropStrip";
 import BuildPlanningCard from "../components/build/BuildPlanningCard";
-import BuildWorkflowNextAction from "../components/build/BuildWorkflowNextAction";
+import BuildSummaryHeader from "../components/build/BuildSummaryHeader";
+import { useBuildPlanningQuery } from "../components/build/useBuildPlanningQuery";
 import EmptyState from "../components/layout/EmptyState";
 import PageHeader from "../components/layout/PageHeader";
 import PageHeaderActions from "../components/layout/PageHeaderActions";
 import PageShell from "../components/layout/PageShell";
+import TaskList, { type WorkflowTask } from "../components/layout/TaskList";
 import KitManifestOptions from "../components/KitManifestOptions";
 import SourceCategorySheet from "../components/sources/SourceCategorySheet";
 import SourceFilePickerCard from "../components/SourceFilePickerCard";
 import ShareImportSetupPanel, {
   type UnmatchedSource,
 } from "../components/share/ShareImportSetupPanel";
-import type { StlNamingProfile } from "@print-partner/contracts";
+import type { PlanStaleReason, StlNamingProfile } from "@print-partner/contracts";
 import { DEFAULT_STL_NAMING_PROFILE } from "@print-partner/contracts";
 import type { KitImportJobResult } from "../api/endpoints/imports";
 import { Badge } from "../components/ui/badge";
@@ -51,6 +50,7 @@ import {
   CardTitle,
 } from "../components/ui/card";
 import { fetchStlNaming } from "../api/endpoints/stlNaming";
+import { startSync } from "../api/endpoints/jobs";
 import type { ProfileLayer } from "../api/endpoints/plans";
 import type { RoleFilamentRow } from "../api/endpoints/filaments";
 import {
@@ -59,6 +59,7 @@ import {
   type SourceSummary,
 } from "../queries/sources";
 import { useSourceCategoriesQuery } from "../queries/sourceCategories";
+import { queryKeys } from "../queries/keys";
 import {
   invalidatePlanStructure,
   useAddPlanAddonLayerMutation,
@@ -67,7 +68,7 @@ import {
   useReplacePlanLayerMutation,
   useSetPlanBaseLayerMutation,
 } from "../queries/planLayers";
-import { exportRoute, libraryRoute } from "../lib/routes";
+import { libraryRoute, planRoute, settingsRoute } from "../lib/routes";
 import { groupMergeConflictsByFilename } from "../lib/mergeConflictGroups";
 import { takeKitImportResult } from "../lib/kitImportStash";
 import { useProfileSelection } from "../context/ProfileContext";
@@ -76,8 +77,15 @@ import { usePlanWorkspace } from "../context/PlanWorkspaceContext";
 import { useImportRulesSaveRegistry } from "../context/ImportRulesSaveContext";
 import { useKitManifestSaveRegistry } from "../context/KitManifestSaveContext";
 import { useEngineHealth } from "../hooks/useEngineHealth";
+import { useJobRunner } from "../hooks/useJobRunner";
 import { meshColorForStlPath } from "../lib/rolePreviewColor";
 import { buildPageDerivedState } from "../lib/buildPageViewModel";
+import {
+  sourcesSetupTasks,
+  type SourcesSetupAction,
+  type SourcesSetupHandlerId,
+  type SourcesSetupSource,
+} from "../lib/sourcesSetupTasks";
 import {
   getBackgroundError,
   resolveEngineState,
@@ -98,10 +106,24 @@ type BuildLocationState = {
 const EMPTY_SOURCES: SourceSummary[] = [];
 const EMPTY_LAYERS: ProfileLayer[] = [];
 
+/** Move the reader to a section and let a screen reader announce it. */
+function revealSection(id: string) {
+  const element = document.getElementById(id);
+  if (!element) return;
+  element.scrollIntoView({ behavior: "smooth", block: "start" });
+  if (!element.hasAttribute("tabindex")) element.setAttribute("tabindex", "-1");
+  element.focus({ preventScroll: true });
+}
+
 export default function BuildPage() {
   return <BuildPageContent />;
 }
 
+/**
+ * Sources is a setup workspace. It answers "are the inputs ready for a Plan?"
+ * with a task list, one primary action, the attached sources, and the advanced
+ * settings behind a disclosure. Working Plan review and acceptance live on Plan.
+ */
 function BuildPageContent() {
   const location = useLocation();
   const { health, error: engineError, loading: healthLoading } = useEngineHealth();
@@ -137,6 +159,9 @@ function BuildPageContent() {
   const [roleFilaments, setRoleFilaments] = useState<RoleFilamentRow[]>([]);
   const [namingProfile, setNamingProfile] = useState<StlNamingProfile>(DEFAULT_STL_NAMING_PROFILE);
   const [attachOpen, setAttachOpen] = useState(false);
+  const [assistantOpen, setAssistantOpen] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const [workingPlanNotice, setWorkingPlanNotice] = useState<string | null>(null);
   const engineState = resolveEngineState({
     health,
     loading: healthLoading,
@@ -156,6 +181,8 @@ function BuildPageContent() {
   const replaceLayerMutation = useReplacePlanLayerMutation(layerProfileId);
   const deleteLayerMutation = useDeletePlanLayerMutation(layerProfileId);
   const updateSourceMutation = useUpdateSourceMutation();
+  const planningQuery = useBuildPlanningQuery(selectedProfileId);
+  const syncJob = useJobRunner("sync");
   const sourceQueryError =
     sourcesQuery.error instanceof Error
       ? sourcesQuery.error.message
@@ -263,6 +290,8 @@ function BuildPageContent() {
       setPendingBaseSourceId("");
       setRoleFilaments([]);
       setLoadError(null);
+      setSyncError(null);
+      setWorkingPlanNotice(null);
     }
   }, [selectedProfileId]);
 
@@ -321,7 +350,6 @@ function BuildPageContent() {
   const {
     partCount,
     archiveAllowed,
-    planWarnings,
     headerSubtitle,
   } = buildPageDerivedState({
     selectedProfile,
@@ -364,29 +392,235 @@ function BuildPageContent() {
     profileDataState === "ready" &&
     sourcesState === "ready";
 
-  const onUpdateBuild = async () => {
-    if (selectedProfileId == null) return;
-    try {
-      await flushPendingSaves();
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e));
-      return;
-    }
-    setDraftActionBusy(true);
-    try {
-      const workspace = await startPlanDraft();
-      setFilamentRefreshKey((key) => key + 1);
-      toast.success(
-        `Saved Working Plan with ${workspace.diff.added.length + workspace.diff.changed.length + workspace.diff.removed.length} change(s)`,
-      );
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : String(error));
-    } finally {
-      setDraftActionBusy(false);
-    }
-  };
-
   const busy = draftActionBusy;
+
+  const onUpdateBuild = useCallback(
+    async (options?: { automatic?: boolean }) => {
+      if (selectedProfileId == null) return;
+      try {
+        await flushPendingSaves();
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : String(e));
+        return;
+      }
+      setDraftActionBusy(true);
+      try {
+        const workspace = await startPlanDraft();
+        setFilamentRefreshKey((key) => key + 1);
+        const changeCount =
+          workspace.diff.added.length +
+          workspace.diff.changed.length +
+          workspace.diff.removed.length;
+        setWorkingPlanNotice(
+          options?.automatic
+            ? `Sources changed, so the Working Plan was updated. ${changeCount} ${changeCount === 1 ? "change" : "changes"} to review on Plan.`
+            : `Working Plan updated with ${changeCount} ${changeCount === 1 ? "change" : "changes"}. Review it on Plan.`,
+        );
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : String(error));
+      } finally {
+        setDraftActionBusy(false);
+      }
+    },
+    [flushPendingSaves, selectedProfileId, startPlanDraft],
+  );
+
+  const reviewLayerById = useMemo(() => {
+    const map = new Map<number, { synced: boolean }>();
+    for (const layer of review?.layers ?? []) map.set(layer.id, { synced: layer.synced });
+    return map;
+  }, [review]);
+
+  const setupSources = useMemo<SourcesSetupSource[]>(
+    () =>
+      sourceCardLayers.map((row) => {
+        const source = sourceById.get(row.sourceId);
+        const reviewLayer = reviewLayerById.get(row.layer.id);
+        return {
+          id: row.sourceId,
+          name: row.sourceName,
+          layerType: row.layerType,
+          synced: reviewLayer ? reviewLayer.synced : Boolean(source?.local_path),
+          updatesAvailable: source?.update_status === "updates_available",
+        };
+      }),
+    [sourceCardLayers, sourceById, reviewLayerById],
+  );
+
+  const syncTargets = useMemo(
+    () =>
+      setupSources
+        .filter((source) => !source.synced || source.updatesAvailable)
+        .map((source) => source.id),
+    [setupSources],
+  );
+
+  const syncAttachedSources = useCallback(async () => {
+    const ids = syncTargets.length > 0 ? syncTargets : setupSources.map((s) => s.id);
+    if (ids.length === 0) return;
+    setSyncError(null);
+    await syncJob.runJob(
+      () => startSync(ids),
+      (snapshot) => {
+        if (snapshot.status === "error") {
+          setSyncError(
+            snapshot.message ??
+              "Sync failed. The attached sources were left unchanged.",
+          );
+          return;
+        }
+        void sourcesQuery.refetch();
+        if (selectedProfileId != null) {
+          void invalidatePlanStructure(queryClient, selectedProfileId);
+          void queryClient.invalidateQueries({
+            queryKey: queryKeys.buildWorkflow(selectedProfileId),
+          });
+        }
+        void refreshPlan();
+      },
+      { sourceIds: ids, profileId: selectedProfileId },
+    );
+  }, [
+    queryClient,
+    refreshPlan,
+    selectedProfileId,
+    setupSources,
+    sourcesQuery,
+    syncJob,
+    syncTargets,
+  ]);
+
+  const setup = useMemo(
+    () =>
+      sourcesSetupTasks({
+        buildId: selectedProfileId ?? 0,
+        specialRequest: selectedProfile?.special_request,
+        sources: setupSources,
+        partCount,
+        reviewIssues: review?.issues ?? [],
+        mergeConflictCount: mergeConflicts.length,
+        roleFilaments,
+        freshness: selectedProfile?.freshness ?? null,
+        planning: planningQuery.data ?? null,
+        syncing: syncJob.busy,
+        updatingWorkingPlan: busy,
+      }),
+    [
+      busy,
+      mergeConflicts.length,
+      partCount,
+      planningQuery.data,
+      review,
+      roleFilaments,
+      selectedProfile,
+      selectedProfileId,
+      setupSources,
+      syncJob.busy,
+    ],
+  );
+
+  const runSetupHandler = useCallback(
+    (handler: SourcesSetupHandlerId) => {
+      switch (handler) {
+        case "confirm_request": {
+          revealSection("build-request");
+          const field = document.getElementById(
+            `plan-special-request-${selectedProfileId ?? 0}`,
+          );
+          if (field instanceof HTMLInputElement) field.focus();
+          return;
+        }
+        case "attach_source":
+          if (!needsBaseSource) setAttachOpen(true);
+          revealSection("attached-sources");
+          return;
+        case "sync_sources":
+          void syncAttachedSources();
+          return;
+        case "resolve_differences":
+          revealSection("attached-sources");
+          return;
+        case "assign_colors":
+          revealSection("materials");
+          return;
+        case "review_assistant":
+          setAssistantOpen(true);
+          revealSection("assistant-changes");
+          return;
+        case "update_working_plan":
+          void onUpdateBuild();
+          return;
+        default: {
+          const exhaustive: never = handler;
+          return exhaustive;
+        }
+      }
+    },
+    [needsBaseSource, onUpdateBuild, selectedProfileId, syncAttachedSources],
+  );
+
+  const tasks = useMemo<WorkflowTask[]>(
+    () =>
+      setup.tasks.map((task) => {
+        const action = task.action;
+        const base: WorkflowTask = {
+          id: task.id,
+          label: task.label,
+          hint: task.hint,
+          state: task.state,
+          statusLabel: task.statusLabel,
+          error:
+            task.id === "sync-sources" && syncError
+              ? {
+                  message: syncError,
+                  onRetry: () => void syncAttachedSources(),
+                  retryLabel: "Retry sync",
+                }
+              : undefined,
+        };
+        if (!action) return base;
+        if (action.kind === "route") return { ...base, to: action.to };
+        return {
+          ...base,
+          actionLabel: action.label,
+          onAction: () => runSetupHandler(action.handler),
+        };
+      }),
+    [runSetupHandler, setup.tasks, syncAttachedSources, syncError],
+  );
+
+  // Rebuilding after a settled source revision change is safe and needs no
+  // decision, so do it instead of asking for a button press. Anything else
+  // (conflicts, untracked inputs, an open Working Plan) stays a task.
+  const autoUpdateSignatureRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!workspaceReady || selectedProfileId == null) return;
+    if (busy || syncJob.busy) return;
+    if (mergeConflicts.length > 0) return;
+    const freshness = selectedProfile?.freshness;
+    if (freshness?.status !== "stale") return;
+    const changed = freshness.reasons.filter(
+      (reason): reason is Extract<PlanStaleReason, { kind: "source_revision_changed" }> =>
+        reason.kind === "source_revision_changed",
+    );
+    if (changed.length !== freshness.reasons.length) return;
+    const signature = `${selectedProfileId}:${changed
+      .map((reason) => `${reason.source_id}@${reason.current_revision_id}`)
+      .join(",")}`;
+    if (autoUpdateSignatureRef.current === signature) return;
+    autoUpdateSignatureRef.current = signature;
+    void onUpdateBuild({ automatic: true });
+  }, [
+    busy,
+    mergeConflicts.length,
+    onUpdateBuild,
+    selectedProfile,
+    selectedProfileId,
+    syncJob.busy,
+    workspaceReady,
+  ]);
+
+  const primaryAction: SourcesSetupAction = setup.primary.action;
 
   const onChangeLayerProject = async (layer: ProfileLayer, projectId: number) => {
     if (selectedProfileId == null) return;
@@ -447,22 +681,28 @@ function BuildPageContent() {
         description={headerSubtitle}
         actions={workspaceReady ? (
           <PageHeaderActions>
-            <Button
-              className="min-h-10 w-full sm:w-auto"
-              onClick={() => void onUpdateBuild()}
-              disabled={selectedProfileId == null || busy || !engineReady}
-              loading={busy}
-            >
-              {busy ? "Building…" : "Build Working Plan"}
-            </Button>
+            {primaryAction.kind === "route" ? (
+              <Button className="min-h-11 w-full sm:w-auto" asChild>
+                <Link to={primaryAction.to}>{primaryAction.label}</Link>
+              </Button>
+            ) : (
+              <Button
+                className="min-h-11 w-full sm:w-auto"
+                onClick={() => runSetupHandler(primaryAction.handler)}
+                disabled={busy || !engineReady}
+                loading={busy || syncJob.busy}
+              >
+                {primaryAction.label}
+              </Button>
+            )}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="min-h-10 w-10"
+                  className="min-h-11 w-11"
                   disabled={selectedProfileId == null || !engineReady}
-                  aria-label="Plan actions"
+                  aria-label="Build actions"
                 >
                   <MoreHorizontal className="h-4 w-4" />
                 </Button>
@@ -504,7 +744,7 @@ function BuildPageContent() {
         ) : undefined}
       />
 
-      <BuildWorkflowNextAction currentStageId="sources" />
+      <BuildSummaryHeader currentStageId="sources" />
 
       {(profilesBackgroundError ||
         profileDataBackgroundError ||
@@ -512,10 +752,10 @@ function BuildPageContent() {
         categoryError) && (
         <div className="space-y-1 text-sm text-destructive" role="alert">
           {profilesBackgroundError && (
-            <p>Could not refresh plans: {profilesBackgroundError}</p>
+            <p>Could not refresh Builds: {profilesBackgroundError}</p>
           )}
           {profileDataBackgroundError && (
-            <p>Could not refresh plan: {profileDataBackgroundError}</p>
+            <p>Could not refresh this Build: {profileDataBackgroundError}</p>
           )}
           {sourcesBackgroundError && (
             <p>Could not refresh sources: {sourcesBackgroundError}</p>
@@ -524,43 +764,35 @@ function BuildPageContent() {
         </div>
       )}
 
-      {workspaceReady && selectedProfileId != null && (
-        <PlanSpecialRequestField
-          profileId={selectedProfileId}
-          value={selectedProfile?.special_request}
-          className="max-w-xl"
+      {workspaceReady && (
+        <TaskList
+          title="Setup tasks"
+          description={
+            setup.ready
+              ? "The inputs are ready. Review the Working Plan on Plan."
+              : "Get the inputs ready before the Plan is reviewed."
+          }
+          tasks={tasks}
         />
       )}
 
-      {workspaceReady && selectedProfileId != null && (
-        <p className="rounded-md border border-border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
-          Export STLs and Share live on{" "}
+      {workspaceReady && workingPlanNotice && (
+        <p
+          className="rounded-md border border-info/30 bg-info-soft px-3 py-2 text-sm text-info"
+          role="status"
+        >
+          {workingPlanNotice}{" "}
           <Link
-            to={exportRoute(selectedProfileId)}
-            className="font-medium text-primary underline-offset-2 hover:underline"
+            to={planRoute(selectedProfileId)}
+            className="font-medium underline underline-offset-2"
           >
-            Production
+            Open Plan
           </Link>
-          .
         </p>
-      )}
-
-      {workspaceReady && selectedProfile && (
-        <PlanFreshnessNotice
-          freshness={selectedProfile.freshness}
-          action={{ kind: "rebuild", busy, onRebuild: () => void onUpdateBuild() }}
-        />
       )}
 
       {workspaceReady && draftError && (
         <p className="text-sm text-destructive" role="alert">{draftError}</p>
-      )}
-
-      {workspaceReady && !buildStale && mergeConflicts.length > 0 && (
-        <MergeConflictBanner
-          conflictCount={mergeConflicts.length}
-          groupedByFilename={mergeConflictGroups}
-        />
       )}
 
       {engineState !== "ready" ? (
@@ -568,7 +800,7 @@ function BuildPageContent() {
           <CardContent className="pt-6">
             <p className="text-sm text-muted-foreground">
               {engineState === "offline"
-                ? "Engine offline — start the print-partner engine to edit a plan."
+                ? "Engine offline — start the print-partner engine to edit a Build."
                 : "Connecting to the engine…"}
             </p>
           </CardContent>
@@ -577,7 +809,7 @@ function BuildPageContent() {
         <Card className="border-destructive/40 bg-destructive/5 shadow-none">
           <CardContent className="space-y-3 pt-6">
             <p className="text-sm text-destructive">
-              Could not load plans: {profilesError}
+              Could not load Builds: {profilesError}
             </p>
             <Button size="sm" variant="secondary" onClick={() => void reloadProfiles()}>
               Retry
@@ -587,13 +819,13 @@ function BuildPageContent() {
       ) : profilesState === "loading" ? (
         <Card className="border-border shadow-sm">
           <CardContent className="pt-6">
-            <p className="text-sm text-muted-foreground">Loading plans…</p>
+            <p className="text-sm text-muted-foreground">Loading Builds…</p>
           </CardContent>
         </Card>
       ) : profiles.length === 0 ? (
         <EmptyState
           icon={Hammer}
-          title="No plan yet"
+          title="No Build yet"
           description="Use New Build in the sidebar (or the + button on mobile) to name a Build, then attach sources and pick STL files below."
           action={{
             label: "New Build",
@@ -603,8 +835,8 @@ function BuildPageContent() {
       ) : selectedProfileId == null ? (
         <EmptyState
           icon={Hammer}
-          title="Select a plan"
-          description="Choose a plan in the sidebar plan picker (or the mobile plan switcher in the header)."
+          title="Select a Build"
+          description="Choose a Build in the sidebar picker (or the mobile Build switcher in the header)."
         />
       ) : sourcesState === "loading" ? (
         <Card className="border-border shadow-sm">
@@ -630,14 +862,14 @@ function BuildPageContent() {
       ) : profileDataState === "loading" ? (
         <Card className="border-border shadow-sm">
           <CardContent className="pt-6">
-            <p className="text-sm text-muted-foreground">Loading plan…</p>
+            <p className="text-sm text-muted-foreground">Loading this Build…</p>
           </CardContent>
         </Card>
       ) : profileDataState === "error" ? (
         <Card className="border-destructive/40 bg-destructive/5 shadow-none">
           <CardContent className="space-y-3 pt-6">
             <p className="text-sm text-destructive">
-              Could not load plan: {profileDataError}
+              Could not load this Build: {profileDataError}
             </p>
             <Button
               size="sm"
@@ -673,7 +905,22 @@ function BuildPageContent() {
 
       {workspaceReady && selectedProfileId != null && (
         <div className="space-y-6">
-          <section className="space-y-3">
+          <section id="build-request" className="space-y-2">
+            <h2 className="text-sm font-semibold tracking-wide">Build request</h2>
+            <label
+              htmlFor={`plan-special-request-${selectedProfileId}`}
+              className="block text-xs text-muted-foreground"
+            >
+              Special request for this Build
+            </label>
+            <PlanSpecialRequestField
+              profileId={selectedProfileId}
+              value={selectedProfile?.special_request}
+              className="max-w-xl"
+            />
+          </section>
+
+          <section id="attached-sources" className="space-y-3">
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-sm font-semibold tracking-wide">
                 Attached sources
@@ -684,26 +931,25 @@ function BuildPageContent() {
                   disabled={!engineReady || busy}
                 />
                 <Button
-                  variant="ghost"
+                  type="button"
+                  variant="secondary"
                   size="sm"
-                  type="button"
-                  className="h-7 px-2 text-xs"
-                  onClick={() => setCategoriesSheetOpen(true)}
-                >
-                  Categories…
-                </Button>
-                <button
-                  type="button"
-                  className="text-xs font-semibold text-primary hover:underline"
                   onClick={() => setAttachOpen((v) => !v)}
                 >
                   Attach another
-                </button>
+                </Button>
                 <Button variant="link" className="h-auto p-0 text-xs" asChild>
                   <Link to={libraryRoute()}>Library</Link>
                 </Button>
               </div>
             </div>
+
+            {mergeConflicts.length > 0 && (
+              <MergeConflictBanner
+                conflictCount={mergeConflicts.length}
+                groupedByFilename={mergeConflictGroups}
+              />
+            )}
 
             {needsBaseSource && (
               <Card className="border-dashed">
@@ -715,8 +961,8 @@ function BuildPageContent() {
                     <div className="min-w-0 flex-1 space-y-1">
                       <CardTitle className="text-sm">Choose base source</CardTitle>
                       <CardDescription className="text-xs">
-                        Pick the main kit project for this plan before adding addons or importing
-                        files.
+                        Pick the main kit project for this Build before adding addons or
+                        importing files.
                       </CardDescription>
                     </div>
                   </div>
@@ -733,6 +979,8 @@ function BuildPageContent() {
                   />
                   <Button
                     size="sm"
+                    variant="secondary"
+                    className="min-h-11"
                     onClick={() => void onSetBaseSource()}
                     disabled={!pendingBaseSourceId || selectedProfileId == null || !engineReady}
                   >
@@ -743,46 +991,27 @@ function BuildPageContent() {
             )}
 
             <div className="flex flex-col gap-2">
-              <PlanCategoryDropStrip
-                categories={categories}
-                onDropSourceCategory={(sourceId, category) =>
-                  void assignSourceCategory(sourceId, category)
-                }
-              />
-              {sourceCardLayers.map((row) => {
-                return (
-                  <SourceFilePickerCard
-                    key={row.key}
-                    sourceId={row.sourceId}
-                    sourceName={row.sourceName}
-                    layerType={row.layerType}
-                    source={sourceById.get(row.sourceId) ?? null}
-                    allSources={sources}
-                    disabled={!engineReady || busy}
-                    onChangeSource={(projectId) => void onChangeLayerProject(row.layer, projectId)}
-                    onAssignCategory={(category) =>
-                      void assignSourceCategory(row.sourceId, category)
-                    }
-                    onRemove={
-                      row.layerType === "addon"
-                        ? () => void onRemoveLayer(row.layer)
-                        : undefined
-                    }
-                    expandedExtra={
-                      row.layerType === "base" ? (
-                        <KitManifestOptions
-                          profileId={selectedProfileId}
-                          baseSourceName={row.sourceName}
-                          buildStale={buildStale}
-                          disabled={!engineReady || busy}
-                          compact
-                        />
-                      ) : undefined
-                    }
-                    meshColorForPath={resolvePreviewMeshColor}
-                  />
-                );
-              })}
+              {sourceCardLayers.map((row) => (
+                <SourceFilePickerCard
+                  key={row.key}
+                  sourceId={row.sourceId}
+                  sourceName={row.sourceName}
+                  layerType={row.layerType}
+                  source={sourceById.get(row.sourceId) ?? null}
+                  allSources={sources}
+                  disabled={!engineReady || busy}
+                  onChangeSource={(projectId) => void onChangeLayerProject(row.layer, projectId)}
+                  onAssignCategory={(category) =>
+                    void assignSourceCategory(row.sourceId, category)
+                  }
+                  onRemove={
+                    row.layerType === "addon"
+                      ? () => void onRemoveLayer(row.layer)
+                      : undefined
+                  }
+                  meshColorForPath={resolvePreviewMeshColor}
+                />
+              ))}
             </div>
 
             {(attachOpen || addonSourceId) && (
@@ -804,12 +1033,13 @@ function BuildPageContent() {
                   searchPlaceholder="Search sources…"
                   emptyText="No sources match."
                   options={addonComboboxOptions}
-                  className="min-h-10 w-full min-w-0 flex-1 sm:w-auto"
+                  className="min-h-11 w-full min-w-0 flex-1 sm:w-auto"
                   contentClassName="min-w-[16rem]"
                 />
                 <Button
                   size="sm"
-                  className="min-h-10 w-full sm:w-auto"
+                  variant="secondary"
+                  className="min-h-11 w-full sm:w-auto"
                   onClick={() => {
                     void onAddAddon();
                     setAttachOpen(false);
@@ -820,41 +1050,72 @@ function BuildPageContent() {
                 </Button>
               </div>
             )}
-            <div className="flex justify-end border-t border-border pt-3">
-              <Button
-                onClick={() => void onUpdateBuild()}
-                disabled={selectedProfileId == null || busy || !engineReady}
-                loading={busy}
-              >
-                {busy ? "Building…" : "Build Working Plan"}
-              </Button>
-            </div>
           </section>
 
-          <section className="space-y-3">
-            <h2 className="text-sm font-semibold tracking-wide">Planning</h2>
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-              <PlanRolesCard
-                profileId={selectedProfileId}
-                disabled={!engineReady || busy}
-                refreshKey={filamentRefreshKey}
-                roleFilaments={roleFilaments}
-                onRolesChange={setRoleFilaments}
-                onUpdated={onRoleFilamentsUpdated}
-              />
-              <PlanWarningsCard warnings={planWarnings} />
-            </div>
-            <details className="group" open={partCount === 0}>
-              <summary className="cursor-pointer select-none text-sm text-muted-foreground transition-colors hover:text-foreground">
-                AI Build planning
-              </summary>
-              <div className="mt-3">
-                <BuildPlanningCard planId={selectedProfileId} />
+          <section id="materials" className="space-y-3">
+            <h2 className="text-sm font-semibold tracking-wide">Materials and colors</h2>
+            <PlanRolesCard
+              profileId={selectedProfileId}
+              disabled={!engineReady || busy}
+              refreshKey={filamentRefreshKey}
+              roleFilaments={roleFilaments}
+              onRolesChange={setRoleFilaments}
+              onUpdated={onRoleFilamentsUpdated}
+            />
+          </section>
+
+          {planningQuery.data ? (
+            <section id="assistant-changes" className="space-y-3">
+              <h2 className="text-sm font-semibold tracking-wide">Assistant changes</h2>
+              <details open={assistantOpen} onToggle={(e) => setAssistantOpen(e.currentTarget.open)}>
+                <summary className="cursor-pointer select-none text-sm text-muted-foreground transition-colors hover:text-foreground">
+                  What the assistant proposed
+                </summary>
+                <div className="mt-3">
+                  <BuildPlanningCard planId={selectedProfileId} />
+                </div>
+              </details>
+            </section>
+          ) : null}
+
+          <details id="advanced-source-settings" className="rounded-lg border border-border bg-card/40 p-4">
+            <summary className="cursor-pointer select-none text-sm font-semibold text-foreground">
+              Advanced source settings
+            </summary>
+            <div className="mt-4 space-y-4">
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  type="button"
+                  className="min-h-11"
+                  onClick={() => setCategoriesSheetOpen(true)}
+                >
+                  Source categories…
+                </Button>
+                <Button variant="secondary" size="sm" className="min-h-11" asChild>
+                  <Link to={`${settingsRoute()}#stl-naming`}>Part naming rules</Link>
+                </Button>
+                {categories.length > 0 ? (
+                  <p className="text-xs text-muted-foreground">
+                    {categories.length} categories in the Library.
+                  </p>
+                ) : null}
               </div>
-            </details>
-          </section>
 
-          <BuildRecipePanel profileId={selectedProfileId} />
+              {baseLayer?.project_id != null ? (
+                <KitManifestOptions
+                  profileId={selectedProfileId}
+                  baseSourceName={baseLayer.project_name ?? "base"}
+                  buildStale={buildStale}
+                  disabled={!engineReady || busy}
+                  compact
+                />
+              ) : null}
+
+              <BuildRecipePanel profileId={selectedProfileId} />
+            </div>
+          </details>
         </div>
       )}
 

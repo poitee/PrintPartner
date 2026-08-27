@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
 
-import { render, screen } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { cleanup, render, screen } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import BuildPlanningCard from "./BuildPlanningCard";
 
 const fetchBuildPlanningState = vi.hoisted(() => vi.fn());
@@ -9,11 +11,28 @@ vi.mock("../../api/endpoints/planManifests", async (loadOriginal) => ({
   ...(await loadOriginal<typeof import("../../api/endpoints/planManifests")>()),
   fetchBuildPlanningState,
 }));
+vi.mock("../../queries/buildWorkflow", () => ({
+  useBuildWorkflowQuery: () => ({ data: undefined }),
+}));
+
+function renderCard() {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  });
+  return render(
+    <QueryClientProvider client={client}>
+      <MemoryRouter>
+        <BuildPlanningCard planId={12} />
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+}
 
 describe("BuildPlanningCard", () => {
   beforeEach(() => fetchBuildPlanningState.mockReset());
+  afterEach(() => cleanup());
 
-  it("shows planning provenance, uploaded artifacts, and blockers", async () => {
+  it("summarises the proposal in human words and lists its decisions", async () => {
     fetchBuildPlanningState.mockResolvedValue({
       planning_phase: { kind: "preparing" },
       brief: {
@@ -40,16 +59,20 @@ describe("BuildPlanningCard", () => {
       difference_count: 7,
     });
 
-    render(<BuildPlanningCard planId={12} />);
+    renderCard();
+
     expect(
-      await screen.findByRole("heading", { name: "AI Build planning" }),
+      await screen.findByRole("heading", { name: "Assistant changes" }),
     ).toBeTruthy();
-    expect(screen.getByText("1 blockers")).toBeTruthy();
+    expect(screen.getByText("1 decision needed")).toBeTruthy();
+    expect(
+      screen.getByText(/2 file choices and 1 requirement to confirm/),
+    ).toBeTruthy();
     expect(screen.getByText(/project\.3mf/)).toBeTruthy();
     expect(screen.getAllByText("size: 350")).toHaveLength(2);
   });
 
-  it("shows a consumed MCP Working Plan as an Accepted Plan revision", async () => {
+  it("names an accepted revision instead of a second kind of draft", async () => {
     fetchBuildPlanningState.mockResolvedValue({
       planning_phase: { kind: "applied", draft_id: 11, revision_id: 4 },
       brief: {
@@ -65,9 +88,14 @@ describe("BuildPlanningCard", () => {
       difference_count: 0,
     });
 
-    render(<BuildPlanningCard planId={12} />);
-    expect(await screen.findByText("Accepted")).toBeTruthy();
+    renderCard();
+
+    expect(await screen.findByText("Applied")).toBeTruthy();
     expect(screen.getByText(/Accepted as Plan revision 4/)).toBeTruthy();
     expect(screen.queryByText("Ready for Plan review")).toBeNull();
+    expect(
+      screen.getByRole("link", { name: "Open Plan to review the Working Plan" })
+        .getAttribute("href"),
+    ).toBe("/plan?profile=12");
   });
 });

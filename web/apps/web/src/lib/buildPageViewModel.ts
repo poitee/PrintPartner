@@ -2,9 +2,7 @@ import type { ProfileSummary, SourceSummary } from "@print-partner/contracts";
 import type { RoleFilamentRow } from "../api/endpoints/filaments";
 import type { PlanReview } from "../api/endpoints/planManifests";
 import { canArchivePlan } from "./planPickerGroups";
-import { buildPlanWarningLines, planHeaderSubtitle } from "./planWarnings";
-import { planHasUnsetRoleColors } from "./roleColorSet";
-import { deskNextStepLine } from "./deskNextStep";
+import { planHeaderSubtitle } from "./planWarnings";
 import { checkoffUnitTotals } from "./checkoffProgress";
 
 export type BuildPageDerivedInput = {
@@ -19,12 +17,14 @@ export type BuildPageDerivedInput = {
 export type BuildPageDerivedState = {
   partCount: number;
   archiveAllowed: boolean;
-  planWarnings: string[];
-  colorsUnset: boolean;
-  planNextStep: string | null;
   headerSubtitle: string;
 };
 
+/**
+ * Page chrome for the Sources workspace: what the header says and which Build
+ * actions are legal. Setup status lives in `sourcesSetupTasks`, so warnings are
+ * not duplicated here as a second, quieter opinion.
+ */
 export function buildPageDerivedState(input: BuildPageDerivedInput): BuildPageDerivedState {
   const partCount = input.selectedProfile?.part_count ?? input.review?.totals.included_parts ?? 0;
   const includedForArchive =
@@ -35,30 +35,11 @@ export function buildPageDerivedState(input: BuildPageDerivedInput): BuildPageDe
     totalUnits: archiveTotals.totalUnits,
     remainingUnits: archiveTotals.remainingUnits,
   });
-  const planWarnings = buildPlanWarningLines({
-    buildStale: input.buildStale,
-    attachedSources: input.attachedSources,
-    review: input.review ?? null,
-    roleFilaments: input.roleFilaments,
-  });
-  const colorsUnset = planHasUnsetRoleColors(input.roleFilaments);
-  const planNextStep = deskNextStepLine("plan", {
-    attachedSourceCount: input.sourceCardLayerCount,
-    partCount,
-    colorsUnset,
-  });
   const headerSubtitle = planHeaderSubtitle({
     profile: input.selectedProfile,
     sourceCount: input.sourceCardLayerCount,
     partCount,
   });
 
-  return {
-    partCount,
-    archiveAllowed,
-    planWarnings,
-    colorsUnset,
-    planNextStep,
-    headerSubtitle,
-  };
+  return { partCount, archiveAllowed, headerSubtitle };
 }
