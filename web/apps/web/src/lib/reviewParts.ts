@@ -1,4 +1,5 @@
-import type { PartRow, PlanReview, PlanReviewPartGroup, ReviewPart } from "../api/engine";
+import type { PartRow } from "@print-partner/contracts";
+import type { PlanReview, PlanReviewPartGroup, ReviewPart } from "../api/endpoints/planManifests";
 
 /** Human-readable source name from `base:repo-name` / `addon:repo-name` layer labels. */
 export function sourceLabelFromLayer(sourceLayer: string | null | undefined): string {

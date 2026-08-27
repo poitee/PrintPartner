@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import {
   fetchSlicerInstances,
   type SlicerInstance,
-} from "../../api/engine";
+} from "../../api/endpoints/slicers";
 import {
   acceptedPlateErrorCode,
   fetchAcceptedPlateSlicerExchangeStatus,

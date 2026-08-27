@@ -4,7 +4,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
-import type { PlanReview } from "../../api/engine";
+import type { PlanReview } from "../../api/endpoints/planManifests";
 import { REVIEW_PARTS_UI_STORAGE_KEY } from "../../lib/persistedReviewPartsUi";
 import ReviewPartsSheet from "./ReviewPartsSheet";
 

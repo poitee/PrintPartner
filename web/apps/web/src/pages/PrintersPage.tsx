@@ -1,16 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { Printer } from "lucide-react";
+import type { PrinterHostStatus } from "@print-partner/contracts";
 import {
   fetchIntegrationStatus,
   fetchIntegrations,
-  fetchPrinterCheckoffLinks,
-  fetchPrinters,
   type IntegrationSummary,
+} from "../api/endpoints/integrations";
+import {
+  fetchPrinterCheckoffLinks,
   type PrinterCheckoffLink,
-  type PrinterHostStatus,
-  type PrinterMachine,
-} from "../api/engine";
+} from "../api/endpoints/checkoff";
+import { fetchPrinters, type PrinterMachine } from "../api/endpoints/printers";
 import PageHeader from "../components/layout/PageHeader";
 import PageHeaderActions from "../components/layout/PageHeaderActions";
 import PageShell from "../components/layout/PageShell";
@@ -38,6 +39,12 @@ import {
 } from "../lib/printerPlanBind";
 import { usePrinterStatusPollMs } from "../hooks/usePrinterStatusPollMs";
 import { exportRoute, settingsPrintersRoute } from "../lib/routes";
+import {
+  configuredHost,
+  formatTemperature,
+  formatUptime,
+  toneBadgeVariant,
+} from "../lib/printersPageModel";
 import { cn } from "@/lib/utils";
 
 const HOST_TYPES = new Set<LiveStripHostType>(["moonraker", "prusalink", "bambu"]);
@@ -47,49 +54,6 @@ type LinkedPrinter = {
   host: IntegrationSummary;
   hostType: LiveStripHostType;
 };
-
-function toneBadgeVariant(
-  tone: ReturnType<typeof printerLiveStripTone>,
-): "success" | "muted" | "default" | "warning" | "error" {
-  switch (tone) {
-    case "idle":
-    case "complete":
-      return "success";
-    case "printing":
-      return "default";
-    case "paused":
-      return "warning";
-    case "error":
-    case "offline":
-      return "error";
-    default:
-      return "muted";
-  }
-}
-
-function formatTemperature(current?: number, target?: number): string {
-  if (current == null) return "Unavailable";
-  const value = `${Math.round(current)}°C`;
-  return target != null && target > 0 ? `${value} / ${Math.round(target)}°C` : value;
-}
-
-function formatUptime(seconds?: number): string {
-  if (seconds == null) return "Unavailable";
-  const days = Math.floor(seconds / 86_400);
-  const hours = Math.floor((seconds % 86_400) / 3_600);
-  const minutes = Math.floor((seconds % 3_600) / 60);
-  return days > 0 ? `${days}d ${hours}h` : hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
-}
-
-function configuredHost(host: IntegrationSummary): string | undefined {
-  const raw = host.config.host ?? host.config.hostname ?? host.config.ip ?? host.config.base_url;
-  if (typeof raw !== "string" || !raw.trim()) return undefined;
-  try {
-    return new URL(raw).hostname;
-  } catch {
-    return raw.trim();
-  }
-}
 
 export default function PrintersPage() {
   const { health, error: engineError, loading: healthLoading } = useEngineHealth();

@@ -4,7 +4,8 @@
  * then falls back to stem counts (e.g. 5+3 by stem). Never auto-ticks Progress.
  */
 
-import type { PrinterCheckoffUnit, ReviewPart } from "../api/engine";
+import type { PrinterCheckoffUnit } from "../api/endpoints/checkoff";
+import type { ReviewPart } from "../api/endpoints/planManifests";
 import { incompleteUnitsForParts } from "./printerCheckoffUnits";
 
 export type ProposedObjectMatch = {

@@ -3,7 +3,7 @@ import type { AcceptedPlateView } from "@print-partner/contracts";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
-import { partMeshUrl } from "../../../api/engine";
+import { partMeshUrl } from "../../../api/endpoints/media";
 import { acceptedPlateUnitColor } from "../../../lib/acceptedPlateColor";
 
 const MAX_PREVIEW_PARTS = 40;

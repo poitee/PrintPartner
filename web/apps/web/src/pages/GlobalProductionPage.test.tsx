@@ -57,7 +57,7 @@ vi.mock("../context/ProfileContext", () => ({
     reloadProfiles: vi.fn(),
   }),
 }));
-vi.mock("../api/engine", () => ({
+vi.mock("../api/endpoints/checkoff", () => ({
   fetchPrinterCheckoffLinks: (...args: unknown[]) => api.fetchPrinterCheckoffLinks(...args),
   fetchUnattributedPrints: (...args: unknown[]) => api.fetchUnattributedPrints(...args),
 }));

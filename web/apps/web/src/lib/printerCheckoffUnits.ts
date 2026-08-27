@@ -1,5 +1,5 @@
-import type { ReviewPart } from "../api/engine";
-import type { PrinterCheckoffUnit } from "../api/engine";
+import type { PrinterCheckoffUnit } from "../api/endpoints/checkoff";
+import type { ReviewPart } from "../api/endpoints/planManifests";
 
 /** Incomplete Progress units for included missing parts (Export send mapping). */
 export function incompleteUnitsForParts(parts: ReviewPart[]): PrinterCheckoffUnit[] {

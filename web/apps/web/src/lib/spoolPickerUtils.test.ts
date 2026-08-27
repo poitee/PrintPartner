@@ -4,7 +4,7 @@ import {
   formatSpoolOptionLabel,
   partSpoolPickerVisibility,
 } from "./spoolPickerUtils";
-import type { SpoolmanSpoolRow } from "../api/engine";
+import type { SpoolmanSpoolRow } from "../api/endpoints/filaments";
 
 const spool = (id: number, filament_id: number, remaining_weight: number): SpoolmanSpoolRow => ({
   id,

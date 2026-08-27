@@ -11,12 +11,9 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
-import {
-  editPlanDraftParts,
-  type PlanDraftWorkspace,
-  type PlanReview,
-  type ReviewPart,
-} from "../../api/engine";
+import type { PlanDraftWorkspace } from "@print-partner/contracts";
+import { editPlanDraftParts } from "../../api/endpoints/planDrafts";
+import type { PlanReview, ReviewPart } from "../../api/endpoints/planManifests";
 import { queryKeys } from "../../queries/keys";
 import { PlanWorkspaceProvider, usePlanWorkspace } from "../../context/PlanWorkspaceContext";
 import {
@@ -76,8 +73,8 @@ const state = vi.hoisted(() => ({
   workspace: null as PlanDraftWorkspace | null,
 }));
 
-vi.mock("../../api/engine", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../api/engine")>();
+vi.mock("../../api/endpoints/planDrafts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../api/endpoints/planDrafts")>();
   return {
     ...actual,
     editPlanDraftParts: vi.fn(),
@@ -86,6 +83,13 @@ vi.mock("../../api/engine", async (importOriginal) => {
     applyPlanDraft: vi.fn(),
     abandonPlanDraft: vi.fn(),
     reconcilePlanDraft: vi.fn(),
+  };
+});
+
+vi.mock("../../api/endpoints/filaments", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../api/endpoints/filaments")>();
+  return {
+    ...actual,
     fetchSpoolmanSpools: vi.fn(async () => []),
   };
 });

@@ -7,8 +7,8 @@ import {
   verifyPrinterCheckoff,
   type PrintRejectReason,
   type PrinterCheckoffLink,
-  type ReviewPart,
-} from "../../api/engine";
+} from "../../api/endpoints/checkoff";
+import type { ReviewPart } from "../../api/endpoints/planManifests";
 import {
   buildPreviewRowsFromUnits,
   type ObjectPreviewRow,
@@ -42,6 +42,12 @@ type Props = {
   profileId: number | null;
   parts: ReviewPart[];
   refreshKey?: number;
+  activityLinks?: {
+    watching: PrinterCheckoffLink[];
+    awaiting: PrinterCheckoffLink[];
+    failed: PrinterCheckoffLink[];
+  };
+  onActivityRefresh?: () => void | Promise<void>;
   onVerified?: () => void;
   onQueueChange?: (state: PrintVerifyQueueState) => void;
   /**
@@ -81,6 +87,8 @@ export default function PrintVerifyPanel({
   profileId,
   parts,
   refreshKey = 0,
+  activityLinks,
+  onActivityRefresh,
   onVerified,
   onQueueChange,
   suppressIntegrationIds,
@@ -101,6 +109,10 @@ export default function PrintVerifyPanel({
   const suppressedHosts = suppressIntegrationIds ?? EMPTY_SUPPRESS_IDS;
 
   const reload = useCallback(async () => {
+    if (activityLinks) {
+      await onActivityRefresh?.();
+      return;
+    }
     if (!engineReady || profileId == null) {
       setWatchingLinks([]);
       setLinks([]);
@@ -119,27 +131,32 @@ export default function PrintVerifyPanel({
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
     }
-  }, [engineReady, profileId]);
+  }, [activityLinks, engineReady, onActivityRefresh, profileId]);
 
   useEffect(() => {
+    if (activityLinks) return;
     void reload();
-  }, [reload, refreshKey]);
+  }, [activityLinks, reload, refreshKey]);
+
+  const displayWatchingLinks = activityLinks?.watching ?? watchingLinks;
+  const displayLinks = activityLinks?.awaiting ?? links;
+  const displayFailedLinks = activityLinks?.failed ?? failedLinks;
 
   useEffect(() => {
     onQueueChangeRef.current?.({
-      awaitingCount: links.length,
-      watchingCount: watchingLinks.length,
-      primaryHostName: links[0]?.host_name ?? watchingLinks[0]?.host_name ?? null,
+      awaitingCount: displayLinks.length,
+      watchingCount: displayWatchingLinks.length,
+      primaryHostName: displayLinks[0]?.host_name ?? displayWatchingLinks[0]?.host_name ?? null,
     });
-  }, [links, watchingLinks]);
+  }, [displayLinks, displayWatchingLinks]);
 
   useEffect(() => {
     if (!rejectTarget) return;
-    const target = links.find((l) => l.id === rejectTarget.linkId);
+    const target = displayLinks.find((l) => l.id === rejectTarget.linkId);
     if (target && suppressedHosts.has(target.integration_id)) {
       setRejectTarget(null);
     }
-  }, [links, rejectTarget, suppressedHosts]);
+  }, [displayLinks, rejectTarget, suppressedHosts]);
 
   const runVerify = async (
     linkId: string,
@@ -184,7 +201,7 @@ export default function PrintVerifyPanel({
 
   const onSubmitReject = () => {
     if (!rejectTarget) return;
-    const link = links.find((l) => l.id === rejectTarget.linkId);
+    const link = displayLinks.find((l) => l.id === rejectTarget.linkId);
     if (!link) return;
     const units = pendingUnits(link);
     if (!units.length) return;
@@ -214,11 +231,11 @@ export default function PrintVerifyPanel({
 
   if (!engineReady || profileId == null) return null;
 
-  const showFailed = failedLinks.length > 0;
-  const actionableLinks = links.filter((l) => !suppressedHosts.has(l.integration_id));
-  const suppressedAwaiting = links.filter((l) => suppressedHosts.has(l.integration_id));
+  const showFailed = displayFailedLinks.length > 0;
+  const actionableLinks = displayLinks.filter((l) => !suppressedHosts.has(l.integration_id));
+  const suppressedAwaiting = displayLinks.filter((l) => suppressedHosts.has(l.integration_id));
   // Watching links always show proposal + printing (Confirm suppressed until finish).
-  const watchingForDisplay = watchingLinks.length > 0 ? watchingLinks : suppressedAwaiting;
+  const watchingForDisplay = displayWatchingLinks.length > 0 ? displayWatchingLinks : suppressedAwaiting;
   const showWatching = watchingForDisplay.length > 0;
   const showVerify = actionableLinks.length > 0;
 
@@ -228,7 +245,7 @@ export default function PrintVerifyPanel({
 
   return (
     <div className={cn("flex flex-col gap-2 print:hidden", className)}>
-      {failedLinks.map((link) => (
+      {displayFailedLinks.map((link) => (
         <div
           key={link.id}
           className="rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm"

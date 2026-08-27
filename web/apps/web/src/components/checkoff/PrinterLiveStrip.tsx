@@ -2,13 +2,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { Printer } from "lucide-react";
-import {
-  fetchIntegrationStatus,
-  fetchIntegrations,
-  fetchPrinters,
-  reconcilePrinterCheckoff,
-  type PrinterHostStatus,
-} from "../../api/engine";
+import type { PrinterHostStatus } from "@print-partner/contracts";
+import { fetchIntegrationStatus, fetchIntegrations } from "../../api/endpoints/integrations";
+import { fetchPrinters } from "../../api/endpoints/printers";
+import { reconcilePrinterCheckoff } from "../../api/endpoints/checkoff";
 import { settingsPrintersRoute } from "../../lib/routes";
 import {
   formatPrinterHostCaption,

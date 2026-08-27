@@ -8,7 +8,7 @@ import {
   type PartsManifestRow,
 } from "./partsManifest";
 import { parsePartsManifestXlsx, partsManifestToXlsxBlob } from "./partsManifestXlsx";
-import type { PlanReview } from "../api/engine";
+import type { PlanReview } from "../api/endpoints/planManifests";
 import type { SourceSummary } from "@print-partner/contracts";
 
 function sampleReview(): PlanReview {

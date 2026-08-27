@@ -1,5 +1,6 @@
 import { Check } from "lucide-react";
-import type { ReviewPart, RoleFilamentRow, SpoolmanSpoolRow } from "../../api/engine";
+import type { ReviewPart } from "../../api/endpoints/planManifests";
+import type { RoleFilamentRow, SpoolmanSpoolRow } from "../../api/endpoints/filaments";
 import type { ReviewViewMode } from "../../lib/persistedReviewPartsUi";
 import PartThumbExpandButton from "../parts/PartThumbExpandButton";
 import PartSpoolPicker from "../PartSpoolPicker";

@@ -1,5 +1,5 @@
 import { toast } from "sonner";
-import type { JobSnapshot } from "../api/engine";
+import type { JobSnapshot } from "@print-partner/contracts";
 import { completeExportDownload } from "./exportActions";
 type CompleteExportOptions = {
   pathField?: "path" | "root_path" | "primary_path";

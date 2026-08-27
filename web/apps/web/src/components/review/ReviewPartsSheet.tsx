@@ -7,8 +7,13 @@ import {
   useRef,
   useState,
 } from "react";
-import type { PlanReview, ReviewPart, RoleFilamentRow, SpoolmanSpoolRow, StlNamingFolderRule } from "../../api/engine";
-import { fetchSpoolmanSpools } from "../../api/engine";
+import type { StlNamingFolderRule } from "@print-partner/contracts";
+import type { PlanReview, ReviewPart } from "../../api/endpoints/planManifests";
+import {
+  fetchSpoolmanSpools,
+  type RoleFilamentRow,
+  type SpoolmanSpoolRow,
+} from "../../api/endpoints/filaments";
 import { usePlanWorkspace } from "../../context/PlanWorkspaceContext";
 import { useSpoolmanEnabled } from "../../hooks/useSpoolmanEnabled";
 import { groupCheckoffParts } from "../../lib/checkoffGroups";
@@ -41,6 +46,7 @@ import PartSpoolPicker from "../PartSpoolPicker";
 import SpoolRemainingBadge from "../SpoolRemainingBadge";
 import PartsGridCard from "./PartsGridCard";
 import ReviewSheetMobileCard from "./ReviewSheetMobileCard";
+import QuantityStepper from "./QuantityStepper";
 import { Button } from "../ui/button";
 import { cn } from "@/lib/utils";
 
@@ -54,60 +60,6 @@ type Props = {
 export type ReviewPartsSheetHandle = {
   print: () => Promise<void>;
 };
-
-function QuantityStepper({
-  part,
-  disabled,
-  onChange,
-}: {
-  part: ReviewPart;
-  disabled?: boolean;
-  onChange: (qty: number) => void;
-}) {
-  const qty = part.quantity_override ?? part.quantity_effective;
-  const belowPrinted = part.printed_count > qty;
-  return (
-    <div className="qty-control flex flex-col items-start gap-0.5">
-      <div className="flex items-center gap-1">
-        <button
-          type="button"
-          className="qty-btn"
-          disabled={disabled || qty <= 1}
-          onClick={() => onChange(qty - 1)}
-          aria-label={`Decrease quantity for ${part.filename}`}
-        >
-          −
-        </button>
-        <input
-          type="number"
-          className="qty-input"
-          min={1}
-          value={qty}
-          disabled={disabled}
-          onChange={(e) => {
-            const n = Number(e.target.value);
-            if (Number.isFinite(n)) onChange(n);
-          }}
-          aria-label={`Quantity for ${part.filename}`}
-        />
-        <button
-          type="button"
-          className="qty-btn"
-          disabled={disabled}
-          onClick={() => onChange(qty + 1)}
-          aria-label={`Increase quantity for ${part.filename}`}
-        >
-          +
-        </button>
-      </div>
-      {belowPrinted && (
-        <span className="text-xs text-warning">
-          {part.printed_count} unit{part.printed_count === 1 ? "" : "s"} already printed
-        </span>
-      )}
-    </div>
-  );
-}
 
 function ReviewSheetRow({
   part,

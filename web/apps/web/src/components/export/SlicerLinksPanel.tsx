@@ -4,7 +4,7 @@
  */
 import { useEffect, useState } from "react";
 import { ExternalLink } from "lucide-react";
-import { fetchSlicerInstances, type SlicerInstance } from "../../api/engine";
+import { fetchSlicerInstances, type SlicerInstance } from "../../api/endpoints/slicers";
 import { SLICER_LINKS } from "../../lib/slicerLinks";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui/card";
 import { Button } from "../ui/button";

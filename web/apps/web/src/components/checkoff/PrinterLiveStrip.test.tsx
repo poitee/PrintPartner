@@ -12,7 +12,16 @@ const api = vi.hoisted(() => ({
   fetchIntegrationStatus: vi.fn(),
 }));
 
-vi.mock("../../api/engine", () => api);
+vi.mock("../../api/endpoints/printers", () => ({
+  fetchPrinters: api.fetchPrinters,
+}));
+vi.mock("../../api/endpoints/integrations", () => ({
+  fetchIntegrations: api.fetchIntegrations,
+  fetchIntegrationStatus: api.fetchIntegrationStatus,
+}));
+vi.mock("../../api/endpoints/checkoff", () => ({
+  reconcilePrinterCheckoff: api.reconcilePrinterCheckoff,
+}));
 vi.mock("../../hooks/usePrinterStatusPollMs", () => ({
   usePrinterStatusPollMs: () => 60_000,
 }));

@@ -3,7 +3,7 @@ import {
   acceptedPartMediaMetadata,
   acceptedPartMediaRevalidationHeaders,
   partThumbnailUrl,
-} from "../../api/engine";
+} from "../../api/endpoints/media";
 import { generatePartThumbnail } from "../../lib/stlThumbnail";
 import { fetchWithRetry } from "../../lib/fetchWithRetry";
 import { acceptedThumbnailBlobCache } from "../../lib/acceptedThumbnailBlobCache";

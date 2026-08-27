@@ -12,14 +12,12 @@
 
 import type {
   AcceptedPlanBasisContract,
+  PlanDraftPartDecisionContract,
+  PlanDraftWorkspace,
   ReviewPart,
   SourceSummary,
 } from "@print-partner/contracts";
-import type {
-  PlanDraftPartDecisionContract,
-  PlanDraftWorkspace,
-  PlanReview,
-} from "../api/engine";
+import type { PlanReview } from "../api/endpoints/planManifests";
 
 /** Stable column keys — keep in sync with PARTS_MANIFEST_HEADERS. */
 export const PARTS_MANIFEST_HEADERS = [

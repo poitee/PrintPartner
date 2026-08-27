@@ -1,4 +1,4 @@
-import type { PlanReview, ReviewPart } from "../api/engine";
+import type { PlanReview, ReviewPart } from "../api/endpoints/planManifests";
 import { isStlMissing } from "./stlAutoSync";
 
 export type PartWarningKind =

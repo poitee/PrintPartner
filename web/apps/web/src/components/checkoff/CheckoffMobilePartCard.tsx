@@ -1,10 +1,11 @@
 import type { DraggableAttributes, DraggableSyntheticListeners } from "@dnd-kit/core";
-import type { ReviewPart } from "../../api/engine";
+import type { ReviewPart } from "../../api/endpoints/planManifests";
 import {
   lastCompletedUnit,
   nextUnitToComplete,
 } from "../../lib/checkoffProgress";
 import ProgressPartRow from "./ProgressPartRow";
+import type { SuggestedPrinterClaim } from "../../lib/checkoffPrinterActivity";
 
 type Props = {
   part: ReviewPart;
@@ -14,12 +15,12 @@ type Props = {
   /** Printer host name if this part's print has finished and awaits verify. */
   awaitingVerify?: string;
   /** Suggested printer from an unattributed print candidate. */
-  suggestedPrinter?: { hostName: string; printId: string; filename: string };
+  suggestedPrinter?: SuggestedPrinterClaim;
   /** Global "Enable assembly tracking" setting (Settings > Build Tracking). */
   assemblyTrackingEnabled?: boolean;
   onToggleUnit: (part: ReviewPart, unitIndex: number) => void;
   onPreview: (part: ReviewPart) => void;
-  onClaim?: (printId: string) => void;
+  onClaim?: (suggestion: SuggestedPrinterClaim) => void;
   /** Called when the user toggles the Assembled switch for a completed unit. */
   onToggleAssembled?: (part: ReviewPart, unitIndex: number) => void;
   dragHandle?: {

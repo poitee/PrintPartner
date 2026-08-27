@@ -8,7 +8,7 @@
  * and the Progress view switches from a flat parts list to a phase-grouped view.
  */
 
-import type { ReviewPart } from "../api/engine";
+import type { ReviewPart } from "../api/endpoints/planManifests";
 import { checkoffUnitTotals, type CheckoffUnitTotals } from "./checkoffProgress";
 
 // ---------------------------------------------------------------------------

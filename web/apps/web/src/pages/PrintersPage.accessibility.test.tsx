@@ -26,11 +26,15 @@ vi.mock("../hooks/usePrinterStatusPollMs", () => ({
 vi.mock("../context/ProfileContext", () => ({
   useProfileSelection: () => ({ profiles: [] }),
 }));
-vi.mock("../api/engine", () => ({
+vi.mock("../api/endpoints/printers", () => ({
   fetchPrinters: api.fetchPrinters,
+}));
+vi.mock("../api/endpoints/integrations", () => ({
   fetchIntegrations: api.fetchIntegrations,
-  fetchPrinterCheckoffLinks: api.fetchPrinterCheckoffLinks,
   fetchIntegrationStatus: api.fetchIntegrationStatus,
+}));
+vi.mock("../api/endpoints/checkoff", () => ({
+  fetchPrinterCheckoffLinks: api.fetchPrinterCheckoffLinks,
 }));
 
 describe("PrintersPage accessibility", () => {

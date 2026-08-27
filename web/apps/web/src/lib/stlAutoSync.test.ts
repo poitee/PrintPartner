@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { PlanReview } from "../api/engine";
+import type { PlanReview } from "../api/endpoints/planManifests";
 import {
   countEmptyThumbs,
   countMissingStls,
@@ -8,7 +8,7 @@ import {
   stlAutoSyncWorkKey,
   stlSyncBannerMode,
 } from "./stlAutoSync";
-import type { ReviewPart } from "../api/engine";
+import type { ReviewPart } from "../api/endpoints/planManifests";
 
 function part(overrides: Partial<ReviewPart> & { id: number }): ReviewPart {
   return {

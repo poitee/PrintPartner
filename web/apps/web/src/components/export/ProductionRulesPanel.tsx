@@ -5,7 +5,7 @@ import type {
   ProductionGroupingRule,
 } from "@print-partner/contracts";
 import { toast } from "sonner";
-import { fetchPrinters, type PrinterMachine } from "../../api/engine";
+import { fetchPrinters, type PrinterMachine } from "../../api/endpoints/printers";
 import { isAcceptedPlateStaleError } from "../../api/endpoints/acceptedPlates";
 import {
   useAcceptedPlateRevisionPending,

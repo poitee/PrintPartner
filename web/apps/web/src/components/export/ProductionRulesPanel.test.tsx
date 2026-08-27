@@ -52,7 +52,7 @@ if (workspace.kind !== "ready") throw new Error("Expected a ready Plate workspac
 
 const mutateAsync = vi.fn(() => Promise.resolve(workspace));
 
-vi.mock("../../api/engine", () => ({
+vi.mock("../../api/endpoints/printers", () => ({
   fetchPrinters: vi.fn(() => Promise.resolve([])),
 }));
 

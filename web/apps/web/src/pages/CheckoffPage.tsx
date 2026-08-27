@@ -33,47 +33,27 @@ import PrintVerifyPanel, {
   type PrintVerifyQueueState,
 } from "../components/checkoff/PrintVerifyPanel";
 
-function haveSameIds(left: readonly string[], right: readonly string[]): boolean {
-  if (left.length !== right.length) return false;
-  const rightIds = new Set(right);
-  return left.every((id) => rightIds.has(id));
-}
-
-function isSameLiveStripState(
-  current: PrinterLiveStripState,
-  next: PrinterLiveStripState,
-): boolean {
-  return (
-    current.anyPrinting === next.anyPrinting &&
-    current.hostCount === next.hostCount &&
-    haveSameIds(current.activeIntegrationIds, next.activeIntegrationIds) &&
-    haveSameIds(current.idleIntegrationIds, next.idleIntegrationIds)
-  );
-}
 import UnattributedPrintCard from "../components/checkoff/UnattributedPrintCard";
 // Lazy: PrinterSendQueuePanel (heavy printer queue UI)
 const PrinterSendQueuePanel = lazy(() => import("../components/export/PrinterSendQueuePanel"));
 import SortableProgressPart from "../components/checkoff/SortableProgressPart";
 import PhaseProgressView from "../components/checkoff/PhaseProgressView";
 import PartPreviewDialog from "../components/parts/PartPreviewDialog";
-import PartThumbExpandButton from "../components/parts/PartThumbExpandButton";
-import SpoolRemainingBadge from "../components/SpoolRemainingBadge";
+import CheckoffSheetRow from "../components/checkoff/CheckoffSheetRow";
 import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";
 import { SegmentedControl } from "../components/ui/segmented-control";
 import { Spinner } from "../components/ui/spinner";
+import type { UnattributedPrint } from "@print-partner/contracts";
 import {
-  fetchUnattributedPrints,
-  fetchPrinterCheckoffLinks,
-  fetchPlanPhaseManifest,
   claimUnattributedPrint,
-  fetchPrinterQueueSuggestions,
+  fetchPrinterCheckoffLinks,
+  fetchUnattributedPrints,
   type PrinterCheckoffLink,
-  type PlanPhaseManifestResponse,
-  type PrinterQueueSuggestion,
-  type ReviewPart,
-  type UnattributedPrint,
-} from "../api/engine";
+} from "../api/endpoints/checkoff";
+import { fetchPrinterQueueSuggestions, type PrinterQueueSuggestion } from "../api/endpoints/productionSend";
+import { fetchPlanPhaseManifest, type PlanPhaseManifestResponse } from "../api/endpoints/planVariants";
+import type { ReviewPart } from "../api/endpoints/planManifests";
 import { useBuildTrackingSettingsQuery } from "../queries/buildTracking";
 import { buildSourcesRoute, planRoute, prepareMissingPartsRoute } from "../lib/routes";
 import { groupCheckoffParts } from "../lib/checkoffGroups";
@@ -84,6 +64,17 @@ import {
   lastCompletedUnit,
   nextUnitToComplete,
 } from "../lib/checkoffProgress";
+import {
+  CHECKOFF_FILTER_MODES,
+  checkoffProgressDescription,
+  checkoffProgressEyebrow,
+  checkoffProgressMeta,
+  checkoffProgressMode,
+  filterCheckoffParts,
+  filterProgressRows,
+  isSameLiveStripState,
+  orderedPartsFromRows,
+} from "../lib/checkoffPageModel";
 import {
   computePhaseProgress,
 } from "../lib/phaseManifest";
@@ -105,6 +96,7 @@ import {
   reconcileProgressRows,
   type ProgressRowRef,
 } from "../lib/progressListOrder";
+import { buildCheckoffPrinterActivityParts } from "../lib/checkoffPrinterActivity";
 import { flattenReviewParts } from "../lib/reviewParts";
 import { useProfileSelection } from "../context/ProfileContext";
 import { usePlanWorkspace } from "../context/PlanWorkspaceContext";
@@ -125,93 +117,6 @@ import {
 } from "../lib/workflowState";
 import PwaInstallBanner from "../components/pwa/PwaInstallBanner";
 import { useSyncComplete } from "../lib/useSyncComplete";
-
-function CheckoffSheetRow({
-  part,
-  busy,
-  compact,
-  eagerThumbs,
-  showThumb,
-  onToggleUnit,
-  onPreview,
-}: {
-  part: ReviewPart;
-  busy: boolean;
-  compact: boolean;
-  eagerThumbs?: boolean;
-  /** Text-only sheets drop the thumbnail entirely — no image fetch, no ink. */
-  showThumb: boolean;
-  onToggleUnit: (part: ReviewPart, unitIndex: number) => void;
-  onPreview: (part: ReviewPart) => void;
-}) {
-  const done = part.printed_count >= part.quantity_effective && part.quantity_effective > 0;
-  return (
-    <tr className={cn("sheet-row", done && "sheet-row-done")}>
-      <td className="sheet-cell-part">
-        <div className="sheet-part">
-          {showThumb && (
-            <PartThumbExpandButton
-              part={part}
-              compact={compact}
-              eager={eagerThumbs}
-              onExpand={onPreview}
-            />
-          )}
-          <div className="sheet-part-meta">
-            <span className="sheet-filename" title={part.relative_path || part.filename}>
-              {part.filename}
-            </span>
-            <span className="sheet-part-tags">
-              {part.filament_hex && (
-                <span className="sheet-swatch" style={{ background: part.filament_hex }} />
-              )}
-              {part.filament_display && <span>{part.filament_display}</span>}
-              <SpoolRemainingBadge part={part} />
-              {part.role && <span className="sheet-role">{part.role}</span>}
-            </span>
-          </div>
-        </div>
-      </td>
-      <td className="sheet-cell-qty sheet-cell-qty-readonly">{part.quantity_effective}</td>
-      <td className="sheet-cell-printed">
-        <div className="sheet-units">
-          {part.print_units.map((unitDone, idx) => (
-            <label
-              key={idx}
-              className={cn("sheet-unit", unitDone && "sheet-unit-done")}
-              title={`Unit #${idx + 1}`}
-            >
-              <input
-                type="checkbox"
-                checked={unitDone}
-                onChange={() => onToggleUnit(part, idx)}
-                disabled={busy}
-              />
-              <span>{idx + 1}</span>
-            </label>
-          ))}
-          <span className={cn("sheet-printed-count", done && "sheet-printed-done")}>
-            <span className="sheet-printed-screen">
-              {part.printed_count}/{part.quantity_effective}
-            </span>
-            <span className="sheet-printed-label" aria-hidden>
-              {part.printed_count} of {part.quantity_effective}
-            </span>
-          </span>
-        </div>
-      </td>
-      <td className="sheet-cell-notes">
-        <span className="sheet-notes-line" aria-hidden />
-      </td>
-    </tr>
-  );
-}
-
-const FILTER_MODES: { mode: CheckoffFilterMode; label: string }[] = [
-  { mode: "missing", label: "Remaining" },
-  { mode: "done", label: "Done" },
-  { mode: "all", label: "All" },
-];
 
 export default function CheckoffPage() {
   const navigate = useNavigate();
@@ -292,6 +197,7 @@ export default function CheckoffPage() {
   const unattributedRequestId = useRef(0);
   const [watchingLinks, setWatchingLinks] = useState<PrinterCheckoffLink[]>([]);
   const [awaitingLinks, setAwaitingLinks] = useState<PrinterCheckoffLink[]>([]);
+  const [failedLinks, setFailedLinks] = useState<PrinterCheckoffLink[]>([]);
   const [phaseManifest, setPhaseManifest] = useState<PlanPhaseManifestResponse | null>(null);
   const [queueSuggestions, setQueueSuggestions] = useState<PrinterQueueSuggestion[]>([]);
   const [auxiliaryErrors, setAuxiliaryErrors] = useState<AuxiliaryErrors>({});
@@ -455,6 +361,20 @@ export default function CheckoffPage() {
           `Could not refresh printer activity: ${e instanceof Error ? e.message : String(e)}`,
         ),
       );
+    void fetchPrinterCheckoffLinks({
+      state: "host_failed",
+      profile_id: selectedProfileId ?? undefined,
+    })
+      .then((res) => {
+        setFailedLinks(res.links ?? []);
+        markAuxiliarySuccess("failed-links");
+      })
+      .catch((e) =>
+        reportAuxiliaryError(
+          "failed-links",
+          `Could not refresh printer activity: ${e instanceof Error ? e.message : String(e)}`,
+        ),
+      );
   }, [
     health?.ok,
     selectedProfileId,
@@ -501,54 +421,16 @@ export default function CheckoffPage() {
     return flattenReviewParts(review.part_groups).filter((p) => p.included);
   }, [review]);
 
-  const printingPartIds = useMemo(() => {
-    const map = new Map<number, string>(); // part_id → host_name
-    for (const link of watchingLinks) {
-      if (link.state === "watching") {
-        for (const unit of link.units ?? []) {
-          if (!map.has(unit.part_id)) {
-            map.set(unit.part_id, link.host_name);
-          }
-        }
-      }
-    }
-    return map;
-  }, [watchingLinks]);
-
-  const awaitingPartIds = useMemo(() => {
-    const map = new Map<number, string>(); // part_id → host_name
-    for (const link of awaitingLinks) {
-      if (link.state === "awaiting_verify") {
-        for (const unit of link.units ?? []) {
-          if (!map.has(unit.part_id)) {
-            map.set(unit.part_id, link.host_name);
-          }
-        }
-      }
-    }
-    return map;
-  }, [awaitingLinks]);
-
-  /** Map part_id → suggested printer info from unattributed print candidates. */
-  const suggestedPartIds = useMemo(() => {
-    const map = new Map<number, { hostName: string; printId: string; filename: string }>();
-    for (const print of unattributedPrints) {
-      for (const candidate of print.candidates ?? []) {
-        for (const matchingFilename of candidate.matching_filenames ?? []) {
-          for (const part of includedParts) {
-            if (part.filename === matchingFilename && !map.has(part.id)) {
-              map.set(part.id, {
-                hostName: print.host_name,
-                printId: print.id,
-                filename: print.filename,
-              });
-            }
-          }
-        }
-      }
-    }
-    return map;
-  }, [unattributedPrints, includedParts]);
+  const { printingPartIds, awaitingPartIds, suggestedPartIds } = useMemo(
+    () =>
+      buildCheckoffPrinterActivityParts({
+        watchingLinks,
+        awaitingLinks,
+        unattributedPrints,
+        includedParts,
+      }),
+    [watchingLinks, awaitingLinks, unattributedPrints, includedParts],
+  );
 
   const partsById = useMemo(() => {
     const map = new Map<number, ReviewPart>();
@@ -571,45 +453,24 @@ export default function CheckoffPage() {
     );
   }, [includedParts, progressRowsByPlanId, selectedProfileId]);
 
-  const filteredParts = useMemo(() => {
-    let rows = includedParts;
-    if (filter === "missing") rows = rows.filter((p) => p.missing);
-    if (filter === "done") rows = rows.filter((p) => !p.missing);
-    const q = search.trim().toLowerCase();
-    if (q) {
-      rows = rows.filter(
-        (p) =>
-          p.filename.toLowerCase().includes(q) ||
-          p.relative_path.toLowerCase().includes(q) ||
-          (p.filament_display || "").toLowerCase().includes(q),
-      );
-    }
-    return rows;
-  }, [includedParts, filter, search]);
+  const filteredParts = useMemo(
+    () => filterCheckoffParts({ parts: includedParts, filter, search }),
+    [includedParts, filter, search],
+  );
 
-  /** Visible Progress rows: bags always show; parts respect Remaining/Done/search. */
-  const filteredRows = useMemo(() => {
-    const visibleParts = new Set(filteredParts.map((p) => p.id));
-    const searching = search.trim().length > 0;
-    return planProgressRows.filter((row) => {
-      if (row.kind === "part") return visibleParts.has(row.id);
-      if (searching) {
-        return row.label.toLowerCase().includes(search.trim().toLowerCase());
-      }
-      return true;
-    });
-  }, [filteredParts, planProgressRows, search]);
+  const filteredRows = useMemo(
+    () => filterProgressRows({
+      rows: planProgressRows,
+      visiblePartIds: new Set(filteredParts.map((part) => part.id)),
+      search,
+    }),
+    [filteredParts, planProgressRows, search],
+  );
 
-  /** Ordered parts for print sheet / totals helpers. */
-  const filtered = useMemo(() => {
-    const out: ReviewPart[] = [];
-    for (const row of filteredRows) {
-      if (row.kind !== "part") continue;
-      const part = partsById.get(row.id);
-      if (part) out.push(part);
-    }
-    return out;
-  }, [filteredRows, partsById]);
+  const filtered = useMemo(
+    () => orderedPartsFromRows({ rows: filteredRows, partsById }),
+    [filteredRows, partsById],
+  );
 
   const setPlanProgressRows = useCallback(
     (rows: ProgressRowRef[]) => {
@@ -713,31 +574,14 @@ export default function CheckoffPage() {
     [liveStrip.activeIntegrationIds],
   );
 
-  /** Prefer verify when any finished job awaits; printing only when nothing to confirm. */
-  const progressMode: "printing" | "verify" | "idle" =
-    verifyQueue.awaitingCount > 0
-      ? "verify"
-      : liveStrip.anyPrinting || verifyQueue.watchingCount > 0
-        ? "printing"
-        : "idle";
-
-  const progressMeta =
-    selectedProfileId != null && includedParts.length > 0
-      ? `${planName} · ${includedParts.length} part${includedParts.length === 1 ? "" : "s"}`
-      : selectedProfileId != null
-        ? planName
-        : null;
-  const progressEyebrow = progressMeta ? `Stage 3 of 4 · ${progressMeta}` : "Stage 3 of 4";
-
-  /**
-   * CoS lock: Progress units are operator-ticked only.
-   * PageHeader stays stable — live printing proposal rows carry the printing note.
-   * Never auto-tick from live/complete host status; Confirm is the only apply path.
-   */
-  const progressDescription =
-    includedParts.length === 0
-      ? "Mark each unit as you finish it on the shop floor."
-      : "Verify when a print finishes. Remaining parts stay below.";
+  const progressMode = checkoffProgressMode({ liveStrip, verifyQueue });
+  const progressMeta = checkoffProgressMeta({
+    selectedProfileId,
+    planName,
+    includedPartCount: includedParts.length,
+  });
+  const progressEyebrow = checkoffProgressEyebrow(progressMeta);
+  const progressDescription = checkoffProgressDescription(includedParts.length);
 
   const progressNextStep = deskNextStepLine("progress", {
     remainingUnits: totals.remainingUnits,
@@ -1075,10 +919,13 @@ export default function CheckoffPage() {
             profileId={selectedProfileId}
             parts={includedParts}
             refreshKey={verifyRefreshKey}
+            activityLinks={{ watching: watchingLinks, awaiting: awaitingLinks, failed: failedLinks }}
+            onActivityRefresh={refreshWatchingLinks}
             suppressIntegrationIds={suppressIntegrationIds}
             onQueueChange={setVerifyQueue}
             onVerified={() => {
               if (selectedProfileId != null) void refresh();
+              refreshWatchingLinks();
             }}
           />
           <Suspense fallback={null}>
@@ -1107,7 +954,7 @@ export default function CheckoffPage() {
               className={cn(isMobileLayout ? "w-full" : undefined)}
               value={filter}
               onValueChange={(value) => setFilter(value)}
-              options={FILTER_MODES.map(({ mode, label }) => ({
+              options={CHECKOFF_FILTER_MODES.map(({ mode, label }) => ({
                 value: mode,
                 label,
               }))}
@@ -1212,9 +1059,11 @@ export default function CheckoffPage() {
                         onDecrement={onDecrement}
                         onPreview={setPreviewPart}
                         onToggleAssembled={onToggleAssembled}
-                        onClaim={(printId) => {
+                        onClaim={(suggestion) => {
                           if (selectedProfileId == null) return;
-                          void claimUnattributedPrint(printId, selectedProfileId)
+                          void claimUnattributedPrint(suggestion.printId, selectedProfileId, {
+                            selected_stl_basenames: [suggestion.stlBasename],
+                          })
                             .then(() => {
                               markAuxiliarySuccess("claim-printer-activity");
                               void refreshUnattributedPrints();

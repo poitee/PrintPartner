@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
-import type { PlanReview, UnattributedPrint } from "../api/engine";
+import type { UnattributedPrint } from "@print-partner/contracts";
+import type { PlanReview } from "../api/endpoints/planManifests";
 import CheckoffPage from "./CheckoffPage";
 
 const testState = vi.hoisted(() => ({
@@ -23,6 +24,7 @@ const api = vi.hoisted(() => ({
   fetchPrinterCheckoffLinks: vi.fn().mockResolvedValue({ links: [] }),
   fetchPlanPhaseManifest: vi.fn().mockResolvedValue(null),
   fetchPrinterQueueSuggestions: vi.fn().mockResolvedValue({ suggestions: [] }),
+  claimUnattributedPrint: vi.fn().mockResolvedValue({ ok: true }),
 }));
 
 const stalePrint: UnattributedPrint = {
@@ -136,10 +138,19 @@ vi.mock("../queries/buildTracking", () => ({
   }),
 }));
 vi.mock("../lib/useSyncComplete", () => ({ useSyncComplete: vi.fn() }));
-vi.mock("../api/engine", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../api/engine")>();
-  return { ...actual, ...api };
-});
+vi.mock("../api/endpoints/checkoff", () => ({
+  claimUnattributedPrint: api.claimUnattributedPrint,
+  fetchPrinterCheckoffLinks: api.fetchPrinterCheckoffLinks,
+  fetchUnattributedPrints: api.fetchUnattributedPrints,
+}));
+
+vi.mock("../api/endpoints/planVariants", () => ({
+  fetchPlanPhaseManifest: api.fetchPlanPhaseManifest,
+}));
+
+vi.mock("../api/endpoints/productionSend", () => ({
+  fetchPrinterQueueSuggestions: api.fetchPrinterQueueSuggestions,
+}));
 vi.mock("../components/checkoff/PrinterLiveStrip", () => ({
   default: (props: {
     onUnattributedUpdate?: (count?: number) => void;
@@ -158,11 +169,15 @@ vi.mock("../components/checkoff/UnattributedPrintCard", () => ({
 vi.mock("../components/checkoff/SortableProgressPart", () => ({
   default: (props: {
     kind: "part" | "bag";
-    suggestedPrinter?: { hostName: string; filename: string };
+    suggestedPrinter?: { hostName: string; filename: string; printId: string; stlBasename: string };
+    onClaim?: (suggestion: { hostName: string; filename: string; printId: string; stlBasename: string }) => void;
   }) =>
     props.kind === "part" && props.suggestedPrinter ? (
       <div>
         Possibly on {props.suggestedPrinter.hostName} ({props.suggestedPrinter.filename})
+        <button type="button" onClick={() => props.onClaim?.(props.suggestedPrinter!)}>
+          Claim suggested
+        </button>
       </div>
     ) : null,
 }));
@@ -203,6 +218,7 @@ describe("CheckoffPage unattributed print reconciliation", () => {
     testState.onLiveStateChange = undefined;
     api.fetchUnattributedPrints.mockReset();
     api.fetchUnattributedPrints.mockResolvedValue([stalePrint]);
+    api.claimUnattributedPrint.mockClear();
     localStorage.clear();
     localStorage.setItem("print-partner.checkoff.ui.v1", JSON.stringify({ filter: "all" }));
   });
@@ -255,6 +271,22 @@ describe("CheckoffPage unattributed print reconciliation", () => {
       expect(api.fetchUnattributedPrints).toHaveBeenCalledTimes(2);
       expect(screen.getByText(/Unclaimed print detected/)).toBeTruthy();
       expect(screen.getByText(/Possibly on Core One Fixed/)).toBeTruthy();
+    });
+  });
+
+  it("claims a suggested row with selected-file scope", async () => {
+    render(
+      <MemoryRouter>
+        <CheckoffPage />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Claim suggested" }));
+
+    await waitFor(() => {
+      expect(api.claimUnattributedPrint).toHaveBeenCalledWith("stale-print", 7, {
+        selected_stl_basenames: ["cube"],
+      });
     });
   });
 

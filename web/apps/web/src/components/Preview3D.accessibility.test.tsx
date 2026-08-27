@@ -54,7 +54,7 @@ endsolid test`;
 vi.mock("../lib/fetchWithRetry", () => ({
   fetchWithRetry: previewRuntime.fetchWithRetry,
 }));
-vi.mock("../api/engine", () => ({
+vi.mock("../api/endpoints/media", () => ({
   acceptedPartMediaMetadata: (response: Response) => {
     const match = /^"([0-9a-f]{64})"$/.exec(response.headers.get("ETag") ?? "");
     if (!match?.[1]) throw new Error("Response is missing a strong accepted media ETag");

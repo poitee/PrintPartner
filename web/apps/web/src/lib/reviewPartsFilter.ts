@@ -1,5 +1,5 @@
-import type { PlanReview, ReviewPart } from "../api/engine";
-import type { StlNamingFolderRule } from "../api/engine";
+import type { StlNamingFolderRule } from "@print-partner/contracts";
+import type { PlanReview, ReviewPart } from "../api/endpoints/planManifests";
 import { folderKeyFromRelativePath } from "./checkoffGroups";
 import { isPartFullyPrinted } from "./checkoffProgress";
 import { hasPartWarning } from "./partWarnings";

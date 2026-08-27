@@ -20,7 +20,7 @@ import { useState, useMemo } from "react";
 import { ChevronDown, ChevronRight, AlertTriangle, CheckCircle2, Clock } from "lucide-react";
 import { Button } from "../ui/button";
 import ProgressPartRow from "./ProgressPartRow";
-import type { ReviewPart } from "../../api/engine";
+import type { ReviewPart } from "../../api/endpoints/planManifests";
 import type { PhaseProgress } from "../../lib/phaseManifest";
 import { nextUnlockedPhase } from "../../lib/phaseManifest";
 import { isProgressRowBusy } from "../../lib/checkoffProgress";
