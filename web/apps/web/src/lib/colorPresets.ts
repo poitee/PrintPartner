@@ -1,4 +1,4 @@
-import { saveRoleFilament, type RoleFilamentRow } from "../api/engine";
+import { saveRoleFilament, type RoleFilamentRow } from "../api/endpoints/filaments";
 
 export const COLOR_PRESET_TYPE = "print-partner-colors";
 export const COLOR_PRESET_VERSION = 1;

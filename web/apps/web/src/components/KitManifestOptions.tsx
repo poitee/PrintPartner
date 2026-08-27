@@ -4,8 +4,8 @@ import {
   fetchPlanKitManifest,
   fetchPlanManifestBuilder,
   type KitManifest,
-  type RepoManifestOptionGroup,
-} from "../api/engine";
+} from "../api/endpoints/planManifests";
+import type { RepoManifestOptionGroup } from "../api/endpoints/sourceArtifacts";
 import { useKitManifestSaveRegistry } from "../context/KitManifestSaveContext";
 import { useKitManifestAutosave } from "../hooks/useKitManifestAutosave";
 import {

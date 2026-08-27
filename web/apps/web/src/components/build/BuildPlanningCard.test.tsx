@@ -5,8 +5,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import BuildPlanningCard from "./BuildPlanningCard";
 
 const fetchBuildPlanningState = vi.hoisted(() => vi.fn());
-vi.mock("../../api/engine", async (loadOriginal) => ({
-  ...(await loadOriginal<typeof import("../../api/engine")>()),
+vi.mock("../../api/endpoints/planManifests", async (loadOriginal) => ({
+  ...(await loadOriginal<typeof import("../../api/endpoints/planManifests")>()),
   fetchBuildPlanningState,
 }));
 

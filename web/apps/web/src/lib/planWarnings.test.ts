@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildPlanWarningLines, planHeaderSubtitle } from "./planWarnings";
-import type { PlanReview, ProfileSummary, SourceSummary } from "../api/engine";
+import type { ProfileSummary, SourceSummary } from "@print-partner/contracts";
+import type { PlanReview } from "../api/endpoints/planManifests";
 
 function source(partial: Partial<SourceSummary> & Pick<SourceSummary, "id" | "name">): SourceSummary {
   return {

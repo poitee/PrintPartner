@@ -1,4 +1,5 @@
-import type { PlanReview, ProfileSummary } from "../api/engine";
+import type { ProfileSummary } from "@print-partner/contracts";
+import type { PlanReview } from "../api/endpoints/planManifests";
 import {
   buildSourcesRoute,
   planRoute,

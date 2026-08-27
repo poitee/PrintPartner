@@ -1,4 +1,4 @@
-import type { PlanReviewIssue } from "../api/engine";
+import type { PlanReviewIssue } from "../api/endpoints/planManifests";
 
 const MERGE_CONFLICT_FILENAME = /Merge conflict for (.+?) —/;
 

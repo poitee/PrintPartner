@@ -71,6 +71,22 @@ export function partitionPlanPickerGroups(
   };
 }
 
+export function shouldPromptBeforeSwitchingPlan(input: {
+  selectedProfileId: number | null | undefined;
+  selectedPartCount: number | null | undefined;
+  targetId: number;
+}): boolean {
+  return (
+    input.selectedProfileId != null &&
+    input.selectedProfileId !== input.targetId &&
+    (input.selectedPartCount ?? 0) > 0
+  );
+}
+
+export function duplicatePlanName(name: string | null | undefined): string {
+  return `${name || "Plan"} (copy)`;
+}
+
 /** Archive is manual and only when print remaining = 0 on a real kit. */
 export function canArchivePlan(input: {
   archived: boolean;

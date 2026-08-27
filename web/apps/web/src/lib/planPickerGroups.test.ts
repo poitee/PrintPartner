@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   canArchivePlan,
+  duplicatePlanName,
   partitionPlanPickerGroups,
   RECENT_PLAN_LIMIT,
+  shouldPromptBeforeSwitchingPlan,
   type PlanPickerRow,
 } from "./planPickerGroups";
 
@@ -85,6 +87,44 @@ describe("partitionPlanPickerGroups", () => {
     const groups = partitionPlanPickerGroups(plans, 1, { search: "" });
     expect(groups.active.map((p) => p.id)).toEqual([1]);
     expect(groups.archived.map((p) => p.id)).toEqual([2]);
+  });
+});
+
+describe("plan picker actions", () => {
+  it("prompts before switching away from a populated selected plan", () => {
+    expect(
+      shouldPromptBeforeSwitchingPlan({
+        selectedProfileId: 1,
+        selectedPartCount: 4,
+        targetId: 2,
+      }),
+    ).toBe(true);
+    expect(
+      shouldPromptBeforeSwitchingPlan({
+        selectedProfileId: 1,
+        selectedPartCount: 4,
+        targetId: 1,
+      }),
+    ).toBe(false);
+    expect(
+      shouldPromptBeforeSwitchingPlan({
+        selectedProfileId: null,
+        selectedPartCount: 4,
+        targetId: 2,
+      }),
+    ).toBe(false);
+    expect(
+      shouldPromptBeforeSwitchingPlan({
+        selectedProfileId: 1,
+        selectedPartCount: 0,
+        targetId: 2,
+      }),
+    ).toBe(false);
+  });
+
+  it("builds duplicate names", () => {
+    expect(duplicatePlanName("Printer")).toBe("Printer (copy)");
+    expect(duplicatePlanName(null)).toBe("Plan (copy)");
   });
 });
 

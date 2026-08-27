@@ -8,21 +8,20 @@ import {
   fetchFilamentCatalog,
   fetchRoleFilaments,
   fetchSpoolmanSpools,
-  regeneratePlanThumbnails,
   saveRoleFilament,
-  DEFAULT_STL_NAMING_PROFILE,
   type CatalogColor,
   type FilamentCatalog,
   type RoleFilamentRow,
   type SpoolmanSpoolRow,
-  type StlNamingRoleId,
-} from "../api/engine";
+} from "../api/endpoints/filaments";
+import { regeneratePlanThumbnails } from "../api/endpoints/media";
 import {
   applyColorPreset,
   downloadColorPreset,
   parseColorPreset,
   pickColorPresetFile,
 } from "../lib/colorPresets";
+import { normalizeFilamentHex, roleFilamentLabel } from "../lib/roleFilamentModel";
 import { bumpThumbnailCache } from "../lib/thumbnailCache";
 import {
   buildSpoolmanSpoolId,
@@ -51,10 +50,6 @@ import {
   type RoleColorSaveStatus,
 } from "../lib/roleColorSave";
 
-const ROLE_LABELS = Object.fromEntries(
-  DEFAULT_STL_NAMING_PROFILE.roles.map((r) => [r.id, r.label]),
-) as Record<StlNamingRoleId, string>;
-
 const DEFAULT_HEX = DEFAULT_FILAMENT_HEX;
 const CHECKER_BG =
   "repeating-conic-gradient(rgba(120,120,120,0.25) 0% 25%, transparent 0% 50%)";
@@ -72,19 +67,6 @@ type Props = {
   /** Plan mock density: tighter rows, mono part counts. */
   density?: "default" | "compact";
 };
-
-function normalizeHex(hex: string): string | null {
-  const m = hex.trim().replace(/^#?/, "");
-  if (/^[0-9a-fA-F]{6}$/.test(m)) return `#${m.toLowerCase()}`;
-  if (/^[0-9a-fA-F]{3}$/.test(m)) {
-    return `#${m
-      .split("")
-      .map((c) => c + c)
-      .join("")
-      .toLowerCase()}`;
-  }
-  return null;
-}
 
 /**
  * Color preview. Catalog colors carry a product photo (`imageUrl`) that shows
@@ -186,7 +168,7 @@ function RoleColorRow({
   }, [colorGroups, query]);
 
   const applyCustomHex = (hex: string) => {
-    const normalized = normalizeHex(hex);
+    const normalized = normalizeFilamentHex(hex);
     if (!normalized) return;
     void onPickCustomHex(normalized);
   };
@@ -287,7 +269,7 @@ function RoleColorRow({
                 <input
                   type="color"
                   className="h-9 w-12 shrink-0 cursor-pointer rounded-md border border-input bg-background p-0.5"
-                  value={normalizeHex(hexDraft) ?? DEFAULT_HEX}
+                  value={normalizeFilamentHex(hexDraft) ?? DEFAULT_HEX}
                   onChange={(e) => {
                     setHexDraft(e.target.value);
                     applyCustomHex(e.target.value);
@@ -704,7 +686,7 @@ export default function RoleFilamentPicker({
 
       <ul className={cn(compact ? "space-y-2.5" : "space-y-2")}>
         {rows.map((row) => {
-          const label = ROLE_LABELS[row.role as StlNamingRoleId] ?? row.role;
+          const label = roleFilamentLabel(row.role);
           const filamentParsed = parseSpoolmanFilamentId(row.filament_color_id ?? "");
           const roleSpools = filamentParsed
             ? filterFilamentSpools(spools, filamentParsed.filamentId)

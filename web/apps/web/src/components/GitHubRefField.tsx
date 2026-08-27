@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { fetchGithubBranches, fetchGithubTags } from "../api/engine";
+import { fetchGithubBranches, fetchGithubTags } from "../api/endpoints/sourceContent";
 
 const GITHUB_REPO_RE =
   /^(?:https?:\/\/(?:www\.)?github\.com\/[\w.-]+\/[\w.-]+(?:\.git)?\/?|git@github\.com:[\w.-]+\/[\w.-]+(?:\.git)?|[\w.-]+\/[\w.-]+(?:\.git)?)$/i;

@@ -1,4 +1,5 @@
-import type { ReviewPart, RoleFilamentRow, SpoolmanSpoolRow } from "../api/engine";
+import type { ReviewPart } from "../api/endpoints/planManifests";
+import type { RoleFilamentRow, SpoolmanSpoolRow } from "../api/endpoints/filaments";
 import {
   formatSpoolOptionLabel,
   logPartSpoolPickerHidden,

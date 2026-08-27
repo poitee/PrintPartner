@@ -20,6 +20,7 @@ import PlanRolesCard from "../components/build/PlanRolesCard";
 import PlanWarningsCard from "../components/build/PlanWarningsCard";
 import PlanCategoryDropStrip from "../components/build/PlanCategoryDropStrip";
 import BuildPlanningCard from "../components/build/BuildPlanningCard";
+import PlanDraftApplyButton from "../components/build/PlanDraftApplyButton";
 import DeskNextStep from "../components/layout/DeskNextStep";
 import EmptyState from "../components/layout/EmptyState";
 import PageHeader from "../components/layout/PageHeader";
@@ -31,7 +32,9 @@ import SourceFilePickerCard from "../components/SourceFilePickerCard";
 import ShareImportSetupPanel, {
   type UnmatchedSource,
 } from "../components/share/ShareImportSetupPanel";
-import type { KitImportJobResult, PlanDraftWorkspace } from "../api/engine";
+import type { RequiredUnitDecisionContract, StlNamingProfile } from "@print-partner/contracts";
+import { DEFAULT_STL_NAMING_PROFILE } from "@print-partner/contracts";
+import type { KitImportJobResult } from "../api/endpoints/imports";
 import { Badge } from "../components/ui/badge";
 import { Combobox } from "../components/ui/combobox";
 import { Button } from "../components/ui/button";
@@ -48,15 +51,9 @@ import {
   CardHeader,
   CardTitle,
 } from "../components/ui/card";
-import {
-  EngineHttpError,
-  fetchStlNaming,
-  type ProfileLayer,
-  type RequiredUnitDecisionContract,
-  type RoleFilamentRow,
-  DEFAULT_STL_NAMING_PROFILE,
-  type StlNamingProfile,
-} from "../api/engine";
+import { fetchStlNaming } from "../api/endpoints/stlNaming";
+import type { ProfileLayer } from "../api/endpoints/plans";
+import type { RoleFilamentRow } from "../api/endpoints/filaments";
 import {
   useSourcesQuery,
   useUpdateSourceMutation,
@@ -74,9 +71,6 @@ import {
 import { exportRoute, libraryRoute } from "../lib/routes";
 import { groupMergeConflictsByFilename } from "../lib/mergeConflictGroups";
 import { takeKitImportResult } from "../lib/kitImportStash";
-import { deskNextStepLine } from "../lib/deskNextStep";
-import { buildPlanWarningLines, planHeaderSubtitle } from "../lib/planWarnings";
-import { planHasUnsetRoleColors } from "../lib/roleColorSet";
 import { useProfileSelection } from "../context/ProfileContext";
 import { usePlanActions } from "../context/PlanActionsContext";
 import { usePlanWorkspace } from "../context/PlanWorkspaceContext";
@@ -84,96 +78,28 @@ import { useImportRulesSaveRegistry } from "../context/ImportRulesSaveContext";
 import { useKitManifestSaveRegistry } from "../context/KitManifestSaveContext";
 import { useEngineHealth } from "../hooks/useEngineHealth";
 import { meshColorForStlPath } from "../lib/rolePreviewColor";
-import { checkoffUnitTotals } from "../lib/checkoffProgress";
-import { canArchivePlan } from "../lib/planPickerGroups";
+import { buildPageDerivedState } from "../lib/buildPageViewModel";
+import {
+  planDraftProductionBlockFromError,
+  planDraftRevisionPartLabels,
+  type ProductionBlock,
+} from "../lib/planDraftUi";
 import {
   getBackgroundError,
   resolveEngineState,
   resolveResourceState,
 } from "../lib/workflowState";
-
-type ProductionBlock = {
-  readonly checkoffLinkCount: number;
-  readonly sendQueueItemCount: number;
-};
-
-export function planDraftProductionBlockFromError(caught: unknown): ProductionBlock | null {
-  if (!(caught instanceof EngineHttpError) || caught.status !== 423) return null;
-  if (!caught.body || typeof caught.body !== "object") return null;
-  const body = caught.body;
-  if (!("code" in body) || body.code !== "production_active") return null;
-  return {
-    checkoffLinkCount:
-      "checkoff_link_count" in body && typeof body.checkoff_link_count === "number"
-        ? body.checkoff_link_count
-        : 0,
-    sendQueueItemCount:
-      "send_queue_item_count" in body && typeof body.send_queue_item_count === "number"
-        ? body.send_queue_item_count
-        : 0,
-  };
-}
+import {
+  attachedPlanSourceIds,
+  basePlanLayer,
+  buildSourceLayerRows,
+  sourceSelectOptions,
+  unattachedSources,
+} from "../lib/buildSourceLayers";
 
 type BuildLocationState = {
   kitImport?: KitImportJobResult;
 };
-
-export function planDraftRevisionPartLabels(
-  workspace: PlanDraftWorkspace,
-): ReadonlyMap<number, string> {
-  const labels = new Map<number, string>();
-  for (const part of workspace.parts) {
-    if (part.base_revision_part_id != null) {
-      labels.set(part.base_revision_part_id, part.filename);
-    }
-  }
-  for (const change of workspace.diff.changed) {
-    labels.set(change.before.revision_part_id, change.before.filename);
-  }
-  for (const part of workspace.diff.removed) {
-    labels.set(part.revision_part_id, part.filename);
-  }
-  return labels;
-}
-
-export function PlanDraftApplyButton({
-  workspace,
-  busy,
-  onApply,
-  onRebase,
-}: {
-  workspace: PlanDraftWorkspace;
-  busy: boolean;
-  onApply: () => void;
-  onRebase: () => void;
-}) {
-  return (
-    <div className="flex flex-wrap gap-2">
-      {!workspace.diff.base_is_current && (
-        <Button
-          type="button"
-          variant="secondary"
-          disabled={busy}
-          onClick={onRebase}
-        >
-          Rebase saved draft
-        </Button>
-      )}
-      <Button
-        type="button"
-        disabled={
-          busy ||
-          !workspace.diff.base_is_current ||
-          workspace.reconciliation.kind !== "ready"
-        }
-        loading={busy}
-        onClick={onApply}
-      >
-        Apply plan changes
-      </Button>
-    </div>
-  );
-}
 
 const EMPTY_SOURCES: SourceSummary[] = [];
 const EMPTY_LAYERS: ProfileLayer[] = [];
@@ -352,35 +278,18 @@ function BuildPageContent() {
     }
   }, [selectedProfileId]);
 
-  const baseLayer = useMemo(
-    () => layers.find((l) => l.layer_type === "base") ?? null,
-    [layers],
-  );
-  const addonLayers = useMemo(
-    () => layers.filter((l) => l.layer_type !== "base"),
-    [layers],
-  );
-
-  const attachedSourceIds = useMemo(() => {
-    const ids = new Set<number>();
-    for (const layer of layers) {
-      if (layer.project_id != null) ids.add(layer.project_id);
-    }
-    return ids;
-  }, [layers]);
+  const baseLayer = useMemo(() => basePlanLayer(layers), [layers]);
+  const attachedSourceIds = useMemo(() => attachedPlanSourceIds(layers), [layers]);
 
   const addonSourceOptions = useMemo(
-    () => sources.filter((s) => !attachedSourceIds.has(s.id)),
+    () => unattachedSources(sources, attachedSourceIds),
     [sources, attachedSourceIds],
   );
 
-  const baseSourceOptions = useMemo(
-    () => sources.map((s) => ({ value: String(s.id), label: s.name })),
-    [sources],
-  );
+  const baseSourceOptions = useMemo(() => sourceSelectOptions(sources), [sources]);
 
   const addonComboboxOptions = useMemo(
-    () => addonSourceOptions.map((s) => ({ value: String(s.id), label: s.name })),
+    () => sourceSelectOptions(addonSourceOptions),
     [addonSourceOptions],
   );
 
@@ -396,35 +305,7 @@ function BuildPageContent() {
     return map;
   }, [sources]);
 
-  const sourceCardLayers = useMemo(() => {
-    const rows: Array<{
-      key: string;
-      layer: ProfileLayer;
-      sourceId: number;
-      sourceName: string;
-      layerType: "base" | "addon";
-    }> = [];
-    if (baseLayer?.project_id != null) {
-      rows.push({
-        key: `base-${baseLayer.id}`,
-        layer: baseLayer,
-        sourceId: baseLayer.project_id,
-        sourceName: baseLayer.project_name ?? "base",
-        layerType: "base",
-      });
-    }
-    for (const layer of addonLayers) {
-      if (layer.project_id == null) continue;
-      rows.push({
-        key: `addon-${layer.id}`,
-        layer,
-        sourceId: layer.project_id,
-        sourceName: layer.project_name ?? "addon",
-        layerType: "addon",
-      });
-    }
-    return rows;
-  }, [baseLayer, addonLayers]);
+  const sourceCardLayers = useMemo(() => buildSourceLayerRows(layers), [layers]);
 
   const needsBaseSource = baseLayer?.project_id == null;
 
@@ -449,36 +330,19 @@ function BuildPageContent() {
     [sourceCardLayers, sourceById],
   );
 
-  const partCount =
-    selectedProfile?.part_count ?? review?.totals.included_parts ?? 0;
-
-  const includedForArchive =
-    review?.part_groups.flatMap((g) => g.parts).filter((p) => p.included) ?? [];
-  const archiveTotals = checkoffUnitTotals(includedForArchive);
-  const archiveAllowed = canArchivePlan({
-    archived: Boolean(selectedProfile?.archived_at),
-    totalUnits: archiveTotals.totalUnits,
-    remainingUnits: archiveTotals.remainingUnits,
-  });
-
-  const planWarnings = buildPlanWarningLines({
-    buildStale,
-    attachedSources,
+  const {
+    partCount,
+    archiveAllowed,
+    planWarnings,
+    planNextStep,
+    headerSubtitle,
+  } = buildPageDerivedState({
+    selectedProfile,
     review,
+    attachedSources,
     roleFilaments,
-  });
-
-  const colorsUnset = planHasUnsetRoleColors(roleFilaments);
-  const planNextStep = deskNextStepLine("plan", {
-    attachedSourceCount: sourceCardLayers.length,
-    partCount,
-    colorsUnset,
-  });
-
-  const headerSubtitle = planHeaderSubtitle({
-    profile: selectedProfile,
-    sourceCount: sourceCardLayers.length,
-    partCount,
+    sourceCardLayerCount: sourceCardLayers.length,
+    buildStale,
   });
   const profilesState = resolveResourceState({
     loading: profilesLoading,

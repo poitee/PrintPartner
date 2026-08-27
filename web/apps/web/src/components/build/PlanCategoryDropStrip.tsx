@@ -8,7 +8,7 @@ type Props = {
   className?: string;
 };
 
-/** Quiet category chips for Plan attached-sources drag-to-categorize. */
+/** Quiet Library category chips shown near attached Plan Sources. */
 export default function PlanCategoryDropStrip({
   categories,
   onDropSourceCategory,
