@@ -988,6 +988,7 @@ export class AppRepository {
         printer_id: linkInput.printerId,
         host_name: linkInput.hostName,
         filename: linkInput.filename,
+        remote_path: linkInput.remotePath,
         units,
         unlabeled_names: unlabeledNames,
         started: linkInput.started,

@@ -280,4 +280,95 @@ describe("prusalinkAdapter", () => {
     expect(status.state).toBe("complete");
     expect(status.filename).toBe("done.bgcode");
   });
+
+  it("browses available storage recursively and follows the advertised download ref", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/status")) return digest401();
+      if (url.endsWith("/api/v1/storage")) {
+        return new Response(JSON.stringify({
+          storage_list: [{ path: "/local", available: true }],
+        }), { headers: { "content-type": "application/json" } });
+      }
+      if (url.endsWith("/api/v1/files/local/")) {
+        return new Response(JSON.stringify({
+          type: "FOLDER",
+          children: [{ name: "jobs", type: "FOLDER", m_timestamp: 1 }],
+        }), { headers: { "content-type": "application/json" } });
+      }
+      if (url.endsWith("/api/v1/files/local/jobs")) {
+        return new Response(JSON.stringify({
+          type: "FOLDER",
+          children: [{
+            name: "BRACK~1.BGC",
+            display_name: "bracket.bgcode",
+            type: "PRINT_FILE",
+            size: 8192,
+            m_timestamp: 1_725_000_000,
+          }],
+        }), { headers: { "content-type": "application/json" } });
+      }
+      if (url.endsWith("/api/v1/files/local/jobs/BRACK~1.BGC")) {
+        return new Response(JSON.stringify({
+          type: "PRINT_FILE",
+          refs: { download: "/api/files/local/jobs/BRACK~1.BGC/raw" },
+        }), { headers: { "content-type": "application/json" } });
+      }
+      if (url.endsWith("/api/files/local/jobs/BRACK~1.BGC/raw")) {
+        return new Response("binary-gcode");
+      }
+      return new Response(null, { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const config = {
+      base_url: "http://127.0.0.1",
+      username: "maker",
+      password: "printer-key",
+    };
+
+    const files = await prusalinkAdapter.files!.list(config);
+    expect(files).toEqual([expect.objectContaining({
+      id: "local/jobs/BRACK~1.BGC",
+      filename: "bracket.bgcode",
+      size_bytes: 8192,
+    })]);
+    const opened = await prusalinkAdapter.files!.open(config, files[0]!.id);
+    expect(await opened.text()).toBe("binary-gcode");
+    expect(fetchMock.mock.calls.some((call) =>
+      String(call[0]).endsWith("/api/files/local/jobs/BRACK~1.BGC/raw"),
+    )).toBe(true);
+  });
+
+  it("exposes connected PrusaLink cameras as snapshots", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/status")) return digest401();
+      if (url.endsWith("/api/v1/cameras")) {
+        return new Response(JSON.stringify([{
+          camera_id: "camera-one",
+          connected: true,
+          config: { name: "Enclosure" },
+        }]), { headers: { "content-type": "application/json" } });
+      }
+      if (url.endsWith("/api/v1/cameras/camera-one/snap")) {
+        return new Response("png", { headers: { "content-type": "image/png" } });
+      }
+      return new Response(null, { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const config = {
+      base_url: "http://127.0.0.1",
+      username: "maker",
+      password: "printer-key",
+    };
+
+    expect(await prusalinkAdapter.cameras!.list(config)).toEqual([{
+      id: "camera-one",
+      name: "Enclosure",
+      view: "snapshot",
+      service: "prusalink",
+    }]);
+    const snapshot = await prusalinkAdapter.cameras!.open(config, "camera-one");
+    expect(snapshot.headers.get("content-type")).toBe("image/png");
+  });
 });

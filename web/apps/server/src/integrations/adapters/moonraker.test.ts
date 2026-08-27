@@ -226,4 +226,72 @@ describe("moonrakerAdapter", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it("browses stored G-code and opens the selected relative path", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify([
+        { path: "jobs/frame x.bgcode", modified: 1_725_000_000, size: 4096, permissions: "rw" },
+      ]), { headers: { "content-type": "application/json" } }))
+      .mockResolvedValueOnce(new Response("; gcode", {
+        headers: { "content-type": "application/octet-stream" },
+      }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const config = { base_url: "http://127.0.0.1:7125" };
+    const files = await moonrakerAdapter.files!.list(config);
+    expect(files).toEqual([expect.objectContaining({
+      id: "jobs/frame x.bgcode",
+      filename: "frame x.bgcode",
+      size_bytes: 4096,
+    })]);
+
+    const opened = await moonrakerAdapter.files!.open(config, files[0]!.id);
+    expect(await opened.text()).toBe("; gcode");
+    expect(String(fetchMock.mock.calls[1]![0])).toContain(
+      "/server/files/gcodes/jobs/frame%20x.bgcode",
+    );
+  });
+
+  it("discovers an MJPEG camera and keeps Moonraker credentials off another origin", async () => {
+    const webcams = {
+      webcams: [{
+        uid: "cam-one",
+        name: "Toolhead",
+        service: "mjpegstreamer",
+        enabled: true,
+        stream_url: "http://camera.lan/stream",
+        snapshot_url: "http://camera.lan/snapshot",
+        aspect_ratio: "16:9",
+      }],
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(webcams), {
+        headers: { "content-type": "application/json" },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(webcams), {
+        headers: { "content-type": "application/json" },
+      }))
+      .mockResolvedValueOnce(new Response("frame", {
+        headers: { "content-type": "multipart/x-mixed-replace" },
+      }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const config = {
+      base_url: "http://127.0.0.1:7125",
+      api_key: "moonraker-secret",
+    };
+    expect(await moonrakerAdapter.cameras!.list(config)).toEqual([{
+      id: "cam-one",
+      name: "Toolhead",
+      view: "mjpeg",
+      service: "mjpegstreamer",
+      aspect_ratio: "16:9",
+    }]);
+    await moonrakerAdapter.cameras!.open(config, "cam-one");
+
+    const cameraHeaders = new Headers((fetchMock.mock.calls[2]![1] as RequestInit).headers);
+    expect(cameraHeaders.get("X-Api-Key")).toBeNull();
+  });
 });

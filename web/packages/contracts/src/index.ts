@@ -217,6 +217,27 @@ export type PrinterHostStatus = {
   bed_target_c?: number;
 };
 
+/** A sliced print file discovered on a linked printer host. */
+export type PrinterStoredFile = {
+  /** Provider-stable opaque identifier used to open this exact file. */
+  id: string;
+  /** Display path relative to the printer's print-file storage. */
+  path: string;
+  filename: string;
+  size_bytes?: number;
+  modified_at?: string;
+};
+
+/** A camera view that Print Partner can render without exposing host credentials. */
+export type PrinterCamera = {
+  id: string;
+  name: string;
+  /** MJPEG is rendered continuously; snapshots are refreshed by the user. */
+  view: "mjpeg" | "snapshot";
+  service?: string;
+  aspect_ratio?: string;
+};
+
 /** One Progress unit linked to a sent print job (verify-first Phase D). */
 export type PrinterCheckoffUnit = {
   part_id: number;

@@ -1,7 +1,9 @@
 import type {
   IntegrationConfig,
   IntegrationTestResult,
+  PrinterCamera,
   PrinterHostStatus,
+  PrinterStoredFile,
   PrinterUploadResult,
 } from "@print-partner/contracts";
 import { createReadStream, statSync } from "node:fs";
@@ -35,6 +37,22 @@ function storageRoot(config: IntegrationConfig): string {
     if (cleaned) return cleaned;
   }
   return "usb";
+}
+
+function safeProviderPath(raw: string): string | null {
+  const normalized = raw.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+  const segments = normalized.split("/");
+  if (
+    !normalized ||
+    segments.some((segment) => !segment || segment === "." || segment === "..")
+  ) {
+    return null;
+  }
+  return segments.join("/");
+}
+
+function encodedProviderPath(path: string): string {
+  return path.split("/").map(encodeURIComponent).join("/");
 }
 
 /**
@@ -275,8 +293,182 @@ async function readStatus(config: IntegrationConfig): Promise<PrinterHostStatus>
   };
 }
 
+type PrusaStorage = {
+  path?: unknown;
+  available?: unknown;
+};
+
+type PrusaFileInfo = {
+  name?: unknown;
+  display_name?: unknown;
+  type?: unknown;
+  size?: unknown;
+  m_timestamp?: unknown;
+  children?: unknown;
+  refs?: { download?: unknown };
+};
+
+function prusaFileUrl(baseUrl: string, providerPath: string): string {
+  const suffix = providerPath.includes("/") ? "" : "/";
+  return `${baseUrl}/api/v1/files/${encodedProviderPath(providerPath)}${suffix}`;
+}
+
+function displayFilename(row: PrusaFileInfo): string {
+  if (typeof row.display_name === "string" && row.display_name.trim()) {
+    return row.display_name.trim();
+  }
+  return typeof row.name === "string" ? row.name.trim() : "";
+}
+
+async function listStoredFiles(config: IntegrationConfig): Promise<PrinterStoredFile[]> {
+  const baseUrl = normalizeBaseUrl(config.base_url ?? config.baseUrl);
+  if (!baseUrl) throw new Error("base_url is required");
+  if (!credentials(config)) throw new Error("username and password are required");
+  const storageResponse = await prusalinkFetch(`${baseUrl}/api/v1/storage`, config, {
+    headers: { Accept: "application/json" },
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!storageResponse.ok) {
+    throw new Error(`PrusaLink storage list returned HTTP ${storageResponse.status}`);
+  }
+  const storageBody = await storageResponse.json() as { storage_list?: unknown };
+  const storages = Array.isArray(storageBody.storage_list)
+    ? storageBody.storage_list as PrusaStorage[]
+    : [];
+  const files: PrinterStoredFile[] = [];
+  const folderQueue: string[] = storages.flatMap((storage) => {
+    if (storage.available === false || typeof storage.path !== "string") return [];
+    const path = safeProviderPath(storage.path);
+    return path ? [path] : [];
+  });
+  const seenFolders = new Set<string>();
+
+  while (folderQueue.length > 0 && files.length < 500 && seenFolders.size < 100) {
+    const folder = folderQueue.shift();
+    if (!folder || seenFolders.has(folder)) continue;
+    seenFolders.add(folder);
+    const folderResponse = await prusalinkFetch(prusaFileUrl(baseUrl, folder), config, {
+      headers: { Accept: "application/json" },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!folderResponse.ok) {
+      await drainResponseBody(folderResponse);
+      continue;
+    }
+    const folderInfo = await folderResponse.json() as PrusaFileInfo;
+    const children = Array.isArray(folderInfo.children)
+      ? folderInfo.children as PrusaFileInfo[]
+      : [];
+    for (const child of children) {
+      const shortName = typeof child.name === "string" ? safeProviderPath(child.name) : null;
+      if (!shortName || shortName.includes("/")) continue;
+      const childPath = `${folder}/${shortName}`;
+      if (child.type === "FOLDER") {
+        folderQueue.push(childPath);
+        continue;
+      }
+      if (child.type !== "PRINT_FILE") continue;
+      const filename = displayFilename(child) || shortName;
+      const size = typeof child.size === "number" && Number.isFinite(child.size) && child.size >= 0
+        ? Math.round(child.size)
+        : undefined;
+      const modified = typeof child.m_timestamp === "number" && Number.isFinite(child.m_timestamp)
+        ? new Date(child.m_timestamp * 1_000).toISOString()
+        : undefined;
+      files.push({
+        id: childPath,
+        path: childPath,
+        filename,
+        ...(size === undefined ? {} : { size_bytes: size }),
+        ...(modified === undefined ? {} : { modified_at: modified }),
+      });
+      if (files.length >= 500) break;
+    }
+  }
+  return files;
+}
+
+type PrusaCameraInfo = {
+  camera_id?: unknown;
+  connected?: unknown;
+  config?: { name?: unknown };
+};
+
+async function readCameras(config: IntegrationConfig): Promise<PrusaCameraInfo[]> {
+  const baseUrl = normalizeBaseUrl(config.base_url ?? config.baseUrl);
+  if (!baseUrl) throw new Error("base_url is required");
+  const response = await prusalinkFetch(`${baseUrl}/api/v1/cameras`, config, {
+    headers: { Accept: "application/json" },
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!response.ok) {
+    if (response.status === 404 || response.status === 403 || response.status === 503) return [];
+    throw new Error(`PrusaLink camera list returned HTTP ${response.status}`);
+  }
+  const body = await response.json() as unknown;
+  return Array.isArray(body) ? body as PrusaCameraInfo[] : [];
+}
+
+async function listCameras(config: IntegrationConfig): Promise<PrinterCamera[]> {
+  const cameras = await readCameras(config);
+  return cameras.flatMap((camera, index): PrinterCamera[] => {
+    const id = typeof camera.camera_id === "string" ? camera.camera_id.trim() : "";
+    if (!id || camera.connected === false) return [];
+    const name = typeof camera.config?.name === "string" && camera.config.name.trim()
+      ? camera.config.name.trim()
+      : `Camera ${index + 1}`;
+    return [{ id, name, view: "snapshot", service: "prusalink" }];
+  });
+}
+
 export const prusalinkAdapter: IntegrationAdapter = {
   type: "prusalink",
+
+  files: {
+    list: listStoredFiles,
+    async open(config, fileId) {
+      const baseUrl = normalizeBaseUrl(config.base_url ?? config.baseUrl);
+      const providerPath = safeProviderPath(fileId);
+      if (!baseUrl || !providerPath) throw new Error("Invalid PrusaLink print-file path");
+      const metadataResponse = await prusalinkFetch(
+        prusaFileUrl(baseUrl, providerPath),
+        config,
+        {
+          headers: { Accept: "application/json" },
+          signal: AbortSignal.timeout(15_000),
+        },
+      );
+      if (!metadataResponse.ok) return metadataResponse;
+      const metadata = await metadataResponse.json() as PrusaFileInfo;
+      const downloadRef = typeof metadata.refs?.download === "string"
+        ? metadata.refs.download.trim()
+        : "";
+      if (!downloadRef) throw new Error("PrusaLink did not advertise a download URL");
+      const downloadUrl = new URL(downloadRef, `${baseUrl}/`).toString();
+      if (new URL(downloadUrl).origin !== new URL(baseUrl).origin) {
+        throw new Error("PrusaLink advertised a cross-origin download URL");
+      }
+      return prusalinkFetch(downloadUrl, config, {
+        signal: AbortSignal.timeout(120_000),
+      });
+    },
+  },
+
+  cameras: {
+    list: listCameras,
+    async open(config, cameraId) {
+      const baseUrl = normalizeBaseUrl(config.base_url ?? config.baseUrl);
+      if (!baseUrl) throw new Error("base_url is required");
+      const cameras = await readCameras(config);
+      const camera = cameras.find((row) => row.camera_id === cameraId && row.connected !== false);
+      if (!camera) throw new Error("Camera not found");
+      return prusalinkFetch(
+        `${baseUrl}/api/v1/cameras/${encodeURIComponent(cameraId)}/snap`,
+        config,
+        { signal: AbortSignal.timeout(30_000) },
+      );
+    },
+  },
 
   async testConnection(config: IntegrationConfig): Promise<IntegrationTestResult> {
     const baseUrl = normalizeBaseUrl(config.base_url ?? config.baseUrl);

@@ -4,7 +4,9 @@ import type {
   IntegrationSummary,
   IntegrationTestResult,
   IntegrationType,
+  PrinterCamera,
   PrinterHostStatus,
+  PrinterStoredFile,
   PrinterUploadResult,
 } from "@print-partner/contracts";
 import type { AppRepository } from "../db/repository.js";
@@ -12,12 +14,26 @@ import type { AppRepository } from "../db/repository.js";
 /** In-memory bytes or a path on disk (streamed by adapters). */
 export type PrinterUploadSource = Uint8Array | { path: string };
 
+/** Optional host capability for browsing and opening already-sliced files. */
+export type PrinterFileAccess = {
+  list(config: IntegrationConfig): Promise<PrinterStoredFile[]>;
+  open(config: IntegrationConfig, fileId: string): Promise<Response>;
+};
+
+/** Optional host capability for credential-safe camera views. */
+export type PrinterCameraAccess = {
+  list(config: IntegrationConfig): Promise<PrinterCamera[]>;
+  open(config: IntegrationConfig, cameraId: string): Promise<Response>;
+};
+
 export type IntegrationAdapter = {
   type: IntegrationType;
   testConnection(config: IntegrationConfig): Promise<IntegrationTestResult>;
   listDevices?(config: IntegrationConfig): Promise<DeviceSummary[]>;
   getStatus?(config: IntegrationConfig): Promise<PrinterHostStatus>;
   getObjectList?(config: IntegrationConfig): Promise<string[]>;
+  files?: PrinterFileAccess;
+  cameras?: PrinterCameraAccess;
   uploadFile?(
     config: IntegrationConfig,
     source: PrinterUploadSource,

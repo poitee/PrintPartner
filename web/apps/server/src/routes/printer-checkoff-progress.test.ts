@@ -23,6 +23,7 @@ import {
   saveUnattributedPrint,
 } from "../services/unattributed-print-store.js";
 import { AcceptedPlanOperationalIntegrityError } from "../db/accepted-plan-operational.js";
+import { parsePrinterMachine, saveFleet } from "../services/printer-fleet.js";
 
 const cleanup: Array<() => Promise<void>> = [];
 
@@ -654,6 +655,90 @@ describe("printer progress route", () => {
     expect(JSON.parse(repo.getSetting("printer.plan_bindings") ?? "[]")).toEqual([
       expect.objectContaining({ integration_id: "prusa-1", profile_id: plan.id }),
     ]);
+  });
+
+  it("assigns an uploaded print file to a Build and manually advances it to Checkoff", async () => {
+    const { app, repo, plan, bracket, acceptedPart } = await setup();
+    saveFleet(repo, [parsePrinterMachine({
+      id: "offline-printer",
+      name: "Garage printer",
+      model: "Custom",
+      bed_width_mm: 250,
+      bed_depth_mm: 210,
+      max_filament_slots: 1,
+      loaded_filaments: [],
+    })]);
+
+    const assigned = await app.inject({
+      method: "POST",
+      url: "/printer-checkoff/file-assignments",
+      payload: {
+        profile_id: plan.id,
+        printer_id: "offline-printer",
+        filename: "bracket.bgcode",
+        object_names: [acceptedPart.units[0]!.objectName],
+        tracking: "manual",
+        completed: false,
+      },
+    });
+
+    expect(assigned.statusCode).toBe(200);
+    expect(assigned.json()).toMatchObject({
+      link: {
+        profile_id: plan.id,
+        printer_id: "offline-printer",
+        integration_id: "manual:offline-printer",
+        state: "watching",
+        units: [{ part_id: bracket.id, unit_index: 0 }],
+      },
+    });
+
+    const completed = await app.inject({
+      method: "POST",
+      url: `/printer-checkoff/${assigned.json().link.id}/manual-complete`,
+      payload: {},
+    });
+    expect(completed.statusCode).toBe(200);
+    expect(completed.json()).toMatchObject({
+      link: { state: "awaiting_verify", host_outcome: "success", last_progress: 100 },
+    });
+    expect(acceptedPrintUnits(repo, plan.id, bracket.id)).toEqual([false]);
+  });
+
+  it("sends an already-finished external 3MF directly to Checkoff", async () => {
+    const { app, repo, plan, acceptedPart } = await setup();
+    saveFleet(repo, [parsePrinterMachine({
+      id: "sd-card-printer",
+      name: "SD card printer",
+      model: "Custom",
+      bed_width_mm: 250,
+      bed_depth_mm: 210,
+      max_filament_slots: 1,
+      loaded_filaments: [],
+    })]);
+
+    const assigned = await app.inject({
+      method: "POST",
+      url: "/printer-checkoff/file-assignments",
+      payload: {
+        profile_id: plan.id,
+        printer_id: "sd-card-printer",
+        filename: "finished.gcode.3mf",
+        object_names: [acceptedPart.units[0]!.objectName],
+        tracking: "manual",
+        completed: true,
+        sliced_3mf_confirmed: true,
+      },
+    });
+
+    expect(assigned.statusCode).toBe(200);
+    expect(assigned.json()).toMatchObject({
+      link: {
+        integration_id: "manual:sd-card-printer",
+        state: "awaiting_verify",
+        host_outcome: "success",
+      },
+    });
   });
 
   it("claims only selected unattributed plate files", async () => {

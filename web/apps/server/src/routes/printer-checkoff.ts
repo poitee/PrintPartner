@@ -13,9 +13,11 @@ import {
 } from "../services/printer-checkoff-verify.js";
 import { dispatchWebhooks } from "../services/webhook-store.js";
 import {
+  getPrinterCheckoffLink,
   listAwaitingVerifyPrinterCheckoffLinks,
   listWatchingPrinterCheckoffLinks,
   loadPrinterCheckoffLinks,
+  updatePrinterCheckoffLink,
 } from "../services/printer-checkoff-store.js";
 import { summarizePrintOutcomes } from "../services/printer-outcomes-store.js";
 import {
@@ -437,6 +439,192 @@ export async function registerPrinterCheckoffRoutes(
         );
       }
       return { link: result };
+    },
+  );
+
+  app.post(
+    "/printer-checkoff/file-assignments",
+    { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const body = request.body as {
+        profile_id?: unknown;
+        printer_id?: unknown;
+        filename?: unknown;
+        remote_path?: unknown;
+        object_names?: unknown;
+        tracking?: unknown;
+        completed?: unknown;
+        sliced_3mf_confirmed?: unknown;
+      };
+      const profileId = Number(body.profile_id);
+      const printerId = typeof body.printer_id === "string" ? body.printer_id.trim() : "";
+      const filename = typeof body.filename === "string" ? body.filename.trim() : "";
+      const tracking = body.tracking === "manual" ? "manual" : "host";
+      if (!Number.isInteger(profileId) || profileId <= 0) {
+        return sendProblem(reply, 400, "Bad Request", "profile_id is required");
+      }
+      if (!printerId) return sendProblem(reply, 400, "Bad Request", "printer_id is required");
+      if (!filename || filename.length > 500) {
+        return sendProblem(reply, 400, "Bad Request", "filename is required");
+      }
+      if (!/\.(?:gcode|gco|bgcode|3mf)$/i.test(filename)) {
+        return sendProblem(
+          reply,
+          400,
+          "Bad Request",
+          "Choose a .gcode, .gco, .bgcode, or .3mf print file",
+        );
+      }
+      if (/\.3mf$/i.test(filename) && body.sliced_3mf_confirmed !== true) {
+        return sendProblem(
+          reply,
+          400,
+          "Bad Request",
+          "Confirm that the 3MF is sliced and print-ready",
+        );
+      }
+      const printer = loadFleet(deps.repo).find((row) => row.id === printerId);
+      if (!printer) return sendProblem(reply, 404, "Not Found", "Printer not found");
+      const objectNames = Array.isArray(body.object_names)
+        ? body.object_names
+            .filter((value): value is string => typeof value === "string")
+            .map((value) => value.trim().slice(0, 200))
+            .filter(Boolean)
+            .slice(0, 500)
+        : [];
+      const remotePath = typeof body.remote_path === "string" && body.remote_path.trim()
+        ? body.remote_path.trim().slice(0, 1_000)
+        : undefined;
+
+      let integrationId: string;
+      if (tracking === "manual") {
+        integrationId = `manual:${printer.id}`;
+      } else {
+        integrationId = printer.integration_id?.trim() ?? "";
+        const integration = integrationId
+          ? getIntegrationConfig(deps.repo, integrationId)
+          : null;
+        if (!integration || integration.config.enabled === false) {
+          return sendProblem(
+            reply,
+            409,
+            "Conflict",
+            "Use manual tracking because this printer has no available host",
+          );
+        }
+      }
+
+      let materialized: ReturnType<AppRepository["materializeAcceptedPrinterLink"]>;
+      try {
+        materialized = deps.repo.materializeAcceptedPrinterLink({
+          kind: "create",
+          profileId,
+          objectNames,
+          fallbackFilename: filename,
+          link: {
+            integrationId,
+            printerId: printer.id,
+            hostName: printer.name,
+            filename,
+            remotePath,
+            started: false,
+          },
+        });
+      } catch (error) {
+        if (error instanceof AcceptedPlanOperationalIntegrityError) {
+          request.log.error(
+            { failure: "integrity", code: error.code, profileId, printerId },
+            "Print file assignment failed",
+          );
+        } else {
+          request.log.error(
+            { failure: "unexpected", profileId, printerId },
+            "Print file assignment failed",
+          );
+        }
+        return sendProblem(reply, 500, "Internal Server Error", "Internal Server Error");
+      }
+
+      if (materialized.kind === "created") {
+        if (body.completed !== true) {
+          return { link: materialized.link, attribution: materialized.attribution };
+        }
+        const completed = updatePrinterCheckoffLink(
+          deps.repo,
+          materialized.link.id,
+          {
+            state: "awaiting_verify",
+            host_outcome: "success",
+            saw_active: true,
+            last_progress: 100,
+            completed_at: new Date().toISOString(),
+          },
+          { requireState: "watching" },
+        );
+        if (!completed) {
+          return sendProblem(reply, 409, "Conflict", "Print assignment changed; retry");
+        }
+        return { link: completed, attribution: materialized.attribution };
+      }
+      switch (materialized.kind) {
+        case "transaction_unavailable":
+          return sendProblem(reply, 503, "Service Unavailable", "Accepted Plan update is unavailable");
+        case "empty":
+          return sendProblem(reply, 409, "Conflict", "Accepted Plan has no required units");
+        case "accepted_state_unavailable":
+          return sendProblem(
+            reply,
+            409,
+            "Conflict",
+            materialized.reason === "compatibility_dirty"
+              ? "Accepted Plan requires compatibility repair"
+              : "Accepted Plan operational state is not initialized",
+          );
+        case "no_match":
+          return sendProblem(
+            reply,
+            409,
+            "Conflict",
+            "Print file does not map to an incomplete Required unit in this Build",
+          );
+        case "already_linked":
+          return sendProblem(reply, 409, "Conflict", "This print file is already assigned");
+        default:
+          request.log.error(
+            { failure: "unexpected", profileId, printerId, outcome: materialized.kind },
+            "Print file assignment failed",
+          );
+          return sendProblem(reply, 500, "Internal Server Error", "Internal Server Error");
+      }
+    },
+  );
+
+  app.post(
+    "/printer-checkoff/:id/manual-complete",
+    { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const id = (request.params as { id: string }).id;
+      const link = getPrinterCheckoffLink(deps.repo, id);
+      if (!link) return sendProblem(reply, 404, "Not Found", "Tracked print not found");
+      if (link.integration_id !== `manual:${link.printer_id}`) {
+        return sendProblem(reply, 409, "Conflict", "This print is monitored by its printer host");
+      }
+      const completed = updatePrinterCheckoffLink(
+        deps.repo,
+        id,
+        {
+          state: "awaiting_verify",
+          host_outcome: "success",
+          saw_active: true,
+          last_progress: 100,
+          completed_at: new Date().toISOString(),
+        },
+        { requireState: "watching" },
+      );
+      if (!completed) {
+        return sendProblem(reply, 409, "Conflict", "Tracked print is no longer waiting to finish");
+      }
+      return { link: completed };
     },
   );
 

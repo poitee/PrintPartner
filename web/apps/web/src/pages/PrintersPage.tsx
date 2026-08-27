@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { Printer } from "lucide-react";
+import { Files, Printer } from "lucide-react";
 import type { PrinterHostStatus } from "@print-partner/contracts";
 import {
   fetchIntegrationStatus,
@@ -46,18 +46,19 @@ import {
   toneBadgeVariant,
 } from "../lib/printersPageModel";
 import { cn } from "@/lib/utils";
+import PrinterWorkspaceSheet from "../components/printers/PrinterWorkspaceSheet";
 
 const HOST_TYPES = new Set<LiveStripHostType>(["moonraker", "prusalink", "bambu"]);
 
-type LinkedPrinter = {
+type PrinterDesk = {
   printer: PrinterMachine;
-  host: IntegrationSummary;
-  hostType: LiveStripHostType;
+  host: IntegrationSummary | null;
+  hostType: LiveStripHostType | null;
 };
 
 export default function PrintersPage() {
   const { health, error: engineError, loading: healthLoading } = useEngineHealth();
-  const { profiles } = useProfileSelection();
+  const { profiles, selectedProfileId } = useProfileSelection();
   const engineState = resolveEngineState({
     health,
     loading: healthLoading,
@@ -65,14 +66,15 @@ export default function PrintersPage() {
   });
   const engineReady = engineState === "ready";
   const pollMs = usePrinterStatusPollMs();
-  const [linked, setLinked] = useState<LinkedPrinter[]>([]);
+  const [printers, setPrinters] = useState<PrinterDesk[]>([]);
+  const [workspacePrinterId, setWorkspacePrinterId] = useState<string | null>(null);
   const [statusById, setStatusById] = useState<Record<string, PrinterHostStatus>>({});
   const [checkoffLinks, setCheckoffLinks] = useState<PrinterCheckoffLink[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [rosterLoading, setRosterLoading] = useState(true);
   const requestId = useRef(0);
-  const linkedRef = useRef(linked);
-  linkedRef.current = linked;
+  const printersRef = useRef(printers);
+  printersRef.current = printers;
 
   const planNameById = useMemo(() => {
     const map = new Map<number, string>();
@@ -82,7 +84,7 @@ export default function PrintersPage() {
 
   const refreshRoster = useCallback(async () => {
     if (!engineReady) {
-      setLinked([]);
+      setPrinters([]);
       setStatusById({});
       setCheckoffLinks([]);
       setLoadError(null);
@@ -99,35 +101,35 @@ export default function PrintersPage() {
           .catch(() => null),
       ]);
       const byId = new Map(integrations.map((i) => [i.id, i]));
-      const next: LinkedPrinter[] = [];
+      const next: PrinterDesk[] = [];
       for (const machine of fleet) {
-        // Skip disabled fleet rows (plan/machine flag) and disabled hosts.
         if (machine.enabled === false) continue;
         const id = machine.integration_id?.trim();
-        if (!id) continue;
-        const host = byId.get(id);
-        if (!host || host.config.enabled === false) continue;
-        if (!HOST_TYPES.has(host.type as LiveStripHostType)) continue;
+        const candidate = id ? byId.get(id) : undefined;
+        const host = candidate?.config.enabled !== false &&
+          HOST_TYPES.has(candidate?.type as LiveStripHostType)
+          ? candidate ?? null
+          : null;
         next.push({
           printer: machine,
           host,
-          hostType: host.type as LiveStripHostType,
+          hostType: host ? host.type as LiveStripHostType : null,
         });
       }
-      setLinked(next);
+      setPrinters(next);
       // Keep last successful links on transient failure (avoid flashing "No plan.").
       if (checkoff) setCheckoffLinks(checkoff.links ?? []);
       setLoadError(null);
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : String(e));
-      setLinked([]);
+      setPrinters([]);
       setCheckoffLinks([]);
     } finally {
       setRosterLoading(false);
     }
   }, [engineReady]);
 
-  const refreshStatuses = useCallback(async (rows: LinkedPrinter[]) => {
+  const refreshStatuses = useCallback(async (rows: PrinterDesk[]) => {
     const id = ++requestId.current;
     if (!rows.length) {
       if (id === requestId.current) {
@@ -136,7 +138,9 @@ export default function PrintersPage() {
       }
       return;
     }
-    const integrationIds = [...new Set(rows.map((r) => r.host.id))];
+    const integrationIds = [
+      ...new Set(rows.flatMap((row) => row.host ? [row.host.id] : [])),
+    ];
     const [entries, checkoff] = await Promise.all([
       Promise.all(
         integrationIds.map(async (integrationId) => {
@@ -167,12 +171,12 @@ export default function PrintersPage() {
   }, [refreshRoster]);
 
   useEffect(() => {
-    if (!engineReady || linked.length === 0) return;
+    if (!engineReady || printers.length === 0) return;
 
     let cancelled = false;
     const tick = () => {
       if (cancelled || document.hidden) return;
-      void refreshStatuses(linkedRef.current);
+      void refreshStatuses(printersRef.current);
     };
 
     tick();
@@ -188,7 +192,11 @@ export default function PrintersPage() {
       document.removeEventListener("visibilitychange", onVisibility);
       requestId.current += 1;
     };
-  }, [engineReady, linked, refreshStatuses, pollMs]);
+  }, [engineReady, printers, refreshStatuses, pollMs]);
+
+  const workspacePrinter = printers.find(
+    (row) => row.printer.id === workspacePrinterId,
+  ) ?? null;
 
   return (
     <PageShell width="list">
@@ -197,7 +205,7 @@ export default function PrintersPage() {
         accent
         eyebrow="Workshop"
         title="Printers"
-        description="Live status for linked printers. Add and manage them in Settings."
+        description="Live status, files, cameras, and manual tracking for every workshop printer."
         actions={
           <PageHeaderActions>
             <Button size="sm" variant="outline" asChild>
@@ -226,12 +234,12 @@ export default function PrintersPage() {
         <p className="text-sm text-muted-foreground" role="status">
           Loading printers…
         </p>
-      ) : linked.length === 0 ? (
+      ) : printers.length === 0 ? (
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">No linked printers</CardTitle>
+            <CardTitle className="text-base">No printers</CardTitle>
             <CardDescription>
-              Add a Klipper, Prusa, or Bambu printer in Settings to see live status here.
+              Add a printer in Settings. A host is optional for manual file tracking.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -242,8 +250,8 @@ export default function PrintersPage() {
         </Card>
       ) : (
         <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-          {linked.map(({ printer, host, hostType }) => {
-            const status = statusById[host.id];
+          {printers.map(({ printer, host, hostType }) => {
+            const status = host ? statusById[host.id] : undefined;
             const tone = printerLiveStripTone(status?.state);
             const filename = status?.filename?.trim();
             const canSend = hostType === "moonraker" || hostType === "prusalink";
@@ -257,7 +265,7 @@ export default function PrintersPage() {
                           {printer.name}
                         </CardTitle>
                         <CardDescription className="text-xs">
-                          {printerDeskTypeLabel(hostType)}
+                          {hostType ? printerDeskTypeLabel(hostType) : `${printer.model} · Manual tracking`}
                         </CardDescription>
                       </div>
                       <Badge
@@ -266,7 +274,7 @@ export default function PrintersPage() {
                           "shrink-0 rounded-full px-2 py-0.5 font-mono text-2xs font-normal",
                         )}
                       >
-                        {formatPrinterStatusPill(status)}
+                        {host ? formatPrinterStatusPill(status) : "Unmonitored"}
                       </Badge>
                     </div>
                   </CardHeader>
@@ -296,7 +304,7 @@ export default function PrintersPage() {
                       })()
                     ) : (
                       <p className="text-xs text-muted-foreground">
-                        {status?.message?.trim() || "No active job"}
+                        {status?.message?.trim() || (host ? "No active job" : "Provide a print file to track this printer")}
                       </p>
                     )}
                     <dl className="grid grid-cols-2 gap-x-4 gap-y-2 rounded-md border border-border/70 bg-muted/25 p-3 text-xs">
@@ -310,8 +318,8 @@ export default function PrintersPage() {
                       </div>
                       <div>
                         <dt className="text-muted-foreground">Address</dt>
-                        <dd className="mt-0.5 truncate font-mono" title={status?.ip_address ?? configuredHost(host)}>
-                          {status?.ip_address ?? configuredHost(host) ?? "Unavailable"}
+                        <dd className="mt-0.5 truncate font-mono" title={status?.ip_address ?? (host ? configuredHost(host) : undefined)}>
+                          {status?.ip_address ?? (host ? configuredHost(host) : undefined) ?? "Unavailable"}
                         </dd>
                       </div>
                       <div>
@@ -330,15 +338,22 @@ export default function PrintersPage() {
                       </div>
                     ) : null}
                     <div className="flex flex-wrap gap-2 pt-1">
+                      <Button
+                        size="sm"
+                        onClick={() => setWorkspacePrinterId(printer.id)}
+                      >
+                        <Files className="mr-1.5 h-4 w-4" aria-hidden />
+                        Files & tracking
+                      </Button>
                       {canSend ? (
                         <Button size="sm" variant="outline" asChild>
                           <Link to={exportRoute()}>Send from Production</Link>
                         </Button>
-                      ) : (
+                      ) : hostType === "bambu" ? (
                         <p className="text-2xs leading-relaxed text-muted-foreground">
                           Use Bambu Connect from Production.
                         </p>
-                      )}
+                      ) : null}
                     </div>
                   </CardContent>
                 </Card>
@@ -347,6 +362,21 @@ export default function PrintersPage() {
           })}
         </ul>
       )}
+
+      {workspacePrinter ? (
+        <PrinterWorkspaceSheet
+          open
+          onOpenChange={(nextOpen) => {
+            if (!nextOpen) setWorkspacePrinterId(null);
+          }}
+          printer={workspacePrinter.printer}
+          host={workspacePrinter.host}
+          profiles={profiles}
+          selectedProfileId={selectedProfileId}
+          links={checkoffLinks}
+          onChanged={() => void refreshStatuses(printersRef.current)}
+        />
+      ) : null}
     </PageShell>
   );
 }

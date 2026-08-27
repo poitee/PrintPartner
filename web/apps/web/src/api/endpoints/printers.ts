@@ -1,4 +1,6 @@
-import { engineFetch } from "../engineTransport";
+import type { PrinterCamera, PrinterStoredFile } from "@print-partner/contracts";
+import { engineFetch, engineFetchStream } from "../engineTransport";
+import { resolveEngineUrl } from "../contractRequest";
 
 export type PrinterMachine = {
   id: string;
@@ -106,4 +108,42 @@ export async function updatePrinterSlicer(
     method: "PUT",
     body: JSON.stringify({ preferred_slicer: preferredSlicer }),
   });
+}
+
+export async function fetchPrinterStoredFiles(printerId: string): Promise<PrinterStoredFile[]> {
+  const body = await engineFetch<{ files: PrinterStoredFile[] }>(
+    `/printers/${encodeURIComponent(printerId)}/files`,
+  );
+  return body.files;
+}
+
+export async function openPrinterStoredFile(
+  printerId: string,
+  storedFile: PrinterStoredFile,
+): Promise<File> {
+  const params = new URLSearchParams({ id: storedFile.id });
+  const response = await engineFetchStream({
+    path: `/printers/${encodeURIComponent(printerId)}/files/content?${params}`,
+  });
+  const blob = await response.blob();
+  return new File([blob], storedFile.filename, {
+    type: blob.type || "application/octet-stream",
+    lastModified: storedFile.modified_at
+      ? new Date(storedFile.modified_at).getTime()
+      : Date.now(),
+  });
+}
+
+export async function fetchPrinterCameras(printerId: string): Promise<PrinterCamera[]> {
+  const body = await engineFetch<{ cameras: PrinterCamera[] }>(
+    `/printers/${encodeURIComponent(printerId)}/cameras`,
+  );
+  return body.cameras;
+}
+
+export function printerCameraViewUrl(printerId: string, cameraId: string): string {
+  const params = new URLSearchParams({ id: cameraId });
+  return resolveEngineUrl(
+    `/printers/${encodeURIComponent(printerId)}/cameras/view?${params}`,
+  );
 }

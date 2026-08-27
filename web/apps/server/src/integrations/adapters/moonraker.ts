@@ -1,7 +1,9 @@
 import type {
   IntegrationConfig,
   IntegrationTestResult,
+  PrinterCamera,
   PrinterHostStatus,
+  PrinterStoredFile,
   PrinterUploadResult,
 } from "@print-partner/contracts";
 import type { IntegrationAdapter, PrinterUploadSource } from "../store.js";
@@ -43,9 +45,9 @@ async function moonrakerFetch(
   url: string,
   config: IntegrationConfig,
   init: RequestInit = {},
+  credentialOrigin = new URL(url).origin,
 ): Promise<Response> {
   const auth = authHeaders(config);
-  const originalOrigin = new URL(url).origin;
   let current = url;
   const signal = init.signal ?? AbortSignal.timeout(30_000);
 
@@ -54,7 +56,7 @@ async function moonrakerFetch(
     const headers = new Headers(init.headers);
     headers.delete("Authorization");
     headers.delete("X-Api-Key");
-    if (new URL(current).origin === originalOrigin) {
+    if (new URL(current).origin === credentialOrigin) {
       for (const [k, v] of Object.entries(auth)) {
         if (!headers.has(k)) headers.set(k, v);
       }
@@ -75,6 +77,121 @@ async function moonrakerFetch(
     return response;
   }
   throw new Error(`Too many redirects fetching ${url}`);
+}
+
+function safeRelativePath(raw: string): string | null {
+  const normalized = raw.replace(/\\/g, "/").replace(/^\/+/, "");
+  const segments = normalized.split("/");
+  if (
+    !normalized ||
+    segments.some((segment) => !segment || segment === "." || segment === "..")
+  ) {
+    return null;
+  }
+  return segments.join("/");
+}
+
+function encodedPath(path: string): string {
+  return path.split("/").map(encodeURIComponent).join("/");
+}
+
+async function listStoredFiles(config: IntegrationConfig): Promise<PrinterStoredFile[]> {
+  const baseUrl = normalizeBaseUrl(config.base_url ?? config.baseUrl);
+  if (!baseUrl) throw new Error("base_url is required");
+  const response = await moonrakerFetch(
+    `${baseUrl}/server/files/list?root=gcodes`,
+    config,
+    { signal: AbortSignal.timeout(15_000) },
+  );
+  if (!response.ok) {
+    throw new Error(`Moonraker file list returned HTTP ${response.status}`);
+  }
+  const body = await response.json() as unknown;
+  if (!Array.isArray(body)) return [];
+  return body.flatMap((value): PrinterStoredFile[] => {
+    if (!value || typeof value !== "object") return [];
+    const row = value as Record<string, unknown>;
+    const path = typeof row.path === "string" ? safeRelativePath(row.path) : null;
+    if (!path) return [];
+    const modified = typeof row.modified === "number" && Number.isFinite(row.modified)
+      ? new Date(row.modified * 1_000).toISOString()
+      : undefined;
+    const size = typeof row.size === "number" && Number.isFinite(row.size) && row.size >= 0
+      ? Math.round(row.size)
+      : undefined;
+    return [{
+      id: path,
+      path,
+      filename: path.split("/").at(-1) ?? path,
+      ...(size === undefined ? {} : { size_bytes: size }),
+      ...(modified === undefined ? {} : { modified_at: modified }),
+    }];
+  });
+}
+
+type MoonrakerWebcam = {
+  uid?: unknown;
+  name?: unknown;
+  service?: unknown;
+  enabled?: unknown;
+  stream_url?: unknown;
+  snapshot_url?: unknown;
+  aspect_ratio?: unknown;
+};
+
+async function readWebcams(config: IntegrationConfig): Promise<MoonrakerWebcam[]> {
+  const baseUrl = normalizeBaseUrl(config.base_url ?? config.baseUrl);
+  if (!baseUrl) throw new Error("base_url is required");
+  const response = await moonrakerFetch(
+    `${baseUrl}/server/webcams/list`,
+    config,
+    { signal: AbortSignal.timeout(10_000) },
+  );
+  if (!response.ok) {
+    if (response.status === 404) return [];
+    throw new Error(`Moonraker webcam list returned HTTP ${response.status}`);
+  }
+  const body = await response.json() as { webcams?: unknown };
+  return Array.isArray(body.webcams) ? body.webcams as MoonrakerWebcam[] : [];
+}
+
+function cameraId(camera: MoonrakerWebcam, index: number): string {
+  const uid = typeof camera.uid === "string" ? camera.uid.trim() : "";
+  return uid || `camera-${index}`;
+}
+
+function supportsMjpeg(service: string, streamUrl: string): boolean {
+  const normalized = service.toLowerCase();
+  return normalized.includes("mjpeg") || normalized.includes("ustreamer") || /action=stream/i.test(streamUrl);
+}
+
+async function listCameras(config: IntegrationConfig): Promise<PrinterCamera[]> {
+  const cameras = await readWebcams(config);
+  return cameras.flatMap((camera, index): PrinterCamera[] => {
+    if (camera.enabled === false) return [];
+    const streamUrl = typeof camera.stream_url === "string" ? camera.stream_url.trim() : "";
+    const snapshotUrl = typeof camera.snapshot_url === "string" ? camera.snapshot_url.trim() : "";
+    const service = typeof camera.service === "string" ? camera.service.trim() : "";
+    const view = streamUrl && supportsMjpeg(service, streamUrl)
+      ? "mjpeg"
+      : snapshotUrl
+        ? "snapshot"
+        : null;
+    if (!view) return [];
+    const name = typeof camera.name === "string" && camera.name.trim()
+      ? camera.name.trim()
+      : `Camera ${index + 1}`;
+    const aspectRatio = typeof camera.aspect_ratio === "string" && camera.aspect_ratio.trim()
+      ? camera.aspect_ratio.trim()
+      : undefined;
+    return [{
+      id: cameraId(camera, index),
+      name,
+      view,
+      ...(service ? { service } : {}),
+      ...(aspectRatio ? { aspect_ratio: aspectRatio } : {}),
+    }];
+  });
 }
 
 function mapPrintState(raw: string | undefined): PrinterHostStatus["state"] {
@@ -192,6 +309,43 @@ async function fetchObjectList(config: IntegrationConfig): Promise<string[]> {
 
 export const moonrakerAdapter: IntegrationAdapter = {
   type: "moonraker",
+
+  files: {
+    list: listStoredFiles,
+    async open(config, fileId) {
+      const baseUrl = normalizeBaseUrl(config.base_url ?? config.baseUrl);
+      const path = safeRelativePath(fileId);
+      if (!baseUrl || !path) throw new Error("Invalid Moonraker print-file path");
+      return moonrakerFetch(
+        `${baseUrl}/server/files/gcodes/${encodedPath(path)}`,
+        config,
+        { signal: AbortSignal.timeout(120_000) },
+      );
+    },
+  },
+
+  cameras: {
+    list: listCameras,
+    async open(config, requestedId) {
+      const baseUrl = normalizeBaseUrl(config.base_url ?? config.baseUrl);
+      if (!baseUrl) throw new Error("base_url is required");
+      const cameras = await readWebcams(config);
+      const entry = cameras.find((camera, index) => cameraId(camera, index) === requestedId);
+      if (!entry || entry.enabled === false) throw new Error("Camera not found");
+      const streamUrl = typeof entry.stream_url === "string" ? entry.stream_url.trim() : "";
+      const snapshotUrl = typeof entry.snapshot_url === "string" ? entry.snapshot_url.trim() : "";
+      const service = typeof entry.service === "string" ? entry.service.trim() : "";
+      const selected = streamUrl && supportsMjpeg(service, streamUrl) ? streamUrl : snapshotUrl;
+      if (!selected) throw new Error("Camera has no browser-compatible view");
+      const url = new URL(selected, `${baseUrl}/`).toString();
+      return moonrakerFetch(
+        url,
+        config,
+        { signal: AbortSignal.timeout(10 * 60_000) },
+        new URL(baseUrl).origin,
+      );
+    },
+  },
 
   async testConnection(config: IntegrationConfig): Promise<IntegrationTestResult> {
     const baseUrl = normalizeBaseUrl(config.base_url ?? config.baseUrl);

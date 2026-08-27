@@ -50,6 +50,7 @@ export type AcceptedPrinterLinkMetadata = Readonly<{
   printerId: string;
   hostName: string;
   filename: string;
+  remotePath?: string;
   started: boolean;
 }>;
 

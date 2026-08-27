@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { Readable } from "node:stream";
 import type { AppRepository } from "../db/repository.js";
 import {
   loadFleet,
@@ -17,6 +18,9 @@ import {
 } from "./printer-route-model.js";
 import { buildAssignmentView } from "../services/printer-profile-assignments.js";
 import type { ProfileSourceMode } from "../services/printer-profile-assignments.js";
+import { getIntegrationAdapter } from "../integrations/registry.js";
+import { getIntegrationConfig } from "../integrations/store.js";
+import { sendProblem } from "../lib/api-error.js";
 
 type RouteDeps = { repo: AppRepository };
 
@@ -24,8 +28,185 @@ function findFleetPrinter(repo: AppRepository, printerId: string) {
   return loadFleet(repo).find((m) => m.id === printerId) ?? null;
 }
 
+type PrinterHostCapability =
+  | {
+      ok: false;
+      error: "printer_not_found" | "host_not_linked" | "host_not_available";
+    }
+  | {
+      ok: true;
+      printer: NonNullable<ReturnType<typeof findFleetPrinter>>;
+      integration: NonNullable<ReturnType<typeof getIntegrationConfig>>;
+      adapter: NonNullable<ReturnType<typeof getIntegrationAdapter>>;
+    };
+
+function printerHostCapability(
+  repo: AppRepository,
+  printerId: string,
+): PrinterHostCapability {
+  const printer = findFleetPrinter(repo, printerId);
+  if (!printer) return { ok: false, error: "printer_not_found" };
+  const integrationId = printer.integration_id?.trim();
+  if (!integrationId) return { ok: false, error: "host_not_linked" };
+  const integration = getIntegrationConfig(repo, integrationId);
+  if (!integration || integration.config.enabled === false) {
+    return { ok: false, error: "host_not_available" };
+  }
+  const adapter = getIntegrationAdapter(integration.type);
+  if (!adapter) return { ok: false, error: "host_not_available" };
+  return { ok: true, printer, integration, adapter };
+}
+
+function publicCapabilityError(
+  reply: Parameters<typeof sendProblem>[0],
+  error: "printer_not_found" | "host_not_linked" | "host_not_available",
+) {
+  if (error === "printer_not_found") {
+    return sendProblem(reply, 404, "Not Found", "Printer not found");
+  }
+  if (error === "host_not_linked") {
+    return sendProblem(reply, 409, "Conflict", "Printer is not linked to a host");
+  }
+  return sendProblem(reply, 503, "Service Unavailable", "Printer host is unavailable");
+}
+
+async function sendUpstreamResponse(
+  reply: Parameters<typeof sendProblem>[0],
+  response: Response,
+) {
+  if (!response.ok || !response.body) {
+    try {
+      await response.arrayBuffer();
+    } catch {
+      /* ignore */
+    }
+    return sendProblem(
+      reply,
+      response.status === 404 ? 404 : 502,
+      response.status === 404 ? "Not Found" : "Bad Gateway",
+      response.status === 404
+        ? "Printer resource not found"
+        : `Printer host returned HTTP ${response.status}`,
+    );
+  }
+  const contentType = response.headers.get("content-type");
+  const contentLength = response.headers.get("content-length");
+  if (contentType) reply.header("Content-Type", contentType);
+  if (contentLength) reply.header("Content-Length", contentLength);
+  reply.header("Cache-Control", "private, no-store");
+  return reply.send(Readable.fromWeb(response.body));
+}
+
 export async function registerPrinterRoutes(app: FastifyInstance, deps: RouteDeps): Promise<void> {
   app.get("/printers", async () => ({ printers: loadFleet(deps.repo) }));
+
+  app.get("/printers/:id/files", async (request, reply) => {
+    const printerId = (request.params as { id: string }).id;
+    const capability = printerHostCapability(deps.repo, printerId);
+    if (!capability.ok) return publicCapabilityError(reply, capability.error);
+    if (!capability.adapter.files) {
+      return sendProblem(reply, 501, "Not Implemented", "Printer host does not support file browsing");
+    }
+    try {
+      return { files: await capability.adapter.files.list(capability.integration.config) };
+    } catch (error) {
+      request.log.warn(
+        { printerId, integrationId: capability.integration.id },
+        "Printer file browsing failed",
+      );
+      return sendProblem(
+        reply,
+        502,
+        "Bad Gateway",
+        error instanceof Error ? error.message : "Could not browse printer files",
+      );
+    }
+  });
+
+  app.get("/printers/:id/files/content", async (request, reply) => {
+    const printerId = (request.params as { id: string }).id;
+    const fileId = String((request.query as { id?: unknown }).id ?? "").trim();
+    if (!fileId) return sendProblem(reply, 400, "Bad Request", "id is required");
+    const capability = printerHostCapability(deps.repo, printerId);
+    if (!capability.ok) return publicCapabilityError(reply, capability.error);
+    if (!capability.adapter.files) {
+      return sendProblem(reply, 501, "Not Implemented", "Printer host does not support file browsing");
+    }
+    try {
+      const listed = await capability.adapter.files.list(capability.integration.config);
+      if (!listed.some((file) => file.id === fileId)) {
+        return sendProblem(reply, 404, "Not Found", "Printer file not found");
+      }
+      return sendUpstreamResponse(
+        reply,
+        await capability.adapter.files.open(capability.integration.config, fileId),
+      );
+    } catch (error) {
+      request.log.warn(
+        { printerId, integrationId: capability.integration.id },
+        "Printer file open failed",
+      );
+      return sendProblem(
+        reply,
+        502,
+        "Bad Gateway",
+        error instanceof Error ? error.message : "Could not open printer file",
+      );
+    }
+  });
+
+  app.get("/printers/:id/cameras", async (request, reply) => {
+    const printerId = (request.params as { id: string }).id;
+    const capability = printerHostCapability(deps.repo, printerId);
+    if (!capability.ok) return publicCapabilityError(reply, capability.error);
+    if (!capability.adapter.cameras) return { cameras: [] };
+    try {
+      return { cameras: await capability.adapter.cameras.list(capability.integration.config) };
+    } catch (error) {
+      request.log.warn(
+        { printerId, integrationId: capability.integration.id },
+        "Printer camera discovery failed",
+      );
+      return sendProblem(
+        reply,
+        502,
+        "Bad Gateway",
+        error instanceof Error ? error.message : "Could not discover printer cameras",
+      );
+    }
+  });
+
+  app.get("/printers/:id/cameras/view", async (request, reply) => {
+    const printerId = (request.params as { id: string }).id;
+    const cameraId = String((request.query as { id?: unknown }).id ?? "").trim();
+    if (!cameraId) return sendProblem(reply, 400, "Bad Request", "id is required");
+    const capability = printerHostCapability(deps.repo, printerId);
+    if (!capability.ok) return publicCapabilityError(reply, capability.error);
+    if (!capability.adapter.cameras) {
+      return sendProblem(reply, 404, "Not Found", "Printer camera not found");
+    }
+    try {
+      const cameras = await capability.adapter.cameras.list(capability.integration.config);
+      if (!cameras.some((camera) => camera.id === cameraId)) {
+        return sendProblem(reply, 404, "Not Found", "Printer camera not found");
+      }
+      return sendUpstreamResponse(
+        reply,
+        await capability.adapter.cameras.open(capability.integration.config, cameraId),
+      );
+    } catch (error) {
+      request.log.warn(
+        { printerId, integrationId: capability.integration.id },
+        "Printer camera view failed",
+      );
+      return sendProblem(
+        reply,
+        502,
+        "Bad Gateway",
+        error instanceof Error ? error.message : "Could not open printer camera",
+      );
+    }
+  });
 
   app.get("/slicer-profile-options", async () => {
     const printers = deps.repo.listSlicerPrinterProfiles().map((row) => {

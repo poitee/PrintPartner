@@ -251,3 +251,28 @@ export async function dismissUnattributedPrint(id: string): Promise<void> {
     body: "{}",
   });
 }
+
+export async function assignPrinterFile(options: {
+  profile_id: number;
+  printer_id: string;
+  filename: string;
+  remote_path?: string;
+  object_names: string[];
+  tracking: "host" | "manual";
+  completed: boolean;
+  sliced_3mf_confirmed?: boolean;
+}): Promise<{ link: PrinterCheckoffLink }> {
+  return engineFetch("/printer-checkoff/file-assignments", {
+    method: "POST",
+    body: JSON.stringify(options),
+  });
+}
+
+export async function completeManualPrinterFile(
+  linkId: string,
+): Promise<{ link: PrinterCheckoffLink }> {
+  return engineFetch(
+    `/printer-checkoff/${encodeURIComponent(linkId)}/manual-complete`,
+    { method: "POST", body: "{}" },
+  );
+}
