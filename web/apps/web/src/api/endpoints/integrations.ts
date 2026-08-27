@@ -1,0 +1,61 @@
+import type { PrinterHostStatus } from "@print-partner/contracts";
+import { engineFetch } from "../engineTransport";
+
+export type IntegrationSummary = {
+  id: string;
+  type: string;
+  name: string;
+  config: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type IntegrationTestResult = {
+  ok: boolean;
+  message?: string;
+};
+
+function v1Path(path: string): string {
+  const normalized = path.startsWith("/") ? path : `/${path}`;
+  return `/api/v1${normalized}`;
+}
+
+export async function fetchIntegrations(): Promise<IntegrationSummary[]> {
+  const body = await engineFetch<{ integrations: IntegrationSummary[] }>(v1Path("/integrations"));
+  return body.integrations;
+}
+
+export async function createIntegration(body: {
+  type: string;
+  name: string;
+  config: Record<string, unknown>;
+}): Promise<IntegrationSummary> {
+  return engineFetch<IntegrationSummary>(v1Path("/integrations"), {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function updateIntegration(
+  id: string,
+  body: { name?: string; config?: Record<string, unknown> },
+): Promise<IntegrationSummary> {
+  return engineFetch<IntegrationSummary>(v1Path(`/integrations/${encodeURIComponent(id)}`), {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function deleteIntegration(id: string): Promise<void> {
+  await engineFetch(v1Path(`/integrations/${encodeURIComponent(id)}`), { method: "DELETE" });
+}
+
+export async function testIntegration(id: string): Promise<IntegrationTestResult> {
+  return engineFetch<IntegrationTestResult>(v1Path(`/integrations/${encodeURIComponent(id)}/test`), {
+    method: "POST",
+  });
+}
+
+export async function fetchIntegrationStatus(id: string): Promise<PrinterHostStatus> {
+  return engineFetch<PrinterHostStatus>(v1Path(`/integrations/${encodeURIComponent(id)}/status`));
+}
