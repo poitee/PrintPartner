@@ -1,40 +1,94 @@
+import type { BuildWorkflowWorkspace } from "@print-partner/contracts";
 import { describe, expect, it } from "vitest";
-import type { ProfileSummary } from "@print-partner/contracts";
 import { buildWorkflowStages, stageIdFromPath } from "./workflowStages";
 
-const voron = {
-  id: 7,
-  name: "Voron",
-  archived_at: null,
-  part_count: 4,
-  build_stale: false,
-} as ProfileSummary;
+const workspace = {
+  build: { id: 7, name: "Voron" },
+  sources: { kind: "ready", attached_count: 2 },
+  accepted_plan: { kind: "none" },
+  working_plan: { kind: "ready", draft_id: 9, change_count: 4 },
+  stages: [
+    {
+      id: "sources",
+      group: "prepare",
+      label: "Sources",
+      status: { kind: "complete", summary: "2 Sources attached." },
+    },
+    {
+      id: "plan",
+      group: "prepare",
+      label: "Plan",
+      status: { kind: "ready", summary: "Working Plan has 4 changes to review." },
+    },
+    {
+      id: "production",
+      group: "make",
+      label: "Production",
+      status: {
+        kind: "not_started",
+        summary: "Accept a Working Plan before Production.",
+      },
+    },
+    {
+      id: "checkoff",
+      group: "make",
+      label: "Checkoff",
+      status: {
+        kind: "not_started",
+        summary: "Accept a Working Plan before Checkoff.",
+      },
+    },
+  ],
+  next_action: {
+    kind: "accept_working_plan",
+    stage_id: "plan",
+    draft_id: 9,
+    label: "Review and accept Working Plan",
+    reason: "The Working Plan is ready for acceptance.",
+  },
+  active_work: {
+    queued_jobs: 0,
+    sending_jobs: 0,
+    printing_jobs: 0,
+    failed_jobs: 0,
+    awaiting_verification: 0,
+    failed_verifications: 0,
+    total_units: 0,
+    remaining_units: 0,
+  },
+} satisfies BuildWorkflowWorkspace;
 
 describe("buildWorkflowStages", () => {
-  it("exposes Sources, Plan, Checkoff, and Production for the selected Build", () => {
-    const stages = buildWorkflowStages({
-      pathname: "/parts",
-      sourcesCount: 2,
-      profiles: [voron],
-      selectedProfileId: 7,
-    });
+  it("adapts the shared Prepare and Make projection to Build routes", () => {
+    const stages = buildWorkflowStages(workspace, 7);
 
     expect(stages.map((stage) => stage.id)).toEqual([
       "sources",
       "plan",
-      "checkoff",
       "production",
+      "checkoff",
     ]);
-    expect(stages.map((stage) => stage.label)).toEqual([
+    expect(stages.map((stage) => stage.status.kind)).toEqual([
+      "complete",
+      "ready",
+      "not_started",
+      "not_started",
+    ]);
+    expect(stages.map((stage) => stage.to)).toEqual([
+      "/sources?profile=7",
+      "/plan?profile=7",
+      "/export?profile=7",
+      "/progress?profile=7",
+    ]);
+  });
+
+  it("keeps the same destinations visible before a Build is selected", () => {
+    expect(buildWorkflowStages(null, null).map((stage) => stage.label)).toEqual([
       "Sources",
       "Plan",
-      "Checkoff",
       "Production",
+      "Checkoff",
     ]);
-    expect(stages.find((stage) => stage.id === "sources")?.to).toBe("/sources?profile=7");
-    expect(stages.find((stage) => stage.id === "plan")?.to).toBe("/plan?profile=7");
-    expect(stages.find((stage) => stage.id === "checkoff")?.to).toBe("/progress?profile=7");
-    expect(stages.find((stage) => stage.id === "production")?.to).toBe("/export?profile=7");
   });
 });
 
@@ -44,9 +98,9 @@ describe("stageIdFromPath", () => {
     expect(stageIdFromPath("/build")).toBe("sources");
     expect(stageIdFromPath("/plan")).toBe("plan");
     expect(stageIdFromPath("/parts")).toBe("plan");
+    expect(stageIdFromPath("/export")).toBe("production");
     expect(stageIdFromPath("/progress")).toBe("checkoff");
     expect(stageIdFromPath("/production")).toBeNull();
-    expect(stageIdFromPath("/export")).toBe("production");
     expect(stageIdFromPath("/library")).toBeNull();
     expect(stageIdFromPath("/builds")).toBeNull();
   });

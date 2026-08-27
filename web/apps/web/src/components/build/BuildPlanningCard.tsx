@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import {
   fetchBuildPlanningState,
   type BuildPlanningState,
 } from "../../api/endpoints/planManifests";
 import { Badge } from "../ui/badge";
+import { planRoute } from "../../lib/routes";
 import {
   Card,
   CardContent,
@@ -15,17 +17,17 @@ import {
 function planningPhaseDescription(phase: BuildPlanningState["planning_phase"]): string {
   switch (phase.kind) {
     case "preparing":
-      return "No reviewed draft yet";
+      return "Working Plan not built yet";
     case "draft":
-      return `Draft ${phase.draft_id}`;
+      return `Working Plan ${phase.draft_id}`;
     case "applied":
       return phase.revision_id == null
-        ? `Applied draft ${phase.draft_id}`
-        : `Applied draft ${phase.draft_id} as Plan revision ${phase.revision_id}`;
+        ? `Working Plan ${phase.draft_id} accepted`
+        : `Accepted as Plan revision ${phase.revision_id}`;
     case "abandoned":
-      return `Abandoned draft ${phase.draft_id}`;
+      return `Working Plan ${phase.draft_id} abandoned`;
     case "missing_draft":
-      return `Draft ${phase.draft_id} is unavailable`;
+      return `Working Plan ${phase.draft_id} is unavailable`;
     default: {
       const exhaustive: never = phase;
       return exhaustive;
@@ -73,17 +75,20 @@ export default function BuildPlanningCard({
   if (!state) return null;
 
   const { brief, planning_phase: planningPhase, readiness } = state;
-  const phaseBadge = planningPhase.kind === "applied"
-    ? { label: "Applied", variant: "success" as const }
+  const phaseBadge: {
+    label: string;
+    variant: "success" | "warning" | "error";
+  } = planningPhase.kind === "applied"
+    ? { label: "Accepted", variant: "success" }
     : planningPhase.kind === "abandoned"
-      ? { label: "Draft abandoned", variant: "warning" as const }
+      ? { label: "Working Plan abandoned", variant: "warning" }
       : planningPhase.kind === "missing_draft"
-        ? { label: "Draft unavailable", variant: "error" as const }
+        ? { label: "Working Plan unavailable", variant: "error" }
         : {
             label: readiness.ready
-              ? "Ready to apply"
+              ? "Ready for Plan review"
               : `${readiness.blockers.length} blockers`,
-            variant: readiness.ready ? "success" as const : "warning" as const,
+            variant: readiness.ready ? "success" : "warning",
           };
   return (
     <Card>
@@ -102,6 +107,15 @@ export default function BuildPlanningCard({
         <p className="whitespace-pre-wrap text-muted-foreground">
           {brief.special_request}
         </p>
+
+        {readiness.ready && planningPhase.kind === "draft" ? (
+          <Link
+            to={planRoute(planId)}
+            className="inline-flex font-medium text-primary underline-offset-2 hover:underline"
+          >
+            Open Plan to review and accept the Working Plan
+          </Link>
+        ) : null}
 
         <section aria-labelledby="planning-requirements-heading">
           <h3 id="planning-requirements-heading" className="mb-2 font-medium">

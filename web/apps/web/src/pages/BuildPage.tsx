@@ -20,8 +20,7 @@ import PlanRolesCard from "../components/build/PlanRolesCard";
 import PlanWarningsCard from "../components/build/PlanWarningsCard";
 import PlanCategoryDropStrip from "../components/build/PlanCategoryDropStrip";
 import BuildPlanningCard from "../components/build/BuildPlanningCard";
-import PlanDraftApplyButton from "../components/build/PlanDraftApplyButton";
-import DeskNextStep from "../components/layout/DeskNextStep";
+import BuildWorkflowNextAction from "../components/build/BuildWorkflowNextAction";
 import EmptyState from "../components/layout/EmptyState";
 import PageHeader from "../components/layout/PageHeader";
 import PageHeaderActions from "../components/layout/PageHeaderActions";
@@ -32,7 +31,7 @@ import SourceFilePickerCard from "../components/SourceFilePickerCard";
 import ShareImportSetupPanel, {
   type UnmatchedSource,
 } from "../components/share/ShareImportSetupPanel";
-import type { RequiredUnitDecisionContract, StlNamingProfile } from "@print-partner/contracts";
+import type { StlNamingProfile } from "@print-partner/contracts";
 import { DEFAULT_STL_NAMING_PROFILE } from "@print-partner/contracts";
 import type { KitImportJobResult } from "../api/endpoints/imports";
 import { Badge } from "../components/ui/badge";
@@ -80,11 +79,6 @@ import { useEngineHealth } from "../hooks/useEngineHealth";
 import { meshColorForStlPath } from "../lib/rolePreviewColor";
 import { buildPageDerivedState } from "../lib/buildPageViewModel";
 import {
-  planDraftProductionBlockFromError,
-  planDraftRevisionPartLabels,
-  type ProductionBlock,
-} from "../lib/planDraftUi";
-import {
   getBackgroundError,
   resolveEngineState,
   resolveResourceState,
@@ -128,12 +122,8 @@ function BuildPageContent() {
   const {
     review,
     refresh: refreshPlan,
-    draftWorkspace,
     draftError,
     startPlanDraft,
-    applyActivePlanDraft,
-    rebaseActivePlanDraft,
-    reconcileActivePlanDraft,
   } = usePlanWorkspace();
   const previousSelectedProfileIdRef = useRef<number | null | undefined>(undefined);
 
@@ -144,8 +134,6 @@ function BuildPageContent() {
   const [categoriesSheetOpen, setCategoriesSheetOpen] = useState(false);
   const [filamentRefreshKey, setFilamentRefreshKey] = useState(0);
   const [draftActionBusy, setDraftActionBusy] = useState(false);
-  const [draftConflictChoices, setDraftConflictChoices] = useState<Record<string, string>>({});
-  const [draftProductionBlock, setDraftProductionBlock] = useState<ProductionBlock | null>(null);
   const [roleFilaments, setRoleFilaments] = useState<RoleFilamentRow[]>([]);
   const [namingProfile, setNamingProfile] = useState<StlNamingProfile>(DEFAULT_STL_NAMING_PROFILE);
   const [attachOpen, setAttachOpen] = useState(false);
@@ -334,7 +322,6 @@ function BuildPageContent() {
     partCount,
     archiveAllowed,
     planWarnings,
-    planNextStep,
     headerSubtitle,
   } = buildPageDerivedState({
     selectedProfile,
@@ -390,7 +377,7 @@ function BuildPageContent() {
       const workspace = await startPlanDraft();
       setFilamentRefreshKey((key) => key + 1);
       toast.success(
-        `Saved Plan draft with ${workspace.diff.added.length + workspace.diff.changed.length + workspace.diff.removed.length} change(s)`,
+        `Saved Working Plan with ${workspace.diff.added.length + workspace.diff.changed.length + workspace.diff.removed.length} change(s)`,
       );
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error));
@@ -399,94 +386,7 @@ function BuildPageContent() {
     }
   };
 
-  const onApplyDraft = async (options?: { remapCheckoffLinks?: boolean }) => {
-    setDraftActionBusy(true);
-    try {
-      const receipt = await applyActivePlanDraft(options);
-      setDraftProductionBlock(null);
-      toast.success(`Applied Plan version ${receipt.plan_version}`);
-    } catch (error) {
-      const productionBlock = planDraftProductionBlockFromError(error);
-      if (productionBlock) {
-        setDraftProductionBlock(productionBlock);
-        toast.error(
-          `${productionBlock.checkoffLinkCount} checkoff record(s) are linked to the current Plan. Remap and apply to preserve them, or resolve production first.`,
-        );
-      } else {
-        toast.error(error instanceof Error ? error.message : String(error));
-      }
-    } finally {
-      setDraftActionBusy(false);
-    }
-  };
-
-  const onRebaseDraft = async () => {
-    setDraftActionBusy(true);
-    try {
-      const workspace = await rebaseActivePlanDraft();
-      toast.success(`Rebased saved draft ${workspace.draft.draft_id}`);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : String(error));
-    } finally {
-      setDraftActionBusy(false);
-    }
-  };
-
-  useEffect(() => {
-    setDraftConflictChoices({});
-    setDraftProductionBlock(null);
-  }, [draftWorkspace?.draft.snapshot_digest]);
-
-  const onResolveDraft = async () => {
-    if (!draftWorkspace || draftWorkspace.reconciliation.kind !== "unresolved") return;
-    const decisions: RequiredUnitDecisionContract[] = [];
-    for (const conflict of draftWorkspace.reconciliation.conflicts) {
-      const key = `${conflict.kind}:${conflict.target_draft_part_id}`;
-      const choice = draftConflictChoices[key];
-      if (!choice) {
-        toast.error("Choose how to resolve every Required-unit conflict");
-        return;
-      }
-      if (choice === "replace") {
-        decisions.push({ kind: "replace", target_draft_part_id: conflict.target_draft_part_id });
-      } else if (conflict.kind === "ambiguous_exact_match") {
-        decisions.push({
-          kind: "select_exact_predecessor",
-          target_draft_part_id: conflict.target_draft_part_id,
-          predecessor_revision_part_id: Number(choice),
-        });
-      } else {
-        decisions.push({
-          kind: "accept_prior_completion",
-          target_draft_part_id: conflict.target_draft_part_id,
-          predecessor_revision_part_id: conflict.predecessor_revision_part_id,
-        });
-      }
-    }
-    setDraftActionBusy(true);
-    try {
-      await reconcileActivePlanDraft(decisions);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : String(error));
-    } finally {
-      setDraftActionBusy(false);
-    }
-  };
-
   const busy = draftActionBusy;
-  const acceptedRevisionPartLabels = draftWorkspace
-    ? planDraftRevisionPartLabels(draftWorkspace)
-    : new Map<number, string>();
-  const proposedPartChanges = draftWorkspace
-    ? [
-        ...draftWorkspace.diff.added.map((part) => ({ part, label: "Added", fields: [] as string[] })),
-        ...draftWorkspace.diff.changed.map((change) => ({
-          part: change.after,
-          label: "Changed",
-          fields: change.fields,
-        })),
-      ]
-    : [];
 
   const onChangeLayerProject = async (layer: ProfileLayer, projectId: number) => {
     if (selectedProfileId == null) return;
@@ -542,7 +442,7 @@ function BuildPageContent() {
       <PageHeader
         icon={Hammer}
         accent
-        eyebrow="Stage 1 of 4"
+        eyebrow="Prepare"
         title="Sources"
         description={headerSubtitle}
         actions={workspaceReady ? (
@@ -553,7 +453,7 @@ function BuildPageContent() {
               disabled={selectedProfileId == null || busy || !engineReady}
               loading={busy}
             >
-              {busy ? "Rebuilding…" : "Rebuild plan"}
+              {busy ? "Building…" : "Build Working Plan"}
             </Button>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -604,7 +504,7 @@ function BuildPageContent() {
         ) : undefined}
       />
 
-      <DeskNextStep>{planNextStep}</DeskNextStep>
+      <BuildWorkflowNextAction currentStageId="sources" />
 
       {(profilesBackgroundError ||
         profileDataBackgroundError ||
@@ -650,152 +550,6 @@ function BuildPageContent() {
           freshness={selectedProfile.freshness}
           action={{ kind: "rebuild", busy, onRebuild: () => void onUpdateBuild() }}
         />
-      )}
-
-      {workspaceReady && draftWorkspace && (
-        <Card className="border-primary/40">
-          <CardHeader className="pb-2">
-            <CardTitle level={3} className="text-base">Saved Plan draft</CardTitle>
-            <CardDescription>
-              Accepted Parts and Checkoff stay unchanged until you apply this draft.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <p className="text-sm">
-              {draftWorkspace.diff.added.length} added, {draftWorkspace.diff.changed.length} changed, {draftWorkspace.diff.removed.length} removed
-            </p>
-            {(proposedPartChanges.length > 0 || draftWorkspace.diff.removed.length > 0) && (
-              <div className="overflow-x-auto rounded-md border border-border">
-                <table className="w-full text-left text-sm">
-                  <thead className="bg-muted/40 text-xs text-muted-foreground">
-                    <tr>
-                      <th className="px-3 py-2 font-medium">Proposed Part</th>
-                      <th className="px-3 py-2 font-medium">Change</th>
-                      <th className="px-3 py-2 font-medium">Proposed qty</th>
-                      <th className="px-3 py-2 font-medium">Proposed inclusion</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {proposedPartChanges.map(({ part, label, fields }) => (
-                      <tr key={`proposed-${part.draft_part_id}`} className="border-t border-border">
-                        <td className="px-3 py-2">
-                          <span className="font-medium">{part.filename}</span>
-                          <span className="block text-xs text-muted-foreground">{part.relative_path}</span>
-                        </td>
-                        <td className="px-3 py-2">
-                          {label}{fields.length > 0 ? `: ${fields.join(", ")}` : ""}
-                        </td>
-                        <td className="px-3 py-2">{part.quantity_effective}</td>
-                        <td className="px-3 py-2">{part.included ? "Included" : "Excluded"}</td>
-                      </tr>
-                    ))}
-                    {draftWorkspace.diff.removed.map((part) => (
-                      <tr key={`removed-${part.revision_part_id}`} className="border-t border-border">
-                        <td className="px-3 py-2">
-                          <span className="font-medium">{part.filename}</span>
-                          <span className="block text-xs text-muted-foreground">{part.relative_path}</span>
-                        </td>
-                        <td className="px-3 py-2">Removed</td>
-                        <td className="px-3 py-2">Not applicable</td>
-                        <td className="px-3 py-2">Removed</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-            {!draftWorkspace.diff.base_is_current && (
-              <p className="text-sm text-destructive" role="alert">
-                The accepted Plan changed after this draft was saved. Rebase it before applying.
-              </p>
-            )}
-            {draftWorkspace.reconciliation.kind === "unresolved" && (
-              <div className="space-y-2 rounded-md border border-warning/40 bg-warning/5 p-3">
-                <p className="text-sm">
-                  Resolve {draftWorkspace.reconciliation.conflicts.length} Required-unit conflict(s) before Apply.
-                </p>
-                <div className="space-y-2">
-                  {draftWorkspace.reconciliation.conflicts.map((conflict) => {
-                    const key = `${conflict.kind}:${conflict.target_draft_part_id}`;
-                    const target = draftWorkspace.parts.find(
-                      (part) => part.draft_part_id === conflict.target_draft_part_id,
-                    );
-                    return (
-                      <label key={key} className="block space-y-1 text-sm">
-                        <span className="block font-medium">
-                          {target?.filename ?? `Draft Part ${conflict.target_draft_part_id}`}
-                        </span>
-                        <select
-                          className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
-                          value={draftConflictChoices[key] ?? ""}
-                          disabled={busy}
-                          onChange={(event) => setDraftConflictChoices((current) => ({
-                            ...current,
-                            [key]: event.target.value,
-                          }))}
-                        >
-                          <option value="">Choose a resolution</option>
-                          {conflict.kind === "ambiguous_exact_match" && conflict.candidate_revision_part_ids.map((candidateId) => (
-                            <option key={candidateId} value={String(candidateId)}>
-                              Reuse {acceptedRevisionPartLabels.get(candidateId) ?? `accepted Part ${candidateId}`}
-                            </option>
-                          ))}
-                          {conflict.kind === "unsafe_predecessor" && (
-                            <option value={String(conflict.predecessor_revision_part_id)}>
-                              Keep prior completed units
-                            </option>
-                          )}
-                          <option value="replace">Print as new units</option>
-                        </select>
-                      </label>
-                    );
-                  })}
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="secondary"
-                    disabled={busy || draftWorkspace.reconciliation.conflicts.some((conflict) => (
-                      !draftConflictChoices[`${conflict.kind}:${conflict.target_draft_part_id}`]
-                    ))}
-                    onClick={() => void onResolveDraft()}
-                  >
-                    Save conflict decisions
-                  </Button>
-                </div>
-              </div>
-            )}
-            {draftProductionBlock && (
-              <div className="space-y-2 rounded-md border border-destructive/40 bg-destructive/5 p-3">
-                <p className="text-sm text-destructive" role="alert">
-                  {draftProductionBlock.checkoffLinkCount} checkoff record(s)
-                  {draftProductionBlock.sendQueueItemCount > 0
-                    ? ` and ${draftProductionBlock.sendQueueItemCount} send-queue item(s)`
-                    : ""}{" "}
-                  are linked to the current accepted Plan. Normal Apply is blocked to protect that progress.
-                </p>
-                <p className="text-sm text-muted-foreground">
-                  Remap and apply moves matching checkoff records to this draft. Apply still fails if a printed file was removed or its printed count exceeds the new quantity.
-                </p>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="secondary"
-                  disabled={busy}
-                  loading={busy}
-                  onClick={() => void onApplyDraft({ remapCheckoffLinks: true })}
-                >
-                  Remap and apply
-                </Button>
-              </div>
-            )}
-            <PlanDraftApplyButton
-              workspace={draftWorkspace}
-              busy={busy}
-              onApply={() => void onApplyDraft()}
-              onRebase={() => void onRebaseDraft()}
-            />
-          </CardContent>
-        </Card>
       )}
 
       {workspaceReady && draftError && (
@@ -1072,7 +826,7 @@ function BuildPageContent() {
                 disabled={selectedProfileId == null || busy || !engineReady}
                 loading={busy}
               >
-                {busy ? "Rebuilding…" : "Rebuild plan"}
+                {busy ? "Building…" : "Build Working Plan"}
               </Button>
             </div>
           </section>

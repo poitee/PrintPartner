@@ -106,7 +106,7 @@ export default function ShareImportSetupPanel({
         <div>
           <p className="mb-2 text-sm text-muted-foreground">
             This shared build references repos you don&apos;t have yet. Add them to fetch the
-            STLs, then <strong>Rebuild plan</strong> and check Parts.
+            STLs, then <strong>Build Working Plan</strong> and review Plan.
           </p>
           {pendingAddable.length > 0 && (
             <Button size="sm" className="mb-2" onClick={() => void addAll()}>

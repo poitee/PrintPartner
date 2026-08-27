@@ -112,6 +112,7 @@ import {
   type SourceContribution,
   type CompatibilityFinding,
 } from "../services/build-planning.js";
+import { readBuildWorkflowWorkspace } from "../services/build-workflow.js";
 
 const GITHUB_PAT_KEY = "github_pat";
 
@@ -137,6 +138,17 @@ export const ASSISTANT_TOOL_SPECS: AssistantToolSpec[] = [
         urls: { type: "array", items: { type: "string" } },
       },
       required: ["request", "urls"],
+    },
+    tier: "read",
+  },
+  {
+    name: "get_build_workflow",
+    description:
+      "Return Sources, Working Plan, Accepted Plan, Production, and Checkoff status plus the next safe Build action. Use this to distinguish an editable Working Plan from the Accepted Plan that authorizes Production.",
+    input_schema: {
+      type: "object",
+      properties: { plan_id: { type: "number" } },
+      required: ["plan_id"],
     },
     tier: "read",
   },
@@ -181,7 +193,7 @@ export const ASSISTANT_TOOL_SPECS: AssistantToolSpec[] = [
   },
   {
     name: "get_plan_draft",
-    description: "Return the planning workflow's current persisted draft and readiness state.",
+    description: "Return the current persisted Working Plan, its internal draft identity, and planning readiness.",
     input_schema: {
       type: "object",
       properties: { plan_id: { type: "number" } },
@@ -434,7 +446,7 @@ export const ASSISTANT_TOOL_SPECS: AssistantToolSpec[] = [
   },
   {
     name: "propose_edit_plan_draft_parts",
-    description: "PROPOSE including or excluding draft parts and setting exact quantities with optimistic snapshot protection.",
+    description: "PROPOSE changing Working Plan inclusion and exact quantities with optimistic snapshot protection.",
     input_schema: {
       type: "object",
       properties: {
@@ -449,7 +461,7 @@ export const ASSISTANT_TOOL_SPECS: AssistantToolSpec[] = [
   },
   {
     name: "propose_rebuild_plan",
-    description: "PROPOSE recomputing and recording a printable-part draft for planning review.",
+    description: "PROPOSE rebuilding and saving a Working Plan for review. This does not change the Accepted Plan.",
     input_schema: {
       type: "object",
       properties: {
@@ -463,7 +475,7 @@ export const ASSISTANT_TOOL_SPECS: AssistantToolSpec[] = [
   },
   {
     name: "propose_apply_plan_draft",
-    description: "PROPOSE applying the selected draft. Server readiness must pass at confirmation time.",
+    description: "PROPOSE accepting the selected Working Plan as a new Accepted Plan revision. Server readiness must pass at confirmation time.",
     input_schema: {
       type: "object",
       properties: { plan_id: { type: "number" }, draft_id: { type: "number" } },
@@ -1790,6 +1802,17 @@ export async function invokeAssistantTool(
               "Reuse a functional slot when its responsibility fits. Otherwise propose a snake_case Build-scoped slot with path scope, evidence, and confidence.",
           }),
         };
+      }
+      case "get_build_workflow": {
+        const planId = resolvePlanId(input, ctx, false);
+        if (planId == null) {
+          return { content: JSON.stringify({ error: "plan_id required" }) };
+        }
+        const result = readBuildWorkflowWorkspace(ctx.repo, planId);
+        if (result.kind === "missing") {
+          return { content: JSON.stringify({ error: "Build not found" }) };
+        }
+        return { content: JSON.stringify(result.workspace) };
       }
       case "get_build_planning_state": {
         const planId = resolvePlanId(input, ctx, false);
@@ -5094,7 +5117,7 @@ export async function applyAssistantAction(
         const brief = storedBrief ? hydrateBuildPlanningBrief(deps.repo, storedBrief) : null;
         const draftId = asInt(action.params.draft_id);
         if (!brief || draftId == null || brief.draft_id !== draftId)
-          return { ok: false, detail: "Selected planning draft not found" };
+          return { ok: false, detail: "Selected Working Plan not found" };
         const blockers = buildPlanningApplyBlockers(deps.repo, planId, draftId) ?? [];
         if (blockers.length > 0)
           return {
@@ -5103,7 +5126,7 @@ export async function applyAssistantAction(
             result: { blockers },
           };
         const draft = deps.repo.getPlanDraft(planId, draftId);
-        if (!draft) return { ok: false, detail: "Selected planning draft not found" };
+        if (!draft) return { ok: false, detail: "Selected Working Plan not found" };
         const workspaceService = new PlanDraftWorkspaceService(deps.repo);
         const prepared = workspaceService.prepareForApply({
           profileId: planId,
@@ -5113,14 +5136,14 @@ export async function applyAssistantAction(
         if (prepared.kind !== "ready") {
           return {
             ok: false,
-            detail: `Plan Apply preparation failed: ${prepared.kind}`,
+            detail: `Working Plan acceptance preparation failed: ${prepared.kind}`,
             result: { preparation_result: prepared },
           };
         }
         if (prepared.workspace.reconciliation.kind !== "ready") {
           return {
             ok: false,
-            detail: "Plan Apply requires required-unit decisions",
+            detail: "Working Plan acceptance requires required-unit decisions",
             result: { reconciliation: prepared.workspace.reconciliation },
           };
         }
@@ -5138,14 +5161,16 @@ export async function applyAssistantAction(
         if (applied.kind !== "applied") {
           return {
             ok: false,
-            detail: `Plan Apply failed: ${applied.kind}`,
+            detail: `Working Plan acceptance failed: ${applied.kind}`,
             result: { apply_result: applied },
           };
         }
+        const workflow = readBuildWorkflowWorkspace(deps.repo, planId);
         outcome = {
           ok: true,
           result: {
             apply_result: applied,
+            build_workflow: workflow.kind === "ready" ? workflow.workspace : null,
             planning_phase: {
               kind: "applied",
               draft_id: applied.receipt.draftId,

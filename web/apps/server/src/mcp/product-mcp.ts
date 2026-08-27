@@ -38,6 +38,7 @@ import {
   hydrateBuildPlanningBrief,
   readBuildPlanningBrief,
 } from "../services/build-planning.js";
+import { readBuildWorkflowWorkspace } from "../services/build-workflow.js";
 
 export const META_TOOLS = [
   {
@@ -189,7 +190,7 @@ export function createProductMcpServer(deps: ProductMcpDeps): Server {
           role: "user" as const,
           content: {
             type: "text" as const,
-              text: `Plan this Build without choosing between conflicting sources on my behalf.\n\n${customerRequest}\n\nAnalyze the request and links first. Treat Printables, MakerWorld, and other model pages as provenance. If their printable files are not already attached, ask me to download and upload them. For uploaded ZIP, STL, 3MF, or supporting files, attach the completed Source by source_id with propose_import_build_inputs. If a sliced 3MF comes from a slicer that cannot integrate with Print Partner, use propose_import_3mf_checkoff to map its objects into the verify-first checkoff flow, then expose the result with get_plan_checkoff and get_printer_checkoff. Use the kit catalog's functional slots to propose path-scoped Source contributions with evidence and confidence; keep Library Source categories organizational only. Propose every persistent change and wait for confirm_apply. Sync and pin repository and uploaded Source evidence, record all overlapping-source differences, and ask me to resolve every group. Verify compatibility and exact filament inventory. Rebuild and review the draft. Apply only when get_build_planning_state reports ready. Do not start printing, exporting, or queueing.`,
+              text: `Plan this Build without choosing between conflicting sources on my behalf.\n\n${customerRequest}\n\nAnalyze the request and links first. Treat Printables, MakerWorld, and other model pages as provenance. If their printable files are not already attached, ask me to download and upload them. For uploaded ZIP, STL, 3MF, or supporting files, attach the completed Source by source_id with propose_import_build_inputs. If a sliced 3MF comes from a slicer that cannot integrate with Print Partner, use propose_import_3mf_checkoff to map its objects into the verify-first Checkoff flow, then expose the result with get_plan_checkoff and get_printer_checkoff. Use the kit catalog's functional slots to propose path-scoped Source contributions with evidence and confidence; keep Library Source categories organizational only. Propose every persistent change and wait for confirm_apply. Sync and pin repository and uploaded Source evidence, record all overlapping-source differences, and ask me to resolve every group. Verify compatibility and exact filament inventory. Rebuild and review the Working Plan. Accept it only when get_build_planning_state reports ready. After confirmation, call get_build_workflow and verify that accepted_plan is ready and working_plan is none. Do not start printing, exporting, or queueing.`,
           },
         },
       ],
@@ -210,6 +211,12 @@ export function createProductMcpServer(deps: ProductMcpDeps): Server {
 
   server.setRequestHandler(ListResourceTemplatesRequestSchema, async () => ({
     resourceTemplates: [
+      {
+        uriTemplate: "print-partner://build-workflow/{build_id}",
+        name: "Build Workflow",
+        description: "Shared Sources, Working Plan, Accepted Plan, Production, and Checkoff status with the next safe action",
+        mimeType: "application/json",
+      },
       {
         uriTemplate: "print-partner://build-planning/{build_id}",
         name: "Build planning state",
@@ -232,6 +239,22 @@ export function createProductMcpServer(deps: ProductMcpDeps): Server {
               null,
               2,
             ),
+          },
+        ],
+      };
+    }
+    const workflowMatch = /^print-partner:\/\/build-workflow\/(\d+)$/.exec(
+      request.params.uri,
+    );
+    if (workflowMatch) {
+      const result = readBuildWorkflowWorkspace(getRepo(), Number(workflowMatch[1]));
+      if (result.kind === "missing") throw new Error("Build not found");
+      return {
+        contents: [
+          {
+            uri: request.params.uri,
+            mimeType: "application/json",
+            text: JSON.stringify(result.workspace, null, 2),
           },
         ],
       };

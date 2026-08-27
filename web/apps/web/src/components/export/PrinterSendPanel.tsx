@@ -301,6 +301,7 @@ export default function PrinterSendPanel({
           toast.success(snap.message || `Sent ${file.name} to ${printerName}`);
         }
       },
+      { profileId },
     );
   };
 

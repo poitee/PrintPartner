@@ -25,6 +25,9 @@ const state = vi.hoisted(() => ({
 vi.mock("../hooks/useEngineHealth", () => ({
   useEngineHealth: () => ({ health: { ok: true }, error: null, loading: false }),
 }));
+vi.mock("../components/build/BuildWorkflowNextAction", () => ({
+  default: () => null,
+}));
 vi.mock("../context/ProfileContext", () => ({
   useProfileSelection: () => ({
     selectedProfileId: 7,

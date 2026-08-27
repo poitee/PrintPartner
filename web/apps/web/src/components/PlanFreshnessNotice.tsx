@@ -61,7 +61,7 @@ export default function PlanFreshnessNotice({ freshness, action, className }: Pr
       <Icon className="mt-0.5 h-4 w-4 shrink-0 text-warning" aria-hidden />
       <div className="min-w-0 flex-1">
         <p className="font-medium text-foreground">
-          {freshness.status === "stale" ? "Plan rebuild needed" : "Plan inputs are not tracked"}
+          {freshness.status === "stale" ? "Working Plan update needed" : "Plan inputs are not tracked"}
         </p>
         {messages.map((message) => (
           <p key={message} className="text-muted-foreground">
@@ -81,11 +81,11 @@ export default function PlanFreshnessNotice({ freshness, action, className }: Pr
             className={cn("mr-1.5 h-3.5 w-3.5", action.busy && "animate-spin")}
             aria-hidden
           />
-          {action.busy ? "Rebuilding…" : "Rebuild plan"}
+          {action.busy ? "Building…" : "Build Working Plan"}
         </Button>
       ) : (
         <Button type="button" size="sm" variant="secondary" asChild>
-          <Link to={action.href}>Review in Plan</Link>
+          <Link to={action.href}>Review Sources</Link>
         </Button>
       )}
     </div>

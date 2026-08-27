@@ -1,52 +1,46 @@
 /** Shared workflow markdown shown in Help and injected into the AI advisor context. */
 export const WORKFLOW_GUIDE = `# Print Partner workflow
 
-Print Partner helps you manage **layered STL kits** with a base repo and add-on repos through **Sources → Plan → Checkoff → Production**. Global navigation is Builds, Production, Printers, and Settings. **New Build** asks only for a name, then opens Sources. Opening an existing Build opens Plan.
+Print Partner organizes each Build as **Sources → Plan → (Production ↔ Checkoff)**. Sources and Plan prepare reviewed production intent. Production and Checkoff form a loop that repeats until every required unit is verified. Global navigation is Builds, All Production, Printers, and Settings.
 
 ## Managing Builds
 
-- **Builds.** The home list. Search, filter, and open a Build into Plan.
-- **Build picker.** Switch the active Build from the sidebar. Archived Builds stay listed as templates; selecting one does not unarchive.
-- **New Build.** Find it under the picker in the sidebar or use the primary action on Builds.
-- **Build overflow.** Rename, Duplicate, and Delete are here. Archive appears only when print remaining is 0.
+- **Builds.** Search, filter, and open a Build.
+- **Build picker.** Switch the active Build from the sidebar. Archived Builds stay listed as templates.
+- **New Build.** Create one under the picker or from the primary action on Builds.
+- **Build actions.** Rename, Duplicate, Delete, and eligible Archive actions are in the overflow menu.
 
-The active Build is shared across Sources, Plan, Checkoff, and Production.
+The active Build is shared across Sources, Plan, Production, and Checkoff. The sidebar reports each area's current status and the next safe action.
 
-## 1. Source library
+## Prepare
 
-Register GitHub repos, local folders, or zip archives. Assign **categories**, set **import rules** (which folders contain STLs), and **sync** to download files. The source library shows sync status and **update available** badges when upstream repos change. Use the global STL search box to find files by name or path across every synced repo.
+### Source library
 
-## 2. Sources
+Register GitHub repositories, local folders, or zip archives. Set categories and import rules, then sync the Source. The library shows update availability and supports STL search across synced Sources.
 
-Open **Sources** for the active Build:
+### Sources
 
-- **Attach sources** — set a base layer and optional add-on layers from your source library.
-- **Pick STL files** — expand each source card, check files or folders to include; selections save automatically.
-- **Role filament colors.** Assign a color per role (primary, accent, clear, opaque). Previews update automatically on Sources, Plan, and Checkoff.
-- **Kit manifest options** — apply stack presets and variant picks on the base source card when manifests are configured.
-- **Rebuild plan** — intentionally accepts the current source revisions, naming rules, and file picks, then rebuilds the parts list. Print Partner explains when those inputs have changed but never replaces the accepted list automatically.
-- **Docs** — read synced repo README and Markdown inline from each source card.
-- **Share build** — export a \`.print-partner-kit\` zip to share plan config (not STLs).
-- **Export STLs.** Export from Sources or Plan, grouped by color only or color + source directory.
+Attach a structural base and any optional overlays or add-ons to the active Build. Pick included STL files, confirm roles and filament colors, and review Source revisions. **Build Working Plan** creates or updates the editable proposal. It does not change the Accepted Plan or Checkoff.
 
-## 3. Plan
+### Plan
 
-Confirm a **validation summary** grouped by role and filament. Browse the full included-parts list with **3D STL previews**, edit quantities, and fix issues (cards link back to Sources when needed). **Export STLs** writes parts organized by role and folder structure.
+Review the Working Plan's quantities, inclusion choices, warnings, and required-unit reconciliation. Resolve every blocking issue, then choose **Accept Working Plan**. Acceptance creates a new Accepted Plan revision. Only an Accepted Plan authorizes new Production work; existing Production and Checkoff records remain tied to the revision that created them.
 
-## 4. Checkoff
+## Make
 
-Track **per-unit print progress** on the shop floor (saved per Build). Filter to remaining or done parts, search, print an HTML checklist, and **Export remaining** STL units from this Build's checkoff for the next print batch. On-scroll **3D thumbnails** render client-side for each part.
+### Production
 
-## 5. Production
+Choose required units from the Accepted Plan, allocate printers, prepare editable plates, export to a slicer, and send printer jobs. Production remains active while jobs are queued, sending, or printing. Having Parts in a Plan does not make Production complete.
 
-Allocate printers, edit plates, download files, track printer jobs, and verify completed prints. Global Production aggregates active jobs and work awaiting verification across Builds.
+### Checkoff
+
+Verify completed print results before they change progress. Confirm successful units, record rejected results, and keep remaining units visible. Failed or remaining units return to Production for another run. Global All Production aggregates active jobs and work awaiting verification across Builds.
 
 ## Tips
 
-- **⌘K / Ctrl+K.** Open the command palette for sync, exports, and navigation. Rebuild the parts list from Sources after reviewing its inputs.
-- **Theme** — light, dark, or system via the sidebar or header; the left sidebar can be **collapsed** to an icon rail (toggle at the bottom).
-- **Save / Import colors.** Export role colors as JSON on Sources. The **Advanced** menu has reset and thumbnail recovery options.
-- **Share build** — export plan config as a \`.print-partner-kit\` zip (not STLs).
-- **Spoolman.** Connect in Settings → Integrations for live filament inventory on Sources and spool weights in Plan / Checkoff. See the Spoolman integration doc in the repo.
-- **API** — OpenAPI at \`/api/v1/openapi.json\` for automation; optional API key in self-host mode.
-`;;
+- **⌘K / Ctrl+K.** Open the command palette for navigation, sync, and export actions.
+- **Theme.** Choose light, dark, or system. The sidebar can collapse to an icon rail.
+- **Share Build.** Export Plan configuration as a \`.print-partner-kit\` archive. STL files are not included.
+- **Spoolman.** Connect it in Settings → Integrations for live filament inventory and spool weights.
+- **API.** OpenAPI is available at \`/api/v1/openapi.json\`. Self-hosted installations can require an API key.
+`;

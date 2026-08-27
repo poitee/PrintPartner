@@ -536,7 +536,7 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
     <section className="space-y-3">
       {draftWorkspace && ui.viewMode === "edit" && (
         <p className="no-print rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-sm">
-          Quantity and inclusion controls show proposed draft values. Accepted Plan values and Checkoff stay unchanged until Apply.
+          Quantity and inclusion controls show Working Plan values. The Accepted Plan and Checkoff stay unchanged until acceptance.
         </p>
       )}
       <div className="no-print checkoff-sticky flex flex-col gap-3 rounded-lg border border-border bg-card p-3">

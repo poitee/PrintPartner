@@ -169,7 +169,7 @@ describe("ReviewPartsSheet accessibility", () => {
       </MemoryRouter>,
     );
 
-    expect(screen.getByText(/controls show proposed draft values/i)).toBeTruthy();
+    expect(screen.getByText(/controls show Working Plan values/i)).toBeTruthy();
     expect(screen.getByRole("columnheader", { name: "Proposed qty" })).toBeTruthy();
     expect(screen.getByRole("spinbutton", { name: "Quantity for bracket.stl" }).getAttribute("value")).toBe("4");
     expect(screen.getByText(/Accepted: qty 2, included/)).toBeTruthy();

@@ -1,7 +1,7 @@
 import { lazy, Suspense, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { FileArchive } from "lucide-react";
-import DeskNextStep from "../components/layout/DeskNextStep";
+import BuildWorkflowNextAction from "../components/build/BuildWorkflowNextAction";
 import PageHeader from "../components/layout/PageHeader";
 import PageShell from "../components/layout/PageShell";
 import ExportActionCards from "../components/export/ExportActionCards";
@@ -25,8 +25,6 @@ import { useProductionSelection } from "../hooks/useProductionSelection";
 import { useSourcesQuery } from "../queries/sources";
 import { useRoleFilamentsQuery } from "../queries/roleFilaments";
 import { useAcceptedPlateWorkspaceQuery } from "../queries/acceptedPlates";
-import { checkoffUnitTotals } from "../lib/checkoffProgress";
-import { deskNextStepLine } from "../lib/deskNextStep";
 import { flattenReviewParts } from "../lib/reviewParts";
 import { planRoute } from "../lib/routes";
 import {
@@ -109,8 +107,6 @@ export default function ExportPage() {
     () => includedParts.filter((p) => p.missing),
     [includedParts],
   );
-  const remainingUnits = checkoffUnitTotals(includedParts).remainingUnits;
-  const exportNextStep = deskNextStepLine("export", { remainingUnits });
   const workspaceQuery = useAcceptedPlateWorkspaceQuery(
     selectedProfileId,
     selectedProfileId != null && engineState === "ready",
@@ -144,11 +140,11 @@ export default function ExportPage() {
       <PageHeader
         icon={FileArchive}
         accent
-        eyebrow={planIdentity ? `Stage 4 of 4 · ${planIdentity}` : "Stage 4 of 4"}
+        eyebrow={planIdentity ? `Make · ${planIdentity}` : "Make"}
         title="Production"
         description="Choose parts, arrange editable Plates, export to your slicer, then send sliced G-code to a printer."
       />
-      <DeskNextStep>{exportNextStep}</DeskNextStep>
+      <BuildWorkflowNextAction currentStageId="production" />
 
       {(profilesBackgroundError || roleFilamentError || (planError && review)) && (
         <div className="space-y-1 text-sm text-destructive" role="alert">

@@ -186,7 +186,7 @@ export default function KitManifestOptions({
           <TitleHeading className="text-sm font-semibold">{title}</TitleHeading>
           <p className="text-xs text-muted-foreground">
             Pick one option per group, then run{" "}
-            <strong className="font-medium text-foreground">Rebuild plan</strong> to apply.
+            <strong className="font-medium text-foreground">Build Working Plan</strong> to include it.
           </p>
         </div>
         {emptyHint}
@@ -196,7 +196,7 @@ export default function KitManifestOptions({
 
   const staleHint = buildStale ? (
     <p className="text-xs text-warning">
-      Run <strong className="font-medium text-foreground">Rebuild plan</strong> to apply variant
+      Choose <strong className="font-medium text-foreground">Build Working Plan</strong> to include variant
       parts to Review and Checkoff.
     </p>
   ) : null;
@@ -296,7 +296,7 @@ export default function KitManifestOptions({
         <div className="space-y-2 border-t border-border px-3 pb-3 pt-2">
           <p className="text-2xs text-muted-foreground">
             Pick one per group, then{" "}
-            <strong className="font-medium text-foreground">Rebuild plan</strong>.{" "}
+            <strong className="font-medium text-foreground">Build Working Plan</strong>.{" "}
             <Link to="/help#kit-variants" className="text-primary hover:underline">
               Help
             </Link>
@@ -318,7 +318,7 @@ export default function KitManifestOptions({
         <TitleHeading className="text-sm font-semibold">{title}</TitleHeading>
         <p className="text-xs text-muted-foreground">
           Pick one option per group, then run{" "}
-          <strong className="font-medium text-foreground">Rebuild plan</strong> to apply.{" "}
+          <strong className="font-medium text-foreground">Build Working Plan</strong> to include it.{" "}
           <Link to="/help#kit-variants" className="text-primary hover:underline">
             Help
           </Link>

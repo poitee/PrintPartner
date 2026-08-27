@@ -269,12 +269,12 @@ describe("PlanWorkspaceProvider saved draft lifecycle", () => {
     await act(async () => {
       await expect(hook.result.current.editActivePlanDraft([
         { kind: "set_included", draft_part_ids: [1], value: false },
-      ])).rejects.toThrow("saved draft changed");
+      ])).rejects.toThrow("Working Plan changed");
     });
 
     expect(client.getQueryData(queryKeys.planDraft(7, 9))).toEqual(replacementWorkspace);
     expect(hook.result.current.review).toBe(acceptedReview);
-    expect(hook.result.current.draftError).toMatch(/saved draft changed/i);
+    expect(hook.result.current.draftError).toMatch(/Working Plan changed/i);
   });
 
   it("does not Apply implicitly and invalidates every accepted projection after explicit Apply", async () => {

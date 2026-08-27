@@ -11,7 +11,7 @@ import {
 describe("site map", () => {
   it("names the four global sections and four Build destinations", () => {
     expect([...GLOBAL_SECTIONS]).toEqual(["builds", "production", "printers", "settings"]);
-    expect([...BUILD_SECTIONS]).toEqual(["sources", "plan", "checkoff", "production"]);
+    expect([...BUILD_SECTIONS]).toEqual(["sources", "plan", "production", "checkoff"]);
   });
 
   it("uses Builds and Production as top-level paths", () => {

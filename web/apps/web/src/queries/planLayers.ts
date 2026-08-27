@@ -29,6 +29,7 @@ async function invalidateLayerDependents(
     invalidatePlanReview(queryClient, profileId),
     invalidateProfiles(queryClient),
     invalidatePlanRecipe(queryClient, profileId),
+    queryClient.invalidateQueries({ queryKey: queryKeys.buildWorkflow(profileId) }),
   ]);
 }
 

@@ -37,7 +37,20 @@ import {
 } from "../lib/helpPageModel";
 import { resolveEngineState } from "../lib/workflowState";
 
-const WORKFLOW_STEP_ICONS: LucideIcon[] = [FolderGit2, Hammer, ClipboardCheck, FileArchive];
+const WORKFLOW_STEP_ICONS: LucideIcon[] = [FolderGit2, Hammer, FileArchive, ClipboardCheck];
+
+const WORKFLOW_GROUPS = [
+  {
+    id: "prepare",
+    label: "Prepare",
+    description: "Establish reviewed production intent.",
+  },
+  {
+    id: "make",
+    label: "Make",
+    description: "Repeat Production and Checkoff until the Build is complete.",
+  },
+] as const;
 
 function HelpLoadingSkeleton() {
   return (
@@ -154,33 +167,43 @@ export default function HelpPage() {
             </span>
             <div>
               <CardTitle className="text-base">Workflow</CardTitle>
-              <CardDescription>Sources → Plan → Checkoff → Production</CardDescription>
+              <CardDescription>Sources → Plan → (Production ↔ Checkoff)</CardDescription>
             </div>
           </div>
         </CardHeader>
         <CardContent>
-          <ol className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-            {WORKFLOW_STEPS.map((step, index) => {
-              const StepIcon = WORKFLOW_STEP_ICONS[index];
-              return (
-                <li key={step.num}>
-                  <Link
-                    to={stepPaths[index]}
-                    className="flex h-full flex-col rounded-lg border border-border bg-muted/20 p-3 transition-colors hover:border-primary/40 hover:bg-muted/40"
-                  >
-                    <span className="flex items-center gap-2">
-                      <span className="flex h-7 w-7 items-center justify-center rounded-md bg-primary/10 text-primary">
-                        <StepIcon className="h-3.5 w-3.5" aria-hidden />
-                      </span>
-                      <span className="text-xs font-medium text-primary">Step {step.num}</span>
-                    </span>
-                    <span className="mt-2 font-medium">{step.label}</span>
-                    <span className="mt-1 text-xs text-muted-foreground">{step.description}</span>
-                  </Link>
-                </li>
-              );
-            })}
-          </ol>
+          <div className="grid gap-4 md:grid-cols-2">
+            {WORKFLOW_GROUPS.map((group) => (
+              <section key={group.id} className="rounded-lg border border-border p-3">
+                <h3 className="font-medium">{group.label}</h3>
+                <p className="mt-1 text-xs text-muted-foreground">{group.description}</p>
+                <ol className="mt-3 grid gap-2">
+                  {WORKFLOW_STEPS.map((step, index) => {
+                    if (step.group !== group.id) return null;
+                    const StepIcon = WORKFLOW_STEP_ICONS[index];
+                    return (
+                      <li key={step.id}>
+                        <Link
+                          to={stepPaths[index]}
+                          className="flex h-full items-start gap-3 rounded-lg bg-muted/30 p-3 transition-colors hover:bg-muted/60"
+                        >
+                          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+                            <StepIcon className="h-3.5 w-3.5" aria-hidden />
+                          </span>
+                          <span>
+                            <span className="block font-medium">{step.label}</span>
+                            <span className="mt-1 block text-xs text-muted-foreground">
+                              {step.description}
+                            </span>
+                          </span>
+                        </Link>
+                      </li>
+                    );
+                  })}
+                </ol>
+              </section>
+            ))}
+          </div>
         </CardContent>
       </Card>
 

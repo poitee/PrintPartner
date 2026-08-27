@@ -24,7 +24,7 @@ const readyWorkspace: PlanDraftWorkspace = {
   reconciliation: { kind: "ready", reused_units: 0, new_units: 0, surplus_units: 0 },
 };
 
-describe("Plan draft Apply control", () => {
+describe("Working Plan acceptance control", () => {
   it("recognizes a production block that can be retried with remapping", () => {
     expect(planDraftProductionBlockFromError(new EngineHttpError(
       "Production is active",
@@ -98,7 +98,7 @@ describe("Plan draft Apply control", () => {
         onRebase={onRebase}
       />,
     );
-    expect(screen.getByRole("button", { name: "Apply plan changes" }).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("button", { name: "Accept Working Plan" }).hasAttribute("disabled")).toBe(true);
     first.unmount();
 
     const stale: PlanDraftWorkspace = {
@@ -113,8 +113,8 @@ describe("Plan draft Apply control", () => {
         onRebase={onRebase}
       />,
     );
-    expect(screen.getByRole("button", { name: "Apply plan changes" }).hasAttribute("disabled")).toBe(true);
-    fireEvent.click(screen.getByRole("button", { name: "Rebase saved draft" }));
+    expect(screen.getByRole("button", { name: "Accept Working Plan" }).hasAttribute("disabled")).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Refresh Working Plan" }));
     expect(onRebase).toHaveBeenCalledOnce();
     expect(onApply).not.toHaveBeenCalled();
   });

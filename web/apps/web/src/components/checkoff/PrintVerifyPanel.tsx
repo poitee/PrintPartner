@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { queryKeys } from "../../queries/keys";
 import { Check, X } from "lucide-react";
 import {
   dismissPrinterCheckoff,
@@ -94,6 +96,7 @@ export default function PrintVerifyPanel({
   suppressIntegrationIds,
   className,
 }: Props) {
+  const queryClient = useQueryClient();
   const [watchingLinks, setWatchingLinks] = useState<PrinterCheckoffLink[]>([]);
   const [links, setLinks] = useState<PrinterCheckoffLink[]>([]);
   const [failedLinks, setFailedLinks] = useState<PrinterCheckoffLink[]>([]);
@@ -178,6 +181,11 @@ export default function PrintVerifyPanel({
       setRejectTarget(null);
       setRejectNote("");
       await reload();
+      if (profileId != null) {
+        void queryClient.invalidateQueries({
+          queryKey: queryKeys.buildWorkflow(profileId),
+        });
+      }
       onVerified?.();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
@@ -222,6 +230,11 @@ export default function PrintVerifyPanel({
     try {
       await dismissPrinterCheckoff({ link_id: linkId });
       await reload();
+      if (profileId != null) {
+        void queryClient.invalidateQueries({
+          queryKey: queryKeys.buildWorkflow(profileId),
+        });
+      }
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
     } finally {

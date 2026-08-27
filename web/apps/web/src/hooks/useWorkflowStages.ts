@@ -1,8 +1,7 @@
 import { useMemo } from "react";
 import { useLocation } from "react-router-dom";
-import { usePlanWorkspace } from "../context/PlanWorkspaceContext";
 import { useProfileSelection } from "../context/ProfileContext";
-import { useSourcesQuery } from "../queries/sources";
+import { useBuildWorkflowQuery } from "../queries/buildWorkflow";
 import {
   buildWorkflowStages,
   stageIdFromPath,
@@ -15,34 +14,12 @@ export function useWorkflowStages(): {
   activeId: WorkflowStageId | null;
 } {
   const location = useLocation();
-  const { profiles, selectedProfileId } = useProfileSelection();
-  const { data: sources = [] } = useSourcesQuery();
-  const { review } = usePlanWorkspace();
-
-  const attachedSourceCount = useMemo(() => {
-    if (!review?.layers) return null;
-    const n = review.layers.filter((l) => l.project_id != null).length;
-    return n > 0 ? n : null;
-  }, [review]);
+  const { selectedProfileId } = useProfileSelection();
+  const workflowQuery = useBuildWorkflowQuery(selectedProfileId);
 
   const stages = useMemo(
-    () =>
-      buildWorkflowStages({
-        pathname: location.pathname,
-        sourcesCount: sources.length,
-        profiles,
-        selectedProfileId,
-        attachedSourceCount,
-        review,
-      }),
-    [
-      location.pathname,
-      sources.length,
-      profiles,
-      selectedProfileId,
-      attachedSourceCount,
-      review,
-    ],
+    () => buildWorkflowStages(workflowQuery.data ?? null, selectedProfileId),
+    [workflowQuery.data, selectedProfileId],
   );
 
   return {

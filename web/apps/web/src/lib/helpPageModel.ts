@@ -11,28 +11,32 @@ export const LEGAL_TABS: readonly { id: LegalTab; label: string }[] = [
 
 export const WORKFLOW_STEPS = [
   {
-    num: 1,
+    id: "sources",
+    group: "prepare",
     label: "Sources",
     path: null as string | null,
-    description: "Attach sources, pick STLs, and set role colors for this Build",
+    description: "Attach and verify the design inputs for this Build",
   },
   {
-    num: 2,
+    id: "plan",
+    group: "prepare",
     label: "Plan",
     path: null as string | null,
-    description: "Review quantities and warnings, then apply Plan changes",
+    description: "Review the Working Plan, resolve issues, then accept it",
   },
   {
-    num: 3,
-    label: "Checkoff",
-    path: null as string | null,
-    description: "Track printed units and bag completed work",
-  },
-  {
-    num: 4,
+    id: "production",
+    group: "make",
     label: "Production",
     path: null as string | null,
-    description: "Allocate printers, edit plates, download, and verify jobs",
+    description: "Prepare plates and send selected units to printers",
+  },
+  {
+    id: "checkoff",
+    group: "make",
+    label: "Checkoff",
+    path: null as string | null,
+    description: "Verify print results, then return failed or remaining work to Production",
   },
 ] as const;
 
@@ -41,8 +45,8 @@ export function workflowStepPaths(selectedProfileId: number | null | undefined):
     if (step.path) return step.path;
     if (step.label === "Sources") return buildSourcesRoute(selectedProfileId);
     if (step.label === "Plan") return planRoute(selectedProfileId);
-    if (step.label === "Checkoff") return checkoffRoute(selectedProfileId);
     if (step.label === "Production") return exportRoute(selectedProfileId);
+    if (step.label === "Checkoff") return checkoffRoute(selectedProfileId);
     return planRoute(selectedProfileId);
   });
 }

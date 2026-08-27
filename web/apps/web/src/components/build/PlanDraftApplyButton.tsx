@@ -23,7 +23,7 @@ export default function PlanDraftApplyButton({
           disabled={busy}
           onClick={onRebase}
         >
-          Rebase saved draft
+          Refresh Working Plan
         </Button>
       )}
       <Button
@@ -36,7 +36,7 @@ export default function PlanDraftApplyButton({
         loading={busy}
         onClick={onApply}
       >
-        Apply plan changes
+        Accept Working Plan
       </Button>
     </div>
   );

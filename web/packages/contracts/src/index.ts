@@ -5,6 +5,7 @@ export * from "./source-category-tree.js";
 export * from "./accepted-plates.js";
 export * from "./plan-drafts.js";
 export * from "./production-setup.js";
+export * from "./build-workflow.js";
 
 export type DeployMode = "self-host" | "saas";
 

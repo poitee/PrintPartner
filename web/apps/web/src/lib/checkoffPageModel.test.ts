@@ -64,7 +64,7 @@ describe("checkoffPageModel", () => {
   it("formats progress header copy", () => {
     const meta = checkoffProgressMeta({ selectedProfileId: 7, planName: "Build", includedPartCount: 2 });
     expect(meta).toBe("Build · 2 parts");
-    expect(checkoffProgressEyebrow(meta)).toBe("Stage 3 of 4 · Build · 2 parts");
+    expect(checkoffProgressEyebrow(meta)).toBe("Make · Build · 2 parts");
     expect(checkoffProgressDescription(0)).toContain("shop floor");
     expect(checkoffProgressDescription(1)).toContain("Verify");
   });

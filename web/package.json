@@ -44,5 +44,5 @@
     "hono": "4.13.1",
     "postcss": "8.5.26"
   },
-  "description": "Print Partner monorepo — Fastify API + React SPA for layered STL kit desk workflow (Library → Builds → Sources → Plan → Checkoff → Production)."
+  "description": "Print Partner monorepo: Fastify API + React SPA for layered STL kit work (Library → Builds → Sources → Plan → Production ↔ Checkoff)."
 }

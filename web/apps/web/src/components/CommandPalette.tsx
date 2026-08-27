@@ -156,6 +156,18 @@ export default function CommandPalette(_props?: Props) {
         },
       },
       {
+        id: "nav-build-production",
+        label: "Go to Build Production",
+        hint: location.pathname === "/export" ? "current" : undefined,
+        group: "Navigate",
+        run: () => {
+          leaveBuildThen(() => {
+            navigate(exportRoute(selectedProfileId));
+            setOpen(false);
+          });
+        },
+      },
+      {
         id: "nav-checkoff",
         label: "Go to Checkoff",
         hint:
@@ -172,7 +184,7 @@ export default function CommandPalette(_props?: Props) {
       },
       {
         id: "nav-production",
-        label: "Go to Production",
+        label: "Go to All Production",
         hint: location.pathname === "/production" ? "current" : undefined,
         group: "Navigate",
         run: () => {

@@ -12,7 +12,8 @@ import {
 } from "lucide-react";
 import PlanFreshnessNotice from "../components/PlanFreshnessNotice";
 import StlSyncBanner from "../components/StlSyncBanner";
-import DeskNextStep from "../components/layout/DeskNextStep";
+import BuildWorkflowNextAction from "../components/build/BuildWorkflowNextAction";
+import WorkingPlanReviewCard from "../components/build/WorkingPlanReviewCard";
 import EmptyState from "../components/layout/EmptyState";
 import PageHeader from "../components/layout/PageHeader";
 import PageHeaderActions from "../components/layout/PageHeaderActions";
@@ -30,15 +31,13 @@ import {
   buildSourcesRoute,
   exportRoute,
   libraryRoute,
-  progressRoute,
 } from "../lib/routes";
 import {
   PARTS_CONFLICT_CTA,
   PARTS_CONFLICT_HINT,
 } from "../lib/mergeConflictCopy";
-import { countMissingStls, countNonMissingPartWarnings } from "../lib/partWarnings";
+import { countNonMissingPartWarnings } from "../lib/partWarnings";
 import { partsSummaryLine } from "../lib/partsGroups";
-import { deskNextStepLine } from "../lib/deskNextStep";
 import { flattenReviewParts } from "../lib/reviewParts";
 import { groupMergeConflictsByFilename } from "../lib/mergeConflictGroups";
 import { useProfileSelection } from "../context/ProfileContext";
@@ -147,17 +146,6 @@ export default function PartsPage() {
     return partsSummaryLine(parts, review.totals.by_role, warnCount);
   }, [review]);
 
-  const missingStlCount = useMemo(() => {
-    if (!review) return 0;
-    return countMissingStls(flattenReviewParts(review.part_groups));
-  }, [review]);
-
-  const partsNextStep = deskNextStepLine("parts", {
-    partCount: hasIncludedParts ? 1 : 0,
-    mergeConflictCount: mergeConflicts.length,
-    missingStlCount,
-  });
-
   const onPrint = useCallback(() => {
     void sheetRef.current?.print();
   }, []);
@@ -165,13 +153,13 @@ export default function PartsPage() {
   return (
     <PageShell>
       <PageHeader
-        eyebrow="Stage 2 of 4"
+        eyebrow="Prepare"
         icon={Package}
         accent
         title="Plan"
         description={
           summaryLine ??
-          "Validate parts, edit quantities, and export when ready."
+          "Review quantities and resolve issues before accepting changes."
         }
         actions={
           <PageHeaderActions>
@@ -184,21 +172,13 @@ export default function PartsPage() {
               <Printer className="mr-1 h-4 w-4" />
               Print
             </Button>
-            <Button
-              variant="secondary"
-              className="min-h-10 w-full sm:w-auto"
-              asChild
-            >
-              <Link to={progressRoute(selectedProfileId)}>Checkoff</Link>
-            </Button>
-            <Button className="min-h-10 w-full sm:w-auto" asChild>
-              <Link to={exportRoute(selectedProfileId)}>Production</Link>
-            </Button>
           </PageHeaderActions>
         }
       />
 
-      <DeskNextStep>{partsNextStep}</DeskNextStep>
+      <BuildWorkflowNextAction currentStageId="plan" />
+
+      <WorkingPlanReviewCard />
 
       {selectedProfile && (
         <PlanFreshnessNotice

@@ -54,7 +54,7 @@ export function checkoffProgressMeta(input: {
 }
 
 export function checkoffProgressEyebrow(progressMeta: string | null): string {
-  return progressMeta ? `Stage 3 of 4 · ${progressMeta}` : "Stage 3 of 4";
+  return progressMeta ? `Make · ${progressMeta}` : "Make";
 }
 
 export function checkoffProgressDescription(includedPartCount: number): string {

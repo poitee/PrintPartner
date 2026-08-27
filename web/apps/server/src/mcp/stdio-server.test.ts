@@ -11,6 +11,7 @@ describe("mcp product tools", () => {
     expect(product.some((t) => t.name === "duplicate_plan")).toBe(true);
     expect(product.some((t) => t.name === "archive_plan")).toBe(true);
     expect(product.some((t) => t.name === "get_plan_snapshot")).toBe(true);
+    expect(product.some((t) => t.name === "get_build_workflow")).toBe(true);
     expect(product.some((t) => t.name === "list_sources")).toBe(true);
     expect(product.every((t) => !t.name.startsWith("ui_"))).toBe(true);
     expect(product.every((t) => t.name !== "start_print")).toBe(true);

@@ -36,6 +36,7 @@ import { acceptedStateDetail } from "./accepted-state-detail.js";
 import { parsePhaseManifestText } from "./phase-manifest-route-model.js";
 import { completeRoleAssignment } from "./plan-role-assignment-model.js";
 import { sendAcceptedFilamentFailure } from "./accepted-filament-failure.js";
+import { readBuildWorkflowWorkspace } from "../services/build-workflow.js";
 
 type RouteDeps = { repo: AppRepository; dataDir: string; reposDir: string; thumbsDir: string };
 export type PlanSummaryContract = "accepted" | "legacy-v1";
@@ -189,6 +190,23 @@ export async function registerPlanRoutes(
         difference_count: brief.differences.length,
       },
     };
+  });
+
+  app.get("/plans/:id/workflow", async (request, reply) => {
+    const id = Number((request.params as { id: string }).id);
+    try {
+      const result = readBuildWorkflowWorkspace(deps.repo, id);
+      if (result.kind === "missing") {
+        return reply.status(404).send({ detail: "Build not found" });
+      }
+      return result.workspace;
+    } catch {
+      request.log.error(
+        { failure: "unexpected", operation: "get_build_workflow", buildId: id },
+        "Build Workflow read failed",
+      );
+      return reply.status(500).send({ detail: "Internal Server Error" });
+    }
   });
 
   app.delete("/plans/:id", async (request, reply) => {

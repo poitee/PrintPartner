@@ -75,7 +75,7 @@ describe("resolveDraftPart", () => {
 
   it("names both failures for the user", () => {
     expect(draftPartMatchError({ kind: "missing" }, "bracket.stl")).toMatch(
-      /not in the saved draft.*Rebuild the Plan/s,
+      /not in the Working Plan.*Rebuild it from Sources/s,
     );
     expect(draftPartMatchError({ kind: "ambiguous", count: 2 }, "bracket.stl")).toMatch(
       /2 Parts matching bracket\.stl/,

@@ -310,7 +310,7 @@ describe("Plan: Remove under Proposed inclusion", () => {
 
     await waitFor(() =>
       expect(screen.getByTestId("draft-error").textContent).toMatch(
-        /bracket\.stl is not in the saved draft/,
+        /bracket\.stl is not in the Working Plan/,
       ),
     );
     expect(editPlanDraftParts).not.toHaveBeenCalled();

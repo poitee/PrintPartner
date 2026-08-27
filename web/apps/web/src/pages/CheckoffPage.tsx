@@ -20,7 +20,7 @@ import PlanFreshnessNotice from "../components/PlanFreshnessNotice";
 import PageHeader from "../components/layout/PageHeader";
 import PageHeaderActions from "../components/layout/PageHeaderActions";
 import PageShell from "../components/layout/PageShell";
-import DeskNextStep from "../components/layout/DeskNextStep";
+import BuildWorkflowNextAction from "../components/build/BuildWorkflowNextAction";
 import EmptyState from "../components/layout/EmptyState";
 import PlanSpecialRequestLine from "../components/PlanSpecialRequestLine";
 // Lazy: PrinterLiveStrip starts polling on mount — defer until rendered
@@ -78,7 +78,6 @@ import {
 import {
   computePhaseProgress,
 } from "../lib/phaseManifest";
-import { deskNextStepLine } from "../lib/deskNextStep";
 import {
   getProgressRowsForPlan,
   loadPersistedCheckoffUi,
@@ -583,10 +582,6 @@ export default function CheckoffPage() {
   const progressEyebrow = checkoffProgressEyebrow(progressMeta);
   const progressDescription = checkoffProgressDescription(includedParts.length);
 
-  const progressNextStep = deskNextStepLine("progress", {
-    remainingUnits: totals.remainingUnits,
-  });
-
   const onToggleUnit = useCallback(
     (part: ReviewPart, unitIndex: number) => {
       const next = !part.print_units[unitIndex];
@@ -765,6 +760,7 @@ export default function CheckoffPage() {
           title="Checkoff"
           description={progressDescription}
         />
+        <BuildWorkflowNextAction currentStageId="checkoff" className="no-print" />
         {stateContent}
       </PageShell>
     );
@@ -824,7 +820,7 @@ export default function CheckoffPage() {
           }
         />
 
-        <DeskNextStep className="no-print">{progressNextStep}</DeskNextStep>
+        <BuildWorkflowNextAction currentStageId="checkoff" className="no-print" />
 
         <PwaInstallBanner />
 

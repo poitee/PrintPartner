@@ -49,7 +49,7 @@ describe("BuildPlanningCard", () => {
     expect(screen.getAllByText("size: 350")).toHaveLength(2);
   });
 
-  it("shows a consumed MCP draft as an applied Plan revision", async () => {
+  it("shows a consumed MCP Working Plan as an Accepted Plan revision", async () => {
     fetchBuildPlanningState.mockResolvedValue({
       planning_phase: { kind: "applied", draft_id: 11, revision_id: 4 },
       brief: {
@@ -66,8 +66,8 @@ describe("BuildPlanningCard", () => {
     });
 
     render(<BuildPlanningCard planId={12} />);
-    expect(await screen.findByText("Applied")).toBeTruthy();
-    expect(screen.getByText(/Applied draft 11 as Plan revision 4/)).toBeTruthy();
-    expect(screen.queryByText("Ready to apply")).toBeNull();
+    expect(await screen.findByText("Accepted")).toBeTruthy();
+    expect(screen.getByText(/Accepted as Plan revision 4/)).toBeTruthy();
+    expect(screen.queryByText("Ready for Plan review")).toBeNull();
   });
 });

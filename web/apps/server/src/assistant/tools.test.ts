@@ -52,6 +52,26 @@ describe("assistant tools + example builds", () => {
     expect(sources.sources.some((s: { name: string }) => s.name === "Voron-2")).toBe(true);
   });
 
+  it("returns the same Build Workflow projection used by the UI", async () => {
+    const build = repo.createProfile("Clockwork Dragon");
+
+    const workflow = JSON.parse((await invokeAssistantTool(
+      "get_build_workflow",
+      { plan_id: build.id },
+      { repo },
+    )).content);
+
+    expect(workflow.next_action.kind).toBe("attach_sources");
+    expect(workflow.accepted_plan).toEqual({ kind: "none" });
+    expect(workflow.working_plan).toEqual({ kind: "none" });
+    expect(workflow.stages.map((stage: { id: string }) => stage.id)).toEqual([
+      "sources",
+      "plan",
+      "production",
+      "checkoff",
+    ]);
+  });
+
   it("exposes plan option groups and searchable Source inventory", async () => {
     const source = repo.createSource({ name: "Options", source_kind: "local" });
     const sourcePath = join(dataDir, "options");

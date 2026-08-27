@@ -157,6 +157,7 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
       workspace,
     );
     void queryClient.invalidateQueries({ queryKey: queryKeys.planDrafts(workspace.profile_id) });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.buildWorkflow(workspace.profile_id) });
     return workspace;
   }, [queryClient]);
 
@@ -180,7 +181,7 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
   ), [activeDraftId, draftQuery.data, queryClient, selectedProfileId]);
 
   const startPlanDraft = useCallback(async () => {
-    if (selectedProfileId == null) throw new Error("Select a Plan before rebuilding");
+    if (selectedProfileId == null) throw new Error("Select a Build before creating its Working Plan");
     setDraftMutationError(null);
     try {
       return storeWorkspace(await recomputePlanDraft(selectedProfileId));
@@ -209,7 +210,7 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
     } catch (error) {
       const replaced = replaceFromConflict(error);
       const message = replaced
-        ? "The saved draft changed. Review it and retry this edit."
+        ? "The Working Plan changed. Review it and retry this edit."
         : error instanceof Error ? error.message : String(error);
       setDraftMutationError(message);
       throw new Error(message, { cause: error });
@@ -218,7 +219,7 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
 
   const editActivePlanDraft = useCallback(async (decisions: PlanDraftPartDecisionContract[]) => {
     const workspace = currentDraftWorkspace();
-    if (!workspace) throw new Error("Rebuild the Plan to create a saved draft first");
+    if (!workspace) throw new Error("Create a Working Plan from Sources first");
     return editWorkspaceParts(workspace, decisions);
   }, [currentDraftWorkspace, editWorkspaceParts]);
 
@@ -238,10 +239,10 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
     };
     try {
       for (let attempt = 0; attempt < 2; attempt += 1) {
-        // The Plan section is also an editing surface. Create a draft on the
+        // The Plan section is also an editing surface. Create a Working Plan on the
         // first attempt when the user has not opened one yet.
         const workspace = currentDraftWorkspace() ?? (attempt === 0 ? await startPlanDraft() : null);
-        if (!workspace) fail("Rebuild the Plan to create a saved draft first");
+        if (!workspace) fail("Create a Working Plan from Sources first");
         const match = resolveDraftPart(workspace.parts, part);
         if (match.kind !== "resolved") fail(draftPartMatchError(match, part.filename));
         const draftPartId = match.part.draft_part_id;
@@ -256,7 +257,7 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
           const replaced = replaceFromConflict(error);
           if (replaced && attempt === 0) continue;
           const message = replaced
-            ? "The saved draft changed. Review it and retry this edit."
+            ? "The Working Plan changed. Review it and retry this edit."
             : error instanceof Error ? error.message : String(error);
           setDraftMutationError(message);
           throw new Error(message, { cause: error });
@@ -286,7 +287,7 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
 
   const reconcileActivePlanDraft = useCallback(async (decisions: RequiredUnitDecisionContract[]) => {
     const workspace = currentDraftWorkspace();
-    if (!workspace) throw new Error("No saved Plan draft is open");
+    if (!workspace) throw new Error("No Working Plan is open");
     const next = await reconcilePlanDraft({
       profileId: workspace.profile_id,
       draftId: workspace.draft.draft_id,
@@ -298,10 +299,10 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
 
   const applyActivePlanDraft = useCallback(async (options?: { remapCheckoffLinks?: boolean }) => {
     const workspace = currentDraftWorkspace();
-    if (!workspace) throw new Error("No saved Plan draft is open");
-    if (!workspace.diff.base_is_current) throw new Error("Rebase this saved draft before Apply");
+    if (!workspace) throw new Error("No Working Plan is open");
+    if (!workspace.diff.base_is_current) throw new Error("Refresh this Working Plan before acceptance");
     if (workspace.reconciliation.kind !== "ready") {
-      throw new Error("Resolve Required-unit changes before Apply");
+      throw new Error("Resolve Required-unit changes before acceptance");
     }
     const receipt = await applyPlanDraft(workspace, options);
     setRecentlyAppliedDraftId(workspace.draft.draft_id);
@@ -314,14 +315,15 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
       queryClient.invalidateQueries({ queryKey: queryKeys.checkoff(workspace.profile_id) }),
       queryClient.invalidateQueries({ queryKey: queryKeys.acceptedPlateWorkspace(workspace.profile_id) }),
       queryClient.invalidateQueries({ queryKey: queryKeys.acceptedPlateExportJobs(workspace.profile_id) }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.buildWorkflow(workspace.profile_id) }),
     ]);
     return receipt;
   }, [currentDraftWorkspace, queryClient]);
 
   const rebaseActivePlanDraft = useCallback(async () => {
     const workspace = currentDraftWorkspace();
-    if (!workspace) throw new Error("No saved Plan draft is open");
-    if (workspace.diff.base_is_current) throw new Error("This saved draft already uses the accepted Plan");
+    if (!workspace) throw new Error("No Working Plan is open");
+    if (workspace.diff.base_is_current) throw new Error("This Working Plan already uses the Accepted Plan");
     setDraftMutationError(null);
     try {
       const abandoned = workspace.draft.state === "abandoned"

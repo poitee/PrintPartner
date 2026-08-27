@@ -1,5 +1,5 @@
 /**
- * Resolving a Plan row to the saved draft's Part.
+ * Resolving a Plan row to the Working Plan's Part.
  *
  * The Plan sheet renders the accepted revision; edits land on the open draft.
  * The two carry different id spaces (`ReviewPart.id` is a projection part id,
@@ -75,7 +75,7 @@ export function draftPartMatchError(
   filename: string,
 ): string {
   if (match.kind === "ambiguous") {
-    return `The saved draft has ${match.count} Parts matching ${filename}. Rebuild the Plan to resolve the duplicate before editing it.`;
+    return `The Working Plan has ${match.count} Parts matching ${filename}. Rebuild it from Sources to resolve the duplicate before editing.`;
   }
-  return `${filename} is not in the saved draft. Rebuild the Plan so the draft matches the current sources, then retry.`;
+  return `${filename} is not in the Working Plan. Rebuild it from Sources, then retry.`;
 }

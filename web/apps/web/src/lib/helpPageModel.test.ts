@@ -17,8 +17,8 @@ describe("helpPageModel", () => {
     expect(WORKFLOW_STEPS.map((step) => step.label)).toEqual([
       "Sources",
       "Plan",
-      "Checkoff",
       "Production",
+      "Checkoff",
     ]);
   });
 
@@ -26,8 +26,8 @@ describe("helpPageModel", () => {
     expect(workflowStepPaths(7)).toEqual([
       "/sources?profile=7",
       "/plan?profile=7",
-      "/progress?profile=7",
       "/export?profile=7",
+      "/progress?profile=7",
     ]);
   });
 

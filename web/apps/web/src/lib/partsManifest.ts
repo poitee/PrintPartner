@@ -441,7 +441,7 @@ export async function applyPartsManifest(
     return {
       updated: 0,
       skipped: rows.length,
-      errors: [{ row: 0, message: "Rebuild the Plan to create a saved draft before importing" }],
+      errors: [{ row: 0, message: "Build a Working Plan from Sources before importing" }],
     };
   }
 

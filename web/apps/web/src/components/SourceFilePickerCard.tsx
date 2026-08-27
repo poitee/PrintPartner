@@ -360,7 +360,7 @@ export default function SourceFilePickerCard({
           <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="text-xs text-muted-foreground">
               Check STL files or folders to include on the next{" "}
-              <strong className="font-medium text-foreground">Rebuild plan</strong>. Selections
+              <strong className="font-medium text-foreground">Build Working Plan</strong>. Selections
               save automatically.
             </p>
             {showRetry && (

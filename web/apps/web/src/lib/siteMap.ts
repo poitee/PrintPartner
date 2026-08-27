@@ -10,7 +10,7 @@ import {
 export const GLOBAL_SECTIONS = ["builds", "production", "printers", "settings"] as const;
 export type GlobalSection = (typeof GLOBAL_SECTIONS)[number];
 
-export const BUILD_SECTIONS = ["sources", "plan", "checkoff", "production"] as const;
+export const BUILD_SECTIONS = ["sources", "plan", "production", "checkoff"] as const;
 export type BuildSection = (typeof BUILD_SECTIONS)[number];
 
 export function globalSectionPath(section: GlobalSection): string {

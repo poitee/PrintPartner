@@ -5,7 +5,7 @@ type Props = {
   /**
    * reading — prose-weight pages (Help, NotFound): max-w-3xl
    * list — index/dashboard pages (Builds, All Production, Printers, Settings): max-w-6xl
-   * work — full-bleed work surfaces (Library, Sources, Plan, Checkoff, Production wizard)
+   * work — full-bleed work surfaces (Library, Sources, Plan, Production, Checkoff)
    */
   width?: "reading" | "list" | "work";
   className?: string;
