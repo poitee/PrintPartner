@@ -52,14 +52,23 @@ export function planStatusLabel(plan: {
   return isArchived(plan) ? "Archived" : "Active";
 }
 
+/**
+ * Reads the Build list "Remaining" cell.
+ *
+ * The wording follows CONTEXT.md: a Build without an Accepted Plan has not
+ * reached the acceptance checkpoint yet. "Not applied" described the old draft
+ * mechanism, not anything the reader can act on.
+ */
 export function planProgressLabel(progress: AcceptedProgressSummary): string {
   switch (progress.kind) {
     case "ready":
-      return progress.total_units === 0
-        ? "No required units"
-        : `${progress.remaining_units} remaining`;
+      if (progress.total_units === 0) return "No Required units";
+      if (progress.remaining_units === 0) {
+        return `All ${progress.total_units} checked off`;
+      }
+      return `${progress.remaining_units} of ${progress.total_units} remaining`;
     case "empty":
-      return "Not applied";
+      return "No Accepted Plan yet";
     case "unavailable":
       return "Checkoff unavailable";
   }

@@ -86,12 +86,15 @@ describe("planStatusLabel", () => {
 describe("accepted Progress display", () => {
   it("labels every Progress state", () => {
     expect(planProgressLabel({ kind: "ready", total_units: 5, remaining_units: 2 })).toBe(
-      "2 remaining",
+      "2 of 5 remaining",
+    );
+    expect(planProgressLabel({ kind: "ready", total_units: 5, remaining_units: 0 })).toBe(
+      "All 5 checked off",
     );
     expect(planProgressLabel({ kind: "ready", total_units: 0, remaining_units: 0 })).toBe(
-      "No required units",
+      "No Required units",
     );
-    expect(planProgressLabel({ kind: "empty" })).toBe("Not applied");
+    expect(planProgressLabel({ kind: "empty" })).toBe("No Accepted Plan yet");
     for (const reason of [
       "compatibility_dirty",
       "uninitialized",

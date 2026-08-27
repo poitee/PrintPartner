@@ -85,7 +85,9 @@ describe("PlansPage", () => {
     expect(
       within(mobileBuilds).getByRole("button", { name: "Actions for Voron" }).tagName,
     ).toBe("BUTTON");
-    expect(within(mobileBuilds).getByText("6 remaining").textContent).toBe("6 remaining");
+    expect(within(mobileBuilds).getByText("6 of 30 remaining").textContent).toBe(
+      "6 of 30 remaining",
+    );
     expect(screen.queryByRole("table")).toBeNull();
   });
 

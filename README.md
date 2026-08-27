@@ -25,16 +25,32 @@ Print Partner keeps source files, build choices, quantities, print progress, and
 
 ## Workflow
 
+Preparing a Build is mostly linear. Making the parts is a loop.
+
+```text
+Sources -> Plan -> Production <-> Checkoff
+              Accepted Plan     verified units
+                     |                |
+                     +-- remaining ---+
+```
+
+| Stage | What you are trying to do |
+|-------|---------------------------|
+| **Sources** | Get the design inputs ready. Attach sources, choose STL files, set quantities, assign role colors. |
+| **Plan** | Decide what this revision requires. Review working changes, resolve issues, then accept a Plan revision. |
+| **Production** | Make the next batch. Select Required units, assign printers, arrange Plates, export for slicing, send G-code. |
+| **Checkoff** | Verify what came off the printer. Anything incomplete or rejected returns to Production. |
+
+Two workspaces sit outside a single Build:
+
 | Area | Purpose |
 |------|---------|
 | **Library** | Register GitHub repositories, local folders, or zip files. Sync sources, set import rules, and search STL files. |
 | **Builds** | Create, rename, duplicate, archive, and restore kit builds. |
-| **Sources** | Attach sources to a build, choose STL files, set quantities, and assign role colors. |
-| **Plan** | Review the draft, resolve warnings, and apply the accepted list. |
-| **Checkoff** | Track each required unit through printing and assembly. |
-| **Production** | Arrange plates, export 3MF or STL files, open a slicer, and send sliced files to linked printers. |
 
-An active Build owns its Sources, Plan, Checkoff state, and Production workspace. The Library is shared across builds.
+Plan acceptance is the safety boundary. Sources and Plan are editable intent; nothing there changes printer work until you accept a Plan revision. An Accepted Plan revision owns the Required units, Checkoff state, Plate arrangements, exports, and printer handoff records.
+
+An active Build owns its Sources, Plan, Production work, and Checkoff history. The Library is shared across Builds. See [`CONTEXT.md`](CONTEXT.md) for the exact vocabulary and [ADR 0001](docs/adr/0001-model-build-workflow-as-preparation-and-making.md) for why the model is a loop and not four steps.
 
 ## Screenshots
 

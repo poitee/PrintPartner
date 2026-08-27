@@ -50,16 +50,25 @@ const API_PREFIXES = [
 ];
 
 /**
- * SPA routes that share a prefix with API routes (`/settings` vs `/settings/*`).
- * Exact document navigations must not be proxied — there is no GET API at these paths.
+ * Exact SPA routes whose path is also an API prefix. `/sources` and `/printers`
+ * even answer a same-path GET, so a plain bypass would break the client while a
+ * plain proxy hands the browser raw JSON instead of the app.
+ *
+ * One rule covers both cases: bypass browser document navigations, proxy
+ * everything else. `fetch` sends `Accept: *\/*` unless the caller says
+ * otherwise, so API calls keep reaching the server.
+ *
+ * Keep this in sync with SPA_PATHS in
+ * `apps/server/src/lib/spa-nav.ts`, which does the same job in production.
  */
-const SPA_EXACT_PATHS = new Set(["/settings", "/help", "/parts"]);
-
-/**
- * Exact SPA paths that also expose a same-path API (GET `/plans` list).
- * Bypass only browser document navigations so API fetches still proxy.
- */
-const SPA_EXACT_PATHS_WITH_API = new Set(["/plans"]);
+const SPA_EXACT_PATHS = new Set([
+  "/help",
+  "/parts",
+  "/plans",
+  "/printers",
+  "/settings",
+  "/sources",
+]);
 
 function isDocumentNavigation(req: IncomingMessage): boolean {
   const mode = req.headers["sec-fetch-mode"];
@@ -74,8 +83,7 @@ function spaExactBypass(req: IncomingMessage): string | undefined {
   if (pathname.length > 1 && pathname.endsWith("/")) {
     pathname = pathname.slice(0, -1);
   }
-  if (SPA_EXACT_PATHS.has(pathname)) return raw;
-  if (SPA_EXACT_PATHS_WITH_API.has(pathname) && isDocumentNavigation(req)) return raw;
+  if (SPA_EXACT_PATHS.has(pathname) && isDocumentNavigation(req)) return raw;
   return undefined;
 }
 
@@ -87,7 +95,7 @@ const proxy: Record<string, ProxyOptions> = Object.fromEntries(
       ws: prefix === "ws" || prefix === "jobs",
     };
     const exact = `/${prefix}`;
-    if (SPA_EXACT_PATHS.has(exact) || SPA_EXACT_PATHS_WITH_API.has(exact)) {
+    if (SPA_EXACT_PATHS.has(exact)) {
       options.bypass = spaExactBypass;
     }
     return [`/${prefix}`, options];

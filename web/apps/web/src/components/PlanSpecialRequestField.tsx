@@ -9,7 +9,13 @@ type Props = {
   className?: string;
 };
 
-/** Quiet per-plan special-request note (Plan edit surface). */
+/**
+ * Per-Build special-request note.
+ *
+ * It looks like every other text field. The earlier "quiet" treatment removed
+ * the border and dimmed the placeholder, which left no visible boundary in
+ * either theme and pushed the placeholder below AA contrast.
+ */
 export default function PlanSpecialRequestField({
   profileId,
   value,
@@ -47,7 +53,7 @@ export default function PlanSpecialRequestField({
       aria-label="Special request"
       disabled={updateMutation.isPending}
       className={cn(
-        "h-8 border-transparent bg-muted/40 text-sm shadow-none placeholder:text-muted-foreground/70 hover:border-border/60 focus-visible:border-input",
+        "h-9 bg-muted/40 text-sm shadow-none",
         className,
       )}
     />
