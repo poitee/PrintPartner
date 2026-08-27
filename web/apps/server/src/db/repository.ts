@@ -5,7 +5,6 @@ import {
   MergeWouldWipeProfileError,
   mergeNamingProfiles,
   namingProfileFromDict,
-  parseSourceNamingMetadata,
   parseSourceNamingMetadataStrict,
   resolveNamingProfile,
   scanRepo,
@@ -68,10 +67,9 @@ import type {
   SourceRevision,
   SourceSummary,
   SourceNamingResponse,
-  StlNamingProfileOverride,
 } from "@print-partner/contracts";
 import { and, asc, count, desc, eq, gte, isNotNull, isNull, ne, sql } from "drizzle-orm";
-import { basename, join, resolve, sep } from "node:path";
+import { join, resolve, sep } from "node:path";
 import type { DrizzleDb } from "./client.js";
 import { asSyncDb, isSyncSqliteDrizzle, runSerializedSettingsMutation, type AppDrizzleDb } from "./sync-db-bridge.js";
 import { getRequestTenantId } from "../middleware/tenant-context.js";
@@ -153,7 +151,6 @@ import { resolveStoredSnapshotPath } from "./stored-snapshot-path.js";
 import {
   projectionPlanningFieldsMatch,
   readAcceptedPlanOperationalSnapshotInternal,
-  type AcceptedPlanCorruptionCode,
   type ReadAcceptedPlanOperationalSnapshotResult,
 } from "./accepted-plan-operational.js";
 import {
@@ -167,7 +164,6 @@ import {
 import {
   MAX_ACCEPTED_PROGRESS_SUMMARY_BATCH,
   readAcceptedPlanProgressBatch,
-  type AcceptedPlanProgressRead,
 } from "./accepted-plan-progress-summary.js";
 import {
   acceptedPlanBasis,
@@ -228,53 +224,41 @@ import {
   type UnplaceAcceptedPlateUnitCommand,
   type UnplaceAcceptedPlateUnitResult,
 } from "./accepted-plates.js";
-
-type PrinterPlanBinding = Readonly<{
-  integration_id: string;
-  profile_id: number | null;
-  updated_at: string;
-}>;
-
-function parsePrinterPlanBindings(raw: string | null | undefined): PrinterPlanBinding[] {
-  if (!raw?.trim()) return [];
-  let value: unknown;
-  try {
-    value = JSON.parse(raw);
-  } catch {
-    throw new Error("Printer Plan bindings are corrupt");
-  }
-  if (!Array.isArray(value)) throw new Error("Printer Plan bindings are corrupt");
-  return value.map((item) => {
-    const row = applyJsonRecord(item, "Printer Plan binding");
-    if (
-      typeof row.integration_id !== "string" ||
-      !row.integration_id.trim() ||
-      (row.profile_id !== null && (!Number.isSafeInteger(row.profile_id) || Number(row.profile_id) <= 0)) ||
-      typeof row.updated_at !== "string"
-    ) {
-      throw new Error("Printer Plan bindings are corrupt");
-    }
-    return {
-      integration_id: row.integration_id,
-      profile_id: row.profile_id === null ? null : Number(row.profile_id),
-      updated_at: row.updated_at,
-    };
-  });
-}
-
-function completedPrefixLength(
-  units: ReadonlyArray<{
-    readonly unitIndex: number;
-    readonly completed: boolean;
-  }>,
-): number {
-  let count = 0;
-  for (const unit of [...units].sort((left, right) => left.unitIndex - right.unitIndex)) {
-    if (unit.unitIndex !== count || !unit.completed) break;
-    count += 1;
-  }
-  return count;
-}
+import {
+  parsePrinterPlanBindings,
+  upsertPrinterPlanBinding,
+  type PrinterPlanBinding,
+} from "./printer-plan-bindings.js";
+import {
+  acceptedRevisionPartRow,
+  partRow,
+  planInputTrackingKind,
+} from "./part-row-model.js";
+import { matchesPlanningPathScope } from "./planning-path-scope.js";
+import {
+  acceptedPlanRevisionIdentity,
+  type AcceptedPlanRevisionIdentity,
+} from "./accepted-plan-revision-model.js";
+import {
+  acceptedProfileProgress,
+  type AcceptedProfileProgress,
+} from "./accepted-profile-progress.js";
+import { completedPrefixLength } from "./completed-prefix.js";
+import {
+  PLAN_APPLY_REQUEST_FORMAT,
+  applyJsonRecord,
+  applySettingArray,
+  assessCheckoffRemap,
+  planApplyRequestDigest,
+  positiveSafeId,
+  type CheckoffRemapPlan,
+  type UnmappableCheckoffLink,
+} from "./plan-apply-model.js";
+import { docTitleFromPath } from "./source-docs-model.js";
+import { sourceNamingResponse } from "./source-naming-model.js";
+import { sourceRevision } from "./source-revision-model.js";
+import { sourceSummary } from "./source-summary-model.js";
+import { requiredText, sha256Digest } from "./write-validation.js";
 
 function filamentAssignmentFromRecord(row: Record<string, unknown>): FilamentAssignment {
   const colorId = typeof row.filament_color_id === "string" ? row.filament_color_id : null;
@@ -289,12 +273,6 @@ function filamentAssignmentFromRecord(row: Record<string, unknown>): FilamentAss
     color,
     spoolmanSpoolId: typeof row.spoolman_spool_id === "string" ? row.spoolman_spool_id : null,
   };
-}
-
-function docTitleFromPath(path: string): string {
-  const base = basename(path);
-  if (/^readme\.md$/i.test(base)) return "README";
-  return base;
 }
 
 export type SchemaTables = Pick<
@@ -372,22 +350,7 @@ export type ProfileHeader = {
   readonly last_used_at: string | null;
 };
 
-export type AcceptedProfileProgress =
-  | {
-      readonly kind: "ready";
-      readonly totalUnits: number;
-      readonly remainingUnits: number;
-    }
-  | { readonly kind: "empty" }
-  | {
-      readonly kind: "unavailable";
-      readonly reason: "compatibility_dirty" | "uninitialized";
-    }
-  | {
-      readonly kind: "integrity_failure";
-      readonly code: AcceptedPlanCorruptionCode;
-    }
-  | { readonly kind: "concurrent_update" };
+export type { AcceptedProfileProgress } from "./accepted-profile-progress.js";
 
 export type AcceptedProfileSummary = Readonly<{
   header: ProfileHeader;
@@ -396,27 +359,6 @@ export type AcceptedProfileSummary = Readonly<{
 
 export type ReadAcceptedProfileSummary =
   { readonly kind: "found"; readonly summary: AcceptedProfileSummary } | { readonly kind: "missing" };
-
-function acceptedProfileProgress(
-  read: Exclude<AcceptedPlanProgressRead, { kind: "missing" }>,
-): AcceptedProfileProgress {
-  switch (read.kind) {
-    case "ready":
-      return {
-        kind: "ready",
-        totalUnits: read.totalUnits,
-        remainingUnits: read.remainingUnits,
-      };
-    case "empty":
-      return { kind: "empty" };
-    case "unavailable":
-      return { kind: "unavailable", reason: read.reason };
-    case "integrity_failure":
-      return { kind: "integrity_failure", code: read.code };
-    case "concurrent_update":
-      return { kind: "concurrent_update" };
-  }
-}
 
 export type OwnedProfileIdentity = {
   readonly id: number;
@@ -520,11 +462,7 @@ export type ApplyPlanChangesCommand = {
   readonly remapCheckoffLinks?: boolean;
 };
 
-export type UnmappableCheckoffLink = {
-  readonly linkId: string;
-  readonly filename: string;
-  readonly reason: string;
-};
+export type { UnmappableCheckoffLink } from "./plan-apply-model.js";
 
 export type AppliedPlanReceipt = {
   readonly profileId: number;
@@ -641,28 +579,15 @@ type StoredRebasePlanDraftResult = Extract<
   }
 >;
 
-type AcceptedPlanRevisionIdentity = Omit<PlanRevisionRow, "provenanceKind" | "inputSetId"> &
-  ({ provenanceKind: "tracked"; inputSetId: number } | { provenanceKind: "legacy"; inputSetId: null });
-
 export type AcceptedPlanRevisionPart = PlanRevisionPartRow & {
   effectiveRole: string;
   effectiveQuantity: number;
 };
 
-export type AcceptedPlanRevision = AcceptedPlanRevisionIdentity & {
+export type AcceptedPlanRevision = AcceptedPlanRevisionIdentity<PlanRevisionRow> & {
   planVersion: number;
   parts: AcceptedPlanRevisionPart[];
 };
-
-function acceptedPlanRevisionIdentity(row: PlanRevisionRow): AcceptedPlanRevisionIdentity {
-  if (row.provenanceKind === "tracked" && row.inputSetId != null) {
-    return { ...row, provenanceKind: "tracked", inputSetId: row.inputSetId };
-  }
-  if (row.provenanceKind === "legacy" && row.inputSetId == null) {
-    return { ...row, provenanceKind: "legacy", inputSetId: null };
-  }
-  throw new Error("Accepted Plan revision provenance is invalid");
-}
 
 export type SourceNamingCommand =
   { readonly kind: "use_defaults" } | { readonly kind: "override"; readonly profile: StlNamingProfileDict };
@@ -676,20 +601,6 @@ export type SourceNamingSaveResult =
   | { readonly kind: "saved"; readonly settings: SourceNamingResponse }
   | { readonly kind: "source_not_found" }
   | { readonly kind: "conflict" };
-
-function sourceNamingResponse(input: {
-  readonly useDefaults: boolean;
-  readonly override: StlNamingProfileOverride;
-  readonly effective: StlNamingProfileDict;
-}): SourceNamingResponse {
-  const common = {
-    effective: input.effective,
-    effective_digest: digestEffectiveNaming(input.effective),
-  };
-  return input.useDefaults
-    ? { use_defaults: true, override: {}, ...common }
-    : { use_defaults: false, override: input.override, ...common };
-}
 
 type CapturedPlanLayer = {
   readonly layerId: number;
@@ -724,14 +635,6 @@ type PreparedPlanDraft = {
 type PreparePlanDraftResult =
   | { readonly kind: "prepared"; readonly value: PreparedPlanDraft }
   | { readonly kind: "no_layers" | "no_stls" | "would_wipe" };
-
-function matchesPlanningPathScope(path: string, scopes: ReadonlySet<string>): boolean {
-  for (const scope of scopes) {
-    if (scope.endsWith("/**") && path.startsWith(scope.slice(0, -2))) return true;
-    if (path === scope) return true;
-  }
-  return false;
-}
 
 type PlanFreshnessContext = {
   readonly globalNaming: StlNamingProfileDict;
@@ -847,288 +750,6 @@ export type SourceNoteSummary = {
   created_at: string;
   updated_at: string;
 };
-
-function readSourceUpdateFields(metadata: Record<string, unknown> | null): {
-  update_status: "up_to_date" | "updates_available" | "unknown" | null;
-  update_checked_at: string | null;
-} {
-  const data = metadata ?? {};
-  const status = data[REMOTE_UPDATE_STATUS_KEY];
-  const valid: "up_to_date" | "updates_available" | "unknown" | null =
-    status === "up_to_date" || status === "updates_available" || status === "unknown" ? status : null;
-  const checked = data[REMOTE_CHECKED_AT_KEY];
-  return {
-    update_status: valid,
-    update_checked_at: typeof checked === "string" ? checked : null,
-  };
-}
-
-function sourceSummary(row: ProjectRow, docCount = 0): SourceSummary {
-  const metadata = parseProjectMetadata(row.metadataJson);
-  const { useDefaults } = parseSourceNamingMetadata(metadata);
-  const { update_status, update_checked_at } = readSourceUpdateFields(metadata);
-  const sourceKind = row.sourceKind || (row.sourceType === "local" ? "local" : "github");
-  return {
-    id: row.id,
-    name: row.name,
-    url: row.url,
-    source_kind: sourceKind,
-    source_type: row.sourceType ?? "git",
-    role: row.role ?? "unassigned",
-    category: resolveSourceCategory(row.metadataJson, row.role),
-    branch: row.branch ?? "main",
-    tag: row.tag ?? null,
-    local_path: row.localPath,
-    last_synced_at: row.lastSyncedAt,
-    last_commit_sha: row.lastCommitSha,
-    current_source_revision_id: row.currentSourceRevisionId,
-    docs_url: row.docsUrl,
-    manifest_community_slug: row.manifestCommunitySlug,
-    metadata,
-    naming_use_defaults: useDefaults,
-    update_status,
-    update_checked_at,
-    doc_count: docCount,
-  };
-}
-
-function sourceRevision(row: SourceRevisionRow): SourceRevision {
-  if (row.completeness !== "complete") {
-    throw new Error("Incomplete sync attempt is not a Source revision");
-  }
-  return {
-    id: row.id,
-    source_id: row.projectId,
-    upstream_revision_key: row.upstreamRevisionKey,
-    manifest_digest: row.manifestDigest,
-    snapshot_locator: row.snapshotLocator,
-    synced_at: row.syncedAt,
-    completeness: "complete",
-  };
-}
-
-function requiredText(value: string, label: string): string {
-  const normalized = value.trim();
-  if (!normalized) throw new Error(`${label} is required`);
-  return normalized;
-}
-
-function sha256Digest(value: string, label: string): string {
-  const normalized = value.trim().toLowerCase();
-  if (!/^[a-f0-9]{64}$/.test(normalized)) {
-    throw new Error(`${label} must be a SHA-256 hex digest`);
-  }
-  return normalized;
-}
-
-const PLAN_APPLY_REQUEST_FORMAT = "plan-apply-request-v1";
-
-function positiveSafeId(value: number, label: string): number {
-  if (!Number.isSafeInteger(value) || value <= 0) throw new Error(`${label} is invalid`);
-  return value;
-}
-
-function planApplyRequestDigest(input: {
-  readonly profileId: number;
-  readonly draftId: number;
-  readonly expectedSnapshotDigest: string;
-  readonly expectedLifecycleVersion: number;
-  readonly expectedBaseRevisionId: number | null;
-  readonly expectedBasePlanVersion: number;
-}): string {
-  return createHash("sha256")
-    .update(
-      JSON.stringify({
-        format: PLAN_APPLY_REQUEST_FORMAT,
-        profile_id: input.profileId,
-        draft_id: input.draftId,
-        expected_snapshot_digest: input.expectedSnapshotDigest,
-        expected_lifecycle_version: input.expectedLifecycleVersion,
-        expected_base_revision_id: input.expectedBaseRevisionId,
-        expected_base_plan_version: input.expectedBasePlanVersion,
-      }),
-    )
-    .digest("hex");
-}
-
-function applyJsonRecord(value: unknown, label: string): Record<string, unknown> {
-  if (typeof value !== "object" || value == null || Array.isArray(value)) {
-    throw new Error(`${label} is corrupt`);
-  }
-  return value as Record<string, unknown>;
-}
-
-type CheckoffRemapPlan = {
-  readonly checkoffLinksRaw: string | null;
-  readonly sendQueueRaw: string | null;
-  readonly remapByDraftPart: ReadonlyMap<string, number>;
-};
-
-function assessCheckoffRemap(input: {
-  readonly profileId: number;
-  readonly checkoffLinksRaw: string | null;
-  readonly sendQueueRaw: string | null;
-  readonly oldPartMatchKeyById: ReadonlyMap<number, string>;
-  readonly partProfileIdById: ReadonlyMap<number, number>;
-  readonly newPartByMatchKey: ReadonlyMap<string, { readonly draftPartId: number; readonly quantityEffective: number }>;
-}):
-  | ({ readonly kind: "safe" } & CheckoffRemapPlan)
-  | { readonly kind: "unsafe"; readonly unmappable: UnmappableCheckoffLink[] } {
-  const remapByDraftPart = new Map<string, number>();
-  const unmappable: UnmappableCheckoffLink[] = [];
-  const seen = new Set<string>();
-
-  function resolve(linkId: string, filename: string, unit: { part_id: number; unit_index: number }): void {
-    const key = `${unit.part_id}:${unit.unit_index}`;
-    if (seen.has(key)) return;
-    seen.add(key);
-    const matchKey = input.oldPartMatchKeyById.get(unit.part_id);
-    if (!matchKey) {
-      unmappable.push({
-        linkId,
-        filename,
-        reason: `Checked-off part id ${unit.part_id} no longer exists in this Plan's parts`,
-      });
-      return;
-    }
-    const target = input.newPartByMatchKey.get(matchKey);
-    if (!target) {
-      unmappable.push({
-        linkId,
-        filename,
-        reason: `STL for "${filename}" (match_key ${matchKey}) is no longer part of the reconciled Plan`,
-      });
-      return;
-    }
-    if (unit.unit_index >= target.quantityEffective) {
-      unmappable.push({
-        linkId,
-        filename,
-        reason: `Checked-off unit index ${unit.unit_index} exceeds the new quantity (${target.quantityEffective}) for "${filename}"`,
-      });
-      return;
-    }
-    remapByDraftPart.set(key, target.draftPartId);
-  }
-
-  for (const value of applySettingArray(input.checkoffLinksRaw, "Printer Checkoff links")) {
-    const row = applyJsonRecord(value, "Printer Checkoff link");
-    if (row.profile_id !== input.profileId) continue;
-    const linkId = typeof row.id === "string" ? row.id : "unknown";
-    const filename = typeof row.filename === "string" ? row.filename : "unknown file";
-    if (Array.isArray(row.units)) {
-      for (const unitValue of row.units) {
-        const unit = applyJsonRecord(unitValue, "Printer Checkoff coordinate");
-        resolve(linkId, filename, {
-          part_id: unit.part_id as number,
-          unit_index: unit.unit_index as number,
-        });
-      }
-    }
-  }
-  for (const value of applySettingArray(input.sendQueueRaw, "Printer send queue")) {
-    const row = applyJsonRecord(value, "Printer send queue item");
-    const units = row.checkoff_units == null ? [] : row.checkoff_units;
-    if (!Array.isArray(units)) continue;
-    const explicitProfileId = typeof row.profile_id === "number" ? row.profile_id : null;
-    if (explicitProfileId != null && explicitProfileId !== input.profileId) continue;
-    if (
-      explicitProfileId == null &&
-      units.some((unitValue) => {
-        const unit = applyJsonRecord(unitValue, "Printer queue coordinate");
-        return input.partProfileIdById.get(unit.part_id as number) === input.profileId;
-      }) === false &&
-      units.some((unitValue) => {
-        const unit = applyJsonRecord(unitValue, "Printer queue coordinate");
-        return input.partProfileIdById.has(unit.part_id as number);
-      })
-    ) {
-      continue;
-    }
-    const linkId = typeof row.id === "string" ? row.id : "unknown";
-    const filename = typeof row.filename === "string" ? row.filename : "unknown file";
-    for (const unitValue of units) {
-      const unit = applyJsonRecord(unitValue, "Printer queue coordinate");
-      resolve(linkId, filename, {
-        part_id: unit.part_id as number,
-        unit_index: unit.unit_index as number,
-      });
-    }
-  }
-
-  if (unmappable.length > 0) return { kind: "unsafe", unmappable };
-  return {
-    kind: "safe",
-    checkoffLinksRaw: input.checkoffLinksRaw,
-    sendQueueRaw: input.sendQueueRaw,
-    remapByDraftPart,
-  };
-}
-
-function applySettingArray(value: string | null, label: string): unknown[] {
-  if (value == null || value.trim() === "") return [];
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(value) as unknown;
-  } catch {
-    throw new Error(`${label} is corrupt`);
-  }
-  if (!Array.isArray(parsed)) throw new Error(`${label} is corrupt`);
-  return parsed;
-}
-
-function planInputTrackingKind(value: string): PlanRevisionInput["tracking_kind"] {
-  return value === "untracked" ? "untracked" : "revision";
-}
-
-function partRow(row: PartDbRow): PartRow {
-  return {
-    id: row.id,
-    match_key: row.matchKey,
-    relative_path: row.relativePath,
-    filename: row.filename,
-    source_layer: row.sourceLayer,
-    status: row.status,
-    role: row.role,
-    requirement: row.requirement,
-    option_group_id: row.optionGroupId,
-    included: row.included,
-    filament_color_id: row.filamentColorId,
-    filament_custom_hex: row.filamentCustomHex,
-    spoolman_spool_id: row.spoolmanSpoolId,
-    filament_display: "",
-    filament_hex: row.filamentCustomHex,
-    quantity_auto: row.quantityAuto,
-    quantity_override: row.quantityOverride,
-    quantity_effective: row.quantityEffective,
-  };
-}
-
-function acceptedRevisionPartRow(row: AcceptedPlanRevisionPart): PartRow {
-  if (row.projectionPartId == null) {
-    throw new Error("Accepted Plan revision Part has no compatibility projection ID");
-  }
-  return {
-    id: row.projectionPartId,
-    match_key: row.partKey,
-    relative_path: row.relativePath,
-    filename: row.filename,
-    source_layer: row.sourceLayer,
-    status: row.status,
-    role: row.effectiveRole,
-    requirement: row.requirement,
-    option_group_id: row.optionGroupId,
-    included: row.included,
-    filament_color_id: row.filamentColorId,
-    filament_custom_hex: row.filamentCustomHex,
-    spoolman_spool_id: row.spoolmanSpoolId,
-    filament_display: "",
-    filament_hex: row.filamentCustomHex,
-    quantity_auto: row.quantityInferred,
-    quantity_override: row.quantityOverride,
-    quantity_effective: row.effectiveQuantity,
-  };
-}
 
 export class AppRepository {
   readonly reposDir: string;
@@ -1404,10 +1025,7 @@ export class AppRepository {
           profile_id: profileId,
           updated_at: new Date().toISOString(),
         } satisfies PrinterPlanBinding;
-        const bindingIndex = bindings.findIndex((candidate) => candidate.integration_id === claimPrint.integration_id);
-        if (bindingIndex >= 0) bindings[bindingIndex] = binding;
-        else bindings.push(binding);
-        this.setSetting("printer.plan_bindings", JSON.stringify(bindings));
+        this.setSetting("printer.plan_bindings", JSON.stringify(upsertPrinterPlanBinding(bindings, binding)));
         return { kind: "claimed" as const, link: awaiting, attribution };
       }
       return { kind: "created" as const, link, attribution };
