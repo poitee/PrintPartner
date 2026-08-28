@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { PlanDraftWorkspace } from "@print-partner/contracts";
-import type { PlanReview, ReviewPart } from "../api/endpoints/planManifests";
+import {
+  isPlanAcceptanceBlockerCode,
+  PLAN_ACCEPTANCE_BLOCKER_CODES,
+  type PlanReview,
+  type ReviewPart,
+} from "../api/endpoints/planManifests";
 import {
   acceptedRevisionSummary,
   acceptanceDecision,
@@ -14,6 +19,9 @@ import {
   workingChangeFieldLabels,
   workingChangeSummary,
 } from "./planAcceptanceModel";
+
+/** The settled answer that this Build has nothing left blocking acceptance. */
+const noBlockers = { kind: "loaded", blockers: [] } as const;
 
 function reviewPart(over: Partial<ReviewPart> & { id: number }): ReviewPart {
   return {
@@ -199,6 +207,7 @@ describe("issue grouping and routes", () => {
       }),
       draft: null,
       buildId: 1,
+      planningBlockers: noBlockers,
     });
     expect(issues).toHaveLength(1);
     expect(issues[0]!.group).toBe("review_recommended");
@@ -217,6 +226,7 @@ describe("issue grouping and routes", () => {
       }),
       draft: null,
       buildId: null,
+      planningBlockers: noBlockers,
     });
     expect(issues[0]!.action).toEqual({
       kind: "route",
@@ -238,6 +248,7 @@ describe("issue grouping and routes", () => {
         },
       }),
       buildId: 1,
+      planningBlockers: noBlockers,
     });
     expect(issues.map((issue) => issue.id)).toEqual([
       "plan-issue-required-unit-1",
@@ -254,6 +265,7 @@ describe("issue grouping and routes", () => {
         diff: { base_is_current: false, added: [], removed: [], changed: [] },
       }),
       buildId: 1,
+      planningBlockers: noBlockers,
     });
     expect(issues[0]!.id).toBe("plan-issue-working-plan-behind");
     expect(issues[0]!.action).toEqual({
@@ -272,6 +284,7 @@ describe("issue grouping and routes", () => {
       }),
       draft: null,
       buildId: 1,
+      planningBlockers: noBlockers,
     });
     expect(issues).toHaveLength(1);
     expect(issues[0]!.title).toBe("2 STL files are not on disk");
@@ -283,6 +296,7 @@ describe("issue grouping and routes", () => {
       review: review(),
       draft: draft(),
       buildId: 1,
+      planningBlockers: noBlockers,
       failure: {
         kind: "unsafe_records",
         units: [{ filename: "skirt_panel_x6.stl", outcome: "printed count is higher than the new quantity" }],
@@ -307,6 +321,7 @@ describe("acceptance decision", () => {
         },
       }),
       buildId: 1,
+      planningBlockers: noBlockers,
     });
     expect(model.decision.label).toBe("Accept Plan revision");
     expect(model.decision.canAccept).toBe(false);
@@ -328,10 +343,7 @@ describe("acceptance decision", () => {
         },
       }),
       buildId: 1,
-      planningBlockers: [{
-        code: "draft_selection",
-        detail: "Draft 17 is not the reviewed planning draft",
-      }],
+      planningBlockers: { kind: "loaded", blockers: ["draft_selection"] },
     });
 
     expect(model.mustResolve).toEqual([
@@ -345,7 +357,12 @@ describe("acceptance decision", () => {
   });
 
   it("allows acceptance and names the revision it will create", () => {
-    const model = planAcceptanceModel({ review: review(), draft: draft(), buildId: 1 });
+    const model = planAcceptanceModel({
+      review: review(),
+      draft: draft(),
+      buildId: 1,
+      planningBlockers: noBlockers,
+    });
     expect(model.decision.canAccept).toBe(true);
     expect(model.decision.reason).toBe(
       "Accepting saves these changes as Plan revision 5. Verified units that still match are kept.",
@@ -356,6 +373,7 @@ describe("acceptance decision", () => {
     expect(acceptanceDecision({
       draft: null,
       issues: [],
+      planningBlockers: noBlockers,
       accepted: acceptedRevisionSummary(review()),
     })).toEqual({
       label: "Accept Plan revision",
@@ -363,6 +381,103 @@ describe("acceptance decision", () => {
       reason: "There are no Working Plan changes to accept.",
       blockingCount: 0,
     });
+  });
+
+  it("refuses acceptance while the Build's planning checks are still loading", () => {
+    const model = planAcceptanceModel({
+      review: review(),
+      draft: draft(),
+      buildId: 1,
+      planningBlockers: { kind: "loading" },
+    });
+    expect(model.decision.canAccept).toBe(false);
+    expect(model.decision.reason).toBe(
+      "Acceptance stays off until this Build's planning checks come back. This clears on its own in a moment.",
+    );
+    expect(model.mustResolve).toEqual([
+      expect.objectContaining({
+        id: "plan-issue-build-planning-loading",
+        title: "Still checking whether this Working Plan can be accepted",
+        statusLabel: "Blocks acceptance",
+      }),
+    ]);
+  });
+
+  it("refuses acceptance when the Build's planning checks could not be read", () => {
+    const model = planAcceptanceModel({
+      review: review(),
+      draft: draft(),
+      buildId: 1,
+      planningBlockers: { kind: "unavailable" },
+    });
+    expect(model.decision.canAccept).toBe(false);
+    expect(model.decision.reason).toBe(
+      "Acceptance stays off because this Build's planning checks could not be read. Reload the page to try again.",
+    );
+    expect(model.mustResolve).toEqual([
+      expect.objectContaining({
+        id: "plan-issue-build-planning-unavailable",
+        title: "This Build's planning checks could not be read",
+      }),
+    ]);
+  });
+
+  it("says nothing about assistant planning when there is no Working Plan", () => {
+    const model = planAcceptanceModel({
+      review: review(),
+      draft: null,
+      buildId: 1,
+      planningBlockers: { kind: "unavailable" },
+    });
+    expect(model.mustResolve).toEqual([]);
+    expect(model.decision.reason).toBe("There are no Working Plan changes to accept.");
+  });
+
+  it("explains a refusal the engine raised after the click, in the same words", () => {
+    const model = planAcceptanceModel({
+      review: review(),
+      draft: draft(),
+      buildId: 1,
+      planningBlockers: noBlockers,
+      failure: { kind: "planning_blocked", blockers: ["requirement_unverified"] },
+    });
+    expect(model.mustResolve).toEqual([
+      expect.objectContaining({
+        id: "plan-issue-acceptance-blocked-requirement-unverified-0",
+        title: "A Build requirement is still unverified",
+        statusLabel: "Blocks acceptance",
+      }),
+    ]);
+    expect(model.decision.canAccept).toBe(false);
+  });
+});
+
+describe("blocker copy", () => {
+  const codes = Object.keys(PLAN_ACCEPTANCE_BLOCKER_CODES).filter(isPlanAcceptanceBlockerCode);
+
+  it("covers every code the engine can send", () => {
+    expect(codes).toHaveLength(Object.keys(PLAN_ACCEPTANCE_BLOCKER_CODES).length);
+  });
+
+  it("writes every blocker in the user's words, with no engine strings", () => {
+    for (const code of [...codes, "unrecognised" as const]) {
+      const issues = planIssues({
+        review: review(),
+        draft: draft(),
+        buildId: 1,
+        planningBlockers: { kind: "loaded", blockers: [code] },
+      });
+      const issue = issues.find((candidate) => candidate.id.includes("build-planning"));
+      expect(issue, code).toBeTruthy();
+      // Written copy, not a code or a token: a sentence naming what to do.
+      expect(issue!.title, code).not.toContain("_");
+      expect(issue!.detail, code).toMatch(/\.$/);
+      expect(issue!.detail, code).toContain("Open Sources");
+      // "Draft" and "setup phase" are Avoid terms for Working Plan and Preparation.
+      expect(issue!.title.toLowerCase(), code).not.toContain("draft");
+      expect(issue!.detail!.toLowerCase(), code).not.toContain("draft");
+      expect(issue!.detail!.toLowerCase(), code).not.toContain("setup");
+    }
   });
 });
 

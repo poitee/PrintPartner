@@ -37,7 +37,13 @@ const FAILING_CONCLUSIONS = new Set([
   "ACTION_REQUIRED",
   "STARTUP_FAILURE",
   "STALE",
+  "ERROR",
 ]);
+
+// Legacy commit statuses carry a state instead of a conclusion.
+const FAILING_STATUSES = new Set(["FAILURE", "ERROR"]);
+
+const PASSING_CONCLUSIONS = new Set(["SUCCESS", "NEUTRAL", "SKIPPED"]);
 
 const PENDING_STATUSES = new Set([
   "PENDING",
@@ -47,6 +53,17 @@ const PENDING_STATUSES = new Set([
   "REQUESTED",
   "EXPECTED",
 ]);
+
+// The only two merge states GitHub will merge from. DRAFT, BLOCKED, BEHIND,
+// DIRTY, and UNKNOWN each mean the merge button is refused or not yet computed.
+const READY_MERGE_STATES = new Set(["CLEAN", "UNSTABLE"]);
+
+// gh returns 1 for a generic API error and 4 when authentication is required.
+const GH_EXIT_ERROR = 1;
+
+// `gh pr view --json ...,statusCheckRollup` on a busy PR overruns the 1 MiB
+// spawnSync default, which truncates stdout into unparseable JSON.
+const GH_MAX_BUFFER = 32 * 1024 * 1024;
 
 export function isBotLogin(login) {
   if (!login) return false;
@@ -59,30 +76,45 @@ export function truncate(text, max = MAX_COMMENT_CHARS) {
   return `${value.slice(0, Math.max(0, max - 1)).trimEnd()}…`;
 }
 
+// A GitHub App comments as `cursor[bot]` while `viewer.login` reads `cursor`.
+function normalizeLogin(login) {
+  return String(login ?? "").toLowerCase().replace(/\[bot\]$/, "");
+}
+
 function nodesOf(connectionOrArray) {
   if (!connectionOrArray) return [];
   if (Array.isArray(connectionOrArray)) return connectionOrArray;
   return connectionOrArray.nodes ?? [];
 }
 
-export function summarizeThreads(reviewThreads) {
+/**
+ * Split open review threads into ones still needing an answer and ones where
+ * the viewer already replied last. The second group is waiting on a human, so
+ * answering it again would only repeat the reply that is already there.
+ */
+export function summarizeThreads({ reviewThreads, viewerLogin = null } = {}) {
+  const viewer = normalizeLogin(viewerLogin);
   const unresolved = [];
+  const awaitingHuman = [];
   for (const thread of reviewThreads ?? []) {
     if (thread?.isResolved) continue;
     const comments = nodesOf(thread.comments);
     const latest = comments.at(-1) ?? comments[0] ?? {};
     const first = comments[0] ?? latest;
-    unresolved.push({
+    const author = latest.author?.login ?? first.author?.login ?? null;
+    const entry = {
       threadId: thread.id ?? null,
       path: thread.path ?? first.path ?? latest.path ?? null,
       line: latest.line ?? latest.originalLine ?? first.line ?? first.originalLine ?? null,
       url: latest.url ?? first.url ?? null,
-      author: latest.author?.login ?? first.author?.login ?? null,
+      author,
       body: truncate(latest.body ?? first.body ?? ""),
       outdated: Boolean(thread.isOutdated),
-    });
+    };
+    if (viewer && normalizeLogin(author) === viewer) awaitingHuman.push(entry);
+    else unresolved.push(entry);
   }
-  return unresolved;
+  return { unresolved, awaitingHuman };
 }
 
 export function classifyChecks(statusCheckRollup) {
@@ -99,13 +131,15 @@ export function classifyChecks(statusCheckRollup) {
       conclusion: conclusion || null,
       url: check.detailsUrl ?? check.targetUrl ?? check.link ?? null,
     };
-    if (FAILING_CONCLUSIONS.has(conclusion) || status === "FAILURE") {
+    if (FAILING_CONCLUSIONS.has(conclusion) || FAILING_STATUSES.has(status)) {
       failing.push(entry);
-    } else if (["SUCCESS", "NEUTRAL", "SKIPPED"].includes(conclusion) || status === "SUCCESS") {
+    } else if (PASSING_CONCLUSIONS.has(conclusion) || status === "SUCCESS") {
       passed.push(entry);
-    } else if (PENDING_STATUSES.has(status) || !conclusion) {
+    } else if (PENDING_STATUSES.has(status)) {
       pending.push(entry);
     } else {
+      // Neither a known pending status nor a known outcome. Surface it as work
+      // to look at rather than a check the agent can wait out.
       failing.push(entry);
     }
   }
@@ -125,43 +159,64 @@ export function summarizeIssueComments(issueComments) {
 
 export function chooseNextAction({
   pr,
-  conflicts,
-  unresolvedComments,
-  failingChecks,
-  pendingChecks,
+  conflicts = false,
+  mergeabilityUnknown = false,
+  unresolvedComments = [],
+  failingChecks = [],
+  pendingChecks = [],
+  isDraft = false,
+  behind = false,
+  mergeStateStatus = null,
 }) {
   if (!pr) return "no-pr";
   if (conflicts) return "conflicts";
+  // An unknown mergeability read can still turn out to be a conflict, so hold
+  // comment and CI work until GitHub has computed it.
+  if (mergeabilityUnknown) return "recheck";
   if (unresolvedComments.length > 0) return "comments";
   if (failingChecks.length > 0) return "ci";
   if (pendingChecks.length > 0) return "watch-ci";
+  if (isDraft || mergeStateStatus === "DRAFT") return "draft";
+  if (mergeStateStatus === "BLOCKED") return "blocked";
+  // Merging the base last keeps the branch from going stale again mid-pass.
+  if (behind) return "behind";
+  if (!READY_MERGE_STATES.has(mergeStateStatus)) return "recheck";
   return "ready";
 }
 
 export function evaluateSnapshot(snapshot = {}) {
   const pr = snapshot.pr ?? null;
-  const unresolvedComments = summarizeThreads(snapshot.reviewThreads);
+  const { unresolved, awaitingHuman } = summarizeThreads({
+    reviewThreads: snapshot.reviewThreads,
+    viewerLogin: snapshot.viewerLogin ?? null,
+  });
   const checks = classifyChecks(snapshot.statusCheckRollup);
   const conversationComments = summarizeIssueComments(snapshot.issueComments);
-  const mergeable = pr?.mergeable ?? null;
+  const mergeable = pr ? (pr.mergeable ?? "UNKNOWN") : null;
   const mergeStateStatus = pr?.mergeStateStatus ?? null;
   const conflicts =
     mergeable === "CONFLICTING" ||
     mergeStateStatus === "DIRTY" ||
     Boolean(snapshot.conflicts);
+  const mergeabilityUnknown = Boolean(pr) && !conflicts && mergeable === "UNKNOWN";
   const behind = mergeStateStatus === "BEHIND" || Boolean(snapshot.behind);
+  const isDraft = Boolean(pr?.isDraft);
   const nextAction = chooseNextAction({
     pr,
     conflicts,
-    unresolvedComments,
+    mergeabilityUnknown,
+    unresolvedComments: unresolved,
     failingChecks: checks.failing,
     pendingChecks: checks.pending,
+    isDraft,
+    behind,
+    mergeStateStatus,
   });
 
   return {
     nextAction,
-    mergeable: mergeable ?? (pr ? "UNKNOWN" : null),
-    mergeStateStatus: mergeStateStatus ?? null,
+    mergeable,
+    mergeStateStatus,
     conflicts,
     behind,
     pr: pr
@@ -169,12 +224,13 @@ export function evaluateSnapshot(snapshot = {}) {
           number: pr.number,
           url: pr.url ?? pr.html_url ?? null,
           title: pr.title ?? null,
-          isDraft: Boolean(pr.isDraft),
+          isDraft,
           baseRefName: pr.baseRefName ?? pr.base ?? null,
           headRefName: pr.headRefName ?? pr.head ?? null,
         }
       : null,
-    unresolvedComments,
+    unresolvedComments: unresolved,
+    awaitingHumanComments: awaitingHuman,
     conversationComments,
     failingChecks: checks.failing,
     pendingChecks: checks.pending,
@@ -182,15 +238,45 @@ export function evaluateSnapshot(snapshot = {}) {
   };
 }
 
-function runGh(args) {
-  const result = spawnSync("gh", args, { encoding: "utf8" });
+/**
+ * Turn a spawnSync result into stdout or a labelled error. spawnSync reports a
+ * missing binary and an ENOBUFS overrun through `result.error` with a null
+ * status, so that has to be read before the exit code.
+ */
+export function readGhResult({ args, result }) {
+  const label = `gh ${args.slice(0, 3).join(" ")}`;
+  if (result.error) {
+    const error = new Error(`${label} could not run: ${result.error.message}`);
+    error.ghFailure = "launch";
+    error.exitCode = null;
+    error.ghArgs = args;
+    error.cause = result.error;
+    throw error;
+  }
   if (result.status !== 0) {
-    const err = new Error((result.stderr || result.stdout || "gh failed").trim());
-    err.exitCode = result.status ?? 1;
-    err.ghArgs = args;
-    throw err;
+    const detail = String(result.stderr || result.stdout || "").trim();
+    const cause = result.signal ? `killed by ${result.signal}` : `exited ${result.status}`;
+    const error = new Error(`${label} ${cause}: ${detail || "no output"}`);
+    error.ghFailure = "exit";
+    error.exitCode = result.status ?? GH_EXIT_ERROR;
+    error.ghArgs = args;
+    throw error;
   }
   return result.stdout;
+}
+
+/**
+ * True when a `gh pr view` failure means the pull request itself is absent.
+ * Only sound once repository access has been probed: an unreachable repository
+ * or an unauthorized token fails with the same exit code.
+ */
+export function isMissingPrError(error) {
+  return error?.ghFailure === "exit" && error.exitCode === GH_EXIT_ERROR;
+}
+
+function runGh(args) {
+  const result = spawnSync("gh", args, { encoding: "utf8", maxBuffer: GH_MAX_BUFFER });
+  return readGhResult({ args, result });
 }
 
 function ghJson(args) {
@@ -199,6 +285,7 @@ function ghJson(args) {
 
 const THREADS_QUERY = `
 query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
+  viewer { login }
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
       reviewThreads(first: 50, after: $cursor) {
@@ -228,6 +315,7 @@ query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
 
 function fetchReviewThreadsPaged({ owner, name, number }) {
   const threads = [];
+  let viewerLogin = null;
   let cursor = null;
   do {
     const args = [
@@ -244,38 +332,40 @@ function fetchReviewThreadsPaged({ owner, name, number }) {
     ];
     if (cursor) args.push("-F", `cursor=${cursor}`);
     const data = ghJson(args);
-    const conn = data?.data?.repository?.pullRequest?.reviewThreads;
     if (data?.errors?.length) {
       throw new Error(data.errors.map((item) => item.message).join("; "));
     }
+    viewerLogin = data?.data?.viewer?.login ?? viewerLogin;
+    const conn = data?.data?.repository?.pullRequest?.reviewThreads;
     threads.push(...(conn?.nodes ?? []));
     const page = conn?.pageInfo;
     cursor = page?.hasNextPage ? page.endCursor : null;
   } while (cursor);
-  return threads;
+  return { threads, viewerLogin };
 }
 
 export function fetchLiveSnapshot({ prNumber } = {}) {
+  // Read the repository first. A missing token, an SSO-blocked token, or an
+  // unreachable repository fails here and surfaces its own message, which is
+  // what lets a later `pr view` failure mean "no such pull request".
+  const repo = ghJson(["repo", "view", "--json", "nameWithOwner"]);
+  const [owner, name] = String(repo.nameWithOwner).split("/");
+
+  const fields =
+    "number,title,url,isDraft,baseRefName,headRefName,mergeable,mergeStateStatus,statusCheckRollup";
   let pr;
   try {
-    const fields =
-      "number,title,url,isDraft,baseRefName,headRefName,mergeable,mergeStateStatus,statusCheckRollup";
     pr = ghJson(
       prNumber
         ? ["pr", "view", String(prNumber), "--json", fields]
         : ["pr", "view", "--json", fields],
     );
   } catch (error) {
-    const message = String(error.message || error);
-    if (/no pull requests found|could not find|not found/i.test(message)) {
-      return evaluateSnapshot({ pr: null });
-    }
+    if (isMissingPrError(error)) return evaluateSnapshot({ pr: null });
     throw error;
   }
 
-  const repo = ghJson(["repo", "view", "--json", "nameWithOwner"]);
-  const [owner, name] = String(repo.nameWithOwner).split("/");
-  const reviewThreads = fetchReviewThreadsPaged({
+  const { threads, viewerLogin } = fetchReviewThreadsPaged({
     owner,
     name,
     number: pr.number,
@@ -293,9 +383,10 @@ export function fetchLiveSnapshot({ prNumber } = {}) {
 
   return evaluateSnapshot({
     pr,
-    reviewThreads,
+    reviewThreads: threads,
     statusCheckRollup: pr.statusCheckRollup ?? [],
     issueComments,
+    viewerLogin,
   });
 }
 

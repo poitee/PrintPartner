@@ -38,7 +38,15 @@ Use this index to find the guide for your task. The in-app Help page covers the 
 - [Manifest format](../manifests/README.md)
 - [Security](../SECURITY.md)
 - [Release history](../CHANGELOG.md)
+
+## Agent workflows
+
+These describe how coding agents work in this repo. `AGENTS.md` points at them too, but it is gitignored, so this is the index that ships.
+
 - [Autopilot](agents/autopilot.md)
+- [Domain docs](agents/domain.md)
+- [Issue tracker](agents/issue-tracker.md)
+- [Triage labels](agents/triage-labels.md)
 
 ## Examples
 

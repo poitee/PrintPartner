@@ -16,14 +16,6 @@ Use the failing check name from `pr-state.mjs` to pick the narrowest local comma
 | --- | --- |
 | Optional integration smoke / `postgres` | Follow `.github/workflows/integration-smoke.yml`; do not invent a substitute |
 
-## Autopilot helper
-
-After changing this skill or `scripts/pr-state.mjs`:
-
-```bash
-node --test scripts/autopilot-pr-state.test.mjs
-```
-
 ## Rules
 
 - Read the failing job log before matching a row above.

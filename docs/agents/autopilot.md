@@ -12,16 +12,10 @@ Every pass starts by reading compact PR state:
 node .agents/skills/autopilot/scripts/pr-state.mjs
 ```
 
-The script prints JSON with a `nextAction` of `conflicts`, `comments`, `ci`, `watch-ci`, `ready`, or `no-pr`. Autopilot works those blockers in that order and stops when `nextAction` is `ready`.
+The script prints JSON with a `nextAction`. `conflicts`, `comments`, and `ci` are the code work, in that order. `recheck`, `watch-ci`, `behind`, `blocked`, `draft`, `ready`, and `no-pr` cover the states where the answer is to wait, merge the base, or report back. Autopilot stops when `nextAction` is `ready`, which it reaches only for a non-draft PR GitHub will actually merge.
 
 It does not merge, enable auto-merge, or mark a draft ready.
 
 ## Cursor Automation
 
 Cursor Automations are configured in the product UI, not committed as YAML (`.cursor/` is local-only in this repo). Copy the prompt and trigger list from [the automation reference](../../.agents/skills/autopilot/references/cursor-automation.md) into [cursor.com/automations](https://cursor.com/automations).
-
-## Verify the helper
-
-```bash
-node --test scripts/autopilot-pr-state.test.mjs
-```

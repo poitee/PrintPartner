@@ -16,7 +16,7 @@
     "dev": "concurrently -n server,web -c blue,green \"npm run dev -w @print-partner/server\" \"npm run dev -w @print-partner/web\"",
     "build": "npm run build -w @print-partner/contracts && npm run build -w @print-partner/domain && npm run build -w @print-partner/server && npm run build -w @print-partner/web",
     "test": "npm run test:release && npm run test -w @print-partner/contracts --if-present && npm run test -w @print-partner/domain --if-present && npm run test -w @print-partner/web --if-present && npm run test -w @print-partner/server --if-present",
-    "test:release": "node ../scripts/audit-public-release.mjs && node --test ../scripts/release.test.mjs ../scripts/site-map-docs.test.mjs",
+    "test:release": "node ../scripts/audit-public-release.mjs && node --test ../scripts/release.test.mjs ../scripts/site-map-docs.test.mjs ../scripts/autopilot-pr-state.test.mjs",
     "test:browser": "npm run test:browser -w @print-partner/web",
     "test:workflow-smoke": "python3 -m unittest scripts.test_workflow_smoke",
     "audit:cleanup": "node ../scripts/audit-cleanup.mjs",

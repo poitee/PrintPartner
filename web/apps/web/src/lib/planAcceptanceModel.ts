@@ -4,7 +4,7 @@ import type {
   PlanStaleReason,
   PlanUntrackedReason,
 } from "@print-partner/contracts";
-import type { BuildPlanningState, PlanReview } from "../api/endpoints/planManifests";
+import type { PlanAcceptanceBlockerCode, PlanReview } from "../api/endpoints/planManifests";
 import { buildSourcesRoute, libraryRoute } from "./routes";
 
 /**
@@ -53,18 +53,33 @@ export type PlanAcceptanceFailure =
       readonly sendQueueItemCount: number;
     }
   | { readonly kind: "unsafe_records"; readonly units: readonly PlanUnitOutcome[] }
+  | {
+      readonly kind: "planning_blocked";
+      readonly blockers: readonly PlanAcceptanceBlockerCode[];
+    }
   | { readonly kind: "error"; readonly message: string };
+
+/**
+ * What this client knows about the engine's acceptance blockers.
+ *
+ * Acceptance authorizes Production, so an unknown answer is not a permissive
+ * one: only "loaded" can clear the gate. A missing field used to read as "no
+ * blockers", which enabled Accept on first paint and kept it enabled when the
+ * read failed.
+ */
+export type PlanningBlockerState =
+  | { readonly kind: "loading" }
+  | { readonly kind: "unavailable" }
+  | { readonly kind: "loaded"; readonly blockers: readonly PlanAcceptanceBlockerCode[] };
 
 export type PlanAcceptanceInput = {
   readonly review: PlanReview | null;
   readonly draft: PlanDraftWorkspace | null;
   readonly buildId: number | null;
+  readonly planningBlockers: PlanningBlockerState;
   readonly failure?: PlanAcceptanceFailure | null;
   readonly freshness?: PlanFreshness | null;
-  readonly planningBlockers?: readonly BuildPlanningBlocker[] | null;
 };
-
-type BuildPlanningBlocker = BuildPlanningState["readiness"]["blockers"][number];
 
 export type AcceptedRevisionSummary = {
   readonly planVersion: number | null;
@@ -245,7 +260,139 @@ function requiredUnitIssues(draft: PlanDraftWorkspace): PlanIssue[] {
   });
 }
 
-function failureIssues(failure: PlanAcceptanceFailure): PlanIssue[] {
+type PlanningBlockerCopy = { readonly title: string; readonly detail: string };
+
+/**
+ * Written copy for every blocker the engine can raise.
+ *
+ * The engine's own `detail` strings name internal things: draft ids, sync
+ * tokens, normalized urls. None of them reach the page. Growing
+ * `PLAN_ACCEPTANCE_BLOCKER_CODES` breaks this switch on purpose, so a new
+ * blocker arrives with copy or not at all.
+ */
+function planningBlockerCopy(code: PlanAcceptanceBlockerCode): PlanningBlockerCopy {
+  switch (code) {
+    case "source_role":
+      return {
+        title: "A Source in this Build has no confirmed role",
+        detail: "Every printable Source needs a role before its parts can be planned. Open Sources and confirm the role.",
+      };
+    case "source_roles":
+      return {
+        title: "This Build needs exactly one structural base Source",
+        detail: "The other Sources hang off the base. Open Sources and pick which one the base is.",
+      };
+    case "model_files_missing":
+      return {
+        title: "A Source is still missing its model files",
+        detail: "One linked model page has no files attached yet. Open Sources and attach them.",
+      };
+    case "source_sync":
+      return {
+        title: "A Source has not finished syncing",
+        detail: "Its files are still arriving, or the last sync failed, so this Working Plan may not match them. Open Sources and sync it again.",
+      };
+    case "source_provenance":
+      return {
+        title: "A Source has no recorded revision",
+        detail: "Without one, an Accepted Plan cannot say which files it was built from. Open Sources and sync it again.",
+      };
+    case "draft_source_changed":
+      return {
+        title: "A Source changed after this Working Plan was written",
+        detail: "This Working Plan no longer matches the files behind it. Open Sources and have the assistant write it again from the current Sources.",
+      };
+    case "requirement_unverified":
+      return {
+        title: "A Build requirement is still unverified",
+        detail: 'The assistant could not confirm one of the requirements it read from your request. Open Sources and settle it under "Decisions the assistant needs".',
+      };
+    case "requirement_incompatible":
+      return {
+        title: "A Build requirement conflicts with the chosen Sources",
+        detail: 'The Sources in this Build cannot meet one of the requirements. Open Sources and settle it under "Decisions the assistant needs".',
+      };
+    case "unconfirmed_contribution":
+      return {
+        title: "It is not confirmed which Source supplies part of this Build",
+        detail: 'The assistant proposed one and nobody confirmed it. Open Sources and confirm it under "Decisions the assistant needs".',
+      };
+    case "compatibility_unverified":
+      return {
+        title: "A compatibility check is still unverified",
+        detail: 'The assistant could not confirm that two of these Sources fit together. Open Sources and settle it under "Decisions the assistant needs".',
+      };
+    case "compatibility_incompatible":
+      return {
+        title: "A compatibility check found a conflict",
+        detail: 'Two Sources in this Build do not fit together. Open Sources and settle it under "Decisions the assistant needs".',
+      };
+    case "open_difference":
+      return {
+        title: "A difference between Sources has no decision yet",
+        detail: 'Two Sources offer the same part and neither is chosen. Open Sources and choose the winner under "Decisions the assistant needs".',
+      };
+    case "unconfirmed_filament_substitute":
+      return {
+        title: "A substitute filament is not confirmed",
+        detail: 'One role is planned with a filament other than the one requested. Open Sources and confirm the substitute under "Decisions the assistant needs".',
+      };
+    case "checklist_incomplete":
+      return {
+        title: "A required Preparation check is not done",
+        detail: 'This Build has a required check still open. Open Sources and finish it under "Decisions the assistant needs".',
+      };
+    case "draft_review":
+      return {
+        title: "This Working Plan still has review notes",
+        detail: 'The assistant left notes that have to be cleared first. Open Sources and work through them under "Decisions the assistant needs".',
+      };
+    case "draft_missing":
+      return {
+        title: "The assistant has no reviewed Working Plan for this Build",
+        detail: 'Nothing has been written for review yet. Open Sources and have the assistant write a Working Plan under "Assistant changes".',
+      };
+    case "draft_selection":
+      return {
+        title: "This Working Plan has not been reviewed",
+        detail: 'The assistant reviewed a different Working Plan. Open Sources and have this one written again under "Assistant changes", then review it before accepting.',
+      };
+    case "unrecognised":
+      return {
+        title: "The assistant reported a check this version of PrintPartner does not know",
+        detail: 'Acceptance stays off until it clears. Open Sources to read it under "Decisions the assistant needs".',
+      };
+    default: {
+      const _exhaustive: never = code;
+      return _exhaustive;
+    }
+  }
+}
+
+function blockerIssues(input: {
+  readonly blockers: readonly PlanAcceptanceBlockerCode[];
+  readonly buildId: number | null;
+  readonly idPrefix: string;
+}): PlanIssue[] {
+  return input.blockers.map((code, index) => {
+    const copy = planningBlockerCopy(code);
+    return {
+      id: `${input.idPrefix}-${code.replaceAll("_", "-")}-${index}`,
+      group: "must_resolve" as const,
+      title: copy.title,
+      detail: copy.detail,
+      statusLabel: "Blocks acceptance",
+      tone: "error" as const,
+      action: sourcesAction(input.buildId),
+    };
+  });
+}
+
+function failureIssues(input: {
+  readonly failure: PlanAcceptanceFailure;
+  readonly buildId: number | null;
+}): PlanIssue[] {
+  const failure = input.failure;
   switch (failure.kind) {
     case "linked_records":
       return [{
@@ -274,6 +421,12 @@ function failureIssues(failure: PlanAcceptanceFailure): PlanIssue[] {
         tone: "error",
         action: null,
       }];
+    case "planning_blocked":
+      return blockerIssues({
+        blockers: failure.blockers,
+        buildId: input.buildId,
+        idPrefix: "plan-issue-acceptance-blocked",
+      });
     case "error":
       return [{
         id: "plan-issue-acceptance-error",
@@ -287,26 +440,47 @@ function failureIssues(failure: PlanAcceptanceFailure): PlanIssue[] {
   }
 }
 
-function planningBlockerIssues(
-  blockers: readonly BuildPlanningBlocker[],
-  buildId: number | null,
-): PlanIssue[] {
-  return blockers.map((blocker, index) => {
-    const isUnreviewedDraft = blocker.code === "draft_selection";
-    return {
-      id: `plan-issue-build-planning-${blocker.code.replaceAll("_", "-")}-${index}`,
-      group: "must_resolve" as const,
-      title: isUnreviewedDraft
-        ? "This Working Plan has not been reviewed"
-        : "Assistant planning is not ready",
-      detail: isUnreviewedDraft
-        ? "The assistant reviewed a different Working Plan. Rebuild it from the reviewed Build setup before accepting."
-        : blocker.detail,
-      statusLabel: "Blocks acceptance",
-      tone: "error" as const,
-      action: sourcesAction(buildId),
-    };
-  });
+/**
+ * Acceptance authorizes Production, so "we do not know yet" and "we could not
+ * ask" both have to block, and both have to say so on the page.
+ */
+function planningStateIssues(input: {
+  readonly state: PlanningBlockerState;
+  readonly buildId: number | null;
+}): PlanIssue[] {
+  const state = input.state;
+  switch (state.kind) {
+    case "loading":
+      return [{
+        id: "plan-issue-build-planning-loading",
+        group: "must_resolve",
+        title: "Still checking whether this Working Plan can be accepted",
+        detail: "This Build's planning checks have not come back yet. Acceptance opens once they do.",
+        statusLabel: "Blocks acceptance",
+        tone: "warning",
+        action: null,
+      }];
+    case "unavailable":
+      return [{
+        id: "plan-issue-build-planning-unavailable",
+        group: "must_resolve",
+        title: "This Build's planning checks could not be read",
+        detail: "Acceptance needs them to confirm this is the Working Plan the assistant reviewed. Reload the page to try again.",
+        statusLabel: "Blocks acceptance",
+        tone: "error",
+        action: null,
+      }];
+    case "loaded":
+      return blockerIssues({
+        blockers: state.blockers,
+        buildId: input.buildId,
+        idPrefix: "plan-issue-build-planning",
+      });
+    default: {
+      const _exhaustive: never = state;
+      return _exhaustive;
+    }
+  }
 }
 
 /** Plain sentences for a Plan whose source inputs moved or were never tracked. */
@@ -360,11 +534,12 @@ export function planIssues(input: PlanAcceptanceInput): PlanIssue[] {
       action: { kind: "refresh_working_plan", label: "Refresh Working Plan" },
     });
   }
-  if (draft) issues.push(...requiredUnitIssues(draft));
-  if (input.planningBlockers) {
-    issues.push(...planningBlockerIssues(input.planningBlockers, buildId));
+  if (draft) {
+    issues.push(...requiredUnitIssues(draft));
+    // Only a Working Plan can be accepted, so these only matter when one exists.
+    issues.push(...planningStateIssues({ state: input.planningBlockers, buildId }));
   }
-  if (input.failure) issues.push(...failureIssues(input.failure));
+  if (input.failure) issues.push(...failureIssues({ failure: input.failure, buildId }));
 
   const reviewIssues = review?.issues ?? [];
   const missingStl = reviewIssues.filter((issue) => issue.code === "missing_stl");
@@ -473,6 +648,7 @@ export function acceptanceDecision(input: {
   readonly draft: PlanDraftWorkspace | null;
   readonly issues: readonly PlanIssue[];
   readonly accepted: AcceptedRevisionSummary;
+  readonly planningBlockers: PlanningBlockerState;
 }): PlanAcceptanceDecision {
   const blocking = input.issues.filter((issue) => issue.group === "must_resolve");
   if (!input.draft) {
@@ -482,6 +658,29 @@ export function acceptanceDecision(input: {
       reason: "There are no Working Plan changes to accept.",
       blockingCount: 0,
     };
+  }
+  const planning = input.planningBlockers;
+  switch (planning.kind) {
+    case "loading":
+      return {
+        label: ACCEPT_LABEL,
+        canAccept: false,
+        reason: "Acceptance stays off until this Build's planning checks come back. This clears on its own in a moment.",
+        blockingCount: blocking.length,
+      };
+    case "unavailable":
+      return {
+        label: ACCEPT_LABEL,
+        canAccept: false,
+        reason: "Acceptance stays off because this Build's planning checks could not be read. Reload the page to try again.",
+        blockingCount: blocking.length,
+      };
+    case "loaded":
+      break;
+    default: {
+      const _exhaustive: never = planning;
+      return _exhaustive;
+    }
   }
   if (blocking.length > 0) {
     return {
@@ -526,7 +725,12 @@ export function planAcceptanceModel(input: PlanAcceptanceInput): PlanAcceptanceM
     mustResolve: issues.filter((issue) => issue.group === "must_resolve"),
     reviewRecommended: issues.filter((issue) => issue.group === "review_recommended"),
     impact: requiredUnitImpact(input.draft),
-    decision: acceptanceDecision({ draft: input.draft, issues, accepted }),
+    decision: acceptanceDecision({
+      draft: input.draft,
+      issues,
+      accepted,
+      planningBlockers: input.planningBlockers,
+    }),
     headerSummary: planHeaderSummary({ review: input.review, draft: input.draft }),
     downstream: downstreamLinks({ draft: input.draft, accepted }),
   };

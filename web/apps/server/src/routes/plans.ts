@@ -195,9 +195,11 @@ export async function registerPlanRoutes(
         brief,
         planning_phase: deriveBuildPlanningPhase(deps.repo, brief),
         readiness: deriveBuildPlanningReadiness(brief),
+        // Blockers are the whole answer: an empty list is acceptance open. A
+        // second `ready` flag beside them was another thing that could drift.
         acceptance_readiness: acceptanceBlockers == null
           ? null
-          : { ready: acceptanceBlockers.length === 0, blockers: acceptanceBlockers },
+          : { blockers: acceptanceBlockers },
         grouped_difference_count: groupIds.size,
         difference_count: brief.differences.length,
       },

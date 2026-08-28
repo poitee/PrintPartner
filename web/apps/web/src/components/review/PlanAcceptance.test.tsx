@@ -19,6 +19,7 @@ import type {
   PlanReview,
   ReviewPart,
 } from "../../api/endpoints/planManifests";
+import { EngineHttpError } from "../../api/engineTransport";
 import { queryKeys } from "../../queries/keys";
 import { PlanWorkspaceProvider } from "../../context/PlanWorkspaceContext";
 import { PlanAcceptanceProvider } from "./PlanAcceptanceContext";
@@ -35,6 +36,10 @@ const state = vi.hoisted(() => {
     review: null as PlanReview | null,
     workspace: null as PlanDraftWorkspace | null,
     planning: null as BuildPlanningState | null,
+    planningError: null as Error | null,
+    planningPending: false,
+    /** Every argument pair the page passed to the planning query. */
+    planningArgs: [] as Array<{ planId: number | null; draftId: number | null }>,
     version: 0,
     subscribe(listener: () => void) {
       listeners.add(listener);
@@ -69,7 +74,14 @@ vi.mock("../../hooks/useEngineHealth", () => ({
 }));
 
 vi.mock("../build/useBuildPlanningQuery", () => ({
-  useBuildPlanningQuery: () => ({ data: state.planning, error: null }),
+  useBuildPlanningQuery: (planId: number | null, draftId?: number | null) => {
+    state.planningArgs.push({ planId, draftId: draftId ?? null });
+    return {
+      data: state.planning,
+      error: state.planningError,
+      isPending: state.planningPending,
+    };
+  },
 }));
 
 vi.mock("../../context/ProfileContext", () => ({
@@ -242,6 +254,9 @@ beforeEach(() => {
   window.sessionStorage.clear();
   state.review = baseReview();
   state.planning = null;
+  state.planningError = null;
+  state.planningPending = false;
+  state.planningArgs.length = 0;
   state.setWorkspace(unresolvedWorkspace());
   vi.mocked(reconcilePlanDraft).mockReset();
   vi.mocked(applyPlanDraft).mockReset();
@@ -288,13 +303,7 @@ describe("Plan acceptance checkpoint", () => {
         draft_id: 16,
       },
       readiness: { ready: true, blockers: [] },
-      acceptance_readiness: {
-        ready: false,
-        blockers: [{
-          code: "draft_selection",
-          detail: "Draft 9 is not the reviewed planning draft",
-        }],
-      },
+      acceptance_readiness: { blockers: ["draft_selection"] },
       grouped_difference_count: 0,
       difference_count: 0,
     };
@@ -304,6 +313,60 @@ describe("Plan acceptance checkpoint", () => {
     expect(await screen.findAllByText("This Working Plan has not been reviewed")).toHaveLength(2);
     expect(screen.getByRole("button", { name: "Accept Plan revision" }).hasAttribute("disabled"))
       .toBe(true);
+  });
+
+  it("reads assistant planning for the selected Build and the open Working Plan", async () => {
+    state.setWorkspace(resolvedWorkspace());
+    renderPlan();
+    await screen.findByRole("button", { name: "Accept Plan revision" });
+    // Wrong ids here would still leave every other test green, so assert them.
+    expect(state.planningArgs.at(-1)).toEqual({ planId: 7, draftId: 9 });
+  });
+
+  it("keeps acceptance off while the planning checks are still loading", async () => {
+    state.setWorkspace(resolvedWorkspace());
+    state.planningPending = true;
+
+    renderPlan();
+
+    const accept = await screen.findByRole("button", { name: "Accept Plan revision" });
+    expect(accept.hasAttribute("disabled")).toBe(true);
+    expect(await screen.findAllByText(
+      "Still checking whether this Working Plan can be accepted",
+    )).toHaveLength(2);
+  });
+
+  it("keeps acceptance off when the planning checks could not be read", async () => {
+    state.setWorkspace(resolvedWorkspace());
+    state.planningError = new Error("engine offline");
+
+    renderPlan();
+
+    const accept = await screen.findByRole("button", { name: "Accept Plan revision" });
+    expect(accept.hasAttribute("disabled")).toBe(true);
+    expect(await screen.findAllByText(
+      "This Build's planning checks could not be read",
+    )).toHaveLength(2);
+    expect(screen.getByText(
+      "Acceptance stays off because this Build's planning checks could not be read. Reload the page to try again.",
+    )).toBeTruthy();
+  });
+
+  it("explains an engine refusal that races the gate, instead of an HTTP error", async () => {
+    const user = userEvent.setup();
+    state.setWorkspace(resolvedWorkspace());
+    vi.mocked(applyPlanDraft).mockRejectedValue(new EngineHttpError("blocked", 422, {
+      code: "build_planning_blocked",
+      detail: "Build planning is not ready",
+      blockers: [{ key: "size", code: "requirement_unverified", detail: "size: 350" }],
+    }));
+
+    renderPlan();
+    await user.click(await screen.findByRole("button", { name: "Accept Plan revision" }));
+
+    expect(await screen.findAllByText("A Build requirement is still unverified"))
+      .toHaveLength(2);
+    expect(screen.queryByText(/422/)).toBeNull();
   });
 
   it("accepts the revision and leaves a receipt on the page", async () => {
@@ -349,7 +412,6 @@ describe("Plan acceptance checkpoint", () => {
   it("names the files whose printed work could not move", async () => {
     const user = userEvent.setup();
     state.setWorkspace(resolvedWorkspace());
-    const { EngineHttpError } = await import("../../api/engineTransport");
     vi.mocked(applyPlanDraft).mockRejectedValue(new EngineHttpError("unsafe", 422, {
       code: "checkoff_remap_unsafe",
       unmappable: [{ linkId: "l1", filename: "part-1.stl", reason: "printed 6 units, new quantity is 4" }],

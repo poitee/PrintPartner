@@ -68,7 +68,6 @@ describe("Build planning routes", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.json().planning.acceptance_readiness).toEqual({
-      ready: false,
       blockers: expect.arrayContaining([{
         code: "draft_selection",
         detail: "Draft 17 is not the reviewed planning draft",
