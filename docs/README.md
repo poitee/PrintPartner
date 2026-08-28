@@ -38,6 +38,7 @@ Use this index to find the guide for your task. The in-app Help page covers the 
 - [Manifest format](../manifests/README.md)
 - [Security](../SECURITY.md)
 - [Release history](../CHANGELOG.md)
+- [Autopilot](agents/autopilot.md)
 
 ## Examples
 

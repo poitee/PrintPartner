@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Autopilot skill** - in-repo `/autopilot` workflow that takes an open PR
+  to merge-ready (conflicts, then review threads, then CI). Includes a
+  `pr-state.mjs` helper, a Cursor Automation prompt, and
+  `docs/agents/autopilot.md`.
+
 - **Source subcategories** - library categories now nest. A category is a
   "/"-separated path, so "Voron" can hold "Voron/Voron 2.4" and
   "Voron/Stealthburner". The Settings manager gains an "Add sub" action per row,
