@@ -260,8 +260,8 @@ describe("moonrakerAdapter", () => {
         name: "Toolhead",
         service: "mjpegstreamer",
         enabled: true,
-        stream_url: "http://camera.lan/stream",
-        snapshot_url: "http://camera.lan/snapshot",
+        stream_url: "http://192.168.1.50/stream",
+        snapshot_url: "http://192.168.1.50/snapshot",
         aspect_ratio: "16:9",
       }],
     };
