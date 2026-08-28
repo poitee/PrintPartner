@@ -1208,9 +1208,18 @@ export async function registerPrinterCheckoffRoutes(
         confirmedUnits.push(unit);
       }
 
-      // The bytes decide. Nothing the client sent about this file is trusted,
-      // and a 3MF PrintPartner cannot read is refused rather than assumed
-      // sliced.
+      // The bytes decide. Nothing the client sent about this file is trusted.
+      //
+      // Print-readiness only gates a file PrintPartner might still print. When
+      // the operator is recording a print that already happened, the file is
+      // evidence of what was made, not instructions to run, and refusing it
+      // for "needs slicing" would refuse the very thing being recorded. A
+      // Bambu or Orca project 3MF is the normal case here: those slicers only
+      // write Metadata/plate_N.gcode when you export a sliced file, so the
+      // project save an operator has on disk carries the object names and no
+      // toolpath. A file PrintPartner could not READ is still refused above,
+      // because then there is nothing to attribute.
+      const alreadyPrinted = body.completed === true;
       let classification: PrintFileClassification | undefined;
       let remoteIdentity: PrinterFileIdentity | undefined;
       const inspection = await inspectPrintFile(deps.repo, parsed);
@@ -1218,7 +1227,7 @@ export async function registerPrinterCheckoffRoutes(
         return sendProblem(reply, 409, "Conflict", inspection.detail);
       }
       if (inspection.outcome === "inspected") {
-        if (!isPrintReady(inspection.classification)) {
+        if (!alreadyPrinted && !isPrintReady(inspection.classification)) {
           return sendProblem(reply, 409, "Conflict", printFileNextAction(inspection.classification));
         }
         classification = inspection.classification;

@@ -1091,6 +1091,63 @@ describe("printer progress route", () => {
     });
   });
 
+  it("refuses bytes it could not read, even for a print that already happened", async () => {
+    const { app, repo, plan, bracket, planRevisionId } = await setup();
+    saveFleet(repo, [parsePrinterMachine({
+      id: "core-one",
+      name: "Core One",
+      model: "Custom",
+      bed_width_mm: 250,
+      bed_depth_mm: 210,
+      max_filament_slots: 1,
+      loaded_filaments: [],
+      integration_id: "prusa-1",
+    })]);
+
+    const bomb = hostileZip([{ name: "3D/3dmodel.model", uncompressedSize: 0xffff_ffff }]);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL) => {
+        const url = String(input);
+        if (url.endsWith("/api/v1/status")) return response({ printer: { state: "IDLE" } });
+        if (url.endsWith("/api/v1/storage")) {
+          return response({ storage_list: [{ path: "usb", available: true }] });
+        }
+        if (url.endsWith("/api/v1/files/usb/")) {
+          return response({
+            children: [{ name: "bomb.3mf", type: "PRINT_FILE", size: bomb.byteLength }],
+          });
+        }
+        if (url.endsWith("/api/v1/files/usb/bomb.3mf")) {
+          return response({ refs: { download: "/api/v1/files/usb/bomb.3mf/raw" } });
+        }
+        if (url.endsWith("/raw")) return new Response(bomb, { status: 200 });
+        throw new Error(`unexpected host call ${url}`);
+      }),
+    );
+
+    const assigned = await app.inject({
+      method: "POST",
+      url: "/printer-checkoff/file-assignments",
+      payload: {
+        profile_id: plan.id,
+        printer_id: "core-one",
+        filename: "bomb.3mf",
+        remote_path: "bomb.3mf",
+        // Saying the print is finished lifts print-readiness, and nothing else.
+        // A file PrintPartner could not read is a different refusal: there is
+        // nothing to attribute the print to.
+        completed: true,
+        plan_revision_id: planRevisionId,
+        unit_tokens: [`${bracket.id}:0`],
+      },
+    });
+
+    expect(assigned.statusCode).toBe(409);
+    expect(assigned.json().detail).toContain("too large to inspect safely");
+    expect(loadPrinterCheckoffLinks(repo)).toEqual([]);
+  });
+
   it("notices on its own that a linked provider file changed", async () => {
     const { repo, plan, bracket, planRevisionId } = await setup();
     const identity = { size_bytes: 4096, modified_at: "2026-08-01T00:00:00.000Z" };
@@ -1723,7 +1780,7 @@ describe("uploaded print files", () => {
     expect(acceptedPrintUnits(repo, plan.id, bracket.id)).toEqual([false]);
   });
 
-  it("refuses an uploaded slicer project with the same words the printer path uses", async () => {
+  it("refuses an uploaded slicer project that is not being recorded as already made", async () => {
     const fixture = await externalPrinter();
     const project = slicerProjectThreeMf();
 
@@ -1741,6 +1798,49 @@ describe("uploaded print files", () => {
     });
     expect(uploaded.json().next_action).toContain("needs slicing");
 
+    // Nothing says this print happened, so PrintPartner may still be asked to
+    // send these bytes to a printer, and no printer can run them. The token
+    // survives a refusal, so both attempts argue about the same upload.
+    const assign = async (completed: boolean | undefined) =>
+      fixture.app.inject({
+        method: "POST",
+        url: "/printer-checkoff/file-assignments",
+        payload: {
+          profile_id: fixture.plan.id,
+          printer_id: "unsupported-printer",
+          tracking: "manual",
+          filename: "project.3mf",
+          upload_token: uploaded.json().upload_token,
+          plan_revision_id: fixture.planRevisionId,
+          unit_tokens: [`${fixture.bracket.id}:0`],
+          ...(completed === undefined ? {} : { completed }),
+        },
+      });
+
+    for (const completed of [undefined, false]) {
+      const assigned = await assign(completed);
+      expect(assigned.statusCode).toBe(409);
+      expect(assigned.json().detail).toContain("needs slicing");
+    }
+    expect(loadPrinterCheckoffLinks(fixture.repo)).toEqual([]);
+  });
+
+  it("records an uploaded slicer project as a print that already happened", async () => {
+    const fixture = await externalPrinter();
+    const project = slicerProjectThreeMf();
+
+    const uploaded = await uploadPrintFile({
+      app: fixture.app,
+      profileId: fixture.plan.id,
+      filename: "project.3mf",
+      bytes: project,
+      objectNames: "bracket",
+    });
+    expect(uploaded.json()).toMatchObject({
+      print_ready: false,
+      classification: { format: "3mf", kind: "slicer_project" },
+    });
+
     const assigned = await fixture.app.inject({
       method: "POST",
       url: "/printer-checkoff/file-assignments",
@@ -1748,15 +1848,35 @@ describe("uploaded print files", () => {
         profile_id: fixture.plan.id,
         printer_id: "unsupported-printer",
         tracking: "manual",
+        // The print is finished. The file is what it was made from, so
+        // print-readiness has nothing left to gate, and a Bambu or Orca
+        // project save is the ordinary thing an operator has on disk.
+        completed: true,
         filename: "project.3mf",
         upload_token: uploaded.json().upload_token,
+        object_names: ["bracket"],
         plan_revision_id: fixture.planRevisionId,
         unit_tokens: [`${fixture.bracket.id}:0`],
       },
     });
-    expect(assigned.statusCode).toBe(409);
-    expect(assigned.json().detail).toContain("needs slicing");
-    expect(loadPrinterCheckoffLinks(fixture.repo)).toEqual([]);
+
+    expect(assigned.statusCode).toBe(200);
+    expect(assigned.json()).toMatchObject({
+      link: {
+        state: "awaiting_verify",
+        // The record says what the file really is, not what a printer could do
+        // with it.
+        classification: { format: "3mf", kind: "slicer_project" },
+        remote_identity: {
+          size_bytes: project.byteLength,
+          sha256: createHash("sha256").update(project).digest("hex"),
+        },
+        units: [{ part_id: fixture.bracket.id, unit_index: 0 }],
+      },
+    });
+    expect(loadPrinterCheckoffLinks(fixture.repo)).toHaveLength(1);
+    // The print is on the record; the units still wait for Checkoff.
+    expect(acceptedPrintUnits(fixture.repo, fixture.plan.id, fixture.bracket.id)).toEqual([false]);
   });
 
   it("refuses a request naming both a printer path and an upload", async () => {

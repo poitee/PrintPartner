@@ -443,20 +443,59 @@ describe("ExternalPrintRoutePanel", () => {
     expect(await screen.findByText(/1 Required unit is checked off/)).toBeTruthy();
   });
 
-  it("will not record a 3MF the server says still needs slicing", async () => {
+  it("records a slicer-project 3MF, because the print it names already happened", async () => {
     api.uploadPrintFileForAssignment.mockResolvedValue({
       ...CHECK,
       classification: { format: "3mf", kind: "slicer_project" },
       print_ready: false,
-      suggested_units: [],
-      suggestion_basis: "none",
+    });
+    api.assignUploadedPrinterFile.mockResolvedValue({
+      link: { id: "link-one", filename: "chassis.3mf", units: [{ part_id: 41, unit_index: 0 }] },
     });
     renderPanel();
 
     fireEvent.click(screen.getByRole("radio", { name: /On this computer/ }));
     await pickFile("chassis.3mf");
 
-    expect(await screen.findByText("Needs slicing")).toBeTruthy();
+    // Named for what it is, with no instruction to go and slice a print the
+    // operator has already made.
+    const badge = await screen.findByText("Slicer project");
+    // A project 3MF is not a problem on this path, so the badge does not warn.
+    expect(badge.closest("[data-status]")?.getAttribute("data-status")).toBe("ready");
+    expect(screen.getByText(/keeps it as the record of this print/)).toBeTruthy();
+    expect(screen.queryByText(/Slice it in your slicer/)).toBeNull();
+    expect(screen.queryByText(/Needs slicing/)).toBeNull();
+
+    answerPrinter(UNMANAGED_PRINTER_ID);
+    answerChecked("checked");
+    fireEvent.click(screen.getByRole("button", { name: "Record this print" }));
+
+    await waitFor(() => expect(api.assignUploadedPrinterFile).toHaveBeenCalledTimes(1));
+    expect(api.assignUploadedPrinterFile.mock.calls[0][0]).toMatchObject({
+      filename: "chassis.3mf",
+      completed: true,
+      unit_tokens: ["41:0"],
+    });
+    expect(await screen.findByText(/chassis.3mf is on the record/)).toBeTruthy();
+  });
+
+  it("will not record a file PrintPartner could not read", async () => {
+    // No classification at all, which is the one thing the record path cannot
+    // work with: there is nothing to attribute the print to.
+    api.uploadPrintFileForAssignment.mockResolvedValue({
+      inspected: false,
+      suggested_units: [],
+      suggestion_basis: "none",
+      unlabeled_names: [],
+      plan_revision_id: 9,
+      upload_token: "upload-one",
+    });
+    renderPanel();
+
+    fireEvent.click(screen.getByRole("radio", { name: /On this computer/ }));
+    await pickFile("chassis.3mf");
+
+    expect(await screen.findByText("Not read by PrintPartner")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Record this print" })).toBeNull();
     expect(screen.getByRole("button", { name: /Choose a different file/ })).toBeTruthy();
   });

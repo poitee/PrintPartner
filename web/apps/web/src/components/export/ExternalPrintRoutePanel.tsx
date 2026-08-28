@@ -677,6 +677,9 @@ function UploadedPrintRecord({
         summary: printFileCheckSummary({
           preview: file.check,
           filename: file.chosen.file.name,
+          // Nothing here goes to a printer. The print already happened, so the
+          // file is what it was made from, and print-readiness has no say.
+          intent: "record",
         }),
       }
     : null;
@@ -716,8 +719,9 @@ function UploadedPrintRecord({
           {answered ? "Choose a different file" : "Choose the print file"}
         </Button>
         <p className="text-meta text-muted-foreground">
-          PrintPartner reads the file you upload and says what it is. A 3MF that still needs slicing
-          cannot be recorded as a print, whatever it is called.
+          PrintPartner reads the file you upload and says what it is. A slicer project is fine
+          here, because this file is the record of a print that already happened, not something
+          PrintPartner is about to run.
         </p>
       </div>
 

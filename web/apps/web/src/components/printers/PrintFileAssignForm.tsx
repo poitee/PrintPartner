@@ -161,6 +161,9 @@ export default function PrintFileAssignForm({
           summary: printFileCheckSummary({
             preview: assign.preview,
             filename: chosen.file.name,
+            // This form may still send the file to a printer, so a file no
+            // printer can run does not get past the check.
+            intent: "print",
           }),
         }
       : null;
