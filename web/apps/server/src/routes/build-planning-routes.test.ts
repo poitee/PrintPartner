@@ -47,4 +47,34 @@ describe("Build planning routes", () => {
     await app.close();
     await ports.db.close();
   });
+
+  it("returns the blockers that prevent a selected Working Plan from being accepted", async () => {
+    const root = mkdtempSync(join(tmpdir(), "build-planning-acceptance-route-"));
+    roots.push(root);
+    process.env.PRINT_PARTNER_DATA_DIR = root;
+    const ports = createSelfHostPorts(root);
+    await ports.db.connect();
+    const app = await buildApp(loadConfig(), ports);
+    const planned = ports.repository!.createProfile("AI planned");
+    saveBuildPlanningBrief(ports.repository!, {
+      ...newBuildPlanningBrief(planned.id, "Print this Build", []),
+      draft_id: 16,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/plans/${planned.id}/build-planning?draft_id=17`,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().planning.acceptance_readiness).toEqual({
+      ready: false,
+      blockers: expect.arrayContaining([{
+        code: "draft_selection",
+        detail: "Draft 17 is not the reviewed planning draft",
+      }]),
+    });
+    await app.close();
+    await ports.db.close();
+  });
 });

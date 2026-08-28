@@ -315,6 +315,35 @@ describe("acceptance decision", () => {
     );
   });
 
+  it("blocks when the Working Plan is not the reviewed assistant draft", () => {
+    const model = planAcceptanceModel({
+      review: review(),
+      draft: draft({
+        draft: {
+          draft_id: 17,
+          state: "open",
+          lifecycle_version: 0,
+          snapshot_digest: "b".repeat(64),
+          base: { revision_id: 4, plan_version: 4 },
+        },
+      }),
+      buildId: 1,
+      planningBlockers: [{
+        code: "draft_selection",
+        detail: "Draft 17 is not the reviewed planning draft",
+      }],
+    });
+
+    expect(model.mustResolve).toEqual([
+      expect.objectContaining({
+        id: "plan-issue-build-planning-draft-selection-0",
+        title: "This Working Plan has not been reviewed",
+        statusLabel: "Blocks acceptance",
+      }),
+    ]);
+    expect(model.decision.canAccept).toBe(false);
+  });
+
   it("allows acceptance and names the revision it will create", () => {
     const model = planAcceptanceModel({ review: review(), draft: draft(), buildId: 1 });
     expect(model.decision.canAccept).toBe(true);

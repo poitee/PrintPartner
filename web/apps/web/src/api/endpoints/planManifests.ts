@@ -281,6 +281,11 @@ export type BuildPlanningState = {
     draft_id?: number;
   };
   readiness: { ready: boolean; blockers: Array<{ code: string; detail: string }> };
+  /** Server-authoritative blockers for accepting the selected Working Plan. */
+  acceptance_readiness: {
+    ready: boolean;
+    blockers: Array<{ code: string; detail: string }>;
+  } | null;
   grouped_difference_count: number;
   difference_count: number;
 };
@@ -395,9 +400,11 @@ export async function fetchPlanLayers(profileId: number): Promise<ProfileLayer[]
 
 export async function fetchBuildPlanningState(
   profileId: number,
+  draftId?: number | null,
 ): Promise<BuildPlanningState | null> {
+  const draftQuery = draftId == null ? "" : `?draft_id=${encodeURIComponent(String(draftId))}`;
   const result = await engineFetch<{ planning: BuildPlanningState | null }>(
-    `/plans/${profileId}/build-planning`,
+    `/plans/${profileId}/build-planning${draftQuery}`,
   );
   return result.planning;
 }
