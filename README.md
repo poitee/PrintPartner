@@ -50,7 +50,7 @@ Two workspaces sit outside a single Build:
 
 Plan acceptance is the safety boundary. Sources and Plan are editable intent; nothing there changes printer work until you accept a Plan revision. An Accepted Plan revision owns the Required units, Checkoff state, Plate arrangements, exports, and printer handoff records.
 
-An active Build owns its Sources, Plan, Production work, and Checkoff history. The Library is shared across Builds. See [`CONTEXT.md`](CONTEXT.md) for the exact vocabulary and [ADR 0001](docs/adr/0001-model-build-workflow-as-preparation-and-making.md) for why the model is a loop and not four steps.
+An active Build owns its Sources, Plan, Production work, and Checkoff history. The Library is shared across Builds. See [ADR 0001](docs/adr/0001-model-build-workflow-as-preparation-and-making.md) for why the model is a loop and not four steps, and [`.agents/CONTEXT.md`](.agents/CONTEXT.md) for how a Source contributes to a Build.
 
 ## Screenshots
 
