@@ -1600,6 +1600,11 @@ describe("accepted Plan operational snapshot", () => {
     }
   });
 
+  // The one test that genuinely needs longer than the 15s global. It builds
+  // 10,001 Required units and snapshots them twice, once through SQLite and
+  // once through the SQLite-backed PostgreSQL bridge, so it lands within a
+  // second of the global limit and flips on load. This is real work, not the
+  // environmental flakiness the global raise was for.
   it("reads more than 10,000 accepted Required units through bounded PostgreSQL pages", () => {
     const context = fixture();
     const profile = context.repo.createProfile("Large accepted Build");
@@ -1647,5 +1652,5 @@ describe("accepted Plan operational snapshot", () => {
       unregisterPostgresSyncQuery(postgres);
       context.database.close();
     }
-  });
+  }, 60_000);
 });
