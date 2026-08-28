@@ -424,8 +424,8 @@ function externalTasks(input: ExternalTaskInput): ProductionTask[] {
       hint: noPlan
         ? "No accepted Required units yet."
         : recorded
-          ? "Verify the recorded prints in Checkoff."
-          : "Check the record, then confirm it. Checkoff verifies the units after that.",
+          ? "Units you had already checked are checked off. Anything else is waiting in Checkoff."
+          : "Say whether you have checked the parts, then confirm. Units you have checked are checked off here.",
       state,
       statusLabel,
       disabledReason,

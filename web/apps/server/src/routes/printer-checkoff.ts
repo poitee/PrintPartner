@@ -5,6 +5,8 @@ import {
   isPrintReady,
   isManualIntegrationId,
   manualIntegrationId,
+  UNMANAGED_PRINTER_ID,
+  UNMANAGED_PRINTER_NAME,
   type PrinterCheckoffLink,
   type PrinterCheckoffUnit,
   type PrinterFileIdentity,
@@ -453,6 +455,80 @@ type PrintFileRequest =
     }
   | { outcome: "invalid"; status: number; title: string; detail: string };
 
+/** The printer a print is recorded against, or the wording for why there is not one. */
+type AssignmentPrinter =
+  | { outcome: "resolved"; printerId: string; printerName: string; integrationId: string }
+  | { outcome: "invalid"; status: number; title: string; detail: string };
+
+/**
+ * Decide which printer a print is recorded against, and what watches it.
+ *
+ * A request either names a printer in the fleet or names none. Naming none
+ * means a printer PrintPartner does not manage: recording that a print
+ * happened must not require registering hardware PrintPartner cannot reach,
+ * which is the whole reason the file was uploaded rather than picked off a
+ * host. A named printer is still resolved in the fleet, so a typo is a 404
+ * rather than a print quietly recorded against nothing.
+ */
+function resolveAssignmentPrinter(
+  repo: AppRepository,
+  request: { printerId: string; tracking: unknown; fromPrinterStorage: boolean },
+): AssignmentPrinter {
+  if (!request.printerId) {
+    // Nothing polls a printer PrintPartner does not manage, so there is no host
+    // to watch and no host to read a stored file off either. Both are refused
+    // rather than quietly downgraded, because an operator who asked for host
+    // tracking is expecting PrintPartner to follow the print.
+    if (request.tracking === "host") {
+      return {
+        outcome: "invalid",
+        status: 400,
+        title: "Bad Request",
+        detail:
+          "PrintPartner cannot watch a printer it does not manage. Name the printer that made this print, or record the print as already made.",
+      };
+    }
+    if (request.fromPrinterStorage) {
+      return {
+        outcome: "invalid",
+        status: 400,
+        title: "Bad Request",
+        detail:
+          "A file held on a printer needs the printer it sits on. Name that printer, or upload the file instead.",
+      };
+    }
+    return {
+      outcome: "resolved",
+      printerId: UNMANAGED_PRINTER_ID,
+      printerName: UNMANAGED_PRINTER_NAME,
+      integrationId: manualIntegrationId(UNMANAGED_PRINTER_ID),
+    };
+  }
+  const printer = loadFleet(repo).find((row) => row.id === request.printerId);
+  if (!printer) {
+    return { outcome: "invalid", status: 404, title: "Not Found", detail: "Printer not found" };
+  }
+  if (request.tracking === "manual") {
+    return {
+      outcome: "resolved",
+      printerId: printer.id,
+      printerName: printer.name,
+      integrationId: manualIntegrationId(printer.id),
+    };
+  }
+  const integrationId = printer.integration_id?.trim() ?? "";
+  const integration = integrationId ? getIntegrationConfig(repo, integrationId) : null;
+  if (!integration || integration.config.enabled === false) {
+    return {
+      outcome: "invalid",
+      status: 409,
+      title: "Conflict",
+      detail: "Use manual tracking because this printer has no available host",
+    };
+  }
+  return { outcome: "resolved", printerId: printer.id, printerName: printer.name, integrationId };
+}
+
 /**
  * The part of a print-file request that preview and assignment share, so a
  * preview cannot answer for one file while the assignment binds another.
@@ -475,32 +551,10 @@ function parsePrintFileRequest(repo: AppRepository, raw: unknown): PrintFileRequ
   });
   const profileId = Number(body.profile_id);
   if (!Number.isInteger(profileId) || profileId <= 0) return invalid("profile_id is required");
-  const printerId = typeof body.printer_id === "string" ? body.printer_id.trim() : "";
-  if (!printerId) return invalid("printer_id is required");
   const filename = typeof body.filename === "string" ? body.filename.trim() : "";
   if (!filename || filename.length > 500) return invalid("filename is required");
   if (!/\.(?:gcode|gco|bgcode|3mf)$/i.test(filename)) {
     return invalid("Choose a .gcode, .gco, .bgcode, or .3mf print file");
-  }
-  const printer = loadFleet(repo).find((row) => row.id === printerId);
-  if (!printer) {
-    return { outcome: "invalid", status: 404, title: "Not Found", detail: "Printer not found" };
-  }
-
-  let integrationId: string;
-  if (body.tracking === "manual") {
-    integrationId = manualIntegrationId(printer.id);
-  } else {
-    integrationId = printer.integration_id?.trim() ?? "";
-    const integration = integrationId ? getIntegrationConfig(repo, integrationId) : null;
-    if (!integration || integration.config.enabled === false) {
-      return {
-        outcome: "invalid",
-        status: 409,
-        title: "Conflict",
-        detail: "Use manual tracking because this printer has no available host",
-      };
-    }
   }
   const remotePath =
     typeof body.remote_path === "string" && body.remote_path.trim()
@@ -513,11 +567,17 @@ function parsePrintFileRequest(repo: AppRepository, raw: unknown): PrintFileRequ
   if (remotePath && uploadToken) {
     return invalid("Send remote_path or upload_token, not both");
   }
+  const printer = resolveAssignmentPrinter(repo, {
+    printerId: typeof body.printer_id === "string" ? body.printer_id.trim() : "",
+    tracking: body.tracking,
+    fromPrinterStorage: remotePath !== undefined,
+  });
+  if (printer.outcome === "invalid") return printer;
   return {
     outcome: "parsed",
     profileId,
-    printerId: printer.id,
-    printerName: printer.name,
+    printerId: printer.printerId,
+    printerName: printer.printerName,
     filename,
     remotePath,
     uploadToken,
@@ -528,7 +588,7 @@ function parsePrintFileRequest(repo: AppRepository, raw: unknown): PrintFileRequ
           .filter(Boolean)
           .slice(0, 500)
       : [],
-    integrationId,
+    integrationId: printer.integrationId,
   };
 }
 

@@ -335,10 +335,16 @@ export async function previewPrinterFileAssignment(options: {
   );
 }
 
-/** The fields an assignment carries whatever the bytes came from. */
+/**
+ * The fields an assignment carries whatever the bytes came from.
+ *
+ * `printer_id` is deliberately not here. A file picked off a printer's storage
+ * always names that printer, while an uploaded file may have been run by a
+ * machine PrintPartner does not manage, so the two routes differ on exactly
+ * that one field.
+ */
 export type PrintFileAssignmentBase = {
   profile_id: number;
-  printer_id: string;
   filename: string;
   object_names: string[];
   tracking: "host" | "manual";
@@ -355,7 +361,7 @@ export type PrintFileAssignmentBase = {
  * are `${part_id}:${unit_index}` and may be empty when nothing maps yet.
  */
 export async function assignPrinterFile(
-  options: PrintFileAssignmentBase & { remote_path?: string },
+  options: PrintFileAssignmentBase & { printer_id: string; remote_path?: string },
 ): Promise<{ link: PrinterCheckoffLink }> {
   return engineFetch("/printer-checkoff/file-assignments", {
     method: "POST",
@@ -432,9 +438,14 @@ export async function uploadPrintFileForAssignment(options: {
  * Same route as {@link assignPrinterFile}. `upload_token` stands in for
  * `remote_path` and the two are mutually exclusive on the wire, which is why
  * this is a second call rather than one options bag holding both.
+ *
+ * Leave `printer_id` out when the machine that ran the print is not in the
+ * fleet. The server records those against `UNMANAGED_PRINTER_ID`, so an already
+ * finished print never forces the operator to register hardware PrintPartner
+ * cannot reach.
  */
 export async function assignUploadedPrinterFile(
-  options: PrintFileAssignmentBase & { upload_token: string },
+  options: PrintFileAssignmentBase & { printer_id?: string; upload_token: string },
 ): Promise<{ link: PrinterCheckoffLink }> {
   return engineFetch("/printer-checkoff/file-assignments", {
     method: "POST",

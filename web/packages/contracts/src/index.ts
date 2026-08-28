@@ -339,6 +339,25 @@ export function isManualIntegrationId(integrationId: string, printerId?: string)
     : integrationId === manualIntegrationId(printerId);
 }
 
+/**
+ * Stands in for the printer that made a print PrintPartner does not manage.
+ *
+ * Recording a finished print must not require registering hardware. The whole
+ * reason a file is uploaded rather than picked off a host is that PrintPartner
+ * cannot talk to the machine that ran it, and it may not be in the fleet at
+ * all. Its links carry this id so they are still attributable and still read
+ * as manual.
+ */
+export const UNMANAGED_PRINTER_ID = "unmanaged";
+
+/** What the operator sees where a printer name would go. */
+export const UNMANAGED_PRINTER_NAME = "A printer PrintPartner does not manage";
+
+/** True for a link recorded against no registered printer. */
+export function isUnmanagedPrinterId(printerId: string): boolean {
+  return printerId === UNMANAGED_PRINTER_ID;
+}
+
 /** A camera view that Print Partner can render without exposing host credentials. */
 export type PrinterCamera = {
   id: string;

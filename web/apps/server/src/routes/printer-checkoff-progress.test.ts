@@ -18,7 +18,12 @@ import {
   slicerProjectThreeMf,
 } from "../test/print-file-fixtures.js";
 import { createIntegrationPort, type PrinterFileAccess } from "../integrations/store.js";
-import type { PrinterStorageEntry } from "@print-partner/contracts";
+import {
+  isManualIntegrationId,
+  UNMANAGED_PRINTER_ID,
+  UNMANAGED_PRINTER_NAME,
+  type PrinterStorageEntry,
+} from "@print-partner/contracts";
 import { getIntegrationAdapter } from "../integrations/registry.js";
 import {
   createPrinterCheckoffLink,
@@ -36,7 +41,7 @@ import {
   saveUnattributedPrint,
 } from "../services/unattributed-print-store.js";
 import { AcceptedPlanOperationalIntegrityError } from "../db/accepted-plan-operational.js";
-import { parsePrinterMachine, saveFleet } from "../services/printer-fleet.js";
+import { loadFleet, parsePrinterMachine, saveFleet } from "../services/printer-fleet.js";
 
 const cleanup: Array<() => Promise<void>> = [];
 
@@ -2024,5 +2029,203 @@ describe("uploaded print files", () => {
     });
     expect(broken.statusCode).toBe(200);
     expect(broken.json().suggestion_basis).toBe("filename");
+  });
+
+  /**
+   * A print made on a printer nobody registered. `printer_id` is absent, which
+   * is the point: PrintPartner cannot reach the machine that ran the file, so
+   * making the operator register it first would be friction for nothing.
+   */
+  async function assignUnmanagedPrint(input: {
+    app: FastifyInstance;
+    profileId: number;
+    partId: number;
+    planRevisionId: number;
+    completed: boolean;
+  }) {
+    const uploaded = await uploadPrintFile({
+      app: input.app,
+      profileId: input.profileId,
+      filename: "elsewhere.gcode",
+      bytes: SLICED_GCODE,
+    });
+    expect(uploaded.statusCode).toBe(200);
+    return input.app.inject({
+      method: "POST",
+      url: "/printer-checkoff/file-assignments",
+      payload: {
+        profile_id: input.profileId,
+        tracking: "manual",
+        completed: input.completed,
+        filename: "elsewhere.gcode",
+        upload_token: uploaded.json().upload_token,
+        plan_revision_id: input.planRevisionId,
+        unit_tokens: [`${input.partId}:0`],
+      },
+    });
+  }
+
+  it("records a print against no registered printer at all", async () => {
+    const { app, repo, plan, bracket, planRevisionId } = await setup();
+    // An empty fleet is the case that used to be refused outright.
+    expect(loadFleet(repo)).toEqual([]);
+
+    const previewed = await app.inject({
+      method: "POST",
+      url: "/printer-checkoff/file-assignments/preview",
+      payload: {
+        profile_id: plan.id,
+        filename: "elsewhere.gcode",
+        object_names: ["bracket.stl_id_0_copy_0"],
+      },
+    });
+    expect(previewed.statusCode).toBe(200);
+    expect(previewed.json()).toMatchObject({
+      suggestion_basis: "object_names",
+      suggested_units: [{ part_id: bracket.id, unit_index: 0 }],
+    });
+
+    const assigned = await assignUnmanagedPrint({
+      app,
+      profileId: plan.id,
+      partId: bracket.id,
+      planRevisionId,
+      completed: true,
+    });
+    expect(assigned.statusCode).toBe(200);
+    const link = assigned.json().link;
+    expect(link).toMatchObject({
+      printer_id: UNMANAGED_PRINTER_ID,
+      integration_id: "manual:unmanaged",
+      host_name: UNMANAGED_PRINTER_NAME,
+      state: "awaiting_verify",
+      units: [{ part_id: bracket.id, unit_index: 0 }],
+    });
+    // Reads as manual, which is what keeps every host-only path off it.
+    expect(isManualIntegrationId(link.integration_id, link.printer_id)).toBe(true);
+    // Verify-first survives: importing the file records the print, it does not
+    // tick the units.
+    expect(acceptedPrintUnits(repo, plan.id, bracket.id)).toEqual([false]);
+  });
+
+  it("finishes a print on an unmanaged printer through manual-complete", async () => {
+    const { app, repo, plan, bracket, planRevisionId } = await setup();
+    const assigned = await assignUnmanagedPrint({
+      app,
+      profileId: plan.id,
+      partId: bracket.id,
+      planRevisionId,
+      completed: false,
+    });
+    expect(assigned.statusCode).toBe(200);
+    expect(assigned.json().link.state).toBe("watching");
+
+    const completed = await app.inject({
+      method: "POST",
+      url: `/printer-checkoff/${assigned.json().link.id}/manual-complete`,
+      payload: {},
+    });
+    expect(completed.statusCode).toBe(200);
+    expect(completed.json().link).toMatchObject({
+      state: "awaiting_verify",
+      host_outcome: "success",
+    });
+    expect(acceptedPrintUnits(repo, plan.id, bracket.id)).toEqual([false]);
+  });
+
+  it.each([
+    {
+      what: "host tracking for a printer PrintPartner does not manage",
+      overrides: { tracking: "host" },
+      status: 400,
+      detail: "cannot watch a printer it does not manage",
+    },
+    {
+      what: "a printer that is not in the fleet",
+      overrides: { printer_id: "never-registered", tracking: "manual" },
+      status: 404,
+      detail: "Printer not found",
+    },
+    {
+      what: "a file held on a printer with no printer named",
+      overrides: { tracking: "manual", remote_path: "usb/elsewhere.gcode" },
+      status: 400,
+      detail: "file held on a printer needs the printer it sits on",
+    },
+  ])("refuses $what", async (refusal) => {
+    const { app, repo, plan, bracket, planRevisionId } = await setup();
+
+    const assigned = await app.inject({
+      method: "POST",
+      url: "/printer-checkoff/file-assignments",
+      payload: {
+        profile_id: plan.id,
+        completed: true,
+        filename: "elsewhere.gcode",
+        plan_revision_id: planRevisionId,
+        unit_tokens: [`${bracket.id}:0`],
+        ...refusal.overrides,
+      },
+    });
+    expect(assigned.statusCode).toBe(refusal.status);
+    expect(assigned.json().detail).toContain(refusal.detail);
+    expect(loadPrinterCheckoffLinks(repo)).toEqual([]);
+  });
+
+  it("keeps reconcile away from a print PrintPartner does not manage", async () => {
+    const { app, repo, plan, bracket, planRevisionId } = await setup();
+    // A registered host reporting a finished file of the same name is the only
+    // way reconcile could plausibly reach an unmanaged link.
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("/api/v1/status")) {
+        return response({
+          printer: { state: "FINISHED" },
+          job: { progress: 100, file: { display_name: "ELSEWHERE.GCODE" } },
+        });
+      }
+      if (url.includes("/api/v1/job")) {
+        return response({ state: "FINISHED", file: { display_name: "ELSEWHERE.GCODE" } });
+      }
+      return response({});
+    }));
+
+    const assigned = await assignUnmanagedPrint({
+      app,
+      profileId: plan.id,
+      partId: bracket.id,
+      planRevisionId,
+      completed: false,
+    });
+    expect(assigned.statusCode).toBe(200);
+    const linkId = assigned.json().link.id;
+    expect(getPrinterCheckoffLink(repo, linkId)?.state).toBe("watching");
+
+    // The unmanaged integration id is not a registered integration, so the
+    // route that drives reconcile cannot even name it.
+    const named = await app.inject({
+      method: "POST",
+      url: "/printer-checkoff/reconcile",
+      payload: { integration_id: "manual:unmanaged" },
+    });
+    expect(named.statusCode).toBe(404);
+    expect(getPrinterCheckoffLink(repo, linkId)?.state).toBe("watching");
+
+    const hostPoll = await app.inject({
+      method: "POST",
+      url: "/printer-checkoff/reconcile",
+      payload: { integration_id: "prusa-1" },
+    });
+    expect(hostPoll.statusCode).toBe(200);
+    expect(hostPoll.json().updates).toEqual([]);
+    expect(hostPoll.json().created_links).toEqual([]);
+    // The host's own finish became its own unattributed print rather than
+    // being matched onto the unmanaged link.
+    expect(hostPoll.json().unattributed).toMatchObject([{ integration_id: "prusa-1" }]);
+    expect(getPrinterCheckoffLink(repo, linkId)).toMatchObject({ state: "watching" });
+    expect(getPrinterCheckoffLink(repo, linkId)?.completed_at).toBeUndefined();
+    // Nothing on a host backs this link, so file drift has nothing to observe.
+    expect(getPrinterCheckoffLink(repo, linkId)?.remote_path).toBeUndefined();
+    expect(acceptedPrintUnits(repo, plan.id, bracket.id)).toEqual([false]);
   });
 });

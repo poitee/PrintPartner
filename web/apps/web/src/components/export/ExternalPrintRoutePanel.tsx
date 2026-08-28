@@ -1,10 +1,17 @@
 import { useCallback, useId, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { Upload } from "lucide-react";
-import type { PrinterCheckoffUnit } from "@print-partner/contracts";
+import {
+  isUnmanagedPrinterId,
+  UNMANAGED_PRINTER_ID,
+  UNMANAGED_PRINTER_NAME,
+  type PrinterCheckoffUnit,
+  type PrintVerifyDecision,
+} from "@print-partner/contracts";
 import {
   assignUploadedPrinterFile,
   uploadPrintFileForAssignment,
+  verifyPrinterCheckoff,
   type UploadedPrintFileCheck,
 } from "../../api/endpoints/checkoff";
 import { fetchIntegrations, type IntegrationSummary } from "../../api/endpoints/integrations";
@@ -16,7 +23,7 @@ import {
 } from "../../api/endpoints/printers";
 import { useProfileSelection } from "../../context/ProfileContext";
 import { parseSlicedObjectsFile } from "../../lib/parseSlicedObjects";
-import { settingsPrintersRoute } from "../../lib/routes";
+import { checkoffRoute, settingsPrintersRoute } from "../../lib/routes";
 import { Button } from "../ui/button";
 import { StatusBadge } from "../ui/status-badge";
 import InlineOperationError from "../printers/InlineOperationError";
@@ -41,12 +48,63 @@ type PrinterDesk = Readonly<{
   host: IntegrationSummary | null;
 }>;
 
-/** What went on the record, for the line the operator reads afterwards. */
-type RecordedPrint = Readonly<{ filename: string; unitCount: number }>;
+/**
+ * What went on the record, for the line the operator reads afterwards.
+ *
+ * `units` is the difference between the two answers to "have you checked the
+ * parts": either the confirmed units are checked off already, or they are
+ * waiting in Checkoff for someone to look at them. The wording afterwards must
+ * never claim the first when only the second is true.
+ */
+type RecordedPrint = Readonly<{
+  filename: string;
+  unitCount: number;
+  units: "checked_off" | "awaiting_check";
+}>;
 
 // The same four containers the printer workspace accepts. The server checks the
 // bytes; this only keeps an obviously wrong pick out of a 64 MiB upload.
 const PRINT_FILE_PATTERN = /\.(?:gcode|gco|bgcode|3mf)$/i;
+
+/** "1 Required unit" or "3 Required units", in the Plan's own words. */
+function requiredUnitCount(count: number): string {
+  return `${count} Required unit${count === 1 ? "" : "s"}`;
+}
+
+/**
+ * What is true now, for the operator reading the outcome.
+ *
+ * The two answers to "have you checked the parts" end in genuinely different
+ * places, so they get genuinely different lines. Nothing here calls a unit
+ * checked off unless the verify that checks it off has already succeeded.
+ */
+function recordedOutcome(print: RecordedPrint): Readonly<{
+  headline: string;
+  body: string;
+  linkLabel: string;
+}> {
+  const units = requiredUnitCount(print.unitCount);
+  switch (print.units) {
+    case "checked_off":
+      return {
+        headline: `${print.filename} is on the record and ${units} ${
+          print.unitCount === 1 ? "is" : "are"
+        } checked off`,
+        body: "Nothing is waiting on you for this print.",
+        linkLabel: "See the units in Checkoff",
+      };
+    case "awaiting_check":
+      return {
+        headline: `${print.filename} is on the record, covering ${units}`,
+        body: "The units are not checked off yet. Look at the parts, then check them off in Checkoff.",
+        linkLabel: "Finish the units in Checkoff",
+      };
+    default: {
+      const _exhaustive: never = print.units;
+      return _exhaustive;
+    }
+  }
+}
 
 /**
  * Record a print that already happened, from inside the work package.
@@ -55,6 +113,11 @@ const PRINT_FILE_PATTERN = /\.(?:gcode|gco|bgcode|3mf)$/i;
  * printer PrintPartner watches, and a file on this computer, which is the only
  * way a printer PrintPartner cannot talk to reaches Checkoff at all. Both end at
  * the same question: which Required units did this print cover.
+ *
+ * The upload source needs no registered printer. The reason a file is uploaded
+ * rather than picked off a host is that PrintPartner cannot reach the machine
+ * that ran it, so that machine may not be in the fleet at all, and an empty
+ * fleet is a normal starting point here rather than a dead end.
  *
  * The printer-storage source is `PrinterFilesView` unchanged, so the browsing,
  * the classification and the assignment stay in one place rather than being
@@ -109,28 +172,27 @@ export default function ExternalPrintRoutePanel({ profileId, onRecorded }: Props
   };
 
   if (recorded) {
+    const outcome = recordedOutcome(recorded);
     return (
       <section aria-label="Record a print made elsewhere" className="stack-section">
-        <StatusBadge
-          status="complete"
-          label={`${recorded.filename} is on the record, covering ${recorded.unitCount} Required unit${recorded.unitCount === 1 ? "" : "s"}`}
-          live
-        />
-        <p className="text-body">
-          Checkoff now holds this print. Verify the units there when you have checked the parts.
-        </p>
-        <Button
-          size="shop"
-          variant="outline"
-          className="self-start"
-          onClick={() => {
-            setRecorded(null);
-            setSource(null);
-            setPrinterId("");
-          }}
-        >
-          Record another print
-        </Button>
+        <StatusBadge status="complete" label={outcome.headline} live />
+        <p className="text-body">{outcome.body}</p>
+        <div className="flex flex-wrap items-center gap-3">
+          <Button
+            size="shop"
+            variant="outline"
+            onClick={() => {
+              setRecorded(null);
+              setSource(null);
+              setPrinterId("");
+            }}
+          >
+            Record another print
+          </Button>
+          <Link className="text-body underline underline-offset-2" to={checkoffRoute(profileId)}>
+            {outcome.linkLabel}
+          </Link>
+        </div>
       </section>
     );
   }
@@ -191,22 +253,18 @@ export default function ExternalPrintRoutePanel({ profileId, onRecorded }: Props
         />
       ) : null}
 
-      {source !== null && fleet.view.status === "ready" && desks.length === 0 ? (
-        <p className="rounded-md border border-dashed border-border-strong p-4 text-body text-muted-foreground">
-          PrintPartner has no printers yet. A print is recorded against the printer that made it,
-          so add that printer first.{" "}
-          <Link className="underline" to={settingsPrintersRoute()}>
-            Open printer settings
-          </Link>
-        </p>
-      ) : null}
-
-      {source === "printer" && desks.length > 0 ? (
+      {source === "printer" && fleet.view.status === "ready" ? (
         <div className="stack-section">
           {watched.length === 0 ? (
             <p className="rounded-md border border-dashed border-border-strong p-4 text-body text-muted-foreground">
-              None of your printers has a linked host, so there is no storage to browse. Choose On
-              this computer and upload the file instead.
+              {desks.length === 0
+                ? "PrintPartner has no printers yet, so there is no storage to browse."
+                : "None of your printers has a linked host, so there is no storage to browse."}{" "}
+              Choose On this computer and upload the file instead, or{" "}
+              <Link className="underline" to={settingsPrintersRoute()}>
+                add the printer in settings
+              </Link>
+              .
             </p>
           ) : (
             <div className="stack-row">
@@ -259,7 +317,13 @@ export default function ExternalPrintRoutePanel({ profileId, onRecorded }: Props
                   profiles={builds}
                   selectedProfileId={profileId}
                   onAssigned={(link) =>
-                    finish({ filename: link.filename, unitCount: link.units.length })
+                    finish({
+                      filename: link.filename,
+                      unitCount: link.units.length,
+                      // This path hands the file to the shared assignment form,
+                      // which does not ask whether the parts were checked.
+                      units: "awaiting_check",
+                    })
                   }
                 />
               </>
@@ -273,11 +337,12 @@ export default function ExternalPrintRoutePanel({ profileId, onRecorded }: Props
         </div>
       ) : null}
 
-      {source === "computer" && desks.length > 0 ? (
+      {source === "computer" && fleet.view.status === "ready" ? (
         <UploadedPrintRecord
           profileId={profileId}
           printers={desks.map((desk) => desk.printer)}
-          onRecorded={finish}
+          onPrintRecorded={onRecorded}
+          onFinished={setRecorded}
         />
       ) : null}
     </section>
@@ -288,12 +353,29 @@ export default function ExternalPrintRoutePanel({ profileId, onRecorded }: Props
 type ReadPrintFile = Readonly<{ file: File; objectNames: string[] }>;
 
 /**
+ * The link the record wrote, kept so a failed check-off can rerun on its own.
+ *
+ * Only the three fields the check-off needs, so a partial link from any caller
+ * still satisfies it.
+ */
+type RecordedLink = Readonly<{
+  id: string;
+  filename: string;
+  units: readonly PrinterCheckoffUnit[];
+}>;
+
+/**
  * Uploading a print file, then putting it on the record.
  *
  * One union rather than a bag of flags, so the states this route does not have,
  * such as uploading a file whose bytes were never read, cannot be built. The
  * chosen file is carried by every phase after it is read, which is what lets a
  * failed upload or a failed save rerun without asking for the file again.
+ *
+ * The last two phases carry the link the record already wrote. That is the
+ * difference the operator has to be told about: the print is on the record from
+ * `checking_off` onwards, so nothing in those phases may offer to record it
+ * again, and only the check-off is worth rerunning.
  */
 type UploadState =
   | { phase: "choosing" }
@@ -308,24 +390,104 @@ type UploadState =
       chosen: ReadPrintFile;
       check: UploadedPrintFileCheck;
       message: string;
+    }
+  | {
+      phase: "checking_off";
+      chosen: ReadPrintFile;
+      check: UploadedPrintFileCheck;
+      link: RecordedLink;
+    }
+  | {
+      phase: "checkoff_failed";
+      chosen: ReadPrintFile;
+      check: UploadedPrintFileCheck;
+      link: RecordedLink;
+      message: string;
     };
 
+/**
+ * The phases that have a checked file on screen, with the file and its check.
+ *
+ * A switch rather than a chain of comparisons, so a new phase has to say
+ * whether it shows the file instead of silently falling out of the form.
+ */
+function answeredFile(
+  state: UploadState,
+): Readonly<{ chosen: ReadPrintFile; check: UploadedPrintFileCheck }> | null {
+  switch (state.phase) {
+    case "confirming":
+    case "saving":
+    case "save_failed":
+    case "checking_off":
+    case "checkoff_failed":
+      return { chosen: state.chosen, check: state.check };
+    case "choosing":
+    case "reading":
+    case "read_failed":
+    case "uploading":
+    case "upload_failed":
+      return null;
+    default: {
+      const _exhaustive: never = state;
+      return _exhaustive;
+    }
+  }
+}
+
+/**
+ * Which machine the operator says ran this print.
+ *
+ * Null until it is answered. A printer PrintPartner does not manage is a real
+ * answer rather than a blank, because that is the usual case for a print made
+ * elsewhere, so the form has to tell the two apart.
+ */
+type PrinterAnswer = { kind: "fleet"; printerId: string } | { kind: "unmanaged" };
+
+/** Whether the operator has already looked at the parts this print made. */
+type CheckedAnswer = "checked" | "not_checked";
+
+function printerSelectValue(answer: PrinterAnswer | null): string {
+  if (answer === null) return "";
+  switch (answer.kind) {
+    case "fleet":
+      return answer.printerId;
+    case "unmanaged":
+      return UNMANAGED_PRINTER_ID;
+    default: {
+      const _exhaustive: never = answer;
+      return _exhaustive;
+    }
+  }
+}
+
+function readPrinterAnswer(value: string): PrinterAnswer | null {
+  if (value === "") return null;
+  return isUnmanagedPrinterId(value) ? { kind: "unmanaged" } : { kind: "fleet", printerId: value };
+}
+
 /** One problem with the record form, named by the field it belongs to. */
-type RecordFieldError = Readonly<{ field: "printer" | "units"; message: string }>;
+type RecordFieldError = Readonly<{
+  field: "printer" | "units" | "checked";
+  message: string;
+}>;
 
 function recordProblems(input: {
-  printerId: string;
+  printer: PrinterAnswer | null;
   confirmedUnitCount: number;
+  checked: CheckedAnswer | null;
 }): RecordFieldError[] {
   const problems: RecordFieldError[] = [];
-  if (!input.printerId) {
-    problems.push({ field: "printer", message: "Choose the printer that made this print" });
+  if (input.printer === null) {
+    problems.push({ field: "printer", message: "Say which printer made this print" });
   }
   if (input.confirmedUnitCount === 0) {
     problems.push({
       field: "units",
       message: "Confirm at least one Required unit this print covers",
     });
+  }
+  if (input.checked === null) {
+    problems.push({ field: "checked", message: "Say whether you have checked the parts" });
   }
   return problems;
 }
@@ -355,26 +517,40 @@ function suggestionCaption(basis: UploadedPrintFileCheck["suggestion_basis"]): s
 function UploadedPrintRecord({
   profileId,
   printers,
-  onRecorded,
+  onPrintRecorded,
+  onFinished,
 }: {
   profileId: number;
   printers: readonly PrinterMachine[];
-  onRecorded: (print: RecordedPrint) => void;
+  /**
+   * The print is on the record. Fires before the units are checked off, because
+   * the record stands whether or not the check-off that follows it succeeds.
+   */
+  onPrintRecorded: () => void;
+  /** Nothing is left to do here, and this is what is now true. */
+  onFinished: (print: RecordedPrint) => void;
 }) {
   const fieldPrefix = useId();
   const printerErrorId = `${fieldPrefix}-printer-error`;
   const unitsErrorId = `${fieldPrefix}-units-error`;
+  const checkedErrorId = `${fieldPrefix}-checked-error`;
   const inputRef = useRef<HTMLInputElement>(null);
-  const [printerId, setPrinterId] = useState("");
+  const [printer, setPrinter] = useState<PrinterAnswer | null>(null);
   const [confirmedTokens, setConfirmedTokens] = useState<ReadonlySet<string>>(new Set());
+  const [checked, setChecked] = useState<CheckedAnswer | null>(null);
   const [showProblems, setShowProblems] = useState(false);
   const [rejected, setRejected] = useState<string | null>(null);
   const [state, setState] = useState<UploadState>({ phase: "choosing" });
 
-  const problems = recordProblems({ printerId, confirmedUnitCount: confirmedTokens.size });
+  const problems = recordProblems({
+    printer,
+    confirmedUnitCount: confirmedTokens.size,
+    checked,
+  });
   const visibleProblems = showProblems ? problems : [];
   const printerProblem = visibleProblems.find((problem) => problem.field === "printer") ?? null;
   const unitsProblem = visibleProblems.find((problem) => problem.field === "units") ?? null;
+  const checkedProblem = visibleProblems.find((problem) => problem.field === "checked") ?? null;
 
   const upload = async (chosen: ReadPrintFile) => {
     setState({ phase: "uploading", chosen });
@@ -411,14 +587,55 @@ function UploadedPrintRecord({
     }
   };
 
+  /**
+   * Check the confirmed units off through the verify the operator would run in
+   * Checkoff, at the moment they already have the answer.
+   *
+   * No second way to mark a unit printed: the same per-unit decisions, sent
+   * from here. A failure leaves a print that really is on the record with units
+   * that really are not checked off, which is why it reruns on its own.
+   */
+  const checkOff = async (input: {
+    chosen: ReadPrintFile;
+    check: UploadedPrintFileCheck;
+    link: RecordedLink;
+  }) => {
+    setState({ phase: "checking_off", ...input });
+    const decisions = input.link.units.map(
+      (unit): PrintVerifyDecision => ({
+        part_id: unit.part_id,
+        unit_index: unit.unit_index,
+        result: "confirmed",
+      }),
+    );
+    try {
+      await verifyPrinterCheckoff({ link_id: input.link.id, decisions });
+      onFinished({
+        filename: input.link.filename,
+        unitCount: decisions.length,
+        units: "checked_off",
+      });
+    } catch (error) {
+      setState({
+        phase: "checkoff_failed",
+        ...input,
+        message: failureMessage(error, "The server did not check the units off."),
+      });
+    }
+  };
+
   const record = async (chosen: ReadPrintFile, check: UploadedPrintFileCheck) => {
     setShowProblems(true);
-    if (problems.length > 0) return;
+    if (problems.length > 0 || printer === null || checked === null) return;
     setState({ phase: "saving", chosen, check });
+    let link: RecordedLink | null = null;
     try {
       const result = await assignUploadedPrinterFile({
         profile_id: profileId,
-        printer_id: printerId,
+        // Omitted for a printer PrintPartner does not manage. The server records
+        // those against UNMANAGED_PRINTER_ID, so no hardware has to be
+        // registered just to say a print happened.
+        ...(printer.kind === "fleet" ? { printer_id: printer.printerId } : {}),
         filename: chosen.file.name,
         upload_token: check.upload_token,
         object_names: chosen.objectNames,
@@ -429,10 +646,7 @@ function UploadedPrintRecord({
         plan_revision_id: check.plan_revision_id,
         unit_tokens: [...confirmedTokens],
       });
-      onRecorded({
-        filename: result.link.filename,
-        unitCount: result.link.units.length,
-      });
+      link = result.link;
     } catch (error) {
       setState({
         phase: "save_failed",
@@ -441,20 +655,38 @@ function UploadedPrintRecord({
         message: failureMessage(error, "The server did not accept the record."),
       });
     }
+    if (link === null) return;
+
+    // The print is on the record from here on, whatever the check-off does.
+    onPrintRecorded();
+    if (checked === "not_checked") {
+      onFinished({
+        filename: link.filename,
+        unitCount: link.units.length,
+        units: "awaiting_check",
+      });
+      return;
+    }
+    await checkOff({ chosen, check, link });
   };
 
-  const answered =
-    state.phase === "confirming" || state.phase === "saving" || state.phase === "save_failed"
-      ? {
-          chosen: state.chosen,
-          check: state.check,
-          summary: printFileCheckSummary({
-            preview: state.check,
-            filename: state.chosen.file.name,
-          }),
-        }
-      : null;
-  const busy = state.phase === "reading" || state.phase === "uploading" || state.phase === "saving";
+  const file = answeredFile(state);
+  const answered = file
+    ? {
+        ...file,
+        summary: printFileCheckSummary({
+          preview: file.check,
+          filename: file.chosen.file.name,
+        }),
+      }
+    : null;
+  const busy =
+    state.phase === "reading" ||
+    state.phase === "uploading" ||
+    state.phase === "saving" ||
+    state.phase === "checking_off";
+  // The record is written, so the form is history and must not be resubmitted.
+  const written = state.phase === "checking_off" || state.phase === "checkoff_failed";
 
   return (
     <div className="stack-section">
@@ -477,7 +709,7 @@ function UploadedPrintRecord({
           size="shop"
           variant="outline"
           className="self-start"
-          disabled={busy}
+          disabled={busy || written}
           onClick={() => inputRef.current?.click()}
         >
           <Upload className="mr-1.5 h-4 w-4" aria-hidden />
@@ -565,18 +797,28 @@ function UploadedPrintRecord({
                 <select
                   id={`${fieldPrefix}-printer`}
                   className="min-h-11 w-full rounded-md border border-input bg-background px-3 text-body"
-                  value={printerId}
+                  value={printerSelectValue(printer)}
+                  disabled={written}
                   aria-invalid={printerProblem ? true : undefined}
                   aria-describedby={printerProblem ? printerErrorId : undefined}
-                  onChange={(event) => setPrinterId(event.target.value)}
+                  onChange={(event) => setPrinter(readPrinterAnswer(event.target.value))}
                 >
-                  <option value="">Choose a printer…</option>
-                  {printers.map((printer) => (
-                    <option key={printer.id} value={printer.id}>
-                      {printer.name}
-                    </option>
-                  ))}
+                  <option value="">Choose an answer…</option>
+                  {printers.length > 0 ? (
+                    <optgroup label="Your printers">
+                      {printers.map((machine) => (
+                        <option key={machine.id} value={machine.id}>
+                          {machine.name}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ) : null}
+                  <option value={UNMANAGED_PRINTER_ID}>{UNMANAGED_PRINTER_NAME}</option>
                 </select>
+                <p className="text-meta text-muted-foreground">
+                  A print made elsewhere does not need a registered printer. Pick the last answer
+                  when PrintPartner does not manage the machine that ran it.
+                </p>
                 {printerProblem ? (
                   <p id={printerErrorId} className="text-meta text-destructive">
                     {printerProblem.message}
@@ -589,6 +831,7 @@ function UploadedPrintRecord({
                 caption={suggestionCaption(answered.check.suggestion_basis)}
                 unlabeledNames={answered.check.unlabeled_names}
                 confirmedTokens={confirmedTokens}
+                disabled={written}
                 onToggle={(token, confirmed) =>
                   setConfirmedTokens((current) => {
                     const next = new Set(current);
@@ -601,6 +844,52 @@ function UploadedPrintRecord({
                 error={unitsProblem}
               />
 
+              <fieldset
+                className="stack-row"
+                disabled={written}
+                aria-invalid={checkedProblem ? true : undefined}
+                aria-describedby={checkedProblem ? checkedErrorId : undefined}
+              >
+                <legend className="text-body font-medium">Have you checked the parts?</legend>
+                <label className="flex min-h-11 items-start gap-2 py-1 text-body">
+                  <input
+                    type="radio"
+                    className="mt-1.5 h-4 w-4"
+                    name={`${fieldPrefix}-checked`}
+                    checked={checked === "checked"}
+                    onChange={() => setChecked("checked")}
+                  />
+                  <span>
+                    <span className="block font-medium">Printed and checked</span>
+                    <span className="block text-meta text-muted-foreground">
+                      You have looked at the parts and they are good. The confirmed units are
+                      checked off as soon as this is recorded.
+                    </span>
+                  </span>
+                </label>
+                <label className="flex min-h-11 items-start gap-2 py-1 text-body">
+                  <input
+                    type="radio"
+                    className="mt-1.5 h-4 w-4"
+                    name={`${fieldPrefix}-checked`}
+                    checked={checked === "not_checked"}
+                    onChange={() => setChecked("not_checked")}
+                  />
+                  <span>
+                    <span className="block font-medium">Printed, not checked yet</span>
+                    <span className="block text-meta text-muted-foreground">
+                      The units wait in Checkoff until you have looked at the parts. Reject one
+                      there if it came out wrong.
+                    </span>
+                  </span>
+                </label>
+                {checkedProblem ? (
+                  <p id={checkedErrorId} className="text-meta text-destructive">
+                    {checkedProblem.message}
+                  </p>
+                ) : null}
+              </fieldset>
+
               {state.phase === "save_failed" ? (
                 <InlineOperationError
                   title={`Could not record ${state.chosen.file.name}`}
@@ -610,14 +899,55 @@ function UploadedPrintRecord({
                 />
               ) : null}
 
-              <Button
-                size="shop"
-                className="self-start"
-                loading={state.phase === "saving"}
-                onClick={() => void record(answered.chosen, answered.check)}
-              >
-                Record this print
-              </Button>
+              {state.phase === "checking_off" ? (
+                <p className="text-body text-muted-foreground" role="status">
+                  Checking {requiredUnitCount(state.link.units.length)} off…
+                </p>
+              ) : null}
+
+              {state.phase === "checkoff_failed" ? (
+                <div className="stack-row">
+                  <InlineOperationError
+                    title={`${state.link.filename} is on the record, and its units are not checked off`}
+                    message={`${state.message} The print itself was recorded, so do not record it again. ${requiredUnitCount(
+                      state.link.units.length,
+                    )} ${state.link.units.length === 1 ? "is" : "are"} still waiting to be checked.`}
+                    onRetry={() =>
+                      void checkOff({
+                        chosen: state.chosen,
+                        check: state.check,
+                        link: state.link,
+                      })
+                    }
+                    retryLabel="Check the units off again"
+                  />
+                  <Button
+                    size="shop"
+                    variant="outline"
+                    className="self-start"
+                    onClick={() =>
+                      onFinished({
+                        filename: state.link.filename,
+                        unitCount: state.link.units.length,
+                        units: "awaiting_check",
+                      })
+                    }
+                  >
+                    Leave the units for Checkoff
+                  </Button>
+                </div>
+              ) : null}
+
+              {written ? null : (
+                <Button
+                  size="shop"
+                  className="self-start"
+                  loading={state.phase === "saving"}
+                  onClick={() => void record(answered.chosen, answered.check)}
+                >
+                  Record this print
+                </Button>
+              )}
             </>
           ) : null}
         </>
@@ -632,6 +962,7 @@ function UnitConfirmation({
   caption,
   unlabeledNames,
   confirmedTokens,
+  disabled,
   onToggle,
   errorId,
   error,
@@ -640,6 +971,8 @@ function UnitConfirmation({
   caption: string;
   unlabeledNames: readonly string[];
   confirmedTokens: ReadonlySet<string>;
+  /** True once the record is written, so the answers are history to read. */
+  disabled: boolean;
   onToggle: (token: string, confirmed: boolean) => void;
   errorId: string;
   error: RecordFieldError | null;
@@ -647,6 +980,7 @@ function UnitConfirmation({
   return (
     <fieldset
       className="stack-row"
+      disabled={disabled}
       aria-invalid={error ? true : undefined}
       aria-describedby={error ? errorId : undefined}
     >
