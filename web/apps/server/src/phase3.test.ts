@@ -10,6 +10,7 @@ import { loadConfig } from "./config.js";
 import { createSelfHostPorts } from "./adapters/self-host/index.js";
 import { buildStlTreePayload, progressSummary } from "@print-partner/domain";
 import { exportStlPackJobMessage, STL_EXPORT_MISSING_HINT } from "./services/export-stl-pack.js";
+import { captureAcceptedOperationalExport } from "./services/accepted-operational-export.js";
 import { acceptedPlanBasis } from "./db/accepted-plan-progress.js";
 import { parseRequiredUnitToken } from "./services/required-units.js";
 
@@ -239,6 +240,71 @@ describe("Phase 3 APIs", () => {
     const job = jobRes.json() as { status: string; result?: { root_path?: string } };
     expect(job.status).toBe("done");
     expect(job.result?.root_path).toBeTruthy();
+
+    await app.close();
+    await ports.db.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("export STL pack restricted to named Required units", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pp-exp-units-"));
+    process.env.PRINT_PARTNER_DATA_DIR = dir;
+    const config = loadConfig();
+    const ports = createSelfHostPorts(dir);
+    await ports.db.connect();
+    const repo = ports.repository;
+    const source = repo.createSource({ name: "R", url: "https://github.com/a/b" });
+    const repoPath = join(dir, "repos", String(source.id));
+    mkdirSync(join(repoPath, "p"), { recursive: true });
+    writeFileSync(join(repoPath, "p", "a.stl"), "stl-a");
+    writeFileSync(join(repoPath, "p", "b.stl"), "stl-b");
+    repo.updateSource(source.id, { local_path: repoPath });
+    repo.updateImportRules(source.id, ["p/"]);
+    const plan = repo.createProfile("UnitTokenPlan", source.id);
+    applyTrackedPlan(repo, source.id, plan.id);
+
+    const captured = captureAcceptedOperationalExport({ repository: repo, profileId: plan.id });
+    if (captured.kind !== "ready") throw new Error("Accepted export is not ready");
+    const tokens = captured.export.parts.flatMap((part) => part.units.map((unit) => unit.token));
+    expect(tokens.length).toBeGreaterThan(1);
+
+    const app = await buildApp(config, ports);
+    const malformed = await app.inject({
+      method: "POST",
+      url: "/jobs/export-stl-pack",
+      payload: { profile_id: plan.id, unit_tokens: ["not-a-token"] },
+    });
+    expect(malformed.statusCode).toBe(400);
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/jobs/export-stl-pack",
+      payload: { profile_id: plan.id, unit_tokens: [tokens[0]] },
+    });
+    expect(res.statusCode).toBe(200);
+    const { job_id } = res.json() as { job_id: string };
+    await new Promise((r) => setTimeout(r, 300));
+    const job = (await app.inject({ method: "GET", url: `/jobs/${job_id}` })).json() as {
+      status: string;
+      result?: { file_total?: number };
+    };
+    expect(job.status).toBe("done");
+    expect(job.result?.file_total).toBe(1);
+
+    const stale = await app.inject({
+      method: "POST",
+      url: "/jobs/export-stl-pack",
+      payload: { profile_id: plan.id, unit_tokens: [`ppu_${"c".repeat(32)}`] },
+    });
+    expect(stale.statusCode).toBe(200);
+    const staleJobId = (stale.json() as { job_id: string }).job_id;
+    await new Promise((r) => setTimeout(r, 300));
+    const staleJob = (await app.inject({ method: "GET", url: `/jobs/${staleJobId}` })).json() as {
+      status: string;
+      error?: string | null;
+    };
+    expect(staleJob.status).toBe("error");
+    expect(staleJob.error).toMatch(/Required units are in the Accepted Plan/);
 
     await app.close();
     await ports.db.close();

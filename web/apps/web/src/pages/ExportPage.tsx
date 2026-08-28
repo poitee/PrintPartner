@@ -1,5 +1,6 @@
 import { lazy, Suspense, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
+import type { ProductionRoute } from "@print-partner/contracts";
 import { FileArchive } from "lucide-react";
 import BuildSummaryHeader from "../components/build/BuildSummaryHeader";
 import PageHeader from "../components/layout/PageHeader";
@@ -10,6 +11,10 @@ import ExportRecentPanel from "../components/export/ExportRecentPanel";
 import PartsManifestTransfer from "../components/export/PartsManifestTransfer";
 import ProductionSelectionPanel from "../components/export/ProductionSelectionPanel";
 import ProductionRulesPanel from "../components/export/ProductionRulesPanel";
+import ProductionRouteChangeDialog from "../components/export/ProductionRouteChangeDialog";
+import ProductionRouteQuestion from "../components/export/ProductionRouteQuestion";
+import StlRoutePanel from "../components/export/StlRoutePanel";
+import ExternalPrintRoutePanel from "../components/export/ExternalPrintRoutePanel";
 import SlicerLinksPanel from "../components/export/SlicerLinksPanel";
 import SlicerHandoffPanel from "../components/export/SlicerHandoffPanel";
 import WorkPackageCard from "../components/export/WorkPackageCard";
@@ -25,6 +30,7 @@ import { usePlanWorkspace } from "../context/PlanWorkspaceContext";
 import { useProfileSelection } from "../context/ProfileContext";
 import { useEngineHealth } from "../hooks/useEngineHealth";
 import { useProductionSelection } from "../hooks/useProductionSelection";
+import { useProductionSetup } from "../queries/productionSetup";
 import { useSourcesQuery } from "../queries/sources";
 import { useRoleFilamentsQuery } from "../queries/roleFilaments";
 import {
@@ -39,9 +45,16 @@ import {
   selectedProductionTokens,
   toggleProductionUnit,
 } from "../lib/productionSelection";
-import { projectWorkPackages } from "../lib/workPackageProjection";
+import {
+  productionRouteChange,
+  projectWorkPackages,
+  type ProductionRouteChange,
+} from "../lib/workPackageProjection";
 import {
   firstUnfinishedProductionTask,
+  PRODUCTION_ROUTE_LABEL,
+  PRODUCTION_TASK_IDS,
+  PRODUCTION_TASK_ROUTE,
   productionStageAlias,
   productionTaskFromParam,
   productionTasks,
@@ -58,17 +71,36 @@ import {
 type OperationFailure = Readonly<{ message: string; retry: () => void }>;
 
 /**
+ * The line under the task list heading. It never counts steps, because the
+ * number of steps depends on the route the operator picked.
+ */
+const TASK_LIST_DESCRIPTION: Readonly<Record<ProductionRoute, string>> = {
+  plates:
+    "Plate preparation stays together. Production reopens at the first unfinished task.",
+  stl: "Production reopens at the first unfinished task.",
+  external:
+    "All three steps happen in one panel. Production reopens at the first unfinished task.",
+};
+
+/**
  * Production — the Build's work packages.
  *
- * The old four numbered tabs promised one uninterrupted pass. The real task
- * leaves the product: export, slice somewhere else, come back later with
- * G-code, send it, wait, then verify in Checkoff. So this page shows work
- * packages with a durable status and four resumable tasks projected from real
- * records (production setup, Plate revision, export jobs, printer checkoff
- * links), not from a `?stage=` URL parameter. Choosing units, assigning printers,
- * and arranging Plates stay together because they produce one Plate revision.
+ * The page asks one question before it shows any task list: how do you want to
+ * make these units? Making Plates for linked printers, taking the unit files,
+ * and recording a print that already happened elsewhere are not three lengths
+ * of one flow. They differ in what they produce and whether a printer is
+ * involved at all, so each route owns its own task list and the tasks of the
+ * other two are absent rather than greyed out.
  *
- * The old `?stage=` and `?select=` links still work as aliases.
+ * Inside a route the tasks are resumable, not a numbered pass. The real job
+ * leaves the product: export, slice somewhere else, come back later with
+ * G-code, send it, wait, then verify in Checkoff. Statuses come from real
+ * records (production setup, Plate revision, export jobs, printer checkoff
+ * links), not from a `?stage=` URL parameter. There is no step count anywhere,
+ * because the number of steps now depends on the answer.
+ *
+ * The old `?stage=` and `?select=` links still work as aliases, and they land
+ * on the Plates route where they were written.
  */
 export default function ExportPage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -88,6 +120,14 @@ export default function ExportPage() {
   const [plateFailure, setPlateFailure] = useState<OperationFailure | null>(null);
   const [exportFailure, setExportFailure] = useState<OperationFailure | null>(null);
   const [sendFailure, setSendFailure] = useState<OperationFailure | null>(null);
+  /**
+   * The route answer is durable Build state, so these three hold only what the
+   * operator is doing right now: reopening the question to change the answer,
+   * a lossy change waiting for confirmation, and a save that failed.
+   */
+  const [changingRoute, setChangingRoute] = useState(false);
+  const [pendingRouteChange, setPendingRouteChange] = useState<ProductionRouteChange | null>(null);
+  const [routeFailure, setRouteFailure] = useState<OperationFailure | null>(null);
   const roleFilamentsQuery = useRoleFilamentsQuery(
     selectedProfileId,
     Boolean(health?.ok),
@@ -147,12 +187,16 @@ export default function ExportPage() {
     [workspaceQuery.data],
   );
   const selectParam = searchParams.get("select");
-  const { selection, setSelection, setupSaving, setupError, setup } = useProductionSelection(
+  const { selection, setSelection, setupSaving, setupError } = useProductionSelection(
     selectableUnits,
     selectParam,
     selectedProfileId,
   );
   const selectedTokens = selectedProductionTokens(selectableUnits, selection);
+  const productionSetup = useProductionSetup(selectedProfileId, engineState === "ready");
+  const setup = productionSetup.data;
+  /** Null until the operator answers the question. There is no default route. */
+  const route = setup?.route ?? null;
 
   const projection = useMemo(
     () =>
@@ -191,28 +235,51 @@ export default function ExportPage() {
     ? `Revision ${workspace.plate_revision_number}`
     : "Assign printers first";
   const tasks = useMemo(() => {
-    if (!projection.bench) return [];
-    return productionTasks({
-      pkg: projection.bench,
-      workspace,
-      selectedCount: selectedTokens.length,
-      totalUnitCount: selectableUnits.length,
-      printerCount,
-      sendPrinterCount: sendFleetQuery.data?.sendCount ?? 0,
-      dispatchedFilenames: [...projection.active, ...projection.recent].map(
-        (entry) => entry.title,
-      ),
-      exportError: exportFailure?.message ?? null,
-      sendError: sendFailure?.message ?? null,
-      plateError: plateFailure?.message ?? null,
-      assignError: assignFailure?.message ?? null,
-    });
+    const bench = projection.bench;
+    if (!bench || route == null) return [];
+    switch (route) {
+      case "plates":
+        return productionTasks({
+          route,
+          pkg: bench,
+          workspace,
+          selectedCount: selectedTokens.length,
+          totalUnitCount: selectableUnits.length,
+          printerCount,
+          sendPrinterCount: sendFleetQuery.data?.sendCount ?? 0,
+          dispatchedFilenames: [...projection.active, ...projection.recent].map(
+            (entry) => entry.title,
+          ),
+          exportError: exportFailure?.message ?? null,
+          sendError: sendFailure?.message ?? null,
+          plateError: plateFailure?.message ?? null,
+          assignError: assignFailure?.message ?? null,
+        });
+      case "stl":
+        return productionTasks({
+          route,
+          pkg: bench,
+          selectedCount: selectedTokens.length,
+          totalUnitCount: selectableUnits.length,
+        });
+      case "external":
+        return productionTasks({
+          route,
+          pkg: bench,
+          recordedPrintCount: projection.active.length + projection.recent.length,
+        });
+      default: {
+        const _exhaustive: never = route;
+        return _exhaustive;
+      }
+    }
   }, [
     assignFailure,
     exportFailure,
     plateFailure,
     printerCount,
     projection,
+    route,
     selectableUnits.length,
     selectedTokens.length,
     sendFailure,
@@ -224,12 +291,18 @@ export default function ExportPage() {
    * Resume point. With no task in the URL the page opens the first unfinished
    * task, so a reload or a move to another device lands where the work stopped.
    * An explicit `?task=` or legacy `?stage=` still wins, so old links work and
-   * the user can jump to any available task.
+   * the user can jump to any available task. A link naming a task from another
+   * route is ignored, because that task does not exist here.
    */
-  const requestedTask = productionTaskFromParam(
+  const paramTask = productionTaskFromParam(
     searchParams.get("task") ?? searchParams.get("stage"),
   );
-  const resumeTask = tasks.length > 0 ? firstUnfinishedProductionTask(tasks) : "prepare-plates";
+  const requestedTask =
+    paramTask != null && route != null && PRODUCTION_TASK_ROUTE[paramTask] === route
+      ? paramTask
+      : null;
+  const resumeTask =
+    route != null && tasks.length > 0 ? firstUnfinishedProductionTask({ tasks, route }) : null;
   /**
    * An old link may point at a task that is genuinely blocked now. The link
    * still works, but it opens the resume task and says what is missing rather
@@ -238,14 +311,19 @@ export default function ExportPage() {
   const blockedRequest = requestedTask
     ? tasks.find((task) => task.id === requestedTask && task.state === "blocked")
     : undefined;
-  const activeTaskId: ProductionTaskId =
+  const activeTaskId: ProductionTaskId | null =
     requestedTask && !blockedRequest ? requestedTask : resumeTask;
   const activeTask = tasks.find((task) => task.id === activeTaskId);
 
   const openTask = (taskId: ProductionTaskId) => {
     const params = new URLSearchParams(searchParams);
     params.set("task", taskId);
-    params.set("stage", productionStageAlias(taskId));
+    const stage = productionStageAlias(taskId);
+    if (stage) {
+      params.set("stage", stage);
+    } else {
+      params.delete("stage");
+    }
     setSearchParams(params, { replace: true });
   };
 
@@ -254,6 +332,61 @@ export default function ExportPage() {
     params.delete("task");
     params.delete("stage");
     setSearchParams(params, { replace: true });
+  };
+
+  /**
+   * The answer is durable, so it goes straight to the production setup. The
+   * patch names only `route`, which is how the Required-unit selection survives
+   * a switch: nothing else in the record is touched, and SC 3.3.7 Redundant
+   * Entry is satisfied without asking the operator to choose units again.
+   *
+   * A failed save keeps the answer on screen with an inline Retry rather than a
+   * toast, so the problem cannot scroll away or time out.
+   */
+  const saveRoute = (next: ProductionRoute) => {
+    setRouteFailure(null);
+    void productionSetup
+      .save({ route: next })
+      .then(() => {
+        setPendingRouteChange(null);
+        setChangingRoute(false);
+      })
+      .catch((error: unknown) => {
+        setRouteFailure({
+          message: `Could not save how you want to make these units: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+          retry: () => saveRoute(next),
+        });
+      });
+  };
+
+  /**
+   * A switch that leaves no work behind happens at once. A switch that steps
+   * away from Plate work says what it steps away from, and waits for an
+   * explicit action. Nothing is deleted either way, so the operator can always
+   * come back.
+   */
+  const requestRoute = (next: ProductionRoute) => {
+    if (next === route) {
+      setChangingRoute(false);
+      return;
+    }
+    if (route == null || projection.bench == null) {
+      saveRoute(next);
+      return;
+    }
+    const change = productionRouteChange({
+      pkg: projection.bench,
+      from: route,
+      to: next,
+      printerAssignments: setup?.printer_assignments ?? [],
+    });
+    if (!change.confirm) {
+      saveRoute(next);
+      return;
+    }
+    setPendingRouteChange(change);
   };
 
   const taskFailure = (taskId: ProductionTaskId): OperationFailure | null => {
@@ -300,6 +433,52 @@ export default function ExportPage() {
       ? `${planName} · ${includedParts.length} part${includedParts.length === 1 ? "" : "s"}`
       : planName;
 
+  /**
+   * Choosing Required units is the same question on the Plates route and the
+   * unit-files route, so both open this one section rather than two that could
+   * drift apart.
+   */
+  const unitSelectionSection = (
+    <section
+      id="plate-builder-units"
+      className="scroll-mt-4 space-y-3 rounded-lg border border-border bg-card p-4"
+      aria-labelledby="production-choose-units-heading"
+    >
+      <div className="space-y-1">
+        <h4 id="production-choose-units-heading" className="text-sm font-semibold">
+          Choose Required units
+        </h4>
+        <p className="text-xs text-muted-foreground">
+          Completed units stay out unless you choose them again.
+        </p>
+      </div>
+      {setupSaving ? (
+        <p className="text-xs text-muted-foreground" role="status">Saving production setup…</p>
+      ) : null}
+      {setupError ? (
+        <p className="text-sm text-destructive" role="alert">
+          Production choices could not be saved:{" "}
+          {setupError instanceof Error ? setupError.message : String(setupError)}
+        </p>
+      ) : null}
+      {selectableUnits.length > 0 ? (
+        <ProductionSelectionPanel
+          units={selectableUnits}
+          selection={selection}
+          onToggle={(token) => setSelection((current) => toggleProductionUnit(current, token))}
+          onClearGroup={(field, value) => setSelection((current) =>
+            clearProductionSelectionGroup(current, selectableUnits, field, value)
+          )}
+          onSelectAll={() => setSelection(new Set(selectableUnits.map((unit) => unit.token)))}
+          onSelectIncomplete={() => setSelection(new Set(
+            selectableUnits.filter((unit) => !unit.completed).map((unit) => unit.token),
+          ))}
+          onClearAll={() => setSelection(new Set())}
+        />
+      ) : null}
+    </section>
+  );
+
   const preparePlatesPanel = (
     <div className="space-y-4">
       <nav
@@ -321,44 +500,7 @@ export default function ExportPage() {
           </a>
         ))}
       </nav>
-      <section
-        id="plate-builder-units"
-        className="scroll-mt-4 space-y-3 rounded-lg border border-border bg-card p-4"
-        aria-labelledby="production-choose-units-heading"
-      >
-        <div className="space-y-1">
-          <h4 id="production-choose-units-heading" className="text-sm font-semibold">
-            Choose Required units
-          </h4>
-          <p className="text-xs text-muted-foreground">
-            Completed units stay out unless you choose them again.
-          </p>
-        </div>
-        {setupSaving ? (
-          <p className="text-xs text-muted-foreground" role="status">Saving production setup…</p>
-        ) : null}
-        {setupError ? (
-          <p className="text-sm text-destructive" role="alert">
-            Production choices could not be saved:{" "}
-            {setupError instanceof Error ? setupError.message : String(setupError)}
-          </p>
-        ) : null}
-        {selectableUnits.length > 0 ? (
-          <ProductionSelectionPanel
-            units={selectableUnits}
-            selection={selection}
-            onToggle={(token) => setSelection((current) => toggleProductionUnit(current, token))}
-            onClearGroup={(field, value) => setSelection((current) =>
-              clearProductionSelectionGroup(current, selectableUnits, field, value)
-            )}
-            onSelectAll={() => setSelection(new Set(selectableUnits.map((unit) => unit.token)))}
-            onSelectIncomplete={() => setSelection(new Set(
-              selectableUnits.filter((unit) => !unit.completed).map((unit) => unit.token),
-            ))}
-            onClearAll={() => setSelection(new Set())}
-          />
-        ) : null}
-      </section>
+      {unitSelectionSection}
 
       {selectedProfileId != null ? (
         <>
@@ -459,6 +601,26 @@ export default function ExportPage() {
     </Suspense>
   );
 
+  const stlPanel =
+    selectedProfileId != null ? (
+      <StlRoutePanel
+        profileId={selectedProfileId}
+        selectedTokens={selectedTokens}
+        totalUnitCount={selectableUnits.length}
+        onOpenUnitSelection={() => openTask("choose-units")}
+      />
+    ) : null;
+
+  const externalPanel =
+    selectedProfileId != null ? (
+      <ExternalPrintRoutePanel
+        profileId={selectedProfileId}
+        onRecorded={() => {
+          void checkoffLinksQuery.refetch();
+        }}
+      />
+    ) : null;
+
   const panelFor = (taskId: ProductionTaskId) => {
     switch (taskId) {
       case "prepare-plates":
@@ -468,6 +630,16 @@ export default function ExportPage() {
       case "add-sliced-file":
       case "send-or-start":
         return sendPanel;
+      case "choose-units":
+        return unitSelectionSection;
+      case "download-stl":
+        return stlPanel;
+      // Picking the file, attributing it and confirming happen together in one
+      // panel, so all three rows open it.
+      case "pick-print-file":
+      case "attribute-units":
+      case "confirm-record":
+        return externalPanel;
     }
   };
 
@@ -478,7 +650,7 @@ export default function ExportPage() {
         accent
         eyebrow={planIdentity ? `Make · ${planIdentity}` : "Make"}
         title="Production"
-        description="Choose Required units, assign them to printers, prepare Plates, and send them to print."
+        description="Decide how this Build's Required units get made, then work through the tasks for that route."
       />
       <BuildSummaryHeader currentStageId="production" />
 
@@ -553,11 +725,71 @@ export default function ExportPage() {
                 ) : null
               }
             >
-              <TaskList
-                title="Prepare this work package"
-                description="Plate preparation stays together. Production reopens at the first unfinished task."
-                tasks={taskRows}
-              />
+              {route == null || changingRoute ? (
+                <ProductionRouteQuestion
+                  key={route ?? "unanswered"}
+                  value={route}
+                  saving={productionSetup.saving}
+                  error={
+                    routeFailure
+                      ? { message: routeFailure.message, onRetry: routeFailure.retry }
+                      : null
+                  }
+                  onSubmit={requestRoute}
+                  onCancel={
+                    route != null
+                      ? () => {
+                          setChangingRoute(false);
+                          setRouteFailure(null);
+                        }
+                      : undefined
+                  }
+                />
+              ) : (
+                <>
+                  <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                    <p className="text-sm text-foreground">
+                      <span className="text-muted-foreground">Route: </span>
+                      <span className="font-medium">{PRODUCTION_ROUTE_LABEL[route]}</span>
+                    </p>
+                    {projection.routeLocked ? (
+                      // A file for this Build is already at a printer, so the
+                      // result is physical and belongs to Checkoff. GOV.UK
+                      // advises against disabling a control, so this is
+                      // read-only text with the route out, not a dead button.
+                      <p className="text-xs text-muted-foreground">
+                        A file is already at a printer, so the route stays as it is. Track the
+                        printed result in{" "}
+                        <Link
+                          className="font-medium underline underline-offset-2"
+                          to={progressRoute(selectedProfileId)}
+                        >
+                          Checkoff
+                        </Link>
+                        .
+                      </p>
+                    ) : (
+                      // GOV.UK check answers: a Change link says what it
+                      // changes to anyone who cannot see which section it sits
+                      // beside.
+                      <Button
+                        type="button"
+                        variant="link"
+                        className="h-auto min-h-11 p-0"
+                        aria-label="Change how you want to make these units"
+                        onClick={() => setChangingRoute(true)}
+                      >
+                        Change
+                      </Button>
+                    )}
+                  </div>
+                  <TaskList
+                    title="Prepare this work package"
+                    description={TASK_LIST_DESCRIPTION[route]}
+                    tasks={taskRows}
+                  />
+                </>
+              )}
               {blockedRequest ? (
                 <p className="text-sm text-muted-foreground" role="status">
                   {blockedRequest.label} is not available yet. {blockedRequest.disabledReason}{" "}
@@ -572,25 +804,30 @@ export default function ExportPage() {
                   >
                     {activeTask.label}
                   </h3>
-                  {panelFor(activeTaskId)}
+                  {activeTaskId ? panelFor(activeTaskId) : null}
                 </section>
               ) : null}
             </WorkPackageCard>
           ) : null}
 
           <div className="flex flex-wrap gap-2">
-            <Button
-              variant="secondary"
-              className="min-h-11"
-              onClick={() => {
-                setSelection(new Set(
-                  selectableUnits.filter((unit) => !unit.completed).map((unit) => unit.token),
-                ));
-                openTask("prepare-plates");
-              }}
-            >
-              Prepare more units
-            </Button>
+            {/* Only the two routes that consume a unit selection get this
+                shortcut. Recording a print picks its own units inside the
+                panel. */}
+            {route === "plates" || route === "stl" ? (
+              <Button
+                variant="secondary"
+                className="min-h-11"
+                onClick={() => {
+                  setSelection(new Set(
+                    selectableUnits.filter((unit) => !unit.completed).map((unit) => unit.token),
+                  ));
+                  openTask(PRODUCTION_TASK_IDS[route][0]);
+                }}
+              >
+                Prepare more units
+              </Button>
+            ) : null}
             <Button variant="ghost" size="sm" asChild>
               <Link to={progressRoute(selectedProfileId)}>Open Checkoff</Link>
             </Button>
@@ -613,6 +850,19 @@ export default function ExportPage() {
           ) : null}
         </div>
       )}
+
+      <ProductionRouteChangeDialog
+        change={pendingRouteChange}
+        saving={productionSetup.saving}
+        error={pendingRouteChange && routeFailure ? routeFailure.message : null}
+        onConfirm={() => {
+          if (pendingRouteChange) saveRoute(pendingRouteChange.to);
+        }}
+        onCancel={() => {
+          setPendingRouteChange(null);
+          setRouteFailure(null);
+        }}
+      />
 
       {selectedProfileId != null && (
         <ShareBuildExportDialog

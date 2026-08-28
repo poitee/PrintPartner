@@ -1,12 +1,15 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type {
-  AcceptedPlateExportRecord,
-  AcceptedPlateWorkspace,
-  RequiredUnitToken,
+import {
+  defaultProductionSetup,
+  type AcceptedPlateExportRecord,
+  type AcceptedPlateWorkspace,
+  type ProductionPrinterAssignment,
+  type ProductionRoute,
+  type RequiredUnitToken,
 } from "@print-partner/contracts";
 import type { PrinterCheckoffLink } from "../api/endpoints/checkoff";
 
@@ -64,10 +67,34 @@ const readyWorkspace = {
   unassigned: [],
 } as unknown as AcceptedPlateWorkspace;
 
+/** A Build with printers but no Plate revision yet, so a route switch loses nothing. */
+const setupWorkspace = {
+  kind: "setup",
+  basis,
+  expected_plate_revision_id: null,
+  printers: [printer],
+  units: [
+    {
+      token: TOKEN_A,
+      object_name: `bracket__${TOKEN_A}`,
+      filename: "bracket.stl",
+      relative_path: "",
+      source_directory: "",
+      source_layer: "kit",
+      role: "accent",
+      filament_color_id: null,
+      completed: false,
+    },
+  ],
+} as unknown as AcceptedPlateWorkspace;
+
 const state = {
   workspace: readyWorkspace as AcceptedPlateWorkspace | undefined,
   exportRecords: [] as AcceptedPlateExportRecord[],
   checkoffLinks: [] as PrinterCheckoffLink[],
+  route: "plates" as ProductionRoute | null,
+  printerAssignments: [] as ProductionPrinterAssignment[],
+  save: vi.fn<(patch: unknown) => Promise<unknown>>(),
 };
 
 vi.mock("../components/build/BuildSummaryHeader", () => ({
@@ -100,6 +127,12 @@ vi.mock("../components/export/PrinterSendPanel", () => ({
 vi.mock("../components/export/accepted-plates/AcceptedPlateSection", () => ({
   default: ({ view }: { view?: string }) => <div data-testid={`panel-plates-${view ?? "all"}`} />,
 }));
+vi.mock("../components/export/StlRoutePanel", () => ({
+  default: () => <div data-testid="panel-stl" />,
+}));
+vi.mock("../components/export/ExternalPrintRoutePanel", () => ({
+  default: () => <div data-testid="panel-external" />,
+}));
 vi.mock("../components/share/ShareBuildExportDialog", () => ({ default: () => null }));
 
 vi.mock("../hooks/useEngineHealth", () => ({
@@ -131,7 +164,7 @@ vi.mock("../queries/acceptedPlates", () => ({
   useAcceptedPlateExportJobsQuery: () => ({ data: state.exportRecords }),
 }));
 vi.mock("../components/export/useProductionCheckoffLinks", () => ({
-  useProductionCheckoffLinks: () => ({ data: state.checkoffLinks }),
+  useProductionCheckoffLinks: () => ({ data: state.checkoffLinks, refetch: vi.fn() }),
 }));
 vi.mock("../components/export/useProductionSendFleet", () => ({
   useProductionSendFleet: () => ({ data: { sendCount: 1, bambuCount: 0 } }),
@@ -140,10 +173,22 @@ vi.mock("../hooks/useProductionSelection", () => ({
   useProductionSelection: (units: readonly { token: RequiredUnitToken }[]) => ({
     selection: new Set(units.map((entry) => entry.token)),
     setSelection: vi.fn(),
-    setup: undefined,
     setupLoading: false,
     setupSaving: false,
     setupError: null,
+  }),
+}));
+vi.mock("../queries/productionSetup", () => ({
+  useProductionSetup: () => ({
+    data: {
+      ...defaultProductionSetup(1),
+      route: state.route,
+      printer_assignments: state.printerAssignments,
+    },
+    isPending: false,
+    saving: false,
+    save: state.save,
+    saveError: null,
   }),
 }));
 
@@ -182,10 +227,28 @@ function exportRecord(): AcceptedPlateExportRecord {
   } as AcceptedPlateExportRecord;
 }
 
+function checkoffLink(): PrinterCheckoffLink {
+  return {
+    id: "link-1",
+    profile_id: 1,
+    integration_id: "int-1",
+    printer_id: "printer-1",
+    host_name: "Voron 350",
+    filename: "batch.gcode",
+    units: [{ part_id: 1, unit_index: 0, object_name: `bracket__${TOKEN_A}` }],
+    state: "awaiting_verify",
+    saw_active: true,
+    created_at: "2026-08-27T10:00:00.000Z",
+  };
+}
+
 beforeEach(() => {
   state.workspace = readyWorkspace;
   state.exportRecords = [];
   state.checkoffLinks = [];
+  state.route = "plates";
+  state.printerAssignments = [];
+  state.save = vi.fn(() => Promise.resolve(undefined));
 });
 
 afterEach(cleanup);
@@ -282,20 +345,7 @@ describe("ExportPage work packages", () => {
   });
 
   it("shows a sent package with its status and a route to Checkoff", () => {
-    state.checkoffLinks = [
-      {
-        id: "link-1",
-        profile_id: 1,
-        integration_id: "int-1",
-        printer_id: "printer-1",
-        host_name: "Voron 350",
-        filename: "batch.gcode",
-        units: [{ part_id: 1, unit_index: 0, object_name: `bracket__${TOKEN_A}` }],
-        state: "awaiting_verify",
-        saw_active: true,
-        created_at: "2026-08-27T10:00:00.000Z",
-      },
-    ];
+    state.checkoffLinks = [checkoffLink()];
     renderAt("/export");
     const active = screen.getByLabelText("batch.gcode · Needs verification");
     expect(within(active).getByText("Needs verification")).toBeTruthy();
@@ -309,5 +359,158 @@ describe("ExportPage work packages", () => {
     expect(
       screen.getByText("Accept a Plan revision with Required units before you prepare work."),
     ).toBeTruthy();
+  });
+});
+
+describe("ExportPage route question", () => {
+  const chooseRoute = (name: RegExp) => fireEvent.click(screen.getByRole("radio", { name }));
+  const continueOn = () => fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+
+  it("asks the question and shows no task list until the Build has a route", () => {
+    state.route = null;
+    renderAt("/export");
+    expect(screen.getByText("How do you want to make these units?")).toBeTruthy();
+    expect(screen.queryByLabelText("Prepare this work package")).toBeNull();
+    for (const option of screen.getAllByRole("radio")) {
+      expect((option as HTMLInputElement).checked).toBe(false);
+    }
+  });
+
+  it("will not continue without an answer", () => {
+    state.route = null;
+    renderAt("/export");
+    continueOn();
+    expect(screen.getByText("Select how you want to make these units")).toBeTruthy();
+    expect(state.save).not.toHaveBeenCalled();
+  });
+
+  it("saves the answer and touches nothing else in the setup", async () => {
+    state.route = null;
+    renderAt("/export");
+    chooseRoute(/Download the unit files/);
+    continueOn();
+    await waitFor(() => expect(state.save).toHaveBeenCalledWith({ route: "stl" }));
+  });
+
+  it("keeps a failed answer on screen with an inline Retry, not a toast", async () => {
+    state.route = null;
+    state.save = vi.fn(() => Promise.reject(new Error("Engine offline")));
+    renderAt("/export");
+    chooseRoute(/Make Plates for my printers/);
+    continueOn();
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Engine offline");
+    expect(
+      (screen.getByRole("radio", { name: /Make Plates for my printers/ }) as HTMLInputElement)
+        .checked,
+    ).toBe(true);
+
+    fireEvent.click(within(alert).getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(state.save).toHaveBeenCalledTimes(2));
+    expect(state.save.mock.calls).toEqual([[{ route: "plates" }], [{ route: "plates" }]]);
+    expect(screen.getByRole("alert").textContent).toContain("Engine offline");
+  });
+
+  it("shows only the unit-files tasks on the unit-files route", () => {
+    state.route = "stl";
+    renderAt("/export");
+    const list = screen.getByLabelText("Prepare this work package");
+    expect(within(list).getByText("Choose Required units")).toBeTruthy();
+    expect(within(list).getByText("Download the unit files")).toBeTruthy();
+    for (const absent of ["Prepare Plates", "Export for slicing", "Add sliced file", "Send or start"]) {
+      expect(within(list).queryByText(absent)).toBeNull();
+    }
+    expect(screen.getByTestId("panel-stl")).toBeTruthy();
+    expect(screen.getByText("Ready to download")).toBeTruthy();
+  });
+
+  it("shows only the record-a-print tasks on the record route", () => {
+    state.route = "external";
+    renderAt("/export");
+    const list = screen.getByLabelText("Prepare this work package");
+    for (const label of [
+      "Choose the print file",
+      "Attribute it to Required units",
+      "Confirm the record",
+    ]) {
+      expect(within(list).getAllByText(label).length).toBeGreaterThan(0);
+    }
+    expect(within(list).queryByText("Send or start")).toBeNull();
+    expect(screen.getByTestId("panel-external")).toBeTruthy();
+  });
+
+  it("names the chosen route above the tasks with a Change link", () => {
+    renderAt("/export");
+    expect(screen.getByText("Make Plates for my printers")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Change how you want to make these units" }),
+    ).toBeTruthy();
+  });
+
+  it("changes route at once when no Plate work is in the way", async () => {
+    state.workspace = setupWorkspace;
+    renderAt("/export");
+    fireEvent.click(screen.getByRole("button", { name: "Change how you want to make these units" }));
+    chooseRoute(/Download the unit files/);
+    continueOn();
+    await waitFor(() => expect(state.save).toHaveBeenCalledWith({ route: "stl" }));
+    expect(screen.queryByText("This work package will stop using:")).toBeNull();
+  });
+
+  it("names the Plate work it steps away from before changing route", async () => {
+    state.printerAssignments = [
+      { token: TOKEN_A, printer_id: "printer-1" },
+      { token: TOKEN_B, printer_id: "printer-1" },
+    ];
+    renderAt("/export");
+    fireEvent.click(screen.getByRole("button", { name: "Change how you want to make these units" }));
+    chooseRoute(/Download the unit files/);
+    continueOn();
+
+    expect(state.save).not.toHaveBeenCalled();
+    expect(screen.getByText("This work package will stop using:")).toBeTruthy();
+    expect(screen.getByText("Plate revision 2, 1 Plate")).toBeTruthy();
+    expect(screen.getByText("Printer assignments for 2 Required units")).toBeTruthy();
+    expect(screen.getByText("Your 2 chosen Required units")).toBeTruthy();
+    expect(screen.getByText(/Nothing is deleted/)).toBeTruthy();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: 'Change to "Download the unit files"' }),
+    );
+    await waitFor(() => expect(state.save).toHaveBeenCalledWith({ route: "stl" }));
+  });
+
+  it("leaves the route alone when the operator keeps it", () => {
+    state.printerAssignments = [{ token: TOKEN_A, printer_id: "printer-1" }];
+    renderAt("/export");
+    fireEvent.click(screen.getByRole("button", { name: "Change how you want to make these units" }));
+    chooseRoute(/Record a print made elsewhere/);
+    continueOn();
+    fireEvent.click(screen.getByRole("button", { name: "Keep this route" }));
+    expect(state.save).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("makes the route read-only after a send and points at Checkoff", () => {
+    state.checkoffLinks = [checkoffLink()];
+    renderAt("/export");
+    expect(
+      screen.queryByRole("button", { name: "Change how you want to make these units" }),
+    ).toBeNull();
+    const line = screen.getByText(/A file is already at a printer, so the route stays as it is/);
+    expect(within(line).getByRole("link", { name: "Checkoff" }).getAttribute("href")).toBe(
+      "/progress?profile=1",
+    );
+  });
+
+  it("shows no tabs and no step count on any route", () => {
+    for (const route of ["plates", "stl", "external"] as const) {
+      cleanup();
+      state.route = route;
+      renderAt("/export");
+      expect(screen.queryAllByRole("tab")).toHaveLength(0);
+      expect(screen.queryByText(/step \d/i)).toBeNull();
+      expect(screen.queryByText(/\bStage \d\b/)).toBeNull();
+    }
   });
 });

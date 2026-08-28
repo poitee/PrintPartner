@@ -11,7 +11,7 @@ import type {
   ReviewPart,
   UnattributedPrint,
 } from "@print-partner/contracts";
-import { engineFetch } from "../engineTransport";
+import { engineFetch, engineFetchMultipart } from "../engineTransport";
 
 /**
  * The printer-checkoff wire types live in `@print-partner/contracts`, which the
@@ -335,6 +335,18 @@ export async function previewPrinterFileAssignment(options: {
   );
 }
 
+/** The fields an assignment carries whatever the bytes came from. */
+export type PrintFileAssignmentBase = {
+  profile_id: number;
+  printer_id: string;
+  filename: string;
+  object_names: string[];
+  tracking: "host" | "manual";
+  completed: boolean;
+  plan_revision_id: number;
+  unit_tokens: string[];
+};
+
 /**
  * Commit the mapping the operator confirmed.
  *
@@ -342,17 +354,88 @@ export async function previewPrinterFileAssignment(options: {
  * Accepted Plan revision the operator was actually looking at. `unit_tokens`
  * are `${part_id}:${unit_index}` and may be empty when nothing maps yet.
  */
-export async function assignPrinterFile(options: {
+export async function assignPrinterFile(
+  options: PrintFileAssignmentBase & { remote_path?: string },
+): Promise<{ link: PrinterCheckoffLink }> {
+  return engineFetch("/printer-checkoff/file-assignments", {
+    method: "POST",
+    body: JSON.stringify(options),
+  });
+}
+
+/**
+ * An uploaded print file's check, plus the token naming the stored bytes.
+ *
+ * The server read the bytes it just took, so this reply is always the
+ * `inspected` arm. `upload_token` is what lets the assignment classify a local
+ * file exactly like one picked off a printer, and it is spent once the
+ * assignment succeeds.
+ */
+export type UploadedPrintFileCheck = PrintFileAssignmentPreview &
+  Readonly<{ upload_token: string }>;
+
+/**
+ * Narrow the upload reply before the UI switches on it.
+ *
+ * The preview fields are checked by the same parser the printer path uses, so
+ * one route cannot answer in a shape the other would reject. A reply without a
+ * usable token is a failure rather than a check the operator could act on,
+ * because nothing would identify the bytes at assignment time.
+ */
+export function parseUploadedPrintFileCheck(value: unknown): UploadedPrintFileCheck {
+  const preview = parsePrintFileAssignmentPreview(value);
+  const token =
+    typeof value === "object" && value !== null && "upload_token" in value
+      ? value.upload_token
+      : null;
+  if (typeof token !== "string" || token.trim() === "") {
+    throw new Error("The server stored the upload but did not name it, so it cannot be recorded.");
+  }
+  return { ...preview, upload_token: token };
+}
+
+/**
+ * Hand the server a print file off this computer and read what it is.
+ *
+ * Writes no Checkoff record. The bytes are stored only so the classification
+ * the operator sees is the classification the assignment is pinned to, which is
+ * what makes a printer PrintPartner cannot browse usable at all.
+ *
+ * `object_names` are the labels this browser read out of the file. The server
+ * does not parse them itself, so without them the Required-unit suggestion
+ * falls back to matching the file name, which is the basis the operator has to
+ * check by hand. The printer path posts them to the preview route for the same
+ * reason.
+ */
+export async function uploadPrintFileForAssignment(options: {
   profile_id: number;
-  printer_id: string;
-  filename: string;
-  remote_path?: string;
+  file: File;
   object_names: string[];
-  tracking: "host" | "manual";
-  completed: boolean;
-  plan_revision_id: number;
-  unit_tokens: string[];
-}): Promise<{ link: PrinterCheckoffLink }> {
+}): Promise<UploadedPrintFileCheck> {
+  const form = new FormData();
+  // `profile_id` first, so the server has the Build before it reads the bytes.
+  form.append("profile_id", String(options.profile_id));
+  form.append("object_names", JSON.stringify(options.object_names));
+  form.append("file", options.file, options.file.name);
+  return parseUploadedPrintFileCheck(
+    await engineFetchMultipart<unknown>({
+      path: "/printer-checkoff/file-assignments/upload",
+      form,
+      failureMessage: "The server did not accept the upload",
+    }),
+  );
+}
+
+/**
+ * Commit an uploaded print file the operator confirmed.
+ *
+ * Same route as {@link assignPrinterFile}. `upload_token` stands in for
+ * `remote_path` and the two are mutually exclusive on the wire, which is why
+ * this is a second call rather than one options bag holding both.
+ */
+export async function assignUploadedPrinterFile(
+  options: PrintFileAssignmentBase & { upload_token: string },
+): Promise<{ link: PrinterCheckoffLink }> {
   return engineFetch("/printer-checkoff/file-assignments", {
     method: "POST",
     body: JSON.stringify(options),

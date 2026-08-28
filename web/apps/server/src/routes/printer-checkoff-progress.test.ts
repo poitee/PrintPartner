@@ -1,15 +1,22 @@
 import { acceptPlanForTest, editAcceptedPartsForTest } from "../test/accept-plan.js";
-import Fastify from "fastify";
+import Fastify, { type FastifyInstance } from "fastify";
 import rateLimit from "@fastify/rate-limit";
+import multipart from "@fastify/multipart";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
-import { strToU8, zipSync } from "fflate";
+import { strToU8 } from "fflate";
 import { getDb, SqliteDatabase } from "../db/client.js";
 import { AppRepository } from "../db/repository.js";
 import { registerPrinterCheckoffRoutes } from "./printer-checkoff.js";
+import {
+  bgcode,
+  hostileZip,
+  slicedThreeMf,
+  slicerProjectThreeMf,
+} from "../test/print-file-fixtures.js";
 import { createIntegrationPort, type PrinterFileAccess } from "../integrations/store.js";
 import type { PrinterStorageEntry } from "@print-partner/contracts";
 import { getIntegrationAdapter } from "../integrations/registry.js";
@@ -74,6 +81,9 @@ async function setup() {
   const integrations = createIntegrationPort({ repo, getAdapter: getIntegrationAdapter });
   const app = Fastify();
   await app.register(rateLimit, { global: false });
+  // Same limits app.ts registers, so the route's own per-request caps are what
+  // the tests exercise.
+  await app.register(multipart, { limits: { fileSize: Infinity, files: 100, parts: 101 } });
   await registerPrinterCheckoffRoutes(app, { repo, integrations });
   await app.register(
     async (v1) => registerPrinterCheckoffRoutes(v1, { repo, integrations }),
@@ -113,6 +123,40 @@ function acceptedPrintUnits(repo: AppRepository, profileId: number, partId: numb
   return accepted.snapshot.parts
     .find((part) => part.projectionPartId === partId)
     ?.units.map((unit) => unit.completed) ?? [];
+}
+
+/**
+ * Build a multipart body by hand, so the upload tests exercise the same wire
+ * bytes a browser sends rather than a mocked parser.
+ */
+function multipartUpload(input: {
+  fields?: Record<string, string>;
+  file?: { fieldname?: string; filename: string; bytes: Uint8Array };
+}): { payload: Buffer; headers: Record<string, string> } {
+  const boundary = "----printpartnertestboundary";
+  const chunks: Buffer[] = [];
+  for (const [name, value] of Object.entries(input.fields ?? {})) {
+    chunks.push(
+      Buffer.from(
+        `--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}\r\n`,
+      ),
+    );
+  }
+  if (input.file) {
+    chunks.push(
+      Buffer.from(
+        `--${boundary}\r\nContent-Disposition: form-data; name="${input.file.fieldname ?? "file"}";` +
+          ` filename="${input.file.filename}"\r\nContent-Type: application/octet-stream\r\n\r\n`,
+      ),
+      Buffer.from(input.file.bytes),
+      Buffer.from("\r\n"),
+    );
+  }
+  chunks.push(Buffer.from(`--${boundary}--\r\n`));
+  return {
+    payload: Buffer.concat(chunks),
+    headers: { "content-type": `multipart/form-data; boundary=${boundary}` },
+  };
 }
 
 describe("printer progress route", () => {
@@ -874,7 +918,7 @@ describe("printer progress route", () => {
     expect(missingRevision.json().detail).toContain("plan_revision_id");
   });
 
-  it("refuses a 3MF whose bytes PrintPartner cannot read", async () => {
+  it("refuses a 3MF with no source, pointing the operator at the upload", async () => {
     const { app, repo, plan, bracket, planRevisionId } = await setup();
     saveFleet(repo, [parsePrinterMachine({
       id: "sd-card-printer",
@@ -905,6 +949,8 @@ describe("printer progress route", () => {
 
     expect(assigned.statusCode).toBe(409);
     expect(assigned.json().detail).toContain("has to read a 3MF");
+    expect(assigned.json().detail).toContain("upload the file");
+    expect(assigned.json().detail).not.toContain("printer's storage");
     expect(loadPrinterCheckoffLinks(repo)).toEqual([]);
   });
 
@@ -921,11 +967,7 @@ describe("printer progress route", () => {
       integration_id: "prusa-1",
     })]);
 
-    const project = zipSync({
-      "[Content_Types].xml": strToU8("<Types/>"),
-      "3D/3dmodel.model": strToU8('<model><resources/><build/></model>'),
-      "Metadata/Slic3r_PE.config": strToU8("; layer_height = 0.2\n"),
-    });
+    const project = slicerProjectThreeMf();
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: string | URL) => {
@@ -989,12 +1031,7 @@ describe("printer progress route", () => {
 
     // The same host serving a real toolpath package does assign, and the link
     // keeps a durable identity including the hash of the bytes read.
-    const sliced = zipSync({
-      "[Content_Types].xml": strToU8("<Types/>"),
-      "3D/3dmodel.model": strToU8("<model><resources/><build/></model>"),
-      "Metadata/project_settings.config": strToU8("{}"),
-      "Metadata/plate_1.gcode": strToU8("G28\nG1 X10 Y10 E1\n"),
-    });
+    const sliced = slicedThreeMf();
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: string | URL) => {
@@ -1574,5 +1611,418 @@ describe("printer progress route", () => {
 
     expect(v1.statusCode).toBe(flat.statusCode);
     expect(v1.json()).toEqual(flat.json());
+  });
+});
+
+describe("uploaded print files", () => {
+  const SLICED_GCODE = strToU8("; sliced elsewhere\nG28 ; home\nG1 X10 Y10 E1\n");
+
+  /** A Build whose print was made on a printer PrintPartner cannot reach. */
+  async function externalPrinter() {
+    const fixture = await setup();
+    saveFleet(fixture.repo, [parsePrinterMachine({
+      id: "unsupported-printer",
+      name: "Ancient Delta",
+      model: "Custom",
+      bed_width_mm: 250,
+      bed_depth_mm: 210,
+      max_filament_slots: 1,
+      loaded_filaments: [],
+    })]);
+    return fixture;
+  }
+
+  async function uploadPrintFile(input: {
+    app: FastifyInstance;
+    profileId: number;
+    filename: string;
+    bytes: Uint8Array;
+    objectNames?: string;
+  }) {
+    return input.app.inject({
+      method: "POST",
+      url: "/printer-checkoff/file-assignments/upload",
+      ...multipartUpload({
+        fields: {
+          profile_id: String(input.profileId),
+          ...(input.objectNames === undefined ? {} : { object_names: input.objectNames }),
+        },
+        file: { filename: input.filename, bytes: input.bytes },
+      }),
+    });
+  }
+
+  it.each([
+    { what: "ASCII G-code", filename: "elsewhere.gcode", bytes: SLICED_GCODE, format: "gcode" },
+    {
+      what: "binary G-code",
+      filename: "elsewhere.bgcode",
+      bytes: bgcode([{ payload: 16 }]),
+      format: "bgcode",
+    },
+    {
+      what: "a toolpath 3MF",
+      filename: "elsewhere.gcode.3mf",
+      bytes: slicedThreeMf(),
+      format: "3mf",
+    },
+  ])("classifies $what off the operator's computer and records its hash", async (fixtureCase) => {
+    const { app, repo, plan, bracket, planRevisionId } = await externalPrinter();
+    const uploaded = await uploadPrintFile({
+      app,
+      profileId: plan.id,
+      filename: fixtureCase.filename,
+      bytes: fixtureCase.bytes,
+    });
+
+    expect(uploaded.statusCode).toBe(200);
+    expect(uploaded.json()).toMatchObject({
+      inspected: true,
+      print_ready: true,
+      next_action: "",
+      classification: { format: fixtureCase.format },
+      plan_revision_id: planRevisionId,
+    });
+    const uploadToken = uploaded.json().upload_token;
+    expect(typeof uploadToken).toBe("string");
+
+    const assigned = await app.inject({
+      method: "POST",
+      url: "/printer-checkoff/file-assignments",
+      payload: {
+        profile_id: plan.id,
+        printer_id: "unsupported-printer",
+        tracking: "manual",
+        completed: true,
+        filename: fixtureCase.filename,
+        upload_token: uploadToken,
+        plan_revision_id: planRevisionId,
+        unit_tokens: [`${bracket.id}:0`],
+      },
+    });
+
+    expect(assigned.statusCode).toBe(200);
+    expect(assigned.json()).toMatchObject({
+      link: {
+        state: "awaiting_verify",
+        // Nothing on a printer PrintPartner can reach backs this link.
+        classification: { format: fixtureCase.format },
+        remote_identity: {
+          size_bytes: fixtureCase.bytes.byteLength,
+          sha256: createHash("sha256").update(fixtureCase.bytes).digest("hex"),
+        },
+        units: [{ part_id: bracket.id, unit_index: 0 }],
+      },
+    });
+    expect(assigned.json().link.remote_path).toBeUndefined();
+    expect(acceptedPrintUnits(repo, plan.id, bracket.id)).toEqual([false]);
+  });
+
+  it("refuses an uploaded slicer project with the same words the printer path uses", async () => {
+    const fixture = await externalPrinter();
+    const project = slicerProjectThreeMf();
+
+    const uploaded = await uploadPrintFile({
+      app: fixture.app,
+      profileId: fixture.plan.id,
+      filename: "project.3mf",
+      bytes: project,
+    });
+    expect(uploaded.statusCode).toBe(200);
+    expect(uploaded.json()).toMatchObject({
+      inspected: true,
+      print_ready: false,
+      classification: { format: "3mf", kind: "slicer_project" },
+    });
+    expect(uploaded.json().next_action).toContain("needs slicing");
+
+    const assigned = await fixture.app.inject({
+      method: "POST",
+      url: "/printer-checkoff/file-assignments",
+      payload: {
+        profile_id: fixture.plan.id,
+        printer_id: "unsupported-printer",
+        tracking: "manual",
+        filename: "project.3mf",
+        upload_token: uploaded.json().upload_token,
+        plan_revision_id: fixture.planRevisionId,
+        unit_tokens: [`${fixture.bracket.id}:0`],
+      },
+    });
+    expect(assigned.statusCode).toBe(409);
+    expect(assigned.json().detail).toContain("needs slicing");
+    expect(loadPrinterCheckoffLinks(fixture.repo)).toEqual([]);
+  });
+
+  it("refuses a request naming both a printer path and an upload", async () => {
+    const fixture = await externalPrinter();
+    const uploaded = await uploadPrintFile({
+      app: fixture.app,
+      profileId: fixture.plan.id,
+      filename: "elsewhere.gcode",
+      bytes: SLICED_GCODE,
+    });
+
+    const assigned = await fixture.app.inject({
+      method: "POST",
+      url: "/printer-checkoff/file-assignments",
+      payload: {
+        profile_id: fixture.plan.id,
+        printer_id: "unsupported-printer",
+        tracking: "manual",
+        filename: "elsewhere.gcode",
+        remote_path: "usb/elsewhere.gcode",
+        upload_token: uploaded.json().upload_token,
+        plan_revision_id: fixture.planRevisionId,
+        unit_tokens: [`${fixture.bracket.id}:0`],
+      },
+    });
+    expect(assigned.statusCode).toBe(400);
+    expect(assigned.json().detail).toContain("not both");
+    expect(loadPrinterCheckoffLinks(fixture.repo)).toEqual([]);
+  });
+
+  it("refuses an unknown token rather than recording an unclassified print", async () => {
+    const fixture = await externalPrinter();
+
+    const assigned = await fixture.app.inject({
+      method: "POST",
+      url: "/printer-checkoff/file-assignments",
+      payload: {
+        profile_id: fixture.plan.id,
+        printer_id: "unsupported-printer",
+        tracking: "manual",
+        filename: "elsewhere.gcode",
+        upload_token: "9f1c0d3e-0000-4000-8000-000000000000",
+        plan_revision_id: fixture.planRevisionId,
+        unit_tokens: [`${fixture.bracket.id}:0`],
+      },
+    });
+    expect(assigned.statusCode).toBe(409);
+    expect(assigned.json().detail).toContain("upload the print file again");
+    expect(loadPrinterCheckoffLinks(fixture.repo)).toEqual([]);
+  });
+
+  it("expires a token, and spends it once the print is recorded", async () => {
+    const fixture = await externalPrinter();
+    const assign = async (uploadToken: string) =>
+      fixture.app.inject({
+        method: "POST",
+        url: "/printer-checkoff/file-assignments",
+        payload: {
+          profile_id: fixture.plan.id,
+          printer_id: "unsupported-printer",
+          tracking: "manual",
+          filename: "elsewhere.gcode",
+          upload_token: uploadToken,
+          plan_revision_id: fixture.planRevisionId,
+          unit_tokens: [`${fixture.bracket.id}:0`],
+        },
+      });
+
+    const spent = await uploadPrintFile({
+      app: fixture.app,
+      profileId: fixture.plan.id,
+      filename: "elsewhere.gcode",
+      bytes: SLICED_GCODE,
+    });
+    const spentToken = spent.json().upload_token;
+    expect((await assign(spentToken)).statusCode).toBe(200);
+    const replayed = await assign(spentToken);
+    expect(replayed.statusCode).toBe(409);
+    expect(replayed.json().detail).toContain("upload the print file again");
+
+    // A token an operator abandoned is gone once its window closes, whatever
+    // the state of the Build it was made for.
+    const stale = await uploadPrintFile({
+      app: fixture.app,
+      profileId: fixture.plan.id,
+      filename: "later.gcode",
+      bytes: SLICED_GCODE,
+    });
+    const staleToken = stale.json().upload_token;
+    // Only the clock the token is read against moves; faking the event loop
+    // would hang the request this test has to make.
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 16 * 60_000);
+    try {
+      const expired = await assign(staleToken);
+      expect(expired.statusCode).toBe(409);
+      expect(expired.json().detail).toContain("upload the print file again");
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("refuses a token issued for another Build", async () => {
+    const fixture = await externalPrinter();
+    const uploaded = await uploadPrintFile({
+      app: fixture.app,
+      profileId: fixture.plan.id,
+      filename: "elsewhere.gcode",
+      bytes: SLICED_GCODE,
+    });
+    const otherPlan = fixture.repo.createProfile("Second Build");
+    acceptPlanForTest(fixture.repo, otherPlan.id);
+
+    const assigned = await fixture.app.inject({
+      method: "POST",
+      url: "/printer-checkoff/file-assignments",
+      payload: {
+        profile_id: otherPlan.id,
+        printer_id: "unsupported-printer",
+        tracking: "manual",
+        filename: "elsewhere.gcode",
+        upload_token: uploaded.json().upload_token,
+        plan_revision_id: fixture.planRevisionId,
+        unit_tokens: [`${fixture.bracket.id}:0`],
+      },
+    });
+    expect(assigned.statusCode).toBe(409);
+    expect(assigned.json().detail).toContain("upload the print file again");
+    expect(loadPrinterCheckoffLinks(fixture.repo)).toEqual([]);
+  });
+
+  it("refuses a zip bomb on the declared sizes, without unpacking it", async () => {
+    const fixture = await externalPrinter();
+    const bomb = hostileZip([
+      { name: "3D/3dmodel.model", uncompressedSize: 0xffff_ffff },
+    ]);
+
+    const uploaded = await uploadPrintFile({
+      app: fixture.app,
+      profileId: fixture.plan.id,
+      filename: "bomb.3mf",
+      bytes: bomb,
+    });
+    expect(uploaded.statusCode).toBe(409);
+    expect(uploaded.json().detail).toContain("too large to inspect safely");
+  });
+
+  it("refuses an upload past the size cap before classifying it", async () => {
+    const fixture = await externalPrinter();
+    const oversized = new Uint8Array(64 * 1024 * 1024 + 1).fill(0x47);
+
+    const uploaded = await uploadPrintFile({
+      app: fixture.app,
+      profileId: fixture.plan.id,
+      filename: "huge.gcode",
+      bytes: oversized,
+    });
+    expect(uploaded.statusCode).toBe(413);
+    expect(uploaded.json().detail).toContain("64 MB");
+  });
+
+  it("stops holding uploads past the total budget, and frees it on the next sweep", async () => {
+    const fixture = await externalPrinter();
+    // Two uploads exactly fill the 128 MB PrintPartner will hold at once. The
+    // bytes have to be runnable G-code, or they would be refused before they
+    // ever reached the budget.
+    const large = new Uint8Array(64 * 1024 * 1024).fill(0x0a);
+    large.set(strToU8("G28\nG1 X10 Y10 E1\n"), 0);
+    // Step the clock past every window an earlier test opened, so this test
+    // measures the budget rather than whatever those tests left behind.
+    const realNow = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(realNow + 16 * 60_000);
+    try {
+      for (const filename of ["first.gcode", "second.gcode"]) {
+        const held = await uploadPrintFile({
+          app: fixture.app,
+          profileId: fixture.plan.id,
+          filename,
+          bytes: large,
+        });
+        expect(held.statusCode).toBe(200);
+      }
+
+      const overflowing = await uploadPrintFile({
+        app: fixture.app,
+        profileId: fixture.plan.id,
+        filename: "third.gcode",
+        bytes: SLICED_GCODE,
+      });
+      expect(overflowing.statusCode).toBe(503);
+      expect(overflowing.json().detail).toContain("as many uploaded print files as it will");
+
+      // Nobody came back for the two big ones, so the next upload past their
+      // window sweeps them and the budget is free again.
+      clock.mockReturnValue(realNow + 32 * 60_000);
+      const afterSweep = await uploadPrintFile({
+        app: fixture.app,
+        profileId: fixture.plan.id,
+        filename: "fourth.gcode",
+        bytes: SLICED_GCODE,
+      });
+      expect(afterSweep.statusCode).toBe(200);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("refuses bytes no printer could run, and an upload with no print file", async () => {
+    const fixture = await externalPrinter();
+
+    const noise = await uploadPrintFile({
+      app: fixture.app,
+      profileId: fixture.plan.id,
+      filename: "notes.gcode",
+      bytes: strToU8("; only comments\n"),
+    });
+    expect(noise.statusCode).toBe(409);
+    expect(noise.json().detail).toContain("not G-code");
+
+    const wrongSuffix = await uploadPrintFile({
+      app: fixture.app,
+      profileId: fixture.plan.id,
+      filename: "model.stl",
+      bytes: SLICED_GCODE,
+    });
+    expect(wrongSuffix.statusCode).toBe(400);
+    expect(wrongSuffix.json().detail).toContain(".gcode");
+
+    const missing = await fixture.app.inject({
+      method: "POST",
+      url: "/printer-checkoff/file-assignments/upload",
+      ...multipartUpload({ fields: { profile_id: String(fixture.plan.id) } }),
+    });
+    expect(missing.statusCode).toBe(400);
+    expect(missing.json().detail).toContain("Attach the print file");
+  });
+
+  it("suggests from object labels the browser sends, and from the filename without them", async () => {
+    const fixture = await externalPrinter();
+
+    const byFilename = await uploadPrintFile({
+      app: fixture.app,
+      profileId: fixture.plan.id,
+      filename: "bracket.gcode",
+      bytes: SLICED_GCODE,
+    });
+    expect(byFilename.json()).toMatchObject({
+      suggestion_basis: "filename",
+      suggested_units: [{ part_id: fixture.bracket.id, unit_index: 0 }],
+    });
+
+    const byLabels = await uploadPrintFile({
+      app: fixture.app,
+      profileId: fixture.plan.id,
+      filename: "plate-1.gcode",
+      bytes: SLICED_GCODE,
+      objectNames: JSON.stringify(["bracket.stl_id_0_copy_0"]),
+    });
+    expect(byLabels.json()).toMatchObject({
+      suggestion_basis: "object_names",
+      suggested_units: [{ part_id: fixture.bracket.id, unit_index: 0 }],
+    });
+
+    // Unreadable labels fall back rather than failing the upload.
+    const broken = await uploadPrintFile({
+      app: fixture.app,
+      profileId: fixture.plan.id,
+      filename: "bracket.gcode",
+      bytes: SLICED_GCODE,
+      objectNames: "not json",
+    });
+    expect(broken.statusCode).toBe(200);
+    expect(broken.json().suggestion_basis).toBe("filename");
   });
 });

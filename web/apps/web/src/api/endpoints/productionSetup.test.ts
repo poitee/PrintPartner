@@ -18,6 +18,7 @@ describe("production setup endpoints", () => {
       preferred_slicer_instance_id: "slicer",
       selection: { mode: "all_incomplete" as const },
       printer_assignments: [{ token: "unit", printer_id: "printer" }],
+      route: "plates" as const,
       rules: [],
     };
 

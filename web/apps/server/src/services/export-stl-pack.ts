@@ -18,6 +18,10 @@ import {
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { Zip, ZipPassThrough } from "fflate";
 import { acceptedPlateZipEpoch, folderKeyFromRelativePath } from "@print-partner/domain";
+import {
+  parseRequiredUnitTokenContract,
+  type RequiredUnitToken,
+} from "@print-partner/contracts";
 import type { AcceptedPlanBasis } from "../db/accepted-plan-progress.js";
 import { openVerifiedAcceptedArtifact } from "./accepted-artifacts.js";
 import type {
@@ -27,7 +31,11 @@ import type {
 
 const ROLE_ORDER = ["primary", "accent", "clear", "opaque"] as const;
 const MAX_TOTAL_SOURCE_BYTES = 256 * 1024 * 1024;
-const MAX_SELECTED_UNITS = 10_000;
+/**
+ * Upper bound on both the units one bundle may carry and the tokens a caller
+ * may name. Both count the same thing, so one limit covers both.
+ */
+export const STL_PACK_MAX_SELECTED_UNITS = 10_000;
 const MAX_OUTPUT_BYTES = 512 * 1024 * 1024;
 
 export type StlPackGroupBy = "color" | "color_dir";
@@ -35,6 +43,17 @@ export type AcceptedStlBundleSelection = "all" | "missing";
 
 export const STL_EXPORT_MISSING_HINT =
   "Sync Sources and fix Review blockers, then export again.";
+
+/**
+ * The caller named Required units, and none of them are in the Accepted Plan.
+ * Usually a page held open across a Plan acceptance.
+ */
+export class UnknownStlPackUnitsError extends Error {
+  constructor() {
+    super("None of the chosen Required units are in the Accepted Plan. Reload the page and choose again.");
+    this.name = "UnknownStlPackUnitsError";
+  }
+}
 
 export type AcceptedStlBundleWarning = Readonly<{
   code: "artifact_unavailable";
@@ -52,7 +71,26 @@ export type MaterializeAcceptedStlBundleResult =
       readonly warnings: readonly AcceptedStlBundleWarning[];
     }
   | { readonly kind: "output_failure" }
-  | { readonly kind: "limit_exceeded" };
+  | { readonly kind: "limit_exceeded" }
+  /** Every token the caller named is absent from the accepted revision. */
+  | { readonly kind: "unknown_unit_tokens" };
+
+/**
+ * Reads the `unit_tokens` field of an export request. Returns `"invalid"` for
+ * anything that is not a bounded array of Required-unit tokens, so the caller
+ * can reject at the HTTP boundary instead of exporting a surprising bundle.
+ */
+export function parseStlPackUnitTokens(
+  raw: unknown,
+): readonly RequiredUnitToken[] | "invalid" {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw) || raw.length > STL_PACK_MAX_SELECTED_UNITS) return "invalid";
+  try {
+    return raw.map((value) => parseRequiredUnitTokenContract(value));
+  } catch {
+    return "invalid";
+  }
+}
 
 type SelectedPart = Readonly<{
   part: AcceptedExportPart;
@@ -324,19 +362,21 @@ function publishedTreeMatches(directory: string, expected: readonly ExpectedFile
   }
 }
 
-function publicationKey(
-  files: readonly ExpectedFile[],
-  warnings: readonly AcceptedStlBundleWarning[],
-): string {
+function publicationKey(input: Readonly<{
+  files: readonly ExpectedFile[];
+  warnings: readonly AcceptedStlBundleWarning[];
+  /** Null when the caller named no units, which keeps the key as it was. */
+  unitTokenDigest: string | null;
+}>): string {
   const identity = {
-    files: files
+    files: input.files
       .map((file) => ({
         relativePath: file.relativePath,
         size: file.size,
         sha256: file.sha256,
       }))
       .sort((left, right) => left.relativePath.localeCompare(right.relativePath)),
-    warnings: warnings
+    warnings: input.warnings
       .map((warning) => ({
         code: warning.code,
         relativePath: warning.relativePath,
@@ -347,6 +387,10 @@ function publicationKey(
           `${right.relativePath}\0${right.sourceLayer}`,
         ),
       ),
+    // Absent, not null, when no units were named: two subsets can produce the
+    // same file list and warnings, and unnamed exports must keep the key that
+    // already published bundles were filed under.
+    ...(input.unitTokenDigest === null ? {} : { unitTokens: input.unitTokenDigest }),
   };
   return createHash("sha256").update(JSON.stringify(identity)).digest("hex");
 }
@@ -385,17 +429,56 @@ function publish(stage: string, finalDirectory: string, expected: readonly Expec
   }
 }
 
-function selectedParts(
+type UnitTokenFilter =
+  | { readonly kind: "every_unit" }
+  | {
+      readonly kind: "listed_units";
+      readonly tokens: ReadonlySet<string>;
+      readonly digest: string;
+    }
+  | { readonly kind: "no_known_units" };
+
+/**
+ * Resolves the tokens a caller named against the units the accepted revision
+ * actually holds. Tokens from another revision are dropped rather than
+ * refused, because a stale page should still export the units it got right.
+ * Naming only unknown tokens is refused: an empty bundle would look like a
+ * successful export of nothing.
+ */
+function unitTokenFilter(
   capture: Extract<CaptureAcceptedOperationalExportResult, { readonly kind: "ready" | "empty" }>,
-  selection: AcceptedStlBundleSelection,
-): readonly SelectedPart[] {
+  requested: readonly string[],
+): UnitTokenFilter {
+  if (requested.length === 0) return { kind: "every_unit" };
+  const available = new Set<string>();
+  if (capture.kind === "ready") {
+    for (const part of capture.export.parts) {
+      for (const unit of part.units) available.add(unit.token);
+    }
+  }
+  const tokens = new Set(requested.filter((token) => available.has(token)));
+  if (tokens.size === 0) return { kind: "no_known_units" };
+  const digest = createHash("sha256").update([...tokens].sort().join("\n")).digest("hex");
+  return { kind: "listed_units", tokens, digest };
+}
+
+function selectedParts(input: Readonly<{
+  capture: Extract<CaptureAcceptedOperationalExportResult, { readonly kind: "ready" | "empty" }>;
+  selection: AcceptedStlBundleSelection;
+  unitTokens: ReadonlySet<string> | null;
+}>): readonly SelectedPart[] {
+  const { capture, selection, unitTokens } = input;
   if (capture.kind === "empty") return [];
   return capture.export.parts
     .filter((part) => part.included)
     .map((part) => ({
       part,
       units: part.units
-        .filter((unit) => selection === "all" || !unit.completed)
+        .filter(
+          (unit) =>
+            (selection === "all" || !unit.completed) &&
+            (unitTokens === null || unitTokens.has(unit.token)),
+        )
         .map((unit) => unit.unitIndex + 1),
     }))
     .filter((entry) => entry.units.length > 0);
@@ -408,11 +491,19 @@ export async function materializeAcceptedStlBundle(input: Readonly<{
   selection: AcceptedStlBundleSelection;
   groupBy: StlPackGroupBy;
   roleOrder: readonly string[];
+  /** Restrict the bundle to these Required units. Empty means every unit. */
+  unitTokens?: readonly string[];
   publishedBytesLimit?: number;
 }>): Promise<MaterializeAcceptedStlBundleResult> {
-  const selected = selectedParts(input.capture, input.selection);
+  const filter = unitTokenFilter(input.capture, input.unitTokens ?? []);
+  if (filter.kind === "no_known_units") return { kind: "unknown_unit_tokens" };
+  const selected = selectedParts({
+    capture: input.capture,
+    selection: input.selection,
+    unitTokens: filter.kind === "listed_units" ? filter.tokens : null,
+  });
   const selectedUnitCount = selected.reduce((total, entry) => total + entry.units.length, 0);
-  if (selectedUnitCount > MAX_SELECTED_UNITS) return { kind: "limit_exceeded" };
+  if (selectedUnitCount > STL_PACK_MAX_SELECTED_UNITS) return { kind: "limit_exceeded" };
 
   const profile = input.capture.kind === "ready" ? input.capture.export.profile : input.capture.profile;
   const basis = input.capture.kind === "ready" ? input.capture.export.basis : null;
@@ -526,7 +617,12 @@ export async function materializeAcceptedStlBundle(input: Readonly<{
       expected.push(zip.file);
       hasBundle = true;
     }
-    const finalDirectory = join(publicationParent, `content-${publicationKey(expected, warnings)}`);
+    const key = publicationKey({
+      files: expected,
+      warnings,
+      unitTokenDigest: filter.kind === "listed_units" ? filter.digest : null,
+    });
+    const finalDirectory = join(publicationParent, `content-${key}`);
     const bundlePath = hasBundle ? join(finalDirectory, "accepted-stl.zip") : null;
     if (!publish(stage, finalDirectory, expected)) return { kind: "output_failure" };
     return {

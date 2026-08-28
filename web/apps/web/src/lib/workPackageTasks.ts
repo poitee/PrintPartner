@@ -1,4 +1,4 @@
-import type { AcceptedPlateWorkspace } from "@print-partner/contracts";
+import type { AcceptedPlateWorkspace, ProductionRoute } from "@print-partner/contracts";
 import type { WorkflowTaskState } from "../components/layout/TaskList";
 import type { WorkPackage } from "./workPackageProjection";
 
@@ -8,15 +8,74 @@ import type { WorkPackage } from "./workPackageProjection";
  * hours later on another machine. Only genuinely blocked tasks are unavailable,
  * completed tasks stay open for review, and the page reopens at the first
  * unfinished task.
+ *
+ * The list belongs to a route, not to the page. A Build on the `stl` route
+ * never sees "Send or start": the task is absent rather than greyed out,
+ * because a row the operator can never reach reads as a permission problem
+ * (GOV.UK Design System, tabs: do not disable elements).
+ *
+ * The `plates` ids are the four this page has always had, so saved links, the
+ * `?stage=` aliases and the Checkoff "Prepare missing parts" link keep working
+ * untouched.
  */
-export const PRODUCTION_TASK_IDS = [
-  "prepare-plates",
-  "export-for-slicing",
-  "add-sliced-file",
-  "send-or-start",
-] as const;
+export const PRODUCTION_TASK_IDS = {
+  plates: ["prepare-plates", "export-for-slicing", "add-sliced-file", "send-or-start"],
+  stl: ["choose-units", "download-stl"],
+  external: ["pick-print-file", "attribute-units", "confirm-record"],
+} as const satisfies Readonly<Record<ProductionRoute, readonly [string, ...string[]]>>;
 
-export type ProductionTaskId = (typeof PRODUCTION_TASK_IDS)[number];
+export type ProductionTaskId = (typeof PRODUCTION_TASK_IDS)[ProductionRoute][number];
+
+/**
+ * Route order on the question: most common first, with the record route last
+ * because it is phrased differently from the other two. GOV.UK cautions that
+ * frequency ordering can reinforce bias, so retuning this order needs evidence.
+ */
+export const PRODUCTION_ROUTE_ORDER = [
+  "plates",
+  "stl",
+  "external",
+] as const satisfies readonly ProductionRoute[];
+
+/**
+ * Compile guard: a route added to the contract but left out of the order above
+ * would silently vanish from the question. This line breaks the build instead.
+ */
+type UnorderedRoute = Exclude<ProductionRoute, (typeof PRODUCTION_ROUTE_ORDER)[number]>;
+const _everyRouteIsOrdered: UnorderedRoute[] = [];
+void _everyRouteIsOrdered;
+
+/** The route names the operator reads. Also used in the change confirmation. */
+export const PRODUCTION_ROUTE_LABEL: Readonly<Record<ProductionRoute, string>> = {
+  plates: "Make Plates for my printers",
+  stl: "Download the unit files",
+  external: "Record a print made elsewhere",
+};
+
+/** One line under each route name on the question. */
+export const PRODUCTION_ROUTE_DESCRIPTION: Readonly<Record<ProductionRoute, string>> = {
+  plates: "Choose printers, group the Required units, arrange Plates, and export for slicing",
+  stl: "Get the files for the units you choose. No Plates, no printers",
+  external:
+    "The print already exists. Pick a file from a linked printer, or upload G-code, binary G-code or a 3MF file",
+};
+
+/**
+ * Which route each task id belongs to, so a `?task=` or legacy `?stage=` link
+ * can be checked against the route the work package is actually on. A new task
+ * id without a route fails to compile.
+ */
+export const PRODUCTION_TASK_ROUTE: Readonly<Record<ProductionTaskId, ProductionRoute>> = {
+  "prepare-plates": "plates",
+  "export-for-slicing": "plates",
+  "add-sliced-file": "plates",
+  "send-or-start": "plates",
+  "choose-units": "stl",
+  "download-stl": "stl",
+  "pick-print-file": "external",
+  "attribute-units": "external",
+  "confirm-record": "external",
+};
 
 export type ProductionTask = Readonly<{
   id: ProductionTaskId;
@@ -29,9 +88,15 @@ export type ProductionTask = Readonly<{
   disabledReason: string | null;
 }>;
 
+const ALL_TASK_IDS: readonly ProductionTaskId[] = PRODUCTION_ROUTE_ORDER.flatMap(
+  (route) => PRODUCTION_TASK_IDS[route],
+);
+
 /**
  * The old numbered tabs live on as URL aliases so saved links and the Checkoff
- * "Prepare missing parts" link keep working.
+ * "Prepare missing parts" link keep working. Every alias resolves into the
+ * `plates` route, because that route is the flow those links were written
+ * against.
  */
 const STAGE_ALIASES: Readonly<Record<string, ProductionTaskId>> = {
   parts: "prepare-plates",
@@ -48,41 +113,74 @@ const SPLIT_TASK_ALIASES: Readonly<Record<string, ProductionTaskId>> = {
 
 export function productionTaskFromParam(value: string | null): ProductionTaskId | null {
   if (!value) return null;
-  if ((PRODUCTION_TASK_IDS as readonly string[]).includes(value)) {
-    return value as ProductionTaskId;
-  }
+  const known = ALL_TASK_IDS.find((id) => id === value);
+  if (known) return known;
   return STAGE_ALIASES[value] ?? SPLIT_TASK_ALIASES[value] ?? null;
 }
 
-/** The `?stage=` value that still points at a task, for backward-compatible links. */
-export function productionStageAlias(task: ProductionTaskId): string {
-  if (task === "prepare-plates") return "plates";
-  const entry = Object.entries(STAGE_ALIASES).find(([, id]) => id === task);
-  if (entry) return entry[0];
-  return "send";
+/**
+ * The `?stage=` value that still points at a task, for backward-compatible
+ * links. Only the `plates` route ever had numbered stages, so tasks on the
+ * other two routes have no stage to write.
+ */
+export function productionStageAlias(task: ProductionTaskId): string | null {
+  switch (task) {
+    case "prepare-plates":
+      return "plates";
+    case "export-for-slicing":
+      return "export";
+    case "add-sliced-file":
+    case "send-or-start":
+      return "send";
+    case "choose-units":
+    case "download-stl":
+    case "pick-print-file":
+    case "attribute-units":
+    case "confirm-record":
+      return null;
+  }
 }
 
-export type ProductionTaskInput = Readonly<{
-  pkg: WorkPackage;
-  workspace: AcceptedPlateWorkspace | undefined;
-  selectedCount: number;
-  totalUnitCount: number;
-  printerCount: number;
-  /** Printers with a linked host, the only ones a sliced file can go to. */
-  sendPrinterCount: number;
-  /** Filenames of packages already sent to a printer for this Build. */
-  dispatchedFilenames: readonly string[];
-  exportError: string | null;
-  sendError: string | null;
-  plateError: string | null;
-  assignError?: string | null;
-}>;
+type TaskInputBase = Readonly<{ pkg: WorkPackage }>;
+
+export type PlatesTaskInput = TaskInputBase &
+  Readonly<{
+    route: "plates";
+    workspace: AcceptedPlateWorkspace | undefined;
+    selectedCount: number;
+    totalUnitCount: number;
+    printerCount: number;
+    /** Printers with a linked host, the only ones a sliced file can go to. */
+    sendPrinterCount: number;
+    /** Filenames of packages already sent to a printer for this Build. */
+    dispatchedFilenames: readonly string[];
+    exportError: string | null;
+    sendError: string | null;
+    plateError: string | null;
+    assignError: string | null;
+  }>;
+
+export type StlTaskInput = TaskInputBase &
+  Readonly<{
+    route: "stl";
+    selectedCount: number;
+    totalUnitCount: number;
+  }>;
+
+export type ExternalTaskInput = TaskInputBase &
+  Readonly<{
+    route: "external";
+    /** Prints already recorded for this Build. */
+    recordedPrintCount: number;
+  }>;
+
+export type ProductionTaskInput = PlatesTaskInput | StlTaskInput | ExternalTaskInput;
 
 function plural(count: number, one: string, many: string): string {
   return `${count} ${count === 1 ? one : many}`;
 }
 
-export function productionTasks(input: ProductionTaskInput): ProductionTask[] {
+function platesTasks(input: PlatesTaskInput): ProductionTask[] {
   const workspace = input.workspace;
   const ready = workspace?.kind === "ready" ? workspace : null;
   const isSetup = workspace?.kind === "setup";
@@ -218,12 +316,136 @@ export function productionTasks(input: ProductionTaskInput): ProductionTask[] {
         : null,
   };
 
+  return [preparePlates, exportForSlicing, addSlicedFile, sendOrStart];
+}
+
+/**
+ * The unit-files route has no finish line inside PrintPartner.
+ *
+ * "Export for slicing" leaves a durable artifact the page can read back, so the
+ * `plates` route can honestly say Complete. A download leaves nothing: the
+ * operator may take the files ten times, and PrintPartner never sees the
+ * printer they go to. So "Download the unit files" stays at "Needs your
+ * decision" for as long as the package exists, and the work package says in
+ * words that Checkoff is where these units get verified. Marking the task
+ * Complete on the click that starts a download would claim knowledge the
+ * product does not have.
+ *
+ * This is the answer to the open question in
+ * docs/audits/2026-08-28-production-route-choice-research.md: handing over
+ * files ends PrintPartner's involvement, and the units stay unverified until
+ * the operator records a print.
+ */
+function stlTasks(input: StlTaskInput): ProductionTask[] {
+  const noPlan = input.pkg.links.acceptedPlan == null;
+  const selected = input.selectedCount > 0;
+
+  const chooseUnits: ProductionTask = {
+    id: "choose-units",
+    label: "Choose Required units",
+    hint: noPlan
+      ? "No accepted Required units yet."
+      : selected
+        ? `${plural(input.selectedCount, "unit", "units")} chosen out of ${input.totalUnitCount}.`
+        : "Choose the Required units you want the files for.",
+    state: noPlan ? "blocked" : selected ? "complete" : "needs_attention",
+    statusLabel: noPlan ? "Unavailable" : selected ? "Complete" : "Needs your decision",
+    disabledReason: noPlan
+      ? "Accept a Plan revision with Required units on the Plan workspace first."
+      : null,
+  };
+
+  const downloadFiles: ProductionTask = {
+    id: "download-stl",
+    label: "Download the unit files",
+    hint: !selected
+      ? "Available once you choose at least one Required unit."
+      : "Take the files as often as you need. PrintPartner cannot see what you print from them, so record the print in Checkoff when it is done.",
+    state: !selected ? "blocked" : "not_started",
+    statusLabel: !selected ? "Unavailable" : "Needs your decision",
+    disabledReason: !selected
+      ? "Choose at least one Required unit before you download."
+      : null,
+  };
+
+  return [chooseUnits, downloadFiles];
+}
+
+/**
+ * Recording a print made elsewhere is one panel, not three screens: the
+ * operator picks a file, says which Required units it covers, and confirms.
+ * The three rows below name those steps so the operator can see the whole job
+ * before starting it, and they all open the same panel. Every row turns
+ * Complete together once a print is on the record, because that is the only
+ * moment the page can observe.
+ */
+function externalTasks(input: ExternalTaskInput): ProductionTask[] {
+  const noPlan = input.pkg.links.acceptedPlan == null;
+  const recorded = input.recordedPrintCount > 0;
+  const state: WorkflowTaskState = noPlan
+    ? "blocked"
+    : recorded
+      ? "complete"
+      : "needs_attention";
+  const statusLabel = noPlan ? "Unavailable" : recorded ? "Complete" : "Needs your decision";
+  const disabledReason = noPlan
+    ? "Accept a Plan revision with Required units on the Plan workspace first."
+    : null;
+  const recordedLine = `${plural(input.recordedPrintCount, "print", "prints")} recorded for this Build.`;
+
   return [
-    preparePlates,
-    exportForSlicing,
-    addSlicedFile,
-    sendOrStart,
+    {
+      id: "pick-print-file",
+      label: "Choose the print file",
+      hint: noPlan
+        ? "No accepted Required units yet."
+        : recorded
+          ? recordedLine
+          : "Pick a file from a linked printer, or upload G-code, binary G-code or a 3MF file.",
+      state,
+      statusLabel,
+      disabledReason,
+    },
+    {
+      id: "attribute-units",
+      label: "Attribute it to Required units",
+      hint: noPlan
+        ? "No accepted Required units yet."
+        : recorded
+          ? "Every recorded print carries the units it covers."
+          : "Say which Required units this print already made.",
+      state,
+      statusLabel,
+      disabledReason,
+    },
+    {
+      id: "confirm-record",
+      label: "Confirm the record",
+      hint: noPlan
+        ? "No accepted Required units yet."
+        : recorded
+          ? "Verify the recorded prints in Checkoff."
+          : "Check the record, then confirm it. Checkoff verifies the units after that.",
+      state,
+      statusLabel,
+      disabledReason,
+    },
   ];
+}
+
+export function productionTasks(input: ProductionTaskInput): ProductionTask[] {
+  switch (input.route) {
+    case "plates":
+      return platesTasks(input);
+    case "stl":
+      return stlTasks(input);
+    case "external":
+      return externalTasks(input);
+    default: {
+      const _exhaustive: never = input;
+      return _exhaustive;
+    }
+  }
 }
 
 /**
@@ -231,16 +453,14 @@ export function productionTasks(input: ProductionTaskInput): ProductionTask[] {
  * task that is not finished. Blocked tasks count as unfinished, because they
  * still tell the user what is missing.
  */
-export function firstUnfinishedProductionTask(
-  tasks: readonly ProductionTask[],
-): ProductionTaskId {
-  const unfinished = tasks.find((task) => task.state !== "complete" && task.state !== "blocked");
+export function firstUnfinishedProductionTask(input: {
+  tasks: readonly ProductionTask[];
+  route: ProductionRoute;
+}): ProductionTaskId {
+  const unfinished = input.tasks.find(
+    (task) => task.state !== "complete" && task.state !== "blocked",
+  );
   if (unfinished) return unfinished.id;
-  const blocked = tasks.find((task) => task.state === "blocked");
-  return blocked?.id ?? tasks[tasks.length - 1]?.id ?? "prepare-plates";
-}
-
-/** A task is openable unless it is genuinely blocked. */
-export function isProductionTaskAvailable(task: ProductionTask): boolean {
-  return task.state !== "blocked";
+  const blocked = input.tasks.find((task) => task.state === "blocked");
+  return blocked?.id ?? PRODUCTION_TASK_IDS[input.route][0];
 }

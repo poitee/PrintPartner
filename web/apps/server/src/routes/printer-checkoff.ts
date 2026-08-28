@@ -1,3 +1,5 @@
+import { basename } from "node:path";
+import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import {
   isPrintReady,
@@ -10,7 +12,10 @@ import {
   type IntegrationConfig,
 } from "@print-partner/contracts";
 import type { AppRepository } from "../db/repository.js";
-import { AcceptedPlanOperationalIntegrityError } from "../db/accepted-plan-operational.js";
+import {
+  AcceptedPlanOperationalIntegrityError,
+  type AcceptedPlanOperationalSnapshot,
+} from "../db/accepted-plan-operational.js";
 import {
   getIntegrationConfig,
   type IntegrationPort,
@@ -285,14 +290,18 @@ function printerFileGateway(
   return files ? { files, config: integration.config } : null;
 }
 
-type RemoteFileInspection =
+/** What PrintPartner learned about a print file, whatever it came from. */
+type PrintFileInspection =
   | {
       outcome: "inspected";
       classification: PrintFileClassification;
       identity: PrinterFileIdentity;
     }
   | { outcome: "rejected"; detail: string }
-  /** No host file access, no path, or the host would not serve the bytes. */
+  /**
+   * No host file access, no path, no upload, or the host would not serve the
+   * bytes. Nothing is known about the file, and nothing may be assumed.
+   */
   | { outcome: "unreadable" };
 
 /**
@@ -304,7 +313,7 @@ async function inspectRemoteFile(
   repo: AppRepository,
   integrationId: string,
   remotePath: string,
-): Promise<RemoteFileInspection> {
+): Promise<PrintFileInspection> {
   const gateway = printerFileGateway(repo, integrationId);
   if (!gateway) return { outcome: "unreadable" };
 
@@ -349,6 +358,86 @@ async function inspectRemoteFile(
   };
 }
 
+/**
+ * Print files an operator uploaded from their own computer, held between the
+ * upload request that read them and the assignment request that records them.
+ * The assignment is a JSON request carrying no file, so PrintPartner keeps the
+ * accepted bytes and reclassifies them when it lands. An uploaded file and one
+ * read off a printer host then reach their verdict through the same code.
+ *
+ * They are held in this process's memory, so both size bounds are memory
+ * bounds. One upload is capped at 64 MB, about the largest sliced artifact a
+ * single plate produces, and everything pending at once at two of those, so a
+ * second operator recording a print at the same moment still gets through. A
+ * token is good for 15 minutes, the window an operator needs to read the
+ * suggestion, tick the Required units, and confirm; past that the bytes are
+ * memory nobody is coming back for. Expired entries are swept whenever a new
+ * upload arrives and a spent one is dropped on the spot, so none of this needs
+ * a background sweeper.
+ */
+const MAX_UPLOAD_BYTES = 64 * 1024 * 1024;
+const MAX_PENDING_UPLOAD_BYTES = 2 * MAX_UPLOAD_BYTES;
+const UPLOAD_TTL_MS = 15 * 60_000;
+
+type PendingUpload = {
+  /** The Build the token was issued for. A token is not portable between them. */
+  profileId: number;
+  bytes: Uint8Array;
+  expiresAt: number;
+};
+
+const pendingUploads = new Map<string, PendingUpload>();
+
+/** Drop expired uploads and report what the survivors still hold. */
+function sweepPendingUploads(now: number): number {
+  let held = 0;
+  for (const [token, upload] of pendingUploads) {
+    if (upload.expiresAt <= now) pendingUploads.delete(token);
+    else held += upload.bytes.byteLength;
+  }
+  return held;
+}
+
+/**
+ * Take an upload without spending it, because an assignment can fail for
+ * reasons that have nothing to do with the file and the operator should not
+ * have to send it again.
+ */
+function readPendingUpload(token: string, profileId: number): PendingUpload | null {
+  const upload = pendingUploads.get(token);
+  if (!upload) return null;
+  if (upload.expiresAt <= Date.now()) {
+    pendingUploads.delete(token);
+    return null;
+  }
+  return upload.profileId === profileId ? upload : null;
+}
+
+/**
+ * Classify an uploaded file. An unknown, expired, or foreign token is refused
+ * outright rather than read as "no file to inspect": PrintPartner had these
+ * bytes once, and quietly recording the print as unclassified would throw that
+ * away.
+ */
+function inspectUploadedFile(token: string, profileId: number): PrintFileInspection {
+  const upload = readPendingUpload(token, profileId);
+  if (!upload) {
+    return {
+      outcome: "rejected",
+      detail: "That upload is no longer available; upload the print file again",
+    };
+  }
+  const classified = classifyPrintFileBytes(upload.bytes);
+  if (classified.outcome === "rejected") {
+    return { outcome: "rejected", detail: printFileRejectionMessage(classified.reason) };
+  }
+  return {
+    outcome: "inspected",
+    classification: classified.classification,
+    identity: { size_bytes: classified.size_bytes, sha256: classified.sha256 },
+  };
+}
+
 type PrintFileRequest =
   | {
       outcome: "parsed";
@@ -356,7 +445,9 @@ type PrintFileRequest =
       printerId: string;
       printerName: string;
       filename: string;
+      /** Where the bytes came from. A file has one source or none, never two. */
       remotePath?: string;
+      uploadToken?: string;
       objectNames: string[];
       integrationId: string;
     }
@@ -372,6 +463,7 @@ function parsePrintFileRequest(repo: AppRepository, raw: unknown): PrintFileRequ
     printer_id?: unknown;
     filename?: unknown;
     remote_path?: unknown;
+    upload_token?: unknown;
     object_names?: unknown;
     tracking?: unknown;
   };
@@ -414,6 +506,13 @@ function parsePrintFileRequest(repo: AppRepository, raw: unknown): PrintFileRequ
     typeof body.remote_path === "string" && body.remote_path.trim()
       ? body.remote_path.trim().slice(0, 1_000)
       : undefined;
+  const uploadToken =
+    typeof body.upload_token === "string" && body.upload_token.trim()
+      ? body.upload_token.trim().slice(0, 200)
+      : undefined;
+  if (remotePath && uploadToken) {
+    return invalid("Send remote_path or upload_token, not both");
+  }
   return {
     outcome: "parsed",
     profileId,
@@ -421,6 +520,7 @@ function parsePrintFileRequest(repo: AppRepository, raw: unknown): PrintFileRequ
     printerName: printer.name,
     filename,
     remotePath,
+    uploadToken,
     objectNames: Array.isArray(body.object_names)
       ? body.object_names
           .filter((value): value is string => typeof value === "string")
@@ -430,6 +530,97 @@ function parsePrintFileRequest(repo: AppRepository, raw: unknown): PrintFileRequ
       : [],
     integrationId,
   };
+}
+
+type ParsedPrintFileRequest = Extract<PrintFileRequest, { outcome: "parsed" }>;
+
+/**
+ * Read whatever source the request names. A print file either sits on a printer
+ * PrintPartner can reach or arrived from the operator's own computer; with
+ * neither, nothing about it is known and nothing may be inferred.
+ */
+async function inspectPrintFile(
+  repo: AppRepository,
+  parsed: ParsedPrintFileRequest,
+): Promise<PrintFileInspection> {
+  if (parsed.remotePath) return inspectRemoteFile(repo, parsed.integrationId, parsed.remotePath);
+  if (parsed.uploadToken) return inspectUploadedFile(parsed.uploadToken, parsed.profileId);
+  return { outcome: "unreadable" };
+}
+
+/**
+ * What PrintPartner thinks a print file produced, before an operator says so.
+ * Suggest only: the filename fallback runs here so the operator can see what a
+ * filename match would imply, and confirm or reject it.
+ */
+function suggestPrintFileAttribution(
+  snapshot: AcceptedPlanOperationalSnapshot,
+  observation: { objectNames: string[]; fallbackFilename: string },
+): {
+  suggested_units: PrinterCheckoffUnit[];
+  suggestion_basis: "none" | "filename" | "object_names";
+  unlabeled_names: string[];
+  plan_revision_id: number;
+} {
+  const suggestion = resolveAcceptedPrinterAttribution(snapshot, observation);
+  const named = confirmAcceptedPrinterUnits({ snapshot, confirmed: suggestion.units });
+  return {
+    suggested_units:
+      named.kind === "confirmed"
+        ? named.units.map((unit) => ({ ...unit }))
+        : suggestion.units.map((unit) => ({ ...unit })),
+    suggestion_basis:
+      suggestion.units.length === 0
+        ? "none"
+        : suggestion.fallback === "used"
+          ? "filename"
+          : "object_names",
+    unlabeled_names: [...suggestion.unmatchedObjectNames],
+    plan_revision_id: snapshot.revisionId,
+  };
+}
+
+/**
+ * The Accepted Plan a print file is attributed against, or the wording for why
+ * there is not one to attribute against.
+ */
+function readAttributionSnapshot(
+  repo: AppRepository,
+  profileId: number,
+):
+  | { outcome: "ready"; snapshot: AcceptedPlanOperationalSnapshot }
+  | { outcome: "unavailable"; problem: MaterializeProblem } {
+  const accepted = repo.readAcceptedPlanOperationalSnapshot(profileId);
+  if (accepted.kind === "ready") return { outcome: "ready", snapshot: accepted.snapshot };
+  const problem = materializeProblem(
+    accepted.kind === "empty"
+      ? { kind: "empty" }
+      : { kind: "accepted_state_unavailable", reason: accepted.kind },
+  );
+  if (!problem) throw new Error("Accepted Plan attribution lost its problem");
+  return { outcome: "unavailable", problem };
+}
+
+/**
+ * Object labels the browser read out of the file it is uploading, sent as a
+ * JSON array because multipart has no shape of its own. Anything unreadable
+ * falls back to the filename basis instead of failing the upload: these labels
+ * only sharpen a suggestion the operator confirms by hand.
+ */
+function parseUploadedObjectNames(raw: string): string[] {
+  if (!raw.trim()) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+  return parsed
+    .filter((value): value is string => typeof value === "string")
+    .map((value) => value.trim().slice(0, 200))
+    .filter(Boolean)
+    .slice(0, 500);
 }
 
 export async function registerPrinterCheckoffRoutes(
@@ -773,26 +964,17 @@ export async function registerPrinterCheckoffRoutes(
       if (parsed.outcome === "invalid") {
         return sendProblem(reply, parsed.status, parsed.title, parsed.detail);
       }
-      const accepted = deps.repo.readAcceptedPlanOperationalSnapshot(parsed.profileId);
-      if (accepted.kind !== "ready") {
-        const problem = materializeProblem(
-          accepted.kind === "empty"
-            ? { kind: "empty" }
-            : { kind: "accepted_state_unavailable", reason: accepted.kind },
-        );
-        if (!problem) throw new Error("Accepted Plan preview lost its problem");
-        return sendProblem(reply, problem.status, problem.title, problem.detail);
+      const accepted = readAttributionSnapshot(deps.repo, parsed.profileId);
+      if (accepted.outcome === "unavailable") {
+        const { status, title, detail } = accepted.problem;
+        return sendProblem(reply, status, title, detail);
       }
 
-      // Suggest only. The filename fallback runs here so the operator can see
-      // what a filename match would imply, and confirm or reject it.
-      const suggestion = resolveAcceptedPrinterAttribution(accepted.snapshot, {
+      const basis = suggestPrintFileAttribution(accepted.snapshot, {
         objectNames: parsed.objectNames,
         fallbackFilename: parsed.filename,
       });
-      const inspection = parsed.remotePath
-        ? await inspectRemoteFile(deps.repo, parsed.integrationId, parsed.remotePath)
-        : ({ outcome: "unreadable" } as const);
+      const inspection = await inspectPrintFile(deps.repo, parsed);
       if (inspection.outcome === "rejected") {
         return sendProblem(reply, 409, "Conflict", inspection.detail);
       }
@@ -800,25 +982,6 @@ export async function registerPrinterCheckoffRoutes(
       // classification and print_ready rather than nulling them. PrintPartner
       // either read the bytes or it did not, and an operator must never be
       // shown a guess.
-      const named = confirmAcceptedPrinterUnits({
-        snapshot: accepted.snapshot,
-        confirmed: suggestion.units,
-      });
-      const suggestedUnits =
-        named.kind === "confirmed"
-          ? named.units.map((unit) => ({ ...unit }))
-          : suggestion.units.map((unit) => ({ ...unit }));
-      const basis = {
-        suggested_units: suggestedUnits,
-        suggestion_basis:
-          suggestion.units.length === 0
-            ? "none"
-            : suggestion.fallback === "used"
-              ? "filename"
-              : "object_names",
-        unlabeled_names: [...suggestion.unmatchedObjectNames],
-        plan_revision_id: accepted.snapshot.revisionId,
-      } as const;
       return inspection.outcome === "inspected"
         ? {
             inspected: true,
@@ -828,6 +991,126 @@ export async function registerPrinterCheckoffRoutes(
             ...basis,
           }
         : { inspected: false, ...basis };
+    },
+  );
+
+  /**
+   * Take a print file off the operator's own computer, for a print made on a
+   * printer PrintPartner cannot reach. The bytes are classified here, exactly
+   * as bytes pulled off a printer host are, and held under `upload_token` for
+   * the assignment that follows.
+   */
+  app.post(
+    "/printer-checkoff/file-assignments/upload",
+    {
+      config: { rateLimit: { max: 10, timeWindow: "1 minute" } },
+      schema: { consumes: ["multipart/form-data"] },
+    },
+    async (request, reply) => {
+      if (!request.isMultipart()) {
+        return sendProblem(
+          reply,
+          415,
+          "Unsupported Media Type",
+          "Send the print file as multipart/form-data",
+        );
+      }
+
+      let bytes: Uint8Array | null = null;
+      let uploadedName = "";
+      let profileIdField = "";
+      let objectNamesField = "";
+      try {
+        for await (const part of request.parts({
+          limits: { fileSize: MAX_UPLOAD_BYTES, files: 1, fields: 4, fieldSize: 64 * 1024 },
+        })) {
+          if (part.type !== "file") {
+            if (part.fieldname === "profile_id") profileIdField = String(part.value);
+            if (part.fieldname === "object_names") objectNamesField = String(part.value);
+            continue;
+          }
+          if (part.fieldname !== "file") {
+            // Busboy stalls on a file stream nobody reads, so drain it.
+            part.file.resume();
+            continue;
+          }
+          bytes = new Uint8Array(await part.toBuffer());
+          uploadedName = part.filename ?? "";
+        }
+      } catch (error) {
+        const code = error instanceof Error && "code" in error ? String(error.code) : "";
+        if (code === "FST_REQ_FILE_TOO_LARGE") {
+          return sendProblem(
+            reply,
+            413,
+            "Payload Too Large",
+            `That print file is larger than the ${MAX_UPLOAD_BYTES / 1024 / 1024} MB PrintPartner will take as an upload`,
+          );
+        }
+        if (code === "FST_FILES_LIMIT") {
+          return sendProblem(reply, 400, "Bad Request", "Upload one print file at a time");
+        }
+        request.log.warn({ failure: code || "unreadable" }, "Print file upload could not be read");
+        return sendProblem(reply, 400, "Bad Request", "That upload could not be read");
+      }
+
+      const profileId = Number(profileIdField);
+      if (!Number.isInteger(profileId) || profileId <= 0) {
+        return sendProblem(reply, 400, "Bad Request", "profile_id is required");
+      }
+      if (!bytes) {
+        return sendProblem(reply, 400, "Bad Request", "Attach the print file as the file part");
+      }
+      const filename = basename(uploadedName.replace(/\\/g, "/")).trim();
+      if (!filename || filename.length > 500) {
+        return sendProblem(reply, 400, "Bad Request", "filename is required");
+      }
+      if (!/\.(?:gcode|gco|bgcode|3mf)$/i.test(filename)) {
+        return sendProblem(
+          reply,
+          400,
+          "Bad Request",
+          "Choose a .gcode, .gco, .bgcode, or .3mf print file",
+        );
+      }
+
+      const accepted = readAttributionSnapshot(deps.repo, profileId);
+      if (accepted.outcome === "unavailable") {
+        const { status, title, detail } = accepted.problem;
+        return sendProblem(reply, status, title, detail);
+      }
+
+      const classified = classifyPrintFileBytes(bytes);
+      if (classified.outcome === "rejected") {
+        return sendProblem(reply, 409, "Conflict", printFileRejectionMessage(classified.reason));
+      }
+
+      const now = Date.now();
+      if (sweepPendingUploads(now) + bytes.byteLength > MAX_PENDING_UPLOAD_BYTES) {
+        return sendProblem(
+          reply,
+          503,
+          "Service Unavailable",
+          "PrintPartner is holding as many uploaded print files as it will; record one of them, then try again",
+        );
+      }
+      const uploadToken = randomUUID();
+      pendingUploads.set(uploadToken, { profileId, bytes, expiresAt: now + UPLOAD_TTL_MS });
+
+      // Same body as a preview, so one flow renders a file off a printer and a
+      // file off the operator's computer. `inspected` is always true: the bytes
+      // are in hand or the upload was refused above.
+      return {
+        inspected: true,
+        classification: classified.classification,
+        print_ready: isPrintReady(classified.classification),
+        next_action: printFileNextAction(classified.classification),
+        upload_token: uploadToken,
+        ...suggestPrintFileAttribution(accepted.snapshot, {
+          objectNames: parseUploadedObjectNames(objectNamesField),
+          fallbackFilename: filename,
+        }),
+      };
     },
   );
 
@@ -870,28 +1153,20 @@ export async function registerPrinterCheckoffRoutes(
       // sliced.
       let classification: PrintFileClassification | undefined;
       let remoteIdentity: PrinterFileIdentity | undefined;
-      if (parsed.remotePath) {
-        const inspection = await inspectRemoteFile(
-          deps.repo,
-          parsed.integrationId,
-          parsed.remotePath,
-        );
-        if (inspection.outcome === "rejected") {
-          return sendProblem(reply, 409, "Conflict", inspection.detail);
+      const inspection = await inspectPrintFile(deps.repo, parsed);
+      if (inspection.outcome === "rejected") {
+        return sendProblem(reply, 409, "Conflict", inspection.detail);
+      }
+      if (inspection.outcome === "inspected") {
+        if (!isPrintReady(inspection.classification)) {
+          return sendProblem(reply, 409, "Conflict", printFileNextAction(inspection.classification));
         }
-        if (inspection.outcome === "inspected") {
-          if (!isPrintReady(inspection.classification)) {
-            return sendProblem(
-              reply,
-              409,
-              "Conflict",
-              printFileNextAction(inspection.classification),
-            );
-          }
-          classification = inspection.classification;
-          remoteIdentity = inspection.identity;
+        classification = inspection.classification;
+        remoteIdentity = inspection.identity;
+        if (parsed.remotePath) {
           // Another link may already point at this path. Re-observing it here
-          // is what turns a changed provider file into recorded drift.
+          // is what turns a changed provider file into recorded drift. An
+          // upload has no path to drift against, so there is nothing to record.
           deps.repo.observePrinterCheckoffRemoteFile({
             integrationId: parsed.integrationId,
             remotePath: parsed.remotePath,
@@ -904,7 +1179,7 @@ export async function registerPrinterCheckoffRoutes(
           reply,
           409,
           "Conflict",
-          "PrintPartner has to read a 3MF to tell whether it holds printer instructions; pick the file from the printer's storage",
+          "PrintPartner has to read a 3MF to tell whether it holds printer instructions; upload the file so PrintPartner can read it",
         );
       }
 
@@ -952,6 +1227,9 @@ export async function registerPrinterCheckoffRoutes(
         );
         return sendProblem(reply, 500, "Internal Server Error", "Internal Server Error");
       }
+      // The link now carries everything the bytes said, so the copy PrintPartner
+      // was holding has no reader left.
+      if (parsed.uploadToken) pendingUploads.delete(parsed.uploadToken);
       if (body.completed !== true) {
         return { link: materialized.link, attribution: materialized.attribution };
       }

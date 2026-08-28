@@ -1,6 +1,8 @@
 import type {
   AcceptedPlateExportRecord,
   AcceptedPlateWorkspace,
+  ProductionPrinterAssignment,
+  ProductionRoute,
   ProductionSetup,
   RequiredUnitToken,
 } from "@print-partner/contracts";
@@ -26,6 +28,8 @@ export type WorkPackageStatus =
   | "ready_to_slice"
   | "awaiting_sliced_file"
   | "ready_to_send"
+  /** Unit files are available. The `stl` route's resting state. */
+  | "ready_to_download"
   | "queued"
   | "printing"
   | "needs_verification"
@@ -36,6 +40,7 @@ export const WORK_PACKAGE_STATUS_LABEL: Record<WorkPackageStatus, string> = {
   preparing: "Preparing",
   ready_to_slice: "Ready to slice",
   awaiting_sliced_file: "Awaiting sliced file",
+  ready_to_download: "Ready to download",
   ready_to_send: "Ready to send",
   queued: "Queued",
   printing: "Printing",
@@ -50,6 +55,7 @@ const STATUS_TONE: Record<WorkPackageStatus, WorkPackageTone> = {
   preparing: "neutral",
   ready_to_slice: "info",
   awaiting_sliced_file: "warning",
+  ready_to_download: "info",
   ready_to_send: "info",
   queued: "info",
   printing: "info",
@@ -67,6 +73,7 @@ const STATUS_OWNER: Record<WorkPackageStatus, string> = {
   preparing: "Waiting for you",
   ready_to_slice: "Waiting for you",
   awaiting_sliced_file: "Waiting for your slicer",
+  ready_to_download: "Waiting for you",
   ready_to_send: "Waiting for you",
   queued: "Waiting for the printer",
   printing: "Waiting for the printer",
@@ -104,6 +111,12 @@ export type WorkPackage = Readonly<{
    * that already left for a printer, one per printer checkoff link.
    */
   kind: "bench" | "dispatched";
+  /**
+   * How this package turns Required units into physical results. Null on the
+   * bench package until the operator answers the route question; always null on
+   * a dispatched package, whose route is settled history.
+   */
+  route: ProductionRoute | null;
   title: string;
   status: WorkPackageStatus;
   statusLabel: string;
@@ -139,6 +152,13 @@ export type WorkPackageProjection = Readonly<{
   active: readonly WorkPackage[];
   /** Recently finished packages, newest first. */
   recent: readonly WorkPackage[];
+  /**
+   * True once a file for this Build reached a printer. The result is physical
+   * from that moment, so the route stops being changeable and Checkoff owns
+   * what happens next. The route is Build state rather than per-package state,
+   * which is why one send fixes it for the Build.
+   */
+  routeLocked: boolean;
 }>;
 
 const TOKEN_PATTERN = /__(ppu_[0-9a-f]{32})$/;
@@ -189,7 +209,13 @@ export function currentExportArtifact(
   };
 }
 
-function benchStatus(input: {
+/**
+ * Each route reaches its resting state a different way, so each derives its own
+ * status. They are not three lengths of one ladder, and a new route in the
+ * contract fails to compile until it says where it rests.
+ */
+type BenchStatusInput = Readonly<{
+  route: ProductionRoute | null;
   hasPlan: boolean;
   selectedCount: number;
   needsAssignment: boolean;
@@ -197,17 +223,47 @@ function benchStatus(input: {
   hasExport: boolean;
   hasSlicedFile: boolean;
   exportFailed: boolean;
-}): WorkPackageStatus {
-  if (!input.hasPlan) return "preparing";
-  if (input.exportFailed) return "failed";
-  if (input.selectedCount === 0) return "preparing";
-  if (input.needsAssignment || input.needsArrangement) return "preparing";
-  if (!input.hasExport) return "ready_to_slice";
-  if (!input.hasSlicedFile) return "awaiting_sliced_file";
-  return "ready_to_send";
+}>;
+
+function benchStatus(input: BenchStatusInput): WorkPackageStatus {
+  switch (input.route) {
+    case null:
+      // No route means no ladder yet. The page shows the question, not a status
+      // that would imply work is under way.
+      return "preparing";
+    case "plates":
+      if (!input.hasPlan) return "preparing";
+      if (input.exportFailed) return "failed";
+      if (input.selectedCount === 0) return "preparing";
+      if (input.needsAssignment || input.needsArrangement) return "preparing";
+      if (!input.hasExport) return "ready_to_slice";
+      if (!input.hasSlicedFile) return "awaiting_sliced_file";
+      return "ready_to_send";
+    case "stl":
+      // `ready_to_download` is where this route rests, and it never advances.
+      // `currentExportArtifact` only recognises accepted-Plate 3MF jobs, so an
+      // STL pack is invisible to the projection, and even a visible one would
+      // not mean much: the files can be taken again at any time and
+      // PrintPartner never sees the printer they reach. Reporting
+      // `awaiting_sliced_file` here would wait forever for a slicer nobody
+      // asked for, and reporting `complete` would claim knowledge the product
+      // does not have. Verification is Checkoff's job, and the summary says so.
+      if (!input.hasPlan || input.selectedCount === 0) return "preparing";
+      return "ready_to_download";
+    case "external":
+      // Recording a print is data entry, and a confirmed record leaves the
+      // bench immediately: it becomes a dispatched package with a real printer
+      // status of its own. So the bench package for this route is always the
+      // blank form.
+      return "preparing";
+    default: {
+      const _exhaustive: never = input.route;
+      return _exhaustive;
+    }
+  }
 }
 
-function benchSummary(status: WorkPackageStatus, unitCount: number, plateCount: number): string {
+function platesSummary(status: WorkPackageStatus, unitCount: number, plateCount: number): string {
   switch (status) {
     case "preparing":
       return unitCount === 0
@@ -224,6 +280,110 @@ function benchSummary(status: WorkPackageStatus, unitCount: number, plateCount: 
     default:
       return `${plural(unitCount, "unit", "units")} in this package.`;
   }
+}
+
+function benchSummary(input: {
+  route: ProductionRoute | null;
+  status: WorkPackageStatus;
+  unitCount: number;
+  plateCount: number;
+  recordedPrintCount: number;
+}): string {
+  switch (input.route) {
+    case null:
+      return "Choose how you want to make these units.";
+    case "plates":
+      return platesSummary(input.status, input.unitCount, input.plateCount);
+    case "stl":
+      return input.unitCount === 0
+        ? "Choose the Required units you want the files for."
+        : `${plural(input.unitCount, "unit", "units")} ready to download. PrintPartner cannot see what you print from these files, so record the result in Checkoff.`;
+    case "external":
+      return input.recordedPrintCount === 0
+        ? "Record a print you already made. Pick the file, then say which Required units it covers."
+        : `${plural(input.recordedPrintCount, "print", "prints")} recorded. Verify them in Checkoff, or record another.`;
+    default: {
+      const _exhaustive: never = input.route;
+      return _exhaustive;
+    }
+  }
+}
+
+export type ProductionRouteChange = Readonly<{
+  from: ProductionRoute;
+  to: ProductionRoute;
+  /**
+   * Work that stops belonging to this work package, in the operator's words.
+   * Nothing listed here is deleted. See `productionRouteChange`.
+   */
+  setAside: readonly string[];
+  /** What the switch does not touch at all. */
+  kept: readonly string[];
+  /** True when there is work worth warning about, so the switch needs an answer. */
+  confirm: boolean;
+}>;
+
+/**
+ * What a route switch actually does.
+ *
+ * WCAG 2.2 SC 3.3.4 lets a page that modifies or deletes stored data satisfy
+ * the criterion three ways: reversible, checked, or confirmed. This switch is
+ * both reversible and confirmed.
+ *
+ * Reversible is the important part, and it is a correction to
+ * docs/audits/2026-08-28-production-route-choice-research.md, which assumed a
+ * switch away from the Plates route destroys the Plate work and wrote its
+ * confirmation as "This work package will lose". It does not. A Plate revision
+ * is its own record keyed to the accepted Plan revision, printer assignments
+ * live in the production setup, and an export artifact is a finished job. The
+ * route is one field beside them. Switching to `stl` and back leaves every one
+ * of those intact, which was checked against a running server.
+ *
+ * So this names the work that leaves the work package and says plainly that
+ * nothing is deleted, rather than deleting the operator's arrangement to make a
+ * warning come true. Confirmed still applies: the operator answers before the
+ * route moves, which is technique G168 minus the destruction.
+ *
+ * Required-unit selection is the same answer on every route, so it is never
+ * touched, which is what SC 3.3.7 Redundant Entry asks for.
+ */
+export function productionRouteChange(input: {
+  pkg: WorkPackage;
+  from: ProductionRoute;
+  to: ProductionRoute;
+  printerAssignments: readonly ProductionPrinterAssignment[];
+}): ProductionRouteChange {
+  const links = input.pkg.links;
+  const setAside: string[] = [];
+  const kept: string[] = [];
+
+  // Only the Plates route builds anything a switch leaves behind. A download is
+  // repeatable, and a confirmed print record already belongs to Checkoff.
+  if (input.from === "plates") {
+    if (links.plateRevision) {
+      setAside.push(
+        `Plate revision ${links.plateRevision.number}, ${plural(input.pkg.plateCount, "Plate", "Plates")}`,
+      );
+    }
+    const covered = new Set<string>(links.unitTokens);
+    const assigned = input.printerAssignments.filter((entry) => covered.has(entry.token)).length;
+    if (assigned > 0) {
+      setAside.push(
+        `Printer assignments for ${plural(assigned, "Required unit", "Required units")}`,
+      );
+    }
+    if (links.exportArtifact) {
+      setAside.push(
+        plural(links.exportArtifact.plateCount, "exported 3MF file", "exported 3MF files"),
+      );
+    }
+  }
+
+  if (input.pkg.unitCount > 0) {
+    kept.push(`Your ${plural(input.pkg.unitCount, "chosen Required unit", "chosen Required units")}`);
+  }
+
+  return { from: input.from, to: input.to, setAside, kept, confirm: setAside.length > 0 };
 }
 
 function dispatchedStatus(link: PrinterCheckoffLink): WorkPackageStatus | null {
@@ -268,6 +428,7 @@ function dispatchedPackage(link: PrinterCheckoffLink): WorkPackage | null {
   return {
     id: `send-${link.id}`,
     kind: "dispatched",
+    route: null,
     title: link.filename,
     status,
     statusLabel: WORK_PACKAGE_STATUS_LABEL[status],
@@ -321,6 +482,8 @@ export function projectWorkPackages(input: WorkPackageProjectionInput): WorkPack
       return (bLink ? sentAtValue(bLink) : "").localeCompare(aLink ? sentAtValue(aLink) : "");
     })
     .slice(0, 5);
+  const route = input.setup?.route ?? null;
+  const routeLocked = dispatched.length > 0;
 
   if (input.profileId == null || workspace == null || workspace.kind === "empty_plan") {
     return {
@@ -328,6 +491,7 @@ export function projectWorkPackages(input: WorkPackageProjectionInput): WorkPack
         ? {
             id: "bench-empty",
             kind: "bench",
+            route,
             title: "Next work package",
             status: "preparing",
             statusLabel: WORK_PACKAGE_STATUS_LABEL.preparing,
@@ -350,6 +514,7 @@ export function projectWorkPackages(input: WorkPackageProjectionInput): WorkPack
         : null,
       active,
       recent,
+      routeLocked,
     };
   }
 
@@ -367,6 +532,7 @@ export function projectWorkPackages(input: WorkPackageProjectionInput): WorkPack
   const needsAssignment = setup != null || (ready?.unassigned.length ?? 0) > 0;
   const needsArrangement = (ready?.unplaced.length ?? 0) > 0;
   const status = benchStatus({
+    route,
     hasPlan: true,
     selectedCount: packageUnits.length,
     needsAssignment,
@@ -386,10 +552,17 @@ export function projectWorkPackages(input: WorkPackageProjectionInput): WorkPack
       ? `bench-plate-${plateRevision.id}`
       : `bench-plan-${(ready ?? setup)?.basis.plan_revision_id ?? 0}`,
     kind: "bench",
+    route,
     title: "Next work package",
     status,
     statusLabel: WORK_PACKAGE_STATUS_LABEL[status],
-    summary: benchSummary(status, packageUnits.length, plateCount),
+    summary: benchSummary({
+      route,
+      status,
+      unitCount: packageUnits.length,
+      plateCount,
+      recordedPrintCount: dispatched.length,
+    }),
     unitCount: packageUnits.length,
     completedUnitCount: packageUnits.filter((unit) => unit.completed).length,
     plateCount,
@@ -409,5 +582,5 @@ export function projectWorkPackages(input: WorkPackageProjectionInput): WorkPack
     },
   };
 
-  return { bench, active, recent };
+  return { bench, active, recent, routeLocked };
 }

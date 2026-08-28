@@ -1,17 +1,25 @@
 import { describe, expect, it } from "vitest";
-import type {
-  AcceptedPlateExportRecord,
-  AcceptedPlateWorkspace,
-  RequiredUnitToken,
+import {
+  defaultProductionSetup,
+  type AcceptedPlateExportRecord,
+  type AcceptedPlateWorkspace,
+  type ProductionRoute,
+  type ProductionSetup,
+  type RequiredUnitToken,
 } from "@print-partner/contracts";
 import type { PrinterCheckoffLink } from "../api/endpoints/checkoff";
 import {
   currentExportArtifact,
+  productionRouteChange,
   projectWorkPackages,
   requiredUnitTokensFromObjectNames,
   workPackageStatusOwner,
   type WorkPackageProjectionInput,
 } from "./workPackageProjection";
+
+function setupOn(route: ProductionRoute | null): ProductionSetup {
+  return { ...defaultProductionSetup(1), route };
+}
 
 function token(seed: string): RequiredUnitToken {
   return `ppu_${seed.repeat(32).slice(0, 32)}` as RequiredUnitToken;
@@ -81,7 +89,7 @@ function input(overrides: Partial<WorkPackageProjectionInput> = {}): WorkPackage
   return {
     profileId: 1,
     workspace: readyWorkspace(),
-    setup: undefined,
+    setup: setupOn("plates"),
     selectedTokens: [TOKEN_A, TOKEN_B],
     exportRecords: [],
     checkoffLinks: [],
@@ -154,7 +162,80 @@ describe("currentExportArtifact", () => {
   });
 });
 
-describe("projectWorkPackages bench status", () => {
+describe("projectWorkPackages bench status without a route", () => {
+  it("stays Preparing and asks the question instead of implying work started", () => {
+    const { bench } = projectWorkPackages(input({ setup: setupOn(null) }));
+    expect(bench?.route).toBeNull();
+    expect(bench?.status).toBe("preparing");
+    expect(bench?.summary).toBe("Choose how you want to make these units.");
+  });
+
+  it("carries the route on the empty-plan package too, so the question still shows", () => {
+    const { bench } = projectWorkPackages(
+      input({ setup: setupOn("stl"), workspace: { kind: "empty_plan" } }),
+    );
+    expect(bench?.route).toBe("stl");
+  });
+});
+
+describe("projectWorkPackages bench status on the unit-files route", () => {
+  it("is Preparing until units are chosen", () => {
+    const { bench } = projectWorkPackages(input({ setup: setupOn("stl"), selectedTokens: [] }));
+    expect(bench?.status).toBe("preparing");
+    expect(bench?.summary).toBe("Choose the Required units you want the files for.");
+  });
+
+  it("rests at Ready to download and never waits for a slicer", () => {
+    const { bench } = projectWorkPackages(input({ setup: setupOn("stl") }));
+    expect(bench?.status).toBe("ready_to_download");
+    expect(bench?.statusLabel).toBe("Ready to download");
+    expect(bench?.summary).toContain("record the result in Checkoff");
+  });
+
+  it("stays at Ready to download even with a Plate export sitting there", () => {
+    const { bench } = projectWorkPackages(
+      input({ setup: setupOn("stl"), exportRecords: [exportRecord(90)] }),
+    );
+    expect(bench?.status).toBe("ready_to_download");
+  });
+});
+
+describe("projectWorkPackages bench status on the record-a-print route", () => {
+  it("is the blank form until something is recorded", () => {
+    const { bench } = projectWorkPackages(input({ setup: setupOn("external") }));
+    expect(bench?.status).toBe("preparing");
+    expect(bench?.summary).toContain("Record a print you already made");
+  });
+
+  it("counts the recorded prints and points at Checkoff", () => {
+    const { bench } = projectWorkPackages(
+      input({ setup: setupOn("external"), checkoffLinks: [checkoffLink()] }),
+    );
+    expect(bench?.summary).toBe("1 print recorded. Verify them in Checkoff, or record another.");
+  });
+});
+
+describe("projectWorkPackages routeLocked", () => {
+  it("is false while nothing has reached a printer", () => {
+    expect(projectWorkPackages(input()).routeLocked).toBe(false);
+  });
+
+  it("is true once a file is at a printer, even after verification", () => {
+    expect(projectWorkPackages(input({ checkoffLinks: [checkoffLink()] })).routeLocked).toBe(true);
+    expect(
+      projectWorkPackages(input({ checkoffLinks: [checkoffLink({ state: "verified" })] }))
+        .routeLocked,
+    ).toBe(true);
+  });
+
+  it("ignores a send that belongs to another Build", () => {
+    expect(
+      projectWorkPackages(input({ checkoffLinks: [checkoffLink({ profile_id: 99 })] })).routeLocked,
+    ).toBe(false);
+  });
+});
+
+describe("projectWorkPackages bench status on the Plates route", () => {
   it("is Preparing when nothing is selected", () => {
     const { bench } = projectWorkPackages(input({ selectedTokens: [] }));
     expect(bench?.status).toBe("preparing");
@@ -267,7 +348,75 @@ describe("projectWorkPackages dispatched packages", () => {
 describe("workPackageStatusOwner", () => {
   it("names who each pending state waits on", () => {
     expect(workPackageStatusOwner("awaiting_sliced_file")).toBe("Waiting for your slicer");
+    expect(workPackageStatusOwner("ready_to_download")).toBe("Waiting for you");
     expect(workPackageStatusOwner("printing")).toBe("Waiting for the printer");
     expect(workPackageStatusOwner("needs_verification")).toBe("Waiting for you in Checkoff");
+  });
+});
+
+describe("productionRouteChange", () => {
+  const benchWith = (overrides: Partial<WorkPackageProjectionInput> = {}) =>
+    projectWorkPackages(input(overrides)).bench!;
+
+  it("needs no answer when the Plates route has no Plate revision yet", () => {
+    const change = productionRouteChange({
+      pkg: benchWith({ workspace: { kind: "setup", basis, units: [], printers: [printer] } as never }),
+      from: "plates",
+      to: "stl",
+      printerAssignments: [],
+    });
+    expect(change.setAside).toEqual([]);
+    expect(change.confirm).toBe(false);
+  });
+
+  it("names the Plate revision, the printer assignments and the exported files", () => {
+    const change = productionRouteChange({
+      pkg: benchWith({ exportRecords: [exportRecord(90)] }),
+      from: "plates",
+      to: "stl",
+      printerAssignments: [
+        { token: TOKEN_A, printer_id: "printer-1" },
+        { token: TOKEN_B, printer_id: "printer-1" },
+      ],
+    });
+    expect(change.setAside).toEqual([
+      "Plate revision 3, 1 Plate",
+      "Printer assignments for 2 Required units",
+      "1 exported 3MF file",
+    ]);
+    expect(change.confirm).toBe(true);
+  });
+
+  it("ignores printer assignments for units this package does not cover", () => {
+    const change = productionRouteChange({
+      pkg: benchWith({ selectedTokens: [TOKEN_A] }),
+      from: "plates",
+      to: "external",
+      printerAssignments: [{ token: TOKEN_B, printer_id: "printer-1" }],
+    });
+    expect(change.setAside).toEqual(["Plate revision 3, 1 Plate"]);
+  });
+
+  it("always keeps the chosen units, which is what Redundant Entry asks for", () => {
+    const change = productionRouteChange({
+      pkg: benchWith(),
+      from: "plates",
+      to: "stl",
+      printerAssignments: [],
+    });
+    expect(change.kept).toEqual(["Your 2 chosen Required units"]);
+  });
+
+  it("needs no answer when leaving a route that builds nothing of its own", () => {
+    for (const from of ["stl", "external"] as const) {
+      const change = productionRouteChange({
+        pkg: benchWith({ setup: setupOn(from), exportRecords: [exportRecord(90)] }),
+        from,
+        to: "plates",
+        printerAssignments: [{ token: TOKEN_A, printer_id: "printer-1" }],
+      });
+      expect(change.setAside).toEqual([]);
+      expect(change.confirm).toBe(false);
+    }
   });
 });

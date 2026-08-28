@@ -58,10 +58,32 @@ export const productionPrinterAssignmentSchema = z.object({
   printer_id: z.string().trim().min(1).max(200),
 });
 
+/**
+ * How one Production work package turns Required units into physical results.
+ *
+ * The routes are not variations on one sequence. They differ in what they
+ * produce, whether a printer is involved at all, and whether the work happens
+ * inside PrintPartner or is being recorded after the fact.
+ *
+ * - `plates`:   prepare Plates for linked printers, export, slice, send.
+ * - `stl`:      hand over the unit files. No Plates, no printers.
+ * - `external`: the print already exists somewhere. Record it against
+ *               Required units so Checkoff can verify it.
+ *
+ * Null means the operator has not chosen yet. There is deliberately no
+ * default: pre-selecting a route would answer a question the operator has
+ * not read.
+ */
+export const productionRouteSchema = z.enum(["plates", "stl", "external"]);
+
+export type ProductionRoute = z.infer<typeof productionRouteSchema>;
+
 export const productionSetupInputSchema = z.object({
   preferred_slicer_instance_id: z.string().trim().min(1).max(200).nullable(),
   selection: productionSelectionSchema,
   printer_assignments: z.array(productionPrinterAssignmentSchema).max(20_000).default([]),
+  /** Null until the operator answers the route question. */
+  route: productionRouteSchema.nullable().default(null),
   rules: z.array(productionGroupingRuleSchema).max(200),
 });
 
@@ -85,6 +107,7 @@ export function defaultProductionSetup(profileId: number): ProductionSetup {
     preferred_slicer_instance_id: null,
     selection: { mode: "all_incomplete" },
     printer_assignments: [],
+    route: null,
     rules: [],
     updated_at: null,
   };

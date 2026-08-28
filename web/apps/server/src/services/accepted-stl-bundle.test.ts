@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import AdmZip from "adm-zip";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -9,7 +9,12 @@ import type {
   AcceptedOperationalExport,
   CaptureAcceptedOperationalExportResult,
 } from "./accepted-operational-export.js";
-import { materializeAcceptedStlBundle } from "./export-stl-pack.js";
+import {
+  materializeAcceptedStlBundle,
+  type AcceptedStlBundleWarning,
+  parseStlPackUnitTokens,
+  STL_PACK_MAX_SELECTED_UNITS,
+} from "./export-stl-pack.js";
 
 const acceptedArtifactTestHook = vi.hoisted(() => ({
   afterVerifiedOpen: undefined as (() => void) | undefined,
@@ -48,6 +53,55 @@ function fixture() {
   const tenantExportsDir = join(root, "exports");
   mkdirSync(snapshotRoot, { recursive: true });
   return { reposDir, snapshotRoot, tenantExportsDir };
+}
+
+/** A Required-unit token in the real `ppu_<32 hex>` spelling, stable per unit. */
+function unitToken(revisionPartId: number, unitIndex: number): string {
+  const digest = createHash("sha256").update(`unit:${revisionPartId}:${unitIndex}`).digest("hex");
+  return `ppu_${digest.slice(0, 32)}`;
+}
+
+/**
+ * Recomputes the publication key the way the service did before per-unit
+ * exports existed, from the published bytes alone. A drift here means an
+ * already-published bundle would be re-exported under a new path.
+ */
+function keyBeforeUnitTokens(
+  rootPath: string,
+  warnings: readonly AcceptedStlBundleWarning[],
+): string {
+  const files: Array<{ relativePath: string; size: number; sha256: string }> = [];
+  const walk = (directory: string, prefix: string): void => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) {
+        walk(path, `${prefix}${entry.name}/`);
+        continue;
+      }
+      const bytes = readFileSync(path);
+      files.push({
+        relativePath: `${prefix}${entry.name}`,
+        size: bytes.length,
+        sha256: createHash("sha256").update(bytes).digest("hex"),
+      });
+    }
+  };
+  walk(rootPath, "");
+  const identity = {
+    files: files.sort((left, right) => left.relativePath.localeCompare(right.relativePath)),
+    warnings: warnings
+      .map((warning) => ({
+        code: warning.code,
+        relativePath: warning.relativePath,
+        sourceLayer: warning.sourceLayer,
+      }))
+      .sort((left, right) =>
+        `${left.relativePath}\0${left.sourceLayer}`.localeCompare(
+          `${right.relativePath}\0${right.sourceLayer}`,
+        ),
+      ),
+  };
+  return createHash("sha256").update(JSON.stringify(identity)).digest("hex");
 }
 
 function part(input: {
@@ -101,7 +155,7 @@ function part(input: {
           expectedSha256: createHash("sha256").update(bytes).digest("hex"),
         },
     units: completed.map((value, unitIndex) => ({
-      token: `${revisionPartId}:${unitIndex}`,
+      token: unitToken(revisionPartId, unitIndex),
       unitIndex,
       completed: value,
       assembled: false,
@@ -410,5 +464,185 @@ describe("materializeAcceptedStlBundle", () => {
       Buffer.from("accepted-stl"),
     );
     expect(() => readFileSync(join(result.rootPath, "..", "widget_01.stl"))).toThrow();
+  });
+
+  it("exports only the Required units named by unitTokens", async () => {
+    const fixturePaths = fixture();
+    const bytes = Buffer.from("named unit bytes");
+    const captured = capture([
+      part({
+        snapshotRoot: fixturePaths.snapshotRoot,
+        bytes,
+        completed: [false, false, false],
+      }),
+    ]);
+
+    const result = await materializeAcceptedStlBundle({
+      capture: captured,
+      ...fixturePaths,
+      selection: "all",
+      groupBy: "color",
+      roleOrder: ["primary", "accent", "clear", "opaque"],
+      unitTokens: [unitToken(31, 0), unitToken(31, 2)],
+    });
+
+    expect(result.kind).toBe("materialized");
+    if (result.kind !== "materialized") return;
+    expect(result.fileCounts).toEqual({ accent: 2 });
+    expect(new AdmZip(result.bundlePath ?? "").getEntries().map((entry) => entry.entryName)).toEqual([
+      "accent/widget_01.stl",
+      "accent/widget_03.stl",
+    ]);
+    expect(readFileSync(join(result.rootPath, "accent", "widget_01.stl"))).toEqual(bytes);
+    expect(() => readFileSync(join(result.rootPath, "accent", "widget_02.stl"))).toThrow();
+  });
+
+  it("narrows named Required units further when only missing ones are wanted", async () => {
+    const fixturePaths = fixture();
+    const captured = capture([
+      part({ snapshotRoot: fixturePaths.snapshotRoot, completed: [false, true, false] }),
+    ]);
+
+    const result = await materializeAcceptedStlBundle({
+      capture: captured,
+      ...fixturePaths,
+      selection: "missing",
+      groupBy: "color",
+      roleOrder: ["primary", "accent", "clear", "opaque"],
+      unitTokens: [unitToken(31, 1), unitToken(31, 2)],
+    });
+
+    expect(result.kind).toBe("materialized");
+    if (result.kind !== "materialized") return;
+    expect(result.fileCounts).toEqual({ accent: 1 });
+    expect(() => readFileSync(join(result.rootPath, "accent", "widget_03.stl"))).not.toThrow();
+  });
+
+  it("drops tokens the accepted revision does not hold and keeps the rest", async () => {
+    const fixturePaths = fixture();
+    const captured = capture([
+      part({ snapshotRoot: fixturePaths.snapshotRoot, completed: [false, false] }),
+    ]);
+
+    const result = await materializeAcceptedStlBundle({
+      capture: captured,
+      ...fixturePaths,
+      selection: "all",
+      groupBy: "color",
+      roleOrder: ["primary", "accent", "clear", "opaque"],
+      unitTokens: [unitToken(31, 1), `ppu_${"f".repeat(32)}`],
+    });
+
+    expect(result.kind).toBe("materialized");
+    if (result.kind !== "materialized") return;
+    expect(result.fileCounts).toEqual({ accent: 1 });
+    expect(() => readFileSync(join(result.rootPath, "accent", "widget_02.stl"))).not.toThrow();
+  });
+
+  it("refuses an export whose Required units are all unknown", async () => {
+    const fixturePaths = fixture();
+
+    await expect(
+      materializeAcceptedStlBundle({
+        capture: capture([
+          part({ snapshotRoot: fixturePaths.snapshotRoot, completed: [false, false] }),
+        ]),
+        ...fixturePaths,
+        selection: "all",
+        groupBy: "color",
+        roleOrder: ["primary", "accent", "clear", "opaque"],
+        unitTokens: [`ppu_${"a".repeat(32)}`, `ppu_${"b".repeat(32)}`],
+      }),
+    ).resolves.toEqual({ kind: "unknown_unit_tokens" });
+  });
+
+  it("publishes two unit selections that share a file list under separate keys", async () => {
+    const fixturePaths = fixture();
+    const unavailable = () =>
+      capture([
+        part({
+          snapshotRoot: fixturePaths.snapshotRoot,
+          completed: [false, false],
+          unavailable: true,
+        }),
+      ]);
+
+    const first = await materializeAcceptedStlBundle({
+      capture: unavailable(),
+      ...fixturePaths,
+      selection: "all",
+      groupBy: "color",
+      roleOrder: ["primary", "accent", "clear", "opaque"],
+      unitTokens: [unitToken(31, 0)],
+    });
+    const second = await materializeAcceptedStlBundle({
+      capture: unavailable(),
+      ...fixturePaths,
+      selection: "all",
+      groupBy: "color",
+      roleOrder: ["primary", "accent", "clear", "opaque"],
+      unitTokens: [unitToken(31, 1)],
+    });
+
+    expect(first.kind).toBe("materialized");
+    expect(second.kind).toBe("materialized");
+    if (first.kind !== "materialized" || second.kind !== "materialized") return;
+    // Same warning, same empty file list. Only the named units tell them apart.
+    expect(first.warnings).toEqual(second.warnings);
+    expect(first.fileCounts).toEqual({});
+    expect(first.rootPath).not.toBe(second.rootPath);
+  });
+
+  it("keeps the publication key it published under before unitTokens existed", async () => {
+    const fixturePaths = fixture();
+    const captured = capture([
+      part({ snapshotRoot: fixturePaths.snapshotRoot, completed: [false, true] }),
+    ]);
+
+    const result = await materializeAcceptedStlBundle({
+      capture: captured,
+      ...fixturePaths,
+      selection: "all",
+      groupBy: "color",
+      roleOrder: ["primary", "accent", "clear", "opaque"],
+    });
+    const empty = await materializeAcceptedStlBundle({
+      capture: captured,
+      ...fixturePaths,
+      selection: "all",
+      groupBy: "color",
+      roleOrder: ["primary", "accent", "clear", "opaque"],
+      unitTokens: [],
+    });
+
+    expect(result.kind).toBe("materialized");
+    expect(empty.kind).toBe("materialized");
+    if (result.kind !== "materialized" || empty.kind !== "materialized") return;
+    expect(basename(result.rootPath)).toBe(
+      `content-${keyBeforeUnitTokens(result.rootPath, result.warnings)}`,
+    );
+    expect(empty.rootPath).toBe(result.rootPath);
+  });
+});
+
+describe("parseStlPackUnitTokens", () => {
+  it("accepts an absent field and a list of Required-unit tokens", () => {
+    expect(parseStlPackUnitTokens(undefined)).toEqual([]);
+    expect(parseStlPackUnitTokens(null)).toEqual([]);
+    expect(parseStlPackUnitTokens([])).toEqual([]);
+    const token = unitToken(31, 0);
+    expect(parseStlPackUnitTokens([token])).toEqual([token]);
+  });
+
+  it("refuses anything that is not a bounded list of tokens", () => {
+    expect(parseStlPackUnitTokens("ppu_" + "a".repeat(32))).toBe("invalid");
+    expect(parseStlPackUnitTokens([42])).toBe("invalid");
+    expect(parseStlPackUnitTokens(["31:0"])).toBe("invalid");
+    expect(parseStlPackUnitTokens([`ppu_${"A".repeat(32)}`])).toBe("invalid");
+    expect(
+      parseStlPackUnitTokens(
+        Array.from({ length: STL_PACK_MAX_SELECTED_UNITS + 1 }, () => unitToken(31, 0)),
+      ),
+    ).toBe("invalid");
   });
 });

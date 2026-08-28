@@ -120,4 +120,66 @@ describe("production setup routes", () => {
       ports.db.close();
     }
   });
+
+  it("round-trips every route choice and treats a stored setup without one as unchosen", async () => {
+    const { app, ports } = await fixture();
+    try {
+      const profile = ports.repository.createProfile("Route Build");
+      const base = {
+        preferred_slicer_instance_id: null,
+        selection: { mode: "all_incomplete" },
+        rules: [],
+      };
+
+      for (const route of ["plates", "stl", "external", null] as const) {
+        const saved = await app.inject({
+          method: "PUT",
+          url: `/plans/${profile.id}/production-setup`,
+          payload: { ...base, route },
+        });
+        expect(saved.statusCode).toBe(200);
+        expect(saved.json().route).toBe(route);
+        const loaded = await app.inject({
+          method: "GET",
+          url: `/plans/${profile.id}/production-setup`,
+        });
+        expect(loaded.json().route).toBe(route);
+      }
+
+      // A work package saved before the route question existed. The operator
+      // has not answered it, so nothing may answer it for them.
+      ports.repository.setSetting(
+        `production_setup:${profile.id}`,
+        JSON.stringify({
+          format: "production-setup-v1",
+          profile_id: profile.id,
+          preferred_slicer_instance_id: "orca-main",
+          selection: { mode: "custom", selected_unit_tokens: ["unit:a:1"] },
+          printer_assignments: [],
+          rules: [],
+          updated_at: "2026-01-01T00:00:00.000Z",
+        }),
+      );
+      const legacy = await app.inject({
+        method: "GET",
+        url: `/plans/${profile.id}/production-setup`,
+      });
+      expect(legacy.statusCode).toBe(200);
+      expect(legacy.json()).toMatchObject({
+        preferred_slicer_instance_id: "orca-main",
+        selection: { mode: "custom", selected_unit_tokens: ["unit:a:1"] },
+        route: null,
+      });
+
+      const rejected = await app.inject({
+        method: "PUT",
+        url: `/plans/${profile.id}/production-setup`,
+        payload: { ...base, route: "plate" },
+      });
+      expect(rejected.statusCode).toBe(400);
+    } finally {
+      await app.close();
+      ports.db.close();
+    }
+  });
 });

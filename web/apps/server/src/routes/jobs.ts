@@ -20,6 +20,9 @@ import { syncProjectById } from "./sources.js";
 import {
   exportStlPackJobMessage,
   materializeAcceptedStlBundle,
+  parseStlPackUnitTokens,
+  STL_PACK_MAX_SELECTED_UNITS,
+  UnknownStlPackUnitsError,
   type StlPackGroupBy,
 } from "../services/export-stl-pack.js";
 import { materializeAcceptedChecklistHtml } from "../services/export-html.js";
@@ -542,7 +545,13 @@ export class InProcessJobRunner {
         selection: missingOnly ? "missing" : "all",
         groupBy,
         roleOrder: naming.export_role_order,
+        unitTokens: Array.isArray(payload.unit_tokens)
+          ? payload.unit_tokens.filter((token): token is string => typeof token === "string")
+          : [],
       });
+      if (materialized.kind === "unknown_unit_tokens") {
+        throw new UnknownStlPackUnitsError();
+      }
       if (materialized.kind === "limit_exceeded") {
         throw new AcceptedOperationalExportPublicError("export_limit_exceeded");
       }
@@ -572,6 +581,9 @@ export class InProcessJobRunner {
           : {}),
       };
     } catch (error) {
+      // The operator picked units that no longer exist. That is their answer to
+      // fix, not an export fault to log as unexpected.
+      if (error instanceof UnknownStlPackUnitsError) throw error;
       return this.acceptedOperationalExportFailure(
         error,
         "accepted_stl_export",
@@ -926,9 +938,19 @@ export async function registerJobRoutes(
       profile_id?: number;
       missing_only?: boolean;
       group_by?: string;
+      unit_tokens?: unknown;
     };
     if (!body.profile_id || !jobs.getRepo().getOwnedProfileIdentity(body.profile_id)) {
       return sendProblem(reply, 404, "Not Found", "Profile not found");
+    }
+    const unitTokens = parseStlPackUnitTokens(body.unit_tokens);
+    if (unitTokens === "invalid") {
+      return sendProblem(
+        reply,
+        400,
+        "Bad Request",
+        `unit_tokens must be a list of at most ${STL_PACK_MAX_SELECTED_UNITS} Required-unit tokens`,
+      );
     }
     const job_id = await jobs.start(
       "export-stl-pack",
@@ -936,6 +958,7 @@ export async function registerJobRoutes(
         profile_id: body.profile_id,
         missing_only: body.missing_only ?? false,
         group_by: body.group_by === "color" ? "color" : "color_dir",
+        ...(unitTokens.length > 0 ? { unit_tokens: [...unitTokens] } : {}),
       },
       request.tenantId,
     );

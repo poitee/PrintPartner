@@ -9,6 +9,13 @@ export type ExportStlPackOptions = {
   profile_id: number;
   missing_only?: boolean;
   group_by?: StlPackGroupBy;
+  /**
+   * Required-unit tokens the pack is limited to, in the branded `ppu_` spelling
+   * the Accepted Plan uses. Omitted or empty means every included part, which
+   * is what every caller before the Production route choice asked for. The
+   * server ANDs this with `missing_only`.
+   */
+  unit_tokens?: readonly string[];
 };
 
 export async function startSync(projectIds?: number[]): Promise<string> {
@@ -35,7 +42,7 @@ export async function startExportKitBundle(
 
 export async function startExportStlPack(
   profileId: number,
-  options?: Pick<ExportStlPackOptions, "missing_only" | "group_by">,
+  options?: Pick<ExportStlPackOptions, "missing_only" | "group_by" | "unit_tokens">,
 ): Promise<string> {
   const body = await engineFetch<{ job_id: string }>("/jobs/export-stl-pack", {
     method: "POST",
@@ -43,6 +50,7 @@ export async function startExportStlPack(
       profile_id: profileId,
       missing_only: options?.missing_only ?? false,
       group_by: options?.group_by ?? "color_dir",
+      ...(options?.unit_tokens?.length ? { unit_tokens: [...options.unit_tokens] } : {}),
     }),
   });
   return body.job_id;
