@@ -6,6 +6,8 @@ import { getDb, SqliteDatabase } from "../db/client.js";
 import { AppRepository } from "../db/repository.js";
 import { createIntegrationPort } from "./store.js";
 import { spoolmanAdapter } from "./adapters/spoolman.js";
+import { moonrakerAdapter } from "./adapters/moonraker.js";
+import { bambuAdapter } from "./adapters/bambu.js";
 
 describe("integration store", () => {
   it("preserves secrets when patch contains redacted placeholders", () => {
@@ -111,6 +113,51 @@ describe("integration store", () => {
     expect(raw).toContain("bambu-lan-code");
     expect(raw).not.toContain('"apiKey":"****"');
     expect(raw).not.toContain('"accessCode":"****"');
+
+    sqlite.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("derives host capabilities from the adapter and never persists them", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pp-int-caps-"));
+    const sqlite = new SqliteDatabase(dir);
+    sqlite.connect();
+    const repo = new AppRepository(getDb(sqlite), undefined, sqlite.reposDir);
+    const port = createIntegrationPort({
+      repo,
+      getAdapter: (type) => {
+        if (type === "moonraker") return moonrakerAdapter;
+        if (type === "bambu") return bambuAdapter;
+        if (type === "spoolman") return spoolmanAdapter;
+        return undefined;
+      },
+    });
+
+    const moonraker = port.create({ type: "moonraker", name: "Voron", config: {} });
+    const bambu = port.create({ type: "bambu", name: "X1C", config: {} });
+    const spoolman = port.create({ type: "spoolman", name: "Spools", config: {} });
+
+    const listed = port.list();
+    const capabilitiesOf = (id: string) =>
+      listed.find((row) => row.id === id)?.capabilities;
+
+    // Moonraker browses files and serves cameras.
+    expect(capabilitiesOf(moonraker.id))
+      .toEqual({ files: true, cameras: true, status: true });
+    // Bambu reports print state but browses no files, so it is a printer host
+    // that can bind a Plan even though it cannot list stored files. The client
+    // used to hide Plan binding from it by hardcoding moonraker/prusalink.
+    expect(capabilitiesOf(bambu.id))
+      .toEqual({ files: false, cameras: false, status: true });
+    // Spoolman is not a printer host at all.
+    expect(capabilitiesOf(spoolman.id))
+      .toEqual({ files: false, cameras: false, status: false });
+
+    expect(port.get(bambu.id)?.capabilities?.status).toBe(true);
+
+    // Derived on read only: a stored capability would go stale the moment an
+    // adapter gained or lost one.
+    expect(repo.getSetting("integrations")).not.toContain("capabilities");
 
     sqlite.close();
     rmSync(dir, { recursive: true, force: true });

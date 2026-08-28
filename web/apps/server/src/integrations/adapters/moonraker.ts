@@ -3,11 +3,17 @@ import type {
   IntegrationTestResult,
   PrinterCamera,
   PrinterHostStatus,
-  PrinterStoredFile,
+  PrinterStorageEntry,
+  PrinterStorageListing,
   PrinterUploadResult,
 } from "@print-partner/contracts";
 import type { IntegrationAdapter, PrinterUploadSource } from "../store.js";
 import { assertSafeOutboundUrl } from "../../lib/outbound-url.js";
+import {
+  encodeStoragePath,
+  joinStoragePath,
+  safeStoragePath,
+} from "./storage-path.js";
 
 function normalizeBaseUrl(raw: unknown): string | null {
   if (typeof raw !== "string" || !raw.trim()) return null;
@@ -79,54 +85,117 @@ async function moonrakerFetch(
   throw new Error(`Too many redirects fetching ${url}`);
 }
 
-function safeRelativePath(raw: string): string | null {
-  const normalized = raw.replace(/\\/g, "/").replace(/^\/+/, "");
-  const segments = normalized.split("/");
-  if (
-    !normalized ||
-    segments.some((segment) => !segment || segment === "." || segment === "..")
-  ) {
-    return null;
-  }
-  return segments.join("/");
+/** Moonraker's print-file root. Every browsable path is relative to it. */
+const GCODES_ROOT = "gcodes";
+
+/**
+ * One row of Moonraker's directory response. Directories report `dirname`,
+ * files report `filename`; both are untrusted network input, so every field
+ * arrives as `unknown` and is narrowed before use.
+ */
+type MoonrakerDirectoryRow = {
+  dirname?: unknown;
+  filename?: unknown;
+  modified?: unknown;
+  size?: unknown;
+};
+
+function directoryRows(value: unknown): MoonrakerDirectoryRow[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((row): row is MoonrakerDirectoryRow =>
+    typeof row === "object" && row !== null
+  );
 }
 
-function encodedPath(path: string): string {
-  return path.split("/").map(encodeURIComponent).join("/");
+/**
+ * Read a bare entry name from a directory row.
+ *
+ * The directory endpoint reports one path segment per entry, so a value with a
+ * separator in it is a provider surprise rather than something to browse into.
+ */
+function entryName(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const name = safeStoragePath(raw, { trimTrailing: true });
+  if (!name || name.includes("/")) return null;
+  return name;
 }
 
-async function listStoredFiles(config: IntegrationConfig): Promise<PrinterStoredFile[]> {
+/**
+ * Moonraker reports `modified: 0` for entries whose timestamp it does not have.
+ * The epoch is a guess, not a modification time, so it stays absent.
+ */
+function modifiedAt(raw: unknown): string | undefined {
+  if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0) return undefined;
+  return new Date(raw * 1_000).toISOString();
+}
+
+/**
+ * Browse one directory of the `gcodes` root.
+ *
+ * Uses `/server/files/directory` rather than the flat `/server/files/list`:
+ * the flat endpoint only reports files Moonraker recognizes as valid G-code, so
+ * it hides folders and every other file an operator may need to see. Moonraker
+ * supplies no revision or etag for stored files, so `provider_revision` is
+ * never populated here; size and modification time carry the drift signal.
+ */
+async function browseStorage(
+  config: IntegrationConfig,
+  path: string,
+): Promise<PrinterStorageListing> {
   const baseUrl = normalizeBaseUrl(config.base_url ?? config.baseUrl);
   if (!baseUrl) throw new Error("base_url is required");
+  // Only an empty or all-slashes path means the root; anything else is validated.
+  const stripped = path.replace(/^\/+|\/+$/g, "");
+  const requested = stripped ? safeStoragePath(stripped, { trimTrailing: true }) : "";
+  const providerPath = requested === null ? null : joinStoragePath(GCODES_ROOT, requested);
+  if (requested === null || !providerPath) {
+    throw new Error("Invalid Moonraker print-file path");
+  }
+
   const response = await moonrakerFetch(
-    `${baseUrl}/server/files/list?root=gcodes`,
+    `${baseUrl}/server/files/directory?path=${encodeStoragePath(providerPath)}&extended=true`,
     config,
     { signal: AbortSignal.timeout(15_000) },
   );
   if (!response.ok) {
-    throw new Error(`Moonraker file list returned HTTP ${response.status}`);
+    throw new Error(`Moonraker directory listing returned HTTP ${response.status}`);
   }
-  const body = await response.json() as unknown;
-  if (!Array.isArray(body)) return [];
-  return body.flatMap((value): PrinterStoredFile[] => {
-    if (!value || typeof value !== "object") return [];
-    const row = value as Record<string, unknown>;
-    const path = typeof row.path === "string" ? safeRelativePath(row.path) : null;
-    if (!path) return [];
-    const modified = typeof row.modified === "number" && Number.isFinite(row.modified)
-      ? new Date(row.modified * 1_000).toISOString()
-      : undefined;
+  // Moonraker's HTTP API wraps nearly every success in `{ "result": ... }`.
+  // Reading the payload fields off the top level silently yields an empty
+  // listing against a real host, which is how this went unnoticed.
+  const body = await response.json() as { result?: { dirs?: unknown; files?: unknown } };
+  const dirRows = directoryRows(body.result?.dirs);
+  const fileRows = directoryRows(body.result?.files);
+  const prefix = requested ? `${requested}/` : "";
+
+  const directories = dirRows.flatMap((row): PrinterStorageEntry[] => {
+    const name = entryName(row.dirname);
+    if (!name) return [];
+    const modified = modifiedAt(row.modified);
+    return [{
+      kind: "directory",
+      path: `${prefix}${name}`,
+      name,
+      ...(modified === undefined ? {} : { modified_at: modified }),
+    }];
+  });
+  const files = fileRows.flatMap((row): PrinterStorageEntry[] => {
+    const name = entryName(row.filename);
+    if (!name) return [];
     const size = typeof row.size === "number" && Number.isFinite(row.size) && row.size >= 0
       ? Math.round(row.size)
       : undefined;
+    const modified = modifiedAt(row.modified);
     return [{
-      id: path,
-      path,
-      filename: path.split("/").at(-1) ?? path,
+      kind: "file",
+      path: `${prefix}${name}`,
+      name,
       ...(size === undefined ? {} : { size_bytes: size }),
       ...(modified === undefined ? {} : { modified_at: modified }),
     }];
   });
+
+  return { path: requested, entries: [...directories, ...files] };
 }
 
 type MoonrakerWebcam = {
@@ -151,8 +220,10 @@ async function readWebcams(config: IntegrationConfig): Promise<MoonrakerWebcam[]
     if (response.status === 404) return [];
     throw new Error(`Moonraker webcam list returned HTTP ${response.status}`);
   }
-  const body = await response.json() as { webcams?: unknown };
-  return Array.isArray(body.webcams) ? body.webcams as MoonrakerWebcam[] : [];
+  // Same `result` envelope as every other Moonraker HTTP endpoint.
+  const body = await response.json() as { result?: { webcams?: unknown } };
+  const webcams = body.result?.webcams;
+  return Array.isArray(webcams) ? webcams as MoonrakerWebcam[] : [];
 }
 
 function cameraId(camera: MoonrakerWebcam, index: number): string {
@@ -160,24 +231,78 @@ function cameraId(camera: MoonrakerWebcam, index: number): string {
   return uid || `camera-${index}`;
 }
 
-function supportsMjpeg(service: string, streamUrl: string): boolean {
-  const normalized = service.toLowerCase();
-  return normalized.includes("mjpeg") || normalized.includes("ustreamer") || /action=stream/i.test(streamUrl);
+/**
+ * How long one proxied camera view may hold the connection.
+ *
+ * Stream duration has to be bounded, and an MJPEG connection never ends on its
+ * own. A minute costs a watching operator a reconnect, which the browser issues
+ * on its own, instead of pinning a proxy socket open for the whole shift.
+ */
+const CAMERA_VIEW_TIMEOUT_MS = 60_000;
+
+/**
+ * Resolve one advertised camera URL against the Moonraker origin.
+ *
+ * Returns null when the value does not land on that origin, including when it
+ * cannot be resolved at all. Either way it is not a URL this adapter will fetch.
+ */
+function sameOriginCameraUrl(
+  { advertised, baseUrl }: { advertised: string; baseUrl: string },
+): string | null {
+  try {
+    const resolved = new URL(advertised, `${baseUrl}/`);
+    return resolved.origin === new URL(baseUrl).origin ? resolved.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Outcome of picking a browser-renderable view for one webcam entry. */
+type CameraViewResolution =
+  | { outcome: "resolved"; view: PrinterCamera["view"]; url: string }
+  | { outcome: "cross_origin" }
+  | { outcome: "unsupported" };
+
+/**
+ * Choose the view to serve for one webcam entry, or say why there is none.
+ *
+ * Moonraker does not operate the camera. It replays whatever a camera service
+ * or an operator wrote into its webcam database, so both URLs are SSRF
+ * candidates. A cross-origin value rejects the whole entry rather than falling
+ * back to its sibling URL: the same database row supplied both, so one bad
+ * value discredits the other.
+ */
+function resolveCameraView(
+  { baseUrl, camera }: { baseUrl: string; camera: MoonrakerWebcam },
+): CameraViewResolution {
+  const streamUrl = typeof camera.stream_url === "string" ? camera.stream_url.trim() : "";
+  const snapshotUrl = typeof camera.snapshot_url === "string" ? camera.snapshot_url.trim() : "";
+  const service = typeof camera.service === "string" ? camera.service.trim().toLowerCase() : "";
+  // "" means the entry advertised nothing; null means it advertised something
+  // this adapter refuses to fetch.
+  const stream = streamUrl ? sameOriginCameraUrl({ advertised: streamUrl, baseUrl }) : "";
+  const snapshot = snapshotUrl ? sameOriginCameraUrl({ advertised: snapshotUrl, baseUrl }) : "";
+  if (stream === null || snapshot === null) return { outcome: "cross_origin" };
+  // MJPEG is the only continuous format this adapter proxies. Moonraker's
+  // service names vary by camera stack, and an `action=stream` query is the
+  // mjpg-streamer convention.
+  const mjpeg = service.includes("mjpeg")
+    || service.includes("ustreamer")
+    || /action=stream/i.test(streamUrl);
+  if (stream && mjpeg) return { outcome: "resolved", view: "mjpeg", url: stream };
+  if (snapshot) return { outcome: "resolved", view: "snapshot", url: snapshot };
+  return { outcome: "unsupported" };
 }
 
 async function listCameras(config: IntegrationConfig): Promise<PrinterCamera[]> {
+  const baseUrl = normalizeBaseUrl(config.base_url ?? config.baseUrl);
+  if (!baseUrl) throw new Error("base_url is required");
   const cameras = await readWebcams(config);
   return cameras.flatMap((camera, index): PrinterCamera[] => {
     if (camera.enabled === false) return [];
-    const streamUrl = typeof camera.stream_url === "string" ? camera.stream_url.trim() : "";
-    const snapshotUrl = typeof camera.snapshot_url === "string" ? camera.snapshot_url.trim() : "";
+    const resolution = resolveCameraView({ baseUrl, camera });
+    if (resolution.outcome !== "resolved") return [];
     const service = typeof camera.service === "string" ? camera.service.trim() : "";
-    const view = streamUrl && supportsMjpeg(service, streamUrl)
-      ? "mjpeg"
-      : snapshotUrl
-        ? "snapshot"
-        : null;
-    if (!view) return [];
     const name = typeof camera.name === "string" && camera.name.trim()
       ? camera.name.trim()
       : `Camera ${index + 1}`;
@@ -187,7 +312,7 @@ async function listCameras(config: IntegrationConfig): Promise<PrinterCamera[]> 
     return [{
       id: cameraId(camera, index),
       name,
-      view,
+      view: resolution.view,
       ...(service ? { service } : {}),
       ...(aspectRatio ? { aspect_ratio: aspectRatio } : {}),
     }];
@@ -311,13 +436,13 @@ export const moonrakerAdapter: IntegrationAdapter = {
   type: "moonraker",
 
   files: {
-    list: listStoredFiles,
-    async open(config, fileId) {
+    browse: browseStorage,
+    async open(config, path) {
       const baseUrl = normalizeBaseUrl(config.base_url ?? config.baseUrl);
-      const path = safeRelativePath(fileId);
-      if (!baseUrl || !path) throw new Error("Invalid Moonraker print-file path");
+      const safePath = safeStoragePath(path);
+      if (!baseUrl || !safePath) throw new Error("Invalid Moonraker print-file path");
       return moonrakerFetch(
-        `${baseUrl}/server/files/gcodes/${encodedPath(path)}`,
+        `${baseUrl}/server/files/${GCODES_ROOT}/${encodeStoragePath(safePath)}`,
         config,
         { signal: AbortSignal.timeout(120_000) },
       );
@@ -332,18 +457,24 @@ export const moonrakerAdapter: IntegrationAdapter = {
       const cameras = await readWebcams(config);
       const entry = cameras.find((camera, index) => cameraId(camera, index) === requestedId);
       if (!entry || entry.enabled === false) throw new Error("Camera not found");
-      const streamUrl = typeof entry.stream_url === "string" ? entry.stream_url.trim() : "";
-      const snapshotUrl = typeof entry.snapshot_url === "string" ? entry.snapshot_url.trim() : "";
-      const service = typeof entry.service === "string" ? entry.service.trim() : "";
-      const selected = streamUrl && supportsMjpeg(service, streamUrl) ? streamUrl : snapshotUrl;
-      if (!selected) throw new Error("Camera has no browser-compatible view");
-      const url = new URL(selected, `${baseUrl}/`).toString();
-      return moonrakerFetch(
-        url,
-        config,
-        { signal: AbortSignal.timeout(10 * 60_000) },
-        new URL(baseUrl).origin,
-      );
+      const resolution = resolveCameraView({ baseUrl, camera: entry });
+      switch (resolution.outcome) {
+        case "resolved":
+          return moonrakerFetch(
+            resolution.url,
+            config,
+            { signal: AbortSignal.timeout(CAMERA_VIEW_TIMEOUT_MS) },
+            new URL(baseUrl).origin,
+          );
+        case "cross_origin":
+          throw new Error("Moonraker advertised a cross-origin camera URL");
+        case "unsupported":
+          throw new Error("Camera has no browser-compatible view");
+        default: {
+          const _exhaustive: never = resolution;
+          throw new Error(`Unhandled camera view outcome: ${JSON.stringify(_exhaustive)}`);
+        }
+      }
     },
   },
 

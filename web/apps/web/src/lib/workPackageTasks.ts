@@ -114,12 +114,12 @@ export function productionTasks(input: ProductionTaskInput): ProductionTask[] {
           : !assigned
             ? unassigned > 0
               ? `${plural(unassigned, "unit needs", "units need")} a printer. Assign by Source layer, directory, color, role, or part.`
-              : "Assign by Source layer, directory, color, role, or part, then build the Plates."
+              : "Assign by Source layer, directory, color, role, or part, then prepare the Plates."
             : unplaced > 0
               ? `${plural(unplaced, "unit does", "units do")} not fit where they are. Review the Plate layout.`
               : ready
                 ? `Plate revision ${ready.plate_revision_number} has ${plural(ready.plates.length, "Plate", "Plates")} ready to export.`
-                : "Choose units, assign printers, and review the Plate layout.",
+                : "Choose Required units, assign printers, and review the Plate layout.",
     state: noPlan
       ? "blocked"
       : preparationFailed

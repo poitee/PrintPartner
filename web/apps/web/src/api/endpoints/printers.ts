@@ -1,4 +1,8 @@
-import type { PrinterCamera, PrinterStoredFile } from "@print-partner/contracts";
+import type {
+  PrinterCamera,
+  PrinterStorageListing,
+  PrinterStoredFile,
+} from "@print-partner/contracts";
 import { engineFetch, engineFetchStream } from "../engineTransport";
 import { resolveEngineUrl } from "../contractRequest";
 
@@ -110,28 +114,63 @@ export async function updatePrinterSlicer(
   });
 }
 
-export async function fetchPrinterStoredFiles(printerId: string): Promise<PrinterStoredFile[]> {
-  const body = await engineFetch<{ files: PrinterStoredFile[] }>(
-    `/printers/${encodeURIComponent(printerId)}/files`,
-  );
-  return body.files;
+/** Which printer-host inspection surfaces the linked host can actually serve. */
+export type PrinterCapabilities = { files: boolean; cameras: boolean };
+
+/**
+ * Ask the server what this printer's host can serve.
+ *
+ * The server owns the provider matrix, so adding an integration never needs a
+ * client edit. A printer with no reachable host reports every capability false.
+ */
+export async function fetchPrinterCapabilities(printerId: string): Promise<PrinterCapabilities> {
+  return engineFetch(`/printers/${encodeURIComponent(printerId)}/capabilities`);
 }
 
-export async function openPrinterStoredFile(
-  printerId: string,
-  storedFile: PrinterStoredFile,
-): Promise<File> {
-  const params = new URLSearchParams({ id: storedFile.id });
+/** List one directory of a printer host's storage. The empty path is the root. */
+export async function fetchPrinterStorageListing(options: {
+  printerId: string;
+  path: string;
+}): Promise<PrinterStorageListing> {
+  const params = new URLSearchParams({ path: options.path });
+  return engineFetch(
+    `/printers/${encodeURIComponent(options.printerId)}/files?${params}`,
+  );
+}
+
+/**
+ * Download a stored file through the server so host credentials stay server-side.
+ *
+ * `path` is the only identifier a provider gives an entry, so it is what the
+ * content route takes.
+ */
+export async function openPrinterStoredFile(options: {
+  printerId: string;
+  file: PrinterStoredFile;
+}): Promise<File> {
+  const params = new URLSearchParams({ path: options.file.path });
   const response = await engineFetchStream({
-    path: `/printers/${encodeURIComponent(printerId)}/files/content?${params}`,
+    path: `/printers/${encodeURIComponent(options.printerId)}/files/content?${params}`,
   });
   const blob = await response.blob();
-  return new File([blob], storedFile.filename, {
+  const modified = options.file.modified_at ? Date.parse(options.file.modified_at) : Number.NaN;
+  return new File([blob], options.file.name, {
     type: blob.type || "application/octet-stream",
-    lastModified: storedFile.modified_at
-      ? new Date(storedFile.modified_at).getTime()
-      : Date.now(),
+    lastModified: Number.isNaN(modified) ? Date.now() : modified,
   });
+}
+
+/**
+ * A browser-followable URL for a stored file, served through PrintPartner.
+ *
+ * Used for the one thing PrintPartner will do with a file it cannot interpret:
+ * hand the operator a copy. The host's own URL never reaches the browser.
+ */
+export function printerStoredFileUrl(options: { printerId: string; path: string }): string {
+  const params = new URLSearchParams({ path: options.path });
+  return resolveEngineUrl(
+    `/printers/${encodeURIComponent(options.printerId)}/files/content?${params}`,
+  );
 }
 
 export async function fetchPrinterCameras(printerId: string): Promise<PrinterCamera[]> {

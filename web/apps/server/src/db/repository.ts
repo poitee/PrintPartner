@@ -64,6 +64,7 @@ import type {
   PlanSnapshotSummary,
   PrintOutcomeEvent,
   PrinterCheckoffLink,
+  PrinterFileIdentity,
   SourceRevision,
   SourceSummary,
   SourceNamingResponse,
@@ -189,6 +190,8 @@ import {
 import { normalizePrinterFilename } from "../services/printer-checkoff.js";
 import { appendPrintOutcomes } from "../services/printer-outcomes-store.js";
 import {
+  confirmAcceptedPrinterUnits,
+  detectPrinterFileDrift,
   resolveAcceptedPrinterAttribution,
   type MaterializeAcceptedPrinterLinkCommand,
   type MaterializeAcceptedPrinterLinkResult,
@@ -894,7 +897,10 @@ export class AppRepository {
     return this.transaction(() => {
       let profileId: number;
       let objectNames: readonly string[];
-      let fallbackFilename: string;
+      /** Repair, claim, and host observation all recover a print nobody is
+       * standing in front of, so they may still fall back to filename
+       * similarity. A fresh assignment may not: the operator confirms it. */
+      let fallbackFilename: string | undefined;
       let claimPrint: Readonly<UnattributedPrint> | undefined;
       if (command.kind === "repair") {
         const current = getPrinterCheckoffLink(this, command.expectedLink.id);
@@ -911,7 +917,10 @@ export class AppRepository {
       } else if (command.kind === "create") {
         profileId = command.profileId;
         objectNames = command.objectNames;
-        fallbackFilename = command.fallbackFilename ?? command.link.filename;
+      } else if (command.kind === "observe") {
+        profileId = command.profileId;
+        objectNames = command.objectNames;
+        fallbackFilename = command.link.filename;
       } else {
         profileId = command.profileId;
         const current = listUnattributedPrints(this).find((print) => print.id === command.expectedPrint.id);
@@ -943,11 +952,30 @@ export class AppRepository {
           reason: accepted.kind,
         };
       }
-      const attribution = resolveAcceptedPrinterAttribution(accepted.snapshot, {
+      if (
+        command.kind === "create" &&
+        accepted.snapshot.revisionId !== command.expectedPlanRevisionId
+      ) {
+        return { kind: "stale_plan_revision" as const };
+      }
+      const suggestion = resolveAcceptedPrinterAttribution(accepted.snapshot, {
         objectNames,
         fallbackFilename,
       });
-      if (attribution.units.length === 0) return { kind: "no_match" as const };
+      let attribution = suggestion;
+      if (command.kind === "create") {
+        const confirmed = confirmAcceptedPrinterUnits({
+          snapshot: accepted.snapshot,
+          confirmed: command.confirmedUnits,
+        });
+        if (confirmed.kind === "rejected") return { kind: "no_match" as const };
+        // A print file with nothing to bind yet, such as a G-code whose objects
+        // carry no Required-unit labels, is still attributed to the Build. It
+        // just carries no units.
+        attribution = { ...suggestion, units: confirmed.units, fallback: "unused" };
+      } else if (attribution.units.length === 0) {
+        return { kind: "no_match" as const };
+      }
       const units = attribution.units.map((unit) => ({ ...unit }));
       const unlabeledNames = attribution.unmatchedObjectNames.length
         ? [...attribution.unmatchedObjectNames]
@@ -989,6 +1017,9 @@ export class AppRepository {
         host_name: linkInput.hostName,
         filename: linkInput.filename,
         remote_path: linkInput.remotePath,
+        plan_revision_id: accepted.snapshot.revisionId,
+        remote_identity: linkInput.remoteIdentity,
+        classification: linkInput.classification,
         units,
         unlabeled_names: unlabeledNames,
         started: linkInput.started,
@@ -1031,6 +1062,37 @@ export class AppRepository {
       }
       return { kind: "created" as const, link, attribution };
     }, "immediate");
+  }
+
+  /**
+   * Re-observe the provider file behind every active link at one storage path.
+   *
+   * Passing `observed: null` records that the provider no longer serves the
+   * path. A path that matches its recorded identity again clears the drift, so
+   * a restored file does not stay flagged forever.
+   */
+  observePrinterCheckoffRemoteFile(input: {
+    readonly integrationId: string;
+    readonly remotePath: string;
+    readonly observed: PrinterFileIdentity | null;
+  }): readonly PrinterCheckoffLink[] {
+    const detectedAt = new Date().toISOString();
+    const updated: PrinterCheckoffLink[] = [];
+    for (const link of loadPrinterCheckoffLinks(this)) {
+      if (link.state !== "watching" && link.state !== "awaiting_verify") continue;
+      if (link.integration_id !== input.integrationId) continue;
+      if (link.remote_path !== input.remotePath) continue;
+      const reason = detectPrinterFileDrift({
+        recorded: link.remote_identity,
+        observed: input.observed,
+      });
+      if (reason === (link.remote_drift?.reason ?? null)) continue;
+      const next = updatePrinterCheckoffLink(this, link.id, {
+        remote_drift: reason === null ? undefined : { reason, detected_at: detectedAt },
+      });
+      if (next) updated.push(next);
+    }
+    return updated;
   }
 
   setAcceptedUnitCompletion(command: SetAcceptedUnitCompletion): SetAcceptedUnitCompletionResult {

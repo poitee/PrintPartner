@@ -233,7 +233,7 @@ export default function AcceptedPlateAssignmentForm({
     <label key={`${field}:${value}`} className="grid gap-1 text-xs font-medium">
       {label}
       <select
-        className="h-9 rounded-md border border-border bg-background px-2 text-sm"
+        className="h-9 rounded-md border border-input bg-background px-2 text-sm"
         value={current.value}
         aria-label={ariaLabel}
         disabled={submitting}
@@ -252,7 +252,7 @@ export default function AcceptedPlateAssignmentForm({
     <div className="space-y-4">
       {workspace.kind === "ready" ? (
         <p className="rounded-md border border-warning/30 bg-warning-soft p-3 text-sm text-warning">
-          Rebuilding Plates replaces all manual Plate positions.
+          Preparing these Plates again replaces every manual Plate position.
         </p>
       ) : null}
       {workspace.printers.length === 0 ? (
@@ -274,7 +274,7 @@ export default function AcceptedPlateAssignmentForm({
           <label className="grid max-w-md gap-1 text-xs font-medium">
             Assign all selected units
             <select
-              className="h-9 rounded-md border border-border bg-background px-2 text-sm"
+              className="h-9 rounded-md border border-input bg-background px-2 text-sm"
               value={allSelectedPrinterId}
               disabled={submitting || rows.length === 0}
               onChange={(event) => {
@@ -297,7 +297,7 @@ export default function AcceptedPlateAssignmentForm({
               <label className="grid max-w-56 gap-1 text-xs font-medium">
                 Group selected units by
                 <select
-                  className="h-9 rounded-md border border-border bg-background px-2 text-sm"
+                  className="h-9 rounded-md border border-input bg-background px-2 text-sm"
                   value={groupField}
                   onChange={(event) => {
                     if (isAssignmentGroupField(event.target.value)) setGroupField(event.target.value);
@@ -345,7 +345,7 @@ export default function AcceptedPlateAssignmentForm({
                 aria-label="Search Plate assignments"
               />
               <select
-                className="h-9 rounded-md border border-border bg-background px-2 text-sm"
+                className="h-9 rounded-md border border-input bg-background px-2 text-sm"
                 value={filter}
                 aria-label="Filter Plate assignments"
                 onChange={(event) => {
@@ -373,7 +373,7 @@ export default function AcceptedPlateAssignmentForm({
             <label className="grid gap-1 text-xs font-medium">
               Printer
               <select
-                className="h-9 rounded-md border border-border bg-background px-2 text-sm"
+                className="h-9 rounded-md border border-input bg-background px-2 text-sm"
                 value={assignments[unit.token] ?? ""}
                 disabled={submitting}
                 onChange={(event) => {
@@ -414,18 +414,18 @@ export default function AcceptedPlateAssignmentForm({
       <div className="sticky bottom-2 z-10 flex flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-card/95 p-3 shadow-sm backdrop-blur">
         <p className={complete ? "text-sm text-foreground" : "text-sm text-warning"} role="status" aria-live="polite">
           {complete
-            ? `${rows.length} selected ${rows.length === 1 ? "unit" : "units"} assigned across ${assignedPrinterIds.size} ${assignedPrinterIds.size === 1 ? "printer" : "printers"}. Ready to build Plates.`
+            ? `${rows.length} selected ${rows.length === 1 ? "unit" : "units"} assigned across ${assignedPrinterIds.size} ${assignedPrinterIds.size === 1 ? "printer" : "printers"}. Ready to prepare Plates.`
             : workspace.printers.length === 0
               ? "Add a printer to assign the selected units."
               : rows.length === 0
-                ? "Choose at least one unit above to build Plates."
+                ? "Choose at least one Required unit above to prepare Plates."
                 : `${missingAssignmentCount} selected ${missingAssignmentCount === 1 ? "unit still needs" : "units still need"} a printer.`}
         </p>
         <div className="flex flex-wrap gap-2">
           <Button onClick={() => void submit()} disabled={!complete || submitting} loading={submitting}>
             {workspace.kind === "ready"
-              ? `Rebuild Plates for ${rows.length} selected ${rows.length === 1 ? "unit" : "units"}`
-              : `Build Plates for ${rows.length} selected ${rows.length === 1 ? "unit" : "units"}`}
+              ? `Prepare Plates again for ${rows.length} selected ${rows.length === 1 ? "unit" : "units"}`
+              : `Prepare Plates for ${rows.length} selected ${rows.length === 1 ? "unit" : "units"}`}
           </Button>
         {onCancel ? (
           <Button variant="ghost" onClick={onCancel} disabled={submitting}>Cancel</Button>

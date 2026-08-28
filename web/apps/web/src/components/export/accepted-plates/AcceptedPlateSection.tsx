@@ -339,14 +339,14 @@ export default function AcceptedPlateSection({
           <div className="space-y-1">
             <CardTitle level={2}>
               {view === "assign"
-                ? "2. Assign printers and build Plates"
+                ? "Assign printers and prepare Plates"
                 : view === "arrange"
-                  ? "3. Review Plate layout"
+                  ? "Review Plate layout"
                   : "Plates"}
             </CardTitle>
             <CardDescription>
               {view === "assign"
-                ? "Assign selected units by Source layer, directory, color, role, or individual part. PrintPartner uses those assignments to build Plates."
+                ? "Assign selected units by Source layer, directory, color, role, or individual part. PrintPartner uses those assignments to prepare Plates."
                 : view === "arrange"
                   ? "Confirm that every unit fits. Transfer or arrange units before export; rotate parts in your slicer."
                   : "PrintPartner preserves Source orientation. Rotate parts in your slicer."}

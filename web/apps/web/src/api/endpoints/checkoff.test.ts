@@ -1,120 +1,131 @@
 import { describe, expect, it } from "vitest";
-import { jsonResponse, createEndpointTestHttp } from "../endpointTestHttp";
-import {
-  claimUnattributedPrint,
-  dismissPrinterCheckoff,
-  dismissUnattributedPrint,
-  fetchCheckoff,
-  fetchPartAssembled,
-  fetchPrintOutcomesSummary,
-  fetchPrinterCheckoffLinks,
-  fetchUnattributedPrints,
-  patchPartAssembled,
-  patchPartProgress,
-  reconcilePrinterCheckoff,
-  verifyPrinterCheckoff,
-} from "./checkoff";
+import { parsePrintFileAssignmentPreview } from "./checkoff";
 
-const http = createEndpointTestHttp();
+const BASIS = {
+  suggested_units: [
+    { part_id: 1, unit_index: 0, object_name: "bracket_left.stl" },
+    { part_id: 2, unit_index: 0 },
+  ],
+  suggestion_basis: "object_names",
+  unlabeled_names: ["mystery.stl"],
+  plan_revision_id: 4,
+};
 
-describe("checkoff endpoints", () => {
-  it("reconciles, lists, verifies, dismisses, and summarizes printer checkoff", async () => {
-    http
-      .respond(
-        jsonResponse({
-          status: { state: "idle" },
-          updates: [],
-          created_links: [],
-          applied: [],
-        }),
-      )
-      .respond(jsonResponse({ links: [] }))
-      .respond(
-        jsonResponse({
-          link: { id: "link" },
-          units_confirmed: 1,
-          units_rejected: 0,
-          outcomes: [],
-        }),
-      )
-      .respond(jsonResponse({ link: { id: "link" } }))
-      .respond(
-        jsonResponse({
-          profile_id: 7,
-          total_confirmed: 1,
-          total_rejected: 0,
-          by_reason: {},
-          by_role: {},
-          recent_rejected: [],
-        }),
+const INSPECTED = {
+  ...BASIS,
+  inspected: true,
+  classification: { format: "3mf", kind: "slicer_project" },
+  print_ready: false,
+};
+
+const UNREADABLE = /shape this app cannot read/;
+
+describe("parsePrintFileAssignmentPreview", () => {
+  it("reads a check that read the bytes", () => {
+    expect(parsePrintFileAssignmentPreview(INSPECTED)).toEqual({
+      inspected: true,
+      classification: { format: "3mf", kind: "slicer_project" },
+      print_ready: false,
+      suggested_units: [
+        { part_id: 1, unit_index: 0, object_name: "bracket_left.stl" },
+        { part_id: 2, unit_index: 0 },
+      ],
+      suggestion_basis: "object_names",
+      unlabeled_names: ["mystery.stl"],
+      plan_revision_id: 4,
+    });
+  });
+
+  it("reads a check that never read the bytes, and gives it no classification", () => {
+    const preview = parsePrintFileAssignmentPreview({ ...BASIS, inspected: false });
+    expect(preview.inspected).toBe(false);
+    expect(preview).not.toHaveProperty("classification");
+    expect(preview).not.toHaveProperty("print_ready");
+    expect(preview.plan_revision_id).toBe(4);
+  });
+
+  it("reads a sliced classification with no kind", () => {
+    const preview = parsePrintFileAssignmentPreview({
+      ...INSPECTED,
+      classification: { format: "gcode" },
+    });
+    expect(preview.inspected && preview.classification).toEqual({ format: "gcode" });
+  });
+
+  it("drops a field the UI does not use rather than failing", () => {
+    expect(
+      parsePrintFileAssignmentPreview({ ...INSPECTED, next_action: "slice it" }),
+    ).not.toHaveProperty("next_action");
+  });
+
+  it("refuses to blur the two arms together", () => {
+    // Read, but with nothing to show for it.
+    const { classification: _c, ...noClassification } = INSPECTED;
+    expect(() => parsePrintFileAssignmentPreview(noClassification)).toThrow(UNREADABLE);
+    const { print_ready: _p, ...noReadiness } = INSPECTED;
+    expect(() => parsePrintFileAssignmentPreview(noReadiness)).toThrow(UNREADABLE);
+    // Never read, yet claiming to know.
+    expect(() =>
+      parsePrintFileAssignmentPreview({
+        ...BASIS,
+        inspected: false,
+        classification: { format: "gcode" },
+      }),
+    ).toThrow(UNREADABLE);
+    // Not a discriminant at all.
+    expect(() => parsePrintFileAssignmentPreview({ ...BASIS, inspected: "maybe" })).toThrow(
+      UNREADABLE,
+    );
+    expect(() => parsePrintFileAssignmentPreview(BASIS)).toThrow(UNREADABLE);
+  });
+
+  it("rejects a classification this app cannot branch on", () => {
+    for (const classification of [
+      null,
+      {},
+      { format: "step" },
+      { format: "3mf" },
+      { format: "3mf", kind: "mystery" },
+    ]) {
+      expect(() => parsePrintFileAssignmentPreview({ ...INSPECTED, classification })).toThrow(
+        UNREADABLE,
       );
-
-    await reconcilePrinterCheckoff({ integration_id: "host" });
-    await fetchPrinterCheckoffLinks({
-      state: "awaiting_verify",
-      profile_id: 7,
-      integration_id: "host",
-    });
-    await verifyPrinterCheckoff({
-      link_id: "link",
-      decisions: [{ part_id: 1, unit_index: 0, result: "confirmed" }],
-    });
-    await dismissPrinterCheckoff({ link_id: "link" });
-    await fetchPrintOutcomesSummary(7);
-
-    expect(http.requestJson(0)).toEqual({ integration_id: "host" });
-    expect(http.calls[1]?.[0]).toContain("state=awaiting_verify");
-    expect(http.calls[1]?.[0]).toContain("profile_id=7");
-    expect(http.requestJson(2)).toEqual({
-      link_id: "link",
-      decisions: [{ part_id: 1, unit_index: 0, result: "confirmed" }],
-    });
-    expect(http.requestJson(3)).toEqual({ link_id: "link" });
-    expect(http.calls[4]?.[0]).toContain(
-      "/printer-outcomes/summary?profile_id=7",
-    );
+    }
   });
 
-  it("reads and patches legacy part checkoff state", async () => {
-    http
-      .respond(jsonResponse({ summary: "0/1", parts: [] }))
-      .respond(jsonResponse({ part: { id: 1 }, summary: "1/1" }))
-      .respond(jsonResponse({ part: { id: 1 }, summary: "1/1" }))
-      .respond(jsonResponse({ assembled: true, part: { id: 1 } }));
-
-    await fetchCheckoff(7);
-    await patchPartProgress(1, 2, true);
-    await patchPartAssembled(1, 2, true);
-    await fetchPartAssembled(1);
-
-    expect(http.calls[0]?.[0]).toContain("/plans/7/checkoff");
-    expect(http.requestJson(1)).toEqual({ unit_index: 2, completed: true });
-    expect(http.requestJson(2)).toEqual({ unit_index: 2, assembled: true });
-    expect(http.calls[3]?.[0]).toContain("/parts/1/assembled");
+  it("rejects a classification nested where the UI does not look for it", () => {
+    expect(() =>
+      parsePrintFileAssignmentPreview({
+        ...BASIS,
+        inspected: true,
+        file: { classification: { format: "gcode" }, print_ready: true },
+      }),
+    ).toThrow(UNREADABLE);
   });
 
-  it("lists, claims, and dismisses unattributed prints", async () => {
-    http
-      .respond(jsonResponse({ prints: [] }))
-      .respond(jsonResponse({ ok: true, link: { id: "link" } }))
-      .respond(jsonResponse({ ok: true }));
+  it("rejects a suggestion basis it has no words for", () => {
+    expect(() =>
+      parsePrintFileAssignmentPreview({ ...INSPECTED, suggestion_basis: "vibes" }),
+    ).toThrow(UNREADABLE);
+  });
 
-    await expect(fetchUnattributedPrints()).resolves.toEqual([]);
-    await claimUnattributedPrint("print/id", 7, {
-      selected_stl_basenames: ["part.stl"],
-    });
-    await dismissUnattributedPrint("print/id");
+  it("rejects a unit that is not a Required unit coordinate", () => {
+    for (const suggested of [
+      "units",
+      [null],
+      [{ part_id: 1 }],
+      [{ part_id: "1", unit_index: 0 }],
+      [{ part_id: 1.5, unit_index: 0 }],
+    ]) {
+      expect(() =>
+        parsePrintFileAssignmentPreview({ ...INSPECTED, suggested_units: suggested }),
+      ).toThrow(UNREADABLE);
+    }
+  });
 
-    expect(http.calls[0]?.[0]).toContain("/printer-checkoff/unattributed");
-    expect(http.calls[1]?.[0]).toContain(
-      "/printer-checkoff/unattributed/print%2Fid/claim",
-    );
-    expect(http.requestJson(1)).toEqual({
-      profile_id: 7,
-      selected_stl_basenames: ["part.stl"],
-    });
-    expect(http.calls[2]?.[0]).toContain(
-      "/printer-checkoff/unattributed/print%2Fid/dismiss",
-    );
+  it("rejects a reply that is not an object at all", () => {
+    for (const value of [null, undefined, "ok", 7, []]) {
+      expect(() => parsePrintFileAssignmentPreview(value)).toThrow(UNREADABLE);
+    }
   });
 });

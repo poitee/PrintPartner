@@ -6,7 +6,7 @@ import type {
   IntegrationType,
   PrinterCamera,
   PrinterHostStatus,
-  PrinterStoredFile,
+  PrinterStorageListing,
   PrinterUploadResult,
 } from "@print-partner/contracts";
 import type { AppRepository } from "../db/repository.js";
@@ -16,8 +16,13 @@ export type PrinterUploadSource = Uint8Array | { path: string };
 
 /** Optional host capability for browsing and opening already-sliced files. */
 export type PrinterFileAccess = {
-  list(config: IntegrationConfig): Promise<PrinterStoredFile[]>;
-  open(config: IntegrationConfig, fileId: string): Promise<Response>;
+  /**
+   * List one directory. `path` is relative to the host's print-file root; the
+   * empty string is the root itself. One directory at a time, because that is
+   * what the providers serve and what an operator browses.
+   */
+  browse(config: IntegrationConfig, path: string): Promise<PrinterStorageListing>;
+  open(config: IntegrationConfig, path: string): Promise<Response>;
 };
 
 /** Optional host capability for credential-safe camera views. */
@@ -125,19 +130,35 @@ function saveRaw(repo: AppRepository, items: IntegrationSummary[]): void {
   repo.setSetting(SETTINGS_KEY, JSON.stringify(items));
 }
 
+/**
+ * Read-side only. `saveRaw` is always fed from `loadRaw`, never from these
+ * projections, so the derived field cannot leak into stored settings.
+ */
+function withCapabilities(
+  item: IntegrationSummary,
+  deps: IntegrationStoreDeps,
+): IntegrationSummary {
+  const adapter = deps.getAdapter(item.type);
+  return {
+    ...item,
+    config: redactConfig(item.config),
+    capabilities: {
+      files: adapter?.files !== undefined,
+      cameras: adapter?.cameras !== undefined,
+      status: adapter?.getStatus !== undefined,
+    },
+  };
+}
+
 export function createIntegrationPort(deps: IntegrationStoreDeps): IntegrationPort {
   return {
     list(): IntegrationSummary[] {
-      return loadRaw(deps.repo).map((item) => ({
-        ...item,
-        config: redactConfig(item.config),
-      }));
+      return loadRaw(deps.repo).map((item) => withCapabilities(item, deps));
     },
 
     get(id: string): IntegrationSummary | null {
       const item = loadRaw(deps.repo).find((x) => x.id === id);
-      if (!item) return null;
-      return { ...item, config: redactConfig(item.config) };
+      return item ? withCapabilities(item, deps) : null;
     },
 
     create(input): IntegrationSummary {

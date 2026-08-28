@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { IntegrationSummary } from "../api/endpoints/integrations";
 import type { PrinterMachine, PrinterPreset } from "../api/endpoints/printers";
 import {
   DEFAULT_PRINTER_HOST_URLS,
@@ -182,7 +183,7 @@ describe("printer settings model", () => {
     const linked = { ...printer, integration_id: "host-1" } satisfies PrinterMachine;
     const orphan = { ...printer, id: "orphan", integration_id: null } satisfies PrinterMachine;
     const stale = { ...printer, id: "stale", integration_id: "missing" } satisfies PrinterMachine;
-    const hosts = new Map([
+    const hosts = new Map<string, IntegrationSummary>([
       [
         "host-1",
         {
@@ -195,11 +196,13 @@ describe("printer settings model", () => {
         },
       ],
       [
-        "docs",
+        "spools",
         {
-          id: "docs",
-          type: "google-drive",
-          name: "Docs",
+          id: "spools",
+          // A real integration that is not a printer host, so it must never
+          // link a printer.
+          type: "spoolman",
+          name: "Spoolman",
           config: {},
           created_at: "2026-01-01T00:00:00.000Z",
           updated_at: "2026-01-01T00:00:00.000Z",

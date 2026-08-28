@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { IntegrationType } from "@print-partner/contracts";
 import type { IntegrationSummary } from "../api/endpoints/integrations";
 import type { PrinterMachine } from "../api/endpoints/printers";
 import {
@@ -27,7 +28,7 @@ function printer(id: string, integrationId: string | null = null): PrinterMachin
 
 function integration(
   id: string,
-  type: string,
+  type: IntegrationType,
   enabled: boolean | undefined = true,
 ): IntegrationSummary {
   return {

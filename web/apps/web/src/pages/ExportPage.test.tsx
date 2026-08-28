@@ -191,12 +191,22 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("ExportPage work packages", () => {
-  it("shows the shared Build header and no numbered tabs", () => {
+  it("shows the shared Build header and no numbered stage or step label", () => {
     renderAt("/export");
     expect(screen.getByTestId("build-summary-header")).toBeTruthy();
     expect(screen.queryByText("1. Parts")).toBeNull();
     expect(screen.queryByText("2. Plates & printers")).toBeNull();
     expect(screen.queryByText("4. Send G-code")).toBeNull();
+  });
+
+  it("names the Plate preparation sections without ordinals or step circles", () => {
+    renderAt("/export?task=prepare-plates");
+    expect(screen.getByRole("heading", { name: "Choose Required units" })).toBeTruthy();
+    expect(screen.queryByRole("navigation", { name: "Plate builder" })).toBeNull();
+    const sections = screen.getByRole("navigation", { name: "Plate preparation sections" });
+    for (const link of within(sections).getAllByRole("link")) {
+      expect(link.textContent).not.toMatch(/^\s*\d/);
+    }
   });
 
   it("names one work package status and lists the four resumable tasks", () => {
@@ -225,12 +235,12 @@ describe("ExportPage work packages", () => {
 
   it("keeps the old numbered stage links working as aliases", async () => {
     renderAt("/export?stage=parts");
-    const plateBuilderNav = screen.getByRole("navigation", { name: "Plate builder" });
-    expect(within(plateBuilderNav).getByRole("link", { name: /Units.*2 selected/ }).getAttribute("href"))
+    const sections = screen.getByRole("navigation", { name: "Plate preparation sections" });
+    expect(within(sections).getByRole("link", { name: /Required units.*2 selected/ }).getAttribute("href"))
       .toBe("#plate-builder-units");
-    expect(within(plateBuilderNav).getByRole("link", { name: /Printers.*Assigned/ }).getAttribute("href"))
+    expect(within(sections).getByRole("link", { name: /Printers.*Assigned/ }).getAttribute("href"))
       .toBe("#plate-builder-printers");
-    expect(within(plateBuilderNav).getByRole("link", { name: /Plate layout.*Revision 2/ }).getAttribute("href"))
+    expect(within(sections).getByRole("link", { name: /Plate layout.*Revision 2/ }).getAttribute("href"))
       .toBe("#plate-builder-layout");
     expect(screen.getByTestId("panel-selection")).toBeTruthy();
     expect(screen.getByTestId("panel-plates-assign")).toBeTruthy();

@@ -50,7 +50,7 @@ export default function ProductionSelectionPanel({
     <div className="space-y-3">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h2 className="text-2xs font-medium uppercase tracking-wide text-muted-foreground">
-          Units in this Plate build
+          Required units in this work package
         </h2>
         <p className="font-mono text-2xs text-muted-foreground">
           {selectedCount} of {units.length} selected
@@ -96,7 +96,7 @@ export default function ProductionSelectionPanel({
               }}
             />
             <select
-              className="h-9 rounded-md border border-border bg-background px-2 text-sm"
+              className="h-9 rounded-md border border-input bg-background px-2 text-sm"
               value={filter}
               aria-label="Filter production parts"
               onChange={(event) => {

@@ -1,19 +1,14 @@
-import type { PrinterHostStatus } from "@print-partner/contracts";
+import type {
+  IntegrationSummary,
+  IntegrationTestResult,
+  PrinterHostStatus,
+} from "@print-partner/contracts";
 import { engineFetch } from "../engineTransport";
 
-export type IntegrationSummary = {
-  id: string;
-  type: string;
-  name: string;
-  config: Record<string, unknown>;
-  created_at: string;
-  updated_at: string;
-};
-
-export type IntegrationTestResult = {
-  ok: boolean;
-  message?: string;
-};
+// Wire types belong to the contract. A hand-copied duplicate here drifts the
+// moment the server adds a field, which is how the capability matrix ended up
+// restated in the client in the first place.
+export type { IntegrationSummary, IntegrationTestResult };
 
 function v1Path(path: string): string {
   const normalized = path.startsWith("/") ? path : `/${path}`;

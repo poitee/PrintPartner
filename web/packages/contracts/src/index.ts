@@ -179,6 +179,21 @@ export type IntegrationType =
 
 export type IntegrationConfig = Record<string, unknown>;
 
+/**
+ * What a linked host can actually do, derived from its adapter.
+ *
+ * The server owns this matrix. A client that re-derives it from the
+ * integration type gets it wrong the moment a provider gains a capability.
+ */
+export type IntegrationCapabilities = {
+  /** Browse and open already-sliced files on the host. */
+  files: boolean;
+  /** Serve camera views through the server proxy. */
+  cameras: boolean;
+  /** Report print state, which is what makes a print attributable to a Build. */
+  status: boolean;
+};
+
 export type IntegrationSummary = {
   id: string;
   type: IntegrationType;
@@ -186,6 +201,11 @@ export type IntegrationSummary = {
   config: IntegrationConfig;
   created_at: string;
   updated_at: string;
+  /**
+   * Derived from the adapter on read. Never persisted, so it cannot go stale
+   * against a provider that gained or lost a capability.
+   */
+  capabilities?: IntegrationCapabilities;
 };
 
 export type IntegrationTestResult = {
@@ -217,16 +237,107 @@ export type PrinterHostStatus = {
   bed_target_c?: number;
 };
 
-/** A sliced print file discovered on a linked printer host. */
-export type PrinterStoredFile = {
-  /** Provider-stable opaque identifier used to open this exact file. */
-  id: string;
-  /** Display path relative to the printer's print-file storage. */
+/**
+ * One entry in a printer host's print-file storage.
+ *
+ * `path` is relative to the host's print-file root and is the only identifier:
+ * every provider addresses an entry by the path it reported, so a second opaque
+ * id would only ever be a copy of it.
+ */
+export type PrinterStorageEntry =
+  | {
+      kind: "directory";
+      path: string;
+      name: string;
+      modified_at?: string;
+    }
+  | {
+      kind: "file";
+      path: string;
+      name: string;
+      size_bytes?: number;
+      modified_at?: string;
+      /** Provider revision or etag, where the host supplies one. */
+      provider_revision?: string;
+    };
+
+export type PrinterStoredDirectory = Extract<PrinterStorageEntry, { kind: "directory" }>;
+export type PrinterStoredFile = Extract<PrinterStorageEntry, { kind: "file" }>;
+
+/** One directory of a printer host's print-file storage. */
+export type PrinterStorageListing = {
+  /** The directory this listing describes. The empty string is the storage root. */
   path: string;
-  filename: string;
+  entries: PrinterStorageEntry[];
+};
+
+/**
+ * Provider-side identity of a linked file, recorded so PrintPartner can tell
+ * that the file at a linked path changed after it was linked.
+ */
+export type PrinterFileIdentity = {
   size_bytes?: number;
   modified_at?: string;
+  provider_revision?: string;
+  /** SHA-256 of the bytes PrintPartner downloaded. */
+  sha256?: string;
 };
+
+/** Why a linked remote file no longer matches the identity recorded for it. */
+export type PrinterFileDriftReason = "missing" | "size" | "modified" | "revision" | "content";
+
+export type PrinterFileDrift = {
+  reason: PrinterFileDriftReason;
+  detected_at: string;
+};
+
+/**
+ * What a .3mf container actually holds. A 3MF is a ZIP/OPC package that may
+ * carry only geometry, so it is not necessarily printer instructions.
+ */
+export type ThreeMfKind =
+  | "slicer_project"
+  | "model_package"
+  | "toolpath_package"
+  | "unsupported";
+
+/** What PrintPartner proved about a print file, by inspecting its bytes. */
+export type PrintFileClassification =
+  | { format: "gcode" }
+  | { format: "bgcode" }
+  | { format: "3mf"; kind: ThreeMfKind };
+
+/** True only for a classification PrintPartner can send to a printer as-is. */
+export function isPrintReady(classification: PrintFileClassification): boolean {
+  switch (classification.format) {
+    case "gcode":
+    case "bgcode":
+      return true;
+    case "3mf":
+      return classification.kind === "toolpath_package";
+    default: {
+      const _exhaustive: never = classification;
+      return _exhaustive;
+    }
+  }
+}
+
+const MANUAL_INTEGRATION_PREFIX = "manual:";
+
+/**
+ * The integration id for a printer tracked by hand. A manual printer has no
+ * host polling it, so its links carry this synthetic id instead of a real one.
+ */
+export function manualIntegrationId(printerId: string): string {
+  return `${MANUAL_INTEGRATION_PREFIX}${printerId}`;
+}
+
+/** Whether `integrationId` is the manual id, optionally for one specific printer. */
+export function isManualIntegrationId(integrationId: string, printerId?: string): boolean {
+  return printerId === undefined
+    ? integrationId.startsWith(MANUAL_INTEGRATION_PREFIX)
+    : integrationId === manualIntegrationId(printerId);
+}
 
 /** A camera view that Print Partner can render without exposing host credentials. */
 export type PrinterCamera = {
@@ -318,6 +429,17 @@ export type PrinterCheckoffLink = {
   filename: string;
   remote_path?: string;
   upload_job_id?: string;
+  /**
+   * The Accepted Plan revision this link was created against. Together with
+   * profile_id it pins the link to one Production work package.
+   */
+  plan_revision_id?: number;
+  /** Provider identity of remote_path when the link was created. */
+  remote_identity?: PrinterFileIdentity;
+  /** Set once the provider file at remote_path stops matching remote_identity. */
+  remote_drift?: PrinterFileDrift;
+  /** How the print file's bytes classified when PrintPartner inspected them. */
+  classification?: PrintFileClassification;
   units: PrinterCheckoffUnit[];
   /** Parsed object names that did not map to Progress units (visible, not confirmable). */
   unlabeled_names?: string[];

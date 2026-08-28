@@ -3,8 +3,13 @@ import type {
   PrinterCheckoffLink,
   PrinterCheckoffLinkState,
   PrinterCheckoffUnit,
+  PrinterFileDrift,
+  PrinterFileDriftReason,
+  PrinterFileIdentity,
+  PrintFileClassification,
   PrinterHostOutcome,
   PrintVerifyDecision,
+  ThreeMfKind,
 } from "@print-partner/contracts";
 import type { AppRepository } from "../db/repository.js";
 
@@ -27,6 +32,21 @@ const HOST_OUTCOMES = new Set<PrinterHostOutcome>([
   "cancelled",
 ]);
 
+const DRIFT_REASONS: Record<PrinterFileDriftReason, true> = {
+  missing: true,
+  size: true,
+  modified: true,
+  revision: true,
+  content: true,
+};
+
+const THREE_MF_KINDS: Record<ThreeMfKind, true> = {
+  slicer_project: true,
+  model_package: true,
+  toolpath_package: true,
+  unsupported: true,
+};
+
 export type CreatePrinterCheckoffLinkInput = {
   profile_id: number;
   integration_id: string;
@@ -35,6 +55,12 @@ export type CreatePrinterCheckoffLinkInput = {
   filename: string;
   remote_path?: string;
   upload_job_id?: string;
+  /** Accepted Plan revision this link is bound to, so a superseded Plan cannot own it. */
+  plan_revision_id?: number;
+  /** Provider identity of remote_path at link time, including a SHA-256 of the bytes. */
+  remote_identity?: PrinterFileIdentity;
+  /** What the print file's bytes classified as when PrintPartner inspected them. */
+  classification?: PrintFileClassification;
   units: PrinterCheckoffUnit[];
   /** Object names that did not map to units — preview only, never confirmable. */
   unlabeled_names?: string[];
@@ -53,6 +79,49 @@ function normalizeUnit(x: unknown): PrinterCheckoffUnit | null {
   const objectName = typeof row.object_name === "string" ? row.object_name.trim() : "";
   if (objectName) unit.object_name = objectName.slice(0, 200);
   return unit;
+}
+
+function parseFileIdentity(raw: unknown): PrinterFileIdentity | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const row = raw as Record<string, unknown>;
+  const identity: PrinterFileIdentity = {};
+  if (typeof row.size_bytes === "number" && Number.isFinite(row.size_bytes) && row.size_bytes >= 0) {
+    identity.size_bytes = Math.round(row.size_bytes);
+  }
+  if (typeof row.modified_at === "string" && row.modified_at.trim()) {
+    identity.modified_at = row.modified_at.trim().slice(0, 100);
+  }
+  if (typeof row.provider_revision === "string" && row.provider_revision.trim()) {
+    identity.provider_revision = row.provider_revision.trim().slice(0, 200);
+  }
+  if (typeof row.sha256 === "string" && /^[0-9a-f]{64}$/.test(row.sha256)) {
+    identity.sha256 = row.sha256;
+  }
+  return Object.keys(identity).length ? identity : undefined;
+}
+
+function isDriftReason(value: unknown): value is PrinterFileDriftReason {
+  return typeof value === "string" && value in DRIFT_REASONS;
+}
+
+function isThreeMfKind(value: unknown): value is ThreeMfKind {
+  return typeof value === "string" && value in THREE_MF_KINDS;
+}
+
+function parseFileDrift(raw: unknown): PrinterFileDrift | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const row = raw as Record<string, unknown>;
+  if (!isDriftReason(row.reason)) return undefined;
+  const detectedAt = typeof row.detected_at === "string" ? row.detected_at.trim() : "";
+  return { reason: row.reason, detected_at: detectedAt || new Date().toISOString() };
+}
+
+function parseClassification(raw: unknown): PrintFileClassification | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const row = raw as Record<string, unknown>;
+  if (row.format === "gcode" || row.format === "bgcode") return { format: row.format };
+  if (row.format !== "3mf" || !isThreeMfKind(row.kind)) return undefined;
+  return { format: "3mf", kind: row.kind };
 }
 
 function parseResolved(raw: unknown): PrintVerifyDecision[] | undefined {
@@ -148,6 +217,15 @@ function parseLink(raw: unknown): PrinterCheckoffLink | null {
       typeof row.upload_job_id === "string" && row.upload_job_id.trim()
         ? row.upload_job_id.trim()
         : undefined,
+    plan_revision_id:
+      typeof row.plan_revision_id === "number" &&
+      Number.isInteger(row.plan_revision_id) &&
+      row.plan_revision_id > 0
+        ? row.plan_revision_id
+        : undefined,
+    remote_identity: parseFileIdentity(row.remote_identity),
+    remote_drift: parseFileDrift(row.remote_drift),
+    classification: parseClassification(row.classification),
     units,
     unlabeled_names: unlabeled_names?.length ? unlabeled_names : undefined,
     resolved_units: parseResolved(row.resolved_units),
@@ -239,6 +317,12 @@ export function createPrinterCheckoffLink(
       filename,
       remote_path: input.remote_path?.trim() || undefined,
       upload_job_id: input.upload_job_id?.trim() || undefined,
+      plan_revision_id:
+        Number.isInteger(input.plan_revision_id) && (input.plan_revision_id ?? 0) > 0
+          ? input.plan_revision_id
+          : undefined,
+      remote_identity: parseFileIdentity(input.remote_identity),
+      classification: input.classification,
       units,
       unlabeled_names,
       state: "watching",
@@ -268,6 +352,8 @@ export type PrinterCheckoffLinkPatch = Partial<
     | "resolved_units"
     | "units"
     | "unlabeled_names"
+    | "remote_identity"
+    | "remote_drift"
   >
 >;
 

@@ -1,12 +1,28 @@
 import type { FastifyInstance } from "fastify";
-import type { PrinterCheckoffLink } from "@print-partner/contracts";
+import {
+  isPrintReady,
+  isManualIntegrationId,
+  manualIntegrationId,
+  type PrinterCheckoffLink,
+  type PrinterCheckoffUnit,
+  type PrinterFileIdentity,
+  type PrintFileClassification,
+  type IntegrationConfig,
+} from "@print-partner/contracts";
 import type { AppRepository } from "../db/repository.js";
 import { AcceptedPlanOperationalIntegrityError } from "../db/accepted-plan-operational.js";
-import type { IntegrationPort } from "../integrations/store.js";
+import {
+  getIntegrationConfig,
+  type IntegrationPort,
+  type PrinterFileAccess,
+} from "../integrations/store.js";
 import { getIntegrationAdapter } from "../integrations/registry.js";
-import { getIntegrationConfig } from "../integrations/store.js";
 import { sendProblem } from "../lib/api-error.js";
-import { reconcilePrinterCheckoff } from "../services/printer-checkoff.js";
+import {
+  observePrinterCheckoffFileDrift,
+  printerStoredFileIdentity,
+  reconcilePrinterCheckoff,
+} from "../services/printer-checkoff.js";
 import {
   dismissHostFailedLink,
   verifyPrinterCheckoff,
@@ -18,6 +34,7 @@ import {
   listWatchingPrinterCheckoffLinks,
   loadPrinterCheckoffLinks,
   updatePrinterCheckoffLink,
+  type PrinterCheckoffLinkPatch,
 } from "../services/printer-checkoff-store.js";
 import { summarizePrintOutcomes } from "../services/printer-outcomes-store.js";
 import {
@@ -36,6 +53,18 @@ import { normalizePrinterFilename } from "../services/printer-checkoff.js";
 import { filterLinkedUnattributedPrints } from "./printer-checkoff-route-model.js";
 import { loadFleet } from "../services/printer-fleet.js";
 import { deductSpoolmanFilamentAfterVerify } from "../services/spoolman-deduct.js";
+import {
+  confirmAcceptedPrinterUnits,
+  parsePrinterCheckoffUnitToken,
+  resolveAcceptedPrinterAttribution,
+  type MaterializeAcceptedPrinterLinkResult,
+} from "../db/accepted-printer-attribution.js";
+import {
+  classifyPrintFileBytes,
+  printFileNextAction,
+  printFileRejectionMessage,
+  MAX_CLASSIFIABLE_BYTES,
+} from "../lib/print-file-classification.js";
 
 type RouteDeps = {
   repo: AppRepository;
@@ -120,6 +149,289 @@ function claimMatchingUnattributedPrints(
   }
 }
 
+/**
+ * The link state a host-confirmed finish produces: printing is done and an
+ * operator still has to verify it. Spread a fresh `completed_at` over it.
+ */
+const HOST_COMPLETED_PATCH = {
+  state: "awaiting_verify",
+  host_outcome: "success",
+  saw_active: true,
+  last_progress: 100,
+} as const satisfies PrinterCheckoffLinkPatch;
+
+type MaterializeProblem = { status: number; title: string; detail: string };
+
+/**
+ * One wording for every way materializing a printer link can fail, so the
+ * assignment route and the unattributed-claim route cannot drift apart. Returns
+ * null for the outcomes that produced a link.
+ */
+function materializeProblem(
+  materialized: MaterializeAcceptedPrinterLinkResult,
+): MaterializeProblem | null {
+  switch (materialized.kind) {
+    case "created":
+    case "repaired":
+    case "claimed":
+      return null;
+    case "transaction_unavailable":
+      return {
+        status: 503,
+        title: "Service Unavailable",
+        detail: "Accepted Plan update is unavailable",
+      };
+    case "empty":
+      return {
+        status: 409,
+        title: "Conflict",
+        detail: "Accepted Plan has no Required units",
+      };
+    case "accepted_state_unavailable":
+      return {
+        status: 409,
+        title: "Conflict",
+        detail:
+          materialized.reason === "compatibility_dirty"
+            ? "Accepted Plan requires compatibility repair"
+            : "Accepted Plan operational state is not initialized",
+      };
+    case "stale_plan_revision":
+      return {
+        status: 409,
+        title: "Conflict",
+        detail: "The Accepted Plan moved on; reload the Build and choose the file again",
+      };
+    case "no_match":
+      return {
+        status: 409,
+        title: "Conflict",
+        detail: "That print file does not map to an incomplete Required unit in this Build",
+      };
+    case "already_linked":
+      return {
+        status: 409,
+        title: "Conflict",
+        detail: "That print file is already assigned",
+      };
+    case "print_changed":
+      return {
+        status: 409,
+        title: "Conflict",
+        detail: "Print changed or was already claimed",
+      };
+    case "link_not_found":
+    case "link_changed":
+    case "not_repairable":
+      return {
+        status: 409,
+        title: "Conflict",
+        detail: "Tracked print changed; reload and retry",
+      };
+    default: {
+      const _exhaustive: never = materialized;
+      return _exhaustive;
+    }
+  }
+}
+
+/** How long PrintPartner will spend pulling one file from a printer host. */
+const MAX_INSPECT_MS = 30_000;
+
+/**
+ * Read a provider response into memory under a byte and time budget, because a
+ * printer host is untrusted network input even on a private LAN.
+ */
+async function readBoundedBody(response: Response): Promise<Uint8Array | null> {
+  const declared = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > MAX_CLASSIFIABLE_BYTES) return null;
+  const reader = response.body?.getReader();
+  if (!reader) {
+    const whole = new Uint8Array(await response.arrayBuffer());
+    return whole.byteLength > MAX_CLASSIFIABLE_BYTES ? null : whole;
+  }
+  const deadline = Date.now() + MAX_INSPECT_MS;
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > MAX_CLASSIFIABLE_BYTES || Date.now() > deadline) {
+      await reader.cancel();
+      return null;
+    }
+    chunks.push(value);
+  }
+  const body = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return body;
+}
+
+/** A host that can actually serve print files, with the config to reach it. */
+type PrinterFileGateway = { files: PrinterFileAccess; config: IntegrationConfig };
+
+function printerFileGateway(
+  repo: AppRepository,
+  integrationId: string,
+): PrinterFileGateway | null {
+  const integration = getIntegrationConfig(repo, integrationId);
+  if (!integration || integration.config.enabled === false) return null;
+  const files = getIntegrationAdapter(integration.type)?.files;
+  return files ? { files, config: integration.config } : null;
+}
+
+type RemoteFileInspection =
+  | {
+      outcome: "inspected";
+      classification: PrintFileClassification;
+      identity: PrinterFileIdentity;
+    }
+  | { outcome: "rejected"; detail: string }
+  /** No host file access, no path, or the host would not serve the bytes. */
+  | { outcome: "unreadable" };
+
+/**
+ * Pull the provider's own metadata plus the real bytes for one storage path,
+ * then classify those bytes. This is the only thing allowed to decide what a
+ * print file is; the client's opinion never enters.
+ */
+async function inspectRemoteFile(
+  repo: AppRepository,
+  integrationId: string,
+  remotePath: string,
+): Promise<RemoteFileInspection> {
+  const gateway = printerFileGateway(repo, integrationId);
+  if (!gateway) return { outcome: "unreadable" };
+
+  const lastSlash = remotePath.lastIndexOf("/");
+  let providerIdentity: PrinterFileIdentity = {};
+  try {
+    const listing = await gateway.files.browse(
+      gateway.config,
+      lastSlash < 0 ? "" : remotePath.slice(0, lastSlash),
+    );
+    const entry = listing.entries.find(
+      (candidate) => candidate.kind === "file" && candidate.path === remotePath,
+    );
+    if (entry?.kind === "file") providerIdentity = printerStoredFileIdentity(entry);
+  } catch {
+    // A host that will not list its storage may still serve the bytes, and the
+    // content hash alone is a usable identity.
+  }
+
+  let bytes: Uint8Array | null;
+  try {
+    const response = await gateway.files.open(gateway.config, remotePath);
+    if (!response.ok) return { outcome: "unreadable" };
+    bytes = await readBoundedBody(response);
+  } catch {
+    return { outcome: "unreadable" };
+  }
+  if (!bytes) return { outcome: "rejected", detail: "That print file is too large to inspect" };
+
+  const classified = classifyPrintFileBytes(bytes);
+  if (classified.outcome === "rejected") {
+    return { outcome: "rejected", detail: printFileRejectionMessage(classified.reason) };
+  }
+  return {
+    outcome: "inspected",
+    classification: classified.classification,
+    identity: {
+      ...providerIdentity,
+      size_bytes: classified.size_bytes,
+      sha256: classified.sha256,
+    },
+  };
+}
+
+type PrintFileRequest =
+  | {
+      outcome: "parsed";
+      profileId: number;
+      printerId: string;
+      printerName: string;
+      filename: string;
+      remotePath?: string;
+      objectNames: string[];
+      integrationId: string;
+    }
+  | { outcome: "invalid"; status: number; title: string; detail: string };
+
+/**
+ * The part of a print-file request that preview and assignment share, so a
+ * preview cannot answer for one file while the assignment binds another.
+ */
+function parsePrintFileRequest(repo: AppRepository, raw: unknown): PrintFileRequest {
+  const body = (raw ?? {}) as {
+    profile_id?: unknown;
+    printer_id?: unknown;
+    filename?: unknown;
+    remote_path?: unknown;
+    object_names?: unknown;
+    tracking?: unknown;
+  };
+  const invalid = (detail: string): PrintFileRequest => ({
+    outcome: "invalid",
+    status: 400,
+    title: "Bad Request",
+    detail,
+  });
+  const profileId = Number(body.profile_id);
+  if (!Number.isInteger(profileId) || profileId <= 0) return invalid("profile_id is required");
+  const printerId = typeof body.printer_id === "string" ? body.printer_id.trim() : "";
+  if (!printerId) return invalid("printer_id is required");
+  const filename = typeof body.filename === "string" ? body.filename.trim() : "";
+  if (!filename || filename.length > 500) return invalid("filename is required");
+  if (!/\.(?:gcode|gco|bgcode|3mf)$/i.test(filename)) {
+    return invalid("Choose a .gcode, .gco, .bgcode, or .3mf print file");
+  }
+  const printer = loadFleet(repo).find((row) => row.id === printerId);
+  if (!printer) {
+    return { outcome: "invalid", status: 404, title: "Not Found", detail: "Printer not found" };
+  }
+
+  let integrationId: string;
+  if (body.tracking === "manual") {
+    integrationId = manualIntegrationId(printer.id);
+  } else {
+    integrationId = printer.integration_id?.trim() ?? "";
+    const integration = integrationId ? getIntegrationConfig(repo, integrationId) : null;
+    if (!integration || integration.config.enabled === false) {
+      return {
+        outcome: "invalid",
+        status: 409,
+        title: "Conflict",
+        detail: "Use manual tracking because this printer has no available host",
+      };
+    }
+  }
+  const remotePath =
+    typeof body.remote_path === "string" && body.remote_path.trim()
+      ? body.remote_path.trim().slice(0, 1_000)
+      : undefined;
+  return {
+    outcome: "parsed",
+    profileId,
+    printerId: printer.id,
+    printerName: printer.name,
+    filename,
+    remotePath,
+    objectNames: Array.isArray(body.object_names)
+      ? body.object_names
+          .filter((value): value is string => typeof value === "string")
+          .map((value) => value.trim().slice(0, 200))
+          .filter(Boolean)
+          .slice(0, 500)
+      : [],
+    integrationId,
+  };
+}
+
 export async function registerPrinterCheckoffRoutes(
   app: FastifyInstance,
   deps: RouteDeps,
@@ -200,6 +512,18 @@ export async function registerPrinterCheckoffRoutes(
       const updates = reconcilePrinterCheckoff(deps.repo, integrationId, status);
       const createdLinks: PrinterCheckoffLink[] = [];
 
+      // Same poll, so a provider file that changed underneath a link is noticed
+      // without an operator asking.
+      const gateway = printerFileGateway(deps.repo, integrationId);
+      if (gateway) {
+        await observePrinterCheckoffFileDrift({
+          repo: deps.repo,
+          integrationId,
+          files: gateway.files,
+          config: gateway.config,
+        });
+      }
+
       // Handle externally-completed prints (no watching link transitioned)
       if (
         status.state === "complete" &&
@@ -272,10 +596,9 @@ export async function registerPrinterCheckoffRoutes(
               const fleet = loadFleet(deps.repo);
               const machine = fleet.find((m) => m.integration_id === integrationId);
               const created = deps.repo.materializeAcceptedPrinterLink({
-                kind: "create",
+                kind: "observe",
                 profileId: binding.profile_id,
                 objectNames,
-                fallbackFilename: status.filename,
                 link: {
                   integrationId,
                   printerId: machine?.id ?? integrationId,
@@ -443,159 +766,234 @@ export async function registerPrinterCheckoffRoutes(
   );
 
   app.post(
+    "/printer-checkoff/file-assignments/preview",
+    { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const parsed = parsePrintFileRequest(deps.repo, request.body);
+      if (parsed.outcome === "invalid") {
+        return sendProblem(reply, parsed.status, parsed.title, parsed.detail);
+      }
+      const accepted = deps.repo.readAcceptedPlanOperationalSnapshot(parsed.profileId);
+      if (accepted.kind !== "ready") {
+        const problem = materializeProblem(
+          accepted.kind === "empty"
+            ? { kind: "empty" }
+            : { kind: "accepted_state_unavailable", reason: accepted.kind },
+        );
+        if (!problem) throw new Error("Accepted Plan preview lost its problem");
+        return sendProblem(reply, problem.status, problem.title, problem.detail);
+      }
+
+      // Suggest only. The filename fallback runs here so the operator can see
+      // what a filename match would imply, and confirm or reject it.
+      const suggestion = resolveAcceptedPrinterAttribution(accepted.snapshot, {
+        objectNames: parsed.objectNames,
+        fallbackFilename: parsed.filename,
+      });
+      const inspection = parsed.remotePath
+        ? await inspectRemoteFile(deps.repo, parsed.integrationId, parsed.remotePath)
+        : ({ outcome: "unreadable" } as const);
+      if (inspection.outcome === "rejected") {
+        return sendProblem(reply, 409, "Conflict", inspection.detail);
+      }
+      // `inspected` is the discriminant, so the unknown case omits
+      // classification and print_ready rather than nulling them. PrintPartner
+      // either read the bytes or it did not, and an operator must never be
+      // shown a guess.
+      const named = confirmAcceptedPrinterUnits({
+        snapshot: accepted.snapshot,
+        confirmed: suggestion.units,
+      });
+      const suggestedUnits =
+        named.kind === "confirmed"
+          ? named.units.map((unit) => ({ ...unit }))
+          : suggestion.units.map((unit) => ({ ...unit }));
+      const basis = {
+        suggested_units: suggestedUnits,
+        suggestion_basis:
+          suggestion.units.length === 0
+            ? "none"
+            : suggestion.fallback === "used"
+              ? "filename"
+              : "object_names",
+        unlabeled_names: [...suggestion.unmatchedObjectNames],
+        plan_revision_id: accepted.snapshot.revisionId,
+      } as const;
+      return inspection.outcome === "inspected"
+        ? {
+            inspected: true,
+            classification: inspection.classification,
+            print_ready: isPrintReady(inspection.classification),
+            next_action: printFileNextAction(inspection.classification),
+            ...basis,
+          }
+        : { inspected: false, ...basis };
+    },
+  );
+
+  app.post(
     "/printer-checkoff/file-assignments",
     { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } },
     async (request, reply) => {
       const body = request.body as {
-        profile_id?: unknown;
-        printer_id?: unknown;
-        filename?: unknown;
-        remote_path?: unknown;
-        object_names?: unknown;
-        tracking?: unknown;
         completed?: unknown;
-        sliced_3mf_confirmed?: unknown;
+        plan_revision_id?: unknown;
+        unit_tokens?: unknown;
       };
-      const profileId = Number(body.profile_id);
-      const printerId = typeof body.printer_id === "string" ? body.printer_id.trim() : "";
-      const filename = typeof body.filename === "string" ? body.filename.trim() : "";
-      const tracking = body.tracking === "manual" ? "manual" : "host";
-      if (!Number.isInteger(profileId) || profileId <= 0) {
-        return sendProblem(reply, 400, "Bad Request", "profile_id is required");
+      const parsed = parsePrintFileRequest(deps.repo, request.body);
+      if (parsed.outcome === "invalid") {
+        return sendProblem(reply, parsed.status, parsed.title, parsed.detail);
       }
-      if (!printerId) return sendProblem(reply, 400, "Bad Request", "printer_id is required");
-      if (!filename || filename.length > 500) {
-        return sendProblem(reply, 400, "Bad Request", "filename is required");
+      const planRevisionId = Number(body.plan_revision_id);
+      if (!Number.isInteger(planRevisionId) || planRevisionId <= 0) {
+        return sendProblem(reply, 400, "Bad Request", "plan_revision_id is required");
       }
-      if (!/\.(?:gcode|gco|bgcode|3mf)$/i.test(filename)) {
+      if (!Array.isArray(body.unit_tokens)) {
         return sendProblem(
           reply,
           400,
           "Bad Request",
-          "Choose a .gcode, .gco, .bgcode, or .3mf print file",
+          "unit_tokens is required; confirm the Required units this file produces",
         );
       }
-      if (/\.3mf$/i.test(filename) && body.sliced_3mf_confirmed !== true) {
-        return sendProblem(
-          reply,
-          400,
-          "Bad Request",
-          "Confirm that the 3MF is sliced and print-ready",
-        );
+      const confirmedUnits: PrinterCheckoffUnit[] = [];
+      for (const rawToken of body.unit_tokens.slice(0, 500)) {
+        const unit = typeof rawToken === "string" ? parsePrinterCheckoffUnitToken(rawToken) : null;
+        if (!unit) {
+          return sendProblem(reply, 400, "Bad Request", "unit_tokens holds an unreadable unit");
+        }
+        confirmedUnits.push(unit);
       }
-      const printer = loadFleet(deps.repo).find((row) => row.id === printerId);
-      if (!printer) return sendProblem(reply, 404, "Not Found", "Printer not found");
-      const objectNames = Array.isArray(body.object_names)
-        ? body.object_names
-            .filter((value): value is string => typeof value === "string")
-            .map((value) => value.trim().slice(0, 200))
-            .filter(Boolean)
-            .slice(0, 500)
-        : [];
-      const remotePath = typeof body.remote_path === "string" && body.remote_path.trim()
-        ? body.remote_path.trim().slice(0, 1_000)
-        : undefined;
 
-      let integrationId: string;
-      if (tracking === "manual") {
-        integrationId = `manual:${printer.id}`;
-      } else {
-        integrationId = printer.integration_id?.trim() ?? "";
-        const integration = integrationId
-          ? getIntegrationConfig(deps.repo, integrationId)
-          : null;
-        if (!integration || integration.config.enabled === false) {
-          return sendProblem(
-            reply,
-            409,
-            "Conflict",
-            "Use manual tracking because this printer has no available host",
-          );
+      // The bytes decide. Nothing the client sent about this file is trusted,
+      // and a 3MF PrintPartner cannot read is refused rather than assumed
+      // sliced.
+      let classification: PrintFileClassification | undefined;
+      let remoteIdentity: PrinterFileIdentity | undefined;
+      if (parsed.remotePath) {
+        const inspection = await inspectRemoteFile(
+          deps.repo,
+          parsed.integrationId,
+          parsed.remotePath,
+        );
+        if (inspection.outcome === "rejected") {
+          return sendProblem(reply, 409, "Conflict", inspection.detail);
+        }
+        if (inspection.outcome === "inspected") {
+          if (!isPrintReady(inspection.classification)) {
+            return sendProblem(
+              reply,
+              409,
+              "Conflict",
+              printFileNextAction(inspection.classification),
+            );
+          }
+          classification = inspection.classification;
+          remoteIdentity = inspection.identity;
+          // Another link may already point at this path. Re-observing it here
+          // is what turns a changed provider file into recorded drift.
+          deps.repo.observePrinterCheckoffRemoteFile({
+            integrationId: parsed.integrationId,
+            remotePath: parsed.remotePath,
+            observed: remoteIdentity,
+          });
         }
       }
+      if (!classification && /\.3mf$/i.test(parsed.filename)) {
+        return sendProblem(
+          reply,
+          409,
+          "Conflict",
+          "PrintPartner has to read a 3MF to tell whether it holds printer instructions; pick the file from the printer's storage",
+        );
+      }
 
-      let materialized: ReturnType<AppRepository["materializeAcceptedPrinterLink"]>;
+      let materialized: MaterializeAcceptedPrinterLinkResult;
       try {
         materialized = deps.repo.materializeAcceptedPrinterLink({
           kind: "create",
-          profileId,
-          objectNames,
-          fallbackFilename: filename,
+          profileId: parsed.profileId,
+          expectedPlanRevisionId: planRevisionId,
+          objectNames: parsed.objectNames,
+          confirmedUnits,
           link: {
-            integrationId,
-            printerId: printer.id,
-            hostName: printer.name,
-            filename,
-            remotePath,
+            integrationId: parsed.integrationId,
+            printerId: parsed.printerId,
+            hostName: parsed.printerName,
+            filename: parsed.filename,
+            remotePath: parsed.remotePath,
+            remoteIdentity,
+            classification,
             started: false,
           },
         });
       } catch (error) {
-        if (error instanceof AcceptedPlanOperationalIntegrityError) {
-          request.log.error(
-            { failure: "integrity", code: error.code, profileId, printerId },
-            "Print file assignment failed",
-          );
-        } else {
-          request.log.error(
-            { failure: "unexpected", profileId, printerId },
-            "Print file assignment failed",
-          );
-        }
+        request.log.error(
+          {
+            failure:
+              error instanceof AcceptedPlanOperationalIntegrityError ? "integrity" : "unexpected",
+            code: error instanceof AcceptedPlanOperationalIntegrityError ? error.code : undefined,
+            profileId: parsed.profileId,
+            printerId: parsed.printerId,
+          },
+          "Print file assignment failed",
+        );
         return sendProblem(reply, 500, "Internal Server Error", "Internal Server Error");
       }
 
-      if (materialized.kind === "created") {
-        if (body.completed !== true) {
-          return { link: materialized.link, attribution: materialized.attribution };
-        }
-        const completed = updatePrinterCheckoffLink(
-          deps.repo,
-          materialized.link.id,
-          {
-            state: "awaiting_verify",
-            host_outcome: "success",
-            saw_active: true,
-            last_progress: 100,
-            completed_at: new Date().toISOString(),
-          },
-          { requireState: "watching" },
+      const problem = materializeProblem(materialized);
+      if (problem) {
+        return sendProblem(reply, problem.status, problem.title, problem.detail);
+      }
+      if (materialized.kind !== "created") {
+        request.log.error(
+          { failure: "unexpected", outcome: materialized.kind },
+          "Print file assignment failed",
         );
-        if (!completed) {
-          return sendProblem(reply, 409, "Conflict", "Print assignment changed; retry");
-        }
-        return { link: completed, attribution: materialized.attribution };
+        return sendProblem(reply, 500, "Internal Server Error", "Internal Server Error");
       }
-      switch (materialized.kind) {
-        case "transaction_unavailable":
-          return sendProblem(reply, 503, "Service Unavailable", "Accepted Plan update is unavailable");
-        case "empty":
-          return sendProblem(reply, 409, "Conflict", "Accepted Plan has no required units");
-        case "accepted_state_unavailable":
-          return sendProblem(
-            reply,
-            409,
-            "Conflict",
-            materialized.reason === "compatibility_dirty"
-              ? "Accepted Plan requires compatibility repair"
-              : "Accepted Plan operational state is not initialized",
-          );
-        case "no_match":
-          return sendProblem(
-            reply,
-            409,
-            "Conflict",
-            "Print file does not map to an incomplete Required unit in this Build",
-          );
-        case "already_linked":
-          return sendProblem(reply, 409, "Conflict", "This print file is already assigned");
-        default:
-          request.log.error(
-            { failure: "unexpected", profileId, printerId, outcome: materialized.kind },
-            "Print file assignment failed",
-          );
-          return sendProblem(reply, 500, "Internal Server Error", "Internal Server Error");
+      if (body.completed !== true) {
+        return { link: materialized.link, attribution: materialized.attribution };
       }
+      const completed = updatePrinterCheckoffLink(
+        deps.repo,
+        materialized.link.id,
+        { ...HOST_COMPLETED_PATCH, completed_at: new Date().toISOString() },
+        { requireState: "watching" },
+      );
+      if (!completed) {
+        return sendProblem(reply, 409, "Conflict", "Print assignment changed; retry");
+      }
+      return { link: completed, attribution: materialized.attribution };
+    },
+  );
+
+  app.post(
+    "/printer-checkoff/:id/recheck-remote-file",
+    { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      const link = getPrinterCheckoffLink(deps.repo, id);
+      if (!link) return sendProblem(reply, 404, "Not Found", "Tracked print not found");
+      if (!link.remote_path) {
+        return sendProblem(reply, 409, "Conflict", "This tracked print has no printer file path");
+      }
+      const gateway = printerFileGateway(deps.repo, link.integration_id);
+      if (!gateway) {
+        return sendProblem(
+          reply,
+          503,
+          "Service Unavailable",
+          "That printer host is not serving its file list right now",
+        );
+      }
+      await observePrinterCheckoffFileDrift({
+        repo: deps.repo,
+        integrationId: link.integration_id,
+        files: gateway.files,
+        config: gateway.config,
+      });
+      return { link: getPrinterCheckoffLink(deps.repo, id) };
     },
   );
 
@@ -606,19 +1004,13 @@ export async function registerPrinterCheckoffRoutes(
       const id = (request.params as { id: string }).id;
       const link = getPrinterCheckoffLink(deps.repo, id);
       if (!link) return sendProblem(reply, 404, "Not Found", "Tracked print not found");
-      if (link.integration_id !== `manual:${link.printer_id}`) {
+      if (!isManualIntegrationId(link.integration_id, link.printer_id)) {
         return sendProblem(reply, 409, "Conflict", "This print is monitored by its printer host");
       }
       const completed = updatePrinterCheckoffLink(
         deps.repo,
         id,
-        {
-          state: "awaiting_verify",
-          host_outcome: "success",
-          saw_active: true,
-          last_progress: 100,
-          completed_at: new Date().toISOString(),
-        },
+        { ...HOST_COMPLETED_PATCH, completed_at: new Date().toISOString() },
         { requireState: "watching" },
       );
       if (!completed) {
@@ -691,7 +1083,7 @@ export async function registerPrinterCheckoffRoutes(
         }
       }
 
-      let materialized: ReturnType<AppRepository["materializeAcceptedPrinterLink"]>;
+      let materialized: MaterializeAcceptedPrinterLinkResult;
       try {
         materialized = deps.repo.materializeAcceptedPrinterLink({
           kind: "claim",
@@ -713,50 +1105,18 @@ export async function registerPrinterCheckoffRoutes(
         }
         return sendProblem(reply, 500, "Internal Server Error", "Internal Server Error");
       }
-      switch (materialized.kind) {
-        case "claimed":
-          return { link: materialized.link, ok: true };
-        case "transaction_unavailable":
-          return sendProblem(
-            reply,
-            503,
-            "Service Unavailable",
-            "Accepted Plan update is unavailable",
-          );
-        case "empty":
-          return sendProblem(reply, 409, "Conflict", "Accepted Plan has no required units");
-        case "accepted_state_unavailable":
-          return sendProblem(
-            reply,
-            409,
-            "Conflict",
-            materialized.reason === "compatibility_dirty"
-              ? "Accepted Plan requires compatibility repair"
-              : "Accepted Plan operational state is not initialized",
-          );
-        case "no_match":
-          return sendProblem(
-            reply,
-            409,
-            "Conflict",
-            "Print does not map to an incomplete accepted Plan unit",
-          );
-        case "already_linked":
-          return sendProblem(reply, 409, "Conflict", "Print is already linked");
-        case "print_changed":
-          return sendProblem(
-            reply,
-            409,
-            "Conflict",
-            "Print changed or was already claimed",
-          );
-        default:
-          request.log.error(
-            { failure: "unexpected", profileId, printId: print.id },
-            "Accepted printer claim failed",
-          );
-          return sendProblem(reply, 500, "Internal Server Error", "Internal Server Error");
+      const problem = materializeProblem(materialized);
+      if (problem) {
+        return sendProblem(reply, problem.status, problem.title, problem.detail);
       }
+      if (materialized.kind !== "claimed") {
+        request.log.error(
+          { failure: "unexpected", profileId, printId: print.id, outcome: materialized.kind },
+          "Accepted printer claim failed",
+        );
+        return sendProblem(reply, 500, "Internal Server Error", "Internal Server Error");
+      }
+      return { link: materialized.link, ok: true };
     },
   );
 

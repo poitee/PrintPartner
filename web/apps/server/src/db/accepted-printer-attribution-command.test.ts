@@ -97,15 +97,16 @@ function setupUninitialized() {
 
 describe("accepted printer attribution repository command", () => {
   it("creates a watching link from one accepted snapshot without mutable Part reads", () => {
-    const { repo, plan, bracket, acceptedPart } = setup();
+    const { repo, plan, bracket, acceptedPart, accepted } = setup();
     const mutableParts = vi.spyOn(repo, "getProfilePartRows");
     const transaction = vi.spyOn(repo, "transaction");
 
     const result = repo.materializeAcceptedPrinterLink({
       kind: "create",
       profileId: plan.id,
+      expectedPlanRevisionId: accepted.revisionId,
       objectNames: [acceptedPart.units[0]!.objectName],
-      fallbackFilename: "bracket.bgcode",
+      confirmedUnits: [{ part_id: bracket.id, unit_index: 0 }],
       link: {
         integrationId: "prusa-1",
         printerId: "core-one",
@@ -117,10 +118,220 @@ describe("accepted printer attribution repository command", () => {
 
     expect(result).toMatchObject({
       kind: "created",
-      link: { units: [{ part_id: bracket.id, unit_index: 0 }], state: "watching" },
+      link: {
+        units: [{ part_id: bracket.id, unit_index: 0 }],
+        state: "watching",
+        plan_revision_id: accepted.revisionId,
+      },
     });
     expect(mutableParts).not.toHaveBeenCalled();
     expect(transaction).toHaveBeenCalledWith(expect.any(Function), "immediate");
+  });
+
+  it("refuses to bind an operator assignment by filename similarity", () => {
+    const { repo, plan, accepted } = setup();
+
+    const assigned = repo.materializeAcceptedPrinterLink({
+      kind: "create",
+      profileId: plan.id,
+      expectedPlanRevisionId: accepted.revisionId,
+      // A Part filename, not a Required-unit Object name. This is exactly the
+      // evidence the spec says is too weak to create a link.
+      objectNames: ["bracket.stl"],
+      confirmedUnits: [],
+      link: {
+        integrationId: "prusa-1",
+        printerId: "core-one",
+        hostName: "Core One",
+        filename: "bracket.bgcode",
+        started: false,
+      },
+    });
+    expect(assigned).toMatchObject({ kind: "created", link: { units: [] } });
+
+    // The same evidence still binds when the host reports it is already
+    // printing, because there is no operator to ask.
+    const observed = repo.materializeAcceptedPrinterLink({
+      kind: "observe",
+      profileId: plan.id,
+      objectNames: ["bracket.stl"],
+      link: {
+        integrationId: "prusa-2",
+        printerId: "core-one",
+        hostName: "Core One",
+        filename: "bracket-observed.bgcode",
+        started: false,
+      },
+    });
+    expect(observed).toMatchObject({ kind: "created", link: { units: [{ unit_index: 0 }] } });
+  });
+
+  it("refuses an assignment carrying a superseded Accepted Plan revision", () => {
+    const { repo, plan, bracket, accepted } = setup();
+    const setSetting = vi.spyOn(repo, "setSetting");
+
+    const result = repo.materializeAcceptedPrinterLink({
+      kind: "create",
+      profileId: plan.id,
+      expectedPlanRevisionId: accepted.revisionId + 1,
+      objectNames: [],
+      confirmedUnits: [{ part_id: bracket.id, unit_index: 0 }],
+      link: {
+        integrationId: "prusa-1",
+        printerId: "core-one",
+        hostName: "Core One",
+        filename: "bracket.bgcode",
+        started: false,
+      },
+    });
+
+    expect(result).toEqual({ kind: "stale_plan_revision" });
+    expect(loadPrinterCheckoffLinks(repo)).toEqual([]);
+    expect(setSetting).not.toHaveBeenCalled();
+  });
+
+  it("refuses a confirmed unit that is not an incomplete Required unit", () => {
+    const { repo, plan, bracket, acceptedPart, accepted } = setup();
+    expect(
+      repo.setAcceptedUnitCompletion({
+        expected: acceptedPlanBasis(accepted),
+        token: parseRequiredUnitToken(acceptedPart.units[0]!.token),
+        completed: true,
+      }).kind,
+    ).toBe("updated");
+    const fresh = repo.readAcceptedPlanOperationalSnapshot(plan.id);
+    if (fresh.kind !== "ready") throw new Error("accepted fixture is unavailable");
+
+    for (const confirmed of [
+      [{ part_id: bracket.id, unit_index: 0 }],
+      [{ part_id: bracket.id, unit_index: 99 }],
+      [
+        { part_id: bracket.id, unit_index: 1 },
+        { part_id: bracket.id, unit_index: 1 },
+      ],
+    ]) {
+      expect(
+        repo.materializeAcceptedPrinterLink({
+          kind: "create",
+          profileId: plan.id,
+          expectedPlanRevisionId: fresh.snapshot.revisionId,
+          objectNames: [],
+          confirmedUnits: confirmed,
+          link: {
+            integrationId: "prusa-1",
+            printerId: "core-one",
+            hostName: "Core One",
+            filename: "bracket.bgcode",
+            started: false,
+          },
+        }),
+      ).toEqual({ kind: "no_match" });
+    }
+    expect(loadPrinterCheckoffLinks(repo)).toEqual([]);
+  });
+
+  it("persists file identity and classification on an assigned link", () => {
+    const { repo, plan, bracket, accepted } = setup();
+
+    const result = repo.materializeAcceptedPrinterLink({
+      kind: "create",
+      profileId: plan.id,
+      expectedPlanRevisionId: accepted.revisionId,
+      objectNames: [],
+      confirmedUnits: [{ part_id: bracket.id, unit_index: 0 }],
+      link: {
+        integrationId: "prusa-1",
+        printerId: "core-one",
+        hostName: "Core One",
+        filename: "bracket.bgcode",
+        remotePath: "usb/bracket.bgcode",
+        remoteIdentity: {
+          size_bytes: 4096,
+          modified_at: "2026-08-01T00:00:00.000Z",
+          provider_revision: "rev-7",
+          sha256: "a".repeat(64),
+        },
+        classification: { format: "bgcode" },
+        started: false,
+      },
+    });
+    if (result.kind !== "created") throw new Error(`unexpected outcome ${result.kind}`);
+
+    // Survives the settings round-trip, not just the in-memory return value.
+    expect(getPrinterCheckoffLink(repo, result.link.id)).toMatchObject({
+      plan_revision_id: accepted.revisionId,
+      remote_path: "usb/bracket.bgcode",
+      remote_identity: {
+        size_bytes: 4096,
+        modified_at: "2026-08-01T00:00:00.000Z",
+        provider_revision: "rev-7",
+        sha256: "a".repeat(64),
+      },
+      classification: { format: "bgcode" },
+    });
+  });
+
+  it("records drift only when a re-observed provider file actually changed", () => {
+    const { repo, plan, bracket, accepted } = setup();
+    const identity = {
+      size_bytes: 4096,
+      modified_at: "2026-08-01T00:00:00.000Z",
+      provider_revision: "rev-7",
+    };
+    const created = repo.materializeAcceptedPrinterLink({
+      kind: "create",
+      profileId: plan.id,
+      expectedPlanRevisionId: accepted.revisionId,
+      objectNames: [],
+      confirmedUnits: [{ part_id: bracket.id, unit_index: 0 }],
+      link: {
+        integrationId: "prusa-1",
+        printerId: "core-one",
+        hostName: "Core One",
+        filename: "bracket.bgcode",
+        remotePath: "usb/bracket.bgcode",
+        remoteIdentity: identity,
+        classification: { format: "bgcode" },
+        started: false,
+      },
+    });
+    if (created.kind !== "created") throw new Error(`unexpected outcome ${created.kind}`);
+
+    const observe = (observed: Parameters<
+      typeof repo.observePrinterCheckoffRemoteFile
+    >[0]["observed"]) =>
+      repo.observePrinterCheckoffRemoteFile({
+        integrationId: "prusa-1",
+        remotePath: "usb/bracket.bgcode",
+        observed,
+      });
+
+    expect(observe(identity)).toEqual([]);
+    expect(getPrinterCheckoffLink(repo, created.link.id)?.remote_drift).toBeUndefined();
+
+    expect(observe({ ...identity, size_bytes: 5000 })[0]).toMatchObject({
+      remote_drift: { reason: "size" },
+    });
+    expect(observe({ ...identity, provider_revision: "rev-8" })[0]).toMatchObject({
+      remote_drift: { reason: "revision" },
+    });
+    expect(observe({ ...identity, modified_at: "2026-08-02T00:00:00.000Z" })[0]).toMatchObject({
+      remote_drift: { reason: "modified" },
+    });
+    expect(observe(null)[0]).toMatchObject({ remote_drift: { reason: "missing" } });
+
+    // A restored file clears the flag rather than staying suspect forever.
+    expect(observe(identity)[0]?.remote_drift).toBeUndefined();
+    expect(getPrinterCheckoffLink(repo, created.link.id)?.remote_drift).toBeUndefined();
+
+    // A path nobody linked is nobody's drift.
+    expect(
+      repo.observePrinterCheckoffRemoteFile({
+        integrationId: "prusa-1",
+        remotePath: "usb/other.bgcode",
+        observed: null,
+      }),
+    ).toEqual([]);
   });
 
   it("uses completion state read inside the command", () => {
@@ -133,10 +344,9 @@ describe("accepted printer attribution repository command", () => {
     expect(completed.kind).toBe("updated");
 
     const result = repo.materializeAcceptedPrinterLink({
-      kind: "create",
+      kind: "observe",
       profileId: plan.id,
       objectNames: ["bracket.stl"],
-      fallbackFilename: "bracket.bgcode",
       link: {
         integrationId: "prusa-1",
         printerId: "core-one",
@@ -158,10 +368,9 @@ describe("accepted printer attribution repository command", () => {
     const setSetting = vi.spyOn(repo, "setSetting");
 
     const result = repo.materializeAcceptedPrinterLink({
-      kind: "create",
+      kind: "observe",
       profileId: plan.id,
       objectNames: ["unknown"],
-      fallbackFilename: "unknown.bgcode",
       link: {
         integrationId: "prusa-1",
         printerId: "core-one",
@@ -202,10 +411,9 @@ describe("accepted printer attribution repository command", () => {
       );
       const setSetting = vi.spyOn(fixture.repo, "setSetting");
       const result = fixture.repo.materializeAcceptedPrinterLink({
-        kind: "create",
+        kind: "observe",
         profileId,
         objectNames: ["bracket.stl"],
-        fallbackFilename: "bracket.bgcode",
         link: {
           integrationId: "prusa-1",
           printerId: "core-one",
@@ -230,10 +438,9 @@ describe("accepted printer attribution repository command", () => {
     const setSetting = vi.spyOn(uninitialized.repo, "setSetting");
     expect(
       uninitialized.repo.materializeAcceptedPrinterLink({
-        kind: "create",
+        kind: "observe",
         profileId: uninitialized.plan.id,
         objectNames: ["bracket.stl"],
-        fallbackFilename: "bracket.bgcode",
         link: {
           integrationId: "prusa-1",
           printerId: "core-one",
@@ -469,8 +676,9 @@ describe("accepted printer attribution repository command", () => {
         repo.materializeAcceptedPrinterLink({
           kind: "create",
           profileId: 1,
+          expectedPlanRevisionId: 1,
           objectNames: ["bracket.stl"],
-          fallbackFilename: "bracket.gcode",
+          confirmedUnits: [{ part_id: 1, unit_index: 0 }],
           link: {
             integrationId: "prusa-1",
             printerId: "core-one",

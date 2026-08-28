@@ -4443,10 +4443,9 @@ export async function applyAssistantAction(
         const unitsByToken = new Map(accepted.snapshot.parts.flatMap((part) => part.units.map((unit) => [unit.token.toLowerCase(), unit] as const)));
         const objectNames = parsed.files.map((file) => unitsByToken.get(file.partNumber?.toLowerCase() ?? "")?.objectName ?? file.objectName);
         const created = deps.repo.materializeAcceptedPrinterLink({
-          kind: "create",
+          kind: "observe",
           profileId: planId,
           objectNames,
-          fallbackFilename: sourceInput.filename,
           link: {
             integrationId: String(action.params.integration_id ?? "mcp-3mf"),
             printerId: String(action.params.printer_id ?? "mcp-3mf"),

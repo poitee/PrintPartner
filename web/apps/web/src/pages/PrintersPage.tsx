@@ -339,7 +339,7 @@ export default function PrintersPage() {
                     ) : null}
                     <div className="flex flex-wrap gap-2 pt-1">
                       <Button
-                        size="sm"
+                        size="shop"
                         onClick={() => setWorkspacePrinterId(printer.id)}
                       >
                         <Files className="mr-1.5 h-4 w-4" aria-hidden />

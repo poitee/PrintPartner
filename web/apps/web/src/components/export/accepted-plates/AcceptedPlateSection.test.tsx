@@ -180,3 +180,26 @@ describe("AcceptedPlateSection assignment draft identity", () => {
     }
   });
 });
+
+describe("AcceptedPlateSection titles", () => {
+  const renderView = (view: "assign" | "arrange") => {
+    const queryClient = new QueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <AcceptedPlateSection profileId={7} enabled view={view} />
+      </QueryClientProvider>,
+    );
+  };
+
+  it("names the assignment card without an ordinal and calls the work Plate preparation", () => {
+    renderView("assign");
+    expect(screen.getByRole("heading", { name: "Assign printers and prepare Plates" })).toBeTruthy();
+    expect(screen.queryByText(/^\d+\./)).toBeNull();
+  });
+
+  it("names the layout card without an ordinal", () => {
+    renderView("arrange");
+    expect(screen.getByRole("heading", { name: "Review Plate layout" })).toBeTruthy();
+    expect(screen.queryByText(/^\d+\./)).toBeNull();
+  });
+});

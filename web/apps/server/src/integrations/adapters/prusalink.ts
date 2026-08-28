@@ -3,13 +3,15 @@ import type {
   IntegrationTestResult,
   PrinterCamera,
   PrinterHostStatus,
-  PrinterStoredFile,
+  PrinterStorageEntry,
+  PrinterStorageListing,
   PrinterUploadResult,
 } from "@print-partner/contracts";
 import { createReadStream, statSync } from "node:fs";
 import type { IntegrationAdapter, PrinterUploadSource } from "../store.js";
 import { assertSafeOutboundUrl } from "../../lib/outbound-url.js";
 import { buildDigestAuthorization, parseWwwAuthenticate } from "../digest-auth.js";
+import { encodeStoragePath, joinStoragePath, safeStoragePath } from "./storage-path.js";
 
 function normalizeBaseUrl(raw: unknown): string | null {
   if (typeof raw !== "string" || !raw.trim()) return null;
@@ -25,34 +27,11 @@ function credentials(config: IntegrationConfig): { username: string; password: s
   return { username, password: passwordRaw.trim() };
 }
 
-function storageRoot(config: IntegrationConfig): string {
+/** Storage root the operator pinned on the integration, if any. */
+function configuredStorageRoot(config: IntegrationConfig): string | null {
   const raw = config.storage ?? config.storage_path;
-  if (typeof raw === "string" && raw.trim()) {
-    const cleaned = raw
-      .trim()
-      .replace(/^\/+|\/+$/g, "")
-      .split("/")
-      .filter((seg) => seg && seg !== "." && seg !== "..")
-      .join("/");
-    if (cleaned) return cleaned;
-  }
-  return "usb";
-}
-
-function safeProviderPath(raw: string): string | null {
-  const normalized = raw.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
-  const segments = normalized.split("/");
-  if (
-    !normalized ||
-    segments.some((segment) => !segment || segment === "." || segment === "..")
-  ) {
-    return null;
-  }
-  return segments.join("/");
-}
-
-function encodedProviderPath(path: string): string {
-  return path.split("/").map(encodeURIComponent).join("/");
+  if (typeof raw !== "string" || !raw.trim()) return null;
+  return safeStoragePath(raw, { trimTrailing: true });
 }
 
 /**
@@ -310,82 +289,121 @@ type PrusaFileInfo = {
 
 function prusaFileUrl(baseUrl: string, providerPath: string): string {
   const suffix = providerPath.includes("/") ? "" : "/";
-  return `${baseUrl}/api/v1/files/${encodedProviderPath(providerPath)}${suffix}`;
+  return `${baseUrl}/api/v1/files/${encodeStoragePath(providerPath)}${suffix}`;
 }
 
-function displayFilename(row: PrusaFileInfo): string {
+function displayName(row: PrusaFileInfo): string {
   if (typeof row.display_name === "string" && row.display_name.trim()) {
     return row.display_name.trim();
   }
   return typeof row.name === "string" ? row.name.trim() : "";
 }
 
-async function listStoredFiles(config: IntegrationConfig): Promise<PrinterStoredFile[]> {
-  const baseUrl = normalizeBaseUrl(config.base_url ?? config.baseUrl);
-  if (!baseUrl) throw new Error("base_url is required");
-  if (!credentials(config)) throw new Error("username and password are required");
-  const storageResponse = await prusalinkFetch(`${baseUrl}/api/v1/storage`, config, {
+/** One directory is one screen for an operator, so one response is bounded too. */
+const MAX_STORAGE_ENTRIES = 500;
+
+/**
+ * The provider storage prefix that browsing and downloading resolve against.
+ *
+ * The research doc is explicit that a `usb` path must not be assumed, so an
+ * integration with no pinned storage takes the first storage the printer itself
+ * reports as available.
+ */
+async function resolveStorageRoot(config: IntegrationConfig, baseUrl: string): Promise<string> {
+  const configured = configuredStorageRoot(config);
+  if (configured) return configured;
+  const response = await prusalinkFetch(`${baseUrl}/api/v1/storage`, config, {
     headers: { Accept: "application/json" },
     signal: AbortSignal.timeout(10_000),
   });
-  if (!storageResponse.ok) {
-    throw new Error(`PrusaLink storage list returned HTTP ${storageResponse.status}`);
+  if (!response.ok) {
+    await drainResponseBody(response);
+    throw new Error(`PrusaLink storage list returned HTTP ${response.status}`);
   }
-  const storageBody = await storageResponse.json() as { storage_list?: unknown };
-  const storages = Array.isArray(storageBody.storage_list)
-    ? storageBody.storage_list as PrusaStorage[]
-    : [];
-  const files: PrinterStoredFile[] = [];
-  const folderQueue: string[] = storages.flatMap((storage) => {
-    if (storage.available === false || typeof storage.path !== "string") return [];
-    const path = safeProviderPath(storage.path);
-    return path ? [path] : [];
-  });
-  const seenFolders = new Set<string>();
+  const body = await response.json() as { storage_list?: unknown };
+  const storages = Array.isArray(body.storage_list) ? body.storage_list as PrusaStorage[] : [];
+  for (const storage of storages) {
+    if (storage.available === false || typeof storage.path !== "string") continue;
+    const root = safeStoragePath(storage.path, { trimTrailing: true });
+    if (root) return root;
+  }
+  throw new Error("PrusaLink reported no available storage");
+}
 
-  while (folderQueue.length > 0 && files.length < 500 && seenFolders.size < 100) {
-    const folder = folderQueue.shift();
-    if (!folder || seenFolders.has(folder)) continue;
-    seenFolders.add(folder);
-    const folderResponse = await prusalinkFetch(prusaFileUrl(baseUrl, folder), config, {
-      headers: { Accept: "application/json" },
-      signal: AbortSignal.timeout(15_000),
-    });
-    if (!folderResponse.ok) {
-      await drainResponseBody(folderResponse);
+/**
+ * Normalize a caller path, or throw before any request goes out.
+ *
+ * Paths arrive from a browser and from the printer's own listings, so both are
+ * untrusted: traversal segments, backslashes, and NUL bytes are rejected here
+ * rather than handed to the printer as URL segments.
+ */
+function storageRelativePath(raw: string): string {
+  if (!raw) return "";
+  const relative = safeStoragePath(raw, { trimTrailing: true });
+  if (!relative) throw new Error("Invalid PrusaLink storage path");
+  return relative;
+}
+
+async function browseStorage(
+  config: IntegrationConfig,
+  path: string,
+): Promise<PrinterStorageListing> {
+  const baseUrl = normalizeBaseUrl(config.base_url ?? config.baseUrl);
+  if (!baseUrl) throw new Error("base_url is required");
+  if (!credentials(config)) throw new Error("username and password are required");
+  const relative = storageRelativePath(path);
+  const providerPath = joinStoragePath(await resolveStorageRoot(config, baseUrl), relative);
+  if (!providerPath) throw new Error("Invalid PrusaLink storage path");
+
+  const response = await prusalinkFetch(prusaFileUrl(baseUrl, providerPath), config, {
+    headers: { Accept: "application/json" },
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!response.ok) {
+    await drainResponseBody(response);
+    throw new Error(`PrusaLink file listing returned HTTP ${response.status}`);
+  }
+  const folder = await response.json() as PrusaFileInfo;
+  const children = Array.isArray(folder.children) ? folder.children as PrusaFileInfo[] : [];
+
+  const entries: PrinterStorageEntry[] = [];
+  for (const child of children) {
+    if (entries.length >= MAX_STORAGE_ENTRIES) break;
+    // A child name is one segment. Anything else is the printer reporting a
+    // path where a name belongs, and it is not this directory's to serve.
+    const name = typeof child.name === "string"
+      ? safeStoragePath(child.name, { trimTrailing: true })
+      : null;
+    if (!name || name.includes("/")) continue;
+    const childPath = relative ? `${relative}/${name}` : name;
+    const modified = typeof child.m_timestamp === "number" && Number.isFinite(child.m_timestamp)
+      ? { modified_at: new Date(child.m_timestamp * 1_000).toISOString() }
+      : {};
+    if (child.type === "FOLDER") {
+      entries.push({
+        kind: "directory",
+        path: childPath,
+        name: displayName(child) || name,
+        ...modified,
+      });
       continue;
     }
-    const folderInfo = await folderResponse.json() as PrusaFileInfo;
-    const children = Array.isArray(folderInfo.children)
-      ? folderInfo.children as PrusaFileInfo[]
-      : [];
-    for (const child of children) {
-      const shortName = typeof child.name === "string" ? safeProviderPath(child.name) : null;
-      if (!shortName || shortName.includes("/")) continue;
-      const childPath = `${folder}/${shortName}`;
-      if (child.type === "FOLDER") {
-        folderQueue.push(childPath);
-        continue;
-      }
-      if (child.type !== "PRINT_FILE") continue;
-      const filename = displayFilename(child) || shortName;
-      const size = typeof child.size === "number" && Number.isFinite(child.size) && child.size >= 0
-        ? Math.round(child.size)
-        : undefined;
-      const modified = typeof child.m_timestamp === "number" && Number.isFinite(child.m_timestamp)
-        ? new Date(child.m_timestamp * 1_000).toISOString()
-        : undefined;
-      files.push({
-        id: childPath,
-        path: childPath,
-        filename,
-        ...(size === undefined ? {} : { size_bytes: size }),
-        ...(modified === undefined ? {} : { modified_at: modified }),
-      });
-      if (files.length >= 500) break;
-    }
+    if (child.type !== "PRINT_FILE") continue;
+    // Absent size stays absent: unknown must not read as zero.
+    const size = typeof child.size === "number" && Number.isFinite(child.size) && child.size >= 0
+      ? { size_bytes: Math.round(child.size) }
+      : {};
+    // PrusaLink's file record carries no etag or revision, so provider_revision
+    // is omitted rather than filled with a stand-in.
+    entries.push({
+      kind: "file",
+      path: childPath,
+      name: displayName(child) || name,
+      ...size,
+      ...modified,
+    });
   }
-  return files;
+  return { path: relative, entries };
 }
 
 type PrusaCameraInfo = {
@@ -425,11 +443,14 @@ export const prusalinkAdapter: IntegrationAdapter = {
   type: "prusalink",
 
   files: {
-    list: listStoredFiles,
-    async open(config, fileId) {
+    browse: browseStorage,
+    async open(config, path) {
       const baseUrl = normalizeBaseUrl(config.base_url ?? config.baseUrl);
-      const providerPath = safeProviderPath(fileId);
-      if (!baseUrl || !providerPath) throw new Error("Invalid PrusaLink print-file path");
+      if (!baseUrl) throw new Error("base_url is required");
+      const relative = storageRelativePath(path);
+      if (!relative) throw new Error("Invalid PrusaLink print-file path");
+      const providerPath = joinStoragePath(await resolveStorageRoot(config, baseUrl), relative);
+      if (!providerPath) throw new Error("Invalid PrusaLink print-file path");
       const metadataResponse = await prusalinkFetch(
         prusaFileUrl(baseUrl, providerPath),
         config,
@@ -652,12 +673,11 @@ export const prusalinkAdapter: IntegrationAdapter = {
       if (cleaned === "." || cleaned === ".." || /^\.+$/.test(cleaned)) return "print.gcode";
       return cleaned;
     })();
-    const storage = storageRoot(config);
-    const remotePath = `${storage}/${safeName}`;
-    const uploadUrl = `${baseUrl}/api/v1/files/${remotePath
-      .split("/")
-      .map((p) => encodeURIComponent(p))
-      .join("/")}`;
+    // Uploads keep the historical `usb` default: that is the storage a Prusa
+    // printer prints from, and browsing discovering `local` must not silently
+    // redirect a write.
+    const remotePath = `${configuredStorageRoot(config) ?? "usb"}/${safeName}`;
+    const uploadUrl = `${baseUrl}/api/v1/files/${encodeStoragePath(remotePath)}`;
 
     try {
       const start = Boolean(options?.start);

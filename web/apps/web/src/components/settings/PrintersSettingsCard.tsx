@@ -820,7 +820,7 @@ export default function PrintersSettingsCard({ engineReady }: Props) {
                   disabled={busy}
                 />
 
-                {(host?.type === "moonraker" || host?.type === "prusalink") && (
+                {host?.capabilities?.status === true && (
                   <div className="flex items-center gap-2 mt-2">
                     <span className="text-xs text-muted-foreground min-w-fit">Default plan:</span>
                     <Select

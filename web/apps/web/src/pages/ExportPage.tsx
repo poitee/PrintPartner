@@ -189,7 +189,7 @@ export default function ExportPage() {
       : "Choose printers";
   const plateLayoutStatus = workspace?.kind === "ready"
     ? `Revision ${workspace.plate_revision_number}`
-    : "Build after assignment";
+    : "Assign printers first";
   const tasks = useMemo(() => {
     if (!projection.bench) return [];
     return productionTasks({
@@ -303,26 +303,21 @@ export default function ExportPage() {
   const preparePlatesPanel = (
     <div className="space-y-4">
       <nav
-        aria-label="Plate builder"
-        className="grid gap-2 rounded-lg border border-border bg-card p-2 shadow-sm sm:grid-cols-3"
+        aria-label="Plate preparation sections"
+        className="grid gap-1 rounded-lg border border-border bg-card p-2 shadow-sm sm:grid-cols-3"
       >
         {[
-          { href: "#plate-builder-units", step: "1", label: "Units", status: `${selectedTokens.length} selected` },
-          { href: "#plate-builder-printers", step: "2", label: "Printers", status: printerAssignmentStatus },
-          { href: "#plate-builder-layout", step: "3", label: "Plate layout", status: plateLayoutStatus },
+          { href: "#plate-builder-units", label: "Required units", status: `${selectedTokens.length} selected` },
+          { href: "#plate-builder-printers", label: "Printers", status: printerAssignmentStatus },
+          { href: "#plate-builder-layout", label: "Plate layout", status: plateLayoutStatus },
         ].map((item) => (
           <a
             key={item.href}
             href={item.href}
-            className="flex min-h-14 items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="flex min-h-14 min-w-0 flex-col justify-center rounded-md px-3 py-2 text-sm transition-colors hover:bg-muted"
           >
-            <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full border border-border bg-background font-mono text-xs font-semibold">
-              {item.step}
-            </span>
-            <span className="min-w-0">
-              <span className="block font-medium text-foreground">{item.label}</span>
-              <span className="block truncate text-xs text-muted-foreground">{item.status}</span>
-            </span>
+            <span className="truncate font-medium text-foreground">{item.label}</span>
+            <span className="truncate text-xs text-muted-foreground">{item.status}</span>
           </a>
         ))}
       </nav>
@@ -333,10 +328,10 @@ export default function ExportPage() {
       >
         <div className="space-y-1">
           <h4 id="production-choose-units-heading" className="text-sm font-semibold">
-            1. Choose what to make
+            Choose Required units
           </h4>
           <p className="text-xs text-muted-foreground">
-            Select the Required units for this work package. Completed units stay out unless you choose them again.
+            Completed units stay out unless you choose them again.
           </p>
         </div>
         {setupSaving ? (
@@ -381,7 +376,7 @@ export default function ExportPage() {
               <Link className="font-medium underline underline-offset-2" to={settingsPrintersRoute()}>
                 Add a printer in Settings
               </Link>{" "}
-              to assign the selected units and build Plates.
+              to assign the selected Required units and prepare Plates.
             </div>
           ) : null}
 
@@ -483,7 +478,7 @@ export default function ExportPage() {
         accent
         eyebrow={planIdentity ? `Make · ${planIdentity}` : "Make"}
         title="Production"
-        description="Choose units, assign them to printers, build Plates, and send them to print."
+        description="Choose Required units, assign them to printers, prepare Plates, and send them to print."
       />
       <BuildSummaryHeader currentStageId="production" />
 

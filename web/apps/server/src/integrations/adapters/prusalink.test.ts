@@ -15,6 +15,61 @@ function digest401() {
   };
 }
 
+const prusaConfig = {
+  base_url: "http://127.0.0.1",
+  username: "maker",
+  password: "printer-key",
+};
+
+/**
+ * A PrusaLink with one available `local` storage holding a `jobs` subfolder, a
+ * print file with no size or timestamp, and a firmware blob. No storage root is
+ * configured, so browsing has to discover `local` from /api/v1/storage.
+ */
+function storageFetchMock({ downloadRef = "/api/files/local/jobs/BRACK~1.BGC/raw" } = {}) {
+  return vi.fn(async (input: string | URL | Request) => {
+    const url = String(input);
+    if (url.endsWith("/api/v1/status")) return digest401();
+    if (url.endsWith("/api/v1/storage")) {
+      return new Response(JSON.stringify({
+        storage_list: [{ path: "/local", available: true }],
+      }), { headers: { "content-type": "application/json" } });
+    }
+    if (url.endsWith("/api/v1/files/local/")) {
+      return new Response(JSON.stringify({
+        type: "FOLDER",
+        children: [
+          { name: "jobs", type: "FOLDER", m_timestamp: 1_724_000_000 },
+          { name: "SPOOL~1.GCO", display_name: "spool-holder.gcode", type: "PRINT_FILE" },
+          { name: "firmware.bbf", type: "FIRMWARE", size: 4096 },
+        ],
+      }), { headers: { "content-type": "application/json" } });
+    }
+    if (url.endsWith("/api/v1/files/local/jobs")) {
+      return new Response(JSON.stringify({
+        type: "FOLDER",
+        children: [{
+          name: "BRACK~1.BGC",
+          display_name: "bracket.bgcode",
+          type: "PRINT_FILE",
+          size: 8192,
+          m_timestamp: 1_725_000_000,
+        }],
+      }), { headers: { "content-type": "application/json" } });
+    }
+    if (url.endsWith("/api/v1/files/local/jobs/BRACK~1.BGC")) {
+      return new Response(JSON.stringify({
+        type: "PRINT_FILE",
+        refs: { download: downloadRef },
+      }), { headers: { "content-type": "application/json" } });
+    }
+    if (url.endsWith("/api/files/local/jobs/BRACK~1.BGC/raw")) {
+      return new Response("binary-gcode");
+    }
+    return new Response(null, { status: 404 });
+  });
+}
+
 describe("prusalinkAdapter", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -281,62 +336,75 @@ describe("prusalinkAdapter", () => {
     expect(status.filename).toBe("done.bgcode");
   });
 
-  it("browses available storage recursively and follows the advertised download ref", async () => {
-    const fetchMock = vi.fn(async (input: string | URL | Request) => {
-      const url = String(input);
-      if (url.endsWith("/api/v1/status")) return digest401();
-      if (url.endsWith("/api/v1/storage")) {
-        return new Response(JSON.stringify({
-          storage_list: [{ path: "/local", available: true }],
-        }), { headers: { "content-type": "application/json" } });
-      }
-      if (url.endsWith("/api/v1/files/local/")) {
-        return new Response(JSON.stringify({
-          type: "FOLDER",
-          children: [{ name: "jobs", type: "FOLDER", m_timestamp: 1 }],
-        }), { headers: { "content-type": "application/json" } });
-      }
-      if (url.endsWith("/api/v1/files/local/jobs")) {
-        return new Response(JSON.stringify({
-          type: "FOLDER",
-          children: [{
-            name: "BRACK~1.BGC",
-            display_name: "bracket.bgcode",
-            type: "PRINT_FILE",
-            size: 8192,
-            m_timestamp: 1_725_000_000,
-          }],
-        }), { headers: { "content-type": "application/json" } });
-      }
-      if (url.endsWith("/api/v1/files/local/jobs/BRACK~1.BGC")) {
-        return new Response(JSON.stringify({
-          type: "PRINT_FILE",
-          refs: { download: "/api/files/local/jobs/BRACK~1.BGC/raw" },
-        }), { headers: { "content-type": "application/json" } });
-      }
-      if (url.endsWith("/api/files/local/jobs/BRACK~1.BGC/raw")) {
-        return new Response("binary-gcode");
-      }
-      return new Response(null, { status: 404 });
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    const config = {
-      base_url: "http://127.0.0.1",
-      username: "maker",
-      password: "printer-key",
-    };
+  it("browses one directory, surfacing subfolders as directory entries", async () => {
+    vi.stubGlobal("fetch", storageFetchMock());
 
-    const files = await prusalinkAdapter.files!.list(config);
-    expect(files).toEqual([expect.objectContaining({
-      id: "local/jobs/BRACK~1.BGC",
-      filename: "bracket.bgcode",
+    const listing = await prusalinkAdapter.files!.browse(prusaConfig, "");
+
+    expect(listing.path).toBe("");
+    expect(listing.entries).toEqual([
+      {
+        kind: "directory",
+        path: "jobs",
+        name: "jobs",
+        modified_at: new Date(1_724_000_000 * 1_000).toISOString(),
+      },
+      { kind: "file", path: "SPOOL~1.GCO", name: "spool-holder.gcode" },
+    ]);
+    // Unknown size and timestamp are absent keys, not zeroes or guesses.
+    expect(Object.keys(listing.entries[1]!)).toEqual(["kind", "path", "name"]);
+  });
+
+  it("browses a nested path and follows the advertised download ref", async () => {
+    const fetchMock = storageFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const listing = await prusalinkAdapter.files!.browse(prusaConfig, "jobs");
+
+    expect(listing.path).toBe("jobs");
+    expect(listing.entries).toEqual([{
+      kind: "file",
+      path: "jobs/BRACK~1.BGC",
+      name: "bracket.bgcode",
       size_bytes: 8192,
-    })]);
-    const opened = await prusalinkAdapter.files!.open(config, files[0]!.id);
+      modified_at: new Date(1_725_000_000 * 1_000).toISOString(),
+    }]);
+
+    const opened = await prusalinkAdapter.files!.open(prusaConfig, "jobs/BRACK~1.BGC");
     expect(await opened.text()).toBe("binary-gcode");
     expect(fetchMock.mock.calls.some((call) =>
       String(call[0]).endsWith("/api/files/local/jobs/BRACK~1.BGC/raw"),
     )).toBe(true);
+  });
+
+  it("rejects traversal, backslash, and NUL paths before any request", async () => {
+    const fetchMock = storageFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+
+    for (
+      const unsafe of [
+        "../secrets",
+        "jobs/../../etc",
+        "jobs\\bracket.bgcode",
+        "jobs/brack\u0000et.bgcode",
+      ]
+    ) {
+      await expect(prusalinkAdapter.files!.browse(prusaConfig, unsafe)).rejects.toThrow(
+        /Invalid PrusaLink storage path/,
+      );
+      await expect(prusalinkAdapter.files!.open(prusaConfig, unsafe)).rejects.toThrow(
+        /Invalid PrusaLink/,
+      );
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses a download ref that points off the configured PrusaLink origin", async () => {
+    vi.stubGlobal("fetch", storageFetchMock({ downloadRef: "http://attacker.example/raw" }));
+
+    await expect(prusalinkAdapter.files!.open(prusaConfig, "jobs/BRACK~1.BGC")).rejects.toThrow(
+      /cross-origin/,
+    );
   });
 
   it("exposes connected PrusaLink cameras as snapshots", async () => {

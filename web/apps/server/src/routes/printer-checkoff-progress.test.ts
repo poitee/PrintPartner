@@ -5,10 +5,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { createHash } from "node:crypto";
+import { strToU8, zipSync } from "fflate";
 import { getDb, SqliteDatabase } from "../db/client.js";
 import { AppRepository } from "../db/repository.js";
 import { registerPrinterCheckoffRoutes } from "./printer-checkoff.js";
-import { createIntegrationPort } from "../integrations/store.js";
+import { createIntegrationPort, type PrinterFileAccess } from "../integrations/store.js";
+import type { PrinterStorageEntry } from "@print-partner/contracts";
 import { getIntegrationAdapter } from "../integrations/registry.js";
 import {
   createPrinterCheckoffLink,
@@ -16,7 +19,10 @@ import {
   loadPrinterCheckoffLinks,
   updatePrinterCheckoffLink,
 } from "../services/printer-checkoff-store.js";
-import { reconcilePrinterCheckoff } from "../services/printer-checkoff.js";
+import {
+  observePrinterCheckoffFileDrift,
+  reconcilePrinterCheckoff,
+} from "../services/printer-checkoff.js";
 import {
   createUnattributedPrint,
   listUnattributedPrints,
@@ -83,7 +89,15 @@ async function setup() {
     sqlite.close();
     rmSync(dir, { recursive: true, force: true });
   });
-  return { app, repo, plan, bracket, repoPath, acceptedPart };
+  return {
+    app,
+    repo,
+    plan,
+    bracket,
+    repoPath,
+    acceptedPart,
+    planRevisionId: accepted.snapshot.revisionId,
+  };
 }
 
 function response(body: unknown, status = 200) {
@@ -658,7 +672,7 @@ describe("printer progress route", () => {
   });
 
   it("assigns an uploaded print file to a Build and manually advances it to Checkoff", async () => {
-    const { app, repo, plan, bracket, acceptedPart } = await setup();
+    const { app, repo, plan, bracket, acceptedPart, planRevisionId } = await setup();
     saveFleet(repo, [parsePrinterMachine({
       id: "offline-printer",
       name: "Garage printer",
@@ -668,6 +682,34 @@ describe("printer progress route", () => {
       max_filament_slots: 1,
       loaded_filaments: [],
     })]);
+
+    const preview = await app.inject({
+      method: "POST",
+      url: "/printer-checkoff/file-assignments/preview",
+      payload: {
+        profile_id: plan.id,
+        printer_id: "offline-printer",
+        filename: "bracket.bgcode",
+        object_names: [acceptedPart.units[0]!.objectName],
+        tracking: "manual",
+      },
+    });
+    expect(preview.statusCode).toBe(200);
+    const previewBody = preview.json();
+    expect(previewBody).toMatchObject({
+      // A manual printer has no host to read bytes from, so PrintPartner says
+      // so instead of guessing.
+      inspected: false,
+      suggested_units: [
+        { part_id: bracket.id, unit_index: 0, object_name: acceptedPart.units[0]!.objectName },
+      ],
+      suggestion_basis: "object_names",
+      plan_revision_id: planRevisionId,
+    });
+    expect(previewBody).not.toHaveProperty("classification");
+    expect(previewBody).not.toHaveProperty("print_ready");
+    // Preview is read-only.
+    expect(loadPrinterCheckoffLinks(repo)).toEqual([]);
 
     const assigned = await app.inject({
       method: "POST",
@@ -679,6 +721,8 @@ describe("printer progress route", () => {
         object_names: [acceptedPart.units[0]!.objectName],
         tracking: "manual",
         completed: false,
+        plan_revision_id: planRevisionId,
+        unit_tokens: [`${bracket.id}:0`],
       },
     });
 
@@ -690,6 +734,7 @@ describe("printer progress route", () => {
         integration_id: "manual:offline-printer",
         state: "watching",
         units: [{ part_id: bracket.id, unit_index: 0 }],
+        plan_revision_id: planRevisionId,
       },
     });
 
@@ -705,8 +750,132 @@ describe("printer progress route", () => {
     expect(acceptedPrintUnits(repo, plan.id, bracket.id)).toEqual([false]);
   });
 
-  it("sends an already-finished external 3MF directly to Checkoff", async () => {
-    const { app, repo, plan, acceptedPart } = await setup();
+  it("binds only the units the operator confirmed, never a filename match", async () => {
+    const { app, repo, plan, bracket, planRevisionId } = await setup();
+    saveFleet(repo, [parsePrinterMachine({
+      id: "offline-printer",
+      name: "Garage printer",
+      model: "Custom",
+      bed_width_mm: 250,
+      bed_depth_mm: 210,
+      max_filament_slots: 1,
+      loaded_filaments: [],
+    })]);
+    const assignment = {
+      profile_id: plan.id,
+      printer_id: "offline-printer",
+      // The Part filename, not a Required-unit Object name.
+      filename: "bracket.bgcode",
+      tracking: "manual",
+      plan_revision_id: planRevisionId,
+    };
+
+    const preview = await app.inject({
+      method: "POST",
+      url: "/printer-checkoff/file-assignments/preview",
+      payload: assignment,
+    });
+    expect(preview.json()).toMatchObject({
+      suggested_units: [{ part_id: bracket.id, unit_index: 0 }],
+      suggestion_basis: "filename",
+    });
+
+    const unconfirmed = await app.inject({
+      method: "POST",
+      url: "/printer-checkoff/file-assignments",
+      payload: { ...assignment, unit_tokens: [] },
+    });
+    expect(unconfirmed.statusCode).toBe(200);
+    expect(unconfirmed.json().link.units).toEqual([]);
+
+    const missingTokens = await app.inject({
+      method: "POST",
+      url: "/printer-checkoff/file-assignments",
+      payload: { ...assignment, filename: "bracket-2.bgcode" },
+    });
+    expect(missingTokens.statusCode).toBe(400);
+    expect(missingTokens.json().detail).toContain("unit_tokens");
+
+    const malformed = await app.inject({
+      method: "POST",
+      url: "/printer-checkoff/file-assignments",
+      payload: { ...assignment, filename: "bracket-3.bgcode", unit_tokens: ["not-a-token"] },
+    });
+    expect(malformed.statusCode).toBe(400);
+
+    const confirmed = await app.inject({
+      method: "POST",
+      url: "/printer-checkoff/file-assignments",
+      payload: {
+        ...assignment,
+        filename: "bracket-4.bgcode",
+        unit_tokens: [`${bracket.id}:0`],
+      },
+    });
+    expect(confirmed.statusCode).toBe(200);
+    expect(confirmed.json().link.units).toEqual([
+      expect.objectContaining({ part_id: bracket.id, unit_index: 0 }),
+    ]);
+    // A confirmed unit that is not an incomplete Required unit is refused.
+    const unknownUnit = await app.inject({
+      method: "POST",
+      url: "/printer-checkoff/file-assignments",
+      payload: {
+        ...assignment,
+        filename: "bracket-5.bgcode",
+        unit_tokens: [`${bracket.id}:99`],
+      },
+    });
+    expect(unknownUnit.statusCode).toBe(409);
+    expect(acceptedPrintUnits(repo, plan.id, bracket.id)).toEqual([false]);
+  });
+
+  it("refuses an assignment carrying a superseded Accepted Plan revision", async () => {
+    const { app, repo, plan, bracket, planRevisionId } = await setup();
+    saveFleet(repo, [parsePrinterMachine({
+      id: "offline-printer",
+      name: "Garage printer",
+      model: "Custom",
+      bed_width_mm: 250,
+      bed_depth_mm: 210,
+      max_filament_slots: 1,
+      loaded_filaments: [],
+    })]);
+
+    const stale = await app.inject({
+      method: "POST",
+      url: "/printer-checkoff/file-assignments",
+      payload: {
+        profile_id: plan.id,
+        printer_id: "offline-printer",
+        filename: "bracket.bgcode",
+        tracking: "manual",
+        plan_revision_id: planRevisionId + 1,
+        unit_tokens: [`${bracket.id}:0`],
+      },
+    });
+
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json().detail).toContain("Accepted Plan moved on");
+    expect(loadPrinterCheckoffLinks(repo)).toEqual([]);
+
+    const missingRevision = await app.inject({
+      method: "POST",
+      url: "/printer-checkoff/file-assignments",
+      payload: {
+        profile_id: plan.id,
+        printer_id: "offline-printer",
+        filename: "bracket.bgcode",
+        tracking: "manual",
+        unit_tokens: [`${bracket.id}:0`],
+      },
+    });
+    expect(missingRevision.statusCode).toBe(400);
+    expect(missingRevision.json().detail).toContain("plan_revision_id");
+  });
+
+  it("refuses a 3MF whose bytes PrintPartner cannot read", async () => {
+    const { app, repo, plan, bracket, planRevisionId } = await setup();
     saveFleet(repo, [parsePrinterMachine({
       id: "sd-card-printer",
       name: "SD card printer",
@@ -724,21 +893,241 @@ describe("printer progress route", () => {
         profile_id: plan.id,
         printer_id: "sd-card-printer",
         filename: "finished.gcode.3mf",
-        object_names: [acceptedPart.units[0]!.objectName],
         tracking: "manual",
         completed: true,
+        plan_revision_id: planRevisionId,
+        unit_tokens: [`${bracket.id}:0`],
+        // A client may send whatever it likes; the server never takes its word.
+        classification: { format: "3mf", kind: "toolpath_package" },
         sliced_3mf_confirmed: true,
       },
     });
 
-    expect(assigned.statusCode).toBe(200);
-    expect(assigned.json()).toMatchObject({
-      link: {
-        integration_id: "manual:sd-card-printer",
-        state: "awaiting_verify",
-        host_outcome: "success",
+    expect(assigned.statusCode).toBe(409);
+    expect(assigned.json().detail).toContain("has to read a 3MF");
+    expect(loadPrinterCheckoffLinks(repo)).toEqual([]);
+  });
+
+  it("refuses a slicer-project 3MF read off a real host, whatever the client claims", async () => {
+    const { app, repo, plan, bracket, planRevisionId } = await setup();
+    saveFleet(repo, [parsePrinterMachine({
+      id: "core-one",
+      name: "Core One",
+      model: "Custom",
+      bed_width_mm: 250,
+      bed_depth_mm: 210,
+      max_filament_slots: 1,
+      loaded_filaments: [],
+      integration_id: "prusa-1",
+    })]);
+
+    const project = zipSync({
+      "[Content_Types].xml": strToU8("<Types/>"),
+      "3D/3dmodel.model": strToU8('<model><resources/><build/></model>'),
+      "Metadata/Slic3r_PE.config": strToU8("; layer_height = 0.2\n"),
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL) => {
+        const url = String(input);
+        // PrusaLink's Digest handshake probes status before every request.
+        if (url.endsWith("/api/v1/status")) return response({ printer: { state: "IDLE" } });
+        if (url.endsWith("/api/v1/storage")) {
+          return response({ storage_list: [{ path: "usb", available: true }] });
+        }
+        if (url.endsWith("/api/v1/files/usb/")) {
+          return response({
+            children: [{ name: "project.3mf", type: "PRINT_FILE", size: project.byteLength }],
+          });
+        }
+        if (url.endsWith("/api/v1/files/usb/project.3mf")) {
+          return response({ refs: { download: "/api/v1/files/usb/project.3mf/raw" } });
+        }
+        if (url.endsWith("/raw")) {
+          return new Response(project, { status: 200 });
+        }
+        throw new Error(`unexpected host call ${url}`);
+      }),
+    );
+
+    const preview = await app.inject({
+      method: "POST",
+      url: "/printer-checkoff/file-assignments/preview",
+      payload: {
+        profile_id: plan.id,
+        printer_id: "core-one",
+        filename: "project.3mf",
+        remote_path: "project.3mf",
       },
     });
+    expect(preview.statusCode).toBe(200);
+    expect(preview.json()).toMatchObject({
+      inspected: true,
+      classification: { format: "3mf", kind: "slicer_project" },
+      print_ready: false,
+    });
+
+    const assigned = await app.inject({
+      method: "POST",
+      url: "/printer-checkoff/file-assignments",
+      payload: {
+        profile_id: plan.id,
+        printer_id: "core-one",
+        filename: "project.3mf",
+        remote_path: "project.3mf",
+        plan_revision_id: planRevisionId,
+        unit_tokens: [`${bracket.id}:0`],
+        // The operator's old checkbox and a forged classification both change
+        // nothing: the answer comes from the bytes.
+        sliced_3mf_confirmed: true,
+        classification: { format: "3mf", kind: "toolpath_package" },
+      },
+    });
+    expect(assigned.statusCode).toBe(409);
+    expect(assigned.json().detail).toContain("needs slicing");
+    expect(loadPrinterCheckoffLinks(repo)).toEqual([]);
+
+    // The same host serving a real toolpath package does assign, and the link
+    // keeps a durable identity including the hash of the bytes read.
+    const sliced = zipSync({
+      "[Content_Types].xml": strToU8("<Types/>"),
+      "3D/3dmodel.model": strToU8("<model><resources/><build/></model>"),
+      "Metadata/project_settings.config": strToU8("{}"),
+      "Metadata/plate_1.gcode": strToU8("G28\nG1 X10 Y10 E1\n"),
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL) => {
+        const url = String(input);
+        if (url.endsWith("/api/v1/status")) return response({ printer: { state: "IDLE" } });
+        if (url.endsWith("/api/v1/storage")) {
+          return response({ storage_list: [{ path: "usb", available: true }] });
+        }
+        if (url.endsWith("/api/v1/files/usb/")) {
+          return response({
+            children: [
+              {
+                name: "sliced.3mf",
+                type: "PRINT_FILE",
+                size: sliced.byteLength,
+                m_timestamp: 1_780_000_000,
+              },
+            ],
+          });
+        }
+        if (url.endsWith("/api/v1/files/usb/sliced.3mf")) {
+          return response({ refs: { download: "/api/v1/files/usb/sliced.3mf/raw" } });
+        }
+        if (url.endsWith("/raw")) return new Response(sliced, { status: 200 });
+        throw new Error(`unexpected host call ${url}`);
+      }),
+    );
+
+    const slicedAssigned = await app.inject({
+      method: "POST",
+      url: "/printer-checkoff/file-assignments",
+      payload: {
+        profile_id: plan.id,
+        printer_id: "core-one",
+        filename: "sliced.3mf",
+        remote_path: "sliced.3mf",
+        plan_revision_id: planRevisionId,
+        unit_tokens: [`${bracket.id}:0`],
+      },
+    });
+    expect(slicedAssigned.statusCode).toBe(200);
+    expect(slicedAssigned.json()).toMatchObject({
+      link: {
+        classification: { format: "3mf", kind: "toolpath_package" },
+        plan_revision_id: planRevisionId,
+        remote_identity: {
+          size_bytes: sliced.byteLength,
+          modified_at: new Date(1_780_000_000_000).toISOString(),
+          sha256: createHash("sha256").update(sliced).digest("hex"),
+        },
+      },
+    });
+  });
+
+  it("notices on its own that a linked provider file changed", async () => {
+    const { repo, plan, bracket, planRevisionId } = await setup();
+    const identity = { size_bytes: 4096, modified_at: "2026-08-01T00:00:00.000Z" };
+    const created = repo.materializeAcceptedPrinterLink({
+      kind: "create",
+      profileId: plan.id,
+      expectedPlanRevisionId: planRevisionId,
+      objectNames: [],
+      confirmedUnits: [{ part_id: bracket.id, unit_index: 0 }],
+      link: {
+        integrationId: "prusa-1",
+        printerId: "core-one",
+        hostName: "Core One",
+        filename: "bracket.bgcode",
+        remotePath: "usb/plates/bracket.bgcode",
+        remoteIdentity: identity,
+        classification: { format: "bgcode" },
+        started: false,
+      },
+    });
+    if (created.kind !== "created") throw new Error(`unexpected outcome ${created.kind}`);
+
+    const browsed: string[] = [];
+    const hostFiles = (entries: PrinterStorageEntry[]): PrinterFileAccess => ({
+      browse: async (_config, path) => {
+        browsed.push(path);
+        return { path, entries };
+      },
+      open: async () => new Response(new Uint8Array(0)),
+    });
+    const observe = (files: PrinterFileAccess) =>
+      observePrinterCheckoffFileDrift({
+        repo,
+        integrationId: "prusa-1",
+        files,
+        config: { base_url: "http://127.0.0.1" },
+      });
+
+    const unchanged: PrinterStorageEntry[] = [
+      { kind: "file", path: "usb/plates/bracket.bgcode", name: "bracket.bgcode", ...identity },
+    ];
+    await observe(hostFiles(unchanged));
+    // One browse of the containing directory, not one per link.
+    expect(browsed).toEqual(["usb/plates"]);
+    expect(getPrinterCheckoffLink(repo, created.link.id)?.remote_drift).toBeUndefined();
+
+    await observe(
+      hostFiles([
+        {
+          kind: "file",
+          path: "usb/plates/bracket.bgcode",
+          name: "bracket.bgcode",
+          size_bytes: 9001,
+          modified_at: identity.modified_at,
+        },
+      ]),
+    );
+    expect(getPrinterCheckoffLink(repo, created.link.id)?.remote_drift).toMatchObject({
+      reason: "size",
+    });
+
+    await observe(hostFiles([]));
+    expect(getPrinterCheckoffLink(repo, created.link.id)?.remote_drift).toMatchObject({
+      reason: "missing",
+    });
+
+    // A host that will not answer has not changed anybody's artifact.
+    await observe({
+      browse: async () => {
+        throw new Error("host unreachable");
+      },
+      open: async () => new Response(new Uint8Array(0)),
+    });
+    expect(getPrinterCheckoffLink(repo, created.link.id)?.remote_drift).toMatchObject({
+      reason: "missing",
+    });
+
+    await observe(hostFiles(unchanged));
+    expect(getPrinterCheckoffLink(repo, created.link.id)?.remote_drift).toBeUndefined();
   });
 
   it("claims only selected unattributed plate files", async () => {
@@ -775,7 +1164,7 @@ describe("printer progress route", () => {
   });
 
   it.each([
-    [{ kind: "empty" } as const, "Accepted Plan has no required units"],
+    [{ kind: "empty" } as const, "Accepted Plan has no Required units"],
     [
       { kind: "accepted_state_unavailable", reason: "compatibility_dirty" } as const,
       "Accepted Plan requires compatibility repair",
@@ -784,9 +1173,17 @@ describe("printer progress route", () => {
       { kind: "accepted_state_unavailable", reason: "uninitialized" } as const,
       "Accepted Plan operational state is not initialized",
     ],
-    [{ kind: "no_match" } as const, "Print does not map to an incomplete accepted Plan unit"],
-    [{ kind: "already_linked" } as const, "Print is already linked"],
+    [
+      { kind: "no_match" } as const,
+      "That print file does not map to an incomplete Required unit in this Build",
+    ],
+    [{ kind: "already_linked" } as const, "That print file is already assigned"],
     [{ kind: "print_changed" } as const, "Print changed or was already claimed"],
+    [
+      { kind: "stale_plan_revision" } as const,
+      "The Accepted Plan moved on; reload the Build and choose the file again",
+    ],
+    [{ kind: "link_changed" } as const, "Tracked print changed; reload and retry"],
   ])("returns a stable conflict for claim outcome %#", async (outcome, detail) => {
     const { app, repo, plan } = await setup();
     const print = createUnattributedPrint(

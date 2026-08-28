@@ -1,14 +1,19 @@
 import { basename } from "node:path";
 import type {
+  IntegrationConfig,
   PrinterCheckoffLink,
   PrinterCheckoffReconcileUpdate,
   PrinterCheckoffUnit,
+  PrinterFileIdentity,
   PrinterHostStatus,
+  PrinterStoredFile,
   PrintVerifyDecision,
 } from "@print-partner/contracts";
 import type { AppRepository } from "../db/repository.js";
+import type { PrinterFileAccess } from "../integrations/store.js";
 import {
   listWatchingPrinterCheckoffLinks,
+  loadPrinterCheckoffLinks,
   updatePrinterCheckoffLink,
 } from "./printer-checkoff-store.js";
 
@@ -245,6 +250,65 @@ export function reconcilePrinterCheckoff(
   }
 
   return updates;
+}
+
+/** The durable provider-side identity of one stored file, as the host reports it. */
+export function printerStoredFileIdentity(entry: PrinterStoredFile): PrinterFileIdentity {
+  const identity: PrinterFileIdentity = {};
+  if (entry.size_bytes !== undefined) identity.size_bytes = entry.size_bytes;
+  if (entry.modified_at !== undefined) identity.modified_at = entry.modified_at;
+  if (entry.provider_revision !== undefined) identity.provider_revision = entry.provider_revision;
+  return identity;
+}
+
+/**
+ * Re-observe every active link's provider file on one host and record drift.
+ *
+ * This runs on the same poll as reconcile, so a file that changed underneath a
+ * link is noticed without anyone asking. Providers describe files in directory
+ * listings, so this browses each distinct containing directory once rather than
+ * once per link.
+ *
+ * A browse that fails is skipped, never treated as a missing file: a host that
+ * is briefly unreachable has not changed anybody's artifact.
+ */
+export async function observePrinterCheckoffFileDrift(input: {
+  readonly repo: AppRepository;
+  readonly integrationId: string;
+  readonly files: PrinterFileAccess;
+  readonly config: IntegrationConfig;
+}): Promise<void> {
+  const pathsByDirectory = new Map<string, Set<string>>();
+  for (const link of loadPrinterCheckoffLinks(input.repo)) {
+    if (link.state !== "watching" && link.state !== "awaiting_verify") continue;
+    if (link.integration_id !== input.integrationId || !link.remote_path) continue;
+    const slash = link.remote_path.lastIndexOf("/");
+    const directory = slash < 0 ? "" : link.remote_path.slice(0, slash);
+    const paths = pathsByDirectory.get(directory);
+    if (paths) paths.add(link.remote_path);
+    else pathsByDirectory.set(directory, new Set([link.remote_path]));
+  }
+
+  for (const [directory, paths] of pathsByDirectory) {
+    let observed: Map<string, PrinterFileIdentity>;
+    try {
+      const listing = await input.files.browse(input.config, directory);
+      observed = new Map(
+        listing.entries.flatMap((entry) =>
+          entry.kind === "file" ? [[entry.path, printerStoredFileIdentity(entry)] as const] : [],
+        ),
+      );
+    } catch {
+      continue;
+    }
+    for (const remotePath of paths) {
+      input.repo.observePrinterCheckoffRemoteFile({
+        integrationId: input.integrationId,
+        remotePath,
+        observed: observed.get(remotePath) ?? null,
+      });
+    }
+  }
 }
 
 export function mergeResolvedUnits(

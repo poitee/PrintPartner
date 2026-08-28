@@ -1,103 +1,37 @@
-import type { PrinterHostStatus, ReviewPart, UnattributedPrint } from "@print-partner/contracts";
+import type {
+  PrinterCheckoffLink,
+  PrinterCheckoffLinkState,
+  PrinterCheckoffReconcileUpdate,
+  PrinterCheckoffUnit,
+  PrinterHostStatus,
+  PrintFileClassification,
+  PrintOutcomeEvent,
+  PrintOutcomesSummary,
+  PrintVerifyDecision,
+  ReviewPart,
+  UnattributedPrint,
+} from "@print-partner/contracts";
 import { engineFetch } from "../engineTransport";
 
-export type PrinterCheckoffUnit = {
-  part_id: number;
-  unit_index: number;
-  object_name?: string;
-};
-
-export type PrinterHostOutcome = "unknown" | "success" | "failed" | "cancelled";
-
-export type PrinterCheckoffLinkState =
-  | "watching"
-  | "awaiting_verify"
-  | "host_failed"
-  | "dismissed"
-  | "verified"
-  | "applied";
-
-export type PrintRejectReason =
-  | "bed_adhesion"
-  | "layer_shift"
-  | "warping"
-  | "stringing"
-  | "under_extrusion"
-  | "over_extrusion"
-  | "dimensional"
-  | "collision"
-  | "wrong_filament"
-  | "other";
-
-export type PrintOutcomeResult = "confirmed" | "rejected";
-
-export type PrintVerifyDecision = {
-  part_id: number;
-  unit_index: number;
-  result: PrintOutcomeResult;
-  reason?: PrintRejectReason;
-  note?: string;
-};
-
-export type PrintOutcomeEvent = {
-  id: string;
-  at: string;
-  profile_id: number;
-  part_id: number;
-  unit_index: number;
-  result: PrintOutcomeResult;
-  reason?: PrintRejectReason;
-  note?: string;
-  host_integration_id?: string;
-  filename?: string;
-  match_key?: string;
-  role?: string;
-  filament_display?: string;
-  link_id?: string;
-};
-
-export type PrintOutcomesSummary = {
-  profile_id: number;
-  total_confirmed: number;
-  total_rejected: number;
-  by_reason: Partial<Record<PrintRejectReason, number>>;
-  by_role: Record<string, { confirmed: number; rejected: number }>;
-  recent_rejected: PrintOutcomeEvent[];
-};
-
-export type PrinterCheckoffLink = {
-  id: string;
-  profile_id: number;
-  integration_id: string;
-  printer_id: string;
-  host_name: string;
-  filename: string;
-  remote_path?: string;
-  upload_job_id?: string;
-  units: PrinterCheckoffUnit[];
-  /** Parsed object names that did not map — visible on Progress, never in confirm set. */
-  unlabeled_names?: string[];
-  resolved_units?: PrintVerifyDecision[];
-  state: PrinterCheckoffLinkState;
-  host_outcome?: PrinterHostOutcome;
-  saw_active: boolean;
-  started?: boolean;
-  last_progress?: number;
-  created_at: string;
-  completed_at?: string;
-  applied_at?: string;
-  units_marked?: number;
-};
-
-export type PrinterCheckoffReconcileUpdate = {
-  link_id: string;
-  host_name: string;
-  profile_id: number;
-  filename: string;
-  event: "awaiting_verify" | "host_failed";
-  host_outcome: PrinterHostOutcome;
-  units_pending: number;
-};
+/**
+ * The printer-checkoff wire types live in `@print-partner/contracts`, which the
+ * server builds against too. They are re-exported here so the many call sites
+ * that already import them from this module keep one import path, and so no
+ * second copy can drift away from the server's shape.
+ */
+export type {
+  PrinterCheckoffLink,
+  PrinterCheckoffLinkState,
+  PrinterCheckoffReconcileUpdate,
+  PrinterCheckoffUnit,
+  PrinterHostOutcome,
+  PrintFileClassification,
+  PrintOutcomeEvent,
+  PrintOutcomeResult,
+  PrintOutcomesSummary,
+  PrintRejectReason,
+  PrintVerifyDecision,
+} from "@print-partner/contracts";
 
 /** @deprecated Prefer PrinterCheckoffReconcileUpdate */
 export type PrinterCheckoffApplied = {
@@ -252,6 +186,162 @@ export async function dismissUnattributedPrint(id: string): Promise<void> {
   });
 }
 
+/** The parts of a print file check that do not depend on reading the bytes. */
+type PrintFileCheckBasis = {
+  /** Required units the file's object names or filename point at. */
+  suggested_units: PrinterCheckoffUnit[];
+  /** What the suggestion was drawn from, so the operator can judge it. */
+  suggestion_basis: "object_names" | "filename" | "none";
+  /** Object names that matched no Required unit. */
+  unlabeled_names: string[];
+  /** The Accepted Plan revision the assignment will be pinned to. */
+  plan_revision_id: number;
+};
+
+/**
+ * What PrintPartner learned about a print file before anything was written.
+ *
+ * Two arms, not one bag with optional fields. The server can only classify a
+ * file whose bytes it can fetch, and a file it never read has no
+ * classification at all rather than an unknown one. Making `inspected` the
+ * discriminant puts `classification` out of reach in the arm where it does not
+ * exist, so the UI cannot render a guess as a fact.
+ */
+export type PrintFileAssignmentPreview =
+  | (PrintFileCheckBasis & {
+      inspected: true;
+      classification: PrintFileClassification;
+      print_ready: boolean;
+    })
+  | (PrintFileCheckBasis & { inspected: false });
+
+function readClassification(value: unknown): PrintFileClassification | null {
+  if (typeof value !== "object" || value === null || !("format" in value)) return null;
+  if (value.format === "gcode" || value.format === "bgcode") return { format: value.format };
+  if (value.format !== "3mf" || !("kind" in value)) return null;
+  const kind = value.kind;
+  return kind === "slicer_project" ||
+    kind === "model_package" ||
+    kind === "toolpath_package" ||
+    kind === "unsupported"
+    ? { format: "3mf", kind }
+    : null;
+}
+
+function readSuggestedUnits(value: unknown): PrinterCheckoffUnit[] | null {
+  if (!Array.isArray(value)) return null;
+  const units: PrinterCheckoffUnit[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "object" || entry === null) return null;
+    if (!("part_id" in entry) || !("unit_index" in entry)) return null;
+    const partId = entry.part_id;
+    const unitIndex = entry.unit_index;
+    if (typeof partId !== "number" || !Number.isInteger(partId)) return null;
+    if (typeof unitIndex !== "number" || !Number.isInteger(unitIndex)) return null;
+    const objectName = "object_name" in entry ? entry.object_name : undefined;
+    units.push({
+      part_id: partId,
+      unit_index: unitIndex,
+      ...(typeof objectName === "string" ? { object_name: objectName } : {}),
+    });
+  }
+  return units;
+}
+
+function readNames(value: unknown): string[] | null {
+  if (!Array.isArray(value)) return null;
+  return value.every((name) => typeof name === "string") ? [...value] : null;
+}
+
+/**
+ * Narrow the preview reply before the UI switches on it.
+ *
+ * The classification and the suggestion basis both drive exhaustive switches
+ * whose default arm is `never`, so a server that answers a shape this client
+ * does not know has to become a failure the operator can retry, not a crashed
+ * sheet. `@print-partner/contracts` owns the schema validator, and this app does
+ * not depend on it directly, so the fields this UI branches on are checked here.
+ *
+ * The two arms are kept apart on purpose: an `inspected` reply missing its
+ * classification, and an uninspected reply carrying one, are both rejected
+ * rather than quietly averaged into something the UI would render as fact.
+ */
+export function parsePrintFileAssignmentPreview(value: unknown): PrintFileAssignmentPreview {
+  const unreadable = new Error(
+    "The server answered the print file check in a shape this app cannot read.",
+  );
+  if (typeof value !== "object" || value === null) throw unreadable;
+  if (
+    !("inspected" in value) ||
+    !("suggested_units" in value) ||
+    !("suggestion_basis" in value) ||
+    !("unlabeled_names" in value) ||
+    !("plan_revision_id" in value)
+  ) {
+    throw unreadable;
+  }
+  const suggestedUnits = readSuggestedUnits(value.suggested_units);
+  const unlabeledNames = readNames(value.unlabeled_names);
+  const basis = value.suggestion_basis;
+  const revisionId = value.plan_revision_id;
+  if (
+    suggestedUnits === null ||
+    unlabeledNames === null ||
+    typeof revisionId !== "number" ||
+    !Number.isInteger(revisionId) ||
+    (basis !== "object_names" && basis !== "filename" && basis !== "none")
+  ) {
+    throw unreadable;
+  }
+  const basisFields: PrintFileCheckBasis = {
+    suggested_units: suggestedUnits,
+    suggestion_basis: basis,
+    unlabeled_names: unlabeledNames,
+    plan_revision_id: revisionId,
+  };
+
+  if (value.inspected === false) {
+    if ("classification" in value || "print_ready" in value) throw unreadable;
+    return { ...basisFields, inspected: false };
+  }
+  if (value.inspected !== true) throw unreadable;
+  if (!("classification" in value) || !("print_ready" in value)) throw unreadable;
+  const classification = readClassification(value.classification);
+  if (classification === null || typeof value.print_ready !== "boolean") throw unreadable;
+  return {
+    ...basisFields,
+    inspected: true,
+    classification,
+    print_ready: value.print_ready,
+  };
+}
+
+/**
+ * Inspect a print file and propose a mapping. Writes nothing, so the operator
+ * can look at the classification and the suggested units before committing.
+ */
+export async function previewPrinterFileAssignment(options: {
+  profile_id: number;
+  printer_id: string;
+  filename: string;
+  remote_path?: string;
+  object_names: string[];
+}): Promise<PrintFileAssignmentPreview> {
+  return parsePrintFileAssignmentPreview(
+    await engineFetch<unknown>("/printer-checkoff/file-assignments/preview", {
+      method: "POST",
+      body: JSON.stringify(options),
+    }),
+  );
+}
+
+/**
+ * Commit the mapping the operator confirmed.
+ *
+ * `plan_revision_id` comes from the preview, so the link is pinned to the
+ * Accepted Plan revision the operator was actually looking at. `unit_tokens`
+ * are `${part_id}:${unit_index}` and may be empty when nothing maps yet.
+ */
 export async function assignPrinterFile(options: {
   profile_id: number;
   printer_id: string;
@@ -260,7 +350,8 @@ export async function assignPrinterFile(options: {
   object_names: string[];
   tracking: "host" | "manual";
   completed: boolean;
-  sliced_3mf_confirmed?: boolean;
+  plan_revision_id: number;
+  unit_tokens: string[];
 }): Promise<{ link: PrinterCheckoffLink }> {
   return engineFetch("/printer-checkoff/file-assignments", {
     method: "POST",

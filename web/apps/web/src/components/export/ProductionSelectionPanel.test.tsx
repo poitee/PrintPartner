@@ -123,7 +123,7 @@ describe("ProductionSelectionPanel", () => {
     );
 
     expect(screen.queryAllByRole("checkbox")).toHaveLength(0);
-    expect(screen.getByText("Units in this Plate build")).toBeTruthy();
+    expect(screen.getByText("Required units in this work package")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Edit individual selection (60)" }));
     expect(screen.getAllByRole("checkbox")).toHaveLength(50);
     expect(screen.getByRole("button", { name: "Show 10 more" })).toBeTruthy();

@@ -1,4 +1,10 @@
-import type { PrinterCheckoffLink, PrinterCheckoffUnit } from "@print-partner/contracts";
+import type {
+  PrinterCheckoffLink,
+  PrinterCheckoffUnit,
+  PrinterFileDriftReason,
+  PrinterFileIdentity,
+  PrintFileClassification,
+} from "@print-partner/contracts";
 import {
   groupObjectsByPart,
   matchObjectsToFilenames,
@@ -51,15 +57,139 @@ export type AcceptedPrinterLinkMetadata = Readonly<{
   hostName: string;
   filename: string;
   remotePath?: string;
+  /** Provider identity of remotePath, including a SHA-256 of the bytes read. */
+  remoteIdentity?: PrinterFileIdentity;
+  /** What the bytes classified as. Never an operator's claim about them. */
+  classification?: PrintFileClassification;
   started: boolean;
 }>;
+
+/**
+ * The Required-unit coordinate the browser round-trips, `${part_id}:${unit_index}`.
+ * The operator confirms a mapping in these terms, so a stale or invented token
+ * is refused instead of quietly re-derived from filename similarity.
+ */
+export function parsePrinterCheckoffUnitToken(raw: string): PrinterCheckoffUnit | null {
+  const [partIdText, unitIndexText, ...rest] = raw.trim().split(":");
+  if (rest.length > 0 || !partIdText || unitIndexText === undefined) return null;
+  const partId = Number(partIdText);
+  const unitIndex = Number(unitIndexText);
+  if (!Number.isInteger(partId) || partId <= 0) return null;
+  if (!Number.isInteger(unitIndex) || unitIndex < 0) return null;
+  return { part_id: partId, unit_index: unitIndex };
+}
+
+/**
+ * Why a linked provider file no longer matches the identity recorded for it, or
+ * null when it still does. Only fields present on both sides are compared, so
+ * a provider that never reported a modification time cannot manufacture drift.
+ */
+export function detectPrinterFileDrift(input: {
+  readonly recorded: PrinterFileIdentity | undefined;
+  readonly observed: PrinterFileIdentity | null;
+}): PrinterFileDriftReason | null {
+  if (input.observed === null) return "missing";
+  const { recorded, observed } = input;
+  if (!recorded) return null;
+  // Strongest evidence first: a content hash settles it, a provider revision is
+  // the provider's own answer, and size beats a coarse modification time.
+  if (recorded.sha256 && observed.sha256 && recorded.sha256 !== observed.sha256) return "content";
+  if (
+    recorded.provider_revision &&
+    observed.provider_revision &&
+    recorded.provider_revision !== observed.provider_revision
+  ) {
+    return "revision";
+  }
+  if (
+    recorded.size_bytes !== undefined &&
+    observed.size_bytes !== undefined &&
+    recorded.size_bytes !== observed.size_bytes
+  ) {
+    return "size";
+  }
+  if (
+    recorded.modified_at &&
+    observed.modified_at &&
+    recorded.modified_at !== observed.modified_at
+  ) {
+    return "modified";
+  }
+  return null;
+}
+
+export type ConfirmedPrinterUnitsResult =
+  | Readonly<{ kind: "confirmed"; units: readonly Readonly<PrinterCheckoffUnit>[] }>
+  | Readonly<{
+      kind: "rejected";
+      reason: "unknown_unit" | "already_completed" | "duplicate_unit";
+      token: string;
+    }>;
+
+/**
+ * Check an operator-confirmed mapping against the Accepted Plan.
+ *
+ * The operator picks the units; this only proves each pick is a Required unit
+ * of this Build that is still incomplete, and stamps its object name so the
+ * link reads the same as an object-name match would.
+ */
+export function confirmAcceptedPrinterUnits(input: {
+  readonly snapshot: AcceptedPlanOperationalSnapshot;
+  readonly confirmed: readonly Readonly<PrinterCheckoffUnit>[];
+}): ConfirmedPrinterUnitsResult {
+  const slots = new Map<string, AcceptedOperationalUnit>();
+  for (const part of input.snapshot.parts) {
+    if (!part.included) continue;
+    for (const unit of part.units) {
+      if (!unit.required) continue;
+      slots.set(`${part.projectionPartId}:${unit.unitIndex}`, unit);
+    }
+  }
+  const units: PrinterCheckoffUnit[] = [];
+  const taken = new Set<string>();
+  for (const coordinate of input.confirmed) {
+    const token = `${coordinate.part_id}:${coordinate.unit_index}`;
+    const slot = slots.get(token);
+    if (!slot) return { kind: "rejected", reason: "unknown_unit", token };
+    if (slot.completed) return { kind: "rejected", reason: "already_completed", token };
+    if (taken.has(token)) return { kind: "rejected", reason: "duplicate_unit", token };
+    taken.add(token);
+    units.push({
+      part_id: coordinate.part_id,
+      unit_index: coordinate.unit_index,
+      ...(slot.objectName ? { object_name: slot.objectName } : {}),
+    });
+  }
+  return { kind: "confirmed", units };
+}
 
 export type MaterializeAcceptedPrinterLinkCommand =
   | Readonly<{
       kind: "create";
       profileId: number;
+      /**
+       * The Accepted Plan revision the operator's browser was looking at. A
+       * mismatch means the Plan moved on, so the assignment is refused rather
+       * than attached to a superseded revision.
+       */
+      expectedPlanRevisionId: number;
       objectNames: readonly string[];
-      fallbackFilename?: string;
+      /**
+       * Required units the operator confirmed. Filename similarity may suggest
+       * a mapping but never creates one, so there is no filename fallback here.
+       */
+      confirmedUnits: readonly Readonly<PrinterCheckoffUnit>[];
+      link: AcceptedPrinterLinkMetadata;
+    }>
+  | Readonly<{
+      /**
+       * The host reported it is already printing this file. There is no
+       * operator in the loop, so this recovery path may still fall back to
+       * filename similarity, exactly as the unattributed-print claim does.
+       */
+      kind: "observe";
+      profileId: number;
+      objectNames: readonly string[];
       link: AcceptedPrinterLinkMetadata;
     }>
   | Readonly<{
@@ -88,6 +218,7 @@ export type MaterializeAcceptedPrinterLinkResult =
         | "print_changed"
         | "no_match"
         | "empty"
+        | "stale_plan_revision"
         | "transaction_unavailable";
     }>
   | Readonly<{
