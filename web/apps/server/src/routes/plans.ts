@@ -19,6 +19,7 @@ import { AcceptedPlanOperationalIntegrityError } from "../db/accepted-plan-opera
 import { toAcceptedCheckoffView } from "../services/accepted-plan-views.js";
 import { acceptedPlanBasis } from "../db/accepted-plan-progress.js";
 import {
+  buildPlanningApplyBlockers,
   deriveBuildPlanningPhase,
   deriveBuildPlanningReadiness,
   hydrateBuildPlanningBrief,
@@ -181,11 +182,22 @@ export async function registerPlanRoutes(
     if (!storedBrief) return { planning: null };
     const brief = hydrateBuildPlanningBrief(deps.repo, storedBrief);
     const groupIds = new Set(brief.differences.map((difference) => difference.group_id));
+    const rawDraftId = (request.query as { draft_id?: unknown }).draft_id;
+    const draftId = rawDraftId == null ? null : Number(rawDraftId);
+    if (draftId != null && (!Number.isSafeInteger(draftId) || draftId <= 0)) {
+      return reply.status(400).send({ detail: "draft_id must be a positive integer" });
+    }
+    const acceptanceBlockers = draftId == null
+      ? null
+      : buildPlanningApplyBlockers(deps.repo, id, draftId);
     return {
       planning: {
         brief,
         planning_phase: deriveBuildPlanningPhase(deps.repo, brief),
         readiness: deriveBuildPlanningReadiness(brief),
+        acceptance_readiness: acceptanceBlockers == null
+          ? null
+          : { ready: acceptanceBlockers.length === 0, blockers: acceptanceBlockers },
         grouped_difference_count: groupIds.size,
         difference_count: brief.differences.length,
       },

@@ -4,7 +4,7 @@ import type {
   PlanStaleReason,
   PlanUntrackedReason,
 } from "@print-partner/contracts";
-import type { PlanReview } from "../api/endpoints/planManifests";
+import type { BuildPlanningState, PlanReview } from "../api/endpoints/planManifests";
 import { buildSourcesRoute, libraryRoute } from "./routes";
 
 /**
@@ -61,7 +61,10 @@ export type PlanAcceptanceInput = {
   readonly buildId: number | null;
   readonly failure?: PlanAcceptanceFailure | null;
   readonly freshness?: PlanFreshness | null;
+  readonly planningBlockers?: readonly BuildPlanningBlocker[] | null;
 };
+
+type BuildPlanningBlocker = BuildPlanningState["readiness"]["blockers"][number];
 
 export type AcceptedRevisionSummary = {
   readonly planVersion: number | null;
@@ -284,6 +287,28 @@ function failureIssues(failure: PlanAcceptanceFailure): PlanIssue[] {
   }
 }
 
+function planningBlockerIssues(
+  blockers: readonly BuildPlanningBlocker[],
+  buildId: number | null,
+): PlanIssue[] {
+  return blockers.map((blocker, index) => {
+    const isUnreviewedDraft = blocker.code === "draft_selection";
+    return {
+      id: `plan-issue-build-planning-${blocker.code.replaceAll("_", "-")}-${index}`,
+      group: "must_resolve" as const,
+      title: isUnreviewedDraft
+        ? "This Working Plan has not been reviewed"
+        : "Assistant planning is not ready",
+      detail: isUnreviewedDraft
+        ? "The assistant reviewed a different Working Plan. Rebuild it from the reviewed Build setup before accepting."
+        : blocker.detail,
+      statusLabel: "Blocks acceptance",
+      tone: "error" as const,
+      action: sourcesAction(buildId),
+    };
+  });
+}
+
 /** Plain sentences for a Plan whose source inputs moved or were never tracked. */
 export function planStaleReasonText(reason: PlanStaleReason): string {
   switch (reason.kind) {
@@ -336,6 +361,9 @@ export function planIssues(input: PlanAcceptanceInput): PlanIssue[] {
     });
   }
   if (draft) issues.push(...requiredUnitIssues(draft));
+  if (input.planningBlockers) {
+    issues.push(...planningBlockerIssues(input.planningBlockers, buildId));
+  }
   if (input.failure) issues.push(...failureIssues(input.failure));
 
   const reviewIssues = review?.issues ?? [];

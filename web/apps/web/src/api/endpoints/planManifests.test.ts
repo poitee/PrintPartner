@@ -162,7 +162,7 @@ describe("plan manifest endpoints", () => {
       exclude: [],
     });
     await fetchPlanLayers(7);
-    await fetchBuildPlanningState(7);
+    await fetchBuildPlanningState(7, 17);
     await fetchPlanParts(7);
     await fetchPlanManifestWarnings(7);
 
@@ -179,6 +179,6 @@ describe("plan manifest endpoints", () => {
         exclude: [],
       },
     });
-    expect(http.calls[9]?.[0]).toContain("/plans/7/build-planning");
+    expect(http.calls[9]?.[0]).toContain("/plans/7/build-planning?draft_id=17");
   });
 });

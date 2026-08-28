@@ -33,17 +33,17 @@ export function buildWorkflowSignature(
  * Assistant planning state for a Build, keyed on the shared workflow query so
  * an MCP or browser mutation refreshes it.
  */
-export function useBuildPlanningQuery(planId: number | null) {
+export function useBuildPlanningQuery(planId: number | null, draftId?: number | null) {
   const workflowQuery = useBuildWorkflowQuery(planId);
   const signature = buildWorkflowSignature(workflowQuery.data);
 
   return useQuery<BuildPlanningState | null>({
-    queryKey: ["buildPlanning", planId ?? 0, signature],
+    queryKey: ["buildPlanning", planId ?? 0, draftId ?? 0, signature],
     queryFn: () => {
       if (planId == null || planId <= 0) {
         throw new Error("A Build is required to read its assistant changes");
       }
-      return fetchBuildPlanningState(planId);
+      return fetchBuildPlanningState(planId, draftId);
     },
     enabled: planId != null && planId > 0,
     staleTime: 5_000,

@@ -10,6 +10,7 @@ import {
 import type { RequiredUnitDecisionContract } from "@print-partner/contracts";
 import { usePlanWorkspace } from "../../context/PlanWorkspaceContext";
 import { useProfileSelection } from "../../context/ProfileContext";
+import { useBuildPlanningQuery } from "../build/useBuildPlanningQuery";
 import {
   planAcceptanceModel,
   preservedVerifiedUnits,
@@ -63,6 +64,10 @@ export function PlanAcceptanceProvider({ children, onSyncSources, syncBusy }: Pr
   const [failure, setFailure] = useState<PlanAcceptanceFailure | null>(null);
   const [decisionChoices, setDecisionChoices] = useState<Record<number, string>>({});
   const [confirmation, setConfirmation] = useState<StoredPlanAcceptance | null>(null);
+  const planningQuery = useBuildPlanningQuery(
+    selectedProfileId,
+    draftWorkspace?.draft.draft_id ?? null,
+  );
 
   // A saved Working Plan that changes underneath invalidates earlier answers.
   useEffect(() => {
@@ -84,8 +89,9 @@ export function PlanAcceptanceProvider({ children, onSyncSources, syncBusy }: Pr
       buildId: selectedProfileId,
       failure,
       freshness,
+      planningBlockers: planningQuery.data?.acceptance_readiness?.blockers,
     }),
-    [draftWorkspace, failure, freshness, review, selectedProfileId],
+    [draftWorkspace, failure, freshness, planningQuery.data, review, selectedProfileId],
   );
 
   const conflicts = draftWorkspace?.reconciliation.kind === "unresolved"

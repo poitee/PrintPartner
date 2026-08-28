@@ -14,7 +14,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import type { PlanDraftWorkspace } from "@print-partner/contracts";
 import { applyPlanDraft, reconcilePlanDraft } from "../../api/endpoints/planDrafts";
-import type { PlanReview, ReviewPart } from "../../api/endpoints/planManifests";
+import type {
+  BuildPlanningState,
+  PlanReview,
+  ReviewPart,
+} from "../../api/endpoints/planManifests";
 import { queryKeys } from "../../queries/keys";
 import { PlanWorkspaceProvider } from "../../context/PlanWorkspaceContext";
 import { PlanAcceptanceProvider } from "./PlanAcceptanceContext";
@@ -30,6 +34,7 @@ const state = vi.hoisted(() => {
   return {
     review: null as PlanReview | null,
     workspace: null as PlanDraftWorkspace | null,
+    planning: null as BuildPlanningState | null,
     version: 0,
     subscribe(listener: () => void) {
       listeners.add(listener);
@@ -61,6 +66,10 @@ vi.mock("../../api/endpoints/planDrafts", async (importOriginal) => {
 
 vi.mock("../../hooks/useEngineHealth", () => ({
   useEngineHealth: () => ({ health: { ok: true } }),
+}));
+
+vi.mock("../build/useBuildPlanningQuery", () => ({
+  useBuildPlanningQuery: () => ({ data: state.planning, error: null }),
 }));
 
 vi.mock("../../context/ProfileContext", () => ({
@@ -232,6 +241,7 @@ function renderPlan() {
 beforeEach(() => {
   window.sessionStorage.clear();
   state.review = baseReview();
+  state.planning = null;
   state.setWorkspace(unresolvedWorkspace());
   vi.mocked(reconcilePlanDraft).mockReset();
   vi.mocked(applyPlanDraft).mockReset();
@@ -263,6 +273,37 @@ describe("Plan acceptance checkpoint", () => {
       name: "part-1.stl: choose what happens to units already printed",
     });
     expect(link.getAttribute("href")).toBe("#plan-issue-required-unit-11");
+  });
+
+  it("shows an assistant-review blocker and disables acceptance", async () => {
+    state.setWorkspace(resolvedWorkspace());
+    state.planning = {
+      planning_phase: { kind: "applied", draft_id: 16, revision_id: 2 },
+      brief: {
+        special_request: "Print this Build",
+        requirements: [],
+        evidence: [],
+        contributions: [],
+        role_filaments: [],
+        draft_id: 16,
+      },
+      readiness: { ready: true, blockers: [] },
+      acceptance_readiness: {
+        ready: false,
+        blockers: [{
+          code: "draft_selection",
+          detail: "Draft 9 is not the reviewed planning draft",
+        }],
+      },
+      grouped_difference_count: 0,
+      difference_count: 0,
+    };
+
+    renderPlan();
+
+    expect(await screen.findAllByText("This Working Plan has not been reviewed")).toHaveLength(2);
+    expect(screen.getByRole("button", { name: "Accept Plan revision" }).hasAttribute("disabled"))
+      .toBe(true);
   });
 
   it("accepts the revision and leaves a receipt on the page", async () => {
