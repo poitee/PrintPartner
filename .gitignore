@@ -32,3 +32,6 @@ Do Not Push/
 
 # Git worktrees (local isolation)
 .worktrees/
+
+# Agent session scratch (task records, working briefs)
+.pi/
