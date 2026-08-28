@@ -6,9 +6,9 @@ import type {
   PrintFileClassification,
 } from "@print-partner/contracts";
 import {
-  groupObjectsByPart,
-  matchObjectsToFilenames,
-} from "../services/gcode-object-parser.js";
+  interpretSlicedObjectName,
+  matchSlicedObjectName,
+} from "@print-partner/domain";
 import { acceptedPlanBasis, type AcceptedPlanBasis } from "./accepted-plan-progress.js";
 import type {
   AcceptedOperationalPart,
@@ -233,23 +233,24 @@ type AcceptedUnitSlot = Readonly<{
 }>;
 
 function parsedObjectName(rawName: string): string {
-  const grouped = groupObjectsByPart([rawName]);
-  return grouped.values().next().value?.objects[0]?.stlBasename ?? rawName;
+  return interpretSlicedObjectName(rawName).unwrappedName.replace(/_stl$/i, ".stl");
 }
 
 function matchingAcceptedParts(
   rawName: string,
   parts: readonly AcceptedOperationalPart[],
 ): readonly AcceptedOperationalPart[] {
-  const grouped = groupObjectsByPart([rawName]);
-  const matched = matchObjectsToFilenames(
-    grouped,
-    parts.map((part) => part.filename),
+  const paths = parts.map((part) => part.relativePath || part.filename);
+  const matched = matchSlicedObjectName(rawName, paths);
+  if (matched.kind === "unmatched") return [];
+  const matchingPaths = new Set(
+    (matched.kind === "matched" ? [matched.filename] : matched.filenames).map((path) =>
+      path.toLowerCase(),
+    ),
   );
-  const matchingFilenames = new Set(
-    [...matched.values()].flat().map((filename) => filename.toLowerCase()),
+  return parts.filter((part) =>
+    matchingPaths.has((part.relativePath || part.filename).toLowerCase()),
   );
-  return parts.filter((part) => matchingFilenames.has(part.filename.toLowerCase()));
 }
 
 export function resolveAcceptedPrinterAttribution(

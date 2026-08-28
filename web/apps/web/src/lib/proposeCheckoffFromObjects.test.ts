@@ -126,6 +126,37 @@ describe("proposeCheckoffFromObjects", () => {
     ]);
   });
 
+  it("uses a preserved path to disambiguate duplicate basenames", () => {
+    const parts = [
+      part({ id: 1, filename: "kit-a/bracket.stl" }),
+      part({ id: 2, filename: "kit-b/bracket.stl" }),
+    ];
+
+    const result = proposeCheckoffFromObjects(["kit-b/bracket.stl"], parts);
+
+    expect(result.units).toEqual([
+      { part_id: 2, unit_index: 0, object_name: "kit-b/bracket.stl" },
+    ]);
+    expect(result.matches[0]?.match).toBe("filename");
+  });
+
+  it("maps a unique conservative typo but preserves semantic distinctions", () => {
+    const parts = [
+      part({ id: 1, filename: "z_tensioner_left.stl" }),
+      part({ id: 2, filename: "z_tensioner_right.stl" }),
+    ];
+
+    const matched = proposeCheckoffFromObjects(["z_tensionr_left.stl"], parts);
+    expect(matched.units).toEqual([
+      { part_id: 1, unit_index: 0, object_name: "z_tensionr_left.stl" },
+    ]);
+    expect(matched.matches[0]?.match).toBe("fuzzy");
+
+    const refused = proposeCheckoffFromObjects(["z_tensionr_top.stl"], parts);
+    expect(refused.units).toEqual([]);
+    expect(refused.unmatchedNames).toEqual(["z_tensionr_top.stl"]);
+  });
+
   it("does not propose past already-printed units", () => {
     const parts = [
       part({

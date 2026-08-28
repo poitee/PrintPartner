@@ -10,6 +10,7 @@ export type SlicedObjectSource =
   | "exclude_object_define"
   | "m486"
   | "3mf_object"
+  | "cura_mesh"
   | "comment";
 
 export type ParsedSlicedObject = {
@@ -19,7 +20,7 @@ export type ParsedSlicedObject = {
 
 export type ParseSlicedObjectsResult = {
   objects: ParsedSlicedObject[];
-  /** Distinct object names in first-seen order. */
+  /** Placed or printed object occurrences in source order. */
   names: string[];
   format: "gcode" | "bgcode" | "3mf" | "unknown";
   unlabeled: boolean;
@@ -31,13 +32,27 @@ export type ParseSlicedObjectsResult = {
   filamentWeightG?: number;
 };
 
-const EXCLUDE_NAME_EQ = /EXCLUDE_OBJECT_DEFINE\b[^\n]*?\bNAME\s*=\s*"?([^"\s,]+)"?/gi;
+const EXCLUDE_LINE = /^\s*EXCLUDE_OBJECT_DEFINE\b([^\n]*)$/gim;
+const EXCLUDE_NAME_EQ = /\bNAME\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s,]+))/i;
 const EXCLUDE_NAME_JSON = /EXCLUDE_OBJECT_DEFINE\b[^\n]*?"name"\s*:\s*"([^"]+)"/gi;
 const M486_A_QUOTED = /\bM486\b[^\n]*?\bA\s*"([^"]+)"/gi;
 const M486_A_BARE = /\bM486\b[^\n]*?\bA\s*([^\s;]+)/gi;
 const PRINTING_OBJECT = /;\s*printing object\s+(\S+?)(?:\s+id:\d+)?(?:\s+copy\s+\d+)?\s*$/gim;
+const CURA_MESH = /^;\s*MESH\s*:\s*(.+?)\s*$/gim;
 
 const OBJECT_NAME_ATTR = /<object\b[^>]*\bname\s*=\s*"([^"]+)"/gi;
+const OBJECT_TAG = /<object\b([^>]*)>/gi;
+const BUILD_BLOCK = /<build\b[^>]*>([\s\S]*?)<\/build>/i;
+const BUILD_ITEM = /<item\b[^>]*\bobjectid\s*=\s*"([^"]+)"[^>]*\/?\s*>/gi;
+const BAMBU_OBJECT_BLOCK = /<object\b([^>]*)>([\s\S]*?)<\/object>/gi;
+const BAMBU_PLATE_BLOCK = /<plate\b[^>]*>([\s\S]*?)<\/plate>/gi;
+const BAMBU_MODEL_INSTANCE_BLOCK =
+  /<model_instance\b[^>]*>([\s\S]*?)<\/model_instance>/gi;
+const XML_ID_ATTR = /\bid\s*=\s*"([^"]+)"/i;
+const MODEL_METADATA_NAME_ATTR =
+  /<metadata\b(?=[^>]*\bkey\s*=\s*"name")[^>]*\bvalue\s*=\s*"([^"]+)"/gi;
+const MODEL_METADATA_OBJECT_ID_ATTR =
+  /<metadata\b(?=[^>]*\bkey\s*=\s*"object_id")[^>]*\bvalue\s*=\s*"([^"]+)"/gi;
 
 function pushUnique(
   out: ParsedSlicedObject[],
@@ -58,12 +73,21 @@ export function parseGcodeObjectText(text: string): ParsedSlicedObject[] {
   const out: ParsedSlicedObject[] = [];
   const seen = new Set<string>();
 
-  for (const re of [EXCLUDE_NAME_EQ, EXCLUDE_NAME_JSON]) {
-    re.lastIndex = 0;
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(text)) != null) {
-      pushUnique(out, seen, m[1] ?? "", "exclude_object_define");
-    }
+  EXCLUDE_NAME_JSON.lastIndex = 0;
+  let excludeJson: RegExpExecArray | null;
+  while ((excludeJson = EXCLUDE_NAME_JSON.exec(text)) != null) {
+    pushUnique(out, seen, excludeJson[1] ?? "", "exclude_object_define");
+  }
+  EXCLUDE_LINE.lastIndex = 0;
+  let excludeLine: RegExpExecArray | null;
+  while ((excludeLine = EXCLUDE_LINE.exec(text)) != null) {
+    const match = EXCLUDE_NAME_EQ.exec(excludeLine[1] ?? "");
+    pushUnique(
+      out,
+      seen,
+      match?.[1] ?? match?.[2] ?? match?.[3] ?? "",
+      "exclude_object_define",
+    );
   }
 
   M486_A_QUOTED.lastIndex = 0;
@@ -83,6 +107,14 @@ export function parseGcodeObjectText(text: string): ParsedSlicedObject[] {
   let comment: RegExpExecArray | null;
   while ((comment = PRINTING_OBJECT.exec(text)) != null) {
     pushUnique(out, seen, comment[1] ?? "", "comment");
+  }
+
+  CURA_MESH.lastIndex = 0;
+  let cura: RegExpExecArray | null;
+  while ((cura = CURA_MESH.exec(text)) != null) {
+    const name = (cura[1] ?? "").trim();
+    if (/^NONMESH$/i.test(name)) continue;
+    pushUnique(out, seen, name, "cura_mesh");
   }
 
   return out;
@@ -145,12 +177,70 @@ function pngToDataUrl(bytes: Uint8Array): string {
 
 /** Pull object@name from 3MF model XML. */
 export function parse3mfObjectNamesFromXml(xml: string): ParsedSlicedObject[] {
+  const namesById = new Map<string, string>();
+  OBJECT_TAG.lastIndex = 0;
+  let objectTag: RegExpExecArray | null;
+  while ((objectTag = OBJECT_TAG.exec(xml)) != null) {
+    const attrs = objectTag[1] ?? "";
+    const id = /\bid\s*=\s*"([^"]+)"/i.exec(attrs)?.[1];
+    const name = /\bname\s*=\s*"([^"]+)"/i.exec(attrs)?.[1];
+    if (id && name) namesById.set(id, name);
+  }
+
+  const build = BUILD_BLOCK.exec(xml)?.[1];
+  if (build != null) {
+    const placed: ParsedSlicedObject[] = [];
+    BUILD_ITEM.lastIndex = 0;
+    let item: RegExpExecArray | null;
+    while ((item = BUILD_ITEM.exec(build)) != null) {
+      const name = namesById.get(item[1] ?? "");
+      if (name) placed.push({ name, source: "3mf_object" });
+    }
+    if (placed.length > 0) return placed;
+  }
+
   const out: ParsedSlicedObject[] = [];
   const seen = new Set<string>();
   OBJECT_NAME_ATTR.lastIndex = 0;
-  let m: RegExpExecArray | null;
-  while ((m = OBJECT_NAME_ATTR.exec(xml)) != null) {
-    pushUnique(out, seen, m[1] ?? "", "3mf_object");
+  let match: RegExpExecArray | null;
+  while ((match = OBJECT_NAME_ATTR.exec(xml)) != null) {
+    pushUnique(out, seen, match[1] ?? "", "3mf_object");
+  }
+  return out;
+}
+
+/** Extract placed-object names from Bambu Studio's model settings metadata. */
+function parseBambuModelSettingsObjectNames(xml: string): ParsedSlicedObject[] {
+  const namesByObjectId = new Map<string, string>();
+  BAMBU_OBJECT_BLOCK.lastIndex = 0;
+  let objectMatch: RegExpExecArray | null;
+  while ((objectMatch = BAMBU_OBJECT_BLOCK.exec(xml)) != null) {
+    const objectId = XML_ID_ATTR.exec(objectMatch[1] ?? "")?.[1];
+    const objectMetadata = (objectMatch[2] ?? "").split(/<part\b/i, 1)[0] ?? "";
+    MODEL_METADATA_NAME_ATTR.lastIndex = 0;
+    const name = MODEL_METADATA_NAME_ATTR.exec(objectMetadata)?.[1];
+    if (objectId != null && name != null) namesByObjectId.set(objectId, name);
+  }
+
+  const out: ParsedSlicedObject[] = [];
+  const seen = new Set<string>();
+  BAMBU_PLATE_BLOCK.lastIndex = 0;
+  let plateMatch: RegExpExecArray | null;
+  while ((plateMatch = BAMBU_PLATE_BLOCK.exec(xml)) != null) {
+    BAMBU_MODEL_INSTANCE_BLOCK.lastIndex = 0;
+    let instanceMatch: RegExpExecArray | null;
+    while ((instanceMatch = BAMBU_MODEL_INSTANCE_BLOCK.exec(plateMatch[1] ?? "")) != null) {
+      MODEL_METADATA_OBJECT_ID_ATTR.lastIndex = 0;
+      const objectId = MODEL_METADATA_OBJECT_ID_ATTR.exec(instanceMatch[1] ?? "")?.[1];
+      const name = namesByObjectId.get(objectId ?? "")?.trim();
+      if (name) out.push({ name, source: "3mf_object" });
+    }
+  }
+
+  if (out.length === 0) {
+    for (const name of namesByObjectId.values()) {
+      pushUnique(out, seen, name, "3mf_object");
+    }
   }
   return out;
 }
@@ -196,8 +286,17 @@ async function parse3mfArchive(
   let printTime: string | undefined;
   let filamentWeightG: number | undefined;
 
-  const merge = (rows: ParsedSlicedObject[]) => {
-    for (const row of rows) pushUnique(out, seen, row.name, row.source);
+  const merge = (rows: ParsedSlicedObject[], preserveOccurrences = false) => {
+    for (const row of rows) {
+      const key = row.name.trim().toLowerCase();
+      if (preserveOccurrences) {
+        if (!key) continue;
+        seen.add(key);
+        out.push(row);
+      } else {
+        pushUnique(out, seen, row.name, row.source);
+      }
+    }
   };
 
   // Collect thumbnail paths in priority order: plate_1.png first, then others.
@@ -227,16 +326,38 @@ async function parse3mfArchive(
     }
   }
 
+  const bambuSettingsEntry = Object.entries(zip.files).find(
+    ([path, entry]) =>
+      !entry.dir && path.toLowerCase() === "metadata/model_settings.config",
+  )?.[1];
+  let bambuObjects: ParsedSlicedObject[] = [];
+  if (bambuSettingsEntry != null) {
+    try {
+      bambuObjects = parseBambuModelSettingsObjectNames(
+        await bambuSettingsEntry.async("string"),
+      );
+      merge(bambuObjects, true);
+    } catch {
+      /* fall back to standard 3MF object names */
+    }
+  }
+
   for (const [path, entry] of Object.entries(zip.files)) {
     if (entry.dir) continue;
     const lower = path.toLowerCase();
-    if (lower.endsWith(".model") || lower.endsWith(".xml")) {
+    if (
+      bambuObjects.length === 0 &&
+      (lower.endsWith(".model") || lower.endsWith(".xml"))
+    ) {
       try {
         const xml = await entry.async("string");
-        merge(parse3mfObjectNamesFromXml(xml));
+        const rows = parse3mfObjectNamesFromXml(xml);
+        merge(rows, BUILD_BLOCK.test(xml));
       } catch {
         /* skip unreadable entries */
       }
+    } else if (lower === "metadata/model_settings.config") {
+      continue;
     } else if (
       lower.endsWith(".gcode") ||
       lower.endsWith(".gco") ||

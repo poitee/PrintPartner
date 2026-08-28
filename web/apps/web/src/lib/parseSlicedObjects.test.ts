@@ -55,6 +55,27 @@ M486 APulley_01
     const text = `; printing object corner_bracket_01 id:0 copy 0`;
     expect(parseGcodeObjectText(text)[0]?.name).toBe("corner_bracket_01");
   });
+
+  it("parses quoted Klipper labels with spaces", () => {
+    const text = `EXCLUDE_OBJECT_DEFINE NAME='Left Frame 01.stl' CENTER=10,10`;
+    expect(parseGcodeObjectText(text).map((o) => o.name)).toEqual([
+      "Left Frame 01.stl",
+    ]);
+  });
+
+  it("parses Cura MESH comments once and ignores NONMESH", () => {
+    const text = `
+;MESH:frame_left.stl
+;MESH:NONMESH
+;LAYER:2
+;MESH:frame_left.stl
+;MESH:frame_right.stl
+`;
+    expect(parseGcodeObjectText(text).map((o) => o.name)).toEqual([
+      "frame_left.stl",
+      "frame_right.stl",
+    ]);
+  });
 });
 
 describe("parse3mfObjectNamesFromXml", () => {
@@ -67,6 +88,21 @@ describe("parse3mfObjectNamesFromXml", () => {
     expect(parse3mfObjectNamesFromXml(xml).map((o) => o.name)).toEqual([
       "bracket_01.stl",
       "spacer_01.stl",
+    ]);
+  });
+
+  it("uses standard 3MF build items and preserves repeated instances", () => {
+    const xml = `<?xml version="1.0"?>
+<model><resources>
+  <object id="1" name="placed.stl" type="model"/>
+  <object id="2" name="unused.stl" type="model"/>
+</resources><build>
+  <item objectid="1"/>
+  <item objectid="1"/>
+</build></model>`;
+    expect(parse3mfObjectNamesFromXml(xml).map((o) => o.name)).toEqual([
+      "placed.stl",
+      "placed.stl",
     ]);
   });
 });
@@ -96,6 +132,65 @@ describe("parseSlicedObjectsFile", () => {
     const result = await parseSlicedObjectsFile(file);
     expect(result.format).toBe("3mf");
     expect(result.names).toEqual(["stem_01.stl", "stem_02.stl", "extra_01"]);
+  });
+
+  it("parses Bambu Studio object names from model_settings.config", async () => {
+    const zip = new JSZip();
+    zip.file(
+      "3D/3dmodel.model",
+      `<model><resources><object id="2" name="internal_component" type="model"><components/></object></resources></model>`,
+    );
+    zip.file(
+      "Metadata/model_settings.config",
+      `<config>
+        <object id="2">
+          <metadata key="name" value="frame_left_01.stl"/>
+          <part id="1" subtype="normal_part">
+            <metadata key="name" value="frame_left_mesh.stl"/>
+          </part>
+        </object>
+        <object id="4">
+          <metadata key="name" value="frame_right_01.stl"/>
+        </object>
+        <object id="6">
+          <metadata key="name" value="unused_object.stl"/>
+        </object>
+        <plate>
+          <model_instance>
+            <metadata key="object_id" value="2"/>
+          </model_instance>
+          <model_instance>
+            <metadata key="object_id" value="4"/>
+          </model_instance>
+        </plate>
+      </config>`,
+    );
+    const blob = await zip.generateAsync({ type: "blob" });
+    const file = new File([blob], "bambu-project.3mf", { type: "application/octet-stream" });
+
+    const result = await parseSlicedObjectsFile(file);
+
+    expect(result.format).toBe("3mf");
+    expect(result.unlabeled).toBe(false);
+    expect(result.names).toEqual(["frame_left_01.stl", "frame_right_01.stl"]);
+  });
+
+  it("preserves repeated Bambu plate instances", async () => {
+    const zip = new JSZip();
+    zip.file("3D/3dmodel.model", `<model><resources/></model>`);
+    zip.file(
+      "Metadata/model_settings.config",
+      `<config>
+        <object id="2"><metadata key="name" value="clip.stl"/></object>
+        <plate>
+          <model_instance><metadata key="object_id" value="2"/></model_instance>
+          <model_instance><metadata key="object_id" value="2"/></model_instance>
+        </plate>
+      </config>`,
+    );
+    const blob = await zip.generateAsync({ type: "blob" });
+    const result = await parseSlicedObjectsFile(new File([blob], "bambu.3mf"));
+    expect(result.names).toEqual(["clip.stl", "clip.stl"]);
   });
 
   it("marks unlabeled when no object markers exist", async () => {

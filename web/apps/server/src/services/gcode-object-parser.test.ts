@@ -32,4 +32,31 @@ describe("gcode object filename matching", () => {
       ]),
     );
   });
+
+  it("uses the shared conservative fuzzy matcher", () => {
+    const grouped = groupObjectsByPart(["z_tensionr_left.stl"]);
+
+    expect(
+      matchObjectsToFilenames(grouped, [
+        "z_tensioner_left.stl",
+        "z_tensioner_right.stl",
+      ]),
+    ).toEqual(
+      new Map([
+        ["z_tensionr_left.stl", ["z_tensioner_left.stl"]],
+      ]),
+    );
+  });
+
+  it("returns all duplicate basename candidates instead of guessing", () => {
+    const grouped = groupObjectsByPart(["bracket.stl"]);
+
+    expect(
+      matchObjectsToFilenames(grouped, ["kit-a/bracket.stl", "kit-b/bracket.stl"]),
+    ).toEqual(
+      new Map([
+        ["bracket.stl", ["kit-a/bracket.stl", "kit-b/bracket.stl"]],
+      ]),
+    );
+  });
 });

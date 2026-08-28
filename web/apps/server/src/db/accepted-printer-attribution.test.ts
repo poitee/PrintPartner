@@ -175,6 +175,37 @@ describe("accepted printer attribution", () => {
     ]);
   });
 
+  it("uses a preserved relative path to disambiguate duplicate basenames", () => {
+    const accepted = snapshot([
+      { id: 1, filename: "kit-a/bracket.stl", units: [{ index: 0, token: token(1) }] },
+      { id: 2, filename: "kit-b/bracket.stl", units: [{ index: 0, token: token(2) }] },
+    ]);
+
+    const result = resolveAcceptedPrinterAttribution(accepted, {
+      objectNames: ["parts/kit-b/bracket.stl"],
+    });
+
+    expect(result.units).toEqual([{ part_id: 2, unit_index: 0 }]);
+  });
+
+  it("suggests a unique conservative typo but not a semantic mismatch", () => {
+    const accepted = snapshot([
+      { id: 1, filename: "z_tensioner_left.stl", units: [{ index: 0, token: token(1) }] },
+      { id: 2, filename: "z_tensioner_right.stl", units: [{ index: 0, token: token(2) }] },
+    ]);
+
+    const matched = resolveAcceptedPrinterAttribution(accepted, {
+      objectNames: ["z_tensionr_left.stl"],
+    });
+    expect(matched.units).toEqual([{ part_id: 1, unit_index: 0 }]);
+
+    const refused = resolveAcceptedPrinterAttribution(accepted, {
+      objectNames: ["z_tensionr_top.stl"],
+    });
+    expect(refused.units).toEqual([]);
+    expect(refused.outcomes[0]).toMatchObject({ kind: "unmatched" });
+  });
+
   it("selects only included required incomplete units", () => {
     const accepted = snapshot([
       {

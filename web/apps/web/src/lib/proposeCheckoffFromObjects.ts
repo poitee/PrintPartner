@@ -1,11 +1,15 @@
 /**
  * Propose Progress checkoff units from parsed sliced-object names vs remaining
- * parts. Matching prefers unique Export-remaining STL names (`stem_01.stl`),
- * then falls back to stem counts (e.g. 5+3 by stem). Never auto-ticks Progress.
+ * parts. Matching prefers unique Export-remaining names, then shared
+ * slicer-aware filename matching. Never auto-ticks Progress.
  */
 
 import type { PrinterCheckoffUnit } from "../api/endpoints/checkoff";
 import type { ReviewPart } from "../api/endpoints/planManifests";
+import {
+  interpretSlicedObjectName,
+  matchSlicedObjectName,
+} from "@print-partner/domain";
 import { incompleteUnitsForParts } from "./printerCheckoffUnits";
 
 export type ProposedObjectMatch = {
@@ -14,7 +18,7 @@ export type ProposedObjectMatch = {
   unit_index: number;
   partFilename: string;
   /** How the name was matched. */
-  match: "export_name" | "stem";
+  match: "export_name" | "filename" | "fuzzy";
 };
 
 export type ProposeCheckoffResult = {
@@ -127,21 +131,17 @@ export function stripMeshExtensions(name: string): string {
  * ` (N)` 3MF copy tags, keep optional `_NN` unit suffix as part of the key.
  */
 export function normalizeObjectKey(name: string): string {
-  let s = stripMeshExtensions(name).toLowerCase();
-  s = s.replace(/\s*\(\d+\)\s*$/u, "");
-  s = s.replace(/[^\w.-]+/g, "_").replace(/_+/g, "_").replace(/^_|_$/g, "");
-  return s;
+  return interpretSlicedObjectName(name).basenameKey;
 }
 
 /** Base stem with trailing `_01` / `_1` unit suffix removed. */
 export function objectStem(name: string): string {
-  const key = normalizeObjectKey(name);
-  return key.replace(/_(\d{1,3})$/u, "") || key;
+  return interpretSlicedObjectName(name).unitStemKey;
 }
 
 /** Export-remaining style unit filename key: `stem_01` (0-based unit_index → 1-based). */
 export function exportUnitKey(filename: string, unitIndex: number): string {
-  const stem = stripMeshExtensions(filename).toLowerCase().replace(/[^\w.-]+/g, "_");
+  const stem = normalizeObjectKey(filename);
   const n = String(unitIndex + 1).padStart(2, "0");
   return normalizeObjectKey(`${stem}_${n}`);
 }
@@ -150,7 +150,6 @@ type RemainingSlot = {
   part: ReviewPart;
   unit_index: number;
   exportKey: string;
-  stem: string;
 };
 
 function remainingSlots(parts: ReviewPart[]): RemainingSlot[] {
@@ -161,16 +160,15 @@ function remainingSlots(parts: ReviewPart[]): RemainingSlot[] {
       part,
       unit_index: u.unit_index,
       exportKey: exportUnitKey(part.filename, u.unit_index),
-      stem: objectStem(part.filename),
     };
   });
 }
 
 /**
  * Map parsed object names onto remaining Progress units.
- * Exact export-name matches first; leftover names consume stem slots in order
- * (the “5+3 by stem” spike behavior). Unmatched names are returned, never
- * auto-selected.
+ * Exact export-name matches first; leftover names use the shared path,
+ * filename, unit-suffix, and conservative fuzzy policy. Unmatched names are
+ * returned, never auto-selected.
  */
 export function proposeCheckoffFromObjects(
   objectNames: string[],
@@ -218,33 +216,24 @@ export function proposeCheckoffFromObjects(
     pendingStem.push(name);
   }
 
-  // Stem-count matching: N objects with stem S claim the next N remaining units
-  // of parts whose filename stem is S.
-  const byStem = new Map<string, string[]>();
   for (const name of pendingStem) {
-    const stem = objectStem(name);
-    const list = byStem.get(stem) ?? [];
-    list.push(name);
-    byStem.set(stem, list);
-  }
-
-  for (const [stem, names] of byStem) {
     const available = slots.filter(
-      (s) => s.stem === stem && !used.has(`${s.part.id}:${s.unit_index}`),
+      (slot) => !used.has(`${slot.part.id}:${slot.unit_index}`),
     );
-    const partIds = new Set(available.map((s) => s.part.id));
-    if (partIds.size > 1) {
-      unmatchedNames.push(...names);
+    const filenames = [...new Set(available.map((slot) => slot.part.filename))];
+    const matched = matchSlicedObjectName(name, filenames);
+    if (matched.kind !== "matched") {
+      unmatchedNames.push(name);
       continue;
     }
-    let i = 0;
-    for (const name of names) {
-      if (i < available.length && takeSlot(available[i]!, name, "stem")) {
-        i += 1;
-      } else {
-        unmatchedNames.push(name);
-      }
+    const candidates = available.filter((slot) => slot.part.filename === matched.filename);
+    const partIds = new Set(candidates.map((slot) => slot.part.id));
+    if (candidates.length === 0 || partIds.size !== 1) {
+      unmatchedNames.push(name);
+      continue;
     }
+    const matchKind = matched.basis === "fuzzy" ? "fuzzy" : "filename";
+    if (!takeSlot(candidates[0]!, name, matchKind)) unmatchedNames.push(name);
   }
 
   const units: PrinterCheckoffUnit[] = matches.map((m) => {
