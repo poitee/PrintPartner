@@ -35,3 +35,7 @@ Do Not Push/
 
 # Agent session scratch (task records, working briefs)
 .pi/
+.audit/
+.superpowers/
+docs/research/
+docs/superpowers/

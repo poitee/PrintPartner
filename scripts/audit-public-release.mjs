@@ -38,6 +38,14 @@ const forbiddenFiles = new Set([
   "docs/assistant-research-brief.md",
 ]);
 
+function gitignoreIgnoresPrefix(gitignore, prefix) {
+  const exact = prefix.replace(/\/$/, "");
+  return gitignore.split(/\r?\n/).some((line) => {
+    const trimmed = line.trim();
+    return trimmed === prefix || trimmed === exact || trimmed === `${exact}/`;
+  });
+}
+
 const screenshotNames = [
   "library.png",
   "builds.png",
@@ -127,6 +135,19 @@ for (const file of files) {
   }
   if (forbiddenFiles.has(file) || forbiddenPathPrefixes.some((prefix) => file.startsWith(prefix))) {
     failures.push(`Internal-only file must not ship: ${file}`);
+  }
+}
+
+const gitignoreFile = files.includes(".gitignore")
+  ? readFileSync(join(repoRoot, ".gitignore"), "utf8")
+  : "";
+if (!gitignoreFile) {
+  failures.push("Missing required public file: .gitignore");
+} else {
+  for (const prefix of forbiddenPathPrefixes) {
+    if (!gitignoreIgnoresPrefix(gitignoreFile, prefix)) {
+      failures.push(`.gitignore must ignore internal prefix ${prefix}`);
+    }
   }
 }
 
