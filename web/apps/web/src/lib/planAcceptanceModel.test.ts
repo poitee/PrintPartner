@@ -8,12 +8,12 @@ import {
 } from "../api/endpoints/planManifests";
 import {
   acceptedRevisionSummary,
-  acceptanceDecision,
   downstreamLinks,
   planAcceptanceModel,
   planConfirmationCopy,
   planHeaderSummary,
   planIssues,
+  planPublication,
   preservedVerifiedUnits,
   requiredUnitImpact,
   workingChangeFieldLabels,
@@ -112,7 +112,7 @@ describe("accepted revision summary", () => {
         ],
       }],
     }));
-    expect(summary.heading).toBe("Plan revision 4 accepted");
+    expect(summary.heading).toBe("Plan revision 4 published");
     expect(summary.requiredUnits).toBe(12);
     expect(summary.verifiedUnits).toBe(2);
     expect(summary.remainingUnits).toBe(10);
@@ -121,7 +121,7 @@ describe("accepted revision summary", () => {
 
   it("says so when no revision has been accepted", () => {
     expect(acceptedRevisionSummary(review({ accepted_basis: null })).heading).toBe(
-      "No Plan revision accepted yet",
+      "No Plan revision published yet",
     );
   });
 });
@@ -135,7 +135,7 @@ describe("header part count", () => {
       draft: draft({
         parts: [1, 2, 3, 4, 5, 6].map((id) => draftPart({ draft_part_id: id, quantity_effective: 2 })),
       }),
-    })).toBe("6 parts in the Working Plan · 6 included · 12 Required units when accepted");
+    })).toBe("6 parts in the Working Plan · 6 included · 12 Required units when published");
   });
 
   it("reports accepted totals when there are no working changes", () => {
@@ -211,7 +211,7 @@ describe("issue grouping and routes", () => {
     });
     expect(issues).toHaveLength(1);
     expect(issues[0]!.group).toBe("review_recommended");
-    expect(issues[0]!.statusLabel).toBe("Blocks Production");
+    expect(issues[0]!.statusLabel).toBe("Needed for Production");
     expect(issues[0]!.action).toEqual({
       kind: "route",
       label: "Open Sources",
@@ -362,12 +362,12 @@ describe("issue grouping and routes", () => {
     expect(issues).toHaveLength(1);
     expect(issues[0]!.title).toBe("This Plan's source revisions are not tracked");
     expect(issues[0]!.detail).toContain("Voron Trident");
-    expect(issues[0]!.statusLabel).toBe("Does not block Production");
+    expect(issues[0]!.statusLabel).toBe("Check before publishing");
   });
 });
 
-describe("acceptance decision", () => {
-  it("blocks while any must-resolve issue is open and says why", () => {
+describe("Plan publication", () => {
+  it("names the choices that must be completed before publishing", () => {
     const model = planAcceptanceModel({
       review: review(),
       draft: draft({
@@ -381,11 +381,12 @@ describe("acceptance decision", () => {
       buildId: 1,
       planningBlockers: noBlockers,
     });
-    expect(model.decision.label).toBe("Accept Plan revision");
-    expect(model.decision.canAccept).toBe(false);
-    expect(model.decision.reason).toBe(
-      'Acceptance is blocked. Resolve 1 item under "Must resolve" first.',
-    );
+    expect(model.publication).toEqual({
+      kind: "waiting_for_choices",
+      label: "Publish Plan for Production",
+      reason: 'Complete 1 choice under "Before publishing" first.',
+      choiceCount: 1,
+    });
   });
 
   it("blocks when the Working Plan is not the reviewed assistant draft", () => {
@@ -408,70 +409,73 @@ describe("acceptance decision", () => {
       expect.objectContaining({
         id: "plan-issue-build-planning-draft-selection-0",
         title: "This Working Plan has not been reviewed",
-        statusLabel: "Blocks acceptance",
+        statusLabel: "Finish before publishing",
       }),
     ]);
-    expect(model.decision.canAccept).toBe(false);
+    expect(model.publication.kind).toBe("waiting_for_choices");
   });
 
-  it("allows acceptance and names the revision it will create", () => {
+  it("allows publication and names the revision and downstream outcome", () => {
     const model = planAcceptanceModel({
       review: review(),
       draft: draft(),
       buildId: 1,
       planningBlockers: noBlockers,
     });
-    expect(model.decision.canAccept).toBe(true);
-    expect(model.decision.reason).toBe(
-      "Accepting saves these changes as Plan revision 5. Verified units that still match are kept.",
-    );
+    expect(model.publication).toEqual({
+      kind: "ready",
+      label: "Publish Plan revision 5 for Production",
+      reason: "Publishes 2 included parts as 2 required units. Production and Checkoff will use this fixed revision.",
+      nextRevision: 5,
+    });
   });
 
-  it("has nothing to accept without working changes", () => {
-    expect(acceptanceDecision({
+  it("points to Working Plan creation when none exists", () => {
+    expect(planPublication({
       draft: null,
       issues: [],
       planningBlockers: noBlockers,
       accepted: acceptedRevisionSummary(review()),
     })).toEqual({
-      label: "Accept Plan revision",
-      canAccept: false,
-      reason: "There are no Working Plan changes to accept.",
-      blockingCount: 0,
+      kind: "no_working_plan",
+      label: "Publish Plan for Production",
+      reason: "Build a Working Plan from the current Sources, then review it here.",
     });
   });
 
-  it("refuses acceptance while the Build's planning checks are still loading", () => {
+  it("waits while the Build's planning checks are still loading", () => {
     const model = planAcceptanceModel({
       review: review(),
       draft: draft(),
       buildId: 1,
       planningBlockers: { kind: "loading" },
     });
-    expect(model.decision.canAccept).toBe(false);
-    expect(model.decision.reason).toBe(
-      "Acceptance stays off until this Build's planning checks come back. This clears on its own in a moment.",
-    );
+    expect(model.publication).toEqual({
+      kind: "checking",
+      label: "Publish Plan for Production",
+      reason: "PrintPartner is checking this Working Plan. Publishing becomes available when the check finishes.",
+    });
     expect(model.mustResolve).toEqual([
       expect.objectContaining({
         id: "plan-issue-build-planning-loading",
-        title: "Still checking whether this Working Plan can be accepted",
-        statusLabel: "Blocks acceptance",
+        title: "Still checking this Working Plan",
+        statusLabel: "Checking",
       }),
     ]);
   });
 
-  it("refuses acceptance when the Build's planning checks could not be read", () => {
+  it("explains when the Build's planning checks could not be read", () => {
     const model = planAcceptanceModel({
       review: review(),
       draft: draft(),
       buildId: 1,
       planningBlockers: { kind: "unavailable" },
     });
-    expect(model.decision.canAccept).toBe(false);
-    expect(model.decision.reason).toBe(
-      "Acceptance stays off because this Build's planning checks could not be read. Reload the page to try again.",
-    );
+    expect(model.publication).toEqual({
+      kind: "checks_unavailable",
+      label: "Publish Plan for Production",
+      reason: "The planning check could not be read. Reload the page to try again.",
+    });
     expect(model.mustResolve).toEqual([
       expect.objectContaining({
         id: "plan-issue-build-planning-unavailable",
@@ -488,7 +492,7 @@ describe("acceptance decision", () => {
       planningBlockers: { kind: "unavailable" },
     });
     expect(model.mustResolve).toEqual([]);
-    expect(model.decision.reason).toBe("There are no Working Plan changes to accept.");
+    expect(model.publication.kind).toBe("no_working_plan");
   });
 
   it("explains a refusal the engine raised after the click, in the same words", () => {
@@ -503,10 +507,10 @@ describe("acceptance decision", () => {
       expect.objectContaining({
         id: "plan-issue-acceptance-blocked-requirement-unverified-0",
         title: "A Build requirement is still unverified",
-        statusLabel: "Blocks acceptance",
+        statusLabel: "Finish before publishing",
       }),
     ]);
-    expect(model.decision.canAccept).toBe(false);
+    expect(model.publication.kind).toBe("waiting_for_choices");
   });
 });
 
@@ -562,7 +566,7 @@ describe("Required-unit impact", () => {
     }));
     expect(impact).toEqual({
       kind: "unavailable",
-      reason: "Answer the Required-unit decisions above to see what acceptance preserves.",
+      reason: "Answer the Required-unit decisions above to see what publishing preserves.",
     });
   });
 });
@@ -595,8 +599,8 @@ describe("downstream destinations", () => {
       accepted: acceptedRevisionSummary(review()),
     });
     expect(links.map((link) => link.qualifier)).toEqual([
-      "uses Accepted revision 4",
-      "uses Accepted revision 4",
+      "uses published revision 4",
+      "uses published revision 4",
     ]);
   });
 
@@ -618,7 +622,7 @@ describe("acceptance confirmation", () => {
       remainingUnits: 7,
       unmoved: [],
     })).toEqual({
-      heading: "Plan revision 5 accepted",
+      heading: "Plan revision 5 published",
       detail: "18 Required units are current. 11 verified units were preserved.",
       prepareLabel: "Prepare 7 remaining units",
       checkoffLabel: "View Checkoff",

@@ -30,7 +30,7 @@ import SourceFilePickerCard from "../components/SourceFilePickerCard";
 import ShareImportSetupPanel, {
   type UnmatchedSource,
 } from "../components/share/ShareImportSetupPanel";
-import type { PlanStaleReason, StlNamingProfile } from "@print-partner/contracts";
+import type { StlNamingProfile } from "@print-partner/contracts";
 import { DEFAULT_STL_NAMING_PROFILE } from "@print-partner/contracts";
 import type { KitImportJobResult } from "../api/endpoints/imports";
 import { Badge } from "../components/ui/badge";
@@ -68,7 +68,7 @@ import {
   useReplacePlanLayerMutation,
   useSetPlanBaseLayerMutation,
 } from "../queries/planLayers";
-import { libraryRoute, planRoute, settingsRoute } from "../lib/routes";
+import { libraryRoute, settingsRoute } from "../lib/routes";
 import { groupMergeConflictsByFilename } from "../lib/mergeConflictGroups";
 import { takeKitImportResult } from "../lib/kitImportStash";
 import { useProfileSelection } from "../context/ProfileContext";
@@ -141,12 +141,7 @@ function BuildPageContent() {
     openDeletePlan,
     openArchivePlan,
   } = usePlanActions();
-  const {
-    review,
-    refresh: refreshPlan,
-    draftError,
-    startPlanDraft,
-  } = usePlanWorkspace();
+  const { review, refresh: refreshPlan } = usePlanWorkspace();
   const previousSelectedProfileIdRef = useRef<number | null | undefined>(undefined);
 
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -154,14 +149,12 @@ function BuildPageContent() {
   const [pendingBaseSourceId, setPendingBaseSourceId] = useState("");
   const [kitImportSetup, setKitImportSetup] = useState<KitImportJobResult | null>(null);
   const [categoriesSheetOpen, setCategoriesSheetOpen] = useState(false);
-  const [filamentRefreshKey, setFilamentRefreshKey] = useState(0);
-  const [draftActionBusy, setDraftActionBusy] = useState(false);
+  const filamentRefreshKey = 0;
   const [roleFilaments, setRoleFilaments] = useState<RoleFilamentRow[]>([]);
   const [namingProfile, setNamingProfile] = useState<StlNamingProfile>(DEFAULT_STL_NAMING_PROFILE);
   const [attachOpen, setAttachOpen] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
-  const [workingPlanNotice, setWorkingPlanNotice] = useState<string | null>(null);
   const engineState = resolveEngineState({
     health,
     loading: healthLoading,
@@ -291,7 +284,6 @@ function BuildPageContent() {
       setRoleFilaments([]);
       setLoadError(null);
       setSyncError(null);
-      setWorkingPlanNotice(null);
     }
   }, [selectedProfileId]);
 
@@ -347,11 +339,7 @@ function BuildPageContent() {
     [sourceCardLayers, sourceById],
   );
 
-  const {
-    partCount,
-    archiveAllowed,
-    headerSubtitle,
-  } = buildPageDerivedState({
+  const { archiveAllowed, headerSubtitle } = buildPageDerivedState({
     selectedProfile,
     review,
     attachedSources,
@@ -392,38 +380,7 @@ function BuildPageContent() {
     profileDataState === "ready" &&
     sourcesState === "ready";
 
-  const busy = draftActionBusy;
-
-  const onUpdateBuild = useCallback(
-    async (options?: { automatic?: boolean }) => {
-      if (selectedProfileId == null) return;
-      try {
-        await flushPendingSaves();
-      } catch (e) {
-        toast.error(e instanceof Error ? e.message : String(e));
-        return;
-      }
-      setDraftActionBusy(true);
-      try {
-        const workspace = await startPlanDraft();
-        setFilamentRefreshKey((key) => key + 1);
-        const changeCount =
-          workspace.diff.added.length +
-          workspace.diff.changed.length +
-          workspace.diff.removed.length;
-        setWorkingPlanNotice(
-          options?.automatic
-            ? `Sources changed, so the Working Plan was updated. ${changeCount} ${changeCount === 1 ? "change" : "changes"} to review on Plan.`
-            : `Working Plan updated with ${changeCount} ${changeCount === 1 ? "change" : "changes"}. Review it on Plan.`,
-        );
-      } catch (error) {
-        toast.error(error instanceof Error ? error.message : String(error));
-      } finally {
-        setDraftActionBusy(false);
-      }
-    },
-    [flushPendingSaves, selectedProfileId, startPlanDraft],
-  );
+  const busy = syncJob.busy;
 
   const reviewLayerById = useMemo(() => {
     const map = new Map<number, { synced: boolean }>();
@@ -496,21 +453,12 @@ function BuildPageContent() {
         buildId: selectedProfileId ?? 0,
         specialRequest: selectedProfile?.special_request,
         sources: setupSources,
-        partCount,
-        reviewIssues: review?.issues ?? [],
         mergeConflictCount: mergeConflicts.length,
         roleFilaments,
-        freshness: selectedProfile?.freshness ?? null,
-        planning: planningQuery.data ?? null,
         syncing: syncJob.busy,
-        updatingWorkingPlan: busy,
       }),
     [
-      busy,
       mergeConflicts.length,
-      partCount,
-      planningQuery.data,
-      review,
       roleFilaments,
       selectedProfile,
       selectedProfileId,
@@ -543,20 +491,13 @@ function BuildPageContent() {
         case "assign_colors":
           revealSection("materials");
           return;
-        case "review_assistant":
-          setAssistantOpen(true);
-          revealSection("assistant-changes");
-          return;
-        case "update_working_plan":
-          void onUpdateBuild();
-          return;
         default: {
           const exhaustive: never = handler;
           return exhaustive;
         }
       }
     },
-    [needsBaseSource, onUpdateBuild, selectedProfileId, syncAttachedSources],
+    [needsBaseSource, selectedProfileId, syncAttachedSources],
   );
 
   const tasks = useMemo<WorkflowTask[]>(
@@ -588,37 +529,6 @@ function BuildPageContent() {
       }),
     [runSetupHandler, setup.tasks, syncAttachedSources, syncError],
   );
-
-  // Rebuilding after a settled source revision change is safe and needs no
-  // decision, so do it instead of asking for a button press. Anything else
-  // (conflicts, untracked inputs, an open Working Plan) stays a task.
-  const autoUpdateSignatureRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (!workspaceReady || selectedProfileId == null) return;
-    if (busy || syncJob.busy) return;
-    if (mergeConflicts.length > 0) return;
-    const freshness = selectedProfile?.freshness;
-    if (freshness?.status !== "stale") return;
-    const changed = freshness.reasons.filter(
-      (reason): reason is Extract<PlanStaleReason, { kind: "source_revision_changed" }> =>
-        reason.kind === "source_revision_changed",
-    );
-    if (changed.length !== freshness.reasons.length) return;
-    const signature = `${selectedProfileId}:${changed
-      .map((reason) => `${reason.source_id}@${reason.current_revision_id}`)
-      .join(",")}`;
-    if (autoUpdateSignatureRef.current === signature) return;
-    autoUpdateSignatureRef.current = signature;
-    void onUpdateBuild({ automatic: true });
-  }, [
-    busy,
-    mergeConflicts.length,
-    onUpdateBuild,
-    selectedProfile,
-    selectedProfileId,
-    syncJob.busy,
-    workspaceReady,
-  ]);
 
   const primaryAction: SourcesSetupAction = setup.primary.action;
 
@@ -690,7 +600,7 @@ function BuildPageContent() {
                 className="min-h-11 w-full sm:w-auto"
                 onClick={() => runSetupHandler(primaryAction.handler)}
                 disabled={busy || !engineReady}
-                loading={busy || syncJob.busy}
+                loading={busy}
               >
                 {primaryAction.label}
               </Button>
@@ -774,25 +684,6 @@ function BuildPageContent() {
           }
           tasks={tasks}
         />
-      )}
-
-      {workspaceReady && workingPlanNotice && (
-        <p
-          className="rounded-md border border-info/30 bg-info-soft px-3 py-2 text-sm text-info"
-          role="status"
-        >
-          {workingPlanNotice}{" "}
-          <Link
-            to={planRoute(selectedProfileId)}
-            className="font-medium underline underline-offset-2"
-          >
-            Open Plan
-          </Link>
-        </p>
-      )}
-
-      {workspaceReady && draftError && (
-        <p className="text-sm text-destructive" role="alert">{draftError}</p>
       )}
 
       {engineState !== "ready" ? (

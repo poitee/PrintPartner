@@ -38,7 +38,7 @@ import { useEngineHealth } from "../hooks/useEngineHealth";
 import { useJobRunner } from "../hooks/useJobRunner";
 import { resolveEngineState } from "../lib/workflowState";
 
-/** Accepted state, open working changes, then parts, then the one accept action. */
+/** Published state, open working changes, then parts, then the one publish action. */
 function PlanReviewSections({
   sheetRef,
   folderRules,
@@ -67,7 +67,7 @@ function PlanReviewSections({
           </h2>
           {!model.working && (
             <p className="text-sm text-muted-foreground">
-              These are the values of the Accepted revision.
+              These are the values of the published revision.
             </p>
           )}
         </div>
@@ -109,10 +109,10 @@ function PlanReviewSections({
 }
 
 /**
- * Plan is the acceptance checkpoint.
+ * Plan is the publication checkpoint.
  *
  * The page answers two questions in order. What does Production use right now?
- * What, if anything, must happen before a new revision can be accepted?
+ * What, if anything, must happen before a new revision can be published?
  */
 export default function PartsPage() {
   const { health, error: engineError, loading: healthLoading } = useEngineHealth();

@@ -1,10 +1,10 @@
-import type { PlanAcceptanceDecision } from "../../lib/planAcceptanceModel";
+import type { PlanPublication } from "../../lib/planAcceptanceModel";
 import { Button } from "../ui/button";
 
 type PlanDraftApplyButtonProps = {
-  readonly decision: PlanAcceptanceDecision;
+  readonly publication: PlanPublication;
   readonly busy: boolean;
-  readonly onAccept: () => void;
+  readonly onPublish: () => void;
 };
 
 /**
@@ -13,24 +13,25 @@ type PlanDraftApplyButtonProps = {
  * greyed-out control.
  */
 export default function PlanDraftApplyButton({
-  decision,
+  publication,
   busy,
-  onAccept,
+  onPublish,
 }: PlanDraftApplyButtonProps) {
+  const ready = publication.kind === "ready";
   return (
     <div className="flex flex-col items-start gap-2">
       <Button
         type="button"
         className="min-h-11 w-full sm:w-auto"
-        aria-describedby="plan-accept-reason"
-        disabled={busy || !decision.canAccept}
+        aria-describedby="plan-publish-reason"
+        disabled={busy || !ready}
         loading={busy}
-        onClick={onAccept}
+        onClick={onPublish}
       >
-        {decision.label}
+        {publication.label}
       </Button>
-      <p id="plan-accept-reason" className="text-sm text-muted-foreground">
-        {decision.reason}
+      <p id="plan-publish-reason" className="text-sm text-muted-foreground">
+        {publication.reason}
       </p>
     </div>
   );

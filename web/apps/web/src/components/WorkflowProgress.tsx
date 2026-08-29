@@ -3,7 +3,6 @@ import { NavLink } from "react-router-dom";
 import { ClipboardList, Import, ListChecks, PackageCheck } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
-  workflowStatusLabel,
   type WorkflowStage,
   type WorkflowStageId,
 } from "../lib/workflowStages";
@@ -48,31 +47,13 @@ function statusDotClass(stage: WorkflowStage, active: boolean): string {
   }
 }
 
-function statusTextClass(stage: WorkflowStage, active: boolean): string {
-  if (active) return "text-primary";
-  switch (stage.status.kind) {
-    case "complete":
-      return "text-success";
-    case "needs_attention":
-    case "stale":
-      return "text-warning";
-    case "error":
-      return "text-destructive";
-    case "in_progress":
-    case "ready":
-      return "text-foreground";
-    case "not_started":
-      return "text-muted-foreground";
-  }
-}
-
 /** Outstanding task count for a stage, used as the mobile badge number. */
 function stageTaskCount(stage: WorkflowStage): number {
   return "task_count" in stage.status ? stage.status.task_count : 0;
 }
 
 function stageAriaLabel(stage: WorkflowStage): string {
-  return `${stage.label}, ${workflowStatusLabel(stage.status.kind)}. ${stage.status.summary}`;
+  return `${stage.label}. ${stage.status.summary}`;
 }
 
 export default function WorkflowProgress({
@@ -250,17 +231,9 @@ export default function WorkflowProgress({
                 >
                   {stage.label}
                 </span>
-                <span className="block truncate text-3xs text-muted-foreground">
+                <span className="mt-0.5 block text-xs leading-snug text-muted-foreground">
                   {stage.status.summary}
                 </span>
-              </span>
-              <span
-                className={cn(
-                  "mt-0.5 shrink-0 text-3xs font-medium",
-                  statusTextClass(stage, active),
-                )}
-              >
-                {workflowStatusLabel(stage.status.kind)}
               </span>
             </NavLink>
           </Fragment>

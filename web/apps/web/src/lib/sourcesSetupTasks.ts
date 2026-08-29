@@ -17,9 +17,7 @@ export type SourcesSetupTaskId =
   | "attach-optional"
   | "sync-sources"
   | "resolve-differences"
-  | "assign-colors"
-  | "review-assistant"
-  | "update-working-plan";
+  | "assign-colors";
 
 /**
  * Work the page performs in place. The page maps each id to a real function,
@@ -30,9 +28,7 @@ export type SourcesSetupHandlerId =
   | "attach_source"
   | "sync_sources"
   | "resolve_differences"
-  | "assign_colors"
-  | "review_assistant"
-  | "update_working_plan";
+  | "assign_colors";
 
 export type SourcesSetupAction =
   | { readonly kind: "route"; readonly label: string; readonly to: string }
@@ -71,30 +67,12 @@ export type SourcesSetupSource = {
   readonly updatesAvailable: boolean;
 };
 
-export type SourcesSetupIssue = {
-  readonly code: string;
-  readonly message: string;
-  readonly severity: "blocker" | "warning";
-};
-
 export type SourcesSetupRoleFilament = {
   readonly role: string;
   readonly part_count: number;
   readonly filament_color_id?: string | null;
   readonly filament_custom_hex?: string | null;
 };
-
-export type SourcesSetupFreshness =
-  | { readonly status: "current" }
-  | {
-      readonly status: "stale";
-      readonly reasons: readonly { readonly kind: string; readonly source_name?: string }[];
-      readonly untracked_sources: readonly { readonly kind: string; readonly source_name?: string }[];
-    }
-  | {
-      readonly status: "untracked";
-      readonly reasons: readonly { readonly kind: string; readonly source_name?: string }[];
-    };
 
 export type SourcesSetupPlanning = {
   readonly planning_phase:
@@ -114,16 +92,10 @@ export type SourcesSetupInput = {
   readonly buildId: number;
   readonly specialRequest: string | null | undefined;
   readonly sources: readonly SourcesSetupSource[];
-  readonly partCount: number;
-  readonly reviewIssues: readonly SourcesSetupIssue[];
   readonly mergeConflictCount: number;
   readonly roleFilaments: readonly SourcesSetupRoleFilament[];
-  readonly freshness: SourcesSetupFreshness | null;
-  readonly planning: SourcesSetupPlanning | null;
   /** A source sync job is running now. */
   readonly syncing: boolean;
-  /** The Working Plan is being rebuilt now. */
-  readonly updatingWorkingPlan: boolean;
 };
 
 function plural(count: number, one: string, many = `${one}s`): string {
@@ -139,41 +111,6 @@ function joinList(parts: readonly string[]): string {
 
 function names(sources: readonly SourcesSetupSource[]): string {
   return joinList(sources.map((source) => source.name));
-}
-
-/** One human line for why the Working Plan no longer matches its inputs. */
-export function workingPlanUpdateReason(
-  freshness: SourcesSetupFreshness | null,
-): string | null {
-  if (!freshness || freshness.status === "current") return null;
-  const reasons =
-    freshness.status === "stale"
-      ? [...freshness.reasons, ...freshness.untracked_sources]
-      : freshness.reasons;
-  const changed = reasons
-    .filter((reason) => reason.kind === "source_revision_changed")
-    .map((reason) => reason.source_name)
-    .filter((name): name is string => Boolean(name));
-  if (changed.length > 0) {
-    return `${joinList(changed)} ${plural(changed.length, "has", "have")} newer files.`;
-  }
-  const untracked = reasons
-    .filter((reason) => reason.kind === "source_revision_untracked")
-    .map((reason) => reason.source_name)
-    .filter((name): name is string => Boolean(name));
-  if (untracked.length > 0) {
-    return `The Working Plan does not record which revision of ${joinList(untracked)} it used.`;
-  }
-  if (reasons.some((reason) => reason.kind === "source_revision_unavailable")) {
-    return "A source revision the Working Plan used is no longer available.";
-  }
-  if (reasons.some((reason) => reason.kind === "naming_rules_changed")) {
-    return "Part naming rules changed since the Working Plan was built.";
-  }
-  if (reasons.some((reason) => reason.kind === "plan_inputs_invalid")) {
-    return "The attached sources have duplicate or missing assignments.";
-  }
-  return "The attached sources changed since the Working Plan was built.";
 }
 
 /**
@@ -315,40 +252,23 @@ function syncSourcesTask(input: SourcesSetupInput): SourcesSetupTask {
 }
 
 function resolveDifferencesTask(input: SourcesSetupInput): SourcesSetupTask | null {
-  const blockers = input.reviewIssues.filter(
-    (issue) => issue.severity === "blocker" && issue.code !== "unsynced_source",
-  );
-  const applies =
-    input.mergeConflictCount > 0 || blockers.length > 0 || input.sources.length > 1;
+  const applies = input.mergeConflictCount > 0 || input.sources.length > 1;
   if (!applies) return null;
 
   if (input.mergeConflictCount > 0) {
     return {
       id: "resolve-differences",
-      label: "Resolve source roles and differences",
+      label: "Choose between overlapping files",
       hint: `${input.mergeConflictCount} ${plural(input.mergeConflictCount, "file")} with the same name come from more than one source. Pick which file wins.`,
       state: "needs_attention",
-      statusLabel: "Needs your decision",
-      action: { kind: "handler", label: "Review differences", handler: "resolve_differences" },
-      needsAttention: true,
-    };
-  }
-  const [firstBlocker, ...moreBlockers] = blockers;
-  if (firstBlocker) {
-    const extra = moreBlockers.length > 0 ? ` And ${moreBlockers.length} more.` : "";
-    return {
-      id: "resolve-differences",
-      label: "Resolve source roles and differences",
-      hint: `${firstBlocker.message}${extra}`,
-      state: "needs_attention",
-      statusLabel: `${blockers.length} ${plural(blockers.length, "file problem")}`,
-      action: { kind: "handler", label: "Review file choices", handler: "resolve_differences" },
+      statusLabel: `${input.mergeConflictCount} ${plural(input.mergeConflictCount, "choice")}`,
+      action: { kind: "handler", label: "Choose files", handler: "resolve_differences" },
       needsAttention: true,
     };
   }
   return {
     id: "resolve-differences",
-    label: "Resolve source roles and differences",
+    label: "Compare attached sources",
     hint: `${input.sources.length} sources agree on every file.`,
     state: "complete",
     statusLabel: "No conflicts",
@@ -381,142 +301,11 @@ function assignColorsTask(input: SourcesSetupInput): SourcesSetupTask | null {
   };
 }
 
-function reviewAssistantTask(input: SourcesSetupInput): SourcesSetupTask | null {
-  const planning = input.planning;
-  if (!planning) return null;
-  const summary = assistantChangeSummary(planning);
-  const phase = planning.planning_phase;
-
-  if (phase.kind === "applied") {
-    return {
-      id: "review-assistant",
-      label: "Review assistant changes",
-      hint: summary
-        ? `${summary}. They are already in the Working Plan.`
-        : "The assistant changes are already in the Working Plan.",
-      state: "complete",
-      statusLabel: "Applied",
-      action: {
-        kind: "route",
-        label: "Open Plan",
-        to: planRoute(input.buildId),
-      },
-      needsAttention: false,
-    };
-  }
-  if (phase.kind === "missing_draft" || phase.kind === "abandoned") {
-    return {
-      id: "review-assistant",
-      label: "Review assistant changes",
-      hint:
-        phase.kind === "missing_draft"
-          ? "The Working Plan the assistant wrote is gone. Build it again from the attached sources."
-          : "The assistant stopped before it finished. Build the Working Plan again when the sources are right.",
-      state: phase.kind === "missing_draft" ? "error" : "not_started",
-      statusLabel:
-        phase.kind === "missing_draft" ? "Working Plan unavailable" : "Not finished",
-      action: {
-        kind: "handler",
-        label: "Update Working Plan",
-        handler: "update_working_plan",
-      },
-      needsAttention: phase.kind === "missing_draft",
-    };
-  }
-  if (planning.readiness.blockers.length > 0) {
-    return {
-      id: "review-assistant",
-      label: "Review assistant changes",
-      hint: `${summary ?? "Assistant changes"} waiting for you.`,
-      state: "needs_attention",
-      statusLabel: "Needs your decision",
-      action: {
-        kind: "handler",
-        label: "Review assistant changes",
-        handler: "review_assistant",
-      },
-      needsAttention: true,
-    };
-  }
-  if (phase.kind === "draft") {
-    return {
-      id: "review-assistant",
-      label: "Review assistant changes",
-      hint: summary
-        ? `${summary}. They are in the Working Plan, ready for Plan review.`
-        : "The assistant changes are in the Working Plan, ready for Plan review.",
-      state: "complete",
-      statusLabel: "Ready for Plan review",
-      action: { kind: "route", label: "Open Plan", to: planRoute(input.buildId) },
-      needsAttention: false,
-    };
-  }
-  return {
-    id: "review-assistant",
-    label: "Review assistant changes",
-    hint: summary ?? "The assistant is still gathering sources and requirements.",
-    state: "in_progress",
-    statusLabel: "Assistant is preparing",
-    action: {
-      kind: "handler",
-      label: "Review assistant changes",
-      handler: "review_assistant",
-    },
-    needsAttention: false,
-  };
-}
-
-function updateWorkingPlanTask(input: SourcesSetupInput): SourcesSetupTask | null {
-  const hasSources = input.sources.length > 0;
-  if (!hasSources) return null;
-  if (input.updatingWorkingPlan) {
-    return {
-      id: "update-working-plan",
-      label: "Update Working Plan",
-      hint: "PrintPartner is rebuilding the Working Plan from the attached sources.",
-      state: "in_progress",
-      statusLabel: "Updating",
-      needsAttention: false,
-    };
-  }
-  const reason = workingPlanUpdateReason(input.freshness);
-  if (input.partCount === 0) {
-    return {
-      id: "update-working-plan",
-      label: "Update Working Plan",
-      hint: "The Working Plan has no parts yet. Build it from the attached sources.",
-      state: "needs_attention",
-      statusLabel: "No parts yet",
-      action: {
-        kind: "handler",
-        label: "Update Working Plan",
-        handler: "update_working_plan",
-      },
-      needsAttention: true,
-    };
-  }
-  if (reason == null) return null;
-  return {
-    id: "update-working-plan",
-    label: "Update Working Plan",
-    hint: reason,
-    state: "needs_attention",
-    statusLabel:
-      input.freshness?.status === "stale" ? "Out of date" : "Inputs not recorded",
-    action: {
-      kind: "handler",
-      label: "Update Working Plan",
-      handler: "update_working_plan",
-    },
-    needsAttention: true,
-  };
-}
-
 /**
  * The ordered setup tasks and the one action the page may show as primary.
  *
  * Order follows the workspace's own dependencies: request, sources, sync,
- * differences, materials, assistant, then the Working Plan rebuild. Tasks that
+ * differences, then materials. Plan owns the Working Plan lifecycle. Tasks that
  * do not apply to this Build are left out rather than shown as empty rows.
  */
 export function sourcesSetupTasks(input: SourcesSetupInput): SourcesSetup {
@@ -530,10 +319,6 @@ export function sourcesSetupTasks(input: SourcesSetupInput): SourcesSetup {
   if (differences) tasks.push(differences);
   const colors = assignColorsTask(input);
   if (colors) tasks.push(colors);
-  const assistant = reviewAssistantTask(input);
-  if (assistant) tasks.push(assistant);
-  const workingPlan = updateWorkingPlanTask(input);
-  if (workingPlan) tasks.push(workingPlan);
 
   let blocking: { task: SourcesSetupTask; action: SourcesSetupAction } | null = null;
   for (const task of tasks) {
@@ -551,11 +336,11 @@ export function sourcesSetupTasks(input: SourcesSetupInput): SourcesSetup {
         action: blocking.action,
       }
     : {
-        label: "Review Working Plan",
-        reason: "The inputs are ready. Review and accept the Plan.",
+        label: "Open Plan",
+        reason: "Sources are ready. Create or review the Working Plan on Plan.",
         action: {
           kind: "route",
-          label: "Review Working Plan",
+          label: "Open Plan",
           to: planRoute(input.buildId),
         },
       };

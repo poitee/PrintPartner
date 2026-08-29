@@ -186,20 +186,20 @@ function planStageStatus(
     case "needs_attention":
       return {
         kind: "needs_attention",
-        summary: `${workingPlan.issueCount} Working Plan ${pluralized(workingPlan.issueCount, "issue")} need attention.`,
+        summary: `${workingPlan.issueCount} Plan ${pluralized(workingPlan.issueCount, "choice")} to finish before publishing.`,
         task_count: workingPlan.issueCount,
       };
     case "stale":
       return {
         kind: "stale",
-        summary: "The Working Plan is based on an older Accepted Plan.",
+        summary: "Refresh the Working Plan before publishing.",
         task_count: workingPlan.issueCount,
       };
     case "none":
       if (acceptedPlan.kind === "ready") {
         return {
           kind: "complete",
-          summary: `Plan revision ${acceptedPlan.planVersion} accepted.`,
+          summary: `Plan revision ${acceptedPlan.planVersion} published.`,
         };
       }
       if (sources.kind === "ready") {
@@ -224,14 +224,14 @@ function productionStageStatus(
   if (acceptedPlan.kind === "unavailable") {
     return {
       kind: "error",
-      summary: "Production cannot read the Accepted Plan.",
+      summary: "Production cannot read the published Plan.",
       task_count: 1,
     };
   }
   if (acceptedPlan.kind === "none") {
     return {
       kind: "not_started",
-      summary: "Accept a Working Plan before Production.",
+      summary: "Publish a Plan to create Production's required units.",
     };
   }
   if (production.failedJobs > 0) {
@@ -269,7 +269,7 @@ function productionStageStatus(
     case "stale":
       return {
         kind: "stale",
-        summary: "Prepared plates do not match the Accepted Plan.",
+        summary: "Prepared plates do not match the published Plan.",
         task_count: 1,
       };
     case "preparing":
@@ -301,14 +301,14 @@ function checkoffStageStatus(
   if (acceptedPlan.kind === "unavailable") {
     return {
       kind: "error",
-      summary: "Checkoff cannot read the Accepted Plan.",
+      summary: "Checkoff cannot read the published Plan.",
       task_count: 1,
     };
   }
   if (acceptedPlan.kind === "none") {
     return {
       kind: "not_started",
-      summary: "Accept a Working Plan before Checkoff.",
+      summary: "Publish a Plan to define the units Checkoff will verify.",
     };
   }
   if (checkoff.failedVerifications > 0) {
@@ -428,8 +428,8 @@ function nextAction(facts: BuildWorkflowFacts): BuildWorkflowNextAction {
         stage_id: "plan",
         draft_id: facts.workingPlan.draftId,
         issue_count: facts.workingPlan.issueCount,
-        label: "Resolve Working Plan issues",
-        reason: `${facts.workingPlan.issueCount} ${pluralized(facts.workingPlan.issueCount, "issue")} block Plan acceptance.`,
+        label: `Review ${facts.workingPlan.issueCount} Plan ${pluralized(facts.workingPlan.issueCount, "choice")}`,
+        reason: "Complete these choices before publishing the Plan for Production.",
       };
     case "stale":
       return {
@@ -437,15 +437,15 @@ function nextAction(facts: BuildWorkflowFacts): BuildWorkflowNextAction {
         stage_id: "plan",
         draft_id: facts.workingPlan.draftId,
         label: "Refresh Working Plan",
-        reason: "The Working Plan is based on an older Accepted Plan.",
+        reason: "Refresh the Working Plan so it compares with the current published revision.",
       };
     case "ready":
       return {
         kind: "accept_working_plan",
         stage_id: "plan",
         draft_id: facts.workingPlan.draftId,
-        label: "Review and accept Working Plan",
-        reason: "The Working Plan is ready for acceptance.",
+        label: "Review and publish Working Plan",
+        reason: "Publishing fixes the part list and creates the required-unit identities Production and Checkoff track.",
       };
     case "none":
       break;
@@ -472,7 +472,7 @@ function nextAction(facts: BuildWorkflowFacts): BuildWorkflowNextAction {
       kind: "create_working_plan",
       stage_id: "plan",
       label: "Create Working Plan",
-      reason: "Sources are ready, but this Build has no Accepted Plan.",
+      reason: "Sources are ready. Build a Working Plan, review it, then publish it for Production.",
     };
   }
   if (facts.acceptedPlan.remainingUnits > 0) {
@@ -489,7 +489,7 @@ function nextAction(facts: BuildWorkflowFacts): BuildWorkflowNextAction {
     kind: "view_completed_build",
     stage_id: "checkoff",
     label: "View completed Build",
-    reason: "Every required unit in the Accepted Plan is checked off.",
+    reason: "Every required unit in the published Plan is checked off.",
   };
 }
 

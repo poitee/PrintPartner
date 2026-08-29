@@ -73,8 +73,31 @@ describe("resolveBuildWorkflow", () => {
       kind: "accept_working_plan",
       stage_id: "plan",
       draft_id: 41,
-      label: "Review and accept Working Plan",
-      reason: "The Working Plan is ready for acceptance.",
+      label: "Review and publish Working Plan",
+      reason: "Publishing fixes the part list and creates the required-unit identities Production and Checkoff track.",
+    });
+    expect(workspace.stages.find((stage) => stage.id === "production")?.status.summary)
+      .toBe("Publish a Plan to create Production's required units.");
+    expect(workspace.stages.find((stage) => stage.id === "checkoff")?.status.summary)
+      .toBe("Publish a Plan to define the units Checkoff will verify.");
+  });
+
+  it("names the concrete Plan choices instead of a generic attention state", () => {
+    const workspace = resolveBuildWorkflow({
+      ...emptyFacts,
+      sources: { kind: "ready", attachedCount: 2 },
+      workingPlan: { kind: "needs_attention", draftId: 41, changeCount: 6, issueCount: 5 },
+    });
+
+    expect(workspace.stages.find((stage) => stage.id === "plan")?.status.summary)
+      .toBe("5 Plan choices to finish before publishing.");
+    expect(workspace.next_action).toEqual({
+      kind: "resolve_plan_issues",
+      stage_id: "plan",
+      draft_id: 41,
+      issue_count: 5,
+      label: "Review 5 Plan choices",
+      reason: "Complete these choices before publishing the Plan for Production.",
     });
   });
 
@@ -221,7 +244,7 @@ describe("resolveBuildWorkflow", () => {
       kind: "view_completed_build",
       stage_id: "checkoff",
       label: "View completed Build",
-      reason: "Every required unit in the Accepted Plan is checked off.",
+      reason: "Every required unit in the published Plan is checked off.",
     });
   });
 });

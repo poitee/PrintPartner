@@ -110,12 +110,24 @@ export type PlanRequiredUnitImpact =
       readonly requiredUnitsAfter: number;
     };
 
-export type PlanAcceptanceDecision = {
-  readonly label: string;
-  readonly canAccept: boolean;
-  readonly reason: string;
-  readonly blockingCount: number;
-};
+export type PlanPublication =
+  | Readonly<{
+      kind: "no_working_plan" | "checking" | "checks_unavailable";
+      label: "Publish Plan for Production";
+      reason: string;
+    }>
+  | Readonly<{
+      kind: "waiting_for_choices";
+      label: "Publish Plan for Production";
+      reason: string;
+      choiceCount: number;
+    }>
+  | Readonly<{
+      kind: "ready";
+      label: string;
+      reason: string;
+      nextRevision: number;
+    }>;
 
 export type PlanDownstreamLink = {
   readonly id: "production" | "checkoff";
@@ -131,12 +143,12 @@ export type PlanAcceptanceModel = {
   readonly mustResolve: readonly PlanIssue[];
   readonly reviewRecommended: readonly PlanIssue[];
   readonly impact: PlanRequiredUnitImpact;
-  readonly decision: PlanAcceptanceDecision;
+  readonly publication: PlanPublication;
   readonly headerSummary: string;
   readonly downstream: readonly PlanDownstreamLink[];
 };
 
-const ACCEPT_LABEL = "Accept Plan revision";
+const PUBLISH_LABEL = "Publish Plan for Production";
 
 function plural(count: number, one: string, many: string): string {
   return `${count} ${count === 1 ? one : many}`;
@@ -156,8 +168,8 @@ export function acceptedRevisionSummary(review: PlanReview | null): AcceptedRevi
     planVersion,
     heading:
       planVersion == null
-        ? "No Plan revision accepted yet"
-        : `Plan revision ${planVersion} accepted`,
+        ? "No Plan revision published yet"
+        : `Plan revision ${planVersion} published`,
     partCount: parts.length,
     requiredUnits,
     verifiedUnits,
@@ -212,7 +224,7 @@ export function planHeaderSummary(input: {
   const accepted = acceptedRevisionSummary(input.review);
   const draft = input.draft;
   if (!draft) {
-    if (accepted.partCount === 0) return "No parts yet. Build a Working Plan from Sources.";
+    if (accepted.partCount === 0) return "No Working Plan yet. Build one from Sources.";
     return [
       plural(accepted.partCount, "part", "parts"),
       `${plural(accepted.requiredUnits, "Required unit", "Required units")}`,
@@ -224,7 +236,7 @@ export function planHeaderSummary(input: {
   return [
     `${plural(draft.parts.length, "part", "parts")} in the Working Plan`,
     `${included.length} included`,
-    `${plural(units, "Required unit", "Required units")} when accepted`,
+    `${plural(units, "Required unit", "Required units")} when published`,
   ].join(" \u00b7 ");
 }
 
@@ -251,9 +263,9 @@ function requiredUnitIssues(draft: PlanDraftWorkspace): PlanIssue[] {
       title: `${filename}: choose what happens to units already printed`,
       detail:
         conflict.kind === "ambiguous_exact_match"
-          ? "More than one accepted part matches this file. Pick the one whose printed units carry over."
+          ? "More than one published part matches this file. Pick the one whose printed units carry over."
           : "This file already has printed units. Keep them, or print the units again.",
-      statusLabel: "Needs your decision",
+      statusLabel: "Choose before publishing",
       tone: "error" as const,
       action: { kind: "required_unit_decision" as const, draftPartId: conflict.target_draft_part_id },
     };
@@ -295,7 +307,7 @@ function planningBlockerCopy(code: PlanAcceptanceBlockerCode): PlanningBlockerCo
     case "source_provenance":
       return {
         title: "A Source has no recorded revision",
-        detail: "Without one, an Accepted Plan cannot say which files it was built from. Open Sources and sync it again.",
+        detail: "Without one, a published Plan cannot say which files it was built from. Open Sources and sync it again.",
       };
     case "draft_source_changed":
       return {
@@ -355,12 +367,12 @@ function planningBlockerCopy(code: PlanAcceptanceBlockerCode): PlanningBlockerCo
     case "draft_selection":
       return {
         title: "This Working Plan has not been reviewed",
-        detail: 'The assistant reviewed a different Working Plan. Open Sources and have this one written again under "Assistant changes", then review it before accepting.',
+        detail: 'The assistant reviewed a different Working Plan. Open Sources and have this one written again under "Assistant changes", then review it before publishing.',
       };
     case "unrecognised":
       return {
         title: "The assistant reported a check this version of PrintPartner does not know",
-        detail: 'Acceptance stays off until it clears. Open Sources to read it under "Decisions the assistant needs".',
+        detail: 'Publishing stays unavailable until it clears. Open Sources to read it under "Decisions the assistant needs".',
       };
     default: {
       const _exhaustive: never = code;
@@ -381,7 +393,7 @@ function blockerIssues(input: {
       group: "must_resolve" as const,
       title: copy.title,
       detail: copy.detail,
-      statusLabel: "Blocks acceptance",
+      statusLabel: "Finish before publishing",
       tone: "error" as const,
       action: sourcesAction(input.buildId),
     };
@@ -404,10 +416,10 @@ function failureIssues(input: {
             : ""
         } still point at the Accepted Plan`,
         detail:
-          "Acceptance stopped so that printed work is not lost. Move these records to the new revision, or finish them in Production first.",
-        statusLabel: "Blocks acceptance",
+          "Publishing paused so that printed work is not lost. Move these records to the new revision, or finish them in Production first.",
+        statusLabel: "Choose before publishing",
         tone: "error",
-        action: { kind: "move_records", label: "Move records and accept" },
+        action: { kind: "move_records", label: "Move records and publish" },
       }];
     case "unsafe_records":
       return [{
@@ -417,7 +429,7 @@ function failureIssues(input: {
         detail: failure.units
           .map((unit) => `${unit.filename}: ${unit.outcome}`)
           .join(" \u2022 "),
-        statusLabel: "Blocks acceptance",
+        statusLabel: "Finish before publishing",
         tone: "error",
         action: null,
       }];
@@ -431,7 +443,7 @@ function failureIssues(input: {
       return [{
         id: "plan-issue-acceptance-error",
         group: "must_resolve",
-        title: "Acceptance failed",
+        title: "Publishing did not complete",
         detail: failure.message,
         statusLabel: "Retry available",
         tone: "error",
@@ -454,9 +466,9 @@ function planningStateIssues(input: {
       return [{
         id: "plan-issue-build-planning-loading",
         group: "must_resolve",
-        title: "Still checking whether this Working Plan can be accepted",
-        detail: "This Build's planning checks have not come back yet. Acceptance opens once they do.",
-        statusLabel: "Blocks acceptance",
+        title: "Still checking this Working Plan",
+        detail: "This Build's planning checks have not come back yet. Publishing becomes available once they do.",
+        statusLabel: "Checking",
         tone: "warning",
         action: null,
       }];
@@ -465,8 +477,8 @@ function planningStateIssues(input: {
         id: "plan-issue-build-planning-unavailable",
         group: "must_resolve",
         title: "This Build's planning checks could not be read",
-        detail: "Acceptance needs them to confirm this is the Working Plan the assistant reviewed. Reload the page to try again.",
-        statusLabel: "Blocks acceptance",
+        detail: "Publishing needs them to confirm this is the Working Plan the assistant reviewed. Reload the page to try again.",
+        statusLabel: "Reload to continue",
         tone: "error",
         action: null,
       }];
@@ -527,9 +539,9 @@ export function planIssues(input: PlanAcceptanceInput): PlanIssue[] {
     issues.push({
       id: "plan-issue-working-plan-behind",
       group: "must_resolve",
-      title: "The Accepted Plan changed after these Working Plan changes were saved",
-      detail: "Refresh the Working Plan so it compares against the current Accepted Plan.",
-      statusLabel: "Blocks acceptance",
+      title: "The published Plan changed after these Working Plan changes were saved",
+      detail: "Refresh the Working Plan so it compares against the current published revision.",
+      statusLabel: "Refresh before publishing",
       tone: "error",
       action: { kind: "refresh_working_plan", label: "Refresh Working Plan" },
     });
@@ -554,7 +566,7 @@ export function planIssues(input: PlanAcceptanceInput): PlanIssue[] {
       title: issue.message,
       detail: null,
       statusLabel:
-        issue.severity === "blocker" ? "Blocks Production" : "Does not block Production",
+        issue.severity === "blocker" ? "Needed for Production" : "Check before publishing",
       tone: issue.severity === "blocker" ? "error" : "warning",
       action: issue.link_hint == null ? null : sourcesAction(buildId),
     });
@@ -568,7 +580,7 @@ export function planIssues(input: PlanAcceptanceInput): PlanIssue[] {
       detail: missingStl
         .map((issue) => issue.message.replace(/^STL not found on disk:\s*/, ""))
         .join(", "),
-      statusLabel: "Blocks Production",
+      statusLabel: "Needed for Production",
       tone: "error",
       action: { kind: "sync_sources", label: "Sync sources" },
     });
@@ -581,7 +593,7 @@ export function planIssues(input: PlanAcceptanceInput): PlanIssue[] {
       group: "review_recommended",
       title: "The sources behind this Plan have moved on",
       detail: planFreshnessMessages(freshness).join(" "),
-      statusLabel: "Does not block Production",
+      statusLabel: "Check before publishing",
       tone: "warning",
       action: sourcesAction(buildId),
     });
@@ -593,7 +605,7 @@ export function planIssues(input: PlanAcceptanceInput): PlanIssue[] {
         group: "review_recommended",
         title: "This Plan's source revisions are not tracked",
         detail: reasons.map(planUntrackedReasonText).join(" "),
-        statusLabel: "Does not block Production",
+        statusLabel: "Check before publishing",
         tone: "warning",
         action: sourcesAction(buildId),
       });
@@ -606,7 +618,7 @@ export function planIssues(input: PlanAcceptanceInput): PlanIssue[] {
       group: "review_recommended",
       title: `Duplicate parts detected in ${plural(mergeConflicts.length, "file", "files")}`,
       detail: "Two sources give the same part. Choose which source wins in the Build's Sources workspace.",
-      statusLabel: "Check before you accept",
+      statusLabel: "Check before publishing",
       tone: "warning",
       action: sourcesAction(buildId),
     });
@@ -621,13 +633,13 @@ export function requiredUnitImpact(
   if (!draft) {
     return {
       kind: "unavailable",
-      reason: "There are no Working Plan changes, so the Accepted Plan's Required units stay as they are.",
+      reason: "There are no Working Plan changes, so the published revision's Required units stay as they are.",
     };
   }
   if (draft.reconciliation.kind !== "ready") {
     return {
       kind: "unavailable",
-      reason: "Answer the Required-unit decisions above to see what acceptance preserves.",
+      reason: "Answer the Required-unit decisions above to see what publishing preserves.",
     };
   }
   const requiredUnitsAfter = draft.parts
@@ -655,36 +667,33 @@ export function preservedVerifiedUnits(input: {
   return Math.min(input.accepted.verifiedUnits, input.draft.reconciliation.reused_units);
 }
 
-export function acceptanceDecision(input: {
+export function planPublication(input: {
   readonly draft: PlanDraftWorkspace | null;
   readonly issues: readonly PlanIssue[];
   readonly accepted: AcceptedRevisionSummary;
   readonly planningBlockers: PlanningBlockerState;
-}): PlanAcceptanceDecision {
-  const blocking = input.issues.filter((issue) => issue.group === "must_resolve");
+}): PlanPublication {
+  const choices = input.issues.filter((issue) => issue.group === "must_resolve");
   if (!input.draft) {
     return {
-      label: ACCEPT_LABEL,
-      canAccept: false,
-      reason: "There are no Working Plan changes to accept.",
-      blockingCount: 0,
+      kind: "no_working_plan",
+      label: PUBLISH_LABEL,
+      reason: "Build a Working Plan from the current Sources, then review it here.",
     };
   }
   const planning = input.planningBlockers;
   switch (planning.kind) {
     case "loading":
       return {
-        label: ACCEPT_LABEL,
-        canAccept: false,
-        reason: "Acceptance stays off until this Build's planning checks come back. This clears on its own in a moment.",
-        blockingCount: blocking.length,
+        kind: "checking",
+        label: PUBLISH_LABEL,
+        reason: "PrintPartner is checking this Working Plan. Publishing becomes available when the check finishes.",
       };
     case "unavailable":
       return {
-        label: ACCEPT_LABEL,
-        canAccept: false,
-        reason: "Acceptance stays off because this Build's planning checks could not be read. Reload the page to try again.",
-        blockingCount: blocking.length,
+        kind: "checks_unavailable",
+        label: PUBLISH_LABEL,
+        reason: "The planning check could not be read. Reload the page to try again.",
       };
     case "loaded":
       break;
@@ -693,20 +702,25 @@ export function acceptanceDecision(input: {
       return _exhaustive;
     }
   }
-  if (blocking.length > 0) {
+  if (choices.length > 0) {
     return {
-      label: ACCEPT_LABEL,
-      canAccept: false,
-      reason: `Acceptance is blocked. Resolve ${plural(blocking.length, "item", "items")} under "Must resolve" first.`,
-      blockingCount: blocking.length,
+      kind: "waiting_for_choices",
+      label: PUBLISH_LABEL,
+      reason: `Complete ${plural(choices.length, "choice", "choices")} under "Before publishing" first.`,
+      choiceCount: choices.length,
     };
   }
   const next = (input.accepted.planVersion ?? 0) + 1;
+  const included = input.draft.parts.filter((part) => part.included);
+  const requiredUnits = included.reduce(
+    (sum, part) => sum + Math.max(0, part.quantity_effective),
+    0,
+  );
   return {
-    label: ACCEPT_LABEL,
-    canAccept: true,
-    reason: `Accepting saves these changes as Plan revision ${next}. Verified units that still match are kept.`,
-    blockingCount: 0,
+    kind: "ready",
+    label: `Publish Plan revision ${next} for Production`,
+    reason: `Publishes ${plural(included.length, "included part", "included parts")} as ${plural(requiredUnits, "required unit", "required units")}. Production and Checkoff will use this fixed revision.`,
+    nextRevision: next,
   };
 }
 
@@ -716,9 +730,9 @@ export function downstreamLinks(input: {
 }): PlanDownstreamLink[] {
   const qualifier =
     input.draft && input.accepted.planVersion != null
-      ? `uses Accepted revision ${input.accepted.planVersion}`
+      ? `uses published revision ${input.accepted.planVersion}`
       : input.draft
-        ? "no accepted revision yet"
+        ? "publish this Plan first"
         : null;
   return [
     { id: "production", label: "Open Production", qualifier },
@@ -736,7 +750,7 @@ export function planAcceptanceModel(input: PlanAcceptanceInput): PlanAcceptanceM
     mustResolve: issues.filter((issue) => issue.group === "must_resolve"),
     reviewRecommended: issues.filter((issue) => issue.group === "review_recommended"),
     impact: requiredUnitImpact(input.draft),
-    decision: acceptanceDecision({
+    publication: planPublication({
       draft: input.draft,
       issues,
       accepted,
@@ -766,7 +780,7 @@ export function planConfirmationCopy(
   confirmation: PlanAcceptanceConfirmation,
 ): PlanConfirmationCopy {
   return {
-    heading: `Plan revision ${confirmation.planVersion} accepted`,
+    heading: `Plan revision ${confirmation.planVersion} published`,
     detail: `${plural(confirmation.requiredUnits, "Required unit is", "Required units are")} current. ${
       confirmation.verifiedUnits === 1
         ? "1 verified unit was preserved."

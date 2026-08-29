@@ -26,7 +26,7 @@ const workspace = {
       label: "Production",
       status: {
         kind: "not_started",
-        summary: "Accept a Working Plan before Production.",
+        summary: "Publish a Plan to create Production's required units.",
       },
     },
     {
@@ -35,7 +35,7 @@ const workspace = {
       label: "Checkoff",
       status: {
         kind: "not_started",
-        summary: "Accept a Working Plan before Checkoff.",
+        summary: "Publish a Plan to define the units Checkoff will verify.",
       },
     },
   ],
@@ -43,8 +43,8 @@ const workspace = {
     kind: "accept_working_plan",
     stage_id: "plan",
     draft_id: 9,
-    label: "Review and accept Working Plan",
-    reason: "The Working Plan is ready for acceptance.",
+    label: "Review and publish Working Plan",
+    reason: "Publishing fixes the part list and creates the required-unit identities Production and Checkoff track.",
   },
   active_work: {
     queued_jobs: 0,

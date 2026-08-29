@@ -2,7 +2,7 @@ import { usePlanWorkspace } from "../../context/PlanWorkspaceContext";
 import { usePlanAcceptance } from "./PlanAcceptanceContext";
 
 /**
- * Step 1 of the Plan checkpoint: what is accepted right now. Everything below
+ * Step 1 of the Plan checkpoint: what is published right now. Everything below
  * is measured against this, so it comes first and states plain totals.
  */
 export default function PlanAcceptedRevisionCard() {
@@ -18,14 +18,14 @@ export default function PlanAcceptedRevisionCard() {
       className="rounded-lg border border-border bg-card p-4 shadow-sm"
     >
       <h2 id="plan-accepted-revision-heading" className="text-sm font-semibold">
-        Accepted revision
+        Published revision
       </h2>
       <p className="mt-1 text-base font-medium text-foreground">{accepted.heading}</p>
       <p className="mt-1 text-sm text-muted-foreground">
         {accepted.planVersion == null
-          ? "Accept a Working Plan before Production and Checkoff can start."
+          ? "Publish a Working Plan before Production and Checkoff can start."
           : model.working
-            ? "Production and Checkoff still use this revision until you accept the working changes below."
+            ? "Production and Checkoff still use this revision until you publish the working changes below."
             : "Production and Checkoff use this revision."}
       </p>
       <dl className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">

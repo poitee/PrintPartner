@@ -1,6 +1,5 @@
 import type {
   BuildWorkflowStage,
-  BuildWorkflowStageStatus,
   BuildWorkflowWorkspace,
 } from "@print-partner/contracts";
 import {
@@ -67,27 +66,6 @@ export function buildWorkflowStages(
       to: stageRoute(stage.id, selectedBuildId),
     }),
   );
-}
-
-export function workflowStatusLabel(
-  kind: BuildWorkflowStageStatus["kind"],
-): string {
-  switch (kind) {
-    case "not_started":
-      return "Not started";
-    case "ready":
-      return "Ready";
-    case "in_progress":
-      return "In progress";
-    case "needs_attention":
-      return "Needs attention";
-    case "complete":
-      return "Complete";
-    case "stale":
-      return "Needs refresh";
-    case "error":
-      return "Error";
-  }
 }
 
 export function stageIdFromPath(pathname: string): WorkflowStageId | null {

@@ -38,6 +38,7 @@ export type PlanAcceptanceValue = {
   readonly syncBusy: boolean;
   chooseDecision: (draftPartId: number, choice: string) => void;
   saveDecisions: () => void;
+  prepareWorkingPlan: () => void;
   refreshWorkingPlan: () => void;
   accept: (options?: { moveLinkedRecords?: boolean }) => void;
   dismissConfirmation: () => void;
@@ -58,6 +59,7 @@ export function PlanAcceptanceProvider({ children, onSyncSources, syncBusy }: Pr
     review,
     draftWorkspace,
     applyActivePlanDraft,
+    startPlanDraft,
     rebaseActivePlanDraft,
     reconcileActivePlanDraft,
   } = usePlanWorkspace();
@@ -156,6 +158,15 @@ export function PlanAcceptanceProvider({ children, onSyncSources, syncBusy }: Pr
       .finally(() => setBusy(false));
   }, [rebaseActivePlanDraft]);
 
+  const prepareWorkingPlan = useCallback(() => {
+    setBusy(true);
+    setFailure(null);
+    void startPlanDraft()
+      // PlanWorkspace reports draft creation errors beside the Working Plan action.
+      .catch(() => undefined)
+      .finally(() => setBusy(false));
+  }, [startPlanDraft]);
+
   const accept = useCallback((options?: { moveLinkedRecords?: boolean }) => {
     const workspace = draftWorkspace;
     if (!workspace || selectedProfileId == null) return;
@@ -212,6 +223,7 @@ export function PlanAcceptanceProvider({ children, onSyncSources, syncBusy }: Pr
       syncBusy: Boolean(syncBusy),
       chooseDecision,
       saveDecisions,
+      prepareWorkingPlan,
       refreshWorkingPlan,
       accept,
       dismissConfirmation,
@@ -227,6 +239,7 @@ export function PlanAcceptanceProvider({ children, onSyncSources, syncBusy }: Pr
       dismissConfirmation,
       failure,
       model,
+      prepareWorkingPlan,
       refreshWorkingPlan,
       saveDecisions,
       selectedProfileId,
