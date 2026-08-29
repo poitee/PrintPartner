@@ -68,6 +68,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Checkoff crashed in Vite** - Progress imported object matching through the
+  domain barrel, which also exports the STL scanner. The scanner uses
+  `node:fs`, so the browser page died with "Something went wrong". Checkoff now
+  imports the matching module directly.
+
 - **Printers sat on "needs review" with nothing to do** - Source changes no
   longer steal the Build's next action from Production once a Plan is accepted.
   A Plan with no accepted inputs no longer lists "source revisions are not

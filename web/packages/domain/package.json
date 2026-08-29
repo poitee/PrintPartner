@@ -9,6 +9,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./sliced-object-matching": {
+      "types": "./dist/sliced-object-matching.d.ts",
+      "import": "./dist/sliced-object-matching.js"
     }
   },
   "scripts": {
