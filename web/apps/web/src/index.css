@@ -447,9 +447,9 @@
   .desk-canvas {
     background-color: var(--surface-base);
     background-image: radial-gradient(
-      80rem 28rem at 8% -12%,
-      color-mix(in srgb, var(--primary) 16%, transparent),
-      transparent 58%
+      56rem 36rem at 50% -8%,
+      color-mix(in srgb, var(--primary) 22%, transparent),
+      transparent 62%
     );
   }
 
