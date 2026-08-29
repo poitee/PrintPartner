@@ -121,7 +121,12 @@ Open [http://localhost:8080](http://localhost:8080), or `http://<this-computer>:
 PP_BIND_ADDRESS=127.0.0.1 docker compose up -d
 ```
 
-Enable authentication (`SINGLE_USER_AUTH=1` or `MULTI_USER=1`) if that network is not trusted.
+Enable authentication if that network is not trusted. `SINGLE_USER_AUTH=1` is
+the self-host login. `MULTI_USER=1` also needs a `SESSION_SECRET`.
+
+Existing Compose installs that never set `PP_BIND_ADDRESS` will publish 8080 on
+the LAN after the next `docker compose up -d`. Put `PP_BIND_ADDRESS=127.0.0.1`
+in `.env` first if you want to keep the old bind.
 
 <!-- release-version:start -->
 The current release is `3.2.0`. The default Compose file uses `ghcr.io/poitee/print-partner:3.2.0`, and the app reports runtime version `3.2.0-web`.

@@ -122,6 +122,10 @@ The Node process should show uid 1000.
 
 ## Update
 
+If this install currently binds only to this computer and you want to keep that,
+put `PP_BIND_ADDRESS=127.0.0.1` in `.env` before the next `docker compose up -d`.
+Otherwise 8080 is published on every host interface.
+
 Pull repository changes and the new image:
 
 ```bash
