@@ -1,15 +1,9 @@
 import { useState } from "react";
-import LayeredSheetMark from "../components/layout/BrandMark";
 import { Link, Navigate, useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
+import AuthScreen, { AuthField } from "../components/auth/AuthScreen";
 import { Button } from "../components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "../components/ui/card";
+import { Input } from "../components/ui/input";
 import { useAuth } from "../context/AuthContext";
 import { resetPasswordWithToken } from "../api/endpoints/auth";
 
@@ -51,64 +45,50 @@ export default function ResetPasswordPage() {
   };
 
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center gap-6 bg-background p-4">
-      <div className="flex items-center gap-2.5" aria-hidden>
-        <LayeredSheetMark />
-        <span className="font-serif text-[17px] font-semibold tracking-[-0.01em] text-foreground">
-          Print Partner
-        </span>
+    <AuthScreen
+      title="Choose a new password"
+      description="Enter a new password for your account."
+    >
+      <div className="space-y-4">
+        <form
+          className="space-y-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            onSubmit();
+          }}
+        >
+          <AuthField label="New password">
+            <Input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              autoComplete="new-password"
+            />
+          </AuthField>
+          <AuthField label="Confirm password">
+            <Input
+              type="password"
+              value={confirm}
+              onChange={(e) => setConfirm(e.target.value)}
+              autoComplete="new-password"
+            />
+          </AuthField>
+          <Button
+            type="submit"
+            className="w-full"
+            size="shop"
+            disabled={busy || password.length < 8 || !confirm}
+          >
+            {busy ? "Saving…" : "Update password"}
+          </Button>
+        </form>
+        <Link
+          to="/login"
+          className="block text-center text-sm text-primary hover:underline"
+        >
+          Back to sign in
+        </Link>
       </div>
-      <Card className="w-full max-w-md">
-        <CardHeader>
-          <CardTitle asChild>
-            <h1>Choose a new password</h1>
-          </CardTitle>
-          <CardDescription>Enter a new password for your account.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <form
-            className="space-y-4"
-            onSubmit={(event) => {
-              event.preventDefault();
-              onSubmit();
-            }}
-          >
-            <label className="block text-sm">
-              <span className="mb-1 block text-muted-foreground">New password</span>
-              <input
-                type="password"
-                className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                autoComplete="new-password"
-              />
-            </label>
-            <label className="block text-sm">
-              <span className="mb-1 block text-muted-foreground">Confirm password</span>
-              <input
-                type="password"
-                className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
-                value={confirm}
-                onChange={(e) => setConfirm(e.target.value)}
-                autoComplete="new-password"
-              />
-            </label>
-            <Button
-              type="submit"
-              className="w-full"
-              disabled={busy || password.length < 8 || !confirm}
-            >
-              {busy ? "Saving…" : "Update password"}
-            </Button>
-          </form>
-          <Link
-            to="/login"
-            className="block text-center text-sm text-primary hover:underline"
-          >
-            Back to sign in
-          </Link>
-        </CardContent>
-      </Card>
-    </main>
+    </AuthScreen>
   );
 }

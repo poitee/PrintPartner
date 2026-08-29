@@ -79,6 +79,7 @@ import {
   SelectValue,
 } from "../components/ui/select";
 import { resolveEngineState } from "../lib/workflowState";
+import { cn } from "@/lib/utils";
 import {
   INITIAL_SETTINGS_LOADS,
   settingsResourceSummary,
@@ -318,7 +319,7 @@ export default function SettingsPage() {
       <div className="gap-8 lg:grid lg:grid-cols-[190px_minmax(0,1fr)] lg:items-start">
         <nav
           aria-label="Settings sections"
-          className="mb-4 flex flex-wrap gap-1.5 lg:sticky lg:top-4 lg:mb-0 lg:flex-col lg:gap-0.5"
+          className="desk-nameplate mb-4 flex flex-wrap gap-1.5 p-2 lg:sticky lg:top-4 lg:mb-0 lg:flex-col lg:gap-0.5"
         >
           {[
             { id: "printers", label: "Printers" },
@@ -334,7 +335,12 @@ export default function SettingsPage() {
             <a
               key={item.id}
               href={`#${item.id}`}
-              className="rounded-md border border-border px-2.5 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-accent/70 hover:text-foreground lg:border-transparent"
+              className={cn(
+                "rounded-md px-2.5 py-1.5 text-sm transition-colors",
+                location.hash.replace(/^#/, "") === item.id
+                  ? "bg-primary/12 font-semibold text-primary"
+                  : "text-muted-foreground hover:bg-accent/70 hover:text-foreground",
+              )}
             >
               {item.label}
             </a>

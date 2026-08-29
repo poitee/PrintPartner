@@ -40,6 +40,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Desk chrome** - the signed-in app and the sign-in screens now share one brass
+  desk canvas. Build stages name the stage and the Build in the top bar. The rail
+  marks the current page with a brass bar, empty states use the page title voice,
+  and Settings sections read as real headings.
+
 - **Compressed responses and immutable asset caching** - the server now serves
   brotli/gzip for pages, assets, and API JSON (event streams stay unbuffered),
   and content-hashed assets cache for a year. First-load JS drops from ~1 MB

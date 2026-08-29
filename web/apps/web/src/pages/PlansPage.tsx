@@ -156,7 +156,8 @@ export default function PlansPage() {
         actions={engineState === "ready" && profilesState === "ready" && profiles.length > 0 ? (
           <PageHeaderActions>
             <Button
-              className="min-h-10 w-full sm:w-auto"
+              size="shop"
+              className="w-full sm:w-auto"
               onClick={openCreatePlan}
               disabled={engineState !== "ready" || profilesState !== "ready"}
             >

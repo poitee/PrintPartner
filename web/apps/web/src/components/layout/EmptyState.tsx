@@ -42,13 +42,18 @@ export default function EmptyState({
         <EmptyMedia
           variant="icon"
           className={cn(
-            "rounded-full border border-accent-brand/15 bg-accent-brand/10 text-accent-brand",
+            "desk-well mb-0 rounded-lg border-border bg-surface-sunken text-muted-foreground",
             compact ? "size-12 [&_svg]:size-5" : "size-14 [&_svg]:size-6",
           )}
         >
           <Icon />
         </EmptyMedia>
-        <EmptyTitle className={cn(compact ? "text-sm" : "text-base")}>
+        <EmptyTitle
+          className={cn(
+            "font-serif tracking-tight",
+            compact ? "text-sm" : "text-title",
+          )}
+        >
           {title}
         </EmptyTitle>
         {description ? (
@@ -57,7 +62,7 @@ export default function EmptyState({
       </EmptyHeader>
       {action ? (
         <EmptyContent>
-          <Button size="sm" onClick={action.onClick}>
+          <Button size={compact ? "sm" : "shop"} onClick={action.onClick}>
             {action.label}
           </Button>
         </EmptyContent>

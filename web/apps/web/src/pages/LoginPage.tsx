@@ -1,15 +1,9 @@
 import { type FormEvent, useState } from "react";
-import LayeredSheetMark from "../components/layout/BrandMark";
 import { Link, Navigate, useLocation } from "react-router-dom";
 import { toast } from "sonner";
+import AuthScreen, { AuthField } from "../components/auth/AuthScreen";
 import { Button } from "../components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "../components/ui/card";
+import { Input } from "../components/ui/input";
 import { useAuth } from "../context/AuthContext";
 import { authOAuthUrl } from "../api/endpoints/auth";
 
@@ -35,29 +29,16 @@ export default function LoginPage() {
 
   if (createdAccountEmail) {
     return (
-      <div className="flex min-h-screen flex-col items-center justify-center gap-6 bg-background p-4">
-      <div className="flex items-center gap-2.5" aria-hidden>
-        <LayeredSheetMark />
-        <span className="font-serif text-[17px] font-semibold tracking-[-0.01em] text-foreground">
-          Print Partner
-        </span>
-      </div>
-        <Card className="w-full max-w-md">
-          <CardHeader>
-            <CardTitle asChild>
-              <h1>Administrator account created</h1>
-            </CardTitle>
-            <CardDescription>
-              Your existing Print Partner data is connected to {createdAccountEmail}.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Button className="w-full" asChild>
-              <Link to={from}>Continue to Print Partner</Link>
-            </Button>
-          </CardContent>
-        </Card>
-      </div>
+      <AuthScreen
+        title="Administrator account created"
+        description={
+          <>Your existing Print Partner data is connected to {createdAccountEmail}.</>
+        }
+      >
+        <Button className="w-full" size="shop" asChild>
+          <Link to={from}>Continue to Print Partner</Link>
+        </Button>
+      </AuthScreen>
     );
   }
 
@@ -89,116 +70,100 @@ export default function LoginPage() {
     })();
   };
 
+  const title = isFirstRunSetup
+    ? "Set up Print Partner"
+    : isConfiguredSingleUser
+      ? "Sign in to Print Partner"
+      : "Print Partner";
+
+  const description = isFirstRunSetup
+    ? "Create the administrator account for this installation. Your existing printers, builds, and settings will stay in place."
+    : isConfiguredSingleUser
+      ? "This installation already has an administrator account."
+      : mode === "login"
+        ? "Sign in to your account"
+        : "Create an account";
+
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center gap-6 bg-background p-4">
-      <div className="flex items-center gap-2.5" aria-hidden>
-        <LayeredSheetMark />
-        <span className="font-serif text-[17px] font-semibold tracking-[-0.01em] text-foreground">
-          Print Partner
-        </span>
-      </div>
-      <Card className="w-full max-w-md">
-        <CardHeader>
-          <CardTitle asChild>
-            <h1>
-              {isFirstRunSetup
-                ? "Set up Print Partner"
-                : isConfiguredSingleUser
-                  ? "Sign in to Print Partner"
-                  : "Print Partner"}
-            </h1>
-          </CardTitle>
-          <CardDescription>
-            {isFirstRunSetup
-              ? "Create the administrator account for this installation. Your existing printers, builds, and settings will stay in place."
-              : isConfiguredSingleUser
-                ? "This installation already has an administrator account."
-                : mode === "login"
-                  ? "Sign in to your account"
-                  : "Create an account"}
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form
-            className="space-y-4"
-            aria-label={mode === "login" ? "Email sign in" : "Email registration"}
-            onSubmit={onSubmit}
-          >
-            {!isFirstRunSetup && <div className="flex flex-col gap-2">
-              <Button variant="secondary" asChild>
-                <a href={authOAuthUrl("github")}>Continue with GitHub</a>
-              </Button>
-              <Button variant="secondary" asChild>
-                <a href={authOAuthUrl("discord")}>Continue with Discord</a>
-              </Button>
-            </div>}
-            {!isFirstRunSetup && <div className="relative text-center text-xs text-muted-foreground">
-              <span className="bg-card px-2">or email</span>
-              <div className="absolute inset-x-0 top-1/2 -z-10 border-t border-border" />
-            </div>}
-            {mode === "register" && (
-              <label className="block text-sm">
-                <span className="mb-1 block text-muted-foreground">Display name</span>
-                <input
-                  className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
-                  value={displayName}
-                  onChange={(e) => setDisplayName(e.target.value)}
-                  autoComplete="name"
-                  required
-                />
-              </label>
-            )}
-            <label className="block text-sm">
-              <span className="mb-1 block text-muted-foreground">Email</span>
-              <input
-                type="email"
-                className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                autoComplete="email"
-                required
-              />
-            </label>
-            <label className="block text-sm">
-              <span className="mb-1 block text-muted-foreground">Password</span>
-              <input
-                type="password"
-                className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                autoComplete={mode === "login" ? "current-password" : "new-password"}
-                required
-              />
-            </label>
-            <Button type="submit" className="w-full" disabled={busy}>
-              {busy
-                ? "Please wait…"
-                : mode === "login"
-                  ? "Sign in"
-                  : isFirstRunSetup
-                    ? "Create administrator"
-                    : "Create account"}
+    <AuthScreen title={title} description={description}>
+      <form
+        className="space-y-4"
+        aria-label={mode === "login" ? "Email sign in" : "Email registration"}
+        onSubmit={onSubmit}
+      >
+        {!isFirstRunSetup && (
+          <div className="flex flex-col gap-2">
+            <Button variant="secondary" asChild>
+              <a href={authOAuthUrl("github")}>Continue with GitHub</a>
             </Button>
-            {mode === "login" && (
-              <Link
-                to="/forgot-password"
-                className="block text-center text-sm text-muted-foreground hover:text-primary hover:underline"
-              >
-                Forgot password?
-              </Link>
-            )}
-            {registrationOpen && !isFirstRunSetup && <button
-              type="button"
-              className="w-full text-center text-sm text-primary hover:underline"
-              onClick={() => setMode(mode === "login" ? "register" : "login")}
-            >
-              {mode === "login"
-                ? "Need an account? Register"
-                : "Already have an account? Sign in"}
-            </button>}
-          </form>
-        </CardContent>
-      </Card>
-    </main>
+            <Button variant="secondary" asChild>
+              <a href={authOAuthUrl("discord")}>Continue with Discord</a>
+            </Button>
+          </div>
+        )}
+        {!isFirstRunSetup && (
+          <div className="relative text-center text-xs text-muted-foreground">
+            <span className="bg-card px-2">or email</span>
+            <div className="absolute inset-x-0 top-1/2 -z-10 border-t border-border" />
+          </div>
+        )}
+        {mode === "register" && (
+          <AuthField label="Display name">
+            <Input
+              value={displayName}
+              onChange={(e) => setDisplayName(e.target.value)}
+              autoComplete="name"
+              required
+            />
+          </AuthField>
+        )}
+        <AuthField label="Email">
+          <Input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            autoComplete="email"
+            required
+          />
+        </AuthField>
+        <AuthField label="Password">
+          <Input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            autoComplete={mode === "login" ? "current-password" : "new-password"}
+            required
+          />
+        </AuthField>
+        <Button type="submit" className="w-full" size="shop" disabled={busy}>
+          {busy
+            ? "Please wait…"
+            : mode === "login"
+              ? "Sign in"
+              : isFirstRunSetup
+                ? "Create administrator"
+                : "Create account"}
+        </Button>
+        {mode === "login" && (
+          <Link
+            to="/forgot-password"
+            className="block text-center text-sm text-muted-foreground hover:text-primary hover:underline"
+          >
+            Forgot password?
+          </Link>
+        )}
+        {registrationOpen && !isFirstRunSetup && (
+          <button
+            type="button"
+            className="w-full text-center text-sm text-primary hover:underline"
+            onClick={() => setMode(mode === "login" ? "register" : "login")}
+          >
+            {mode === "login"
+              ? "Need an account? Register"
+              : "Already have an account? Sign in"}
+          </button>
+        )}
+      </form>
+    </AuthScreen>
   );
 }

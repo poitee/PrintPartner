@@ -162,7 +162,7 @@ export default function HelpPage() {
       <Card>
         <CardHeader accent>
           <div className="flex items-start gap-3">
-            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-accent-brand/10 text-accent-brand">
+            <span className="desk-well h-9 w-9 shrink-0">
               <Workflow className="h-4 w-4" aria-hidden />
             </span>
             <div>
@@ -174,7 +174,7 @@ export default function HelpPage() {
         <CardContent>
           <div className="grid gap-4 md:grid-cols-2">
             {WORKFLOW_GROUPS.map((group) => (
-              <section key={group.id} className="rounded-lg border border-border p-3">
+              <section key={group.id} className="desk-nameplate p-3">
                 <h3 className="font-medium">{group.label}</h3>
                 <p className="mt-1 text-xs text-muted-foreground">{group.description}</p>
                 <ol className="mt-3 grid gap-2">
@@ -185,9 +185,9 @@ export default function HelpPage() {
                       <li key={step.id}>
                         <Link
                           to={stepPaths[index]}
-                          className="flex h-full items-start gap-3 rounded-lg bg-muted/30 p-3 transition-colors hover:bg-muted/60"
+                          className="flex h-full items-start gap-3 rounded-lg p-3 transition-colors hover:bg-accent/70"
                         >
-                          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+                          <span className="desk-well h-7 w-7 shrink-0">
                             <StepIcon className="h-3.5 w-3.5" aria-hidden />
                           </span>
                           <span>
@@ -210,7 +210,7 @@ export default function HelpPage() {
       <Card id="kit-variants">
         <CardHeader accent>
           <div className="flex items-start gap-3">
-            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+            <span className="desk-well h-9 w-9 shrink-0">
               <Hammer className="h-4 w-4" aria-hidden />
             </span>
             <div>
@@ -265,7 +265,7 @@ export default function HelpPage() {
       <Card id="creating-a-manifest">
         <CardHeader accent>
           <div className="flex items-start gap-3">
-            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-info/10 text-info">
+            <span className="desk-well h-9 w-9 shrink-0">
               <BookOpen className="h-4 w-4" aria-hidden />
             </span>
             <div>
@@ -295,7 +295,7 @@ export default function HelpPage() {
       <Card>
         <CardHeader accent>
           <div className="flex items-start gap-3">
-            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+            <span className="desk-well h-9 w-9 shrink-0">
               <FolderGit2 className="h-4 w-4" aria-hidden />
             </span>
             <div>
@@ -357,7 +357,7 @@ export default function HelpPage() {
       <Card>
         <CardHeader accent>
           <div className="flex items-start gap-3">
-            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-accent-brand/10 text-accent-brand">
+            <span className="desk-well h-9 w-9 shrink-0">
               <FolderOpen className="h-4 w-4" aria-hidden />
             </span>
             <div>
@@ -393,7 +393,7 @@ export default function HelpPage() {
       <Card>
         <CardHeader accent>
           <div className="flex items-start gap-3">
-            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+            <span className="desk-well h-9 w-9 shrink-0">
               <Scale className="h-4 w-4" aria-hidden />
             </span>
             <div>

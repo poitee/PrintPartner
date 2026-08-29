@@ -3,6 +3,7 @@ import { toast } from "sonner";
 import { KeyRound } from "lucide-react";
 import { changePassword } from "../../api/endpoints/auth";
 import { Button } from "../ui/button";
+import { Input } from "../ui/input";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui/card";
 
 export default function AccountPasswordCard() {
@@ -43,30 +44,30 @@ export default function AccountPasswordCard() {
       </CardHeader>
       <CardContent className="space-y-3">
         <label className="block text-sm">
-          <span className="mb-1 block text-muted-foreground">Current password</span>
-          <input
+          <span className="mb-1.5 block text-muted-foreground">Current password</span>
+          <Input
             type="password"
-            className="w-full max-w-md rounded-md border border-border bg-background px-3 py-2 text-sm"
+            className="max-w-md"
             value={currentPassword}
             onChange={(e) => setCurrentPassword(e.target.value)}
             autoComplete="current-password"
           />
         </label>
         <label className="block text-sm">
-          <span className="mb-1 block text-muted-foreground">New password</span>
-          <input
+          <span className="mb-1.5 block text-muted-foreground">New password</span>
+          <Input
             type="password"
-            className="w-full max-w-md rounded-md border border-border bg-background px-3 py-2 text-sm"
+            className="max-w-md"
             value={newPassword}
             onChange={(e) => setNewPassword(e.target.value)}
             autoComplete="new-password"
           />
         </label>
         <label className="block text-sm">
-          <span className="mb-1 block text-muted-foreground">Confirm new password</span>
-          <input
+          <span className="mb-1.5 block text-muted-foreground">Confirm new password</span>
+          <Input
             type="password"
-            className="w-full max-w-md rounded-md border border-border bg-background px-3 py-2 text-sm"
+            className="max-w-md"
             value={confirmPassword}
             onChange={(e) => setConfirmPassword(e.target.value)}
             autoComplete="new-password"

@@ -40,6 +40,12 @@ const UTILITY_ICONS: Record<SpineUtilityId, typeof Layers> = {
 
 const WORKSHOP_IDS: SpineUtilityId[] = ["builds", "library", "production", "printers"];
 
+const NAV_RAIL =
+  "relative before:absolute before:inset-y-1.5 before:left-0 before:w-0.5 before:rounded-full before:content-['']";
+const NAV_ACTIVE = "bg-primary/12 font-semibold text-primary before:bg-primary";
+const NAV_IDLE =
+  "text-muted-foreground hover:bg-accent/70 hover:text-foreground before:bg-transparent";
+
 type Props = {
   onNavigate: (to: string, e: MouseEvent<HTMLAnchorElement>) => void;
 };
@@ -73,12 +79,12 @@ export default function MobileNavDrawer({ onNavigate }: Props) {
       }}
       className={({ isActive }) =>
         cn(
+          NAV_RAIL,
           "flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm font-medium transition-colors",
-          isActive
-            ? "bg-accent font-semibold text-accent-foreground"
-            : "text-muted-foreground hover:bg-accent/70 hover:text-foreground",
+          isActive ? NAV_ACTIVE : NAV_IDLE,
         )
       }
+      end
     >
       <item.icon className="h-4 w-4 shrink-0" />
       {item.label}
@@ -111,8 +117,8 @@ export default function MobileNavDrawer({ onNavigate }: Props) {
         </SheetHeader>
         <div className="flex flex-1 flex-col gap-4 overflow-y-auto p-3">
           <div className="space-y-2">
-            <DrawerGroupLabel>Current build</DrawerGroupLabel>
-            <div className="space-y-2 rounded-md border border-border bg-muted/30 p-2">
+            <DrawerGroupLabel>On the bench</DrawerGroupLabel>
+            <div className="desk-nameplate space-y-2 p-2">
               <PlanPicker className="w-full" />
               <CreatePlanButton className="w-full" variant="outline" size="sm" />
             </div>

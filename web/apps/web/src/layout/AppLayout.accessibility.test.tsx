@@ -23,12 +23,20 @@ vi.mock("../components/PlanPicker", () => ({ default: () => <button type="button
 vi.mock("../components/ui/sonner", () => ({ Toaster: () => null }));
 vi.mock("../hooks/useProfileUrlSync", () => ({ useProfileUrlSync: vi.fn() }));
 vi.mock("../hooks/useAppUpdateCheck", () => ({ useAppUpdateCheck: () => ({ updateCheck: null }) }));
+const workflowState = vi.hoisted(() => ({
+  stages: [] as Array<{ id: string; label: string }>,
+  activeId: null as string | null,
+}));
+const profileState = vi.hoisted(() => ({
+  selectedProfileId: null as number | null,
+  profiles: [] as Array<{ id: number; name: string }>,
+}));
 vi.mock("../hooks/useWorkflowStages", () => ({
-  useWorkflowStages: () => ({ stages: [], activeId: null }),
+  useWorkflowStages: () => workflowState,
 }));
 vi.mock("../hooks/useEngineHealth", () => ({ useEngineHealth: () => ({ health: { ok: true } }) }));
 vi.mock("../context/ProfileContext", () => ({
-  useProfileSelection: () => ({ selectedProfileId: null, profiles: [] }),
+  useProfileSelection: () => profileState,
 }));
 vi.mock("../context/ImportRulesSaveContext", () => ({
   useImportRulesSaveRegistry: () => ({ flushAll: vi.fn().mockResolvedValue(undefined) }),
@@ -64,6 +72,10 @@ vi.mock("../context/StlAutoSyncContext", () => ({
 
 describe("application shell accessibility", () => {
   beforeEach(() => {
+    workflowState.stages = [];
+    workflowState.activeId = null;
+    profileState.selectedProfileId = null;
+    profileState.profiles = [];
     Object.defineProperty(window, "matchMedia", {
       configurable: true,
       value: vi.fn().mockReturnValue({
@@ -123,7 +135,29 @@ describe("application shell accessibility", () => {
     expect(nav).toBeTruthy();
     const link = await screen.findByRole("link", { name: "Source Library" });
     expect(link.getAttribute("aria-current")).toBe("page");
-    expect(link.className).toContain("bg-accent");
+    expect(link.className).toContain("bg-primary/12");
+  });
+
+  it("names the current stage and Build in the instrument header", () => {
+    workflowState.stages = [{ id: "plan", label: "Plan" }];
+    workflowState.activeId = "plan";
+    profileState.selectedProfileId = 1;
+    profileState.profiles = [{ id: 1, name: "Voron 2.4" }];
+
+    const { container } = render(
+      <MemoryRouter initialEntries={["/plan"]}>
+        <Routes>
+          <Route element={<AppLayout />}>
+            <Route path="plan" element={<h1>Plan</h1>} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const chrome = container.querySelector("header");
+    expect(chrome?.textContent).toContain("Plan");
+    expect(chrome?.textContent).toContain("Voron 2.4");
+    expect(screen.getByRole("main").className).toContain("desk-canvas");
   });
 
   it("shows the STL sync banner when files are still missing", () => {

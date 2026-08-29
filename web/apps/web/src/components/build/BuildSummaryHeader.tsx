@@ -30,13 +30,13 @@ function chipClass(tone: BuildActiveWorkChip["tone"]): string {
 }
 
 /**
- * The shared Build header. Every stage page starts with the same block: which
- * Build and accepted revision the user is on, what is happening in the
- * background, and the one next action with a route to it.
+ * Current-state summary on every Build stage. The instrument header already
+ * names the Build. This block answers which accepted revision is in force,
+ * what is happening in the background, and the one next action.
  *
  * It reads the server-owned Build Workflow projection, so the browser and MCP
- * agree on status and next action. It is a current-state summary, not a stepper:
- * stage navigation stays in the rail.
+ * agree on status and next action. It is not a stepper. Stage navigation stays
+ * in the rail.
  */
 export default function BuildSummaryHeader({ currentStageId, className }: Props) {
   const { selectedProfileId } = useProfileSelection();
@@ -54,18 +54,12 @@ export default function BuildSummaryHeader({ currentStageId, className }: Props)
 
   return (
     <section
-      className={cn(
-        "rounded-lg border border-border bg-card",
-        className,
-      )}
+      className={cn("desk-nameplate", className)}
       aria-label="Build summary and next action"
       data-testid="build-summary-header"
     >
       <div className="flex flex-col gap-1 border-b border-border px-4 py-3">
-        <p className="truncate text-sm font-semibold text-foreground">
-          {workspace.build.name}
-        </p>
-        <p className="text-xs text-muted-foreground">
+        <p className="text-body text-muted-foreground">
           {summary.facts.join(" · ")}
         </p>
         {chips.length > 0 ? (
@@ -103,11 +97,7 @@ export default function BuildSummaryHeader({ currentStageId, className }: Props)
               <ArrowRight className="ml-1 h-4 w-4" aria-hidden />
             </Link>
           </Button>
-        ) : (
-          <p className="shrink-0 text-xs text-muted-foreground">
-            You are on {workspace.stages.find((s) => s.id === currentStageId)?.label ?? "this stage"}.
-          </p>
-        )}
+        ) : null}
       </div>
     </section>
   );
