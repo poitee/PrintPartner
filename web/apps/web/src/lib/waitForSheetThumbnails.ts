@@ -22,7 +22,9 @@ export function waitForSheetThumbnails(
     const check = () => {
       const thumbs = sheet.querySelectorAll<HTMLElement>(".sheet-thumb");
       const pending = [...thumbs].filter((thumb) => !sheetThumbnailIsReady(thumb)).length;
-      if (pending === 0) {
+      // Print prep remounts the sheet. Zero thumbs means the rows are not on
+      // the page yet, not that every picture is loaded.
+      if (thumbs.length > 0 && pending === 0) {
         resolve({ ready: true, pending: 0 });
         return;
       }

@@ -33,6 +33,14 @@ describe("waitForSheetThumbnails", () => {
     vi.useRealTimers();
   });
 
+  it("does not treat an empty sheet as ready while print prep is still mounting thumbs", async () => {
+    const sheet = document.createElement("div");
+    await expect(waitForSheetThumbnails(sheet, 0)).resolves.toEqual({
+      ready: false,
+      pending: 0,
+    });
+  });
+
   it("treats a thumb with no image as pending after timeout", async () => {
     const sheet = sheetWithThumbs([{ kind: "placeholder" }]);
     await expect(waitForSheetThumbnails(sheet, 0)).resolves.toEqual({
