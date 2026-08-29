@@ -14,15 +14,7 @@ function PageLoader() {
       role="status"
       aria-live="polite"
       aria-atomic="true"
-      style={{
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        height: "100vh",
-        opacity: 0.4,
-        fontSize: "0.875rem",
-        color: "var(--muted-foreground, #6b7280)",
-      }}
+      className="desk-canvas flex h-dvh items-center justify-center text-body text-muted-foreground"
     >
       Loading…
     </div>

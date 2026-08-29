@@ -669,7 +669,7 @@ export default function ExportPage() {
           <CardContent className="pt-6">
             <p className="text-sm text-muted-foreground">
               {engineState === "offline"
-                ? "Engine offline — start the print-partner engine to export."
+                ? "Engine offline — start the print-partner engine to use Production."
                 : "Connecting to the engine…"}
             </p>
           </CardContent>
@@ -695,7 +695,7 @@ export default function ExportPage() {
         <Card>
           <CardContent className="pt-6">
             <p className="text-sm text-muted-foreground">
-              Open a plan to send sliced files or export slicer input.
+              Open a Build to decide how Required units get made.
             </p>
           </CardContent>
         </Card>

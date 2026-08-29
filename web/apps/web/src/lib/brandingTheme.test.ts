@@ -97,6 +97,8 @@ describe("GRE-234 branding tokens", () => {
     expect(indexCss).not.toMatch(/--gradient-header:\s*linear-gradient/);
     expect(indexCss).not.toMatch(/--gradient-accent:\s*linear-gradient/);
     expect(indexCss).not.toMatch(/\.page-accent-bar::before[\s\S]*?background:\s*var\(--gradient-accent\)/);
+    expect(indexCss).toMatch(/\.desk-canvas\s*\{/);
+    expect(indexCss).toMatch(/\.desk-stage-active\s*\{/);
   });
 });
 

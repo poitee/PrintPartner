@@ -109,7 +109,7 @@ export default function WorkflowProgress({
                 "relative flex min-h-11 min-w-0 flex-1 flex-col items-center justify-center gap-0.5 rounded-md px-1 py-1 text-center transition-colors",
                 startsMake && "border-l border-border",
                 active
-                  ? "bg-primary/12 text-primary"
+                  ? "desk-stage-active text-primary"
                   : "text-muted-foreground hover:bg-accent/70 hover:text-foreground",
               )}
             >
@@ -167,7 +167,7 @@ export default function WorkflowProgress({
                 className={cn(
                   "relative flex items-center justify-center rounded-md p-2.5 transition-colors",
                   active
-                    ? "bg-primary/12 text-primary"
+                    ? "desk-stage-active text-primary"
                     : "text-muted-foreground hover:bg-accent/70 hover:text-foreground",
                   stage.status.kind === "not_started" && !active && "opacity-60",
                 )}
@@ -227,7 +227,7 @@ export default function WorkflowProgress({
               aria-label={stageAriaLabel(stage)}
               className={cn(
                 "relative flex items-start gap-2.5 rounded-md px-2.5 py-2 transition-colors",
-                active ? "bg-primary/12" : "hover:bg-accent/70",
+                active ? "desk-stage-active" : "hover:bg-accent/70",
               )}
             >
               <span

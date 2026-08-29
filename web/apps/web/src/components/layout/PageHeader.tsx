@@ -33,10 +33,7 @@ export default function PageHeader({
       <div className="min-w-0 flex-1">
         <div className="flex items-start gap-3">
           {Icon && (
-            <span
-              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-accent-brand/20 bg-accent-brand/10 text-accent-brand"
-              aria-hidden
-            >
+            <span className="desk-well h-10 w-10 shrink-0" aria-hidden>
               <Icon className="h-5 w-5" />
             </span>
           )}
@@ -44,7 +41,7 @@ export default function PageHeader({
             {eyebrow ? (
               <p className="eyebrow mb-1 text-muted-foreground">{eyebrow}</p>
             ) : null}
-            <h1 className="text-section">{title}</h1>
+            <h1 className="text-page">{title}</h1>
             {description && (
               <p className="mt-1 text-body text-muted-foreground">{description}</p>
             )}

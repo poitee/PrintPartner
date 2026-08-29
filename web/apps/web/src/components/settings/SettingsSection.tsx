@@ -8,11 +8,9 @@ type SettingsSectionProps = {
 
 export default function SettingsSection({ id, title, children }: SettingsSectionProps) {
   return (
-    <section id={id} className="scroll-mt-4 space-y-3">
-      <h2 className="text-sm font-semibold tracking-wide text-muted-foreground">
-        {title}
-      </h2>
-      <div className="space-y-4">{children}</div>
+    <section id={id} className="scroll-mt-4 stack-section">
+      <h2 className="section-heading">{title}</h2>
+      <div className="stack-section">{children}</div>
     </section>
   );
 }

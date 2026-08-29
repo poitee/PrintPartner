@@ -11,7 +11,7 @@ export default function DeskNextStep({ children, className }: Props) {
   return (
     <p
       className={cn(
-        "text-xs leading-snug text-muted-foreground",
+        "text-body leading-snug text-muted-foreground",
         className,
       )}
       data-testid="desk-next-step"

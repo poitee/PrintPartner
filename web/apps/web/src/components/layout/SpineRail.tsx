@@ -56,6 +56,12 @@ const UTILITY_ICONS: Record<
    flat and ordered in spineUtilityNav.ts (locked by siteChromeLabels tests). */
 const WORKSHOP_IDS: SpineUtilityId[] = ["builds", "library", "production", "printers"];
 
+const NAV_RAIL =
+  "relative before:absolute before:inset-y-1.5 before:left-0 before:w-0.5 before:rounded-full before:content-['']";
+const NAV_ACTIVE = "bg-primary/12 font-semibold text-primary before:bg-primary";
+const NAV_IDLE =
+  "text-muted-foreground hover:bg-accent/70 hover:text-foreground before:bg-transparent";
+
 function SidebarTooltip({
   label,
   collapsed,
@@ -99,10 +105,9 @@ function UtilityLink({
           to={link.to}
           onClick={(e) => onStageNavigate(link.to, e)}
           className={cn(
-            "relative flex items-center justify-center rounded-md p-2.5 transition-colors",
-            link.match
-              ? "bg-primary/12 text-primary"
-              : "text-muted-foreground hover:bg-accent/70 hover:text-foreground",
+            NAV_RAIL,
+            "flex items-center justify-center rounded-md p-2.5 transition-colors",
+            link.match ? NAV_ACTIVE : NAV_IDLE,
           )}
           aria-label={link.label}
         >
@@ -116,19 +121,13 @@ function UtilityLink({
       to={link.to}
       onClick={(e) => onStageNavigate(link.to, e)}
       className={cn(
-        "relative flex items-center gap-2.5 rounded-md px-2.5 py-2 transition-colors",
-        link.match
-          ? "bg-primary/12 text-primary"
-          : "text-muted-foreground hover:bg-accent/70 hover:text-foreground",
+        NAV_RAIL,
+        "flex items-center gap-2.5 rounded-md px-2.5 py-2 transition-colors",
+        link.match ? NAV_ACTIVE : NAV_IDLE,
       )}
     >
       <link.icon className="h-4 w-4 shrink-0" />
-      <span
-        className={cn(
-          "min-w-0 flex-1 text-sm font-medium",
-          link.match && "font-semibold",
-        )}
-      >
+      <span className="min-w-0 flex-1 text-sm font-medium">
         {link.label}
       </span>
     </NavLink>
@@ -174,9 +173,9 @@ export default function SpineRail({
       </div>
 
       <div className={cn("flex flex-1 flex-col gap-3 overflow-y-auto", collapsed ? "p-2" : "p-3")}>
-        <GroupHeading collapsed={collapsed}>Current build</GroupHeading>
+        <GroupHeading collapsed={collapsed}>On the bench</GroupHeading>
         {!collapsed ? (
-          <div className="space-y-2 rounded-md border border-border bg-muted/30 p-2">
+          <div className="desk-nameplate space-y-2 p-2">
             <PlanPicker className="w-full" />
             <CreatePlanButton className="w-full" variant="outline" size="sm" />
           </div>

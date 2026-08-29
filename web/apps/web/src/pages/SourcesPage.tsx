@@ -835,7 +835,7 @@ export default function SourcesPage() {
       />
       <DeskNextStep>{libraryNextStep}</DeskNextStep>
 
-      <div className="overflow-hidden rounded-xl border border-border bg-background lg:grid lg:min-h-[min(70vh,720px)] lg:grid-cols-[178px_minmax(0,1fr)]">
+      <div className="overflow-hidden rounded-xl border border-border bg-card lg:grid lg:min-h-[min(70vh,720px)] lg:grid-cols-[178px_minmax(0,1fr)]">
         <LibraryCategoryRail
           className="hidden lg:flex"
           categories={categories}

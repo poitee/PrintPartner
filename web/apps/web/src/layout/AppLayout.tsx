@@ -107,6 +107,7 @@ export default function AppLayout() {
       isPartsPath(location.pathname) ||
       isProgressPath(location.pathname) ||
       isExportPath(location.pathname));
+  const activeStage = stages.find((stage) => stage.id === activeId) ?? null;
 
   return (
     <TooltipProvider delayDuration={300}>
@@ -127,14 +128,19 @@ export default function AppLayout() {
 
           <div className="flex min-w-0 flex-1 flex-col">
             <header
-              className="flex items-center justify-between gap-2 border-b border-border bg-card px-3 py-2.5 sm:gap-4 sm:px-5 print:hidden"
+              className="flex items-center justify-between gap-2 border-b border-border bg-card/90 px-3 py-2.5 backdrop-blur-md sm:gap-4 sm:px-5 print:hidden"
             >
               <div className="flex min-w-0 flex-1 items-center gap-2 text-sm">
                 <MobileNavDrawer onNavigate={onPipelineNavigate} />
                 {showPlanInHeader && activePlanName ? (
-                  <span className="min-w-0 truncate text-muted-foreground">
-                    <span className="font-medium text-foreground">{activePlanName}</span>
-                  </span>
+                  <div className="min-w-0">
+                    {activeStage ? (
+                      <p className="eyebrow leading-none">{activeStage.label}</p>
+                    ) : null}
+                    <p className="truncate font-serif text-[15px] font-semibold tracking-[-0.01em] text-foreground">
+                      {activePlanName}
+                    </p>
+                  </div>
                 ) : null}
               </div>
               <div className="flex min-w-0 items-center gap-2 sm:justify-end">
@@ -149,7 +155,7 @@ export default function AppLayout() {
               id="main-content"
               tabIndex={-1}
               className={cn(
-                "flex-1 overflow-x-hidden overflow-y-auto p-3 sm:p-5 print:overflow-visible print:p-0",
+                "desk-canvas flex-1 overflow-x-hidden overflow-y-auto p-3 sm:p-5 print:overflow-visible print:p-0",
                 // Reserve the fixed chrome so a running job or the mobile nav row
                 // never covers the end of the page.
                 "pb-[calc(var(--mobile-stage-height,0px)+var(--job-tray-height,0px)+2rem)]",

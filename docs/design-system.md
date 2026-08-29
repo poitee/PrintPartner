@@ -30,6 +30,12 @@ Dark separates by value: the step from base to raised is 1.24:1, raised to overl
 `Card` takes `surface="raised" | "flat" | "sunken"`. A `sunken` card inside a raised
 card reads as a well. Do not stack raised on raised.
 
+`.desk-canvas` is the page itself: `--surface-base` plus a faint brass radial wash.
+`<main>` and the auth screens use it. It is not `--gradient-header`. `.desk-nameplate`
+is the sunken plate for the current Build picker. `.desk-well` is the icon well on a
+page header. `.desk-stage-active` outlines the current workflow stage without shifting
+layout.
+
 ### Text contrast
 
 Ratios by surface (sunken / base / raised / overlay).
@@ -111,7 +117,8 @@ All three are `flex-direction: column` with a gap and `min-width: 0`, so long
 filenames truncate instead of pushing the layout wide.
 
 `.eyebrow` is the mono uppercase label above a title. `.section-heading` is the
-18px semibold section label.
+18px semibold section label. Page titles use `text-page` (28px). The instrument
+header names the current Build stage and the Build in serif at 15px.
 
 ## Status
 

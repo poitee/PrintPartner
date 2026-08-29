@@ -208,7 +208,7 @@ export default function PrintersPage() {
         description="Live status, files, cameras, and manual tracking for every workshop printer."
         actions={
           <PageHeaderActions>
-            <Button size="sm" variant="outline" asChild>
+            <Button asChild>
               <Link to={settingsPrintersRoute()}>Add printer</Link>
             </Button>
           </PageHeaderActions>
