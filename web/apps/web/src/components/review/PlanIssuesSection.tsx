@@ -11,8 +11,8 @@ import { cn } from "@/lib/utils";
 /**
  * Step 3 of the Plan checkpoint: every open question in one place.
  *
- * "Must resolve" holds the items that stop acceptance. "Review recommended"
- * holds items that acceptance allows but Production or the shop floor will
+ * "Before publishing" holds choices publication needs. "Worth checking"
+ * holds items that publication allows but Production or the shop floor will
  * feel. The summary at the top links to each one, following the GOV.UK error
  * summary pattern, and every item carries its state as text.
  */
@@ -211,10 +211,10 @@ export default function PlanIssuesSection() {
       >
         <h3 id="plan-issue-summary-heading" className="text-sm font-semibold">
           {model.mustResolve.length > 0
-            ? `${model.mustResolve.length} of ${model.issues.length} issues block acceptance`
+            ? `${model.mustResolve.length} ${model.mustResolve.length === 1 ? "choice" : "choices"} before publishing`
             : model.working
-              ? `${model.issues.length} issues to check before you accept`
-              : `${model.issues.length} issues to review`}
+              ? `${model.issues.length} ${model.issues.length === 1 ? "item" : "items"} worth checking before publishing`
+              : `${model.issues.length} ${model.issues.length === 1 ? "item" : "items"} to review`}
         </h3>
         <ul className="mt-1.5 space-y-1 text-sm">
           {model.issues.map((issue) => (
@@ -229,15 +229,15 @@ export default function PlanIssuesSection() {
 
       {renderGroup(
         "plan-issues-must-resolve",
-        "Must resolve",
-        "Acceptance stays blocked until these are done.",
+        "Before publishing",
+        "Complete these choices so PrintPartner can publish a fixed revision for Production.",
         model.mustResolve,
         true,
       )}
       {renderGroup(
         "plan-issues-review-recommended",
-        "Review recommended",
-        "These do not block acceptance. They change what Production and Checkoff can do.",
+        "Worth checking",
+        "These can change what Production and Checkoff can do after publication.",
         model.reviewRecommended,
         false,
       )}

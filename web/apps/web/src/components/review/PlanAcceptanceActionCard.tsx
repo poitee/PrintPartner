@@ -6,9 +6,14 @@ import { usePlanAcceptance } from "./PlanAcceptanceContext";
 import { cn } from "@/lib/utils";
 
 /**
- * Accept the Working Plan. Hidden when there is nothing to accept.
- * Printed-unit impact sits next to the action so the operator sees the
- * consequence in the same place they confirm it.
+ * Step 7 of the Plan checkpoint: publish the revision for Production.
+ *
+ * Required-unit impact stays beside the publication action so the operator
+ * sees the consequence in the same place they confirm it.
+ *
+ * A failed attempt stays on the page with Retry. The user's quantity, inclusion
+ * and Required-unit answers are untouched, so Retry repeats the publication
+ * rather than restarting the review.
  */
 export default function PlanAcceptanceActionCard() {
   const { model, busy, failure, accept } = usePlanAcceptance();
@@ -23,7 +28,7 @@ export default function PlanAcceptanceActionCard() {
       className="rounded-lg border border-primary/40 bg-card p-4 shadow-sm"
     >
       <h2 id="plan-acceptance-heading" className="text-sm font-semibold">
-        Accept this revision
+        Publish for Production
       </h2>
       {impact.kind === "ready" ? (
         <dl className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
@@ -43,9 +48,9 @@ export default function PlanAcceptanceActionCard() {
       ) : null}
       <div className="mt-3">
         <PlanDraftApplyButton
-          decision={model.decision}
+          publication={model.publication}
           busy={busy}
-          onAccept={() => accept()}
+          onPublish={() => accept()}
         />
       </div>
       {failure?.kind === "error" && (
@@ -58,7 +63,7 @@ export default function PlanAcceptanceActionCard() {
         >
           <CircleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
           <div className="min-w-0 flex-1">
-            <p className="font-medium text-foreground">Acceptance did not complete</p>
+            <p className="font-medium text-foreground">Publishing did not complete</p>
             <p className="mt-0.5 text-xs text-muted-foreground">{failure.message}</p>
             <Button
               type="button"
@@ -68,7 +73,7 @@ export default function PlanAcceptanceActionCard() {
               disabled={busy}
               onClick={() => accept()}
             >
-              Retry acceptance
+              Retry publishing
             </Button>
           </div>
         </div>

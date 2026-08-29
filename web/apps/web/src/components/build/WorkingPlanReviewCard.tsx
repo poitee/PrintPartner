@@ -1,6 +1,8 @@
+import { useState } from "react";
 import { usePlanWorkspace } from "../../context/PlanWorkspaceContext";
 import { workingChangeFieldLabels } from "../../lib/planAcceptanceModel";
 import { usePlanAcceptance } from "../review/PlanAcceptanceContext";
+import { Button } from "../ui/button";
 
 type ChangeRow = {
   readonly key: string;
@@ -18,10 +20,37 @@ type ChangeRow = {
  * is comparing two revisions of their own Build, not managing a draft record.
  */
 export default function WorkingPlanReviewCard() {
-  const { model } = usePlanAcceptance();
+  const { model, busy, prepareWorkingPlan } = usePlanAcceptance();
   const { draftWorkspace } = usePlanWorkspace();
   const working = model.working;
-  if (!working) return null;
+  const [expanded, setExpanded] = useState(false);
+
+  if (!working) {
+    return (
+      <section
+        id="plan-working-changes"
+        aria-labelledby="plan-working-changes-heading"
+        className="rounded-lg border border-border bg-card p-4 shadow-sm"
+      >
+        <h2 id="plan-working-changes-heading" className="text-sm font-semibold">
+          Create a Working Plan
+        </h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Build one from the current Sources to review parts and quantities before publishing.
+        </p>
+        <Button
+          type="button"
+          variant="secondary"
+          className="mt-3 min-h-11"
+          disabled={busy}
+          loading={busy}
+          onClick={prepareWorkingPlan}
+        >
+          Build Working Plan from Sources
+        </Button>
+      </section>
+    );
+  }
 
   const rows: ChangeRow[] = draftWorkspace
     ? [
@@ -65,8 +94,9 @@ export default function WorkingPlanReviewCard() {
         Working Plan changes
       </h2>
       <p className="mt-1 text-sm text-muted-foreground">
-        Not accepted yet. Production and Checkoff keep using the Accepted revision until you
-        accept.
+        {model.accepted.planVersion == null
+          ? "Publishing this Working Plan creates the fixed part list Production and Checkoff will use."
+          : "Not published yet. Production and Checkoff keep using the published revision until you publish this one."}
       </p>
 
       <dl className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -85,43 +115,59 @@ export default function WorkingPlanReviewCard() {
 
       {rows.length > 0 && (
         <>
-          <ul className="mt-3 space-y-2 md:hidden">
-            {rows.map((row) => (
-              <li key={row.key} className="rounded-md border border-border p-3 text-sm">
-                <p className="font-medium">{row.filename}</p>
-                <p className="text-xs text-muted-foreground">{row.path}</p>
-                <p className="mt-1">{row.change}</p>
-                <p className="text-xs text-muted-foreground">
-                  Working quantity {row.quantity} · {row.inclusion}
-                </p>
-              </li>
-            ))}
-          </ul>
-          <div className="mt-3 hidden overflow-x-auto rounded-md border border-border md:block">
-            <table className="w-full text-left text-sm">
-              <caption className="sr-only">Parts changed by the Working Plan</caption>
-              <thead className="bg-muted/40 text-xs text-muted-foreground">
-                <tr>
-                  <th scope="col" className="px-3 py-2 font-medium">Part</th>
-                  <th scope="col" className="px-3 py-2 font-medium">Change</th>
-                  <th scope="col" className="px-3 py-2 font-medium">Working quantity</th>
-                  <th scope="col" className="px-3 py-2 font-medium">Working inclusion</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((row) => (
-                  <tr key={row.key} className="border-t border-border">
-                    <td className="px-3 py-2">
-                      <span className="font-medium">{row.filename}</span>
-                      <span className="block text-xs text-muted-foreground">{row.path}</span>
-                    </td>
-                    <td className="px-3 py-2">{row.change}</td>
-                    <td className="px-3 py-2 tabular-nums">{row.quantity}</td>
-                    <td className="px-3 py-2">{row.inclusion}</td>
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            className="mt-3 min-h-11 print:hidden"
+            aria-expanded={expanded}
+            aria-controls="working-plan-change-details"
+            onClick={() => setExpanded((current) => !current)}
+          >
+            {expanded ? "Hide part changes" : `Show ${rows.length} part changes`}
+          </Button>
+          <div
+            id="working-plan-change-details"
+            className={expanded ? "mt-3" : "mt-3 hidden print:block"}
+          >
+            <ul className="space-y-2 md:hidden print:hidden">
+              {rows.map((row) => (
+                <li key={row.key} className="rounded-md border border-border p-3 text-sm">
+                  <p className="font-medium">{row.filename}</p>
+                  <p className="text-xs text-muted-foreground">{row.path}</p>
+                  <p className="mt-1">{row.change}</p>
+                  <p className="text-xs text-muted-foreground">
+                    Working quantity {row.quantity} · {row.inclusion}
+                  </p>
+                </li>
+              ))}
+            </ul>
+            <div className="hidden overflow-x-auto rounded-md border border-border md:block print:block">
+              <table className="w-full text-left text-sm">
+                <caption className="sr-only">Parts changed by the Working Plan</caption>
+                <thead className="bg-muted/40 text-xs text-muted-foreground">
+                  <tr>
+                    <th scope="col" className="px-3 py-2 font-medium">Part</th>
+                    <th scope="col" className="px-3 py-2 font-medium">Change</th>
+                    <th scope="col" className="px-3 py-2 font-medium">Working quantity</th>
+                    <th scope="col" className="px-3 py-2 font-medium">Working inclusion</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {rows.map((row) => (
+                    <tr key={row.key} className="border-t border-border">
+                      <td className="px-3 py-2">
+                        <span className="font-medium">{row.filename}</span>
+                        <span className="block text-xs text-muted-foreground">{row.path}</span>
+                      </td>
+                      <td className="px-3 py-2">{row.change}</td>
+                      <td className="px-3 py-2 tabular-nums">{row.quantity}</td>
+                      <td className="px-3 py-2">{row.inclusion}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         </>
       )}

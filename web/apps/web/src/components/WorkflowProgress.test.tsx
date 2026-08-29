@@ -3,14 +3,15 @@
 import type { BuildWorkflowWorkspace } from "@print-partner/contracts";
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { describe, expect, it, vi } from "vitest";
-import BuildWorkflowNextAction from "./BuildWorkflowNextAction";
+import { describe, expect, it } from "vitest";
+import { buildWorkflowStages } from "../lib/workflowStages";
+import WorkflowProgress from "./WorkflowProgress";
 
 const workspace = {
-  build: { id: 7, name: "Clockwork Dragon" },
+  build: { id: 5, name: "Voron Trident" },
   sources: { kind: "ready", attached_count: 2 },
   accepted_plan: { kind: "none" },
-  working_plan: { kind: "ready", draft_id: 9, change_count: 4 },
+  working_plan: { kind: "needs_attention", draft_id: 9, change_count: 102, issue_count: 5 },
   stages: [
     {
       id: "sources",
@@ -22,7 +23,11 @@ const workspace = {
       id: "plan",
       group: "prepare",
       label: "Plan",
-      status: { kind: "ready", summary: "Working Plan has 4 changes to review." },
+      status: {
+        kind: "needs_attention",
+        summary: "5 Plan choices to finish before publishing.",
+        task_count: 5,
+      },
     },
     {
       id: "production",
@@ -44,11 +49,12 @@ const workspace = {
     },
   ],
   next_action: {
-    kind: "accept_working_plan",
+    kind: "resolve_plan_issues",
     stage_id: "plan",
     draft_id: 9,
-    label: "Review and publish Working Plan",
-    reason: "Publishing fixes the part list and creates the required-unit identities Production and Checkoff track.",
+    issue_count: 5,
+    label: "Review 5 Plan choices",
+    reason: "Complete these choices before publishing the Plan for Production.",
   },
   active_work: {
     queued_jobs: 0,
@@ -62,28 +68,22 @@ const workspace = {
   },
 } satisfies BuildWorkflowWorkspace;
 
-vi.mock("../../context/ProfileContext", () => ({
-  useProfileSelection: () => ({ selectedProfileId: 7 }),
-}));
-
-vi.mock("../../queries/buildWorkflow", () => ({
-  useBuildWorkflowQuery: () => ({ data: workspace }),
-}));
-
-describe("BuildWorkflowNextAction", () => {
-  it("uses the shared action and links to its owning workspace", () => {
+describe("WorkflowProgress", () => {
+  it("shows contextual stage summaries and keeps every stage navigable", () => {
     render(
       <MemoryRouter>
-        <BuildWorkflowNextAction currentStageId="sources" />
+        <WorkflowProgress
+          stages={buildWorkflowStages(workspace, 5)}
+          activeId="plan"
+        />
       </MemoryRouter>,
     );
 
-    expect(screen.getByText("Review and publish Working Plan")).toBeTruthy();
-    expect(screen.getByText(
-      "Publishing fixes the part list and creates the required-unit identities Production and Checkoff track.",
-    )).toBeTruthy();
-    expect(screen.getByRole("link", { name: "Open Plan" }).getAttribute("href")).toBe(
-      "/plan?profile=7",
-    );
+    expect(screen.queryByText("Needs attention")).toBeNull();
+    expect(screen.getByText("5 Plan choices to finish before publishing.")).toBeTruthy();
+    expect(screen.getAllByRole("link")).toHaveLength(4);
+    expect(screen.getByRole("link", {
+      name: "Plan. 5 Plan choices to finish before publishing.",
+    }).getAttribute("href")).toBe("/plan?profile=5");
   });
 });

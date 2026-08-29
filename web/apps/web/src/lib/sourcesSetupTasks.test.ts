@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   assistantChangeSummary,
   sourcesSetupTasks,
-  workingPlanUpdateReason,
   type SourcesSetupInput,
   type SourcesSetupTaskId,
 } from "./sourcesSetupTasks";
@@ -20,14 +19,9 @@ function input(overrides: Partial<SourcesSetupInput> = {}): SourcesSetupInput {
     buildId: 1,
     specialRequest: null,
     sources: [baseSource],
-    partCount: 6,
-    reviewIssues: [],
     mergeConflictCount: 0,
     roleFilaments: [],
-    freshness: { status: "current" },
-    planning: null,
     syncing: false,
-    updatingWorkingPlan: false,
     ...overrides,
   };
 }
@@ -42,9 +36,9 @@ describe("sourcesSetupTasks", () => {
 
     expect(setup.ready).toBe(true);
     expect(setup.primary).toEqual({
-      label: "Review Working Plan",
-      reason: "The inputs are ready. Review and accept the Plan.",
-      action: { kind: "route", label: "Review Working Plan", to: "/plan?profile=1" },
+      label: "Open Plan",
+      reason: "Sources are ready. Create or review the Working Plan on Plan.",
+      action: { kind: "route", label: "Open Plan", to: "/plan?profile=1" },
     });
   });
 
@@ -53,15 +47,6 @@ describe("sourcesSetupTasks", () => {
       input({
         sources: [baseSource, { ...baseSource, id: 2, name: "Mods", layerType: "addon" }],
         roleFilaments: [{ role: "primary", part_count: 3, filament_color_id: null }],
-        planning: {
-          planning_phase: { kind: "preparing" },
-          readiness: { ready: false, blockers: [{ code: "source_role", detail: "pick a role" }] },
-          grouped_difference_count: 3,
-        },
-        freshness: {
-          status: "untracked",
-          reasons: [{ kind: "source_revision_untracked", source_name: "Mods" }],
-        },
       }),
     );
 
@@ -72,13 +57,11 @@ describe("sourcesSetupTasks", () => {
       "sync-sources",
       "resolve-differences",
       "assign-colors",
-      "review-assistant",
-      "update-working-plan",
     ]);
   });
 
   it("hides the optional-source and difference tasks before a base source exists", () => {
-    const setup = sourcesSetupTasks(input({ sources: [], partCount: 0 }));
+    const setup = sourcesSetupTasks(input({ sources: [] }));
 
     expect(ids(setup)).toEqual(["confirm-request", "attach-base"]);
     expect(setup.primary.label).toBe("Attach a base source");
@@ -89,10 +72,6 @@ describe("sourcesSetupTasks", () => {
     const setup = sourcesSetupTasks(
       input({
         sources: [{ ...baseSource, synced: false }],
-        reviewIssues: [
-          { code: "unsynced_source", severity: "blocker", message: "Source is not synced." },
-          { code: "missing_stl", severity: "blocker", message: "STL not found on disk: a.stl" },
-        ],
         roleFilaments: [{ role: "primary", part_count: 3, filament_color_id: null }],
       }),
     );
@@ -105,10 +84,39 @@ describe("sourcesSetupTasks", () => {
     const sync = setup.tasks.find((task) => task.id === "sync-sources");
     expect(sync?.state).toBe("needs_attention");
     expect(sync?.statusLabel).toBe("Not synced");
-    // The sync task owns the unsynced blocker; differences report the rest.
-    expect(setup.tasks.find((task) => task.id === "resolve-differences")?.statusLabel).toBe(
-      "1 file problem",
+    expect(setup.tasks.find((task) => task.id === "resolve-differences")).toBeUndefined();
+  });
+
+  it("does not claim sources agree while any attached source is still arriving", () => {
+    const setup = sourcesSetupTasks(
+      input({
+        sources: [
+          baseSource,
+          { ...baseSource, id: 2, name: "Mods", layerType: "addon", synced: false },
+        ],
+      }),
     );
+
+    expect(setup.tasks.find((task) => task.id === "resolve-differences")).toBeUndefined();
+    expect(setup.primary.action).toEqual({
+      kind: "handler",
+      label: "Sync sources",
+      handler: "sync_sources",
+    });
+  });
+
+  it("holds file comparison until every source is current, even with known conflicts", () => {
+    const setup = sourcesSetupTasks(
+      input({
+        sources: [
+          baseSource,
+          { ...baseSource, id: 2, name: "Mods", layerType: "addon", updatesAvailable: true },
+        ],
+        mergeConflictCount: 2,
+      }),
+    );
+
+    expect(setup.tasks.find((task) => task.id === "resolve-differences")).toBeUndefined();
   });
 
   it("reports a running sync as background work with no action", () => {
@@ -120,27 +128,24 @@ describe("sourcesSetupTasks", () => {
     expect(sync?.state).toBe("in_progress");
     expect(sync?.statusLabel).toBe("Syncing sources");
     expect(sync?.action).toBeUndefined();
-    expect(setup.primary.label).toBe("Review Working Plan");
+    expect(setup.primary.label).toBe("Open Plan");
   });
 
   it("puts name conflicts ahead of other file problems", () => {
     const setup = sourcesSetupTasks(
       input({
         mergeConflictCount: 2,
-        reviewIssues: [
-          { code: "missing_stl", severity: "blocker", message: "STL not found on disk: a.stl" },
-        ],
       }),
     );
 
     expect(setup.primary.action).toEqual({
       kind: "handler",
-      label: "Review differences",
+      label: "Choose files",
       handler: "resolve_differences",
     });
     expect(
       setup.tasks.find((task) => task.id === "resolve-differences")?.statusLabel,
-    ).toBe("Needs your decision");
+    ).toBe("2 choices");
   });
 
   it("names the roles that still need a filament", () => {
@@ -160,48 +165,16 @@ describe("sourcesSetupTasks", () => {
     expect(setup.primary.label).toBe("Assign colors");
   });
 
-  it("asks for a Working Plan update instead of a rebuild button", () => {
-    const setup = sourcesSetupTasks(
-      input({
-        freshness: {
-          status: "stale",
-          reasons: [{ kind: "source_revision_changed", source_name: "Voron 2.4 LDO Kit" }],
-          untracked_sources: [],
-        },
-      }),
-    );
-    const update = setup.tasks.find((task) => task.id === "update-working-plan");
+  it("does not invent Plan or file work from an otherwise-ready first build", () => {
+    const setup = sourcesSetupTasks(input());
+    const text = setup.tasks
+      .flatMap((task) => [task.label, task.hint ?? "", task.statusLabel])
+      .join(" ");
 
-    expect(update?.label).toBe("Update Working Plan");
-    expect(update?.statusLabel).toBe("Out of date");
-    expect(update?.hint).toBe("Voron 2.4 LDO Kit has newer files.");
-    expect(setup.primary.action).toEqual({
-      kind: "handler",
-      label: "Update Working Plan",
-      handler: "update_working_plan",
-    });
-  });
-
-  it("gives every pending assistant state an action", () => {
-    for (const phase of [
-      { kind: "preparing" },
-      { kind: "draft", draft_id: 4 },
-      { kind: "abandoned", draft_id: 4 },
-      { kind: "missing_draft", draft_id: 4 },
-      { kind: "applied", draft_id: 4, revision_id: 2 },
-    ] as const) {
-      const setup = sourcesSetupTasks(
-        input({
-          planning: {
-            planning_phase: phase,
-            readiness: { ready: true, blockers: [] },
-            grouped_difference_count: 1,
-          },
-        }),
-      );
-      const assistant = setup.tasks.find((task) => task.id === "review-assistant");
-      expect(assistant?.action, `${phase.kind} has no action`).toBeDefined();
-    }
+    expect(text).not.toContain("file problem");
+    expect(text).not.toContain("No parts yet");
+    expect(ids(setup)).not.toContain("update-working-plan");
+    expect(ids(setup)).not.toContain("review-assistant");
   });
 
   it("summarises assistant proposals in human words", () => {
@@ -231,20 +204,4 @@ describe("sourcesSetupTasks", () => {
     ).toBeNull();
   });
 
-  it("explains why the Working Plan is out of date", () => {
-    expect(workingPlanUpdateReason({ status: "current" })).toBeNull();
-    expect(
-      workingPlanUpdateReason({
-        status: "untracked",
-        reasons: [{ kind: "source_revision_untracked", source_name: "Kit" }],
-      }),
-    ).toBe("The Working Plan does not record which revision of Kit it used.");
-    expect(
-      workingPlanUpdateReason({
-        status: "stale",
-        reasons: [{ kind: "naming_rules_changed", source_name: "Kit" }],
-        untracked_sources: [],
-      }),
-    ).toBe("Part naming rules changed since the Working Plan was built.");
-  });
 });

@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 
 /**
- * Plan is the acceptance checkpoint. This drives the real decision path:
- * a blocked Accept, the Required-unit answers that unblock it, and the durable
+ * Plan is the publication checkpoint. This drives the real decision path:
+ * pending choices, the Required-unit answers that complete them, and the durable
  * receipt that stays on the page afterwards. Only the engine HTTP layer is
  * mocked.
  */
@@ -13,7 +13,11 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import type { PlanDraftWorkspace } from "@print-partner/contracts";
-import { applyPlanDraft, reconcilePlanDraft } from "../../api/endpoints/planDrafts";
+import {
+  applyPlanDraft,
+  recomputePlanDraft,
+  reconcilePlanDraft,
+} from "../../api/endpoints/planDrafts";
 import type {
   BuildPlanningState,
   PlanReview,
@@ -259,6 +263,7 @@ beforeEach(() => {
   state.planningArgs.length = 0;
   state.setWorkspace(unresolvedWorkspace());
   vi.mocked(reconcilePlanDraft).mockReset();
+  vi.mocked(recomputePlanDraft).mockReset();
   vi.mocked(applyPlanDraft).mockReset();
 });
 
@@ -267,35 +272,42 @@ afterEach(() => {
 });
 
 describe("Plan acceptance checkpoint", () => {
-  it("shows the accepted revision and the working change counts", async () => {
+  it("shows the published revision and the working change counts", async () => {
+    const user = userEvent.setup();
     renderPlan();
-    expect(await screen.findByText("Plan revision 1 accepted")).toBeTruthy();
+    expect(await screen.findByText("Plan revision 1 published")).toBeTruthy();
     expect(screen.getByText(
-      "Production and Checkoff still use this revision until you accept the working changes below.",
+      "Production and Checkoff still use this revision until you publish the working changes below.",
     )).toBeTruthy();
     const changes = screen.getByRole("region", { name: "Working Plan changes" });
     expect(changes.textContent).toContain("Changed quantity");
-    expect(changes.textContent).toContain("Not accepted yet");
+    expect(changes.textContent).toContain("Not published yet");
+    const toggle = screen.getByRole("button", { name: "Show 1 part changes" });
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(document.getElementById("working-plan-change-details")?.className).toContain("print:block");
+    await user.click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByRole("button", { name: "Hide part changes" })).toBeTruthy();
   });
 
-  it("does not claim Production uses a revision that has not been accepted", async () => {
+  it("does not claim Production uses a revision that has not been published", async () => {
     state.review = { ...baseReview(), accepted_basis: null };
     renderPlan();
-    expect(await screen.findByText("No Plan revision accepted yet")).toBeTruthy();
+    expect(await screen.findByText("No Plan revision published yet")).toBeTruthy();
     expect(screen.getByText(
-      "Accept a Working Plan before Production and Checkoff can start.",
+      "Publish a Working Plan before Production and Checkoff can start.",
     )).toBeTruthy();
     expect(screen.queryByText(/still use this revision/)).toBeNull();
   });
 
-  it("blocks acceptance while a Required-unit decision is open, and says why", async () => {
+  it("names the choice needed before publication", async () => {
     renderPlan();
-    const accept = await screen.findByRole("button", { name: "Accept Plan revision" });
-    expect(accept.hasAttribute("disabled")).toBe(true);
+    const publish = await screen.findByRole("button", { name: "Publish Plan for Production" });
+    expect(publish.hasAttribute("disabled")).toBe(true);
     expect(screen.getByText(
-      'Acceptance is blocked. Resolve 1 item under "Must resolve" first.',
+      'Complete 1 choice under "Before publishing" first.',
     )).toBeTruthy();
-    expect(screen.getByRole("heading", { name: /Must resolve \(1\)/ })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: /Before publishing \(1\)/ })).toBeTruthy();
     // The summary links to the control that fixes the issue.
     const link = screen.getByRole("link", {
       name: "part-1.stl: choose what happens to units already printed",
@@ -303,7 +315,25 @@ describe("Plan acceptance checkpoint", () => {
     expect(link.getAttribute("href")).toBe("#plan-issue-required-unit-11");
   });
 
-  it("shows an assistant-review blocker and disables acceptance", async () => {
+  it("builds the first Working Plan from the Plan page", async () => {
+    const user = userEvent.setup();
+    state.setWorkspace(null);
+    vi.mocked(recomputePlanDraft).mockImplementation(async () => {
+      const next = resolvedWorkspace();
+      state.setWorkspace(next);
+      return next;
+    });
+
+    renderPlan();
+    await user.click(await screen.findByRole("button", {
+      name: "Build Working Plan from Sources",
+    }));
+
+    await waitFor(() => expect(recomputePlanDraft).toHaveBeenCalledWith(7));
+    expect(await screen.findByRole("button", { name: "Show 1 part changes" })).toBeTruthy();
+  });
+
+  it("shows an assistant-review choice and keeps publication unavailable", async () => {
     state.setWorkspace(resolvedWorkspace());
     state.planning = {
       planning_phase: { kind: "applied", draft_id: 16, revision_id: 2 },
@@ -324,44 +354,44 @@ describe("Plan acceptance checkpoint", () => {
     renderPlan();
 
     expect(await screen.findAllByText("This Working Plan has not been reviewed")).toHaveLength(2);
-    expect(screen.getByRole("button", { name: "Accept Plan revision" }).hasAttribute("disabled"))
+    expect(screen.getByRole("button", { name: "Publish Plan for Production" }).hasAttribute("disabled"))
       .toBe(true);
   });
 
   it("reads assistant planning for the selected Build and the open Working Plan", async () => {
     state.setWorkspace(resolvedWorkspace());
     renderPlan();
-    await screen.findByRole("button", { name: "Accept Plan revision" });
+    await screen.findByRole("button", { name: /Publish Plan/ });
     // Wrong ids here would still leave every other test green, so assert them.
     expect(state.planningArgs.at(-1)).toEqual({ planId: 7, draftId: 9 });
   });
 
-  it("keeps acceptance off while the planning checks are still loading", async () => {
+  it("shows that publication is checking the Working Plan", async () => {
     state.setWorkspace(resolvedWorkspace());
     state.planningPending = true;
 
     renderPlan();
 
-    const accept = await screen.findByRole("button", { name: "Accept Plan revision" });
-    expect(accept.hasAttribute("disabled")).toBe(true);
+    const publish = await screen.findByRole("button", { name: "Publish Plan for Production" });
+    expect(publish.hasAttribute("disabled")).toBe(true);
     expect(await screen.findAllByText(
-      "Still checking whether this Working Plan can be accepted",
+      "Still checking this Working Plan",
     )).toHaveLength(2);
   });
 
-  it("keeps acceptance off when the planning checks could not be read", async () => {
+  it("explains when publication checks could not be read", async () => {
     state.setWorkspace(resolvedWorkspace());
     state.planningError = new Error("engine offline");
 
     renderPlan();
 
-    const accept = await screen.findByRole("button", { name: "Accept Plan revision" });
-    expect(accept.hasAttribute("disabled")).toBe(true);
+    const publish = await screen.findByRole("button", { name: "Publish Plan for Production" });
+    expect(publish.hasAttribute("disabled")).toBe(true);
     expect(await screen.findAllByText(
       "This Build's planning checks could not be read",
     )).toHaveLength(2);
     expect(screen.getByText(
-      "Acceptance stays off because this Build's planning checks could not be read. Reload the page to try again.",
+      "The planning check could not be read. Reload the page to try again.",
     )).toBeTruthy();
   });
 
@@ -375,14 +405,14 @@ describe("Plan acceptance checkpoint", () => {
     }));
 
     renderPlan();
-    await user.click(await screen.findByRole("button", { name: "Accept Plan revision" }));
+    await user.click(await screen.findByRole("button", { name: "Publish Plan revision 2 for Production" }));
 
     expect(await screen.findAllByText("A Build requirement is still unverified"))
       .toHaveLength(2);
     expect(screen.queryByText(/422/)).toBeNull();
   });
 
-  it("accepts the revision and leaves a receipt on the page", async () => {
+  it("publishes the revision and leaves a receipt on the page", async () => {
     const user = userEvent.setup();
     vi.mocked(reconcilePlanDraft).mockImplementation(async () => {
       const next = resolvedWorkspace();
@@ -408,13 +438,13 @@ describe("Plan acceptance checkpoint", () => {
     await user.click(screen.getByRole("button", { name: "Save Required-unit decisions" }));
     await waitFor(() => expect(reconcilePlanDraft).toHaveBeenCalledOnce());
 
-    const accept = await screen.findByRole("button", { name: "Accept Plan revision" });
-    await waitFor(() => expect(accept.hasAttribute("disabled")).toBe(false));
+    const publish = await screen.findByRole("button", { name: "Publish Plan revision 2 for Production" });
+    await waitFor(() => expect(publish.hasAttribute("disabled")).toBe(false));
     expect(screen.getByText("Units kept")).toBeTruthy();
     expect(screen.getByText("Must be printed again")).toBeTruthy();
-    await user.click(accept);
+    await user.click(publish);
 
-    expect(await screen.findByText("Plan revision 2 accepted")).toBeTruthy();
+    expect(await screen.findByText("Plan revision 2 published")).toBeTruthy();
     expect(screen.getByText(
       "6 Required units are current. 2 verified units were preserved.",
     )).toBeTruthy();
@@ -424,12 +454,12 @@ describe("Plan acceptance checkpoint", () => {
       .toBe("/progress?profile=7");
   });
 
-  it("hides accept and empty issue cards when the accepted revision is current", async () => {
+  it("hides publish and empty issue cards when the published revision is current", async () => {
     state.setWorkspace(null);
     renderPlan();
-    expect(await screen.findByText("Plan revision 1 accepted")).toBeTruthy();
+    expect(await screen.findByText("Plan revision 1 published")).toBeTruthy();
     expect(screen.getByText("Production and Checkoff use this revision.")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Accept Plan revision" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Publish Plan/ })).toBeNull();
     expect(screen.queryByRole("region", { name: "Working Plan changes" })).toBeNull();
     expect(screen.queryByRole("heading", { name: "Issues" })).toBeNull();
   });
@@ -443,7 +473,34 @@ describe("Plan acceptance checkpoint", () => {
     }));
 
     renderPlan();
-    await user.click(await screen.findByRole("button", { name: "Accept Plan revision" }));
+    await user.click(await screen.findByRole("button", { name: "Publish Plan revision 2 for Production" }));
     expect(await screen.findByText(/part-1.stl: printed 6 units, new quantity is 4/)).toBeTruthy();
+  });
+
+  it("retries a linked-record publication with the same move option", async () => {
+    const user = userEvent.setup();
+    state.setWorkspace(resolvedWorkspace());
+    vi.mocked(applyPlanDraft)
+      .mockRejectedValueOnce(new EngineHttpError("locked", 423, {
+        code: "production_active",
+        checkoff_link_count: 2,
+        send_queue_item_count: 0,
+      }))
+      .mockRejectedValueOnce(new Error("engine offline"));
+
+    renderPlan();
+    await user.click(await screen.findByRole("button", { name: "Publish Plan revision 2 for Production" }));
+    await user.click(await screen.findByRole("button", { name: "Move records and publish" }));
+    expect(applyPlanDraft).toHaveBeenLastCalledWith(
+      expect.anything(),
+      { remapCheckoffLinks: true },
+    );
+
+    await user.click(await screen.findByRole("button", { name: "Retry publishing" }));
+    expect(applyPlanDraft).toHaveBeenLastCalledWith(
+      expect.anything(),
+      { remapCheckoffLinks: true },
+    );
+    expect(applyPlanDraft).toHaveBeenCalledTimes(3);
   });
 });

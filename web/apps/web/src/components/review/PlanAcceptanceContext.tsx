@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -38,6 +39,7 @@ export type PlanAcceptanceValue = {
   readonly syncBusy: boolean;
   chooseDecision: (draftPartId: number, choice: string) => void;
   saveDecisions: () => void;
+  prepareWorkingPlan: () => void;
   refreshWorkingPlan: () => void;
   accept: (options?: { moveLinkedRecords?: boolean }) => void;
   dismissConfirmation: () => void;
@@ -58,6 +60,7 @@ export function PlanAcceptanceProvider({ children, onSyncSources, syncBusy }: Pr
     review,
     draftWorkspace,
     applyActivePlanDraft,
+    startPlanDraft,
     rebaseActivePlanDraft,
     reconcileActivePlanDraft,
   } = usePlanWorkspace();
@@ -65,6 +68,7 @@ export function PlanAcceptanceProvider({ children, onSyncSources, syncBusy }: Pr
   const [failure, setFailure] = useState<PlanAcceptanceFailure | null>(null);
   const [decisionChoices, setDecisionChoices] = useState<Record<number, string>>({});
   const [confirmation, setConfirmation] = useState<StoredPlanAcceptance | null>(null);
+  const lastAcceptOptionsRef = useRef<{ moveLinkedRecords?: boolean } | undefined>(undefined);
   const planningQuery = useBuildPlanningQuery(
     selectedProfileId,
     draftWorkspace?.draft.draft_id ?? null,
@@ -74,6 +78,7 @@ export function PlanAcceptanceProvider({ children, onSyncSources, syncBusy }: Pr
   useEffect(() => {
     setDecisionChoices({});
     setFailure(null);
+    lastAcceptOptionsRef.current = undefined;
   }, [draftWorkspace?.draft.snapshot_digest]);
 
   useEffect(() => {
@@ -156,9 +161,20 @@ export function PlanAcceptanceProvider({ children, onSyncSources, syncBusy }: Pr
       .finally(() => setBusy(false));
   }, [rebaseActivePlanDraft]);
 
+  const prepareWorkingPlan = useCallback(() => {
+    setBusy(true);
+    setFailure(null);
+    void startPlanDraft()
+      // PlanWorkspace reports draft creation errors beside the Working Plan action.
+      .catch(() => undefined)
+      .finally(() => setBusy(false));
+  }, [startPlanDraft]);
+
   const accept = useCallback((options?: { moveLinkedRecords?: boolean }) => {
     const workspace = draftWorkspace;
     if (!workspace || selectedProfileId == null) return;
+    if (options !== undefined) lastAcceptOptionsRef.current = options;
+    const resolved = options ?? lastAcceptOptionsRef.current;
     const included = workspace.parts.filter((part) => part.included);
     const requiredUnits = included.reduce(
       (sum, part) => sum + Math.max(0, part.quantity_effective),
@@ -172,7 +188,7 @@ export function PlanAcceptanceProvider({ children, onSyncSources, syncBusy }: Pr
     setBusy(true);
     setFailure(null);
     void applyActivePlanDraft(
-      options?.moveLinkedRecords ? { remapCheckoffLinks: true } : undefined,
+      resolved?.moveLinkedRecords ? { remapCheckoffLinks: true } : undefined,
     )
       .then((receipt) => {
         const stored: StoredPlanAcceptance = {
@@ -212,6 +228,7 @@ export function PlanAcceptanceProvider({ children, onSyncSources, syncBusy }: Pr
       syncBusy: Boolean(syncBusy),
       chooseDecision,
       saveDecisions,
+      prepareWorkingPlan,
       refreshWorkingPlan,
       accept,
       dismissConfirmation,
@@ -227,6 +244,7 @@ export function PlanAcceptanceProvider({ children, onSyncSources, syncBusy }: Pr
       dismissConfirmation,
       failure,
       model,
+      prepareWorkingPlan,
       refreshWorkingPlan,
       saveDecisions,
       selectedProfileId,
