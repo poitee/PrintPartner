@@ -7,7 +7,7 @@ export default function AuthGate() {
 
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center text-sm text-muted-foreground">
+      <div className="desk-canvas flex min-h-dvh items-center justify-center text-body text-muted-foreground">
         Loading…
       </div>
     );
