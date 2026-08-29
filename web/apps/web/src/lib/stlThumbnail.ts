@@ -9,6 +9,7 @@ import {
 } from "../api/endpoints/media.js";
 import { fetchWithRetry } from "./fetchWithRetry.js";
 import { getCachedMeshBuffer, cacheMeshBuffer } from "./meshCache.js";
+import { getThumbnailCacheVersion } from "./thumbnailCache.js";
 
 const SIZE = 256;
 const DEFAULT_COLOR = DEFAULT_FILAMENT_HEX;
@@ -396,4 +397,15 @@ export function generatePartThumbnail(
         inFlightPartThumbnails.delete(requestKey);
       }
     });
+}
+
+export async function warmupPartThumbnails(partIds: readonly number[]): Promise<void> {
+  const unique = [...new Set(partIds)];
+  const cacheVersion = getThumbnailCacheVersion();
+  await Promise.all(
+    unique.map(async (partId) => {
+      const url = await generatePartThumbnail(partId, { priority: 0, cacheVersion });
+      if (url) URL.revokeObjectURL(url);
+    }),
+  );
 }

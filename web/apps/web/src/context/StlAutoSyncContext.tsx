@@ -9,14 +9,12 @@ import {
   type ReactNode,
 } from "react";
 import { useLocation } from "react-router-dom";
-import { regeneratePlanThumbnails } from "../api/endpoints/media";
 import type { PlanReview } from "../api/endpoints/planManifests";
 import { startSync } from "../api/endpoints/jobs";
 import { usePlanWorkspace } from "./PlanWorkspaceContext";
 import { useProfileSelection } from "./ProfileContext";
 import { useJobRunner } from "../hooks/useJobRunner";
 import { isPartsPath, isLibraryPath } from "../lib/routes";
-import { bumpThumbnailCache } from "../lib/thumbnailCache";
 import {
   countEmptyThumbs,
   countMissingStls,
@@ -30,6 +28,7 @@ import {
   type StlSyncBannerMode,
 } from "../lib/stlAutoSync";
 import { flattenReviewParts } from "../lib/reviewParts";
+import { warmupPartThumbnails } from "../lib/stlThumbnail";
 
 type StlAutoSyncValue = {
   busy: boolean;
@@ -50,15 +49,6 @@ function workKeyForReview(profileId: number, review: PlanReview): string {
     missingStlPartIds(parts),
     emptyThumbPartIds(parts),
   );
-}
-
-async function regenThumbs(profileId: number): Promise<void> {
-  try {
-    await regeneratePlanThumbnails(profileId);
-  } catch {
-    // Clear may fail if no cache yet — still bump so PartThumb re-probes / renders.
-  }
-  bumpThumbnailCache();
 }
 
 export function StlAutoSyncProvider({ children }: { children: ReactNode }) {
@@ -94,8 +84,7 @@ export function StlAutoSyncProvider({ children }: { children: ReactNode }) {
       if (!opts.force && attemptedWorkKeyRef.current === opts.workKey) return;
 
       const needSync = missingCount > 0 || review.layers.some((l) => !l.synced);
-      const needThumbs = emptyThumbCount > 0 || needSync;
-      if (!needSync && !needThumbs) return;
+      if (!needSync) return;
 
       attemptedWorkKeyRef.current = opts.workKey;
       runInFlightRef.current = true;
@@ -115,7 +104,6 @@ export function StlAutoSyncProvider({ children }: { children: ReactNode }) {
         try {
           if (selectedProfileId != null) {
             await refresh();
-            if (needThumbs) await regenThumbs(selectedProfileId);
           }
         } catch {
           finishFail();
@@ -126,56 +114,47 @@ export function StlAutoSyncProvider({ children }: { children: ReactNode }) {
         }
       };
 
-      if (needSync) {
-        const ids = projectIdsForStlSync(review);
-        if (ids.length === 0) {
-          // Nothing to pull — still try thumbs if flagged.
-          setLocalBusy(true);
-          try {
-            if (needThumbs) await regenThumbs(selectedProfileId);
-            await refresh();
-          } catch {
+      const ids = projectIdsForStlSync(review);
+      if (ids.length === 0) {
+        setLocalBusy(true);
+        try {
+          await refresh();
+        } catch {
+          finishFail();
+          return;
+        } finally {
+          if (runInFlightRef.current) clearInFlight();
+        }
+        return;
+      }
+      void syncJob.runJob(
+        () => startSync(ids),
+        (snap) => {
+          if (snap.status === "error") {
             finishFail();
             return;
-          } finally {
-            if (runInFlightRef.current) clearInFlight();
           }
-          return;
-        }
-        void syncJob.runJob(
-          () => startSync(ids),
-          (snap) => {
-            if (snap.status === "error") {
-              finishFail();
-              return;
-            }
-            void finishOk();
-          },
-          { profileId: selectedProfileId, sourceIds: ids },
-        );
-        return;
-      }
-
-      // Thumbs-only coordinated path (no missing STLs).
-      setLocalBusy(true);
-      try {
-        await regenThumbs(selectedProfileId);
-      } catch {
-        finishFail();
-        return;
-      } finally {
-        if (runInFlightRef.current) clearInFlight();
-      }
+          void finishOk();
+        },
+        { profileId: selectedProfileId, sourceIds: ids },
+      );
     },
     [
       selectedProfileId,
       review,
       missingCount,
-      emptyThumbCount,
       syncJob,
       refresh,
     ],
   );
+
+  const emptyThumbKey = useMemo(() => emptyThumbPartIds(parts).join(","), [parts]);
+
+  useEffect(() => {
+    if (!emptyThumbKey) return;
+    const ids = emptyThumbKey.split(",").map(Number);
+    void warmupPartThumbnails(ids);
+  }, [emptyThumbKey]);
 
   const runSync = useCallback(() => {
     if (selectedProfileId == null || !review) return;

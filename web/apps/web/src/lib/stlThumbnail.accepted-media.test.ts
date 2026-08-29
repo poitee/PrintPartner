@@ -60,6 +60,7 @@ import {
   decimateGeometryForThumbnail,
   generatePartThumbnail,
   loadAcceptedMeshBuffer,
+  warmupPartThumbnails,
 } from "./stlThumbnail";
 
 const basis = "a".repeat(64);
@@ -90,6 +91,10 @@ describe("accepted STL thumbnail mesh loading", () => {
     Object.defineProperty(URL, "createObjectURL", {
       configurable: true,
       value: vi.fn(() => "blob:thumbnail"),
+    });
+    Object.defineProperty(URL, "revokeObjectURL", {
+      configurable: true,
+      value: vi.fn(),
     });
   });
 
@@ -323,5 +328,61 @@ describe("accepted STL thumbnail mesh loading", () => {
       init: { headers: {} },
       retryStatuses: [502, 503, 504],
     });
+  });
+
+  it("warms each unique Part id once", async () => {
+    runtime.fetchWithRetry.mockResolvedValue(new Response(null, { status: 404 }));
+
+    await warmupPartThumbnails([701, 701, 702]);
+
+    expect(runtime.fetchWithRetry).toHaveBeenCalledTimes(2);
+    expect(URL.revokeObjectURL).not.toHaveBeenCalled();
+  });
+
+  it("revokes warmup object URLs after a successful render", async () => {
+    function binaryStl(): Uint8Array<ArrayBuffer> {
+      const bytes = new Uint8Array(84 + 50);
+      const view = new DataView(bytes.buffer);
+      view.setUint32(80, 1, true);
+      const vertices = [
+        [0, 0, 0],
+        [1, 0, 0],
+        [0, 1, 0],
+      ];
+      let offset = 96;
+      for (const vertex of vertices) {
+        for (const coordinate of vertex) {
+          view.setFloat32(offset, coordinate, true);
+          offset += 4;
+        }
+      }
+      return bytes;
+    }
+
+    runtime.fetchWithRetry.mockResolvedValueOnce(meshResponse(200, binaryStl(), "e".repeat(64)));
+
+    await warmupPartThumbnails([801]);
+
+    expect(URL.createObjectURL).toHaveBeenCalledOnce();
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:thumbnail");
+    expect(runtime.uploadPartThumbnail).toHaveBeenCalledOnce();
+  });
+
+  it("joins an in-flight generate instead of starting a second render", async () => {
+    let settle!: (response: Response) => void;
+    runtime.fetchWithRetry.mockImplementationOnce(
+      () =>
+        new Promise<Response>((resolve) => {
+          settle = resolve;
+        }),
+    );
+
+    const visible = generatePartThumbnail(901);
+    await vi.waitFor(() => expect(runtime.fetchWithRetry).toHaveBeenCalledTimes(1));
+
+    const warmup = warmupPartThumbnails([901]);
+    settle(new Response(null, { status: 404 }));
+    await expect(Promise.all([visible, warmup])).resolves.toEqual([null, undefined]);
+    expect(runtime.fetchWithRetry).toHaveBeenCalledTimes(1);
   });
 });

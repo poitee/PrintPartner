@@ -58,6 +58,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Part thumbnails stayed empty squares** - auto-sync no longer deletes cached
+  pictures when some are missing. Empty thumbs render in the background. Print
+  waits up to two minutes for real pictures, then prints what it has and says
+  how many are still missing. A failed render shows the filename letters
+  instead of a blank square.
+
 - **Plan sheet could wedge on a stale draft** - rebuilding the plan twice left
   two open drafts; applying the newer one stranded the sheet on the older,
   whose base version could never match again, so every edit failed with a

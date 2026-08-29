@@ -1,18 +1,33 @@
-/** Wait until sheet thumbnails finish loading (or timeout). */
-export function waitForSheetThumbnails(sheet: HTMLElement, timeoutMs = 4000): Promise<void> {
+/** Wait until sheet thumbnails finish loading a real picture (or timeout). */
+
+export const SHEET_THUMBNAIL_WAIT_MS = 120_000;
+
+export type SheetThumbnailWaitResult = {
+  readonly ready: boolean;
+  readonly pending: number;
+};
+
+export function sheetThumbnailIsReady(thumb: HTMLElement): boolean {
+  const img = thumb.querySelector<HTMLImageElement>(".sheet-thumb-img");
+  return Boolean(img && img.complete && img.naturalWidth > 1 && img.naturalHeight > 1);
+}
+
+export function waitForSheetThumbnails(
+  sheet: HTMLElement,
+  timeoutMs = SHEET_THUMBNAIL_WAIT_MS,
+): Promise<SheetThumbnailWaitResult> {
   return new Promise((resolve) => {
     const deadline = Date.now() + timeoutMs;
 
     const check = () => {
-      // Thumbs still showing the placeholder (no <img> yet) count as pending,
-      // otherwise we'd resolve before eager loading has even started.
       const thumbs = sheet.querySelectorAll<HTMLElement>(".sheet-thumb");
-      const pending = [...thumbs].filter((thumb) => {
-        const img = thumb.querySelector<HTMLImageElement>(".sheet-thumb-img");
-        return !img || !img.complete;
-      });
-      if (pending.length === 0 || Date.now() >= deadline) {
-        resolve();
+      const pending = [...thumbs].filter((thumb) => !sheetThumbnailIsReady(thumb)).length;
+      if (pending === 0) {
+        resolve({ ready: true, pending: 0 });
+        return;
+      }
+      if (Date.now() >= deadline) {
+        resolve({ ready: false, pending });
         return;
       }
       setTimeout(check, 100);
