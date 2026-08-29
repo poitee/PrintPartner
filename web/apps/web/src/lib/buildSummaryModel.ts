@@ -128,5 +128,12 @@ export function buildActiveWorkChips(
       tone: "neutral",
     });
   }
+  if (workspace.sources.kind === "stale") {
+    chips.push({
+      id: "source_changes",
+      label: "Sources changed since acceptance",
+      tone: "warning",
+    });
+  }
   return chips;
 }

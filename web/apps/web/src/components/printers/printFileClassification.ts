@@ -202,9 +202,9 @@ function threeMfSummary(
       const fact = "This 3MF holds toolpaths.";
       return intentSummary(intent, {
         print: {
-          status: "needs_attention",
-          headline: "Compatibility review required",
-          nextStep: `${fact} Check it against this printer before you rely on it to print.`,
+          status: "ready",
+          headline: "Sliced 3MF",
+          nextStep: `${fact} Confirm it matches this printer, then assign it.`,
           downloadOnly: false,
         },
         record: { headline: "Sliced 3MF", fact },

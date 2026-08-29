@@ -21,6 +21,11 @@ export default function PlanAcceptedRevisionCard() {
         Accepted revision
       </h2>
       <p className="mt-1 text-base font-medium text-foreground">{accepted.heading}</p>
+      <p className="mt-1 text-sm text-muted-foreground">
+        {model.working
+          ? "Production and Checkoff still use this revision until you accept the working changes below."
+          : "Production and Checkoff use this revision."}
+      </p>
       <dl className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
         <div>
           <dt className="text-xs text-muted-foreground">Required units</dt>

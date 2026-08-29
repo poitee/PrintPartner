@@ -32,7 +32,9 @@ export default function PlanFreshnessNotice({ freshness, action, className }: Pr
       <Icon className="mt-0.5 h-4 w-4 shrink-0 text-warning" aria-hidden />
       <div className="min-w-0 flex-1">
         <p className="font-medium text-foreground">
-          {freshness.status === "stale" ? "Working Plan update needed" : "Plan inputs are not tracked"}
+          {freshness.status === "stale"
+            ? "Sources have changed since this Plan was accepted"
+            : "Plan inputs are not tracked"}
         </p>
         {messages.map((message) => (
           <p key={message} className="text-muted-foreground">

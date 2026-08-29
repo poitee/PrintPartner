@@ -6,14 +6,15 @@ import { usePlanAcceptance } from "./PlanAcceptanceContext";
 import { cn } from "@/lib/utils";
 
 /**
- * Step 7 of the Plan checkpoint: accept the revision.
- *
- * A failed attempt stays on the page with Retry. The user's quantity, inclusion
- * and Required-unit answers are untouched, so Retry repeats the acceptance
- * rather than restarting the review.
+ * Accept the Working Plan. Hidden when there is nothing to accept.
+ * Printed-unit impact sits next to the action so the operator sees the
+ * consequence in the same place they confirm it.
  */
 export default function PlanAcceptanceActionCard() {
   const { model, busy, failure, accept } = usePlanAcceptance();
+  if (!model.working) return null;
+
+  const impact = model.impact;
 
   return (
     <section
@@ -24,7 +25,23 @@ export default function PlanAcceptanceActionCard() {
       <h2 id="plan-acceptance-heading" className="text-sm font-semibold">
         Accept this revision
       </h2>
-      <div className="mt-2">
+      {impact.kind === "ready" ? (
+        <dl className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <div>
+            <dt className="text-xs text-muted-foreground">Units kept</dt>
+            <dd className="text-lg font-semibold tabular-nums">{impact.preservedUnits}</dd>
+          </div>
+          <div>
+            <dt className="text-xs text-muted-foreground">Must be printed again</dt>
+            <dd className="text-lg font-semibold tabular-nums">{impact.printAgainUnits}</dd>
+          </div>
+          <div>
+            <dt className="text-xs text-muted-foreground">No longer required</dt>
+            <dd className="text-lg font-semibold tabular-nums">{impact.retiredUnits}</dd>
+          </div>
+        </dl>
+      ) : null}
+      <div className="mt-3">
         <PlanDraftApplyButton
           decision={model.decision}
           busy={busy}

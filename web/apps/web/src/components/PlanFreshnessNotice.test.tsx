@@ -34,6 +34,7 @@ describe("PlanFreshnessNotice", () => {
     );
 
     expect(screen.getByText(/Voron Trident has a newer synced revision/i)).toBeTruthy();
+    expect(screen.getByText("Sources have changed since this Plan was accepted")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Update Working Plan" }));
     expect(onRebuild).toHaveBeenCalledTimes(1);
   });

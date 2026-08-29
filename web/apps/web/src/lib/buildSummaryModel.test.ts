@@ -127,6 +127,21 @@ describe("buildActiveWorkChips", () => {
     });
   });
 
+  it("names Source changes as background context, not as a printer problem", () => {
+    const chips = buildActiveWorkChips(
+      workspace({
+        sources: { kind: "stale", attached_count: 2, issue_count: 1 },
+      }),
+    );
+    expect(chips).toEqual([
+      {
+        id: "source_changes",
+        label: "Sources changed since acceptance",
+        tone: "warning",
+      },
+    ]);
+  });
+
   it("carries its own text so tone never stands alone", () => {
     const chips = buildActiveWorkChips(
       workspace({

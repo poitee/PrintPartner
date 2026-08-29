@@ -21,6 +21,7 @@ export default function WorkingPlanReviewCard() {
   const { model } = usePlanAcceptance();
   const { draftWorkspace } = usePlanWorkspace();
   const working = model.working;
+  if (!working) return null;
 
   const rows: ChangeRow[] = draftWorkspace
     ? [
@@ -63,32 +64,24 @@ export default function WorkingPlanReviewCard() {
       <h2 id="plan-working-changes-heading" className="text-sm font-semibold">
         Working Plan changes
       </h2>
-      {working ? (
-        <p className="mt-1 text-sm text-muted-foreground">
-          Not accepted yet. Production and Checkoff keep using the Accepted revision until you
-          accept.
-        </p>
-      ) : (
-        <p className="mt-1 text-sm text-muted-foreground">
-          No working changes. Production and Checkoff are using the Accepted revision.
-        </p>
-      )}
+      <p className="mt-1 text-sm text-muted-foreground">
+        Not accepted yet. Production and Checkoff keep using the Accepted revision until you
+        accept.
+      </p>
 
-      {working && (
-        <dl className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
-          {[
-            { label: "Added", value: working.added },
-            { label: "Changed", value: working.changed },
-            { label: "Removed", value: working.removed },
-            { label: "Unaffected", value: working.unaffected },
-          ].map((cell) => (
-            <div key={cell.label}>
-              <dt className="text-xs text-muted-foreground">{cell.label}</dt>
-              <dd className="text-lg font-semibold tabular-nums">{cell.value}</dd>
-            </div>
-          ))}
-        </dl>
-      )}
+      <dl className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+        {[
+          { label: "Added", value: working.added },
+          { label: "Changed", value: working.changed },
+          { label: "Removed", value: working.removed },
+          { label: "Unaffected", value: working.unaffected },
+        ].map((cell) => (
+          <div key={cell.label}>
+            <dt className="text-xs text-muted-foreground">{cell.label}</dt>
+            <dd className="text-lg font-semibold tabular-nums">{cell.value}</dd>
+          </div>
+        ))}
+      </dl>
 
       {rows.length > 0 && (
         <>

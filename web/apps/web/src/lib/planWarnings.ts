@@ -21,7 +21,9 @@ export function buildPlanWarningLines(input: {
       `${upstream.length} source${upstream.length === 1 ? "" : "s"} updated upstream. Review and rebuild the Plan`,
     );
   } else if (buildStale) {
-    lines.push("Plan inputs changed. Review and rebuild the Plan");
+    lines.push(
+      "Sources have changed. The accepted Plan stays in force until you accept a new revision.",
+    );
   }
 
   for (const issue of review?.issues ?? []) {

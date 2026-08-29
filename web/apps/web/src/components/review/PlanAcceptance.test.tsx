@@ -397,6 +397,8 @@ describe("Plan acceptance checkpoint", () => {
 
     const accept = await screen.findByRole("button", { name: "Accept Plan revision" });
     await waitFor(() => expect(accept.hasAttribute("disabled")).toBe(false));
+    expect(screen.getByText("Units kept")).toBeTruthy();
+    expect(screen.getByText("Must be printed again")).toBeTruthy();
     await user.click(accept);
 
     expect(await screen.findByText("Plan revision 2 accepted")).toBeTruthy();
@@ -407,6 +409,16 @@ describe("Plan acceptance checkpoint", () => {
       .toBe("/export?profile=7&select=missing");
     expect(screen.getByRole("link", { name: "View Checkoff" }).getAttribute("href"))
       .toBe("/progress?profile=7");
+  });
+
+  it("hides accept and empty issue cards when the accepted revision is current", async () => {
+    state.setWorkspace(null);
+    renderPlan();
+    expect(await screen.findByText("Plan revision 1 accepted")).toBeTruthy();
+    expect(screen.getByText("Production and Checkoff use this revision.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Accept Plan revision" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "Working Plan changes" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Issues" })).toBeNull();
   });
 
   it("names the files whose printed work could not move", async () => {
