@@ -35,6 +35,14 @@ vi.mock("./context/PlanWorkspaceContext", () => ({
 }));
 vi.mock("./context/StlAutoSyncContext", () => ({
   StlAutoSyncProvider: ({ children }: { children: ReactNode }) => children,
+  useStlAutoSync: () => ({
+    busy: false,
+    failed: false,
+    missingCount: 0,
+    emptyThumbCount: 0,
+    banner: { kind: "hidden" as const },
+    runSync: () => undefined,
+  }),
 }));
 vi.mock("./context/ImportRulesSaveContext", () => ({
   ImportRulesSaveProvider: ({ children }: { children: ReactNode }) => children,

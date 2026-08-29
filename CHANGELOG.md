@@ -58,6 +58,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Legacy sidecar zip could be sent as G-code** - a zip body from the old
+  `/slice` protocol that failed to unzip, or unzipped with no `.gcode` file,
+  was returned as the G-code payload. The printer would have received an
+  archive. That path now throws `invalid_zip` or `empty_gcode`.
+
+- **STL sync status never appeared** - `StlAutoSyncProvider` already computed
+  the banner, but nothing rendered `StlSyncBanner`. Missing or failed STL
+  syncs now show in the app shell with a Sync retry.
+
+- **Incoming shared builds had no inbox** - `IncomingSharesCard` existed and
+  the `/shares/incoming` API worked, but Builds never mounted the card.
+  Multi-user inboxes now list those shares on Builds.
+
+- **Farm send queue had no operator surface** - `PrinterSendQueuePanel` was
+  unmounted. Checkoff reports printer status and does not dispatch, so the
+  panel now sits on the Production send task next to Send / Start print.
+
 - **Plan sheet could wedge on a stale draft** - rebuilding the plan twice left
   two open drafts; applying the newer one stranded the sheet on the older,
   whose base version could never match again, so every edit failed with a

@@ -41,6 +41,27 @@ vi.mock("../lib/persistedSidebarUi", () => ({
   writeSidebarCollapsed: vi.fn(),
 }));
 
+const stlSync = vi.hoisted(() => ({
+  banner: { kind: "hidden" as const } as
+    | { kind: "hidden" }
+    | { kind: "running" }
+    | { kind: "failed" }
+    | { kind: "missing"; count: number },
+  runSync: vi.fn(),
+  busy: false,
+}));
+
+vi.mock("../context/StlAutoSyncContext", () => ({
+  useStlAutoSync: () => ({
+    banner: stlSync.banner,
+    runSync: stlSync.runSync,
+    busy: stlSync.busy,
+    failed: false,
+    missingCount: 0,
+    emptyThumbCount: 0,
+  }),
+}));
+
 describe("application shell accessibility", () => {
   beforeEach(() => {
     Object.defineProperty(window, "matchMedia", {
@@ -55,6 +76,9 @@ describe("application shell accessibility", () => {
 
   afterEach(() => {
     cleanup();
+    stlSync.banner = { kind: "hidden" };
+    stlSync.runSync.mockReset();
+    stlSync.busy = false;
     document.documentElement.style.removeProperty("--app-sidebar-width");
     document.documentElement.style.removeProperty("--mobile-stage-height");
   });
@@ -100,5 +124,23 @@ describe("application shell accessibility", () => {
     const link = await screen.findByRole("link", { name: "Source Library" });
     expect(link.getAttribute("aria-current")).toBe("page");
     expect(link.className).toContain("bg-accent");
+  });
+
+  it("shows the STL sync banner when files are still missing", () => {
+    stlSync.banner = { kind: "missing", count: 3 };
+
+    render(
+      <MemoryRouter initialEntries={["/plan"]}>
+        <Routes>
+          <Route element={<AppLayout />}>
+            <Route path="plan" element={<h1>Plan</h1>} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByRole("alert").textContent).toContain("3 STL missing");
+    fireEvent.click(screen.getByRole("button", { name: "Sync" }));
+    expect(stlSync.runSync).toHaveBeenCalledTimes(1);
   });
 });

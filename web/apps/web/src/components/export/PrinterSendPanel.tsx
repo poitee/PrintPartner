@@ -71,7 +71,8 @@ type Props = {
  * plus a separate Bambu Connect handoff row when a Bambu host is fleet-linked.
  *
  * Only two verbs live here: Send (upload) and Start print. Farm-queue verbs
- * (Send ready / Send now / Remove) live on Progress, not on Export.
+ * (Send ready / Send now / Remove) sit in PrinterSendQueuePanel on this same
+ * Production send task.
  */
 export default function PrinterSendPanel({
   remainingParts,

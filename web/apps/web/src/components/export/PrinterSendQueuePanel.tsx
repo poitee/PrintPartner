@@ -41,9 +41,9 @@ function stateLabel(item: PrinterSendQueueItem): string {
 }
 
 /**
- * Farm send-queue operator surface for Progress.
+ * Farm send-queue operator surface for Production send.
  * Hides when empty. Send ready / Send now / Remove when allowDispatch.
- * Export Send panel does not mount this — Export only has Send / Start print.
+ * Checkoff reports printer status and never dispatches.
  */
 export default function PrinterSendQueuePanel({
   engineReady,
