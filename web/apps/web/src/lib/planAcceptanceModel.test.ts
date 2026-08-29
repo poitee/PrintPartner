@@ -306,6 +306,64 @@ describe("issue grouping and routes", () => {
     expect(issues[0]!.detail).toContain("skirt_panel_x6.stl");
     expect(issues[0]!.detail).toContain("printed count is higher than the new quantity");
   });
+
+  it("does not treat a Plan with no accepted inputs as something to review", () => {
+    const issues = planIssues({
+      review: review(),
+      draft: null,
+      buildId: 1,
+      planningBlockers: noBlockers,
+      freshness: {
+        status: "untracked",
+        accepted_input_set_id: null,
+        accepted_at: null,
+        reasons: [{ kind: "no_accepted_inputs" }],
+      },
+    });
+    expect(issues).toEqual([]);
+  });
+
+  it("does not list an empty Build as an issue when there is nothing to accept", () => {
+    const issues = planIssues({
+      review: review({
+        accepted_basis: null,
+        issues: [
+          {
+            code: "no_included_parts",
+            message: "No parts are included in this build.",
+            severity: "blocker",
+            link_hint: "build",
+          },
+        ],
+        has_blockers: true,
+      }),
+      draft: null,
+      buildId: 1,
+      planningBlockers: noBlockers,
+    });
+    expect(issues).toEqual([]);
+  });
+
+  it("still names a Source whose revision was never recorded", () => {
+    const issues = planIssues({
+      review: review(),
+      draft: null,
+      buildId: 1,
+      planningBlockers: noBlockers,
+      freshness: {
+        status: "untracked",
+        accepted_input_set_id: null,
+        accepted_at: null,
+        reasons: [
+          { kind: "source_revision_untracked", source_id: 2, source_name: "Voron Trident" },
+        ],
+      },
+    });
+    expect(issues).toHaveLength(1);
+    expect(issues[0]!.title).toBe("This Plan's source revisions are not tracked");
+    expect(issues[0]!.detail).toContain("Voron Trident");
+    expect(issues[0]!.statusLabel).toBe("Does not block Production");
+  });
 });
 
 describe("acceptance decision", () => {

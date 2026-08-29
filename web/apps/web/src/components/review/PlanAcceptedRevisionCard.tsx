@@ -24,7 +24,9 @@ export default function PlanAcceptedRevisionCard() {
       <p className="mt-1 text-sm text-muted-foreground">
         {model.working
           ? "Production and Checkoff still use this revision until you accept the working changes below."
-          : "Production and Checkoff use this revision."}
+          : accepted.planVersion == null
+            ? "Accept a Working Plan before Production and Checkoff can start."
+            : "Production and Checkoff use this revision."}
       </p>
       <dl className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
         <div>

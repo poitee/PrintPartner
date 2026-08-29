@@ -70,9 +70,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - **Printers sat on "needs review" with nothing to do** - Source changes no
   longer steal the Build's next action from Production once a Plan is accepted.
-  Sliced 3MF files on a printer read as ready to assign, not "compatibility
-  review required". A damaged Accepted Plan says to restart PrintPartner, not
-  to review compatibility.
+  A Plan with no accepted inputs no longer lists "source revisions are not
+  tracked" as an issue, and an empty Build no longer lists "no parts included"
+  as something to review. Sliced 3MF files on a printer read as ready to assign,
+  not "compatibility review required". A damaged Accepted Plan says to restart
+  PrintPartner, not to review compatibility.
 
 - **Part thumbnails stayed empty squares** - auto-sync no longer deletes cached
   pictures when some are missing. Empty thumbs render in the background. Print
