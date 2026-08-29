@@ -63,6 +63,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Part thumbnails stayed empty squares** - auto-sync no longer deletes cached
+  pictures when some are missing. Empty thumbs render in the background. Print
+  waits up to two minutes for real pictures, then prints what it has and says
+  how many are still missing. A failed render shows the filename letters
+  instead of a blank square.
+
 - **Legacy sidecar zip could be sent as G-code** - a zip body from the old
   `/slice` protocol that failed to unzip, or unzipped with no `.gcode` file,
   was returned as the G-code payload. The printer would have received an

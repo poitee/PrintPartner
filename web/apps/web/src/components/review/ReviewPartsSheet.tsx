@@ -8,6 +8,7 @@ import {
   useState,
 } from "react";
 import type { StlNamingFolderRule } from "@print-partner/contracts";
+import { toast } from "sonner";
 import type { PlanReview, ReviewPart } from "../../api/endpoints/planManifests";
 import {
   fetchSpoolmanSpools,
@@ -290,7 +291,16 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
           requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
         });
         const sheet = sheetArticleRef.current;
-        if (sheet && !ui.textOnlyPrint) await waitForSheetThumbnails(sheet);
+        if (sheet && !ui.textOnlyPrint) {
+          const { pending } = await waitForSheetThumbnails(sheet);
+          if (pending > 0) {
+            toast.warning(
+              pending === 1
+                ? "1 part picture was not ready. The sheet printed anyway."
+                : `${pending} part pictures were not ready. The sheet printed anyway.`,
+            );
+          }
+        }
         window.print();
         setPrintPrep(false);
       },

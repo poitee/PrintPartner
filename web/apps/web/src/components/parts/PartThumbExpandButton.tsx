@@ -35,6 +35,7 @@ export default function PartThumbExpandButton<P extends PreviewDialogPart & { id
         compact={compact}
         sizePx={sizePx}
         eager={eager}
+        fallbackLabel={part.filename}
       />
       <span className="sheet-thumb-expand no-print" aria-hidden>
         <Maximize2 />

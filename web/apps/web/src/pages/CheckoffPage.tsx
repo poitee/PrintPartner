@@ -1,6 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { CheckSquare } from "lucide-react";
+import { toast } from "sonner";
 import PlanFreshnessNotice from "../components/PlanFreshnessNotice";
 import PageHeader from "../components/layout/PageHeader";
 import PageHeaderActions from "../components/layout/PageHeaderActions";
@@ -232,7 +233,16 @@ export default function CheckoffPage() {
       setPrintPrep(false);
       return;
     }
-    if (!printLayout.textOnlyPrint) await waitForSheetThumbnails(sheet);
+    if (!printLayout.textOnlyPrint) {
+      const { pending } = await waitForSheetThumbnails(sheet);
+      if (pending > 0) {
+        toast.warning(
+          pending === 1
+            ? "1 part picture was not ready. The sheet printed anyway."
+            : `${pending} part pictures were not ready. The sheet printed anyway.`,
+        );
+      }
+    }
     window.print();
   }, [printLayout.textOnlyPrint]);
 
