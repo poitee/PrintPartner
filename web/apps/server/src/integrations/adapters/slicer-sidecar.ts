@@ -25,6 +25,7 @@
  */
 
 import type { IntegrationConfig, IntegrationTestResult } from "@print-partner/contracts";
+import { unzipSync } from "fflate";
 import type { IntegrationAdapter } from "../store.js";
 import { assertSafeOutboundUrl } from "../../lib/outbound-url.js";
 
@@ -329,38 +330,35 @@ export async function slicerSidecarSlice(
   }
 }
 
-/**
- * Extract gcode and thumbnail from a ZIP returned by the sidecar.
- * Expects the OrcaSlicer output ZIP which contains:
- *   - *.gcode (or Metadata/*.gcode inside the gcode.3mf)
- *   - Metadata/plate_N.png
- * We use a simple streaming scan rather than pulling in a zip library.
- */
 function extractSliceZip(buf: Uint8Array): SliceResult {
-  // Dynamically import fflate (already in the project via domain package)
-  // For server-side use we use the synchronous unzipSync from fflate.
-  // We do a best-effort extraction here; if fflate is absent we return raw buf as gcode.
+  let files: Record<string, Uint8Array>;
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { unzipSync } = require("fflate") as { unzipSync: (data: Uint8Array) => Record<string, Uint8Array> };
-    const files = unzipSync(buf);
-    let gcode = new Uint8Array(0);
-    let thumbnail = new Uint8Array(0);
-    let thumbnailName: string | undefined;
-    for (const [name, data] of Object.entries(files)) {
-      if (name.endsWith(".gcode") || name.endsWith(".bgcode")) {
-        if (!gcode.length || data.length > gcode.length) gcode = data as Uint8Array<ArrayBuffer>;
-      }
-      if (/plate_\d+\.png$/i.test(name)) {
-        thumbnail = data as Uint8Array<ArrayBuffer>;
-        thumbnailName = name.split("/").pop();
-      }
-    }
-    return { gcode, thumbnail, ...(thumbnailName ? { thumbnail_filename: thumbnailName } : {}) };
-  } catch {
-    // Couldn't unzip — return the whole buffer as gcode (best effort).
-    return { gcode: buf, thumbnail: new Uint8Array(0) };
+    files = unzipSync(buf);
+  } catch (e) {
+    throw new SlicerSidecarError("Slicer sidecar zip was not readable", {
+      code: "invalid_zip",
+      details: { cause: e instanceof Error ? e.message : String(e) },
+    });
   }
+
+  let gcode = new Uint8Array(0);
+  let thumbnail = new Uint8Array(0);
+  let thumbnailName: string | undefined;
+  for (const [name, data] of Object.entries(files)) {
+    if (name.endsWith(".gcode") || name.endsWith(".bgcode")) {
+      if (!gcode.length || data.length > gcode.length) gcode = new Uint8Array(data);
+    }
+    if (/plate_\d+\.png$/i.test(name)) {
+      thumbnail = new Uint8Array(data);
+      thumbnailName = name.split("/").pop();
+    }
+  }
+  if (!gcode.length) {
+    throw new SlicerSidecarError("Slicer sidecar zip contained no gcode", {
+      code: "empty_gcode",
+    });
+  }
+  return { gcode, thumbnail, ...(thumbnailName ? { thumbnail_filename: thumbnailName } : {}) };
 }
 
 export const slicerSidecarAdapter: IntegrationAdapter = {
