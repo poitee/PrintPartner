@@ -87,6 +87,38 @@ describe("sourcesSetupTasks", () => {
     expect(setup.tasks.find((task) => task.id === "resolve-differences")).toBeUndefined();
   });
 
+  it("does not claim sources agree while any attached source is still arriving", () => {
+    const setup = sourcesSetupTasks(
+      input({
+        sources: [
+          baseSource,
+          { ...baseSource, id: 2, name: "Mods", layerType: "addon", synced: false },
+        ],
+      }),
+    );
+
+    expect(setup.tasks.find((task) => task.id === "resolve-differences")).toBeUndefined();
+    expect(setup.primary.action).toEqual({
+      kind: "handler",
+      label: "Sync sources",
+      handler: "sync_sources",
+    });
+  });
+
+  it("holds file comparison until every source is current, even with known conflicts", () => {
+    const setup = sourcesSetupTasks(
+      input({
+        sources: [
+          baseSource,
+          { ...baseSource, id: 2, name: "Mods", layerType: "addon", updatesAvailable: true },
+        ],
+        mergeConflictCount: 2,
+      }),
+    );
+
+    expect(setup.tasks.find((task) => task.id === "resolve-differences")).toBeUndefined();
+  });
+
   it("reports a running sync as background work with no action", () => {
     const setup = sourcesSetupTasks(
       input({ sources: [{ ...baseSource, synced: false }], syncing: true }),

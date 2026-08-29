@@ -410,6 +410,11 @@ describe("Plan publication", () => {
         id: "plan-issue-build-planning-draft-selection-0",
         title: "This Working Plan has not been reviewed",
         statusLabel: "Finish before publishing",
+        action: {
+          kind: "route",
+          label: "Open Plan",
+          to: "/plan?profile=1#plan-working-changes",
+        },
       }),
     ]);
     expect(model.publication.kind).toBe("waiting_for_choices");
@@ -534,7 +539,9 @@ describe("blocker copy", () => {
       // Written copy, not a code or a token: a sentence naming what to do.
       expect(issue!.title, code).not.toContain("_");
       expect(issue!.detail, code).toMatch(/\.$/);
-      expect(issue!.detail, code).toContain("Open Sources");
+      const planOwned =
+        code === "draft_missing" || code === "draft_review" || code === "draft_selection";
+      expect(issue!.detail, code).toContain(planOwned ? "Open Plan" : "Open Sources");
       // "Draft" and "setup phase" are Avoid terms for Working Plan and Preparation.
       expect(issue!.title.toLowerCase(), code).not.toContain("draft");
       expect(issue!.detail!.toLowerCase(), code).not.toContain("draft");

@@ -252,6 +252,9 @@ function syncSourcesTask(input: SourcesSetupInput): SourcesSetupTask {
 }
 
 function resolveDifferencesTask(input: SourcesSetupInput): SourcesSetupTask | null {
+  if (input.sources.some((source) => !source.synced || source.updatesAvailable)) {
+    return null;
+  }
   const applies = input.mergeConflictCount > 0 || input.sources.length > 1;
   if (!applies) return null;
 

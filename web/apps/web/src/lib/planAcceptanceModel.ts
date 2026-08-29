@@ -5,7 +5,7 @@ import type {
   PlanUntrackedReason,
 } from "@print-partner/contracts";
 import type { PlanAcceptanceBlockerCode, PlanReview } from "../api/endpoints/planManifests";
-import { buildSourcesRoute, libraryRoute } from "./routes";
+import { buildSourcesRoute, libraryRoute, planRoute } from "./routes";
 
 /**
  * The Plan acceptance checkpoint, as data.
@@ -251,6 +251,20 @@ function sourcesAction(buildId: number | null): PlanIssueAction {
     : { kind: "route", label: "Open Sources", to: buildSourcesRoute(buildId) };
 }
 
+function planWorkingPlanAction(buildId: number | null): PlanIssueAction {
+  return { kind: "route", label: "Open Plan", to: `${planRoute(buildId)}#plan-working-changes` };
+}
+
+function planningBlockerAction(
+  code: PlanAcceptanceBlockerCode,
+  buildId: number | null,
+): PlanIssueAction {
+  if (code === "draft_missing" || code === "draft_review" || code === "draft_selection") {
+    return planWorkingPlanAction(buildId);
+  }
+  return sourcesAction(buildId);
+}
+
 function requiredUnitIssues(draft: PlanDraftWorkspace): PlanIssue[] {
   if (draft.reconciliation.kind !== "unresolved") return [];
   const partById = new Map(draft.parts.map((part) => [part.draft_part_id, part]));
@@ -357,17 +371,17 @@ function planningBlockerCopy(code: PlanAcceptanceBlockerCode): PlanningBlockerCo
     case "draft_review":
       return {
         title: "This Working Plan still has review notes",
-        detail: 'The assistant left notes that have to be cleared first. Open Sources and work through them under "Decisions the assistant needs".',
+        detail: "The assistant left notes that have to be cleared first. Open Plan and work through them on the Working Plan.",
       };
     case "draft_missing":
       return {
         title: "The assistant has no reviewed Working Plan for this Build",
-        detail: 'Nothing has been written for review yet. Open Sources and have the assistant write a Working Plan under "Assistant changes".',
+        detail: "Nothing has been written for review yet. Open Plan and build a Working Plan from Sources.",
       };
     case "draft_selection":
       return {
         title: "This Working Plan has not been reviewed",
-        detail: 'The assistant reviewed a different Working Plan. Open Sources and have this one written again under "Assistant changes", then review it before publishing.',
+        detail: "The assistant reviewed a different Working Plan. Open Plan and build this one again from Sources, then review it before publishing.",
       };
     case "unrecognised":
       return {
@@ -395,7 +409,7 @@ function blockerIssues(input: {
       detail: copy.detail,
       statusLabel: "Finish before publishing",
       tone: "error" as const,
-      action: sourcesAction(input.buildId),
+      action: planningBlockerAction(code, input.buildId),
     };
   });
 }

@@ -476,4 +476,31 @@ describe("Plan acceptance checkpoint", () => {
     await user.click(await screen.findByRole("button", { name: "Publish Plan revision 2 for Production" }));
     expect(await screen.findByText(/part-1.stl: printed 6 units, new quantity is 4/)).toBeTruthy();
   });
+
+  it("retries a linked-record publication with the same move option", async () => {
+    const user = userEvent.setup();
+    state.setWorkspace(resolvedWorkspace());
+    vi.mocked(applyPlanDraft)
+      .mockRejectedValueOnce(new EngineHttpError("locked", 423, {
+        code: "production_active",
+        checkoff_link_count: 2,
+        send_queue_item_count: 0,
+      }))
+      .mockRejectedValueOnce(new Error("engine offline"));
+
+    renderPlan();
+    await user.click(await screen.findByRole("button", { name: "Publish Plan revision 2 for Production" }));
+    await user.click(await screen.findByRole("button", { name: "Move records and publish" }));
+    expect(applyPlanDraft).toHaveBeenLastCalledWith(
+      expect.anything(),
+      { remapCheckoffLinks: true },
+    );
+
+    await user.click(await screen.findByRole("button", { name: "Retry publishing" }));
+    expect(applyPlanDraft).toHaveBeenLastCalledWith(
+      expect.anything(),
+      { remapCheckoffLinks: true },
+    );
+    expect(applyPlanDraft).toHaveBeenCalledTimes(3);
+  });
 });

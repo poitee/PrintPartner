@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -67,6 +68,7 @@ export function PlanAcceptanceProvider({ children, onSyncSources, syncBusy }: Pr
   const [failure, setFailure] = useState<PlanAcceptanceFailure | null>(null);
   const [decisionChoices, setDecisionChoices] = useState<Record<number, string>>({});
   const [confirmation, setConfirmation] = useState<StoredPlanAcceptance | null>(null);
+  const lastAcceptOptionsRef = useRef<{ moveLinkedRecords?: boolean } | undefined>(undefined);
   const planningQuery = useBuildPlanningQuery(
     selectedProfileId,
     draftWorkspace?.draft.draft_id ?? null,
@@ -76,6 +78,7 @@ export function PlanAcceptanceProvider({ children, onSyncSources, syncBusy }: Pr
   useEffect(() => {
     setDecisionChoices({});
     setFailure(null);
+    lastAcceptOptionsRef.current = undefined;
   }, [draftWorkspace?.draft.snapshot_digest]);
 
   useEffect(() => {
@@ -170,6 +173,8 @@ export function PlanAcceptanceProvider({ children, onSyncSources, syncBusy }: Pr
   const accept = useCallback((options?: { moveLinkedRecords?: boolean }) => {
     const workspace = draftWorkspace;
     if (!workspace || selectedProfileId == null) return;
+    if (options !== undefined) lastAcceptOptionsRef.current = options;
+    const resolved = options ?? lastAcceptOptionsRef.current;
     const included = workspace.parts.filter((part) => part.included);
     const requiredUnits = included.reduce(
       (sum, part) => sum + Math.max(0, part.quantity_effective),
@@ -183,7 +188,7 @@ export function PlanAcceptanceProvider({ children, onSyncSources, syncBusy }: Pr
     setBusy(true);
     setFailure(null);
     void applyActivePlanDraft(
-      options?.moveLinkedRecords ? { remapCheckoffLinks: true } : undefined,
+      resolved?.moveLinkedRecords ? { remapCheckoffLinks: true } : undefined,
     )
       .then((receipt) => {
         const stored: StoredPlanAcceptance = {
