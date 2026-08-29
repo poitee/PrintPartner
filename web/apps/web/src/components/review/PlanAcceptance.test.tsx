@@ -270,9 +270,22 @@ describe("Plan acceptance checkpoint", () => {
   it("shows the accepted revision and the working change counts", async () => {
     renderPlan();
     expect(await screen.findByText("Plan revision 1 accepted")).toBeTruthy();
+    expect(screen.getByText(
+      "Production and Checkoff still use this revision until you accept the working changes below.",
+    )).toBeTruthy();
     const changes = screen.getByRole("region", { name: "Working Plan changes" });
     expect(changes.textContent).toContain("Changed quantity");
     expect(changes.textContent).toContain("Not accepted yet");
+  });
+
+  it("does not claim Production uses a revision that has not been accepted", async () => {
+    state.review = { ...baseReview(), accepted_basis: null };
+    renderPlan();
+    expect(await screen.findByText("No Plan revision accepted yet")).toBeTruthy();
+    expect(screen.getByText(
+      "Accept a Working Plan before Production and Checkoff can start.",
+    )).toBeTruthy();
+    expect(screen.queryByText(/still use this revision/)).toBeNull();
   });
 
   it("blocks acceptance while a Required-unit decision is open, and says why", async () => {
