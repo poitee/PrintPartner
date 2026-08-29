@@ -27,8 +27,10 @@ function sourceFacts(
   attachedCount: number,
 ): BuildWorkflowSourceFacts {
   if (attachedCount === 0) return { kind: "empty" };
-  if (summary.header.build_stale) {
-    return { kind: "stale", attachedCount, issueCount: 1 };
+  const freshness = summary.header.freshness;
+  if (freshness.status === "stale") {
+    const issueCount = freshness.reasons.length + freshness.untracked_sources.length;
+    return { kind: "stale", attachedCount, issueCount: Math.max(1, issueCount) };
   }
   return { kind: "ready", attachedCount };
 }
@@ -42,7 +44,7 @@ function acceptedPlanFailureReason(
   switch (progress.kind) {
     case "unavailable":
       return progress.reason === "compatibility_dirty"
-        ? "The Accepted Plan needs compatibility review."
+        ? "This Build's Accepted Plan cannot be read. Restart PrintPartner so it can repair the Plan data."
         : "The Accepted Plan has not been initialized.";
     case "integrity_failure":
       return "Accepted Plan data is inconsistent.";

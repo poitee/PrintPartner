@@ -78,6 +78,48 @@ describe("resolveBuildWorkflow", () => {
     });
   });
 
+  it("does not stop Production for Source changes once a Plan is accepted", () => {
+    const workspace = resolveBuildWorkflow({
+      ...emptyFacts,
+      sources: { kind: "stale", attachedCount: 3, issueCount: 2 },
+      acceptedPlan: {
+        kind: "ready",
+        revisionId: 12,
+        planVersion: 3,
+        totalUnits: 8,
+        remainingUnits: 3,
+      },
+    });
+
+    expect(workspace.next_action).toEqual({
+      kind: "prepare_production",
+      stage_id: "production",
+      unit_count: 3,
+      label: "Prepare Production",
+      reason: "3 required units remain in the Accepted Plan.",
+    });
+    expect(workspace.stages.find((stage) => stage.id === "sources")?.status).toEqual({
+      kind: "stale",
+      summary: "Sources have changed since this Plan was accepted.",
+      task_count: 2,
+    });
+  });
+
+  it("asks for Source review only before the first Accepted Plan", () => {
+    const workspace = resolveBuildWorkflow({
+      ...emptyFacts,
+      sources: { kind: "stale", attachedCount: 3, issueCount: 1 },
+    });
+
+    expect(workspace.next_action).toEqual({
+      kind: "review_source_changes",
+      stage_id: "sources",
+      issue_count: 1,
+      label: "Review Source changes",
+      reason: "Sources have changed. Review them before you write a Working Plan.",
+    });
+  });
+
   it("moves Source changes forward through a reviewed Working Plan", () => {
     const workspace = resolveBuildWorkflow({
       ...emptyFacts,

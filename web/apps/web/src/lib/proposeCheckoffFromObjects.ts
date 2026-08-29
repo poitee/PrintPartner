@@ -9,7 +9,7 @@ import type { ReviewPart } from "../api/endpoints/planManifests";
 import {
   interpretSlicedObjectName,
   matchSlicedObjectName,
-} from "@print-partner/domain";
+} from "@print-partner/domain/sliced-object-matching";
 import { incompleteUnitsForParts } from "./printerCheckoffUnits";
 
 export type ProposedObjectMatch = {

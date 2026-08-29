@@ -79,7 +79,7 @@ describe("buildPlanWarningLines", () => {
       attachedSources: [source({ id: 1, name: "A", update_status: "up_to_date" })],
       review: null,
     });
-    expect(lines[0]).toMatch(/plan inputs changed/i);
+    expect(lines[0]).toMatch(/sources have changed/i);
   });
 });
 
