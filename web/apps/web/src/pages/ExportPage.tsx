@@ -21,7 +21,6 @@ import WorkPackageCard from "../components/export/WorkPackageCard";
 import { useProductionCheckoffLinks } from "../components/export/useProductionCheckoffLinks";
 import { useProductionSendFleet } from "../components/export/useProductionSendFleet";
 import AcceptedPlateSection from "../components/export/accepted-plates/AcceptedPlateSection";
-// Lazy: PrinterSendPanel pulls in heavy printer integration + dnd-kit
 const PrinterSendPanel = lazy(() => import("../components/export/PrinterSendPanel"));
 const PrinterSendQueuePanel = lazy(() => import("../components/export/PrinterSendQueuePanel"));
 import ShareBuildExportDialog from "../components/share/ShareBuildExportDialog";

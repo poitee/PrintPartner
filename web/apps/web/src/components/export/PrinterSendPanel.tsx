@@ -66,14 +66,6 @@ type Props = {
   onFailure?: (failure: PrinterSendFailure | null) => void;
 };
 
-/**
- * Primary Export Send UI — Send / Start print for Moonraker/PrusaLink,
- * plus a separate Bambu Connect handoff row when a Bambu host is fleet-linked.
- *
- * Only two verbs live here: Send (upload) and Start print. Farm-queue verbs
- * (Send ready / Send now / Remove) sit in PrinterSendQueuePanel on this same
- * Production send task.
- */
 export default function PrinterSendPanel({
   remainingParts,
   profileId,

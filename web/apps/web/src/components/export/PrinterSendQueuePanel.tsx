@@ -13,11 +13,8 @@ import { cn } from "@/lib/utils";
 type Props = {
   engineReady: boolean;
   refreshKey?: number;
-  /** When true (Progress), show Send ready / Send now. Default true. */
   allowDispatch?: boolean;
-  /** Idle Progress: Send ready is the primary operator move. */
   emphasizeSendReady?: boolean;
-  /** Reports active queue length so Progress can choose idle copy. */
   onActiveCountChange?: (count: number) => void;
   className?: string;
 };
@@ -40,11 +37,6 @@ function stateLabel(item: PrinterSendQueueItem): string {
   }
 }
 
-/**
- * Farm send-queue operator surface for Production send.
- * Hides when empty. Send ready / Send now / Remove when allowDispatch.
- * Checkoff reports printer status and never dispatches.
- */
 export default function PrinterSendQueuePanel({
   engineReady,
   refreshKey = 0,
