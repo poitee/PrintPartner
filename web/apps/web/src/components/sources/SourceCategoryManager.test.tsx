@@ -176,17 +176,21 @@ describe("SourceCategoryManager", () => {
 
     act(() => queryClient.setQueryData(queryKeys.sourceCategories, ["External"]));
 
-    await waitFor(() =>
-      expect((firstCategory as HTMLInputElement).value).toBe("External"),
-    );
-
-    fireEvent.change(firstCategory, { target: { value: "Saved external" } });
-    const saveButton = screen.getByRole("button", { name: "Save categories" });
     await waitFor(() => {
-      expect((firstCategory as HTMLInputElement).value).toBe("Saved external");
-      expect((saveButton as HTMLButtonElement).disabled).toBe(false);
+      const restored = screen.getByRole("textbox", { name: "Category 1" }) as HTMLInputElement;
+      expect(restored.value).toBe("External");
+      expect((screen.getByRole("button", { name: "Save categories" }) as HTMLButtonElement).disabled).toBe(true);
     });
-    fireEvent.click(saveButton);
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Category 1" }), {
+      target: { value: "Saved external" },
+    });
+    await waitFor(() => {
+      const edited = screen.getByRole("textbox", { name: "Category 1" }) as HTMLInputElement;
+      expect(edited.value).toBe("Saved external");
+      expect((screen.getByRole("button", { name: "Save categories" }) as HTMLButtonElement).disabled).toBe(false);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save categories" }));
 
     await waitFor(() =>
       expect(screen.getByTestId("saved-categories").textContent).toBe("Saved external"),

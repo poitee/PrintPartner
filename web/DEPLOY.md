@@ -12,7 +12,7 @@ From the repository root:
 docker compose pull && docker compose up -d
 ```
 
-Open [http://localhost:8080](http://localhost:8080). The Compose port binds to loopback by default. Set `PP_BIND_ADDRESS=0.0.0.0` for LAN access, and enable authentication before publishing that port. Data persists in the `print-partner-data` volume (`/data` in the container). To build from source instead of pulling, use `docker compose up --build`.
+Open [http://localhost:8080](http://localhost:8080), or `http://<this-computer>:8080` from another machine on the LAN. Compose publishes `8080` on every host interface. Set `PP_BIND_ADDRESS=127.0.0.1` to keep it on this computer, and enable authentication on an untrusted network. Data persists in the `print-partner-data` volume (`/data` in the container). To build from source instead of pulling, use `docker compose up --build`.
 
 ### Published images
 
@@ -44,7 +44,7 @@ The app service has a healthcheck that polls `GET /health` every 30s using Node'
 |----------|---------|-------------|
 | `PRINT_PARTNER_DATA_DIR` | `./data` | SQLite DB, repos, exports, thumbs |
 | `HOST` | `127.0.0.1` | Bind address |
-| `PP_BIND_ADDRESS` | `127.0.0.1` | Compose published-port interface. Set `0.0.0.0` for LAN access. |
+| `PP_BIND_ADDRESS` | `0.0.0.0` | Compose published-port interface. Set `127.0.0.1` to keep 8080 on this computer. |
 | `PORT` | `18765` (dev) / `8080` (Docker) | HTTP port |
 | `STATIC_DIR` | unset | When set, serve built SPA from this directory |
 | `DEPLOY_MODE` | `self-host` | `self-host` or `saas` |

@@ -40,6 +40,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Compose publishes 8080 on every host interface** - `docker compose up`
+  is reachable from other machines on the LAN. Set `PP_BIND_ADDRESS=127.0.0.1`
+  to keep it on this computer, and enable authentication on an untrusted
+  network. Existing installs that never set `PP_BIND_ADDRESS` pick this up on
+  the next `docker compose up -d`. The image already listened on `0.0.0.0`
+  inside the container.
+
 - **Plan acceptance is one checkpoint** - Plan no longer stacks empty Issues,
   Final review recap, and Required-unit cards above Accept. Working changes,
   open issues, parts, and the accept action (with unit impact) are the whole
@@ -123,10 +130,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - **Unclaimed-print claim hid when profile fetch failed** - the card now uses
   the parent's plan list, and busy state always clears.
-
-- **Default Compose published port 8080 on every interface** - it now binds
-  loopback. Set `PP_BIND_ADDRESS=0.0.0.0` for LAN access, and enable
-  authentication before publishing that port.
 
 - **Plan sheet could wedge on a stale draft** - rebuilding the plan twice left
   two open drafts; applying the newer one stranded the sheet on the older,
