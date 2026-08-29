@@ -259,7 +259,12 @@ function planningBlockerAction(
   code: PlanAcceptanceBlockerCode,
   buildId: number | null,
 ): PlanIssueAction {
-  if (code === "draft_missing" || code === "draft_review" || code === "draft_selection") {
+  if (
+    code === "draft_missing"
+    || code === "draft_review"
+    || code === "draft_selection"
+    || code === "draft_source_changed"
+  ) {
     return planWorkingPlanAction(buildId);
   }
   return sourcesAction(buildId);
@@ -326,7 +331,7 @@ function planningBlockerCopy(code: PlanAcceptanceBlockerCode): PlanningBlockerCo
     case "draft_source_changed":
       return {
         title: "A Source changed after this Working Plan was written",
-        detail: "This Working Plan no longer matches the files behind it. Open Sources and have the assistant write it again from the current Sources.",
+        detail: "This Working Plan no longer matches the files behind it. Open Plan and build it again from the current Sources.",
       };
     case "requirement_unverified":
       return {

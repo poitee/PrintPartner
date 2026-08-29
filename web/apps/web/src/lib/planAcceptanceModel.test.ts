@@ -540,7 +540,10 @@ describe("blocker copy", () => {
       expect(issue!.title, code).not.toContain("_");
       expect(issue!.detail, code).toMatch(/\.$/);
       const planOwned =
-        code === "draft_missing" || code === "draft_review" || code === "draft_selection";
+        code === "draft_missing"
+        || code === "draft_review"
+        || code === "draft_selection"
+        || code === "draft_source_changed";
       expect(issue!.detail, code).toContain(planOwned ? "Open Plan" : "Open Sources");
       // "Draft" and "setup phase" are Avoid terms for Working Plan and Preparation.
       expect(issue!.title.toLowerCase(), code).not.toContain("draft");
