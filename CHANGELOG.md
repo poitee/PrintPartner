@@ -58,6 +58,47 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Legacy sidecar zip could be sent as G-code** - a zip body from the old
+  `/slice` protocol that failed to unzip, or unzipped with no `.gcode` file,
+  was returned as the G-code payload. The printer would have received an
+  archive. That path now throws `invalid_zip` or `empty_gcode`.
+
+- **STL sync status never appeared** - `StlAutoSyncProvider` already computed
+  the banner, but nothing rendered `StlSyncBanner`. Missing or failed STL
+  syncs now show in the app shell with a Sync retry.
+
+- **Incoming shared builds had no inbox** - `IncomingSharesCard` existed and
+  the `/shares/incoming` API worked, but Builds never mounted the card.
+  Multi-user inboxes now list those shares on Builds.
+
+- **Farm send queue had no operator surface** - `PrinterSendQueuePanel` was
+  unmounted. Checkoff reports printer status and does not dispatch, so the
+  panel now sits on the Production send task next to Send / Start print.
+
+- **IPv4-mapped IPv6 bypassed the outbound URL guard** - Node rewrites
+  `[::ffff:127.0.0.1]` to `::ffff:7f00:1`, which the classifier treated as
+  public. Loopback and cloud-metadata mapped addresses are blocked.
+
+- **Changing a password left other sessions valid** - reset already dropped
+  every session. Change-password now does the same, then mints a cookie for
+  the current request.
+
+- **Two drain requests could start two jobs on one printer** - the claim now
+  refuses while another item for that printer is already sending.
+
+- **`?select=missing` could not stick** - a Production setup save changed
+  `updated_at` and reapplied the query param over a custom selection.
+
+- **Checkoff wiped "completed at" on a cold load** - empty parts while the
+  review was loading looked like an unfinished Build and cleared the receipt.
+
+- **Unclaimed-print claim hid when profile fetch failed** - the card now uses
+  the parent's plan list, and busy state always clears.
+
+- **Default Compose published port 8080 on every interface** - it now binds
+  loopback. Set `PP_BIND_ADDRESS=0.0.0.0` for LAN access, and enable
+  authentication before publishing that port.
+
 - **Plan sheet could wedge on a stale draft** - rebuilding the plan twice left
   two open drafts; applying the newer one stranded the sheet on the older,
   whose base version could never match again, so every edit failed with a

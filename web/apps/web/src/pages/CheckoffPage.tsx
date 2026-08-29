@@ -380,6 +380,7 @@ export default function CheckoffPage() {
   // Record when the Build first reached "every Required unit verified".
   useEffect(() => {
     if (selectedProfileId == null) return;
+    if (review == null || review.profile_id !== selectedProfileId) return;
     if (completion.kind === "complete") {
       const at = new Date().toISOString();
       setConsolePrefs((prev) => withCheckoffCompletedAt(prev, selectedProfileId, at));
@@ -390,7 +391,7 @@ export default function CheckoffPage() {
         ? prev
         : withCheckoffCompletedAt(prev, selectedProfileId, null),
     );
-  }, [completion.kind, selectedProfileId]);
+  }, [completion.kind, review, selectedProfileId]);
 
   const correctionsByPart = useMemo(
     () => latestCorrectionsByPart(getCheckoffCorrections(consolePrefs, selectedProfileId)),
@@ -687,6 +688,7 @@ export default function CheckoffPage() {
             failed: activity.failedLinks,
           }}
           unattributedPrints={activity.unattributedPrints}
+          profiles={profiles}
           suppressIntegrationIds={suppressIntegrationIds}
           onActivityRefresh={activity.refreshLinks}
           onQueueChange={setVerifyQueue}

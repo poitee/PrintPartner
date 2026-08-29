@@ -113,6 +113,37 @@ describe("UnattributedPrintCard", () => {
     });
   });
 
+  it("still offers a plan picker when the parent already has profiles and fetch fails", async () => {
+    api.fetchProfiles.mockRejectedValue(new Error("profiles unavailable"));
+    render(
+      <UnattributedPrintCard
+        print={print}
+        profiles={[{ id: 4, name: "Voron Build" }]}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Unclaimed print detected/ }));
+
+    expect(await screen.findByRole("combobox", { name: "Select a plan" })).toBeTruthy();
+    expect(screen.queryByText("profiles unavailable")).toBeNull();
+  });
+
+  it("clears busy after a successful claim that stays mounted", async () => {
+    api.fetchProfiles.mockResolvedValue([{ id: 4, name: "Voron Build" }]);
+    render(<UnattributedPrintCard print={print} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /Unclaimed print detected/ }));
+    fireEvent.change(await screen.findByRole("combobox", { name: "Select a plan" }), {
+      target: { value: "4" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Claim whole plate" }));
+
+    await waitFor(() => {
+      expect(api.claimUnattributedPrint).toHaveBeenCalledWith("17", 4, undefined);
+    });
+    expect(screen.getByRole("button", { name: "Dismiss" }).hasAttribute("disabled")).toBe(false);
+  });
+
   it("claims only selected files for a partial plate", async () => {
     api.fetchProfiles.mockResolvedValue([{ id: 4, name: "Voron Build" }]);
     render(<UnattributedPrintCard print={print} />);

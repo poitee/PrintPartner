@@ -221,7 +221,10 @@ export function updatePrinterSendQueueItem(
       | "printer_id"
     >
   >,
-  options?: { requireState?: PrinterSendQueueState | PrinterSendQueueState[] },
+  options?: {
+    requireState?: PrinterSendQueueState | PrinterSendQueueState[];
+    requireNoSendingForPrinter?: string;
+  },
 ): PrinterSendQueueItem | null {
   return repo.transaction(() => {
     const all = loadPrinterSendQueue(repo);
@@ -232,6 +235,17 @@ export function updatePrinterSendQueueItem(
         ? options.requireState
         : [options.requireState];
       if (!allowed.includes(all[idx].state)) return null;
+    }
+    if (options?.requireNoSendingForPrinter) {
+      const printerId = options.requireNoSendingForPrinter;
+      if (
+        all.some(
+          (item, itemIdx) =>
+            itemIdx !== idx && item.printer_id === printerId && item.state === "sending",
+        )
+      ) {
+        return null;
+      }
     }
     const next = {
       ...all[idx],

@@ -124,6 +124,9 @@ vi.mock("../components/export/PartsManifestTransfer", () => ({
 vi.mock("../components/export/PrinterSendPanel", () => ({
   default: () => <div data-testid="panel-send" />,
 }));
+vi.mock("../components/export/PrinterSendQueuePanel", () => ({
+  default: () => <div data-testid="panel-send-queue" />,
+}));
 vi.mock("../components/export/accepted-plates/AcceptedPlateSection", () => ({
   default: ({ view }: { view?: string }) => <div data-testid={`panel-plates-${view ?? "all"}`} />,
 }));
@@ -294,6 +297,7 @@ describe("ExportPage work packages", () => {
     state.exportRecords = [exportRecord()];
     renderAt("/export");
     expect(await screen.findByTestId("panel-send")).toBeTruthy();
+    expect(screen.getByTestId("panel-send-queue")).toBeTruthy();
   });
 
   it("keeps the old numbered stage links working as aliases", async () => {
@@ -323,6 +327,7 @@ describe("ExportPage work packages", () => {
     state.exportRecords = [exportRecord()];
     renderAt("/export?stage=send");
     expect(await screen.findByTestId("panel-send")).toBeTruthy();
+    expect(screen.getByTestId("panel-send-queue")).toBeTruthy();
   });
 
   it("opens the resume task and explains why when an old link points at a blocked task", () => {

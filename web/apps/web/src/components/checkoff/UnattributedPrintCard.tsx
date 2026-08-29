@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useState } from "react";
 import { AlertTriangle, ChevronDown } from "lucide-react";
-import type { ProfileSummary, UnattributedPrint } from "@print-partner/contracts";
+import type { UnattributedPrint } from "@print-partner/contracts";
 import {
   claimUnattributedPrint,
   dismissUnattributedPrint,
@@ -15,16 +15,27 @@ import {
   SelectValue,
 } from "../ui/select";
 
+type ProfileOption = {
+  id: number;
+  name: string;
+};
+
 type Props = {
   print: UnattributedPrint;
+  profiles?: readonly ProfileOption[];
   onClaimed?: () => void;
   onDismissed?: () => void;
 };
 
-export default function UnattributedPrintCard({ print, onClaimed, onDismissed }: Props) {
+export default function UnattributedPrintCard({
+  print,
+  profiles: profilesProp,
+  onClaimed,
+  onDismissed,
+}: Props) {
   const detailsId = useId();
   const [expanded, setExpanded] = useState(false);
-  const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
+  const [fetchedProfiles, setFetchedProfiles] = useState<ProfileOption[]>([]);
   const [selectedProfileId, setSelectedProfileId] = useState<string>("");
   const [selectedStlBasenames, setSelectedStlBasenames] = useState<Set<string>>(
     () => new Set(print.candidates.map((candidate) => candidate.stl_basename)),
@@ -33,11 +44,15 @@ export default function UnattributedPrintCard({ print, onClaimed, onDismissed }:
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (profilesProp) return;
     fetchProfiles()
-      .then(setProfiles)
-      .catch(() => {/* ignore */});
-  }, []);
+      .then(setFetchedProfiles)
+      .catch((e) => {
+        setError(e instanceof Error ? e.message : "Could not load plans");
+      });
+  }, [profilesProp]);
 
+  const profiles = profilesProp ?? fetchedProfiles;
   const hasMatches = print.candidates.some((c) => c.matching_filenames.length > 0);
 
   const handleClaim = useCallback(async (scope: "whole_plate" | "selected_files") => {
@@ -56,6 +71,7 @@ export default function UnattributedPrintCard({ print, onClaimed, onDismissed }:
       onClaimed?.();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to claim");
+    } finally {
       setBusy(false);
     }
   }, [print.id, selectedProfileId, selectedStlBasenames, onClaimed]);
@@ -68,6 +84,7 @@ export default function UnattributedPrintCard({ print, onClaimed, onDismissed }:
       onDismissed?.();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to dismiss");
+    } finally {
       setBusy(false);
     }
   }, [print.id, onDismissed]);

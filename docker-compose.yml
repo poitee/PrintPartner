@@ -6,7 +6,9 @@ services:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "8080:8080"
+      # Loopback by default. Set PP_BIND_ADDRESS=0.0.0.0 for LAN access, and
+      # enable MULTI_USER or SINGLE_USER_AUTH before publishing the port.
+      - "${PP_BIND_ADDRESS:-127.0.0.1}:8080:8080"
     # Reach host services (e.g. native Ollama) via host.docker.internal on Linux too.
     # Docker Desktop (Mac/Windows) already provides this; host-gateway is a no-op there.
     extra_hosts:

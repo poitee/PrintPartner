@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import { strToU8, zipSync } from "fflate";
 import {
   slicerSidecarAdapter,
   slicerSidecarSlice,
@@ -274,6 +275,63 @@ describe("slicerSidecarSlice — legacy fallback", () => {
     await expect(
       slicerSidecarSlice({}, { model: new Uint8Array([1]), slicer: "orca" }),
     ).rejects.toMatchObject({ code: "no_url" });
+  });
+
+  it("extracts gcode and thumbnail from a legacy zip body", async () => {
+    reset();
+    const zip = zipSync({
+      "plate_1.gcode": strToU8(GCODE),
+      "Metadata/plate_1.png": Uint8Array.from(Buffer.from(PNG_B64, "base64")),
+    });
+    handler = (_req, res) => {
+      res.writeHead(200, { "content-type": "application/zip" });
+      res.end(Buffer.from(zip));
+    };
+
+    const result = await slicerSidecarSlice(
+      { url: baseUrl, slicer: "orca", api: "legacy" },
+      { model: new Uint8Array([1]), slicer: "orca", resolved_flat_configs: { machine: {} } },
+    );
+
+    expect(result.protocol).toBe("legacy");
+    expect(Buffer.from(result.gcode).toString()).toBe(GCODE);
+    expect(Buffer.from(result.thumbnail.slice(0, 8))).toEqual(
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    );
+    expect(result.thumbnail_filename).toBe("plate_1.png");
+  });
+
+  it("rejects a zip content-type whose body is not a zip", async () => {
+    reset();
+    const garbage = Buffer.from("this is not a zip archive");
+    handler = (_req, res) => {
+      res.writeHead(200, { "content-type": "application/zip" });
+      res.end(garbage);
+    };
+
+    const err = await slicerSidecarSlice(
+      { url: baseUrl, slicer: "orca", api: "legacy" },
+      { model: new Uint8Array([1]), slicer: "orca", resolved_flat_configs: { machine: {} } },
+    ).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(SlicerSidecarError);
+    expect((err as SlicerSidecarError).code).toBe("invalid_zip");
+  });
+
+  it("rejects a zip that contains no gcode", async () => {
+    reset();
+    const zip = zipSync({ "readme.txt": strToU8("no gcode here") });
+    handler = (_req, res) => {
+      res.writeHead(200, { "content-type": "application/zip" });
+      res.end(Buffer.from(zip));
+    };
+
+    await expect(
+      slicerSidecarSlice(
+        { url: baseUrl, slicer: "orca", api: "legacy" },
+        { model: new Uint8Array([1]), slicer: "orca", resolved_flat_configs: { machine: {} } },
+      ),
+    ).rejects.toMatchObject({ code: "empty_gcode" });
   });
 });
 

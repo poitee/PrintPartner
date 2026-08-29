@@ -88,6 +88,8 @@ services:
       - pp-exchange:/exchange      # shared with print-partner (3MF in, gcode out)
     expose:
       - "2814"
+    # Print Partner reaches this over the Compose network:
+    # http://slicer-sidecar-orca:2814  (not localhost:2814 from inside the PP container)
     restart: unless-stopped
 
   # -----------------------------------------------------------------------

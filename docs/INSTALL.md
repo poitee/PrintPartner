@@ -5,7 +5,7 @@ This guide installs the self-hosted Docker setup on macOS, Windows, or Linux. Th
 ## Requirements
 
 - Docker Engine with Compose v2, or Docker Desktop
-- A browser on the same computer or local network
+- A browser on the same computer. For another computer on the local network, set `PP_BIND_ADDRESS=0.0.0.0` and enable authentication.
 - Git, unless you download the repository as a zip file
 
 Verify Docker before continuing:
@@ -37,7 +37,7 @@ docker compose up -d
 
 On first startup of each new release, Print Partner creates and validates a database backup in `/data/backups` before it runs migrations. If backup creation or validation fails, the server does not modify the database or start. Repeated starts of the same release reuse the existing pre-update backup.
 
-Open [http://localhost:8080](http://localhost:8080). Check the service if the page does not load:
+Open [http://localhost:8080](http://localhost:8080). The Compose port binds to loopback by default. To reach the app from another computer on the same network, set `PP_BIND_ADDRESS=0.0.0.0` and enable authentication before publishing that port. Check the service if the page does not load:
 
 ```bash
 docker compose ps
@@ -83,10 +83,10 @@ docker compose down
 
 Never add `-v` unless you intend to delete the named volume.
 
-Inspect the volume with:
+Inspect disk use from inside the container. Compose prefixes named volumes with the project name, so the host volume is usually `<project>_print-partner-data`, not `print-partner-data`:
 
 ```bash
-docker volume inspect print-partner-data
+docker compose exec print-partner du -sh /data
 ```
 
 See [Operations](../OPERATIONS.md) for backup and restore commands.

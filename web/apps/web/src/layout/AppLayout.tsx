@@ -10,6 +10,7 @@ import UserMenu from "../components/UserMenu";
 import WorkflowProgress from "../components/WorkflowProgress";
 import SpineRail from "../components/layout/SpineRail";
 import MobileNavDrawer from "../components/layout/MobileNavDrawer";
+import StlSyncBanner from "../components/StlSyncBanner";
 import UpdateAvailableBanner, {
   dismissUpdateBanner,
   isUpdateBannerDismissed,
@@ -26,6 +27,7 @@ import {
 } from "../lib/routes";
 import { cn } from "@/lib/utils";
 import { useProfileSelection } from "../context/ProfileContext";
+import { useStlAutoSync } from "../context/StlAutoSyncContext";
 import { useImportRulesSaveRegistry } from "../context/ImportRulesSaveContext";
 import { useKitManifestSaveRegistry } from "../context/KitManifestSaveContext";
 import ThemePreferenceControl from "../components/ThemePreferenceControl";
@@ -82,6 +84,7 @@ export default function AppLayout() {
 
   useProfileUrlSync();
   const { selectedProfileId, profiles } = useProfileSelection();
+  const { banner, runSync, busy } = useStlAutoSync();
   const { flushAll: flushImportRules } = useImportRulesSaveRegistry();
   const { flushAll: flushKitManifest } = useKitManifestSaveRegistry();
   const { stages, activeId } = useWorkflowStages();
@@ -155,6 +158,12 @@ export default function AppLayout() {
                 "pb-[calc(var(--mobile-stage-height,0px)+var(--job-tray-height,0px)+2rem)]",
               )}
             >
+              <StlSyncBanner
+                mode={banner}
+                onSync={runSync}
+                syncDisabled={busy}
+                className="mb-3 print:hidden"
+              />
               <ErrorBoundary key={location.pathname}>
                 <Outlet />
               </ErrorBoundary>

@@ -21,8 +21,8 @@ import WorkPackageCard from "../components/export/WorkPackageCard";
 import { useProductionCheckoffLinks } from "../components/export/useProductionCheckoffLinks";
 import { useProductionSendFleet } from "../components/export/useProductionSendFleet";
 import AcceptedPlateSection from "../components/export/accepted-plates/AcceptedPlateSection";
-// Lazy: PrinterSendPanel pulls in heavy printer integration + dnd-kit
 const PrinterSendPanel = lazy(() => import("../components/export/PrinterSendPanel"));
+const PrinterSendQueuePanel = lazy(() => import("../components/export/PrinterSendQueuePanel"));
 import ShareBuildExportDialog from "../components/share/ShareBuildExportDialog";
 import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";
@@ -590,14 +590,20 @@ export default function ExportPage() {
 
   const sendPanel = (
     <Suspense fallback={<div className="h-32 animate-pulse rounded-lg bg-muted" />}>
-      <PrinterSendPanel
-        remainingParts={remainingParts}
-        profileId={selectedProfileId}
-        planName={planName}
-        engineReady={engineState === "ready"}
-        onSlicedFileChange={setSlicedFile}
-        onFailure={setSendFailure}
-      />
+      <div className="space-y-3">
+        <PrinterSendPanel
+          remainingParts={remainingParts}
+          profileId={selectedProfileId}
+          planName={planName}
+          engineReady={engineState === "ready"}
+          onSlicedFileChange={setSlicedFile}
+          onFailure={setSendFailure}
+        />
+        <PrinterSendQueuePanel
+          engineReady={engineState === "ready"}
+          allowDispatch
+        />
+      </div>
     </Suspense>
   );
 

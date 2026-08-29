@@ -50,6 +50,9 @@ vi.mock("../queries/profiles", () => ({
 vi.mock("../hooks/useMediaQuery", () => ({
   useMediaQuery: () => state.mobile,
 }));
+vi.mock("../context/AuthContext", () => ({
+  useAuth: () => ({ multiUser: false }),
+}));
 
 describe("PlansPage", () => {
   afterEach(cleanup);

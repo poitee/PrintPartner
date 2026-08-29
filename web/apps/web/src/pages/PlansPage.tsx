@@ -13,6 +13,7 @@ import PageHeader from "../components/layout/PageHeader";
 import PageHeaderActions from "../components/layout/PageHeaderActions";
 import EmptyState from "../components/layout/EmptyState";
 import PageShell from "../components/layout/PageShell";
+import IncomingSharesCard from "../components/share/IncomingSharesCard";
 import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";
 import {
@@ -172,6 +173,7 @@ export default function PlansPage() {
       >
         {loadingAnnouncement}
       </p>
+      <IncomingSharesCard />
 
       {profilesBackgroundError && (
         <p className="text-sm text-destructive" role="alert">

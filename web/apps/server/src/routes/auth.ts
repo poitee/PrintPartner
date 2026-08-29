@@ -243,6 +243,9 @@ export function registerAuthRoutes(
       }
 
       authStore.updatePasswordHash(user.id, hashPassword(newPassword));
+      authStore.deleteAllUserSessions(user.id);
+      const raw = authStore.createSession(user.id);
+      setSessionCookie(reply, raw, config.sessionCookieSecure);
       return { ok: true };
     });
   }

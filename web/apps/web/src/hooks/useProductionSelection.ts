@@ -15,7 +15,7 @@ export function useProductionSelection(
   const setup = useProductionSetup(profileId, persist);
   const setupRef = useRef(setup.data);
   setupRef.current = setup.data;
-  const identity = `${profileId ?? ""}:${select ?? ""}:${setup.data?.updated_at ?? "loading"}:${units.map((unit) => unit.token).sort().join(",")}`;
+  const identity = `${profileId ?? ""}:${select ?? ""}:${setup.data ? "ready" : "loading"}:${units.map((unit) => unit.token).sort().join(",")}`;
   const previousIdentity = useRef(identity);
   const [selection, setSelection] = useState<ReadonlySet<RequiredUnitToken>>(() =>
     initialProductionSelection(units, select),
