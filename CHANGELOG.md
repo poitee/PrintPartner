@@ -40,6 +40,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Compose publishes 8080 on every host interface** - `docker compose up`
+  is reachable from other machines on the LAN. Set `PP_BIND_ADDRESS=127.0.0.1`
+  to keep it on this computer, and enable authentication on an untrusted
+  network. The image already listened on `0.0.0.0` inside the container.
+
 - **Plan acceptance is one checkpoint** - Plan no longer stacks empty Issues,
   Final review recap, and Required-unit cards above Accept. Working changes,
   open issues, parts, and the accept action (with unit impact) are the whole

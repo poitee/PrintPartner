@@ -115,7 +115,13 @@ docker compose pull
 docker compose up -d
 ```
 
-Open [http://localhost:8080](http://localhost:8080). The Compose port binds to loopback by default. To reach the app from another computer on the same network, set `PP_BIND_ADDRESS=0.0.0.0` and enable authentication before publishing that port.
+Open [http://localhost:8080](http://localhost:8080), or `http://<this-computer>:8080` from another machine on the same network. To keep the port on this computer only:
+
+```bash
+PP_BIND_ADDRESS=127.0.0.1 docker compose up -d
+```
+
+Enable authentication (`SINGLE_USER_AUTH=1` or `MULTI_USER=1`) if that network is not trusted.
 
 <!-- release-version:start -->
 The current release is `3.2.0`. The default Compose file uses `ghcr.io/poitee/print-partner:3.2.0`, and the app reports runtime version `3.2.0-web`.
@@ -171,7 +177,7 @@ The default self-host setup uses SQLite and local storage. Common variables are:
 | `HOST` | `127.0.0.1` or `0.0.0.0` in Docker | Server bind address |
 | `PORT` | `18765` or `8080` in Docker | HTTP port |
 | `PRINT_PARTNER_API_KEY` | unset | Protects API and remote MCP access |
-| `PP_BIND_ADDRESS` | `127.0.0.1` (Compose) | Host interface for the published `8080` port |
+| `PP_BIND_ADDRESS` | `0.0.0.0` (Compose) | Host interface for the published `8080` port. Set `127.0.0.1` for this computer only. |
 | `GITHUB_REPO` | `poitee/PrintPartner` | Repository used for update checks |
 | `PRINT_PARTNER_UPDATE_CHECK` | enabled | Set to `0` to disable release checks |
 

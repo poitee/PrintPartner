@@ -51,6 +51,8 @@ ENV PP_VERSION=${PP_APP_VERSION}-web
 ENV PP_COMMIT=${PP_COMMIT}
 ENV PP_TAG=${PP_TAG}
 ENV PP_BUILD_DATE=${PP_BUILD_DATE}
+# Listen on every container interface so `docker run -p 8080:8080` and Compose
+# can publish the app. Compose also publishes the host port (see PP_BIND_ADDRESS).
 ENV HOST=0.0.0.0
 ENV PORT=8080
 ENV PRINT_PARTNER_DATA_DIR=/data
