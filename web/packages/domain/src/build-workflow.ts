@@ -156,7 +156,7 @@ function sourceStageStatus(
     case "stale":
       return {
         kind: "stale",
-        summary: `${facts.issueCount} Source ${pluralized(facts.issueCount, "change")} need review.`,
+        summary: "Sources have changed since this Plan was accepted.",
         task_count: facts.issueCount,
       };
     default:
@@ -412,18 +412,6 @@ function nextAction(facts: BuildWorkflowFacts): BuildWorkflowNextAction {
       reason: facts.acceptedPlan.reason,
     };
   }
-  if (
-    facts.sources.kind === "stale"
-    && facts.workingPlan.kind === "none"
-  ) {
-    return {
-      kind: "review_source_changes",
-      stage_id: "sources",
-      issue_count: facts.sources.issueCount,
-      label: "Review Source changes",
-      reason: `${facts.sources.issueCount} Source ${pluralized(facts.sources.issueCount, "change")} need review.`,
-    };
-  }
   if (facts.sources.kind === "empty") {
     return {
       kind: "attach_sources",
@@ -463,6 +451,20 @@ function nextAction(facts: BuildWorkflowFacts): BuildWorkflowNextAction {
       break;
     default:
       return assertNever(facts.workingPlan);
+  }
+
+  if (
+    facts.sources.kind === "stale"
+    && facts.workingPlan.kind === "none"
+    && facts.acceptedPlan.kind === "none"
+  ) {
+    return {
+      kind: "review_source_changes",
+      stage_id: "sources",
+      issue_count: facts.sources.issueCount,
+      label: "Review Source changes",
+      reason: "Sources have changed. Review them before you write a Working Plan.",
+    };
   }
 
   if (facts.acceptedPlan.kind === "none") {

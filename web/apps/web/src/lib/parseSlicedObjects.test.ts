@@ -173,6 +173,8 @@ describe("parseSlicedObjectsFile", () => {
     expect(result.format).toBe("3mf");
     expect(result.unlabeled).toBe(false);
     expect(result.names).toEqual(["frame_left_01.stl", "frame_right_01.stl"]);
+    if (result.format !== "3mf") throw new Error("expected 3MF result");
+    expect(result.projectOnlyNames).toEqual(["unused_object.stl"]);
   });
 
   it("preserves repeated Bambu plate instances", async () => {

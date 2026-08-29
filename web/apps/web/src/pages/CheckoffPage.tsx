@@ -2,7 +2,6 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { Link, useNavigate } from "react-router-dom";
 import { CheckSquare } from "lucide-react";
 import { toast } from "sonner";
-import PlanFreshnessNotice from "../components/PlanFreshnessNotice";
 import PageHeader from "../components/layout/PageHeader";
 import PageHeaderActions from "../components/layout/PageHeaderActions";
 import PageShell from "../components/layout/PageShell";
@@ -38,7 +37,6 @@ import type { ReviewPart } from "../api/endpoints/planManifests";
 import { useBuildTrackingSettingsQuery } from "../queries/buildTracking";
 import { useBuildWorkflowQuery } from "../queries/buildWorkflow";
 import {
-  buildSourcesRoute,
   planRoute,
   prepareMissingPartsRoute,
   productionRoute,
@@ -627,13 +625,6 @@ export default function CheckoffPage() {
         <PwaInstallBanner />
 
         <PlanSpecialRequestLine note={specialRequest} />
-
-        {selectedProfile && (
-          <PlanFreshnessNotice
-            freshness={selectedProfile.freshness}
-            action={{ kind: "review", href: buildSourcesRoute(selectedProfileId) }}
-          />
-        )}
 
         {completion.kind === "complete" ? (
           <CheckoffCompletionCard

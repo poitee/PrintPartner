@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom";
-import { AlertTriangle, CircleAlert, CircleCheck } from "lucide-react";
+import { AlertTriangle, CircleAlert } from "lucide-react";
 import { usePlanWorkspace } from "../../context/PlanWorkspaceContext";
 import { planDraftRevisionPartLabels } from "../../lib/planDraftUi";
 import { statusTone } from "../../lib/statusTone";
@@ -38,23 +38,7 @@ export default function PlanIssuesSection() {
   const acceptedPartLabels = draftWorkspace
     ? planDraftRevisionPartLabels(draftWorkspace)
     : new Map<number, string>();
-  if (model.issues.length === 0) {
-    return (
-      <section
-        id="plan-issues"
-        aria-labelledby="plan-issues-heading"
-        className="rounded-lg border border-border bg-card p-4 shadow-sm"
-      >
-        <h2 id="plan-issues-heading" className="text-sm font-semibold">
-          Issues
-        </h2>
-        <p className="mt-1 flex items-center gap-2 text-sm text-muted-foreground">
-          <CircleCheck className={cn("h-4 w-4", statusTone({ tone: "success", emphasis: "text" }))} aria-hidden />
-          Nothing to resolve. This revision is ready to review.
-        </p>
-      </section>
-    );
-  }
+  if (model.issues.length === 0) return null;
 
   const renderAction = (issue: PlanIssue) => {
     const action = issue.action;

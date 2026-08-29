@@ -352,6 +352,13 @@ export default function ExternalPrintRoutePanel({ profileId, onRecorded }: Props
 /** The file the operator picked, with the object labels this browser read from it. */
 type ReadPrintFile = Readonly<{ file: File; objectNames: string[] }>;
 
+/** A Bambu/Orca project whose off-plate objects need an operator decision. */
+type ProjectObjectReview = Readonly<{
+  file: File;
+  plateObjectNames: string[];
+  projectOnlyNames: string[];
+}>;
+
 /**
  * The link the record wrote, kept so a failed check-off can rerun on its own.
  *
@@ -381,6 +388,7 @@ type UploadState =
   | { phase: "choosing" }
   | { phase: "reading"; filename: string }
   | { phase: "read_failed"; filename: string; message: string }
+  | { phase: "reviewing_project_objects"; review: ProjectObjectReview }
   | { phase: "uploading"; chosen: ReadPrintFile }
   | { phase: "upload_failed"; chosen: ReadPrintFile; message: string }
   | { phase: "confirming"; chosen: ReadPrintFile; check: UploadedPrintFileCheck }
@@ -424,6 +432,7 @@ function answeredFile(
     case "choosing":
     case "reading":
     case "read_failed":
+    case "reviewing_project_objects":
     case "uploading":
     case "upload_failed":
       return null;
@@ -577,6 +586,17 @@ function UploadedPrintRecord({
     setState({ phase: "reading", filename: file.name });
     try {
       const parsed = await parseSlicedObjectsFile(file);
+      if (parsed.format === "3mf" && parsed.projectOnlyNames.length > 0) {
+        setState({
+          phase: "reviewing_project_objects",
+          review: {
+            file,
+            plateObjectNames: parsed.names,
+            projectOnlyNames: parsed.projectOnlyNames,
+          },
+        });
+        return;
+      }
       await upload({ file, objectNames: parsed.names });
     } catch (error) {
       setState({
@@ -690,6 +710,7 @@ function UploadedPrintRecord({
     state.phase === "checking_off";
   // The record is written, so the form is history and must not be resubmitted.
   const written = state.phase === "checking_off" || state.phase === "checkoff_failed";
+  const hasChosenFile = answered !== null || state.phase === "reviewing_project_objects";
 
   return (
     <div className="stack-section">
@@ -716,7 +737,7 @@ function UploadedPrintRecord({
           onClick={() => inputRef.current?.click()}
         >
           <Upload className="mr-1.5 h-4 w-4" aria-hidden />
-          {answered ? "Choose a different file" : "Choose the print file"}
+          {hasChosenFile ? "Choose a different file" : "Choose the print file"}
         </Button>
         <p className="text-meta text-muted-foreground">
           PrintPartner reads the file you upload and says what it is. A slicer project is fine
@@ -753,6 +774,63 @@ function UploadedPrintRecord({
           onRetry={() => inputRef.current?.click()}
           retryLabel="Choose another file"
         />
+      ) : null}
+
+      {state.phase === "reviewing_project_objects" ? (
+        <section
+          aria-label="Project-only 3MF objects"
+          className="stack-row rounded-md border border-warning/35 bg-warning-soft p-3"
+        >
+          <p className="font-mono text-body font-semibold">{state.review.file.name}</p>
+          <p className="text-body font-medium text-warning">
+            {state.review.plateObjectNames.length} object
+            {state.review.plateObjectNames.length === 1 ? "" : "s"} assigned to a plate
+          </p>
+          <p className="text-body">
+            {state.review.projectOnlyNames.length} more object
+            {state.review.projectOnlyNames.length === 1 ? "" : "s"} stored only in the project.
+            Bambu did not assign {state.review.projectOnlyNames.length === 1 ? "it" : "them"} to
+            a printable plate. Include {state.review.projectOnlyNames.length === 1 ? "it" : "them"}
+            only if {state.review.projectOnlyNames.length === 1 ? "it was" : "they were"} printed.
+          </p>
+          <ul className="max-h-40 overflow-y-auto rounded-md border border-warning/35 bg-background p-2 font-mono text-micro">
+            {state.review.projectOnlyNames.map((name, index) => (
+              <li key={`${name}:${index}`} className="truncate" title={name}>
+                {name}
+              </li>
+            ))}
+          </ul>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              size="shop"
+              variant="outline"
+              onClick={() =>
+                void upload({
+                  file: state.review.file,
+                  objectNames: state.review.plateObjectNames,
+                })
+              }
+            >
+              Use plate objects only
+            </Button>
+            <Button
+              size="shop"
+              onClick={() =>
+                void upload({
+                  file: state.review.file,
+                  objectNames: [
+                    ...state.review.plateObjectNames,
+                    ...state.review.projectOnlyNames,
+                  ],
+                })
+              }
+            >
+              {`Include all ${
+                state.review.plateObjectNames.length + state.review.projectOnlyNames.length
+              } project objects`}
+            </Button>
+          </div>
+        </section>
       ) : null}
 
       {state.phase === "upload_failed" ? (

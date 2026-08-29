@@ -25,7 +25,19 @@ describe("printFileClassificationSummary, print intent", () => {
     expect(printFileClassificationSummary({ format: "bgcode" }, "print").status).toBe("ready");
   });
 
-  it("uses the words the research doc fixed for each 3MF classification", () => {
+  it("shows a sliced 3MF as ready to assign, not as a review gate", () => {
+    expect(printFileClassificationSummary(
+      { format: "3mf", kind: "toolpath_package" },
+      "print",
+    )).toMatchObject({
+      status: "ready",
+      headline: "Sliced 3MF",
+      downloadOnly: false,
+    });
+    expect(isPrintReady({ format: "3mf", kind: "toolpath_package" })).toBe(true);
+  });
+
+  it("names each 3MF classification", () => {
     const cases: readonly { classification: PrintFileClassification; headline: string }[] = [
       { classification: { format: "3mf", kind: "slicer_project" }, headline: "Needs slicing" },
       {
@@ -34,7 +46,7 @@ describe("printFileClassificationSummary, print intent", () => {
       },
       {
         classification: { format: "3mf", kind: "toolpath_package" },
-        headline: "Compatibility review required",
+        headline: "Sliced 3MF",
       },
       { classification: { format: "3mf", kind: "unsupported" }, headline: "Unsupported 3MF" },
     ];

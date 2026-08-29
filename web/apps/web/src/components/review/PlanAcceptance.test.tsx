@@ -270,9 +270,22 @@ describe("Plan acceptance checkpoint", () => {
   it("shows the accepted revision and the working change counts", async () => {
     renderPlan();
     expect(await screen.findByText("Plan revision 1 accepted")).toBeTruthy();
+    expect(screen.getByText(
+      "Production and Checkoff still use this revision until you accept the working changes below.",
+    )).toBeTruthy();
     const changes = screen.getByRole("region", { name: "Working Plan changes" });
     expect(changes.textContent).toContain("Changed quantity");
     expect(changes.textContent).toContain("Not accepted yet");
+  });
+
+  it("does not claim Production uses a revision that has not been accepted", async () => {
+    state.review = { ...baseReview(), accepted_basis: null };
+    renderPlan();
+    expect(await screen.findByText("No Plan revision accepted yet")).toBeTruthy();
+    expect(screen.getByText(
+      "Accept a Working Plan before Production and Checkoff can start.",
+    )).toBeTruthy();
+    expect(screen.queryByText(/still use this revision/)).toBeNull();
   });
 
   it("blocks acceptance while a Required-unit decision is open, and says why", async () => {
@@ -397,6 +410,8 @@ describe("Plan acceptance checkpoint", () => {
 
     const accept = await screen.findByRole("button", { name: "Accept Plan revision" });
     await waitFor(() => expect(accept.hasAttribute("disabled")).toBe(false));
+    expect(screen.getByText("Units kept")).toBeTruthy();
+    expect(screen.getByText("Must be printed again")).toBeTruthy();
     await user.click(accept);
 
     expect(await screen.findByText("Plan revision 2 accepted")).toBeTruthy();
@@ -407,6 +422,16 @@ describe("Plan acceptance checkpoint", () => {
       .toBe("/export?profile=7&select=missing");
     expect(screen.getByRole("link", { name: "View Checkoff" }).getAttribute("href"))
       .toBe("/progress?profile=7");
+  });
+
+  it("hides accept and empty issue cards when the accepted revision is current", async () => {
+    state.setWorkspace(null);
+    renderPlan();
+    expect(await screen.findByText("Plan revision 1 accepted")).toBeTruthy();
+    expect(screen.getByText("Production and Checkoff use this revision.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Accept Plan revision" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "Working Plan changes" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Issues" })).toBeNull();
   });
 
   it("names the files whose printed work could not move", async () => {

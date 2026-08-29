@@ -547,13 +547,14 @@ export function planIssues(input: PlanAcceptanceInput): PlanIssue[] {
 
   for (const [index, issue] of reviewIssues.entries()) {
     if (issue.code === "missing_stl" || issue.code === "merge_conflict") continue;
+    if (issue.code === "no_included_parts" && !draft) continue;
     issues.push({
       id: `plan-issue-${issue.code}-${index}`,
       group: "review_recommended",
       title: issue.message,
       detail: null,
       statusLabel:
-        issue.severity === "blocker" ? "Blocks Production" : "Check before you accept",
+        issue.severity === "blocker" ? "Blocks Production" : "Does not block Production",
       tone: issue.severity === "blocker" ? "error" : "warning",
       action: issue.link_hint == null ? null : sourcesAction(buildId),
     });
@@ -574,19 +575,29 @@ export function planIssues(input: PlanAcceptanceInput): PlanIssue[] {
   }
 
   const freshness = input.freshness;
-  if (freshness && freshness.status !== "current") {
+  if (freshness?.status === "stale") {
     issues.push({
       id: "plan-issue-source-freshness",
       group: "review_recommended",
-      title:
-        freshness.status === "stale"
-          ? "The sources behind this Plan have moved on"
-          : "This Plan's source revisions are not tracked",
+      title: "The sources behind this Plan have moved on",
       detail: planFreshnessMessages(freshness).join(" "),
-      statusLabel: "Check before you accept",
+      statusLabel: "Does not block Production",
       tone: "warning",
       action: sourcesAction(buildId),
     });
+  } else if (freshness?.status === "untracked") {
+    const reasons = freshness.reasons.filter((reason) => reason.kind !== "no_accepted_inputs");
+    if (reasons.length > 0) {
+      issues.push({
+        id: "plan-issue-source-freshness",
+        group: "review_recommended",
+        title: "This Plan's source revisions are not tracked",
+        detail: reasons.map(planUntrackedReasonText).join(" "),
+        statusLabel: "Does not block Production",
+        tone: "warning",
+        action: sourcesAction(buildId),
+      });
+    }
   }
 
   if (mergeConflicts.length > 0) {

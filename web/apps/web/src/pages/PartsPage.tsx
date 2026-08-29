@@ -24,9 +24,7 @@ import {
 import PlanAcceptanceActionCard from "../components/review/PlanAcceptanceActionCard";
 import PlanAcceptanceConfirmation from "../components/review/PlanAcceptanceConfirmation";
 import PlanAcceptedRevisionCard from "../components/review/PlanAcceptedRevisionCard";
-import PlanFinalReviewCard from "../components/review/PlanFinalReviewCard";
 import PlanIssuesSection from "../components/review/PlanIssuesSection";
-import PlanRequiredUnitImpactCard from "../components/review/PlanRequiredUnitImpactCard";
 import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";
 import type { StlNamingFolderRule } from "@print-partner/contracts";
@@ -40,7 +38,7 @@ import { useEngineHealth } from "../hooks/useEngineHealth";
 import { useJobRunner } from "../hooks/useJobRunner";
 import { resolveEngineState } from "../lib/workflowState";
 
-/** Steps 4 to 7 plus the downstream routes, in the order the user reads them. */
+/** Accepted state, open working changes, then parts, then the one accept action. */
 function PlanReviewSections({
   sheetRef,
   folderRules,
@@ -82,8 +80,6 @@ function PlanReviewSections({
         />
       </section>
 
-      <PlanRequiredUnitImpactCard />
-      <PlanFinalReviewCard />
       <PlanAcceptanceActionCard />
 
       <section aria-labelledby="plan-downstream-heading" className="space-y-2 print:hidden">
@@ -113,12 +109,10 @@ function PlanReviewSections({
 }
 
 /**
- * Plan — the review and acceptance checkpoint.
+ * Plan is the acceptance checkpoint.
  *
- * The page answers two questions in a fixed order: what will this revision
- * require, and am I ready to accept it? Accepted state comes first, then the
- * working changes, then everything that is still open, then the parts, then the
- * effect on printed work, then one summary and one action.
+ * The page answers two questions in order. What does Production use right now?
+ * What, if anything, must happen before a new revision can be accepted?
  */
 export default function PartsPage() {
   const { health, error: engineError, loading: healthLoading } = useEngineHealth();
