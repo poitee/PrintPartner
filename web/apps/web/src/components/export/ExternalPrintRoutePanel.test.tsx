@@ -479,6 +479,55 @@ describe("ExternalPrintRoutePanel", () => {
     expect(await screen.findByText(/chassis.3mf is on the record/)).toBeTruthy();
   });
 
+  it("requires an explicit choice before including project-only 3MF objects", async () => {
+    api.parseSlicedObjectsFile.mockResolvedValueOnce({
+      objects: [{ name: "plate_part.stl", source: "3mf_object" }],
+      names: ["plate_part.stl"],
+      format: "3mf",
+      unlabeled: false,
+      projectOnlyObjects: [{ name: "parked_part.stl", source: "3mf_object" }],
+      projectOnlyNames: ["parked_part.stl"],
+    });
+    renderPanel();
+
+    fireEvent.click(screen.getByRole("radio", { name: /On this computer/ }));
+    await pickFile("project.3mf");
+
+    expect(await screen.findByText(/1 object assigned to a plate/)).toBeTruthy();
+    expect(screen.getByText(/1 more object stored only in the project/)).toBeTruthy();
+    expect(api.uploadPrintFileForAssignment).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Include all 2 project objects" }));
+
+    await waitFor(() =>
+      expect(api.uploadPrintFileForAssignment).toHaveBeenCalledWith(
+        expect.objectContaining({ object_names: ["plate_part.stl", "parked_part.stl"] }),
+      ),
+    );
+  });
+
+  it("keeps project-only 3MF objects out when the operator chooses plate objects", async () => {
+    api.parseSlicedObjectsFile.mockResolvedValueOnce({
+      objects: [{ name: "plate_part.stl", source: "3mf_object" }],
+      names: ["plate_part.stl"],
+      format: "3mf",
+      unlabeled: false,
+      projectOnlyObjects: [{ name: "parked_part.stl", source: "3mf_object" }],
+      projectOnlyNames: ["parked_part.stl"],
+    });
+    renderPanel();
+
+    fireEvent.click(screen.getByRole("radio", { name: /On this computer/ }));
+    await pickFile("project.3mf");
+    fireEvent.click(await screen.findByRole("button", { name: "Use plate objects only" }));
+
+    await waitFor(() =>
+      expect(api.uploadPrintFileForAssignment).toHaveBeenCalledWith(
+        expect.objectContaining({ object_names: ["plate_part.stl"] }),
+      ),
+    );
+  });
+
   it("will not record a file PrintPartner could not read", async () => {
     // No classification at all, which is the one thing the record path cannot
     // work with: there is nothing to attribute the print to.
