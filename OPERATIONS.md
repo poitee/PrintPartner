@@ -196,8 +196,9 @@ Monitor at least:
 
 ```bash
 docker compose exec print-partner du -sh /data
-docker volume inspect print-partner-data
 ```
+
+Compose prefixes named volumes with the project name, so `docker volume inspect print-partner-data` often misses the real volume.
 
 Large consumers are usually synced repositories, thumbnails, exports, and backup archives. Download old backups before deleting their server-side copies.
 

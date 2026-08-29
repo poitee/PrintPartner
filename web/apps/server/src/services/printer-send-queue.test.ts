@@ -311,4 +311,43 @@ describe("printer-send-queue dispatch/drain", () => {
     expect(loadPrinterSendQueue(repo).find((row) => row.id === item.id)?.printer_id).toBe("p1");
   });
 
+  it("refuses to claim a second item while another send for that printer is already sending", async () => {
+    const first = enqueuePrinterSend(repo, {
+      filename: "first.gcode",
+      artifact_path: stageArtifact("race-first"),
+      printer_id: "p1",
+      start: false,
+      wait_for_idle: false,
+      match: "pinned",
+    })!;
+    const second = enqueuePrinterSend(repo, {
+      filename: "second.gcode",
+      artifact_path: stageArtifact("race-second"),
+      printer_id: "p1",
+      start: false,
+      wait_for_idle: false,
+      match: "pinned",
+    })!;
+
+    const firstResult = await dispatchPrinterSendQueueItem(repo, exportsDir, first.id, {
+      startJob: async () => "job-first",
+      getStatus: async () => ({ state: "idle" }),
+    });
+    expect("job_id" in firstResult).toBe(true);
+
+    const started: string[] = [];
+    const secondResult = await dispatchPrinterSendQueueItem(repo, exportsDir, second.id, {
+      startJob: async (payload) => {
+        started.push(payload.printer_id);
+        return "job-second";
+      },
+      getStatus: async () => ({ state: "idle" }),
+    });
+
+    expect("error" in secondResult).toBe(true);
+    if ("error" in secondResult) expect(secondResult.status).toBe(409);
+    expect(started).toEqual([]);
+    expect(loadPrinterSendQueue(repo).find((row) => row.id === second.id)?.state).toBe("queued");
+  });
+
 });

@@ -56,14 +56,54 @@ function classifyIpv4(address: string): AddressClass {
 }
 
 function normalizeIpv6(address: string): string {
-  return address.toLowerCase().split("%")[0] ?? "";
+  return address.toLowerCase().replace(/^\[|\]$/g, "").split("%")[0] ?? "";
+}
+
+/** Expand a compressed IPv6 literal into eight hex groups, or null if unparseable. */
+function expandIpv6Groups(ip: string): string[] | null {
+  if (ip.includes(".")) return null;
+  const sides = ip.split("::");
+  if (sides.length > 2) return null;
+  const parseSide = (side: string): string[] => (side === "" ? [] : side.split(":"));
+  if (sides.length === 1) {
+    const groups = parseSide(sides[0]!);
+    return groups.length === 8 ? groups : null;
+  }
+  const head = parseSide(sides[0]!);
+  const tail = parseSide(sides[1]!);
+  const missing = 8 - head.length - tail.length;
+  if (missing < 1) return null;
+  return [...head, ...Array<string>(missing).fill("0"), ...tail];
+}
+
+/** IPv4-mapped IPv6 (::ffff:x.x.x.x or ::ffff:7f00:1). Node URL uses the hex form. */
+function ipv4FromMappedIpv6(ip: string): string | null {
+  const dotted = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(ip);
+  if (dotted) return dotted[1]!;
+  const groups = expandIpv6Groups(ip);
+  if (!groups) return null;
+  const parsed = groups.map((group) => Number.parseInt(group, 16));
+  if (parsed.some((n) => Number.isNaN(n) || n < 0 || n > 0xffff)) return null;
+  if (
+    parsed[0] !== 0 ||
+    parsed[1] !== 0 ||
+    parsed[2] !== 0 ||
+    parsed[3] !== 0 ||
+    parsed[4] !== 0 ||
+    parsed[5] !== 0xffff
+  ) {
+    return null;
+  }
+  const hi = parsed[6]!;
+  const lo = parsed[7]!;
+  return `${(hi >> 8) & 255}.${hi & 255}.${(lo >> 8) & 255}.${lo & 255}`;
 }
 
 function classifyIpv6(address: string): AddressClass {
   const ip = normalizeIpv6(address);
   if (ip === METADATA_IPV6) return "metadata";
-  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(ip);
-  if (mapped) return classifyIpv4(mapped[1]!);
+  const mappedIpv4 = ipv4FromMappedIpv6(ip);
+  if (mappedIpv4) return classifyIpv4(mappedIpv4);
   if (ip === "::" || ip === "::1") return "private";
   if (ip.startsWith("fc") || ip.startsWith("fd")) return "private"; // ULA fc00::/7
   if (/^fe[89ab]/.test(ip)) return "private"; // link-local fe80::/10
@@ -71,9 +111,10 @@ function classifyIpv6(address: string): AddressClass {
 }
 
 export function classifyAddress(address: string): AddressClass {
-  const family = isIP(address);
-  if (family === 4) return classifyIpv4(address);
-  if (family === 6) return classifyIpv6(address);
+  const host = address.replace(/^\[|\]$/g, "");
+  const family = isIP(host);
+  if (family === 4) return classifyIpv4(host);
+  if (family === 6) return classifyIpv6(host);
   return "private";
 }
 

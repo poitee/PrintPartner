@@ -76,6 +76,68 @@ describe("production authentication routes", () => {
     }
   });
 
+  it("invalidates other sessions when the password changes", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pp-auth-change-password-"));
+    const { app, ports } = await makeProductionApp(dir);
+
+    try {
+      const registration = await app.inject({
+        method: "POST",
+        url: "/auth/register",
+        payload: {
+          email: "sessions@example.com",
+          password: "correct-horse-battery",
+          display_name: "Sessions",
+        },
+      });
+      expect(registration.statusCode).toBe(200);
+      const firstCookie = String(registration.headers["set-cookie"]).split(";", 1)[0];
+
+      const secondLogin = await app.inject({
+        method: "POST",
+        url: "/auth/login",
+        payload: {
+          email: "sessions@example.com",
+          password: "correct-horse-battery",
+        },
+      });
+      expect(secondLogin.statusCode).toBe(200);
+      const secondCookie = String(secondLogin.headers["set-cookie"]).split(";", 1)[0];
+
+      const changed = await app.inject({
+        method: "POST",
+        url: "/auth/change-password",
+        headers: { cookie: firstCookie },
+        payload: {
+          current_password: "correct-horse-battery",
+          new_password: "correct-horse-battery-2",
+        },
+      });
+      expect(changed.statusCode).toBe(200);
+      const refreshedCookie = String(changed.headers["set-cookie"]).split(";", 1)[0];
+      expect(refreshedCookie).toMatch(/^pp_session=/);
+      expect(refreshedCookie).not.toBe(firstCookie);
+
+      const otherSession = await app.inject({
+        method: "GET",
+        url: "/health",
+        headers: { cookie: secondCookie },
+      });
+      expect(otherSession.json()).toMatchObject({ authenticated: false });
+
+      const currentSession = await app.inject({
+        method: "GET",
+        url: "/health",
+        headers: { cookie: refreshedCookie },
+      });
+      expect(currentSession.json()).toMatchObject({ authenticated: true });
+    } finally {
+      await app.close();
+      ports.db.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("reports whether the health request has an authenticated session", async () => {
     const dir = mkdtempSync(join(tmpdir(), "pp-auth-production-health-"));
     const { app, ports } = await makeProductionApp(dir);

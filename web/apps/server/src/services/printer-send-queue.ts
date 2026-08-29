@@ -128,7 +128,7 @@ export async function dispatchPrinterSendQueueItem(
       printer_id: target.printer.id,
       host_name: target.hostName,
     },
-    { requireState: ["queued", "error"] },
+    { requireState: ["queued", "error"], requireNoSendingForPrinter: target.printer.id },
   );
   if (!claimed) return { error: "Item changed concurrently", status: 409 };
 

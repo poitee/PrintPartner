@@ -199,6 +199,7 @@ export default function GlobalProductionPage() {
                   <UnattributedPrintCard
                     key={print.id}
                     print={print}
+                    profiles={profiles}
                     onClaimed={() => void refreshFarm()}
                     onDismissed={() => void refreshFarm()}
                   />

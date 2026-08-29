@@ -7,6 +7,14 @@ on:
     branches: [main, master]
     paths:
       - "web/**"
+      - "scripts/**"
+      - "docs/**"
+      - ".agents/**"
+      - "Caddyfile"
+      - "README.md"
+      - "CHANGELOG.md"
+      - "OPERATIONS.md"
+      - ".github/FUNDING.yml"
       - "Dockerfile"
       - "docker-entrypoint.sh"
       - "docker-compose*.yml"
@@ -17,6 +25,14 @@ on:
   pull_request:
     paths:
       - "web/**"
+      - "scripts/**"
+      - "docs/**"
+      - ".agents/**"
+      - "Caddyfile"
+      - "README.md"
+      - "CHANGELOG.md"
+      - "OPERATIONS.md"
+      - ".github/FUNDING.yml"
       - "Dockerfile"
       - "docker-entrypoint.sh"
       - "docker-compose*.yml"

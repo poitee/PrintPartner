@@ -19,7 +19,10 @@
  *    {gcode, thumbnail, filename} base64 JSON.
  *
  * Config fields:
- *   url      - Base URL of the sidecar HTTP service, e.g. http://localhost:2814
+ *   url      - Base URL of the sidecar HTTP service.
+ *              On the host, http://localhost:2814. From the Print Partner
+ *              Compose service, http://slicer-sidecar-orca:2814 (the sidecar
+ *              only exposes 2814 on the Compose network).
  *   slicer   - Which CLI the sidecar wraps: "orca" | "prusa" | "bambu"
  *   api      - Optional protocol pin: "v1" | "legacy" (default: try v1, fall back)
  */

@@ -1,5 +1,5 @@
 import { ClipboardCheck } from "lucide-react";
-import type { UnattributedPrint } from "@print-partner/contracts";
+import type { ProfileSummary, UnattributedPrint } from "@print-partner/contracts";
 import type { PrinterCheckoffLink } from "../../api/endpoints/checkoff";
 import type { ReviewPart } from "../../api/endpoints/planManifests";
 import type { CheckoffAttentionItem } from "../../lib/checkoffConsoleModel";
@@ -20,6 +20,7 @@ type Props = {
     failed: PrinterCheckoffLink[];
   };
   unattributedPrints: UnattributedPrint[];
+  profiles: readonly Pick<ProfileSummary, "id" | "name">[];
   suppressIntegrationIds: ReadonlySet<string>;
   onActivityRefresh: () => void;
   onQueueChange: (state: PrintVerifyQueueState) => void;
@@ -44,6 +45,7 @@ export default function CheckoffAttentionView({
   refreshKey,
   links,
   unattributedPrints,
+  profiles,
   suppressIntegrationIds,
   onActivityRefresh,
   onQueueChange,
@@ -70,6 +72,7 @@ export default function CheckoffAttentionView({
         <UnattributedPrintCard
           key={print.id}
           print={print}
+          profiles={profiles}
           onClaimed={onClaimed}
           onDismissed={onDismissed}
         />

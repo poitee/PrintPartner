@@ -35,6 +35,21 @@ describe("classifyAddress", () => {
     expect(classifyAddress("fd00:ec2::254")).toBe("metadata");
     expect(classifyAddress("2606:4700::1111")).toBe("public");
   });
+
+  it("classifies the IPv4-mapped form Node URL parsing actually produces", () => {
+    const loopbackHost = new URL("http://[::ffff:127.0.0.1]/").hostname.replace(/^\[|\]$/g, "");
+    const metadataHost = new URL("http://[::ffff:169.254.169.254]/").hostname.replace(
+      /^\[|\]$/g,
+      "",
+    );
+    expect(loopbackHost).toBe("::ffff:7f00:1");
+    expect(metadataHost).toBe("::ffff:a9fe:a9fe");
+    expect(classifyAddress(loopbackHost)).toBe("private");
+    expect(classifyAddress(metadataHost)).toBe("metadata");
+    expect(classifyAddress(`[${loopbackHost}]`)).toBe("private");
+    expect(classifyAddress("0:0:0:0:0:ffff:7f00:1")).toBe("private");
+    expect(classifyAddress("2001:db8::ffff:7f00:1")).toBe("public");
+  });
 });
 
 describe("assertSafeOutboundUrl", () => {
@@ -61,6 +76,12 @@ describe("assertSafeOutboundUrl", () => {
     await expect(
       assertSafeOutboundUrl("http://169.254.169.254/latest/meta-data/"),
     ).rejects.toThrow(/metadata/);
+    await expect(assertSafeOutboundUrl("http://[::ffff:127.0.0.1]/")).rejects.toThrow(
+      /private or internal/,
+    );
+    await expect(assertSafeOutboundUrl("http://[::ffff:169.254.169.254]/")).rejects.toThrow(
+      /metadata/,
+    );
   });
 
   it("allows private IPs with allowPrivate but still blocks metadata", async () => {
