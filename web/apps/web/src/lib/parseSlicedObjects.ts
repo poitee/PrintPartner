@@ -18,11 +18,10 @@ export type ParsedSlicedObject = {
   source: SlicedObjectSource;
 };
 
-export type ParseSlicedObjectsResult = {
+type ParsedSlicedObjectsBase = {
   objects: ParsedSlicedObject[];
   /** Placed or printed object occurrences in source order. */
   names: string[];
-  format: "gcode" | "bgcode" | "3mf" | "unknown";
   unlabeled: boolean;
   /** Plate preview thumbnail as a data URL (PNG), if found in .gcode.3mf. */
   thumbnailUrl?: string;
@@ -31,6 +30,17 @@ export type ParseSlicedObjectsResult = {
   /** Total filament weight in grams from gcode header comments. */
   filamentWeightG?: number;
 };
+
+export type ParseSlicedObjectsResult =
+  | (ParsedSlicedObjectsBase & {
+      format: "3mf";
+      /** Named project objects that Bambu/Orca did not assign to any plate. */
+      projectOnlyObjects: ParsedSlicedObject[];
+      projectOnlyNames: string[];
+    })
+  | (ParsedSlicedObjectsBase & {
+      format: "gcode" | "bgcode" | "unknown";
+    });
 
 const EXCLUDE_LINE = /^\s*EXCLUDE_OBJECT_DEFINE\b([^\n]*)$/gim;
 const EXCLUDE_NAME_EQ = /\bNAME\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s,]+))/i;
@@ -209,8 +219,13 @@ export function parse3mfObjectNamesFromXml(xml: string): ParsedSlicedObject[] {
   return out;
 }
 
-/** Extract placed-object names from Bambu Studio's model settings metadata. */
-function parseBambuModelSettingsObjectNames(xml: string): ParsedSlicedObject[] {
+type BambuObjectInventory = Readonly<{
+  plateObjects: ParsedSlicedObject[];
+  projectOnlyObjects: ParsedSlicedObject[];
+}>;
+
+/** Separate plate-assigned objects from project-only Bambu Studio objects. */
+function parseBambuModelSettingsObjectNames(xml: string): BambuObjectInventory {
   const namesByObjectId = new Map<string, string>();
   BAMBU_OBJECT_BLOCK.lastIndex = 0;
   let objectMatch: RegExpExecArray | null;
@@ -222,27 +237,37 @@ function parseBambuModelSettingsObjectNames(xml: string): ParsedSlicedObject[] {
     if (objectId != null && name != null) namesByObjectId.set(objectId, name);
   }
 
-  const out: ParsedSlicedObject[] = [];
-  const seen = new Set<string>();
+  const plateObjects: ParsedSlicedObject[] = [];
+  const placedObjectIds = new Set<string>();
+  let foundPlate = false;
   BAMBU_PLATE_BLOCK.lastIndex = 0;
   let plateMatch: RegExpExecArray | null;
   while ((plateMatch = BAMBU_PLATE_BLOCK.exec(xml)) != null) {
+    foundPlate = true;
     BAMBU_MODEL_INSTANCE_BLOCK.lastIndex = 0;
     let instanceMatch: RegExpExecArray | null;
     while ((instanceMatch = BAMBU_MODEL_INSTANCE_BLOCK.exec(plateMatch[1] ?? "")) != null) {
       MODEL_METADATA_OBJECT_ID_ATTR.lastIndex = 0;
       const objectId = MODEL_METADATA_OBJECT_ID_ATTR.exec(instanceMatch[1] ?? "")?.[1];
       const name = namesByObjectId.get(objectId ?? "")?.trim();
-      if (name) out.push({ name, source: "3mf_object" });
+      if (objectId && name) {
+        placedObjectIds.add(objectId);
+        plateObjects.push({ name, source: "3mf_object" });
+      }
     }
   }
 
-  if (out.length === 0) {
+  if (!foundPlate) {
     for (const name of namesByObjectId.values()) {
-      pushUnique(out, seen, name, "3mf_object");
+      plateObjects.push({ name, source: "3mf_object" });
     }
+    return { plateObjects, projectOnlyObjects: [] };
   }
-  return out;
+
+  const projectOnlyObjects = [...namesByObjectId.entries()]
+    .filter(([objectId]) => !placedObjectIds.has(objectId))
+    .map(([, name]) => ({ name, source: "3mf_object" }) satisfies ParsedSlicedObject);
+  return { plateObjects, projectOnlyObjects };
 }
 
 function detectFormat(filename: string): ParseSlicedObjectsResult["format"] {
@@ -278,7 +303,13 @@ export function extractAsciiChunks(bytes: Uint8Array, minRun = 12): string {
 
 async function parse3mfArchive(
   bytes: ArrayBuffer,
-): Promise<{ objects: ParsedSlicedObject[]; thumbnailUrl?: string; printTime?: string; filamentWeightG?: number }> {
+): Promise<{
+  objects: ParsedSlicedObject[];
+  projectOnlyObjects: ParsedSlicedObject[];
+  thumbnailUrl?: string;
+  printTime?: string;
+  filamentWeightG?: number;
+}> {
   const zip = await JSZip.loadAsync(bytes);
   const out: ParsedSlicedObject[] = [];
   const seen = new Set<string>();
@@ -330,13 +361,13 @@ async function parse3mfArchive(
     ([path, entry]) =>
       !entry.dir && path.toLowerCase() === "metadata/model_settings.config",
   )?.[1];
-  let bambuObjects: ParsedSlicedObject[] = [];
+  let bambuInventory: BambuObjectInventory | null = null;
   if (bambuSettingsEntry != null) {
     try {
-      bambuObjects = parseBambuModelSettingsObjectNames(
+      bambuInventory = parseBambuModelSettingsObjectNames(
         await bambuSettingsEntry.async("string"),
       );
-      merge(bambuObjects, true);
+      merge(bambuInventory.plateObjects, true);
     } catch {
       /* fall back to standard 3MF object names */
     }
@@ -346,7 +377,7 @@ async function parse3mfArchive(
     if (entry.dir) continue;
     const lower = path.toLowerCase();
     if (
-      bambuObjects.length === 0 &&
+      bambuInventory === null &&
       (lower.endsWith(".model") || lower.endsWith(".xml"))
     ) {
       try {
@@ -380,12 +411,18 @@ async function parse3mfArchive(
       }
     }
   }
-  return { objects: out, thumbnailUrl, printTime, filamentWeightG };
+  return {
+    objects: out,
+    projectOnlyObjects: bambuInventory?.projectOnlyObjects ?? [],
+    thumbnailUrl,
+    printTime,
+    filamentWeightG,
+  };
 }
 
-function finish(
+function finishFlat(
   objects: ParsedSlicedObject[],
-  format: ParseSlicedObjectsResult["format"],
+  format: "gcode" | "bgcode" | "unknown",
   extras?: Pick<ParseSlicedObjectsResult, "thumbnailUrl" | "printTime" | "filamentWeightG">,
 ): ParseSlicedObjectsResult {
   const names = objects.map((o) => o.name);
@@ -407,18 +444,30 @@ export async function parseSlicedObjectsFile(file: File): Promise<ParseSlicedObj
   const buffer = await file.arrayBuffer();
 
   if (format === "3mf") {
-    const { objects, thumbnailUrl, printTime, filamentWeightG } = await parse3mfArchive(buffer);
-    return finish(objects, "3mf", { thumbnailUrl, printTime, filamentWeightG });
+    const { objects, projectOnlyObjects, thumbnailUrl, printTime, filamentWeightG } =
+      await parse3mfArchive(buffer);
+    const names = objects.map((object) => object.name);
+    return {
+      objects,
+      names,
+      format: "3mf",
+      unlabeled: names.length === 0,
+      projectOnlyObjects,
+      projectOnlyNames: projectOnlyObjects.map((object) => object.name),
+      thumbnailUrl,
+      printTime,
+      filamentWeightG,
+    };
   }
 
   if (format === "bgcode") {
     const ascii = extractAsciiChunks(new Uint8Array(buffer));
     const stats = parseGcodeStats(ascii);
-    return finish(parseGcodeObjectText(ascii), "bgcode", stats);
+    return finishFlat(parseGcodeObjectText(ascii), "bgcode", stats);
   }
 
   // .gcode / .gco / unknown — decode as text
   const text = new TextDecoder("utf-8", { fatal: false }).decode(buffer);
   const stats = parseGcodeStats(text);
-  return finish(parseGcodeObjectText(text), format === "unknown" ? "gcode" : format, stats);
+  return finishFlat(parseGcodeObjectText(text), format === "unknown" ? "gcode" : format, stats);
 }
