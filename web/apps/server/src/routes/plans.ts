@@ -19,7 +19,6 @@ import { AcceptedPlanOperationalIntegrityError } from "../db/accepted-plan-opera
 import { toAcceptedCheckoffView } from "../services/accepted-plan-views.js";
 import { acceptedPlanBasis } from "../db/accepted-plan-progress.js";
 import {
-  buildPlanningApplyBlockers,
   deriveBuildPlanningPhase,
   deriveBuildPlanningReadiness,
   hydrateBuildPlanningBrief,
@@ -187,19 +186,11 @@ export async function registerPlanRoutes(
     if (draftId != null && (!Number.isSafeInteger(draftId) || draftId <= 0)) {
       return reply.status(400).send({ detail: "draft_id must be a positive integer" });
     }
-    const acceptanceBlockers = draftId == null
-      ? null
-      : buildPlanningApplyBlockers(deps.repo, id, draftId);
     return {
       planning: {
         brief,
         planning_phase: deriveBuildPlanningPhase(deps.repo, brief),
         readiness: deriveBuildPlanningReadiness(brief),
-        // Blockers are the whole answer: an empty list is acceptance open. A
-        // second `ready` flag beside them was another thing that could drift.
-        acceptance_readiness: acceptanceBlockers == null
-          ? null
-          : { blockers: acceptanceBlockers },
         grouped_difference_count: groupIds.size,
         difference_count: brief.differences.length,
       },

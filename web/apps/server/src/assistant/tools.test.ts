@@ -561,7 +561,7 @@ describe("assistant tools + example builds", () => {
     expect(repo.getPlanDraft(plan.id, refreshedBrief.draft_id!)?.parts).toHaveLength(2);
   });
 
-  it("reports an MCP-applied planning draft as applied", async () => {
+  it("lets MCP publish a Working Plan without turning Preparation notes into gates", async () => {
     const source = repo.createSource({ name: "Applied project", source_kind: "local" });
     const sourcePath = join(dataDir, "applied-project");
     mkdirSync(sourcePath, { recursive: true });
@@ -573,10 +573,14 @@ describe("assistant tools + example builds", () => {
     });
     const plan = repo.createProfile("Applied project", source.id);
     const brief = newBuildPlanningBrief(plan.id, "Print the bracket", []);
-    brief.requirements = brief.requirements.map((requirement) => ({
-      ...requirement,
-      status: "satisfied",
-    }));
+    brief.checklist_items = [{
+      id: "customer-follow-up",
+      title: "Confirm optional customer preference",
+      category: "pre_print",
+      required: true,
+      completed: false,
+    }];
+    brief.draft_review_blockers = ["Assistant review was not completed"];
     brief.evidence.push({
       id: "printable",
       url: `printpartner:source:${source.id}`,
@@ -623,6 +627,8 @@ describe("assistant tools + example builds", () => {
       draft_id: rebuilt.result.draft_id,
       revision_id: expect.any(Number),
     });
+    expect(planningState).not.toHaveProperty("readiness");
+    expect(planningState.brief).not.toHaveProperty("draft_review_blockers");
   });
 
   it("rolls back planning layer changes when rebuild fails", async () => {

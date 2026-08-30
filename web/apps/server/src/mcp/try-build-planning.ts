@@ -132,7 +132,6 @@ async function main(): Promise<void> {
       },
       planning_state: {
         evidence: planningState.brief.evidence,
-        readiness: planningState.readiness,
         grouped_difference_count: planningState.grouped_difference_count,
         difference_count: planningState.difference_count,
         first_differences: planningState.brief.differences.slice(0, 10),

@@ -129,6 +129,14 @@ export type BuildPlanningBrief = {
   updated_at: string;
 };
 
+/** MCP clients receive Preparation facts, never the legacy publication-gate field. */
+export function mcpBuildPlanningBrief(
+  brief: BuildPlanningBrief,
+): Omit<BuildPlanningBrief, "draft_review_blockers"> {
+  const { draft_review_blockers: _legacyPublicationGates, ...planningBrief } = brief;
+  return planningBrief;
+}
+
 export type BuildPlanningReadiness = {
   ready: boolean;
   blockers: Array<{ code: string; detail: string }>;
@@ -855,24 +863,6 @@ export function deriveBuildPlanningPhase(
       return exhaustive;
     }
   }
-}
-
-export function buildPlanningApplyBlockers(
-  repo: AppRepository,
-  buildId: number,
-  draftId: number,
-): BuildPlanningReadiness["blockers"] | null {
-  const stored = readBuildPlanningBrief(repo, buildId);
-  if (!stored) return null;
-  const brief = hydrateBuildPlanningBrief(repo, stored);
-  const blockers = [...deriveBuildPlanningReadiness(brief).blockers];
-  if (brief.draft_id !== draftId) {
-    blockers.push({
-      code: "draft_selection",
-      detail: `Draft ${draftId} is not the reviewed planning draft`,
-    });
-  }
-  return blockers;
 }
 
 export function newBuildPlanningBrief(

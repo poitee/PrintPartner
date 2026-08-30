@@ -34,8 +34,8 @@ import { createIntegrationPort, type IntegrationPort } from "../integrations/sto
 import { getIntegrationAdapter } from "../integrations/registry.js";
 import {
   deriveBuildPlanningPhase,
-  deriveBuildPlanningReadiness,
   hydrateBuildPlanningBrief,
+  mcpBuildPlanningBrief,
   readBuildPlanningBrief,
 } from "../services/build-planning.js";
 import { readBuildWorkflowWorkspace } from "../services/build-workflow.js";
@@ -220,7 +220,7 @@ export function createProductMcpServer(deps: ProductMcpDeps): Server {
       {
         uriTemplate: "print-partner://build-planning/{build_id}",
         name: "Build planning state",
-        description: "Versioned Build brief, evidence, differences, decisions, draft, and readiness blockers",
+        description: "Versioned Build brief, evidence, differences, decisions, and Working Plan",
         mimeType: "application/json",
       },
     ],
@@ -273,9 +273,8 @@ export function createProductMcpServer(deps: ProductMcpDeps): Server {
           mimeType: "application/json",
           text: JSON.stringify(
             {
-              brief,
+              brief: mcpBuildPlanningBrief(brief),
               planning_phase: planningPhase,
-              readiness: deriveBuildPlanningReadiness(brief),
             },
             null,
             2,

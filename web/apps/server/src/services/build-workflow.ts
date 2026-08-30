@@ -10,7 +10,6 @@ import type {
   AcceptedProfileSummary,
   AppRepository,
 } from "../db/repository.js";
-import { buildPlanningApplyBlockers } from "./build-planning.js";
 import { PlanDraftWorkspaceService } from "./plan-draft-workspace.js";
 import { loadPrinterCheckoffLinks } from "./printer-checkoff-store.js";
 import { loadPrinterSendQueue } from "./printer-send-queue-store.js";
@@ -121,9 +120,7 @@ function workingPlanFacts(
   const reconciliationIssues = workspace.reconciliation.kind === "unresolved"
     ? workspace.reconciliation.conflicts.length
     : 0;
-  const planningIssues = buildPlanningApplyBlockers(repo, buildId, draftId)?.length
-    ?? 0;
-  const issueCount = reconciliationIssues + planningIssues;
+  const issueCount = reconciliationIssues;
 
   if (!workspace.diff.base_is_current) {
     return {

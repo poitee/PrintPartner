@@ -14,7 +14,6 @@ import {
   type ApplyDraftWorkspaceResult,
   type PlanDraftWorkspaceResult,
 } from "../services/plan-draft-workspace.js";
-import { buildPlanningApplyBlockers } from "../services/build-planning.js";
 
 type RouteDeps = { readonly repo: AppRepository };
 
@@ -189,14 +188,9 @@ export async function registerPlanDraftRoutes(
       if (!deps.repo.canMutateAcceptedPlan()) {
         return sendFailure(reply, { kind: "transaction_unavailable" });
       }
-      const planningBlockers = buildPlanningApplyBlockers(deps.repo, profileId, draftId);
-      if (planningBlockers?.length) {
-        return reply.status(422).send({
-          code: "build_planning_blocked",
-          detail: "Build planning is not ready",
-          blockers: planningBlockers,
-        });
-      }
+      // MCP Preparation data is advisory. PlanDraftWorkspaceService remains the
+      // publication authority and atomically enforces snapshot, lifecycle,
+      // accepted-base, required-unit reconciliation, and active-work safety.
       const result = service.apply({
         profileId,
         draftId,

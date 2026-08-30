@@ -259,45 +259,6 @@ export type BuildPlanningEvidence = {
   }>;
 };
 
-/**
- * Every blocker code the engine can raise against accepting a Working Plan.
- *
- * The wire field is a bare string. It is narrowed to this list as the response
- * is read, so the copy that explains a blocker switches over a closed set: a
- * code the engine grows and this list does not becomes a type error at the
- * switch, not silent generic copy in front of the user.
- */
-export const PLAN_ACCEPTANCE_BLOCKER_CODES = {
-  source_role: true,
-  source_roles: true,
-  model_files_missing: true,
-  source_sync: true,
-  source_provenance: true,
-  draft_source_changed: true,
-  requirement_unverified: true,
-  requirement_incompatible: true,
-  unconfirmed_contribution: true,
-  compatibility_unverified: true,
-  compatibility_incompatible: true,
-  open_difference: true,
-  unconfirmed_filament_substitute: true,
-  checklist_incomplete: true,
-  draft_review: true,
-  draft_missing: true,
-  draft_selection: true,
-} as const;
-
-/** A blocker the engine raised. "unrecognised" is a code newer than this client. */
-export type PlanAcceptanceBlockerCode =
-  | keyof typeof PLAN_ACCEPTANCE_BLOCKER_CODES
-  | "unrecognised";
-
-export function isPlanAcceptanceBlockerCode(
-  code: string,
-): code is Exclude<PlanAcceptanceBlockerCode, "unrecognised"> {
-  return Object.hasOwn(PLAN_ACCEPTANCE_BLOCKER_CODES, code);
-}
-
 export type BuildPlanningState = {
   planning_phase:
     | { kind: "preparing" }
@@ -320,15 +281,6 @@ export type BuildPlanningState = {
     draft_id?: number;
   };
   readiness: { ready: boolean; blockers: Array<{ code: string; detail: string }> };
-  /**
-   * Engine-authoritative blockers for accepting the selected Working Plan, and
-   * the only representation of that decision: acceptance is open when the list
-   * is empty. `null` when the read named no Working Plan.
-   *
-   * The engine's `detail` strings are internal and are dropped here. Each code
-   * carries its own written copy in `planAcceptanceModel`.
-   */
-  acceptance_readiness: { blockers: readonly PlanAcceptanceBlockerCode[] } | null;
   grouped_difference_count: number;
   difference_count: number;
 };
@@ -441,32 +393,15 @@ export async function fetchPlanLayers(profileId: number): Promise<ProfileLayer[]
   return body.layers;
 }
 
-/** The wire shape, before blocker codes are narrowed. */
-type BuildPlanningStateWire = Omit<BuildPlanningState, "acceptance_readiness"> & {
-  acceptance_readiness: { blockers: Array<{ code: string; detail: string }> } | null;
-};
-
 export async function fetchBuildPlanningState(
   profileId: number,
   draftId?: number | null,
 ): Promise<BuildPlanningState | null> {
   const draftQuery = draftId == null ? "" : `?draft_id=${encodeURIComponent(String(draftId))}`;
-  const result = await engineFetch<{ planning: BuildPlanningStateWire | null }>(
+  const result = await engineFetch<{ planning: BuildPlanningState | null }>(
     `/plans/${profileId}/build-planning${draftQuery}`,
   );
-  const planning = result.planning;
-  if (!planning) return null;
-  const acceptance = planning.acceptance_readiness;
-  return {
-    ...planning,
-    acceptance_readiness: acceptance == null
-      ? null
-      : {
-          blockers: acceptance.blockers.map((blocker) =>
-            isPlanAcceptanceBlockerCode(blocker.code) ? blocker.code : "unrecognised",
-          ),
-        },
-  };
+  return result.planning;
 }
 
 export async function fetchPlanParts(profileId: number): Promise<PartRow[]> {

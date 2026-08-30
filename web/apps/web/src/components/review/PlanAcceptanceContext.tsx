@@ -11,13 +11,11 @@ import {
 import type { RequiredUnitDecisionContract } from "@print-partner/contracts";
 import { usePlanWorkspace } from "../../context/PlanWorkspaceContext";
 import { useProfileSelection } from "../../context/ProfileContext";
-import { useBuildPlanningQuery } from "../build/useBuildPlanningQuery";
 import {
   planAcceptanceModel,
   preservedVerifiedUnits,
   type PlanAcceptanceFailure,
   type PlanAcceptanceModel,
-  type PlanningBlockerState,
 } from "../../lib/planAcceptanceModel";
 import { planAcceptanceFailureFromError, unmovedUnits } from "../../lib/planAcceptanceFailure";
 import {
@@ -69,11 +67,6 @@ export function PlanAcceptanceProvider({ children, onSyncSources, syncBusy }: Pr
   const [decisionChoices, setDecisionChoices] = useState<Record<number, string>>({});
   const [confirmation, setConfirmation] = useState<StoredPlanAcceptance | null>(null);
   const lastAcceptOptionsRef = useRef<{ moveLinkedRecords?: boolean } | undefined>(undefined);
-  const planningQuery = useBuildPlanningQuery(
-    selectedProfileId,
-    draftWorkspace?.draft.draft_id ?? null,
-  );
-
   // A saved Working Plan that changes underneath invalidates earlier answers.
   useEffect(() => {
     setDecisionChoices({});
@@ -88,19 +81,6 @@ export function PlanAcceptanceProvider({ children, onSyncSources, syncBusy }: Pr
   const freshness =
     profiles.find((profile) => profile.id === selectedProfileId)?.freshness ?? null;
 
-  /**
-   * A failed or in-flight read is not permission to accept. `null` planning is a
-   * settled answer: this Build has nothing the assistant planned.
-   */
-  const planningBlockers = useMemo<PlanningBlockerState>(() => {
-    if (planningQuery.error) return { kind: "unavailable" };
-    if (planningQuery.isPending) return { kind: "loading" };
-    return {
-      kind: "loaded",
-      blockers: planningQuery.data?.acceptance_readiness?.blockers ?? [],
-    };
-  }, [planningQuery.data, planningQuery.error, planningQuery.isPending]);
-
   const model = useMemo(
     () => planAcceptanceModel({
       review,
@@ -108,9 +88,8 @@ export function PlanAcceptanceProvider({ children, onSyncSources, syncBusy }: Pr
       buildId: selectedProfileId,
       failure,
       freshness,
-      planningBlockers,
     }),
-    [draftWorkspace, failure, freshness, planningBlockers, review, selectedProfileId],
+    [draftWorkspace, failure, freshness, review, selectedProfileId],
   );
 
   const conflicts = draftWorkspace?.reconciliation.kind === "unresolved"

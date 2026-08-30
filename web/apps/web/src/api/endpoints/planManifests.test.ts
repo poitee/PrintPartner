@@ -182,7 +182,7 @@ describe("plan manifest endpoints", () => {
     expect(http.calls[9]?.[0]).toContain("/plans/7/build-planning?draft_id=17");
   });
 
-  it("narrows acceptance blocker codes and leaves engine detail strings behind", async () => {
+  it("returns advisory Preparation state without a publication gate", async () => {
     http.respond(
       jsonResponse({
         planning: {
@@ -195,12 +195,6 @@ describe("plan manifest endpoints", () => {
             role_filaments: [],
           },
           readiness: { ready: true, blockers: [] },
-          acceptance_readiness: {
-            blockers: [
-              { code: "draft_selection", detail: "Draft 9 is not the reviewed planning draft" },
-              { code: "a_code_from_a_newer_engine", detail: "https://example.com/x: pending" },
-            ],
-          },
           grouped_difference_count: 0,
           difference_count: 0,
         },
@@ -209,8 +203,7 @@ describe("plan manifest endpoints", () => {
 
     const planning = await fetchBuildPlanningState(7, 9);
 
-    expect(planning?.acceptance_readiness).toEqual({
-      blockers: ["draft_selection", "unrecognised"],
-    });
+    expect(planning?.readiness).toEqual({ ready: true, blockers: [] });
+    expect(planning).not.toHaveProperty("acceptance_readiness");
   });
 });

@@ -25,4 +25,13 @@ describe("mcp product tools", () => {
     expect(mutate.some((t) => t.name === "archive_plan")).toBe(true);
     expect(mutate.every((t) => t.tier === "mutate")).toBe(true);
   });
+
+  it("does not let MCP create publication blockers", () => {
+    const rebuild = ASSISTANT_TOOL_SPECS.find((tool) => tool.name === "propose_rebuild_plan");
+    const publish = ASSISTANT_TOOL_SPECS.find((tool) => tool.name === "propose_apply_plan_draft");
+
+    expect(rebuild?.input_schema.properties).not.toHaveProperty("review_blockers");
+    expect(publish?.description).toContain("Preparation notes remain advisory");
+    expect(publish?.description).not.toMatch(/readiness must pass|block/i);
+  });
 });

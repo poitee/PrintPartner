@@ -48,7 +48,7 @@ async function fixture() {
 }
 
 describe("Plan draft routes", () => {
-  it("blocks the native draft Apply route while AI Build planning has unresolved decisions", async () => {
+  it("applies a native Working Plan while MCP preparation notes remain unfinished", async () => {
     const { app, repo, profile } = await fixture();
     const created = (await app.inject({
       method: "POST",
@@ -71,15 +71,12 @@ describe("Plan draft routes", () => {
       },
     });
 
-    expect(response.statusCode).toBe(422);
-    expect(response.json()).toEqual(
-      expect.objectContaining({
-        code: "build_planning_blocked",
-        blockers: expect.arrayContaining([
-          expect.objectContaining({ code: "requirement_unverified" }),
-        ]),
-      }),
-    );
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual(expect.objectContaining({
+      profile_id: profile.id,
+      draft_id: created.draft.draft_id,
+      plan_version: 1,
+    }));
   });
 
   it("mounts recompute flat and in v2 without changing accepted state", async () => {

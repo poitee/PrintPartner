@@ -99,11 +99,10 @@ import { verifyPrinterCheckoff } from "../services/printer-checkoff-verify.js";
 import { listUnattributedPrints } from "../services/unattributed-print-store.js";
 import {
   analyzeBuildRequest,
-  buildPlanningApplyBlockers,
   buildEvidenceFromUploadedSource,
   deriveBuildPlanningPhase,
-  deriveBuildPlanningReadiness,
   hydrateBuildPlanningBrief,
+  mcpBuildPlanningBrief,
   newBuildPlanningBrief,
   normalizedUrl,
   readBuildPlanningBrief,
@@ -155,7 +154,7 @@ export const ASSISTANT_TOOL_SPECS: AssistantToolSpec[] = [
   {
     name: "get_build_planning_state",
     description:
-      "Return the planning brief, evidence, requirement state, difference counts, blockers, and next decisions.",
+      "Return the planning brief, evidence, requirement state, difference counts, and optional next decisions.",
     input_schema: {
       type: "object",
       properties: { plan_id: { type: "number" } },
@@ -193,7 +192,7 @@ export const ASSISTANT_TOOL_SPECS: AssistantToolSpec[] = [
   },
   {
     name: "get_plan_draft",
-    description: "Return the current persisted Working Plan, its internal draft identity, and planning readiness.",
+    description: "Return the current persisted Working Plan and its internal draft identity.",
     input_schema: {
       type: "object",
       properties: { plan_id: { type: "number" } },
@@ -466,7 +465,6 @@ export const ASSISTANT_TOOL_SPECS: AssistantToolSpec[] = [
       type: "object",
       properties: {
         plan_id: { type: "number" },
-        review_blockers: { type: "array", items: { type: "string" } },
         idempotency_key: { type: "string" },
       },
       required: ["plan_id"],
@@ -475,7 +473,7 @@ export const ASSISTANT_TOOL_SPECS: AssistantToolSpec[] = [
   },
   {
     name: "propose_apply_plan_draft",
-    description: "PROPOSE accepting the selected Working Plan as a new Accepted Plan revision. Server readiness must pass at confirmation time.",
+    description: "PROPOSE publishing the selected Working Plan. Confirmation enforces native Plan integrity; Preparation notes remain advisory.",
     input_schema: {
       type: "object",
       properties: { plan_id: { type: "number" }, draft_id: { type: "number" } },
@@ -1828,9 +1826,8 @@ export async function invokeAssistantTool(
         const groupIds = [...new Set(brief.differences.map((item) => item.group_id))];
         return {
           content: JSON.stringify({
-            brief,
+            brief: mcpBuildPlanningBrief(brief),
             planning_phase: deriveBuildPlanningPhase(ctx.repo, brief),
-            readiness: deriveBuildPlanningReadiness(brief),
             grouped_difference_count: groupIds.length,
             difference_count: brief.differences.length,
             next_required_decisions: [
@@ -1931,7 +1928,6 @@ export async function invokeAssistantTool(
           content: JSON.stringify({
             draft,
             planning_phase: deriveBuildPlanningPhase(ctx.repo, brief),
-            readiness: deriveBuildPlanningReadiness(brief),
           }),
         };
       }
@@ -4994,10 +4990,7 @@ export async function applyAssistantAction(
         if (structuralSources.length !== 1) {
           return { ok: false, detail: "Planning rebuild requires exactly one structural base Source" };
         }
-        const requestedReviewBlockers = Array.isArray(action.params.review_blockers)
-          ? action.params.review_blockers.map(String).filter(Boolean)
-          : [];
-        let rebuilt: { draftId: number; recompute: "created" | "existing"; reviewBlockers: string[] };
+        let rebuilt: { draftId: number; recompute: "created" | "existing" };
         try {
           rebuilt = deps.repo.transaction(() => {
             const structuralSourceId = structuralSources[0]!.source_id!;
@@ -5048,7 +5041,6 @@ export async function applyAssistantAction(
                 resolutions: brief.resolutions,
                 exclusions: decisions.exclusions,
                 managed_source_ids: [...targetSourceIds].sort((left, right) => left - right),
-                review_blockers: requestedReviewBlockers,
               }))
               .digest("hex")
               .slice(0, 16);
@@ -5081,7 +5073,6 @@ export async function applyAssistantAction(
               throw new Error(`Plan draft recompute failed: ${recomputed.kind}`);
             }
             const draft = recomputed.draft;
-            const reviewBlockers = [...new Set([...decisions.blockers, ...requestedReviewBlockers])];
             const draftSourceRevisions = Object.fromEntries(
               brief.evidence.flatMap((evidence) =>
                 evidence.source_id != null && evidence.pinned_revision
@@ -5092,11 +5083,11 @@ export async function applyAssistantAction(
             saveBuildPlanningBrief(deps.repo, {
               ...brief,
               draft_id: draft.id,
-              draft_review_blockers: reviewBlockers,
+              draft_review_blockers: [],
               managed_source_ids: [...targetSourceIds].sort((left, right) => left - right),
               draft_source_revisions: draftSourceRevisions,
             });
-            return { draftId: draft.id, recompute: recomputed.kind, reviewBlockers };
+            return { draftId: draft.id, recompute: recomputed.kind };
           }, "immediate");
         } catch (error) {
           return { ok: false, detail: error instanceof Error ? error.message : String(error) };
@@ -5106,7 +5097,6 @@ export async function applyAssistantAction(
           result: {
             draft_id: rebuilt.draftId,
             recompute: rebuilt.recompute,
-            review_blockers: rebuilt.reviewBlockers,
           },
         };
         break;
@@ -5117,13 +5107,6 @@ export async function applyAssistantAction(
         const draftId = asInt(action.params.draft_id);
         if (!brief || draftId == null || brief.draft_id !== draftId)
           return { ok: false, detail: "Selected Working Plan not found" };
-        const blockers = buildPlanningApplyBlockers(deps.repo, planId, draftId) ?? [];
-        if (blockers.length > 0)
-          return {
-            ok: false,
-            detail: "Build planning is not ready",
-            result: { blockers },
-          };
         const draft = deps.repo.getPlanDraft(planId, draftId);
         if (!draft) return { ok: false, detail: "Selected Working Plan not found" };
         const workspaceService = new PlanDraftWorkspaceService(deps.repo);

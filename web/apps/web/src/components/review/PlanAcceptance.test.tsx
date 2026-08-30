@@ -19,7 +19,6 @@ import {
   reconcilePlanDraft,
 } from "../../api/endpoints/planDrafts";
 import type {
-  BuildPlanningState,
   PlanReview,
   ReviewPart,
 } from "../../api/endpoints/planManifests";
@@ -39,11 +38,6 @@ const state = vi.hoisted(() => {
   return {
     review: null as PlanReview | null,
     workspace: null as PlanDraftWorkspace | null,
-    planning: null as BuildPlanningState | null,
-    planningError: null as Error | null,
-    planningPending: false,
-    /** Every argument pair the page passed to the planning query. */
-    planningArgs: [] as Array<{ planId: number | null; draftId: number | null }>,
     version: 0,
     subscribe(listener: () => void) {
       listeners.add(listener);
@@ -75,17 +69,6 @@ vi.mock("../../api/endpoints/planDrafts", async (importOriginal) => {
 
 vi.mock("../../hooks/useEngineHealth", () => ({
   useEngineHealth: () => ({ health: { ok: true } }),
-}));
-
-vi.mock("../build/useBuildPlanningQuery", () => ({
-  useBuildPlanningQuery: (planId: number | null, draftId?: number | null) => {
-    state.planningArgs.push({ planId, draftId: draftId ?? null });
-    return {
-      data: state.planning,
-      error: state.planningError,
-      isPending: state.planningPending,
-    };
-  },
 }));
 
 vi.mock("../../context/ProfileContext", () => ({
@@ -257,10 +240,6 @@ function renderPlan() {
 beforeEach(() => {
   window.sessionStorage.clear();
   state.review = baseReview();
-  state.planning = null;
-  state.planningError = null;
-  state.planningPending = false;
-  state.planningArgs.length = 0;
   state.setWorkspace(unresolvedWorkspace());
   vi.mocked(reconcilePlanDraft).mockReset();
   vi.mocked(recomputePlanDraft).mockReset();
@@ -331,85 +310,6 @@ describe("Plan acceptance checkpoint", () => {
 
     await waitFor(() => expect(recomputePlanDraft).toHaveBeenCalledWith(7));
     expect(await screen.findByRole("button", { name: "Show 1 part changes" })).toBeTruthy();
-  });
-
-  it("shows an assistant-review choice and keeps publication unavailable", async () => {
-    state.setWorkspace(resolvedWorkspace());
-    state.planning = {
-      planning_phase: { kind: "applied", draft_id: 16, revision_id: 2 },
-      brief: {
-        special_request: "Print this Build",
-        requirements: [],
-        evidence: [],
-        contributions: [],
-        role_filaments: [],
-        draft_id: 16,
-      },
-      readiness: { ready: true, blockers: [] },
-      acceptance_readiness: { blockers: ["draft_selection"] },
-      grouped_difference_count: 0,
-      difference_count: 0,
-    };
-
-    renderPlan();
-
-    expect(await screen.findAllByText("This Working Plan has not been reviewed")).toHaveLength(2);
-    expect(screen.getByRole("button", { name: "Publish Plan for Production" }).hasAttribute("disabled"))
-      .toBe(true);
-  });
-
-  it("reads assistant planning for the selected Build and the open Working Plan", async () => {
-    state.setWorkspace(resolvedWorkspace());
-    renderPlan();
-    await screen.findByRole("button", { name: /Publish Plan/ });
-    // Wrong ids here would still leave every other test green, so assert them.
-    expect(state.planningArgs.at(-1)).toEqual({ planId: 7, draftId: 9 });
-  });
-
-  it("shows that publication is checking the Working Plan", async () => {
-    state.setWorkspace(resolvedWorkspace());
-    state.planningPending = true;
-
-    renderPlan();
-
-    const publish = await screen.findByRole("button", { name: "Publish Plan for Production" });
-    expect(publish.hasAttribute("disabled")).toBe(true);
-    expect(await screen.findAllByText(
-      "Still checking this Working Plan",
-    )).toHaveLength(2);
-  });
-
-  it("explains when publication checks could not be read", async () => {
-    state.setWorkspace(resolvedWorkspace());
-    state.planningError = new Error("engine offline");
-
-    renderPlan();
-
-    const publish = await screen.findByRole("button", { name: "Publish Plan for Production" });
-    expect(publish.hasAttribute("disabled")).toBe(true);
-    expect(await screen.findAllByText(
-      "This Build's planning checks could not be read",
-    )).toHaveLength(2);
-    expect(screen.getByText(
-      "The planning check could not be read. Reload the page to try again.",
-    )).toBeTruthy();
-  });
-
-  it("explains an engine refusal that races the gate, instead of an HTTP error", async () => {
-    const user = userEvent.setup();
-    state.setWorkspace(resolvedWorkspace());
-    vi.mocked(applyPlanDraft).mockRejectedValue(new EngineHttpError("blocked", 422, {
-      code: "build_planning_blocked",
-      detail: "Build planning is not ready",
-      blockers: [{ key: "size", code: "requirement_unverified", detail: "size: 350" }],
-    }));
-
-    renderPlan();
-    await user.click(await screen.findByRole("button", { name: "Publish Plan revision 2 for Production" }));
-
-    expect(await screen.findAllByText("A Build requirement is still unverified"))
-      .toHaveLength(2);
-    expect(screen.queryByText(/422/)).toBeNull();
   });
 
   it("publishes the revision and leaves a receipt on the page", async () => {
