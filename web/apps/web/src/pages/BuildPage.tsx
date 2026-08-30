@@ -821,6 +821,7 @@ function BuildPageContent() {
                   variant="secondary"
                   size="sm"
                   onClick={() => setAttachOpen((v) => !v)}
+                  disabled={!engineReady || busy}
                 >
                   Add a source
                 </Button>
@@ -861,7 +862,7 @@ function BuildPageContent() {
                   <Combobox
                     value={pendingBaseSourceId || null}
                     onValueChange={setPendingBaseSourceId}
-                    disabled={!engineReady || selectedProfileId == null}
+                    disabled={!engineReady || busy || selectedProfileId == null}
                     placeholder="Choose base source…"
                     searchPlaceholder="Search sources…"
                     emptyText="No sources match."
@@ -872,7 +873,7 @@ function BuildPageContent() {
                     variant="secondary"
                     className="min-h-11"
                     onClick={() => void onSetBaseSource()}
-                    disabled={!pendingBaseSourceId || selectedProfileId == null || !engineReady}
+                    disabled={!pendingBaseSourceId || selectedProfileId == null || !engineReady || busy}
                   >
                     Set base source
                   </Button>
@@ -911,6 +912,7 @@ function BuildPageContent() {
                   onValueChange={setAddonSourceId}
                   disabled={
                     !engineReady ||
+                    busy ||
                     selectedProfileId == null ||
                     needsBaseSource ||
                     addonSourceOptions.length === 0
@@ -934,7 +936,7 @@ function BuildPageContent() {
                     void onAddAddon();
                     setAttachOpen(false);
                   }}
-                  disabled={!addonSourceId || needsBaseSource}
+                  disabled={!addonSourceId || needsBaseSource || busy}
                 >
                   Attach
                 </Button>

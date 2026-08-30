@@ -66,6 +66,10 @@ describe("BuildPlanningCard", () => {
     ).toBeTruthy();
     expect(screen.getByText("1 decision needed")).toBeTruthy();
     expect(
+      screen.getByRole("heading", { name: "Decisions the AI MCP Server needs" }),
+    ).toBeTruthy();
+    expect(screen.queryByText(/the assistant/i)).toBeNull();
+    expect(
       screen.getByText(/2 file choices and 1 requirement to confirm/),
     ).toBeTruthy();
     expect(screen.getByText(/project\.3mf/)).toBeTruthy();
@@ -97,5 +101,29 @@ describe("BuildPlanningCard", () => {
       screen.getByRole("link", { name: "Open Plan to review the Working Plan" })
         .getAttribute("href"),
     ).toBe("/plan?profile=12");
+  });
+
+  it("keeps missing-draft copy on the AI MCP Server", async () => {
+    fetchBuildPlanningState.mockResolvedValue({
+      planning_phase: { kind: "missing_draft", draft_id: 11 },
+      brief: {
+        special_request: "",
+        requirements: [],
+        evidence: [],
+        contributions: [],
+        role_filaments: [],
+      },
+      readiness: { ready: true, blockers: [] },
+      grouped_difference_count: 0,
+      difference_count: 0,
+    });
+
+    renderCard();
+
+    expect(await screen.findByText("Working Plan unavailable")).toBeTruthy();
+    expect(
+      screen.getByText(/Working Plan from the connected AI MCP Server is no longer available/),
+    ).toBeTruthy();
+    expect(screen.queryByText(/the assistant/i)).toBeNull();
   });
 });
