@@ -1,7 +1,3 @@
-import {
-  isPlanAcceptanceBlockerCode,
-  type PlanAcceptanceBlockerCode,
-} from "../api/endpoints/planManifests";
 import { EngineHttpError } from "../api/engineTransport";
 import type { PlanAcceptanceFailure, PlanUnitOutcome } from "./planAcceptanceModel";
 
@@ -34,16 +30,6 @@ export function planAcceptanceFailureFromError(caught: unknown): PlanAcceptanceF
         }];
       });
       return { kind: "unsafe_records", units };
-    }
-    if (caught.status === 422 && body.code === "build_planning_blocked") {
-      const rows = Array.isArray(body.blockers) ? body.blockers : [];
-      const blockers: PlanAcceptanceBlockerCode[] = rows.flatMap((row) => {
-        if (row == null || typeof row !== "object") return [];
-        const item = row as Record<string, unknown>;
-        if (typeof item.code !== "string") return [];
-        return [isPlanAcceptanceBlockerCode(item.code) ? item.code : "unrecognised"];
-      });
-      return { kind: "planning_blocked", blockers };
     }
   }
   return {

@@ -48,7 +48,7 @@ describe("Build planning routes", () => {
     await ports.db.close();
   });
 
-  it("returns the blockers that prevent a selected Working Plan from being accepted", async () => {
+  it("returns Preparation readiness without creating a Plan publication gate", async () => {
     const root = mkdtempSync(join(tmpdir(), "build-planning-acceptance-route-"));
     roots.push(root);
     process.env.PRINT_PARTNER_DATA_DIR = root;
@@ -67,12 +67,8 @@ describe("Build planning routes", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json().planning.acceptance_readiness).toEqual({
-      blockers: expect.arrayContaining([{
-        code: "draft_selection",
-        detail: "Draft 17 is not the reviewed planning draft",
-      }]),
-    });
+    expect(response.json().planning.readiness).toEqual({ ready: true, blockers: [] });
+    expect(response.json().planning).not.toHaveProperty("acceptance_readiness");
     await app.close();
     await ports.db.close();
   });
