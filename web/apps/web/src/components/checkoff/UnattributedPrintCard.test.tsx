@@ -85,7 +85,7 @@ describe("UnattributedPrintCard", () => {
   it("starts as a compact flair and opens to show detected files", () => {
     render(<UnattributedPrintCard print={print} />);
 
-    const flair = screen.getByRole("button", { name: /Unclaimed print detected/ });
+    const flair = screen.getByRole("button", { name: /Unmatched printer file/ });
     expect(flair.getAttribute("aria-expanded")).toBe("false");
     expect(screen.queryByText("Found on plate:")).toBeNull();
 
@@ -102,7 +102,7 @@ describe("UnattributedPrintCard", () => {
     api.fetchProfiles.mockResolvedValue([{ id: 4, name: "Voron Build" }]);
     render(<UnattributedPrintCard print={print} />);
 
-    fireEvent.click(screen.getByRole("button", { name: /Unclaimed print detected/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Unmatched printer file/ }));
     fireEvent.change(await screen.findByRole("combobox", { name: "Select a plan" }), {
       target: { value: "4" },
     });
@@ -122,7 +122,7 @@ describe("UnattributedPrintCard", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /Unclaimed print detected/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Unmatched printer file/ }));
 
     expect(await screen.findByRole("combobox", { name: "Select a plan" })).toBeTruthy();
     expect(screen.queryByText("profiles unavailable")).toBeNull();
@@ -132,7 +132,7 @@ describe("UnattributedPrintCard", () => {
     api.fetchProfiles.mockResolvedValue([{ id: 4, name: "Voron Build" }]);
     render(<UnattributedPrintCard print={print} />);
 
-    fireEvent.click(screen.getByRole("button", { name: /Unclaimed print detected/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Unmatched printer file/ }));
     fireEvent.change(await screen.findByRole("combobox", { name: "Select a plan" }), {
       target: { value: "4" },
     });
@@ -148,7 +148,7 @@ describe("UnattributedPrintCard", () => {
     api.fetchProfiles.mockResolvedValue([{ id: 4, name: "Voron Build" }]);
     render(<UnattributedPrintCard print={print} />);
 
-    fireEvent.click(screen.getByRole("button", { name: /Unclaimed print detected/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Unmatched printer file/ }));
     fireEvent.change(await screen.findByRole("combobox", { name: "Select a plan" }), {
       target: { value: "4" },
     });

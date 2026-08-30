@@ -152,21 +152,21 @@ describe("ExternalPrintRoutePanel", () => {
   it("asks where the file is without answering for the operator", async () => {
     renderPanel();
 
-    expect(screen.getByText(/This records a print that already happened/)).toBeTruthy();
+    expect(screen.getByText(/Add each print you sliced or sent outside PrintPartner/)).toBeTruthy();
     for (const label of [/On a printer PrintPartner watches/, /On this computer/]) {
       expect(screen.getByRole("radio", { name: label, checked: false })).toBeTruthy();
     }
     await waitFor(() => expect(api.fetchPrinters).toHaveBeenCalled());
     // Nothing below the question until it is answered.
     expect(screen.queryByLabelText("Print file to upload")).toBeNull();
-    expect(screen.queryByLabelText("Which printer made this print?")).toBeNull();
+    expect(screen.queryByLabelText("Which printer made this print or plate?")).toBeNull();
   });
 
   it("reaches the printer's own storage through the shared files view", async () => {
     renderPanel();
 
     fireEvent.click(screen.getByRole("radio", { name: /On a printer PrintPartner watches/ }));
-    fireEvent.change(await screen.findByLabelText("Which printer made this print?"), {
+    fireEvent.change(await screen.findByLabelText("Which printer made this print or plate?"), {
       target: { value: printer.id },
     });
 
@@ -181,7 +181,7 @@ describe("ExternalPrintRoutePanel", () => {
     renderPanel();
 
     fireEvent.click(screen.getByRole("radio", { name: /On a printer PrintPartner watches/ }));
-    fireEvent.change(await screen.findByLabelText("Which printer made this print?"), {
+    fireEvent.change(await screen.findByLabelText("Which printer made this print or plate?"), {
       target: { value: printer.id },
     });
 
@@ -261,6 +261,36 @@ describe("ExternalPrintRoutePanel", () => {
     ).toBeTruthy();
     expect(screen.getByText(/The units are not checked off yet/)).toBeTruthy();
     expect(screen.getByRole("link", { name: "Finish the units in Checkoff" })).toBeTruthy();
+  });
+
+  it("retains several manual print records and resets the form for the next printer or plate", async () => {
+    api.assignUploadedPrinterFile
+      .mockResolvedValueOnce({
+        link: { id: "link-one", filename: "plate-one.gcode", units: [{ part_id: 41, unit_index: 0 }] },
+      })
+      .mockResolvedValueOnce({
+        link: { id: "link-two", filename: "plate-two.gcode", units: [{ part_id: 41, unit_index: 0 }] },
+      });
+    const { onRecorded } = renderPanel();
+
+    fireEvent.click(screen.getByRole("radio", { name: /On this computer/ }));
+    await pickFile("plate-one.gcode");
+    await screen.findByText("Sliced binary G-code");
+    answerPrinter("sd-card");
+    answerChecked("not_checked");
+    fireEvent.click(screen.getByRole("button", { name: "Record this print" }));
+
+    expect(await screen.findByText(/Prints added this session \(1\)/)).toBeTruthy();
+    await pickFile("plate-two.gcode");
+    await screen.findByText("Sliced binary G-code");
+    answerPrinter(UNMANAGED_PRINTER_ID);
+    answerChecked("not_checked");
+    fireEvent.click(screen.getByRole("button", { name: "Record this print" }));
+
+    expect(await screen.findByText(/Prints added this session \(2\)/)).toBeTruthy();
+    expect(screen.getByText(/plate-one.gcode is on the record/)).toBeTruthy();
+    expect(screen.getByText(/plate-two.gcode is on the record/)).toBeTruthy();
+    expect(onRecorded).toHaveBeenCalledTimes(2);
   });
 
   it("records against a printer PrintPartner does not manage without naming one", async () => {

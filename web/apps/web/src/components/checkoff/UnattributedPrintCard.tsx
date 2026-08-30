@@ -113,7 +113,7 @@ export default function UnattributedPrintCard({
         onClick={() => setExpanded((value) => !value)}
       >
         <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden />
-        <span className="font-medium">Unclaimed print detected</span>
+        <span className="font-medium">Unmatched printer file</span>
         <span className="min-w-0 truncate text-muted-foreground" title={print.filename}>
           {print.host_name} · {shortFilename}
         </span>

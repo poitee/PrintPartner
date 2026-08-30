@@ -25,7 +25,7 @@ const radio = (name: string | RegExp) => screen.getByRole("radio", { name });
 describe("ProductionRouteQuestion", () => {
   it("groups the routes under one legend and pre-selects nothing", () => {
     renderQuestion();
-    expect(screen.getByText("How do you want to make these units?").tagName).toBe("LEGEND");
+    expect(screen.getByText("What should PrintPartner prepare?").tagName).toBe("LEGEND");
     const radios = screen.getAllByRole("radio");
     expect(radios).toHaveLength(3);
     for (const option of radios) expect((option as HTMLInputElement).checked).toBe(false);
@@ -33,17 +33,17 @@ describe("ProductionRouteQuestion", () => {
 
   it("names each route with a one-line description", () => {
     renderQuestion();
-    expect(radio(/Make Plates for my printers/)).toBeTruthy();
-    expect(screen.getByText(/Choose printers, group the Required units/)).toBeTruthy();
-    expect(radio(/Download the unit files/)).toBeTruthy();
-    expect(screen.getByText(/No Plates, no printers/)).toBeTruthy();
-    expect(radio(/Record a print made elsewhere/)).toBeTruthy();
-    expect(screen.getByText(/upload G-code, binary G-code or a 3MF file/)).toBeTruthy();
+    expect(radio(/Generate 3MF plates/)).toBeTruthy();
+    expect(screen.getByText(/using each printer's build volume/)).toBeTruthy();
+    expect(radio(/Download sorted STL files/)).toBeTruthy();
+    expect(screen.getByText(/organized by color, material, part type/)).toBeTruthy();
+    expect(radio(/Add manually prepared prints/)).toBeTruthy();
+    expect(screen.getByText(/sliced or sent one or more jobs yourself/)).toBeTruthy();
   });
 
-  it("separates the differently phrased route with an or divider", () => {
+  it("presents all three production methods as equal choices", () => {
     renderQuestion();
-    expect(screen.getByText("or")).toBeTruthy();
+    expect(screen.queryByText("or")).toBeNull();
   });
 
   it("uses no tabs and no step count", () => {
@@ -57,21 +57,21 @@ describe("ProductionRouteQuestion", () => {
     const { onSubmit } = renderQuestion();
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
     expect(onSubmit).not.toHaveBeenCalled();
-    expect(screen.getByText("Select how you want to make these units")).toBeTruthy();
+    expect(screen.getByText("Select what PrintPartner should prepare")).toBeTruthy();
   });
 
   it("clears the error and reports the answer once a route is picked", () => {
     const { onSubmit } = renderQuestion();
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
-    fireEvent.click(radio(/Download the unit files/));
-    expect(screen.queryByText("Select how you want to make these units")).toBeNull();
+    fireEvent.click(radio(/Download sorted STL files/));
+    expect(screen.queryByText("Select what PrintPartner should prepare")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
     expect(onSubmit).toHaveBeenCalledWith("stl");
   });
 
   it("brings the previous answer back pre-selected on a change", () => {
     renderQuestion({ value: "external", onCancel: vi.fn() });
-    expect((radio(/Record a print made elsewhere/) as HTMLInputElement).checked).toBe(true);
+    expect((radio(/Add manually prepared prints/) as HTMLInputElement).checked).toBe(true);
     expect(screen.getByRole("button", { name: "Keep this route" })).toBeTruthy();
   });
 
@@ -83,10 +83,10 @@ describe("ProductionRouteQuestion", () => {
   it("keeps the answer on screen after a failed save and retries in place", () => {
     const onRetry = vi.fn();
     renderQuestion({ error: { message: "Engine offline.", onRetry } });
-    fireEvent.click(radio(/Make Plates for my printers/));
+    fireEvent.click(radio(/Generate 3MF plates/));
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(onRetry).toHaveBeenCalled();
-    expect((radio(/Make Plates for my printers/) as HTMLInputElement).checked).toBe(true);
+    expect((radio(/Generate 3MF plates/) as HTMLInputElement).checked).toBe(true);
     expect(screen.getByRole("alert").textContent).toContain("Engine offline.");
   });
 });

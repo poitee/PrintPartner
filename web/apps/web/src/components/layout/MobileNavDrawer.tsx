@@ -110,9 +110,9 @@ export default function MobileNavDrawer({ onNavigate }: Props) {
         className="w-80 max-w-[85vw] gap-0 p-0"
       >
         <SheetHeader className="flex-row items-center gap-2.5 space-y-0 px-4 py-4">
-          <LayeredSheetMark />
+          <LayeredSheetMark className="h-9 w-9" />
           <SheetTitle className="font-serif text-[15px] font-semibold tracking-[-0.01em]">
-            Print Partner
+            PrintPartner
           </SheetTitle>
         </SheetHeader>
         <div className="flex flex-1 flex-col gap-4 overflow-y-auto p-3">

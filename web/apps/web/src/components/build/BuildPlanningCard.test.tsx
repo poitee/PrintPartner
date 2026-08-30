@@ -62,7 +62,7 @@ describe("BuildPlanningCard", () => {
     renderCard();
 
     expect(
-      await screen.findByRole("heading", { name: "Assistant changes" }),
+      await screen.findByRole("heading", { name: "AI MCP Server changes" }),
     ).toBeTruthy();
     expect(screen.getByText("1 decision needed")).toBeTruthy();
     expect(

@@ -134,7 +134,7 @@ export default function StlRoutePanel({
   };
 
   return (
-    <section aria-label="Download the unit files" className="stack-section">
+    <section aria-label="Download sorted STL files" className="stack-section">
       <div className="stack-row rounded-lg border border-border bg-surface-sunken p-3">
         <p className="text-body">
           {chosenCount > 0 ? (
@@ -234,7 +234,7 @@ export default function StlRoutePanel({
           onClick={() => void download()}
         >
           <Download className="mr-1.5 h-4 w-4" aria-hidden />
-          Download the unit files
+          Download sorted STL files
         </Button>
         {pack.phase === "running" ? (
           <StatusBadge
@@ -247,7 +247,7 @@ export default function StlRoutePanel({
 
       {pack.phase === "failed" ? (
         <InlineOperationError
-          title="Could not download the unit files"
+          title="Could not download the STL files"
           message={pack.message}
           onRetry={() => void download()}
           retryLabel="Try again"
@@ -291,9 +291,9 @@ export default function StlRoutePanel({
       ) : null}
 
       <p className="text-meta text-muted-foreground">
-        Handing over the files ends PrintPartner's part in this work package. These Required units
+        Handing over the files ends PrintPartner's part in this production method. These Required units
         stay unverified in Checkoff, because nothing here says a print happened. Once one does, come
-        back to this work package and choose Record a print made elsewhere.
+        back to Production and choose Add manually prepared prints.
       </p>
     </section>
   );

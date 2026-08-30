@@ -1,5 +1,5 @@
-import { useCallback, useRef, useState } from "react";
-import { ChevronRight, FileCode2, Folder, FolderOpen, RefreshCw, Upload } from "lucide-react";
+import { useCallback, useMemo, useRef, useState } from "react";
+import { ChevronRight, FileCode2, Folder, FolderOpen, RefreshCw, Search, Upload } from "lucide-react";
 import type {
   PrinterStorageEntry,
   PrinterStoredFile,
@@ -14,6 +14,7 @@ import {
 import type { IntegrationSummary } from "../../api/endpoints/integrations";
 import { parseSlicedObjectsFile } from "../../lib/parseSlicedObjects";
 import { Button } from "../ui/button";
+import { Input } from "../ui/input";
 import { SegmentedControl } from "../ui/segmented-control";
 import InlineOperationError from "./InlineOperationError";
 import PrintFileAssignForm, { type ChosenPrintFile } from "./PrintFileAssignForm";
@@ -263,6 +264,34 @@ function StorageEntries({
   onEnter: (path: string) => void;
   onOpenFile: (file: PrinterStoredFile) => void;
 }) {
+  const [query, setQuery] = useState("");
+  const [sort, setSort] = useState<"newest" | "name" | "largest">("newest");
+  const visibleEntries = useMemo(() => {
+    const normalized = query.trim().toLocaleLowerCase();
+    const filtered = normalized
+      ? entries.filter((entry) =>
+          `${entry.name} ${entry.path}`.toLocaleLowerCase().includes(normalized),
+        )
+      : [...entries];
+    return filtered.sort((left, right) => {
+      if (left.kind !== right.kind) return left.kind === "directory" ? -1 : 1;
+      if (left.kind === "directory" || right.kind === "directory" || sort === "name") {
+        return left.name.localeCompare(right.name, undefined, { numeric: true });
+      }
+      if (sort === "largest") {
+        return (
+          (right.size_bytes ?? -1) - (left.size_bytes ?? -1) ||
+          left.name.localeCompare(right.name)
+        );
+      }
+      const rightTime = modifiedTime(right.modified_at);
+      const leftTime = modifiedTime(left.modified_at);
+      return rightTime - leftTime || left.name.localeCompare(right.name);
+    });
+  }, [entries, query, sort]);
+  const folderCount = visibleEntries.filter((entry) => entry.kind === "directory").length;
+  const fileCount = visibleEntries.length - folderCount;
+
   if (entries.length === 0) {
     return (
       <p className="rounded-md border border-dashed border-border-strong p-4 text-body text-muted-foreground">
@@ -272,47 +301,96 @@ function StorageEntries({
   }
 
   return (
-    <ul className="max-h-72 divide-y divide-border overflow-y-auto rounded-md border border-border">
-      {entries.map((entry) =>
-        entry.kind === "directory" ? (
-          <li key={entry.path}>
-            <button
-              type="button"
-              className="flex min-h-11 w-full items-center gap-3 px-3 py-2 text-left hover:bg-accent/60"
-              onClick={() => onEnter(entry.path)}
-            >
-              <Folder className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
-              <span className="min-w-0 flex-1 truncate text-body font-medium">{entry.name}</span>
-              <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
-            </button>
-          </li>
-        ) : (
-          <li key={entry.path} className="flex min-h-11 items-center gap-3 p-3">
-            <FileCode2 className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
-            <div className="min-w-0 flex-1">
-              <p className="truncate font-mono text-body font-medium" title={entry.path}>
-                {entry.name}
-              </p>
-              <p className="truncate text-meta text-muted-foreground">
-                {formatBytes(entry.size_bytes)} · {formatModified(entry.modified_at)}
-              </p>
-            </div>
-            {PRINT_FILE_PATTERN.test(entry.name) ? (
-              <Button
-                size="shop"
-                variant="outline"
-                disabled={busy}
-                onClick={() => onOpenFile(entry)}
-              >
-                Open
-              </Button>
+    <div className="space-y-2">
+      <div className="flex flex-col gap-2 sm:flex-row">
+        <label className="relative min-w-0 flex-1">
+          <span className="sr-only">Search this folder</span>
+          <Search
+            className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
+            aria-hidden
+          />
+          <Input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search this folder…"
+            className="pl-9"
+          />
+        </label>
+        <label className="flex items-center gap-2 text-meta text-muted-foreground">
+          <span>Sort</span>
+          <select
+            className="min-h-10 rounded-md border border-input bg-background px-3 text-body text-foreground"
+            value={sort}
+            onChange={(event) => setSort(event.target.value as typeof sort)}
+          >
+            <option value="newest">Newest first</option>
+            <option value="name">Name A–Z</option>
+            <option value="largest">Largest first</option>
+          </select>
+        </label>
+      </div>
+      <p className="text-meta text-muted-foreground">
+        {fileCount} {fileCount === 1 ? "file" : "files"} · {folderCount}{" "}
+        {folderCount === 1 ? "folder" : "folders"}
+      </p>
+      {visibleEntries.length === 0 ? (
+        <p className="rounded-md border border-dashed border-border-strong p-4 text-body text-muted-foreground">
+          No files or folders match “{query}”.
+        </p>
+      ) : (
+        <ul className="max-h-72 divide-y divide-border overflow-y-auto rounded-md border border-border">
+          {visibleEntries.map((entry) =>
+            entry.kind === "directory" ? (
+              <li key={entry.path}>
+                <button
+                  type="button"
+                  className="flex min-h-11 w-full items-center gap-3 px-3 py-2 text-left hover:bg-accent/60"
+                  onClick={() => onEnter(entry.path)}
+                >
+                  <Folder className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
+                  <span className="min-w-0 flex-1 truncate text-body font-medium">
+                    {entry.name}
+                  </span>
+                  <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
+                </button>
+              </li>
             ) : (
-              <span className="shrink-0 text-meta text-muted-foreground">Not a print file</span>
-            )}
-          </li>
-        ),
+              <li key={entry.path} className="flex min-h-11 items-center gap-3 p-3">
+                <FileCode2 className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
+                <div className="min-w-0 flex-1">
+                  <p className="truncate font-mono text-body font-medium" title={entry.path}>
+                    {entry.name}
+                  </p>
+                  <p className="truncate text-meta text-muted-foreground">
+                    {[
+                      printFileType(entry.name),
+                      formatBytes(entry.size_bytes),
+                      formatModified(entry.modified_at),
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </p>
+                </div>
+                {PRINT_FILE_PATTERN.test(entry.name) ? (
+                  <Button
+                    size="shop"
+                    variant="outline"
+                    disabled={busy}
+                    onClick={() => onOpenFile(entry)}
+                  >
+                    Open
+                  </Button>
+                ) : (
+                  <span className="shrink-0 text-meta text-muted-foreground">
+                    Not a print file
+                  </span>
+                )}
+              </li>
+            ),
+          )}
+        </ul>
       )}
-    </ul>
+    </div>
   );
 }
 
@@ -365,15 +443,26 @@ function LocalFilePicker({ busy, onPick }: { busy: boolean; onPick: (file: File)
 }
 
 /** Missing provider metadata reads as unknown, never as zero or a guess. */
-function formatBytes(bytes?: number): string {
-  if (bytes == null) return "Size unknown";
+function formatBytes(bytes?: number): string | null {
+  if (bytes == null) return null;
   if (bytes < 1_024) return `${bytes} B`;
   if (bytes < 1_048_576) return `${(bytes / 1_024).toFixed(1)} KB`;
   return `${(bytes / 1_048_576).toFixed(1)} MB`;
 }
 
-function formatModified(value?: string): string {
-  if (!value) return "Changed date unknown";
+function formatModified(value?: string): string | null {
+  if (!value) return null;
   const at = new Date(value);
-  return Number.isNaN(at.getTime()) ? "Changed date unknown" : at.toLocaleString();
+  return Number.isNaN(at.getTime()) ? null : at.toLocaleString();
+}
+
+function modifiedTime(value?: string): number {
+  if (!value) return Number.NEGATIVE_INFINITY;
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? Number.NEGATIVE_INFINITY : parsed;
+}
+
+function printFileType(name: string): string {
+  const extension = name.split(".").pop()?.trim().toUpperCase();
+  return extension ? `${extension} file` : "File";
 }

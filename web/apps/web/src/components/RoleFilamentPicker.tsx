@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DEFAULT_FILAMENT_HEX } from "@/lib/colorPresets";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Check, ChevronDown, Download, MoreHorizontal, Search, Upload } from "lucide-react";
+import { Check, ChevronDown, Download, Search, Upload } from "lucide-react";
 import {
   applyRoleColorsToParts,
   fetchFilamentCatalog,
@@ -31,12 +31,6 @@ import {
 import { isSpoolmanIntegrationConfigured } from "../hooks/useSpoolmanEnabled";
 import { allCatalogColors, catalogColorGroups } from "./FilamentSwatch";
 import { Button } from "./ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "./ui/dropdown-menu";
 import { Field, FieldLabel } from "./ui/field";
 import { Input } from "./ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
@@ -745,33 +739,22 @@ export default function RoleFilamentPicker({
           <Upload className="h-4 w-4" aria-hidden />
           {busyAction === "import" ? "Importing…" : "Import colors"}
         </Button>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              variant="ghost"
-              size="sm"
-              disabled={disabled || busyAction !== null}
-              aria-label="More color actions"
-            >
-              <MoreHorizontal className="h-4 w-4" aria-hidden />
-              Advanced
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuItem
-              disabled={busyAction !== null}
-              onClick={() => void onApplyAllRoleColors()}
-            >
-              {busyAction === "apply" ? "Resetting…" : "Reset parts to role colors"}
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              disabled={busyAction !== null}
-              onClick={() => void onRegenerateThumbnails()}
-            >
-              {busyAction === "regenerate" ? "Regenerating…" : "Regenerate thumbnails"}
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={disabled || busyAction !== null}
+          onClick={() => void onApplyAllRoleColors()}
+        >
+          {busyAction === "apply" ? "Resetting…" : "Reset part colors"}
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={disabled || busyAction !== null}
+          onClick={() => void onRegenerateThumbnails()}
+        >
+          {busyAction === "regenerate" ? "Refreshing…" : "Refresh thumbnails"}
+        </Button>
       </div>
     </div>
   );

@@ -56,7 +56,7 @@ export default function BuildPlanningCard({
         role="alert"
       >
         <p className="min-w-0 flex-1 text-sm text-destructive">
-          Could not load assistant changes:{" "}
+          Could not load AI MCP Server changes:{" "}
           {error instanceof Error ? error.message : String(error)}
         </p>
         <Button
@@ -94,11 +94,12 @@ export default function BuildPlanningCard({
     <Card>
       <CardHeader>
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <CardTitle>Assistant changes</CardTitle>
+          <CardTitle>AI MCP Server changes</CardTitle>
           <Badge variant={phaseBadge.variant}>{phaseBadge.label}</Badge>
         </div>
         <CardDescription>
           {summary ? `${summary}. ` : ""}
+          These changes came from the connected AI MCP Server. {" "}
           {workingPlanState(planningPhase)}
         </CardDescription>
       </CardHeader>

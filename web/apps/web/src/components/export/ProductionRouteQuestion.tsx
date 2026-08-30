@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ProductionRoute } from "@print-partner/contracts";
 import {
   PRODUCTION_ROUTE_DESCRIPTION,
@@ -65,7 +65,7 @@ export default function ProductionRouteQuestion({
         aria-invalid={missing || undefined}
       >
         <legend id={LEGEND_ID} className="text-sm font-semibold text-foreground">
-          How do you want to make these units?
+          What should PrintPartner prepare?
         </legend>
 
         {missing ? (
@@ -78,7 +78,7 @@ export default function ProductionRouteQuestion({
             {/* GOV.UK prefixes error messages with a visually hidden "Error:"
                 so a screen reader hears that the line is a problem. */}
             <span className="sr-only">Error:</span>{" "}
-            <span>Select how you want to make these units</span>
+            <span>Select what PrintPartner should prepare</span>
           </p>
         ) : null}
 
@@ -86,46 +86,39 @@ export default function ProductionRouteQuestion({
             workshop monitor, which is what SC 1.4.10 Reflow asks for. */}
         <div className="grid gap-2">
           {PRODUCTION_ROUTE_ORDER.map((route) => (
-            <Fragment key={route}>
-              {/* GOV.UK: separate an option phrased differently from the others
-                  with an "or" divider. Recording a print is a record of work
-                  already done, not work PrintPartner will do. */}
-              {route === "external" ? (
-                <p className="py-1 text-center text-sm text-muted-foreground">or</p>
-              ) : null}
-              <label
-                className={cn(
-                  "flex min-h-11 cursor-pointer items-start gap-3 rounded-lg border p-3 transition-colors",
-                  chosen === route
-                    ? "border-primary bg-accent/60 ring-2 ring-primary/60"
-                    : "border-border-strong bg-card hover:bg-accent/40",
-                )}
-              >
-                <input
-                  type="radio"
-                  name="production-route"
-                  value={route}
-                  checked={chosen === route}
-                  className="mt-0.5 h-5 w-5 shrink-0 accent-primary"
-                  aria-describedby={`production-route-${route}-hint`}
-                  onChange={() => {
-                    setChosen(route);
-                    setMissing(false);
-                  }}
-                />
-                <span className="min-w-0">
-                  <span className="block text-sm font-semibold text-foreground">
-                    {PRODUCTION_ROUTE_LABEL[route]}
-                  </span>
-                  <span
-                    id={`production-route-${route}-hint`}
-                    className="mt-0.5 block text-xs text-muted-foreground"
-                  >
-                    {PRODUCTION_ROUTE_DESCRIPTION[route]}
-                  </span>
+            <label
+              key={route}
+              className={cn(
+                "flex min-h-11 cursor-pointer items-start gap-3 rounded-lg border p-3 transition-colors",
+                chosen === route
+                  ? "border-primary bg-accent/60 ring-2 ring-primary/60"
+                  : "border-border-strong bg-card hover:bg-accent/40",
+              )}
+            >
+              <input
+                type="radio"
+                name="production-route"
+                value={route}
+                checked={chosen === route}
+                className="mt-0.5 h-5 w-5 shrink-0 accent-primary"
+                aria-describedby={`production-route-${route}-hint`}
+                onChange={() => {
+                  setChosen(route);
+                  setMissing(false);
+                }}
+              />
+              <span className="min-w-0">
+                <span className="block text-sm font-semibold text-foreground">
+                  {PRODUCTION_ROUTE_LABEL[route]}
                 </span>
-              </label>
-            </Fragment>
+                <span
+                  id={`production-route-${route}-hint`}
+                  className="mt-0.5 block text-xs text-muted-foreground"
+                >
+                  {PRODUCTION_ROUTE_DESCRIPTION[route]}
+                </span>
+              </span>
+            </label>
           ))}
         </div>
       </fieldset>
