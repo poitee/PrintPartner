@@ -307,7 +307,7 @@ export default function SourceFilePickerCard({
             onClick={() => setExpanded((v) => !v)}
             aria-expanded={expanded}
           >
-            {expanded ? "Hide picks" : "Edit picks"}
+            {expanded ? "Done choosing files" : "Choose print files"}
           </button>
           {allSources && onChangeSource && (
             <select
@@ -359,9 +359,8 @@ export default function SourceFilePickerCard({
           {expandedExtra}
           <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="text-xs text-muted-foreground">
-              Check STL files or folders to include on the next{" "}
-              <strong className="font-medium text-foreground">Build Working Plan</strong>. Selections
-              save automatically.
+              Select the folders or individual STL files this Build needs. Start with a folder
+              when the source contains several options. Selections save automatically.
             </p>
             {showRetry && (
               <Button

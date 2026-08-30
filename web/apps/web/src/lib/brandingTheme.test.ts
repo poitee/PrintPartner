@@ -174,27 +174,26 @@ describe("GRE-234 type", () => {
 });
 
 describe("GRE-234 spine brand chrome", () => {
-  it("uses Print Partner wordmark without pipeline brand copy", () => {
-    expect(spineRail).toMatch(/Print Partner/);
+  it("uses the PrintPartner wordmark without pipeline brand copy", () => {
+    expect(spineRail).toMatch(/PrintPartner/);
     expect(spineRail).not.toMatch(
       /Library\s*→\s*Plan\s*→\s*Parts\s*→\s*Progress\s*→\s*Export/,
     );
   });
 
-  it("collapsed mark is layered sheets, not printer icon or PP", () => {
+  it("uses the generated PrintPartner mark in expanded and collapsed chrome", () => {
     expect(brandMark).toMatch(/aria-hidden/);
-    expect(brandMark).toMatch(/<rect[\s\S]*width=["']10["'][\s\S]*height=["']12["']/);
-    expect(brandMark.match(/<rect[\s\S]*?width=["']10["'][\s\S]*?height=["']12["']/g)?.length).toBeGreaterThanOrEqual(2);
+    expect(brandMark).toMatch(/print-partner-mark\.png/);
     expect(brandMark).not.toMatch(/<Printer\b/);
     expect(brandMark).not.toMatch(/>\s*PP\s*</);
     expect(spineRail).toMatch(/LayeredSheetMark/);
     expect(spineRail).not.toMatch(/>\s*PP\s*</);
   });
 
-  it("wordmark uses Source Serif 4 at 15px / -0.01em when expanded", () => {
+  it("wordmark uses Source Serif 4 with compact tracking when expanded", () => {
     expect(spineRail).toMatch(/font-serif|Source Serif 4|font-\[family/);
-    expect(spineRail).toMatch(/text-\[15px\]|15px/);
-    expect(spineRail).toMatch(/tracking-\[-0\.01em\]|-0\.01em/);
+    expect(spineRail).toMatch(/text-base/);
+    expect(spineRail).toMatch(/tracking-\[-0\.02em\]/);
   });
 });
 

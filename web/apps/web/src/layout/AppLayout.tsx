@@ -57,7 +57,7 @@ export default function AppLayout() {
   }, [updateCheck?.latest_version]);
 
   useEffect(() => {
-    const width = sidebarCollapsed ? "4.25rem" : "14rem";
+    const width = sidebarCollapsed ? "4.25rem" : "18rem";
     document.documentElement.style.setProperty("--app-sidebar-width", width);
   }, [sidebarCollapsed]);
 

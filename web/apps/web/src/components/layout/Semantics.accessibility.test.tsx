@@ -33,6 +33,6 @@ describe("page heading hierarchy", () => {
     const headings = screen.getAllByRole("heading", { level: 1 });
     expect(headings).toHaveLength(1);
     expect(headings[0]?.textContent).toBe("Plans");
-    expect(screen.getByText("Print Partner").tagName).not.toBe("H1");
+    expect(screen.getByText("PrintPartner").tagName).not.toBe("H1");
   });
 });

@@ -47,17 +47,19 @@ void _everyRouteIsOrdered;
 
 /** The route names the operator reads. Also used in the change confirmation. */
 export const PRODUCTION_ROUTE_LABEL: Readonly<Record<ProductionRoute, string>> = {
-  plates: "Make Plates for my printers",
-  stl: "Download the unit files",
-  external: "Record a print made elsewhere",
+  plates: "Generate 3MF plates",
+  stl: "Download sorted STL files",
+  external: "Add manually prepared prints",
 };
 
 /** One line under each route name on the question. */
 export const PRODUCTION_ROUTE_DESCRIPTION: Readonly<Record<ProductionRoute, string>> = {
-  plates: "Choose printers, group the Required units, arrange Plates, and export for slicing",
-  stl: "Get the files for the units you choose. No Plates, no printers",
+  plates:
+    "Arrange selected parts into plates using each printer's build volume and your color, material, and part-type sorting.",
+  stl:
+    "Download selected STL files organized by color, material, part type, and your other sorting choices.",
   external:
-    "The print already exists. Pick a file from a linked printer, or upload G-code, binary G-code or a 3MF file",
+    "Use this when you sliced or sent one or more jobs yourself. Add each 3MF or G-code file, then verify its parts in Checkoff.",
 };
 
 /**
@@ -357,7 +359,7 @@ function stlTasks(input: StlTaskInput): ProductionTask[] {
 
   const downloadFiles: ProductionTask = {
     id: "download-stl",
-    label: "Download the unit files",
+    label: "Download sorted STL files",
     hint: !selected
       ? "Available once you choose at least one Required unit."
       : "Take the files as often as you need. PrintPartner cannot see what you print from them, so record the print in Checkoff when it is done.",

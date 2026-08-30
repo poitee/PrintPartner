@@ -59,7 +59,7 @@ export default function JobTray({ sidebarCollapsed = false }: Props) {
       className={cn(
         "job-tray fixed left-0 right-0 z-50 border-t border-border bg-card/95 backdrop-blur-sm",
         "bottom-[var(--mobile-stage-height,0px)]",
-        "lg:left-[var(--app-sidebar-width,14rem)]",
+        "lg:left-[var(--app-sidebar-width,18rem)]",
         sidebarCollapsed && "lg:left-[4.25rem]",
         !hasJobs && "hidden",
       )}

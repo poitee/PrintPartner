@@ -307,7 +307,7 @@ export default function PlanPicker({
           selectedProfileId === p.id ? "opacity-100" : "opacity-0",
         )}
       />
-      <span className="truncate">{p.name}</span>
+      <span className="min-w-0 whitespace-normal break-words leading-snug">{p.name}</span>
       {opts?.showArchivedHint && p.archived_at ? (
         <span className="ml-2 shrink-0 text-xs text-muted-foreground">
           Archived
@@ -360,7 +360,7 @@ export default function PlanPicker({
               className={cn(
                 compact
                   ? "text-muted-foreground"
-                  : "min-w-0 justify-between font-normal",
+                  : "min-h-14 min-w-0 items-start justify-between py-2 text-left font-normal",
                 className,
               )}
             >
@@ -368,32 +368,30 @@ export default function PlanPicker({
                 <Layers className="h-4 w-4" />
               ) : (
                 <>
-                  <span className="min-w-0 truncate">
+                  <span className="min-w-0 flex-1">
                     {labelName != null ? (
-                      <>
-                        <span>{labelName}</span>
-                        {selectedArchived ? (
-                          <span className="text-muted-foreground">
-                            {" "}
-                            Archived
-                          </span>
-                        ) : null}
-                        <span className="text-muted-foreground">
-                          {" "}
-                          ({selected!.part_count} parts)
+                      <span className="block">
+                        <span className="line-clamp-2 break-words text-sm font-medium leading-snug">
+                          {labelName}
                         </span>
-                      </>
+                        <span className="mt-1 block text-xs text-muted-foreground">
+                        {selectedArchived ? (
+                          <>Archived · </>
+                        ) : null}
+                          {selected!.part_count} {selected!.part_count === 1 ? "part" : "parts"}
+                        </span>
+                      </span>
                     ) : (
                       label
                     )}
                   </span>
-                  <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                  <ChevronsUpDown className="ml-2 mt-1 h-4 w-4 shrink-0 opacity-50" />
                 </>
               )}
             </Button>
           </PopoverTrigger>
           <PopoverContent
-            className="w-[min(100vw-2rem,320px)] p-0"
+            className="w-[min(100vw-2rem,420px)] p-0"
             align={compact ? "start" : "end"}
             side={compact ? "right" : "bottom"}
           >

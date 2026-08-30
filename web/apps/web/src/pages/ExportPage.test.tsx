@@ -278,7 +278,7 @@ describe("ExportPage work packages", () => {
   it("names one work package status and lists the four resumable tasks", () => {
     renderAt("/export");
     expect(screen.getByText("Ready to slice")).toBeTruthy();
-    const list = screen.getByLabelText("Prepare this work package");
+    const list = screen.getByLabelText("Create and slice your plates");
     for (const label of [
       "Prepare Plates",
       "Export for slicing",
@@ -341,7 +341,7 @@ describe("ExportPage work packages", () => {
   it("lets the user jump to any available task and states why a blocked one is unavailable", () => {
     state.exportRecords = [];
     renderAt("/export");
-    const list = screen.getByLabelText("Prepare this work package");
+    const list = screen.getByLabelText("Create and slice your plates");
     expect(within(list).getByText("Add a sliced file before you send.")).toBeTruthy();
     fireEvent.click(within(list).getByRole("button", { name: "Review Plates" }));
     expect(screen.getByTestId("panel-selection")).toBeTruthy();
@@ -374,8 +374,8 @@ describe("ExportPage route question", () => {
   it("asks the question and shows no task list until the Build has a route", () => {
     state.route = null;
     renderAt("/export");
-    expect(screen.getByText("How do you want to make these units?")).toBeTruthy();
-    expect(screen.queryByLabelText("Prepare this work package")).toBeNull();
+    expect(screen.getByText("What should PrintPartner prepare?")).toBeTruthy();
+    expect(screen.queryByLabelText("Create and slice your plates")).toBeNull();
     for (const option of screen.getAllByRole("radio")) {
       expect((option as HTMLInputElement).checked).toBe(false);
     }
@@ -385,14 +385,14 @@ describe("ExportPage route question", () => {
     state.route = null;
     renderAt("/export");
     continueOn();
-    expect(screen.getByText("Select how you want to make these units")).toBeTruthy();
+    expect(screen.getByText("Select what PrintPartner should prepare")).toBeTruthy();
     expect(state.save).not.toHaveBeenCalled();
   });
 
   it("saves the answer and touches nothing else in the setup", async () => {
     state.route = null;
     renderAt("/export");
-    chooseRoute(/Download the unit files/);
+    chooseRoute(/Download sorted STL files/);
     continueOn();
     await waitFor(() => expect(state.save).toHaveBeenCalledWith({ route: "stl" }));
   });
@@ -401,12 +401,12 @@ describe("ExportPage route question", () => {
     state.route = null;
     state.save = vi.fn(() => Promise.reject(new Error("Engine offline")));
     renderAt("/export");
-    chooseRoute(/Make Plates for my printers/);
+    chooseRoute(/Generate 3MF plates/);
     continueOn();
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("Engine offline");
     expect(
-      (screen.getByRole("radio", { name: /Make Plates for my printers/ }) as HTMLInputElement)
+      (screen.getByRole("radio", { name: /Generate 3MF plates/ }) as HTMLInputElement)
         .checked,
     ).toBe(true);
 
@@ -419,9 +419,9 @@ describe("ExportPage route question", () => {
   it("shows only the unit-files tasks on the unit-files route", () => {
     state.route = "stl";
     renderAt("/export");
-    const list = screen.getByLabelText("Prepare this work package");
+    const list = screen.getByLabelText("Choose and download STL files");
     expect(within(list).getByText("Choose Required units")).toBeTruthy();
-    expect(within(list).getByText("Download the unit files")).toBeTruthy();
+    expect(within(list).getByText("Download sorted STL files")).toBeTruthy();
     for (const absent of ["Prepare Plates", "Export for slicing", "Add sliced file", "Send or start"]) {
       expect(within(list).queryByText(absent)).toBeNull();
     }
@@ -432,7 +432,7 @@ describe("ExportPage route question", () => {
   it("shows only the record-a-print tasks on the record route", () => {
     state.route = "external";
     renderAt("/export");
-    const list = screen.getByLabelText("Prepare this work package");
+    const list = screen.getByLabelText("Add each manually prepared print");
     for (const label of [
       "Choose the print file",
       "Attribute it to Required units",
@@ -446,17 +446,17 @@ describe("ExportPage route question", () => {
 
   it("names the chosen route above the tasks with a Change link", () => {
     renderAt("/export");
-    expect(screen.getByText("Make Plates for my printers")).toBeTruthy();
+    expect(screen.getByText("Generate 3MF plates")).toBeTruthy();
     expect(
-      screen.getByRole("button", { name: "Change how you want to make these units" }),
+      screen.getByRole("button", { name: "Change production method" }),
     ).toBeTruthy();
   });
 
   it("changes route at once when no Plate work is in the way", async () => {
     state.workspace = setupWorkspace;
     renderAt("/export");
-    fireEvent.click(screen.getByRole("button", { name: "Change how you want to make these units" }));
-    chooseRoute(/Download the unit files/);
+    fireEvent.click(screen.getByRole("button", { name: "Change production method" }));
+    chooseRoute(/Download sorted STL files/);
     continueOn();
     await waitFor(() => expect(state.save).toHaveBeenCalledWith({ route: "stl" }));
     expect(screen.queryByText("This work package will stop using:")).toBeNull();
@@ -468,8 +468,8 @@ describe("ExportPage route question", () => {
       { token: TOKEN_B, printer_id: "printer-1" },
     ];
     renderAt("/export");
-    fireEvent.click(screen.getByRole("button", { name: "Change how you want to make these units" }));
-    chooseRoute(/Download the unit files/);
+    fireEvent.click(screen.getByRole("button", { name: "Change production method" }));
+    chooseRoute(/Download sorted STL files/);
     continueOn();
 
     expect(state.save).not.toHaveBeenCalled();
@@ -480,7 +480,7 @@ describe("ExportPage route question", () => {
     expect(screen.getByText(/Nothing is deleted/)).toBeTruthy();
 
     fireEvent.click(
-      screen.getByRole("button", { name: 'Change to "Download the unit files"' }),
+      screen.getByRole("button", { name: 'Change to "Download sorted STL files"' }),
     );
     await waitFor(() => expect(state.save).toHaveBeenCalledWith({ route: "stl" }));
   });
@@ -488,8 +488,8 @@ describe("ExportPage route question", () => {
   it("leaves the route alone when the operator keeps it", () => {
     state.printerAssignments = [{ token: TOKEN_A, printer_id: "printer-1" }];
     renderAt("/export");
-    fireEvent.click(screen.getByRole("button", { name: "Change how you want to make these units" }));
-    chooseRoute(/Record a print made elsewhere/);
+    fireEvent.click(screen.getByRole("button", { name: "Change production method" }));
+    chooseRoute(/Add manually prepared prints/);
     continueOn();
     fireEvent.click(screen.getByRole("button", { name: "Keep this route" }));
     expect(state.save).not.toHaveBeenCalled();
@@ -500,7 +500,7 @@ describe("ExportPage route question", () => {
     state.checkoffLinks = [checkoffLink()];
     renderAt("/export");
     expect(
-      screen.queryByRole("button", { name: "Change how you want to make these units" }),
+      screen.queryByRole("button", { name: "Change production method" }),
     ).toBeNull();
     const line = screen.getByText(/A file is already at a printer, so the route stays as it is/);
     expect(within(line).getByRole("link", { name: "Checkoff" }).getAttribute("href")).toBe(

@@ -155,7 +155,7 @@ export default function SpineRail({
     <aside
       className={cn(
         "hidden shrink-0 flex-col border-r border-border bg-card transition-[width] duration-200 ease-out lg:flex print:hidden",
-        collapsed ? "w-[4.25rem]" : "w-56",
+        collapsed ? "w-[4.25rem]" : "w-72",
       )}
     >
       <div className={cn("border-b border-border", collapsed ? "px-2 py-3" : "px-4 py-4")}>
@@ -163,10 +163,16 @@ export default function SpineRail({
           {collapsed ? (
             <LayeredSheetMark />
           ) : (
-            <div
-              className="font-serif text-[15px] font-semibold tracking-[-0.01em] text-foreground"
-            >
-              Print Partner
+            <div className="flex min-w-0 items-center gap-2.5">
+              <LayeredSheetMark className="h-9 w-9 shrink-0" />
+              <div className="min-w-0">
+                <div className="font-serif text-base font-semibold tracking-[-0.02em] text-foreground">
+                  PrintPartner
+                </div>
+                <div className="text-3xs uppercase tracking-[0.12em] text-muted-foreground">
+                  Print planning & production
+                </div>
+              </div>
             </div>
           )}
         </div>

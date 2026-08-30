@@ -31,11 +31,23 @@ import {
 
 const PrinterLiveStrip = lazy(() => import("../components/checkoff/PrinterLiveStrip"));
 
-function JobList({ title, jobs }: { title: string; jobs: GlobalProductionJob[] }) {
+function JobList({
+  title,
+  jobs,
+  nested = false,
+}: {
+  title: string;
+  jobs: GlobalProductionJob[];
+  nested?: boolean;
+}) {
   if (jobs.length === 0) return null;
   return (
     <section className="space-y-2">
-      <h2 className="text-sm font-medium">{title}</h2>
+      {nested ? (
+        <h3 className="text-sm font-medium">{title}</h3>
+      ) : (
+        <h2 className="text-sm font-medium">{title}</h2>
+      )}
       <ul className="space-y-2" aria-label={title}>
         {jobs.map((job) => (
           <li key={job.id}>
@@ -191,26 +203,38 @@ export default function GlobalProductionPage() {
             />
           </Suspense>
 
-          {unattributed.length > 0 && (
-            <section className="space-y-2">
-              <h2 className="text-sm font-medium">Unmatched prints</h2>
-              <div className="flex flex-col gap-2">
-                {unattributed.map((print) => (
-                  <UnattributedPrintCard
-                    key={print.id}
-                    print={print}
-                    profiles={profiles}
-                    onClaimed={() => void refreshFarm()}
-                    onDismissed={() => void refreshFarm()}
-                  />
-                ))}
+          {unattributed.length > 0 || buckets.awaiting.length > 0 || buckets.failed.length > 0 ? (
+            <section className="space-y-4 rounded-lg border border-border bg-card p-4" aria-labelledby="production-attention-heading">
+              <div>
+                <h2 id="production-attention-heading" className="text-sm font-semibold">
+                  Attention needed
+                </h2>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Match unknown printer files, verify finished parts, and resolve failed jobs.
+                </p>
               </div>
+              {unattributed.length > 0 ? (
+                <section className="space-y-2">
+                  <h3 className="text-sm font-medium">Unmatched printer files</h3>
+                  <div className="flex flex-col gap-2">
+                    {unattributed.map((print) => (
+                      <UnattributedPrintCard
+                        key={print.id}
+                        print={print}
+                        profiles={profiles}
+                        onClaimed={() => void refreshFarm()}
+                        onDismissed={() => void refreshFarm()}
+                      />
+                    ))}
+                  </div>
+                </section>
+              ) : null}
+              <JobList title="Parts to verify" jobs={buckets.awaiting} nested />
+              <JobList title="Failed jobs" jobs={buckets.failed} nested />
             </section>
-          )}
+          ) : null}
 
-          <JobList title="Needs verification" jobs={buckets.awaiting} />
-          <JobList title="Failed" jobs={buckets.failed} />
-          <JobList title="Printing" jobs={buckets.watching} />
+          <JobList title="Printing now" jobs={buckets.watching} />
 
           {recent.length > 0 && (
             <section className="space-y-2">

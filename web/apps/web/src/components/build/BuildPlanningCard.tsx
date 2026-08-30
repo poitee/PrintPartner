@@ -13,11 +13,6 @@ import {
   CardTitle,
 } from "../ui/card";
 
-/**
- * Two checkpoints share the word "draft" in the code and must not share it in
- * the interface: what the assistant proposed, and the Working Plan that Plan
- * accepts. This card only ever says "assistant changes" or "Working Plan".
- */
 function workingPlanState(phase: BuildPlanningState["planning_phase"]): string {
   switch (phase.kind) {
     case "preparing":
@@ -31,7 +26,7 @@ function workingPlanState(phase: BuildPlanningState["planning_phase"]): string {
     case "abandoned":
       return "The Working Plan was dropped before it was accepted.";
     case "missing_draft":
-      return "The Working Plan the assistant wrote is no longer available.";
+      return "The Working Plan from the connected AI MCP Server is no longer available.";
     default: {
       const exhaustive: never = phase;
       return exhaustive;
@@ -56,7 +51,7 @@ export default function BuildPlanningCard({
         role="alert"
       >
         <p className="min-w-0 flex-1 text-sm text-destructive">
-          Could not load assistant changes:{" "}
+          Could not load AI MCP Server changes:{" "}
           {error instanceof Error ? error.message : String(error)}
         </p>
         <Button
@@ -94,11 +89,12 @@ export default function BuildPlanningCard({
     <Card>
       <CardHeader>
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <CardTitle>Assistant changes</CardTitle>
+          <CardTitle>AI MCP Server changes</CardTitle>
           <Badge variant={phaseBadge.variant}>{phaseBadge.label}</Badge>
         </div>
         <CardDescription>
           {summary ? `${summary}. ` : ""}
+          These changes came from the connected AI MCP Server. {" "}
           {workingPlanState(planningPhase)}
         </CardDescription>
       </CardHeader>
@@ -198,7 +194,7 @@ export default function BuildPlanningCard({
         {readiness.blockers.length > 0 ? (
           <section aria-labelledby="planning-blockers-heading">
             <h3 id="planning-blockers-heading" className="mb-2 font-medium">
-              Decisions the assistant needs
+              Decisions the AI MCP Server needs
             </h3>
             <ul className="list-disc space-y-1 pl-5">
               {readiness.blockers.map((blocker, index) => (

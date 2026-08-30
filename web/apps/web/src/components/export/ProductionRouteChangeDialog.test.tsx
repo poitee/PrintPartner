@@ -45,7 +45,7 @@ describe("ProductionRouteChangeDialog", () => {
     renderDialog();
     expect(
       screen.getByRole("heading", {
-        name: 'Change route from "Make Plates for my printers" to "Download the unit files"?',
+        name: 'Change route from "Generate 3MF plates" to "Download sorted STL files"?',
       }),
     ).toBeTruthy();
   });
@@ -63,14 +63,14 @@ describe("ProductionRouteChangeDialog", () => {
     renderDialog();
     expect(
       screen.getByText(
-        /Nothing is deleted\. Change back to .Make Plates for my printers. and this work is still here\./,
+        /Nothing is deleted\. Change back to .Generate 3MF plates. and this work is still here\./,
       ),
     ).toBeTruthy();
   });
 
   it("names the destination in the button the operator presses", () => {
     const { onConfirm } = renderDialog();
-    fireEvent.click(screen.getByRole("button", { name: 'Change to "Download the unit files"' }));
+    fireEvent.click(screen.getByRole("button", { name: 'Change to "Download sorted STL files"' }));
     expect(onConfirm).toHaveBeenCalled();
   });
 

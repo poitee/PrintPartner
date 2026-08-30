@@ -123,6 +123,31 @@ describe("PrinterFilesView", () => {
     expect(screen.queryByText("bracket.bgcode")).toBeNull();
   });
 
+  it("searches the current folder and sorts files using printer metadata", async () => {
+    api.fetchPrinterStorageListing.mockResolvedValue({
+      path: "",
+      entries: [
+        { kind: "file", path: "small.gcode", name: "small.gcode", size_bytes: 10, modified_at: "2026-08-20T10:00:00.000Z" },
+        { kind: "file", path: "large.gcode", name: "large.gcode", size_bytes: 500, modified_at: "2026-08-19T10:00:00.000Z" },
+        { kind: "directory", path: "archive", name: "archive" },
+      ],
+    });
+    renderView();
+
+    const search = await screen.findByPlaceholderText("Search this folder…");
+    fireEvent.change(search, { target: { value: "large" } });
+    expect(screen.getByText("large.gcode")).toBeTruthy();
+    expect(screen.queryByText("small.gcode")).toBeNull();
+    expect(screen.getByText("1 file · 0 folders")).toBeTruthy();
+
+    fireEvent.change(search, { target: { value: "" } });
+    fireEvent.change(screen.getByLabelText("Sort"), { target: { value: "largest" } });
+    expect(screen.getAllByText(/\.gcode$/).map((node) => node.textContent)).toEqual([
+      "large.gcode",
+      "small.gcode",
+    ]);
+  });
+
   it("keeps a failed listing on screen with a Retry that reruns it", async () => {
     api.fetchPrinterStorageListing.mockRejectedValueOnce(new Error("Host refused the connection"));
     renderView();

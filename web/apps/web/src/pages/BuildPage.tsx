@@ -13,7 +13,6 @@ import {
 } from "lucide-react";
 import MergeConflictBanner from "../components/MergeConflictBanner";
 import PlanSpecialRequestField from "../components/PlanSpecialRequestField";
-import BuildSourcesPanel from "../components/build/BuildSourcesPanel";
 import BuildRecipePanel from "../components/build/BuildRecipePanel";
 import PlanRolesCard from "../components/build/PlanRolesCard";
 import BuildPlanningCard from "../components/build/BuildPlanningCard";
@@ -814,26 +813,27 @@ function BuildPageContent() {
           <section id="attached-sources" className="space-y-3">
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-sm font-semibold tracking-wide">
-                Attached sources
+                Print sources
               </h2>
               <div className="ml-auto flex flex-wrap items-center gap-2">
-                <BuildSourcesPanel
-                  profileId={selectedProfileId}
-                  disabled={!engineReady || busy}
-                />
                 <Button
                   type="button"
                   variant="secondary"
                   size="sm"
                   onClick={() => setAttachOpen((v) => !v)}
+                  disabled={!engineReady || busy}
                 >
-                  Attach another
+                  Add a source
                 </Button>
                 <Button variant="link" className="h-auto p-0 text-xs" asChild>
-                  <Link to={libraryRoute()}>Library</Link>
+                  <Link to={libraryRoute()}>Open Source Library</Link>
                 </Button>
               </div>
             </div>
+            <p className="max-w-3xl text-xs text-muted-foreground">
+              Add the repositories that contain this Build's parts. For each source, choose the
+              folders or individual STL files that belong in the plan.
+            </p>
 
             {mergeConflicts.length > 0 && (
               <MergeConflictBanner
@@ -862,7 +862,7 @@ function BuildPageContent() {
                   <Combobox
                     value={pendingBaseSourceId || null}
                     onValueChange={setPendingBaseSourceId}
-                    disabled={!engineReady || selectedProfileId == null}
+                    disabled={!engineReady || busy || selectedProfileId == null}
                     placeholder="Choose base source…"
                     searchPlaceholder="Search sources…"
                     emptyText="No sources match."
@@ -873,7 +873,7 @@ function BuildPageContent() {
                     variant="secondary"
                     className="min-h-11"
                     onClick={() => void onSetBaseSource()}
-                    disabled={!pendingBaseSourceId || selectedProfileId == null || !engineReady}
+                    disabled={!pendingBaseSourceId || selectedProfileId == null || !engineReady || busy}
                   >
                     Set base source
                   </Button>
@@ -912,6 +912,7 @@ function BuildPageContent() {
                   onValueChange={setAddonSourceId}
                   disabled={
                     !engineReady ||
+                    busy ||
                     selectedProfileId == null ||
                     needsBaseSource ||
                     addonSourceOptions.length === 0
@@ -935,7 +936,7 @@ function BuildPageContent() {
                     void onAddAddon();
                     setAttachOpen(false);
                   }}
-                  disabled={!addonSourceId || needsBaseSource}
+                  disabled={!addonSourceId || needsBaseSource || busy}
                 >
                   Attach
                 </Button>
@@ -957,10 +958,10 @@ function BuildPageContent() {
 
           {planningQuery.data ? (
             <section id="assistant-changes" className="space-y-3">
-              <h2 className="text-sm font-semibold tracking-wide">Assistant changes</h2>
+              <h2 className="text-sm font-semibold tracking-wide">AI MCP Server changes</h2>
               <details open={assistantOpen} onToggle={(e) => setAssistantOpen(e.currentTarget.open)}>
                 <summary className="cursor-pointer select-none text-sm text-muted-foreground transition-colors hover:text-foreground">
-                  What the assistant proposed
+                  Review changes proposed by the AI MCP Server
                 </summary>
                 <div className="mt-3">
                   <BuildPlanningCard planId={selectedProfileId} />

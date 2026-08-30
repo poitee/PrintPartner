@@ -115,7 +115,7 @@ describe("StlRoutePanel", () => {
   it("runs the export with the chosen units and offers the finished files", async () => {
     renderPanel();
 
-    fireEvent.click(screen.getByRole("button", { name: /Download the unit files/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Download sorted STL files/ }));
 
     await waitFor(() => {
       expect(api.startExportStlPack).toHaveBeenCalledWith(7, {
@@ -136,7 +136,7 @@ describe("StlRoutePanel", () => {
 
     fireEvent.click(screen.getByRole("radio", { name: /Only the ones still to print/ }));
     fireEvent.click(screen.getByRole("radio", { name: /By color only/ }));
-    fireEvent.click(screen.getByRole("button", { name: /Download the unit files/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Download sorted STL files/ }));
 
     await waitFor(() => {
       expect(api.startExportStlPack).toHaveBeenCalledWith(7, {
@@ -152,7 +152,7 @@ describe("StlRoutePanel", () => {
     api.startExportStlPack.mockReturnValue(new Promise<string>(() => {}));
     renderPanel();
 
-    fireEvent.click(screen.getByRole("button", { name: /Download the unit files/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Download sorted STL files/ }));
 
     const progress = await screen.findByRole("status");
     expect(progress.textContent).toContain("Collecting the unit files");
@@ -165,10 +165,10 @@ describe("StlRoutePanel", () => {
     renderPanel();
 
     fireEvent.click(screen.getByRole("radio", { name: /By color only/ }));
-    fireEvent.click(screen.getByRole("button", { name: /Download the unit files/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Download sorted STL files/ }));
 
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain("Could not download the unit files");
+    expect(alert.textContent).toContain("Could not download the STL files");
     expect(alert.textContent).toContain("A verified accepted STL is unavailable.");
     expect(screen.queryByRole("link", { name: /Save the files/ })).toBeNull();
 
@@ -197,7 +197,7 @@ describe("StlRoutePanel", () => {
     );
     renderPanel();
 
-    fireEvent.click(screen.getByRole("button", { name: /Download the unit files/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Download sorted STL files/ }));
 
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("bracket.stl (Frame)");
@@ -208,7 +208,7 @@ describe("StlRoutePanel", () => {
     api.startExportStlPack.mockRejectedValue(new Error("Profile not found"));
     renderPanel();
 
-    fireEvent.click(screen.getByRole("button", { name: /Download the unit files/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Download sorted STL files/ }));
 
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("Profile not found");
@@ -229,7 +229,7 @@ describe("StlRoutePanel", () => {
     );
     renderPanel();
 
-    fireEvent.click(screen.getByRole("button", { name: /Download the unit files/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Download sorted STL files/ }));
 
     expect(await screen.findByText(/on the PrintPartner server/)).toBeTruthy();
     expect(screen.queryByRole("link", { name: /Save the files/ })).toBeNull();
@@ -239,6 +239,6 @@ describe("StlRoutePanel", () => {
     renderPanel();
 
     const note = screen.getByText(/stay unverified in Checkoff/);
-    expect(note.textContent).toContain("Record a print made elsewhere");
+    expect(note.textContent).toContain("Add manually prepared prints");
   });
 });

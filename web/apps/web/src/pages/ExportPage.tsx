@@ -76,10 +76,16 @@ type OperationFailure = Readonly<{ message: string; retry: () => void }>;
  */
 const TASK_LIST_DESCRIPTION: Readonly<Record<ProductionRoute, string>> = {
   plates:
-    "Plate preparation stays together. Production reopens at the first unfinished task.",
-  stl: "Production reopens at the first unfinished task.",
+    "Choose the parts, printers, and layout, then export the plates for slicing.",
+  stl: "Choose the parts and sorting you want in the download.",
   external:
-    "All three steps happen in one panel. Production reopens at the first unfinished task.",
+    "Add each print prepared outside PrintPartner. Nothing here starts or monitors a printer.",
+};
+
+const TASK_LIST_TITLE: Readonly<Record<ProductionRoute, string>> = {
+  plates: "Create and slice your plates",
+  stl: "Choose and download STL files",
+  external: "Add each manually prepared print",
 };
 
 /**
@@ -755,7 +761,7 @@ export default function ExportPage() {
                 <>
                   <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
                     <p className="text-sm text-foreground">
-                      <span className="text-muted-foreground">Route: </span>
+                      <span className="text-muted-foreground">Production method: </span>
                       <span className="font-medium">{PRODUCTION_ROUTE_LABEL[route]}</span>
                     </p>
                     {projection.routeLocked ? (
@@ -782,15 +788,15 @@ export default function ExportPage() {
                         type="button"
                         variant="link"
                         className="h-auto min-h-11 p-0"
-                        aria-label="Change how you want to make these units"
+                        aria-label="Change production method"
                         onClick={() => setChangingRoute(true)}
                       >
-                        Change
+                        Change method
                       </Button>
                     )}
                   </div>
                   <TaskList
-                    title="Prepare this work package"
+                    title={TASK_LIST_TITLE[route]}
                     description={TASK_LIST_DESCRIPTION[route]}
                     tasks={taskRows}
                   />

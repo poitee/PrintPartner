@@ -128,7 +128,7 @@ export default function ExternalPrintRoutePanel({ profileId, onRecorded }: Props
   const { profiles } = useProfileSelection();
   const [source, setSource] = useState<FileSource | null>(null);
   const [printerId, setPrinterId] = useState("");
-  const [recorded, setRecorded] = useState<RecordedPrint | null>(null);
+  const [recorded, setRecorded] = useState<RecordedPrint[]>([]);
 
   const fleetRequest = useCallback(async (): Promise<PrinterDesk[]> => {
     const [fleet, integrations] = await Promise.all([fetchPrinters(), fetchIntegrations()]);
@@ -167,40 +167,47 @@ export default function ExternalPrintRoutePanel({ profileId, onRecorded }: Props
   const builds = profiles.filter((profile) => profile.id === profileId);
 
   const finish = (print: RecordedPrint) => {
-    setRecorded(print);
+    setRecorded((current) => [...current, print]);
     onRecorded();
   };
 
-  if (recorded) {
-    const outcome = recordedOutcome(recorded);
-    return (
-      <section aria-label="Record a print made elsewhere" className="stack-section">
-        <StatusBadge status="complete" label={outcome.headline} live />
-        <p className="text-body">{outcome.body}</p>
-        <div className="flex flex-wrap items-center gap-3">
-          <Button
-            size="shop"
-            variant="outline"
-            onClick={() => {
-              setRecorded(null);
-              setSource(null);
-              setPrinterId("");
-            }}
-          >
-            Record another print
-          </Button>
-          <Link className="text-body underline underline-offset-2" to={checkoffRoute(profileId)}>
-            {outcome.linkLabel}
-          </Link>
-        </div>
-      </section>
-    );
-  }
-
   return (
-    <section aria-label="Record a print made elsewhere" className="stack-section">
+    <section aria-label="Add manually prepared prints" className="stack-section">
+      {recorded.length > 0 ? (
+        <section className="stack-row" aria-labelledby={`${fieldPrefix}-recorded-heading`}>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 id={`${fieldPrefix}-recorded-heading`} className="text-body font-medium">
+              Prints added this session ({recorded.length})
+            </h3>
+            <Link className="text-body underline underline-offset-2" to={checkoffRoute(profileId)}>
+              Review parts in Checkoff
+            </Link>
+          </div>
+          <ul className="space-y-2">
+            {recorded.map((print, index) => {
+              const outcome = recordedOutcome(print);
+              return (
+                <li
+                  key={`${print.filename}:${index}`}
+                  className="rounded-md border border-border bg-surface-sunken p-3"
+                >
+                  <StatusBadge status="complete" label={outcome.headline} live />
+                  <p className="mt-1 text-meta text-muted-foreground">{outcome.body}</p>
+                  <Link
+                    className="mt-1 inline-block text-meta underline underline-offset-2"
+                    to={checkoffRoute(profileId)}
+                  >
+                    {outcome.linkLabel}
+                  </Link>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      ) : null}
       <p className="text-body">
-        This records a print that already happened. Nothing here sends anything to a printer.
+        Add each print you sliced or sent outside PrintPartner. Nothing here sends anything to a
+        printer. Each file can use a different printer and cover different part instances.
       </p>
 
       <fieldset className="stack-row">
@@ -269,7 +276,7 @@ export default function ExternalPrintRoutePanel({ profileId, onRecorded }: Props
           ) : (
             <div className="stack-row">
               <label className="text-body font-medium" htmlFor={`${fieldPrefix}-printer`}>
-                Which printer made this print?
+                Which printer made this print or plate?
               </label>
               <select
                 id={`${fieldPrefix}-printer`}
@@ -339,10 +346,11 @@ export default function ExternalPrintRoutePanel({ profileId, onRecorded }: Props
 
       {source === "computer" && fleet.view.status === "ready" ? (
         <UploadedPrintRecord
+          key={recorded.length}
           profileId={profileId}
           printers={desks.map((desk) => desk.printer)}
           onPrintRecorded={onRecorded}
-          onFinished={setRecorded}
+          onFinished={(print) => setRecorded((current) => [...current, print])}
         />
       ) : null}
     </section>
