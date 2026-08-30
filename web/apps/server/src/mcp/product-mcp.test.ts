@@ -121,4 +121,33 @@ describe("product MCP confirm_apply reservation", () => {
     await client.close();
     await server.close();
   });
+
+  it("plan_build prompt does not wait for planning readiness", async () => {
+    const { client, server } = await withClient(new Map());
+    const prompt = await client.getPrompt({
+      name: "plan_build",
+      arguments: { customer_request: "print a Voron 0.2" },
+    });
+    const content = prompt.messages[0]?.content;
+    if (content?.type !== "text") {
+      throw new Error("plan_build prompt is not text");
+    }
+
+    expect(content.text).toContain("print a Voron 0.2");
+    expect(content.text).not.toMatch(/get_build_planning_state reports ready/i);
+    expect(content.text).toContain("advisory Preparation");
+    expect(content.text).toContain("propose_apply_plan_draft");
+    expect(content.text).toContain("get_build_workflow");
+    expect(content.text).toMatch(/accepted_plan is ready/);
+    expect(content.text).toMatch(/working_plan is none/);
+
+    const templates = await client.listResourceTemplates();
+    const planning = templates.resourceTemplates.find((template) =>
+      template.uriTemplate === "print-partner://build-planning/{build_id}",
+    );
+    expect(planning?.description).not.toMatch(/readiness/i);
+
+    await client.close();
+    await server.close();
+  });
 });
