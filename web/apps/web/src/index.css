@@ -49,6 +49,16 @@
   --primary: hsl(196 92% 28%);
   --primary-foreground: hsl(200 30% 98%);
 
+  /* Category identity. Unlike --primary these do encode meaning: a category
+     keeps one colour down the rail, so a "Printers" family reads as a family.
+     Six well-separated hues, all kept clear of the cyan accent. */
+  --category-1: hsl(152 52% 30%);
+  --category-2: hsl(45 84% 30%);
+  --category-3: hsl(350 62% 42%);
+  --category-4: hsl(275 48% 46%);
+  --category-5: hsl(25 76% 36%);
+  --category-6: hsl(105 46% 28%);
+
   /* Tinted surface for selection and interaction panels, so "this one is
      active" is one token instead of five hand-picked alphas of --primary. */
   --primary-soft: hsl(196 60% 93%);
@@ -154,6 +164,13 @@
   --primary: hsl(190 72% 60%);
   --primary-foreground: hsl(200 40% 9%);
 
+  --category-1: hsl(152 46% 58%);
+  --category-2: hsl(45 78% 60%);
+  --category-3: hsl(350 66% 68%);
+  --category-4: hsl(275 62% 72%);
+  --category-5: hsl(25 78% 62%);
+  --category-6: hsl(105 42% 58%);
+
   --primary-soft: hsl(198 34% 18%);
 
   --accent-brand: var(--primary);
@@ -256,6 +273,13 @@
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
   --color-primary-soft: var(--primary-soft);
+
+  --color-category-1: var(--category-1);
+  --color-category-2: var(--category-2);
+  --color-category-3: var(--category-3);
+  --color-category-4: var(--category-4);
+  --color-category-5: var(--category-5);
+  --color-category-6: var(--category-6);
 
   --color-accent-brand: var(--accent-brand);
   --color-accent-brand-foreground: var(--accent-brand-foreground);

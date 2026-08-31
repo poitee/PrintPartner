@@ -169,13 +169,19 @@ export function buildLibraryCardMeta({
   };
 }
 
+/**
+ * Six theme-aware category hues. These were hardcoded `hsl()` literals, which
+ * meant they were a second palette invisible to the token layer and identical
+ * in both themes — one of them, `hsl(222 28% 16%)`, was near-black on a dark
+ * background. They now resolve per theme from `index.css`.
+ */
 const CATEGORY_SWATCHES = [
-  "hsl(222 28% 16%)",
-  "hsl(199 88% 42%)",
-  "hsl(152 48% 36%)",
-  "hsl(33 70% 42%)",
-  "hsl(262 52% 48%)",
-  "hsl(340 55% 45%)",
+  "var(--category-1)",
+  "var(--category-2)",
+  "var(--category-3)",
+  "var(--category-4)",
+  "var(--category-5)",
+  "var(--category-6)",
 ];
 
 /**
