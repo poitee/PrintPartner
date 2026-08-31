@@ -65,7 +65,7 @@ export default memo(function PartThumb({
   }, [visible, eager]);
 
   useEffect(() => {
-    if (!visible) return;
+    if (!visible || partId <= 0) return;
     let cancelled = false;
     let objectUrl: string | null = null;
     let probe: HTMLImageElement | null = null;

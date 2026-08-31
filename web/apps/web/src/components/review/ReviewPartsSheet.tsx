@@ -28,6 +28,7 @@ import {
 import {
   flattenReviewParts,
   sourceLabelFromLayer,
+  workingPlanReviewParts,
 } from "../../lib/reviewParts";
 import {
   loadPersistedReviewPartsUi,
@@ -351,24 +352,10 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
     () => new Map(acceptedParts.map((part) => [part.id, part])),
     [acceptedParts],
   );
-  const draftPartByKey = useMemo(
-    () => new Map((draftWorkspace?.parts ?? []).map((part) => [part.part_key, part])),
-    [draftWorkspace],
-  );
   const allParts = useMemo(() => {
     if (!draftWorkspace || ui.viewMode !== "edit") return acceptedParts;
-    return acceptedParts.map((part) => {
-      const proposed = draftPartByKey.get(part.match_key);
-      return proposed
-        ? {
-            ...part,
-            included: proposed.included,
-            quantity_override: proposed.quantity_override,
-            quantity_effective: proposed.quantity_effective,
-          }
-        : part;
-    });
-  }, [acceptedParts, draftPartByKey, draftWorkspace, ui.viewMode]);
+    return workingPlanReviewParts(acceptedParts, draftWorkspace);
+  }, [acceptedParts, draftWorkspace, ui.viewMode]);
 
   const facets = useMemo(() => collectReviewFacets(allParts), [allParts]);
 
@@ -386,8 +373,8 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
   const sourceGroups = useMemo(() => groupCheckoffParts(filtered), [filtered]);
 
   const summary = useMemo(
-    () => formatCheckoffSummary(acceptedParts.filter((p) => p.included)),
-    [acceptedParts],
+    () => formatCheckoffSummary(allParts.filter((p) => p.included)),
+    [allParts],
   );
 
   const patchUi = useCallback((patch: Partial<PersistedReviewPartsUi>) => {

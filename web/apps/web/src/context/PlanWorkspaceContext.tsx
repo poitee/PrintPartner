@@ -301,7 +301,10 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
     const workspace = currentDraftWorkspace();
     if (!workspace) throw new Error("No Working Plan is open");
     if (!workspace.diff.base_is_current) throw new Error("Refresh this Working Plan before acceptance");
-    if (workspace.reconciliation.kind !== "ready") {
+    if (
+      workspace.reconciliation.kind === "unresolved" &&
+      workspace.reconciliation.conflicts.length > 0
+    ) {
       throw new Error("Resolve Required-unit changes before acceptance");
     }
     const receipt = await applyPlanDraft(workspace, options);

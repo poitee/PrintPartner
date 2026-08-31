@@ -1,4 +1,4 @@
-import type { PartRow } from "@print-partner/contracts";
+import type { PartRow, PlanDraftPartView, PlanDraftWorkspace } from "@print-partner/contracts";
 import type { PlanReview, PlanReviewPartGroup, ReviewPart } from "../api/endpoints/planManifests";
 
 /** Human-readable source name from `base:repo-name` / `addon:repo-name` layer labels. */
@@ -10,6 +10,97 @@ export function sourceLabelFromLayer(sourceLayer: string | null | undefined): st
 
 export function flattenReviewParts(groups: PlanReviewPartGroup[]): ReviewPart[] {
   return groups.flatMap((g) => g.parts);
+}
+
+function only<T>(values: readonly T[]): T | null {
+  return values.length === 1 ? values[0]! : null;
+}
+
+function normalizedPath(value: string): string {
+  return value.replace(/\\/g, "/").toLowerCase().replace(/^\/+|\/+$/g, "");
+}
+
+function acceptedPartForDraft(
+  acceptedParts: readonly ReviewPart[],
+  draftPart: PlanDraftPartView,
+  usedAcceptedIds: ReadonlySet<number>,
+): ReviewPart | null {
+  const available = acceptedParts.filter((part) => !usedAcceptedIds.has(part.id));
+  const byKey = available.filter((part) => part.match_key === draftPart.part_key);
+  const exactKey = only(byKey);
+  if (exactKey) return exactKey;
+
+  const candidates = byKey.length > 0 ? byKey : available;
+  const draftPath = normalizedPath(draftPart.relative_path);
+  const byLayerAndPath = only(candidates.filter((part) => (
+    part.source_layer === draftPart.source_layer &&
+    normalizedPath(part.relative_path) === draftPath
+  )));
+  if (byLayerAndPath) return byLayerAndPath;
+
+  return only(candidates.filter((part) => normalizedPath(part.relative_path) === draftPath));
+}
+
+function progressForQuantity(part: ReviewPart | null, quantity: number): {
+  readonly printUnits: boolean[];
+  readonly printedCount: number;
+} {
+  const printUnits = Array.from(
+    { length: quantity },
+    (_, index) => part?.print_units[index] ?? false,
+  );
+  return {
+    printUnits,
+    printedCount: printUnits.filter(Boolean).length,
+  };
+}
+
+/**
+ * Project the editable Working Plan through the sheet used by Plan.
+ *
+ * Accepted rows contribute media, filament, and carried progress when they
+ * exist. New rows use negative display-only IDs so they cannot be mistaken
+ * for Accepted Plan identities before publication.
+ */
+export function workingPlanReviewParts(
+  acceptedParts: readonly ReviewPart[],
+  workspace: PlanDraftWorkspace,
+): ReviewPart[] {
+  const usedAcceptedIds = new Set<number>();
+  return workspace.parts.map((draftPart) => {
+    const accepted = acceptedPartForDraft(acceptedParts, draftPart, usedAcceptedIds);
+    if (accepted) usedAcceptedIds.add(accepted.id);
+    const { printUnits, printedCount } = progressForQuantity(
+      accepted,
+      draftPart.quantity_effective,
+    );
+    const planningFields = {
+      match_key: draftPart.part_key,
+      relative_path: draftPart.relative_path,
+      filename: draftPart.filename,
+      source_layer: draftPart.source_layer,
+      role: draftPart.role,
+      included: draftPart.included,
+      quantity_auto: draftPart.quantity_inferred,
+      quantity_override: draftPart.quantity_override,
+      quantity_effective: draftPart.quantity_effective,
+      print_units: printUnits,
+      printed_count: printedCount,
+      missing: draftPart.included && printedCount < draftPart.quantity_effective,
+    };
+    if (accepted) return { ...accepted, ...planningFields };
+    return {
+      id: -draftPart.draft_part_id,
+      status: "working",
+      requirement: null,
+      option_group_id: null,
+      filament_color_id: null,
+      filament_custom_hex: null,
+      spoolman_spool_id: null,
+      filament_display: "",
+      ...planningFields,
+    };
+  });
 }
 
 /** Merge a partial patch into a review part row (keeps print progress fields). */

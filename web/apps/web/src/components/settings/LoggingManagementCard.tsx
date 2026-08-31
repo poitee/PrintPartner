@@ -31,9 +31,58 @@ interface LogStats {
   errorCount: number;
 }
 
+interface WorkflowLog {
+  id: string;
+  timestamp: string;
+  method: string;
+  url: string;
+  duration: number;
+  statusCode: number;
+  severity: LoggerConfig["minSeverity"];
+  message: string;
+  context?: unknown;
+  error?: unknown;
+}
+
+function isSeverity(value: unknown): value is WorkflowLog["severity"] {
+  return value === "debug" || value === "info" || value === "warn" || value === "error";
+}
+
+function isWorkflowLog(value: unknown): value is WorkflowLog {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "id" in value && typeof value.id === "string" &&
+    "timestamp" in value && typeof value.timestamp === "string" &&
+    "method" in value && typeof value.method === "string" &&
+    "url" in value && typeof value.url === "string" &&
+    "duration" in value && typeof value.duration === "number" &&
+    "statusCode" in value && typeof value.statusCode === "number" &&
+    "severity" in value && isSeverity(value.severity) &&
+    "message" in value && typeof value.message === "string"
+  );
+}
+
+function parseWorkflowLogs(value: unknown): WorkflowLog[] {
+  if (!Array.isArray(value) || !value.every(isWorkflowLog)) {
+    throw new Error("The server returned invalid log data");
+  }
+  return value;
+}
+
+function logDetails(log: WorkflowLog): string | null {
+  const details = [
+    log.context === undefined ? null : { context: log.context },
+    log.error === undefined ? null : { error: log.error },
+  ].filter((value) => value !== null);
+  return details.length > 0 ? JSON.stringify(Object.assign({}, ...details), null, 2) : null;
+}
+
 export default function LoggingManagementCard() {
   const [config, setConfig] = useState<LoggerConfig | null>(null);
   const [stats, setStats] = useState<LogStats | null>(null);
+  const [logs, setLogs] = useState<WorkflowLog[]>([]);
+  const [logsLoading, setLogsLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -64,9 +113,25 @@ export default function LoggingManagementCard() {
     }
   };
 
+  const loadLogs = async () => {
+    setLogsLoading(true);
+    setError(null);
+    try {
+      const response = await fetch("/settings/logging/logs?limit=100");
+      if (!response.ok) throw new Error("Failed to load recent logs");
+      const value: unknown = await response.json();
+      setLogs(parseWorkflowLogs(value).slice().reverse());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load recent logs");
+    } finally {
+      setLogsLoading(false);
+    }
+  };
+
   useEffect(() => {
     loadConfig();
     loadStats();
+    loadLogs();
     // Poll stats every 5s, but pause when the tab is hidden
     const interval = setInterval(() => {
       if (document.visibilityState !== "hidden") void loadStats();
@@ -120,6 +185,7 @@ export default function LoggingManagementCard() {
         method: "DELETE",
       });
       if (!response.ok) throw new Error("Clear failed");
+      setLogs([]);
       await loadStats();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Clear failed");
@@ -214,6 +280,70 @@ export default function LoggingManagementCard() {
             </div>
           </div>
         )}
+
+        <section className="space-y-2 border-t pt-4" aria-labelledby="recent-logs-heading">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h4 id="recent-logs-heading" className="text-sm font-medium">Recent requests</h4>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                Latest 100 recorded requests. Open a row to inspect its message and context.
+              </p>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              aria-label="Refresh recent logs"
+              disabled={logsLoading}
+              onClick={() => void Promise.all([loadLogs(), loadStats()])}
+            >
+              <RefreshCw className={logsLoading ? "h-4 w-4 animate-spin" : "h-4 w-4"} />
+            </Button>
+          </div>
+          {logsLoading && logs.length === 0 ? (
+            <p className="rounded-md border border-border p-3 text-sm text-muted-foreground">
+              Loading recent requests…
+            </p>
+          ) : logs.length === 0 ? (
+            <p className="rounded-md border border-border p-3 text-sm text-muted-foreground">
+              No workflow requests have been recorded yet.
+            </p>
+          ) : (
+            <ul className="max-h-96 space-y-1 overflow-y-auto rounded-md border border-border p-1">
+              {logs.map((log) => {
+                const details = logDetails(log);
+                return (
+                  <li key={log.id}>
+                    <details className="rounded-md border border-transparent px-2 py-1.5 open:border-border open:bg-muted/40">
+                      <summary className="cursor-pointer list-none text-xs">
+                        <span className="grid grid-cols-[auto_auto_auto_1fr_auto] items-center gap-2">
+                          <time className="whitespace-nowrap text-muted-foreground" dateTime={log.timestamp}>
+                            {new Date(log.timestamp).toLocaleString()}
+                          </time>
+                          <span className="font-mono font-semibold uppercase">{log.method}</span>
+                          <span className="font-mono tabular-nums">{log.statusCode}</span>
+                          <span className="min-w-0 truncate font-mono" title={log.url}>{log.url}</span>
+                          <span className="whitespace-nowrap tabular-nums text-muted-foreground">
+                            {Math.round(log.duration)} ms
+                          </span>
+                        </span>
+                      </summary>
+                      <div className="space-y-2 px-1 pb-1 pt-2 text-xs">
+                        <p>{log.message}</p>
+                        <p className="text-muted-foreground">Severity: {log.severity}</p>
+                        {details && (
+                          <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all rounded bg-background p-2 font-mono text-2xs">
+                            {details}
+                          </pre>
+                        )}
+                      </div>
+                    </details>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </section>
 
         <div className="space-y-2 pt-4 border-t">
           <p className="text-sm font-medium">Export & Manage</p>

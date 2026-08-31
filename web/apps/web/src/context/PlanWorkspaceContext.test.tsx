@@ -72,6 +72,7 @@ const replacementWorkspace: PlanDraftWorkspace = {
 const draftQueryState = vi.hoisted(() => ({
   hasOpenDraft: true,
   hasWorkspace: true,
+  workspace: null as PlanDraftWorkspace | null,
 }));
 
 const editedWorkspace: PlanDraftWorkspace = {
@@ -119,7 +120,7 @@ vi.mock("../queries/planDraft", () => ({
   }),
   usePlanDraftWorkspaceQuery: vi.fn((_profileId: number | null, draftId: number | null) => ({
     data: draftQueryState.hasWorkspace && draftId === savedWorkspace.draft.draft_id
-      ? savedWorkspace
+      ? draftQueryState.workspace ?? savedWorkspace
       : undefined,
     isLoading: false,
     error: null,
@@ -144,6 +145,7 @@ afterEach(() => {
 beforeEach(() => {
   draftQueryState.hasOpenDraft = true;
   draftQueryState.hasWorkspace = true;
+  draftQueryState.workspace = null;
   vi.mocked(editPlanDraftParts).mockReset();
   vi.mocked(applyPlanDraft).mockResolvedValue({
     profile_id: 7,
@@ -303,6 +305,23 @@ describe("PlanWorkspaceProvider saved draft lifecycle", () => {
     expect(client.getQueryState(queryKeys.acceptedPlateWorkspace(7))?.isInvalidated).toBe(true);
     expect(client.getQueryState(queryKeys.acceptedPlateExportJobs(7))?.isInvalidated).toBe(true);
     await waitFor(() => expect(hook.result.current.draftWorkspace).toBeNull());
+  });
+
+  it("lets the server repair an unresolved Working Plan that has no choices", async () => {
+    const legacyWorkspace: PlanDraftWorkspace = {
+      ...savedWorkspace,
+      reconciliation: { kind: "unresolved", conflicts: [] },
+    };
+    draftQueryState.workspace = legacyWorkspace;
+    const client = new QueryClient();
+    const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(client) });
+    await waitFor(() => expect(hook.result.current.draftWorkspace).toEqual(legacyWorkspace));
+
+    await act(async () => {
+      await hook.result.current.applyActivePlanDraft();
+    });
+
+    expect(applyPlanDraft).toHaveBeenCalledWith(legacyWorkspace, undefined);
   });
 
   it("keeps the saved draft open when production blocks Apply", async () => {

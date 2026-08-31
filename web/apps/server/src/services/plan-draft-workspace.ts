@@ -130,11 +130,37 @@ export class PlanDraftWorkspaceService {
     readonly profileId: number;
     readonly draftId: number;
     readonly actorId: string;
+    readonly expected?: {
+      readonly snapshotDigest: string;
+      readonly lifecycleVersion: number;
+      readonly base: ApplyPlanDraftRequest["expected_base"];
+    };
   }): PlanDraftWorkspaceResult {
     if (!this.repo.canMutateAcceptedPlan()) return { kind: "transaction_unavailable" };
     if (!this.repo.getOwnedProfileIdentity(input.profileId)) return { kind: "profile_not_found" };
     const draft = this.repo.getPlanDraft(input.profileId, input.draftId);
     if (!draft) return { kind: "draft_not_found" };
+    if (draft.state !== "open") {
+      return { kind: "not_open", workspace: this.workspace(draft) };
+    }
+    if (
+      input.expected &&
+      (
+        draft.snapshotDigest !== input.expected.snapshotDigest ||
+        draft.lifecycleVersion !== input.expected.lifecycleVersion
+      )
+    ) {
+      return { kind: "draft_changed", workspace: this.workspace(draft) };
+    }
+    if (
+      input.expected &&
+      (
+        draft.baseRevisionId !== input.expected.base.revision_id ||
+        draft.basePlanVersion !== input.expected.base.plan_version
+      )
+    ) {
+      return { kind: "base_changed", workspace: this.workspace(draft) };
+    }
     return this.autoReconcile(draft, input.actorId);
   }
 

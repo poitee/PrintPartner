@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { PartRow } from "@print-partner/contracts";
+import type { PartRow, PlanDraftWorkspace } from "@print-partner/contracts";
 import type { PlanReview } from "../api/endpoints/planManifests";
 import {
   filterPartsByQuery,
@@ -8,6 +8,7 @@ import {
   mergeProgressIntoReview,
   partitionIncludedParts,
   sourceLabelFromLayer,
+  workingPlanReviewParts,
 } from "./reviewParts";
 
 const samplePart = (overrides: Partial<PartRow> & { id: number }): PartRow & {
@@ -62,6 +63,50 @@ describe("filterPartsByQuery", () => {
     ];
     expect(filterPartsByQuery(parts, "wheels").map((p) => p.id)).toEqual([2]);
     expect(filterPartsByQuery(parts, "bracket").map((p) => p.id)).toEqual([1]);
+  });
+});
+
+describe("workingPlanReviewParts", () => {
+  it("shows first-publication draft parts when there is no Accepted Plan", () => {
+    const workspace: PlanDraftWorkspace = {
+      profile_id: 12,
+      draft: {
+        draft_id: 40,
+        state: "open",
+        lifecycle_version: 0,
+        snapshot_digest: "a".repeat(64),
+        base: { revision_id: null, plan_version: 0 },
+      },
+      parts: [{
+        draft_part_id: 4777,
+        base_revision_part_id: null,
+        part_key: "stls/frame/bracket.stl",
+        filename: "bracket.stl",
+        relative_path: "STLs/Frame/bracket.stl",
+        source_layer: "base:Voron-2",
+        role: "primary",
+        quantity_inferred: 2,
+        quantity_override: 4,
+        quantity_effective: 4,
+        included: true,
+      }],
+      diff: { base_is_current: true, added: [], removed: [], changed: [] },
+      reconciliation: { kind: "unresolved", conflicts: [] },
+    };
+
+    expect(workingPlanReviewParts([], workspace)).toEqual([
+      expect.objectContaining({
+        id: -4777,
+        match_key: "stls/frame/bracket.stl",
+        filename: "bracket.stl",
+        included: true,
+        quantity_auto: 2,
+        quantity_effective: 4,
+        print_units: [false, false, false, false],
+        printed_count: 0,
+        missing: true,
+      }),
+    ]);
   });
 });
 

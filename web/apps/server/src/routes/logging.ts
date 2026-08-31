@@ -66,6 +66,7 @@ export async function registerLoggingRoutes(app: FastifyInstance): Promise<void>
     Reply: object[];
   }>(
     "/settings/logging/logs",
+    { compress: false },
     async (request, reply) => {
       const logs = logger.getLogs({
         severity: request.query.severity,
@@ -90,18 +91,19 @@ export async function registerLoggingRoutes(app: FastifyInstance): Promise<void>
   );
 
   /**
-   * POST /settings/logging/export
+   * GET /settings/logging/export
    * Export all logs as JSON for sharing with agents.
    * Query param:
    *   - format: "json" (default) or "jsonl" (newline-delimited)
    */
-  app.post<{
+  app.get<{
     Querystring: {
       format?: "json" | "jsonl";
     };
     Reply: string;
   }>(
     "/settings/logging/export",
+    { compress: false },
     async (request, reply) => {
       const format = request.query.format ?? "json";
 

@@ -191,13 +191,38 @@ export async function registerPlanDraftRoutes(
       // MCP Preparation data is advisory. PlanDraftWorkspaceService remains the
       // publication authority and atomically enforces snapshot, lifecycle,
       // accepted-base, required-unit reconciliation, and active-work safety.
-      const result = service.apply({
+      let result = service.apply({
         profileId,
         draftId,
         actorId: actorId(request),
         idempotencyKey: key,
         request: parsed,
       });
+      if (result.kind === "reconciliation_required") {
+        const prepared = service.prepareForApply({
+          profileId,
+          draftId,
+          actorId: actorId(request),
+          expected: {
+            snapshotDigest: parsed.expected_snapshot_digest,
+            lifecycleVersion: parsed.expected_lifecycle_version,
+            base: parsed.expected_base,
+          },
+        });
+        if (prepared.kind !== "ready") return sendFailure(reply, prepared);
+        result = service.apply({
+          profileId,
+          draftId,
+          actorId: actorId(request),
+          idempotencyKey: key,
+          request: {
+            ...parsed,
+            expected_snapshot_digest: prepared.workspace.draft.snapshot_digest,
+            expected_lifecycle_version: prepared.workspace.draft.lifecycle_version,
+            expected_base: prepared.workspace.draft.base,
+          },
+        });
+      }
       if (result.kind !== "applied") return sendFailure(reply, result);
       return {
         profile_id: result.receipt.profileId,

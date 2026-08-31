@@ -22,6 +22,24 @@ export default function PartThumbExpandButton<P extends PreviewDialogPart & { id
   eager,
   onExpand,
 }: Props<P>) {
+  if (part.id <= 0) {
+    return (
+      <span
+        className="sheet-thumb-btn"
+        aria-label={`3D preview for ${part.filename} is available after publication`}
+        title="3D preview is available after this Working Plan is published"
+      >
+        <PartThumb
+          partId={part.id}
+          tintHex={part.filament_hex}
+          compact={compact}
+          sizePx={sizePx}
+          eager={eager}
+          fallbackLabel={part.filename}
+        />
+      </span>
+    );
+  }
   return (
     <button
       type="button"

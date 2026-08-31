@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import Fastify from "fastify";
+import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import type { Pool } from "pg";
 import { buildApp } from "../app.js";
@@ -10,6 +11,7 @@ import { createSelfHostPorts } from "../adapters/self-host/index.js";
 import { loadConfig } from "../config.js";
 import { AppRepository, type SchemaTables } from "../db/repository.js";
 import * as pgSchema from "../db/schema-pg.js";
+import * as sqliteSchema from "../db/schema.js";
 import { registerPostgresSyncQuery, unregisterPostgresSyncQuery } from "../db/sync-db-bridge.js";
 import { registerPlanDraftRoutes } from "./plan-drafts.js";
 import { acceptPlanForTest } from "../test/accept-plan.js";
@@ -44,10 +46,113 @@ async function fixture() {
     else process.env.PRINT_PARTNER_DATA_DIR = previousDataDir;
     rmSync(root, { recursive: true, force: true });
   });
-  return { app, repo, profile, before, sourceRoot };
+  return { app, repo, profile, before, sourceRoot, ports };
 }
 
 describe("Plan draft routes", () => {
+  it("repairs a legacy Working Plan without reconciliation before publishing", async () => {
+    const { app, repo, profile } = await fixture();
+    const created = repo.recomputePlanDraft({
+      profileId: profile.id,
+      actor: "legacy:user",
+      idempotencyKey: "legacy-unreconciled-draft",
+    });
+    if (created.kind !== "created") throw new Error("legacy Working Plan was not created");
+    expect(created.draft.requiredUnitReconciliation).toBeNull();
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/plans/${profile.id}/drafts/${created.draft.id}/apply`,
+      headers: { "idempotency-key": "legacy-unreconciled-apply" },
+      payload: {
+        expected_snapshot_digest: created.draft.snapshotDigest,
+        expected_lifecycle_version: created.draft.lifecycleVersion,
+        expected_base: {
+          revision_id: created.draft.baseRevisionId,
+          plan_version: created.draft.basePlanVersion,
+        },
+      },
+    });
+
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json()).toMatchObject({
+      profile_id: profile.id,
+      draft_id: created.draft.id,
+      plan_version: 1,
+    });
+
+    const retry = await app.inject({
+      method: "POST",
+      url: `/plans/${profile.id}/drafts/${created.draft.id}/apply`,
+      headers: { "idempotency-key": "legacy-unreconciled-apply-retry" },
+      payload: {
+        expected_snapshot_digest: created.draft.snapshotDigest,
+        expected_lifecycle_version: created.draft.lifecycleVersion,
+        expected_base: {
+          revision_id: created.draft.baseRevisionId,
+          plan_version: created.draft.basePlanVersion,
+        },
+      },
+    });
+
+    expect(retry.statusCode, retry.body).toBe(200);
+    expect(retry.json()).toEqual(response.json());
+  });
+
+  it("reattaches a matching legacy reconciliation before publishing", async () => {
+    const { app, repo, profile, ports } = await fixture();
+    const createdResponse = await app.inject({
+      method: "POST",
+      url: `/plans/${profile.id}/drafts/recompute`,
+      headers: { "idempotency-key": "detached-reconciliation-draft" },
+      payload: { apply_manifest: true },
+    });
+    expect(createdResponse.statusCode).toBe(200);
+    const created = createdResponse.json();
+    const storedDraft = repo.getPlanDraft(profile.id, created.draft.draft_id);
+    const selectedId = storedDraft?.requiredUnitReconciliation?.id;
+    if (!storedDraft || selectedId == null) {
+      throw new Error("test Working Plan reconciliation was not selected");
+    }
+    const reconciliation = repo.getPlanDraftRequiredUnitReconciliation(
+      profile.id,
+      storedDraft.id,
+      selectedId,
+    );
+    if (!reconciliation) throw new Error("test Working Plan reconciliation is missing");
+    const db = ports.db.sqlite.drizzle;
+    if (!db) throw new Error("test database is not connected");
+    db.update(sqliteSchema.planDrafts)
+      .set({
+        currentRequiredUnitReconciliationId: null,
+        digestFormat: "plan-draft-v1",
+        snapshotDigest: reconciliation.planningDigest,
+      })
+      .where(eq(sqliteSchema.planDrafts.id, storedDraft.id))
+      .run();
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/plans/${profile.id}/drafts/${storedDraft.id}/apply`,
+      headers: { "idempotency-key": "detached-reconciliation-apply" },
+      payload: {
+        expected_snapshot_digest: reconciliation.planningDigest,
+        expected_lifecycle_version: storedDraft.lifecycleVersion,
+        expected_base: {
+          revision_id: storedDraft.baseRevisionId,
+          plan_version: storedDraft.basePlanVersion,
+        },
+      },
+    });
+
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json()).toMatchObject({
+      profile_id: profile.id,
+      draft_id: storedDraft.id,
+      plan_version: 1,
+    });
+  });
+
   it("applies a native Working Plan while MCP preparation notes remain unfinished", async () => {
     const { app, repo, profile } = await fixture();
     const created = (await app.inject({

@@ -4852,6 +4852,9 @@ export class AppRepository {
         const draftRow = this.db
           .select({
             selected: this.schema.planDrafts.currentRequiredUnitReconciliationId,
+            state: this.schema.planDrafts.state,
+            digestFormat: this.schema.planDrafts.digestFormat,
+            snapshotDigest: this.schema.planDrafts.snapshotDigest,
           })
           .from(this.schema.planDrafts)
           .where(
@@ -4864,6 +4867,64 @@ export class AppRepository {
           .get();
         if (!draftRow) return { kind: "not_found" };
         if (draftRow.selected !== transactionExisting.id) {
+          if (
+            draftRow.selected == null &&
+            draftRow.state === "open" &&
+            draftRow.digestFormat === PLAN_DRAFT_DIGEST_FORMAT &&
+            draftRow.snapshotDigest === expectedSnapshotDigest
+          ) {
+            const detachedDraft = this.getPlanDraft(input.profileId, input.draftId);
+            if (!detachedDraft) return { kind: "not_found" };
+            const detached = this.readSavedRequiredUnitReconciliation(transactionExisting.id);
+            const planningDigest = digestPlanDraft(detachedDraft);
+            if (
+              detached.planningDigest === planningDigest &&
+              detached.planningDigest === expectedSnapshotDigest &&
+              detached.baseRevisionId === detachedDraft.baseRevisionId
+            ) {
+              const nextSnapshotDigest = digestPlanDraftSelection({
+                planningDigest,
+                requiredUnitReconciliation: {
+                  format: REQUIRED_UNIT_RECONCILIATION_FORMAT,
+                  digest: detached.reconciliationDigest,
+                },
+              });
+              const repaired = this.db
+                .update(this.schema.planDrafts)
+                .set({
+                  currentRequiredUnitReconciliationId: transactionExisting.id,
+                  digestFormat: PLAN_DRAFT_SELECTION_DIGEST_FORMAT,
+                  snapshotDigest: nextSnapshotDigest,
+                })
+                .where(
+                  and(
+                    eq(this.schema.planDrafts.tenantId, this.tenantId),
+                    eq(this.schema.planDrafts.profileId, input.profileId),
+                    eq(this.schema.planDrafts.id, input.draftId),
+                    eq(this.schema.planDrafts.state, "open"),
+                    isNull(this.schema.planDrafts.currentRequiredUnitReconciliationId),
+                    eq(this.schema.planDrafts.digestFormat, PLAN_DRAFT_DIGEST_FORMAT),
+                    eq(this.schema.planDrafts.snapshotDigest, expectedSnapshotDigest),
+                  ),
+                )
+                .run();
+              if (repaired.changes === 1) {
+                const repairedDraft = this.getPlanDraft(input.profileId, input.draftId);
+                if (
+                  !repairedDraft ||
+                  repairedDraft.snapshotDigest !== nextSnapshotDigest ||
+                  repairedDraft.requiredUnitReconciliation?.id !== transactionExisting.id
+                ) {
+                  throw new Error("Required-unit reconciliation repair could not be verified");
+                }
+                return {
+                  kind: "existing",
+                  draft: repairedDraft,
+                  reconciliation: detached,
+                };
+              }
+            }
+          }
           return {
             kind: "superseded",
             reconciliationId: transactionExisting.id,
