@@ -226,11 +226,42 @@ describe("GRE-234 spine brand chrome", () => {
 
   it("uses the generated PrintPartner mark in expanded and collapsed chrome", () => {
     expect(brandMark).toMatch(/aria-hidden/);
-    expect(brandMark).toMatch(/print-partner-mark\.png/);
     expect(brandMark).not.toMatch(/<Printer\b/);
     expect(brandMark).not.toMatch(/>\s*PP\s*</);
     expect(spineRail).toMatch(/LayeredSheetMark/);
     expect(spineRail).not.toMatch(/>\s*PP\s*</);
+  });
+
+  it("draws the mark inline so its ink follows the theme", () => {
+    // A raster cannot track light/dark, and the PNG baked in the old brass.
+    expect(brandMark).not.toMatch(/<img/);
+    expect(brandMark).toMatch(/<svg/);
+    expect(brandMark).toMatch(/currentColor/);
+    expect(brandMark).toMatch(/var\(--primary\)/);
+  });
+
+  it("keeps the PWA icon artwork in step with the inline mark", () => {
+    const iconSvg = readFileSync(join(root, "../public/icons/icon.svg"), "utf8");
+    // Same plate geometry, with literal hex because a PWA icon cannot read
+    // CSS variables. These two drifted into different logos once already.
+    const plate = /M12 4\.4H6\.5A2\.1 2\.1 0 0 0 4\.4 6\.5V12H12Z/;
+    expect(brandMark).toMatch(plate);
+    expect(iconSvg).toMatch(plate);
+    expect(iconSvg).not.toMatch(/#c9963f|#191714/);
+  });
+
+  it("ships a dedicated maskable icon that a circular mask cannot clip", () => {
+    const manifest = JSON.parse(
+      readFileSync(join(root, "../public/manifest.json"), "utf8"),
+    ) as { icons: Array<{ src: string; purpose: string }> };
+    const maskable = manifest.icons.filter((icon) => icon.purpose.includes("maskable"));
+    expect(maskable).toHaveLength(1);
+    expect(maskable[0].purpose).toBe("maskable");
+    // The rounded-plate icon has transparent corners, so it must not be
+    // declared maskable: a circular mask would expose them.
+    for (const icon of manifest.icons.filter((i) => i.purpose === "any")) {
+      expect(icon.src).not.toBe(maskable[0].src);
+    }
   });
 
   it("wordmark keeps the display slot and compact tracking when expanded", () => {

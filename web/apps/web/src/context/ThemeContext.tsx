@@ -32,10 +32,24 @@ export function resolveTheme(preference: ThemePreference): ResolvedTheme {
   return preference;
 }
 
+/**
+ * Browser and OS chrome read <meta name="theme-color">. It was written once in
+ * index.html and never updated, so a light-mode user got dark browser chrome.
+ * These are --surface-base per theme; index.html carries the dark value as the
+ * boot default and brandingTheme.test.ts locks it.
+ */
+const THEME_COLOR: Record<ResolvedTheme, string> = {
+  dark: "#1a1b1e",
+  light: "#f6f7f9",
+};
+
 function applyResolvedTheme(resolved: ResolvedTheme) {
   const root = document.documentElement;
   root.classList.toggle("dark", resolved === "dark");
   root.style.colorScheme = resolved;
+  document
+    .querySelector('meta[name="theme-color"]')
+    ?.setAttribute("content", THEME_COLOR[resolved]);
 }
 
 type ThemeContextValue = {
