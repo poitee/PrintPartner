@@ -265,7 +265,7 @@ export class PlanDraftWorkspaceService {
       idempotencyKey: input.idempotencyKey,
       remapCheckoffLinks: input.request.remap_checkoff_links,
     });
-    return this.applyResult(result);
+    return this.applyResult(input.profileId, input.draftId, result);
   }
 
   abandon(input: {
@@ -494,7 +494,11 @@ export class PlanDraftWorkspaceService {
     }
   }
 
-  private applyResult(result: ApplyPlanChangesResult): ApplyDraftWorkspaceResult {
+  private applyResult(
+    profileId: number,
+    draftId: number,
+    result: ApplyPlanChangesResult,
+  ): ApplyDraftWorkspaceResult {
     switch (result.kind) {
       case "applied":
       case "existing":
@@ -519,14 +523,25 @@ export class PlanDraftWorkspaceService {
         };
       case "reconciliation_required":
         return result;
-      case "not_open":
-        return { kind: "not_open" };
+      case "not_open": {
+        const current = this.repo.getPlanDraft(profileId, draftId);
+        return {
+          kind: "not_open",
+          ...(current ? { workspace: this.workspace(current) } : {}),
+        };
+      }
       case "idempotency_conflict":
-      case "draft_changed":
       case "accepted_baseline_required":
-      case "base_changed":
       case "transaction_unavailable":
         return result;
+      case "draft_changed":
+      case "base_changed": {
+        const current = this.repo.getPlanDraft(profileId, draftId);
+        return {
+          kind: result.kind,
+          ...(current ? { workspace: this.workspace(current) } : {}),
+        };
+      }
       case "build_archived":
       case "token_allocation_failed":
         return { kind: "domain_error", code: result.kind };

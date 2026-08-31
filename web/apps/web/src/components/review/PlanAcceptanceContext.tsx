@@ -70,7 +70,7 @@ export function PlanAcceptanceProvider({ children, onSyncSources, syncBusy }: Pr
   // A saved Working Plan that changes underneath invalidates earlier answers.
   useEffect(() => {
     setDecisionChoices({});
-    setFailure(null);
+    setFailure((current) => current?.kind === "working_plan_changed" ? current : null);
     lastAcceptOptionsRef.current = undefined;
   }, [draftWorkspace?.draft.snapshot_digest]);
 

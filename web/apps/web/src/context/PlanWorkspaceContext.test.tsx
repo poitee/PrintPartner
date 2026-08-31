@@ -16,6 +16,7 @@ import {
 import type { PlanReview } from "../api/endpoints/planManifests";
 import { queryKeys } from "../queries/keys";
 import { usePlanDraftWorkspaceQuery } from "../queries/planDraft";
+import { WORKING_PLAN_CHANGED_MESSAGE } from "../lib/workingPlanChanged";
 import { PlanWorkspaceProvider, usePlanWorkspace } from "./PlanWorkspaceContext";
 
 const acceptedReview: PlanReview = {
@@ -305,6 +306,44 @@ describe("PlanWorkspaceProvider saved draft lifecycle", () => {
     expect(client.getQueryState(queryKeys.acceptedPlateWorkspace(7))?.isInvalidated).toBe(true);
     expect(client.getQueryState(queryKeys.acceptedPlateExportJobs(7))?.isInvalidated).toBe(true);
     await waitFor(() => expect(hook.result.current.draftWorkspace).toBeNull());
+  });
+
+  it("replaces a stale publication workspace so the next explicit retry uses current state", async () => {
+    const client = new QueryClient();
+    const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(client) });
+    await waitFor(() => expect(hook.result.current.draftWorkspace?.draft.draft_id).toBe(9));
+    vi.mocked(applyPlanDraft)
+      .mockRejectedValueOnce(new EngineHttpError(
+        "Engine /plans/7/drafts/9/apply failed: 409",
+        409,
+        { code: "draft_changed", workspace: replacementWorkspace },
+      ))
+      .mockResolvedValueOnce({
+        profile_id: 7,
+        draft_id: 9,
+        revision_id: 4,
+        plan_version: 2,
+        draft_lifecycle_version: 1,
+        revision_digest: "c".repeat(64),
+        required_unit_mapping_digest: "d".repeat(64),
+        applied_at: "2026-08-21T12:00:00.000Z",
+      });
+
+    await act(async () => {
+      await expect(hook.result.current.applyActivePlanDraft()).rejects.toThrow(
+        WORKING_PLAN_CHANGED_MESSAGE,
+      );
+    });
+
+    expect(client.getQueryData(queryKeys.planDraft(7, 9))).toEqual(replacementWorkspace);
+
+    await act(async () => {
+      await hook.result.current.applyActivePlanDraft();
+    });
+
+    expect(applyPlanDraft).toHaveBeenCalledTimes(2);
+    expect(applyPlanDraft).toHaveBeenNthCalledWith(1, savedWorkspace, undefined);
+    expect(applyPlanDraft).toHaveBeenNthCalledWith(2, replacementWorkspace, undefined);
   });
 
   it("lets the server repair an unresolved Working Plan that has no choices", async () => {

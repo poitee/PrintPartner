@@ -1,11 +1,15 @@
 import { EngineHttpError } from "../api/engineTransport";
 import type { PlanAcceptanceFailure, PlanUnitOutcome } from "./planAcceptanceModel";
+import { WorkingPlanChangedError } from "./workingPlanChanged";
 
 /**
  * Turn an acceptance rejection into something the Plan page can show beside the
  * button, in the user's words. The server codes stay internal.
  */
 export function planAcceptanceFailureFromError(caught: unknown): PlanAcceptanceFailure {
+  if (caught instanceof WorkingPlanChangedError) {
+    return { kind: "working_plan_changed" };
+  }
   if (caught instanceof EngineHttpError && caught.body && typeof caught.body === "object") {
     const body = caught.body as Record<string, unknown>;
     if (caught.status === 423 && body.code === "production_active") {

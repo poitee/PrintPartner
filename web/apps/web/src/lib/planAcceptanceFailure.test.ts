@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { EngineHttpError } from "../api/engineTransport";
 import { planAcceptanceFailureFromError, unmovedUnits } from "./planAcceptanceFailure";
+import { WorkingPlanChangedError } from "./workingPlanChanged";
 
 describe("acceptance failures", () => {
   it("reads a block caused by live Production records", () => {
@@ -35,5 +36,11 @@ describe("acceptance failures", () => {
       message: "engine offline",
     });
     expect(unmovedUnits(null)).toEqual([]);
+  });
+
+  it("keeps a refreshed Working Plan distinct from a generic engine error", () => {
+    expect(planAcceptanceFailureFromError(new WorkingPlanChangedError())).toEqual({
+      kind: "working_plan_changed",
+    });
   });
 });
