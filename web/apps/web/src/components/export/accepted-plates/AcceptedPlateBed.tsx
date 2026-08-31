@@ -15,6 +15,13 @@ import AcceptedPlatePositionEditor from "./AcceptedPlatePositionEditor";
 import AcceptedPlateUnitActions from "./AcceptedPlateUnitActions";
 import AcceptedPlate3DPreview from "./AcceptedPlate3DPreview";
 import { acceptedPlateUnitColor } from "../../../lib/acceptedPlateColor";
+import {
+  blendColor,
+  rampColor,
+  readableForeground,
+  usePreviewTheme,
+  type PreviewTheme,
+} from "../../../lib/previewTheme";
 
 type ReadyWorkspace = Extract<AcceptedPlateWorkspace, { kind: "ready" }>;
 
@@ -66,6 +73,14 @@ function matrixOf(svg: SVGSVGElement) {
   } : null;
 }
 
+/** Mean opacity of the unit gradient, which the label ink is judged against. */
+const LABEL_BACKDROP_ALPHA = 0.72;
+
+/** A unit's own filament colour, or the theme's categorical ramp entry. */
+function unitFill(unit: AcceptedPlatePlacedUnit, index: number, theme: PreviewTheme): string {
+  return acceptedPlateUnitColor(unit) ?? rampColor(theme, index);
+}
+
 function displayedUnit(unit: AcceptedPlatePlacedUnit, draft: PositionDraft) {
   if (draft.kind === "idle" || draft.token !== unit.token) return unit;
   return { ...unit, x_um: draft.xUm, y_um: draft.yUm };
@@ -82,6 +97,7 @@ export default function AcceptedPlateBed({
   onUnplace,
   onTransfer,
 }: Props) {
+  const theme = usePreviewTheme();
   const [selectedToken, setSelectedToken] = useState<RequiredUnitToken | null>(plate.units[0]?.token ?? null);
   const [draft, setDraft] = useState<PositionDraft>({ kind: "idle" });
   const [viewMode, setViewMode] = useState<"preview" | "edit">("preview");
@@ -198,30 +214,25 @@ export default function AcceptedPlateBed({
       </div>
       {viewMode === "edit" ? (
       <svg
-        className="max-h-[34rem] w-full touch-none rounded-xl border border-white/10 bg-[#080b10] shadow-[inset_0_1px_0_rgba(255,255,255,0.06),0_18px_50px_rgba(0,0,0,0.35)]"
+        className="max-h-[34rem] w-full touch-none rounded-xl border border-border bg-media shadow-md"
         viewBox={`0 0 ${plate.printer.bed_width_um} ${plate.printer.bed_depth_um}`}
         aria-label={`Plate ${plate.ordinal} layout`}
       >
         <defs>
           <pattern id={`plate-grid-${plate.plate_id}`} width="10000" height="10000" patternUnits="userSpaceOnUse">
-            <path d="M 10000 0 L 0 0 0 10000" fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth="350" />
+            <path d="M 10000 0 L 0 0 0 10000" fill="none" stroke={theme.grid.minor} strokeWidth="350" />
           </pattern>
-          <linearGradient id={`part-fill-${plate.plate_id}`} x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0%" stopColor="rgb(74 222 128)" stopOpacity="0.72" />
-            <stop offset="100%" stopColor="rgb(14 165 233)" stopOpacity="0.42" />
-          </linearGradient>
-          {plate.units.map((unit) => {
-            const color = acceptedPlateUnitColor(unit);
-            if (!color) return null;
+          {plate.units.map((unit, index) => {
+            const color = unitFill(unit, index, theme);
             return (
               <linearGradient key={unit.token} id={`part-fill-${plate.plate_id}-${unit.token}`} x1="0" y1="0" x2="1" y2="1">
-                <stop offset="0%" stopColor={color} stopOpacity="0.82" />
-                <stop offset="100%" stopColor={color} stopOpacity="0.46" />
+                <stop offset="0%" stopColor={color} stopOpacity="0.9" />
+                <stop offset="100%" stopColor={color} stopOpacity="0.55" />
               </linearGradient>
             );
           })}
           <filter id={`part-glow-${plate.plate_id}`} x="-30%" y="-30%" width="160%" height="160%">
-            <feDropShadow dx="0" dy="0" stdDeviation="1800" floodColor="rgb(56 189 248)" floodOpacity="0.5" />
+            <feDropShadow dx="0" dy="0" stdDeviation="1800" floodColor={theme.accent} floodOpacity="0.5" />
           </filter>
         </defs>
         <rect width={plate.printer.bed_width_um} height={plate.printer.bed_depth_um} fill={`url(#plate-grid-${plate.plate_id})`} />
@@ -231,13 +242,14 @@ export default function AcceptedPlateBed({
           width={plate.printer.bed_width_um - plate.printer.margin_um * 2}
           height={plate.printer.bed_depth_um - plate.printer.margin_um * 2}
           fill="none"
-          stroke="rgba(125,211,252,0.5)"
+          stroke={theme.outline}
           strokeWidth={Math.max(500, plate.printer.bed_width_um / 500)}
-          opacity="0.35"
+          opacity="0.55"
         />
-        {plate.units.map((unit) => {
+        {plate.units.map((unit, index) => {
           const displayed = displayedUnit(unit, draft);
           const selectedUnit = unit.token === selected?.token;
+          const fill = unitFill(unit, index, theme);
           return (
             <g key={unit.token}>
               <rect
@@ -246,8 +258,8 @@ export default function AcceptedPlateBed({
                 width={unit.width_um}
                 height={unit.depth_um}
                 rx={1_500}
-                fill={`url(#part-fill-${plate.plate_id}${acceptedPlateUnitColor(unit) ? `-${unit.token}` : ""})`}
-                stroke={selectedUnit ? "rgb(186 230 253)" : "rgb(56 189 248)"}
+                fill={`url(#part-fill-${plate.plate_id}-${unit.token})`}
+                stroke={selectedUnit ? theme.accent : theme.outline}
                 filter={selectedUnit ? `url(#part-glow-${plate.plate_id})` : undefined}
                 className="cursor-grab active:cursor-grabbing"
                 strokeWidth={selectedUnit ? 1_500 : 750}
@@ -265,7 +277,7 @@ export default function AcceptedPlateBed({
                 y={displayed.y_um + unit.depth_um / 2}
                 textAnchor="middle"
                 dominantBaseline="middle"
-                fill="white"
+                fill={readableForeground(blendColor(fill, theme.background, LABEL_BACKDROP_ALPHA), theme)}
                 opacity="0.9"
                 fontSize={Math.max(3_500, Math.min(8_000, unit.width_um / 7))}
                 className="pointer-events-none select-none font-sans"

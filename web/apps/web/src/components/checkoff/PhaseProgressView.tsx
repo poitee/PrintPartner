@@ -24,6 +24,7 @@ import type { ReviewPart } from "../../api/endpoints/planManifests";
 import type { PhaseProgress } from "../../lib/phaseManifest";
 import { nextUnlockedPhase } from "../../lib/phaseManifest";
 import { isProgressRowBusy } from "../../lib/checkoffProgress";
+import { readableForeground, usePreviewTheme } from "../../lib/previewTheme";
 import { cn } from "@/lib/utils";
 
 // ---------------------------------------------------------------------------
@@ -31,10 +32,14 @@ import { cn } from "@/lib/utils";
 // ---------------------------------------------------------------------------
 
 function PhaseBadge({ color, name }: { color?: string; name: string }) {
+  const theme = usePreviewTheme();
+  // Phase colours come from the plan's manifest, so the ink has to be chosen
+  // against whatever the manifest says rather than assumed to be white.
+  const background = color ?? theme.mutedForeground;
   return (
     <span
-      className="inline-flex shrink-0 items-center rounded px-2 py-0.5 text-xs font-semibold text-white shadow-sm"
-      style={{ background: color ?? "#6b7280" }}
+      className="inline-flex shrink-0 items-center rounded px-2 py-0.5 text-xs font-semibold shadow-sm"
+      style={{ background, color: readableForeground(background, theme) }}
     >
       {name}
     </span>

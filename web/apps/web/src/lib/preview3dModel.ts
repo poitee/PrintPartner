@@ -1,6 +1,3 @@
-const DARK_BG = "#0a0e14";
-const LIGHT_BG = "#dfe4ea";
-
 export type PreviewTarget =
   | { kind: "part"; partId: number }
   | { kind: "source"; sourceId: number; relativePath: string };
@@ -16,9 +13,29 @@ export function perceivedLuminance(hex: string): number {
   return (0.299 * red + 0.587 * green + 0.114 * blue) / 255;
 }
 
-/** Dark parts get a light backdrop; light parts keep the dark one. */
-export function contrastBackground(meshHex: string): string {
-  return perceivedLuminance(meshHex) < 0.4 ? LIGHT_BG : DARK_BG;
+/**
+ * Backdrops the viewer can put behind a mesh. Supplied by the theme
+ * (lib/previewTheme.ts) so this module stays a pure model.
+ */
+export type PreviewBackdrops = Readonly<{
+  /** --media-bg: the backdrop every preview uses by default. */
+  background: string;
+  /** Mid-tone stand-in for meshes that would vanish into `background`. */
+  backgroundContrast: string;
+}>;
+
+/** Luminance gap below which a mesh loses its silhouette against a backdrop. */
+const MIN_SEPARATION = 0.18;
+
+/**
+ * Keep the media backdrop unless the mesh colour sits too close to it — a
+ * near-black part on a near-black stage, or a white part on light paper.
+ */
+export function contrastBackground(meshHex: string, backdrops: PreviewBackdrops): string {
+  const separation = Math.abs(
+    perceivedLuminance(meshHex) - perceivedLuminance(backdrops.background),
+  );
+  return separation < MIN_SEPARATION ? backdrops.backgroundContrast : backdrops.background;
 }
 
 /** STL units are millimeters by convention. */

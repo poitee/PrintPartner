@@ -32,6 +32,14 @@ import {
   previewTarget,
   previewUrlWithColor,
 } from "../lib/preview3dModel";
+import {
+  addPreviewRig,
+  applyPreviewRig,
+  createPreviewMaterial,
+  createPreviewRig,
+  type PreviewRig,
+} from "../lib/previewRig";
+import { usePreviewTheme, type PreviewTheme } from "../lib/previewTheme";
 
 type Props = {
   partId: number | null;
@@ -54,32 +62,37 @@ const DEFAULT_COLOR = DEFAULT_FILAMENT_HEX;
  * Dimension markers for the bounding box: a faint box outline plus X/Y/Z
  * measurement lines with end ticks and mm labels (CSS2D, so they stay
  * readable while the model rotates). Geometry is centered at the origin.
+ *
+ * Lines carry their theme role in userData so a theme switch can re-tint them
+ * without rebuilding the geometry.
  */
-function buildDimensionGroup(size: THREE.Vector3): THREE.Group {
+function buildDimensionGroup(size: THREE.Vector3, theme: PreviewTheme): THREE.Group {
   const group = new THREE.Group();
   const half = new THREE.Vector3(size.x / 2, size.y / 2, size.z / 2);
   const maxDim = Math.max(size.x, size.y, size.z, 1);
   const off = maxDim * 0.08;
   const tick = maxDim * 0.03;
 
-  const lineMat = new THREE.LineBasicMaterial({ color: 0xf97316 });
+  const lineMat = new THREE.LineBasicMaterial({ color: new THREE.Color(theme.dimension) });
   const boxMat = new THREE.LineBasicMaterial({
-    color: 0x94a3b8,
+    color: new THREE.Color(theme.outline),
     transparent: true,
     opacity: 0.55,
   });
 
-  group.add(
-    new THREE.LineSegments(
-      new THREE.EdgesGeometry(new THREE.BoxGeometry(size.x, size.y, size.z)),
-      boxMat,
-    ),
+  const outline = new THREE.LineSegments(
+    new THREE.EdgesGeometry(new THREE.BoxGeometry(size.x, size.y, size.z)),
+    boxMat,
   );
+  outline.userData.previewRole = "outline";
+  group.add(outline);
 
   const v = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
 
   const addLine = (a: THREE.Vector3, b: THREE.Vector3) => {
-    group.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([a, b]), lineMat));
+    const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints([a, b]), lineMat);
+    line.userData.previewRole = "dimension";
+    group.add(line);
   };
 
   const addLabel = (text: string, pos: THREE.Vector3) => {
@@ -118,6 +131,16 @@ function buildDimensionGroup(size: THREE.Vector3): THREE.Group {
   return group;
 }
 
+/** Re-tint measurement lines and the box outline after a theme switch. */
+function applyDimensionTheme(group: THREE.Group, theme: PreviewTheme) {
+  group.traverse((obj) => {
+    if (!(obj instanceof THREE.Line || obj instanceof THREE.LineSegments)) return;
+    const material = obj.material as THREE.LineBasicMaterial;
+    if (obj.userData.previewRole === "outline") material.color.set(theme.outline);
+    if (obj.userData.previewRole === "dimension") material.color.set(theme.dimension);
+  });
+}
+
 function disposeDimensionGroup(group: THREE.Group) {
   group.traverse((obj) => {
     if (obj instanceof THREE.Line || obj instanceof THREE.LineSegments) {
@@ -147,8 +170,12 @@ export default function Preview3D({
   instructions = "visible",
   appearance = "adaptive",
 }: Props) {
+  const theme = usePreviewTheme();
+  const themeRef = useRef(theme);
   const mountRef = useRef<HTMLDivElement>(null);
   const materialRef = useRef<THREE.MeshStandardMaterial | null>(null);
+  const rigRef = useRef<PreviewRig | null>(null);
+  const shadowMaterialRef = useRef<THREE.ShadowMaterial | null>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
   const dimsGroupRef = useRef<THREE.Group | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
@@ -172,15 +199,28 @@ export default function Preview3D({
   const targetRelativePath = target?.kind === "source" ? target.relativePath : null;
 
   useEffect(() => {
+    themeRef.current = theme;
+  }, [theme]);
+
+  // Re-tint the live scene in place. Rebuilding it would refetch the mesh and
+  // re-upload a thumbnail for what is only a colour change.
+  useEffect(() => {
     const material = materialRef.current;
-    if (material) material.color.set(resolvedColor);
+    if (material) {
+      material.color.set(resolvedColor);
+      material.metalness = theme.material.metalness;
+      material.roughness = theme.material.roughness;
+    }
     const scene = sceneRef.current;
     if (scene) {
       scene.background = appearance === "studio"
         ? null
-        : new THREE.Color(contrastBackground(resolvedColor));
+        : new THREE.Color(contrastBackground(resolvedColor, theme));
     }
-  }, [appearance, resolvedColor]);
+    if (rigRef.current) applyPreviewRig(rigRef.current, theme);
+    if (shadowMaterialRef.current) shadowMaterialRef.current.opacity = theme.shadowOpacity;
+    if (dimsGroupRef.current) applyDimensionTheme(dimsGroupRef.current, theme);
+  }, [appearance, resolvedColor, theme]);
 
   useEffect(() => {
     showDimsRef.current = showDims;
@@ -194,6 +234,8 @@ export default function Preview3D({
       setErrorMessage(null);
       setDims(null);
       materialRef.current = null;
+      rigRef.current = null;
+      shadowMaterialRef.current = null;
       sceneRef.current = null;
       dimsGroupRef.current = null;
       cameraRef.current = null;
@@ -224,6 +266,8 @@ export default function Preview3D({
       groundMaterial = null;
       materialRef.current?.dispose();
       materialRef.current = null;
+      rigRef.current = null;
+      shadowMaterialRef.current = null;
       if (dimsGroupRef.current) {
         disposeDimensionGroup(dimsGroupRef.current);
         dimsGroupRef.current = null;
@@ -311,11 +355,8 @@ export default function Preview3D({
         bbox?.getSize(size);
         const maxDim = Math.max(size.x, size.y, size.z, 1);
 
-        const material = new THREE.MeshStandardMaterial({
-          color: new THREE.Color(resolvedColor),
-          metalness: appearance === "studio" ? 0.08 : 0.15,
-          roughness: appearance === "studio" ? 0.5 : 0.65,
-        });
+        const activeTheme = themeRef.current;
+        const material = createPreviewMaterial(activeTheme, resolvedColor);
         materialRef.current = material;
         const mesh = new THREE.Mesh(geometry, material);
         mesh.castShadow = appearance === "studio";
@@ -323,48 +364,35 @@ export default function Preview3D({
         const scene = new THREE.Scene();
         scene.background = appearance === "studio"
           ? null
-          : new THREE.Color(contrastBackground(resolvedColor));
+          : new THREE.Color(contrastBackground(resolvedColor, activeTheme));
         sceneRef.current = scene;
         scene.add(mesh);
 
-        const dimsGroup = buildDimensionGroup(size);
+        const dimsGroup = buildDimensionGroup(size, activeTheme);
         dimsGroup.visible = showDimsRef.current;
         scene.add(dimsGroup);
         dimsGroupRef.current = dimsGroup;
         setDims({ x: size.x, y: size.y, z: size.z });
 
-        scene.add(
-          appearance === "studio"
-            ? new THREE.HemisphereLight(0xdbeafe, 0x111827, 1.35)
-            : new THREE.AmbientLight(0xffffff, 0.55),
-        );
-        const key = new THREE.DirectionalLight(
-          appearance === "studio" ? 0xfff1dc : 0xffffff,
-          appearance === "studio" ? 2.5 : 0.85,
-        );
-        key.position.set(1, 1.2, 0.8);
-        const fill = new THREE.DirectionalLight(
-          appearance === "studio" ? 0x8fb7ff : 0xffffff,
-          appearance === "studio" ? 1.15 : 0.35,
-        );
-        fill.position.set(-0.8, 0.4, -1);
-        scene.add(key, fill);
+        // The same rig the inline thumbnail uses (lib/previewRig.ts), so the
+        // 96px picture and this one agree. Studio adds a contact shadow, not
+        // a second lighting scheme.
+        const rig = createPreviewRig(activeTheme, { distance: maxDim * 2 });
+        rigRef.current = rig;
+        addPreviewRig(scene, rig);
         if (appearance === "studio") {
-          key.castShadow = true;
-          key.shadow.mapSize.set(1024, 1024);
-          key.shadow.camera.left = -maxDim * 2;
-          key.shadow.camera.right = maxDim * 2;
-          key.shadow.camera.top = maxDim * 2;
-          key.shadow.camera.bottom = -maxDim * 2;
-          key.shadow.camera.near = 0.1;
-          key.shadow.camera.far = maxDim * 8;
-
-          const rim = new THREE.DirectionalLight(0x60a5fa, 2.1);
-          rim.position.set(-1.4, 1.1, 1.6);
-          scene.add(rim);
+          rig.key.castShadow = true;
+          rig.key.shadow.mapSize.set(1024, 1024);
+          rig.key.shadow.camera.left = -maxDim * 2;
+          rig.key.shadow.camera.right = maxDim * 2;
+          rig.key.shadow.camera.top = maxDim * 2;
+          rig.key.shadow.camera.bottom = -maxDim * 2;
+          rig.key.shadow.camera.near = 0.1;
+          rig.key.shadow.camera.far = maxDim * 8;
 
           groundGeometry = new THREE.PlaneGeometry(maxDim * 6, maxDim * 6);
-          groundMaterial = new THREE.ShadowMaterial({ opacity: 0.28 });
+          groundMaterial = new THREE.ShadowMaterial({ opacity: activeTheme.shadowOpacity });
+          shadowMaterialRef.current = groundMaterial;
           const ground = new THREE.Mesh(groundGeometry, groundMaterial);
           ground.rotation.x = -Math.PI / 2;
           ground.position.y = -size.y / 2 - maxDim * 0.035;
@@ -385,8 +413,9 @@ export default function Preview3D({
           renderer.shadowMap.enabled = true;
           renderer.shadowMap.type = THREE.PCFSoftShadowMap;
           renderer.outputColorSpace = THREE.SRGBColorSpace;
-          renderer.toneMapping = THREE.ACESFilmicToneMapping;
-          renderer.toneMappingExposure = 1.08;
+          // No tone mapping anywhere: ACES desaturates highlights, which would
+          // report a filament colour the user never loaded, and would make this
+          // view disagree with the thumbnail.
           renderer.setClearColor(0x000000, 0);
         }
         mount.appendChild(renderer.domElement);
