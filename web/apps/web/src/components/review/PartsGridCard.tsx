@@ -43,20 +43,20 @@ export default function PartsGridCard({
         <div className="flex h-[84px] items-center justify-center p-1">
           <PartThumbExpandButton part={part} sizePx={72} onExpand={onPreview} />
         </div>
-        <span className="absolute right-1.5 top-1.5 rounded bg-foreground px-1.5 py-0.5 font-mono text-3xs font-medium text-background">
+        <span className="absolute right-1.5 top-1.5 rounded bg-foreground px-1.5 py-0.5 font-mono text-micro font-medium text-background">
           ×{qty}
         </span>
       </div>
       <div className="flex flex-col gap-1 p-2">
         <p
-          className="truncate font-mono text-2xs leading-tight"
+          className="truncate font-mono text-micro leading-tight"
           title={part.relative_path || part.filename}
         >
           {part.filename.replace(/\.stl$/i, "")}
         </p>
         <p
           className={cn(
-            "truncate text-2xs",
+            "truncate text-micro",
             warn ? "text-warning" : "text-muted-foreground",
           )}
           title={note}

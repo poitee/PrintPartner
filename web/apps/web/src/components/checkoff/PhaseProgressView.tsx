@@ -147,7 +147,7 @@ function PhaseCard({
               {partsPrinted}/{partsTotal} parts printed
             </span>
             {blocked && (
-              <span className="ml-1 rounded bg-destructive/10 px-1.5 py-0.5 text-2xs font-semibold text-destructive">
+              <span className="ml-1 rounded bg-destructive/10 px-1.5 py-0.5 text-micro font-semibold text-destructive">
                 BLOCKED
               </span>
             )}
@@ -155,7 +155,7 @@ function PhaseCard({
 
           <PhaseBar percent={totals.percent} blocked={blocked} />
 
-          <span className="font-mono text-2xs text-muted-foreground">
+          <span className="font-mono text-micro text-muted-foreground">
             {totals.percent}% · {totals.remainingUnits} unit{totals.remainingUnits === 1 ? "" : "s"} remaining
           </span>
         </div>

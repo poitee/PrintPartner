@@ -84,7 +84,7 @@ export default function BuildSummaryHeader({ currentStageId, className }: Props)
         data-testid="build-next-action"
       >
         <div className="min-w-0">
-          <p className="font-mono text-2xs font-semibold uppercase tracking-[0.14em] text-primary">
+          <p className="font-mono text-micro font-semibold uppercase tracking-[0.14em] text-primary">
             Next
           </p>
           <p className="mt-0.5 text-sm font-medium text-foreground">{action.label}</p>

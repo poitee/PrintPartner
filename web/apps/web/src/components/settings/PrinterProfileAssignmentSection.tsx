@@ -144,7 +144,7 @@ export default function PrinterProfileAssignmentSection({
           </SelectContent>
         </Select>
         {!assignedMode && (
-          <p className="mt-1 text-2xs text-muted-foreground">
+          <p className="mt-1 text-micro text-muted-foreground">
             Saves name matching as a preference for future integrations.
           </p>
         )}
@@ -220,7 +220,7 @@ export default function PrinterProfileAssignmentSection({
 
           {(assignment?.compatible_processes.length ?? 0) > 0 && (
             <div className="space-y-1">
-              <p className="text-2xs font-medium text-muted-foreground">
+              <p className="text-micro font-medium text-muted-foreground">
                 Compatible process profiles
               </p>
               <div className="flex flex-wrap gap-1.5">
@@ -228,14 +228,14 @@ export default function PrinterProfileAssignmentSection({
                   <span
                     key={p.id}
                     className={cn(
-                      "inline-flex rounded-md bg-muted px-2 py-0.5 text-2xs text-muted-foreground",
+                      "inline-flex rounded-md bg-muted px-2 py-0.5 text-micro text-muted-foreground",
                     )}
                   >
                     {p.name}
                   </span>
                 ))}
               </div>
-              <p className="text-2xs text-muted-foreground">
+              <p className="text-micro text-muted-foreground">
                 Compatible processes are reference metadata. Accepted Plate export and handoff do
                 not choose a process profile.
               </p>

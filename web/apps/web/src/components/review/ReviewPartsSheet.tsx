@@ -570,7 +570,7 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
             >
               Warnings only
               {warningCount > 0 && (
-                <span className="ml-1 font-mono text-2xs text-warning">{warningCount}</span>
+                <span className="ml-1 font-mono text-micro text-warning">{warningCount}</span>
               )}
             </Button>
           </div>
@@ -792,7 +792,7 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
                       aria-hidden
                     />
                     <h3 className="text-sm font-semibold">{group.title}</h3>
-                    <span className="font-mono text-2xs text-muted-foreground">
+                    <span className="font-mono text-micro text-muted-foreground">
                       {group.meta}
                     </span>
                   </div>

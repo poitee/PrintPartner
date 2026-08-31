@@ -212,7 +212,7 @@ const ProgressPartRow = memo(function ProgressPartRow({
           />
         </div>
         {correctionNote ? (
-          <p className="text-2xs text-muted-foreground">{correctionNote}</p>
+          <p className="text-micro text-muted-foreground">{correctionNote}</p>
         ) : null}
         {assemblyTrackingEnabled && onToggleAssembled && (
           <AssembledToggles part={part} busy={busy} onToggleAssembled={onToggleAssembled} />
@@ -248,7 +248,7 @@ const ProgressPartRow = memo(function ProgressPartRow({
           >
             {part.filename}
           </span>
-          <span className="truncate text-2xs text-muted-foreground">{sourceLine(part)}</span>
+          <span className="truncate text-micro text-muted-foreground">{sourceLine(part)}</span>
           <StatusBadges
             inCompact={false}
             printingOn={printingOn}
@@ -258,7 +258,7 @@ const ProgressPartRow = memo(function ProgressPartRow({
             onClaim={onClaim}
           />
           {correctionNote ? (
-            <span className="text-2xs text-muted-foreground">{correctionNote}</span>
+            <span className="text-micro text-muted-foreground">{correctionNote}</span>
           ) : null}
           {assemblyTrackingEnabled && onToggleAssembled && (
             <AssembledToggles part={part} busy={busy} onToggleAssembled={onToggleAssembled} />

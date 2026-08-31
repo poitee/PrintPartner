@@ -35,7 +35,7 @@ export default function BuildWorkflowNextAction({
       data-testid="build-next-action"
     >
       <div className="min-w-0">
-        <p className="font-mono text-3xs font-semibold uppercase tracking-[0.14em] text-primary">
+        <p className="font-mono text-micro font-semibold uppercase tracking-[0.14em] text-primary">
           Next action
         </p>
         <p className="mt-1 text-sm font-medium text-foreground">{action.label}</p>

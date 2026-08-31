@@ -144,7 +144,7 @@ export default function ExportActionCards({
               <CardDescription className="text-xs leading-relaxed">{card.description}</CardDescription>
               <div className="flex flex-wrap gap-1.5 pt-0.5">
                 {card.chips.map((chip) => (
-                  <Badge key={chip} variant="muted" className="rounded-full px-2 py-0.5 font-mono text-2xs font-normal">
+                  <Badge key={chip} variant="muted" className="rounded-full px-2 py-0.5 font-mono text-micro font-normal">
                     {chip}
                   </Badge>
                 ))}
@@ -175,7 +175,7 @@ export default function ExportActionCards({
               Sources, choices, roles, and quantities. STL files stay private.
             </CardDescription>
             <div className="flex flex-wrap gap-1.5 pt-0.5">
-              <Badge variant="muted" className="rounded-full px-2 py-0.5 font-mono text-2xs font-normal">no STLs</Badge>
+              <Badge variant="muted" className="rounded-full px-2 py-0.5 font-mono text-micro font-normal">no STLs</Badge>
             </div>
           </CardHeader>
           <CardContent className="mt-auto pt-1">

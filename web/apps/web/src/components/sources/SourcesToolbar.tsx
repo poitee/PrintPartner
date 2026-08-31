@@ -78,7 +78,7 @@ export default function SourcesToolbar({
           <SlidersHorizontal className="h-3.5 w-3.5" />
           Filters
           {activeFilterCount > 0 && (
-            <span className="ml-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-3xs font-semibold text-primary-foreground">
+            <span className="ml-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-micro font-semibold text-primary-foreground">
               {activeFilterCount}
             </span>
           )}

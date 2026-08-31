@@ -53,7 +53,7 @@ type Props = {
 
 function DrawerGroupLabel({ children }: { children: string }) {
   return (
-    <p className="px-1 font-mono text-3xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+    <p className="px-1 font-mono text-micro font-semibold uppercase tracking-[0.14em] text-muted-foreground">
       {children}
     </p>
   );
@@ -93,14 +93,14 @@ export default function MobileNavDrawer({ onNavigate, sourceUpdateCount }: Props
       <span className="min-w-0 flex-1">
         <span className="block">{item.label}</span>
         {item.id === "library" ? (
-          <span className="block truncate text-2xs font-normal text-muted-foreground" aria-hidden>
+          <span className="block truncate text-micro font-normal text-muted-foreground" aria-hidden>
             Add, sync, and watch projects
           </span>
         ) : null}
       </span>
       {item.id === "library" && sourceUpdateCount > 0 ? (
         <span
-          className="rounded-full border border-warning/35 bg-warning-soft px-1.5 py-0.5 font-mono text-3xs font-semibold text-warning"
+          className="rounded-full border border-warning/35 bg-warning-soft px-1.5 py-0.5 font-mono text-micro font-semibold text-warning"
           aria-hidden
         >
           {sourceUpdateCount}

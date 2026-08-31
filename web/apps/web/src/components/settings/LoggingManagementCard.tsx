@@ -332,7 +332,7 @@ export default function LoggingManagementCard() {
                         <p>{log.message}</p>
                         <p className="text-muted-foreground">Severity: {log.severity}</p>
                         {details && (
-                          <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all rounded bg-background p-2 font-mono text-2xs">
+                          <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all rounded bg-background p-2 font-mono text-micro">
                             {details}
                           </pre>
                         )}

@@ -39,7 +39,7 @@ export default function PlanRolesCard({
         className,
       )}
     >
-      <span className="font-mono text-3xs font-medium uppercase tracking-[0.08em] text-muted-foreground">
+      <span className="font-mono text-micro font-medium uppercase tracking-[0.08em] text-muted-foreground">
         Filament roles
       </span>
       {colorsUnset ? (
@@ -55,7 +55,7 @@ export default function PlanRolesCard({
         onUpdated={onUpdated}
         density="compact"
       />
-      <FieldDescription className="text-2xs">
+      <FieldDescription className="text-micro">
         Roles come from STL filenames and folder rules
         {DEFAULT_STL_NAMING_PROFILE.roles.some((r) => r.markers.length > 0)
           ? ` (e.g. ${DEFAULT_STL_NAMING_PROFILE.roles
@@ -65,7 +65,7 @@ export default function PlanRolesCard({
               .join("; ")})`
           : ""}
         .{" "}
-        <Button variant="link" className="h-auto p-0 text-2xs" asChild>
+        <Button variant="link" className="h-auto p-0 text-micro" asChild>
           <Link to={`${settingsRoute()}#stl-naming`}>Customize in Settings</Link>
         </Button>
       </FieldDescription>

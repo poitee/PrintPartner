@@ -100,7 +100,7 @@ function CategoryRowBody({
         >
           {row.label}
         </span>
-        <span className="ml-auto font-mono text-2xs tabular-nums text-muted-foreground">
+        <span className="ml-auto font-mono text-micro tabular-nums text-muted-foreground">
           {row.count}
         </span>
       </button>
@@ -264,12 +264,12 @@ export default function LibraryCategoryRail({
       )}
     >
       <div className="flex items-center gap-2">
-        <span className="font-mono text-3xs font-medium uppercase tracking-[0.08em] text-muted-foreground">
+        <span className="font-mono text-micro font-medium uppercase tracking-[0.08em] text-muted-foreground">
           Categories
         </span>
         <button
           type="button"
-          className="ml-auto text-2xs font-semibold text-primary hover:underline"
+          className="ml-auto text-micro font-semibold text-primary hover:underline"
           onClick={onManageCategories}
         >
           Edit
@@ -291,7 +291,7 @@ export default function LibraryCategoryRail({
       )}
 
       <div className="mt-auto border-t border-border pt-3">
-        <span className="font-mono text-3xs font-medium uppercase tracking-[0.08em] text-muted-foreground">
+        <span className="font-mono text-micro font-medium uppercase tracking-[0.08em] text-muted-foreground">
           Add source
         </span>
         <div className="mt-1.5 flex flex-col gap-0.5">

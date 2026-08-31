@@ -246,7 +246,7 @@ export default function SourceWatchPanel({
                     className="rounded-md border border-border bg-surface-sunken px-3 py-2"
                   >
                     <p className="text-xs font-medium text-foreground">{activityText(event)}</p>
-                    <p className="text-2xs text-muted-foreground">{formatDate(event.at)}</p>
+                    <p className="text-micro text-muted-foreground">{formatDate(event.at)}</p>
                   </li>
                 ))}
               </ul>

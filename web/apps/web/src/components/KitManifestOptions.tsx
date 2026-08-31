@@ -294,7 +294,7 @@ export default function KitManifestOptions({
           <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" />
         </summary>
         <div className="space-y-2 border-t border-border px-3 pb-3 pt-2">
-          <p className="text-2xs text-muted-foreground">
+          <p className="text-micro text-muted-foreground">
             Pick one per group, then{" "}
             <strong className="font-medium text-foreground">Build Working Plan</strong>.{" "}
             <Link to="/help#kit-variants" className="text-primary hover:underline">

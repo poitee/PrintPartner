@@ -244,19 +244,19 @@ export default function SourceFilePickerCard({
         />
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <Badge variant={layerType} className="h-5 px-1.5 text-3xs">
+            <Badge variant={layerType} className="h-5 px-1.5 text-micro">
               {layerType}
             </Badge>
             <h2 className="truncate text-sm font-semibold">{sourceName}</h2>
             {source ? (
-              <span className="truncate text-2xs text-muted-foreground">
+              <span className="truncate text-micro text-muted-foreground">
                 {source.category?.trim() || "Uncategorised"}
               </span>
             ) : null}
             {saveStatusLabel && (
               <span
                 className={cn(
-                  "text-3xs font-medium",
+                  "text-micro font-medium",
                   status === "saved" && "text-success",
                   status === "error" && "text-destructive",
                   (status === "pending" || status === "saving") && "text-muted-foreground",
@@ -269,7 +269,7 @@ export default function SourceFilePickerCard({
           </div>
           <p
             className={cn(
-              "font-mono text-2xs font-normal",
+              "font-mono text-micro font-normal",
               state.tone === "warn" && "text-warning",
               state.tone === "sync" && "text-info",
               state.tone === "muted" && "text-muted-foreground",
@@ -279,7 +279,7 @@ export default function SourceFilePickerCard({
           </p>
         </div>
         <div className="ml-auto flex w-full flex-wrap items-center gap-3 sm:w-auto sm:flex-nowrap">
-          <span className="font-mono text-2xs font-medium tabular-nums">{pickLabel}</span>
+          <span className="font-mono text-micro font-medium tabular-nums">{pickLabel}</span>
           {(source?.local_path || source?.source_kind === "github") && (
             <button
               type="button"
@@ -311,7 +311,7 @@ export default function SourceFilePickerCard({
           </button>
           {allSources && onChangeSource && (
             <select
-              className="max-w-[140px] rounded-md border border-input bg-background px-1.5 py-1 text-2xs"
+              className="max-w-[140px] rounded-md border border-input bg-background px-1.5 py-1 text-micro"
               value={sourceId}
               disabled={disabled}
               aria-label={`Change ${layerType} source`}
@@ -348,7 +348,7 @@ export default function SourceFilePickerCard({
               style={{ width: `${syncProgress ?? 56}%` }}
             />
           </span>
-          <span className="shrink-0 font-mono text-2xs text-info">
+          <span className="shrink-0 font-mono text-micro text-info">
             {activeSync?.message || "syncing"}
           </span>
         </div>

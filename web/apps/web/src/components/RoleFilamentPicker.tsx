@@ -202,7 +202,7 @@ function RoleColorRow({
                     {saveLabel && (
                       <span
                         className={cn(
-                          "text-3xs font-medium",
+                          "text-micro font-medium",
                           saveStatus === "saved" && "text-success",
                           saveStatus === "error" && "text-destructive",
                           saveStatus === "saving" && "text-muted-foreground",
@@ -213,7 +213,7 @@ function RoleColorRow({
                       </span>
                     )}
                   </span>
-                  <span className="block truncate font-mono text-2xs font-normal text-muted-foreground">
+                  <span className="block truncate font-mono text-micro font-normal text-muted-foreground">
                     {row.filament_display || (hasColor ? row.filament_hex : "No color set")}
                   </span>
                 </>
@@ -227,7 +227,7 @@ function RoleColorRow({
                     {saveLabel && (
                       <span
                         className={cn(
-                          "text-3xs font-medium",
+                          "text-micro font-medium",
                           saveStatus === "saved" && "text-success",
                           saveStatus === "error" && "text-destructive",
                           saveStatus === "saving" && "text-muted-foreground",
@@ -245,7 +245,7 @@ function RoleColorRow({
               )}
             </span>
             {compact ? (
-              <span className="ml-auto shrink-0 font-mono text-2xs font-medium text-foreground">
+              <span className="ml-auto shrink-0 font-mono text-micro font-medium text-foreground">
                 {row.part_count}
               </span>
             ) : (

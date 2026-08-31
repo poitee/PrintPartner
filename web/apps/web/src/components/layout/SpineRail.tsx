@@ -84,7 +84,7 @@ function SidebarTooltip({
 function GroupHeading({ collapsed, children }: { collapsed: boolean; children: ReactNode }) {
   if (collapsed) return <Separator className="mx-1 w-auto" />;
   return (
-    <p className="px-1 font-mono text-3xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+    <p className="px-1 font-mono text-micro font-semibold uppercase tracking-[0.14em] text-muted-foreground">
       {children}
     </p>
   );
@@ -143,14 +143,14 @@ function UtilityLink({
       <span className="min-w-0 flex-1">
         <span className="block text-sm font-medium">{link.label}</span>
         {isLibrary ? (
-          <span className="block truncate text-2xs font-normal text-muted-foreground" aria-hidden>
+          <span className="block truncate text-micro font-normal text-muted-foreground" aria-hidden>
             Add, sync, and watch projects
           </span>
         ) : null}
       </span>
       {isLibrary && sourceUpdateCount > 0 ? (
         <span
-          className="rounded-full border border-warning/35 bg-warning-soft px-1.5 py-0.5 font-mono text-3xs font-semibold text-warning"
+          className="rounded-full border border-warning/35 bg-warning-soft px-1.5 py-0.5 font-mono text-micro font-semibold text-warning"
           title={`${sourceUpdateCount} source update${sourceUpdateCount === 1 ? "" : "s"} ready`}
           aria-hidden
         >
@@ -197,7 +197,7 @@ export default function SpineRail({
                 <div className="font-serif text-base font-semibold tracking-[-0.02em] text-foreground">
                   PrintPartner
                 </div>
-                <div className="text-3xs uppercase tracking-[0.12em] text-muted-foreground">
+                <div className="text-micro uppercase tracking-[0.12em] text-muted-foreground">
                   Print planning & production
                 </div>
               </div>

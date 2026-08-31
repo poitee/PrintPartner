@@ -156,16 +156,16 @@ export default function LibrarySourceCard({
             <span className="block truncate text-sm font-semibold tracking-tight">
               {source.name}
             </span>
-            <span className="block truncate font-mono text-2xs text-muted-foreground">
+            <span className="block truncate font-mono text-micro text-muted-foreground">
               {meta.slug}
             </span>
-            <span className="mt-0.5 block truncate text-2xs text-muted-foreground">
+            <span className="mt-0.5 block truncate text-micro text-muted-foreground">
               {sourceCategoryLabel(source.category)}
             </span>
           </button>
           <Badge
             variant="muted"
-            className="mt-0.5 shrink-0 rounded-full px-1.5 py-0 text-3xs font-medium"
+            className="mt-0.5 shrink-0 rounded-full px-1.5 py-0 text-micro font-medium"
           >
             {kindLabel(source.source_kind)}
           </Badge>
@@ -204,10 +204,10 @@ export default function LibrarySourceCard({
         </div>
 
         <div className="flex items-center gap-1.5 border-t border-border/70 pt-2">
-          <span className={cn("min-w-0 truncate text-2xs", stateClass(meta.stateTone))}>
+          <span className={cn("min-w-0 truncate text-micro", stateClass(meta.stateTone))}>
             {meta.stateLabel}
           </span>
-          <span className="ml-auto shrink-0 font-mono text-2xs font-medium tabular-nums text-foreground">
+          <span className="ml-auto shrink-0 font-mono text-micro font-medium tabular-nums text-foreground">
             {meta.pickLabel}
           </span>
         </div>

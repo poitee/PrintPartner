@@ -757,7 +757,7 @@ export default function SourcesPage() {
           >
             <Search className="h-3.5 w-3.5 shrink-0" aria-hidden />
             <span className="min-w-0 truncate">Search STLs everywhere</span>
-            <kbd className="ml-auto hidden font-mono text-3xs text-muted-foreground sm:inline">
+            <kbd className="ml-auto hidden font-mono text-micro text-muted-foreground sm:inline">
               ⌘K
             </kbd>
           </button>

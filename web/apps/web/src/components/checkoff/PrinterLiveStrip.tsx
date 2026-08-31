@@ -361,7 +361,7 @@ export default function PrinterLiveStrip({
             </div>
             <span
               className={cn(
-                "inline-flex shrink-0 items-center rounded-md border px-2 py-0.5 font-mono text-2xs font-medium tabular-nums",
+                "inline-flex shrink-0 items-center rounded-md border px-2 py-0.5 font-mono text-micro font-medium tabular-nums",
                 pillClass(tone),
               )}
             >

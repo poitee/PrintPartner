@@ -45,7 +45,7 @@ export default function CheckoffViewTabs({
             )}
           >
             <span>{view.label}</span>
-            <span className="font-mono text-2xs tabular-nums">
+            <span className="font-mono text-micro tabular-nums">
               {count}
               <span className="sr-only">
                 {" "}
