@@ -11,7 +11,11 @@ import { loadKitManifest, saveKitManifest } from "../services/kit-manifest-store
 import { buildPlanManifestBuilder } from "../services/plan-manifest-builder.js";
 import { preloadSpoolmanForColorIds, enrichRoleFilamentRows } from "../services/filament-resolve.js";
 import { clearPartThumbnailCacheAtHexes, clearPlanThumbnailCache } from "../services/plan-thumbnails.js";
-import { canonicalRoleOrder, loadRoleFilamentDefaults } from "../services/role-filament-store.js";
+import {
+  canonicalRoleOrder,
+  loadRoleFilamentDefaults,
+  saveRoleFilamentDefault,
+} from "../services/role-filament-store.js";
 import { resolvePartFilamentHex } from "../services/filament-catalog.js";
 import { resolvePartStl } from "../services/part-paths.js";
 import { normalizePartRole } from "../services/role-filament.js";
@@ -621,20 +625,29 @@ export async function registerPlanRoutes(
     };
     const role = String(body.role ?? "").trim();
     if (!role) return reply.status(400).send({ detail: "role is required" });
+    const normalizedRole = normalizePartRole(role);
+    const assignment = completeRoleAssignment(body);
     const snapshot = deps.repo.readAcceptedPlanOperationalSnapshot(id);
+    if (snapshot.kind === "empty") {
+      const columns = filamentAssignmentColumns(assignment);
+      saveRoleFilamentDefault(deps.repo, id, normalizedRole, {
+        filament_color_id: columns.filamentColorId,
+        filament_custom_hex: columns.filamentCustomHex,
+        spoolman_spool_id: columns.spoolmanSpoolId,
+      });
+      const roles = deps.repo.getRoleFilaments(id);
+      await enrichRoleFilamentRows(roles, { repo: deps.repo, dataDir: deps.dataDir });
+      return { updated: 0, thumbnails_cleared: 0, roles };
+    }
     if (snapshot.kind !== "ready") {
       return reply.status(409).send({
-        detail:
-          snapshot.kind === "empty"
-            ? "Accepted Plan changed; reload and retry"
-            : acceptedStateDetail(snapshot.kind),
+        detail: acceptedStateDetail(snapshot.kind),
       });
     }
-    const normalizedRole = normalizePartRole(role);
     const result = deps.repo.assignAcceptedFilament({
       expected: acceptedPlanBasis(snapshot.snapshot),
       target: { kind: "role", role: normalizedRole },
-      assignment: completeRoleAssignment(body),
+      assignment,
     });
     if (result.kind !== "updated") return sendAcceptedFilamentFailure(reply, result);
     const refreshThumbnails = body.refresh_thumbnails !== false;
@@ -667,12 +680,14 @@ export async function registerPlanRoutes(
     const body = (request.body ?? {}) as { refresh_thumbnails?: boolean };
     const refreshThumbnails = body.refresh_thumbnails !== false;
     const snapshot = deps.repo.readAcceptedPlanOperationalSnapshot(id);
+    if (snapshot.kind === "empty") {
+      const roles = deps.repo.getRoleFilaments(id);
+      await enrichRoleFilamentRows(roles, { repo: deps.repo, dataDir: deps.dataDir });
+      return { updated: 0, thumbnails_cleared: 0, roles };
+    }
     if (snapshot.kind !== "ready") {
       return reply.status(409).send({
-        detail:
-          snapshot.kind === "empty"
-            ? "Accepted Plan changed; reload and retry"
-            : acceptedStateDetail(snapshot.kind),
+        detail: acceptedStateDetail(snapshot.kind),
       });
     }
     const savedDefaults = loadRoleFilamentDefaults(deps.repo, id);
