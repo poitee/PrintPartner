@@ -38,6 +38,7 @@ import {
 } from "../lib/plansList";
 import { planRoute, productionRoute, progressRoute } from "../lib/routes";
 import { isPlansListEmpty, plansLoadingAnnouncement } from "../lib/plansPageModel";
+import { statusTone } from "../lib/statusTone";
 import { cn } from "@/lib/utils";
 import {
   getBackgroundError,
@@ -196,7 +197,7 @@ export default function PlansPage() {
           </CardContent>
         </Card>
       ) : profilesState === "error" ? (
-        <Card className="border-destructive/40 bg-destructive/5 shadow-none">
+        <Card className={cn("shadow-none", statusTone({ tone: "error", emphasis: "surface" }))}>
           <CardContent className="space-y-3 pt-6">
             <p className="text-sm text-destructive" role="alert">
               Could not load builds: {profilesError}
@@ -272,7 +273,7 @@ export default function PlansPage() {
                       <Card
                         className={cn(
                           "shadow-none",
-                          selected && "border-primary/35 bg-primary/8",
+                          selected && "border-primary/40 bg-primary-soft",
                         )}
                       >
                         <CardContent className="space-y-3 p-3">
@@ -337,7 +338,7 @@ export default function PlansPage() {
                         key={plan.id}
                         className={cn(
                           "border-b border-border/80 transition-colors",
-                          selected ? "bg-primary/8" : "hover:bg-muted/40",
+                          selected ? "bg-primary-soft" : "hover:bg-muted/40",
                         )}
                       >
                         <td className="py-2.5 pr-3">

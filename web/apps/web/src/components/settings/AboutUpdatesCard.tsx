@@ -51,7 +51,7 @@ export default function AboutUpdatesCard({
         )}
 
         {updateCheck?.enabled && updateCheck.update_available && updateCheck.latest_version && (
-          <div className="rounded-md border border-primary/25 bg-primary/5 px-3 py-2">
+          <div className="rounded-md border border-primary/40 bg-primary-soft px-3 py-2">
             <p className="font-medium">
               Update available: {updateCheck.latest_version}
             </p>

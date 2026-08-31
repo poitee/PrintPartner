@@ -15,6 +15,8 @@ import {
   type PrinterMachine,
 } from "../../api/endpoints/printers";
 import type { IntegrationSummary } from "../../api/endpoints/integrations";
+import { statusTone } from "../../lib/statusTone";
+import { cn } from "@/lib/utils";
 import { Button } from "../ui/button";
 import { StatusBadge } from "../ui/status-badge";
 import InlineOperationError from "./InlineOperationError";
@@ -189,7 +191,7 @@ export default function PrintFileAssignForm({
   return (
     <section
       aria-label={`Assign ${chosen.file.name}`}
-      className="stack-section rounded-lg border border-primary/25 bg-primary/5 p-4"
+      className="stack-section rounded-lg border border-primary/40 bg-primary-soft p-4"
     >
       <div className="min-w-0">
         <h3 className="truncate font-mono text-body font-semibold" title={chosen.file.name}>
@@ -385,7 +387,10 @@ function AssignErrorSummary({ errors }: { errors: readonly AssignFieldError[] })
   return (
     <div
       role="alert"
-      className="rounded-md border border-destructive/40 bg-destructive-soft p-3 text-destructive"
+      className={cn(
+        "rounded-md p-3",
+        statusTone({ tone: "error", emphasis: "soft" }),
+      )}
     >
       <p className="text-body font-semibold">
         {errors.length === 1
@@ -480,7 +485,12 @@ function UnitConfirmation({
       ) : null}
 
       {preview.unlabeled_names.length > 0 ? (
-        <div className="rounded-md border border-warning/35 bg-warning-soft p-2.5">
+        <div
+          className={cn(
+            "rounded-md p-2.5",
+            statusTone({ tone: "warning", emphasis: "surface" }),
+          )}
+        >
           <p className="text-meta font-medium text-warning">
             {preview.unlabeled_names.length} object name
             {preview.unlabeled_names.length === 1 ? "" : "s"} matched no Required unit

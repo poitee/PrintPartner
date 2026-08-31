@@ -5,6 +5,7 @@ import {
   CircleCheck,
   CircleDashed,
   LoaderCircle,
+  Lock,
   RefreshCw,
   TriangleAlert,
   type LucideIcon,
@@ -25,6 +26,10 @@ import {
  * emphasis:
  * - text    — icons and inline copy
  * - soft    — chips, banners, status rows (bordered tinted surface)
+ * - surface — soft without the ink, for panels whose contents set their own
+ *             text colours (cards, worklist rows, tinted list items)
+ * - edge    — the border alone, for a card that flags its state on its rim
+ *             while keeping a neutral surface behind real content
  * - outline — quiet bordered chip on a transparent background
  * - solid   — progress fills and hard indicators
  */
@@ -40,6 +45,8 @@ export const statusTone = cva("", {
     emphasis: {
       text: "",
       soft: "border",
+      surface: "border",
+      edge: "border",
       outline: "border bg-transparent",
       solid: "",
     },
@@ -56,6 +63,18 @@ export const statusTone = cva("", {
     { tone: "info", emphasis: "soft", className: "border-info/40 bg-info-soft text-info" },
     { tone: "error", emphasis: "soft", className: "border-destructive/40 bg-destructive-soft text-destructive" },
     { tone: "neutral", emphasis: "soft", className: "border-border bg-muted text-muted-foreground" },
+
+    { tone: "success", emphasis: "surface", className: "border-success/40 bg-success-soft" },
+    { tone: "warning", emphasis: "surface", className: "border-warning/40 bg-warning-soft" },
+    { tone: "info", emphasis: "surface", className: "border-info/40 bg-info-soft" },
+    { tone: "error", emphasis: "surface", className: "border-destructive/40 bg-destructive-soft" },
+    { tone: "neutral", emphasis: "surface", className: "border-border bg-muted" },
+
+    { tone: "success", emphasis: "edge", className: "border-success/50" },
+    { tone: "warning", emphasis: "edge", className: "border-warning/50" },
+    { tone: "info", emphasis: "edge", className: "border-info/50" },
+    { tone: "error", emphasis: "edge", className: "border-destructive/50" },
+    { tone: "neutral", emphasis: "edge", className: "border-border" },
 
     { tone: "success", emphasis: "outline", className: "border-success/50 text-success" },
     { tone: "warning", emphasis: "outline", className: "border-warning/50 text-warning" },
@@ -78,6 +97,7 @@ export type StatusEmphasis = NonNullable<VariantProps<typeof statusTone>["emphas
 /** The workflow states a stage, task, or Build can be in. */
 export const WORKFLOW_STATUS_KINDS = [
   "not_started",
+  "blocked",
   "ready",
   "in_progress",
   "needs_attention",
@@ -108,6 +128,15 @@ const PRESENTATION: Readonly<Record<WorkflowStatusKind, WorkflowStatusPresentati
     tone: "neutral",
     label: "Not started",
     icon: CircleDashed,
+    live: null,
+  },
+  blocked: {
+    kind: "blocked",
+    tone: "neutral",
+    label: "Blocked",
+    // A padlock, not a dashed circle: "waiting on something else" must not read
+    // as "nobody has started this yet" when the colour is the same (WCAG G14).
+    icon: Lock,
     live: null,
   },
   ready: {

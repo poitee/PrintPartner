@@ -46,7 +46,7 @@ export default function UpdateAvailableBanner({
   return (
     <div
       className={cn(
-        "flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-primary/20 bg-primary/5 px-3 py-2 text-xs text-foreground sm:px-5 print:hidden",
+        "flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-primary/40 bg-primary-soft px-3 py-2 text-xs text-foreground sm:px-5 print:hidden",
         className,
       )}
       role="status"

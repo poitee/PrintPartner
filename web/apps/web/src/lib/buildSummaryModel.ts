@@ -3,6 +3,7 @@ import type {
   BuildWorkflowWorkingPlan,
   BuildWorkflowWorkspace,
 } from "@print-partner/contracts";
+import type { StatusTone } from "./statusTone";
 
 /**
  * The one-line current-state summary shown on every stage page.
@@ -21,7 +22,8 @@ export type BuildSummaryLine = Readonly<{
 export type BuildActiveWorkChip = Readonly<{
   id: string;
   label: string;
-  tone: "info" | "warning" | "error" | "neutral";
+  /** Coloured by `lib/statusTone`; a chip never picks its own classes. */
+  tone: Extract<StatusTone, "info" | "warning" | "error" | "neutral">;
 }>;
 
 function plural(count: number, singular: string, many = `${singular}s`): string {

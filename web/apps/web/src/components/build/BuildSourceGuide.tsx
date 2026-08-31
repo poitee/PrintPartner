@@ -8,7 +8,7 @@ export default function BuildSourceGuide({ profileId }: { profileId: number }) {
   return (
     <Card
       surface="sunken"
-      className="border-primary/25"
+      className="border-primary/40"
       aria-labelledby="build-source-guide-heading"
     >
       <CardContent className="space-y-3 p-4">

@@ -80,6 +80,7 @@ import {
   SelectValue,
 } from "../components/ui/select";
 import { resolveEngineState } from "../lib/workflowState";
+import { statusTone } from "@/lib/statusTone";
 import { cn } from "@/lib/utils";
 import {
   INITIAL_SETTINGS_LOADS,
@@ -357,7 +358,7 @@ export default function SettingsPage() {
               className={cn(
                 "rounded-md px-2.5 py-1.5 text-sm transition-colors",
                 location.hash.replace(/^#/, "") === item.id
-                  ? "bg-primary/12 font-semibold text-primary"
+                  ? "bg-primary-soft font-semibold text-primary"
                   : "text-muted-foreground hover:bg-accent/70 hover:text-foreground",
               )}
             >
@@ -472,7 +473,12 @@ export default function SettingsPage() {
         <Card>
           <CardHeader accent>
             <div className="flex items-start gap-3">
-              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-info/10 text-info">
+              <span
+                className={cn(
+                  "flex h-9 w-9 shrink-0 items-center justify-center rounded-lg",
+                  statusTone({ tone: "info", emphasis: "soft" }),
+                )}
+              >
                 <RefreshCw className="h-4 w-4" aria-hidden />
               </span>
               <div>
@@ -826,7 +832,12 @@ export default function SettingsPage() {
         <Card>
           <CardHeader accent>
             <div className="flex items-start gap-3">
-              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-info/10 text-info">
+              <span
+                className={cn(
+                  "flex h-9 w-9 shrink-0 items-center justify-center rounded-lg",
+                  statusTone({ tone: "info", emphasis: "soft" }),
+                )}
+              >
                 <CalendarClock className="h-4 w-4" aria-hidden />
               </span>
               <div>

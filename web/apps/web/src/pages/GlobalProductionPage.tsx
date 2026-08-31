@@ -23,6 +23,8 @@ import {
 } from "../lib/globalProduction";
 import { filterPlansList, planProgressLabel } from "../lib/plansList";
 import { buildsRoute, productionRoute, progressRoute } from "../lib/routes";
+import { statusTone } from "../lib/statusTone";
+import { cn } from "@/lib/utils";
 import {
   getBackgroundError,
   resolveEngineState,
@@ -268,7 +270,7 @@ export default function GlobalProductionPage() {
       )}
 
       {profilesState === "error" ? (
-        <Card className="border-destructive/40 bg-destructive/5 shadow-none">
+        <Card className={cn("shadow-none", statusTone({ tone: "error", emphasis: "surface" }))}>
           <CardContent className="space-y-3 pt-6">
             <p className="text-sm text-destructive" role="alert">
               Could not load builds: {profilesError}

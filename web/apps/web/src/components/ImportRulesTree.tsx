@@ -100,7 +100,7 @@ function TreeRows({
                 }}
                 className={cn(
                   "flex items-center gap-2 rounded-md py-0.5 pr-1 text-sm transition-colors",
-                  isSelected && "bg-primary/10 ring-1 ring-primary/30",
+                  isSelected && "bg-primary-soft ring-1 ring-primary/30",
                   !node.checked && "opacity-70",
                   enableFileCategoryDrag && !disabled && "cursor-grab active:cursor-grabbing",
                 )}

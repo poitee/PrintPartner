@@ -4,6 +4,7 @@ import { statusTone } from "../../lib/statusTone";
 import { Button } from "../ui/button";
 import { usePlanAcceptance } from "./PlanAcceptanceContext";
 import { cn } from "@/lib/utils";
+import { WORKING_PLAN_CHANGED_MESSAGE } from "../../lib/workingPlanChanged";
 
 /**
  * Step 7 of the Plan checkpoint: publish the revision for Production.
@@ -20,6 +21,9 @@ export default function PlanAcceptanceActionCard() {
   if (!model.working) return null;
 
   const impact = model.impact;
+  const retryFailure = failure?.kind === "error" || failure?.kind === "working_plan_changed"
+    ? failure
+    : null;
 
   return (
     <section
@@ -53,7 +57,7 @@ export default function PlanAcceptanceActionCard() {
           onPublish={() => accept()}
         />
       </div>
-      {failure?.kind === "error" && (
+      {retryFailure && (
         <div
           role="alert"
           className={cn(
@@ -63,8 +67,16 @@ export default function PlanAcceptanceActionCard() {
         >
           <CircleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
           <div className="min-w-0 flex-1">
-            <p className="font-medium text-foreground">Publishing did not complete</p>
-            <p className="mt-0.5 text-xs text-muted-foreground">{failure.message}</p>
+            <p className="font-medium text-foreground">
+              {retryFailure.kind === "working_plan_changed"
+                ? "Working Plan refreshed"
+                : "Publishing did not complete"}
+            </p>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              {retryFailure.kind === "working_plan_changed"
+                ? WORKING_PLAN_CHANGED_MESSAGE
+                : retryFailure.message}
+            </p>
             <Button
               type="button"
               variant="secondary"
@@ -73,7 +85,9 @@ export default function PlanAcceptanceActionCard() {
               disabled={busy}
               onClick={() => accept()}
             >
-              Retry publishing
+              {retryFailure.kind === "working_plan_changed"
+                ? "Publish updated Plan"
+                : "Retry publishing"}
             </Button>
           </div>
         </div>

@@ -35,13 +35,13 @@ export default function CheckoffPrinterStatusCard({
     <section
       aria-label="Printer status"
       className={cn(
-        "overflow-hidden rounded-lg border border-primary/30 bg-card shadow-sm",
+        "overflow-hidden rounded-lg border border-primary/40 bg-card shadow-sm",
         className,
       )}
     >
-      <div className="space-y-3 bg-primary/8 px-4 py-3">
+      <div className="space-y-3 bg-primary-soft px-4 py-3">
         <div className="flex flex-wrap items-start gap-3">
-          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/12 text-primary">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-soft text-primary">
             <Printer className="h-4 w-4" aria-hidden />
           </span>
           <div className="min-w-0 flex-1">

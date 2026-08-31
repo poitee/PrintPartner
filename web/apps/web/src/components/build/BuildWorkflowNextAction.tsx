@@ -28,7 +28,7 @@ export default function BuildWorkflowNextAction({
   return (
     <section
       className={cn(
-        "flex flex-col gap-3 rounded-lg border border-primary/25 bg-primary/[0.04] p-3 sm:flex-row sm:items-center sm:justify-between",
+        "flex flex-col gap-3 rounded-lg border border-primary/40 bg-primary/[0.04] p-3 sm:flex-row sm:items-center sm:justify-between",
         className,
       )}
       aria-label="Next Build action"

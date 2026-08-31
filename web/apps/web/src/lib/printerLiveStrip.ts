@@ -1,5 +1,6 @@
 import type { PrinterHostStatus } from "@print-partner/contracts";
 import { quietPrinterStatusMessage } from "./printerErrorCopy";
+import type { StatusTone } from "./statusTone";
 
 export type LiveStripHostType = "moonraker" | "prusalink" | "bambu";
 
@@ -63,6 +64,29 @@ export function printerLiveStripTone(
       return state;
     default:
       return "unknown";
+  }
+}
+
+/**
+ * Status tone for a printer host, shared by the Progress strip, the Printers
+ * board, and Settings. Colour comes from `lib/statusTone` — this only decides
+ * which tone a host state carries.
+ */
+export function printerStatusTone(
+  state: PrinterHostStatus["state"] | undefined,
+): StatusTone {
+  switch (printerLiveStripTone(state)) {
+    case "idle":
+    case "complete":
+      return "success";
+    case "printing":
+      return "info";
+    case "paused":
+      return "warning";
+    case "error":
+      return "error";
+    default:
+      return "neutral";
   }
 }
 

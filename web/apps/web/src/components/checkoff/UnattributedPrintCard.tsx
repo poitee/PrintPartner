@@ -6,6 +6,8 @@ import {
   dismissUnattributedPrint,
 } from "../../api/endpoints/checkoff";
 import { fetchProfiles } from "../../api/endpoints/plans";
+import { statusTone } from "../../lib/statusTone";
+import { cn } from "@/lib/utils";
 import { Button } from "../ui/button";
 import {
   Select,
@@ -107,7 +109,10 @@ export default function UnattributedPrintCard({
     <div className="space-y-2">
       <button
         type="button"
-        className="inline-flex max-w-full items-center gap-2 rounded-full border border-warning/30 bg-warning-soft px-3 py-1.5 text-left text-xs text-warning shadow-sm transition-colors hover:bg-warning-soft/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className={cn(
+          "inline-flex max-w-full items-center gap-2 rounded-full px-3 py-1.5 text-left text-xs shadow-sm transition-colors hover:bg-warning-soft/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          statusTone({ tone: "warning", emphasis: "soft" }),
+        )}
         aria-expanded={expanded}
         aria-controls={detailsId}
         onClick={() => setExpanded((value) => !value)}
@@ -131,7 +136,10 @@ export default function UnattributedPrintCard({
       {expanded && (
         <div
           id={detailsId}
-          className="max-w-2xl rounded-lg border border-warning/25 bg-card p-3 shadow-sm"
+          className={cn(
+            "max-w-2xl rounded-lg bg-card p-3 shadow-sm",
+            statusTone({ tone: "warning", emphasis: "edge" }),
+          )}
         >
           <div className="flex flex-col gap-2">
             {print.candidates.length > 0 && (

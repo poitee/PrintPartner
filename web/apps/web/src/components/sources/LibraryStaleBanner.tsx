@@ -1,3 +1,4 @@
+import { statusTone } from "@/lib/statusTone";
 import { cn } from "@/lib/utils";
 
 type Props = {
@@ -26,7 +27,8 @@ export default function LibraryStaleBanner({
       type="button"
       onClick={onSeeChanges}
       className={cn(
-        "flex w-full items-center gap-2.5 rounded-lg border border-warning/30 bg-warning-soft px-3 py-2.5 text-left transition-colors hover:bg-warning/20",
+        "flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-left transition-colors hover:bg-warning/20",
+        statusTone({ tone: "warning", emphasis: "surface" }),
         className,
       )}
     >

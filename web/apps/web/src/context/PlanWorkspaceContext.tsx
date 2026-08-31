@@ -42,6 +42,7 @@ import {
   resolveDraftPart,
   type PlanRowIdentity,
 } from "../lib/planDraftPartMatch";
+import { WorkingPlanChangedError } from "../lib/workingPlanChanged";
 import { useProfileSelection } from "./ProfileContext";
 
 /** The Plan row being edited — enough identity to find it in the saved draft. */
@@ -307,7 +308,15 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
     ) {
       throw new Error("Resolve Required-unit changes before acceptance");
     }
-    const receipt = await applyPlanDraft(workspace, options);
+    let receipt: ApplyPlanDraftReceipt;
+    try {
+      receipt = await applyPlanDraft(workspace, options);
+    } catch (error) {
+      if (replaceFromConflict(error)) {
+        throw new WorkingPlanChangedError({ cause: error });
+      }
+      throw error;
+    }
     setRecentlyAppliedDraftId(workspace.draft.draft_id);
     setActiveDraftId(null);
     queryClient.removeQueries({ queryKey: queryKeys.planDraft(workspace.profile_id, workspace.draft.draft_id), exact: true });
@@ -321,7 +330,7 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
       queryClient.invalidateQueries({ queryKey: queryKeys.buildWorkflow(workspace.profile_id) }),
     ]);
     return receipt;
-  }, [currentDraftWorkspace, queryClient]);
+  }, [currentDraftWorkspace, queryClient, replaceFromConflict]);
 
   const rebaseActivePlanDraft = useCallback(async () => {
     const workspace = currentDraftWorkspace();

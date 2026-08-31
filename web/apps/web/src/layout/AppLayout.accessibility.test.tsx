@@ -137,7 +137,7 @@ describe("application shell accessibility", () => {
     expect(nav).toBeTruthy();
     const link = await screen.findByRole("link", { name: "Source Library" });
     expect(link.getAttribute("aria-current")).toBe("page");
-    expect(link.className).toContain("bg-primary/12");
+    expect(link.className).toContain("bg-primary-soft");
   });
 
   it("names the current stage and Build in the instrument header", () => {

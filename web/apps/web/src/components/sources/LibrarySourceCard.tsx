@@ -14,6 +14,7 @@ import { cn } from "@/lib/utils";
 import type { LibraryCardMeta } from "../../lib/librarySourceMeta";
 import { sourceCategoryLabel } from "../../lib/sourceCategoryAssignment";
 import { librarySourceDragId } from "../../lib/sourceCategoryDnD";
+import { statusTone } from "../../lib/statusTone";
 import { kindLabel } from "./sourceLabels";
 import SourceCategoryAssignSubmenu from "./SourceCategoryAssignSubmenu";
 
@@ -50,9 +51,9 @@ function barClass(tone: LibraryCardMeta["barTone"]): string {
 function borderClass(tone: LibraryCardMeta["borderTone"]): string {
   switch (tone) {
     case "syncing":
-      return "border-info/30";
+      return statusTone({ tone: "info", emphasis: "edge" });
     case "update":
-      return "border-warning/30";
+      return statusTone({ tone: "warning", emphasis: "edge" });
     default:
       return "border-border";
   }
@@ -61,13 +62,13 @@ function borderClass(tone: LibraryCardMeta["borderTone"]): string {
 function stateClass(tone: LibraryCardMeta["stateTone"]): string {
   switch (tone) {
     case "warning":
-      return "text-warning";
+      return statusTone({ tone: "warning", emphasis: "text" });
     case "sync":
-      return "text-info";
+      return statusTone({ tone: "info", emphasis: "text" });
     case "success":
-      return "text-success";
+      return statusTone({ tone: "success", emphasis: "text" });
     default:
-      return "text-muted-foreground";
+      return statusTone({ tone: "neutral", emphasis: "text" });
   }
 }
 

@@ -70,12 +70,13 @@ import {
   printerDetailsDraft,
   printerHostConnectionReady,
   printerSettingsCanAdd,
-  statusPillClass,
   statusPillLabel,
   type HostType,
   type PrinterDetailsDraft,
   type SlicerOverride,
 } from "../../lib/printerSettingsModel";
+import { printerStatusTone } from "../../lib/printerLiveStrip";
+import { statusTone } from "../../lib/statusTone";
 
 type Props = {
   engineReady: boolean;
@@ -714,7 +715,7 @@ export default function PrintersSettingsCard({ engineReady }: Props) {
                   <span
                     className={cn(
                       "inline-flex min-h-8 shrink-0 items-center rounded-md px-2.5 text-xs font-medium",
-                      statusPillClass(status?.state),
+                      statusTone({ tone: printerStatusTone(status?.state), emphasis: "soft" }),
                     )}
                     title={status?.message}
                   >

@@ -1,6 +1,7 @@
 import type { PlanReview, ReviewPart } from "../../api/endpoints/planManifests";
 import { partSourceNote } from "../../lib/partsGroups";
 import { partWarningNote } from "../../lib/partWarnings";
+import { statusTone } from "../../lib/statusTone";
 import PartThumbExpandButton from "../parts/PartThumbExpandButton";
 import { Button } from "../ui/button";
 import { cn } from "@/lib/utils";
@@ -35,7 +36,7 @@ export default function PartsGridCard({
     <article
       className={cn(
         "flex flex-col overflow-hidden rounded-md border bg-card",
-        warn ? "border-warning/60" : "border-border",
+        warn ? statusTone({ tone: "warning", emphasis: "edge" }) : "border-border",
         !part.included && "opacity-70",
       )}
     >
@@ -57,7 +58,9 @@ export default function PartsGridCard({
         <p
           className={cn(
             "truncate text-micro",
-            warn ? "text-warning" : "text-muted-foreground",
+            warn
+              ? statusTone({ tone: "warning", emphasis: "text" })
+              : "text-muted-foreground",
           )}
           title={note}
         >

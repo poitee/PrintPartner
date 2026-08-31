@@ -5,6 +5,7 @@ import {
   PRODUCTION_ROUTE_LABEL,
 } from "../../lib/workPackageTasks";
 import { Button } from "../ui/button";
+import { statusTone } from "@/lib/statusTone";
 import { cn } from "@/lib/utils";
 
 type PreparationRoute = Exclude<ProductionRoute, "external">;
@@ -75,7 +76,10 @@ export default function ProductionRouteQuestion({
             id={ERROR_ID}
             ref={missingRef}
             tabIndex={-1}
-            className="rounded-md border border-destructive/35 bg-destructive-soft px-3 py-2 text-sm font-medium text-destructive"
+            className={cn(
+              "rounded-md px-3 py-2 text-sm font-medium",
+              statusTone({ tone: "error", emphasis: "soft" }),
+            )}
           >
             {/* GOV.UK prefixes error messages with a visually hidden "Error:"
                 so a screen reader hears that the line is a problem. */}
@@ -127,7 +131,10 @@ export default function ProductionRouteQuestion({
 
       {error ? (
         <div
-          className="flex flex-wrap items-center gap-3 rounded-md border border-destructive/35 bg-destructive-soft px-3 py-2"
+          className={cn(
+            "flex flex-wrap items-center gap-3 rounded-md px-3 py-2",
+            statusTone({ tone: "error", emphasis: "surface" }),
+          )}
           role="alert"
         >
           <p className="min-w-0 flex-1 text-sm text-destructive">{error.message}</p>

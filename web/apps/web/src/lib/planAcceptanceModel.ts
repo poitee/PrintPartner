@@ -53,6 +53,7 @@ export type PlanAcceptanceFailure =
       readonly sendQueueItemCount: number;
     }
   | { readonly kind: "unsafe_records"; readonly units: readonly PlanUnitOutcome[] }
+  | { readonly kind: "working_plan_changed" }
   | { readonly kind: "error"; readonly message: string };
 
 export type PlanAcceptanceInput = {
@@ -284,6 +285,16 @@ function failureIssues(input: {
           .join(" \u2022 "),
         statusLabel: "Finish before publishing",
         tone: "error",
+        action: null,
+      }];
+    case "working_plan_changed":
+      return [{
+        id: "plan-issue-working-plan-changed",
+        group: "must_resolve",
+        title: "Working Plan refreshed before publishing",
+        detail: "Review the updated quantities and choices, then publish again.",
+        statusLabel: "Review before publishing",
+        tone: "warning",
         action: null,
       }];
     case "error":

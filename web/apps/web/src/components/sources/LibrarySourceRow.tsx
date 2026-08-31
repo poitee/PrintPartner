@@ -4,6 +4,7 @@ import type { LibraryCardMeta } from "../../lib/librarySourceMeta";
 import { librarySourceDragId } from "../../lib/sourceCategoryDnD";
 import { sourceCategoryLabel } from "../../lib/sourceCategoryAssignment";
 import { sourceCanUpload } from "../../lib/sourceImportModel";
+import { statusTone } from "../../lib/statusTone";
 import { cn } from "@/lib/utils";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
@@ -61,8 +62,8 @@ export default function LibrarySourceRow({
       }}
       className={cn(
         "flex flex-col gap-2 rounded-lg border bg-card px-4 py-3 sm:flex-row sm:flex-wrap sm:items-center",
-        meta.borderTone === "update" && "border-warning/30",
-        meta.borderTone === "syncing" && "border-info/30",
+        meta.borderTone === "update" && statusTone({ tone: "warning", emphasis: "edge" }),
+        meta.borderTone === "syncing" && statusTone({ tone: "info", emphasis: "edge" }),
         selected && "ring-2 ring-primary border-primary/60",
         !busy && "cursor-grab active:cursor-grabbing",
       )}

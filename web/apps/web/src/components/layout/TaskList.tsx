@@ -1,30 +1,25 @@
 import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
+import { ChevronRight } from "lucide-react";
 import {
-  AlertTriangle,
-  Check,
-  ChevronRight,
-  CircleDashed,
-  Loader2,
-  Lock,
-  XCircle,
-} from "lucide-react";
+  statusTone,
+  workflowStatusPresentation,
+  type WorkflowStatusKind,
+} from "@/lib/statusTone";
 import { Button } from "../ui/button";
 import { cn } from "@/lib/utils";
 
 /**
  * Task states for a workspace task list.
  *
- * These are deliberately not the Build Workflow stage states. A stage says where
- * a Build is; a task says what one person must do next inside a workspace.
+ * A subset of the workflow states: a task list never says "ready" or "needs
+ * refresh". Tone, words, and icon shape all come from `lib/statusTone`, so a
+ * task row and a Build stage badge read the same.
  */
-export type WorkflowTaskState =
-  | "not_started"
-  | "in_progress"
-  | "needs_attention"
-  | "blocked"
-  | "complete"
-  | "error";
+export type WorkflowTaskState = Extract<
+  WorkflowStatusKind,
+  "not_started" | "in_progress" | "needs_attention" | "blocked" | "complete" | "error"
+>;
 
 export type WorkflowTask = Readonly<{
   id: string;
@@ -55,41 +50,20 @@ type Props = {
   className?: string;
 };
 
-const STATE_ICON: Record<WorkflowTaskState, typeof Check> = {
-  not_started: CircleDashed,
-  in_progress: Loader2,
-  needs_attention: AlertTriangle,
-  blocked: Lock,
-  complete: Check,
-  error: XCircle,
-};
-
 /**
- * Status colour is always paired with the visible `statusLabel`, so colour never
- * carries meaning on its own (WCAG G14).
+ * Status colour is always paired with the visible `statusLabel` and with the
+ * state's own icon shape, so colour never carries meaning on its own (WCAG G14).
  */
 function stateClasses(state: WorkflowTaskState): string {
-  switch (state) {
-    case "complete":
-      return "border-success/35 bg-success-soft text-success";
-    case "needs_attention":
-      return "border-warning/35 bg-warning-soft text-warning";
-    case "error":
-      return "border-destructive/35 bg-destructive-soft text-destructive";
-    case "in_progress":
-      return "border-info/35 bg-info-soft text-info";
-    case "blocked":
-    case "not_started":
-      return "border-border bg-muted text-muted-foreground";
-  }
+  return statusTone({ tone: workflowStatusPresentation(state).tone, emphasis: "soft" });
 }
 
 function TaskIcon({ state }: { state: WorkflowTaskState }) {
-  const Icon = STATE_ICON[state];
+  const Icon = workflowStatusPresentation(state).icon;
   return (
     <span
       className={cn(
-        "mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full border",
+        "mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full",
         stateClasses(state),
       )}
       aria-hidden
@@ -198,7 +172,10 @@ export default function TaskList({ title, description, tasks, className }: Props
 
               {task.error ? (
                 <div
-                  className="mx-4 mb-3 flex flex-wrap items-center gap-3 rounded-md border border-destructive/35 bg-destructive-soft px-3 py-2"
+                  className={cn(
+                    "mx-4 mb-3 flex flex-wrap items-center gap-3 rounded-md px-3 py-2",
+                    statusTone({ tone: "error", emphasis: "surface" }),
+                  )}
                   role="alert"
                 >
                   <p className="min-w-0 flex-1 text-xs text-destructive">

@@ -12,8 +12,10 @@ import {
   formatPrinterJobLine,
   formatPrinterStatusPill,
   printerLiveStripTone,
+  printerStatusTone,
   type LiveStripHostType,
 } from "../../lib/printerLiveStrip";
+import { statusTone } from "../../lib/statusTone";
 import { quietPrinterLoadError, quietPrinterStatusMessage } from "../../lib/printerErrorCopy";
 import { usePrinterStatusPollMs } from "../../hooks/usePrinterStatusPollMs";
 import { cn } from "@/lib/utils";
@@ -51,41 +53,6 @@ type Props = {
   onUnattributedUpdate?: () => void;
   className?: string;
 };
-
-function toneClass(tone: ReturnType<typeof printerLiveStripTone>): string {
-  switch (tone) {
-    case "idle":
-      return "border-success/30 bg-success-soft text-success";
-    case "printing":
-      return "border-info/30 bg-info-soft text-info";
-    case "paused":
-      return "border-warning/30 bg-warning-soft text-warning";
-    case "complete":
-      return "border-success/30 bg-success-soft text-success";
-    case "error":
-      return "border-destructive/40 bg-destructive/10 text-destructive";
-    case "offline":
-      return "border-border bg-muted/60 text-muted-foreground";
-    default:
-      return "border-border bg-card text-muted-foreground";
-  }
-}
-
-function pillClass(tone: ReturnType<typeof printerLiveStripTone>): string {
-  switch (tone) {
-    case "printing":
-      return "border-info/30 bg-info-soft text-info";
-    case "paused":
-      return "border-warning/30 bg-warning-soft text-warning";
-    case "complete":
-    case "idle":
-      return "border-success/30 bg-success-soft text-success";
-    case "error":
-      return "border-destructive/40 bg-destructive/15 text-destructive";
-    default:
-      return "border-border bg-background/70 text-muted-foreground";
-  }
-}
 
 /**
  * Sticky Progress banner: live status for fleet machines linked to a printer host.
@@ -302,10 +269,10 @@ export default function PrinterLiveStrip({
     return (
       <div
         className={cn(
-          "flex flex-wrap items-center gap-2 rounded-lg border px-3 py-2 text-sm print:hidden",
+          "flex flex-wrap items-center gap-2 rounded-lg px-3 py-2 text-sm print:hidden",
           quiet
-            ? "border-border bg-muted/50 text-muted-foreground"
-            : "border-destructive/30 bg-destructive/5",
+            ? statusTone({ tone: "neutral", emphasis: "soft" })
+            : statusTone({ tone: "error", emphasis: "surface" }),
           className,
         )}
         role="status"
@@ -345,8 +312,8 @@ export default function PrinterLiveStrip({
           <div
             key={host.integrationId}
             className={cn(
-              "flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg border px-3 py-2 text-sm",
-              toneClass(tone),
+              "flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg px-3 py-2 text-sm",
+              statusTone({ tone: printerStatusTone(status?.state), emphasis: "soft" }),
             )}
             title={quietPrinterStatusMessage(status?.message) ?? undefined}
           >
@@ -361,8 +328,8 @@ export default function PrinterLiveStrip({
             </div>
             <span
               className={cn(
-                "inline-flex shrink-0 items-center rounded-md border px-2 py-0.5 font-mono text-micro font-medium tabular-nums",
-                pillClass(tone),
+                "inline-flex shrink-0 items-center rounded-md px-2 py-0.5 font-mono text-micro font-medium tabular-nums",
+                statusTone({ tone: printerStatusTone(status?.state), emphasis: "outline" }),
               )}
             >
               {formatPrinterStatusPill(status)}

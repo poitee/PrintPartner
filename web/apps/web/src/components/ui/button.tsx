@@ -2,6 +2,7 @@ import * as React from "react";
 import { Slot } from "@radix-ui/react-slot";
 import { cva, type VariantProps } from "class-variance-authority";
 import { Spinner } from "./spinner";
+import { statusTone } from "@/lib/statusTone";
 import { cn } from "@/lib/utils";
 
 /**
@@ -22,8 +23,10 @@ const buttonVariants = cva(
         outline:
           "border border-border-strong bg-background shadow-sm hover:border-primary/50 hover:bg-accent hover:text-accent-foreground",
         link: "text-primary underline-offset-4 hover:underline",
-        destructive:
-          "border border-destructive/70 bg-destructive-soft text-destructive hover:bg-destructive/20",
+        destructive: cn(
+          statusTone({ tone: "error", emphasis: "edge" }),
+          "bg-destructive-soft text-destructive hover:bg-destructive/20",
+        ),
         info: "bg-info text-info-foreground shadow-sm hover:bg-info/90 hover:shadow-md",
         sheetRemove:
           "border border-[var(--paper-destructive-border)] bg-[var(--paper-bg)] text-[var(--paper-destructive)] shadow-none hover:border-[var(--paper-destructive-border-hover)] hover:bg-[var(--paper-destructive-bg-hover)] hover:text-[var(--paper-destructive-hover)]",

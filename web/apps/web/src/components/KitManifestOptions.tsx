@@ -260,7 +260,7 @@ export default function KitManifestOptions({
                       className={cn(
                         "min-h-10 rounded-md border px-3 py-2 text-sm transition-colors sm:min-h-0 sm:py-1.5",
                         active
-                          ? "border-primary bg-primary/10 text-foreground"
+                          ? "border-primary bg-primary-soft text-foreground"
                           : "border-border bg-background text-muted-foreground hover:border-primary/40 hover:text-foreground",
                       )}
                       onClick={() => onPickVariant(groupId, variant.id)}

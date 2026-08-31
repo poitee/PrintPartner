@@ -1,4 +1,5 @@
 import { Spinner } from "./ui/spinner";
+import { statusTone } from "../lib/statusTone";
 import { cn } from "@/lib/utils";
 import type { StlSyncBannerMode } from "../lib/stlAutoSync";
 
@@ -43,7 +44,8 @@ export default function StlSyncBanner({
   return (
     <div
       className={cn(
-        "flex flex-wrap items-center gap-2 rounded-md border border-warning bg-warning/15 px-3 py-2.5 text-sm",
+        "flex flex-wrap items-center gap-2 rounded-md px-3 py-2.5 text-sm",
+        statusTone({ tone: "warning", emphasis: "surface" }),
         className,
       )}
       role="alert"

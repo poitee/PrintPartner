@@ -24,6 +24,7 @@ import {
   type CheckoffMutationAction,
   type CheckoffRowErrors,
 } from "../../lib/checkoffConsoleRowErrors";
+import { statusTone } from "../../lib/statusTone";
 import ObjectProposalRows from "../export/ObjectProposalRows";
 import CheckoffRowErrorNotice from "./CheckoffRowErrorNotice";
 import { Button } from "../ui/button";
@@ -333,7 +334,10 @@ export default function PrintVerifyPanel({
     <div className={cn("flex flex-col gap-2 print:hidden", className)}>
       {readError ? (
         <div
-          className="flex flex-wrap items-center gap-2 rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm"
+          className={cn(
+            "flex flex-wrap items-center gap-2 rounded-lg px-3 py-2 text-sm",
+            statusTone({ tone: "error", emphasis: "surface" }),
+          )}
           role="alert"
         >
           <span className="min-w-0 flex-1 text-destructive">{readError}</span>
@@ -352,7 +356,10 @@ export default function PrintVerifyPanel({
       {displayFailedLinks.map((link) => (
         <div
           key={link.id}
-          className="rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm"
+          className={cn(
+            "rounded-lg px-3 py-2 text-sm",
+            statusTone({ tone: "error", emphasis: "surface" }),
+          )}
           role="status"
         >
           <div className="flex flex-wrap items-center gap-2">
@@ -390,7 +397,10 @@ export default function PrintVerifyPanel({
             return (
               <div
                 key={`watching:${link.id}`}
-                className="rounded-lg border border-info/30 bg-info-soft px-4 py-4 text-sm shadow-sm"
+                className={cn(
+                  "rounded-lg px-4 py-4 text-sm shadow-sm",
+                  statusTone({ tone: "info", emphasis: "surface" }),
+                )}
                 role="status"
                 aria-label={`Printing proposed parts from ${link.filename}`}
               >
@@ -414,7 +424,10 @@ export default function PrintVerifyPanel({
           return (
             <div
               key={link.id}
-              className="rounded-lg border border-warning/35 bg-warning-soft px-4 py-4 text-sm shadow-sm"
+              className={cn(
+                "rounded-lg px-4 py-4 text-sm shadow-sm",
+                statusTone({ tone: "warning", emphasis: "surface" }),
+              )}
               role="region"
               aria-label={`Confirm these parts from ${link.filename}`}
             >

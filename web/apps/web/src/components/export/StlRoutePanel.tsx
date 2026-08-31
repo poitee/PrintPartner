@@ -5,6 +5,8 @@ import { engineAssetUrl } from "../../api/endpoints/browserFiles";
 import { startExportStlPack, type StlPackGroupBy } from "../../api/endpoints/jobs";
 import { useJobRunner } from "../../hooks/useJobRunner";
 import { checkoffPastPrintRoute } from "../../lib/routes";
+import { statusTone } from "../../lib/statusTone";
+import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { StatusBadge } from "../ui/status-badge";
 import InlineOperationError from "../printers/InlineOperationError";
@@ -277,7 +279,7 @@ export default function StlRoutePanel({
             </p>
           ) : null}
           {pack.artifact.warnings.length > 0 ? (
-            <div className="rounded-md border border-warning/35 bg-warning-soft p-2.5">
+            <div className={cn("rounded-md p-2.5", statusTone({ tone: "warning", emphasis: "surface" }))}>
               <p className="text-meta font-medium text-warning">
                 {pack.artifact.warnings.length} unit file
                 {pack.artifact.warnings.length === 1 ? "" : "s"} could not be included

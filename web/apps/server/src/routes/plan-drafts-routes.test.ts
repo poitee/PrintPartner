@@ -50,6 +50,56 @@ async function fixture() {
 }
 
 describe("Plan draft routes", () => {
+  it("returns the current Working Plan when publication uses a stale identity", async () => {
+    const { app, profile } = await fixture();
+    const createdResponse = await app.inject({
+      method: "POST",
+      url: `/plans/${profile.id}/drafts/recompute`,
+      headers: { "idempotency-key": "stale-publication-draft" },
+      payload: { apply_manifest: true },
+    });
+    expect(createdResponse.statusCode).toBe(200);
+    const created = createdResponse.json();
+    const target = created.parts[0];
+    const editedResponse = await app.inject({
+      method: "PATCH",
+      url: `/plans/${profile.id}/drafts/${created.draft.draft_id}/parts`,
+      payload: {
+        expected_snapshot_digest: created.draft.snapshot_digest,
+        decisions: [{
+          kind: "set_quantity_override",
+          draft_part_ids: [target.draft_part_id],
+          value: 2,
+        }],
+      },
+    });
+    expect(editedResponse.statusCode).toBe(200);
+    const edited = editedResponse.json();
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/plans/${profile.id}/drafts/${created.draft.draft_id}/apply`,
+      headers: { "idempotency-key": "stale-publication-apply" },
+      payload: {
+        expected_snapshot_digest: created.draft.snapshot_digest,
+        expected_lifecycle_version: created.draft.lifecycle_version,
+        expected_base: created.draft.base,
+      },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({
+      code: "draft_changed",
+      workspace: {
+        profile_id: profile.id,
+        draft: {
+          draft_id: created.draft.draft_id,
+          snapshot_digest: edited.draft.snapshot_digest,
+        },
+      },
+    });
+  });
+
   it("repairs a legacy Working Plan without reconciliation before publishing", async () => {
     const { app, repo, profile } = await fixture();
     const created = repo.recomputePlanDraft({

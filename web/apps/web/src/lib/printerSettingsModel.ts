@@ -119,25 +119,6 @@ export function statusPillLabel(status: PrinterHostStatus | null | undefined): s
   return status.message ?? status.state;
 }
 
-export function statusPillClass(state: PrinterHostStatus["state"] | undefined): string {
-  switch (state) {
-    case "idle":
-      return "bg-success-soft text-success";
-    case "printing":
-      return "bg-info-soft text-info";
-    case "paused":
-      return "bg-warning-soft text-warning";
-    case "complete":
-      return "bg-success-soft text-success";
-    case "error":
-      return "bg-destructive/15 text-destructive";
-    case "offline":
-      return "bg-muted text-muted-foreground";
-    default:
-      return "bg-muted text-muted-foreground";
-  }
-}
-
 export function pickDefaultPresetId(
   presets: PrinterPreset[],
   fallbackPresetId: string,

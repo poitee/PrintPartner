@@ -1,4 +1,5 @@
 import type { CheckoffRowError } from "../../lib/checkoffConsoleRowErrors";
+import { statusTone } from "../../lib/statusTone";
 import { Button } from "../ui/button";
 import { cn } from "@/lib/utils";
 
@@ -25,7 +26,8 @@ export default function CheckoffRowErrorNotice({
     <div
       role="alert"
       className={cn(
-        "flex flex-wrap items-center gap-2 rounded-md border border-destructive/40 bg-destructive/5 px-2.5 py-2 text-xs",
+        "flex flex-wrap items-center gap-2 rounded-md px-2.5 py-2 text-xs",
+        statusTone({ tone: "error", emphasis: "surface" }),
         className,
       )}
     >

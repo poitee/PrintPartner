@@ -25,6 +25,7 @@ import {
   shouldShowImportRulesRetry,
 } from "../lib/importRulesSave";
 import { librarySourceDragId } from "../lib/sourceCategoryDnD";
+import { statusTone } from "../lib/statusTone";
 import { cn } from "@/lib/utils";
 import { attachedSourceStateLabel } from "../lib/sourceFilePickerModel";
 
@@ -227,8 +228,8 @@ export default function SourceFilePickerCard({
         "flex flex-col gap-2.5 rounded-lg border bg-card px-3.5 py-2.5 shadow-[0_1px_2px_rgba(89,115,166,0.06)]",
         updateWarn || syncBusy
           ? syncBusy
-            ? "border-info/30"
-            : "border-warning/30"
+            ? statusTone({ tone: "info", emphasis: "edge" })
+            : statusTone({ tone: "warning", emphasis: "edge" })
           : "border-border",
         expanded && dirty && "border-primary/40",
         !disabled && "cursor-grab active:cursor-grabbing",
@@ -375,7 +376,12 @@ export default function SourceFilePickerCard({
             )}
           </div>
           {duplicateBasenames.length > 0 && (
-            <p className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-muted-foreground">
+            <p
+              className={cn(
+                "rounded-md px-3 py-2 text-xs text-muted-foreground",
+                statusTone({ tone: "warning", emphasis: "surface" }),
+              )}
+            >
               <strong className="font-medium text-foreground">Duplicate filenames selected</strong>
               {" — "}
               {duplicateBasenames.slice(0, 4).join(", ")}

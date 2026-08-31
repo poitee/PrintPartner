@@ -4,6 +4,7 @@ import {
   formatAcceptedRevisionLine,
   formatCompletedAt,
 } from "../../lib/checkoffConsoleModel";
+import { statusTone } from "../../lib/statusTone";
 import { Button } from "../ui/button";
 import { cn } from "@/lib/utils";
 
@@ -44,7 +45,8 @@ export default function CheckoffCompletionCard({
       aria-labelledby="checkoff-complete-title"
       role="status"
       className={cn(
-        "rounded-lg border border-success/40 bg-success-soft p-4 sm:p-5",
+        "rounded-lg p-4 sm:p-5",
+        statusTone({ tone: "success", emphasis: "surface" }),
         className,
       )}
     >

@@ -142,7 +142,7 @@ function SortableCategoryNavItem({
           ref={setNodeRef}
           className={cn(
             "flex items-center gap-0.5 rounded-md",
-            active ? "bg-primary/10 text-primary" : "text-foreground hover:bg-accent/70",
+            active ? "bg-primary-soft text-primary" : "text-foreground hover:bg-accent/70",
           )}
         >
           {reorderEnabled ? (
@@ -222,7 +222,7 @@ export default function LibraryCategoryRail({
         <div
           className={cn(
             "flex items-center gap-0.5 rounded-md pl-2.5",
-            active ? "bg-primary/10 text-primary" : "text-foreground hover:bg-accent/70",
+            active ? "bg-primary-soft text-primary" : "text-foreground hover:bg-accent/70",
           )}
         >
           <CategoryRowBody

@@ -115,6 +115,7 @@ import {
   sourceKindNeedsArchiveUpload,
   sourceSyncLabel,
 } from "../lib/sourceImportModel";
+import { statusTone } from "../lib/statusTone";
 import { cn } from "@/lib/utils";
 import { resolveEngineState } from "../lib/workflowState";
 import {
@@ -1019,7 +1020,7 @@ export default function SourcesPage() {
                 </div>
               )
             ) : pageLoadError && sources.length === 0 ? (
-              <Card className="border-destructive/40 bg-destructive/5 shadow-none">
+              <Card className={cn("shadow-none", statusTone({ tone: "error", emphasis: "surface" }))}>
                 <CardContent className="space-y-3 pt-6">
                   <p className="text-sm text-destructive">
                     Could not load Library: {pageLoadError}

@@ -1,5 +1,6 @@
 import { Check, Loader2, AlertCircle } from "lucide-react";
 import { useSaveStatusRegistry } from "../context/SaveStatusContext";
+import { statusTone } from "@/lib/statusTone";
 import { cn } from "@/lib/utils";
 
 export default function SaveStatusIndicator() {
@@ -16,10 +17,10 @@ export default function SaveStatusIndicator() {
       className={cn(
         "inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs",
         errored
-          ? "bg-destructive/10 text-destructive"
+          ? statusTone({ tone: "error", emphasis: "soft" })
           : saving
-            ? "bg-muted text-muted-foreground"
-            : "bg-success-soft text-success",
+            ? statusTone({ tone: "neutral", emphasis: "soft" })
+            : statusTone({ tone: "success", emphasis: "soft" }),
       )}
       role="status"
       aria-live="polite"

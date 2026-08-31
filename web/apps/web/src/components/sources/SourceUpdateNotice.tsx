@@ -4,6 +4,8 @@ import { useState } from "react";
 import type { SourceActivityEvent } from "../../api/endpoints/sourceContent";
 import { useSourceMonitoringQueries } from "../../queries/sourceMonitoring";
 import { libraryRoute } from "../../lib/routes";
+import { statusTone } from "../../lib/statusTone";
+import { cn } from "@/lib/utils";
 import { Button } from "../ui/button";
 
 const DISMISSED_SOURCE_NOTICE_KEY = "print-partner.source-notice.dismissed";
@@ -95,8 +97,11 @@ export default function SourceUpdateNotice({ enabled }: { enabled: boolean }) {
     <section
       className={
         notice.tone === "failure"
-          ? "mb-3 flex flex-wrap items-start gap-3 rounded-lg border border-destructive/35 bg-destructive/5 px-3 py-2.5 print:hidden"
-          : "mb-3 flex flex-wrap items-start gap-3 rounded-lg border border-primary/30 bg-primary/8 px-3 py-2.5 print:hidden"
+          ? cn(
+              "mb-3 flex flex-wrap items-start gap-3 rounded-lg px-3 py-2.5 print:hidden",
+              statusTone({ tone: "error", emphasis: "surface" }),
+            )
+          : "mb-3 flex flex-wrap items-start gap-3 rounded-lg border border-primary/40 bg-primary-soft px-3 py-2.5 print:hidden"
       }
       aria-label="Source update notification"
       role="status"

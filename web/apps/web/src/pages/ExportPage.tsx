@@ -64,6 +64,7 @@ import {
   productionTasks,
   type ProductionTaskId,
 } from "../lib/workPackageTasks";
+import { statusTone } from "../lib/statusTone";
 import { cn } from "@/lib/utils";
 import {
   getBackgroundError,
@@ -520,7 +521,12 @@ export default function ExportPage() {
             onFailure={setAssignFailure}
           />
           {printerCount === 0 ? (
-            <div className="rounded-lg border border-warning/35 bg-warning-soft p-4 text-sm text-warning">
+            <div
+              className={cn(
+                "rounded-lg p-4 text-sm",
+                statusTone({ tone: "warning", emphasis: "soft" }),
+              )}
+            >
               No printer is set up.{" "}
               <Link className="font-medium underline underline-offset-2" to={settingsPrintersRoute()}>
                 Add a printer in Settings
@@ -678,7 +684,7 @@ export default function ExportPage() {
           </CardContent>
         </Card>
       ) : profilesState === "error" ? (
-        <Card className="border-destructive/40 bg-destructive/5 shadow-none">
+        <Card className={cn("shadow-none", statusTone({ tone: "error", emphasis: "surface" }))}>
           <CardContent className="space-y-3 pt-6">
             <p className="text-sm text-destructive">
               Could not load plans: {profilesError}
@@ -730,7 +736,7 @@ export default function ExportPage() {
             >
               {route === "external" && !changingRoute ? (
                 <section
-                  className="space-y-3 rounded-lg border border-primary/35 bg-primary/8 p-4"
+                  className="space-y-3 rounded-lg border border-primary/40 bg-primary-soft p-4"
                   aria-labelledby="past-print-route-moved-heading"
                 >
                   <div className="space-y-1">

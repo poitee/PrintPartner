@@ -14,6 +14,7 @@ import { AlertTriangle, CheckCircle2, Clock, Printer, XCircle } from "lucide-rea
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../ui/card";
+import { statusTone } from "@/lib/statusTone";
 import { cn } from "@/lib/utils";
 
 export type PlateApprovalInfo = {
@@ -64,7 +65,7 @@ export default function PlateApprovalCard({
     <Card
       className={cn(
         "border-border shadow-sm",
-        hasWarnings && "border-warning/50",
+        hasWarnings && statusTone({ tone: "warning", emphasis: "edge" }),
         className,
       )}
     >
@@ -109,7 +110,7 @@ export default function PlateApprovalCard({
 
         {/* Warnings */}
         {hasWarnings && (
-          <div className="rounded-md border border-warning/30 bg-warning/10 p-2">
+          <div className={cn("rounded-md p-2", statusTone({ tone: "warning", emphasis: "surface" }))}>
             <p className="mb-1 flex items-center gap-1 text-micro font-medium text-warning">
               <AlertTriangle className="h-3 w-3 shrink-0" aria-hidden />
               Unmatched objects — will not appear on Progress

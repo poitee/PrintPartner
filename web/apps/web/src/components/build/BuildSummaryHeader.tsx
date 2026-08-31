@@ -2,11 +2,8 @@ import { Link } from "react-router-dom";
 import { ArrowRight } from "lucide-react";
 import { useProfileSelection } from "../../context/ProfileContext";
 import { buildWorkflowStages, type WorkflowStageId } from "../../lib/workflowStages";
-import {
-  buildActiveWorkChips,
-  buildSummaryLine,
-  type BuildActiveWorkChip,
-} from "../../lib/buildSummaryModel";
+import { buildActiveWorkChips, buildSummaryLine } from "../../lib/buildSummaryModel";
+import { statusTone } from "../../lib/statusTone";
 import { useBuildWorkflowQuery } from "../../queries/buildWorkflow";
 import { Button } from "../ui/button";
 import { cn } from "@/lib/utils";
@@ -15,19 +12,6 @@ type Props = {
   currentStageId: WorkflowStageId;
   className?: string;
 };
-
-function chipClass(tone: BuildActiveWorkChip["tone"]): string {
-  switch (tone) {
-    case "error":
-      return "border-destructive/35 bg-destructive-soft text-destructive";
-    case "warning":
-      return "border-warning/35 bg-warning-soft text-warning";
-    case "info":
-      return "border-info/35 bg-info-soft text-info";
-    case "neutral":
-      return "border-border bg-muted text-muted-foreground";
-  }
-}
 
 /**
  * Current-state summary on every Build stage. The instrument header already
@@ -68,8 +52,8 @@ export default function BuildSummaryHeader({ currentStageId, className }: Props)
               <li
                 key={chip.id}
                 className={cn(
-                  "rounded-md border px-2 py-0.5 text-xs font-medium",
-                  chipClass(chip.tone),
+                  "rounded-md px-2 py-0.5 text-xs font-medium",
+                  statusTone({ tone: chip.tone, emphasis: "soft" }),
                 )}
               >
                 {chip.label}

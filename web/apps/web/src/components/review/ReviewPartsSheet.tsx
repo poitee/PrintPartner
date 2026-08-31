@@ -532,7 +532,7 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
   return (
     <section className="space-y-3">
       {draftWorkspace && ui.viewMode === "edit" && (
-        <p className="no-print rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-sm">
+        <p className="no-print rounded-md border border-primary/40 bg-primary-soft px-3 py-2 text-sm">
           Quantity and inclusion controls change the Working Plan. They are not accepted yet.
         </p>
       )}

@@ -27,6 +27,7 @@ import {
   type SpineUtilityId,
   type SpineUtilityNavItem,
 } from "../../lib/spineUtilityNav";
+import { statusTone } from "@/lib/statusTone";
 import { cn } from "@/lib/utils";
 import type { WorkflowStage, WorkflowStageId } from "../../lib/workflowStages";
 import { useProfileSelection } from "../../context/ProfileContext";
@@ -59,7 +60,7 @@ const WORKSHOP_IDS: SpineUtilityId[] = ["builds", "library", "production", "prin
 
 const NAV_RAIL =
   "relative before:absolute before:inset-y-1.5 before:left-0 before:w-0.5 before:rounded-full before:content-['']";
-const NAV_ACTIVE = "bg-primary/12 font-semibold text-primary before:bg-primary";
+const NAV_ACTIVE = "bg-primary-soft font-semibold text-primary before:bg-primary";
 const NAV_IDLE =
   "text-muted-foreground hover:bg-accent/70 hover:text-foreground before:bg-transparent";
 
@@ -111,7 +112,7 @@ function UtilityLink({
           className={cn(
             NAV_RAIL,
             "flex items-center justify-center rounded-md p-2.5 transition-colors",
-            isLibrary && "border border-primary/25 bg-primary/5",
+            isLibrary && "border border-primary/40 bg-primary-soft",
             link.match ? NAV_ACTIVE : NAV_IDLE,
           )}
           aria-label={link.label}
@@ -134,7 +135,7 @@ function UtilityLink({
       className={cn(
         NAV_RAIL,
         "flex items-center gap-2.5 rounded-md px-2.5 py-2 transition-colors",
-        isLibrary && "my-0.5 border border-primary/25 bg-primary/5 py-2.5",
+        isLibrary && "my-0.5 border border-primary/40 bg-primary-soft py-2.5",
         link.match ? NAV_ACTIVE : NAV_IDLE,
       )}
       aria-label={link.label}
@@ -150,7 +151,10 @@ function UtilityLink({
       </span>
       {isLibrary && sourceUpdateCount > 0 ? (
         <span
-          className="rounded-full border border-warning/35 bg-warning-soft px-1.5 py-0.5 font-mono text-micro font-semibold text-warning"
+          className={cn(
+            "rounded-full px-1.5 py-0.5 font-mono text-micro font-semibold",
+            statusTone({ tone: "warning", emphasis: "soft" }),
+          )}
           title={`${sourceUpdateCount} source update${sourceUpdateCount === 1 ? "" : "s"} ready`}
           aria-hidden
         >

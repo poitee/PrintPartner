@@ -24,6 +24,8 @@ import {
 import { useProfileSelection } from "../../context/ProfileContext";
 import { parseSlicedObjectsFile } from "../../lib/parseSlicedObjects";
 import { checkoffRoute, settingsPrintersRoute } from "../../lib/routes";
+import { statusTone } from "../../lib/statusTone";
+import { cn } from "@/lib/utils";
 import { Button } from "../ui/button";
 import { StatusBadge } from "../ui/status-badge";
 import InlineOperationError from "../printers/InlineOperationError";
@@ -787,7 +789,10 @@ function UploadedPrintRecord({
       {state.phase === "reviewing_project_objects" ? (
         <section
           aria-label="Project-only 3MF objects"
-          className="stack-row rounded-md border border-warning/35 bg-warning-soft p-3"
+          className={cn(
+            "stack-row rounded-md p-3",
+            statusTone({ tone: "warning", emphasis: "surface" }),
+          )}
         >
           <p className="font-mono text-body font-semibold">{state.review.file.name}</p>
           <p className="text-body font-medium text-warning">
@@ -801,7 +806,12 @@ function UploadedPrintRecord({
             a printable plate. Include {state.review.projectOnlyNames.length === 1 ? "it" : "them"}
             only if {state.review.projectOnlyNames.length === 1 ? "it was" : "they were"} printed.
           </p>
-          <ul className="max-h-40 overflow-y-auto rounded-md border border-warning/35 bg-background p-2 font-mono text-micro">
+          <ul
+            className={cn(
+              "max-h-40 overflow-y-auto rounded-md bg-background p-2 font-mono text-micro",
+              statusTone({ tone: "warning", emphasis: "edge" }),
+            )}
+          >
             {state.review.projectOnlyNames.map((name, index) => (
               <li key={`${name}:${index}`} className="truncate" title={name}>
                 {name}
@@ -865,7 +875,10 @@ function UploadedPrintRecord({
               {visibleProblems.length > 0 ? (
                 <div
                   role="alert"
-                  className="rounded-md border border-destructive/40 bg-destructive-soft p-3 text-destructive"
+                  className={cn(
+                    "rounded-md p-3",
+                    statusTone({ tone: "error", emphasis: "soft" }),
+                  )}
                 >
                   <p className="text-body font-semibold">
                     {visibleProblems.length === 1
@@ -1107,7 +1120,12 @@ function UnitConfirmation({
       ) : null}
 
       {unlabeledNames.length > 0 ? (
-        <div className="rounded-md border border-warning/35 bg-warning-soft p-2.5">
+        <div
+          className={cn(
+            "rounded-md p-2.5",
+            statusTone({ tone: "warning", emphasis: "surface" }),
+          )}
+        >
           <p className="text-meta font-medium text-warning">
             {unlabeledNames.length} object name{unlabeledNames.length === 1 ? "" : "s"} matched no
             Required unit

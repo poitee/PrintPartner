@@ -25,6 +25,8 @@ import {
   uploadBlobToGoogleDrive,
   type DriveFileRef,
 } from "../../lib/googleDrive";
+import { statusTone } from "../../lib/statusTone";
+import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import {
   Card,
@@ -338,7 +340,12 @@ export default function PartsManifestTransfer({ review, sources, onApplied }: Pr
           </div>
 
           {lastErrors.length > 0 && (
-            <div className="max-h-40 overflow-y-auto rounded-md border border-destructive/40 bg-destructive/5 p-2 text-xs">
+            <div
+              className={cn(
+                "max-h-40 overflow-y-auto rounded-md p-2 text-xs",
+                statusTone({ tone: "error", emphasis: "surface" }),
+              )}
+            >
               {lastErrors.slice(0, 20).map((err) => (
                 <div key={`${err.row}-${err.message}`}>
                   Row {err.row}: {err.message}

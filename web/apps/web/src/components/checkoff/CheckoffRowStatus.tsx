@@ -38,7 +38,7 @@ export function AssembledToggles({
             key={idx}
             className={cn(
               "flex items-center gap-1.5 rounded-full border border-border bg-muted/40 px-2 py-0.5 text-micro font-medium text-muted-foreground",
-              isAssembled && "border-success/40 bg-success/10 text-success",
+              isAssembled && statusTone({ tone: "success", emphasis: "soft" }),
             )}
           >
             <Switch
@@ -117,7 +117,8 @@ export function StatusBadges({
           <button
             type="button"
             className={cn(
-              "rounded border border-warning/30 bg-warning-soft px-1.5 py-0 text-micro font-semibold text-warning hover:bg-warning/20",
+              "rounded px-1.5 py-0 text-micro font-semibold hover:bg-warning/20",
+              statusTone({ tone: "warning", emphasis: "outline" }),
               inCompact ? "h-5" : "h-4",
             )}
             disabled={busy}

@@ -12,6 +12,7 @@ import {
 } from "../../lib/checkoffProgress";
 import { folderKeyFromRelativePath } from "../../lib/checkoffGroups";
 import { sourceLabelFromLayer } from "../../lib/reviewParts";
+import { statusTone, type StatusTone } from "../../lib/statusTone";
 import { cn } from "@/lib/utils";
 import { SortableDragHandle } from "../dnd/SortableDragHandle";
 import PartThumbExpandButton from "../parts/PartThumbExpandButton";
@@ -66,16 +67,11 @@ function sourceLine(part: ReviewPart): string {
   return `${repo} / ${folder}`;
 }
 
-const toneCountClass: Record<ReturnType<typeof partProgressTone>, string> = {
-  empty: "text-destructive",
-  partial: "text-warning",
-  done: "text-success",
-};
-
-const toneBarClass: Record<ReturnType<typeof partProgressTone>, string> = {
-  empty: "bg-muted",
-  partial: "bg-warning",
-  done: "bg-success",
+/** How far through its units a part is, in the shared status vocabulary. */
+const PROGRESS_TONE: Record<ReturnType<typeof partProgressTone>, StatusTone> = {
+  empty: "error",
+  partial: "warning",
+  done: "success",
 };
 
 /** Text state for the row. Never rely on the colour alone. */
@@ -157,9 +153,9 @@ const ProgressPartRow = memo(function ProgressPartRow({
       <article
         className={cn(
           "flex flex-col gap-2 rounded-[10px] border border-border bg-card p-3 shadow-sm",
-          tone === "done" && "border-success/40 bg-success/5",
-          awaitingVerify && "border-success/30 bg-success-soft",
-          rowError && "border-destructive/50",
+          tone === "done" && statusTone({ tone: "success", emphasis: "surface" }),
+          awaitingVerify && statusTone({ tone: "success", emphasis: "surface" }),
+          rowError && statusTone({ tone: "error", emphasis: "edge" }),
         )}
       >
         {/* Filename first: it is what the operator reads off the part. */}
@@ -180,7 +176,12 @@ const ProgressPartRow = memo(function ProgressPartRow({
                   title={part.filament_display || undefined}
                 />
               ) : null}
-              <span className={cn("text-xs font-medium tabular-nums", toneCountClass[tone])}>
+              <span
+                className={cn(
+                  "text-xs font-medium tabular-nums",
+                  statusTone({ tone: PROGRESS_TONE[tone], emphasis: "text" }),
+                )}
+              >
                 {stateLabel}
               </span>
             </span>
@@ -226,9 +227,9 @@ const ProgressPartRow = memo(function ProgressPartRow({
     <article
       className={cn(
         "flex flex-col gap-2 rounded-lg border border-border bg-card px-3 py-2.5 shadow-sm",
-        tone === "done" && "border-success/40 bg-success/5",
-        awaitingVerify && "border-success/30 bg-success-soft",
-        rowError && "border-destructive/50",
+        tone === "done" && statusTone({ tone: "success", emphasis: "surface" }),
+        awaitingVerify && statusTone({ tone: "success", emphasis: "surface" }),
+        rowError && statusTone({ tone: "error", emphasis: "edge" }),
       )}
     >
       <div className="flex items-center gap-3">
@@ -282,7 +283,10 @@ const ProgressPartRow = memo(function ProgressPartRow({
           aria-label={`${part.filename} ${pct}% printed`}
         >
           <span
-            className={cn("block h-full rounded-full transition-[width]", toneBarClass[tone])}
+            className={cn(
+              "block h-full rounded-full transition-[width]",
+              statusTone({ tone: PROGRESS_TONE[tone], emphasis: "solid" }),
+            )}
             style={{ width: `${pct}%` }}
           />
         </span>
@@ -301,7 +305,7 @@ const ProgressPartRow = memo(function ProgressPartRow({
           <span
             className={cn(
               "w-[3.25rem] text-center font-mono text-sm font-medium tabular-nums",
-              toneCountClass[tone],
+              statusTone({ tone: PROGRESS_TONE[tone], emphasis: "text" }),
             )}
           >
             {countLabel}
@@ -310,7 +314,7 @@ const ProgressPartRow = memo(function ProgressPartRow({
             type="button"
             variant="outline"
             size="icon"
-            className="size-9 rounded-md border-primary bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary"
+            className="size-9 rounded-md border-primary bg-primary-soft text-primary hover:bg-primary hover:text-primary-foreground"
             disabled={busy || !canInc}
             aria-label={`Mark one ${part.filename} printed. ${stateLabel}`}
             onClick={() => onIncrement(part)}

@@ -49,6 +49,10 @@
   --primary: hsl(196 92% 28%);
   --primary-foreground: hsl(200 30% 98%);
 
+  /* Tinted surface for selection and interaction panels, so "this one is
+     active" is one token instead of five hand-picked alphas of --primary. */
+  --primary-soft: hsl(196 60% 93%);
+
   /* Retained as an alias while call sites migrate; not a second palette. */
   --accent-brand: var(--primary);
   --accent-brand-foreground: var(--primary-foreground);
@@ -150,6 +154,8 @@
   --primary: hsl(190 72% 60%);
   --primary-foreground: hsl(200 40% 9%);
 
+  --primary-soft: hsl(198 34% 18%);
+
   --accent-brand: var(--primary);
   --accent-brand-foreground: var(--primary-foreground);
 
@@ -249,6 +255,7 @@
 
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
+  --color-primary-soft: var(--primary-soft);
 
   --color-accent-brand: var(--accent-brand);
   --color-accent-brand-foreground: var(--accent-brand-foreground);

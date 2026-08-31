@@ -1,3 +1,5 @@
+import { statusTone } from "@/lib/statusTone";
+import { cn } from "@/lib/utils";
 import { Button } from "../ui/button";
 import { Card, CardContent } from "../ui/card";
 import { Spinner } from "../ui/spinner";
@@ -51,7 +53,12 @@ export default function CheckoffStateNotice({
 
   if (profilesState === "error") {
     return (
-      <Card className="no-print border-destructive/40 bg-destructive/5 shadow-none">
+      <Card
+        className={cn(
+          "no-print shadow-none",
+          statusTone({ tone: "error", emphasis: "surface" }),
+        )}
+      >
         <CardContent className="space-y-3 pt-6">
           <p className="text-sm text-destructive" role="alert">
             Could not load plans: {profilesError}
@@ -82,7 +89,12 @@ export default function CheckoffStateNotice({
 
   if (reviewState === "error") {
     return (
-      <Card className="no-print border-destructive/40 bg-destructive/5 shadow-none">
+      <Card
+        className={cn(
+          "no-print shadow-none",
+          statusTone({ tone: "error", emphasis: "surface" }),
+        )}
+      >
         <CardContent className="space-y-3 pt-6">
           <p className="text-sm text-destructive" role="alert">
             Could not load Checkoff: {workspaceError}
