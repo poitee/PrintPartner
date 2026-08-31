@@ -2,10 +2,13 @@ import { useId, useState } from "react";
 import { Download } from "lucide-react";
 import type { ProfileSummary } from "@print-partner/contracts";
 import {
+  assignUploadedPrinterFile,
   assignPrinterFile,
   previewPrinterFileAssignment,
+  uploadPrintFileForAssignment,
   type PrinterCheckoffLink,
   type PrintFileAssignmentPreview,
+  type UploadedPrintFileCheck,
 } from "../../api/endpoints/checkoff";
 import {
   printerStoredFileUrl,
@@ -59,9 +62,15 @@ type AssignState =
   | { phase: "unchecked" }
   | { phase: "checking" }
   | { phase: "check_failed"; message: string }
-  | { phase: "confirming"; preview: PrintFileAssignmentPreview }
-  | { phase: "saving"; preview: PrintFileAssignmentPreview }
-  | { phase: "save_failed"; preview: PrintFileAssignmentPreview; message: string };
+  | { phase: "confirming"; preview: AssignmentCheck }
+  | { phase: "saving"; preview: AssignmentCheck }
+  | { phase: "save_failed"; preview: AssignmentCheck; message: string };
+
+type AssignmentCheck = PrintFileAssignmentPreview | UploadedPrintFileCheck;
+
+function isUploadedCheck(check: AssignmentCheck): check is UploadedPrintFileCheck {
+  return "upload_token" in check;
+}
 
 /** Which decisions have been submitted, and therefore whose problems to show. */
 type ErrorGate = "none" | "check" | "save";
@@ -109,13 +118,20 @@ export default function PrintFileAssignForm({
     if (buildId == null) return;
     setAssign({ phase: "checking" });
     try {
-      const preview = await previewPrinterFileAssignment({
-        profile_id: buildId,
-        printer_id: printer.id,
-        filename: chosen.file.name,
-        remote_path: chosen.remotePath,
-        object_names: chosen.objectNames,
-      });
+      const preview =
+        chosen.remotePath === undefined
+          ? await uploadPrintFileForAssignment({
+              profile_id: buildId,
+              file: chosen.file,
+              object_names: chosen.objectNames,
+            })
+          : await previewPrinterFileAssignment({
+              profile_id: buildId,
+              printer_id: printer.id,
+              filename: chosen.file.name,
+              remote_path: chosen.remotePath,
+              object_names: chosen.objectNames,
+            });
       setConfirmedTokens(new Set(preview.suggested_units.map(requiredUnitToken)));
       setErrorGate("none");
       setAssign({ phase: "confirming", preview });
@@ -127,22 +143,24 @@ export default function PrintFileAssignForm({
     }
   };
 
-  const save = async (preview: PrintFileAssignmentPreview) => {
+  const save = async (preview: AssignmentCheck) => {
     setErrorGate("save");
     if (errors.length > 0 || buildId == null) return;
     setAssign({ phase: "saving", preview });
     try {
-      const result = await assignPrinterFile({
+      const base = {
         profile_id: buildId,
         printer_id: printer.id,
         filename: chosen.file.name,
-        remote_path: chosen.remotePath,
         object_names: chosen.objectNames,
         tracking,
         completed,
         plan_revision_id: preview.plan_revision_id,
         unit_tokens: [...confirmedTokens],
-      });
+      };
+      const result = isUploadedCheck(preview)
+        ? await assignUploadedPrinterFile({ ...base, upload_token: preview.upload_token })
+        : await assignPrinterFile({ ...base, remote_path: chosen.remotePath });
       onAssigned(result.link);
     } catch (error) {
       setAssign({

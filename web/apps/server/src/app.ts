@@ -262,6 +262,15 @@ export async function buildApp(config: ServerConfig, ports: RuntimePorts) {
       dataDir: config.dataDir,
       sqlite,
       appVersion: config.version,
+      ...(sqlite
+        ? {
+            refreshDatabaseConsumers: () => {
+              const restoredDb = getDb(sqlite);
+              repository.replaceDatabase(restoredDb);
+              authStore?.replaceDatabase(restoredDb);
+            },
+          }
+        : {}),
     });
 
     // Register logging routes

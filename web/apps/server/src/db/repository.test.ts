@@ -178,6 +178,54 @@ describe("AppRepository", () => {
     });
   });
 
+  it("treats only repository-backed source kinds as Git sources", () => {
+    withRepo((repo) => {
+      const github = repo.createSource({
+        name: "Repository",
+        url: "https://github.com/example/repository",
+        source_kind: "github",
+      });
+      const printables = repo.createSource({
+        name: "Model page",
+        url: "https://www.printables.com/model/123-example",
+        source_kind: "printables",
+      });
+      const thangs = repo.createSource({
+        name: "Thangs page",
+        url: "https://thangs.com/designer/example/3d-model/example-123",
+        source_kind: "thangs",
+      });
+
+      expect(github.source_type).toBe("git");
+      expect(printables.source_type).toBe("local");
+      expect(thangs.source_type).toBe("local");
+    });
+  });
+
+  it("records and lists source activity newest first", () => {
+    withRepo((repo) => {
+      repo.recordAppEvent({
+        kind: "source.update_available",
+        at: "2026-08-30T10:00:00.000Z",
+        payload: { source_id: 1, source_name: "First" },
+      });
+      repo.recordAppEvent({
+        kind: "source.updated",
+        at: "2026-08-30T11:00:00.000Z",
+        payload: { source_id: 2, source_name: "Second" },
+      });
+      repo.recordAppEvent({ kind: "unrelated.event" });
+
+      const events = repo.listAppEvents({
+        kinds: ["source.update_available", "source.updated"],
+      });
+      expect(events.map((event) => event.kind)).toEqual([
+        "source.updated",
+        "source.update_available",
+      ]);
+    });
+  });
+
   it("touches last_used_at and duplicates as a fresh non-archived spine plan", () => {
     withRepo((repo, db) => {
       const plan = repo.createProfile("Template");

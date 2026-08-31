@@ -133,9 +133,6 @@ vi.mock("../components/export/accepted-plates/AcceptedPlateSection", () => ({
 vi.mock("../components/export/StlRoutePanel", () => ({
   default: () => <div data-testid="panel-stl" />,
 }));
-vi.mock("../components/export/ExternalPrintRoutePanel", () => ({
-  default: () => <div data-testid="panel-external" />,
-}));
 vi.mock("../components/share/ShareBuildExportDialog", () => ({ default: () => null }));
 
 vi.mock("../hooks/useEngineHealth", () => ({
@@ -429,19 +426,14 @@ describe("ExportPage route question", () => {
     expect(screen.getByText("Ready to download")).toBeTruthy();
   });
 
-  it("shows only the record-a-print tasks on the record route", () => {
+  it("hands Builds with the former record route over to Checkoff", () => {
     state.route = "external";
     renderAt("/export");
-    const list = screen.getByLabelText("Add each manually prepared print");
-    for (const label of [
-      "Choose the print file",
-      "Attribute it to Required units",
-      "Confirm the record",
-    ]) {
-      expect(within(list).getAllByText(label).length).toBeGreaterThan(0);
-    }
-    expect(within(list).queryByText("Send or start")).toBeNull();
-    expect(screen.getByTestId("panel-external")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Past prints now belong in Checkoff" })).toBeTruthy();
+    expect(screen.queryByLabelText("Add each manually prepared print")).toBeNull();
+    expect(
+      screen.getByRole("link", { name: "Add a past print in Checkoff" }).getAttribute("href"),
+    ).toBe("/progress?profile=1&add=past-print");
   });
 
   it("names the chosen route above the tasks with a Change link", () => {
@@ -489,7 +481,7 @@ describe("ExportPage route question", () => {
     state.printerAssignments = [{ token: TOKEN_A, printer_id: "printer-1" }];
     renderAt("/export");
     fireEvent.click(screen.getByRole("button", { name: "Change production method" }));
-    chooseRoute(/Add manually prepared prints/);
+    chooseRoute(/Download sorted STL files/);
     continueOn();
     fireEvent.click(screen.getByRole("button", { name: "Keep this route" }));
     expect(state.save).not.toHaveBeenCalled();

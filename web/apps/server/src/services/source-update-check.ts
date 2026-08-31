@@ -42,7 +42,7 @@ function isGitSource(row: {
 }): boolean {
   if (!row.localPath) return false;
   const kind = (row.sourceKind || "").toLowerCase();
-  if (kind === "local" || kind === "archive") return false;
+  if (kind !== "github" && kind !== "git") return false;
   if ((row.sourceType || "git") === "local") return false;
   if ((row.url || "").startsWith("file://")) return false;
   return true;
@@ -80,6 +80,20 @@ export async function checkAllSourceUpdates(repo: AppRepository): Promise<{
         [REMOTE_CHECKED_AT_KEY]: now,
       },
     });
+    if (status === "updates_available" && source.update_status !== "updates_available") {
+      repo.recordAppEvent({
+        kind: "source.update_available",
+        actorType: "source",
+        actorId: String(source.id),
+        payload: {
+          source_id: source.id,
+          source_name: source.name,
+          source_url: source.url,
+          branch: row.branch ?? "main",
+          previous_sha: row.lastCommitSha,
+        },
+      });
+    }
     checked.push({ source_id: source.id, name: source.name, update_status: status });
   }
 

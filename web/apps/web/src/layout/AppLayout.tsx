@@ -34,11 +34,17 @@ import ThemePreferenceControl from "../components/ThemePreferenceControl";
 import { useEngineHealth } from "../hooks/useEngineHealth";
 import { readSidebarCollapsed, writeSidebarCollapsed } from "../lib/persistedSidebarUi";
 import { TooltipProvider } from "../components/ui/tooltip";
+import SourceUpdateNotice from "../components/sources/SourceUpdateNotice";
+import { useSourcesQuery } from "../queries/sources";
 
 export default function AppLayout() {
   const location = useLocation();
   const navigate = useNavigate();
   const { health } = useEngineHealth();
+  const { data: navigationSources = [] } = useSourcesQuery(Boolean(health?.ok));
+  const sourceUpdateCount = navigationSources.filter(
+    (source) => source.update_status === "updates_available",
+  ).length;
   const { updateCheck } = useAppUpdateCheck(Boolean(health));
   const [bannerDismissed, setBannerDismissed] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => readSidebarCollapsed());
@@ -127,6 +133,7 @@ export default function AppLayout() {
             stages={stages}
             activeId={activeId}
             onStageNavigate={onPipelineNavigate}
+            sourceUpdateCount={sourceUpdateCount}
           />
 
           <div className="flex min-w-0 flex-1 flex-col">
@@ -134,7 +141,10 @@ export default function AppLayout() {
               className="flex items-center justify-between gap-2 border-b border-border bg-card/90 px-3 py-2.5 backdrop-blur-md sm:gap-4 sm:px-5 print:hidden"
             >
               <div className="flex min-w-0 flex-1 items-center gap-2 text-sm">
-                <MobileNavDrawer onNavigate={onPipelineNavigate} />
+                <MobileNavDrawer
+                  onNavigate={onPipelineNavigate}
+                  sourceUpdateCount={sourceUpdateCount}
+                />
                 {showPlanInHeader && activePlanName ? (
                   <div className="min-w-0">
                     {activeStage ? (
@@ -170,6 +180,7 @@ export default function AppLayout() {
                 syncDisabled={busy}
                 className="mb-3 print:hidden"
               />
+              <SourceUpdateNotice enabled={Boolean(health?.ok)} />
               <ErrorBoundary key={location.pathname}>
                 <Outlet />
               </ErrorBoundary>

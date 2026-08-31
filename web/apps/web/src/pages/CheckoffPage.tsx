@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { CheckSquare } from "lucide-react";
 import { toast } from "sonner";
 import PageHeader from "../components/layout/PageHeader";
@@ -24,6 +24,7 @@ import CheckoffMoveToDialog, {
   type CheckoffMoveTarget,
 } from "../components/checkoff/CheckoffMoveToDialog";
 import CheckoffPrinterStatusCard from "../components/checkoff/CheckoffPrinterStatusCard";
+import PastPrintIntakePanel from "../components/checkoff/PastPrintIntakePanel";
 import CheckoffPrintSheet from "../components/checkoff/CheckoffPrintSheet";
 import CheckoffPrintSheetButton, {
   type PrintSheetLayout,
@@ -32,6 +33,12 @@ import CheckoffStateNotice from "../components/checkoff/CheckoffStateNotice";
 import CheckoffViewTabs from "../components/checkoff/CheckoffViewTabs";
 import CheckoffWorklist from "../components/checkoff/CheckoffWorklist";
 import { Button } from "../components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "../components/ui/dialog";
 import { claimUnattributedPrint } from "../api/endpoints/checkoff";
 import type { ReviewPart } from "../api/endpoints/planManifests";
 import { useBuildTrackingSettingsQuery } from "../queries/buildTracking";
@@ -39,6 +46,7 @@ import { useBuildWorkflowQuery } from "../queries/buildWorkflow";
 import {
   planRoute,
   prepareMissingPartsRoute,
+  printersRoute,
   productionRoute,
 } from "../lib/routes";
 import { groupCheckoffParts } from "../lib/checkoffGroups";
@@ -116,14 +124,17 @@ import { useSyncComplete } from "../lib/useSyncComplete";
  *
  * It answers one question — what physical result needs my attention? — and
  * splits the answer into three views, so a finished printer job never competes
- * with the manual worklist. Queue dispatch belongs to Production; this page
- * reports printer status and links there.
+ * with the manual worklist. This page also owns printer evidence: live watched
+ * jobs, missed jobs recovered from printer storage, and files from printers
+ * PrintPartner cannot monitor. New-work preparation and dispatch stay in
+ * Production.
  *
  * View selection, grouping, row state, correction rules, and recovery live in
  * `lib/checkoffConsole*`. This file is composition.
  */
 export default function CheckoffPage() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { health, error: engineError, loading: healthLoading } = useEngineHealth();
   const engineReady = Boolean(health?.ok);
   const {
@@ -188,6 +199,9 @@ export default function CheckoffPage() {
   const search = getCheckoffSearch(consolePrefs, selectedProfileId);
   const [previewPart, setPreviewPart] = useState<ReviewPart | null>(null);
   const [printPrep, setPrintPrep] = useState(false);
+  const [pastPrintOpen, setPastPrintOpen] = useState(
+    () => searchParams.get("add") === "past-print",
+  );
   const [verifyRefreshKey, setVerifyRefreshKey] = useState(0);
   const [correctionTarget, setCorrectionTarget] =
     useState<CheckoffCorrectionTarget | null>(null);
@@ -209,6 +223,24 @@ export default function CheckoffPage() {
   const sheetRef = useRef<HTMLElement>(null);
   const mutations = useCheckoffProgressMutations();
   const { runMutation, retryRow, clearAll: clearRowErrors } = mutations;
+
+  useEffect(() => {
+    if (searchParams.get("add") === "past-print") setPastPrintOpen(true);
+  }, [searchParams]);
+
+  const openPastPrintIntake = useCallback(() => {
+    const next = new URLSearchParams(searchParams);
+    next.set("add", "past-print");
+    setSearchParams(next, { replace: true });
+    setPastPrintOpen(true);
+  }, [searchParams, setSearchParams]);
+
+  const closePastPrintIntake = useCallback(() => {
+    const next = new URLSearchParams(searchParams);
+    next.delete("add");
+    setSearchParams(next, { replace: true });
+    setPastPrintOpen(false);
+  }, [searchParams, setSearchParams]);
 
   useEffect(() => {
     const onBeforePrint = () => setPrintPrep(true);
@@ -626,6 +658,35 @@ export default function CheckoffPage() {
 
         <PlanSpecialRequestLine note={specialRequest} />
 
+        <CheckoffPrinterStatusCard
+          className="no-print"
+          printingJobs={workflow?.active_work.printing_jobs ?? 0}
+          queuedJobs={workflow?.active_work.queued_jobs ?? 0}
+          failedJobs={workflow?.active_work.failed_jobs ?? 0}
+          printersRoute={printersRoute()}
+          onAddPastPrint={openPastPrintIntake}
+        >
+          <Suspense
+            fallback={
+              <p className="text-xs text-muted-foreground" role="status">
+                Loading live printer activity…
+              </p>
+            }
+          >
+            <PrinterLiveStrip
+              engineReady={engineReady}
+              onLiveStateChange={updateLiveStrip}
+              onCheckoffUpdate={(profileId) => {
+                if (profileId === selectedProfileId) setVerifyRefreshKey((k) => k + 1);
+                activity.refreshLinks();
+              }}
+              onUnattributedUpdate={() => {
+                void activity.refreshUnattributed();
+              }}
+            />
+          </Suspense>
+        </CheckoffPrinterStatusCard>
+
         {completion.kind === "complete" ? (
           <CheckoffCompletionCard
             buildName={planName}
@@ -773,28 +834,6 @@ export default function CheckoffPage() {
         </>
       )}
 
-      <CheckoffPrinterStatusCard
-        className="no-print"
-        printingJobs={workflow?.active_work.printing_jobs ?? 0}
-        queuedJobs={workflow?.active_work.queued_jobs ?? 0}
-        failedJobs={workflow?.active_work.failed_jobs ?? 0}
-        productionRoute={productionRoute(selectedProfileId)}
-      >
-        <Suspense fallback={null}>
-          <PrinterLiveStrip
-            engineReady={engineReady}
-            onLiveStateChange={updateLiveStrip}
-            onCheckoffUpdate={(profileId) => {
-              if (profileId === selectedProfileId) setVerifyRefreshKey((k) => k + 1);
-              activity.refreshLinks();
-            }}
-            onUnattributedUpdate={() => {
-              void activity.refreshUnattributed();
-            }}
-          />
-        </Suspense>
-      </CheckoffPrinterStatusCard>
-
       {orderedParts.length > 0 ? (
         <CheckoffPrintSheet
           sheetRef={sheetRef}
@@ -838,6 +877,35 @@ export default function CheckoffPage() {
         onCancel={() => setCorrectionTarget(null)}
         onConfirm={onConfirmCorrection}
       />
+
+      <Dialog
+        open={pastPrintOpen}
+        onOpenChange={(open) => {
+          if (!open) closePastPrintIntake();
+        }}
+      >
+        <DialogContent
+          className="max-w-4xl"
+          aria-describedby="past-print-intake-description"
+        >
+          <DialogHeader>
+            <DialogTitle>Add a past print to {planName}</DialogTitle>
+            <p id="past-print-intake-description" className="text-sm text-muted-foreground">
+              Choose a file from a watched printer or upload one from this computer, then confirm
+              which Required units it made. You can add several prints and use a different printer
+              for each one.
+            </p>
+          </DialogHeader>
+          <PastPrintIntakePanel
+            profileId={selectedProfileId}
+            onRecorded={() => {
+              void activity.refreshUnattributed();
+              activity.refreshLinks();
+              setVerifyRefreshKey((key) => key + 1);
+            }}
+          />
+        </DialogContent>
+      </Dialog>
 
       <CheckoffMoveToDialog
         target={moveTarget}

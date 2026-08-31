@@ -29,6 +29,13 @@ export function progressRoute(profileId?: number | null): string {
   return withProfile("/progress", profileId ?? null);
 }
 
+/** Checkoff deep link that opens the past-print intake for the selected Build. */
+export function checkoffPastPrintRoute(profileId?: number | null): string {
+  const path = progressRoute(profileId);
+  const separator = path.includes("?") ? "&" : "?";
+  return `${path}${separator}add=past-print`;
+}
+
 export function productionRoute(profileId?: number | null): string {
   return withProfile("/export", profileId ?? null);
 }

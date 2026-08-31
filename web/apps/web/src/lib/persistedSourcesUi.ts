@@ -23,7 +23,12 @@ function isViewMode(value: unknown): value is SourceViewMode {
 }
 
 function isSyncFilter(value: unknown): value is SyncFilter {
-  return value === "all" || value === "synced" || value === "unsynced";
+  return (
+    value === "all" ||
+    value === "synced" ||
+    value === "unsynced" ||
+    value === "updates"
+  );
 }
 
 export function parsePersistedSourcesUi(raw: string | null): PersistedSourcesUi {

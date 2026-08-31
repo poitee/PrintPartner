@@ -19,6 +19,7 @@ import {
   fetchGitHubPatSettings,
   fetchSourceUpdateCheckSettings,
   saveGitHubPat,
+  saveSourceMonitoringSettings,
   saveSourceUpdateCheckInterval,
   startCheckSourceUpdates,
   type GitHubPatSettings,
@@ -111,6 +112,7 @@ export default function SettingsPage() {
   const [deleteFilamentId, setDeleteFilamentId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [updateIntervalHours, setUpdateIntervalHours] = useState("24");
+  const [sourceAutoSync, setSourceAutoSync] = useState(true);
   const [updateIntervalSaving, setUpdateIntervalSaving] = useState(false);
   const [discordSettings, setDiscordSettings] = useState<DiscordNotifySettings | null>(null);
   const [discordWebhookInput, setDiscordWebhookInput] = useState("");
@@ -162,6 +164,7 @@ export default function SettingsPage() {
       loadResource("sourceUpdates", async () => {
         const settings = await fetchSourceUpdateCheckSettings();
         setUpdateIntervalHours(String(settings.interval_hours));
+        setSourceAutoSync(settings.auto_sync_updates);
       }),
       loadResource("discord", async () => {
         const settings = await fetchDiscordNotifySettings();
@@ -177,6 +180,7 @@ export default function SettingsPage() {
     setFilaments,
     setGithubPat,
     setLoadError,
+    setSourceAutoSync,
     setUpdateIntervalHours,
   ]);
 
@@ -261,6 +265,21 @@ export default function SettingsPage() {
 
   const onCheckSourceUpdatesNow = () => {
     void runUpdateJob(() => startCheckSourceUpdates());
+  };
+
+  const onSourceAutoSyncChange = async (enabled: boolean) => {
+    setSourceAutoSync(enabled);
+    setUpdateIntervalSaving(true);
+    setLoadError(null);
+    try {
+      const saved = await saveSourceMonitoringSettings({ auto_sync_updates: enabled });
+      setSourceAutoSync(saved.auto_sync_updates);
+    } catch (e) {
+      setSourceAutoSync(!enabled);
+      setLoadError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setUpdateIntervalSaving(false);
+    }
   };
 
   const onClearGitHubPat = async () => {
@@ -489,6 +508,21 @@ export default function SettingsPage() {
                 disabled={!sourceUpdatesReady || updateIntervalSaving || updateBusy}
               />
             </label>
+            <div className="flex items-center justify-between gap-4 rounded-lg border border-border-subtle p-3">
+              <div>
+                <p className="text-sm font-medium">Refresh GitHub sources automatically</p>
+                <p className="text-xs text-muted-foreground">
+                  Pull changes after a scheduled check finds an update. In-app alerts record the
+                  result either way.
+                </p>
+              </div>
+              <Switch
+                checked={sourceAutoSync}
+                onCheckedChange={(enabled) => void onSourceAutoSyncChange(enabled)}
+                disabled={!sourceUpdatesReady || updateIntervalSaving || updateBusy}
+                aria-label="Refresh GitHub sources automatically"
+              />
+            </div>
             <Button
               variant="secondary"
               className="min-h-10 w-full sm:w-auto"
@@ -662,22 +696,6 @@ export default function SettingsPage() {
                     }}
                   />
                   Notify when a source is auto-synced (updates)
-                </label>
-                <label className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    disabled={!discordReady || discordSaving}
-                    checked={discordSettings.auto_sync_updates}
-                    onChange={async (e) => {
-                      try {
-                        const saved = await saveDiscordNotifySettings({ auto_sync_updates: e.target.checked });
-                        setDiscordSettings(saved);
-                      } catch (e) {
-                        setLoadError(e instanceof Error ? e.message : String(e));
-                      }
-                    }}
-                  />
-                  Auto-sync sources when updates are detected
                 </label>
                 <label className="flex items-center gap-2 text-sm">
                   <input

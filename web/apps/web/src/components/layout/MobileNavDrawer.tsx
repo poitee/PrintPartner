@@ -48,6 +48,7 @@ const NAV_IDLE =
 
 type Props = {
   onNavigate: (to: string, e: MouseEvent<HTMLAnchorElement>) => void;
+  sourceUpdateCount: number;
 };
 
 function DrawerGroupLabel({ children }: { children: string }) {
@@ -59,7 +60,7 @@ function DrawerGroupLabel({ children }: { children: string }) {
 }
 
 /** Hamburger-triggered navigation drawer for viewports below lg (no SpineRail). */
-export default function MobileNavDrawer({ onNavigate }: Props) {
+export default function MobileNavDrawer({ onNavigate, sourceUpdateCount }: Props) {
   const [open, setOpen] = useState(false);
   const { selectedProfileId } = useProfileSelection();
   const items = spineUtilityNavItems(selectedProfileId).map((item) => ({
@@ -81,13 +82,30 @@ export default function MobileNavDrawer({ onNavigate }: Props) {
         cn(
           NAV_RAIL,
           "flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm font-medium transition-colors",
+          item.id === "library" && "my-0.5 border border-primary/25 bg-primary/5 py-2.5",
           isActive ? NAV_ACTIVE : NAV_IDLE,
         )
       }
+      aria-label={item.label}
       end
     >
       <item.icon className="h-4 w-4 shrink-0" />
-      {item.label}
+      <span className="min-w-0 flex-1">
+        <span className="block">{item.label}</span>
+        {item.id === "library" ? (
+          <span className="block truncate text-2xs font-normal text-muted-foreground" aria-hidden>
+            Add, sync, and watch projects
+          </span>
+        ) : null}
+      </span>
+      {item.id === "library" && sourceUpdateCount > 0 ? (
+        <span
+          className="rounded-full border border-warning/35 bg-warning-soft px-1.5 py-0.5 font-mono text-3xs font-semibold text-warning"
+          aria-hidden
+        >
+          {sourceUpdateCount}
+        </span>
+      ) : null}
     </NavLink>
   );
 

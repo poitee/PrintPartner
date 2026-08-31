@@ -65,7 +65,7 @@ function rowToSessionUser(user: DbUser, provider: SessionUser["provider"]): Sess
 }
 
 export class AuthStore {
-  private readonly db: DrizzleDb;
+  private db: DrizzleDb;
   private readonly schema: AuthSchemaBundle;
   private readonly claimDefaultTenantForFirstUser: boolean;
 
@@ -77,6 +77,11 @@ export class AuthStore {
     this.db = asSyncDb(db);
     this.schema = schema;
     this.claimDefaultTenantForFirstUser = claimDefaultTenantForFirstUser;
+  }
+
+  /** Keep session and account reads on the connection opened after a restore. */
+  replaceDatabase(db: AppDrizzleDb): void {
+    this.db = asSyncDb(db);
   }
 
   countUsers(): number {

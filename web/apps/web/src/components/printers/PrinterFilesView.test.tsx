@@ -11,6 +11,8 @@ const api = vi.hoisted(() => ({
   openPrinterStoredFile: vi.fn(),
   previewPrinterFileAssignment: vi.fn(),
   assignPrinterFile: vi.fn(),
+  uploadPrintFileForAssignment: vi.fn(),
+  assignUploadedPrinterFile: vi.fn(),
   parseSlicedObjectsFile: vi.fn(),
 }));
 
@@ -25,6 +27,8 @@ vi.mock("../../api/endpoints/checkoff", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../api/endpoints/checkoff")>()),
   previewPrinterFileAssignment: api.previewPrinterFileAssignment,
   assignPrinterFile: api.assignPrinterFile,
+  uploadPrintFileForAssignment: api.uploadPrintFileForAssignment,
+  assignUploadedPrinterFile: api.assignUploadedPrinterFile,
 }));
 
 vi.mock("../../lib/parseSlicedObjects", async (importOriginal) => ({
@@ -98,6 +102,19 @@ describe("PrinterFilesView", () => {
     });
     api.assignPrinterFile.mockResolvedValue({
       link: { id: "link-one", filename: "bracket.bgcode", units: [{ part_id: 41, unit_index: 0 }] },
+    });
+    api.uploadPrintFileForAssignment.mockResolvedValue({
+      upload_token: "upload-one",
+      inspected: true,
+      classification: { format: "bgcode" },
+      print_ready: true,
+      suggested_units: [{ part_id: 41, unit_index: 0, object_name: "bracket.stl" }],
+      suggestion_basis: "object_names",
+      unlabeled_names: [],
+      plan_revision_id: 9,
+    });
+    api.assignUploadedPrinterFile.mockResolvedValue({
+      link: { id: "link-upload", filename: "bracket.bgcode", units: [{ part_id: 41, unit_index: 0 }] },
     });
   });
 
@@ -397,5 +414,41 @@ describe("PrinterFilesView", () => {
     expect(await screen.findByRole("button", { name: /Choose a print file/ })).toBeTruthy();
     expect(screen.queryByRole("group", { name: "Where is the file?" })).toBeNull();
     expect(api.fetchPrinterStorageListing).not.toHaveBeenCalled();
+  });
+
+  it("uploads a computer file before assigning it to a Build", async () => {
+    const { onAssigned } = renderView({ canBrowse: false });
+    const picked = new File(["binary"], "bracket.bgcode");
+    const input = document.querySelector<HTMLInputElement>('input[type="file"]');
+    expect(input).toBeTruthy();
+
+    fireEvent.change(input!, { target: { files: [picked] } });
+    fireEvent.click(await screen.findByRole("button", { name: "Check this file" }));
+
+    await waitFor(() => {
+      expect(api.uploadPrintFileForAssignment).toHaveBeenCalledWith({
+        profile_id: 7,
+        file: picked,
+        object_names: ["bracket.stl"],
+      });
+    });
+    expect(api.previewPrinterFileAssignment).not.toHaveBeenCalled();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Assign print file" }));
+
+    await waitFor(() => {
+      expect(api.assignUploadedPrinterFile).toHaveBeenCalledWith({
+        profile_id: 7,
+        printer_id: "voron-one",
+        filename: "bracket.bgcode",
+        object_names: ["bracket.stl"],
+        tracking: "host",
+        completed: false,
+        plan_revision_id: 9,
+        unit_tokens: ["41:0"],
+        upload_token: "upload-one",
+      });
+    });
+    expect(onAssigned).toHaveBeenCalled();
   });
 });

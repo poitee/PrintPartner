@@ -32,6 +32,7 @@ import BulkCategoryBar from "../components/sources/BulkCategoryBar";
 import LibraryStaleBanner from "../components/sources/LibraryStaleBanner";
 import SourceDetailSheet from "../components/sources/SourceDetailSheet";
 import SourceCategorySheet from "../components/sources/SourceCategorySheet";
+import SourceWatchPanel from "../components/sources/SourceWatchPanel";
 import SourcesToolbar, {
   type SourceViewMode,
   type SyncFilter,
@@ -117,6 +118,11 @@ import {
 import { cn } from "@/lib/utils";
 import { resolveEngineState } from "../lib/workflowState";
 import {
+  sourceModelUrlPlaceholder,
+  sourceMonitoringCapability,
+  sourceMonitoringSummary,
+} from "../lib/sourceMonitoring";
+import {
   invalidateSourceDependents,
   useBulkAssignSourceCategoryMutation,
   useCreateSourceMutation,
@@ -128,6 +134,7 @@ import {
   useSaveSourceCategoriesMutation,
   useSourceCategoriesQuery,
 } from "../queries/sourceCategories";
+import { queryKeys } from "../queries/keys";
 
 type SourceDetailTab = "docs" | "rules" | "naming";
 type SourcesLocationState = { stlSearch?: boolean };
@@ -370,6 +377,7 @@ export default function SourcesPage() {
     () => staleSources.filter((s) => attachedIds.has(s.id)).length,
     [staleSources, attachedIds],
   );
+  const monitoring = useMemo(() => sourceMonitoringSummary(sources), [sources]);
 
   const syncJob = activeJobs.find(
     (j) => j.kind === "sync" && (j.status === "running" || j.status === "pending"),
@@ -423,6 +431,7 @@ export default function SourcesPage() {
       () => startCheckSourceUpdates(),
       (snap) => {
         void refresh();
+        void queryClient.invalidateQueries({ queryKey: queryKeys.sourceActivity });
         toastJobResult(snap, "Update check finished", "Update check failed");
       },
     );
@@ -668,7 +677,11 @@ export default function SourcesPage() {
         busy={busy}
         onOpen={() => openDetail(s, "docs")}
         onEdit={() => openEditWizard(s)}
-        onSync={s.source_kind === "github" ? () => syncSources([s.id]) : undefined}
+        onSync={
+          sourceMonitoringCapability(s.source_kind) === "automatic"
+            ? () => syncSources([s.id])
+            : undefined
+        }
         onUpload={sourceCanUpload(s) ? () => runUpload(s) : undefined}
         onDelete={() => setDeleteTarget(s)}
         onAssignCategory={(category) => void assignSourceCategory(s, category)}
@@ -699,7 +712,11 @@ export default function SourcesPage() {
         selected={isSelected}
         onOpen={() => openDetail(s, "docs")}
         onEdit={() => openEditWizard(s)}
-        onSync={s.source_kind === "github" ? () => syncSources([s.id]) : undefined}
+        onSync={
+          sourceMonitoringCapability(s.source_kind) === "automatic"
+            ? () => syncSources([s.id])
+            : undefined
+        }
         onUpload={sourceCanUpload(s) ? () => runUpload(s) : undefined}
         onDelete={() => setDeleteTarget(s)}
         onAssignCategory={(category) => void assignSourceCategory(s, category)}
@@ -711,7 +728,7 @@ export default function SourcesPage() {
   if (!engineReady) {
     return (
       <PageShell>
-        <PageHeader icon={Library} accent eyebrow="Workshop" title="Library" />
+        <PageHeader icon={Library} accent eyebrow="Workshop" title="Source Library" />
         <Card>
           <CardContent className="pt-6">
             <p
@@ -768,6 +785,9 @@ export default function SourcesPage() {
               <DropdownMenuItem onClick={() => openAddWizard("makerworld")}>
                 MakerWorld
               </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => openAddWizard("thangs")}>
+                Thangs
+              </DropdownMenuItem>
               <DropdownMenuItem onClick={() => openAddWizard("self")}>
                 Another instance / URL
               </DropdownMenuItem>
@@ -785,18 +805,6 @@ export default function SourcesPage() {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              <DropdownMenuItem
-                onClick={() => syncSources()}
-                disabled={busy || updateBusy || sources.length === 0}
-              >
-                {busy ? "Syncing…" : "Sync all"}
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={checkUpdates}
-                disabled={busy || updateBusy || sources.length === 0}
-              >
-                {updateBusy ? "Checking…" : "Check updates"}
-              </DropdownMenuItem>
               <DropdownMenuItem
                 onClick={() => void refresh()}
                 disabled={busy || updateBusy}
@@ -829,11 +837,33 @@ export default function SourcesPage() {
         icon={Library}
         accent
         eyebrow="Workshop"
-        title="Library"
-        description={headerSubtitle}
+        title="Source Library"
+        description={`${headerSubtitle} · Add, sync, and watch reusable print projects.`}
         actions={headerActions}
       />
       <DeskNextStep>{libraryNextStep}</DeskNextStep>
+
+      <SourceWatchPanel
+        githubSourceCount={monitoring.automaticCount}
+        manualTrackedCount={monitoring.manualTrackedCount}
+        updateCount={monitoring.updateCount}
+        attachedUpdateCount={attachedStaleCount}
+        lastCheckedAt={monitoring.lastCheckedAt}
+        checking={updateBusy}
+        syncing={busy}
+        onCheckNow={checkUpdates}
+        onSyncGitHub={() =>
+          syncSources(
+            sources
+              .filter(
+                (source) => sourceMonitoringCapability(source.source_kind) === "automatic",
+              )
+              .map((source) => source.id),
+          )
+        }
+        onShowUpdates={() => setSyncFilter("updates")}
+        onImportRepositories={() => setReposImportOpen(true)}
+      />
 
       <div className="overflow-hidden rounded-xl border border-border bg-card lg:grid lg:min-h-[min(70vh,720px)] lg:grid-cols-[178px_minmax(0,1fr)]">
         <LibraryCategoryRail
@@ -1111,6 +1141,7 @@ export default function SourcesPage() {
                       "local",
                       "printables",
                       "makerworld",
+                      "thangs",
                       "self",
                       "archive",
                     ] as SourceKind[]
@@ -1261,24 +1292,20 @@ export default function SourcesPage() {
                             existing?.toLowerCase() === "http" ? "http" : "https";
                           setForm((f) => ({ ...f, url: `${scheme}://${raw}` }));
                         }}
-                        placeholder={
-                          form.source_kind === "printables"
-                            ? "www.printables.com/model/…"
-                            : form.source_kind === "makerworld"
-                              ? "makerworld.com/en/models/…"
-                              : "github.com/org/repo.git"
-                        }
+                        placeholder={sourceModelUrlPlaceholder(form.source_kind)}
                       />
                     </InputGroup>
                   </Field>
                 </div>
                 {(form.source_kind === "printables" ||
-                  form.source_kind === "makerworld") && (
+                  form.source_kind === "makerworld" ||
+                  form.source_kind === "thangs") && (
                   <div className="space-y-2 md:col-span-2">
                     <Label>Model archive (ZIP)</Label>
                     <p className="text-xs text-muted-foreground">
                       Download the model archive from the site, then attach it here. The web app
-                      uploads the ZIP to your server — it does not fetch from Printables directly.
+                      uploads the ZIP to your server. Automatic file refresh is currently limited
+                      to GitHub repositories.
                     </p>
                     <div className="flex flex-wrap items-center gap-2">
                       <Button

@@ -34,7 +34,7 @@ import { requiredUnitToken } from "../printers/printFileAssignment";
 
 type Props = Readonly<{
   profileId: number;
-  /** Called once a print is on the record, so the work package can move on. */
+  /** Called once a print is on the record, so Checkoff can refresh its activity. */
   onRecorded: () => void;
 }>;
 
@@ -107,7 +107,7 @@ function recordedOutcome(print: RecordedPrint): Readonly<{
 }
 
 /**
- * Record a print that already happened, from inside the work package.
+ * Record a print that already happened, from the Checkoff printer desk.
  *
  * Nothing here starts a print. The two sources are a file still sitting on a
  * printer PrintPartner watches, and a file on this computer, which is the only
@@ -121,9 +121,9 @@ function recordedOutcome(print: RecordedPrint): Readonly<{
  *
  * The printer-storage source is `PrinterFilesView` unchanged, so the browsing,
  * the classification and the assignment stay in one place rather than being
- * forked for Production.
+ * forked for Checkoff.
  */
-export default function ExternalPrintRoutePanel({ profileId, onRecorded }: Props) {
+export default function PastPrintIntakePanel({ profileId, onRecorded }: Props) {
   const fieldPrefix = useId();
   const { profiles } = useProfileSelection();
   const [source, setSource] = useState<FileSource | null>(null);
@@ -172,7 +172,7 @@ export default function ExternalPrintRoutePanel({ profileId, onRecorded }: Props
   };
 
   return (
-    <section aria-label="Add manually prepared prints" className="stack-section">
+    <section aria-label="Add a past print" className="stack-section">
       {recorded.length > 0 ? (
         <section className="stack-row" aria-labelledby={`${fieldPrefix}-recorded-heading`}>
           <div className="flex flex-wrap items-center justify-between gap-2">

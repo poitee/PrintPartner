@@ -14,7 +14,6 @@ import ProductionRulesPanel from "../components/export/ProductionRulesPanel";
 import ProductionRouteChangeDialog from "../components/export/ProductionRouteChangeDialog";
 import ProductionRouteQuestion from "../components/export/ProductionRouteQuestion";
 import StlRoutePanel from "../components/export/StlRoutePanel";
-import ExternalPrintRoutePanel from "../components/export/ExternalPrintRoutePanel";
 import SlicerLinksPanel from "../components/export/SlicerLinksPanel";
 import SlicerHandoffPanel from "../components/export/SlicerHandoffPanel";
 import WorkPackageCard from "../components/export/WorkPackageCard";
@@ -38,7 +37,12 @@ import {
   useAcceptedPlateWorkspaceQuery,
 } from "../queries/acceptedPlates";
 import { flattenReviewParts } from "../lib/reviewParts";
-import { planRoute, progressRoute, settingsPrintersRoute } from "../lib/routes";
+import {
+  checkoffPastPrintRoute,
+  planRoute,
+  progressRoute,
+  settingsPrintersRoute,
+} from "../lib/routes";
 import {
   clearProductionSelectionGroup,
   productionSelectableUnits,
@@ -92,11 +96,9 @@ const TASK_LIST_TITLE: Readonly<Record<ProductionRoute, string>> = {
  * Production — the Build's work packages.
  *
  * The page asks one question before it shows any task list: how do you want to
- * make these units? Making Plates for linked printers, taking the unit files,
- * and recording a print that already happened elsewhere are not three lengths
- * of one flow. They differ in what they produce and whether a printer is
- * involved at all, so each route owns its own task list and the tasks of the
- * other two are absent rather than greyed out.
+ * make these units? Making Plates for linked printers and taking sorted unit
+ * files are different preparation flows, so each route owns its own task list.
+ * Printer monitoring and prints that already happened belong to Checkoff.
  *
  * Inside a route the tasks are resumable, not a numbered pass. The real job
  * leaves the product: export, slice somewhere else, come back later with
@@ -269,11 +271,10 @@ export default function ExportPage() {
           totalUnitCount: selectableUnits.length,
         });
       case "external":
-        return productionTasks({
-          route,
-          pkg: bench,
-          recordedPrintCount: projection.active.length + projection.recent.length,
-        });
+        // Compatibility for Builds that saved the former past-print Production
+        // route. The page renders a handoff to Checkoff instead of reviving its
+        // old task list.
+        return [];
       default: {
         const _exhaustive: never = route;
         return _exhaustive;
@@ -623,16 +624,6 @@ export default function ExportPage() {
       />
     ) : null;
 
-  const externalPanel =
-    selectedProfileId != null ? (
-      <ExternalPrintRoutePanel
-        profileId={selectedProfileId}
-        onRecorded={() => {
-          void checkoffLinksQuery.refetch();
-        }}
-      />
-    ) : null;
-
   const panelFor = (taskId: ProductionTaskId) => {
     switch (taskId) {
       case "prepare-plates":
@@ -651,7 +642,7 @@ export default function ExportPage() {
       case "pick-print-file":
       case "attribute-units":
       case "confirm-record":
-        return externalPanel;
+        return null;
     }
   };
 
@@ -737,10 +728,36 @@ export default function ExportPage() {
                 ) : null
               }
             >
-              {route == null || changingRoute ? (
+              {route === "external" && !changingRoute ? (
+                <section
+                  className="space-y-3 rounded-lg border border-primary/35 bg-primary/8 p-4"
+                  aria-labelledby="past-print-route-moved-heading"
+                >
+                  <div className="space-y-1">
+                    <h3 id="past-print-route-moved-heading" className="text-sm font-semibold">
+                      Past prints now belong in Checkoff
+                    </h3>
+                    <p className="text-sm text-muted-foreground">
+                      Browse watched printers, recover a missed job, or upload G-code, binary
+                      G-code, or 3MF from the Checkoff printer desk. Production now prepares new
+                      plates and STL downloads.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button asChild>
+                      <Link to={checkoffPastPrintRoute(selectedProfileId)}>
+                        Add a past print in Checkoff
+                      </Link>
+                    </Button>
+                    <Button variant="secondary" onClick={() => setChangingRoute(true)}>
+                      Choose a Production method
+                    </Button>
+                  </div>
+                </section>
+              ) : route == null || changingRoute ? (
                 <ProductionRouteQuestion
                   key={route ?? "unanswered"}
-                  value={route}
+                  value={route === "external" ? null : route}
                   saving={productionSetup.saving}
                   error={
                     routeFailure

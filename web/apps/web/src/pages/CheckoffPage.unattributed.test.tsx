@@ -242,11 +242,11 @@ describe("CheckoffPage unattributed print reconciliation", () => {
       }),
     );
 
-    // Queue dispatch belongs to Production.
+    // Checkoff offers recovery and fleet inspection, never queue dispatch.
     await waitFor(() =>
       expect(api.fetchPrinterQueueSuggestions).not.toHaveBeenCalled(),
     );
-    expect(screen.getByRole("link", { name: "Go to Production" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Open all printers" })).toBeTruthy();
   });
 
   it("keeps printer A's unclaimed print when printer B reports zero", async () => {

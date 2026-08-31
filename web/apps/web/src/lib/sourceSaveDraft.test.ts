@@ -30,8 +30,10 @@ describe("sourceSavePayloadFromDraft", () => {
   });
 
   it("requires model page URLs for storefront Sources", () => {
-    expect(() =>
-      sourceSavePayloadFromDraft({ ...draft, source_kind: "printables", url: "" }),
-    ).toThrow("Enter the model page URL from Printables or MakerWorld.");
+    for (const source_kind of ["printables", "makerworld", "thangs"] as const) {
+      expect(() =>
+        sourceSavePayloadFromDraft({ ...draft, source_kind, url: "" }),
+      ).toThrow("Enter the model page URL from Printables, MakerWorld, or Thangs.");
+    }
   });
 });

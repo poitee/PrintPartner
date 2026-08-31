@@ -18,6 +18,7 @@ const SOURCE_KINDS: readonly SourceKind[] = [
   "local",
   "printables",
   "makerworld",
+  "thangs",
   "self",
   "archive",
 ];

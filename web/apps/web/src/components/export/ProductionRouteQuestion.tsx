@@ -3,10 +3,11 @@ import type { ProductionRoute } from "@print-partner/contracts";
 import {
   PRODUCTION_ROUTE_DESCRIPTION,
   PRODUCTION_ROUTE_LABEL,
-  PRODUCTION_ROUTE_ORDER,
 } from "../../lib/workPackageTasks";
 import { Button } from "../ui/button";
 import { cn } from "@/lib/utils";
+
+type PreparationRoute = Exclude<ProductionRoute, "external">;
 
 type Props = Readonly<{
   /**
@@ -14,9 +15,9 @@ type Props = Readonly<{
    * answer comes back pre-selected, the way GOV.UK's check answers pattern
    * requires of a Change link.
    */
-  value: ProductionRoute | null;
+  value: PreparationRoute | null;
   /** The answer the operator settled on. */
-  onSubmit: (route: ProductionRoute) => void;
+  onSubmit: (route: PreparationRoute) => void;
   /** Offered only when there is an answer to go back to. */
   onCancel?: () => void;
   saving: boolean;
@@ -26,13 +27,14 @@ type Props = Readonly<{
 
 const ERROR_ID = "production-route-error";
 const LEGEND_ID = "production-route-legend";
+const PREPARATION_ROUTE_ORDER = ["plates", "stl"] as const satisfies readonly PreparationRoute[];
 
 /**
  * The one question Production asks before it shows any task list.
  *
  * A branch belongs above the list, not inside it: USWDS says to consider
  * another approach when the number of steps can change from user input, and the
- * three routes have three different lengths. So this is a radio question in a
+ * the two preparation routes have different lengths. So this is a radio question in a
  * fieldset, in the USWDS tile treatment that gives each route a description line
  * and a shop-floor target, and it never conditionally reveals a task list.
  *
@@ -49,7 +51,7 @@ export default function ProductionRouteQuestion({
   saving,
   error,
 }: Props) {
-  const [chosen, setChosen] = useState<ProductionRoute | null>(value);
+  const [chosen, setChosen] = useState<PreparationRoute | null>(value);
   const [missing, setMissing] = useState(false);
   const missingRef = useRef<HTMLParagraphElement>(null);
 
@@ -85,7 +87,7 @@ export default function ProductionRouteQuestion({
         {/* One column at every width. A phone gets the same reading order as a
             workshop monitor, which is what SC 1.4.10 Reflow asks for. */}
         <div className="grid gap-2">
-          {PRODUCTION_ROUTE_ORDER.map((route) => (
+          {PREPARATION_ROUTE_ORDER.map((route) => (
             <label
               key={route}
               className={cn(

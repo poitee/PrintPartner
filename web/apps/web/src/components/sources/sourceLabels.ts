@@ -3,6 +3,7 @@ export type SourceKind =
   | "local"
   | "printables"
   | "makerworld"
+  | "thangs"
   | "self"
   | "archive";
 
@@ -11,6 +12,7 @@ export const KIND_LABELS: Record<SourceKind, string> = {
   local: "Local folder",
   printables: "Printables",
   makerworld: "MakerWorld",
+  thangs: "Thangs",
   self: "URL / other",
   archive: "Archive (zip)",
 };

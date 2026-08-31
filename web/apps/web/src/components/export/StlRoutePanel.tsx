@@ -1,8 +1,10 @@
 import { useId, useState } from "react";
 import { Download } from "lucide-react";
+import { Link } from "react-router-dom";
 import { engineAssetUrl } from "../../api/endpoints/browserFiles";
 import { startExportStlPack, type StlPackGroupBy } from "../../api/endpoints/jobs";
 import { useJobRunner } from "../../hooks/useJobRunner";
+import { checkoffPastPrintRoute } from "../../lib/routes";
 import { Button } from "../ui/button";
 import { StatusBadge } from "../ui/status-badge";
 import InlineOperationError from "../printers/InlineOperationError";
@@ -292,8 +294,14 @@ export default function StlRoutePanel({
 
       <p className="text-meta text-muted-foreground">
         Handing over the files ends PrintPartner's part in this production method. These Required units
-        stay unverified in Checkoff, because nothing here says a print happened. Once one does, come
-        back to Production and choose Add manually prepared prints.
+        stay unverified in Checkoff, because nothing here says a print happened. Once one does,{" "}
+        <Link
+          className="font-medium text-foreground underline underline-offset-2"
+          to={checkoffPastPrintRoute(profileId)}
+        >
+          add the past print in Checkoff
+        </Link>
+        .
       </p>
     </section>
   );

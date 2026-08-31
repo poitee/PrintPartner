@@ -2,6 +2,17 @@ import { engineFetch, engineFetchStream } from "../engineTransport";
 
 export type SourceUpdateCheckSettings = {
   interval_hours: number;
+  auto_sync_updates: boolean;
+  last_checked_at: string | null;
+};
+
+export type SourceActivityEvent = {
+  id: number;
+  at: string;
+  kind: "source.update_available" | "source.updated" | "source.sync_failed";
+  source_id: number | null;
+  source_name: string;
+  detail: string | null;
 };
 
 export type GithubBranchesResponse = {
@@ -79,10 +90,24 @@ export async function fetchSourceUpdateCheckSettings(): Promise<SourceUpdateChec
 export async function saveSourceUpdateCheckInterval(
   intervalHours: number,
 ): Promise<SourceUpdateCheckSettings> {
+  return saveSourceMonitoringSettings({ interval_hours: intervalHours });
+}
+
+export async function saveSourceMonitoringSettings(
+  settings: Partial<Pick<SourceUpdateCheckSettings, "interval_hours" | "auto_sync_updates">>,
+): Promise<SourceUpdateCheckSettings> {
   return engineFetch<SourceUpdateCheckSettings>("/settings/source-update-check", {
     method: "PUT",
-    body: JSON.stringify({ interval_hours: intervalHours }),
+    body: JSON.stringify(settings),
   });
+}
+
+export async function fetchSourceActivity(limit = 20): Promise<SourceActivityEvent[]> {
+  const query = new URLSearchParams({ limit: String(limit) });
+  const body = await engineFetch<{ events: SourceActivityEvent[] }>(
+    `/sources/activity?${query.toString()}`,
+  );
+  return body.events;
 }
 
 export async function startCheckSourceUpdates(): Promise<string> {

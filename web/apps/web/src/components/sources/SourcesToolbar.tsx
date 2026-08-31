@@ -15,7 +15,7 @@ import { kindLabel } from "./sourceLabels";
 import { UNCategorized_FILTER } from "./sourceLabels";
 
 export type SourceViewMode = "grid" | "list";
-export type SyncFilter = "all" | "synced" | "unsynced";
+export type SyncFilter = "all" | "synced" | "unsynced" | "updates";
 
 type Props = {
   search: string;
@@ -171,6 +171,7 @@ export default function SourcesToolbar({
                   <SelectItem value="all">All</SelectItem>
                   <SelectItem value="synced">Synced</SelectItem>
                   <SelectItem value="unsynced">Not synced</SelectItem>
+                  <SelectItem value="updates">Updates ready</SelectItem>
                 </SelectContent>
               </Select>
             </div>

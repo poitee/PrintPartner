@@ -1,5 +1,5 @@
-import { useCallback, useState, useEffect } from "react";
-import { Download, RefreshCw, Trash2, AlertCircle } from "lucide-react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { AlertCircle, Download, RefreshCw, Trash2, Upload } from "lucide-react";
 import {
   Card,
   CardContent,
@@ -14,27 +14,103 @@ import {
   DialogHeader,
   DialogTitle,
 } from "../ui/dialog";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "../ui/select";
 
-interface Backup {
+type Backup = Readonly<{
   name: string;
   createdAt: string;
   size: number;
+}>;
+
+type BackupMetadata = Readonly<{
+  version: string;
+  createdAt: string;
+  appVersion: string;
+  formatVersion: number;
+}>;
+
+type RestoreTarget =
+  | Readonly<{ kind: "stored"; backup: Backup }>
+  | Readonly<{ kind: "upload"; file: File; metadata: BackupMetadata }>;
+
+type RestoreFlow =
+  | Readonly<{ phase: "idle" }>
+  | Readonly<{ phase: "validating" }>
+  | Readonly<{ phase: "confirming"; target: RestoreTarget }>
+  | Readonly<{ phase: "restoring"; target: RestoreTarget }>;
+
+function isBackup(value: unknown): value is Backup {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "name" in value &&
+    typeof value.name === "string" &&
+    "createdAt" in value &&
+    typeof value.createdAt === "string" &&
+    "size" in value &&
+    typeof value.size === "number"
+  );
+}
+
+function parseBackupList(value: unknown): Backup[] {
+  if (!Array.isArray(value) || !value.every(isBackup)) {
+    throw new Error("The server returned an invalid backup list");
+  }
+  return value;
+}
+
+function isBackupMetadata(value: unknown): value is BackupMetadata {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "version" in value &&
+    typeof value.version === "string" &&
+    "createdAt" in value &&
+    typeof value.createdAt === "string" &&
+    "appVersion" in value &&
+    typeof value.appVersion === "string" &&
+    "formatVersion" in value &&
+    typeof value.formatVersion === "number"
+  );
+}
+
+function parseValidationMetadata(value: unknown): BackupMetadata {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("valid" in value) ||
+    value.valid !== true ||
+    !("metadata" in value) ||
+    !isBackupMetadata(value.metadata)
+  ) {
+    throw new Error("The server could not verify this backup");
+  }
+  return value.metadata;
+}
+
+async function responseError(response: Response, fallback: string): Promise<Error> {
+  try {
+    const value: unknown = await response.json();
+    if (
+      typeof value === "object" &&
+      value !== null &&
+      "detail" in value &&
+      typeof value.detail === "string"
+    ) {
+      return new Error(value.detail);
+    }
+  } catch {
+    // The fallback still tells the operator which action failed.
+  }
+  return new Error(fallback);
 }
 
 export default function BackupManagementCard() {
+  const uploadInputRef = useRef<HTMLInputElement>(null);
+  const restoreDescriptionId = useId();
   const [backups, setBackups] = useState<Backup[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [selectedBackup, setSelectedBackup] = useState<string | null>(null);
-  const [showRestoreDialog, setShowRestoreDialog] = useState(false);
-  const [restoring, setRestoring] = useState(false);
+  const [restoreFlow, setRestoreFlow] = useState<RestoreFlow>({ phase: "idle" });
 
   const loadBackups = useCallback(async () => {
     setLoading(true);
@@ -42,8 +118,8 @@ export default function BackupManagementCard() {
     try {
       const response = await fetch("/backups");
       if (!response.ok) throw new Error("Failed to load backups");
-      const data = (await response.json()) as Backup[];
-      setBackups(data);
+      const data: unknown = await response.json();
+      setBackups(parseBackupList(data));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unknown error");
     } finally {
@@ -90,24 +166,56 @@ export default function BackupManagementCard() {
     }
   };
 
-  const handleRestore = async () => {
-    if (!selectedBackup) return;
-    setRestoring(true);
+  const handleUploadFile = async (file: File) => {
+    setError(null);
+    if (!file.name.toLowerCase().endsWith(".tar.gz")) {
+      setError("Choose a PrintPartner backup ending in .tar.gz");
+      setRestoreFlow({ phase: "idle" });
+      return;
+    }
+
+    setRestoreFlow({ phase: "validating" });
     try {
-      const response = await fetch("/backups/restore", {
+      const form = new FormData();
+      form.append("file", file, file.name);
+      const response = await fetch("/backups/validate", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ backupName: selectedBackup }),
+        body: form,
       });
-      if (!response.ok) throw new Error("Restore failed");
-      setShowRestoreDialog(false);
+      if (!response.ok) throw await responseError(response, "Backup validation failed");
+      const value: unknown = await response.json();
+      const metadata = parseValidationMetadata(value);
+      setRestoreFlow({ phase: "confirming", target: { kind: "upload", file, metadata } });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Backup validation failed");
+      setRestoreFlow({ phase: "idle" });
+    }
+  };
+
+  const handleRestore = async () => {
+    if (restoreFlow.phase !== "confirming") return;
+    const target = restoreFlow.target;
+    setRestoreFlow({ phase: "restoring", target });
+    try {
+      let response: Response;
+      if (target.kind === "upload") {
+        const form = new FormData();
+        form.append("file", target.file, target.file.name);
+        response = await fetch("/backups/restore", { method: "POST", body: form });
+      } else {
+        response = await fetch("/backups/restore", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ backupName: target.backup.name }),
+        });
+      }
+      if (!response.ok) throw await responseError(response, "Restore failed");
+      setRestoreFlow({ phase: "idle" });
       setError(null);
-      // Reload page after successful restore
       setTimeout(() => window.location.reload(), 2000);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Restore failed");
-    } finally {
-      setRestoring(false);
+      setRestoreFlow({ phase: "confirming", target });
     }
   };
 
@@ -134,12 +242,20 @@ export default function BackupManagementCard() {
     return new Date(timestamp).toLocaleString();
   };
 
+  const restoreTarget =
+    restoreFlow.phase === "confirming" || restoreFlow.phase === "restoring"
+      ? restoreFlow.target
+      : null;
+  const restoring = restoreFlow.phase === "restoring";
+  const validating = restoreFlow.phase === "validating";
+
   return (
     <Card>
       <CardHeader>
         <CardTitle level={3}>Backup & Restore</CardTitle>
         <CardDescription>
-          Create and manage database backups with automatic rollback protection
+          Create backups on this server, download them, or restore a PrintPartner backup from
+          your computer.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -150,11 +266,23 @@ export default function BackupManagementCard() {
           </div>
         )}
 
-        <div className="flex gap-2">
+        <input
+          ref={uploadInputRef}
+          type="file"
+          className="sr-only"
+          aria-label="Backup file to restore"
+          accept=".tar.gz,application/gzip,application/x-gzip"
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            event.target.value = "";
+            if (file) void handleUploadFile(file);
+          }}
+        />
+
+        <div className="grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
           <Button
             onClick={handleCreateBackup}
-            disabled={loading}
-            className="flex-1"
+            disabled={loading || validating || restoring}
           >
             {loading ? (
               <>
@@ -162,13 +290,35 @@ export default function BackupManagementCard() {
                 Creating...
               </>
             ) : (
-              "Create Backup"
+              "Create backup"
             )}
           </Button>
-          <Button onClick={loadBackups} variant="outline" disabled={loading}>
-            <RefreshCw className="h-4 w-4" />
+          <Button
+            onClick={() => uploadInputRef.current?.click()}
+            variant="outline"
+            disabled={loading || validating || restoring}
+          >
+            {validating ? (
+              <RefreshCw className="h-4 w-4 animate-spin" aria-hidden />
+            ) : (
+              <Upload className="h-4 w-4" aria-hidden />
+            )}
+            {validating ? "Checking backup..." : "Restore backup file"}
+          </Button>
+          <Button
+            onClick={loadBackups}
+            variant="outline"
+            disabled={loading || validating || restoring}
+            aria-label="Refresh backup list"
+          >
+            <RefreshCw className="h-4 w-4" aria-hidden />
           </Button>
         </div>
+
+        <p className="text-sm text-muted-foreground">
+          Downloaded backups use the <code className="font-mono">.tar.gz</code> format. PrintPartner
+          checks an uploaded file before it shows the restore confirmation.
+        </p>
 
         {backups.length > 0 ? (
           <div className="space-y-2">
@@ -197,8 +347,11 @@ export default function BackupManagementCard() {
                     </Button>
                     <Button
                       onClick={() => {
-                        setSelectedBackup(backup.name);
-                        setShowRestoreDialog(true);
+                        setError(null);
+                        setRestoreFlow({
+                          phase: "confirming",
+                          target: { kind: "stored", backup },
+                        });
                       }}
                       size="sm"
                       variant="outline"
@@ -222,43 +375,54 @@ export default function BackupManagementCard() {
           <p className="text-sm text-muted-foreground">No backups yet</p>
         )}
 
-        <Dialog open={showRestoreDialog} onOpenChange={setShowRestoreDialog}>
-          <DialogContent>
+        <Dialog
+          open={restoreTarget !== null}
+          onOpenChange={(open) => {
+            if (!open && !restoring) setRestoreFlow({ phase: "idle" });
+          }}
+        >
+          <DialogContent aria-describedby={restoreDescriptionId}>
             <DialogHeader>
-              <DialogTitle>Restore from Backup</DialogTitle>
+              <DialogTitle>
+                {restoreTarget?.kind === "upload" ? "Restore uploaded backup" : "Restore backup"}
+              </DialogTitle>
             </DialogHeader>
-            <div className="text-sm text-muted-foreground mb-4">
-              This will restore the database from a previous backup. A new backup will be created automatically before restoring. The system will restart.
-            </div>
-            <div className="space-y-4">
-              <Select value={selectedBackup || ""} onValueChange={setSelectedBackup}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select backup" />
-                </SelectTrigger>
-                <SelectContent>
-                  {backups.map((backup) => (
-                    <SelectItem key={backup.name} value={backup.name}>
-                      {backup.name} ({formatDate(backup.createdAt)})
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <div className="flex gap-2 pt-4">
-                <Button
-                  onClick={handleRestore}
-                  disabled={!selectedBackup || restoring}
-                  className="flex-1"
-                >
-                  {restoring ? "Restoring..." : "Restore"}
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={() => setShowRestoreDialog(false)}
-                >
-                  Cancel
-                </Button>
+            {restoreTarget && (
+              <div className="space-y-4">
+                <div className="rounded-lg border border-border-strong bg-muted/30 p-3">
+                  <p className="break-all font-mono text-sm font-medium">
+                    {restoreTarget.kind === "upload"
+                      ? restoreTarget.file.name
+                      : restoreTarget.backup.name}
+                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {restoreTarget.kind === "upload"
+                      ? `Created ${formatDate(restoreTarget.metadata.createdAt)} with PrintPartner ${restoreTarget.metadata.appVersion}`
+                      : `${formatDate(restoreTarget.backup.createdAt)} · ${formatSize(restoreTarget.backup.size)}`}
+                  </p>
+                </div>
+                <p id={restoreDescriptionId} className="text-sm text-muted-foreground">
+                  Restoring replaces the current database and stored files. PrintPartner saves a
+                  rollback copy first, then reloads the app.
+                </p>
+                <div className="flex gap-2 pt-4">
+                  <Button
+                    onClick={handleRestore}
+                    disabled={restoring}
+                    className="flex-1"
+                  >
+                    {restoring ? "Restoring..." : "Restore this backup"}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    disabled={restoring}
+                    onClick={() => setRestoreFlow({ phase: "idle" })}
+                  >
+                    Cancel
+                  </Button>
+                </div>
               </div>
-            </div>
+            )}
           </DialogContent>
         </Dialog>
       </CardContent>

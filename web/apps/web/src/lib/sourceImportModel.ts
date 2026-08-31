@@ -18,7 +18,12 @@ export type ReposImportResultLike = {
 export type NewImportedSource = { source_id: number; name: string };
 
 export function sourceKindNeedsArchiveUpload(kind: SourceKind): boolean {
-  return kind === "archive" || kind === "printables" || kind === "makerworld";
+  return (
+    kind === "archive" ||
+    kind === "printables" ||
+    kind === "makerworld" ||
+    kind === "thangs"
+  );
 }
 
 export function sourceKindCanUpload(kind: SourceKind): boolean {

@@ -16,6 +16,7 @@ type RouteDeps = {
   dataDir: string;
   sqlite: SqliteDatabase | null;
   appVersion: string;
+  refreshDatabaseConsumers?: () => void;
 };
 
 export function safeBackupUploadPath(root: string, multipartFilename: string): string {
@@ -288,11 +289,21 @@ export async function registerBackupRoutes(
         }
 
         const metadata = await restoreBackup(backupPath, deps.dataDir, deps.sqlite);
+        deps.refreshDatabaseConsumers?.();
         return reply.send({
           success: true,
-          message: `Backup restored successfully (${metadata.createdAt}). Application will restart.`,
+          message: `Backup restored successfully (${metadata.createdAt}).`,
         });
       } catch (error) {
+        // restoreBackup reconnects SQLite after both success and failure. Any
+        // long-lived repository must follow that new connection before the
+        // next request arrives.
+        try {
+          deps.refreshDatabaseConsumers?.();
+        } catch {
+          // Preserve the restore error below. The health check will expose a
+          // reconnect failure without replacing the more useful root cause.
+        }
         const message = error instanceof Error ? error.message : String(error);
         return reply.status(500).send({
           detail: `Restore failed: ${message}`,

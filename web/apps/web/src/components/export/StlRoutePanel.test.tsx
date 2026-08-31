@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JobSnapshot } from "@print-partner/contracts";
 import StlRoutePanel from "./StlRoutePanel";
@@ -65,12 +66,14 @@ function runJobLike(next: JobSnapshot | null) {
 function renderPanel(overrides?: { selectedTokens?: readonly string[] }) {
   const onOpenUnitSelection = vi.fn();
   render(
-    <StlRoutePanel
-      profileId={7}
-      selectedTokens={overrides?.selectedTokens ?? TOKENS}
-      totalUnitCount={40}
-      onOpenUnitSelection={onOpenUnitSelection}
-    />,
+    <MemoryRouter>
+      <StlRoutePanel
+        profileId={7}
+        selectedTokens={overrides?.selectedTokens ?? TOKENS}
+        totalUnitCount={40}
+        onOpenUnitSelection={onOpenUnitSelection}
+      />
+    </MemoryRouter>,
   );
   return { onOpenUnitSelection };
 }
@@ -239,6 +242,8 @@ describe("StlRoutePanel", () => {
     renderPanel();
 
     const note = screen.getByText(/stay unverified in Checkoff/);
-    expect(note.textContent).toContain("Add manually prepared prints");
+    expect(note.textContent).toContain("add the past print in Checkoff");
+    expect(screen.getByRole("link", { name: "add the past print in Checkoff" }).getAttribute("href"))
+      .toBe("/progress?profile=7&add=past-print");
   });
 });

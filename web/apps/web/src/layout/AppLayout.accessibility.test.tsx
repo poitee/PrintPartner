@@ -19,10 +19,12 @@ vi.mock("../components/UpdateAvailableBanner", () => ({
   isUpdateBannerDismissed: () => false,
 }));
 vi.mock("../components/ThemePreferenceControl", () => ({ default: () => null }));
+vi.mock("../components/sources/SourceUpdateNotice", () => ({ default: () => null }));
 vi.mock("../components/PlanPicker", () => ({ default: () => <button type="button">Plan</button> }));
 vi.mock("../components/ui/sonner", () => ({ Toaster: () => null }));
 vi.mock("../hooks/useProfileUrlSync", () => ({ useProfileUrlSync: vi.fn() }));
 vi.mock("../hooks/useAppUpdateCheck", () => ({ useAppUpdateCheck: () => ({ updateCheck: null }) }));
+vi.mock("../queries/sources", () => ({ useSourcesQuery: () => ({ data: [] }) }));
 const workflowState = vi.hoisted(() => ({
   stages: [] as Array<{ id: string; label: string }>,
   activeId: null as string | null,

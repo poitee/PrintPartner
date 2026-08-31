@@ -22,9 +22,10 @@ describe("page heading hierarchy", () => {
         <SpineRail
           collapsed={false}
           onToggleCollapsed={vi.fn()}
-          stages={[]}
-          activeId={null}
-          onStageNavigate={vi.fn()}
+        stages={[]}
+        activeId={null}
+        sourceUpdateCount={0}
+        onStageNavigate={vi.fn()}
         />
         <PageHeader title="Plans" />
       </MemoryRouter>,

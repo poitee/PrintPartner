@@ -17,6 +17,7 @@ import BuildRecipePanel from "../components/build/BuildRecipePanel";
 import PlanRolesCard from "../components/build/PlanRolesCard";
 import BuildPlanningCard from "../components/build/BuildPlanningCard";
 import BuildSummaryHeader from "../components/build/BuildSummaryHeader";
+import BuildSourceGuide from "../components/build/BuildSourceGuide";
 import { useBuildPlanningQuery } from "../components/build/useBuildPlanningQuery";
 import EmptyState from "../components/layout/EmptyState";
 import PageHeader from "../components/layout/PageHeader";
@@ -823,17 +824,19 @@ function BuildPageContent() {
                   onClick={() => setAttachOpen((v) => !v)}
                   disabled={!engineReady || busy}
                 >
-                  Add a source
+                  Attach from Library
                 </Button>
-                <Button variant="link" className="h-auto p-0 text-xs" asChild>
-                  <Link to={libraryRoute()}>Open Source Library</Link>
+                <Button variant="outline" size="sm" asChild>
+                  <Link to={libraryRoute()}>Manage Source Library</Link>
                 </Button>
               </div>
             </div>
             <p className="max-w-3xl text-xs text-muted-foreground">
-              Add the repositories that contain this Build's parts. For each source, choose the
-              folders or individual STL files that belong in the plan.
+              Attach the Library projects that contain this Build's parts. For each source, choose
+              the folders or individual STL files that belong in the Plan.
             </p>
+
+            <BuildSourceGuide profileId={selectedProfileId} />
 
             {mergeConflicts.length > 0 && (
               <MergeConflictBanner

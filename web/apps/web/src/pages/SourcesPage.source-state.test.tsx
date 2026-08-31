@@ -179,7 +179,7 @@ describe("SourcesPage Source state ownership", () => {
       </QueryClientProvider>,
     );
 
-    expect(screen.getByRole("heading", { level: 1, name: "Library" })).toBeTruthy();
+    expect(screen.getByRole("heading", { level: 1, name: "Source Library" })).toBeTruthy();
     expect(screen.getByRole("alert").textContent).toContain("Engine offline");
   });
 
@@ -198,7 +198,7 @@ describe("SourcesPage Source state ownership", () => {
       </QueryClientProvider>,
     );
 
-    expect(screen.getByRole("heading", { level: 1, name: "Library" })).toBeTruthy();
+    expect(screen.getByRole("heading", { level: 1, name: "Source Library" })).toBeTruthy();
     expect(screen.getByRole("status").textContent).toContain("Connecting to the engine");
   });
 

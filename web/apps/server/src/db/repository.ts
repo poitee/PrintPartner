@@ -377,6 +377,7 @@ export type PlanDecisionRow = typeof defaultSchema.planDecisions.$inferSelect;
 export type PlanSnapshotRow = typeof defaultSchema.planSnapshots.$inferSelect;
 export type PrintJobRow = typeof defaultSchema.printJobs.$inferSelect;
 export type PrintJobPartRow = typeof defaultSchema.printJobParts.$inferSelect;
+export type AppEventRow = typeof defaultSchema.appEvents.$inferSelect;
 export type SourceRevisionRow = typeof defaultSchema.sourceRevisions.$inferSelect;
 export type PlanRevisionInputSetRow = typeof defaultSchema.planRevisionInputSets.$inferSelect;
 export type PlanRevisionInputRow = typeof defaultSchema.planRevisionInputs.$inferSelect;
@@ -759,6 +760,7 @@ export class AppRepository {
 
   private readonly schema: SchemaTables;
   private readonly syncSqlite: boolean;
+  private db: DrizzleDb;
 
   constructor(
     db: AppDrizzleDb,
@@ -776,7 +778,17 @@ export class AppRepository {
     this.reposDir = reposDir;
   }
 
-  private readonly db: DrizzleDb;
+  /**
+   * Point this long-lived repository at a newly opened SQLite connection.
+   * Backup restore replaces the database file, so every route that already
+   * holds this repository must move to the new Drizzle instance together.
+   */
+  replaceDatabase(db: AppDrizzleDb): void {
+    if (isSyncSqliteDrizzle(db) !== this.syncSqlite) {
+      throw new Error("Cannot replace the repository database with a different driver");
+    }
+    this.db = asSyncDb(db);
+  }
 
   private get tenantId(): string {
     return getRequestTenantId(this.defaultTenantId);
@@ -1595,6 +1607,47 @@ export class AppRepository {
         set: { value },
       })
       .run();
+  }
+
+  recordAppEvent(input: {
+    kind: string;
+    at?: string;
+    actorType?: string | null;
+    actorId?: string | null;
+    payload?: Record<string, unknown> | null;
+  }): AppEventRow {
+    const row = this.db
+      .insert(this.schema.appEvents)
+      .values({
+        tenantId: this.tenantId,
+        at: input.at ?? new Date().toISOString(),
+        kind: input.kind,
+        actorType: input.actorType ?? null,
+        actorId: input.actorId ?? null,
+        payloadJson: input.payload ? JSON.stringify(input.payload) : null,
+      })
+      .returning()
+      .get();
+    if (!row) throw new Error("Application event could not be recorded");
+    return row;
+  }
+
+  listAppEvents(input: { kinds: readonly string[]; limit?: number }): AppEventRow[] {
+    const kinds = [...new Set(input.kinds.map((kind) => kind.trim()).filter(Boolean))];
+    if (kinds.length === 0) return [];
+    const limit = Math.min(Math.max(Math.trunc(input.limit ?? 20), 1), 100);
+    return this.db
+      .select()
+      .from(this.schema.appEvents)
+      .where(
+        and(
+          eq(this.schema.appEvents.tenantId, this.tenantId),
+          inArray(this.schema.appEvents.kind, kinds),
+        ),
+      )
+      .orderBy(desc(this.schema.appEvents.id))
+      .limit(limit)
+      .all();
   }
 
   /**
@@ -3091,7 +3144,8 @@ export class AppRepository {
     const name = input.name.trim();
     if (!name) throw new Error("Source name is required");
     const sourceKind = (input.source_kind ?? "github").toLowerCase();
-    const sourceType = input.source_type ?? (sourceKind === "local" ? "local" : "git");
+    const sourceType =
+      input.source_type ?? (sourceKind === "github" || sourceKind === "git" ? "git" : "local");
     const existing = this.db
       .select()
       .from(this.schema.projects)

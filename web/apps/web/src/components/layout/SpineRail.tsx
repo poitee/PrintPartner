@@ -37,6 +37,7 @@ type Props = {
   stages: WorkflowStage[];
   activeId: WorkflowStageId | null;
   onStageNavigate: (to: string, e: MouseEvent<HTMLAnchorElement>) => void;
+  sourceUpdateCount: number;
 };
 
 const UTILITY_ICONS: Record<
@@ -93,11 +94,14 @@ function UtilityLink({
   link,
   collapsed,
   onStageNavigate,
+  sourceUpdateCount,
 }: {
   link: SpineUtilityNavItem & { icon: typeof Layers; match: boolean };
   collapsed: boolean;
   onStageNavigate: Props["onStageNavigate"];
+  sourceUpdateCount: number;
 }) {
+  const isLibrary = link.id === "library";
   if (collapsed) {
     return (
       <SidebarTooltip label={link.label} collapsed>
@@ -107,11 +111,18 @@ function UtilityLink({
           className={cn(
             NAV_RAIL,
             "flex items-center justify-center rounded-md p-2.5 transition-colors",
+            isLibrary && "border border-primary/25 bg-primary/5",
             link.match ? NAV_ACTIVE : NAV_IDLE,
           )}
           aria-label={link.label}
         >
           <link.icon className="h-4 w-4" />
+          {isLibrary && sourceUpdateCount > 0 ? (
+            <span
+              className="absolute right-1 top-1 h-2 w-2 rounded-full bg-warning ring-2 ring-card"
+              aria-hidden
+            />
+          ) : null}
         </NavLink>
       </SidebarTooltip>
     );
@@ -123,13 +134,29 @@ function UtilityLink({
       className={cn(
         NAV_RAIL,
         "flex items-center gap-2.5 rounded-md px-2.5 py-2 transition-colors",
+        isLibrary && "my-0.5 border border-primary/25 bg-primary/5 py-2.5",
         link.match ? NAV_ACTIVE : NAV_IDLE,
       )}
+      aria-label={link.label}
     >
       <link.icon className="h-4 w-4 shrink-0" />
-      <span className="min-w-0 flex-1 text-sm font-medium">
-        {link.label}
+      <span className="min-w-0 flex-1">
+        <span className="block text-sm font-medium">{link.label}</span>
+        {isLibrary ? (
+          <span className="block truncate text-2xs font-normal text-muted-foreground" aria-hidden>
+            Add, sync, and watch projects
+          </span>
+        ) : null}
       </span>
+      {isLibrary && sourceUpdateCount > 0 ? (
+        <span
+          className="rounded-full border border-warning/35 bg-warning-soft px-1.5 py-0.5 font-mono text-3xs font-semibold text-warning"
+          title={`${sourceUpdateCount} source update${sourceUpdateCount === 1 ? "" : "s"} ready`}
+          aria-hidden
+        >
+          {sourceUpdateCount}
+        </span>
+      ) : null}
     </NavLink>
   );
 }
@@ -140,6 +167,7 @@ export default function SpineRail({
   stages,
   activeId,
   onStageNavigate,
+  sourceUpdateCount,
 }: Props) {
   const location = useLocation();
   const { selectedProfileId } = useProfileSelection();
@@ -218,6 +246,7 @@ export default function SpineRail({
               link={link}
               collapsed={collapsed}
               onStageNavigate={onStageNavigate}
+              sourceUpdateCount={sourceUpdateCount}
             />
           ))}
         </nav>
@@ -231,6 +260,7 @@ export default function SpineRail({
               link={link}
               collapsed={collapsed}
               onStageNavigate={onStageNavigate}
+              sourceUpdateCount={sourceUpdateCount}
             />
           ))}
         </nav>

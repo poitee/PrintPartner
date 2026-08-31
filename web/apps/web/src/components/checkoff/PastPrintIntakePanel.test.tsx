@@ -8,7 +8,7 @@ import {
   UNMANAGED_PRINTER_NAME,
   type PrinterStorageListing,
 } from "@print-partner/contracts";
-import ExternalPrintRoutePanel from "./ExternalPrintRoutePanel";
+import PastPrintIntakePanel from "./PastPrintIntakePanel";
 import { build, host, printer } from "../printers/testFixtures";
 
 const api = vi.hoisted(() => ({
@@ -87,7 +87,7 @@ function renderPanel() {
   const onRecorded = vi.fn();
   render(
     <MemoryRouter>
-      <ExternalPrintRoutePanel profileId={build.id} onRecorded={onRecorded} />
+      <PastPrintIntakePanel profileId={build.id} onRecorded={onRecorded} />
     </MemoryRouter>,
   );
   return { onRecorded };
@@ -118,7 +118,7 @@ function answerChecked(answer: "checked" | "not_checked") {
   );
 }
 
-describe("ExternalPrintRoutePanel", () => {
+describe("PastPrintIntakePanel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     api.fetchPrinters.mockResolvedValue([printer, sdCard]);

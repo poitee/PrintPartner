@@ -10,8 +10,10 @@ import {
   fetchSourceDocs,
   fetchSourceNotes,
   fetchSourceReadme,
+  fetchSourceActivity,
   fetchSourceUpdateCheckSettings,
   saveGitHubPat,
+  saveSourceMonitoringSettings,
   saveSourceUpdateCheckInterval,
   startCheckSourceUpdates,
   updateSourceNote,
@@ -56,18 +58,24 @@ describe("source content endpoints", () => {
     http
       .respond(jsonResponse({ configured: true, masked: "ghp_***" }))
       .respond(jsonResponse({ configured: true, masked: "ghp_***" }))
-      .respond(jsonResponse({ interval_hours: 24 }))
-      .respond(jsonResponse({ interval_hours: 12 }))
+      .respond(jsonResponse({ interval_hours: 24, auto_sync_updates: true, last_checked_at: null }))
+      .respond(jsonResponse({ interval_hours: 12, auto_sync_updates: true, last_checked_at: null }))
+      .respond(jsonResponse({ interval_hours: 12, auto_sync_updates: false, last_checked_at: null }))
+      .respond(jsonResponse({ events: [{ id: 1, kind: "source.updated" }] }))
       .respond(jsonResponse({ job_id: "job-1" }));
 
     await fetchGitHubPatSettings();
     await saveGitHubPat("token");
     await fetchSourceUpdateCheckSettings();
     await saveSourceUpdateCheckInterval(12);
+    await saveSourceMonitoringSettings({ auto_sync_updates: false });
+    await fetchSourceActivity(5);
     await expect(startCheckSourceUpdates()).resolves.toBe("job-1");
 
     expect(http.requestJson(1)).toEqual({ token: "token" });
     expect(http.requestJson(3)).toEqual({ interval_hours: 12 });
+    expect(http.requestJson(4)).toEqual({ auto_sync_updates: false });
+    expect(http.calls[5]?.[0]).toContain("/sources/activity?limit=5");
   });
 
   it("reads source docs and notes", async () => {

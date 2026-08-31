@@ -146,6 +146,8 @@ export async function registerSettingsRoutes(app: FastifyInstance, deps: RouteDe
 
   app.get("/settings/source-update-check", async () => ({
     interval_hours: Number(deps.repo.getSetting("source_update_check_hours", "24")),
+    auto_sync_updates: deps.repo.getSetting("discord_auto_sync_updates", "1") !== "0",
+    last_checked_at: deps.repo.getSetting("source_update_check_last_run_at") || null,
   }));
 
   app.get("/settings/build-tracking", async () => ({
@@ -236,10 +238,22 @@ export async function registerSettingsRoutes(app: FastifyInstance, deps: RouteDe
   });
 
   app.put("/settings/source-update-check", async (request) => {
-    const body = request.body as { interval_hours?: number };
-    const hours = Number(body.interval_hours ?? 24);
-    deps.repo.setSetting("source_update_check_hours", String(hours));
-    return { interval_hours: hours };
+    const body = request.body as {
+      interval_hours?: number;
+      auto_sync_updates?: boolean;
+    };
+    if (body.interval_hours !== undefined) {
+      const hours = Number(body.interval_hours);
+      deps.repo.setSetting("source_update_check_hours", String(hours));
+    }
+    if (body.auto_sync_updates !== undefined) {
+      deps.repo.setSetting("discord_auto_sync_updates", body.auto_sync_updates ? "1" : "0");
+    }
+    return {
+      interval_hours: Number(deps.repo.getSetting("source_update_check_hours", "24")),
+      auto_sync_updates: deps.repo.getSetting("discord_auto_sync_updates", "1") !== "0",
+      last_checked_at: deps.repo.getSetting("source_update_check_last_run_at") || null,
+    };
   });
 
   // --- Printer → Plan default bindings ---

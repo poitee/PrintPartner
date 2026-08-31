@@ -25,10 +25,12 @@ export function sourceSavePayloadFromDraft(draft: SourceSaveDraft): SourceSavePa
     throw new Error("Enter a tag or switch back to Branch.");
   }
   if (
-    (draft.source_kind === "printables" || draft.source_kind === "makerworld") &&
+    (draft.source_kind === "printables" ||
+      draft.source_kind === "makerworld" ||
+      draft.source_kind === "thangs") &&
     !draft.url.trim()
   ) {
-    throw new Error("Enter the model page URL from Printables or MakerWorld.");
+    throw new Error("Enter the model page URL from Printables, MakerWorld, or Thangs.");
   }
 
   const refFields =

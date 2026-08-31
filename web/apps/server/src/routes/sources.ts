@@ -55,6 +55,39 @@ async function prefetchSourceCover(deps: RouteDeps, sourceId: number): Promise<v
 export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps): Promise<void> {
   app.get("/sources", async () => ({ sources: deps.repo.listSources() }));
 
+  app.get("/sources/activity", async (request) => {
+    const requested = Number((request.query as { limit?: string }).limit ?? 20);
+    const limit = Number.isFinite(requested) ? requested : 20;
+    const events = deps.repo.listAppEvents({
+      kinds: ["source.update_available", "source.updated", "source.sync_failed"],
+      limit,
+    });
+    return {
+      events: events.map((event) => {
+        let payload: Record<string, unknown> = {};
+        if (event.payloadJson) {
+          try {
+            const parsed = JSON.parse(event.payloadJson) as unknown;
+            if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+              payload = parsed as Record<string, unknown>;
+            }
+          } catch {
+            payload = {};
+          }
+        }
+        return {
+          id: event.id,
+          at: event.at,
+          kind: event.kind,
+          source_id: typeof payload.source_id === "number" ? payload.source_id : null,
+          source_name:
+            typeof payload.source_name === "string" ? payload.source_name : "Source",
+          detail: typeof payload.error === "string" ? payload.error : null,
+        };
+      }),
+    };
+  });
+
   app.get("/sources/github-branches", async (request, reply) => {
     const url = (request.query as { url?: string }).url ?? "";
     if (!url.trim()) {
@@ -92,7 +125,11 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
     try {
       const body = request.body as Record<string, unknown>;
       const sourceKind = body.source_kind != null ? String(body.source_kind) : undefined;
-      if (sourceKind === "printables" || sourceKind === "makerworld") {
+      if (
+        sourceKind === "printables" ||
+        sourceKind === "makerworld" ||
+        sourceKind === "thangs"
+      ) {
         const modelUrl = body.url != null ? String(body.url).trim() : "";
         if (!modelUrl) {
           return reply.status(400).send({
@@ -511,7 +548,7 @@ export async function syncProjectById(
   const token = repo.getSetting(GITHUB_PAT_KEY);
   const maxDocsBytes = options?.maxDocsBytes ?? DEFAULT_SOURCE_DOCS_MAX_BYTES;
 
-  if (row.sourceKind === "github" || row.sourceType === "git") {
+  if (row.sourceKind === "github" || row.sourceKind === "git") {
     const result = await syncGithubSource({
       url: row.url,
       branch: row.branch ?? "main",

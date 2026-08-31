@@ -30,7 +30,13 @@ async function syncUnsyncedSources(
   getSettings: () => SourceWatcherSettings,
 ): Promise<void> {
   const logger = getLogger();
-  const sources = repo.listSources().filter((s) => s.last_synced_at === null);
+  const sources = repo
+    .listSources()
+    .filter(
+      (source) =>
+        source.last_synced_at === null &&
+        (source.source_kind === "github" || source.source_kind === "git"),
+    );
   if (sources.length === 0) return;
 
   logger.log("info", `[source-watcher] Auto-syncing ${sources.length} unsynced source(s) on startup`);
@@ -134,10 +140,24 @@ async function runPeriodicUpdateCheck(
       try {
         logger.log("info", `[source-watcher] Auto-syncing updated source: ${source.name}`);
         const result = await syncProjectById(repo, reposDir, source.id, coversDir);
+        const updatedRow = repo.getProjectRow(source.id);
+        repo.recordAppEvent({
+          kind: "source.updated",
+          actorType: "source",
+          actorId: String(source.id),
+          payload: {
+            source_id: source.id,
+            source_name: source.name,
+            source_url: source.url,
+            branch: row?.branch ?? source.branch ?? "main",
+            previous_sha: previousSha,
+            commit_sha: updatedRow?.lastCommitSha ?? null,
+            stl_count: result.stl_count,
+          },
+        });
 
         const currentSettings = getSettings();
         if (currentSettings.discordWebhookUrl && currentSettings.notifyOnUpdate) {
-          const updatedRow = repo.getProjectRow(source.id);
           await sendDiscordNotification(currentSettings.discordWebhookUrl, "source.updated", {
             sourceName: source.name,
             sourceUrl: source.url,
@@ -162,6 +182,18 @@ async function runPeriodicUpdateCheck(
           `[source-watcher] Auto-sync failed for ${source.name}: ${err instanceof Error ? err.message : String(err)}`,
         );
         const currentSettings = getSettings();
+        repo.recordAppEvent({
+          kind: "source.sync_failed",
+          actorType: "source",
+          actorId: String(source.id),
+          payload: {
+            source_id: source.id,
+            source_name: source.name,
+            source_url: source.url,
+            branch: row?.branch ?? source.branch ?? "main",
+            error: err instanceof Error ? err.message : String(err),
+          },
+        });
         if (currentSettings.discordWebhookUrl) {
           await sendDiscordNotification(currentSettings.discordWebhookUrl, "source.sync_failed", {
             sourceName: source.name,

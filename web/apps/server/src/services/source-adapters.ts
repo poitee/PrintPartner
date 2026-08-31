@@ -26,11 +26,22 @@ export function fetchMakerworldMetadata(url: string): SourceMetadataStub {
   };
 }
 
+export function fetchThangsMetadata(url: string): SourceMetadataStub {
+  return {
+    supported: false,
+    message:
+      "Thangs is tracked by model URL. Download the model archive from Thangs, then upload it to refresh this source.",
+    url,
+    title: null,
+  };
+}
+
 export function resolveRemoteSourceMetadata(
   sourceKind: string,
   url: string,
 ): SourceMetadataStub | null {
   if (sourceKind === "printables") return fetchPrintablesMetadata(url);
   if (sourceKind === "makerworld") return fetchMakerworldMetadata(url);
+  if (sourceKind === "thangs") return fetchThangsMetadata(url);
   return null;
 }

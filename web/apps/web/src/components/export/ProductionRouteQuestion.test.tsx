@@ -27,7 +27,7 @@ describe("ProductionRouteQuestion", () => {
     renderQuestion();
     expect(screen.getByText("What should PrintPartner prepare?").tagName).toBe("LEGEND");
     const radios = screen.getAllByRole("radio");
-    expect(radios).toHaveLength(3);
+    expect(radios).toHaveLength(2);
     for (const option of radios) expect((option as HTMLInputElement).checked).toBe(false);
   });
 
@@ -37,11 +37,10 @@ describe("ProductionRouteQuestion", () => {
     expect(screen.getByText(/using each printer's build volume/)).toBeTruthy();
     expect(radio(/Download sorted STL files/)).toBeTruthy();
     expect(screen.getByText(/organized by color, material, part type/)).toBeTruthy();
-    expect(radio(/Add manually prepared prints/)).toBeTruthy();
-    expect(screen.getByText(/sliced or sent one or more jobs yourself/)).toBeTruthy();
+    expect(screen.queryByRole("radio", { name: /Add manually prepared prints/ })).toBeNull();
   });
 
-  it("presents all three production methods as equal choices", () => {
+  it("presents both preparation methods as equal choices", () => {
     renderQuestion();
     expect(screen.queryByText("or")).toBeNull();
   });
@@ -70,8 +69,8 @@ describe("ProductionRouteQuestion", () => {
   });
 
   it("brings the previous answer back pre-selected on a change", () => {
-    renderQuestion({ value: "external", onCancel: vi.fn() });
-    expect((radio(/Add manually prepared prints/) as HTMLInputElement).checked).toBe(true);
+    renderQuestion({ value: "plates", onCancel: vi.fn() });
+    expect((radio(/Generate 3MF plates/) as HTMLInputElement).checked).toBe(true);
     expect(screen.getByRole("button", { name: "Keep this route" })).toBeTruthy();
   });
 
