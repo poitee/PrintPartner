@@ -21,12 +21,12 @@ Release images are published to GitHub Container Registry:
 
 | Image | Tags | Platforms |
 |-------|------|-----------|
-| `ghcr.io/poitee/print-partner` | `latest`, `X.Y.Z` (one per release, e.g. `3.2.0`) | `linux/amd64`, `linux/arm64` |
+| `ghcr.io/poitee/print-partner` | `latest`, `X.Y.Z` (one per release, e.g. `3.3.0`) | `linux/amd64`, `linux/arm64` |
 
 Each image bakes the release version, peeled Git commit, tag, and build date into
 its runtime identity. `GET /health` reports those values, and the in-app update
 checker compares the runtime version with GitHub Releases. Compose defaults to
-the prepared `3.2.0` image tag; set `PRINT_PARTNER_VERSION` to another release
+the prepared `3.3.0` image tag; set `PRINT_PARTNER_VERSION` to another release
 explicitly. The compose files keep a `build:` section as a fallback, so
 `docker compose up --build` always works without the registry.
 
@@ -49,7 +49,7 @@ The app service has a healthcheck that polls `GET /health` every 30s using Node'
 | `STATIC_DIR` | unset | When set, serve built SPA from this directory |
 | `DEPLOY_MODE` | `self-host` | `self-host` or `saas` |
 | `CORS_ORIGIN` / `ALLOWED_ORIGINS` | `true` | CORS allowed origin(s); comma-separated list for multiple |
-| `PP_VERSION` | `3.2.0-web` (baked into release images) | Health payload version |
+| `PP_VERSION` | `3.3.0-web` (baked into release images) | Health payload version |
 | `PP_COMMIT` / `PP_TAG` / `PP_BUILD_DATE` | baked into release images | Read-only release provenance reported by `GET /health`; source builds report a development identity |
 | `BASIC_AUTH_USER` / `BASIC_AUTH_PASS` | unset | Optional HTTP Basic protection |
 | `SINGLE_USER_AUTH` | `0` | Set to `1` to require login with one administrator account. The first registration claims existing self-host data. |
@@ -126,14 +126,14 @@ Prepare every version-bearing file with the release command, review the dry
 run, and commit the result:
 
 ```bash
-node scripts/release.mjs prepare 3.2.0 --dry-run
-node scripts/release.mjs prepare 3.2.0
+node scripts/release.mjs prepare 3.3.0 --dry-run
+node scripts/release.mjs prepare 3.3.0
 git add CHANGELOG.md Dockerfile README.md OPERATIONS.md docker-compose.yml web/package.json web/package-lock.json web/DEPLOY.md
-git commit -m "chore(release): prepare v3.2.0"
+git commit -m "chore(release): prepare v3.3.0"
 node scripts/release.mjs check
-git tag -a v3.2.0 -m "Release v3.2.0"
+git tag -a v3.3.0 -m "Release v3.3.0"
 git push origin main
-git push origin v3.2.0
+git push origin v3.3.0
 ```
 
 The `release.yml` workflow first requires the complete web quality suite,
@@ -142,7 +142,7 @@ schema/drift validation. It peels the annotated tag to its commit, checks every
 version sink, and builds a multi-arch candidate image (`linux/amd64` and
 `linux/arm64`) with matching OCI metadata. CI then attaches a digest-pinned
 `release-identity.json` to the GitHub Release, creates or verifies the immutable
-`:3.2.0` alias, verifies the public identity, and moves `:latest` last as a
+`:3.3.0` alias, verifies the public identity, and moves `:latest` last as a
 convenience alias. A conflicting existing candidate, release asset, or version
 alias fails instead of being overwritten.
 <!-- release-version:end -->

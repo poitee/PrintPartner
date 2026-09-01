@@ -16,7 +16,7 @@ RUN npm run build && \
 
 FROM node:22-bookworm-slim AS runtime
 # Release builds override these with the validated, peeled tag identity.
-ARG PP_APP_VERSION=3.2.0
+ARG PP_APP_VERSION=3.3.0
 ARG PP_COMMIT=
 ARG PP_TAG=
 ARG PP_BUILD_DATE=unknown

@@ -11,7 +11,7 @@ curl --fail --silent http://127.0.0.1:8080/health | jq .
 ```
 
 <!-- release-version:start -->
-A healthy `3.2.0` deployment reports runtime version `3.2.0-web` and a release tag of `v3.2.0`.
+A healthy `3.3.0` deployment reports runtime version `3.3.0-web` and a release tag of `v3.3.0`.
 <!-- release-version:end -->
 
 The health response also reports the database driver and connection state. Treat a failed database check as unavailable service, even when the container remains running.
