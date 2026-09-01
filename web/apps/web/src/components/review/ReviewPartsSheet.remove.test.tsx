@@ -292,7 +292,13 @@ describe("Plan: Remove under Proposed inclusion", () => {
     );
   });
 
-  it("reports a part the draft does not carry instead of failing silently", async () => {
+  it("offers the Working Plan's Parts, not accepted Parts the draft dropped", async () => {
+    // Proposed inclusion projects the draft (workingPlanReviewParts maps over
+    // workspace.parts), so an accepted Part the draft no longer carries has no
+    // row here at all. It surfaces as a removal in the draft diff instead.
+    // This is why every rendered row resolves: its match_key IS a draft
+    // part_key. resolveDraftPart's "missing" branch stays as defence for
+    // non-UI callers and is covered directly in planDraftPartMatch.test.ts.
     state.review = baseReview([reviewPart({ id: 42, match_key: "frame/bracket.stl" })]);
     state.workspace = baseWorkspace([
       draftPart({
@@ -306,14 +312,21 @@ describe("Plan: Remove under Proposed inclusion", () => {
 
     renderSheet();
     await screen.findByRole("columnheader", { name: "Proposed inclusion" });
+
+    expect(screen.getByText("motor.stl")).toBeTruthy();
+    expect(screen.queryByText("bracket.stl")).toBeNull();
+
     await userEvent.click(screen.getByRole("button", { name: "Remove" }));
 
+    // The one row present is the draft's, so the edit lands rather than erroring.
     await waitFor(() =>
-      expect(screen.getByTestId("draft-error").textContent).toMatch(
-        /bracket\.stl is not in the Working Plan/,
+      expect(editPlanDraftParts).toHaveBeenCalledWith(
+        expect.objectContaining({
+          decisions: [{ kind: "set_included", draft_part_ids: [17], value: false }],
+        }),
       ),
     );
-    expect(editPlanDraftParts).not.toHaveBeenCalled();
+    expect(screen.getByTestId("draft-error").textContent).toBe("");
   });
 
   it("reports duplicates the row identity cannot narrow", async () => {
