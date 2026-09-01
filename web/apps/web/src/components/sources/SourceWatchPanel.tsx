@@ -13,6 +13,7 @@ import { cn } from "@/lib/utils";
 import SourceUpdateIntervalSelect from "../settings/SourceUpdateIntervalSelect";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
+import { Checkbox } from "../ui/checkbox";
 import {
   Card,
   CardContent,
@@ -208,14 +209,17 @@ export default function SourceWatchPanel({
                   onChange={(value) => void saveSettings({ interval_hours: Number(value) })}
                 />
               </label>
-              <label className="flex min-h-11 items-start gap-2 rounded-md border border-border p-3 text-sm">
-                <input
-                  type="checkbox"
-                  className="mt-1 h-4 w-4"
+              <label
+                className="flex min-h-11 items-start gap-2 rounded-md border border-border p-3 text-sm"
+                htmlFor="source-watch-auto-sync"
+              >
+                <Checkbox
+                  id="source-watch-auto-sync"
+                  className="mt-1 shrink-0"
                   checked={settings?.auto_sync_updates ?? false}
                   disabled={!settings || saving}
-                  onChange={(event) =>
-                    void saveSettings({ auto_sync_updates: event.target.checked })
+                  onCheckedChange={(next) =>
+                    void saveSettings({ auto_sync_updates: next === true })
                   }
                 />
                 <span>

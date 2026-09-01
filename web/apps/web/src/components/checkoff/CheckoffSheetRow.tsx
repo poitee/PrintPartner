@@ -1,6 +1,8 @@
+import { useId } from "react";
 import type { ReviewPart } from "../../api/endpoints/planManifests";
 import PartThumbExpandButton from "../parts/PartThumbExpandButton";
 import SpoolRemainingBadge from "../SpoolRemainingBadge";
+import { Checkbox } from "../ui/checkbox";
 import { cn } from "@/lib/utils";
 
 export default function CheckoffSheetRow({
@@ -21,6 +23,7 @@ export default function CheckoffSheetRow({
   onToggleUnit: (part: ReviewPart, unitIndex: number) => void;
   onPreview: (part: ReviewPart) => void;
 }) {
+  const unitIdPrefix = useId();
   const done = part.printed_count >= part.quantity_effective && part.quantity_effective > 0;
   return (
     <tr className={cn("sheet-row", done && "sheet-row-done")}>
@@ -52,21 +55,31 @@ export default function CheckoffSheetRow({
       <td className="sheet-cell-qty sheet-cell-qty-readonly">{part.quantity_effective}</td>
       <td className="sheet-cell-printed">
         <div className="sheet-units">
-          {part.print_units.map((unitDone, idx) => (
-            <label
-              key={idx}
-              className={cn("sheet-unit", unitDone && "sheet-unit-done")}
-              title={`Unit #${idx + 1}`}
-            >
-              <input
-                type="checkbox"
-                checked={unitDone}
-                onChange={() => onToggleUnit(part, idx)}
-                disabled={busy}
-              />
-              <span>{idx + 1}</span>
-            </label>
-          ))}
+          {part.print_units.map((unitDone, idx) => {
+            /* The label names the box; a <label> wrapper alone would not name a
+               button with role="checkbox". */
+            const unitId = `${unitIdPrefix}-unit-${idx}`;
+            return (
+              <label
+                key={idx}
+                htmlFor={unitId}
+                className={cn("sheet-unit", unitDone && "sheet-unit-done")}
+                title={`Unit #${idx + 1}`}
+              >
+                <Checkbox
+                  id={unitId}
+                  /* On paper the tally box is the .sheet-unit border itself, so
+                     the control drops out of the print exactly as it did when
+                     App.css hid `.sheet-unit input`. */
+                  className="print:hidden"
+                  checked={unitDone}
+                  onCheckedChange={() => onToggleUnit(part, idx)}
+                  disabled={busy}
+                />
+                <span>{idx + 1}</span>
+              </label>
+            );
+          })}
           <span className={cn("sheet-printed-count", done && "sheet-printed-done")}>
             <span className="sheet-printed-screen">
               {part.printed_count}/{part.quantity_effective}

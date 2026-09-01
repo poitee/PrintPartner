@@ -23,6 +23,7 @@ import AcceptedPlateSection from "../components/export/accepted-plates/AcceptedP
 const PrinterSendPanel = lazy(() => import("../components/export/PrinterSendPanel"));
 const PrinterSendQueuePanel = lazy(() => import("../components/export/PrinterSendQueuePanel"));
 import ShareBuildExportDialog from "../components/share/ShareBuildExportDialog";
+import { Alert, AlertActions, AlertDescription } from "../components/ui/alert";
 import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";
 import { usePlanWorkspace } from "../context/PlanWorkspaceContext";
@@ -571,14 +572,14 @@ export default function ExportPage() {
           </CardContent>
         </Card>
       ) : planError && !review ? (
-        <Card>
-          <CardContent className="space-y-3 pt-6">
-            <p className="text-sm text-destructive">Could not load this plan: {planError}</p>
+        <Alert tone="error">
+          <AlertDescription>Could not load this plan: {planError}</AlertDescription>
+          <AlertActions>
             <Button size="sm" variant="secondary" onClick={() => {
               if (selectedProfileId != null) void refresh();
             }}>Retry</Button>
-          </CardContent>
-        </Card>
+          </AlertActions>
+        </Alert>
       ) : (
         <div className={cn("grid gap-4", "lg:grid-cols-[minmax(0,1fr)_minmax(16rem,18.75rem)]")}>
           <div className="min-w-0">
@@ -684,16 +685,16 @@ export default function ExportPage() {
           </CardContent>
         </Card>
       ) : profilesState === "error" ? (
-        <Card className={cn("shadow-none", statusTone({ tone: "error", emphasis: "surface" }))}>
-          <CardContent className="space-y-3 pt-6">
-            <p className="text-sm text-destructive">
-              Could not load plans: {profilesError}
-            </p>
+        <Alert tone="error">
+          <AlertDescription>
+            Could not load plans: {profilesError}
+          </AlertDescription>
+          <AlertActions>
             <Button size="sm" variant="secondary" onClick={() => void reloadProfiles()}>
               Retry
             </Button>
-          </CardContent>
-        </Card>
+          </AlertActions>
+        </Alert>
       ) : profilesState === "loading" ? (
         <Card>
           <CardContent className="pt-6">

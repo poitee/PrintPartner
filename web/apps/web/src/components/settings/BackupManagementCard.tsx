@@ -8,6 +8,7 @@ import {
   CardTitle,
 } from "../ui/card";
 import { Button } from "../ui/button";
+import ConfirmDialog from "../ConfirmDialog";
 import {
   Dialog,
   DialogContent,
@@ -220,7 +221,6 @@ export default function BackupManagementCard() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm("Delete this backup? This cannot be undone.")) return;
     try {
       const response = await fetch(`/backups/${id}`, { method: "DELETE" });
       if (!response.ok) throw new Error("Delete failed");
@@ -358,14 +358,27 @@ export default function BackupManagementCard() {
                     >
                       Restore
                     </Button>
-                    <Button
-                      onClick={() => handleDelete(backup.name)}
-                      size="sm"
-                      variant="outline"
-                      className="text-destructive hover:text-destructive"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
+                    <ConfirmDialog
+                      trigger={
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="text-destructive hover:text-destructive"
+                          aria-label={`Delete backup ${backup.name}`}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      }
+                      title="Delete this backup?"
+                      description={
+                        <>
+                          “{backup.name}” is removed from this server. This cannot be
+                          undone.
+                        </>
+                      }
+                      confirmLabel="Delete backup"
+                      onConfirm={() => void handleDelete(backup.name)}
+                    />
                   </div>
                 </div>
               ))}

@@ -2,6 +2,7 @@ import { ExternalLink, X } from "lucide-react";
 import { Link } from "react-router-dom";
 import type { AppUpdateCheckResponse } from "@print-partner/contracts";
 import { Button } from "./ui/button";
+import { Alert, AlertActions, AlertTitle } from "./ui/alert";
 import { cn } from "@/lib/utils";
 
 const DISMISS_PREFIX = "pp-update-banner-dismissed:";
@@ -44,19 +45,22 @@ export default function UpdateAvailableBanner({
       : "";
 
   return (
-    <div
+    <Alert
+      tone="info"
+      role="status"
       className={cn(
-        "flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-primary/40 bg-primary-soft px-3 py-2 text-xs text-foreground sm:px-5 print:hidden",
+        // A full-bleed strip across the app chrome, not a card: square it off and
+        // keep only the top rule.
+        "items-center rounded-none border-x-0 border-b-0 px-3 py-2 text-xs sm:px-5 print:hidden",
         className,
       )}
-      role="status"
     >
-      <p className="min-w-0 flex-1 leading-snug">
+      <AlertTitle className="font-normal leading-snug">
         <span className="font-medium">Print Partner {updateCheck.latest_version}</span> is available
         (you are on {updateCheck.current_version}).
         {dockerHint}
-      </p>
-      <div className="flex shrink-0 items-center gap-1">
+      </AlertTitle>
+      <AlertActions className="gap-1">
         {releaseUrl && (
           <Button variant="secondary" size="sm" className="h-7 px-2 text-xs" asChild>
             <a href={releaseUrl} target="_blank" rel="noopener noreferrer">
@@ -78,7 +82,7 @@ export default function UpdateAvailableBanner({
         >
           <X className="h-3.5 w-3.5" />
         </Button>
-      </div>
-    </div>
+      </AlertActions>
+    </Alert>
   );
 }

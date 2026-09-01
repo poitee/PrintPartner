@@ -28,6 +28,7 @@ import {
 import { statusTone } from "../../lib/statusTone";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
+import { Checkbox } from "../ui/checkbox";
 import {
   Card,
   CardContent,
@@ -65,6 +66,8 @@ export default function PartsManifestTransfer({ review, sources, onApplied }: Pr
   const { draftWorkspace, editActivePlanDraft } = usePlanWorkspace();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const fileInputId = useId();
+  const applyIncludedId = `${fileInputId}-apply-included`;
+  const applyPrintedId = `${fileInputId}-apply-printed`;
   const [busy, setBusy] = useState(false);
   const [applyIncluded, setApplyIncluded] = useState(false);
   const [applyPrinted, setApplyPrinted] = useState(false);
@@ -277,19 +280,19 @@ export default function PartsManifestTransfer({ review, sources, onApplied }: Pr
           <div className="space-y-2 border-t border-border pt-3">
             <p className="text-sm font-medium">Import</p>
             <div className="flex flex-wrap gap-4 text-sm">
-              <label className="flex items-center gap-2">
-                <input
-                  type="checkbox"
+              <label className="flex items-center gap-2" htmlFor={applyIncludedId}>
+                <Checkbox
+                  id={applyIncludedId}
                   checked={applyIncluded}
-                  onChange={(e) => setApplyIncluded(e.target.checked)}
+                  onCheckedChange={(next) => setApplyIncluded(next === true)}
                 />
                 Propose included flag
               </label>
-              <label className="flex items-center gap-2">
-                <input
-                  type="checkbox"
+              <label className="flex items-center gap-2" htmlFor={applyPrintedId}>
+                <Checkbox
+                  id={applyPrintedId}
                   checked={applyPrinted}
-                  onChange={(e) => setApplyPrinted(e.target.checked)}
+                  onCheckedChange={(next) => setApplyPrinted(next === true)}
                 />
                 Apply printed counts to accepted Checkoff (run separately)
               </label>

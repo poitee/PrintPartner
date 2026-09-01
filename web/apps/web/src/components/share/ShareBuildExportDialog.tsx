@@ -6,6 +6,7 @@ import { startExportKitBundle } from "../../api/endpoints/jobs";
 import { useAuth } from "../../context/AuthContext";
 import { useJobRunner } from "../../hooks/useJobRunner";
 import { Button } from "../ui/button";
+import { Checkbox } from "../ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -84,11 +85,14 @@ export default function ShareBuildExportDialog({ open, onOpenChange, profileId }
             </Button>
           </div>
         )}
-        <label className="flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
+        <label
+          htmlFor="share-include-progress"
+          className="flex items-center gap-2 text-sm"
+        >
+          <Checkbox
+            id="share-include-progress"
             checked={includeProgress}
-            onChange={(e) => setIncludeProgress(e.target.checked)}
+            onCheckedChange={(next) => setIncludeProgress(next === true)}
           />
           <span>Include print progress (done/not-done per unit only)</span>
         </label>

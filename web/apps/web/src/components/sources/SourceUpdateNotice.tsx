@@ -4,8 +4,7 @@ import { useState } from "react";
 import type { SourceActivityEvent } from "../../api/endpoints/sourceContent";
 import { useSourceMonitoringQueries } from "../../queries/sourceMonitoring";
 import { libraryRoute } from "../../lib/routes";
-import { statusTone } from "../../lib/statusTone";
-import { cn } from "@/lib/utils";
+import { Alert, AlertActions, AlertDescription, AlertTitle } from "../ui/alert";
 import { Button } from "../ui/button";
 
 const DISMISSED_SOURCE_NOTICE_KEY = "print-partner.source-notice.dismissed";
@@ -94,37 +93,31 @@ export default function SourceUpdateNotice({ enabled }: { enabled: boolean }) {
   if (!notice || dismissed === notice.signature) return null;
 
   return (
-    <section
-      className={
-        notice.tone === "failure"
-          ? cn(
-              "mb-3 flex flex-wrap items-start gap-3 rounded-lg px-3 py-2.5 print:hidden",
-              statusTone({ tone: "error", emphasis: "surface" }),
-            )
-          : "mb-3 flex flex-wrap items-start gap-3 rounded-lg border border-primary/40 bg-primary-soft px-3 py-2.5 print:hidden"
-      }
+    <Alert
+      tone={notice.tone === "failure" ? "error" : "info"}
+      className="mb-3 print:hidden"
       aria-label="Source update notification"
       role="status"
     >
-      <Bell className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden />
-      <div className="min-w-0 flex-1">
-        <p className="text-sm font-semibold text-foreground">{notice.title}</p>
-        <p className="text-xs text-muted-foreground">{notice.detail}</p>
-      </div>
-      <Button size="sm" variant="secondary" asChild>
-        <Link to={libraryRoute()}>Open Source Library</Link>
-      </Button>
-      <button
-        type="button"
-        className="inline-flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
-        aria-label="Dismiss source update notification"
-        onClick={() => {
-          dismissSignature(notice.signature);
-          setDismissed(notice.signature);
-        }}
-      >
-        <X className="h-4 w-4" aria-hidden />
-      </button>
-    </section>
+      <Bell aria-hidden />
+      <AlertTitle>{notice.title}</AlertTitle>
+      <AlertDescription>{notice.detail}</AlertDescription>
+      <AlertActions>
+        <Button size="sm" variant="secondary" asChild>
+          <Link to={libraryRoute()}>Open Source Library</Link>
+        </Button>
+        <button
+          type="button"
+          className="inline-flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+          aria-label="Dismiss source update notification"
+          onClick={() => {
+            dismissSignature(notice.signature);
+            setDismissed(notice.signature);
+          }}
+        >
+          <X className="h-4 w-4" aria-hidden />
+        </button>
+      </AlertActions>
+    </Alert>
   );
 }

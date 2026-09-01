@@ -17,6 +17,7 @@ import { cn } from "@/lib/utils";
 import { SortableDragHandle } from "../dnd/SortableDragHandle";
 import PartThumbExpandButton from "../parts/PartThumbExpandButton";
 import { Button } from "../ui/button";
+import { Progress } from "../ui/progress";
 import CheckoffRowActionsMenu, {
   type CheckoffRowAction,
   type CheckoffRowMoveControls,
@@ -274,22 +275,12 @@ const ProgressPartRow = memo(function ProgressPartRow({
         ) : (
           <span className="size-3.5 shrink-0" aria-hidden />
         )}
-        <span
-          className="hidden h-1.5 max-w-[14rem] flex-1 overflow-hidden rounded-full bg-muted sm:block"
-          role="progressbar"
-          aria-valuenow={pct}
-          aria-valuemin={0}
-          aria-valuemax={100}
+        <Progress
+          value={pct}
+          tone={PROGRESS_TONE[tone]}
+          className="hidden h-1.5 max-w-[14rem] flex-1 sm:block"
           aria-label={`${part.filename} ${pct}% printed`}
-        >
-          <span
-            className={cn(
-              "block h-full rounded-full transition-[width]",
-              statusTone({ tone: PROGRESS_TONE[tone], emphasis: "solid" }),
-            )}
-            style={{ width: `${pct}%` }}
-          />
-        </span>
+        />
         <div className="ml-auto flex items-center gap-2">
           <Button
             type="button"

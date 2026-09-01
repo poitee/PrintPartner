@@ -3,6 +3,7 @@ import type { SourceSummary } from "@print-partner/contracts";
 import SourceCardCover from "../SourceCardCover";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
+import { Checkbox } from "../ui/checkbox";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -104,16 +105,14 @@ export default function LibrarySourceCard({
     >
       <div className="relative">
         {onSelectClick && (
-          <label
-            className="absolute left-1.5 top-1.5 z-10 flex h-6 w-6 cursor-pointer items-center justify-center rounded-md bg-background/85 shadow-sm backdrop-blur-sm"
+          <span
+            className="absolute left-1.5 top-1.5 z-10 flex h-6 w-6 items-center justify-center rounded-md bg-background/85 shadow-sm backdrop-blur-sm"
             onClick={(e) => e.stopPropagation()}
           >
-            <input
-              type="checkbox"
-              className="h-4 w-4 accent-primary"
+            <Checkbox
+              className="cursor-pointer"
               checked={selected}
               aria-label={`Select ${source.name}`}
-              onChange={() => {}}
               onClick={(e) =>
                 onSelectClick({
                   shiftKey: e.shiftKey,
@@ -122,7 +121,7 @@ export default function LibrarySourceCard({
                 })
               }
             />
-          </label>
+          </span>
         )}
         <button
           type="button"

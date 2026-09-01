@@ -8,6 +8,7 @@ import {
   CardTitle,
 } from "../ui/card";
 import { Button } from "../ui/button";
+import ConfirmDialog from "../ConfirmDialog";
 import {
   Select,
   SelectContent,
@@ -179,7 +180,6 @@ export default function LoggingManagementCard() {
   };
 
   const handleClearLogs = async () => {
-    if (!confirm("Clear all logs? This cannot be undone.")) return;
     try {
       const response = await fetch("/settings/logging/logs", {
         method: "DELETE",
@@ -374,15 +374,22 @@ export default function LoggingManagementCard() {
               <RefreshCw className="h-4 w-4" />
             </Button>
           </div>
-          <Button
-            onClick={handleClearLogs}
-            variant="outline"
-            size="sm"
-            className="w-full text-destructive hover:text-destructive"
-          >
-            <Trash2 className="mr-2 h-4 w-4" />
-            Clear All Logs
-          </Button>
+          <ConfirmDialog
+            trigger={
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full text-destructive hover:text-destructive"
+              >
+                <Trash2 className="mr-2 h-4 w-4" />
+                Clear All Logs
+              </Button>
+            }
+            title="Clear all logs?"
+            description="Every stored log line is deleted from this server. This cannot be undone."
+            confirmLabel="Clear all logs"
+            onConfirm={() => void handleClearLogs()}
+          />
         </div>
       </CardContent>
     </Card>

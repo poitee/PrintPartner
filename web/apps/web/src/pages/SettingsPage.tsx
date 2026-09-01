@@ -53,12 +53,8 @@ import LoggingManagementCard from "../components/settings/LoggingManagementCard"
 import ThemePreferenceControl from "../components/ThemePreferenceControl";
 import SourceCategoryManager from "../components/sources/SourceCategoryManager";
 import { Button } from "../components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "../components/ui/dialog";
+import ConfirmDialog from "../components/ConfirmDialog";
+import { Checkbox } from "../components/ui/checkbox";
 import SupportCta from "../components/SupportCta";
 import {
   Card,
@@ -687,14 +683,17 @@ export default function SettingsPage() {
             </Button>
             {discordSettings?.webhook_url && (
               <div className="space-y-2 pt-1">
-                <label className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
+                <label
+                  htmlFor="discord-notify-on-update"
+                  className="flex items-center gap-2 text-sm"
+                >
+                  <Checkbox
+                    id="discord-notify-on-update"
                     disabled={!discordReady || discordSaving}
                     checked={discordSettings.notify_on_update}
-                    onChange={async (e) => {
+                    onCheckedChange={async (next) => {
                       try {
-                        const saved = await saveDiscordNotifySettings({ notify_on_update: e.target.checked });
+                        const saved = await saveDiscordNotifySettings({ notify_on_update: next === true });
                         setDiscordSettings(saved);
                       } catch (e) {
                         setLoadError(e instanceof Error ? e.message : String(e));
@@ -703,14 +702,17 @@ export default function SettingsPage() {
                   />
                   Notify when a source is auto-synced (updates)
                 </label>
-                <label className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
+                <label
+                  htmlFor="discord-notify-on-sync"
+                  className="flex items-center gap-2 text-sm"
+                >
+                  <Checkbox
+                    id="discord-notify-on-sync"
                     disabled={!discordReady || discordSaving}
                     checked={discordSettings.notify_on_sync}
-                    onChange={async (e) => {
+                    onCheckedChange={async (next) => {
                       try {
-                        const saved = await saveDiscordNotifySettings({ notify_on_sync: e.target.checked });
+                        const saved = await saveDiscordNotifySettings({ notify_on_sync: next === true });
                         setDiscordSettings(saved);
                       } catch (e) {
                         setLoadError(e instanceof Error ? e.message : String(e));
@@ -885,43 +887,25 @@ export default function SettingsPage() {
         </div>
       </div>
 
-      <Dialog
+      <ConfirmDialog
         open={deleteFilamentId != null}
         onOpenChange={(open) => {
           if (!open && !deleting) setDeleteFilamentId(null);
         }}
-      >
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Remove custom filament?</DialogTitle>
-          </DialogHeader>
-          <p className="text-sm text-muted-foreground">
-            {deleteFilamentId
-              ? `Remove “${filaments.find((f) => f.id === deleteFilamentId)?.display_name ?? "this filament"}” from your custom colors?`
-              : ""}
-          </p>
-          <div className="flex justify-end gap-2">
-            <Button
-              variant="secondary"
-              disabled={deleting}
-              onClick={() => setDeleteFilamentId(null)}
-            >
-              Cancel
-            </Button>
-            <Button
-              variant="ghost"
-              disabled={
-                !filamentsReady ||
-                deleting ||
-                deleteFilamentId == null
-              }
-              onClick={() => deleteFilamentId && void onDeleteFilament(deleteFilamentId)}
-            >
-              {deleting ? "Removing…" : "Delete"}
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+        title="Remove custom filament?"
+        description={
+          deleteFilamentId
+            ? `Remove “${filaments.find((f) => f.id === deleteFilamentId)?.display_name ?? "this filament"}” from your custom colors?`
+            : ""
+        }
+        confirmLabel={deleting ? "Removing…" : "Delete"}
+        disabled={!filamentsReady || deleting || deleteFilamentId == null}
+        onConfirm={(event) => {
+          // The button reports "Removing…", so the dialog has to outlive the click.
+          event.preventDefault();
+          if (deleteFilamentId) void onDeleteFilament(deleteFilamentId);
+        }}
+      />
     </PageShell>
   );
 }

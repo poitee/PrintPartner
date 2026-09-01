@@ -18,6 +18,8 @@ import type { IntegrationSummary } from "../../api/endpoints/integrations";
 import { statusTone } from "../../lib/statusTone";
 import { cn } from "@/lib/utils";
 import { Button } from "../ui/button";
+import { Checkbox } from "../ui/checkbox";
+import { RadioGroup, RadioGroupItem } from "../ui/radio-group";
 import { StatusBadge } from "../ui/status-badge";
 import InlineOperationError from "./InlineOperationError";
 import { failureMessage } from "./asyncView";
@@ -90,6 +92,8 @@ export default function PrintFileAssignForm({
   const buildFieldId = `${fieldPrefix}-build`;
   const buildErrorId = `${fieldPrefix}-build-error`;
   const unitsErrorId = `${fieldPrefix}-units-error`;
+  const trackingLegendId = `${fieldPrefix}-tracking-legend`;
+  const completedFieldId = `${fieldPrefix}-completed`;
 
   const [buildValue, setBuildValue] = useState(
     selectedProfileId == null ? "" : String(selectedProfileId),
@@ -239,40 +243,55 @@ export default function PrintFileAssignForm({
       </div>
 
       <fieldset className="stack-row">
-        <legend className="text-body font-medium">How should PrintPartner track it?</legend>
-        {host ? (
-          <label className="flex items-start gap-2 text-body">
-            <input
-              type="radio"
-              className="mt-1 h-4 w-4"
-              name={`${fieldPrefix}-tracking`}
-              checked={tracking === "host"}
-              onChange={() => setTracking("host")}
+        <legend id={trackingLegendId} className="text-body font-medium">
+          How should PrintPartner track it?
+        </legend>
+        {/* The legend names the fieldset, not the radio group inside it, so the
+            group is given the same name explicitly. */}
+        <RadioGroup
+          className="gap-[var(--space-row)]"
+          aria-labelledby={trackingLegendId}
+          value={tracking}
+          onValueChange={(next) => setTracking(next as "host" | "manual")}
+        >
+          {host ? (
+            <label
+              htmlFor={`${fieldPrefix}-tracking-host`}
+              className="flex items-start gap-2 text-body"
+            >
+              <RadioGroupItem
+                id={`${fieldPrefix}-tracking-host`}
+                size="shop"
+                value="host"
+                className="mt-1"
+              />
+              <span>
+                <span className="block font-medium">Watch this printer</span>
+                <span className="block text-meta text-muted-foreground">
+                  Match the file name when {host.name} reports the current or next print.
+                </span>
+              </span>
+            </label>
+          ) : null}
+          <label
+            htmlFor={`${fieldPrefix}-tracking-manual`}
+            className="flex items-start gap-2 text-body"
+          >
+            <RadioGroupItem
+              id={`${fieldPrefix}-tracking-manual`}
+              size="shop"
+              value="manual"
+              className="mt-1"
             />
             <span>
-              <span className="block font-medium">Watch this printer</span>
+              <span className="block font-medium">Track it by hand</span>
               <span className="block text-meta text-muted-foreground">
-                Match the file name when {host.name} reports the current or next print.
+                You mark it finished in the Tracked tab. Use this when the printer cannot report
+                status.
               </span>
             </span>
           </label>
-        ) : null}
-        <label className="flex items-start gap-2 text-body">
-          <input
-            type="radio"
-            className="mt-1 h-4 w-4"
-            name={`${fieldPrefix}-tracking`}
-            checked={tracking === "manual"}
-            onChange={() => setTracking("manual")}
-          />
-          <span>
-            <span className="block font-medium">Track it by hand</span>
-            <span className="block text-meta text-muted-foreground">
-              You mark it finished in the Tracked tab. Use this when the printer cannot report
-              status.
-            </span>
-          </span>
-        </label>
+        </RadioGroup>
       </fieldset>
 
       {assign.phase === "unchecked" ? (
@@ -326,12 +345,16 @@ export default function PrintFileAssignForm({
                 error={unitsError}
               />
 
-              <label className="flex items-start gap-2 rounded-md border border-border bg-background p-3 text-body">
-                <input
-                  type="checkbox"
-                  className="mt-1 h-4 w-4"
+              <label
+                htmlFor={completedFieldId}
+                className="flex items-start gap-2 rounded-md border border-border bg-background p-3 text-body"
+              >
+                <Checkbox
+                  id={completedFieldId}
+                  size="shop"
+                  className="mt-1"
                   checked={completed}
-                  onChange={(event) => setCompleted(event.target.checked)}
+                  onCheckedChange={(next) => setCompleted(next === true)}
                 />
                 <span>
                   <span className="block font-medium">This print is already finished</span>
@@ -446,6 +469,7 @@ function UnitConfirmation({
   errorId: string;
   error: AssignFieldError | null;
 }) {
+  const unitPrefix = useId();
   return (
     <fieldset
       className="stack-row"
@@ -459,14 +483,16 @@ function UnitConfirmation({
         <ul className="max-h-40 overflow-y-auto rounded-md border border-border bg-background p-2">
           {preview.suggested_units.map((unit) => {
             const token = requiredUnitToken(unit);
+            const unitFieldId = `${unitPrefix}-${token}`;
             return (
               <li key={token}>
-                <label className="flex items-center gap-2 py-1 text-body">
-                  <input
-                    type="checkbox"
-                    className="h-4 w-4 shrink-0"
+                {/* The rows sit close together in a scroller, so these keep the
+                    24px target rather than the 44px one, which would overlap. */}
+                <label htmlFor={unitFieldId} className="flex items-center gap-2 py-1 text-body">
+                  <Checkbox
+                    id={unitFieldId}
                     checked={confirmedTokens.has(token)}
-                    onChange={(event) => onToggle(token, event.target.checked)}
+                    onCheckedChange={(next) => onToggle(token, next === true)}
                   />
                   <span className="truncate font-mono text-meta">
                     {unit.object_name ?? `Required unit ${unit.part_id}-${unit.unit_index + 1}`}

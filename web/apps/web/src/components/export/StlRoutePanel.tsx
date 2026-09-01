@@ -8,6 +8,7 @@ import { checkoffPastPrintRoute } from "../../lib/routes";
 import { statusTone } from "../../lib/statusTone";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
+import { RadioGroup, RadioGroupItem } from "../ui/radio-group";
 import { StatusBadge } from "../ui/status-badge";
 import InlineOperationError from "../printers/InlineOperationError";
 import { failureMessage } from "../printers/asyncView";
@@ -164,71 +165,99 @@ export default function StlRoutePanel({
       </div>
 
       <fieldset className="stack-row">
-        <legend className="text-body font-medium">Which units go in the download?</legend>
-        <label className="flex min-h-11 items-start gap-2 py-1 text-body">
-          <input
-            type="radio"
-            className="mt-1.5 h-4 w-4"
-            name={`${fieldPrefix}-scope`}
-            checked={scope === "all"}
-            onChange={() => setScope("all")}
-          />
-          <span>
-            <span className="block font-medium">Every unit</span>
-            <span className="block text-meta text-muted-foreground">
-              All the Required units named above, printed or not.
+        <legend id={`${fieldPrefix}-scope-legend`} className="text-body font-medium">
+          Which units go in the download?
+        </legend>
+        {/* The legend names the fieldset, not the radio group inside it, so the
+            group is given the same name explicitly. */}
+        <RadioGroup
+          className="gap-[var(--space-row)]"
+          aria-labelledby={`${fieldPrefix}-scope-legend`}
+          value={scope}
+          onValueChange={(next) => setScope(next as UnitScope)}
+        >
+          <label
+            htmlFor={`${fieldPrefix}-scope-all`}
+            className="flex min-h-11 items-start gap-2 py-1 text-body"
+          >
+            <RadioGroupItem
+              id={`${fieldPrefix}-scope-all`}
+              size="shop"
+              value="all"
+              className="mt-1"
+            />
+            <span>
+              <span className="block font-medium">Every unit</span>
+              <span className="block text-meta text-muted-foreground">
+                All the Required units named above, printed or not.
+              </span>
             </span>
-          </span>
-        </label>
-        <label className="flex min-h-11 items-start gap-2 py-1 text-body">
-          <input
-            type="radio"
-            className="mt-1.5 h-4 w-4"
-            name={`${fieldPrefix}-scope`}
-            checked={scope === "remaining"}
-            onChange={() => setScope("remaining")}
-          />
-          <span>
-            <span className="block font-medium">Only the ones still to print</span>
-            <span className="block text-meta text-muted-foreground">
-              Leaves out the units Checkoff has already verified.
+          </label>
+          <label
+            htmlFor={`${fieldPrefix}-scope-remaining`}
+            className="flex min-h-11 items-start gap-2 py-1 text-body"
+          >
+            <RadioGroupItem
+              id={`${fieldPrefix}-scope-remaining`}
+              size="shop"
+              value="remaining"
+              className="mt-1"
+            />
+            <span>
+              <span className="block font-medium">Only the ones still to print</span>
+              <span className="block text-meta text-muted-foreground">
+                Leaves out the units Checkoff has already verified.
+              </span>
             </span>
-          </span>
-        </label>
+          </label>
+        </RadioGroup>
       </fieldset>
 
       <fieldset className="stack-row">
-        <legend className="text-body font-medium">How should the files be arranged?</legend>
-        <label className="flex min-h-11 items-start gap-2 py-1 text-body">
-          <input
-            type="radio"
-            className="mt-1.5 h-4 w-4"
-            name={`${fieldPrefix}-grouping`}
-            checked={grouping === "color_dir"}
-            onChange={() => setGrouping("color_dir")}
-          />
-          <span>
-            <span className="block font-medium">By color, keeping the Source folders</span>
-            <span className="block text-meta text-muted-foreground">
-              One folder per color, with each Source's own folders inside it.
+        <legend id={`${fieldPrefix}-grouping-legend`} className="text-body font-medium">
+          How should the files be arranged?
+        </legend>
+        <RadioGroup
+          className="gap-[var(--space-row)]"
+          aria-labelledby={`${fieldPrefix}-grouping-legend`}
+          value={grouping}
+          onValueChange={(next) => setGrouping(next as StlPackGroupBy)}
+        >
+          <label
+            htmlFor={`${fieldPrefix}-grouping-color-dir`}
+            className="flex min-h-11 items-start gap-2 py-1 text-body"
+          >
+            <RadioGroupItem
+              id={`${fieldPrefix}-grouping-color-dir`}
+              size="shop"
+              value="color_dir"
+              className="mt-1"
+            />
+            <span>
+              <span className="block font-medium">By color, keeping the Source folders</span>
+              <span className="block text-meta text-muted-foreground">
+                One folder per color, with each Source's own folders inside it.
+              </span>
             </span>
-          </span>
-        </label>
-        <label className="flex min-h-11 items-start gap-2 py-1 text-body">
-          <input
-            type="radio"
-            className="mt-1.5 h-4 w-4"
-            name={`${fieldPrefix}-grouping`}
-            checked={grouping === "color"}
-            onChange={() => setGrouping("color")}
-          />
-          <span>
-            <span className="block font-medium">By color only</span>
-            <span className="block text-meta text-muted-foreground">
-              One folder per color, with every file flat inside it.
+          </label>
+          <label
+            htmlFor={`${fieldPrefix}-grouping-color`}
+            className="flex min-h-11 items-start gap-2 py-1 text-body"
+          >
+            <RadioGroupItem
+              id={`${fieldPrefix}-grouping-color`}
+              size="shop"
+              value="color"
+              className="mt-1"
+            />
+            <span>
+              <span className="block font-medium">By color only</span>
+              <span className="block text-meta text-muted-foreground">
+                One folder per color, with every file flat inside it.
+              </span>
             </span>
-          </span>
-        </label>
+          </label>
+        </RadioGroup>
       </fieldset>
 
       <div className="flex flex-wrap items-center gap-3">

@@ -30,6 +30,7 @@ import ImportRulesTree from "../ImportRulesTree";
 const Preview3D = lazy(() => import("../Preview3D"));
 import SourceCardCover from "../SourceCardCover";
 import { Button } from "../ui/button";
+import { Checkbox } from "../ui/checkbox";
 import { Label } from "../ui/label";
 import { ScrollArea } from "../ui/scroll-area";
 import {
@@ -493,12 +494,15 @@ export default function SourceDetailSheet({
                 </p>
                 {namingLoadError && <p className="text-sm text-destructive">{namingLoadError}</p>}
                 {namingNote && <p className="text-sm text-muted-foreground">{namingNote}</p>}
-                <label className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
+                <label
+                  className="flex items-center gap-2 text-sm"
+                  htmlFor="source-naming-use-defaults"
+                >
+                  <Checkbox
+                    id="source-naming-use-defaults"
                     checked={useDefaults}
                     disabled={namingApiMissing || namingSaving || busy}
-                    onChange={(e) => setUseDefaults(e.target.checked)}
+                    onCheckedChange={(next) => setUseDefaults(next === true)}
                   />
                   <span>Use app default naming rules</span>
                 </label>

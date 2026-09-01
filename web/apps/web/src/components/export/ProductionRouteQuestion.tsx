@@ -4,7 +4,9 @@ import {
   PRODUCTION_ROUTE_DESCRIPTION,
   PRODUCTION_ROUTE_LABEL,
 } from "../../lib/workPackageTasks";
+import { Alert, AlertActions, AlertDescription } from "../ui/alert";
 import { Button } from "../ui/button";
+import { RadioGroup, RadioGroupItem } from "../ui/radio-group";
 import { statusTone } from "@/lib/statusTone";
 import { cn } from "@/lib/utils";
 
@@ -90,10 +92,25 @@ export default function ProductionRouteQuestion({
 
         {/* One column at every width. A phone gets the same reading order as a
             workshop monitor, which is what SC 1.4.10 Reflow asks for. */}
-        <div className="grid gap-2">
+        <RadioGroup
+          className="grid gap-2"
+          // The legend names the fieldset; the radio group is a separate node in
+          // the accessibility tree, so it has to be told the same name.
+          aria-labelledby={LEGEND_ID}
+          aria-describedby={missing ? ERROR_ID : undefined}
+          aria-invalid={missing || undefined}
+          value={chosen ?? ""}
+          onValueChange={(next) => {
+            setChosen(next as PreparationRoute);
+            setMissing(false);
+          }}
+        >
           {PREPARATION_ROUTE_ORDER.map((route) => (
             <label
               key={route}
+              // A wrapping label does not name a `role="radio"` button, so the
+              // name comes from `for`, which does.
+              htmlFor={`production-route-${route}`}
               className={cn(
                 "flex min-h-11 cursor-pointer items-start gap-3 rounded-lg border p-3 transition-colors",
                 chosen === route
@@ -101,17 +118,12 @@ export default function ProductionRouteQuestion({
                   : "border-border-strong bg-card hover:bg-accent/40",
               )}
             >
-              <input
-                type="radio"
-                name="production-route"
+              <RadioGroupItem
+                id={`production-route-${route}`}
+                size="shop"
                 value={route}
-                checked={chosen === route}
-                className="mt-0.5 h-5 w-5 shrink-0 accent-primary"
+                className="mt-0.5"
                 aria-describedby={`production-route-${route}-hint`}
-                onChange={() => {
-                  setChosen(route);
-                  setMissing(false);
-                }}
               />
               <span className="min-w-0">
                 <span className="block text-sm font-semibold text-foreground">
@@ -126,28 +138,24 @@ export default function ProductionRouteQuestion({
               </span>
             </label>
           ))}
-        </div>
+        </RadioGroup>
       </fieldset>
 
       {error ? (
-        <div
-          className={cn(
-            "flex flex-wrap items-center gap-3 rounded-md px-3 py-2",
-            statusTone({ tone: "error", emphasis: "surface" }),
-          )}
-          role="alert"
-        >
-          <p className="min-w-0 flex-1 text-sm text-destructive">{error.message}</p>
-          <Button
-            type="button"
-            size="sm"
-            variant="secondary"
-            className="min-h-9 shrink-0"
-            onClick={error.onRetry}
-          >
-            Retry
-          </Button>
-        </div>
+        <Alert tone="error">
+          <AlertDescription className="min-w-0">{error.message}</AlertDescription>
+          <AlertActions>
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              className="min-h-9 shrink-0"
+              onClick={error.onRetry}
+            >
+              Retry
+            </Button>
+          </AlertActions>
+        </Alert>
       ) : null}
 
       <div className="flex flex-wrap gap-2">

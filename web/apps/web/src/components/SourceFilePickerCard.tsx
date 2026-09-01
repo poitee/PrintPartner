@@ -7,6 +7,7 @@ import SourceCardCover from "./SourceCardCover";
 import SourceDocsSheet from "./sources/SourceDocsSheet";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
+import { Progress } from "./ui/progress";
 import {
   Sheet,
   SheetContent,
@@ -343,12 +344,12 @@ export default function SourceFilePickerCard({
 
       {syncBusy && (
         <div className="flex items-center gap-2">
-          <span className="block h-1 flex-1 overflow-hidden rounded-full bg-muted">
-            <span
-              className="block h-full bg-info transition-[width]"
-              style={{ width: `${syncProgress ?? 56}%` }}
-            />
-          </span>
+          <Progress
+            value={syncProgress ?? null}
+            tone="info"
+            className="h-1 flex-1"
+            aria-label="Sync progress"
+          />
           <span className="shrink-0 font-mono text-micro text-info">
             {activeSync?.message || "syncing"}
           </span>

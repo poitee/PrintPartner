@@ -8,6 +8,7 @@ import { statusTone } from "../../lib/statusTone";
 import { cn } from "@/lib/utils";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
+import { Checkbox } from "../ui/checkbox";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -69,12 +70,10 @@ export default function LibrarySourceRow({
       )}
       title="Drag onto a category"
     >
-      <input
-        type="checkbox"
-        className="h-4 w-4 shrink-0 accent-primary"
+      <Checkbox
+        className="shrink-0"
         checked={selected}
         aria-label={`Select ${source.name}`}
-        onChange={() => {}}
         onClick={(event) => {
           event.stopPropagation();
           onSelectClick({

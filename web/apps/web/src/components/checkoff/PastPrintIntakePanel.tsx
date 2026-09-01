@@ -27,6 +27,8 @@ import { checkoffRoute, settingsPrintersRoute } from "../../lib/routes";
 import { statusTone } from "../../lib/statusTone";
 import { cn } from "@/lib/utils";
 import { Button } from "../ui/button";
+import { Checkbox } from "../ui/checkbox";
+import { RadioGroup, RadioGroupItem } from "../ui/radio-group";
 import { StatusBadge } from "../ui/status-badge";
 import InlineOperationError from "../printers/InlineOperationError";
 import PrinterFilesView from "../printers/PrinterFilesView";
@@ -213,38 +215,52 @@ export default function PastPrintIntakePanel({ profileId, onRecorded }: Props) {
       </p>
 
       <fieldset className="stack-row">
-        <legend className="text-body font-medium">Where is the print file?</legend>
-        <label className="flex min-h-11 items-start gap-2 py-1 text-body">
-          <input
-            type="radio"
-            className="mt-1.5 h-4 w-4"
-            name={`${fieldPrefix}-source`}
-            checked={source === "printer"}
-            onChange={() => setSource("printer")}
-          />
-          <span>
-            <span className="block font-medium">On a printer PrintPartner watches</span>
-            <span className="block text-meta text-muted-foreground">
-              Browse that printer's own storage and pick the file it ran.
+        <legend id={`${fieldPrefix}-source-legend`} className="text-body font-medium">
+          Where is the print file?
+        </legend>
+        <RadioGroup
+          aria-labelledby={`${fieldPrefix}-source-legend`}
+          className="gap-[var(--space-row)]"
+          name={`${fieldPrefix}-source`}
+          value={source ?? ""}
+          onValueChange={(next) => setSource(next as FileSource)}
+        >
+          <label
+            htmlFor={`${fieldPrefix}-source-printer`}
+            className="flex min-h-11 items-start gap-2 py-1 text-body"
+          >
+            <RadioGroupItem
+              id={`${fieldPrefix}-source-printer`}
+              value="printer"
+              size="shop"
+              className="mt-1.5"
+            />
+            <span>
+              <span className="block font-medium">On a printer PrintPartner watches</span>
+              <span className="block text-meta text-muted-foreground">
+                Browse that printer's own storage and pick the file it ran.
+              </span>
             </span>
-          </span>
-        </label>
-        <label className="flex min-h-11 items-start gap-2 py-1 text-body">
-          <input
-            type="radio"
-            className="mt-1.5 h-4 w-4"
-            name={`${fieldPrefix}-source`}
-            checked={source === "computer"}
-            onChange={() => setSource("computer")}
-          />
-          <span>
-            <span className="block font-medium">On this computer</span>
-            <span className="block text-meta text-muted-foreground">
-              Upload G-code, binary G-code, or a 3MF. This is the way in for a printer
-              PrintPartner cannot talk to.
+          </label>
+          <label
+            htmlFor={`${fieldPrefix}-source-computer`}
+            className="flex min-h-11 items-start gap-2 py-1 text-body"
+          >
+            <RadioGroupItem
+              id={`${fieldPrefix}-source-computer`}
+              value="computer"
+              size="shop"
+              className="mt-1.5"
+            />
+            <span>
+              <span className="block font-medium">On this computer</span>
+              <span className="block text-meta text-muted-foreground">
+                Upload G-code, binary G-code, or a 3MF. This is the way in for a printer
+                PrintPartner cannot talk to.
+              </span>
             </span>
-          </span>
-        </label>
+          </label>
+        </RadioGroup>
       </fieldset>
 
       {fleet.view.status === "loading" ? (
@@ -953,39 +969,53 @@ function UploadedPrintRecord({
                 aria-invalid={checkedProblem ? true : undefined}
                 aria-describedby={checkedProblem ? checkedErrorId : undefined}
               >
-                <legend className="text-body font-medium">Have you checked the parts?</legend>
-                <label className="flex min-h-11 items-start gap-2 py-1 text-body">
-                  <input
-                    type="radio"
-                    className="mt-1.5 h-4 w-4"
-                    name={`${fieldPrefix}-checked`}
-                    checked={checked === "checked"}
-                    onChange={() => setChecked("checked")}
-                  />
-                  <span>
-                    <span className="block font-medium">Printed and checked</span>
-                    <span className="block text-meta text-muted-foreground">
-                      You have looked at the parts and they are good. The confirmed units are
-                      checked off as soon as this is recorded.
+                <legend id={`${fieldPrefix}-checked-legend`} className="text-body font-medium">
+                  Have you checked the parts?
+                </legend>
+                <RadioGroup
+                  aria-labelledby={`${fieldPrefix}-checked-legend`}
+                  className="gap-[var(--space-row)]"
+                  name={`${fieldPrefix}-checked`}
+                  value={checked ?? ""}
+                  onValueChange={(next) => setChecked(next as CheckedAnswer)}
+                >
+                  <label
+                    htmlFor={`${fieldPrefix}-checked-yes`}
+                    className="flex min-h-11 items-start gap-2 py-1 text-body"
+                  >
+                    <RadioGroupItem
+                      id={`${fieldPrefix}-checked-yes`}
+                      value="checked"
+                      size="shop"
+                      className="mt-1.5"
+                    />
+                    <span>
+                      <span className="block font-medium">Printed and checked</span>
+                      <span className="block text-meta text-muted-foreground">
+                        You have looked at the parts and they are good. The confirmed units are
+                        checked off as soon as this is recorded.
+                      </span>
                     </span>
-                  </span>
-                </label>
-                <label className="flex min-h-11 items-start gap-2 py-1 text-body">
-                  <input
-                    type="radio"
-                    className="mt-1.5 h-4 w-4"
-                    name={`${fieldPrefix}-checked`}
-                    checked={checked === "not_checked"}
-                    onChange={() => setChecked("not_checked")}
-                  />
-                  <span>
-                    <span className="block font-medium">Printed, not checked yet</span>
-                    <span className="block text-meta text-muted-foreground">
-                      The units wait in Checkoff until you have looked at the parts. Reject one
-                      there if it came out wrong.
+                  </label>
+                  <label
+                    htmlFor={`${fieldPrefix}-checked-no`}
+                    className="flex min-h-11 items-start gap-2 py-1 text-body"
+                  >
+                    <RadioGroupItem
+                      id={`${fieldPrefix}-checked-no`}
+                      value="not_checked"
+                      size="shop"
+                      className="mt-1.5"
+                    />
+                    <span>
+                      <span className="block font-medium">Printed, not checked yet</span>
+                      <span className="block text-meta text-muted-foreground">
+                        The units wait in Checkoff until you have looked at the parts. Reject one
+                        there if it came out wrong.
+                      </span>
                     </span>
-                  </span>
-                </label>
+                  </label>
+                </RadioGroup>
                 {checkedProblem ? (
                   <p id={checkedErrorId} className="text-meta text-destructive">
                     {checkedProblem.message}
@@ -1080,6 +1110,7 @@ function UnitConfirmation({
   errorId: string;
   error: RecordFieldError | null;
 }) {
+  const unitIdPrefix = useId();
   return (
     <fieldset
       className="stack-row"
@@ -1094,14 +1125,21 @@ function UnitConfirmation({
         <ul className="max-h-40 overflow-y-auto rounded-md border border-border bg-background p-2">
           {units.map((unit) => {
             const token = requiredUnitToken(unit);
+            /* Named through `for`: a <label> wrapper does not name a button
+               with role="checkbox". */
+            const unitId = `${unitIdPrefix}-${token}`;
             return (
               <li key={token}>
-                <label className="flex min-h-11 items-center gap-2 py-1 text-body">
-                  <input
-                    type="checkbox"
-                    className="h-4 w-4 shrink-0"
+                <label
+                  htmlFor={unitId}
+                  className="flex min-h-11 items-center gap-2 py-1 text-body"
+                >
+                  <Checkbox
+                    id={unitId}
+                    size="shop"
+                    className="shrink-0"
                     checked={confirmedTokens.has(token)}
-                    onChange={(event) => onToggle(token, event.target.checked)}
+                    onCheckedChange={(next) => onToggle(token, next === true)}
                   />
                   <span className="truncate font-mono text-meta">
                     {unit.object_name ?? `Required unit ${unit.part_id}-${unit.unit_index + 1}`}

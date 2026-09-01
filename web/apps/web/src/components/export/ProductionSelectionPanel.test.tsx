@@ -82,9 +82,11 @@ describe("ProductionSelectionPanel", () => {
       />,
     );
 
-    expect(screen.getByRole("checkbox", { name: `bracket__${token}` })).toHaveProperty("checked", true);
-    expect(screen.getByRole("checkbox", { name: `clip__${second}` })).toHaveProperty("checked", false);
-    expect(screen.getByRole("checkbox", { name: `spacer__${third}` })).toHaveProperty("checked", true);
+    // ARIA checkboxes rather than `<input type="checkbox">`, so the tick is read
+    // the way an assistive technology reads it.
+    expect(screen.getByRole("checkbox", { name: `bracket__${token}`, checked: true })).toBeTruthy();
+    expect(screen.getByRole("checkbox", { name: `clip__${second}`, checked: false })).toBeTruthy();
+    expect(screen.getByRole("checkbox", { name: `spacer__${third}`, checked: true })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Clear Electronics" }));
     expect(onClearGroup).toHaveBeenCalledWith("source_layer", "Electronics");
     fireEvent.click(screen.getByRole("checkbox", { name: `bracket__${token}` }));
