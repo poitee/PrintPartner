@@ -5,7 +5,7 @@ import type {
   PlanUntrackedReason,
 } from "@print-partner/contracts";
 import type { PlanReview } from "../api/endpoints/planManifests";
-import { buildSourcesRoute, libraryRoute } from "./routes";
+import { buildSourcesRoute, libraryRoute, productionRoute } from "./routes";
 import type { WorkingPlanRecovery } from "./workingPlanChanged";
 
 /**
@@ -40,6 +40,24 @@ export type PlanIssue = {
   readonly tone: "error" | "warning";
   readonly action: PlanIssueAction | null;
 };
+
+export type PlanSourceNotice =
+  | Readonly<{
+      kind: "updates_available";
+      title: "Source updates available";
+      detail: string;
+      message: string;
+      productionAction: Readonly<{ label: "Continue to Production"; to: string }>;
+      reviewAction: Readonly<{ label: "Review Sources for the next Plan"; to: string }>;
+    }>
+  | Readonly<{
+      kind: "tracking_unavailable";
+      title: "Source update tracking unavailable";
+      detail: string;
+      message: string;
+      productionAction: Readonly<{ label: "Continue to Production"; to: string }>;
+      reviewAction: Readonly<{ label: "Review Sources for the next Plan"; to: string }>;
+    }>;
 
 /** A Checkoff or printer record that could not move to the new revision. */
 export type PlanUnitOutcome = {
@@ -126,6 +144,7 @@ export type PlanAcceptanceModel = {
   readonly issues: readonly PlanIssue[];
   readonly mustResolve: readonly PlanIssue[];
   readonly reviewRecommended: readonly PlanIssue[];
+  readonly sourceNotice: PlanSourceNotice | null;
   readonly impact: PlanRequiredUnitImpact;
   readonly publication: PlanPublication;
   readonly headerSummary: string;
@@ -233,6 +252,53 @@ function sourcesAction(buildId: number | null): PlanIssueAction {
   return buildId == null
     ? { kind: "route", label: "Open Source Library", to: libraryRoute() }
     : { kind: "route", label: "Open Sources", to: buildSourcesRoute(buildId) };
+}
+
+function sourceReviewRoute(buildId: number | null): string {
+  return buildId == null ? libraryRoute() : buildSourcesRoute(buildId);
+}
+
+export function planSourceNotice(input: {
+  readonly freshness: PlanFreshness | null | undefined;
+  readonly accepted: AcceptedRevisionSummary;
+  readonly buildId: number | null;
+}): PlanSourceNotice | null {
+  const freshness = input.freshness;
+  const planVersion = input.accepted.planVersion;
+  if (!freshness || freshness.status === "current" || planVersion == null) return null;
+
+  const message =
+    `Production and Checkoff continue using the files from published Plan revision ${planVersion}.`;
+  const productionAction: PlanSourceNotice["productionAction"] = {
+    label: "Continue to Production",
+    to: productionRoute(input.buildId),
+  };
+  const reviewAction: PlanSourceNotice["reviewAction"] = {
+    label: "Review Sources for the next Plan",
+    to: sourceReviewRoute(input.buildId),
+  };
+
+  if (freshness.status === "stale") {
+    return {
+      kind: "updates_available",
+      title: "Source updates available",
+      detail: planFreshnessMessages(freshness).join(" "),
+      message,
+      productionAction,
+      reviewAction,
+    };
+  }
+
+  const reasons = freshness.reasons.filter((reason) => reason.kind !== "no_accepted_inputs");
+  if (reasons.length === 0) return null;
+  return {
+    kind: "tracking_unavailable",
+    title: "Source update tracking unavailable",
+    detail: reasons.map(planUntrackedReasonText).join(" "),
+    message,
+    productionAction,
+    reviewAction,
+  };
 }
 
 function requiredUnitIssues(draft: PlanDraftWorkspace): PlanIssue[] {
@@ -404,32 +470,6 @@ export function planIssues(input: PlanAcceptanceInput): PlanIssue[] {
     });
   }
 
-  const freshness = input.freshness;
-  if (freshness?.status === "stale") {
-    issues.push({
-      id: "plan-issue-source-freshness",
-      group: "review_recommended",
-      title: "The sources behind this Plan have moved on",
-      detail: planFreshnessMessages(freshness).join(" "),
-      statusLabel: "Check before publishing",
-      tone: "warning",
-      action: sourcesAction(buildId),
-    });
-  } else if (freshness?.status === "untracked") {
-    const reasons = freshness.reasons.filter((reason) => reason.kind !== "no_accepted_inputs");
-    if (reasons.length > 0) {
-      issues.push({
-        id: "plan-issue-source-freshness",
-        group: "review_recommended",
-        title: "This Plan's source revisions are not tracked",
-        detail: reasons.map(planUntrackedReasonText).join(" "),
-        statusLabel: "Check before publishing",
-        tone: "warning",
-        action: sourcesAction(buildId),
-      });
-    }
-  }
-
   if (mergeConflicts.length > 0) {
     issues.push({
       id: "plan-issue-merge-conflict",
@@ -545,6 +585,11 @@ export function planAcceptanceModel(input: PlanAcceptanceInput): PlanAcceptanceM
     issues,
     mustResolve: issues.filter((issue) => issue.group === "must_resolve"),
     reviewRecommended: issues.filter((issue) => issue.group === "review_recommended"),
+    sourceNotice: planSourceNotice({
+      freshness: input.freshness,
+      accepted,
+      buildId: input.buildId,
+    }),
     impact: requiredUnitImpact(input.draft),
     publication: planPublication({
       draft: input.draft,
