@@ -25,6 +25,7 @@ import PlanAcceptanceActionCard from "../components/review/PlanAcceptanceActionC
 import PlanAcceptanceConfirmation from "../components/review/PlanAcceptanceConfirmation";
 import PlanAcceptedRevisionCard from "../components/review/PlanAcceptedRevisionCard";
 import PlanIssuesSection from "../components/review/PlanIssuesSection";
+import PlanSourceNotice from "../components/review/PlanSourceNotice";
 import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";
 import type { StlNamingFolderRule } from "@print-partner/contracts";
@@ -57,6 +58,7 @@ function PlanReviewSections({
   return (
     <>
       <PlanAcceptedRevisionCard />
+      <PlanSourceNotice />
       <WorkingPlanReviewCard />
       <PlanIssuesSection />
 

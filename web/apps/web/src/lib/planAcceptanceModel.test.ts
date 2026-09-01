@@ -328,8 +328,8 @@ describe("issue grouping and routes", () => {
     expect(issues).toEqual([]);
   });
 
-  it("still names a Source whose revision was never recorded", () => {
-    const issues = planIssues({
+  it("keeps untracked Source context separate from publishing issues", () => {
+    const model = planAcceptanceModel({
       review: review(),
       draft: null,
       buildId: 1,
@@ -342,14 +342,46 @@ describe("issue grouping and routes", () => {
         ],
       },
     });
-    expect(issues).toHaveLength(1);
-    expect(issues[0]!.title).toBe("This Plan's source revisions are not tracked");
-    expect(issues[0]!.detail).toContain("Voron Trident");
-    expect(issues[0]!.statusLabel).toBe("Check before publishing");
+    expect(model.issues).toEqual([]);
+    expect(model.sourceNotice?.kind).toBe("tracking_unavailable");
+    expect(model.sourceNotice?.detail).toContain("Voron Trident");
   });
 });
 
 describe("Plan publication", () => {
+  it("keeps Source updates out of publishing issues and points back to Production", () => {
+    const model = planAcceptanceModel({
+      review: review(),
+      draft: draft(),
+      buildId: 1,
+      freshness: {
+        status: "stale",
+        accepted_input_set_id: 4,
+        accepted_at: "2026-09-01T00:00:00.000Z",
+        reasons: [{ kind: "plan_configuration_changed" }],
+        untracked_sources: [],
+      },
+    });
+
+    expect(model.publication.kind).toBe("ready");
+    expect(model.issues).toEqual([]);
+    expect(model.sourceNotice).toEqual({
+      kind: "updates_available",
+      title: "Source updates available",
+      detail: "The Plan's source selection or file rules changed.",
+      message:
+        "Production and Checkoff continue using the files from published Plan revision 4.",
+      productionAction: {
+        label: "Continue to Production",
+        to: "/export?profile=1",
+      },
+      reviewAction: {
+        label: "Review Sources for the next Plan",
+        to: "/sources?profile=1",
+      },
+    });
+  });
+
   it("does not turn an empty-part notice into a publication choice", () => {
     const model = planAcceptanceModel({
       review: review({

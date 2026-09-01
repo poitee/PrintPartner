@@ -12,7 +12,7 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
-import type { PlanDraftWorkspace } from "@print-partner/contracts";
+import type { PlanDraftWorkspace, PlanFreshness } from "@print-partner/contracts";
 import {
   applyPlanDraft,
   recomputePlanDraft,
@@ -30,14 +30,31 @@ import PlanAcceptanceActionCard from "./PlanAcceptanceActionCard";
 import PlanAcceptanceConfirmation from "./PlanAcceptanceConfirmation";
 import PlanAcceptedRevisionCard from "./PlanAcceptedRevisionCard";
 import PlanIssuesSection from "./PlanIssuesSection";
+import PlanSourceNotice from "./PlanSourceNotice";
 import WorkingPlanReviewCard from "../build/WorkingPlanReviewCard";
 
+type PlanTestState = {
+  review: PlanReview | null;
+  workspace: PlanDraftWorkspace | null;
+  freshness: PlanFreshness;
+  version: number;
+  subscribe(listener: () => void): () => void;
+  snapshot(): number;
+  setWorkspace(next: PlanDraftWorkspace | null): void;
+};
+
 /** A tiny store so the mocked draft query re-renders like the real one. */
-const state = vi.hoisted(() => {
+const state = vi.hoisted((): PlanTestState => {
   const listeners = new Set<() => void>();
+  const freshness: PlanFreshness = {
+    status: "current",
+    accepted_input_set_id: 1,
+    accepted_at: "2026-08-27T10:00:00.000Z",
+  };
   return {
-    review: null as PlanReview | null,
-    workspace: null as PlanDraftWorkspace | null,
+    review: null,
+    workspace: null,
+    freshness,
     version: 0,
     subscribe(listener: () => void) {
       listeners.add(listener);
@@ -72,7 +89,10 @@ vi.mock("../../hooks/useEngineHealth", () => ({
 }));
 
 vi.mock("../../context/ProfileContext", () => ({
-  useProfileSelection: () => ({ selectedProfileId: 7, profiles: [] }),
+  useProfileSelection: () => ({
+    selectedProfileId: 7,
+    profiles: [{ id: 7, name: "Voron 2.4 Workshop", freshness: state.freshness }],
+  }),
 }));
 
 vi.mock("../../queries/planReview", () => ({
@@ -227,6 +247,7 @@ function renderPlan() {
           <PlanAcceptanceProvider>
             <PlanAcceptanceConfirmation />
             <PlanAcceptedRevisionCard />
+            <PlanSourceNotice />
             <WorkingPlanReviewCard />
             <PlanIssuesSection />
             <PlanAcceptanceActionCard />
@@ -241,6 +262,11 @@ beforeEach(() => {
   window.sessionStorage.clear();
   state.review = baseReview();
   state.setWorkspace(unresolvedWorkspace());
+  state.freshness = {
+    status: "current",
+    accepted_input_set_id: 1,
+    accepted_at: "2026-08-27T10:00:00.000Z",
+  };
   vi.mocked(reconcilePlanDraft).mockReset();
   vi.mocked(recomputePlanDraft).mockReset();
   vi.mocked(applyPlanDraft).mockReset();
@@ -251,6 +277,34 @@ afterEach(() => {
 });
 
 describe("Plan acceptance checkpoint", () => {
+  it("keeps Source updates out of Issues and offers Production first", async () => {
+    state.setWorkspace(resolvedWorkspace());
+    state.freshness = {
+      status: "stale",
+      accepted_input_set_id: 1,
+      accepted_at: "2026-08-27T10:00:00.000Z",
+      reasons: [{ kind: "plan_configuration_changed" }],
+      untracked_sources: [],
+    };
+
+    renderPlan();
+
+    const notice = await screen.findByRole("region", { name: "Source updates available" });
+    expect(notice.textContent).toContain(
+      "Production and Checkoff continue using the files from published Plan revision 1.",
+    );
+    expect(screen.getByRole("link", { name: "Continue to Production" }).getAttribute("href"))
+      .toBe("/export?profile=7");
+    expect(
+      screen.getByRole("link", { name: "Review Sources for the next Plan" }).getAttribute("href"),
+    ).toBe("/sources?profile=7");
+    expect(screen.queryByRole("heading", { name: "Issues" })).toBeNull();
+    expect(
+      (await screen.findByRole("button", { name: "Publish Plan revision 2 for Production" }))
+        .hasAttribute("disabled"),
+    ).toBe(false);
+  });
+
   it("shows the published revision and the working change counts", async () => {
     const user = userEvent.setup();
     renderPlan();
