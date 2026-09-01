@@ -67,7 +67,7 @@ Light:
 | destructive | 5.15 | 5.80 | 6.23 | 6.23 |
 | border-strong | 4.33 | 4.88 | 5.24 | 5.24 |
 
-Every ink clears AA (4.5:1) on every surface it is allowed on, with the text floor at
+Every text ink clears AA (4.5:1) on every surface it is allowed on, with the text floor at
 5.20 dark and 5.07 light. `--border-strong` clears AA non-text (3:1) everywhere, which
 is why it draws control boundaries.
 

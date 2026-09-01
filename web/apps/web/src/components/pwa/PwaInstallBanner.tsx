@@ -23,7 +23,7 @@ export default function PwaInstallBanner() {
   if (!canInstall || dismissed || isStandalone) return null;
 
   return (
-    <Alert tone="info" className="items-center shadow-sm">
+    <Alert tone="info" role="status" className="items-center shadow-sm">
       <Download aria-hidden />
       <AlertTitle className="font-normal">
         Install <strong className="font-medium">Print Partner</strong> for offline floor use

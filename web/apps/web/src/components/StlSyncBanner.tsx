@@ -30,7 +30,7 @@ export default function StlSyncBanner({
         aria-live="polite"
         className={cn("items-center", className)}
       >
-        <Spinner className="size-4 shrink-0" />
+        <Spinner className="size-4 shrink-0" aria-hidden="true" />
         <AlertTitle>Syncing STLs…</AlertTitle>
       </Alert>
     );
