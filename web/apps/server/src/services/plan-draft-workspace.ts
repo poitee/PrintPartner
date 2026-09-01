@@ -532,6 +532,7 @@ export class PlanDraftWorkspaceService {
       }
       case "idempotency_conflict":
       case "accepted_baseline_required":
+      case "inputs_changed":
       case "transaction_unavailable":
         return result;
       case "draft_changed":

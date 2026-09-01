@@ -488,6 +488,7 @@ export type ApplyPlanChangesResult =
   | { readonly kind: "not_found" }
   | { readonly kind: "not_open"; readonly state: "abandoned" | "consumed" }
   | { readonly kind: "draft_changed" }
+  | { readonly kind: "inputs_changed" }
   | { readonly kind: "build_archived" }
   | { readonly kind: "accepted_baseline_required" }
   | { readonly kind: "base_changed" }
@@ -5507,7 +5508,7 @@ export class AppRepository {
         }))
         .sort((left, right) => left.layerOrder - right.layerOrder || left.sourceId - right.sourceId);
       if (JSON.stringify(liveAttachments) !== JSON.stringify(draftAttachments)) {
-        return { kind: "draft_changed" };
+        return { kind: "inputs_changed" };
       }
       this.validatePlanRevisionInputs(profileId, draftInputs);
       const liveFilamentByProjectionId = new Map<

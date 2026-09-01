@@ -377,6 +377,55 @@ describe("Plan acceptance checkpoint", () => {
     expect(await screen.findByText(/part-1.stl: printed 6 units, new quantity is 4/)).toBeTruthy();
   });
 
+  it("rebuilds from current Sources instead of retrying an unchanged Working Plan", async () => {
+    const user = userEvent.setup();
+    const rebuiltWorkspace: PlanDraftWorkspace = {
+      ...resolvedWorkspace(),
+      draft: {
+        ...resolvedWorkspace().draft,
+        draft_id: 10,
+        snapshot_digest: "c".repeat(64),
+      },
+    };
+    state.setWorkspace(resolvedWorkspace());
+    vi.mocked(recomputePlanDraft).mockImplementation(async () => {
+      state.setWorkspace(rebuiltWorkspace);
+      return rebuiltWorkspace;
+    });
+    vi.mocked(applyPlanDraft)
+      .mockRejectedValueOnce(new EngineHttpError("Sources changed", 409, {
+        code: "inputs_changed",
+      }))
+      .mockResolvedValueOnce({
+        profile_id: 7,
+        draft_id: 10,
+        revision_id: 2,
+        plan_version: 2,
+        draft_lifecycle_version: 1,
+        revision_digest: "d".repeat(64),
+        required_unit_mapping_digest: "e".repeat(64),
+        applied_at: "2026-09-01T00:00:00.000Z",
+      });
+
+    renderPlan();
+    await user.click(await screen.findByRole("button", {
+      name: "Publish Plan revision 2 for Production",
+    }));
+
+    expect(await screen.findByText("Working Plan rebuilt from Sources")).toBeTruthy();
+    expect(screen.getByText(/Sources changed after this Working Plan was created/)).toBeTruthy();
+    expect(recomputePlanDraft).toHaveBeenCalledWith(7);
+    expect(screen.queryByText(/choice before publishing/)).toBeNull();
+
+    await user.click(screen.getByRole("button", {
+      name: "Publish Plan revision 2 for Production",
+    }));
+
+    await waitFor(() => expect(applyPlanDraft).toHaveBeenCalledTimes(2));
+    expect(applyPlanDraft).toHaveBeenLastCalledWith(rebuiltWorkspace, undefined);
+    expect(await screen.findByText("Plan revision 2 published")).toBeTruthy();
+  });
+
   it("retries a linked-record publication with the same move option", async () => {
     const user = userEvent.setup();
     state.setWorkspace(resolvedWorkspace());

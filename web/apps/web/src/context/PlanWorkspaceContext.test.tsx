@@ -346,6 +346,54 @@ describe("PlanWorkspaceProvider saved draft lifecycle", () => {
     expect(applyPlanDraft).toHaveBeenNthCalledWith(2, replacementWorkspace, undefined);
   });
 
+  it("rebuilds a Working Plan whose attached Sources changed before publishing", async () => {
+    const rebuiltWorkspace: PlanDraftWorkspace = {
+      ...replacementWorkspace,
+      draft: {
+        ...replacementWorkspace.draft,
+        draft_id: 10,
+        snapshot_digest: "d".repeat(64),
+      },
+    };
+    const client = new QueryClient();
+    const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(client) });
+    await waitFor(() => expect(hook.result.current.draftWorkspace?.draft.draft_id).toBe(9));
+    vi.mocked(applyPlanDraft)
+      .mockRejectedValueOnce(new EngineHttpError(
+        "Engine /plans/7/drafts/9/apply failed: 409",
+        409,
+        { code: "inputs_changed" },
+      ))
+      .mockResolvedValueOnce({
+        profile_id: 7,
+        draft_id: 10,
+        revision_id: 4,
+        plan_version: 2,
+        draft_lifecycle_version: 1,
+        revision_digest: "e".repeat(64),
+        required_unit_mapping_digest: "f".repeat(64),
+        applied_at: "2026-08-21T12:00:00.000Z",
+      });
+    vi.mocked(recomputePlanDraft).mockResolvedValue(rebuiltWorkspace);
+
+    await act(async () => {
+      await expect(hook.result.current.applyActivePlanDraft()).rejects.toThrow(
+        "Sources changed after this Working Plan was created",
+      );
+    });
+
+    expect(recomputePlanDraft).toHaveBeenCalledWith(7);
+    expect(client.getQueryData(queryKeys.planDraft(7, 10))).toEqual(rebuiltWorkspace);
+
+    await act(async () => {
+      await hook.result.current.applyActivePlanDraft();
+    });
+
+    expect(applyPlanDraft).toHaveBeenCalledTimes(2);
+    expect(applyPlanDraft).toHaveBeenNthCalledWith(1, savedWorkspace, undefined);
+    expect(applyPlanDraft).toHaveBeenNthCalledWith(2, rebuiltWorkspace, undefined);
+  });
+
   it("lets the server repair an unresolved Working Plan that has no choices", async () => {
     const legacyWorkspace: PlanDraftWorkspace = {
       ...savedWorkspace,

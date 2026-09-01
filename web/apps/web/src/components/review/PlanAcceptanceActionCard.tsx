@@ -4,7 +4,7 @@ import { statusTone } from "../../lib/statusTone";
 import { Button } from "../ui/button";
 import { usePlanAcceptance } from "./PlanAcceptanceContext";
 import { cn } from "@/lib/utils";
-import { WORKING_PLAN_CHANGED_MESSAGE } from "../../lib/workingPlanChanged";
+import { workingPlanChangedMessage } from "../../lib/workingPlanChanged";
 
 /**
  * Step 7 of the Plan checkpoint: publish the revision for Production.
@@ -12,9 +12,9 @@ import { WORKING_PLAN_CHANGED_MESSAGE } from "../../lib/workingPlanChanged";
  * Required-unit impact stays beside the publication action so the operator
  * sees the consequence in the same place they confirm it.
  *
- * A failed attempt stays on the page with Retry. The user's quantity, inclusion
- * and Required-unit answers are untouched, so Retry repeats the publication
- * rather than restarting the review.
+ * A failed attempt stays on the page with its next safe action. Concurrent
+ * edits refresh the Working Plan. Source changes rebuild it and require another
+ * review before publication.
  */
 export default function PlanAcceptanceActionCard() {
   const { model, busy, failure, accept } = usePlanAcceptance();
@@ -24,6 +24,11 @@ export default function PlanAcceptanceActionCard() {
   const retryFailure = failure?.kind === "error" || failure?.kind === "working_plan_changed"
     ? failure
     : null;
+  const rebuiltFromSources = retryFailure?.kind === "working_plan_changed" &&
+    retryFailure.recovery === "rebuilt_from_sources";
+  const recoveryHeading = rebuiltFromSources
+    ? "Working Plan rebuilt from Sources"
+    : "Working Plan refreshed";
 
   return (
     <section
@@ -69,26 +74,26 @@ export default function PlanAcceptanceActionCard() {
           <div className="min-w-0 flex-1">
             <p className="font-medium text-foreground">
               {retryFailure.kind === "working_plan_changed"
-                ? "Working Plan refreshed"
+                ? recoveryHeading
                 : "Publishing did not complete"}
             </p>
             <p className="mt-0.5 text-xs text-muted-foreground">
               {retryFailure.kind === "working_plan_changed"
-                ? WORKING_PLAN_CHANGED_MESSAGE
+                ? workingPlanChangedMessage(retryFailure.recovery)
                 : retryFailure.message}
             </p>
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              className="mt-2 min-h-11"
-              disabled={busy}
-              onClick={() => accept()}
-            >
-              {retryFailure.kind === "working_plan_changed"
-                ? "Publish updated Plan"
-                : "Retry publishing"}
-            </Button>
+            {retryFailure.kind === "error" ? (
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                className="mt-2 min-h-11"
+                disabled={busy}
+                onClick={() => accept()}
+              >
+                Retry publishing
+              </Button>
+            ) : null}
           </div>
         </div>
       )}
