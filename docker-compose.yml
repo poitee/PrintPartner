@@ -1,6 +1,6 @@
 services:
   print-partner:
-    image: ghcr.io/poitee/print-partner:${PRINT_PARTNER_VERSION:-3.2.0}
+    image: ghcr.io/poitee/print-partner:${PRINT_PARTNER_VERSION:-3.3.0}
     # Fallback for building from source: docker compose up --build
     build:
       context: .

@@ -129,7 +129,7 @@ the LAN after the next `docker compose up -d`. Put `PP_BIND_ADDRESS=127.0.0.1`
 in `.env` first if you want to keep the old bind.
 
 <!-- release-version:start -->
-The current release is `3.2.0`. The default Compose file uses `ghcr.io/poitee/print-partner:3.2.0`, and the app reports runtime version `3.2.0-web`.
+The current release is `3.3.0`. The default Compose file uses `ghcr.io/poitee/print-partner:3.3.0`, and the app reports runtime version `3.3.0-web`.
 <!-- release-version:end -->
 
 To build the image from source:

@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [3.3.0] - 2026-09-01
+
 ### Added
 
 - **Autopilot skill** - in-repo `/autopilot` workflow that takes an open PR
@@ -82,6 +84,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - **Printers sat on "needs review" with nothing to do** - Source changes no
   longer steal the Build's next action from Production once a Plan is accepted.
+  Plan presents them as available updates, says the published revision remains
+  usable, and offers Continue to Production first instead of a publishing check.
   A Plan with no accepted inputs no longer lists "source revisions are not
   tracked" as an issue, and an empty Build no longer lists "no parts included"
   as something to review. Sliced 3MF files on a printer read as ready to assign,
@@ -410,5 +414,6 @@ Major release: Tauri + React desktop replaces the legacy Qt UI. Workflow is **So
 [0.2.0]: https://github.com/poitee/PrintPartner/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/poitee/PrintPartner/releases/tag/v0.1.0
 [3.1.0]: https://github.com/poitee/PrintPartner/compare/v3.0.0...v3.1.0
-[Unreleased]: https://github.com/poitee/PrintPartner/compare/v3.2.0...HEAD
+[Unreleased]: https://github.com/poitee/PrintPartner/compare/v3.3.0...HEAD
 [3.2.0]: https://github.com/poitee/PrintPartner/releases/tag/v3.2.0
+[3.3.0]: https://github.com/poitee/PrintPartner/releases/tag/v3.3.0
