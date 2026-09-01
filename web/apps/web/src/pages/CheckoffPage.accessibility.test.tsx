@@ -191,6 +191,31 @@ describe("CheckoffPage accessibility", () => {
     ).toBe("INPUT");
   });
 
+  it("keeps the accepted Checkoff sheet printable when the current view filters out every row", () => {
+    state.profiles[0]!.build_stale = true;
+    localStorage.setItem(
+      "print-partner.checkoff.console.v1",
+      JSON.stringify({
+        view: "remaining",
+        searchByPlanId: { "7": "no matching accepted part" },
+        completedAtByPlanId: {},
+        correctionsByPlanId: {},
+      }),
+    );
+
+    const { container } = render(
+      <MemoryRouter>
+        <CheckoffPage />
+      </MemoryRouter>,
+    );
+
+    expect(
+      (screen.getByRole("button", { name: "Print sheet" }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+    expect(container.querySelector(".sheet-title")?.textContent).toBe("Voron");
+    expect(container.querySelector(".sheet-row")).not.toBeNull();
+  });
+
   it("keeps the printable sheet hierarchy subordinate to the single page h1", () => {
     const { container } = render(
       <MemoryRouter>

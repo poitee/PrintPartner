@@ -133,8 +133,8 @@ export function buildActiveWorkChips(
   if (workspace.sources.kind === "stale") {
     chips.push({
       id: "source_changes",
-      label: "Sources changed since acceptance",
-      tone: "warning",
+      label: "Source updates available for the next Plan",
+      tone: "neutral",
     });
   }
   return chips;

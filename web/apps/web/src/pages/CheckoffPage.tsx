@@ -359,9 +359,9 @@ export default function CheckoffPage() {
     return view === "remaining" ? rows : rows.filter((row) => row.kind === "part");
   }, [filteredParts, planProgressRows, search, view]);
 
-  const orderedParts = useMemo(
-    () => orderedPartsFromRows({ rows: filteredRows, partsById }),
-    [filteredRows, partsById],
+  const sheetParts = useMemo(
+    () => orderedPartsFromRows({ rows: planProgressRows, partsById }),
+    [partsById, planProgressRows],
   );
 
   const setWorklistRows = worklistOrder.setRows;
@@ -387,7 +387,7 @@ export default function CheckoffPage() {
     setConsolePrefs((prev) => ({ ...prev, view: next }));
   }, []);
 
-  const grouped = useMemo(() => groupCheckoffParts(orderedParts), [orderedParts]);
+  const sheetGroups = useMemo(() => groupCheckoffParts(sheetParts), [sheetParts]);
   const phaseProgress = useMemo(() => {
     const manifest = activity.phaseManifest;
     if (!manifest?.has_phases || manifest.phases.length === 0) return null;
@@ -646,7 +646,7 @@ export default function CheckoffPage() {
                   layout={printLayout}
                   onLayoutChange={setPrintLayout}
                   onPrint={() => void onPrint()}
-                  disabled={orderedParts.length === 0}
+                  disabled={sheetParts.length === 0}
                 />
               </PageHeaderActions>
             )
@@ -828,13 +828,13 @@ export default function CheckoffPage() {
         </>
       )}
 
-      {orderedParts.length > 0 ? (
+      {sheetParts.length > 0 ? (
         <CheckoffPrintSheet
           sheetRef={sheetRef}
           planName={planName}
-          partCount={orderedParts.length}
+          partCount={sheetParts.length}
           printedLine={printedLine}
-          groups={grouped}
+          groups={sheetGroups}
           layout={printLayout}
           printPrep={printPrep}
           busyPartId={busyPartId}
@@ -851,7 +851,7 @@ export default function CheckoffPage() {
               layout={printLayout}
               onLayoutChange={setPrintLayout}
               onPrint={() => void onPrint()}
-              disabled={orderedParts.length === 0}
+              disabled={sheetParts.length === 0}
             />
           )}
           <Button className="min-h-11 w-full sm:w-auto" variant="ghost" asChild>
