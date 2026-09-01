@@ -68,7 +68,7 @@ export default function WorkPackageCard({ pkg, children, actions, className }: P
           </div>
           <p className="mt-1 text-sm text-muted-foreground">{pkg.summary}</p>
           {facts.length > 0 ? (
-            <p className="mt-1 font-mono text-2xs text-muted-foreground">{facts.join(" · ")}</p>
+            <p className="mt-1 font-mono text-micro text-muted-foreground">{facts.join(" · ")}</p>
           ) : null}
           {pkg.blockedReason ? (
             <p className="mt-1 text-xs text-muted-foreground">{pkg.blockedReason}</p>

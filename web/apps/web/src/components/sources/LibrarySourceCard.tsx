@@ -3,6 +3,7 @@ import type { SourceSummary } from "@print-partner/contracts";
 import SourceCardCover from "../SourceCardCover";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
+import { Checkbox } from "../ui/checkbox";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -14,6 +15,7 @@ import { cn } from "@/lib/utils";
 import type { LibraryCardMeta } from "../../lib/librarySourceMeta";
 import { sourceCategoryLabel } from "../../lib/sourceCategoryAssignment";
 import { librarySourceDragId } from "../../lib/sourceCategoryDnD";
+import { statusTone } from "../../lib/statusTone";
 import { kindLabel } from "./sourceLabels";
 import SourceCategoryAssignSubmenu from "./SourceCategoryAssignSubmenu";
 
@@ -50,9 +52,9 @@ function barClass(tone: LibraryCardMeta["barTone"]): string {
 function borderClass(tone: LibraryCardMeta["borderTone"]): string {
   switch (tone) {
     case "syncing":
-      return "border-info/30";
+      return statusTone({ tone: "info", emphasis: "edge" });
     case "update":
-      return "border-warning/30";
+      return statusTone({ tone: "warning", emphasis: "edge" });
     default:
       return "border-border";
   }
@@ -61,13 +63,13 @@ function borderClass(tone: LibraryCardMeta["borderTone"]): string {
 function stateClass(tone: LibraryCardMeta["stateTone"]): string {
   switch (tone) {
     case "warning":
-      return "text-warning";
+      return statusTone({ tone: "warning", emphasis: "text" });
     case "sync":
-      return "text-info";
+      return statusTone({ tone: "info", emphasis: "text" });
     case "success":
-      return "text-success";
+      return statusTone({ tone: "success", emphasis: "text" });
     default:
-      return "text-muted-foreground";
+      return statusTone({ tone: "neutral", emphasis: "text" });
   }
 }
 
@@ -103,16 +105,14 @@ export default function LibrarySourceCard({
     >
       <div className="relative">
         {onSelectClick && (
-          <label
-            className="absolute left-1.5 top-1.5 z-10 flex h-6 w-6 cursor-pointer items-center justify-center rounded-md bg-background/85 shadow-sm backdrop-blur-sm"
+          <span
+            className="absolute left-1.5 top-1.5 z-10 flex h-6 w-6 items-center justify-center rounded-md bg-background/85 shadow-sm backdrop-blur-sm"
             onClick={(e) => e.stopPropagation()}
           >
-            <input
-              type="checkbox"
-              className="h-4 w-4 accent-primary"
+            <Checkbox
+              className="cursor-pointer"
               checked={selected}
               aria-label={`Select ${source.name}`}
-              onChange={() => {}}
               onClick={(e) =>
                 onSelectClick({
                   shiftKey: e.shiftKey,
@@ -121,7 +121,7 @@ export default function LibrarySourceCard({
                 })
               }
             />
-          </label>
+          </span>
         )}
         <button
           type="button"
@@ -156,16 +156,16 @@ export default function LibrarySourceCard({
             <span className="block truncate text-sm font-semibold tracking-tight">
               {source.name}
             </span>
-            <span className="block truncate font-mono text-2xs text-muted-foreground">
+            <span className="block truncate font-mono text-micro text-muted-foreground">
               {meta.slug}
             </span>
-            <span className="mt-0.5 block truncate text-2xs text-muted-foreground">
+            <span className="mt-0.5 block truncate text-micro text-muted-foreground">
               {sourceCategoryLabel(source.category)}
             </span>
           </button>
           <Badge
             variant="muted"
-            className="mt-0.5 shrink-0 rounded-full px-1.5 py-0 text-3xs font-medium"
+            className="mt-0.5 shrink-0 rounded-full px-1.5 py-0 text-micro font-medium"
           >
             {kindLabel(source.source_kind)}
           </Badge>
@@ -204,10 +204,10 @@ export default function LibrarySourceCard({
         </div>
 
         <div className="flex items-center gap-1.5 border-t border-border/70 pt-2">
-          <span className={cn("min-w-0 truncate text-2xs", stateClass(meta.stateTone))}>
+          <span className={cn("min-w-0 truncate text-micro", stateClass(meta.stateTone))}>
             {meta.stateLabel}
           </span>
-          <span className="ml-auto shrink-0 font-mono text-2xs font-medium tabular-nums text-foreground">
+          <span className="ml-auto shrink-0 font-mono text-micro font-medium tabular-nums text-foreground">
             {meta.pickLabel}
           </span>
         </div>

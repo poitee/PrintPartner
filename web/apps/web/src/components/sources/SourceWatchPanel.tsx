@@ -8,9 +8,12 @@ import {
 } from "../../api/endpoints/sourceContent";
 import { useDateFormat } from "../../context/DateFormatContext";
 import { useSourceActivityQuery } from "../../queries/sourceMonitoring";
+import { statusTone } from "../../lib/statusTone";
+import { cn } from "@/lib/utils";
 import SourceUpdateIntervalSelect from "../settings/SourceUpdateIntervalSelect";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
+import { Checkbox } from "../ui/checkbox";
 import {
   Card,
   CardContent,
@@ -108,10 +111,10 @@ export default function SourceWatchPanel({
   };
 
   return (
-    <Card className="border-primary/30 shadow-sm" aria-labelledby="source-watch-heading">
+    <Card className="border-primary/40 shadow-sm" aria-labelledby="source-watch-heading">
       <CardHeader accent className="gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="flex min-w-0 items-start gap-3">
-          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/12 text-primary">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-soft text-primary">
             <BellRing className="h-4 w-4" aria-hidden />
           </span>
           <div className="min-w-0">
@@ -175,7 +178,12 @@ export default function SourceWatchPanel({
         </dl>
 
         {updateCount > 0 ? (
-          <div className="flex flex-wrap items-center gap-3 rounded-md border border-warning/35 bg-warning-soft p-3">
+          <div
+            className={cn(
+              "flex flex-wrap items-center gap-3 rounded-md p-3",
+              statusTone({ tone: "warning", emphasis: "surface" }),
+            )}
+          >
             <p className="min-w-0 flex-1 text-sm text-warning">
               {attachedUpdateCount > 0
                 ? `${attachedUpdateCount} update${attachedUpdateCount === 1 ? "" : "s"} affect the active Build.`
@@ -201,14 +209,17 @@ export default function SourceWatchPanel({
                   onChange={(value) => void saveSettings({ interval_hours: Number(value) })}
                 />
               </label>
-              <label className="flex min-h-11 items-start gap-2 rounded-md border border-border p-3 text-sm">
-                <input
-                  type="checkbox"
-                  className="mt-1 h-4 w-4"
+              <label
+                className="flex min-h-11 items-start gap-2 rounded-md border border-border p-3 text-sm"
+                htmlFor="source-watch-auto-sync"
+              >
+                <Checkbox
+                  id="source-watch-auto-sync"
+                  className="mt-1 shrink-0"
                   checked={settings?.auto_sync_updates ?? false}
                   disabled={!settings || saving}
-                  onChange={(event) =>
-                    void saveSettings({ auto_sync_updates: event.target.checked })
+                  onCheckedChange={(next) =>
+                    void saveSettings({ auto_sync_updates: next === true })
                   }
                 />
                 <span>
@@ -246,7 +257,7 @@ export default function SourceWatchPanel({
                     className="rounded-md border border-border bg-surface-sunken px-3 py-2"
                   >
                     <p className="text-xs font-medium text-foreground">{activityText(event)}</p>
-                    <p className="text-2xs text-muted-foreground">{formatDate(event.at)}</p>
+                    <p className="text-micro text-muted-foreground">{formatDate(event.at)}</p>
                   </li>
                 ))}
               </ul>

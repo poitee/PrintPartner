@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import { Printer, Settings2 } from "lucide-react";
 import { Button } from "../ui/button";
+import { Checkbox } from "../ui/checkbox";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 
 export type PrintSheetLayout = {
@@ -46,6 +47,7 @@ export default function CheckoffPrintSheetButton({
   disabled = false,
 }: Props) {
   const [open, setOpen] = useState(false);
+  const optionIdPrefix = useId();
 
   return (
     <div className="inline-flex items-stretch rounded-md">
@@ -74,22 +76,31 @@ export default function CheckoffPrintSheetButton({
         <PopoverContent align="end" className="w-80">
           <fieldset className="space-y-3">
             <legend className="text-sm font-semibold">Paper layout</legend>
-            {OPTIONS.map((option) => (
-              <label key={option.key} className="flex items-start gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  className="mt-1 size-4"
-                  checked={layout[option.key]}
-                  onChange={(event) =>
-                    onLayoutChange({ ...layout, [option.key]: event.target.checked })
-                  }
-                />
-                <span className="min-w-0">
-                  <span className="block font-medium">{option.label}</span>
-                  <span className="block text-xs text-muted-foreground">{option.hint}</span>
-                </span>
-              </label>
-            ))}
+            {OPTIONS.map((option) => {
+              /* Named through `for`, because a <label> wrapper does not name a
+                 button with role="checkbox". */
+              const optionId = `${optionIdPrefix}-${option.key}`;
+              return (
+                <label
+                  key={option.key}
+                  htmlFor={optionId}
+                  className="flex items-start gap-2 text-sm"
+                >
+                  <Checkbox
+                    id={optionId}
+                    className="mt-1"
+                    checked={layout[option.key]}
+                    onCheckedChange={(next) =>
+                      onLayoutChange({ ...layout, [option.key]: next === true })
+                    }
+                  />
+                  <span className="min-w-0">
+                    <span className="block font-medium">{option.label}</span>
+                    <span className="block text-xs text-muted-foreground">{option.hint}</span>
+                  </span>
+                </label>
+              );
+            })}
             <Button
               type="button"
               className="min-h-11 w-full"

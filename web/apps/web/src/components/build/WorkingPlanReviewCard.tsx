@@ -3,6 +3,14 @@ import { usePlanWorkspace } from "../../context/PlanWorkspaceContext";
 import { workingChangeFieldLabels } from "../../lib/planAcceptanceModel";
 import { usePlanAcceptance } from "../review/PlanAcceptanceContext";
 import { Button } from "../ui/button";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "../ui/table";
 
 type ChangeRow = {
   readonly key: string;
@@ -142,31 +150,31 @@ export default function WorkingPlanReviewCard() {
                 </li>
               ))}
             </ul>
-            <div className="hidden overflow-x-auto rounded-md border border-border md:block print:block">
-              <table className="w-full text-left text-sm">
+            <div className="hidden rounded-md border border-border md:block print:block">
+              <Table className="text-left">
                 <caption className="sr-only">Parts changed by the Working Plan</caption>
-                <thead className="bg-muted/40 text-xs text-muted-foreground">
-                  <tr>
-                    <th scope="col" className="px-3 py-2 font-medium">Part</th>
-                    <th scope="col" className="px-3 py-2 font-medium">Change</th>
-                    <th scope="col" className="px-3 py-2 font-medium">Working quantity</th>
-                    <th scope="col" className="px-3 py-2 font-medium">Working inclusion</th>
-                  </tr>
-                </thead>
-                <tbody>
+                <TableHeader className="bg-surface-sunken">
+                  <TableRow>
+                    <TableHead scope="col">Part</TableHead>
+                    <TableHead scope="col">Change</TableHead>
+                    <TableHead scope="col">Working quantity</TableHead>
+                    <TableHead scope="col">Working inclusion</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
                   {rows.map((row) => (
-                    <tr key={row.key} className="border-t border-border">
-                      <td className="px-3 py-2">
+                    <TableRow key={row.key}>
+                      <TableCell>
                         <span className="font-medium">{row.filename}</span>
                         <span className="block text-xs text-muted-foreground">{row.path}</span>
-                      </td>
-                      <td className="px-3 py-2">{row.change}</td>
-                      <td className="px-3 py-2 tabular-nums">{row.quantity}</td>
-                      <td className="px-3 py-2">{row.inclusion}</td>
-                    </tr>
+                      </TableCell>
+                      <TableCell>{row.change}</TableCell>
+                      <TableCell className="tabular-nums">{row.quantity}</TableCell>
+                      <TableCell>{row.inclusion}</TableCell>
+                    </TableRow>
                   ))}
-                </tbody>
-              </table>
+                </TableBody>
+              </Table>
             </div>
           </div>
         </>

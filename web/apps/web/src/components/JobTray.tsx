@@ -4,6 +4,7 @@ import { useJobContext } from "../context/JobContext";
 import { jobKindLabel } from "../lib/jobLabels";
 import { cn } from "@/lib/utils";
 import { Button } from "./ui/button";
+import { Progress } from "./ui/progress";
 
 const STATUS_STYLES: Record<string, string> = {
   pending: "text-warning",
@@ -107,18 +108,11 @@ export default function JobTray({ sidebarCollapsed = false }: Props) {
                 </Button>
               ) : null}
               {pct != null && isActive ? (
-                <div
-                  className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary/20"
-                  role="progressbar"
-                  aria-valuenow={pct}
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                >
-                  <div
-                    className="h-full bg-primary transition-[width] duration-200 ease-out"
-                    style={{ width: `${pct}%` }}
-                  />
-                </div>
+                <Progress
+                  value={pct}
+                  tone="info"
+                  className="absolute bottom-0 left-0 right-0 h-0.5 w-auto rounded-none"
+                />
               ) : null}
             </div>
           );

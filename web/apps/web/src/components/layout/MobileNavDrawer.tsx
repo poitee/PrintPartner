@@ -26,6 +26,7 @@ import {
   spineUtilityNavItems,
   type SpineUtilityId,
 } from "../../lib/spineUtilityNav";
+import { statusTone } from "@/lib/statusTone";
 import { cn } from "@/lib/utils";
 import { useProfileSelection } from "../../context/ProfileContext";
 
@@ -42,7 +43,7 @@ const WORKSHOP_IDS: SpineUtilityId[] = ["builds", "library", "production", "prin
 
 const NAV_RAIL =
   "relative before:absolute before:inset-y-1.5 before:left-0 before:w-0.5 before:rounded-full before:content-['']";
-const NAV_ACTIVE = "bg-primary/12 font-semibold text-primary before:bg-primary";
+const NAV_ACTIVE = "bg-primary-soft font-semibold text-primary before:bg-primary";
 const NAV_IDLE =
   "text-muted-foreground hover:bg-accent/70 hover:text-foreground before:bg-transparent";
 
@@ -53,7 +54,7 @@ type Props = {
 
 function DrawerGroupLabel({ children }: { children: string }) {
   return (
-    <p className="px-1 font-mono text-3xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+    <p className="px-1 font-mono text-micro font-semibold uppercase tracking-[0.14em] text-muted-foreground">
       {children}
     </p>
   );
@@ -82,7 +83,9 @@ export default function MobileNavDrawer({ onNavigate, sourceUpdateCount }: Props
         cn(
           NAV_RAIL,
           "flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm font-medium transition-colors",
-          item.id === "library" && "my-0.5 border border-primary/25 bg-primary/5 py-2.5",
+          item.id === "library" && "my-0.5 py-2.5",
+          /* Signal/primary soft is selected-only; idle Library uses carrier card chrome. */
+          item.id === "library" && !isActive && "border border-border bg-card",
           isActive ? NAV_ACTIVE : NAV_IDLE,
         )
       }
@@ -93,14 +96,17 @@ export default function MobileNavDrawer({ onNavigate, sourceUpdateCount }: Props
       <span className="min-w-0 flex-1">
         <span className="block">{item.label}</span>
         {item.id === "library" ? (
-          <span className="block truncate text-2xs font-normal text-muted-foreground" aria-hidden>
+          <span className="block truncate text-micro font-normal text-muted-foreground" aria-hidden>
             Add, sync, and watch projects
           </span>
         ) : null}
       </span>
       {item.id === "library" && sourceUpdateCount > 0 ? (
         <span
-          className="rounded-full border border-warning/35 bg-warning-soft px-1.5 py-0.5 font-mono text-3xs font-semibold text-warning"
+          className={cn(
+            "rounded-full px-1.5 py-0.5 font-mono text-micro font-semibold",
+            statusTone({ tone: "warning", emphasis: "soft" }),
+          )}
           aria-hidden
         >
           {sourceUpdateCount}

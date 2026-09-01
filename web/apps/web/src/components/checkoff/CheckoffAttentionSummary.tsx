@@ -54,7 +54,7 @@ export default function CheckoffAttentionSummary({ items, className }: Props) {
                 <span className="truncate font-mono text-sm text-foreground">{item.title}</span>
                 <span
                   className={cn(
-                    "rounded-full px-2 py-0.5 text-2xs font-semibold",
+                    "rounded-full px-2 py-0.5 text-micro font-semibold",
                     statusTone({ tone: TONE_BY_KIND[item.kind], emphasis: "soft" }),
                   )}
                 >

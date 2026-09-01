@@ -13,6 +13,7 @@ import {
   saveSpoolmanDefaultIntegration,
 } from "../../api/endpoints/filaments";
 import { Button } from "../ui/button";
+import { Checkbox } from "../ui/checkbox";
 import {
   Select,
   SelectContent,
@@ -252,12 +253,15 @@ export default function IntegrationsSettingsCard({ engineReady }: Props) {
                   <p className="text-sm font-medium">{item.name}</p>
                   <p className="truncate font-mono text-xs text-muted-foreground">{baseUrl}</p>
                 </div>
-                <label className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
+                <label
+                  htmlFor={`integration-enabled-${item.id}`}
+                  className="flex items-center gap-2 text-sm"
+                >
+                  <Checkbox
+                    id={`integration-enabled-${item.id}`}
                     checked={enabled}
                     disabled={busy}
-                    onChange={(e) => void onToggleEnabled(item, e.target.checked)}
+                    onCheckedChange={(next) => void onToggleEnabled(item, next === true)}
                   />
                   Enabled
                 </label>

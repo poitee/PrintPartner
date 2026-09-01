@@ -24,6 +24,7 @@ import type { ReviewPart } from "../../api/endpoints/planManifests";
 import type { PhaseProgress } from "../../lib/phaseManifest";
 import { nextUnlockedPhase } from "../../lib/phaseManifest";
 import { isProgressRowBusy } from "../../lib/checkoffProgress";
+import { readableForeground, usePreviewTheme } from "../../lib/previewTheme";
 import { cn } from "@/lib/utils";
 
 // ---------------------------------------------------------------------------
@@ -31,10 +32,14 @@ import { cn } from "@/lib/utils";
 // ---------------------------------------------------------------------------
 
 function PhaseBadge({ color, name }: { color?: string; name: string }) {
+  const theme = usePreviewTheme();
+  // Phase colours come from the plan's manifest, so the ink has to be chosen
+  // against whatever the manifest says rather than assumed to be white.
+  const background = color ?? theme.mutedForeground;
   return (
     <span
-      className="inline-flex shrink-0 items-center rounded px-2 py-0.5 text-xs font-semibold text-white shadow-sm"
-      style={{ background: color ?? "#6b7280" }}
+      className="inline-flex shrink-0 items-center rounded px-2 py-0.5 text-xs font-semibold shadow-sm"
+      style={{ background, color: readableForeground(background, theme) }}
     >
       {name}
     </span>
@@ -147,7 +152,7 @@ function PhaseCard({
               {partsPrinted}/{partsTotal} parts printed
             </span>
             {blocked && (
-              <span className="ml-1 rounded bg-destructive/10 px-1.5 py-0.5 text-2xs font-semibold text-destructive">
+              <span className="ml-1 rounded bg-destructive/10 px-1.5 py-0.5 text-micro font-semibold text-destructive">
                 BLOCKED
               </span>
             )}
@@ -155,7 +160,7 @@ function PhaseCard({
 
           <PhaseBar percent={totals.percent} blocked={blocked} />
 
-          <span className="font-mono text-2xs text-muted-foreground">
+          <span className="font-mono text-micro text-muted-foreground">
             {totals.percent}% · {totals.remainingUnits} unit{totals.remainingUnits === 1 ? "" : "s"} remaining
           </span>
         </div>

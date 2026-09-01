@@ -25,7 +25,7 @@ export function Badge({ className, variant = "default", icon: Icon, children, ..
     <span
       className={cn(
         "inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-meta font-medium tabular transition-colors",
-        variant === "default" && "border-primary/40 bg-primary/15 text-primary",
+        variant === "default" && "border-primary/40 bg-primary-soft text-primary",
         variant === "base" && statusTone({ tone: "success", emphasis: "soft" }),
         variant === "addon" && statusTone({ tone: "warning", emphasis: "soft" }),
         variant === "muted" && statusTone({ tone: "neutral", emphasis: "soft" }),

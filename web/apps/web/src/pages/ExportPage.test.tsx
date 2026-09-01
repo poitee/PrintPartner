@@ -373,9 +373,10 @@ describe("ExportPage route question", () => {
     renderAt("/export");
     expect(screen.getByText("What should PrintPartner prepare?")).toBeTruthy();
     expect(screen.queryByLabelText("Create and slice your plates")).toBeNull();
-    for (const option of screen.getAllByRole("radio")) {
-      expect((option as HTMLInputElement).checked).toBe(false);
-    }
+    // ARIA radios rather than `<input type="radio">`, so the answer is read the
+    // way an assistive technology reads it.
+    expect(screen.getAllByRole("radio").length).toBeGreaterThan(0);
+    expect(screen.queryAllByRole("radio", { checked: true })).toHaveLength(0);
   });
 
   it("will not continue without an answer", () => {
@@ -403,9 +404,8 @@ describe("ExportPage route question", () => {
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("Engine offline");
     expect(
-      (screen.getByRole("radio", { name: /Generate 3MF plates/ }) as HTMLInputElement)
-        .checked,
-    ).toBe(true);
+      screen.getByRole("radio", { name: /Generate 3MF plates/, checked: true }),
+    ).toBeTruthy();
 
     fireEvent.click(within(alert).getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(state.save).toHaveBeenCalledTimes(2));

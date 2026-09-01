@@ -14,10 +14,26 @@ const KIND_ICONS: Record<string, typeof GitBranch> = {
   self: Globe,
 };
 
-function hashHue(name: string): number {
+/**
+ * A source with no cover art still wants to be distinguishable in a grid, but
+ * the previous fallback hashed the name into a saturated hue — colour that
+ * encoded nothing and competed with the filament and mesh colours the app
+ * exists to show. Vary a neutral hatch angle instead: same distinctness, no
+ * invented meaning, and it stays out of the way of real content.
+ */
+const HATCH_ANGLES = [22, 45, 68, 112, 135, 158] as const;
+
+function hatchAngle(name: string): number {
   let h = 0;
-  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) % 360;
-  return h;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) % 997;
+  return HATCH_ANGLES[h % HATCH_ANGLES.length]!;
+}
+
+function hatchStyle(name: string) {
+  return {
+    backgroundColor: "var(--media-bg)",
+    backgroundImage: `repeating-linear-gradient(${hatchAngle(name)}deg, color-mix(in srgb, var(--border-strong) 16%, transparent) 0 1px, transparent 1px 9px)`,
+  };
 }
 
 function CoverFallback({
@@ -30,25 +46,18 @@ function CoverFallback({
   compact?: boolean;
 }) {
   const Icon = KIND_ICONS[sourceKind] ?? Globe;
-  const hue = hashHue(name);
   return (
     <div
       className={cn(
-        "relative flex w-full items-center justify-center overflow-hidden bg-secondary",
+        "relative flex w-full items-center justify-center overflow-hidden",
         compact ? "h-16" : "h-32",
       )}
-      style={{
-        background: `linear-gradient(135deg, hsl(${hue} 42% 22%) 0%, hsl(${(hue + 40) % 360} 35% 14%) 100%)`,
-      }}
+      style={hatchStyle(name)}
     >
       <Icon
-        className={cn(
-          "text-foreground/25",
-          compact ? "h-8 w-8" : "h-14 w-14",
-        )}
-        strokeWidth={1.25}
+        className={cn("text-muted-foreground", compact ? "h-8 w-8" : "h-14 w-14")}
+        strokeWidth={1.5}
       />
-      <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-card via-transparent to-transparent" />
     </div>
   );
 }
@@ -105,7 +114,6 @@ export default function SourceCardCover({
 
   if (thumb) {
     const Icon = KIND_ICONS[sourceKind] ?? Globe;
-    const hue = hashHue(name);
     if (failed || !coverSrc) {
       return (
         <div
@@ -113,12 +121,10 @@ export default function SourceCardCover({
             "flex h-[30px] w-[30px] items-center justify-center overflow-hidden rounded-md border border-border",
             className,
           )}
-          style={{
-            background: `linear-gradient(135deg, hsl(${hue} 42% 22%) 0%, hsl(${(hue + 40) % 360} 35% 14%) 100%)`,
-          }}
+          style={hatchStyle(name)}
           aria-hidden
         >
-          <Icon className="h-3.5 w-3.5 text-foreground/40" strokeWidth={1.5} />
+          <Icon className="h-3.5 w-3.5 text-muted-foreground" strokeWidth={1.5} />
         </div>
       );
     }
@@ -159,7 +165,7 @@ export default function SourceCardCover({
       />
       <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-card via-card/30 to-transparent" />
       {!hideKindBadge ? (
-        <div className="absolute bottom-2 left-2 rounded-md border border-border/60 bg-card/80 px-1.5 py-0.5 text-3xs font-medium uppercase tracking-wide text-muted-foreground backdrop-blur-sm">
+        <div className="absolute bottom-2 left-2 rounded-md border border-border/60 bg-card/80 px-1.5 py-0.5 text-micro font-medium uppercase tracking-wide text-muted-foreground backdrop-blur-sm">
           {sourceKind === "github" ? "GitHub" : sourceKind}
         </div>
       ) : null}

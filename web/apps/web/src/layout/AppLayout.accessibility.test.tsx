@@ -137,7 +137,30 @@ describe("application shell accessibility", () => {
     expect(nav).toBeTruthy();
     const link = await screen.findByRole("link", { name: "Source Library" });
     expect(link.getAttribute("aria-current")).toBe("page");
-    expect(link.className).toContain("bg-primary/12");
+    expect(link.className).toContain("bg-primary-soft");
+    expect(link.className).not.toContain("border-primary");
+  });
+
+  it("keeps Source Library off primary-soft when the drawer is opened off-route", async () => {
+    render(
+      <MemoryRouter initialEntries={["/plan"]}>
+        <Routes>
+          <Route element={<AppLayout />}>
+            <Route path="plan" element={<h1>Plan</h1>} />
+            <Route path="library" element={<h1>Library</h1>} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Menu" }));
+
+    const link = await screen.findByRole("link", { name: "Source Library" });
+    expect(link.getAttribute("aria-current")).toBeNull();
+    expect(link.className).not.toContain("bg-primary-soft");
+    expect(link.className).not.toContain("border-primary");
+    expect(link.className).toContain("border-border");
+    expect(link.className).toContain("bg-card");
   });
 
   it("names the current stage and Build in the instrument header", () => {

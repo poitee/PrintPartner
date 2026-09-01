@@ -7,6 +7,8 @@ import { Input } from "../components/ui/input";
 import { useAuth } from "../context/AuthContext";
 import { requestPasswordReset } from "../api/endpoints/auth";
 import { isSafeAppUrl } from "../lib/authPageModel";
+import { statusTone } from "../lib/statusTone";
+import { cn } from "@/lib/utils";
 
 export default function ForgotPasswordPage() {
   const { user, authRequired, loading } = useAuth();
@@ -80,7 +82,12 @@ export default function ForgotPasswordPage() {
           </p>
         )}
         {devResetUrl && isSafeAppUrl(devResetUrl) && (
-          <div className="rounded-md border border-warning/30 bg-warning-soft p-3 text-sm">
+          <div
+            className={cn(
+              "rounded-md p-3 text-sm",
+              statusTone({ tone: "warning", emphasis: "surface" }),
+            )}
+          >
             <p className="font-medium text-warning">Dev reset link</p>
             <p className="mt-1 break-all text-muted-foreground">
               SMTP is not configured — use this link locally:

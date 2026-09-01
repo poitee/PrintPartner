@@ -27,6 +27,7 @@ import {
   type SpineUtilityId,
   type SpineUtilityNavItem,
 } from "../../lib/spineUtilityNav";
+import { statusTone } from "@/lib/statusTone";
 import { cn } from "@/lib/utils";
 import type { WorkflowStage, WorkflowStageId } from "../../lib/workflowStages";
 import { useProfileSelection } from "../../context/ProfileContext";
@@ -59,7 +60,7 @@ const WORKSHOP_IDS: SpineUtilityId[] = ["builds", "library", "production", "prin
 
 const NAV_RAIL =
   "relative before:absolute before:inset-y-1.5 before:left-0 before:w-0.5 before:rounded-full before:content-['']";
-const NAV_ACTIVE = "bg-primary/12 font-semibold text-primary before:bg-primary";
+const NAV_ACTIVE = "bg-primary-soft font-semibold text-primary before:bg-primary";
 const NAV_IDLE =
   "text-muted-foreground hover:bg-accent/70 hover:text-foreground before:bg-transparent";
 
@@ -84,7 +85,7 @@ function SidebarTooltip({
 function GroupHeading({ collapsed, children }: { collapsed: boolean; children: ReactNode }) {
   if (collapsed) return <Separator className="mx-1 w-auto" />;
   return (
-    <p className="px-1 font-mono text-3xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+    <p className="px-1 font-mono text-micro font-semibold uppercase tracking-[0.14em] text-muted-foreground">
       {children}
     </p>
   );
@@ -102,6 +103,9 @@ function UtilityLink({
   sourceUpdateCount: number;
 }) {
   const isLibrary = link.id === "library";
+  /* Library may keep card chrome (raised + 1px border) but signal/primary
+     fill is selected-only — never decorative always-on cyan. */
+  const libraryIdleChrome = isLibrary && !link.match && "border border-border bg-card";
   if (collapsed) {
     return (
       <SidebarTooltip label={link.label} collapsed>
@@ -111,7 +115,7 @@ function UtilityLink({
           className={cn(
             NAV_RAIL,
             "flex items-center justify-center rounded-md p-2.5 transition-colors",
-            isLibrary && "border border-primary/25 bg-primary/5",
+            libraryIdleChrome,
             link.match ? NAV_ACTIVE : NAV_IDLE,
           )}
           aria-label={link.label}
@@ -134,7 +138,8 @@ function UtilityLink({
       className={cn(
         NAV_RAIL,
         "flex items-center gap-2.5 rounded-md px-2.5 py-2 transition-colors",
-        isLibrary && "my-0.5 border border-primary/25 bg-primary/5 py-2.5",
+        isLibrary && "my-0.5 py-2.5",
+        libraryIdleChrome,
         link.match ? NAV_ACTIVE : NAV_IDLE,
       )}
       aria-label={link.label}
@@ -143,14 +148,17 @@ function UtilityLink({
       <span className="min-w-0 flex-1">
         <span className="block text-sm font-medium">{link.label}</span>
         {isLibrary ? (
-          <span className="block truncate text-2xs font-normal text-muted-foreground" aria-hidden>
+          <span className="block truncate text-micro font-normal text-muted-foreground" aria-hidden>
             Add, sync, and watch projects
           </span>
         ) : null}
       </span>
       {isLibrary && sourceUpdateCount > 0 ? (
         <span
-          className="rounded-full border border-warning/35 bg-warning-soft px-1.5 py-0.5 font-mono text-3xs font-semibold text-warning"
+          className={cn(
+            "rounded-full px-1.5 py-0.5 font-mono text-micro font-semibold",
+            statusTone({ tone: "warning", emphasis: "soft" }),
+          )}
           title={`${sourceUpdateCount} source update${sourceUpdateCount === 1 ? "" : "s"} ready`}
           aria-hidden
         >
@@ -197,7 +205,7 @@ export default function SpineRail({
                 <div className="font-serif text-base font-semibold tracking-[-0.02em] text-foreground">
                   PrintPartner
                 </div>
-                <div className="text-3xs uppercase tracking-[0.12em] text-muted-foreground">
+                <div className="text-micro uppercase tracking-[0.12em] text-muted-foreground">
                   Print planning & production
                 </div>
               </div>

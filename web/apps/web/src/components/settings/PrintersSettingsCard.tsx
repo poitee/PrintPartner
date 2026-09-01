@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Printer } from "lucide-react";
 import { fetchFilamentCatalog, type FilamentCatalog } from "../../api/endpoints/filaments";
 import {
@@ -30,6 +30,8 @@ import {
   type PrinterPlanBinding,
 } from "../../api/endpoints/printerSettings";
 import { Button } from "../ui/button";
+import ConfirmDialog from "../ConfirmDialog";
+import { Checkbox } from "../ui/checkbox";
 import {
   Card,
   CardContent,
@@ -70,12 +72,13 @@ import {
   printerDetailsDraft,
   printerHostConnectionReady,
   printerSettingsCanAdd,
-  statusPillClass,
   statusPillLabel,
   type HostType,
   type PrinterDetailsDraft,
   type SlicerOverride,
 } from "../../lib/printerSettingsModel";
+import { printerStatusTone } from "../../lib/printerLiveStrip";
+import { statusTone } from "../../lib/statusTone";
 
 type Props = {
   engineReady: boolean;
@@ -85,6 +88,23 @@ const DEFAULT_PRESET_ID = "preset-prusa-mk4";
 
 const INPUT_CLASS =
   "rounded-md border border-input bg-background px-2 py-1.5 text-sm w-full";
+
+/**
+ * Removing a printer also deletes the host integration it connects through, and
+ * a button that only says "Remove" does not tell anyone that. Say it here,
+ * where it is the last thing read before the printer goes.
+ */
+function removePrinterConsequence(printer: PrinterMachine): ReactNode {
+  const hasHost = Boolean(printer.integration_id?.trim());
+  return (
+    <>
+      “{printer.name}” is removed from the fleet.
+      {hasHost
+        ? " Its saved connection to the printer host is deleted with it, so you would have to set that connection up again."
+        : ""}
+    </>
+  );
+}
 
 export default function PrintersSettingsCard({ engineReady }: Props) {
   const [printers, setPrinters] = useState<PrinterMachine[]>([]);
@@ -714,7 +734,7 @@ export default function PrintersSettingsCard({ engineReady }: Props) {
                   <span
                     className={cn(
                       "inline-flex min-h-8 shrink-0 items-center rounded-md px-2.5 text-xs font-medium",
-                      statusPillClass(status?.state),
+                      statusTone({ tone: printerStatusTone(status?.state), emphasis: "soft" }),
                     )}
                     title={status?.message}
                   >
@@ -723,12 +743,15 @@ export default function PrintersSettingsCard({ engineReady }: Props) {
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2">
-                  <label className="flex items-center gap-2 text-sm">
-                    <input
-                      type="checkbox"
+                  <label
+                    htmlFor={`printer-enabled-${printer.id}`}
+                    className="flex items-center gap-2 text-sm"
+                  >
+                    <Checkbox
+                      id={`printer-enabled-${printer.id}`}
                       checked={enabled}
                       disabled={busy || !linkedId}
-                      onChange={(e) => void onToggleEnabled(printer, e.target.checked)}
+                      onCheckedChange={(next) => void onToggleEnabled(printer, next === true)}
                     />
                     Enabled
                   </label>
@@ -748,14 +771,18 @@ export default function PrintersSettingsCard({ engineReady }: Props) {
                   >
                     Edit printer
                   </Button>
-                  <Button
-                    variant="destructive"
-                    size="sm"
+                  <ConfirmDialog
+                    trigger={
+                      <Button variant="destructive" size="sm" disabled={busy}>
+                        Remove
+                      </Button>
+                    }
+                    title="Remove this printer?"
+                    description={removePrinterConsequence(printer)}
+                    confirmLabel="Remove printer"
                     disabled={busy}
-                    onClick={() => void onRemove(printer)}
-                  >
-                    Remove
-                  </Button>
+                    onConfirm={() => void onRemove(printer)}
+                  />
                   <label className="flex items-center gap-2 text-sm">
                     <span className="text-xs text-muted-foreground">Preferred slicer:</span>
                     <Select
@@ -897,14 +924,18 @@ export default function PrintersSettingsCard({ engineReady }: Props) {
                             Add connection
                           </Button>
                         )}
-                        <Button
-                          variant="destructive"
-                          size="sm"
+                        <ConfirmDialog
+                          trigger={
+                            <Button variant="destructive" size="sm" disabled={busy}>
+                              Remove
+                            </Button>
+                          }
+                          title="Remove this printer?"
+                          description={removePrinterConsequence(printer)}
+                          confirmLabel="Remove printer"
                           disabled={busy}
-                          onClick={() => void onRemove(printer)}
-                        >
-                          Remove
-                        </Button>
+                          onConfirm={() => void onRemove(printer)}
+                        />
                       </div>
                     </div>
 

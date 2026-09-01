@@ -233,7 +233,7 @@ export default function SourceDocsSheet({
                         >
                           {d.title}
                           {d.kind === "pdf" ? (
-                            <span className="mt-0.5 block text-3xs text-muted-foreground">
+                            <span className="mt-0.5 block text-micro text-muted-foreground">
                               PDF
                               {d.extract_status && d.extract_status !== "ready"
                                 ? ` · ${d.extract_status}`

@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import type { RequiredUnitToken } from "@print-partner/contracts";
 import type { ProductionSelectableUnit } from "../../lib/productionSelection";
 import { Button } from "../ui/button";
+import { Checkbox } from "../ui/checkbox";
 import { Input } from "../ui/input";
 
 type SelectionFilter = "selected" | "not_selected" | "all";
@@ -30,6 +31,7 @@ export default function ProductionSelectionPanel({
   onSelectIncomplete,
   onClearAll,
 }: Props) {
+  const fieldPrefix = useId();
   const [showUnits, setShowUnits] = useState(units.length <= 30);
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<SelectionFilter>(() => units.length > 30 ? "selected" : "all");
@@ -49,10 +51,10 @@ export default function ProductionSelectionPanel({
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h2 className="text-2xs font-medium uppercase tracking-wide text-muted-foreground">
+        <h2 className="text-micro font-medium uppercase tracking-wide text-muted-foreground">
           Required units in this work package
         </h2>
-        <p className="font-mono text-2xs text-muted-foreground">
+        <p className="font-mono text-micro text-muted-foreground">
           {selectedCount} of {units.length} selected
         </p>
       </div>
@@ -113,14 +115,17 @@ export default function ProductionSelectionPanel({
         {visibleUnits.slice(0, visibleLimit).map((unit) => (
           <label
             key={unit.token}
+            htmlFor={`${fieldPrefix}-${unit.token}`}
             className="flex cursor-pointer items-start gap-3 p-3"
           >
-            <input
-              type="checkbox"
-              className="mt-1 h-4 w-4"
+            {/* `aria-label` still carries the name, so the row stays named by
+                the part rather than by the whole line of metadata. */}
+            <Checkbox
+              id={`${fieldPrefix}-${unit.token}`}
+              className="mt-1"
               checked={selection.has(unit.token)}
               aria-label={unit.object_name}
-              onChange={() => onToggle(unit.token)}
+              onCheckedChange={() => onToggle(unit.token)}
             />
             <span className="min-w-0">
               <span className="block truncate text-sm font-medium">{unit.object_name}</span>

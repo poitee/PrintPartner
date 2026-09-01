@@ -1,4 +1,4 @@
-@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Source+Sans+3:ital,wght@0,400;0,600;1,400&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap");
+@import "https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap";
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "./App.css";
@@ -8,78 +8,107 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 /*
-  Desk ink / paper / brass. One palette; the remaining shadcn tokens are
-  derived from the locked set (no second accent family).
+  Instrument. A near-neutral graphite carrier so the app's real content —
+  coloured filament and 3D geometry — reads true, with one high-chroma signal
+  cyan reserved for interaction and status colours at industrial-signage
+  saturation.
 
-  - `:root` = light (shop daylight); `.dark` = dark desk (product default).
+  The carrier is hue 220 at 7-22% saturation: cool enough to feel like an
+  instrument, neutral enough to be a colour-accurate backdrop. `--primary` is
+  the only chromatic chrome and it sits ~168 degrees from `--destructive`, so a
+  brand accent can never be mistaken for a status. The previous brass sat at
+  the same hue as `--warning`, which is why the app read as one warm wash.
+
+  - `:root` = light; `.dark` = dark (product default).
   - Surfaces run on a four-step ladder: sunken -> base -> raised -> overlay.
+  - Cards separate by value plus a 1px border. Shadow is reserved for things
+    that genuinely float, so `--elevation-sm` is none.
   - Paper token group is theme-independent printable white.
   - Measured contrast ratios live in docs/design-system.md.
 */
 :root {
-  /* ---- Light theme (shop daylight) ---- */
+  /* ---- Light theme ---- */
 
   /* Surface ladder. sunken = wells and table headers, base = the page,
-     raised = cards and panels, overlay = popovers, menus, dialogs, sheets. */
-  --surface-sunken: hsl(36 20% 92%);
-  --surface-base: hsl(36 28% 97%);
-  --surface-raised: hsl(36 30% 99%);
+     raised = cards and panels, overlay = popovers, menus, dialogs, sheets.
+     Light cannot separate raised from overlay by value without going grey,
+     so both are white and the overlay step is carried by elevation. */
+  --surface-sunken: hsl(220 16% 92%);
+  --surface-base: hsl(220 22% 97%);
+  --surface-raised: hsl(0 0% 100%);
   --surface-overlay: hsl(0 0% 100%);
 
   --background: var(--surface-base);
-  --foreground: hsl(32 16% 14%);
+  --foreground: hsl(220 20% 13%);
   --card: var(--surface-raised);
-  --card-foreground: hsl(32 16% 14%);
+  --card-foreground: hsl(220 20% 13%);
   --popover: var(--surface-overlay);
-  --popover-foreground: hsl(32 16% 14%);
+  --popover-foreground: hsl(220 20% 13%);
 
-  --primary: hsl(34 52% 38%);
-  --primary-foreground: hsl(36 30% 98%);
+  /* Signal cyan. Interaction only — never a decorative fill, never a chip. */
+  --primary: hsl(196 92% 28%);
+  --primary-foreground: hsl(200 30% 98%);
 
-  /* Same brass family as primary — not a second palette. */
-  --accent-brand: hsl(34 52% 38%);
-  --accent-brand-foreground: hsl(36 30% 98%);
+  /* Category identity. Unlike --primary these do encode meaning: a category
+     keeps one colour down the rail, so a "Printers" family reads as a family.
+     Six well-separated hues, all kept clear of the cyan accent. */
+  --category-1: hsl(152 52% 30%);
+  --category-2: hsl(45 84% 30%);
+  --category-3: hsl(350 62% 42%);
+  --category-4: hsl(275 48% 46%);
+  --category-5: hsl(25 76% 36%);
+  --category-6: hsl(105 46% 28%);
 
-  --secondary: hsl(32 12% 91%);
-  --secondary-foreground: hsl(32 16% 14%);
+  /* Tinted surface for selection and interaction panels, so "this one is
+     active" is one token instead of five hand-picked alphas of --primary. */
+  --primary-soft: hsl(196 60% 93%);
 
-  --muted: hsl(32 12% 91%);
-  --muted-foreground: hsl(32 10% 38%);
+  /* Retained as an alias while call sites migrate; not a second palette. */
+  --accent-brand: var(--primary);
+  --accent-brand-foreground: var(--primary-foreground);
 
-  --accent: hsl(32 12% 88%);
-  --accent-foreground: hsl(32 16% 14%);
+  --secondary: hsl(220 14% 93%);
+  --secondary-foreground: hsl(220 20% 13%);
 
-  --destructive: hsl(0 62% 42%);
-  --destructive-foreground: hsl(36 30% 98%);
-  --destructive-soft: hsl(0 55% 95%);
+  --muted: hsl(220 14% 93%);
+  --muted-foreground: hsl(220 10% 37%);
 
-  --success: hsl(152 40% 32%);
-  --success-foreground: hsl(36 30% 98%);
-  --success-soft: hsl(152 40% 93%);
-  --warning: hsl(34 72% 34%);
-  --warning-foreground: hsl(36 30% 98%);
-  --warning-soft: hsl(38 60% 95%);
-  --info: hsl(200 45% 38%);
-  --info-foreground: hsl(36 30% 98%);
-  --info-soft: hsl(200 45% 93%);
+  --accent: hsl(220 14% 89%);
+  --accent-foreground: hsl(220 20% 13%);
+
+  --destructive: hsl(4 72% 42%);
+  --destructive-foreground: hsl(0 0% 100%);
+  --destructive-soft: hsl(4 70% 95%);
+
+  --success: hsl(148 62% 26%);
+  --success-foreground: hsl(0 0% 100%);
+  --success-soft: hsl(148 45% 92%);
+  --warning: hsl(28 88% 32%);
+  --warning-foreground: hsl(0 0% 100%);
+  --warning-soft: hsl(32 80% 93%);
+  --info: hsl(212 72% 36%);
+  --info-foreground: hsl(0 0% 100%);
+  --info-soft: hsl(212 65% 94%);
 
   /* --border draws hairlines between blocks. --border-strong draws the
      boundary of a control and clears 3:1 on every surface (WCAG 1.4.11). */
-  --border: hsl(32 12% 78%);
-  --border-strong: hsl(32 12% 48%);
+  --border: hsl(220 12% 82%);
+  --border-strong: hsl(220 10% 44%);
   --input: var(--border-strong);
-  --ring: hsl(34 52% 38%);
+  --ring: hsl(196 92% 28%);
 
-  --media-bg: hsl(32 12% 90%);
+  /* Neutral so a filament colour is never judged against a tinted well. */
+  --media-bg: hsl(220 8% 90%);
 
-  /* Single warm scrim behind dialogs / sheets / backdrops. */
-  --overlay: hsl(32 25% 12% / 0.45);
+  /* Single scrim behind dialogs / sheets / backdrops. */
+  --overlay: hsl(220 25% 10% / 0.45);
 
-  --elevation-sm: 0 1px 2px hsl(32 20% 30% / 0.14), 0 2px 4px hsl(32 16% 30% / 0.06);
-  --elevation-md: 0 1px 3px hsl(32 20% 30% / 0.16), 0 6px 16px hsl(32 16% 30% / 0.1);
-  --elevation-lg: 0 2px 8px hsl(32 20% 30% / 0.18), 0 16px 36px hsl(32 16% 30% / 0.18);
+  /* Cards carry no shadow; only genuinely floating surfaces do. */
+  --elevation-sm: none;
+  --elevation-md: 0 4px 16px hsl(220 25% 15% / 0.16);
+  --elevation-lg: 0 12px 36px hsl(220 25% 12% / 0.26);
 
-  --radius: 0.5rem;
+  --radius: 0.25rem;
 
   /* ---- Motion ---- */
   --motion-fast: 110ms;
@@ -116,74 +145,91 @@
   --paper-destructive-bg-hover: #fef2f2;
 }
 
-/* ---- Dark theme (desk default) ---- */
+
+/* ---- Dark theme (product default) ---- */
 .dark {
-  --surface-sunken: hsl(32 12% 4%);
-  --surface-base: hsl(32 10% 9%);
-  --surface-raised: hsl(32 9% 16%);
-  --surface-overlay: hsl(32 9% 19%);
+  --surface-sunken: hsl(220 8% 7%);
+  --surface-base: hsl(220 8% 11%);
+  --surface-raised: hsl(220 7% 16%);
+  --surface-overlay: hsl(220 7% 20%);
 
   --background: var(--surface-base);
-  --foreground: hsl(36 18% 93%);
+  --foreground: hsl(220 14% 95%);
   --card: var(--surface-raised);
-  --card-foreground: hsl(36 18% 93%);
+  --card-foreground: hsl(220 14% 95%);
   --popover: var(--surface-overlay);
-  --popover-foreground: hsl(36 18% 93%);
+  --popover-foreground: hsl(220 14% 95%);
 
-  --primary: hsl(36 48% 52%);
-  --primary-foreground: hsl(32 20% 10%);
+  /* Brighter and bluer than light, so it glows without vibrating. */
+  --primary: hsl(190 72% 60%);
+  --primary-foreground: hsl(200 40% 9%);
 
-  --accent-brand: hsl(36 48% 52%);
-  --accent-brand-foreground: hsl(32 20% 10%);
+  --category-1: hsl(152 46% 58%);
+  --category-2: hsl(45 78% 60%);
+  --category-3: hsl(350 66% 68%);
+  --category-4: hsl(275 62% 72%);
+  --category-5: hsl(25 78% 62%);
+  --category-6: hsl(105 42% 58%);
 
-  --secondary: hsl(32 8% 21%);
-  --secondary-foreground: hsl(36 18% 93%);
+  --primary-soft: hsl(198 34% 18%);
 
-  --muted: hsl(32 8% 21%);
-  --muted-foreground: hsl(32 8% 66%);
+  --accent-brand: var(--primary);
+  --accent-brand-foreground: var(--primary-foreground);
 
-  --accent: hsl(32 8% 25%);
-  --accent-foreground: hsl(36 18% 93%);
+  --secondary: hsl(220 7% 22%);
+  --secondary-foreground: hsl(220 14% 95%);
+
+  --muted: hsl(220 7% 22%);
+  --muted-foreground: hsl(220 9% 68%);
+
+  --accent: hsl(220 7% 27%);
+  --accent-foreground: hsl(220 14% 95%);
 
   /* Status hues sit high enough to pass AA as text on every surface up to
      the overlay step; solid fills take dark ink foregrounds. */
-  --destructive: hsl(0 66% 70%);
-  --destructive-foreground: hsl(32 20% 10%);
-  --destructive-soft: hsl(0 32% 16%);
+  --destructive: hsl(4 78% 72%);
+  --destructive-foreground: hsl(4 40% 10%);
+  --destructive-soft: hsl(4 32% 17%);
 
-  --success: hsl(152 42% 56%);
-  --success-foreground: hsl(152 30% 8%);
-  --success-soft: hsl(152 30% 15%);
-  --warning: hsl(38 68% 58%);
-  --warning-foreground: hsl(38 30% 8%);
-  --warning-soft: hsl(38 32% 15%);
-  --info: hsl(200 55% 60%);
-  --info-foreground: hsl(32 20% 10%);
-  --info-soft: hsl(202 32% 16%);
+  --success: hsl(146 48% 58%);
+  --success-foreground: hsl(146 40% 8%);
+  --success-soft: hsl(146 30% 15%);
+  --warning: hsl(40 88% 62%);
+  --warning-foreground: hsl(40 40% 9%);
+  --warning-soft: hsl(38 32% 16%);
+  --info: hsl(212 74% 68%);
+  --info-foreground: hsl(212 40% 10%);
+  --info-soft: hsl(212 34% 19%);
 
-  --border: hsl(32 8% 30%);
-  --border-strong: hsl(32 8% 52%);
+  --border: hsl(220 7% 28%);
+  --border-strong: hsl(220 8% 52%);
   --input: var(--border-strong);
-  --ring: hsl(36 48% 52%);
+  --ring: hsl(190 72% 60%);
 
-  --media-bg: hsl(32 10% 6%);
+  --media-bg: hsl(220 8% 6%);
 
-  --overlay: hsl(30 25% 3% / 0.65);
+  --overlay: hsl(220 30% 3% / 0.62);
 
-  --elevation-sm: 0 1px 2px hsl(0 0% 0% / 0.4);
-  --elevation-md: 0 1px 0 hsl(32 8% 30% / 0.5), 0 4px 14px hsl(0 0% 0% / 0.5);
-  --elevation-lg: 0 1px 0 hsl(32 8% 34% / 0.5), 0 18px 40px hsl(0 0% 0% / 0.6);
+  --elevation-sm: none;
+  --elevation-md: 0 4px 16px hsl(0 0% 0% / 0.55);
+  --elevation-lg: 0 12px 36px hsl(0 0% 0% / 0.65);
 }
 
 /* Fonts, radii, type scale, motion defaults. */
 @theme {
-  --font-sans: "Source Sans 3", system-ui, sans-serif;
-  --font-serif: "Source Serif 4", ui-serif, Georgia, serif;
+  /* One foundry, matched metrics. Plex Sans has the wide apertures and
+     slightly mechanical character an instrument panel wants, and its tabular
+     figures are excellent. The serif slot is kept so `font-serif` call sites
+     keep working; it resolves to the same family. */
+  --font-sans: "IBM Plex Sans", system-ui, sans-serif;
+  --font-serif: "IBM Plex Sans", system-ui, sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, monospace;
 
+  /* --radius-xl is what upstream shadcn Card and Alert reach for. */
+  --radius-xl: calc(var(--radius) + 4px);
   --radius-lg: var(--radius);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 1px);
+  --radius-sm: calc(var(--radius) - 2px);
 
   /*
    * Named type scale. Use these instead of raw text-[Npx].
@@ -226,6 +272,14 @@
 
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
+  --color-primary-soft: var(--primary-soft);
+
+  --color-category-1: var(--category-1);
+  --color-category-2: var(--category-2);
+  --color-category-3: var(--category-3);
+  --color-category-4: var(--category-4);
+  --color-category-5: var(--category-5);
+  --color-category-6: var(--category-6);
 
   --color-accent-brand: var(--accent-brand);
   --color-accent-brand-foreground: var(--accent-brand-foreground);
@@ -441,16 +495,12 @@
   }
 
   /*
-   * Page canvas. A faint brass wash on surface-base, not a named gradient
-   * token. Auth screens and <main> share this so the desk reads as one room.
+   * Page canvas. Flat. A tinted ground would bias every filament swatch and
+   * mesh rendered on top of it, which is the whole reason this palette is
+   * neutral. Auth screens and <main> share it so the app reads as one room.
    */
   .desk-canvas {
     background-color: var(--surface-base);
-    background-image: radial-gradient(
-      56rem 36rem at 50% -8%,
-      color-mix(in srgb, var(--primary) 22%, transparent),
-      transparent 62%
-    );
   }
 
   /* Sunken plate for the current Build picker and similar nameplates. */

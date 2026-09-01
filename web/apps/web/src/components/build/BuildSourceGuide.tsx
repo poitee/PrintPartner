@@ -8,7 +8,7 @@ export default function BuildSourceGuide({ profileId }: { profileId: number }) {
   return (
     <Card
       surface="sunken"
-      className="border-primary/25"
+      className="border-primary/40"
       aria-labelledby="build-source-guide-heading"
     >
       <CardContent className="space-y-3 p-4">
@@ -32,7 +32,7 @@ export default function BuildSourceGuide({ profileId }: { profileId: number }) {
 
         <ol className="grid gap-2 sm:grid-cols-3">
           <li className="rounded-md border border-border bg-card p-3">
-            <p className="font-mono text-2xs font-semibold uppercase tracking-wide text-primary">
+            <p className="font-mono text-micro font-semibold uppercase tracking-wide text-primary">
               1 · Library
             </p>
             <p className="mt-1 text-xs font-medium">Add or update the reusable project.</p>
@@ -42,7 +42,7 @@ export default function BuildSourceGuide({ profileId }: { profileId: number }) {
               className="absolute -left-3 top-1/2 hidden h-4 w-4 -translate-y-1/2 text-muted-foreground sm:block"
               aria-hidden
             />
-            <p className="font-mono text-2xs font-semibold uppercase tracking-wide text-primary">
+            <p className="font-mono text-micro font-semibold uppercase tracking-wide text-primary">
               2 · This Build
             </p>
             <p className="mt-1 text-xs font-medium">Attach sources, then choose folders or STLs.</p>
@@ -52,7 +52,7 @@ export default function BuildSourceGuide({ profileId }: { profileId: number }) {
               className="absolute -left-3 top-1/2 hidden h-4 w-4 -translate-y-1/2 text-muted-foreground sm:block"
               aria-hidden
             />
-            <p className="font-mono text-2xs font-semibold uppercase tracking-wide text-primary">
+            <p className="font-mono text-micro font-semibold uppercase tracking-wide text-primary">
               3 · Plan
             </p>
             <p className="mt-1 text-xs font-medium">Review Required units and publish the revision.</p>

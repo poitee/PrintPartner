@@ -26,10 +26,10 @@ export default function DirectExportCard({ tokenCount, busy, onExport }: Props) 
           unit, laid out the way the Plates step showed them.
         </CardDescription>
         <div className="flex flex-wrap gap-1.5 pt-0.5">
-          <Badge variant="muted" className="rounded-full px-2 py-0.5 font-mono text-2xs font-normal">
+          <Badge variant="muted" className="rounded-full px-2 py-0.5 font-mono text-micro font-normal">
             {tokenCount > 0 ? `${tokenCount} units` : "none selected"}
           </Badge>
-          <Badge variant="muted" className="rounded-full px-2 py-0.5 font-mono text-2xs font-normal">
+          <Badge variant="muted" className="rounded-full px-2 py-0.5 font-mono text-micro font-normal">
             Plate layout
           </Badge>
         </div>

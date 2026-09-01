@@ -14,7 +14,6 @@ import {
   printerDetailsDraft,
   printerHostConnectionReady,
   printerSettingsCanAdd,
-  statusPillClass,
   statusPillLabel,
 } from "./printerSettingsModel";
 
@@ -78,7 +77,6 @@ describe("printer settings model", () => {
   it("formats status pills", () => {
     expect(statusPillLabel({ state: "printing", progress: 42.4 })).toBe("Printing 42%");
     expect(statusPillLabel({ state: "offline", message: "No route" })).toBe("Offline");
-    expect(statusPillClass("error")).toContain("destructive");
   });
 
   it("validates host types and exposes host defaults", () => {

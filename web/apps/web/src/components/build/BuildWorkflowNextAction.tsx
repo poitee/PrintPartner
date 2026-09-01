@@ -28,14 +28,14 @@ export default function BuildWorkflowNextAction({
   return (
     <section
       className={cn(
-        "flex flex-col gap-3 rounded-lg border border-primary/25 bg-primary/[0.04] p-3 sm:flex-row sm:items-center sm:justify-between",
+        "flex flex-col gap-3 rounded-lg border border-primary/40 bg-primary/[0.04] p-3 sm:flex-row sm:items-center sm:justify-between",
         className,
       )}
       aria-label="Next Build action"
       data-testid="build-next-action"
     >
       <div className="min-w-0">
-        <p className="font-mono text-3xs font-semibold uppercase tracking-[0.14em] text-primary">
+        <p className="font-mono text-micro font-semibold uppercase tracking-[0.14em] text-primary">
           Next action
         </p>
         <p className="mt-1 text-sm font-medium text-foreground">{action.label}</p>

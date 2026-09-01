@@ -1,4 +1,5 @@
 import { Spinner } from "./ui/spinner";
+import { Alert, AlertActions, AlertTitle } from "./ui/alert";
 import { cn } from "@/lib/utils";
 import type { StlSyncBannerMode } from "../lib/stlAutoSync";
 
@@ -23,17 +24,15 @@ export default function StlSyncBanner({
 
   if (mode.kind === "running") {
     return (
-      <div
-        className={cn(
-          "flex items-center gap-2 rounded-md border border-border bg-muted/40 px-3 py-2.5 text-sm",
-          className,
-        )}
+      <Alert
+        tone="neutral"
         role="status"
         aria-live="polite"
+        className={cn("items-center", className)}
       >
-        <Spinner className="size-4 shrink-0" />
-        <span className="font-medium">Syncing STLs…</span>
-      </div>
+        <Spinner className="size-4 shrink-0" aria-hidden="true" />
+        <AlertTitle>Syncing STLs…</AlertTitle>
+      </Alert>
     );
   }
 
@@ -41,22 +40,18 @@ export default function StlSyncBanner({
     mode.kind === "failed" ? "Sync failed" : `${mode.count} STL missing`;
 
   return (
-    <div
-      className={cn(
-        "flex flex-wrap items-center gap-2 rounded-md border border-warning bg-warning/15 px-3 py-2.5 text-sm",
-        className,
-      )}
-      role="alert"
-    >
-      <span className="font-medium">{label}</span>
-      <button
-        type="button"
-        className="text-xs font-medium text-primary underline disabled:opacity-50"
-        onClick={onSync}
-        disabled={syncDisabled}
-      >
-        Sync
-      </button>
-    </div>
+    <Alert tone="warning" className={cn("items-center", className)}>
+      <AlertTitle>{label}</AlertTitle>
+      <AlertActions>
+        <button
+          type="button"
+          className="text-xs font-medium text-primary underline disabled:opacity-50"
+          onClick={onSync}
+          disabled={syncDisabled}
+        >
+          Sync
+        </button>
+      </AlertActions>
+    </Alert>
   );
 }

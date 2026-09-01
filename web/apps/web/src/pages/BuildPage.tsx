@@ -71,6 +71,8 @@ import {
 import { libraryRoute, settingsRoute } from "../lib/routes";
 import { groupMergeConflictsByFilename } from "../lib/mergeConflictGroups";
 import { takeKitImportResult } from "../lib/kitImportStash";
+import { statusTone } from "../lib/statusTone";
+import { cn } from "@/lib/utils";
 import { useProfileSelection } from "../context/ProfileContext";
 import { usePlanActions } from "../context/PlanActionsContext";
 import { usePlanWorkspace } from "../context/PlanWorkspaceContext";
@@ -697,7 +699,7 @@ function BuildPageContent() {
           </CardContent>
         </Card>
       ) : profilesState === "error" ? (
-        <Card className="border-destructive/40 bg-destructive/5 shadow-none">
+        <Card className={cn("shadow-none", statusTone({ tone: "error", emphasis: "surface" }))}>
           <CardContent className="space-y-3 pt-6">
             <p className="text-sm text-destructive">
               Could not load Builds: {profilesError}
@@ -736,7 +738,7 @@ function BuildPageContent() {
           </CardContent>
         </Card>
       ) : sourcesState === "error" ? (
-        <Card className="border-destructive/40 bg-destructive/5 shadow-none">
+        <Card className={cn("shadow-none", statusTone({ tone: "error", emphasis: "surface" }))}>
           <CardContent className="space-y-3 pt-6">
             <p className="text-sm text-destructive">
               Could not load sources: {sourceQueryError}
@@ -757,7 +759,7 @@ function BuildPageContent() {
           </CardContent>
         </Card>
       ) : profileDataState === "error" ? (
-        <Card className="border-destructive/40 bg-destructive/5 shadow-none">
+        <Card className={cn("shadow-none", statusTone({ tone: "error", emphasis: "surface" }))}>
           <CardContent className="space-y-3 pt-6">
             <p className="text-sm text-destructive">
               Could not load this Build: {profileDataError}

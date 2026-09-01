@@ -104,7 +104,7 @@ export default function SlotFilamentPicker({
             ) : (
               filtered.map((group) => (
                 <div key={group.label}>
-                  <p className="mb-1 text-2xs font-medium text-muted-foreground">{group.label}</p>
+                  <p className="mb-1 text-micro font-medium text-muted-foreground">{group.label}</p>
                   <div className="space-y-0.5">
                     {group.colors.map((c) => {
                       const active = filamentColorId === c.id;

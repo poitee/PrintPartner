@@ -121,5 +121,18 @@ export async function applyColorPreset(profileId: number, preset: ColorPreset): 
   return applied;
 }
 
-/** Default hex for a filament with no assigned color. */
+/**
+ * Default hex for a filament with no assigned color.
+ *
+ * Deliberately NOT a theme token. This is content, not chrome: it is the
+ * colour a Part is rendered in, and a Part must look the same in both themes
+ * (that fidelity is the point of lib/previewTheme.ts). Moving it to a neutral
+ * grey was considered — an unassigned Part currently renders in a confident
+ * crimson that is indistinguishable from a Part someone actually assigned red
+ * — but the accepted-media basis keys on the *assigned* hex, which is null
+ * while unassigned, so changing this value would not invalidate the
+ * server-side thumbnails already rendered with it. The result would be a
+ * mixed fleet of grey and crimson tiles for the same state. Changing it needs
+ * a thumbnail basis version bump, not a palette edit.
+ */
 export const DEFAULT_FILAMENT_HEX = "#c41230";

@@ -69,7 +69,7 @@ export default function ExportRecentPanel() {
 
   return (
     <aside className="flex flex-col gap-3 rounded-lg border border-border bg-card p-3.5 shadow-sm">
-      <span className="font-mono text-3xs font-medium uppercase tracking-[0.08em] text-muted-foreground">
+      <span className="font-mono text-micro font-medium uppercase tracking-[0.08em] text-muted-foreground">
         Recent accepted Plate exports
       </span>
       {history.isError ? (
@@ -137,7 +137,7 @@ export default function ExportRecentPanel() {
           );
         })}
       </ul>
-      <p className="text-2xs leading-relaxed text-muted-foreground">
+      <p className="text-micro leading-relaxed text-muted-foreground">
         Job metadata survives reload for about 24 hours, but disappears when the server restarts. Download retention is separate.
       </p>
     </aside>

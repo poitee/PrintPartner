@@ -172,7 +172,7 @@ export default memo(function PartThumb({
       ) : (
         <div
           className="sheet-thumb-ph"
-          style={{ background: tintHex ?? "#e5e7eb" }}
+          style={{ background: tintHex ?? "var(--surface-sunken)" }}
           aria-hidden
         />
       )}

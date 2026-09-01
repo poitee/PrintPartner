@@ -2,6 +2,7 @@ import {
   forwardRef,
   useCallback,
   useEffect,
+  useId,
   useImperativeHandle,
   useMemo,
   useRef,
@@ -48,6 +49,7 @@ import PartSpoolPicker from "../PartSpoolPicker";
 import SpoolRemainingBadge from "../SpoolRemainingBadge";
 import PartsGridCard from "./PartsGridCard";
 import ReviewSheetMobileCard from "./ReviewSheetMobileCard";
+import { Checkbox } from "../ui/checkbox";
 import QuantityStepper from "./QuantityStepper";
 import { Button } from "../ui/button";
 import { cn } from "@/lib/utils";
@@ -102,6 +104,7 @@ function ReviewSheetRow({
 }) {
   const printDone =
     part.printed_count >= part.quantity_effective && part.quantity_effective > 0;
+  const unitFieldId = useId();
 
   if (viewMode === "print") {
     return (
@@ -133,21 +136,29 @@ function ReviewSheetRow({
         <td className="sheet-cell-qty sheet-cell-qty-readonly">{part.quantity_effective}</td>
         <td className="sheet-cell-printed">
           <div className="sheet-units">
-            {part.print_units.map((unitDone, idx) => (
-              <label
-                key={idx}
-                className={cn("sheet-unit", unitDone && "sheet-unit-done")}
-                title={`Unit #${idx + 1}`}
-              >
-                <input
-                  type="checkbox"
-                  checked={unitDone}
-                  onChange={() => onToggleUnit(part, idx)}
-                  disabled={busy || !part.included}
-                />
-                <span>{idx + 1}</span>
-              </label>
-            ))}
+            {part.print_units.map((unitDone, idx) => {
+              const unitId = `${unitFieldId}-${idx}`;
+              return (
+                <label
+                  key={idx}
+                  htmlFor={unitId}
+                  className={cn("sheet-unit", unitDone && "sheet-unit-done")}
+                  title={`Unit #${idx + 1}`}
+                >
+                  <Checkbox
+                    id={unitId}
+                    /* On paper the tally box is the .sheet-unit border itself, so
+                       the control drops out of the print exactly as it did when
+                       App.css hid `.sheet-unit input`. */
+                    className="print:hidden"
+                    checked={unitDone}
+                    onCheckedChange={() => onToggleUnit(part, idx)}
+                    disabled={busy || !part.included}
+                  />
+                  <span>{idx + 1}</span>
+                </label>
+              );
+            })}
             <span className={cn("sheet-printed-count", printDone && "sheet-printed-done")}>
               <span className="sheet-printed-screen">
                 {part.printed_count}/{part.quantity_effective}
@@ -532,7 +543,7 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
   return (
     <section className="space-y-3">
       {draftWorkspace && ui.viewMode === "edit" && (
-        <p className="no-print rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-sm">
+        <p className="no-print rounded-md border border-primary/40 bg-primary-soft px-3 py-2 text-sm">
           Quantity and inclusion controls change the Working Plan. They are not accepted yet.
         </p>
       )}
@@ -570,7 +581,7 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
             >
               Warnings only
               {warningCount > 0 && (
-                <span className="ml-1 font-mono text-2xs text-warning">{warningCount}</span>
+                <span className="ml-1 font-mono text-micro text-warning">{warningCount}</span>
               )}
             </Button>
           </div>
@@ -738,21 +749,27 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
 
         <div className="flex flex-wrap items-center gap-3 text-sm">
           {!isMobileLayout && layoutMode === "table" && (
-            <label className="flex items-center gap-2 text-muted-foreground">
-              <input
-                type="checkbox"
+            <label
+              htmlFor="review-parts-compact-rows"
+              className="flex items-center gap-2 text-muted-foreground"
+            >
+              <Checkbox
+                id="review-parts-compact-rows"
                 checked={ui.compactMode}
-                onChange={(e) => patchUi({ compactMode: e.target.checked })}
+                onCheckedChange={(next) => patchUi({ compactMode: next === true })}
               />
               Compact rows
             </label>
           )}
           {!isMobileLayout && (
-            <label className="flex items-center gap-2 text-muted-foreground">
-              <input
-                type="checkbox"
+            <label
+              htmlFor="review-parts-text-only-print"
+              className="flex items-center gap-2 text-muted-foreground"
+            >
+              <Checkbox
+                id="review-parts-text-only-print"
                 checked={ui.textOnlyPrint}
-                onChange={(e) => patchUi({ textOnlyPrint: e.target.checked })}
+                onCheckedChange={(next) => patchUi({ textOnlyPrint: next === true })}
               />
               Text-only print (no thumbnails)
             </label>
@@ -792,7 +809,7 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
                       aria-hidden
                     />
                     <h3 className="text-sm font-semibold">{group.title}</h3>
-                    <span className="font-mono text-2xs text-muted-foreground">
+                    <span className="font-mono text-micro text-muted-foreground">
                       {group.meta}
                     </span>
                   </div>

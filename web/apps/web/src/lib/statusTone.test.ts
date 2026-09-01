@@ -9,7 +9,7 @@ import {
 } from "./statusTone";
 
 const TONES: StatusTone[] = ["success", "warning", "info", "error", "neutral"];
-const EMPHASES: StatusEmphasis[] = ["text", "soft", "outline", "solid"];
+const EMPHASES: StatusEmphasis[] = ["text", "soft", "surface", "edge", "outline", "solid"];
 
 describe("statusTone", () => {
   it("emits only semantic token classes — no raw palette, no dark: overrides", () => {
@@ -30,6 +30,23 @@ describe("statusTone", () => {
   it("uses soft backgrounds for chips and banners", () => {
     expect(statusTone({ tone: "success", emphasis: "soft" })).toContain("bg-success-soft");
     expect(statusTone({ tone: "info", emphasis: "soft" })).toContain("bg-info-soft");
+  });
+
+  it("leaves the ink alone for surface, so panel contents keep their own colours", () => {
+    for (const tone of TONES) {
+      const cls = statusTone({ tone, emphasis: "surface" });
+      expect(cls).not.toMatch(/(?:^|\s)text-/);
+    }
+    expect(statusTone({ tone: "warning", emphasis: "surface" })).toContain("bg-warning-soft");
+    expect(statusTone({ tone: "warning", emphasis: "surface" })).toContain("border-warning/40");
+  });
+
+  it("colours only the rim for edge, so the card keeps its own surface", () => {
+    for (const tone of TONES) {
+      const cls = statusTone({ tone, emphasis: "edge" });
+      expect(cls).not.toMatch(/(?:^|\s)(?:bg|text)-/);
+    }
+    expect(statusTone({ tone: "warning", emphasis: "edge" })).toContain("border-warning/50");
   });
 });
 

@@ -5,14 +5,18 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
 import { partMeshUrl } from "../../../api/endpoints/media";
 import { acceptedPlateUnitColor } from "../../../lib/acceptedPlateColor";
+import { addPreviewRig, createPreviewMaterial, createPreviewRig } from "../../../lib/previewRig";
+import { rampColor, usePreviewTheme, type PreviewTheme } from "../../../lib/previewTheme";
 
 const MAX_PREVIEW_PARTS = 40;
 
-function unitColor(unit: { filament_hex?: string | null; filament_custom_hex?: string | null; filament_color_id?: string | null }, index: number): THREE.Color {
-  const selected = acceptedPlateUnitColor(unit);
-  if (selected) return new THREE.Color(selected);
-  const colors = [0x38bdf8, 0x4ade80, 0xfb923c, 0xc084fc, 0xfacc15];
-  return new THREE.Color(colors[index % colors.length]);
+/** A unit's own filament colour, or the theme's categorical ramp entry. */
+function unitColor(
+  unit: { filament_hex?: string | null; filament_custom_hex?: string | null; filament_color_id?: string | null },
+  index: number,
+  theme: PreviewTheme,
+): string {
+  return acceptedPlateUnitColor(unit) ?? rampColor(theme, index);
 }
 
 export default function AcceptedPlate3DPreview({
@@ -23,14 +27,18 @@ export default function AcceptedPlate3DPreview({
   onUnavailable?: () => void;
 }) {
   const mountRef = useRef<HTMLDivElement>(null);
+  const theme = usePreviewTheme();
   const [message, setMessage] = useState("Loading Plate meshes…");
 
+  // The theme is a dependency, not a live patch: a theme switch is rare and
+  // the meshes come back from the browser cache, so rebuilding the scene is
+  // cheaper than keeping every material, light and grid line in sync by hand.
   useEffect(() => {
     const mount = mountRef.current;
     if (!mount) return;
     let cancelled = false;
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x080b10);
+    scene.background = new THREE.Color(theme.background);
     const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 5_000);
     camera.up.set(0, 0, 1);
     let renderer: THREE.WebGLRenderer;
@@ -50,25 +58,34 @@ export default function AcceptedPlate3DPreview({
     const bedDepth = plate.printer.bed_depth_um / 1_000;
     const bed = new THREE.Mesh(
       new THREE.PlaneGeometry(bedWidth, bedDepth),
-      new THREE.MeshStandardMaterial({ color: 0x111827, roughness: 0.72, metalness: 0.2 }),
+      new THREE.MeshStandardMaterial({
+        color: new THREE.Color(theme.bed),
+        roughness: 0.72,
+        metalness: 0.2,
+      }),
     );
     bed.receiveShadow = true;
     scene.add(bed);
-    const grid = new THREE.GridHelper(Math.max(bedWidth, bedDepth), 20, 0x38bdf8, 0x334155);
+    const grid = new THREE.GridHelper(
+      Math.max(bedWidth, bedDepth),
+      20,
+      new THREE.Color(theme.grid.major),
+      new THREE.Color(theme.grid.minor),
+    );
     grid.rotation.x = Math.PI / 2;
     grid.position.z = 0.08;
     scene.add(grid);
 
-    scene.add(new THREE.HemisphereLight(0xbfe8ff, 0x111827, 1.35));
-    const key = new THREE.DirectionalLight(0xffffff, 2.8);
-    key.position.set(-bedWidth, -bedDepth, Math.max(bedWidth, bedDepth));
-    key.castShadow = true;
-    scene.add(key);
-    const rim = new THREE.PointLight(0x38bdf8, 2.2, Math.max(bedWidth, bedDepth) * 3);
-    rim.position.set(bedWidth / 2, bedDepth / 2, Math.max(bedWidth, bedDepth) / 2);
-    scene.add(rim);
-
     const maxBed = Math.max(bedWidth, bedDepth);
+    const rig = createPreviewRig(theme, { up: "z", distance: maxBed });
+    rig.key.castShadow = true;
+    rig.key.shadow.camera.left = -maxBed;
+    rig.key.shadow.camera.right = maxBed;
+    rig.key.shadow.camera.top = maxBed;
+    rig.key.shadow.camera.bottom = -maxBed;
+    rig.key.shadow.camera.far = maxBed * 4;
+    addPreviewRig(scene, rig);
+
     camera.position.set(maxBed * 0.7, -maxBed * 0.9, maxBed * 0.85);
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.target.set(0, 0, 0);
@@ -103,8 +120,11 @@ export default function AcceptedPlate3DPreview({
       }
       const buffers = new Map<number, ArrayBuffer>();
       let loaded = 0;
-      await Promise.all(previewUnits.map(async (unit, index) => {
+      await Promise.all(previewUnits.map(async (unit) => {
         if (unit.part_id == null) return;
+        // Index within the Plate, not within the filtered preview list, so a
+        // unit keeps the same ramp colour in the SVG bed and here.
+        const index = plate.units.indexOf(unit);
         try {
           let buffer = buffers.get(unit.part_id);
           if (!buffer) {
@@ -120,11 +140,7 @@ export default function AcceptedPlate3DPreview({
           if (!bounds) return;
           geometry.translate(-bounds.min.x, -bounds.min.y, -bounds.min.z);
           geometry.computeVertexNormals();
-          const material = new THREE.MeshStandardMaterial({
-            color: unitColor(unit, index),
-            roughness: 0.34,
-            metalness: 0.08,
-          });
+          const material = createPreviewMaterial(theme, unitColor(unit, index, theme));
           const mesh = new THREE.Mesh(geometry, material);
           mesh.position.set(
             unit.x_um / 1_000 - bedWidth / 2,
@@ -163,11 +179,15 @@ export default function AcceptedPlate3DPreview({
       renderer.dispose();
       renderer.domElement.remove();
     };
-  }, [onUnavailable, plate]);
+  }, [onUnavailable, plate, theme]);
 
   return (
     <div className="space-y-2">
-      <div ref={mountRef} className="h-[26rem] overflow-hidden rounded-xl border border-white/10 bg-[#080b10] shadow-[0_18px_50px_rgba(0,0,0,0.35)]" aria-label={`Rotatable 3D preview of Plate ${plate.ordinal}`} />
+      <div
+        ref={mountRef}
+        className="h-[26rem] overflow-hidden rounded-xl border border-border bg-media shadow-lg"
+        aria-label={`Rotatable 3D preview of Plate ${plate.ordinal}`}
+      />
       <p className="text-xs text-muted-foreground">{message} · Drag to rotate, scroll to zoom.</p>
     </div>
   );

@@ -31,6 +31,8 @@ import {
 } from "../../lib/printerSendModel";
 import { usePrinterStatusPollMs } from "../../hooks/usePrinterStatusPollMs";
 import { settingsPrintersRoute } from "../../lib/routes";
+import { statusTone } from "../../lib/statusTone";
+import { cn } from "../../lib/utils";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import {
@@ -502,7 +504,10 @@ export default function PrinterSendPanel({
         <CardContent className="flex flex-col gap-2.5 pt-1">
           {sendFailure ? (
             <div
-              className="flex flex-wrap items-center gap-3 rounded-md border border-destructive/35 bg-destructive-soft px-3 py-2"
+              className={cn(
+                "flex flex-wrap items-center gap-3 rounded-md px-3 py-2",
+                statusTone({ tone: "error", emphasis: "surface" }),
+              )}
               role="alert"
             >
               <p className="min-w-0 flex-1 text-sm text-destructive">{sendFailure.message}</p>
@@ -556,7 +561,7 @@ export default function PrinterSendPanel({
                 </select>
                 <Badge
                   variant={printerSendStatusVariant(selectedHostStatus)}
-                  className="shrink-0 rounded-full px-2 py-0.5 font-mono text-2xs font-normal"
+                  className="shrink-0 rounded-full px-2 py-0.5 font-mono text-micro font-normal"
                 >
                   {printerSendStatusLabel(selectedHostStatus)}
                 </Badge>
@@ -646,16 +651,16 @@ export default function PrinterSendPanel({
                 </div>
               ) : null}
 
-              <p className="text-2xs leading-relaxed text-muted-foreground">
+              <p className="text-micro leading-relaxed text-muted-foreground">
                 {planBind.line}
               </p>
               {planBind.canSend ? (
-                <p className="text-2xs leading-relaxed text-muted-foreground">
+                <p className="text-micro leading-relaxed text-muted-foreground">
                   Send from here to track these parts on Progress.
                 </p>
               ) : null}
               {selectedPrinterBusy ? (
-                <p className="text-2xs leading-relaxed text-muted-foreground">
+                <p className="text-micro leading-relaxed text-muted-foreground">
                   Printer is busy. Send still works. Or wait until Idle.
                 </p>
               ) : null}
@@ -670,7 +675,7 @@ export default function PrinterSendPanel({
                 <Link to={settingsPrintersRoute()}>Add printers in Settings</Link>
               </Button>
               {!hasBambuLinked ? (
-                <p className="text-2xs leading-relaxed text-muted-foreground">
+                <p className="text-micro leading-relaxed text-muted-foreground">
                   Bambu Connect is available after you link a Bambu host. It never starts a
                   print from here.
                 </p>
@@ -728,10 +733,10 @@ export default function PrinterSendPanel({
             >
               {bambuBusy ? "Handing off…" : "Open in Bambu Connect"}
             </Button>
-            <p className="text-2xs leading-relaxed text-muted-foreground">
+            <p className="text-micro leading-relaxed text-muted-foreground">
               {planBind.line}
             </p>
-            <p className="text-2xs leading-relaxed text-muted-foreground">
+            <p className="text-micro leading-relaxed text-muted-foreground">
               Opens Bambu Connect with the sliced file. Does not start a print from here.
             </p>
           </CardContent>

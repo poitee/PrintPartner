@@ -20,6 +20,7 @@ import {
   useUpdateProfileMutation,
 } from "../queries/profiles";
 import { Button } from "./ui/button";
+import ConfirmDialog from "./ConfirmDialog";
 import {
   Command,
   CommandEmpty,
@@ -547,41 +548,23 @@ export default function PlanPicker({
         </DialogContent>
       </Dialog>
 
-      <Dialog
+      <ConfirmDialog
         open={deleteOpen}
         onOpenChange={(next) => {
           setDeleteOpen(next);
           if (!next) closeActionDialog();
         }}
-      >
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Delete Build?</DialogTitle>
-          </DialogHeader>
-          <p className="text-sm text-muted-foreground">
+        title="Delete Build?"
+        description={
+          <>
             Delete “{actionTarget?.name}” and all its parts, layers, and print
             settings?
-          </p>
-          <div className="flex justify-end gap-2">
-            <Button
-              variant="secondary"
-              onClick={() => {
-                setDeleteOpen(false);
-                closeActionDialog();
-              }}
-            >
-              Cancel
-            </Button>
-            <Button
-              variant="ghost"
-              disabled={busy}
-              onClick={() => void confirmDelete()}
-            >
-              Delete
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+          </>
+        }
+        confirmLabel="Delete"
+        disabled={busy}
+        onConfirm={() => void confirmDelete()}
+      />
 
       <Dialog
         open={archiveOpen}

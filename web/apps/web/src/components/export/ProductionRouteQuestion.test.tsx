@@ -21,6 +21,12 @@ function renderQuestion(overrides: Partial<Parameters<typeof ProductionRouteQues
 }
 
 const radio = (name: string | RegExp) => screen.getByRole("radio", { name });
+/**
+ * The routes are ARIA radios rather than `<input type="radio">`, so the answer
+ * is read the way an assistive technology reads it.
+ */
+const isChosen = (name: string | RegExp) =>
+  screen.getByRole("radio", { name, checked: true });
 
 describe("ProductionRouteQuestion", () => {
   it("groups the routes under one legend and pre-selects nothing", () => {
@@ -28,7 +34,7 @@ describe("ProductionRouteQuestion", () => {
     expect(screen.getByText("What should PrintPartner prepare?").tagName).toBe("LEGEND");
     const radios = screen.getAllByRole("radio");
     expect(radios).toHaveLength(2);
-    for (const option of radios) expect((option as HTMLInputElement).checked).toBe(false);
+    expect(screen.queryAllByRole("radio", { checked: true })).toHaveLength(0);
   });
 
   it("names each route with a one-line description", () => {
@@ -70,7 +76,7 @@ describe("ProductionRouteQuestion", () => {
 
   it("brings the previous answer back pre-selected on a change", () => {
     renderQuestion({ value: "plates", onCancel: vi.fn() });
-    expect((radio(/Generate 3MF plates/) as HTMLInputElement).checked).toBe(true);
+    expect(isChosen(/Generate 3MF plates/)).toBeTruthy();
     expect(screen.getByRole("button", { name: "Keep this route" })).toBeTruthy();
   });
 
@@ -85,7 +91,7 @@ describe("ProductionRouteQuestion", () => {
     fireEvent.click(radio(/Generate 3MF plates/));
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(onRetry).toHaveBeenCalled();
-    expect((radio(/Generate 3MF plates/) as HTMLInputElement).checked).toBe(true);
+    expect(isChosen(/Generate 3MF plates/)).toBeTruthy();
     expect(screen.getByRole("alert").textContent).toContain("Engine offline.");
   });
 });

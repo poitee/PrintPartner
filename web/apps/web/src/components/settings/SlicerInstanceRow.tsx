@@ -138,7 +138,7 @@ export default function SlicerInstanceRow({
         </div>
       ) : null}
       {logs?.length ? (
-        <pre className="max-h-40 overflow-auto rounded bg-muted p-2 text-2xs leading-snug">
+        <pre className="max-h-40 overflow-auto rounded bg-muted p-2 text-micro leading-snug">
           {logs.join("\n")}
         </pre>
       ) : null}

@@ -6,7 +6,10 @@ import {
   dismissUnattributedPrint,
 } from "../../api/endpoints/checkoff";
 import { fetchProfiles } from "../../api/endpoints/plans";
+import { statusTone } from "../../lib/statusTone";
+import { cn } from "@/lib/utils";
 import { Button } from "../ui/button";
+import { Checkbox } from "../ui/checkbox";
 import {
   Select,
   SelectContent,
@@ -107,7 +110,10 @@ export default function UnattributedPrintCard({
     <div className="space-y-2">
       <button
         type="button"
-        className="inline-flex max-w-full items-center gap-2 rounded-full border border-warning/30 bg-warning-soft px-3 py-1.5 text-left text-xs text-warning shadow-sm transition-colors hover:bg-warning-soft/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className={cn(
+          "inline-flex max-w-full items-center gap-2 rounded-full px-3 py-1.5 text-left text-xs shadow-sm transition-colors hover:bg-warning-soft/80",
+          statusTone({ tone: "warning", emphasis: "soft" }),
+        )}
         aria-expanded={expanded}
         aria-controls={detailsId}
         onClick={() => setExpanded((value) => !value)}
@@ -131,29 +137,39 @@ export default function UnattributedPrintCard({
       {expanded && (
         <div
           id={detailsId}
-          className="max-w-2xl rounded-lg border border-warning/25 bg-card p-3 shadow-sm"
+          className={cn(
+            "max-w-2xl rounded-lg bg-card p-3 shadow-sm",
+            statusTone({ tone: "warning", emphasis: "edge" }),
+          )}
         >
           <div className="flex flex-col gap-2">
             {print.candidates.length > 0 && (
               <div className="space-y-1">
                 <p className="text-xs font-medium text-muted-foreground">Found on plate:</p>
                 <ul className="space-y-0.5">
-                  {print.candidates.map((c) => (
-                    <li key={c.stl_basename} className="text-xs">
-                      <label className="flex items-center gap-2">
-                        <input
-                          type="checkbox"
-                          checked={selectedStlBasenames.has(c.stl_basename)}
-                          onChange={(event) => toggleCandidate(c.stl_basename, event.target.checked)}
-                          disabled={busy}
-                        />
-                        <span className="font-mono">{c.stl_basename}</span>
-                        {c.copy_count > 1 && (
-                          <span className="text-muted-foreground"> ×{c.copy_count}</span>
-                        )}
-                      </label>
-                    </li>
-                  ))}
+                  {print.candidates.map((c) => {
+                    /* The label names the box explicitly: a <label> wrapper on
+                       its own does not name a button with role="checkbox". */
+                    const candidateId = `${detailsId}-${c.stl_basename}`;
+                    return (
+                      <li key={c.stl_basename} className="text-xs">
+                        <label htmlFor={candidateId} className="flex items-center gap-2">
+                          <Checkbox
+                            id={candidateId}
+                            checked={selectedStlBasenames.has(c.stl_basename)}
+                            onCheckedChange={(next) =>
+                              toggleCandidate(c.stl_basename, next === true)
+                            }
+                            disabled={busy}
+                          />
+                          <span className="font-mono">{c.stl_basename}</span>
+                          {c.copy_count > 1 && (
+                            <span className="text-muted-foreground"> ×{c.copy_count}</span>
+                          )}
+                        </label>
+                      </li>
+                    );
+                  })}
                 </ul>
               </div>
             )}

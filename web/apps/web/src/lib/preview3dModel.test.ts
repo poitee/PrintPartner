@@ -10,10 +10,16 @@ import {
 } from "./preview3dModel";
 
 describe("preview3dModel", () => {
-  it("chooses contrasting backgrounds from mesh color luminance", () => {
+  it("keeps the themed backdrop until the mesh would vanish into it", () => {
+    const dark = { background: "#0f1011", backgroundContrast: "#6b6d70" };
+    const light = { background: "#e3e5e8", backgroundContrast: "#6b6d70" };
     expect(perceivedLuminance("#000000")).toBe(0);
-    expect(contrastBackground("#000000")).toBe("#dfe4ea");
-    expect(contrastBackground("#ffffff")).toBe("#0a0e14");
+    // A red part reads on either stage, so the media backdrop stands.
+    expect(contrastBackground("#c41230", dark)).toBe("#0f1011");
+    expect(contrastBackground("#c41230", light)).toBe("#e3e5e8");
+    // Black on the dark stage and white on the light one need the stand-in.
+    expect(contrastBackground("#000000", dark)).toBe("#6b6d70");
+    expect(contrastBackground("#ffffff", light)).toBe("#6b6d70");
     expect(perceivedLuminance("not-a-color")).toBe(0.5);
   });
 

@@ -39,3 +39,40 @@ describe("status color drift lock", () => {
     expect(offenders).toEqual([]);
   });
 });
+
+/**
+ * Border-alpha drift lock. `lib/statusTone.ts` owns the alpha a status border
+ * is drawn at (/40 for a tinted surface, /50 for a rim or an outline chip).
+ * Before it did, the same banner appeared at /25, /30, /35, /40, /50 and /60
+ * across the app, so "warning" meant a different weight of orange on every
+ * screen. Feature code asks for a tone and an emphasis; only statusTone spells
+ * out the number.
+ */
+const STATUS_BORDER_ALPHA = /border-(?:success|warning|info|destructive)\/\d+/;
+
+/**
+ * Owned by the plate/preview workstream — sweep these when that branch lands.
+ * Nothing else belongs here: a new entry means a call site went around
+ * statusTone rather than extending it.
+ */
+const BORDER_ALPHA_ALLOWLIST = new Set<string>([
+  "components/checkoff/PhaseProgressView.tsx",
+  "components/export/accepted-plates/AcceptedPlateAssignmentForm.tsx",
+  "components/export/accepted-plates/AcceptedPlateSection.tsx",
+]);
+
+describe("status border drift lock", () => {
+  it("keeps status border alphas inside lib/statusTone.ts", () => {
+    const offenders: string[] = [];
+    for (const base of ["components", "pages", "layout", "lib"]) {
+      for (const file of walk(join(root, base))) {
+        const rel = relative(root, file);
+        if (rel === join("lib", "statusTone.ts")) continue;
+        if (BORDER_ALPHA_ALLOWLIST.has(rel)) continue;
+        const match = STATUS_BORDER_ALPHA.exec(readFileSync(file, "utf8"));
+        if (match) offenders.push(`${rel}: ${match[0]}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+});

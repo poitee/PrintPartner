@@ -8,6 +8,7 @@ import {
   printerDeskTypeLabel,
   printerHostTypeLabel,
   printerLiveStripTone,
+  printerStatusTone,
 } from "./printerLiveStrip";
 
 describe("formatEtaSeconds", () => {
@@ -136,5 +137,17 @@ describe("printerLiveStripTone", () => {
     expect(printerLiveStripTone("complete")).toBe("complete");
     expect(printerLiveStripTone("unknown")).toBe("unknown");
     expect(printerLiveStripTone(undefined)).toBe("unknown");
+  });
+});
+
+describe("printerStatusTone", () => {
+  it("hands every host state to a status tone rather than a colour class", () => {
+    expect(printerStatusTone("idle")).toBe("success");
+    expect(printerStatusTone("complete")).toBe("success");
+    expect(printerStatusTone("printing")).toBe("info");
+    expect(printerStatusTone("paused")).toBe("warning");
+    expect(printerStatusTone("error")).toBe("error");
+    expect(printerStatusTone("offline")).toBe("neutral");
+    expect(printerStatusTone(undefined)).toBe("neutral");
   });
 });

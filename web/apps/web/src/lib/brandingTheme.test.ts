@@ -4,9 +4,10 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 /**
- * GRE-234: Print Partner desk ink / paper / brass branding lock.
- * Tokens + type + spine chrome contracts live in source so the palette
- * cannot silently drift back to Voron red / DM Sans / pipeline tagline.
+ * Print Partner "Instrument" branding lock: a neutral graphite carrier with a
+ * single signal-cyan accent. Tokens, type, and spine chrome contracts live in
+ * source so the palette cannot silently drift back to Voron red / DM Sans /
+ * pipeline tagline, or back to a warm accent sitting on top of --warning.
  */
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const indexCss = readFileSync(join(root, "index.css"), "utf8");
@@ -43,24 +44,24 @@ const lightTokens = ruleBody(indexCss, ":root");
 const darkTokens = ruleBody(indexCss, ".dark");
 
 describe("GRE-234 branding tokens", () => {
-  it("locks dark desk ink / paper / brass", () => {
-    expect(darkTokens).toMatch(/--surface-base:\s*hsl\(32\s+10%\s+9%\)/);
+  it("locks the dark graphite carrier and signal accent", () => {
+    expect(darkTokens).toMatch(/--surface-base:\s*hsl\(220\s+8%\s+11%\)/);
     expect(darkTokens).toMatch(/--background:\s*var\(--surface-base\)/);
     expect(darkTokens).toMatch(/--card:\s*var\(--surface-raised\)/);
-    expect(darkTokens).toMatch(/--foreground:\s*hsl\(36\s+18%\s+93%\)/);
-    expect(darkTokens).toMatch(/--primary:\s*hsl\(36\s+48%\s+52%\)/);
-    expect(darkTokens).toMatch(/--primary-foreground:\s*hsl\(32\s+20%\s+10%\)/);
-    expect(darkTokens).toMatch(/--muted-foreground:\s*hsl\(32\s+8%\s+66%\)/);
+    expect(darkTokens).toMatch(/--foreground:\s*hsl\(220\s+14%\s+95%\)/);
+    expect(darkTokens).toMatch(/--primary:\s*hsl\(190\s+72%\s+60%\)/);
+    expect(darkTokens).toMatch(/--primary-foreground:\s*hsl\(200\s+40%\s+9%\)/);
+    expect(darkTokens).toMatch(/--muted-foreground:\s*hsl\(220\s+9%\s+68%\)/);
   });
 
-  it("locks light shop daylight tokens", () => {
-    expect(lightTokens).toMatch(/--surface-base:\s*hsl\(36\s+28%\s+97%\)/);
+  it("locks the light graphite carrier and signal accent", () => {
+    expect(lightTokens).toMatch(/--surface-base:\s*hsl\(220\s+22%\s+97%\)/);
     expect(lightTokens).toMatch(/--background:\s*var\(--surface-base\)/);
     expect(lightTokens).toMatch(/--card:\s*var\(--surface-raised\)/);
-    expect(lightTokens).toMatch(/--foreground:\s*hsl\(32\s+16%\s+14%\)/);
-    expect(lightTokens).toMatch(/--primary:\s*hsl\(34\s+52%\s+38%\)/);
-    expect(lightTokens).toMatch(/--primary-foreground:\s*hsl\(36\s+30%\s+98%\)/);
-    expect(lightTokens).toMatch(/--muted-foreground:\s*hsl\(32\s+10%\s+38%\)/);
+    expect(lightTokens).toMatch(/--foreground:\s*hsl\(220\s+20%\s+13%\)/);
+    expect(lightTokens).toMatch(/--primary:\s*hsl\(196\s+92%\s+28%\)/);
+    expect(lightTokens).toMatch(/--primary-foreground:\s*hsl\(200\s+30%\s+98%\)/);
+    expect(lightTokens).toMatch(/--muted-foreground:\s*hsl\(220\s+10%\s+37%\)/);
   });
 
   it("gives both themes the four-step surface ladder", () => {
@@ -104,12 +105,12 @@ describe("GRE-234 branding tokens", () => {
 
 describe("elevation, scrim, and status system", () => {
   it("locks AA-passing dark status hues with soft counterparts", () => {
-    expect(darkTokens).toMatch(/--success:\s*hsl\(152\s+42%\s+56%\)/);
-    expect(darkTokens).toMatch(/--warning:\s*hsl\(38\s+68%\s+58%\)/);
-    expect(darkTokens).toMatch(/--info:\s*hsl\(200\s+55%\s+60%\)/);
-    expect(darkTokens).toMatch(/--destructive:\s*hsl\(0\s+66%\s+70%\)/);
+    expect(darkTokens).toMatch(/--success:\s*hsl\(146\s+48%\s+58%\)/);
+    expect(darkTokens).toMatch(/--warning:\s*hsl\(40\s+88%\s+62%\)/);
+    expect(darkTokens).toMatch(/--info:\s*hsl\(212\s+74%\s+68%\)/);
+    expect(darkTokens).toMatch(/--destructive:\s*hsl\(4\s+78%\s+72%\)/);
     // Bright dark-mode fills take dark ink, like --primary-foreground.
-    expect(darkTokens).toMatch(/--destructive-foreground:\s*hsl\(32\s+20%\s+10%\)/);
+    expect(darkTokens).toMatch(/--destructive-foreground:\s*hsl\(4\s+40%\s+10%\)/);
     for (const tokens of [lightTokens, darkTokens]) {
       for (const tone of ["success", "warning", "info", "destructive"]) {
         expect(tokens).toMatch(new RegExp(`--${tone}-soft:\\s*hsl\\(`));
@@ -158,17 +159,59 @@ describe("elevation, scrim, and status system", () => {
   });
 });
 
+/**
+ * The previous palette put --primary at the same hue as --warning (0 degrees
+ * apart in light, 2 in dark), so a brand accent and a warning chip were the
+ * same colour and the app read as one warm wash. Separation is the property
+ * that mattered, so assert the property rather than the hex.
+ */
+describe("accent and status hues stay distinguishable", () => {
+  function hueOf(tokens: string, name: string): number {
+    const match = new RegExp(`--${name}:\\s*hsl\\(\\s*([\\d.]+)`).exec(tokens);
+    expect(match, `no hsl hue for --${name}`).toBeTruthy();
+    return Number(match![1]);
+  }
+
+  function separation(a: number, b: number): number {
+    const d = Math.abs(a - b) % 360;
+    return Math.min(d, 360 - d);
+  }
+
+  it.each([
+    ["light", () => lightTokens],
+    ["dark", () => darkTokens],
+  ])("keeps --primary clear of every status hue in %s", (_theme, get) => {
+    const tokens = get();
+    const primary = hueOf(tokens, "primary");
+    for (const tone of ["success", "warning", "info", "destructive"]) {
+      expect(separation(primary, hueOf(tokens, tone))).toBeGreaterThanOrEqual(15);
+    }
+  });
+
+  it.each([
+    ["light", () => lightTokens],
+    ["dark", () => darkTokens],
+  ])("keeps warning and destructive apart in %s", (_theme, get) => {
+    const tokens = get();
+    expect(
+      separation(hueOf(tokens, "warning"), hueOf(tokens, "destructive")),
+    ).toBeGreaterThanOrEqual(20);
+  });
+});
+
 describe("GRE-234 type", () => {
-  it("loads Source Sans 3 + Source Serif 4 + IBM Plex Mono and drops DM Sans", () => {
+  it("loads the IBM Plex family and drops the previous stack", () => {
     for (const source of [indexHtml, indexCss]) {
       expect(source).not.toMatch(/DM\+Sans|DM Sans/);
-      expect(source).toMatch(/Source\+Sans\+3|Source Sans 3/);
-      expect(source).toMatch(/Source\+Serif\+4|Source Serif 4/);
-      expect(source).toMatch(/IBM\+Plex\+Mono|IBM Plex Mono/);
       expect(source).not.toMatch(/JetBrains\+Mono|JetBrains Mono/);
+      expect(source).not.toMatch(/Source\+Sans\+3|Source Sans 3/);
+      expect(source).not.toMatch(/Source\+Serif\+4|Source Serif 4/);
+      expect(source).toMatch(/IBM\+Plex\+Sans|IBM Plex Sans/);
+      expect(source).toMatch(/IBM\+Plex\+Mono|IBM Plex Mono/);
     }
-    expect(indexCss).toMatch(/--font-sans:\s*"Source Sans 3"/);
-    expect(indexCss).toMatch(/--font-serif:\s*"Source Serif 4"/);
+    expect(indexCss).toMatch(/--font-sans:\s*"IBM Plex Sans"/);
+    // The serif slot is retained so `font-serif` call sites keep resolving.
+    expect(indexCss).toMatch(/--font-serif:\s*"IBM Plex Sans"/);
     expect(indexCss).toMatch(/--font-mono:\s*"IBM Plex Mono"/);
   });
 });
@@ -183,14 +226,45 @@ describe("GRE-234 spine brand chrome", () => {
 
   it("uses the generated PrintPartner mark in expanded and collapsed chrome", () => {
     expect(brandMark).toMatch(/aria-hidden/);
-    expect(brandMark).toMatch(/print-partner-mark\.png/);
     expect(brandMark).not.toMatch(/<Printer\b/);
     expect(brandMark).not.toMatch(/>\s*PP\s*</);
     expect(spineRail).toMatch(/LayeredSheetMark/);
     expect(spineRail).not.toMatch(/>\s*PP\s*</);
   });
 
-  it("wordmark uses Source Serif 4 with compact tracking when expanded", () => {
+  it("draws the mark inline so its ink follows the theme", () => {
+    // A raster cannot track light/dark, and the PNG baked in the old brass.
+    expect(brandMark).not.toMatch(/<img/);
+    expect(brandMark).toMatch(/<svg/);
+    expect(brandMark).toMatch(/currentColor/);
+    expect(brandMark).toMatch(/var\(--primary\)/);
+  });
+
+  it("keeps the PWA icon artwork in step with the inline mark", () => {
+    const iconSvg = readFileSync(join(root, "../public/icons/icon.svg"), "utf8");
+    // Same plate geometry, with literal hex because a PWA icon cannot read
+    // CSS variables. These two drifted into different logos once already.
+    const plate = /M12 4\.4H6\.5A2\.1 2\.1 0 0 0 4\.4 6\.5V12H12Z/;
+    expect(brandMark).toMatch(plate);
+    expect(iconSvg).toMatch(plate);
+    expect(iconSvg).not.toMatch(/#c9963f|#191714/);
+  });
+
+  it("ships a dedicated maskable icon that a circular mask cannot clip", () => {
+    const manifest = JSON.parse(
+      readFileSync(join(root, "../public/manifest.json"), "utf8"),
+    ) as { icons: Array<{ src: string; purpose: string }> };
+    const maskable = manifest.icons.filter((icon) => icon.purpose.includes("maskable"));
+    expect(maskable).toHaveLength(1);
+    expect(maskable[0].purpose).toBe("maskable");
+    // The rounded-plate icon has transparent corners, so it must not be
+    // declared maskable: a circular mask would expose them.
+    for (const icon of manifest.icons.filter((i) => i.purpose === "any")) {
+      expect(icon.src).not.toBe(maskable[0].src);
+    }
+  });
+
+  it("wordmark keeps the display slot and compact tracking when expanded", () => {
     expect(spineRail).toMatch(/font-serif|Source Serif 4|font-\[family/);
     expect(spineRail).toMatch(/text-base/);
     expect(spineRail).toMatch(/tracking-\[-0\.02em\]/);
@@ -198,11 +272,12 @@ describe("GRE-234 spine brand chrome", () => {
 });
 
 describe("brand assets", () => {
-  it("keeps PWA chrome on the desk ink brand color", () => {
+  it("keeps PWA chrome on the dark carrier brand color", () => {
     const manifest = readFileSync(join(root, "../public/manifest.json"), "utf8");
-    expect(manifest).toMatch(/"theme_color":\s*"#191714"/);
-    expect(manifest).toMatch(/"background_color":\s*"#191714"/);
-    expect(indexHtml).toMatch(/<meta name="theme-color" content="#191714"/);
+    // #1a1b1e is dark --surface-base, hand-duplicated in three files.
+    expect(manifest).toMatch(/"theme_color":\s*"#1a1b1e"/);
+    expect(manifest).toMatch(/"background_color":\s*"#1a1b1e"/);
+    expect(indexHtml).toMatch(/<meta name="theme-color" content="#1a1b1e"/);
   });
 });
 

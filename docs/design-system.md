@@ -30,7 +30,8 @@ Dark separates by value: the step from base to raised is 1.24:1, raised to overl
 `Card` takes `surface="raised" | "flat" | "sunken"`. A `sunken` card inside a raised
 card reads as a well. Do not stack raised on raised.
 
-`.desk-canvas` is the page itself: `--surface-base` plus a faint brass radial wash.
+`.desk-canvas` is the page itself: flat `--surface-base`. It carries no wash, because
+a tinted ground would bias every filament swatch and mesh rendered on top of it.
 `<main>` and the auth screens use it. It is not `--gradient-header`. `.desk-nameplate`
 is the sunken plate for the current Build picker. `.desk-well` is the icon well on a
 page header. `.desk-stage-active` outlines the current workflow stage without shifting
@@ -44,31 +45,34 @@ Dark:
 
 | Ink | sunken | base | raised | overlay |
 | --- | --- | --- | --- | --- |
-| foreground | 17.03 | 15.40 | 12.46 | 11.17 |
-| muted-foreground | 7.52 | 6.80 | 5.50 | 4.93 |
-| primary (brass, also the focus ring) | 6.90 | 6.24 | 5.04 | 4.52 |
-| success | 8.71 | 7.88 | 6.37 | 5.71 |
-| warning | 9.14 | 8.26 | 6.68 | 5.99 |
-| info | 7.81 | 7.06 | 5.71 | 5.12 |
-| destructive | 7.27 | 6.57 | 5.32 | 4.77 |
-| border-strong | 5.46 | 4.94 | 4.00 | 3.58 |
+| foreground | 16.76 | 15.29 | 13.16 | 11.46 |
+| muted-foreground | 8.17 | 7.45 | 6.42 | 5.59 |
+| primary (signal cyan, also the focus ring) | 9.76 | 8.91 | 7.67 | 6.68 |
+| success | 9.05 | 8.25 | 7.10 | 6.19 |
+| warning | 10.75 | 9.81 | 8.44 | 7.35 |
+| info | 7.71 | 7.03 | 6.05 | 5.27 |
+| destructive | 7.60 | 6.94 | 5.97 | 5.20 |
+| border-strong | 4.83 | 4.41 | 3.80 | 3.31 |
 
 Light:
 
 | Ink | sunken | base | raised | overlay |
 | --- | --- | --- | --- | --- |
-| foreground | 12.97 | 14.45 | 15.05 | 15.35 |
-| muted-foreground | 5.08 | 5.67 | 5.90 | 6.02 |
-| primary | 4.17 | 4.65 | 4.84 | 4.94 |
-| success | 4.83 | 5.38 | 5.60 | 5.71 |
-| warning | 4.51 | 5.03 | 5.24 | 5.34 |
-| info | 4.63 | 5.16 | 5.38 | 5.49 |
-| destructive | 5.66 | 6.31 | 6.57 | 6.70 |
-| border-strong | 3.46 | 3.85 | 4.01 | 4.09 |
+| foreground | 13.65 | 15.38 | 16.52 | 16.52 |
+| muted-foreground | 5.62 | 6.33 | 6.80 | 6.80 |
+| primary (signal cyan, also the focus ring) | 5.30 | 5.98 | 6.42 | 6.42 |
+| success | 5.37 | 6.04 | 6.49 | 6.49 |
+| warning | 5.07 | 5.71 | 6.13 | 6.13 |
+| info | 5.96 | 6.71 | 7.21 | 7.21 |
+| destructive | 5.15 | 5.80 | 6.23 | 6.23 |
+| border-strong | 4.33 | 4.88 | 5.24 | 5.24 |
 
-Every ink clears AA (4.5:1) on every surface it is allowed on. `--border-strong`
-clears AA non-text (3:1) everywhere, which is why it draws control boundaries.
-Status text on a `-soft` chip runs 4.51:1 to 6.58:1.
+Every text ink clears AA (4.5:1) on every surface it is allowed on, with the text floor at
+5.20 dark and 5.07 light. `--border-strong` clears AA non-text (3:1) everywhere, which
+is why it draws control boundaries.
+
+These tables are generated. Run `node web/scripts/design-system-contrast.mjs` after any
+palette edit and paste the output, or `--check` to fail when the doc has drifted.
 
 `--accent` is a hover fill for controls whose text is `--accent-foreground`. Status
 color on `--accent` drops to about 3.6:1, so do not put status text there.

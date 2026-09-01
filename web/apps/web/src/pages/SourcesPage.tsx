@@ -40,6 +40,8 @@ import SourcesToolbar, {
 import { kindLabel, type SourceKind } from "../components/sources/sourceLabels";
 import { UNCategorized_FILTER } from "../components/sources/sourceLabels";
 import { Button } from "../components/ui/button";
+import { Checkbox } from "../components/ui/checkbox";
+import ConfirmDialog from "../components/ConfirmDialog";
 import { Card, CardContent } from "../components/ui/card";
 import { Skeleton } from "../components/ui/skeleton";
 import { useImportSharedBuild } from "../hooks/useImportSharedBuild";
@@ -115,6 +117,7 @@ import {
   sourceKindNeedsArchiveUpload,
   sourceSyncLabel,
 } from "../lib/sourceImportModel";
+import { statusTone } from "../lib/statusTone";
 import { cn } from "@/lib/utils";
 import { resolveEngineState } from "../lib/workflowState";
 import {
@@ -757,7 +760,7 @@ export default function SourcesPage() {
           >
             <Search className="h-3.5 w-3.5 shrink-0" aria-hidden />
             <span className="min-w-0 truncate">Search STLs everywhere</span>
-            <kbd className="ml-auto hidden font-mono text-3xs text-muted-foreground sm:inline">
+            <kbd className="ml-auto hidden font-mono text-micro text-muted-foreground sm:inline">
               ⌘K
             </kbd>
           </button>
@@ -1019,7 +1022,7 @@ export default function SourcesPage() {
                 </div>
               )
             ) : pageLoadError && sources.length === 0 ? (
-              <Card className="border-destructive/40 bg-destructive/5 shadow-none">
+              <Card className={cn("shadow-none", statusTone({ tone: "error", emphasis: "surface" }))}>
                 <CardContent className="space-y-3 pt-6">
                   <p className="text-sm text-destructive">
                     Could not load Library: {pageLoadError}
@@ -1086,11 +1089,14 @@ export default function SourcesPage() {
             value={reposImportText}
             onChange={(e) => setReposImportText(e.target.value)}
           />
-          <label className="flex items-center gap-2 text-sm text-muted-foreground">
-            <input
-              type="checkbox"
+          <label
+            htmlFor="repos-import-sync-after"
+            className="flex items-center gap-2 text-sm text-muted-foreground"
+          >
+            <Checkbox
+              id="repos-import-sync-after"
               checked={reposImportSyncAfter}
-              onChange={(e) => setReposImportSyncAfter(e.target.checked)}
+              onCheckedChange={(next) => setReposImportSyncAfter(next === true)}
               disabled={reposImportBusy}
             />
             Sync after import (new GitHub sources only)
@@ -1352,31 +1358,25 @@ export default function SourcesPage() {
         </DialogContent>
       </Dialog>
 
-      <Dialog
+      <ConfirmDialog
         open={deleteTarget != null}
         onOpenChange={(open) => {
           if (!open && !deleting) setDeleteTarget(null);
         }}
-      >
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Remove source?</DialogTitle>
-          </DialogHeader>
-          <p className="text-sm text-muted-foreground">
-            {deleteTarget
-              ? `“${deleteTarget.name}” will be removed from Print Partner. Synced files on disk are not deleted.`
-              : ""}
-          </p>
-          <div className="flex justify-end gap-2">
-            <Button variant="secondary" disabled={deleting} onClick={() => setDeleteTarget(null)}>
-              Cancel
-            </Button>
-            <Button variant="ghost" disabled={deleting} onClick={() => void confirmDelete()}>
-              {deleting ? "Removing…" : "Delete"}
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+        title="Remove source?"
+        description={
+          deleteTarget
+            ? `“${deleteTarget.name}” will be removed from Print Partner. Synced files on disk are not deleted.`
+            : ""
+        }
+        confirmLabel={deleting ? "Removing…" : "Delete"}
+        disabled={deleting}
+        onConfirm={(event) => {
+          // The button reports "Removing…", so the dialog has to outlive the click.
+          event.preventDefault();
+          void confirmDelete();
+        }}
+      />
 
       <SourceCategorySheet
         open={categoriesSheetOpen}

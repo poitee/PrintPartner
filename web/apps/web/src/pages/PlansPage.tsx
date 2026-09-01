@@ -38,7 +38,17 @@ import {
 } from "../lib/plansList";
 import { planRoute, productionRoute, progressRoute } from "../lib/routes";
 import { isPlansListEmpty, plansLoadingAnnouncement } from "../lib/plansPageModel";
+import { statusTone } from "../lib/statusTone";
 import { cn } from "@/lib/utils";
+import { Progress } from "@/components/ui/progress";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import {
   getBackgroundError,
   resolveEngineState,
@@ -196,7 +206,7 @@ export default function PlansPage() {
           </CardContent>
         </Card>
       ) : profilesState === "error" ? (
-        <Card className="border-destructive/40 bg-destructive/5 shadow-none">
+        <Card className={cn("shadow-none", statusTone({ tone: "error", emphasis: "surface" }))}>
           <CardContent className="space-y-3 pt-6">
             <p className="text-sm text-destructive" role="alert">
               Could not load builds: {profilesError}
@@ -272,7 +282,7 @@ export default function PlansPage() {
                       <Card
                         className={cn(
                           "shadow-none",
-                          selected && "border-primary/35 bg-primary/8",
+                          selected && "border-primary/40 bg-primary-soft",
                         )}
                       >
                         <CardContent className="space-y-3 p-3">
@@ -310,41 +320,35 @@ export default function PlansPage() {
                 })}
               </ul>
               ) : (
-              <div className="overflow-x-auto">
-              <table
-                className="w-full min-w-[36rem] border-collapse text-sm"
-                aria-label="Builds"
-              >
-                <thead>
-                  <tr className="border-b border-border text-left text-xs text-muted-foreground">
-                    <th className="py-2 pr-3 font-medium">Name</th>
-                    <th className="py-2 pr-3 font-medium">Status</th>
-                    <th className="py-2 pr-3 font-medium">Remaining</th>
-                    <th className="py-2 pr-3 font-medium">Parts</th>
-                    <th className="py-2 pr-3 font-medium">Stale</th>
-                    <th className="py-2 pr-3 font-medium">Checkoff</th>
-                    <th className="py-2 pr-3 font-medium">Production</th>
-                    <th className="py-2 pl-2 font-medium">
+              <Table aria-label="Builds" className="table-fixed">
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-[28%] px-0 pr-3">Name</TableHead>
+                    <TableHead className="w-[9%] px-0 pr-3">Status</TableHead>
+                    <TableHead className="w-[26%] px-0 pr-3">Remaining</TableHead>
+                    <TableHead className="w-[7%] px-0 pr-3">Parts</TableHead>
+                    <TableHead className="w-[7%] px-0 pr-3">Stale</TableHead>
+                    <TableHead className="w-[9%] px-0 pr-3">Checkoff</TableHead>
+                    <TableHead className="w-[10%] px-0 pr-3">Production</TableHead>
+                    <TableHead className="w-[5%] px-0 pl-2">
                       <span className="sr-only">Actions</span>
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
+                    </TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
                   {rows.map((plan) => {
                     const selected = plan.id === selectedProfileId;
                     return (
-                      <tr
+                      <TableRow
                         key={plan.id}
-                        className={cn(
-                          "border-b border-border/80 transition-colors",
-                          selected ? "bg-primary/8" : "hover:bg-muted/40",
-                        )}
+                        data-state={selected ? "selected" : undefined}
+                        className={cn(selected && "bg-primary-soft hover:bg-primary-soft")}
                       >
-                        <td className="py-2.5 pr-3">
+                        <TableCell className="px-0 py-2.5 pr-3">
                           <button
                             type="button"
                             className={cn(
-                              "max-w-[16rem] truncate text-left font-medium underline-offset-2 hover:underline",
+                              "block w-full truncate text-left font-medium underline-offset-2 hover:underline",
                               selected && "text-primary",
                             )}
                             aria-label={`Open ${plan.name}`}
@@ -353,27 +357,27 @@ export default function PlansPage() {
                           >
                             {plan.name}
                           </button>
-                        </td>
-                        <td className="py-2.5 pr-3 text-muted-foreground">
+                        </TableCell>
+                        <TableCell className="px-0 py-2.5 pr-3 text-muted-foreground">
                           {planStatusLabel(plan)}
-                        </td>
-                        <td className="py-2.5 pr-3 font-mono tabular-nums text-muted-foreground">
-                          <span className="inline-flex items-center gap-2">
+                        </TableCell>
+                        <TableCell className="px-0 py-2.5 pr-3 font-mono tabular-nums text-muted-foreground">
+                          <span className="inline-flex items-center gap-2 whitespace-nowrap">
                             <PlanProgressBar progress={plan.accepted_progress} />
                             {planProgressLabel(plan.accepted_progress)}
                           </span>
-                        </td>
-                        <td className="py-2.5 pr-3 font-mono tabular-nums text-muted-foreground">
+                        </TableCell>
+                        <TableCell className="px-0 py-2.5 pr-3 font-mono tabular-nums text-muted-foreground">
                           {plan.part_count}
-                        </td>
-                        <td className="py-2.5 pr-3 text-muted-foreground">
+                        </TableCell>
+                        <TableCell className="px-0 py-2.5 pr-3 text-muted-foreground">
                           {plan.build_stale ? (
                             <span className="text-xs">stale</span>
                           ) : (
                             <span className="sr-only">fresh</span>
                           )}
-                        </td>
-                        <td className="py-2.5 pr-3">
+                        </TableCell>
+                        <TableCell className="px-0 py-2.5 pr-3">
                           <Link
                             className="text-xs underline-offset-2 hover:underline"
                             to={progressRoute(plan.id)}
@@ -381,8 +385,8 @@ export default function PlansPage() {
                           >
                             Checkoff
                           </Link>
-                        </td>
-                        <td className="py-2.5 pr-3">
+                        </TableCell>
+                        <TableCell className="px-0 py-2.5 pr-3">
                           <Link
                             className="text-xs underline-offset-2 hover:underline"
                             to={productionRoute(plan.id)}
@@ -390,16 +394,15 @@ export default function PlansPage() {
                           >
                             Production
                           </Link>
-                        </td>
-                        <td className="py-2.5 pl-2 text-right">
+                        </TableCell>
+                        <TableCell className="px-0 py-2.5 pl-2 text-right">
                           {renderPlanActions(plan)}
-                        </td>
-                      </tr>
+                        </TableCell>
+                      </TableRow>
                     );
                   })}
-                </tbody>
-              </table>
-              </div>
+                </TableBody>
+              </Table>
               )}
             </>
           )}
@@ -413,16 +416,15 @@ function PlanProgressBar({ progress }: { progress: AcceptedProgressSummary }) {
   if (progress.kind !== "ready" || progress.total_units <= 0) return null;
   const done = progress.total_units - progress.remaining_units;
   const percent = Math.round((done / progress.total_units) * 100);
+  // Decorative: the adjacent planProgressLabel already states the numbers, so a
+  // second progressbar in the a11y tree would only repeat them.
   return (
-    <span
-      className="inline-block h-1.5 w-16 overflow-hidden rounded-full bg-muted align-middle"
+    <Progress
+      value={percent}
+      tone="success"
       aria-hidden
-    >
-      <span
-        className="block h-full rounded-full bg-success"
-        style={{ width: `${percent}%` }}
-      />
-    </span>
+      className="inline-block h-1.5 w-16 align-middle"
+    />
   );
 }
 

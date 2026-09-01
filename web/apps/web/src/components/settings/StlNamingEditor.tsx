@@ -13,7 +13,14 @@ import {
   previewStlNaming,
   saveStlNaming,
 } from "../../api/endpoints/stlNaming";
-import { DataTable } from "../DataTable";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "../ui/table";
 import { Button } from "../ui/button";
 import {
   Card,
@@ -138,21 +145,21 @@ function StlNamingEditorBody({
           Substrings in path or filename that assign accent, clear, or opaque. Primary has no
           markers.
         </p>
-        <div className="overflow-x-auto rounded-md border border-border">
-          <DataTable className="w-full text-sm">
-            <thead>
-              <tr>
-                <th className="w-28">Role</th>
-                <th>Markers (comma-separated)</th>
-              </tr>
-            </thead>
-            <tbody>
+        <div className="rounded-md border border-border">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="w-28">Role</TableHead>
+                <TableHead>Markers (comma-separated)</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {profile.roles.map((role: StlNamingRole) => (
-                <tr key={role.id}>
-                  <td className="text-muted-foreground">
+                <TableRow key={role.id}>
+                  <TableCell className="text-muted-foreground">
                     {STL_NAMING_ROLE_LABELS[role.id] ?? role.label}
-                  </td>
-                  <td>
+                  </TableCell>
+                  <TableCell>
                     <Input
                       className={inputClass}
                       value={markersToInput(role.markers)}
@@ -161,11 +168,11 @@ function StlNamingEditorBody({
                       onChange={(e) => updateRoleMarkers(role.id, e.target.value)}
                       aria-label={`${role.label} markers`}
                     />
-                  </td>
-                </tr>
+                  </TableCell>
+                </TableRow>
               ))}
-            </tbody>
-          </DataTable>
+            </TableBody>
+          </Table>
         </div>
       </div>
 

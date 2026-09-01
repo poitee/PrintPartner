@@ -8,6 +8,8 @@ import {
   type CheckoffCorrectionImpact,
   type CheckoffCorrectionReason,
 } from "../../lib/checkoffConsoleCorrection";
+import { statusTone } from "../../lib/statusTone";
+import { cn } from "@/lib/utils";
 import { Button } from "../ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../ui/dialog";
 
@@ -80,7 +82,10 @@ export default function CheckoffCorrectionDialog({
             ref={summaryRef}
             tabIndex={-1}
             role="alert"
-            className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm"
+            className={cn(
+              "rounded-md p-3 text-sm",
+              statusTone({ tone: "error", emphasis: "surface" }),
+            )}
           >
             <p className="font-semibold text-destructive">There is a problem</p>
             <ul className="mt-1 list-disc pl-5 text-destructive">

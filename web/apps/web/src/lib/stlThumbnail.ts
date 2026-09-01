@@ -8,6 +8,8 @@ import {
   uploadPartThumbnail,
 } from "../api/endpoints/media.js";
 import { fetchWithRetry } from "./fetchWithRetry.js";
+import { addPreviewRig, createPreviewMaterial, createPreviewRig } from "./previewRig.js";
+import { previewTheme } from "./previewTheme.js";
 import { getCachedMeshBuffer, cacheMeshBuffer } from "./meshCache.js";
 import { getThumbnailCacheVersion } from "./thumbnailCache.js";
 
@@ -139,21 +141,16 @@ function renderBufferToBlob(buffer: ArrayBuffer, hex: string): Promise<Blob | nu
   geometry.boundingBox?.getSize(dims);
   const maxDim = Math.max(dims.x, dims.y, dims.z, 1);
 
-  const material = new THREE.MeshStandardMaterial({
-    color: new THREE.Color(hex || DEFAULT_COLOR),
-    metalness: 0.15,
-    roughness: 0.65,
-  });
+  // Same rig and material as the expanded viewer (lib/previewRig.ts). The
+  // background stays transparent so the tile inherits whatever surface it
+  // sits on, and a cached thumbnail never bakes in one theme's backdrop.
+  const theme = previewTheme();
+  const material = createPreviewMaterial(theme, hex || DEFAULT_COLOR);
   const mesh = new THREE.Mesh(geometry, material);
 
   const scene = new THREE.Scene();
   scene.add(mesh);
-  scene.add(new THREE.AmbientLight(0xffffff, 0.6));
-  const key = new THREE.DirectionalLight(0xffffff, 0.85);
-  key.position.set(1, 1.2, 0.8);
-  const fill = new THREE.DirectionalLight(0xffffff, 0.35);
-  fill.position.set(-0.8, 0.4, -1);
-  scene.add(key, fill);
+  addPreviewRig(scene, createPreviewRig(theme, { distance: maxDim * 2 }));
 
   const camera = new THREE.PerspectiveCamera(45, 1, 0.1, maxDim * 20);
   camera.position.set(maxDim * 1.4, maxDim * 1.1, maxDim * 1.6);

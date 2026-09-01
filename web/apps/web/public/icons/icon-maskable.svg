@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!--
+    Maskable variant. Full bleed, no rounded corners of its own, and the mark
+    sits inside the 80% safe zone so a circular mask cannot clip it. The
+    "any" icon keeps the rounded plate; this one is only ever masked.
+  -->
+  <rect width="512" height="512" fill="#1a1b1e"/>
+  <g transform="translate(256 256) scale(12.8) translate(-12 -12)">
+    <path d="M12 4.4H6.5A2.1 2.1 0 0 0 4.4 6.5V12H12Z" fill="#50cae2"/>
+    <rect x="3.1" y="3.1" width="17.8" height="17.8" rx="3.4" fill="none" stroke="#e9ebee" stroke-width="1.7"/>
+    <path d="M12 4V20M4 12H20" stroke="#e9ebee" stroke-width="1.7" stroke-linecap="round"/>
+  </g>
+</svg>

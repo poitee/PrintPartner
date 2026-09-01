@@ -21,6 +21,7 @@ import {
 } from "../../lib/slicerSettingsModel";
 import { useEngineHealth } from "../../hooks/useEngineHealth";
 import { Button } from "../ui/button";
+import ConfirmDialog from "../ConfirmDialog";
 import {
   Card,
   CardContent,
@@ -50,6 +51,7 @@ export default function SlicersSettingsCard({ engineReady }: SlicersSettingsCard
   const dockerEnabled = health?.deploy_mode !== "saas";
   const [instances, setInstances] = useState<SlicerInstance[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<SlicerInstance | null>(null);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false);
   const [logsById, setLogsById] = useState<Record<string, string[]>>({});
@@ -113,7 +115,6 @@ export default function SlicersSettingsCard({ engineReady }: SlicersSettingsCard
   };
 
   const onDelete = async (row: SlicerInstance) => {
-    if (!window.confirm(`Delete slicer “${row.name}”?`)) return;
     setBusy(true);
     setError(null);
     try {
@@ -202,6 +203,26 @@ export default function SlicersSettingsCard({ engineReady }: SlicersSettingsCard
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
+        <ConfirmDialog
+          open={pendingDelete != null}
+          onOpenChange={(next) => {
+            if (!next) setPendingDelete(null);
+          }}
+          title="Delete this slicer?"
+          description={
+            <>
+              “{pendingDelete?.name}” is removed, along with its profile watch
+              paths. Profiles already synced into Print Partner stay.
+            </>
+          }
+          confirmLabel="Delete slicer"
+          disabled={busy}
+          onConfirm={() => {
+            const target = pendingDelete;
+            setPendingDelete(null);
+            if (target) void onDelete(target);
+          }}
+        />
         {error && <p className="text-sm text-destructive">{error}</p>}
 
         {instances.length === 0 ? (
@@ -223,7 +244,7 @@ export default function SlicersSettingsCard({ engineReady }: SlicersSettingsCard
                 logs={logsById[row.id]}
                 onToggle={(slicer, enabled) => void onToggle(slicer, enabled)}
                 onSaveField={(slicer, patch) => void onSaveField(slicer, patch)}
-                onDelete={(slicer) => void onDelete(slicer)}
+                onDelete={(slicer) => setPendingDelete(slicer)}
                 onDocker={(slicer, action) => void onDocker(slicer, action)}
               />
             ))}

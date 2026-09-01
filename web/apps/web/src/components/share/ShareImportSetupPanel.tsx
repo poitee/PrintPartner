@@ -3,6 +3,8 @@ import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { Button } from "../ui/button";
 import { buildRoute, sourcesRoute } from "../../lib/routes";
+import { statusTone } from "../../lib/statusTone";
+import { cn } from "../../lib/utils";
 import { startSync } from "../../api/endpoints/jobs";
 import {
   addProfileAddonLayer,
@@ -100,7 +102,7 @@ export default function ShareImportSetupPanel({
   };
 
   return (
-    <section className="rounded-lg border border-warning/30 bg-warning-soft p-4 space-y-3">
+    <section className={cn("rounded-lg p-4 space-y-3", statusTone({ tone: "warning", emphasis: "surface" }))}>
       <h2 className="text-sm font-semibold">Share import setup</h2>
       {unmatchedSources.length > 0 && (
         <div>

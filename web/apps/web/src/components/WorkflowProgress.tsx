@@ -101,7 +101,7 @@ export default function WorkflowProgress({
                 {attention ? (
                   <span
                     className={cn(
-                      "absolute -right-2 -top-1 min-w-4 rounded-full px-1 text-3xs font-semibold leading-4 ring-2 ring-card",
+                      "absolute -right-2 -top-1 min-w-4 rounded-full px-1 text-micro font-semibold leading-4 ring-2 ring-card",
                       stage.status.kind === "error"
                         ? "bg-destructive text-destructive-foreground"
                         : "bg-warning text-warning-foreground",
@@ -114,7 +114,7 @@ export default function WorkflowProgress({
               </span>
               <span
                 className={cn(
-                  "w-full truncate text-2xs font-medium",
+                  "w-full truncate text-micro font-medium",
                   active && "font-semibold",
                 )}
               >
@@ -194,7 +194,7 @@ export default function WorkflowProgress({
             {startsGroup ? (
               <p
                 className={cn(
-                  "px-2 pt-1 font-mono text-3xs font-semibold uppercase tracking-[0.14em] text-muted-foreground",
+                  "px-2 pt-1 font-mono text-micro font-semibold uppercase tracking-[0.14em] text-muted-foreground",
                   index > 0 && "mt-2 border-t border-border pt-3",
                 )}
               >

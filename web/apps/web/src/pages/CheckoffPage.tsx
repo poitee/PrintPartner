@@ -39,6 +39,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "../components/ui/dialog";
+import { Progress } from "../components/ui/progress";
 import { claimUnattributedPrint } from "../api/endpoints/checkoff";
 import type { ReviewPart } from "../api/endpoints/planManifests";
 import { useBuildTrackingSettingsQuery } from "../queries/buildTracking";
@@ -706,24 +707,17 @@ export default function CheckoffPage() {
             {headline}
           </p>
           {includedParts.length > 0 && (
-            <span className="flex items-center gap-3">
-              <span
-                className="h-1.5 w-16 overflow-hidden rounded-full bg-muted"
-                role="progressbar"
-                aria-valuenow={totals.percent}
-                aria-valuemin={0}
-                aria-valuemax={100}
+            <div className="flex items-center gap-3">
+              <Progress
+                value={totals.percent}
+                tone="success"
+                className="h-1.5 w-16 shrink-0"
                 aria-label={`${totals.percent}% of print units verified`}
-              >
-                <span
-                  className="block h-full rounded-full bg-success transition-[width]"
-                  style={{ width: `${totals.percent}%` }}
-                />
-              </span>
+              />
               <span className="font-mono text-xs tabular-nums text-muted-foreground">
                 {totals.printedUnits} / {totals.totalUnits} verified
               </span>
-            </span>
+            </div>
           )}
         </div>
 

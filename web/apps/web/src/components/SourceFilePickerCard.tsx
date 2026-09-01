@@ -7,6 +7,7 @@ import SourceCardCover from "./SourceCardCover";
 import SourceDocsSheet from "./sources/SourceDocsSheet";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
+import { Progress } from "./ui/progress";
 import {
   Sheet,
   SheetContent,
@@ -25,6 +26,7 @@ import {
   shouldShowImportRulesRetry,
 } from "../lib/importRulesSave";
 import { librarySourceDragId } from "../lib/sourceCategoryDnD";
+import { statusTone } from "../lib/statusTone";
 import { cn } from "@/lib/utils";
 import { attachedSourceStateLabel } from "../lib/sourceFilePickerModel";
 
@@ -227,8 +229,8 @@ export default function SourceFilePickerCard({
         "flex flex-col gap-2.5 rounded-lg border bg-card px-3.5 py-2.5 shadow-[0_1px_2px_rgba(89,115,166,0.06)]",
         updateWarn || syncBusy
           ? syncBusy
-            ? "border-info/30"
-            : "border-warning/30"
+            ? statusTone({ tone: "info", emphasis: "edge" })
+            : statusTone({ tone: "warning", emphasis: "edge" })
           : "border-border",
         expanded && dirty && "border-primary/40",
         !disabled && "cursor-grab active:cursor-grabbing",
@@ -244,19 +246,19 @@ export default function SourceFilePickerCard({
         />
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <Badge variant={layerType} className="h-5 px-1.5 text-3xs">
+            <Badge variant={layerType} className="h-5 px-1.5 text-micro">
               {layerType}
             </Badge>
             <h2 className="truncate text-sm font-semibold">{sourceName}</h2>
             {source ? (
-              <span className="truncate text-2xs text-muted-foreground">
+              <span className="truncate text-micro text-muted-foreground">
                 {source.category?.trim() || "Uncategorised"}
               </span>
             ) : null}
             {saveStatusLabel && (
               <span
                 className={cn(
-                  "text-3xs font-medium",
+                  "text-micro font-medium",
                   status === "saved" && "text-success",
                   status === "error" && "text-destructive",
                   (status === "pending" || status === "saving") && "text-muted-foreground",
@@ -269,7 +271,7 @@ export default function SourceFilePickerCard({
           </div>
           <p
             className={cn(
-              "font-mono text-2xs font-normal",
+              "font-mono text-micro font-normal",
               state.tone === "warn" && "text-warning",
               state.tone === "sync" && "text-info",
               state.tone === "muted" && "text-muted-foreground",
@@ -279,7 +281,7 @@ export default function SourceFilePickerCard({
           </p>
         </div>
         <div className="ml-auto flex w-full flex-wrap items-center gap-3 sm:w-auto sm:flex-nowrap">
-          <span className="font-mono text-2xs font-medium tabular-nums">{pickLabel}</span>
+          <span className="font-mono text-micro font-medium tabular-nums">{pickLabel}</span>
           {(source?.local_path || source?.source_kind === "github") && (
             <button
               type="button"
@@ -311,7 +313,7 @@ export default function SourceFilePickerCard({
           </button>
           {allSources && onChangeSource && (
             <select
-              className="max-w-[140px] rounded-md border border-input bg-background px-1.5 py-1 text-2xs"
+              className="max-w-[140px] rounded-md border border-input bg-background px-1.5 py-1 text-micro"
               value={sourceId}
               disabled={disabled}
               aria-label={`Change ${layerType} source`}
@@ -342,13 +344,13 @@ export default function SourceFilePickerCard({
 
       {syncBusy && (
         <div className="flex items-center gap-2">
-          <span className="block h-1 flex-1 overflow-hidden rounded-full bg-muted">
-            <span
-              className="block h-full bg-info transition-[width]"
-              style={{ width: `${syncProgress ?? 56}%` }}
-            />
-          </span>
-          <span className="shrink-0 font-mono text-2xs text-info">
+          <Progress
+            value={syncProgress ?? null}
+            tone="info"
+            className="h-1 flex-1"
+            aria-label="Sync progress"
+          />
+          <span className="shrink-0 font-mono text-micro text-info">
             {activeSync?.message || "syncing"}
           </span>
         </div>
@@ -375,7 +377,12 @@ export default function SourceFilePickerCard({
             )}
           </div>
           {duplicateBasenames.length > 0 && (
-            <p className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-muted-foreground">
+            <p
+              className={cn(
+                "rounded-md px-3 py-2 text-xs text-muted-foreground",
+                statusTone({ tone: "warning", emphasis: "surface" }),
+              )}
+            >
               <strong className="font-medium text-foreground">Duplicate filenames selected</strong>
               {" — "}
               {duplicateBasenames.slice(0, 4).join(", ")}

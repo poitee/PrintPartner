@@ -14,6 +14,7 @@ import { AlertTriangle, CheckCircle2, Clock, Printer, XCircle } from "lucide-rea
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../ui/card";
+import { statusTone } from "@/lib/statusTone";
 import { cn } from "@/lib/utils";
 
 export type PlateApprovalInfo = {
@@ -64,7 +65,7 @@ export default function PlateApprovalCard({
     <Card
       className={cn(
         "border-border shadow-sm",
-        hasWarnings && "border-warning/50",
+        hasWarnings && statusTone({ tone: "warning", emphasis: "edge" }),
         className,
       )}
     >
@@ -83,7 +84,7 @@ export default function PlateApprovalCard({
         <CardTitle level={3} className="flex flex-wrap items-center gap-2 text-sm font-semibold leading-snug">
           <Printer className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />
           <span className="min-w-0 flex-1 truncate">{printerName}</span>
-          <Badge variant="muted" className="shrink-0 font-mono text-2xs font-normal">
+          <Badge variant="muted" className="shrink-0 font-mono text-micro font-normal">
             {plateLabel}
           </Badge>
         </CardTitle>
@@ -92,7 +93,7 @@ export default function PlateApprovalCard({
       <CardContent className="flex flex-col gap-3 pt-0">
         {/* Stats row */}
         {(printTime != null || filamentWeightG != null) && (
-          <div className="flex flex-wrap gap-3 text-2xs text-muted-foreground">
+          <div className="flex flex-wrap gap-3 text-micro text-muted-foreground">
             {printTime != null && (
               <span className="flex items-center gap-1">
                 <Clock className="h-3 w-3 shrink-0" aria-hidden />
@@ -109,14 +110,14 @@ export default function PlateApprovalCard({
 
         {/* Warnings */}
         {hasWarnings && (
-          <div className="rounded-md border border-warning/30 bg-warning/10 p-2">
-            <p className="mb-1 flex items-center gap-1 text-2xs font-medium text-warning">
+          <div className={cn("rounded-md p-2", statusTone({ tone: "warning", emphasis: "surface" }))}>
+            <p className="mb-1 flex items-center gap-1 text-micro font-medium text-warning">
               <AlertTriangle className="h-3 w-3 shrink-0" aria-hidden />
               Unmatched objects — will not appear on Progress
             </p>
             <ul className="space-y-0.5 pl-4">
               {unmatchedNames.map((name) => (
-                <li key={name} className="truncate font-mono text-2xs text-warning/80">
+                <li key={name} className="truncate font-mono text-micro text-warning/80">
                   {name}
                 </li>
               ))}
@@ -149,7 +150,7 @@ export default function PlateApprovalCard({
           </Button>
         </div>
 
-        <p className="text-2xs leading-relaxed text-muted-foreground">
+        <p className="text-micro leading-relaxed text-muted-foreground">
           Approve sends the file to <span className="font-medium text-foreground">{printerName}</span>.
           Reject discards this file so you can re-slice.
         </p>

@@ -271,7 +271,7 @@ export default function PrintersPage() {
                       <Badge
                         variant={toneBadgeVariant(tone)}
                         className={cn(
-                          "shrink-0 rounded-full px-2 py-0.5 font-mono text-2xs font-normal",
+                          "shrink-0 rounded-full px-2 py-0.5 font-mono text-micro font-normal",
                         )}
                       >
                         {host ? formatPrinterStatusPill(status) : "Unmonitored"}
@@ -329,7 +329,7 @@ export default function PrintersPage() {
                     </dl>
                     {status?.progress != null ? (
                       <div className="space-y-1" aria-label={`Print progress ${status.progress}%`}>
-                        <div className="flex justify-between text-2xs text-muted-foreground">
+                        <div className="flex justify-between text-micro text-muted-foreground">
                           <span>Progress</span><span className="font-mono">{status.progress}%</span>
                         </div>
                         <div className="h-1.5 overflow-hidden rounded-full bg-muted">
@@ -350,7 +350,7 @@ export default function PrintersPage() {
                           <Link to={exportRoute()}>Send from Production</Link>
                         </Button>
                       ) : hostType === "bambu" ? (
-                        <p className="text-2xs leading-relaxed text-muted-foreground">
+                        <p className="text-micro leading-relaxed text-muted-foreground">
                           Use Bambu Connect from Production.
                         </p>
                       ) : null}

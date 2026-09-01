@@ -4,9 +4,12 @@
  * when already installed (standalone display mode).
  */
 import { useState } from "react";
-import { Download } from "lucide-react";
+import { Download, X } from "lucide-react";
 import { usePwaInstall } from "../../lib/pwaInstall";
+import { statusTone } from "../../lib/statusTone";
+import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
+import { Alert, AlertActions, AlertTitle } from "../ui/alert";
 
 export default function PwaInstallBanner() {
   const { canInstall, promptInstall } = usePwaInstall();
@@ -20,26 +23,30 @@ export default function PwaInstallBanner() {
   if (!canInstall || dismissed || isStandalone) return null;
 
   return (
-    <div className="flex items-center gap-3 rounded-lg border border-info/30 bg-info-soft px-4 py-3 text-sm text-info shadow-sm">
-      <Download className="h-4 w-4 shrink-0 text-info" />
-      <span className="flex-1">
-        Install <strong>Print Partner</strong> for offline floor use
-      </span>
-      <Button
-        size="sm"
-        variant="outline"
-        className="border-info/30 text-info hover:bg-info-soft"
-        onClick={promptInstall}
-      >
-        Install
-      </Button>
-      <button
-        aria-label="Dismiss install prompt"
-        className="ml-1 text-info hover:text-info"
-        onClick={() => setDismissed(true)}
-      >
-        ✕
-      </button>
-    </div>
+    <Alert tone="info" role="status" className="items-center shadow-sm">
+      <Download aria-hidden />
+      <AlertTitle className="font-normal">
+        Install <strong className="font-medium">Print Partner</strong> for offline floor use
+      </AlertTitle>
+      <AlertActions>
+        <Button
+          size="sm"
+          variant="outline"
+          className={cn(statusTone({ tone: "info", emphasis: "outline" }), "hover:bg-info-soft")}
+          onClick={promptInstall}
+        >
+          Install
+        </Button>
+        <Button
+          size="icon"
+          variant="ghost"
+          aria-label="Dismiss install prompt"
+          className="size-8 hover:text-info"
+          onClick={() => setDismissed(true)}
+        >
+          <X className="size-4" aria-hidden />
+        </Button>
+      </AlertActions>
+    </Alert>
   );
 }

@@ -194,32 +194,20 @@ async function waitForApp(page) {
   throw new Error(`App not healthy at ${baseUrl}/health after 120s`);
 }
 
+/**
+ * Navigate straight to the route.
+ *
+ * This used to click through the rail, which broke when the sidebar was
+ * restructured: it waited on a `navigation` landmark named "Workflow stages"
+ * that no longer exists, so every capture after Sources timed out. The rail's
+ * labels are the app's business, not this script's, and a screenshot run has no
+ * reason to depend on them.
+ */
 async function openClientPath(page, path) {
-  const workflow = page.getByRole("navigation", { name: "Workflow stages" });
-  const utility = page.getByRole("navigation", { name: "Utility" });
-  if (path === "/library") {
-    await page.goto(`${baseUrl}/library`, { waitUntil: "domcontentloaded", timeout: 60_000 });
-    return;
-  }
-  if (path === "/builds") {
-    await utility.getByRole("link", { name: "Builds" }).click();
-    return;
-  }
-  const workflowLabel = {
-    "/sources": "Sources",
-    "/plan": "Plan",
-    "/progress": "Checkoff",
-    "/export": "Production",
-  }[path];
-  if (workflowLabel) {
-    await workflow.getByRole("link", { name: workflowLabel }).click();
-    return;
-  }
-  await page.evaluate((next) => {
-    const url = new URL(next, window.location.origin);
-    window.history.pushState({}, "", `${url.pathname}${url.search}`);
-    window.dispatchEvent(new PopStateEvent("popstate"));
-  }, path);
+  const url = new URL(path, baseUrl);
+  if (profileId) url.searchParams.set("profile", profileId);
+  await page.goto(url.toString(), { waitUntil: "domcontentloaded", timeout: 60_000 });
+  await page.waitForSelector("#main-content", { state: "visible", timeout: 30_000 });
 }
 
 async function main() {

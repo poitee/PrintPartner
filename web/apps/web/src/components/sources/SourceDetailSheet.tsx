@@ -30,6 +30,7 @@ import ImportRulesTree from "../ImportRulesTree";
 const Preview3D = lazy(() => import("../Preview3D"));
 import SourceCardCover from "../SourceCardCover";
 import { Button } from "../ui/button";
+import { Checkbox } from "../ui/checkbox";
 import { Label } from "../ui/label";
 import { ScrollArea } from "../ui/scroll-area";
 import {
@@ -291,7 +292,7 @@ export default function SourceDetailSheet({
                 <div className="mt-2 max-w-[220px] space-y-1">
                   <Label
                     htmlFor={`source-detail-category-${source.id}`}
-                    className="text-2xs text-muted-foreground"
+                    className="text-micro text-muted-foreground"
                   >
                     Category
                   </Label>
@@ -394,7 +395,7 @@ export default function SourceDetailSheet({
                               {d.kind === "pdf" &&
                               d.extract_status &&
                               d.extract_status !== "ready" ? (
-                                <span className="mt-0.5 block text-3xs text-muted-foreground">
+                                <span className="mt-0.5 block text-micro text-muted-foreground">
                                   PDF · {d.extract_status}
                                 </span>
                               ) : null}
@@ -493,12 +494,15 @@ export default function SourceDetailSheet({
                 </p>
                 {namingLoadError && <p className="text-sm text-destructive">{namingLoadError}</p>}
                 {namingNote && <p className="text-sm text-muted-foreground">{namingNote}</p>}
-                <label className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
+                <label
+                  className="flex items-center gap-2 text-sm"
+                  htmlFor="source-naming-use-defaults"
+                >
+                  <Checkbox
+                    id="source-naming-use-defaults"
                     checked={useDefaults}
                     disabled={namingApiMissing || namingSaving || busy}
-                    onChange={(e) => setUseDefaults(e.target.checked)}
+                    onCheckedChange={(next) => setUseDefaults(next === true)}
                   />
                   <span>Use app default naming rules</span>
                 </label>

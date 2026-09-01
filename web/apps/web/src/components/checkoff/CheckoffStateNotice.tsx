@@ -1,5 +1,5 @@
+import { Alert, AlertActions, AlertTitle } from "../ui/alert";
 import { Button } from "../ui/button";
-import { Card, CardContent } from "../ui/card";
 import { Spinner } from "../ui/spinner";
 
 export type CheckoffResourceState = "loading" | "ready" | "error" | "empty" | "offline";
@@ -19,6 +19,10 @@ type Props = {
 /**
  * The console before it has data: engine reachable, Builds loaded, Checkoff
  * read. Each state names what is happening and who can move it forward.
+ *
+ * Only the two waiting states are live regions, and only they announce. An
+ * offline engine is a standing condition the operator reads, not an
+ * interruption, so it keeps the plain banner it always had.
  */
 export default function CheckoffStateNotice({
   engineState,
@@ -31,67 +35,63 @@ export default function CheckoffStateNotice({
   emptyState,
 }: Props) {
   if (engineState !== "ready") {
+    const connecting = engineState === "loading";
     return (
-      <Card className="no-print">
-        <CardContent className="pt-6">
-          <p
-            className="text-sm text-muted-foreground"
-            role={engineState === "loading" ? "status" : undefined}
-            aria-live={engineState === "loading" ? "polite" : undefined}
-            aria-atomic={engineState === "loading" ? "true" : undefined}
-          >
-            {engineState === "offline"
-              ? "Engine offline. Start the print-partner engine to use Checkoff."
-              : "Connecting to the engine…"}
-          </p>
-        </CardContent>
-      </Card>
+      <Alert
+        tone={connecting ? "neutral" : "warning"}
+        className="no-print"
+        role={connecting ? "status" : undefined}
+        aria-live={connecting ? "polite" : undefined}
+        aria-atomic={connecting ? "true" : undefined}
+      >
+        {connecting ? <Spinner className="size-4" aria-hidden="true" /> : null}
+        <AlertTitle className="font-normal">
+          {engineState === "offline"
+            ? "Engine offline. Start the print-partner engine to use Checkoff."
+            : "Connecting to the engine…"}
+        </AlertTitle>
+      </Alert>
     );
   }
 
   if (profilesState === "error") {
     return (
-      <Card className="no-print border-destructive/40 bg-destructive/5 shadow-none">
-        <CardContent className="space-y-3 pt-6">
-          <p className="text-sm text-destructive" role="alert">
-            Could not load plans: {profilesError}
-          </p>
+      <Alert tone="error" className="no-print">
+        <AlertTitle className="font-normal">Could not load plans: {profilesError}</AlertTitle>
+        <AlertActions>
           <Button size="sm" variant="secondary" onClick={onReloadProfiles}>
             Retry
           </Button>
-        </CardContent>
-      </Card>
+        </AlertActions>
+      </Alert>
     );
   }
 
   if (profilesState === "loading" || reviewState === "loading") {
     return (
-      <Card className="no-print border-border shadow-sm">
-        <CardContent
-          className="flex items-center gap-2 pt-6"
-          role="status"
-          aria-live="polite"
-          aria-atomic="true"
-        >
-          <Spinner className="size-4" aria-hidden="true" />
-          <p className="text-sm text-muted-foreground">Loading progress…</p>
-        </CardContent>
-      </Card>
+      <Alert
+        tone="neutral"
+        className="no-print"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+      >
+        <Spinner className="size-4" aria-hidden="true" />
+        <AlertTitle className="font-normal">Loading progress…</AlertTitle>
+      </Alert>
     );
   }
 
   if (reviewState === "error") {
     return (
-      <Card className="no-print border-destructive/40 bg-destructive/5 shadow-none">
-        <CardContent className="space-y-3 pt-6">
-          <p className="text-sm text-destructive" role="alert">
-            Could not load Checkoff: {workspaceError}
-          </p>
+      <Alert tone="error" className="no-print">
+        <AlertTitle className="font-normal">Could not load Checkoff: {workspaceError}</AlertTitle>
+        <AlertActions>
           <Button size="sm" variant="secondary" onClick={onRetryReview}>
             Retry
           </Button>
-        </CardContent>
-      </Card>
+        </AlertActions>
+      </Alert>
     );
   }
 

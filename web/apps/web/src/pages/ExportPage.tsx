@@ -23,6 +23,7 @@ import AcceptedPlateSection from "../components/export/accepted-plates/AcceptedP
 const PrinterSendPanel = lazy(() => import("../components/export/PrinterSendPanel"));
 const PrinterSendQueuePanel = lazy(() => import("../components/export/PrinterSendQueuePanel"));
 import ShareBuildExportDialog from "../components/share/ShareBuildExportDialog";
+import { Alert, AlertActions, AlertDescription } from "../components/ui/alert";
 import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";
 import { usePlanWorkspace } from "../context/PlanWorkspaceContext";
@@ -64,6 +65,7 @@ import {
   productionTasks,
   type ProductionTaskId,
 } from "../lib/workPackageTasks";
+import { statusTone } from "../lib/statusTone";
 import { cn } from "@/lib/utils";
 import {
   getBackgroundError,
@@ -520,7 +522,12 @@ export default function ExportPage() {
             onFailure={setAssignFailure}
           />
           {printerCount === 0 ? (
-            <div className="rounded-lg border border-warning/35 bg-warning-soft p-4 text-sm text-warning">
+            <div
+              className={cn(
+                "rounded-lg p-4 text-sm",
+                statusTone({ tone: "warning", emphasis: "soft" }),
+              )}
+            >
               No printer is set up.{" "}
               <Link className="font-medium underline underline-offset-2" to={settingsPrintersRoute()}>
                 Add a printer in Settings
@@ -565,14 +572,14 @@ export default function ExportPage() {
           </CardContent>
         </Card>
       ) : planError && !review ? (
-        <Card>
-          <CardContent className="space-y-3 pt-6">
-            <p className="text-sm text-destructive">Could not load this plan: {planError}</p>
+        <Alert tone="error">
+          <AlertDescription>Could not load this plan: {planError}</AlertDescription>
+          <AlertActions>
             <Button size="sm" variant="secondary" onClick={() => {
               if (selectedProfileId != null) void refresh();
             }}>Retry</Button>
-          </CardContent>
-        </Card>
+          </AlertActions>
+        </Alert>
       ) : (
         <div className={cn("grid gap-4", "lg:grid-cols-[minmax(0,1fr)_minmax(16rem,18.75rem)]")}>
           <div className="min-w-0">
@@ -678,16 +685,16 @@ export default function ExportPage() {
           </CardContent>
         </Card>
       ) : profilesState === "error" ? (
-        <Card className="border-destructive/40 bg-destructive/5 shadow-none">
-          <CardContent className="space-y-3 pt-6">
-            <p className="text-sm text-destructive">
-              Could not load plans: {profilesError}
-            </p>
+        <Alert tone="error">
+          <AlertDescription>
+            Could not load plans: {profilesError}
+          </AlertDescription>
+          <AlertActions>
             <Button size="sm" variant="secondary" onClick={() => void reloadProfiles()}>
               Retry
             </Button>
-          </CardContent>
-        </Card>
+          </AlertActions>
+        </Alert>
       ) : profilesState === "loading" ? (
         <Card>
           <CardContent className="pt-6">
@@ -730,7 +737,7 @@ export default function ExportPage() {
             >
               {route === "external" && !changingRoute ? (
                 <section
-                  className="space-y-3 rounded-lg border border-primary/35 bg-primary/8 p-4"
+                  className="space-y-3 rounded-lg border border-primary/40 bg-primary-soft p-4"
                   aria-labelledby="past-print-route-moved-heading"
                 >
                   <div className="space-y-1">

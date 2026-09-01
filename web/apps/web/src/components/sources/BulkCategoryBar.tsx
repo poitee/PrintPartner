@@ -40,7 +40,7 @@ export default function BulkCategoryBar({
     <div
       role="toolbar"
       aria-label="Bulk source actions"
-      className="sticky top-0 z-10 flex flex-wrap items-center gap-2 rounded-lg border border-primary/40 bg-primary/5 px-3 py-2"
+      className="sticky top-0 z-10 flex flex-wrap items-center gap-2 rounded-lg border border-primary/40 bg-primary-soft px-3 py-2"
     >
       <span className="text-sm font-medium text-foreground">
         {selectionSummaryLabel(count)}

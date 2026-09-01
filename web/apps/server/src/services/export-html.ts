@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { folderKeyFromRelativePath, safePlanSlug } from "@print-partner/domain";
+import { PAPER, folderKeyFromRelativePath, safePlanSlug } from "@print-partner/domain";
 import { formatTimestamp, type DateFormatId } from "@print-partner/contracts";
 import type { AcceptedPlanBasis } from "../db/accepted-plan-progress.js";
 import { readAcceptedMediaPng } from "../lib/accepted-media-cache.js";
@@ -68,7 +68,7 @@ function renderChecklist(input: Readonly<{
   const generatedAt = formatTimestamp(input.generatedAt, input.dateFormat);
   let thumbCount = 0;
   let html = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>${escapeHtml(input.profile.name)} checklist</title>
-<style>body{font-family:system-ui,sans-serif;margin:1.5rem;background:#faf7f2;color:#2b241c;}h1{color:#2b241c;}a{color:#8f6a2e;}table{border-collapse:collapse;width:100%;}th{background:#f1ebe1;}th,td{border:1px solid #ddd4c5;padding:.4rem .6rem;text-align:left;}
+<style>body{font-family:system-ui,sans-serif;margin:1.5rem;background:${PAPER.bg};color:${PAPER.fg};}h1{color:${PAPER.fg};}a{color:${PAPER.focus};}table{border-collapse:collapse;width:100%;}th{background:${PAPER.surface};}th,td{border:1px solid ${PAPER.border};padding:.4rem .6rem;text-align:left;}
 .swatch{display:inline-block;width:12px;height:12px;border-radius:50%;margin-right:.35rem;vertical-align:middle;}
 .thumb{width:48px;height:48px;object-fit:contain;vertical-align:middle;margin-right:.35rem;}</style></head><body>`;
   html += `<h1>${escapeHtml(input.profile.name)}</h1>`;

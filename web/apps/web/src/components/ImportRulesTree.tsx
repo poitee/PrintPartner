@@ -26,6 +26,7 @@ import { suggestRulesFromTopLevelFolders } from "../lib/importRulesSuggest";
 import { findDuplicateBasenames } from "../lib/importRuleConflicts";
 import { libraryFileDragId } from "../lib/sourceCategoryDnD";
 import { Button } from "./ui/button";
+import { Checkbox } from "./ui/checkbox";
 import { Input } from "./ui/input";
 import { cn } from "@/lib/utils";
 
@@ -100,20 +101,20 @@ function TreeRows({
                 }}
                 className={cn(
                   "flex items-center gap-2 rounded-md py-0.5 pr-1 text-sm transition-colors",
-                  isSelected && "bg-primary/10 ring-1 ring-primary/30",
+                  isSelected && "bg-primary-soft ring-1 ring-primary/30",
                   !node.checked && "opacity-70",
                   enableFileCategoryDrag && !disabled && "cursor-grab active:cursor-grabbing",
                 )}
                 style={{ paddingLeft: `${depth * 0.9}rem` }}
                 title={enableFileCategoryDrag ? "Drag onto a category" : undefined}
               >
-                <input
-                  type="checkbox"
+                <Checkbox
+                  className="shrink-0"
                   checked={node.checked}
                   disabled={disabled}
                   aria-label={`Include ${fileName}`}
                   onClick={(e) => e.stopPropagation()}
-                  onChange={(e) => onToggleFile(node.path, e.target.checked)}
+                  onCheckedChange={(next) => onToggleFile(node.path, next === true)}
                 />
                 <button
                   type="button"
@@ -128,12 +129,12 @@ function TreeRows({
           }
           return (
             <li key={node.path} className="tree-file" style={{ paddingLeft: `${depth * 1.1}rem` }}>
-              <label>
-                <input
-                  type="checkbox"
+              <label htmlFor={`import-file-${projectId}-${node.path}`}>
+                <Checkbox
+                  id={`import-file-${projectId}-${node.path}`}
                   checked={node.checked}
                   disabled={disabled}
-                  onChange={(e) => onToggleFile(node.path, e.target.checked)}
+                  onCheckedChange={(next) => onToggleFile(node.path, next === true)}
                 />
                 <span className="mono">{node.path}</span>
               </label>
@@ -165,15 +166,16 @@ function TreeRows({
                     <span className="inline-block w-3 text-center text-xs">▾</span>
                   )}
                 </button>
-                <label className="flex min-w-0 flex-1 items-center gap-2">
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    ref={(el) => {
-                      if (el) el.indeterminate = indeterminate;
-                    }}
+                <label
+                  className="flex min-w-0 flex-1 items-center gap-2"
+                  htmlFor={`import-folder-${projectId}-${node.path}`}
+                >
+                  <Checkbox
+                    id={`import-folder-${projectId}-${node.path}`}
+                    className="shrink-0"
+                    checked={indeterminate ? "indeterminate" : checked}
                     disabled={disabled}
-                    onChange={(e) => onToggleFolder(node.path, e.target.checked)}
+                    onCheckedChange={(next) => onToggleFolder(node.path, next === true)}
                   />
                   <button
                     type="button"
@@ -212,15 +214,12 @@ function TreeRows({
         return (
           <li key={`folder:${node.path}`} className="tree-folder-block">
             <div className="tree-folder" style={{ paddingLeft: `${depth * 1.1}rem` }}>
-              <label>
-                <input
-                  type="checkbox"
-                  checked={checked}
-                  ref={(el) => {
-                    if (el) el.indeterminate = indeterminate;
-                  }}
+              <label htmlFor={`import-folder-${projectId}-${node.path}`}>
+                <Checkbox
+                  id={`import-folder-${projectId}-${node.path}`}
+                  checked={indeterminate ? "indeterminate" : checked}
                   disabled={disabled}
-                  onChange={(e) => onToggleFolder(node.path, e.target.checked)}
+                  onCheckedChange={(next) => onToggleFolder(node.path, next === true)}
                 />
                 <span>{node.path || "(root)"}</span>
                 <span className="muted small"> folder</span>

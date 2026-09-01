@@ -23,3 +23,4 @@ export * from "./accepted-plate-packer.js";
 export * from "./direct-export-layout.js";
 export * from "./build-workflow.js";
 export * from "./sliced-object-matching.js";
+export * from "./paper-palette.js";

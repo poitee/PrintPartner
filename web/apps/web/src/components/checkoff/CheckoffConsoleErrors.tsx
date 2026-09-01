@@ -1,3 +1,4 @@
+import { statusTone } from "@/lib/statusTone";
 import { cn } from "@/lib/utils";
 
 type Props = {
@@ -49,7 +50,10 @@ export default function CheckoffConsoleErrors({
       ) : null}
       {rowErrors.length > 0 ? (
         <div
-          className="rounded-md border border-destructive/40 bg-destructive/5 p-3"
+          className={cn(
+            "rounded-md p-3",
+            statusTone({ tone: "error", emphasis: "surface" }),
+          )}
           role="alert"
         >
           <p className="text-sm font-semibold text-destructive">

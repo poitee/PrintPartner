@@ -45,7 +45,9 @@ export default function PartPreviewDialog({ part, onClose, size = "default" }: P
     >
       <DialogContent
         className={cn(
-          "part-preview-dialog overflow-hidden border-white/10 bg-[#080b10] text-white/90 shadow-2xl shadow-black/60",
+          // Surface, border and ink come from DialogContent's own tokens; the
+          // stage inside is the only media surface (App.css .preview3d-studio).
+          "part-preview-dialog overflow-hidden",
           size === "large" ? "max-w-4xl" : "max-w-2xl",
         )}
       >
@@ -54,7 +56,7 @@ export default function PartPreviewDialog({ part, onClose, size = "default" }: P
             <DialogHeader>
               <DialogTitle className="break-all pr-8 text-base">{part.filename}</DialogTitle>
             </DialogHeader>
-            <p className="text-xs text-white/60">
+            <p className="text-xs text-muted-foreground">
               Drag to rotate · scroll or pinch to zoom
             </p>
             <Suspense fallback={<div className="flex items-center justify-center" style={{minHeight: 160}}>Loading 3D…</div>}>

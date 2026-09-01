@@ -1,6 +1,15 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
-  <rect width="512" height="512" rx="96" fill="#191714"/>
-  <!-- Layered-sheet mark (matches the app's SpineRail brand mark) -->
-  <rect x="96" y="176" width="224" height="264" rx="40" fill="#c9963f" opacity="0.45"/>
-  <rect x="192" y="96" width="224" height="264" rx="40" fill="#c9963f"/>
+  <!--
+    PrintPartner mark: a build plate, quartered, with one unit placed on it.
+    Same artwork as src/components/layout/BrandMark.tsx, with literal hex
+    because a PWA icon cannot read CSS variables. Keep the two in step.
+    Ink #e9ebee is dark --foreground; #50cae2 is dark --primary;
+    #1a1b1e is dark --surface-base.
+  -->
+  <rect width="512" height="512" rx="114" fill="#1a1b1e"/>
+  <g transform="translate(256 256) scale(17.0667) translate(-12 -12)">
+    <path d="M12 4.4H6.5A2.1 2.1 0 0 0 4.4 6.5V12H12Z" fill="#50cae2"/>
+    <rect x="3.1" y="3.1" width="17.8" height="17.8" rx="3.4" fill="none" stroke="#e9ebee" stroke-width="1.7"/>
+    <path d="M12 4V20M4 12H20" stroke="#e9ebee" stroke-width="1.7" stroke-linecap="round"/>
+  </g>
 </svg>

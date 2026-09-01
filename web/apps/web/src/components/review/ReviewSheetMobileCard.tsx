@@ -1,3 +1,4 @@
+import { useId } from "react";
 import { Check } from "lucide-react";
 import type { ReviewPart } from "../../api/endpoints/planManifests";
 import type { RoleFilamentRow, SpoolmanSpoolRow } from "../../api/endpoints/filaments";
@@ -6,6 +7,7 @@ import PartThumbExpandButton from "../parts/PartThumbExpandButton";
 import PartSpoolPicker from "../PartSpoolPicker";
 import SpoolRemainingBadge from "../SpoolRemainingBadge";
 import { Button } from "../ui/button";
+import { Checkbox } from "../ui/checkbox";
 import { cn } from "@/lib/utils";
 
 type Props = {
@@ -79,6 +81,7 @@ export default function ReviewSheetMobileCard({
   const done =
     part.printed_count >= part.quantity_effective && part.quantity_effective > 0;
   const nextIdx = part.print_units.findIndex((u) => !u);
+  const unitFieldId = useId();
 
   if (viewMode === "print") {
     return (
@@ -123,20 +126,24 @@ export default function ReviewSheetMobileCard({
               </Button>
             </div>
             <div className="checkoff-mobile-units" role="group" aria-label="Print units">
-              {part.print_units.map((unitDone, idx) => (
-                <label
-                  key={idx}
-                  className={cn("checkoff-mobile-unit", unitDone && "checkoff-mobile-unit-done")}
-                >
-                  <input
-                    type="checkbox"
-                    checked={unitDone}
-                    onChange={() => onToggleUnit(part, idx)}
-                    disabled={busy}
-                  />
-                  <span>#{idx + 1}</span>
-                </label>
-              ))}
+              {part.print_units.map((unitDone, idx) => {
+                const unitId = `${unitFieldId}-${idx}`;
+                return (
+                  <label
+                    key={idx}
+                    htmlFor={unitId}
+                    className={cn("checkoff-mobile-unit", unitDone && "checkoff-mobile-unit-done")}
+                  >
+                    <Checkbox
+                      id={unitId}
+                      checked={unitDone}
+                      onCheckedChange={() => onToggleUnit(part, idx)}
+                      disabled={busy}
+                    />
+                    <span>#{idx + 1}</span>
+                  </label>
+                );
+              })}
             </div>
           </>
         )}

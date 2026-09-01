@@ -12,6 +12,7 @@ import {
 } from "../../queries/planRecipe";
 import { invalidateSources } from "../../queries/sources";
 import { Button } from "../ui/button";
+import ConfirmDialog from "../ConfirmDialog";
 
 type Props = {
   profileId: number;
@@ -55,10 +56,7 @@ export default function BuildRecipePanel({ profileId }: Props) {
     }
   };
 
-  const onRestore = async (sid: number, name: string) => {
-    if (!window.confirm(`Restore snapshot “${name}”? This replaces layers and kit selections.`)) {
-      return;
-    }
+  const onRestore = async (sid: number) => {
     setBusy(true);
     try {
       const result = await restorePlanSnapshotApi(profileId, sid);
@@ -160,16 +158,29 @@ export default function BuildRecipePanel({ profileId }: Props) {
                         ({new Date(s.created_at).toLocaleString()})
                       </span>
                     </span>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      className="h-7 px-2"
+                    <ConfirmDialog
+                      trigger={
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          className="h-7 px-2"
+                          disabled={busy}
+                        >
+                          Restore
+                        </Button>
+                      }
+                      title="Restore this snapshot?"
+                      description={
+                        <>
+                          Restoring “{s.name}” replaces the current layers and kit
+                          selections with the ones saved in this snapshot.
+                        </>
+                      }
+                      confirmLabel="Restore snapshot"
                       disabled={busy}
-                      onClick={() => void onRestore(s.id, s.name)}
-                    >
-                      Restore
-                    </Button>
+                      onConfirm={() => void onRestore(s.id)}
+                    />
                   </li>
                 ))}
               </ul>

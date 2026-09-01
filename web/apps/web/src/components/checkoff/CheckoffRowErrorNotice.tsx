@@ -1,4 +1,5 @@
 import type { CheckoffRowError } from "../../lib/checkoffConsoleRowErrors";
+import { Alert, AlertActions, AlertTitle } from "../ui/alert";
 import { Button } from "../ui/button";
 import { cn } from "@/lib/utils";
 
@@ -22,24 +23,20 @@ export default function CheckoffRowErrorNotice({
   className,
 }: Props) {
   return (
-    <div
-      role="alert"
-      className={cn(
-        "flex flex-wrap items-center gap-2 rounded-md border border-destructive/40 bg-destructive/5 px-2.5 py-2 text-xs",
-        className,
-      )}
-    >
-      <span className="min-w-0 flex-1 text-destructive">{error.message}</span>
-      <Button
-        type="button"
-        size="sm"
-        variant="secondary"
-        className="min-h-9"
-        disabled={busy}
-        onClick={onRetry}
-      >
-        {error.retryLabel}
-      </Button>
-    </div>
+    <Alert tone="error" className={cn("px-2.5 py-2 text-xs", className)}>
+      <AlertTitle className="font-normal">{error.message}</AlertTitle>
+      <AlertActions>
+        <Button
+          type="button"
+          size="sm"
+          variant="secondary"
+          className="min-h-9"
+          disabled={busy}
+          onClick={onRetry}
+        >
+          {error.retryLabel}
+        </Button>
+      </AlertActions>
+    </Alert>
   );
 }

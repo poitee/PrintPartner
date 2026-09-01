@@ -8,6 +8,7 @@ import {
   CardTitle,
 } from "../ui/card";
 import { Button } from "../ui/button";
+import ConfirmDialog from "../ConfirmDialog";
 import {
   Dialog,
   DialogContent,
@@ -93,7 +94,6 @@ export default function ApiKeyManagementCard() {
   };
 
   const handleRevokeKey = async (keyId: string) => {
-    if (!confirm("Revoke this API key? It will no longer work.")) return;
     try {
       const response = await fetch(`/settings/api-keys/${keyId}`, {
         method: "DELETE",
@@ -179,14 +179,28 @@ export default function ApiKeyManagementCard() {
                       >
                         <RotateCw className="h-4 w-4" />
                       </Button>
-                      <Button
-                        onClick={() => handleRevokeKey(key.id)}
-                        size="sm"
-                        variant="outline"
-                        className="text-destructive hover:text-destructive"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
+                      <ConfirmDialog
+                        trigger={
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="text-destructive hover:text-destructive"
+                            aria-label={`Revoke API key ${key.id}`}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        }
+                        title="Revoke this API key?"
+                        description={
+                          <>
+                            Key <code className="font-mono">{key.id}</code> stops
+                            working immediately, and anything using it loses
+                            access. This cannot be undone.
+                          </>
+                        }
+                        confirmLabel="Revoke key"
+                        onConfirm={() => void handleRevokeKey(key.id)}
+                      />
                     </>
                   )}
                 </div>
