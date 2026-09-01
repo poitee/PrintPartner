@@ -8,7 +8,7 @@ import { WorkingPlanChangedError } from "./workingPlanChanged";
  */
 export function planAcceptanceFailureFromError(caught: unknown): PlanAcceptanceFailure {
   if (caught instanceof WorkingPlanChangedError) {
-    return { kind: "working_plan_changed" };
+    return { kind: "working_plan_changed", recovery: caught.recovery };
   }
   if (caught instanceof EngineHttpError && caught.body && typeof caught.body === "object") {
     const body = caught.body as Record<string, unknown>;

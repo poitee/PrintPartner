@@ -50,6 +50,37 @@ async function fixture() {
 }
 
 describe("Plan draft routes", () => {
+  it("reports changed Sources separately from a stale Working Plan identity", async () => {
+    const { app, repo, profile } = await fixture();
+    const createdResponse = await app.inject({
+      method: "POST",
+      url: `/plans/${profile.id}/drafts/recompute`,
+      headers: { "idempotency-key": "sources-changed-draft" },
+      payload: { apply_manifest: true },
+    });
+    expect(createdResponse.statusCode).toBe(200);
+    const created = createdResponse.json();
+    const addedSource = repo.createSource({
+      name: "Added after planning",
+      url: "https://example.test/added-after-planning",
+    });
+    repo.addAddonLayer(profile.id, addedSource.id);
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/plans/${profile.id}/drafts/${created.draft.draft_id}/apply`,
+      headers: { "idempotency-key": "sources-changed-apply" },
+      payload: {
+        expected_snapshot_digest: created.draft.snapshot_digest,
+        expected_lifecycle_version: created.draft.lifecycle_version,
+        expected_base: created.draft.base,
+      },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({ code: "inputs_changed" });
+  });
+
   it("returns the current Working Plan when publication uses a stale identity", async () => {
     const { app, profile } = await fixture();
     const createdResponse = await app.inject({

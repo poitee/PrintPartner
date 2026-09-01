@@ -42,7 +42,10 @@ import {
   resolveDraftPart,
   type PlanRowIdentity,
 } from "../lib/planDraftPartMatch";
-import { WorkingPlanChangedError } from "../lib/workingPlanChanged";
+import {
+  isWorkingPlanInputsChanged,
+  WorkingPlanChangedError,
+} from "../lib/workingPlanChanged";
 import { useProfileSelection } from "./ProfileContext";
 
 /** The Plan row being edited — enough identity to find it in the saved draft. */
@@ -312,8 +315,12 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
     try {
       receipt = await applyPlanDraft(workspace, options);
     } catch (error) {
+      if (isWorkingPlanInputsChanged(error)) {
+        await startPlanDraft();
+        throw new WorkingPlanChangedError("rebuilt_from_sources", { cause: error });
+      }
       if (replaceFromConflict(error)) {
-        throw new WorkingPlanChangedError({ cause: error });
+        throw new WorkingPlanChangedError("refreshed", { cause: error });
       }
       throw error;
     }
@@ -330,7 +337,7 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
       queryClient.invalidateQueries({ queryKey: queryKeys.buildWorkflow(workspace.profile_id) }),
     ]);
     return receipt;
-  }, [currentDraftWorkspace, queryClient, replaceFromConflict]);
+  }, [currentDraftWorkspace, queryClient, replaceFromConflict, startPlanDraft]);
 
   const rebaseActivePlanDraft = useCallback(async () => {
     const workspace = currentDraftWorkspace();

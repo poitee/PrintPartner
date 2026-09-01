@@ -41,6 +41,13 @@ describe("acceptance failures", () => {
   it("keeps a refreshed Working Plan distinct from a generic engine error", () => {
     expect(planAcceptanceFailureFromError(new WorkingPlanChangedError())).toEqual({
       kind: "working_plan_changed",
+      recovery: "refreshed",
+    });
+    expect(planAcceptanceFailureFromError(
+      new WorkingPlanChangedError("rebuilt_from_sources"),
+    )).toEqual({
+      kind: "working_plan_changed",
+      recovery: "rebuilt_from_sources",
     });
   });
 });

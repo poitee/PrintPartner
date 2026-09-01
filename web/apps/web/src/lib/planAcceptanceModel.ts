@@ -6,6 +6,7 @@ import type {
 } from "@print-partner/contracts";
 import type { PlanReview } from "../api/endpoints/planManifests";
 import { buildSourcesRoute, libraryRoute } from "./routes";
+import type { WorkingPlanRecovery } from "./workingPlanChanged";
 
 /**
  * The Plan acceptance checkpoint, as data.
@@ -53,7 +54,7 @@ export type PlanAcceptanceFailure =
       readonly sendQueueItemCount: number;
     }
   | { readonly kind: "unsafe_records"; readonly units: readonly PlanUnitOutcome[] }
-  | { readonly kind: "working_plan_changed" }
+  | { readonly kind: "working_plan_changed"; readonly recovery: WorkingPlanRecovery }
   | { readonly kind: "error"; readonly message: string };
 
 export type PlanAcceptanceInput = {
@@ -290,10 +291,14 @@ function failureIssues(input: {
     case "working_plan_changed":
       return [{
         id: "plan-issue-working-plan-changed",
-        group: "must_resolve",
-        title: "Working Plan refreshed before publishing",
-        detail: "Review the updated quantities and choices, then publish again.",
-        statusLabel: "Review before publishing",
+        group: "review_recommended",
+        title: failure.recovery === "rebuilt_from_sources"
+          ? "Working Plan rebuilt from current Sources"
+          : "Working Plan refreshed before publishing",
+        detail: failure.recovery === "rebuilt_from_sources"
+          ? "Review the updated parts and quantities, then publish again."
+          : "Review the updated quantities and choices, then publish again.",
+        statusLabel: "Review updated Plan",
         tone: "warning",
         action: null,
       }];
