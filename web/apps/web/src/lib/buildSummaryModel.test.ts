@@ -127,7 +127,7 @@ describe("buildActiveWorkChips", () => {
     });
   });
 
-  it("names Source changes as background context, not as a printer problem", () => {
+  it("names Source updates as next-Plan context, not as a current-Plan warning", () => {
     const chips = buildActiveWorkChips(
       workspace({
         sources: { kind: "stale", attached_count: 2, issue_count: 1 },
@@ -136,8 +136,8 @@ describe("buildActiveWorkChips", () => {
     expect(chips).toEqual([
       {
         id: "source_changes",
-        label: "Sources changed since acceptance",
-        tone: "warning",
+        label: "Source updates available for the next Plan",
+        tone: "neutral",
       },
     ]);
   });
