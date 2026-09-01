@@ -83,7 +83,9 @@ export default function MobileNavDrawer({ onNavigate, sourceUpdateCount }: Props
         cn(
           NAV_RAIL,
           "flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm font-medium transition-colors",
-          item.id === "library" && "my-0.5 border border-primary/40 bg-primary-soft py-2.5",
+          item.id === "library" && "my-0.5 py-2.5",
+          /* Signal/primary soft is selected-only; idle Library uses carrier card chrome. */
+          item.id === "library" && !isActive && "border border-border bg-card",
           isActive ? NAV_ACTIVE : NAV_IDLE,
         )
       }

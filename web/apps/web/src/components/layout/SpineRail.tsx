@@ -103,6 +103,9 @@ function UtilityLink({
   sourceUpdateCount: number;
 }) {
   const isLibrary = link.id === "library";
+  /* Library may keep card chrome (raised + 1px border) but signal/primary
+     fill is selected-only — never decorative always-on cyan. */
+  const libraryIdleChrome = isLibrary && !link.match && "border border-border bg-card";
   if (collapsed) {
     return (
       <SidebarTooltip label={link.label} collapsed>
@@ -112,7 +115,7 @@ function UtilityLink({
           className={cn(
             NAV_RAIL,
             "flex items-center justify-center rounded-md p-2.5 transition-colors",
-            isLibrary && "border border-primary/40 bg-primary-soft",
+            libraryIdleChrome,
             link.match ? NAV_ACTIVE : NAV_IDLE,
           )}
           aria-label={link.label}
@@ -135,7 +138,8 @@ function UtilityLink({
       className={cn(
         NAV_RAIL,
         "flex items-center gap-2.5 rounded-md px-2.5 py-2 transition-colors",
-        isLibrary && "my-0.5 border border-primary/40 bg-primary-soft py-2.5",
+        isLibrary && "my-0.5 py-2.5",
+        libraryIdleChrome,
         link.match ? NAV_ACTIVE : NAV_IDLE,
       )}
       aria-label={link.label}
