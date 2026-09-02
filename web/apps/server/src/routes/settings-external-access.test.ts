@@ -81,6 +81,20 @@ describe("/settings/external-access", () => {
       });
       expect(externalApiWithoutKey.statusCode).toBe(403);
 
+      const forgedBrowserHeaders = await app.inject({
+        method: "GET",
+        url: "/api/v1/plans",
+        remoteAddress: "203.0.113.10",
+        headers: {
+          host: "printpartner.example",
+          referer: "https://printpartner.example/plans/12",
+          "sec-fetch-dest": "empty",
+          "sec-fetch-mode": "cors",
+          "sec-fetch-site": "same-origin",
+        },
+      });
+      expect(forgedBrowserHeaders.statusCode).toBe(403);
+
       const mcp = await app.inject({
         method: "POST",
         url: "/api/v1/mcp",
@@ -99,13 +113,6 @@ describe("/settings/external-access", () => {
         method: "GET",
         url: "/api/v1/plans",
         remoteAddress: "192.168.200.50",
-        headers: {
-          host: "192.168.200.80:8080",
-          referer: "http://192.168.200.80:8080/plans/12",
-          "sec-fetch-dest": "empty",
-          "sec-fetch-mode": "cors",
-          "sec-fetch-site": "same-origin",
-        },
       });
       expect(browserApi.statusCode).toBe(200);
 

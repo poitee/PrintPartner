@@ -1,4 +1,5 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { isIP } from "node:net";
 import type {
   FastifyInstance,
   FastifyReply,
@@ -91,24 +92,46 @@ function hasAuthenticatedSession(request: FastifyRequest): boolean {
   return Boolean(user && !isSyntheticAnonymousSession(user));
 }
 
-function isSameOriginBrowserRequest(request: FastifyRequest): boolean {
-  if (request.headers["sec-fetch-site"] !== "same-origin") return false;
-  const mode = request.headers["sec-fetch-mode"];
-  if (mode !== "cors" && mode !== "same-origin") return false;
-  if (request.headers["sec-fetch-dest"] !== "empty") return false;
-
-  const referer = request.headers.referer;
-  const host = request.headers.host;
-  if (typeof referer !== "string" || typeof host !== "string") return false;
-  try {
-    const origin = new URL(referer);
+function isPrivateNetworkAddress(address: string | undefined): boolean {
+  if (!address) return false;
+  const normalized = address.toLowerCase().startsWith("::ffff:")
+    ? address.slice("::ffff:".length)
+    : address;
+  if (isIP(normalized) === 4) {
+    const octets = normalized.split(".").map(Number);
+    const [first, second] = octets;
     return (
-      (origin.protocol === "http:" || origin.protocol === "https:") &&
-      origin.host.toLowerCase() === host.toLowerCase()
+      first === 10 ||
+      (first === 100 && second != null && second >= 64 && second <= 127) ||
+      (first === 169 && second === 254) ||
+      (first === 172 && second != null && second >= 16 && second <= 31) ||
+      (first === 192 && second === 168)
     );
-  } catch {
+  }
+  if (isIP(normalized) === 6) {
+    const firstHextet = Number.parseInt(normalized.split(":")[0] || "0", 16);
+    return (
+      (firstHextet & 0xfe00) === 0xfc00 ||
+      (firstHextet & 0xffc0) === 0xfe80
+    );
+  }
+  return false;
+}
+
+function isDirectPrivateNetworkPeer(
+  request: FastifyRequest,
+  config: ServerConfig,
+): boolean {
+  if (
+    config.deployMode !== "self-host" ||
+    config.authRequired ||
+    config.singleUserAuth ||
+    config.trustProxy ||
+    hasForwardingHeaders(request)
+  ) {
     return false;
   }
+  return isPrivateNetworkAddress(request.socket.remoteAddress);
 }
 
 function hasConfiguredBasicAuth(
@@ -165,7 +188,7 @@ export function registerApiKeyAuth(
       if (isUnambiguousLoopback(request, config)) return;
       if (hasAuthenticatedSession(request)) return;
       if (hasConfiguredBasicAuth(request, config)) return;
-      if (isSameOriginBrowserRequest(request)) return;
+      if (isDirectPrivateNetworkPeer(request, config)) return;
       return sendProblem(
         reply,
         403,
