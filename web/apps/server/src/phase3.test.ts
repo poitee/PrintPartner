@@ -9,6 +9,7 @@ import { buildApp } from "./app.js";
 import { loadConfig } from "./config.js";
 import { createSelfHostPorts } from "./adapters/self-host/index.js";
 import { buildStlTreePayload, progressSummary } from "@print-partner/domain";
+import type { JobSnapshot } from "@print-partner/contracts";
 import { exportStlPackJobMessage, STL_EXPORT_MISSING_HINT } from "./services/export-stl-pack.js";
 import { captureAcceptedOperationalExport } from "./services/accepted-operational-export.js";
 import { acceptedPlanBasis } from "./db/accepted-plan-progress.js";
@@ -51,6 +52,28 @@ function applyTrackedPlan(repo: AppRepository, sourceId: number, profileId: numb
     idempotencyKey: `phase3-apply-${profileId}`,
   });
   if (applied.kind !== "applied") throw new Error("Plan was not applied");
+}
+
+async function waitForJobToSettle(
+  app: Awaited<ReturnType<typeof buildApp>>,
+  jobId: string,
+): Promise<void> {
+  let lastStatus = "unknown";
+  for (let attempt = 0; attempt < 500; attempt += 1) {
+    const response = await app.inject({ method: "GET", url: `/jobs/${jobId}` });
+    expect(response.statusCode).toBe(200);
+    const snapshot: JobSnapshot = response.json();
+    lastStatus = snapshot.status;
+    if (
+      snapshot.status === "done"
+      || snapshot.status === "error"
+      || snapshot.status === "cancelled"
+    ) {
+      return;
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`Export job ${jobId} did not settle; last status was ${lastStatus}`);
 }
 
 describe("Phase 3 APIs", () => {
@@ -235,7 +258,7 @@ describe("Phase 3 APIs", () => {
     });
     expect(res.statusCode).toBe(200);
     const { job_id } = res.json() as { job_id: string };
-    await new Promise((r) => setTimeout(r, 300));
+    await waitForJobToSettle(app, job_id);
     const jobRes = await app.inject({ method: "GET", url: `/jobs/${job_id}` });
     const job = jobRes.json() as { status: string; result?: { root_path?: string } };
     expect(job.status).toBe("done");
@@ -283,7 +306,7 @@ describe("Phase 3 APIs", () => {
     });
     expect(res.statusCode).toBe(200);
     const { job_id } = res.json() as { job_id: string };
-    await new Promise((r) => setTimeout(r, 300));
+    await waitForJobToSettle(app, job_id);
     const job = (await app.inject({ method: "GET", url: `/jobs/${job_id}` })).json() as {
       status: string;
       result?: { file_total?: number };
@@ -298,7 +321,7 @@ describe("Phase 3 APIs", () => {
     });
     expect(stale.statusCode).toBe(200);
     const staleJobId = (stale.json() as { job_id: string }).job_id;
-    await new Promise((r) => setTimeout(r, 300));
+    await waitForJobToSettle(app, staleJobId);
     const staleJob = (await app.inject({ method: "GET", url: `/jobs/${staleJobId}` })).json() as {
       status: string;
       error?: string | null;
@@ -335,7 +358,7 @@ describe("Phase 3 APIs", () => {
     });
     expect(res.statusCode).toBe(200);
     const { job_id } = res.json() as { job_id: string };
-    await new Promise((r) => setTimeout(r, 300));
+    await waitForJobToSettle(app, job_id);
     const jobRes = await app.inject({ method: "GET", url: `/jobs/${job_id}` });
     const job = jobRes.json() as {
       status: string;
@@ -376,7 +399,7 @@ describe("Phase 3 APIs", () => {
     });
     expect(res.statusCode).toBe(200);
     const { job_id } = res.json() as { job_id: string };
-    await new Promise((r) => setTimeout(r, 300));
+    await waitForJobToSettle(app, job_id);
     const jobRes = await app.inject({ method: "GET", url: `/jobs/${job_id}` });
     const job = jobRes.json() as { status: string; result?: { file_total?: number } };
     expect(job.status).toBe("done");
@@ -413,7 +436,7 @@ describe("Phase 3 APIs", () => {
     });
     expect(res.statusCode).toBe(200);
     const { job_id } = res.json() as { job_id: string };
-    await new Promise((r) => setTimeout(r, 300));
+    await waitForJobToSettle(app, job_id);
     const jobRes = await app.inject({ method: "GET", url: `/jobs/${job_id}` });
     const job = jobRes.json() as {
       status: string;

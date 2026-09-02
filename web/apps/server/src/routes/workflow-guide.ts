@@ -1,5 +1,9 @@
-/** Shared workflow markdown shown in Help and injected into the AI advisor context. */
-export const WORKFLOW_GUIDE = `# Print Partner workflow
+import {
+  externalApiAccessEnabled,
+  type ExternalAccessMode,
+} from "@print-partner/contracts";
+
+const CORE_WORKFLOW_GUIDE = `# Print Partner workflow
 
 Print Partner organizes each Build as **Sources → Plan → (Production ↔ Checkoff)**. Sources and Plan prepare reviewed production intent. Production and Checkoff form a loop that repeats until every required unit is verified. Global navigation is Builds, All Production, Printers, and Settings.
 
@@ -42,5 +46,16 @@ Verify completed print results before they change progress. Confirm successful u
 - **Theme.** Choose light, dark, or system. The sidebar can collapse to an icon rail.
 - **Share Build.** Export Plan configuration as a \`.print-partner-kit\` archive. STL files are not included.
 - **Spoolman.** Connect it in Settings → Integrations for live filament inventory and spool weights.
+`;
+
+const API_WORKFLOW_TIP = `
 - **API.** OpenAPI is available at \`/api/v1/openapi.json\`. Self-hosted installations can require an API key.
 `;
+
+/** Full workflow context used by the built-in advisor when external tools are available. */
+export const WORKFLOW_GUIDE = `${CORE_WORKFLOW_GUIDE}${API_WORKFLOW_TIP}`;
+
+/** User-facing help follows the installation's chosen level of complexity. */
+export function workflowGuideForExternalAccess(mode: ExternalAccessMode): string {
+  return externalApiAccessEnabled(mode) ? WORKFLOW_GUIDE : CORE_WORKFLOW_GUIDE;
+}

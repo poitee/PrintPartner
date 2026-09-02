@@ -11,6 +11,7 @@ import {
   Workflow,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import { externalApiAccessEnabled } from "@print-partner/contracts";
 import { fetchHealth, fetchLegalDocument, fetchWorkflowGuide } from "../api/endpoints/help";
 import { fetchManifestRegistry, type ManifestRegistryEntry } from "../api/endpoints/planManifests";
 import { engineBaseUrl } from "../api/endpoints/runtime";
@@ -36,6 +37,7 @@ import {
   type LegalTab,
 } from "../lib/helpPageModel";
 import { resolveEngineState } from "../lib/workflowState";
+import { useExternalAccessSettingsQuery } from "../queries/externalAccess";
 
 const WORKFLOW_STEP_ICONS: LucideIcon[] = [FolderGit2, Hammer, FileArchive, ClipboardCheck];
 
@@ -72,6 +74,10 @@ export default function HelpPage() {
     error: engineError,
   });
   const engineReady = engineState === "ready";
+  const externalAccessQuery = useExternalAccessSettingsQuery(engineReady);
+  const showApiDetails = externalAccessQuery.data
+    ? externalApiAccessEnabled(externalAccessQuery.data.mode)
+    : false;
   const [legalTab, setLegalTab] = useState<LegalTab>("summary");
   const [legalText, setLegalText] = useState("");
   const [workflowText, setWorkflowText] = useState("");
@@ -381,12 +387,12 @@ export default function HelpPage() {
             <code className="font-mono">print-partner-data</code> → <code className="font-mono">/data</code>
             ).
           </p>
-          {engineUrl && (
+          {engineUrl && showApiDetails ? (
             <p className="text-xs text-muted-foreground">
               Engine API: <code className="font-mono">{engineUrl}</code> · OpenAPI:{" "}
               <code className="font-mono">{engineUrl}/api/v1/openapi.json</code>
             </p>
-          )}
+          ) : null}
         </CardContent>
       </Card>
 

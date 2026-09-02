@@ -25,32 +25,147 @@ export type GithubRepoRef = {
   owner: string;
   repo: string;
   branch: string;
+  branchFromUrl: boolean;
 };
 
-export function parseGithubUrl(url: string): GithubRepoRef | null {
-  const trimmed = url.trim().replace(/\.git$/, "");
-  const patterns = [
-    /^https?:\/\/github\.com\/([^/]+)\/([^/]+?)(?:\/tree\/([^/]+))?$/i,
-    /^git@github\.com:([^/]+)\/([^/.]+)/i,
-    /^https?:\/\/github\.com\/([^/]+)\/([^/]+)/i,
-  ];
-  for (const re of patterns) {
-    const m = trimmed.match(re);
-    if (m) {
-      return {
-        owner: m[1],
-        repo: m[2].replace(/\.git$/, ""),
-        branch: m[3] ?? "main",
-      };
-    }
+function decodeGithubPathSegment(value: string): string | null {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return null;
   }
-  return null;
+}
+
+export function parseGithubUrl(url: string): GithubRepoRef | null {
+  const trimmed = url.trim();
+  const ssh = trimmed.match(/^git@github\.com:([^/\s]+)\/([^/\s]+?)(?:\.git)?$/i);
+  if (ssh) {
+    return {
+      owner: ssh[1],
+      repo: ssh[2],
+      branch: "main",
+      branchFromUrl: false,
+    };
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return null;
+  }
+  if (
+    (parsed.protocol !== "https:" && parsed.protocol !== "http:") ||
+    (parsed.hostname.toLowerCase() !== "github.com" &&
+      parsed.hostname.toLowerCase() !== "www.github.com")
+  ) {
+    return null;
+  }
+
+  const segments = parsed.pathname.split("/").filter(Boolean);
+  if (segments.length < 2) return null;
+  const owner = decodeGithubPathSegment(segments[0]!);
+  const decodedRepo = decodeGithubPathSegment(segments[1]!);
+  const repo = decodedRepo?.replace(/\.git$/i, "") ?? null;
+  if (!owner || !repo) return null;
+  if (segments.length === 2) {
+    return { owner, repo, branch: "main", branchFromUrl: false };
+  }
+
+  const pageKind = segments[2]?.toLowerCase();
+  if ((pageKind !== "tree" && pageKind !== "blob") || !segments[3]) return null;
+  const branch = decodeGithubPathSegment(segments[3]!);
+  if (!branch) return null;
+  return { owner, repo, branch, branchFromUrl: true };
+}
+
+function deepGithubRefTail(url: string): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(url.trim());
+  } catch {
+    return null;
+  }
+  const segments = parsed.pathname.split("/").filter(Boolean);
+  const pageKind = segments[2]?.toLowerCase();
+  if ((pageKind !== "tree" && pageKind !== "blob") || !segments[3]) return null;
+  const decoded = segments.slice(3).map(decodeGithubPathSegment);
+  if (decoded.some((segment) => segment == null)) return null;
+  return (decoded as string[]).join("/");
+}
+
+/** Resolve the longest known branch prefix from an otherwise ambiguous deep GitHub URL. */
+export function resolveGithubUrlRef(
+  url: string,
+  knownRefs: readonly string[],
+): string | null {
+  const tail = deepGithubRefTail(url);
+  if (!tail) return null;
+  let match: string | null = null;
+  for (const rawRef of knownRefs) {
+    const ref = rawRef.trim();
+    if (!ref || (tail !== ref && !tail.startsWith(`${ref}/`))) continue;
+    if (match == null || ref.length > match.length) match = ref;
+  }
+  return match;
+}
+
+export function githubRefName(
+  url: string,
+  requestedRef?: string | null,
+): string | null {
+  const parsed = parseGithubUrl(url);
+  if (!parsed) return null;
+  const requested = requestedRef?.trim();
+  if (!parsed.branchFromUrl) return requested || parsed.branch;
+  return (requested && resolveGithubUrlRef(url, [requested])) || parsed.branch;
+}
+
+async function resolveGithubRefName(
+  octokit: Octokit,
+  url: string,
+  parsed: GithubRepoRef,
+  requestedRef?: string | null,
+): Promise<string> {
+  const requested = requestedRef?.trim();
+  if (!parsed.branchFromUrl) return requested || parsed.branch;
+  if (requested && resolveGithubUrlRef(url, [requested])) return requested;
+  if (deepGithubRefTail(url) === parsed.branch) return parsed.branch;
+
+  try {
+    const branches = await octokit.paginate(octokit.repos.listBranches, {
+      owner: parsed.owner,
+      repo: parsed.repo,
+      per_page: 100,
+    });
+    return resolveGithubUrlRef(url, branches.map((branch) => branch.name)) ?? parsed.branch;
+  } catch {
+    return parsed.branch;
+  }
+}
+
+export function normalizeGithubSourceLocation(
+  url: string,
+  branch?: string | null,
+): { url: string; branch: string } | null {
+  const parsed = parseGithubUrl(url);
+  if (!parsed) return null;
+  return {
+    url: `https://github.com/${parsed.owner}/${parsed.repo}`,
+    branch: githubRefName(url, branch) ?? parsed.branch,
+  };
 }
 
 export async function listGithubBranches(
   url: string,
   token?: string | null,
-): Promise<{ owner: string; repo: string; default_branch: string; branches: string[] }> {
+): Promise<{
+  owner: string;
+  repo: string;
+  default_branch: string;
+  url_branch: string | null;
+  branches: string[];
+}> {
   const ref = parseGithubUrl(url);
   if (!ref) throw new Error("Invalid GitHub repository URL");
   const octokit = new Octokit(token ? { auth: token } : {});
@@ -60,11 +175,15 @@ export async function listGithubBranches(
     repo: ref.repo,
     per_page: 100,
   });
+  const branchNames = branches.map((branch) => branch.name);
   return {
     owner: ref.owner,
     repo: ref.repo,
     default_branch: repoMeta.data.default_branch ?? ref.branch,
-    branches: branches.map((b) => b.name),
+    url_branch: ref.branchFromUrl
+      ? resolveGithubUrlRef(url, branchNames) ?? ref.branch
+      : null,
+    branches: branchNames,
   };
 }
 
@@ -216,7 +335,7 @@ export async function fetchGithubRepoTreeSummary(
   const parsed = parseGithubUrl(url);
   if (!parsed) throw new Error("Invalid GitHub repository URL");
   const octokit = new Octokit(token ? { auth: token } : {});
-  let refName = ref?.trim() || parsed.branch;
+  let refName = await resolveGithubRefName(octokit, url, parsed, ref);
   let resolved: { commitSha: string; entries: RepoTreeEntry[]; truncated: boolean };
   try {
     resolved = await fetchGithubTreeEntries(octokit, parsed.owner, parsed.repo, refName);
@@ -287,7 +406,7 @@ export async function syncGithubSource(input: SyncGithubSourceInput): Promise<Sy
   const octokit = new Octokit(token ? { auth: token } : {});
 
   const tagName = options?.tag?.trim() || null;
-  const refName = tagName || branch || ref.branch;
+  const refName = tagName || await resolveGithubRefName(octokit, url, ref, branch);
   const { commitSha, entries, truncated } = await fetchGithubTreeEntries(
     octokit,
     ref.owner,

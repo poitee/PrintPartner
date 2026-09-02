@@ -104,8 +104,8 @@ export function collectCheckedFiles(nodes: StlTreeNode[]): string[] {
 /**
  * Compress tree nodes into minimal rules. Emits a folder rule only when the whole
  * subtree is checked (`check_state === "checked"`); partial folders recurse so
- * unchecked siblings are never re-included. Unlike `compressRulesFromFiles`, this
- * is total-aware because the tree carries every file under each folder.
+ * unchecked siblings are never re-included. The tree carries every file under
+ * each folder, which makes this compression total-aware.
  */
 export function rulesFromTreeNodes(nodes: StlTreeNode[]): string[] {
   const rules: string[] = [];

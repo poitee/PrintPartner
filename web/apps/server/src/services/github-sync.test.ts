@@ -6,18 +6,32 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const github = vi.hoisted(() => ({
   getCommit: vi.fn(),
   getTree: vi.fn(),
+  getRepo: vi.fn(),
+  listBranches: vi.fn(),
+  paginate: vi.fn(),
 }));
 
 vi.mock("@octokit/rest", () => ({
   Octokit: class {
-    repos = { getCommit: github.getCommit };
+    repos = {
+      get: github.getRepo,
+      getCommit: github.getCommit,
+      listBranches: github.listBranches,
+    };
     git = { getTree: github.getTree };
+    paginate = github.paginate;
   },
 }));
 
 import { createSelfHostPorts } from "../adapters/self-host/index.js";
 import { syncProjectById } from "../routes/sources.js";
-import { syncGithubSource } from "./github-sync.js";
+import {
+  listGithubBranches,
+  normalizeGithubSourceLocation,
+  parseGithubUrl,
+  resolveGithubUrlRef,
+  syncGithubSource,
+} from "./github-sync.js";
 
 const COMMIT_A = "a".repeat(40);
 const COMMIT_B = "b".repeat(40);
@@ -57,6 +71,9 @@ function rawResponse(contentByPath: Record<string, string>): ReturnType<typeof v
 beforeEach(() => {
   github.getCommit.mockReset();
   github.getTree.mockReset();
+  github.getRepo.mockReset();
+  github.listBranches.mockReset();
+  github.paginate.mockReset();
   vi.stubGlobal("fetch", vi.fn());
 });
 
@@ -66,6 +83,49 @@ afterEach(() => {
 });
 
 describe("atomic GitHub Source sync", () => {
+  it("keeps the branch from a deep GitHub tree URL", () => {
+    const url =
+      "https://github.com/MillenniumMachines/Milo-V2.0/tree/Current/STL%20Files/Spindle-Mounts/LDO-Kit-Spindle-Mount";
+
+    expect(parseGithubUrl(url)).toEqual({
+      owner: "MillenniumMachines",
+      repo: "Milo-V2.0",
+      branch: "Current",
+      branchFromUrl: true,
+    });
+    expect(normalizeGithubSourceLocation(url, "main")).toEqual({
+      url: "https://github.com/MillenniumMachines/Milo-V2.0",
+      branch: "Current",
+    });
+  });
+
+  it("rejects non-repository GitHub pages instead of silently using main", () => {
+    expect(parseGithubUrl("https://github.com/example/printer/issues/12")).toBeNull();
+  });
+
+  it("resolves slash-containing branches as the longest valid tree or blob URL prefix", async () => {
+    const branches = [
+      { name: "feature" },
+      { name: "feature/new-ui" },
+      { name: "main" },
+    ];
+    github.getRepo.mockResolvedValue({ data: { default_branch: "main" } });
+    github.paginate.mockResolvedValue(branches);
+
+    for (const kind of ["tree", "blob"] as const) {
+      const url = `https://github.com/example/printer/${kind}/feature/new-ui/models/part.stl`;
+      const result = await listGithubBranches(url);
+      expect(result.url_branch).toBe("feature/new-ui");
+      expect(resolveGithubUrlRef(url, branches.map((branch) => branch.name))).toBe(
+        "feature/new-ui",
+      );
+      expect(normalizeGithubSourceLocation(url, "feature/new-ui")).toEqual({
+        url: "https://github.com/example/printer",
+        branch: "feature/new-ui",
+      });
+    }
+  });
+
   it("pins every raw download to the resolved commit and publishes a complete snapshot", async () => {
     const root = reposRoot();
     setTree(COMMIT_A, [

@@ -72,6 +72,24 @@ describe("summarizeRepoTreePaths (EMU-like fixture)", () => {
     expect(config?.options.map((o) => o.label).sort()).toEqual(["3 Lane", "4 Lane", "5 Lane"]);
   });
 
+  it("keeps named alternatives with numeric sibling choices", () => {
+    const candidates = detectVariantFolderCandidates([
+      "STL Files/Spindle-Mounts/65mm-Spindle-Mounts/front.stl",
+      "STL Files/Spindle-Mounts/80mm-Spindle-Mounts/front.stl",
+      "STL Files/Spindle-Mounts/LDO-Kit-Spindle-Mount/front.stl",
+      "STL Files/Spindle-Mounts/Logo-insert.stl",
+    ]);
+
+    const spindleMounts = candidates.find(
+      (candidate) => candidate.dir === "STL Files/Spindle-Mounts",
+    );
+    expect(spindleMounts?.options.map((option) => option.label).sort()).toEqual([
+      "65mm-Spindle-Mounts",
+      "80mm-Spindle-Mounts",
+      "LDO-Kit-Spindle-Mount",
+    ]);
+  });
+
   it("does not invent candidates for plain structural trees", () => {
     const candidates = detectVariantFolderCandidates([
       "STLs/frame/part_a.stl",
@@ -124,5 +142,27 @@ describe("inferSiblingFolderOptionGroups (Build picker fallback)", () => {
     expect(
       inferSiblingFolderOptionGroups(["STLs/frame/a.stl", "STLs/gantry/b.stl"]),
     ).toEqual({});
+  });
+
+  it("offers every Milo spindle-mount family in one Build choice", () => {
+    const groups = inferSiblingFolderOptionGroups([
+      "STL Files/Spindle-Mounts/65mm-Spindle-Mounts/65mm-front.stl",
+      "STL Files/Spindle-Mounts/65mm-Spindle-Mounts/65mm-back.stl",
+      "STL Files/Spindle-Mounts/80mm-Spindle-Mounts/80mm-front.stl",
+      "STL Files/Spindle-Mounts/80mm-Spindle-Mounts/80mm-back.stl",
+      "STL Files/Spindle-Mounts/LDO-Kit-Spindle-Mount/LDO-front.stl",
+      "STL Files/Spindle-Mounts/LDO-Kit-Spindle-Mount/LDO-back.stl",
+    ]);
+
+    const spindleMounts = Object.values(groups).find(
+      (group) => group.label === "Spindle-Mounts",
+    );
+    expect(spindleMounts?.variants.map((variant) => variant.label).sort()).toEqual([
+      "65mm-Spindle-Mounts",
+      "80mm-Spindle-Mounts",
+      "LDO-Kit-Spindle-Mount",
+    ]);
+    expect(spindleMounts?.variants.find((variant) => variant.id === "ldo_kit_spindle_mount")?.parts)
+      .toEqual(["STL Files/Spindle-Mounts/LDO-Kit-Spindle-Mount/*"]);
   });
 });

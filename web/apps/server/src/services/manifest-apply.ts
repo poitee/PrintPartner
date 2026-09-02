@@ -333,6 +333,7 @@ export function applyManifestToDraftParts(
   repo: AppRepository,
   profileId: number,
   inputParts: readonly (PlanSnapshotPart & { readonly baseRevisionPartId: number | null })[],
+  effectiveOptionGroups?: Readonly<Record<string, ManifestOptionGroup>>,
 ): Array<PlanSnapshotPart & { baseRevisionPartId: number | null }> {
   const manifests = collectRepoManifests(repo, profileId);
   const overlaySelections = { ...loadKitManifest(repo, profileId).selections };
@@ -359,5 +360,6 @@ export function applyManifestToDraftParts(
 
   const groups: Record<string, ManifestOptionGroup> = {};
   for (const { doc } of manifests) mergeOptionGroups(groups, doc.option_groups ?? {});
+  if (effectiveOptionGroups) mergeOptionGroups(groups, { ...effectiveOptionGroups });
   return applyOptionGroupSelections(parts, groups, overlaySelections);
 }

@@ -1,4 +1,5 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { isIP } from "node:net";
 import type {
   FastifyInstance,
   FastifyReply,
@@ -6,6 +7,7 @@ import type {
 } from "fastify";
 import type { ServerConfig } from "../config.js";
 import { sendProblem } from "../lib/api-error.js";
+import { isMcpTransportRequest } from "../lib/mcp-transport-path.js";
 import { isSyntheticAnonymousSession } from "../routes/auth-types.js";
 
 const EXEMPT_PREFIXES = [
@@ -29,6 +31,16 @@ export type AdminPreHandler = (
   request: FastifyRequest,
   reply: FastifyReply,
 ) => Promise<unknown>;
+
+type ExternalAccess = Readonly<{
+  apiKeysEnabled: () => boolean;
+  mcpEnabled: () => boolean;
+}>;
+
+const ALL_EXTERNAL_ACCESS: ExternalAccess = {
+  apiKeysEnabled: () => true,
+  mcpEnabled: () => true,
+};
 
 export function extractApiKey(request: FastifyRequest): string | null {
   const header = request.headers.authorization;
@@ -80,6 +92,48 @@ function hasAuthenticatedSession(request: FastifyRequest): boolean {
   return Boolean(user && !isSyntheticAnonymousSession(user));
 }
 
+function isPrivateNetworkAddress(address: string | undefined): boolean {
+  if (!address) return false;
+  const normalized = address.toLowerCase().startsWith("::ffff:")
+    ? address.slice("::ffff:".length)
+    : address;
+  if (isIP(normalized) === 4) {
+    const octets = normalized.split(".").map(Number);
+    const [first, second] = octets;
+    return (
+      first === 10 ||
+      (first === 100 && second != null && second >= 64 && second <= 127) ||
+      (first === 169 && second === 254) ||
+      (first === 172 && second != null && second >= 16 && second <= 31) ||
+      (first === 192 && second === 168)
+    );
+  }
+  if (isIP(normalized) === 6) {
+    const firstHextet = Number.parseInt(normalized.split(":")[0] || "0", 16);
+    return (
+      (firstHextet & 0xfe00) === 0xfc00 ||
+      (firstHextet & 0xffc0) === 0xfe80
+    );
+  }
+  return false;
+}
+
+function isDirectPrivateNetworkPeer(
+  request: FastifyRequest,
+  config: ServerConfig,
+): boolean {
+  if (
+    config.deployMode !== "self-host" ||
+    config.authRequired ||
+    config.singleUserAuth ||
+    config.trustProxy ||
+    hasForwardingHeaders(request)
+  ) {
+    return false;
+  }
+  return isPrivateNetworkAddress(request.socket.remoteAddress);
+}
+
 function hasConfiguredBasicAuth(
   request: FastifyRequest,
   config: ServerConfig,
@@ -103,16 +157,45 @@ export function registerApiKeyAuth(
   app: FastifyInstance,
   config: ServerConfig,
   validateRepositoryKey: ApiKeyValidator,
+  externalAccess: ExternalAccess = ALL_EXTERNAL_ACCESS,
 ): ApiKeyValidator {
-  const validateKey: ApiKeyValidator = (rawKey) =>
-    (config.integrationApiKey !== null &&
-      constantTimeSecretEqual(rawKey, config.integrationApiKey)) ||
-    validateRepositoryKey(rawKey);
+  const validateKey: ApiKeyValidator = (rawKey) => {
+    if (!externalAccess.apiKeysEnabled()) return false;
+    return (
+      (config.integrationApiKey !== null &&
+        constantTimeSecretEqual(rawKey, config.integrationApiKey)) ||
+      validateRepositoryKey(rawKey)
+    );
+  };
 
   app.addHook("onRequest", async (request, reply) => {
     const path = request.url.split("?")[0] ?? request.url;
     if (!path.startsWith("/api/v1") && !path.startsWith("/api/v2")) return;
+    if (
+      isMcpTransportRequest(request.method, path) &&
+      !externalAccess.mcpEnabled()
+    ) {
+      return sendProblem(
+        reply,
+        403,
+        "Forbidden",
+        "MCP access is turned off in Settings",
+      );
+    }
     if (isExempt(path)) return;
+
+    if (!externalAccess.apiKeysEnabled()) {
+      if (isUnambiguousLoopback(request, config)) return;
+      if (hasAuthenticatedSession(request)) return;
+      if (hasConfiguredBasicAuth(request, config)) return;
+      if (isDirectPrivateNetworkPeer(request, config)) return;
+      return sendProblem(
+        reply,
+        403,
+        "Forbidden",
+        "External API access is turned off in Settings",
+      );
+    }
 
     const provided = extractApiKey(request);
     if (provided) {

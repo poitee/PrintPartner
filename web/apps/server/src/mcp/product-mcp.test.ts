@@ -34,13 +34,17 @@ describe("product MCP confirm_apply reservation", () => {
     else process.env.HOST = prevHost;
   });
 
-  async function withClient(pending: Map<string, AssistantProposedAction>) {
+  async function withClient(
+    pending: Map<string, AssistantProposedAction>,
+    isEnabled?: () => boolean,
+  ) {
     const config = loadConfig();
     const server = createProductMcpServer({
       getRepo: () => ({ getProfile: () => null }) as never,
       jobs: { start: async () => "j1" } as never,
       config,
       pending,
+      isEnabled,
     });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: "test", version: "0.0.1" });
@@ -146,6 +150,18 @@ describe("product MCP confirm_apply reservation", () => {
       template.uriTemplate === "print-partner://build-planning/{build_id}",
     );
     expect(planning?.description).not.toMatch(/readiness/i);
+
+    await client.close();
+    await server.close();
+  });
+
+  it("stops serving a running session when MCP access is turned off", async () => {
+    let enabled = true;
+    const { client, server } = await withClient(new Map(), () => enabled);
+
+    await expect(client.listTools()).resolves.toHaveProperty("tools");
+    enabled = false;
+    await expect(client.listTools()).rejects.toThrow(/MCP access is turned off/i);
 
     await client.close();
     await server.close();

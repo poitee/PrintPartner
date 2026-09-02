@@ -1,5 +1,5 @@
 import { Octokit } from "@octokit/rest";
-import { parseGithubUrl } from "./github-sync.js";
+import { githubRefName, parseGithubUrl } from "./github-sync.js";
 import type { AppRepository } from "../db/repository.js";
 import { parseProjectMetadata } from "@print-partner/domain";
 
@@ -19,7 +19,7 @@ export async function remoteUpdateStatusOctokit(
   if (!ref) return "unknown";
   try {
     const octokit = new Octokit(token ? { auth: token } : {});
-    const refName = tag?.trim() || branch || ref.branch;
+    const refName = tag?.trim() || githubRefName(url, branch) || ref.branch;
     const { data } = await octokit.repos.getCommit({
       owner: ref.owner,
       repo: ref.repo,

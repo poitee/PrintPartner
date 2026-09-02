@@ -91,10 +91,12 @@ describe("AcceptedPlatePositionEditor", () => {
     fireEvent.change(x, { target: { value: "12" } });
     fireEvent.click(screen.getByRole("button", { name: "Save position" }));
 
-    await waitFor(() => expect(onStaleMove).toHaveBeenCalledOnce());
     if (!(x instanceof HTMLInputElement)) throw new Error("Expected X input");
-    expect(x.value).toBe("4");
-    expect(document.activeElement).toBe(x);
+    await waitFor(() => {
+      expect(onStaleMove).toHaveBeenCalledOnce();
+      expect(x.value).toBe("4");
+      expect(document.activeElement).toBe(x);
+    });
     expect(calls).toEqual(["refresh"]);
   });
 

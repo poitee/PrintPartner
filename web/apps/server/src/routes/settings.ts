@@ -5,6 +5,7 @@ import {
   DATE_FORMAT_DEFAULT,
   DATE_FORMAT_PRESETS,
   buildSourceCategoryTree,
+  isExternalAccessMode,
   SourceNamingContractError,
   invalidSourceNaming,
   invalidSourceNamingState,
@@ -35,9 +36,13 @@ import {
   listSpoolmanFilaments,
   spoolmanFilamentToCatalogColor,
 } from "../integrations/spoolman-client.js";
-import { WORKFLOW_GUIDE } from "./workflow-guide.js";
+import { workflowGuideForExternalAccess } from "./workflow-guide.js";
 import { sendDiscordNotification } from "../services/discord-notify.js";
 import { sourceIdFromParams } from "./settings-route-model.js";
+import {
+  readExternalAccessSettings,
+  saveExternalAccessMode,
+} from "../services/external-access.js";
 
 type RouteDeps = { repo: AppRepository; dataDir: string; config?: ServerConfig };
 
@@ -160,6 +165,22 @@ export async function registerSettingsRoutes(app: FastifyInstance, deps: RouteDe
     return { assembly_tracking: body.assembly_tracking === true };
   });
 
+  app.get("/settings/external-access", async () =>
+    readExternalAccessSettings(deps.repo),
+  );
+
+  app.put("/settings/external-access", async (request, reply) => {
+    const body: unknown = request.body;
+    if (!body || typeof body !== "object" || !("mode" in body)) {
+      return reply.status(400).send({ detail: "mode is required" });
+    }
+    if (!isExternalAccessMode(body.mode)) {
+      return reply.status(400).send({
+        detail: "mode must be off, api, or api_and_mcp",
+      });
+    }
+    return saveExternalAccessMode(deps.repo, body.mode);
+  });
 
   app.get("/settings/discord-notify", async () => ({
     webhook_url: deps.repo.getSetting("discord_notify_webhook_url") || null,
@@ -456,5 +477,7 @@ export async function registerStubRoutes(app: FastifyInstance, deps: RouteDeps):
     }
   });
 
-  app.get("/help/workflow", async () => WORKFLOW_GUIDE);
+  app.get("/help/workflow", async () =>
+    workflowGuideForExternalAccess(readExternalAccessSettings(deps.repo).mode),
+  );
 }

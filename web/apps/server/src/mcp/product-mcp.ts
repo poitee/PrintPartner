@@ -118,14 +118,22 @@ export type ProductMcpDeps = {
    * Live printer-host access for farm tools (get_farm_status). Optional so
    * tests can inject a stub; when omitted a real port is built from the repo,
    * because without one get_farm_status reports every printer as "unknown".
-   */
+  */
   integrations?: IntegrationPort;
+  /** Optional live access check, used by long-running stdio sessions. */
+  isEnabled?: () => boolean;
 };
 
 export function createProductMcpServer(deps: ProductMcpDeps): Server {
   const { getRepo, jobs, config, pending } = deps;
   const defaultPlanId = deps.defaultPlanId ?? null;
   const tenantId = deps.tenantId;
+
+  function assertEnabled(): void {
+    if (deps.isEnabled && !deps.isEnabled()) {
+      throw new Error("MCP access is turned off in Print Partner Settings.");
+    }
+  }
 
   // get_farm_status needs an IntegrationPort to read live printer state. It is
   // built lazily and cached: constructing it per tool call would re-resolve
@@ -164,23 +172,27 @@ export function createProductMcpServer(deps: ProductMcpDeps): Server {
     { capabilities: { tools: {}, prompts: {}, resources: {} } },
   );
 
-  server.setRequestHandler(ListPromptsRequestSchema, async () => ({
-    prompts: [
-      {
-        name: "plan_build",
-        description: "Research and verify a customer Build before applying its printable-part draft.",
-        arguments: [
-          {
-            name: "customer_request",
-            description: "The verbatim customer request",
-            required: true,
-          },
-        ],
-      },
-    ],
-  }));
+  server.setRequestHandler(ListPromptsRequestSchema, async () => {
+    assertEnabled();
+    return {
+      prompts: [
+        {
+          name: "plan_build",
+          description: "Research and verify a customer Build before applying its printable-part draft.",
+          arguments: [
+            {
+              name: "customer_request",
+              description: "The verbatim customer request",
+              required: true,
+            },
+          ],
+        },
+      ],
+    };
+  });
 
   server.setRequestHandler(GetPromptRequestSchema, async (request) => {
+    assertEnabled();
     if (request.params.name !== "plan_build") throw new Error(`Unknown prompt: ${request.params.name}`);
     const customerRequest = request.params.arguments?.customer_request ?? "";
     return {
@@ -197,36 +209,43 @@ export function createProductMcpServer(deps: ProductMcpDeps): Server {
     };
   });
 
-  server.setRequestHandler(ListResourcesRequestSchema, async () => ({
-    resources: [
-      {
-        uri: SOURCE_CATEGORIES_URI,
-        name: "Library source categories",
-        description:
-          'Library category tree — categories and their subcategories as "/"-separated paths',
-        mimeType: "application/json",
-      },
-    ],
-  }));
+  server.setRequestHandler(ListResourcesRequestSchema, async () => {
+    assertEnabled();
+    return {
+      resources: [
+        {
+          uri: SOURCE_CATEGORIES_URI,
+          name: "Library source categories",
+          description:
+            'Library category tree — categories and their subcategories as "/"-separated paths',
+          mimeType: "application/json",
+        },
+      ],
+    };
+  });
 
-  server.setRequestHandler(ListResourceTemplatesRequestSchema, async () => ({
-    resourceTemplates: [
-      {
-        uriTemplate: "print-partner://build-workflow/{build_id}",
-        name: "Build Workflow",
-        description: "Shared Sources, Working Plan, Accepted Plan, Production, and Checkoff status with the next safe action",
-        mimeType: "application/json",
-      },
-      {
-        uriTemplate: "print-partner://build-planning/{build_id}",
-        name: "Build planning state",
-        description: "Versioned Build brief, evidence, differences, decisions, and Working Plan",
-        mimeType: "application/json",
-      },
-    ],
-  }));
+  server.setRequestHandler(ListResourceTemplatesRequestSchema, async () => {
+    assertEnabled();
+    return {
+      resourceTemplates: [
+        {
+          uriTemplate: "print-partner://build-workflow/{build_id}",
+          name: "Build Workflow",
+          description: "Shared Sources, Working Plan, Accepted Plan, Production, and Checkoff status with the next safe action",
+          mimeType: "application/json",
+        },
+        {
+          uriTemplate: "print-partner://build-planning/{build_id}",
+          name: "Build planning state",
+          description: "Versioned Build brief, evidence, differences, decisions, and Working Plan",
+          mimeType: "application/json",
+        },
+      ],
+    };
+  });
 
   server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
+    assertEnabled();
     if (request.params.uri === SOURCE_CATEGORIES_URI) {
       const categories = getRepo().getSourceCategories();
       return {
@@ -284,18 +303,22 @@ export function createProductMcpServer(deps: ProductMcpDeps): Server {
     };
   });
 
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: [
-      ...productToolSpecs().map(jsonSchemaToMcp),
-      ...META_TOOLS.map((t) => ({
-        name: t.name,
-        description: t.description,
-        inputSchema: t.inputSchema,
-      })),
-    ],
-  }));
+  server.setRequestHandler(ListToolsRequestSchema, async () => {
+    assertEnabled();
+    return {
+      tools: [
+        ...productToolSpecs().map(jsonSchemaToMcp),
+        ...META_TOOLS.map((t) => ({
+          name: t.name,
+          description: t.description,
+          inputSchema: t.inputSchema,
+        })),
+      ],
+    };
+  });
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    assertEnabled();
     const name = request.params.name;
     const args =
       request.params.arguments && typeof request.params.arguments === "object"

@@ -59,39 +59,6 @@ export function pathMatchesRules(relativePath: string, rules: string[]): boolean
   return false;
 }
 
-export function compressRulesFromFiles(checkedFiles: Iterable<string>): string[] {
-  const allFiles = new Set(checkedFiles);
-  if (allFiles.size === 0) return [];
-
-  const dirPrefixes = new Set<string>();
-  for (const f of allFiles) {
-    const parts = f.split("/");
-    for (let i = 1; i < parts.length; i++) {
-      dirPrefixes.add(parts.slice(0, i).join("/"));
-    }
-  }
-
-  const rules: string[] = [];
-  const used = new Set<string>();
-
-  for (const prefix of [...dirPrefixes].sort(
-    (a, b) => b.split("/").length - a.split("/").length || a.localeCompare(b),
-  )) {
-    const prefixFiles = [...allFiles].filter((f) => f.startsWith(`${prefix}/`));
-    if (!prefixFiles.length) continue;
-    if (prefixFiles.every((f) => used.has(f))) continue;
-    if (prefixFiles.every((f) => allFiles.has(f))) {
-      rules.push(normalizeRule(`${prefix}/`));
-      for (const f of prefixFiles) used.add(f);
-    }
-  }
-
-  for (const f of [...allFiles].sort()) {
-    if (!used.has(f)) rules.push(f);
-  }
-  return rules;
-}
-
 export function importRulesForProject(importedPathsRaw: string | null | undefined): string[] | null {
   return parseImportRulesJson(importedPathsRaw ?? null);
 }

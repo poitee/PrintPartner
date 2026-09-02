@@ -1,5 +1,5 @@
 import { Octokit } from "@octokit/rest";
-import { parseGithubUrl } from "./github-sync.js";
+import { githubRefName, parseGithubUrl } from "./github-sync.js";
 import { readReadmeText } from "../lib/repo-readme.js";
 
 type CacheEntry = { markdown: string; fetchedAt: number; source: "live" | "disk" };
@@ -43,7 +43,9 @@ export async function fetchGithubReadme(options: {
 
   if (!ref) return diskFallback();
 
-  const refName = options.tag?.trim() || options.branch?.trim() || ref.branch;
+  const refName =
+    options.tag?.trim() ||
+    githubRefName(options.url, options.branch) || ref.branch;
   const key = cacheKey(ref.owner, ref.repo, refName);
   const wantLive = options.live !== false;
 

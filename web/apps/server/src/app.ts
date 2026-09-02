@@ -44,6 +44,17 @@ import { createAuthStore, type AuthStore } from "./services/auth-store.js";
 import { validateApiKey } from "./services/api-key-manager.js";
 import { migrateLegacySelfHostExports } from "./services/legacy-export-migration.js";
 import { prepareSqliteUpgrade } from "./db/upgrade-guard.js";
+import {
+  EXTERNAL_ACCESS_DEFAULT,
+  externalApiAccessEnabled,
+  mcpAccessEnabled,
+  type ExternalAccessMode,
+} from "@print-partner/contracts";
+import { readExternalAccessSettings } from "./services/external-access.js";
+import {
+  MAX_SOURCE_UPLOAD_FILES,
+  MAX_SOURCE_UPLOAD_PARTS,
+} from "./services/archive-import.js";
 
 export type RuntimePorts = AppPorts & {
   repository?: AppRepository;
@@ -129,10 +140,18 @@ export async function buildApp(config: ServerConfig, ports: RuntimePorts) {
   await app.register(cookie);
   registerTenantMiddleware(app, config, authStore);
   registerAuthRoutes(app, config, authStore);
+  const externalAccessMode = (): ExternalAccessMode =>
+    repository === null
+      ? EXTERNAL_ACCESS_DEFAULT
+      : readExternalAccessSettings(repository).mode;
   const validateRequestApiKey = registerApiKeyAuth(
     app,
     config,
     (rawKey) => repository !== null && validateApiKey(repository, rawKey) !== null,
+    {
+      apiKeysEnabled: () => externalApiAccessEnabled(externalAccessMode()),
+      mcpEnabled: () => mcpAccessEnabled(externalAccessMode()),
+    },
   );
 
   await app.register(cors, { origin: config.corsOrigin, credentials: true });
@@ -159,8 +178,8 @@ export async function buildApp(config: ServerConfig, ports: RuntimePorts) {
   await app.register(multipart, {
     limits: {
       fileSize: Infinity,
-      files: 100,
-      parts: 101,
+      files: MAX_SOURCE_UPLOAD_FILES,
+      parts: MAX_SOURCE_UPLOAD_PARTS,
     },
   });
 

@@ -117,6 +117,75 @@ option_groups:
     rmSync(dir, { recursive: true, force: true });
   });
 
+  it("applies an inferred Milo spindle choice without importing unchecked files", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pp-kit-milo-"));
+    process.env.PRINT_PARTNER_DATA_DIR = dir;
+    const ports = createSelfHostPorts(dir);
+    await ports.db.connect();
+    const repo = ports.repository!;
+
+    const source = repo.createSource({
+      name: "Milo V2.0",
+      url: "https://github.com/MillenniumMachines/Milo-V2.0",
+    });
+    const repoPath = join(dir, "repos", String(source.id));
+    const spindleRoot = join(repoPath, "STL Files", "Spindle-Mounts");
+    for (const folder of [
+      "65mm-Spindle-Mounts",
+      "80mm-Spindle-Mounts",
+      "LDO-Kit-Spindle-Mount",
+    ]) {
+      mkdirSync(join(spindleRoot, folder), { recursive: true });
+      writeFileSync(join(spindleRoot, folder, `${folder}.stl`), `solid ${folder}`);
+    }
+    mkdirSync(join(repoPath, "STL Files", "Archive"), { recursive: true });
+    writeFileSync(join(repoPath, "STL Files", "Archive", "unchecked.stl"), "solid unchecked");
+    const electronicsPath = join(
+      spindleRoot,
+      "LDO-Kit-Spindle-Mount",
+      "electronics",
+    );
+    mkdirSync(electronicsPath, { recursive: true });
+    writeFileSync(join(electronicsPath, "controller.stl"), "solid controller");
+    repo.updateSource(source.id, { local_path: repoPath });
+    repo.updateImportRules(source.id, ["STL Files/Spindle-Mounts/"]);
+
+    const plan = repo.createProfile("Milo V2.0", source.id);
+    const builder = buildPlanManifestBuilder(repo, plan.id);
+    expect(builder.merged_option_groups.controller?.variants[0]?.id).toBe("stock");
+    const [spindleGroupId, spindleGroup] = Object.entries(builder.merged_option_groups).find(
+      ([, group]) => group.label === "Spindle-Mounts",
+    ) ?? [];
+    expect(spindleGroup?.variants.map((variant) => variant.id).sort()).toEqual([
+      "65mm_spindle_mounts",
+      "80mm_spindle_mounts",
+      "ldo_kit_spindle_mount",
+    ]);
+
+    saveKitManifest(repo, plan.id, {
+      selections: { [spindleGroupId!]: "ldo_kit_spindle_mount" },
+    });
+    const result = repo.recomputePlanDraft({
+      profileId: plan.id,
+      actor: "test:user",
+      idempotencyKey: "milo-ldo-draft",
+    });
+    if (result.kind !== "created") throw new Error("Milo draft was not created");
+
+    expect(result.draft.parts.map((part) => part.relativePath)).not.toContain(
+      "STL Files/Archive/unchecked.stl",
+    );
+    expect(
+      result.draft.parts.filter((part) => part.included).map((part) => part.relativePath),
+    ).toEqual([
+      "STL Files/Spindle-Mounts/LDO-Kit-Spindle-Mount/electronics/controller.stl",
+      "STL Files/Spindle-Mounts/LDO-Kit-Spindle-Mount/LDO-Kit-Spindle-Mount.stl",
+    ]);
+
+    await ports.db.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   it("selectionIncludesPart matches variant globs", () => {
     const doc = loadManifestYaml(`option_groups:
   toolhead:

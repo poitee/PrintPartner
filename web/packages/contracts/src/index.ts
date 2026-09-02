@@ -9,6 +9,31 @@ export * from "./build-workflow.js";
 
 export type DeployMode = "self-host" | "saas";
 
+/**
+ * External tools are layered because MCP authenticates through API keys.
+ * Keeping this as one mode prevents the impossible "MCP on, API keys off"
+ * combination from reaching either the UI or server.
+ */
+export type ExternalAccessMode = "off" | "api" | "api_and_mcp";
+
+export type ExternalAccessSettings = Readonly<{
+  mode: ExternalAccessMode;
+}>;
+
+export const EXTERNAL_ACCESS_DEFAULT: ExternalAccessMode = "api_and_mcp";
+
+export function isExternalAccessMode(value: unknown): value is ExternalAccessMode {
+  return value === "off" || value === "api" || value === "api_and_mcp";
+}
+
+export function externalApiAccessEnabled(mode: ExternalAccessMode): boolean {
+  return mode === "api" || mode === "api_and_mcp";
+}
+
+export function mcpAccessEnabled(mode: ExternalAccessMode): boolean {
+  return mode === "api_and_mcp";
+}
+
 /** Global preference controlling how timestamps (e.g. "Generated …", "Last synced …") are displayed. */
 export type DateFormatId = "mdy_12h" | "dmy_12h" | "mdy_short" | "dmy_short" | "ymd_24h" | "iso";
 

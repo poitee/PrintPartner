@@ -20,6 +20,8 @@ import { createPorts } from "../app.js";
 import { createJobRunner, type InProcessJobRunner } from "../routes/jobs.js";
 import type { AppRepository } from "../db/repository.js";
 import { createProductMcpServer } from "./product-mcp.js";
+import { mcpAccessEnabled } from "@print-partner/contracts";
+import { readExternalAccessSettings } from "../services/external-access.js";
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -39,6 +41,10 @@ async function main(): Promise<void> {
     throw new Error("No repository available");
   };
 
+  if (!mcpAccessEnabled(readExternalAccessSettings(getRepo()).mode)) {
+    throw new Error("MCP access is turned off in Print Partner Settings.");
+  }
+
   const jobs: InProcessJobRunner = createJobRunner(getRepo, config.dataDir);
   const pending = new Map<string, AssistantProposedAction>();
 
@@ -52,6 +58,8 @@ async function main(): Promise<void> {
     config,
     defaultPlanId,
     pending,
+    isEnabled: () =>
+      mcpAccessEnabled(readExternalAccessSettings(getRepo()).mode),
   });
 
   const transport = new StdioServerTransport();

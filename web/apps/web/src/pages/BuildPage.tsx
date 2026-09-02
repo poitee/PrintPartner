@@ -31,7 +31,10 @@ import ShareImportSetupPanel, {
   type UnmatchedSource,
 } from "../components/share/ShareImportSetupPanel";
 import type { StlNamingProfile } from "@print-partner/contracts";
-import { DEFAULT_STL_NAMING_PROFILE } from "@print-partner/contracts";
+import {
+  DEFAULT_STL_NAMING_PROFILE,
+  mcpAccessEnabled,
+} from "@print-partner/contracts";
 import type { KitImportJobResult } from "../api/endpoints/imports";
 import { Badge } from "../components/ui/badge";
 import { Combobox } from "../components/ui/combobox";
@@ -79,6 +82,7 @@ import { usePlanWorkspace } from "../context/PlanWorkspaceContext";
 import { useImportRulesSaveRegistry } from "../context/ImportRulesSaveContext";
 import { useKitManifestSaveRegistry } from "../context/KitManifestSaveContext";
 import { useEngineHealth } from "../hooks/useEngineHealth";
+import { useExternalAccessSettingsQuery } from "../queries/externalAccess";
 import { useJobRunner } from "../hooks/useJobRunner";
 import { meshColorForStlPath } from "../lib/rolePreviewColor";
 import { buildPageDerivedState } from "../lib/buildPageViewModel";
@@ -176,7 +180,14 @@ function BuildPageContent() {
   const replaceLayerMutation = useReplacePlanLayerMutation(layerProfileId);
   const deleteLayerMutation = useDeletePlanLayerMutation(layerProfileId);
   const updateSourceMutation = useUpdateSourceMutation();
-  const planningQuery = useBuildPlanningQuery(selectedProfileId);
+  const externalAccessQuery = useExternalAccessSettingsQuery(engineReady);
+  const showMcpTools = externalAccessQuery.data
+    ? mcpAccessEnabled(externalAccessQuery.data.mode)
+    : false;
+  const planningQuery = useBuildPlanningQuery({
+    planId: selectedProfileId,
+    enabled: engineReady && showMcpTools,
+  });
   const syncJob = useJobRunner("sync");
   const sourceQueryError =
     sourcesQuery.error instanceof Error
@@ -961,7 +972,7 @@ function BuildPageContent() {
             />
           </section>
 
-          {planningQuery.data ? (
+          {showMcpTools && planningQuery.data ? (
             <section id="assistant-changes" className="space-y-3">
               <h2 className="text-sm font-semibold tracking-wide">AI MCP Server changes</h2>
               <details open={assistantOpen} onToggle={(e) => setAssistantOpen(e.currentTarget.open)}>
