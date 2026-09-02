@@ -17,7 +17,11 @@ vi.mock("@octokit/rest", () => ({
 
 import { createSelfHostPorts } from "../adapters/self-host/index.js";
 import { syncProjectById } from "../routes/sources.js";
-import { syncGithubSource } from "./github-sync.js";
+import {
+  normalizeGithubSourceLocation,
+  parseGithubUrl,
+  syncGithubSource,
+} from "./github-sync.js";
 
 const COMMIT_A = "a".repeat(40);
 const COMMIT_B = "b".repeat(40);
@@ -66,6 +70,26 @@ afterEach(() => {
 });
 
 describe("atomic GitHub Source sync", () => {
+  it("keeps the branch from a deep GitHub tree URL", () => {
+    const url =
+      "https://github.com/MillenniumMachines/Milo-V2.0/tree/Current/STL%20Files/Spindle-Mounts/LDO-Kit-Spindle-Mount";
+
+    expect(parseGithubUrl(url)).toEqual({
+      owner: "MillenniumMachines",
+      repo: "Milo-V2.0",
+      branch: "Current",
+      branchFromUrl: true,
+    });
+    expect(normalizeGithubSourceLocation(url, "main")).toEqual({
+      url: "https://github.com/MillenniumMachines/Milo-V2.0",
+      branch: "Current",
+    });
+  });
+
+  it("rejects non-repository GitHub pages instead of silently using main", () => {
+    expect(parseGithubUrl("https://github.com/example/printer/issues/12")).toBeNull();
+  });
+
   it("pins every raw download to the resolved commit and publishes a complete snapshot", async () => {
     const root = reposRoot();
     setTree(COMMIT_A, [

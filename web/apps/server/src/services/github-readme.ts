@@ -43,7 +43,9 @@ export async function fetchGithubReadme(options: {
 
   if (!ref) return diskFallback();
 
-  const refName = options.tag?.trim() || options.branch?.trim() || ref.branch;
+  const refName =
+    options.tag?.trim() ||
+    (ref.branchFromUrl ? ref.branch : options.branch?.trim() || ref.branch);
   const key = cacheKey(ref.owner, ref.repo, refName);
   const wantLive = options.live !== false;
 

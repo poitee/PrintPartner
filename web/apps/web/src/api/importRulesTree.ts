@@ -20,9 +20,8 @@ export function collectCheckedFiles(nodes: StlTreeNode[]): string[] {
  *
  * Walks the tree (which knows every file under each folder, checked or not) so a
  * folder rule is emitted ONLY when the whole subtree is selected. Partial folders
- * recurse; checked leaf files are emitted individually. This is the correct,
- * total-aware version — `compressRulesFromFiles` cannot tell a full folder from a
- * partial one because it only sees the checked subset.
+ * recurse; checked leaf files are emitted individually. The complete tree makes
+ * the compression total-aware.
  */
 export function compressRulesFromClientTree(nodes: StlTreeNode[]): string[] {
   const rules: string[] = [];
@@ -41,40 +40,6 @@ export function compressRulesFromClientTree(nodes: StlTreeNode[]): string[] {
     }
   };
   walk(nodes);
-  return rules;
-}
-
-export function compressRulesFromFiles(checkedFiles: string[]): string[] {
-  const allFiles = new Set(checkedFiles);
-  if (allFiles.size === 0) return [];
-
-  const dirPrefixes = new Set<string>();
-  for (const f of allFiles) {
-    const parts = f.split("/");
-    for (let i = 1; i < parts.length; i++) {
-      dirPrefixes.add(parts.slice(0, i).join("/"));
-    }
-  }
-
-  const rules: string[] = [];
-  const used = new Set<string>();
-  const sorted = [...dirPrefixes].sort(
-    (a, b) => b.split("/").length - a.split("/").length || a.localeCompare(b),
-  );
-
-  for (const prefix of sorted) {
-    const prefixFiles = [...allFiles].filter((f) => f.startsWith(`${prefix}/`));
-    if (prefixFiles.length === 0) continue;
-    if (prefixFiles.every((f) => used.has(f))) continue;
-    if (prefixFiles.every((f) => allFiles.has(f))) {
-      rules.push(`${prefix}/`);
-      for (const f of prefixFiles) used.add(f);
-    }
-  }
-
-  for (const f of [...allFiles].sort()) {
-    if (!used.has(f)) rules.push(f);
-  }
   return rules;
 }
 

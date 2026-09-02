@@ -13,6 +13,22 @@ import { findEditableSourceManifestPath } from "./source-workspace.js";
 
 const CANONICAL_REPO_FILENAME = "print-partner.manifest.yaml";
 
+type ScannedManifestPart = { match: string; relative_path: string };
+
+type PreparedManifestSource = {
+  projectId: number;
+  projectName: string;
+  projectRole: string | null;
+  projectUrl: string | null;
+  layerType: string;
+  exists: boolean;
+  manifestPath: string | null;
+  manifestYaml: string;
+  document: ReturnType<typeof loadManifestYaml>;
+  scanned: ScannedManifestPart[];
+  optionGroups: Record<string, ManifestOptionGroup>;
+};
+
 function scannedParts(localPath: string, importedPaths: string | null): Array<{ match: string; relative_path: string }> {
   const rules = importRulesForProject(importedPaths);
   let paths = listStlRelativePaths(localPath);
@@ -47,65 +63,119 @@ function trackVariantSources(
   }
 }
 
+function resolveSourceOptionGroups(
+  document: ReturnType<typeof loadManifestYaml>,
+  scanned: ScannedManifestPart[],
+): Record<string, ManifestOptionGroup> {
+  const groups: Record<string, ManifestOptionGroup> = {};
+  mergeOptionGroups(groups, document.option_groups ?? {});
+  if (!Object.keys(document.option_groups ?? {}).length) {
+    mergeOptionGroups(
+      groups,
+      inferOptionGroupsFromPaths(scanned.map((part) => part.relative_path)),
+    );
+  }
+  if (!Object.keys(groups).length) {
+    mergeOptionGroups(
+      groups,
+      inferSiblingFolderOptionGroups(scanned.map((part) => part.relative_path)),
+    );
+  }
+  return groups;
+}
+
+function prepareManifestSources(
+  repo: AppRepository,
+  profileId: number,
+): PreparedManifestSource[] {
+  const sources: PreparedManifestSource[] = [];
+  for (const layer of repo.getProfileLayers(profileId)) {
+    if (!layer.project_id) continue;
+    const project = repo.getProjectRow(layer.project_id);
+    if (!project?.localPath) continue;
+
+    let manifestYaml = "";
+    let document = loadManifestYaml("");
+    let exists = false;
+    const manifestPath = findEditableSourceManifestPath({
+      reposDir: repo.reposDir,
+      sourceId: project.id,
+      contentRoot: project.localPath,
+    });
+    if (manifestPath) {
+      try {
+        manifestYaml = readFileSync(manifestPath, "utf8");
+        document = loadManifestYaml(manifestYaml);
+        exists = true;
+      } catch {
+        manifestYaml = "";
+        document = loadManifestYaml("");
+      }
+    }
+
+    const scanned = scannedParts(project.localPath, project.importedPaths);
+    sources.push({
+      projectId: project.id,
+      projectName: project.name,
+      projectRole: project.role,
+      projectUrl: project.url,
+      layerType: layer.layer_type,
+      exists,
+      manifestPath,
+      manifestYaml,
+      document,
+      scanned,
+      optionGroups: resolveSourceOptionGroups(document, scanned),
+    });
+  }
+  return sources;
+}
+
+/** The exact option groups shown in Sources and enforced by Working Plan recomputation. */
+export function buildPlanOptionGroups(
+  repo: AppRepository,
+  profileId: number,
+): Record<string, ManifestOptionGroup> {
+  const merged: Record<string, ManifestOptionGroup> = {};
+  for (const source of prepareManifestSources(repo, profileId)) {
+    mergeOptionGroups(merged, source.optionGroups);
+  }
+  return merged;
+}
+
 export function buildPlanManifestBuilder(repo: AppRepository, profileId: number) {
   const mergedGroups: Record<string, ManifestOptionGroup> = {};
   const variantSources: Record<string, Record<string, Array<{ source_id: number; source_name: string }>>> = {};
   const sourceRows: Array<Record<string, unknown>> = [];
 
-  for (const layer of repo.getProfileLayers(profileId)) {
-    if (!layer.project_id) continue;
-    const proj = repo.getProjectRow(layer.project_id);
-    if (!proj?.localPath) continue;
-
-    let doc = loadManifestYaml("");
-    let exists = false;
-    const manifestPath = findEditableSourceManifestPath({
-      reposDir: repo.reposDir,
-      sourceId: proj.id,
-      contentRoot: proj.localPath,
-    });
-    if (manifestPath) {
-      try {
-        doc = loadManifestYaml(readFileSync(manifestPath, "utf8"));
-        exists = true;
-      } catch {
-        /* keep empty doc */
-      }
-    }
-
-    const scanned = scannedParts(proj.localPath, proj.importedPaths);
-    const layerGroups: Record<string, ManifestOptionGroup> = {};
-    mergeOptionGroups(layerGroups, doc.option_groups ?? {});
-    if (!Object.keys(doc.option_groups ?? {}).length) {
-      mergeOptionGroups(layerGroups, inferOptionGroupsFromPaths(scanned.map((p) => p.relative_path)));
-    }
-    // Sibling-folder fallback: repos without manifest YAML or path-hint matches
-    // (e.g. EMU) still get Build pickers derived from variant-looking folders.
-    if (!Object.keys(layerGroups).length) {
-      mergeOptionGroups(
-        layerGroups,
-        inferSiblingFolderOptionGroups(scanned.map((p) => p.relative_path)),
-      );
-    }
-    mergeOptionGroups(mergedGroups, layerGroups);
-    trackVariantSources(variantSources, layerGroups, proj.id, proj.name, scanned);
+  for (const source of prepareManifestSources(repo, profileId)) {
+    mergeOptionGroups(mergedGroups, source.optionGroups);
+    trackVariantSources(
+      variantSources,
+      source.optionGroups,
+      source.projectId,
+      source.projectName,
+      source.scanned,
+    );
 
     sourceRows.push({
-      source_id: proj.id,
-      layer_type: layer.layer_type,
-      name: proj.name,
-      role: proj.role ?? "unassigned",
-      url: proj.url ?? "",
-      exists,
+      source_id: source.projectId,
+      layer_type: source.layerType,
+      name: source.projectName,
+      role: source.projectRole ?? "unassigned",
+      url: source.projectUrl ?? "",
+      exists: source.exists,
       path: CANONICAL_REPO_FILENAME,
-      yaml: exists && manifestPath ? readFileSync(manifestPath, "utf8") : `format: print-partner-manifest-v2\nversion: 2\nproject: ${proj.name}\n`,
+      yaml: source.exists && source.manifestPath
+        ? source.manifestYaml
+        : `format: print-partner-manifest-v2\nversion: 2\nproject: ${source.projectName}\n`,
       document: {
         format: "print-partner-manifest-v2",
         version: 2,
-        project: proj.name,
-        option_groups: doc.option_groups ?? {},
+        project: source.projectName,
+        option_groups: source.document.option_groups ?? {},
       },
-      scanned_parts: scanned,
+      scanned_parts: source.scanned,
     });
   }
 

@@ -41,7 +41,7 @@ export default function BuildPlanningCard({
 }: {
   planId: number | null;
 }) {
-  const planningQuery = useBuildPlanningQuery(planId);
+  const planningQuery = useBuildPlanningQuery({ planId });
   const state = planningQuery.data ?? null;
   const error = planningQuery.error;
 

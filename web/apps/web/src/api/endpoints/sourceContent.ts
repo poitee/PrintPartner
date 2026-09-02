@@ -19,6 +19,7 @@ export type GithubBranchesResponse = {
   owner: string;
   repo: string;
   default_branch: string;
+  url_branch: string | null;
   branches: string[];
 };
 

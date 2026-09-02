@@ -19,7 +19,7 @@ export async function remoteUpdateStatusOctokit(
   if (!ref) return "unknown";
   try {
     const octokit = new Octokit(token ? { auth: token } : {});
-    const refName = tag?.trim() || branch || ref.branch;
+    const refName = tag?.trim() || (ref.branchFromUrl ? ref.branch : branch || ref.branch);
     const { data } = await octokit.repos.getCommit({
       owner: ref.owner,
       repo: ref.repo,

@@ -6,6 +6,7 @@ import type {
 } from "fastify";
 import type { ServerConfig } from "../config.js";
 import { sendProblem } from "../lib/api-error.js";
+import { isMcpTransportRequest } from "../lib/mcp-transport-path.js";
 import { isSyntheticAnonymousSession } from "../routes/auth-types.js";
 
 const EXEMPT_PREFIXES = [
@@ -29,6 +30,16 @@ export type AdminPreHandler = (
   request: FastifyRequest,
   reply: FastifyReply,
 ) => Promise<unknown>;
+
+type ExternalAccess = Readonly<{
+  apiKeysEnabled: () => boolean;
+  mcpEnabled: () => boolean;
+}>;
+
+const ALL_EXTERNAL_ACCESS: ExternalAccess = {
+  apiKeysEnabled: () => true,
+  mcpEnabled: () => true,
+};
 
 export function extractApiKey(request: FastifyRequest): string | null {
   const header = request.headers.authorization;
@@ -103,15 +114,31 @@ export function registerApiKeyAuth(
   app: FastifyInstance,
   config: ServerConfig,
   validateRepositoryKey: ApiKeyValidator,
+  externalAccess: ExternalAccess = ALL_EXTERNAL_ACCESS,
 ): ApiKeyValidator {
-  const validateKey: ApiKeyValidator = (rawKey) =>
-    (config.integrationApiKey !== null &&
-      constantTimeSecretEqual(rawKey, config.integrationApiKey)) ||
-    validateRepositoryKey(rawKey);
+  const validateKey: ApiKeyValidator = (rawKey) => {
+    if (!externalAccess.apiKeysEnabled()) return false;
+    return (
+      (config.integrationApiKey !== null &&
+        constantTimeSecretEqual(rawKey, config.integrationApiKey)) ||
+      validateRepositoryKey(rawKey)
+    );
+  };
 
   app.addHook("onRequest", async (request, reply) => {
     const path = request.url.split("?")[0] ?? request.url;
     if (!path.startsWith("/api/v1") && !path.startsWith("/api/v2")) return;
+    if (
+      isMcpTransportRequest(request.method, path) &&
+      !externalAccess.mcpEnabled()
+    ) {
+      return sendProblem(
+        reply,
+        403,
+        "Forbidden",
+        "MCP access is turned off in Settings",
+      );
+    }
     if (isExempt(path)) return;
 
     const provided = extractApiKey(request);

@@ -4,9 +4,11 @@ import {
   fetchBuildTrackingSettings,
   fetchDateFormatSetting,
   fetchDiscordNotifySettings,
+  fetchExternalAccessSettings,
   saveBuildTrackingSettings,
   saveDateFormatSetting,
   saveDiscordNotifySettings,
+  saveExternalAccessSettings,
   testDiscordNotify,
 } from "./settings";
 
@@ -61,5 +63,21 @@ describe("settings endpoints", () => {
 
     expect(http.requestJson(1)).toEqual({ format: "iso" });
     expect(http.requestJson(3)).toEqual({ assembly_tracking: false });
+  });
+
+  it("reads, writes, and validates external tool access", async () => {
+    http
+      .respond(jsonResponse({ mode: "api_and_mcp" }))
+      .respond(jsonResponse({ mode: "off" }))
+      .respond(jsonResponse({ mode: "sometimes" }));
+
+    await expect(fetchExternalAccessSettings()).resolves.toEqual({
+      mode: "api_and_mcp",
+    });
+    await expect(saveExternalAccessSettings({ mode: "off" })).resolves.toEqual({
+      mode: "off",
+    });
+    expect(http.requestJson(1)).toEqual({ mode: "off" });
+    await expect(fetchExternalAccessSettings()).rejects.toThrow(/invalid access mode/i);
   });
 });

@@ -22,6 +22,7 @@ import {
 import { createHash } from "node:crypto";
 import { inArray } from "drizzle-orm";
 import { applyManifestToDraftParts } from "../services/manifest-apply.js";
+import { buildPlanOptionGroups } from "../services/plan-manifest-builder.js";
 import { loadKitManifest, saveKitManifest, type KitManifestRecord } from "../services/kit-manifest-store.js";
 import {
   collectKitBundleSourceRefs,
@@ -3939,7 +3940,12 @@ export class AppRepository {
         };
       },
     );
-    const draftParts = applyManifestToDraftParts(this, profileId, scannedDraftParts);
+    const draftParts = applyManifestToDraftParts(
+      this,
+      profileId,
+      scannedDraftParts,
+      buildPlanOptionGroups(this, profileId),
+    );
     return {
       kind: "prepared",
       value: {

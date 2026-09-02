@@ -177,6 +177,55 @@ function nonStructuralChildren(dirs: Map<string, DirInfo>, info: DirInfo): DirIn
   );
 }
 
+const VARIANT_NAME_NOISE = new Set([
+  "cm",
+  "inch",
+  "inches",
+  "kit",
+  "mm",
+  "option",
+  "options",
+  "variant",
+  "variants",
+  "version",
+]);
+
+function variantNameTokens(name: string): Set<string> {
+  const tokens = name
+    .toLowerCase()
+    .replace(/([a-z])([0-9])/g, "$1 $2")
+    .replace(/([0-9])([a-z])/g, "$1 $2")
+    .split(/[^a-z0-9]+/)
+    .filter((token) => token && !/^\d+$/.test(token) && !VARIANT_NAME_NOISE.has(token))
+    .map((token) => token.length > 3 && token.endsWith("s") ? token.slice(0, -1) : token);
+  return new Set(tokens);
+}
+
+function sharedVariantNameTokens(options: DirInfo[]): Set<string> {
+  const [first, ...rest] = options;
+  if (!first) return new Set();
+  const shared = variantNameTokens(first.name);
+  for (const option of rest) {
+    const tokens = variantNameTokens(option.name);
+    for (const token of shared) {
+      if (!tokens.has(token)) shared.delete(token);
+    }
+  }
+  return shared;
+}
+
+function namedAlternativesForNumericSet(children: DirInfo[], numericOptions: DirInfo[]): DirInfo[] {
+  const shared = sharedVariantNameTokens(numericOptions);
+  // One common word (for example "lane") is too weak: a sibling may be a
+  // shared accessory rather than another mutually exclusive choice. Milo's
+  // spindle folders share both "spindle" and "mount".
+  if (shared.size < 2) return numericOptions;
+  return children.filter((child) => {
+    const tokens = variantNameTokens(child.name);
+    return [...shared].every((token) => tokens.has(token));
+  });
+}
+
 /**
  * Detect folder-shaped decision points:
  * - mods containers (User_Mods/…) → optional mods
@@ -320,12 +369,16 @@ export function detectVariantFolderCandidates(blobPaths: string[]): RepoVariantC
     }
     for (const [skeleton, sibs] of bySkeleton) {
       if (sibs.length < 2) continue;
+      const options = namedAlternativesForNumericSet(children, sibs);
       pushCandidate({
         group_id: slugifyTreePath(`${info.path || "root"} ${skeleton.replace(/#/g, "n")}`),
         dir: info.path,
         kind: "config",
-        options: sibs.map((c) => optionFromDir(c)),
-        reason: `Sibling folders under "${info.path || "/"}" differ only by a number — looks like a size/count choice.`,
+        options: options.map((c) => optionFromDir(c)),
+        reason:
+          options.length === sibs.length
+            ? `Sibling folders under "${info.path || "/"}" differ only by a number — looks like a size/count choice.`
+            : `Sibling folders under "${info.path || "/"}" describe the same part family — pick one size or named kit.`,
       });
     }
   }

@@ -25,32 +25,82 @@ export type GithubRepoRef = {
   owner: string;
   repo: string;
   branch: string;
+  branchFromUrl: boolean;
 };
 
-export function parseGithubUrl(url: string): GithubRepoRef | null {
-  const trimmed = url.trim().replace(/\.git$/, "");
-  const patterns = [
-    /^https?:\/\/github\.com\/([^/]+)\/([^/]+?)(?:\/tree\/([^/]+))?$/i,
-    /^git@github\.com:([^/]+)\/([^/.]+)/i,
-    /^https?:\/\/github\.com\/([^/]+)\/([^/]+)/i,
-  ];
-  for (const re of patterns) {
-    const m = trimmed.match(re);
-    if (m) {
-      return {
-        owner: m[1],
-        repo: m[2].replace(/\.git$/, ""),
-        branch: m[3] ?? "main",
-      };
-    }
+function decodeGithubPathSegment(value: string): string | null {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return null;
   }
-  return null;
+}
+
+export function parseGithubUrl(url: string): GithubRepoRef | null {
+  const trimmed = url.trim();
+  const ssh = trimmed.match(/^git@github\.com:([^/\s]+)\/([^/\s]+?)(?:\.git)?$/i);
+  if (ssh) {
+    return {
+      owner: ssh[1],
+      repo: ssh[2],
+      branch: "main",
+      branchFromUrl: false,
+    };
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return null;
+  }
+  if (
+    (parsed.protocol !== "https:" && parsed.protocol !== "http:") ||
+    (parsed.hostname.toLowerCase() !== "github.com" &&
+      parsed.hostname.toLowerCase() !== "www.github.com")
+  ) {
+    return null;
+  }
+
+  const segments = parsed.pathname.split("/").filter(Boolean);
+  if (segments.length < 2) return null;
+  const owner = decodeGithubPathSegment(segments[0]!);
+  const decodedRepo = decodeGithubPathSegment(segments[1]!);
+  const repo = decodedRepo?.replace(/\.git$/i, "") ?? null;
+  if (!owner || !repo) return null;
+  if (segments.length === 2) {
+    return { owner, repo, branch: "main", branchFromUrl: false };
+  }
+
+  const pageKind = segments[2]?.toLowerCase();
+  if ((pageKind !== "tree" && pageKind !== "blob") || !segments[3]) return null;
+  const branch = decodeGithubPathSegment(segments[3]!);
+  if (!branch) return null;
+  return { owner, repo, branch, branchFromUrl: true };
+}
+
+export function normalizeGithubSourceLocation(
+  url: string,
+  branch?: string | null,
+): { url: string; branch: string } | null {
+  const parsed = parseGithubUrl(url);
+  if (!parsed) return null;
+  return {
+    url: `https://github.com/${parsed.owner}/${parsed.repo}`,
+    branch: parsed.branchFromUrl ? parsed.branch : branch?.trim() || parsed.branch,
+  };
 }
 
 export async function listGithubBranches(
   url: string,
   token?: string | null,
-): Promise<{ owner: string; repo: string; default_branch: string; branches: string[] }> {
+): Promise<{
+  owner: string;
+  repo: string;
+  default_branch: string;
+  url_branch: string | null;
+  branches: string[];
+}> {
   const ref = parseGithubUrl(url);
   if (!ref) throw new Error("Invalid GitHub repository URL");
   const octokit = new Octokit(token ? { auth: token } : {});
@@ -64,6 +114,7 @@ export async function listGithubBranches(
     owner: ref.owner,
     repo: ref.repo,
     default_branch: repoMeta.data.default_branch ?? ref.branch,
+    url_branch: ref.branchFromUrl ? ref.branch : null,
     branches: branches.map((b) => b.name),
   };
 }
@@ -216,7 +267,7 @@ export async function fetchGithubRepoTreeSummary(
   const parsed = parseGithubUrl(url);
   if (!parsed) throw new Error("Invalid GitHub repository URL");
   const octokit = new Octokit(token ? { auth: token } : {});
-  let refName = ref?.trim() || parsed.branch;
+  let refName = parsed.branchFromUrl ? parsed.branch : ref?.trim() || parsed.branch;
   let resolved: { commitSha: string; entries: RepoTreeEntry[]; truncated: boolean };
   try {
     resolved = await fetchGithubTreeEntries(octokit, parsed.owner, parsed.repo, refName);
@@ -287,7 +338,7 @@ export async function syncGithubSource(input: SyncGithubSourceInput): Promise<Sy
   const octokit = new Octokit(token ? { auth: token } : {});
 
   const tagName = options?.tag?.trim() || null;
-  const refName = tagName || branch || ref.branch;
+  const refName = tagName || (ref.branchFromUrl ? ref.branch : branch || ref.branch);
   const { commitSha, entries, truncated } = await fetchGithubTreeEntries(
     octokit,
     ref.owner,

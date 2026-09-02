@@ -13,8 +13,19 @@ import {
   openRepoStlMeshStream,
   openStlThumbStream,
 } from "../lib/secure-path.js";
-import { listGithubBranches, listGithubTags, syncGithubSource } from "../services/github-sync.js";
-import { writeUploadedZip, writeUploadedFiles, finalizeUploadedSource } from "../services/archive-import.js";
+import {
+  listGithubBranches,
+  listGithubTags,
+  normalizeGithubSourceLocation,
+  syncGithubSource,
+} from "../services/github-sync.js";
+import {
+  finalizeUploadedSource,
+  MAX_SOURCE_UPLOAD_FILES,
+  MAX_SOURCE_UPLOAD_PARTS,
+  writeUploadedFiles,
+  writeUploadedZip,
+} from "../services/archive-import.js";
 import { PLACEHOLDER_PNG } from "../lib/thumbnails.js";
 import { importReposTxt, parseReposTxtText } from "../services/repos-txt.js";
 import { coverMediaType, ensureSourceCover } from "../lib/source-cover.js";
@@ -125,6 +136,7 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
     try {
       const body = request.body as Record<string, unknown>;
       const sourceKind = body.source_kind != null ? String(body.source_kind) : undefined;
+      const kind = (sourceKind ?? "github").toLowerCase();
       if (
         sourceKind === "printables" ||
         sourceKind === "makerworld" ||
@@ -137,10 +149,16 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
           });
         }
       }
+      const requestedUrl = body.url != null ? String(body.url) : undefined;
+      const requestedBranch = body.branch != null ? String(body.branch) : undefined;
+      const githubLocation =
+        requestedUrl && (kind === "github" || kind === "git")
+          ? normalizeGithubSourceLocation(requestedUrl, requestedBranch)
+          : null;
       const newSource = deps.repo.createSource({
         name: String(body.name ?? ""),
-        url: body.url != null ? String(body.url) : undefined,
-        branch: body.branch != null ? String(body.branch) : undefined,
+        url: githubLocation?.url ?? requestedUrl,
+        branch: githubLocation?.branch ?? requestedBranch,
         tag: body.tag != null ? String(body.tag) : undefined,
         source_kind: body.source_kind != null ? String(body.source_kind) : undefined,
         role: body.role != null ? String(body.role) : undefined,
@@ -151,7 +169,6 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
             : undefined,
       });
       // Kick off auto-sync for new GitHub/git source (best-effort, non-blocking)
-      const kind = (body.source_kind ?? "github").toString().toLowerCase();
       if (kind === "github" || kind === "git") {
         try {
           if (deps.jobs) {
@@ -169,12 +186,21 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
     const id = Number((request.params as { id: string }).id);
     const body = request.body as Record<string, unknown>;
     try {
+      const requestedUrl = body.url != null ? String(body.url) : undefined;
+      const requestedBranch = body.branch != null ? String(body.branch) : undefined;
+      const requestedKind = body.source_kind != null ? String(body.source_kind) : undefined;
+      const existing = deps.repo.getSource(id);
+      const effectiveKind = (requestedKind ?? existing?.source_kind ?? "github").toLowerCase();
+      const githubLocation =
+        requestedUrl && (effectiveKind === "github" || effectiveKind === "git")
+          ? normalizeGithubSourceLocation(requestedUrl, requestedBranch ?? existing?.branch)
+          : null;
       return deps.repo.updateSource(id, {
         name: body.name != null ? String(body.name) : undefined,
-        url: body.url != null ? String(body.url) : undefined,
-        branch: body.branch != null ? String(body.branch) : undefined,
+        url: githubLocation?.url ?? requestedUrl,
+        branch: githubLocation?.branch ?? requestedBranch,
         tag: body.tag !== undefined ? (body.tag != null ? String(body.tag) : null) : undefined,
-        source_kind: body.source_kind != null ? String(body.source_kind) : undefined,
+        source_kind: requestedKind,
         role: body.role != null ? String(body.role) : undefined,
         local_path: body.local_path != null ? String(body.local_path) : undefined,
         metadata:
@@ -326,7 +352,9 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
 
     const uploads: Array<{ relativePath: string; buffer: Buffer }> = [];
     let relativePaths: string[] = [];
-    for await (const part of request.parts({ limits: { files: 100, parts: 101 } })) {
+    for await (const part of request.parts({
+      limits: { files: MAX_SOURCE_UPLOAD_FILES, parts: MAX_SOURCE_UPLOAD_PARTS },
+    })) {
       if (part.type === "field" && part.fieldname === "relative_paths") {
         const value = await part.value;
         try {

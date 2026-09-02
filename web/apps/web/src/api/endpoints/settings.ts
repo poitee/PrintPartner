@@ -1,4 +1,8 @@
-import type { DateFormatId } from "@print-partner/contracts";
+import {
+  isExternalAccessMode,
+  type DateFormatId,
+  type ExternalAccessSettings,
+} from "@print-partner/contracts";
 import { engineFetch } from "../engineTransport";
 
 export type DiscordNotifySettings = {
@@ -11,6 +15,18 @@ export type DiscordNotifySettings = {
 export type BuildTrackingSettings = {
   assembly_tracking: boolean;
 };
+
+function parseExternalAccessSettings(value: unknown): ExternalAccessSettings {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    !("mode" in value) ||
+    !isExternalAccessMode(value.mode)
+  ) {
+    throw new Error("External tool settings returned an invalid access mode");
+  }
+  return { mode: value.mode };
+}
 
 export async function fetchDiscordNotifySettings(): Promise<DiscordNotifySettings> {
   return engineFetch<DiscordNotifySettings>("/settings/discord-notify");
@@ -54,4 +70,19 @@ export async function saveBuildTrackingSettings(
     method: "PUT",
     body: JSON.stringify(settings),
   });
+}
+
+export async function fetchExternalAccessSettings(): Promise<ExternalAccessSettings> {
+  const value = await engineFetch<unknown>("/settings/external-access");
+  return parseExternalAccessSettings(value);
+}
+
+export async function saveExternalAccessSettings(
+  settings: ExternalAccessSettings,
+): Promise<ExternalAccessSettings> {
+  const value = await engineFetch<unknown>("/settings/external-access", {
+    method: "PUT",
+    body: JSON.stringify(settings),
+  });
+  return parseExternalAccessSettings(value);
 }

@@ -33,7 +33,12 @@ export function buildWorkflowSignature(
  * Assistant planning state for a Build, keyed on the shared workflow query so
  * an MCP or browser mutation refreshes it.
  */
-export function useBuildPlanningQuery(planId: number | null, draftId?: number | null) {
+export function useBuildPlanningQuery(options: {
+  planId: number | null;
+  draftId?: number | null;
+  enabled?: boolean;
+}) {
+  const { planId, draftId, enabled = true } = options;
   const workflowQuery = useBuildWorkflowQuery(planId);
   const signature = buildWorkflowSignature(workflowQuery.data);
 
@@ -45,7 +50,7 @@ export function useBuildPlanningQuery(planId: number | null, draftId?: number | 
       }
       return fetchBuildPlanningState(planId, draftId);
     },
-    enabled: planId != null && planId > 0,
+    enabled: enabled && planId != null && planId > 0,
     staleTime: 5_000,
   });
 }

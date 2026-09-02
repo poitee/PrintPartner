@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Simpler external tools settings** - Settings now lets you turn off API-key
+  and MCP controls, allow API keys only, or enable both. Turning them off keeps
+  Sources, Plan, Production, Checkoff, printers, backups, and logs available.
+  Existing installations keep API and MCP enabled until you change the setting.
+
+### Fixed
+
+- **Milo V2 source planning** - Deep GitHub tree links now keep their selected
+  branch instead of silently importing `main`. The LDO kit spindle mount appears
+  beside the 65 mm and 80 mm choices, inferred source choices are enforced when
+  the Working Plan is built, and unchecked files remain outside the Plan.
+- **Large local folders** - Browser folder imports now accept up to 10,000 files,
+  matching the existing archive-entry limit instead of failing after 100 files.
+
 ## [3.3.0] - 2026-09-01
 
 ### Added

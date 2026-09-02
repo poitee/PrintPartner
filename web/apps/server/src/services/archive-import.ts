@@ -5,6 +5,8 @@ import { extractThreeMfMeshes } from "./three-mf-import.js";
 
 export const MAX_ZIP_ENTRIES = 10_000;
 export const MAX_ZIP_UNCOMPRESSED_BYTES = 1024 * 1024 * 1024;
+export const MAX_SOURCE_UPLOAD_FILES = MAX_ZIP_ENTRIES;
+export const MAX_SOURCE_UPLOAD_PARTS = MAX_SOURCE_UPLOAD_FILES + 1;
 
 export type ExtractLimits = {
   maxEntries?: number;

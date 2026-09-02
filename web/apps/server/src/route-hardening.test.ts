@@ -219,6 +219,37 @@ describe("path traversal hardening", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  it("POST /sources/:id/upload-files accepts a full project folder", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pp-upload-project-folder-"));
+    const { app, ports } = await makeApp(dir);
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/sources",
+      payload: { name: "Milo V2.0", source_kind: "local" },
+    });
+    const sourceId = (created.json() as { id: number }).id;
+    const files = Array.from({ length: 118 }, (_, index) => ({
+      name: `Milo-V2.0/STL Files/part-${index + 1}.stl`,
+      content: Buffer.from(`solid part-${index + 1}`),
+    }));
+    const { payload, headers } = multipartFiles(files);
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/sources/${sourceId}/upload-files`,
+      payload,
+      headers,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect((response.json() as { stl_count?: number }).stl_count).toBe(118);
+
+    await app.close();
+    ports.db.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   it("removed the path-based import endpoints", async () => {
     const dir = mkdtempSync(join(tmpdir(), "pp-removed-routes-"));
     const { app, ports } = await makeApp(dir);

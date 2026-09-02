@@ -8,7 +8,11 @@ import {
   Settings,
   SunMoon,
 } from "lucide-react";
-import { DATE_FORMAT_PRESETS, type DateFormatId } from "@print-partner/contracts";
+import {
+  DATE_FORMAT_PRESETS,
+  externalApiAccessEnabled,
+  type DateFormatId,
+} from "@print-partner/contracts";
 import {
   createCustomFilament,
   deleteCustomFilament,
@@ -49,6 +53,7 @@ import SourceUpdateIntervalSelect from "../components/settings/SourceUpdateInter
 import AccountPasswordCard from "../components/settings/AccountPasswordCard";
 import BackupManagementCard from "../components/settings/BackupManagementCard";
 import ApiKeyManagementCard from "../components/settings/ApiKeyManagementCard";
+import ExternalToolsSettingsCard from "../components/settings/ExternalToolsSettingsCard";
 import LoggingManagementCard from "../components/settings/LoggingManagementCard";
 import ThemePreferenceControl from "../components/ThemePreferenceControl";
 import SourceCategoryManager from "../components/sources/SourceCategoryManager";
@@ -83,6 +88,7 @@ import {
   settingsResourceSummary,
   type SettingsResource,
 } from "../lib/settingsPageModel";
+import { useExternalAccessSettingsQuery } from "../queries/externalAccess";
 
 export default function SettingsPage() {
   const location = useLocation();
@@ -93,6 +99,10 @@ export default function SettingsPage() {
     error: engineError,
   });
   const engineReady = engineState === "ready";
+  const externalAccessQuery = useExternalAccessSettingsQuery(engineReady);
+  const showApiKeys = externalAccessQuery.data
+    ? externalApiAccessEnabled(externalAccessQuery.data.mode)
+    : false;
   const { user, authRequired } = useAuth();
   const { format: dateFormat, setFormat: setDateFormat } = useDateFormat();
   const { updateCheck, refresh: refreshUpdateCheck } = useAppUpdateCheck(engineReady);
@@ -338,6 +348,7 @@ export default function SettingsPage() {
           className="desk-nameplate mb-4 flex flex-wrap gap-1.5 p-2 lg:sticky lg:top-4 lg:mb-0 lg:flex-col lg:gap-0.5"
         >
           {[
+            { id: "features", label: "Optional Features" },
             { id: "printers", label: "Printers" },
             { id: "slicers", label: "Slicers" },
             { id: "library", label: "Library" },
@@ -369,6 +380,10 @@ export default function SettingsPage() {
         onRefresh={onCheckAppUpdates}
         refreshing={updateCheckRefreshing}
       />
+
+      <SettingsSection id="features" title="Optional features">
+        <ExternalToolsSettingsCard engineReady={engineReady} />
+      </SettingsSection>
 
       <SettingsSection id="printers" title="Printers">
         <PrintersSettingsCard engineReady={engineReady} />
@@ -880,7 +895,7 @@ export default function SettingsPage() {
       {recoveryToolsReady && (
         <SettingsSection id="data" title="Data & System">
           <BackupManagementCard />
-          <ApiKeyManagementCard />
+          {showApiKeys ? <ApiKeyManagementCard /> : null}
           <LoggingManagementCard />
         </SettingsSection>
       )}
