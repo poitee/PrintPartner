@@ -68,14 +68,13 @@ function resolveSourceOptionGroups(
   scanned: ScannedManifestPart[],
 ): Record<string, ManifestOptionGroup> {
   const groups: Record<string, ManifestOptionGroup> = {};
-  mergeOptionGroups(groups, document.option_groups ?? {});
-  if (!Object.keys(document.option_groups ?? {}).length) {
+  const declaredGroups = document.option_groups ?? {};
+  mergeOptionGroups(groups, declaredGroups);
+  if (!Object.keys(declaredGroups).length) {
     mergeOptionGroups(
       groups,
       inferOptionGroupsFromPaths(scanned.map((part) => part.relative_path)),
     );
-  }
-  if (!Object.keys(groups).length) {
     mergeOptionGroups(
       groups,
       inferSiblingFolderOptionGroups(scanned.map((part) => part.relative_path)),

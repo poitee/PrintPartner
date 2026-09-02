@@ -30,7 +30,7 @@ describe("GitHubRefField", () => {
 
     render(
       <GitHubRefField
-        url="https://github.com/MillenniumMachines/Milo-V2.0/tree/Current/STL%20Files/Spindle-Mounts/LDO-Kit-Spindle-Mount"
+        url="https://github.com/MillenniumMachines/Milo-V2.0/tree/Current/STL%20Files/Spindle-Mounts/LDO-Kit-Spindle-Mount?plain=1#mount"
         refType="branch"
         branch="main"
         tag=""

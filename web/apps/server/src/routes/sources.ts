@@ -23,6 +23,7 @@ import {
   finalizeUploadedSource,
   MAX_SOURCE_UPLOAD_FILES,
   MAX_SOURCE_UPLOAD_PARTS,
+  MAX_SOURCE_UPLOAD_BYTES,
   writeUploadedFiles,
   writeUploadedZip,
 } from "../services/archive-import.js";
@@ -352,8 +353,13 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
 
     const uploads: Array<{ relativePath: string; buffer: Buffer }> = [];
     let relativePaths: string[] = [];
+    let uploadedBytes = 0;
     for await (const part of request.parts({
-      limits: { files: MAX_SOURCE_UPLOAD_FILES, parts: MAX_SOURCE_UPLOAD_PARTS },
+      limits: {
+        fileSize: MAX_SOURCE_UPLOAD_BYTES,
+        files: MAX_SOURCE_UPLOAD_FILES,
+        parts: MAX_SOURCE_UPLOAD_PARTS,
+      },
     })) {
       if (part.type === "field" && part.fieldname === "relative_paths") {
         const value = await part.value;
@@ -370,7 +376,19 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
       if (part.type !== "file" || part.fieldname !== "files") continue;
       const chunks: Buffer[] = [];
       for await (const chunk of part.file) {
-        chunks.push(Buffer.from(chunk));
+        const buffer = Buffer.from(chunk);
+        uploadedBytes += buffer.length;
+        if (uploadedBytes > MAX_SOURCE_UPLOAD_BYTES) {
+          return reply.status(413).send({
+            detail: "Uploaded source exceeds the 256 MiB upload limit",
+          });
+        }
+        chunks.push(buffer);
+      }
+      if (part.file.truncated) {
+        return reply.status(413).send({
+          detail: "Uploaded source exceeds the 256 MiB upload limit",
+        });
       }
       const buffer = Buffer.concat(chunks);
       uploads.push({

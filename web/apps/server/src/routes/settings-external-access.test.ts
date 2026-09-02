@@ -6,11 +6,14 @@ import { createSelfHostPorts } from "../adapters/self-host/index.js";
 import { buildApp } from "../app.js";
 import { loadConfig } from "../config.js";
 
-async function makeApp(directory: string) {
+async function makeApp(
+  directory: string,
+  integrationApiKey: string | null = "external-tool-key",
+) {
   const config = {
     ...loadConfig(),
     dataDir: directory,
-    integrationApiKey: "external-tool-key",
+    integrationApiKey,
   };
   const ports = createSelfHostPorts(directory);
   await ports.db.connect();
@@ -52,7 +55,7 @@ describe("/settings/external-access", () => {
 
   it("turns off external API keys and MCP without breaking browser API access", async () => {
     const directory = mkdtempSync(join(tmpdir(), "pp-external-access-off-"));
-    const { app, ports } = await makeApp(directory);
+    const { app, ports } = await makeApp(directory, null);
 
     try {
       const saved = await app.inject({
@@ -69,7 +72,14 @@ describe("/settings/external-access", () => {
         remoteAddress: "203.0.113.10",
         headers: { authorization: "Bearer external-tool-key" },
       });
-      expect(externalApi.statusCode).toBe(401);
+      expect(externalApi.statusCode).toBe(403);
+
+      const externalApiWithoutKey = await app.inject({
+        method: "GET",
+        url: "/api/v1/plans",
+        remoteAddress: "203.0.113.10",
+      });
+      expect(externalApiWithoutKey.statusCode).toBe(403);
 
       const mcp = await app.inject({
         method: "POST",
@@ -88,7 +98,14 @@ describe("/settings/external-access", () => {
       const browserApi = await app.inject({
         method: "GET",
         url: "/api/v1/plans",
-        remoteAddress: "127.0.0.1",
+        remoteAddress: "192.168.200.50",
+        headers: {
+          host: "192.168.200.80:8080",
+          referer: "http://192.168.200.80:8080/plans/12",
+          "sec-fetch-dest": "empty",
+          "sec-fetch-mode": "cors",
+          "sec-fetch-site": "same-origin",
+        },
       });
       expect(browserApi.statusCode).toBe(200);
 

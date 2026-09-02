@@ -5,6 +5,7 @@ import { extractThreeMfMeshes } from "./three-mf-import.js";
 
 export const MAX_ZIP_ENTRIES = 10_000;
 export const MAX_ZIP_UNCOMPRESSED_BYTES = 1024 * 1024 * 1024;
+export const MAX_SOURCE_UPLOAD_BYTES = 256 * 1024 * 1024;
 export const MAX_SOURCE_UPLOAD_FILES = MAX_ZIP_ENTRIES;
 export const MAX_SOURCE_UPLOAD_PARTS = MAX_SOURCE_UPLOAD_FILES + 1;
 
@@ -185,7 +186,9 @@ export function writeUploadedFiles(
 ): UploadedFilesResult {
   if (!files.length) throw new Error("At least one file is required");
   const uploadedBytes = files.reduce((total, file) => total + file.buffer.length, 0);
-  if (uploadedBytes > MAX_ZIP_UNCOMPRESSED_BYTES) throw new Error("Uploaded source exceeds the total size limit");
+  if (uploadedBytes > MAX_SOURCE_UPLOAD_BYTES) {
+    throw new Error("Uploaded source exceeds the 256 MiB upload limit");
+  }
   const dir = join(sourcesDir, String(sourceId));
   mkdirSync(dir, { recursive: true });
   const extractDir = join(dir, "files");

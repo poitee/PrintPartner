@@ -140,11 +140,19 @@ option_groups:
     }
     mkdirSync(join(repoPath, "STL Files", "Archive"), { recursive: true });
     writeFileSync(join(repoPath, "STL Files", "Archive", "unchecked.stl"), "solid unchecked");
+    const electronicsPath = join(
+      spindleRoot,
+      "LDO-Kit-Spindle-Mount",
+      "electronics",
+    );
+    mkdirSync(electronicsPath, { recursive: true });
+    writeFileSync(join(electronicsPath, "controller.stl"), "solid controller");
     repo.updateSource(source.id, { local_path: repoPath });
     repo.updateImportRules(source.id, ["STL Files/Spindle-Mounts/"]);
 
     const plan = repo.createProfile("Milo V2.0", source.id);
     const builder = buildPlanManifestBuilder(repo, plan.id);
+    expect(builder.merged_option_groups.controller?.variants[0]?.id).toBe("stock");
     const [spindleGroupId, spindleGroup] = Object.entries(builder.merged_option_groups).find(
       ([, group]) => group.label === "Spindle-Mounts",
     ) ?? [];
@@ -170,6 +178,7 @@ option_groups:
     expect(
       result.draft.parts.filter((part) => part.included).map((part) => part.relativePath),
     ).toEqual([
+      "STL Files/Spindle-Mounts/LDO-Kit-Spindle-Mount/electronics/controller.stl",
       "STL Files/Spindle-Mounts/LDO-Kit-Spindle-Mount/LDO-Kit-Spindle-Mount.stl",
     ]);
 

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { fetchGithubBranches, fetchGithubTags } from "../api/endpoints/sourceContent";
 
 const GITHUB_REPO_RE =
-  /^(?:https?:\/\/(?:www\.)?github\.com\/[\w.-]+\/[\w.-]+(?:\.git)?(?:\/(?:tree|blob)\/[^/?#]+(?:\/[^?#]*)?)?\/?|git@github\.com:[\w.-]+\/[\w.-]+(?:\.git)?|[\w.-]+\/[\w.-]+(?:\.git)?)$/i;
+  /^(?:https?:\/\/(?:www\.)?github\.com\/[\w.-]+\/[\w.-]+(?:\.git)?(?:\/(?:tree|blob)\/[^/?#]+(?:\/[^?#]*)?)?\/?(?:[?#].*)?|git@github\.com:[\w.-]+\/[\w.-]+(?:\.git)?|[\w.-]+\/[\w.-]+(?:\.git)?)$/i;
 
 export type GithubRefType = "branch" | "tag";
 

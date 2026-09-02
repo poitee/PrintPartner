@@ -58,6 +58,8 @@ async function main(): Promise<void> {
     config,
     defaultPlanId,
     pending,
+    isEnabled: () =>
+      mcpAccessEnabled(readExternalAccessSettings(getRepo()).mode),
   });
 
   const transport = new StdioServerTransport();

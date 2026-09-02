@@ -91,6 +91,26 @@ function hasAuthenticatedSession(request: FastifyRequest): boolean {
   return Boolean(user && !isSyntheticAnonymousSession(user));
 }
 
+function isSameOriginBrowserRequest(request: FastifyRequest): boolean {
+  if (request.headers["sec-fetch-site"] !== "same-origin") return false;
+  const mode = request.headers["sec-fetch-mode"];
+  if (mode !== "cors" && mode !== "same-origin") return false;
+  if (request.headers["sec-fetch-dest"] !== "empty") return false;
+
+  const referer = request.headers.referer;
+  const host = request.headers.host;
+  if (typeof referer !== "string" || typeof host !== "string") return false;
+  try {
+    const origin = new URL(referer);
+    return (
+      (origin.protocol === "http:" || origin.protocol === "https:") &&
+      origin.host.toLowerCase() === host.toLowerCase()
+    );
+  } catch {
+    return false;
+  }
+}
+
 function hasConfiguredBasicAuth(
   request: FastifyRequest,
   config: ServerConfig,
@@ -140,6 +160,19 @@ export function registerApiKeyAuth(
       );
     }
     if (isExempt(path)) return;
+
+    if (!externalAccess.apiKeysEnabled()) {
+      if (isUnambiguousLoopback(request, config)) return;
+      if (hasAuthenticatedSession(request)) return;
+      if (hasConfiguredBasicAuth(request, config)) return;
+      if (isSameOriginBrowserRequest(request)) return;
+      return sendProblem(
+        reply,
+        403,
+        "Forbidden",
+        "External API access is turned off in Settings",
+      );
+    }
 
     const provided = extractApiKey(request);
     if (provided) {
