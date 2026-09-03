@@ -10,6 +10,8 @@ import {
   abandonPlanDraft,
   applyPlanDraft,
   editPlanDraftParts,
+  fetchPlanDraftWorkspace,
+  listPlanDrafts,
   recomputePlanDraft,
   rebasePlanDraft,
 } from "../api/endpoints/planDrafts";
@@ -17,14 +19,22 @@ import type { PlanReview } from "../api/endpoints/planManifests";
 import { queryKeys } from "../queries/keys";
 import { usePlanDraftWorkspaceQuery } from "../queries/planDraft";
 import { WORKING_PLAN_CHANGED_MESSAGE } from "../lib/workingPlanChanged";
-import { PlanWorkspaceProvider, usePlanWorkspace } from "./PlanWorkspaceContext";
+import {
+  PlanWorkspaceProvider,
+  usePlanWorkspace,
+} from "./PlanWorkspaceContext";
 
 const acceptedReview: PlanReview = {
   profile_id: 7,
   accepted_basis: null,
   plan_name: "Accepted Plan",
   layers: [],
-  totals: { included_parts: 0, total_print_units: 0, by_role: {}, by_filament: {} },
+  totals: {
+    included_parts: 0,
+    total_print_units: 0,
+    by_role: {},
+    by_filament: {},
+  },
   issues: [],
   has_blockers: false,
   part_groups: [],
@@ -39,21 +49,28 @@ const savedWorkspace: PlanDraftWorkspace = {
     snapshot_digest: "a".repeat(64),
     base: { revision_id: 3, plan_version: 1 },
   },
-  parts: [{
-    draft_part_id: 17,
-    base_revision_part_id: 42,
-    part_key: "frame/bracket.stl",
-    filename: "bracket.stl",
-    relative_path: "frame/bracket.stl",
-    source_layer: "base:Voron",
-    role: "structural",
-    quantity_inferred: 1,
-    quantity_override: null,
-    quantity_effective: 1,
-    included: true,
-  }],
+  parts: [
+    {
+      draft_part_id: 17,
+      base_revision_part_id: 42,
+      part_key: "frame/bracket.stl",
+      filename: "bracket.stl",
+      relative_path: "frame/bracket.stl",
+      source_layer: "base:Voron",
+      role: "structural",
+      quantity_inferred: 1,
+      quantity_override: null,
+      quantity_effective: 1,
+      included: true,
+    },
+  ],
   diff: { base_is_current: true, added: [], removed: [], changed: [] },
-  reconciliation: { kind: "ready", reused_units: 0, new_units: 0, surplus_units: 0 },
+  reconciliation: {
+    kind: "ready",
+    reused_units: 0,
+    new_units: 0,
+    surplus_units: 0,
+  },
 };
 
 /** The Plan row the user clicks — identity the draft is resolved against. */
@@ -73,19 +90,26 @@ const replacementWorkspace: PlanDraftWorkspace = {
 const draftQueryState = vi.hoisted(() => ({
   hasOpenDraft: true,
   hasWorkspace: true,
+  /** Models a click landing before GET /plans/:id/drafts has resolved. */
+  listPending: false,
   workspace: null as PlanDraftWorkspace | null,
 }));
 
 const editedWorkspace: PlanDraftWorkspace = {
   ...replacementWorkspace,
   draft: { ...replacementWorkspace.draft, snapshot_digest: "c".repeat(64) },
-  parts: replacementWorkspace.parts.map((part) => ({ ...part, included: false })),
+  parts: replacementWorkspace.parts.map((part) => ({
+    ...part,
+    included: false,
+  })),
 };
 
 vi.mock("../api/endpoints/planDrafts", () => ({
   applyPlanDraft: vi.fn(),
   abandonPlanDraft: vi.fn(),
   editPlanDraftParts: vi.fn(),
+  fetchPlanDraftWorkspace: vi.fn(),
+  listPlanDrafts: vi.fn(),
   reconcilePlanDraft: vi.fn(),
   recomputePlanDraft: vi.fn(),
   rebasePlanDraft: vi.fn(),
@@ -100,12 +124,18 @@ vi.mock("./ProfileContext", () => ({
 }));
 
 vi.mock("../queries/planReview", () => ({
-  usePlanReviewQuery: () => ({ data: acceptedReview, isLoading: false, error: null }),
+  usePlanReviewQuery: () => ({
+    data: acceptedReview,
+    isLoading: false,
+    error: null,
+  }),
   usePatchPartMutation: () => ({ mutateAsync: vi.fn() }),
   usePatchPartProgressMutation: () => ({ mutateAsync: vi.fn() }),
   usePatchPartAssembledMutation: () => ({ mutateAsync: vi.fn() }),
   invalidatePlanReview: (client: QueryClient, profileId: number) =>
-    client.invalidateQueries({ queryKey: queryKeys.planReview(profileId, false) }),
+    client.invalidateQueries({
+      queryKey: queryKeys.planReview(profileId, false),
+    }),
 }));
 
 vi.mock("../queries/profiles", () => ({
@@ -115,17 +145,24 @@ vi.mock("../queries/profiles", () => ({
 
 vi.mock("../queries/planDraft", () => ({
   usePlanDraftListQuery: () => ({
-    data: draftQueryState.hasOpenDraft ? [savedWorkspace.draft] : [],
-    isLoading: false,
+    data:
+      draftQueryState.hasOpenDraft && !draftQueryState.listPending
+        ? [savedWorkspace.draft]
+        : undefined,
+    isLoading: draftQueryState.listPending,
     error: null,
   }),
-  usePlanDraftWorkspaceQuery: vi.fn((_profileId: number | null, draftId: number | null) => ({
-    data: draftQueryState.hasWorkspace && draftId === savedWorkspace.draft.draft_id
-      ? draftQueryState.workspace ?? savedWorkspace
-      : undefined,
-    isLoading: false,
-    error: null,
-  })),
+  usePlanDraftWorkspaceQuery: vi.fn(
+    (_profileId: number | null, draftId: number | null) => ({
+      data:
+        draftQueryState.hasWorkspace &&
+        draftId === savedWorkspace.draft.draft_id
+          ? (draftQueryState.workspace ?? savedWorkspace)
+          : undefined,
+      isLoading: false,
+      error: null,
+    }),
+  ),
 }));
 
 function wrapper(client: QueryClient) {
@@ -146,8 +183,30 @@ afterEach(() => {
 beforeEach(() => {
   draftQueryState.hasOpenDraft = true;
   draftQueryState.hasWorkspace = true;
+  draftQueryState.listPending = false;
   draftQueryState.workspace = null;
+  vi.mocked(listPlanDrafts).mockImplementation(async () =>
+    draftQueryState.hasOpenDraft ? [savedWorkspace.draft] : [],
+  );
+  vi.mocked(fetchPlanDraftWorkspace).mockImplementation(
+    async () => draftQueryState.workspace ?? savedWorkspace,
+  );
+  // Default rebuild result: a brand-new draft, so a wrong rebuild shows up as a
+  // failed assertion rather than an unrelated crash.
+  vi.mocked(recomputePlanDraft).mockResolvedValue({
+    ...savedWorkspace,
+    draft: {
+      ...savedWorkspace.draft,
+      draft_id: 11,
+      snapshot_digest: "c".repeat(64),
+    },
+  });
   vi.mocked(editPlanDraftParts).mockReset();
+  vi.mocked(editPlanDraftParts).mockResolvedValue({
+    ...savedWorkspace,
+    draft: { ...savedWorkspace.draft, snapshot_digest: "b".repeat(64) },
+    parts: savedWorkspace.parts.map((part) => ({ ...part, included: false })),
+  });
   vi.mocked(applyPlanDraft).mockResolvedValue({
     profile_id: 7,
     draft_id: 9,
@@ -182,19 +241,21 @@ describe("PlanWorkspaceProvider saved draft lifecycle", () => {
         draft_id: 11,
         snapshot_digest: "c".repeat(64),
       },
-      parts: [{
-        draft_part_id: 17,
-        base_revision_part_id: 42,
-        part_key: "frame/bracket.stl",
-        filename: "bracket.stl",
-        relative_path: "frame/bracket.stl",
-        source_layer: "base:Voron",
-        role: "structural",
-        quantity_inferred: 1,
-        quantity_override: null,
-        quantity_effective: 1,
-        included: true,
-      }],
+      parts: [
+        {
+          draft_part_id: 17,
+          base_revision_part_id: 42,
+          part_key: "frame/bracket.stl",
+          filename: "bracket.stl",
+          relative_path: "frame/bracket.stl",
+          source_layer: "base:Voron",
+          role: "structural",
+          quantity_inferred: 1,
+          quantity_override: null,
+          quantity_effective: 1,
+          included: true,
+        },
+      ],
     };
     draftQueryState.hasOpenDraft = false;
     draftQueryState.hasWorkspace = false;
@@ -220,16 +281,56 @@ describe("PlanWorkspaceProvider saved draft lifecycle", () => {
     });
   });
 
+  it("loads the persisted open draft instead of rebuilding when its workspace GET has not resolved", async () => {
+    // A reload leaves the open draft on disk while GET /drafts/:id is still in
+    // flight. Editing must PATCH that draft, never rebuild it from Sources.
+    draftQueryState.hasWorkspace = false;
+    const client = new QueryClient();
+    const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(client) });
+
+    await act(async () => {
+      await hook.result.current.setIncluded(planRow, false);
+    });
+
+    expect(recomputePlanDraft).not.toHaveBeenCalled();
+    expect(fetchPlanDraftWorkspace).toHaveBeenCalledWith(7, 9);
+    expect(editPlanDraftParts).toHaveBeenCalledTimes(1);
+    expect(editPlanDraftParts).toHaveBeenCalledWith(
+      expect.objectContaining({
+        draftId: 9,
+        expectedSnapshotDigest: "a".repeat(64),
+      }),
+    );
+  });
+
+  it("waits for the draft list rather than rebuilding when a click lands mid-load", async () => {
+    draftQueryState.hasWorkspace = false;
+    draftQueryState.listPending = true;
+    const client = new QueryClient();
+    const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(client) });
+
+    await act(async () => {
+      await hook.result.current.setIncluded(planRow, false);
+    });
+
+    expect(recomputePlanDraft).not.toHaveBeenCalled();
+    expect(listPlanDrafts).toHaveBeenCalledWith(7);
+    expect(editPlanDraftParts).toHaveBeenCalledTimes(1);
+  });
+
   it("retries one inclusion edit after replacing a stale draft", async () => {
     const client = new QueryClient();
     const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(client) });
-    await waitFor(() => expect(hook.result.current.draftWorkspace?.draft.draft_id).toBe(9));
+    await waitFor(() =>
+      expect(hook.result.current.draftWorkspace?.draft.draft_id).toBe(9),
+    );
     vi.mocked(editPlanDraftParts)
-      .mockRejectedValueOnce(new EngineHttpError(
-        "Draft changed",
-        409,
-        { code: "draft_changed", workspace: replacementWorkspace },
-      ))
+      .mockRejectedValueOnce(
+        new EngineHttpError("Draft changed", 409, {
+          code: "draft_changed",
+          workspace: replacementWorkspace,
+        }),
+      )
       .mockResolvedValueOnce(editedWorkspace);
 
     await act(async () => {
@@ -237,45 +338,72 @@ describe("PlanWorkspaceProvider saved draft lifecycle", () => {
     });
 
     expect(editPlanDraftParts).toHaveBeenCalledTimes(2);
-    expect(editPlanDraftParts).toHaveBeenNthCalledWith(1, expect.objectContaining({
-      expectedSnapshotDigest: "a".repeat(64),
-    }));
-    expect(editPlanDraftParts).toHaveBeenNthCalledWith(2, expect.objectContaining({
-      expectedSnapshotDigest: "b".repeat(64),
-    }));
-    expect(client.getQueryData(queryKeys.planDraft(7, 9))).toEqual(editedWorkspace);
+    expect(editPlanDraftParts).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        expectedSnapshotDigest: "a".repeat(64),
+      }),
+    );
+    expect(editPlanDraftParts).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        expectedSnapshotDigest: "b".repeat(64),
+      }),
+    );
+    expect(client.getQueryData(queryKeys.planDraft(7, 9))).toEqual(
+      editedWorkspace,
+    );
     expect(hook.result.current.draftError).toBeNull();
   });
 
   it("refetches the persisted open draft after each mount", async () => {
     const firstClient = new QueryClient();
-    const first = renderHook(usePlanWorkspace, { wrapper: wrapper(firstClient) });
-    await waitFor(() => expect(first.result.current.draftWorkspace?.draft.draft_id).toBe(9));
+    const first = renderHook(usePlanWorkspace, {
+      wrapper: wrapper(firstClient),
+    });
+    await waitFor(() =>
+      expect(first.result.current.draftWorkspace?.draft.draft_id).toBe(9),
+    );
     first.unmount();
 
     const secondClient = new QueryClient();
-    const second = renderHook(usePlanWorkspace, { wrapper: wrapper(secondClient) });
-    await waitFor(() => expect(second.result.current.draftWorkspace?.draft.draft_id).toBe(9));
-    expect(vi.mocked(usePlanDraftWorkspaceQuery)).toHaveBeenCalledWith(7, 9, true);
+    const second = renderHook(usePlanWorkspace, {
+      wrapper: wrapper(secondClient),
+    });
+    await waitFor(() =>
+      expect(second.result.current.draftWorkspace?.draft.draft_id).toBe(9),
+    );
+    expect(vi.mocked(usePlanDraftWorkspaceQuery)).toHaveBeenCalledWith(
+      7,
+      9,
+      true,
+    );
   });
 
   it("replaces the cached workspace on a stale edit and leaves accepted Review unchanged", async () => {
     const client = new QueryClient();
     const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(client) });
-    await waitFor(() => expect(hook.result.current.draftWorkspace?.draft.draft_id).toBe(9));
-    vi.mocked(editPlanDraftParts).mockRejectedValue(new EngineHttpError(
-      "Draft changed",
-      409,
-      { code: "draft_changed", workspace: replacementWorkspace },
-    ));
+    await waitFor(() =>
+      expect(hook.result.current.draftWorkspace?.draft.draft_id).toBe(9),
+    );
+    vi.mocked(editPlanDraftParts).mockRejectedValue(
+      new EngineHttpError("Draft changed", 409, {
+        code: "draft_changed",
+        workspace: replacementWorkspace,
+      }),
+    );
 
     await act(async () => {
-      await expect(hook.result.current.editActivePlanDraft([
-        { kind: "set_included", draft_part_ids: [1], value: false },
-      ])).rejects.toThrow("Working Plan changed");
+      await expect(
+        hook.result.current.editActivePlanDraft([
+          { kind: "set_included", draft_part_ids: [1], value: false },
+        ]),
+      ).rejects.toThrow("Working Plan changed");
     });
 
-    expect(client.getQueryData(queryKeys.planDraft(7, 9))).toEqual(replacementWorkspace);
+    expect(client.getQueryData(queryKeys.planDraft(7, 9))).toEqual(
+      replacementWorkspace,
+    );
     expect(hook.result.current.review).toBe(acceptedReview);
     expect(hook.result.current.draftError).toMatch(/Working Plan changed/i);
   });
@@ -292,7 +420,9 @@ describe("PlanWorkspaceProvider saved draft lifecycle", () => {
       client.setQueryData(key, {});
     }
     const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(client) });
-    await waitFor(() => expect(hook.result.current.draftWorkspace?.draft.draft_id).toBe(9));
+    await waitFor(() =>
+      expect(hook.result.current.draftWorkspace?.draft.draft_id).toBe(9),
+    );
     expect(applyPlanDraft).not.toHaveBeenCalled();
 
     await act(async () => {
@@ -300,24 +430,35 @@ describe("PlanWorkspaceProvider saved draft lifecycle", () => {
     });
 
     expect(applyPlanDraft).toHaveBeenCalledWith(savedWorkspace, undefined);
-    expect(client.getQueryState(queryKeys.planReview(7, false))?.isInvalidated).toBe(true);
+    expect(
+      client.getQueryState(queryKeys.planReview(7, false))?.isInvalidated,
+    ).toBe(true);
     expect(client.getQueryState(queryKeys.profiles)?.isInvalidated).toBe(true);
-    expect(client.getQueryState(queryKeys.checkoff(7))?.isInvalidated).toBe(true);
-    expect(client.getQueryState(queryKeys.acceptedPlateWorkspace(7))?.isInvalidated).toBe(true);
-    expect(client.getQueryState(queryKeys.acceptedPlateExportJobs(7))?.isInvalidated).toBe(true);
+    expect(client.getQueryState(queryKeys.checkoff(7))?.isInvalidated).toBe(
+      true,
+    );
+    expect(
+      client.getQueryState(queryKeys.acceptedPlateWorkspace(7))?.isInvalidated,
+    ).toBe(true);
+    expect(
+      client.getQueryState(queryKeys.acceptedPlateExportJobs(7))?.isInvalidated,
+    ).toBe(true);
     await waitFor(() => expect(hook.result.current.draftWorkspace).toBeNull());
   });
 
   it("replaces a stale publication workspace so the next explicit retry uses current state", async () => {
     const client = new QueryClient();
     const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(client) });
-    await waitFor(() => expect(hook.result.current.draftWorkspace?.draft.draft_id).toBe(9));
+    await waitFor(() =>
+      expect(hook.result.current.draftWorkspace?.draft.draft_id).toBe(9),
+    );
     vi.mocked(applyPlanDraft)
-      .mockRejectedValueOnce(new EngineHttpError(
-        "Engine /plans/7/drafts/9/apply failed: 409",
-        409,
-        { code: "draft_changed", workspace: replacementWorkspace },
-      ))
+      .mockRejectedValueOnce(
+        new EngineHttpError("Engine /plans/7/drafts/9/apply failed: 409", 409, {
+          code: "draft_changed",
+          workspace: replacementWorkspace,
+        }),
+      )
       .mockResolvedValueOnce({
         profile_id: 7,
         draft_id: 9,
@@ -335,15 +476,25 @@ describe("PlanWorkspaceProvider saved draft lifecycle", () => {
       );
     });
 
-    expect(client.getQueryData(queryKeys.planDraft(7, 9))).toEqual(replacementWorkspace);
+    expect(client.getQueryData(queryKeys.planDraft(7, 9))).toEqual(
+      replacementWorkspace,
+    );
 
     await act(async () => {
       await hook.result.current.applyActivePlanDraft();
     });
 
     expect(applyPlanDraft).toHaveBeenCalledTimes(2);
-    expect(applyPlanDraft).toHaveBeenNthCalledWith(1, savedWorkspace, undefined);
-    expect(applyPlanDraft).toHaveBeenNthCalledWith(2, replacementWorkspace, undefined);
+    expect(applyPlanDraft).toHaveBeenNthCalledWith(
+      1,
+      savedWorkspace,
+      undefined,
+    );
+    expect(applyPlanDraft).toHaveBeenNthCalledWith(
+      2,
+      replacementWorkspace,
+      undefined,
+    );
   });
 
   it("rebuilds a Working Plan whose attached Sources changed before publishing", async () => {
@@ -357,13 +508,15 @@ describe("PlanWorkspaceProvider saved draft lifecycle", () => {
     };
     const client = new QueryClient();
     const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(client) });
-    await waitFor(() => expect(hook.result.current.draftWorkspace?.draft.draft_id).toBe(9));
+    await waitFor(() =>
+      expect(hook.result.current.draftWorkspace?.draft.draft_id).toBe(9),
+    );
     vi.mocked(applyPlanDraft)
-      .mockRejectedValueOnce(new EngineHttpError(
-        "Engine /plans/7/drafts/9/apply failed: 409",
-        409,
-        { code: "inputs_changed" },
-      ))
+      .mockRejectedValueOnce(
+        new EngineHttpError("Engine /plans/7/drafts/9/apply failed: 409", 409, {
+          code: "inputs_changed",
+        }),
+      )
       .mockResolvedValueOnce({
         profile_id: 7,
         draft_id: 10,
@@ -383,15 +536,25 @@ describe("PlanWorkspaceProvider saved draft lifecycle", () => {
     });
 
     expect(recomputePlanDraft).toHaveBeenCalledWith(7);
-    expect(client.getQueryData(queryKeys.planDraft(7, 10))).toEqual(rebuiltWorkspace);
+    expect(client.getQueryData(queryKeys.planDraft(7, 10))).toEqual(
+      rebuiltWorkspace,
+    );
 
     await act(async () => {
       await hook.result.current.applyActivePlanDraft();
     });
 
     expect(applyPlanDraft).toHaveBeenCalledTimes(2);
-    expect(applyPlanDraft).toHaveBeenNthCalledWith(1, savedWorkspace, undefined);
-    expect(applyPlanDraft).toHaveBeenNthCalledWith(2, rebuiltWorkspace, undefined);
+    expect(applyPlanDraft).toHaveBeenNthCalledWith(
+      1,
+      savedWorkspace,
+      undefined,
+    );
+    expect(applyPlanDraft).toHaveBeenNthCalledWith(
+      2,
+      rebuiltWorkspace,
+      undefined,
+    );
   });
 
   it("lets the server repair an unresolved Working Plan that has no choices", async () => {
@@ -402,7 +565,9 @@ describe("PlanWorkspaceProvider saved draft lifecycle", () => {
     draftQueryState.workspace = legacyWorkspace;
     const client = new QueryClient();
     const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(client) });
-    await waitFor(() => expect(hook.result.current.draftWorkspace).toEqual(legacyWorkspace));
+    await waitFor(() =>
+      expect(hook.result.current.draftWorkspace).toEqual(legacyWorkspace),
+    );
 
     await act(async () => {
       await hook.result.current.applyActivePlanDraft();
@@ -414,31 +579,44 @@ describe("PlanWorkspaceProvider saved draft lifecycle", () => {
   it("keeps the saved draft open when production blocks Apply", async () => {
     const client = new QueryClient();
     const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(client) });
-    await waitFor(() => expect(hook.result.current.draftWorkspace?.draft.draft_id).toBe(9));
-    vi.mocked(applyPlanDraft).mockRejectedValue(new EngineHttpError(
-      "Production is active",
-      423,
-      { code: "production_active" },
-    ));
+    await waitFor(() =>
+      expect(hook.result.current.draftWorkspace?.draft.draft_id).toBe(9),
+    );
+    vi.mocked(applyPlanDraft).mockRejectedValue(
+      new EngineHttpError("Production is active", 423, {
+        code: "production_active",
+      }),
+    );
 
     await act(async () => {
-      await expect(hook.result.current.applyActivePlanDraft()).rejects.toThrow("Production is active");
+      await expect(hook.result.current.applyActivePlanDraft()).rejects.toThrow(
+        "Production is active",
+      );
     });
 
-    expect(hook.result.current.draftWorkspace?.draft).toMatchObject({ draft_id: 9, state: "open" });
+    expect(hook.result.current.draftWorkspace?.draft).toMatchObject({
+      draft_id: 9,
+      state: "open",
+    });
     expect(client.getQueryData(queryKeys.planDraft(7, 9))).not.toBeNull();
   });
 
   it("forwards remapCheckoffLinks when Apply is asked to preserve production links", async () => {
     const client = new QueryClient();
     const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(client) });
-    await waitFor(() => expect(hook.result.current.draftWorkspace?.draft.draft_id).toBe(9));
+    await waitFor(() =>
+      expect(hook.result.current.draftWorkspace?.draft.draft_id).toBe(9),
+    );
 
     await act(async () => {
-      await hook.result.current.applyActivePlanDraft({ remapCheckoffLinks: true });
+      await hook.result.current.applyActivePlanDraft({
+        remapCheckoffLinks: true,
+      });
     });
 
-    expect(applyPlanDraft).toHaveBeenCalledWith(savedWorkspace, { remapCheckoffLinks: true });
+    expect(applyPlanDraft).toHaveBeenCalledWith(savedWorkspace, {
+      remapCheckoffLinks: true,
+    });
     await waitFor(() => expect(hook.result.current.draftWorkspace).toBeNull());
   });
 
@@ -454,7 +632,9 @@ describe("PlanWorkspaceProvider saved draft lifecycle", () => {
     } as ReturnType<typeof usePlanDraftWorkspaceQuery>);
     const client = new QueryClient();
     const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(client) });
-    await waitFor(() => expect(hook.result.current.draftWorkspace?.draft.draft_id).toBe(9));
+    await waitFor(() =>
+      expect(hook.result.current.draftWorkspace?.draft.draft_id).toBe(9),
+    );
 
     await act(async () => {
       await hook.result.current.rebaseActivePlanDraft();
