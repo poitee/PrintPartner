@@ -318,6 +318,52 @@ describe("PlanWorkspaceProvider saved draft lifecycle", () => {
     expect(editPlanDraftParts).toHaveBeenCalledTimes(1);
   });
 
+  it("does not rebuild when the cached draft list is stale and empty", async () => {
+    draftQueryState.hasWorkspace = false;
+    const client = new QueryClient();
+    client.setQueryData(queryKeys.planDrafts(7), []);
+    const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(client) });
+
+    await act(async () => {
+      await hook.result.current.setIncluded(planRow, false);
+    });
+
+    expect(recomputePlanDraft).not.toHaveBeenCalled();
+    expect(listPlanDrafts).toHaveBeenCalledWith(7);
+    expect(editPlanDraftParts).toHaveBeenCalledWith(
+      expect.objectContaining({
+        draftId: 9,
+        expectedSnapshotDigest: "a".repeat(64),
+      }),
+    );
+  });
+
+  it("clears a previous Plan-sheet error when a later editActivePlanDraft succeeds", async () => {
+    const client = new QueryClient();
+    const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(client) });
+    await waitFor(() =>
+      expect(hook.result.current.draftWorkspace?.draft.draft_id).toBe(9),
+    );
+    vi.mocked(editPlanDraftParts).mockRejectedValueOnce(new Error("disk full"));
+
+    await act(async () => {
+      await expect(
+        hook.result.current.editActivePlanDraft([
+          { kind: "set_included", draft_part_ids: [17], value: false },
+        ]),
+      ).rejects.toThrow("disk full");
+    });
+    expect(hook.result.current.draftError).toBe("disk full");
+
+    vi.mocked(editPlanDraftParts).mockResolvedValueOnce(editedWorkspace);
+    await act(async () => {
+      await hook.result.current.editActivePlanDraft([
+        { kind: "set_included", draft_part_ids: [17], value: false },
+      ]);
+    });
+    expect(hook.result.current.draftError).toBeNull();
+  });
+
   it("retries one inclusion edit after replacing a stale draft", async () => {
     const client = new QueryClient();
     const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(client) });
@@ -582,6 +628,7 @@ describe("PlanWorkspaceProvider saved draft lifecycle", () => {
     await waitFor(() =>
       expect(hook.result.current.draftWorkspace?.draft.draft_id).toBe(9),
     );
+    client.setQueryData(queryKeys.planDraft(7, 9), savedWorkspace);
     vi.mocked(applyPlanDraft).mockRejectedValue(
       new EngineHttpError("Production is active", 423, {
         code: "production_active",
@@ -598,7 +645,9 @@ describe("PlanWorkspaceProvider saved draft lifecycle", () => {
       draft_id: 9,
       state: "open",
     });
-    expect(client.getQueryData(queryKeys.planDraft(7, 9))).not.toBeNull();
+    expect(client.getQueryData(queryKeys.planDraft(7, 9))).toEqual(
+      savedWorkspace,
+    );
   });
 
   it("forwards remapCheckoffLinks when Apply is asked to preserve production links", async () => {

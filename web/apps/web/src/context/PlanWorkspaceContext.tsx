@@ -268,6 +268,7 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
       workspace: PlanDraftWorkspace,
       decisions: PlanDraftPartDecisionContract[],
     ) => {
+      setDraftMutationError(null);
       try {
         return await persistDraftEdit(workspace, decisions);
       } catch (error) {
@@ -298,9 +299,10 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
       const cached = currentDraftWorkspace();
       if (cached) return cached;
       if (selectedProfileId == null) return null;
-      const drafts = await queryClient.ensureQueryData({
+      const drafts = await queryClient.fetchQuery({
         queryKey: queryKeys.planDrafts(selectedProfileId),
         queryFn: () => listPlanDrafts(selectedProfileId),
+        staleTime: 0,
       });
       const openDraftId = latestOpenDraftId(drafts, recentlyAppliedDraftId);
       if (openDraftId == null) return null;
