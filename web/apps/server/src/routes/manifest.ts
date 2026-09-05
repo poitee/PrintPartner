@@ -12,7 +12,7 @@ import { loadKitManifest, saveKitManifest } from "../services/kit-manifest-store
 
 const DATA_DIR = join(dirname(fileURLToPath(import.meta.url)), "../data/manifests");
 
-type RouteDeps = { repo: AppRepository };
+type RouteDeps = { repo: AppRepository; dataDir: string | null };
 
 const REGISTRY_STRING_FIELDS = ["slug", "target_repo", "title", "manifest_file"] as const;
 
@@ -119,7 +119,7 @@ export async function registerManifestRoutes(
     return { project_id: id, part_count: scanned.length, yaml };
   });
 
-  app.get("/kit-catalog", async () => loadKitCatalog());
+  app.get("/kit-catalog", async () => loadKitCatalog(deps.dataDir));
 
   app.post("/plans/:id/apply-stack-preset", async (request, reply) => {
     const id = Number((request.params as { id: string }).id);
@@ -130,7 +130,12 @@ export async function registerManifestRoutes(
       return reply.status(404).send({ detail: "Profile not found" });
     }
     try {
-      const result = applyStackPresetToProfile(deps.repo, id, presetId);
+      const result = applyStackPresetToProfile(
+        deps.repo,
+        id,
+        presetId,
+        deps.dataDir,
+      );
       const kit = loadKitManifest(deps.repo, id);
       kit.selections = result.selections;
       saveKitManifest(deps.repo, id, kit);

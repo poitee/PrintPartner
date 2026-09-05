@@ -25,12 +25,15 @@ import { nativeSearchNote, nativeSearchProviderForAi } from "./provider-native.j
 import {
   isSearchProviderId,
   SEARCH_UNTRUSTED_BANNER,
+  type SearchAdapterDependencies,
   type SearchProviderId,
   type SearchSetupOption,
   type SearchStatus,
   type WebSearchOptions,
   type WebSearchResult,
 } from "./types.js";
+
+export const WEB_SEARCH_REQUEST_TIMEOUT_MS = 30_000;
 
 export type {
   SearchHit,
@@ -222,6 +225,8 @@ export async function searchWeb(
   config: ServerConfig,
   deps?: SearchResolveOverrides & {
     fetchFn?: typeof safeOutboundFetch;
+    signal?: AbortSignal;
+    timeoutMs?: number;
   },
 ): Promise<WebSearchResult> {
   const query = options.query.trim();
@@ -235,7 +240,12 @@ export async function searchWeb(
     };
   }
 
-  const { fetchFn: fetchOverride, ...overrides } = deps ?? {};
+  const {
+    fetchFn: fetchOverride,
+    signal: callerSignal,
+    timeoutMs = WEB_SEARCH_REQUEST_TIMEOUT_MS,
+    ...overrides
+  } = deps ?? {};
   const input = buildResolveSearchInput(config, overrides);
   const provider = resolveSearchProvider(input);
   const fetchFn = fetchOverride ?? safeOutboundFetch;
@@ -250,6 +260,12 @@ export async function searchWeb(
     };
   }
 
+  const deadline = AbortSignal.timeout(timeoutMs);
+  const adapterDependencies: SearchAdapterDependencies = {
+    fetchFn,
+    signal: callerSignal ? AbortSignal.any([callerSignal, deadline]) : deadline,
+  };
+
   if (provider === "brave") {
     if (!input.searchApiKey) {
       return {
@@ -260,7 +276,11 @@ export async function searchWeb(
         setup_hint: setupHintFor("brave", true),
       };
     }
-    const { hits, error } = await searchBrave(options, input.searchApiKey, fetchFn);
+    const { hits, error } = await searchBrave(
+      options,
+      input.searchApiKey,
+      adapterDependencies,
+    );
     return {
       provider,
       hits,
@@ -280,7 +300,11 @@ export async function searchWeb(
         setup_hint: setupHintFor("exa", true),
       };
     }
-    const { hits, error } = await searchExa(options, input.searchApiKey, fetchFn);
+    const { hits, error } = await searchExa(
+      options,
+      input.searchApiKey,
+      adapterDependencies,
+    );
     return {
       provider,
       hits,
@@ -291,7 +315,7 @@ export async function searchWeb(
   }
 
   // anthropic-native / openai-native / duckduckgo → DuckDuckGo HTTP
-  const { hits, error } = await searchDuckDuckGo(options, fetchFn);
+  const { hits, error } = await searchDuckDuckGo(options, adapterDependencies);
   const note =
     provider === "anthropic-native" || provider === "openai-native"
       ? nativeSearchNote(provider)

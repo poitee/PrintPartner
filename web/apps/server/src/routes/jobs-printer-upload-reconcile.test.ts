@@ -77,8 +77,6 @@ describe("printer-upload job failure reconcile", () => {
   });
 
   it("reconciles send-queue out of sending even when emit listeners throw", async () => {
-    // QA / CodeRabbit major: reconcile shared the emit try/catch, so a throwing
-    // subscriber left the queue item stuck in "sending".
     const staged = enqueuePrinterSend(repo, {
       filename: "plate.gcode",
       artifact_path: join(dataDir, "exports", "printer-uploads", "x", "plate.gcode"),

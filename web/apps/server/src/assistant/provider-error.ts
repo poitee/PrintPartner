@@ -1,4 +1,7 @@
+import { readBoundedResponseText } from "../lib/bounded-response.js";
+
 const MAX_SNIPPET = 240;
+const MAX_PROVIDER_ERROR_BYTES = 64 * 1024;
 
 /** Strip credential-like substrings before returning provider errors to clients. */
 function redactSecrets(text: string): string {
@@ -43,6 +46,6 @@ export function formatProviderHttpError(
 }
 
 export async function readProviderHttpError(label: string, res: Response): Promise<string> {
-  const text = await res.text().catch(() => "");
+  const text = await readBoundedResponseText(res, MAX_PROVIDER_ERROR_BYTES).catch(() => "");
   return formatProviderHttpError(label, res.status, text);
 }

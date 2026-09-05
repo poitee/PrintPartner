@@ -109,6 +109,7 @@ export type AcceptedPlanProgressDependencies = Readonly<{
   tenantId: string;
   reposDir: string;
   sqlite: boolean;
+  resolveSourceSnapshotPath: (sourceId: number, locator: string) => string | null;
 }>;
 
 export function acceptedPlanBasis(snapshot: AcceptedPlanOperationalSnapshot): AcceptedPlanBasis {

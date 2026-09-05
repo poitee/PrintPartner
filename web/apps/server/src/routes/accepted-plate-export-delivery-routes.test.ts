@@ -82,7 +82,12 @@ endsolid accepted`);
     syncedAt: "2026-08-21T12:00:00.000Z",
     completeness: "complete",
   });
-  repo.activateSourceRevision({ sourceId: source.id, revisionId: sourceRevision.id, observed });
+  repo.activateSourceRevision({
+    sourceId: source.id,
+    revisionId: sourceRevision.id,
+    observed,
+    sourceVersion: sourceRevision.upstream_revision_key,
+  });
   const profile = repo.createProfile("Accepted export Build", source.id);
   const draft = repo.recomputePlanDraft({
     profileId: profile.id,

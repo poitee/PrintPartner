@@ -1,6 +1,6 @@
-import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { AppRepository, ProjectRow } from "../db/repository.js";
+import { resolvedFileUnderRoot } from "../lib/secure-path.js";
 
 export const SOURCE_MANIFEST_FILENAME = "print-partner.manifest.yaml";
 
@@ -25,20 +25,15 @@ export function sourceWorkspaceRoot(reposDir: string, sourceId: number): string 
   return join(reposDir, String(requireSourceId(sourceId)));
 }
 
-export function editableSourceManifestPath(reposDir: string, sourceId: number): string {
+export function legacySourceManifestOverridePath(reposDir: string, sourceId: number): string {
   return join(sourceWorkspaceRoot(reposDir, sourceId), SOURCE_MANIFEST_FILENAME);
 }
 
-export function findEditableSourceManifestPath(input: {
-  reposDir: string;
-  sourceId: number;
-  contentRoot: string;
-}): string | null {
-  const editablePath = editableSourceManifestPath(input.reposDir, input.sourceId);
-  if (existsSync(editablePath)) return editablePath;
-
-  const legacyPath = join(input.contentRoot, SOURCE_MANIFEST_FILENAME);
-  return existsSync(legacyPath) ? legacyPath : null;
+export function findSourceManifestPath(contentRoot: string): string | null {
+  return resolvedFileUnderRoot(
+    contentRoot,
+    join(contentRoot, SOURCE_MANIFEST_FILENAME),
+  );
 }
 
 export function revisionPdfTextCacheRoot(input: {

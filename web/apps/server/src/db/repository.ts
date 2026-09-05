@@ -21,6 +21,10 @@ import {
 } from "@print-partner/domain";
 import { createHash } from "node:crypto";
 import { inArray } from "drizzle-orm";
+import {
+  copyProductionSetup,
+  productionSetupSettingKey,
+} from "../services/production-setup-store.js";
 import { applyManifestToDraftParts } from "../services/manifest-apply.js";
 import { buildPlanOptionGroups } from "../services/plan-manifest-builder.js";
 import { loadKitManifest, saveKitManifest, type KitManifestRecord } from "../services/kit-manifest-store.js";
@@ -71,9 +75,20 @@ import type {
   SourceNamingResponse,
 } from "@print-partner/contracts";
 import { and, asc, count, desc, eq, gte, isNotNull, isNull, ne, sql } from "drizzle-orm";
-import { join, resolve, sep } from "node:path";
+import { dirname, resolve } from "node:path";
 import type { DrizzleDb } from "./client.js";
-import { asSyncDb, isSyncSqliteDrizzle, runSerializedSettingsMutation, type AppDrizzleDb } from "./sync-db-bridge.js";
+import {
+  settingSnapshotsEqual,
+  type SettingCompareAndSetInput,
+  type SettingSnapshot,
+} from "./setting-compare-and-set.js";
+import {
+  asSyncDb,
+  compareAndSetPostgresSetting,
+  isSyncSqliteDrizzle,
+  runSerializedSettingsMutation,
+  type AppDrizzleDb,
+} from "./sync-db-bridge.js";
 import { getRequestTenantId } from "../middleware/tenant-context.js";
 import type { ProfileSourceMode } from "../services/printer-profile-assignments.js";
 import { stockPresets } from "../services/slicer-instances.js";
@@ -150,6 +165,14 @@ import {
   type WorkingSourceSelection,
 } from "../services/working-plan-sources.js";
 import { resolveStoredSnapshotPath } from "./stored-snapshot-path.js";
+import {
+  allowsUserSourceLocalPath,
+  resolveSourceFilesystemRoot,
+  sourceWorkspaceRoot,
+  TRUSTED_SINGLE_USER_SOURCE_FILESYSTEM,
+  UserSourceLocalPathNotAllowedError,
+  type SourceFilesystemPolicy,
+} from "../services/source-filesystem-policy.js";
 import {
   projectionPlanningFieldsMatch,
   readAcceptedPlanOperationalSnapshotInternal,
@@ -325,6 +348,11 @@ export type SchemaTables = Pick<
 >;
 
 export type ProjectRow = typeof defaultSchema.projects.$inferSelect;
+export type AppRepositoryOptions = {
+  readonly clock?: () => Date;
+  readonly tokenFactory?: () => string;
+  readonly sourceFilesystemPolicy?: SourceFilesystemPolicy;
+};
 export class PlanTransactionUnavailableError extends Error {
   readonly code = "transaction_unavailable" as const;
 
@@ -334,10 +362,27 @@ export class PlanTransactionUnavailableError extends Error {
   }
 }
 
+export class SourceActivationConflictError extends Error {
+  readonly code = "source_activation_conflict" as const;
+
+  constructor() {
+    super("Source changed during sync; revision was not activated");
+    this.name = "SourceActivationConflictError";
+  }
+}
+
 export type SourceActivationObservation = Readonly<
   Pick<
     ProjectRow,
-    "currentSourceRevisionId" | "url" | "branch" | "tag" | "sourceKind" | "sourceType" | "localPath" | "lastCommitSha"
+    | "currentSourceRevisionId"
+    | "url"
+    | "branch"
+    | "tag"
+    | "sourceKind"
+    | "sourceType"
+    | "localPath"
+    | "lastCommitSha"
+    | "legacyManifestCutover"
   >
 >;
 export type ProfileRow = typeof defaultSchema.buildProfiles.$inferSelect;
@@ -762,6 +807,7 @@ export class AppRepository {
 
   private readonly schema: SchemaTables;
   private readonly syncSqlite: boolean;
+  private driverDb: AppDrizzleDb;
   private db: DrizzleDb;
 
   constructor(
@@ -769,12 +815,10 @@ export class AppRepository {
     private readonly defaultTenantId = DEFAULT_TENANT_ID,
     reposDir: string,
     schema: SchemaTables = defaultSchema,
-    private readonly planApplyDependencies: {
-      readonly clock?: () => Date;
-      readonly tokenFactory?: () => string;
-    } = {},
+    private readonly options: AppRepositoryOptions = {},
   ) {
     this.syncSqlite = isSyncSqliteDrizzle(db);
+    this.driverDb = db;
     this.db = asSyncDb(db);
     this.schema = schema;
     this.reposDir = reposDir;
@@ -789,11 +833,77 @@ export class AppRepository {
     if (isSyncSqliteDrizzle(db) !== this.syncSqlite) {
       throw new Error("Cannot replace the repository database with a different driver");
     }
+    this.driverDb = db;
     this.db = asSyncDb(db);
   }
 
   private get tenantId(): string {
     return getRequestTenantId(this.defaultTenantId);
+  }
+
+  private get sourceFilesystemPolicy(): SourceFilesystemPolicy {
+    return this.options.sourceFilesystemPolicy ?? TRUSTED_SINGLE_USER_SOURCE_FILESYSTEM;
+  }
+
+  allowsUserSourceLocalPaths(): boolean {
+    return allowsUserSourceLocalPath(this.sourceFilesystemPolicy);
+  }
+
+  sourceSummaryForClient(source: SourceSummary): SourceSummary {
+    return this.allowsUserSourceLocalPaths() ? source : { ...source, local_path: null };
+  }
+
+  private sourceRowWithResolvedFilesystemPath(row: ProjectRow): ProjectRow {
+    return {
+      ...row,
+      localPath: resolveSourceFilesystemRoot(
+        this.sourceFilesystemPolicy,
+        this.reposDir,
+        row.id,
+        row.localPath,
+      ),
+    };
+  }
+
+  private resolveSourceFilesystemPath(sourceId: number, path: string | null): string | null {
+    return resolveSourceFilesystemRoot(
+      this.sourceFilesystemPolicy,
+      this.reposDir,
+      sourceId,
+      path,
+    );
+  }
+
+  resolveSourceSnapshotPath(sourceId: number, locator: string): string | null {
+    return this.resolveSourceFilesystemPath(
+      sourceId,
+      resolveStoredSnapshotPath(this.reposDir, locator),
+    );
+  }
+
+  getSourceActivationObservation(sourceId: number): SourceActivationObservation | null {
+    return (
+      this.db
+        .select({
+          currentSourceRevisionId: this.schema.projects.currentSourceRevisionId,
+          url: this.schema.projects.url,
+          branch: this.schema.projects.branch,
+          tag: this.schema.projects.tag,
+          sourceKind: this.schema.projects.sourceKind,
+          sourceType: this.schema.projects.sourceType,
+          localPath: this.schema.projects.localPath,
+          lastCommitSha: this.schema.projects.lastCommitSha,
+          legacyManifestCutover: this.schema.projects.legacyManifestCutover,
+        })
+        .from(this.schema.projects)
+        .where(
+          and(
+            eq(this.schema.projects.tenantId, this.tenantId),
+            eq(this.schema.projects.id, sourceId),
+          ),
+        )
+        .get() ?? null
+    );
   }
 
   private requireProfile(profileId: number): void {
@@ -814,7 +924,9 @@ export class AppRepository {
       sqlite: this.syncSqlite,
       transaction: <T>(operation: () => T) => this.transaction(operation, "immediate"),
       readTransaction: <T>(operation: () => T) => this.transaction(operation, "deferred"),
-      clock: this.planApplyDependencies.clock,
+      clock: this.options.clock,
+      resolveSourceSnapshotPath: (sourceId: number, locator: string) =>
+        this.resolveSourceSnapshotPath(sourceId, locator),
     };
   }
 
@@ -898,6 +1010,8 @@ export class AppRepository {
         profileId,
         reposDir: this.reposDir,
         sqlite: this.syncSqlite,
+        resolveSourceSnapshotPath: (sourceId, locator) =>
+          this.resolveSourceSnapshotPath(sourceId, locator),
       });
     return this.syncSqlite ? this.transaction(read, "deferred") : read();
   }
@@ -958,6 +1072,8 @@ export class AppRepository {
         profileId,
         reposDir: this.reposDir,
         sqlite: true,
+        resolveSourceSnapshotPath: (sourceId, locator) =>
+          this.resolveSourceSnapshotPath(sourceId, locator),
       });
       if (accepted.kind === "empty") return { kind: "empty" as const };
       if (accepted.kind !== "ready") {
@@ -1120,6 +1236,8 @@ export class AppRepository {
             tenantId: this.tenantId,
             reposDir: this.reposDir,
             sqlite: true,
+            resolveSourceSnapshotPath: (sourceId, locator) =>
+              this.resolveSourceSnapshotPath(sourceId, locator),
           },
           command,
         ),
@@ -1137,6 +1255,8 @@ export class AppRepository {
           tenantId: this.tenantId,
           reposDir: this.reposDir,
           sqlite: true,
+          resolveSourceSnapshotPath: (sourceId, locator) =>
+            this.resolveSourceSnapshotPath(sourceId, locator),
         },
         command,
       );
@@ -1168,6 +1288,8 @@ export class AppRepository {
         reposDir: this.reposDir,
         sqlite: true,
         profileId: command.expected.profileId,
+        resolveSourceSnapshotPath: (sourceId, locator) =>
+          this.resolveSourceSnapshotPath(sourceId, locator),
       });
       if (accepted.kind !== "ready") {
         if (accepted.kind === "empty") return { kind: "stale_accepted_plan" };
@@ -1238,6 +1360,8 @@ export class AppRepository {
             tenantId: this.tenantId,
             reposDir: this.reposDir,
             sqlite: true,
+            resolveSourceSnapshotPath: (sourceId, locator) =>
+              this.resolveSourceSnapshotPath(sourceId, locator),
           },
           command,
         ),
@@ -1256,6 +1380,8 @@ export class AppRepository {
             tenantId: this.tenantId,
             reposDir: this.reposDir,
             sqlite: true,
+            resolveSourceSnapshotPath: (sourceId, locator) =>
+              this.resolveSourceSnapshotPath(sourceId, locator),
           },
           command.expected,
         ),
@@ -1307,6 +1433,8 @@ export class AppRepository {
           tenantId: this.tenantId,
           reposDir: this.reposDir,
           sqlite: true,
+          resolveSourceSnapshotPath: (sourceId, locator) =>
+            this.resolveSourceSnapshotPath(sourceId, locator),
         },
         command.expected,
         command.decisions,
@@ -1611,6 +1739,33 @@ export class AppRepository {
       .run();
   }
 
+  getSettingSnapshot(key: string): SettingSnapshot {
+    const row = this.db
+      .select({ value: this.schema.appSettings.value })
+      .from(this.schema.appSettings)
+      .where(and(
+        eq(this.schema.appSettings.tenantId, this.tenantId),
+        eq(this.schema.appSettings.key, key),
+      ))
+      .get();
+    return row ? { kind: "stored", value: row.value } : { kind: "missing" };
+  }
+
+  compareAndSetSetting(input: SettingCompareAndSetInput): boolean {
+    if (!this.syncSqlite) {
+      return compareAndSetPostgresSetting(this.driverDb, {
+        tenantId: this.tenantId,
+        ...input,
+      });
+    }
+    return this.transaction(() => {
+      const current = this.getSettingSnapshot(input.key);
+      if (!settingSnapshotsEqual(current, input.expected)) return false;
+      this.setSetting(input.key, input.value);
+      return true;
+    }, "immediate");
+  }
+
   recordAppEvent(input: {
     kind: string;
     at?: string;
@@ -1653,9 +1808,8 @@ export class AppRepository {
   }
 
   /**
-   * Serialize settings-row RMW mutations.
-   * SQLite: native sync transaction. Postgres: in-process queue (sync bridge cannot
-   * rebind queries onto an async tx client).
+   * Run a native SQLite transaction or serialize Postgres callbacks in this process.
+   * Cross-process Postgres writes must use a database-native atomic operation.
    */
   transaction<T>(fn: () => T, behavior: "deferred" | "immediate" = "deferred"): T {
     if (this.syncSqlite) {
@@ -2443,7 +2597,9 @@ export class AppRepository {
       .orderBy(asc(this.schema.projects.name))
       .all();
     const counts = this.docCountByProjectId();
-    return rows.map((row) => sourceSummary(row, counts.get(row.id) ?? 0));
+    return rows.map((row) =>
+      sourceSummary(this.sourceRowWithResolvedFilesystemPath(row), counts.get(row.id) ?? 0),
+    );
   }
 
   getSource(id: number): SourceSummary | null {
@@ -2454,7 +2610,7 @@ export class AppRepository {
       .get();
     if (!row) return null;
     const counts = this.docCountByProjectId([id]);
-    return sourceSummary(row, counts.get(id) ?? 0);
+    return sourceSummary(this.sourceRowWithResolvedFilesystemPath(row), counts.get(id) ?? 0);
   }
 
   getPartRow(id: number): PartDbRow | null {
@@ -2473,13 +2629,12 @@ export class AppRepository {
   }
 
   getProjectRow(id: number): ProjectRow | null {
-    return (
-      this.db
-        .select()
-        .from(this.schema.projects)
-        .where(and(eq(this.schema.projects.tenantId, this.tenantId), eq(this.schema.projects.id, id)))
-        .get() ?? null
-    );
+    const row = this.db
+      .select()
+      .from(this.schema.projects)
+      .where(and(eq(this.schema.projects.tenantId, this.tenantId), eq(this.schema.projects.id, id)))
+      .get();
+    return row ? this.sourceRowWithResolvedFilesystemPath(row) : null;
   }
 
   recordSourceRevision(input: {
@@ -2573,6 +2728,8 @@ export class AppRepository {
     sourceId: number;
     revisionId: number;
     observed: SourceActivationObservation;
+    sourceVersion: string;
+    recordLegacyManifestCutover?: boolean;
   }): SourceSummary {
     const revision = this.db
       .select()
@@ -2587,11 +2744,14 @@ export class AppRepository {
       )
       .get();
     if (!revision) throw new Error("Source revision not found for source");
+    const sourceVersion = requiredText(input.sourceVersion, "Source version");
 
     const snapshotLocator = requiredText(revision.snapshotLocator, "Snapshot locator");
-    const localPath = resolveStoredSnapshotPath(this.reposDir, snapshotLocator);
+    const localPath = this.resolveSourceSnapshotPath(input.sourceId, snapshotLocator);
     if (!localPath) {
-      throw new Error("Snapshot locator must be a canonical storage-relative path");
+      throw new Error(
+        "Snapshot locator must be storage-relative and resolve inside the Source workspace",
+      );
     }
 
     const observed = input.observed;
@@ -2604,8 +2764,10 @@ export class AppRepository {
       current.sourceKind === observed.sourceKind &&
       current.sourceType === observed.sourceType &&
       current.localPath === localPath &&
-      current.lastCommitSha === revision.upstreamRevisionKey &&
-      current.lastSyncedAt === revision.syncedAt
+      current.lastCommitSha === sourceVersion &&
+      current.lastSyncedAt === revision.syncedAt &&
+      current.legacyManifestCutover === observed.legacyManifestCutover &&
+      (!input.recordLegacyManifestCutover || current.legacyManifestCutover)
     ) {
       const alreadyActive = this.getSource(input.sourceId);
       if (!alreadyActive) throw new Error("Active Source revision could not be read");
@@ -2616,8 +2778,9 @@ export class AppRepository {
       .set({
         currentSourceRevisionId: revision.id,
         localPath,
-        lastCommitSha: revision.upstreamRevisionKey,
+        lastCommitSha: sourceVersion,
         lastSyncedAt: revision.syncedAt,
+        ...(input.recordLegacyManifestCutover ? { legacyManifestCutover: true } : {}),
       })
       .where(
         and(
@@ -2637,11 +2800,15 @@ export class AppRepository {
           observed.lastCommitSha === null
             ? isNull(this.schema.projects.lastCommitSha)
             : eq(this.schema.projects.lastCommitSha, observed.lastCommitSha),
+          eq(
+            this.schema.projects.legacyManifestCutover,
+            observed.legacyManifestCutover,
+          ),
         ),
       )
       .run();
     if (result.changes !== 1) {
-      throw new Error("Source changed during sync; revision was not activated");
+      throw new SourceActivationConflictError();
     }
 
     const activated = this.getSource(input.sourceId);
@@ -2732,7 +2899,7 @@ export class AppRepository {
         throw new Error("Active Source revision not found");
       }
       const localPath = revision
-        ? resolveStoredSnapshotPath(this.reposDir, revision.snapshotLocator)
+        ? this.resolveSourceSnapshotPath(source.id, revision.snapshotLocator)
         : source.localPath;
       if (revision && !localPath) {
         throw new Error("Active Source revision has an unsafe snapshot locator");
@@ -3077,7 +3244,7 @@ export class AppRepository {
       if (input.tracking_kind === "revision" && input.source_revision_id != null) {
         const revision = this.getSourceRevision(input.source_revision_id);
         if (!revision) throw new Error("Accepted Source revision not found");
-        rootPath = resolveStoredSnapshotPath(this.reposDir, revision.snapshot_locator);
+        rootPath = this.resolveSourceSnapshotPath(input.source_id, revision.snapshot_locator);
         if (!rootPath) {
           throw new Error("Accepted Source revision has an unsafe snapshot locator");
         }
@@ -3155,16 +3322,10 @@ export class AppRepository {
       .get();
     if (existing) throw new Error(`Source already exists: ${name}`);
 
-    const reposRoot = resolve(this.reposDir);
-    let trustedLocalPath: string | null = null;
-    if (input.local_path) {
-      const candidate = resolve(input.local_path);
-      if (candidate.startsWith(reposRoot + sep) || candidate === reposRoot) {
-        trustedLocalPath = candidate;
-      }
+    if (input.local_path !== undefined && !this.allowsUserSourceLocalPaths()) {
+      throw new UserSourceLocalPathNotAllowedError();
     }
-
-    const localPath = trustedLocalPath;
+    const localPath = input.local_path ? resolve(input.local_path) : null;
 
     const inserted = this.db
       .insert(this.schema.projects)
@@ -3185,8 +3346,8 @@ export class AppRepository {
 
     if (!inserted) throw new Error("Failed to create source");
 
-    const repoPath = join(this.reposDir, String(inserted.id));
-    if (!inserted.localPath) {
+    if (!inserted.localPath && this.allowsUserSourceLocalPaths()) {
+      const repoPath = sourceWorkspaceRoot(this.reposDir, inserted.id);
       this.db
         .update(this.schema.projects)
         .set({ localPath: repoPath })
@@ -3227,8 +3388,17 @@ export class AppRepository {
     if (patch.source_kind != null) updates.sourceKind = patch.source_kind;
     if (patch.source_type != null) updates.sourceType = patch.source_type;
     if (patch.role != null) updates.role = patch.role;
-    if (patch.local_path != null) updates.localPath = patch.local_path;
-    if (patch.localPath != null) updates.localPath = patch.localPath;
+    if (patch.local_path != null) {
+      if (!this.allowsUserSourceLocalPaths()) throw new UserSourceLocalPathNotAllowedError();
+      updates.localPath = resolve(patch.local_path);
+    }
+    if (patch.localPath != null) {
+      const resolvedPath = this.resolveSourceFilesystemPath(id, patch.localPath);
+      if (!resolvedPath) {
+        throw new Error("Source localPath must resolve inside its workspace");
+      }
+      updates.localPath = resolvedPath;
+    }
     if (patch.last_synced_at !== undefined) updates.lastSyncedAt = patch.last_synced_at;
     if (patch.last_commit_sha !== undefined) updates.lastCommitSha = patch.last_commit_sha;
     if (patch.metadata != null) {
@@ -3249,7 +3419,11 @@ export class AppRepository {
     return this.getSource(id)!;
   }
 
-  deleteSource(id: number): void {
+  deleteSource(id: number):
+    | Readonly<{ kind: "deleted" }>
+    | Readonly<{ kind: "not_found" }>
+    | Readonly<{ kind: "retained_history" }> {
+    if (!this.getProjectRow(id)) return { kind: "not_found" };
     const revision = this.db
       .select({ id: this.schema.sourceRevisions.id })
       .from(this.schema.sourceRevisions)
@@ -3259,12 +3433,13 @@ export class AppRepository {
       .limit(1)
       .get();
     if (revision) {
-      throw new Error("Source has immutable revision history; archive it instead");
+      return { kind: "retained_history" };
     }
     this.db
       .delete(this.schema.projects)
       .where(and(eq(this.schema.projects.tenantId, this.tenantId), eq(this.schema.projects.id, id)))
       .run();
+    return { kind: "deleted" };
   }
 
   listProfileHeaders(): ProfileHeader[] {
@@ -3340,7 +3515,9 @@ export class AppRepository {
           .where(and(eq(this.schema.projects.tenantId, this.tenantId), inArray(this.schema.projects.id, sourceIds)))
           .all()
       : [];
-    const sourcesById = new Map(sources.map((source) => [source.id, source]));
+    const sourcesById = new Map(
+      sources.map((source) => [source.id, this.sourceRowWithResolvedFilesystemPath(source)]),
+    );
 
     const revisionIds = [
       ...new Set(
@@ -3944,7 +4121,7 @@ export class AppRepository {
       this,
       profileId,
       scannedDraftParts,
-      buildPlanOptionGroups(this, profileId),
+      buildPlanOptionGroups(this, profileId, dirname(this.reposDir)),
     );
     return {
       kind: "prepared",
@@ -5796,7 +5973,7 @@ export class AppRepository {
         for (let attempt = 0; attempt < 32; attempt += 1) {
           try {
             const token = parseRequiredUnitToken(
-              this.planApplyDependencies.tokenFactory?.() ?? generateRequiredUnitToken(),
+              this.options.tokenFactory?.() ?? generateRequiredUnitToken(),
             );
             const objectName = requiredUnitObjectName(part.filename, token);
             if (!existingTokens.has(token) && !existingObjectNames.has(objectName.toLowerCase())) {
@@ -5812,7 +5989,7 @@ export class AppRepository {
         if (!chosen) return { kind: "token_allocation_failed" };
         allocated.set(`${assignment.draftPartId}:${assignment.unitIndex}`, chosen);
       }
-      const appliedAt = (this.planApplyDependencies.clock?.() ?? new Date()).toISOString();
+      const appliedAt = (this.options.clock?.() ?? new Date()).toISOString();
       validateAcceptedOperationalTextRow([
         this.tenantId,
         "tracked",
@@ -6578,7 +6755,7 @@ export class AppRepository {
         .where(and(
           eq(this.schema.appSettings.tenantId, this.tenantId),
           inArray(this.schema.appSettings.key, [
-            `production_setup:${id}`,
+            productionSetupSettingKey(id),
             roleFilamentSettingKey(id),
           ]),
         ))
@@ -6737,6 +6914,8 @@ export class AppRepository {
         reposDir: this.reposDir,
         sqlite: true,
         profileId,
+        resolveSourceSnapshotPath: (sourceId, locator) =>
+          this.resolveSourceSnapshotPath(sourceId, locator),
       });
       if (accepted.kind !== "ready") return `Accepted Plan state is ${accepted.kind}`;
       if (accepted.snapshot.profile.archivedAt) return "Accepted Plan is archived";
@@ -6861,23 +7040,11 @@ export class AppRepository {
       if (roleFilaments) {
         this.setSetting(roleFilamentSettingKey(newProfile.id), roleFilaments);
       }
-      const productionSetupRaw = this.getSetting(`production_setup:${id}`);
-      if (productionSetupRaw) {
-        try {
-          const parsed = JSON.parse(productionSetupRaw) as unknown;
-          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-            throw new Error("Invalid production setup");
-          }
-          const productionSetup = parsed as Record<string, unknown>;
-          this.setSetting(`production_setup:${newProfile.id}`, JSON.stringify({
-            ...productionSetup,
-            profile_id: newProfile.id,
-            updated_at: new Date().toISOString(),
-          }));
-        } catch {
-          // A malformed optional setup must not make an otherwise valid Build impossible to duplicate.
-        }
-      }
+      copyProductionSetup(this, {
+        sourceProfileId: id,
+        targetProfileId: newProfile.id,
+        updatedAt: new Date().toISOString(),
+      });
       saveKitManifest(this, newProfile.id, loadKitManifest(this, id));
 
       return {

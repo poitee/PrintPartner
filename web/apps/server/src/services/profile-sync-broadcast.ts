@@ -7,26 +7,34 @@ import type { ProfileSyncResult } from "../services/profile-sync.js";
  * broadcasts a single stream to all listeners (profile changes are rare and small).
  */
 
-const listeners = new Set<(event: ProfileSyncResult) => void>();
+const listenersByTenant = new Map<string, Set<(event: ProfileSyncResult) => void>>();
 
-export function broadcastProfileSync(event: ProfileSyncResult): void {
-  for (const l of listeners) {
+export function broadcastProfileSync(tenantId: string, event: ProfileSyncResult): void {
+  for (const listener of listenersByTenant.get(tenantId) ?? []) {
     try {
-      l(event);
+      listener(event);
     } catch {
       /* drop listener errors */
     }
   }
 }
 
-export function subscribeProfileSync(listener: (event: ProfileSyncResult) => void): () => void {
+export function subscribeProfileSync(
+  tenantId: string,
+  listener: (event: ProfileSyncResult) => void,
+): () => void {
+  const listeners = listenersByTenant.get(tenantId) ?? new Set();
   listeners.add(listener);
-  return () => listeners.delete(listener);
+  listenersByTenant.set(tenantId, listeners);
+  return () => {
+    listeners.delete(listener);
+    if (listeners.size === 0) listenersByTenant.delete(tenantId);
+  };
 }
 
 export function registerProfileSyncWebSocket(app: FastifyInstance): void {
-  app.get("/ws/profile-sync", { websocket: true }, (socket) => {
-    const unsub = subscribeProfileSync((event) => {
+  app.get("/ws/profile-sync", { websocket: true }, (socket, request) => {
+    const unsub = subscribeProfileSync(request.tenantId, (event) => {
       try {
         socket.send(JSON.stringify(event));
       } catch {

@@ -1,5 +1,11 @@
 import type { AssistantChatMessage } from "@print-partner/contracts";
+import {
+  isJsonObject as isRecord,
+  readBoundedJsonResponse,
+  readBoundedResponseChunks,
+} from "../lib/bounded-response.js";
 import { readProviderHttpError } from "./provider-error.js";
+import { fetchAssistantProvider } from "./provider-fetch.js";
 import type {
   AssistantChatParams,
   AssistantCompletionResult,
@@ -9,6 +15,8 @@ import type {
   AssistantToolMessage,
   AssistantToolsParams,
 } from "./types.js";
+
+const MAX_COMPLETION_RESPONSE_BYTES = 32 * 1024 * 1024;
 
 type AnthropicDeps = {
   apiKey: string;
@@ -92,23 +100,22 @@ function toAnthropicToolMessages(
   return out;
 }
 
-function parseToolCalls(content: Array<Record<string, unknown>>): {
+function parseToolCalls(content: unknown): {
   text: string;
   toolCalls: AssistantToolCallRequest[];
 } {
   const textParts: string[] = [];
   const toolCalls: AssistantToolCallRequest[] = [];
+  if (!Array.isArray(content)) return { text: "", toolCalls: [] };
   for (const block of content) {
+    if (!isRecord(block)) continue;
     if (block.type === "text" && typeof block.text === "string") {
       textParts.push(block.text);
     } else if (block.type === "tool_use") {
       toolCalls.push({
         id: String(block.id ?? ""),
         name: String(block.name ?? ""),
-        input:
-          block.input && typeof block.input === "object"
-            ? (block.input as Record<string, unknown>)
-            : {},
+        input: isRecord(block.input) ? block.input : {},
       });
     }
   }
@@ -119,7 +126,7 @@ export function createAnthropicAssistant(deps: AnthropicDeps): AssistantPort {
   const model = deps.defaultModel;
 
   async function request(params: AssistantChatParams, stream: boolean): Promise<Response> {
-    return fetch("https://api.anthropic.com/v1/messages", {
+    return fetchAssistantProvider("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -133,6 +140,7 @@ export function createAnthropicAssistant(deps: AnthropicDeps): AssistantPort {
         messages: toAnthropicMessages(params.messages),
         stream,
       }),
+      signal: params.signal,
     });
   }
 
@@ -145,19 +153,20 @@ export function createAnthropicAssistant(deps: AnthropicDeps): AssistantPort {
     async complete(params) {
       const res = await request(params, false);
       if (!res.ok) throw new Error(await readProviderHttpError("Anthropic", res));
-      const body = (await res.json()) as {
-        content?: Array<{ type?: string; text?: string }>;
-      };
-      const text = (body.content ?? [])
-        .filter((c) => c.type === "text" && c.text)
-        .map((c) => c.text!)
+      const body = await readBoundedJsonResponse(res, MAX_COMPLETION_RESPONSE_BYTES);
+      const content = isRecord(body) && Array.isArray(body.content) ? body.content : [];
+      const text = content
+        .flatMap((block) => isRecord(block) && block.type === "text"
+          && typeof block.text === "string" && block.text
+          ? [block.text]
+          : [])
         .join("");
       if (!text) throw new Error("Anthropic returned an empty response");
       return text;
     },
 
     async completeWithTools(params: AssistantToolsParams): Promise<AssistantCompletionResult> {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
+      const res = await fetchAssistantProvider("https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -175,15 +184,16 @@ export function createAnthropicAssistant(deps: AnthropicDeps): AssistantPort {
             input_schema: t.input_schema,
           })),
         }),
+        signal: params.signal,
       });
       if (!res.ok) throw new Error(await readProviderHttpError("Anthropic", res));
-      const body = (await res.json()) as {
-        content?: Array<Record<string, unknown>>;
-        stop_reason?: string;
-      };
-      const parsed = parseToolCalls(body.content ?? []);
+      const body = await readBoundedJsonResponse(res, MAX_COMPLETION_RESPONSE_BYTES);
+      const content = isRecord(body) ? body.content : undefined;
+      const parsed = parseToolCalls(content);
       const stopReason =
-        body.stop_reason === "tool_use" || parsed.toolCalls.length > 0 ? "tool_use" : "end_turn";
+        (isRecord(body) && body.stop_reason === "tool_use") || parsed.toolCalls.length > 0
+          ? "tool_use"
+          : "end_turn";
       return {
         content: parsed.text,
         toolCalls: parsed.toolCalls,
@@ -202,37 +212,42 @@ export function createAnthropicAssistant(deps: AnthropicDeps): AssistantPort {
           handlers.onError(new Error("Anthropic stream body missing"));
           return;
         }
-        const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
+        const processLine = (line: string): void => {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith("data:")) return;
+          const payload = trimmed.slice(5).trim();
+          if (!payload || payload === "[DONE]") return;
+          try {
+            const event: unknown = JSON.parse(payload);
+            const delta = isRecord(event) && isRecord(event.delta) ? event.delta : null;
+            if (
+              isRecord(event) &&
+              event.type === "content_block_delta" &&
+              delta?.type === "text_delta" &&
+              typeof delta.text === "string" &&
+              delta.text
+            ) {
+              handlers.onToken(delta.text);
+            }
+          } catch {
+            /* skip malformed SSE chunk */
+          }
+        };
+        for await (const value of readBoundedResponseChunks(
+          res,
+          MAX_COMPLETION_RESPONSE_BYTES,
+        )) {
           buffer += decoder.decode(value, { stream: true });
           const lines = buffer.split("\n");
           buffer = lines.pop() ?? "";
           for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed.startsWith("data:")) continue;
-            const payload = trimmed.slice(5).trim();
-            if (!payload || payload === "[DONE]") continue;
-            try {
-              const event = JSON.parse(payload) as {
-                type?: string;
-                delta?: { type?: string; text?: string };
-              };
-              if (
-                event.type === "content_block_delta" &&
-                event.delta?.type === "text_delta" &&
-                event.delta.text
-              ) {
-                handlers.onToken(event.delta.text);
-              }
-            } catch {
-              /* skip malformed SSE chunk */
-            }
+            processLine(line);
           }
         }
+        buffer += decoder.decode();
+        processLine(buffer);
         handlers.onDone();
       } catch (e) {
         handlers.onError(e instanceof Error ? e : new Error(String(e)));

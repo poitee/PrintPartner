@@ -2,10 +2,10 @@ import { Unzip, UnzipInflate } from "fflate";
 import { appendFileSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import { extractThreeMfMeshes } from "./three-mf-import.js";
+import { MAX_SOURCE_UPLOAD_BYTES } from "./upload-limits.js";
 
 export const MAX_ZIP_ENTRIES = 10_000;
 export const MAX_ZIP_UNCOMPRESSED_BYTES = 1024 * 1024 * 1024;
-export const MAX_SOURCE_UPLOAD_BYTES = 256 * 1024 * 1024;
 export const MAX_SOURCE_UPLOAD_FILES = MAX_ZIP_ENTRIES;
 export const MAX_SOURCE_UPLOAD_PARTS = MAX_SOURCE_UPLOAD_FILES + 1;
 

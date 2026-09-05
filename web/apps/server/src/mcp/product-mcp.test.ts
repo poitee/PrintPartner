@@ -40,7 +40,7 @@ describe("product MCP confirm_apply reservation", () => {
   ) {
     const config = loadConfig();
     const server = createProductMcpServer({
-      getRepo: () => ({ getProfile: () => null }) as never,
+      getRepo: () => ({ getProfile: () => null, getSetting: () => null }) as never,
       jobs: { start: async () => "j1" } as never,
       config,
       pending,
@@ -122,6 +122,43 @@ describe("product MCP confirm_apply reservation", () => {
     expect(pending.has("act-2")).toBe(false);
     expect(tools.applyAssistantAction).toHaveBeenCalledTimes(1);
 
+    await client.close();
+    await server.close();
+  });
+
+  it("propagates client cancellation into the tool context", async () => {
+    let observedSignal: AbortSignal | undefined;
+    let enter!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      enter = resolve;
+    });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.spyOn(tools, "invokeAssistantTool").mockImplementation(async (_name, _args, ctx) => {
+      observedSignal = ctx.signal;
+      enter();
+      await gate;
+      return { content: "{}" };
+    });
+
+    const { client, server } = await withClient(new Map());
+    const controller = new AbortController();
+    const call = client.callTool(
+      { name: "get_print_stats", arguments: {} },
+      undefined,
+      { signal: controller.signal },
+    );
+    const settled = call.catch((error: unknown) => error);
+    await entered;
+
+    controller.abort();
+    release();
+    await settled;
+
+    expect(observedSignal).toBeInstanceOf(AbortSignal);
+    expect(observedSignal?.aborted).toBe(true);
     await client.close();
     await server.close();
   });

@@ -1,6 +1,6 @@
 /** Walk repo directories and collect STL parts (ported from Python scanner.py). */
 
-import { readdirSync, statSync } from "node:fs";
+import { lstatSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathMatchesRules } from "./import-rules.js";
 import { parseStlPath } from "./parsers.js";
@@ -40,9 +40,9 @@ function walkStlFiles(dir: string, root: string, out: string[]): void {
   }
   for (const name of entries) {
     const full = join(dir, name);
-    let st: ReturnType<typeof statSync>;
+    let st: ReturnType<typeof lstatSync>;
     try {
-      st = statSync(full);
+      st = lstatSync(full);
     } catch {
       continue;
     }
@@ -64,7 +64,7 @@ export function scanRepo(
   let root: string;
   try {
     root = resolve(repoRoot);
-    const st = statSync(root);
+    const st = lstatSync(root);
     if (!st.isDirectory()) return [];
   } catch {
     return [];
@@ -96,7 +96,7 @@ export function listStlRelativePaths(repoRoot: string): string[] {
   let root: string;
   try {
     root = resolve(repoRoot);
-    if (!statSync(root).isDirectory()) return [];
+    if (!lstatSync(root).isDirectory()) return [];
   } catch {
     return [];
   }

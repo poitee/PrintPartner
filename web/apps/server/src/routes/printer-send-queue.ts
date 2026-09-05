@@ -1,4 +1,3 @@
-import { rmSync } from "node:fs";
 import type { FastifyInstance } from "fastify";
 import type { AppRepository } from "../db/repository.js";
 import type { IntegrationPort } from "../integrations/store.js";
@@ -19,6 +18,7 @@ import {
 } from "../services/printer-send-queue.js";
 import { computePrinterQueueSuggestions } from "../services/printer-queue-suggestions.js";
 import { parsePrinterUploadMultipart } from "../services/printer-upload-multipart.js";
+import { cleanupPrinterUploadArtifactDir } from "../services/printer-upload-job.js";
 import type { InProcessJobRunner } from "./jobs.js";
 
 type RouteDeps = {
@@ -126,7 +126,6 @@ export async function registerPrinterSendQueueRoutes(
         artifactPath = artifact_path;
 
         const checkoff_units = parseCheckoffUnits(checkoffUnitsRaw);
-        // GRE-232: queued sends also stamp plan_id at enqueue time.
         if (profileId == null) {
           return sendProblem(
             reply,
@@ -183,11 +182,7 @@ export async function registerPrinterSendQueueRoutes(
         return { item };
       } finally {
         if (artifactPath) {
-          try {
-            rmSync(artifactPath, { force: true });
-          } catch {
-            /* ignore */
-          }
+          cleanupPrinterUploadArtifactDir(artifactPath);
         }
       }
     },

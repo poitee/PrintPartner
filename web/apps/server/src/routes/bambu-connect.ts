@@ -27,6 +27,12 @@ import { parseCheckoffUnits } from "../services/printer-checkoff.js";
 import { createPrinterCheckoffLink } from "../services/printer-checkoff-store.js";
 import { loadFleet } from "../services/printer-fleet.js";
 import type { InProcessJobRunner } from "./jobs.js";
+import {
+  MAX_MULTIPART_FIELD_BYTES,
+  MAX_PRINT_FILE_UPLOAD_BYTES,
+  PRINT_FILE_UPLOAD_TOO_LARGE_DETAIL,
+} from "../services/upload-limits.js";
+import { sweepExpiredTransferArtifacts } from "../services/transfer-artifact-retention.js";
 
 type RouteDeps = {
   repo: AppRepository;
@@ -102,7 +108,9 @@ export async function registerBambuConnectRoutes(
       let handoffId = "";
       let profileId: number | undefined;
       let checkoffUnitsRaw: string | undefined;
+      let retainHandoff = false;
       const exportsDir = deps.jobs.getExportsDir(request.tenantId);
+      sweepExpiredTransferArtifacts(exportsDir, { kinds: ["bambu-connect"] });
 
       const reject = (status: number, title: string, detail: string) => {
         discardHandoff(exportsDir, handoffId);
@@ -111,164 +119,184 @@ export async function registerBambuConnectRoutes(
         return sendProblem(reply, status, title, detail);
       };
 
-      for await (const part of request.parts()) {
-        if (part.type === "field") {
-          const value = String(await part.value);
-          if (part.fieldname === "printer_id") printerId = value.trim();
-          if (part.fieldname === "launch") {
-            const raw = value.toLowerCase();
-            if (raw === "0" || raw === "false" || raw === "no") launchField = false;
-            else if (raw === "1" || raw === "true" || raw === "yes") launchField = true;
+      try {
+        for await (const part of request.parts({
+          limits: {
+            fileSize: MAX_PRINT_FILE_UPLOAD_BYTES,
+            files: 1,
+            fields: 5,
+            fieldSize: MAX_MULTIPART_FIELD_BYTES,
+            parts: 6,
+          },
+        })) {
+          if (part.type === "field") {
+            const value = String(await part.value);
+            if (part.fieldname === "printer_id") printerId = value.trim();
+            if (part.fieldname === "launch") {
+              const raw = value.toLowerCase();
+              if (raw === "0" || raw === "false" || raw === "no") launchField = false;
+              else if (raw === "1" || raw === "true" || raw === "yes") launchField = true;
+            }
+            if (part.fieldname === "profile_id" || part.fieldname === "plan_id") {
+              const n = Number(value);
+              if (Number.isInteger(n) && n > 0) profileId = n;
+            }
+            if (part.fieldname === "checkoff_units") {
+              checkoffUnitsRaw = value;
+            }
+            continue;
           }
-          if (part.fieldname === "profile_id" || part.fieldname === "plan_id") {
-            const n = Number(value);
-            if (Number.isInteger(n) && n > 0) profileId = n;
+          if (part.type !== "file") continue;
+          if (
+            part.fieldname !== "file" &&
+            part.fieldname !== "gcode" &&
+            part.fieldname !== "3mf"
+          ) {
+            part.file.resume();
+            continue;
           }
-          if (part.fieldname === "checkoff_units") {
-            checkoffUnitsRaw = value;
+          if (artifactPath) {
+            part.file.resume();
+            return reject(400, "Bad Request", "Only one file is allowed");
           }
-          continue;
+          filename = (part.filename || "print.3mf").replace(/\\/g, "/");
+          const candidate = sanitizeBambuConnectFilename(basename(filename));
+          if (!isAllowedBambuConnectFilename(candidate)) {
+            part.file.resume();
+            return reject(
+              400,
+              "Bad Request",
+              "Only .3mf / .gcode.3mf / .gcode / .gco files can be handed off to Bambu Connect",
+            );
+          }
+          handoffId = randomUUID();
+          try {
+            artifactPath = await streamBambuConnectArtifact(
+              exportsDir,
+              handoffId,
+              candidate,
+              part.file,
+            );
+          } catch (err) {
+            discardHandoff(exportsDir, handoffId);
+            handoffId = "";
+            const message = err instanceof Error ? err.message : String(err);
+            if (/size limit/i.test(message)) {
+              return sendProblem(
+                reply,
+                413,
+                "Payload Too Large",
+                PRINT_FILE_UPLOAD_TOO_LARGE_DETAIL,
+              );
+            }
+            throw err;
+          }
         }
-        if (part.type !== "file") continue;
-        if (part.fieldname !== "file" && part.fieldname !== "gcode" && part.fieldname !== "3mf") {
-          part.file.resume();
-          continue;
+
+        if (!artifactPath || !handoffId) {
+          return reject(400, "Bad Request", "Sliced .3mf or .gcode file required");
         }
-        if (artifactPath) {
-          part.file.resume();
-          return reject(400, "Bad Request", "Only one file is allowed");
-        }
-        filename = (part.filename || "print.3mf").replace(/\\/g, "/");
-        const candidate = sanitizeBambuConnectFilename(basename(filename));
-        if (!isAllowedBambuConnectFilename(candidate)) {
-          part.file.resume();
+
+        const baseName = sanitizeBambuConnectFilename(basename(filename));
+        if (!isAllowedBambuConnectFilename(baseName)) {
           return reject(
             400,
             "Bad Request",
             "Only .3mf / .gcode.3mf / .gcode / .gco files can be handed off to Bambu Connect",
           );
         }
-        handoffId = randomUUID();
-        try {
-          artifactPath = await streamBambuConnectArtifact(
-            exportsDir,
-            handoffId,
-            candidate,
-            part.file,
-          );
-        } catch (err) {
-          discardHandoff(exportsDir, handoffId);
-          handoffId = "";
-          const message = err instanceof Error ? err.message : String(err);
-          if (/size limit/i.test(message)) {
-            return sendProblem(reply, 413, "Payload Too Large", message);
-          }
-          throw err;
-        }
-      }
 
-      if (!artifactPath || !handoffId) {
-        return reject(400, "Bad Request", "Sliced .3mf or .gcode file required");
-      }
-
-      const baseName = sanitizeBambuConnectFilename(basename(filename));
-      if (!isAllowedBambuConnectFilename(baseName)) {
-        return reject(
-          400,
-          "Bad Request",
-          "Only .3mf / .gcode.3mf / .gcode / .gco files can be handed off to Bambu Connect",
-        );
-      }
-
-      const checkoff_units = parseCheckoffUnits(checkoffUnitsRaw);
-      // GRE-232: Bambu handoff stamps plan_id; require an active spine plan.
-      if (profileId == null) {
-        return reject(
-          400,
-          "Bad Request",
-          "Pick a plan to bind this send (profile_id required)",
-        );
-      }
-      if (!deps.repo.getOwnedProfileIdentity(profileId)) {
-        return reject(404, "Not Found", "Profile not found");
-      }
-
-      let hostName = "Bambu Connect";
-      let integrationId: string | undefined;
-      let fleetPrinterId: string | undefined;
-
-      if (printerId) {
-        const machine = loadFleet(deps.repo).find((m) => m.id === printerId);
-        if (!machine) {
-          return reject(404, "Not Found", "Fleet printer not found");
-        }
-        const iid = machine.integration_id?.trim();
-        if (!iid) {
-          return reject(400, "Bad Request", "Printer is not linked to a Bambu host");
-        }
-        const integration = getIntegrationConfig(deps.repo, iid);
-        if (!integration || integration.type !== "bambu") {
+        const checkoff_units = parseCheckoffUnits(checkoffUnitsRaw);
+        if (profileId == null) {
           return reject(
             400,
             "Bad Request",
-            "Connect handoff requires a fleet machine linked to a Bambu host",
+            "Pick a plan to bind this send (profile_id required)",
           );
         }
-        integrationId = iid;
-        fleetPrinterId = machine.id;
-        hostName = integration.name;
-      }
+        if (!deps.repo.getOwnedProfileIdentity(profileId)) {
+          return reject(404, "Not Found", "Profile not found");
+        }
 
-      const hostPath = resolveBambuConnectHostPath(artifactPath);
-      const displayName = bambuConnectDisplayName(baseName);
-      const connect_url = buildBambuConnectUrl(hostPath, displayName);
+        let hostName = "Bambu Connect";
+        let integrationId: string | undefined;
+        let fleetPrinterId: string | undefined;
 
-      let launched = false;
-      let launch_error: string | undefined;
-      const attemptLaunch = shouldAttemptBambuConnectLaunch({
-        requestLaunch: launchField,
-      });
-      if (attemptLaunch) {
-        const result = await tryLaunchBambuConnectUrl(connect_url);
-        launched = result.launched;
-        launch_error = result.error;
-      }
+        if (printerId) {
+          const machine = loadFleet(deps.repo).find((m) => m.id === printerId);
+          if (!machine) {
+            return reject(404, "Not Found", "Fleet printer not found");
+          }
+          const iid = machine.integration_id?.trim();
+          if (!iid) {
+            return reject(400, "Bad Request", "Printer is not linked to a Bambu host");
+          }
+          const integration = getIntegrationConfig(deps.repo, iid);
+          if (!integration || integration.type !== "bambu") {
+            return reject(
+              400,
+              "Bad Request",
+              "Connect handoff requires a fleet machine linked to a Bambu host",
+            );
+          }
+          integrationId = iid;
+          fleetPrinterId = machine.id;
+          hostName = integration.name;
+        }
 
-      let checkoff_link_id: string | undefined;
-      // GRE-232: stamp plan_id at Bambu handoff whenever a plan is bound.
-      if (profileId != null && integrationId && fleetPrinterId) {
-        const link = createPrinterCheckoffLink(deps.repo, {
-          profile_id: profileId,
-          integration_id: integrationId,
-          printer_id: fleetPrinterId,
-          host_name: hostName,
-          filename: baseName,
-          units: checkoff_units,
-          started: launched,
+        const hostPath = resolveBambuConnectHostPath(artifactPath);
+        const displayName = bambuConnectDisplayName(baseName);
+        const connect_url = buildBambuConnectUrl(hostPath, displayName);
+
+        let launched = false;
+        let launch_error: string | undefined;
+        const attemptLaunch = shouldAttemptBambuConnectLaunch({
+          requestLaunch: launchField,
         });
-        checkoff_link_id = link?.id;
+        if (attemptLaunch) {
+          const result = await tryLaunchBambuConnectUrl(connect_url);
+          launched = result.launched;
+          launch_error = result.error;
+        }
+
+        let checkoff_link_id: string | undefined;
+        if (profileId != null && integrationId && fleetPrinterId) {
+          const link = createPrinterCheckoffLink(deps.repo, {
+            profile_id: profileId,
+            integration_id: integrationId,
+            printer_id: fleetPrinterId,
+            host_name: hostName,
+            filename: baseName,
+            units: checkoff_units,
+            started: launched,
+          });
+          checkoff_link_id = link?.id;
+        }
+
+        const inContainer = isLikelyContainerRuntime();
+        const message = launched
+          ? `Opened Bambu Connect with ${baseName}`
+          : inContainer
+            ? `Staged ${baseName}. Download the file (or map BAMBU_CONNECT_HOST_PATH_MAP) and open it in Bambu Connect. Container paths are not visible to Connect on the host.`
+            : `Staged ${baseName}. Open the Connect URL or copy it if Bambu Connect did not launch.`;
+
+        retainHandoff = true;
+        return {
+          handoff_id: handoffId,
+          filename: baseName,
+          absolute_path: hostPath,
+          connect_url,
+          launched,
+          launch_error,
+          in_container: inContainer,
+          download_path: `/bambu-connect/handoff/${handoffId}/file`,
+          checkoff_link_id,
+          checkoff_units: checkoff_units.length || undefined,
+          message,
+        };
+      } finally {
+        if (!retainHandoff) discardHandoff(exportsDir, handoffId);
       }
-
-      const inContainer = isLikelyContainerRuntime();
-      const message = launched
-        ? `Opened Bambu Connect with ${baseName}`
-        : inContainer
-          ? `Staged ${baseName}. Download the file (or map BAMBU_CONNECT_HOST_PATH_MAP) and open in Bambu Connect — container paths are not visible to Connect on the host.`
-          : `Staged ${baseName}. Open the Connect URL or copy it if Bambu Connect did not launch.`;
-
-      return {
-        handoff_id: handoffId,
-        filename: baseName,
-        absolute_path: hostPath,
-        connect_url,
-        launched,
-        launch_error,
-        in_container: inContainer,
-        download_path: `/bambu-connect/handoff/${handoffId}/file`,
-        checkoff_link_id,
-        checkoff_units: checkoff_units.length || undefined,
-        message,
-      };
     },
   );
 
@@ -278,6 +306,7 @@ export async function registerBambuConnectRoutes(
       return sendProblem(reply, 400, "Bad Request", "Invalid handoff id");
     }
     const exportsDir = deps.jobs.getExportsDir(request.tenantId);
+    sweepExpiredTransferArtifacts(exportsDir, { kinds: ["bambu-connect"] });
     const dir = join(exportsDir, "bambu-connect", id);
     let entries: string[];
     try {
@@ -301,6 +330,7 @@ export async function registerBambuConnectRoutes(
       "Content-Disposition",
       `attachment; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(file)}`,
     );
+    reply.raw.once("finish", () => discardHandoff(exportsDir, id));
     return reply.send(createReadStream(path));
   });
 }

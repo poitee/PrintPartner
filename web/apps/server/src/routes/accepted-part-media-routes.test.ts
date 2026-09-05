@@ -10,7 +10,12 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("../services/upload-limits.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../services/upload-limits.js")>()),
+  MAX_THUMBNAIL_UPLOAD_BYTES: 64,
+}));
 import { createSelfHostPorts } from "../adapters/self-host/index.js";
 import { buildApp } from "../app.js";
 import { loadConfig } from "../config.js";
@@ -69,7 +74,12 @@ describe("accepted Part media routes", () => {
       syncedAt: "2026-08-21T12:00:00.000Z",
       completeness: "complete",
     });
-    repo.activateSourceRevision({ sourceId: source.id, revisionId: sourceRevision.id, observed });
+    repo.activateSourceRevision({
+      sourceId: source.id,
+      revisionId: sourceRevision.id,
+      observed,
+      sourceVersion: sourceRevision.upstream_revision_key,
+    });
     const profile = repo.createProfile("Accepted media Plan", source.id);
     saveRoleFilamentDefault(repo, profile.id, "primary", {
       filament_color_id: null,
@@ -180,6 +190,25 @@ describe("accepted Part media routes", () => {
       expect(placeholder.headers["cache-control"]).toBe("no-store");
       expect(placeholder.headers["x-thumbnail-placeholder"]).toBe("1");
       expect(placeholder.headers["x-accepted-render-hex"]).toBe("#112233");
+      expect(acceptedReads).toBe(5);
+
+      const oversizedBoundary = "accepted-media-oversized-upload";
+      const oversized = await app.inject({
+        method: "POST",
+        url: `/parts/${part.id}/thumbnail`,
+        headers: {
+          "content-type": `multipart/form-data; boundary=${oversizedBoundary}`,
+          "if-match": `"${expectedBasis}"`,
+        },
+        payload: multipartPng(
+          oversizedBoundary,
+          Buffer.concat([png, Buffer.alloc(65 - png.length)]),
+        ),
+      });
+      expect(oversized.statusCode).toBe(413);
+      expect(oversized.json()).toEqual({
+        detail: "Thumbnail exceeds the 64 MiB upload limit",
+      });
       expect(acceptedReads).toBe(5);
 
       const boundary = "accepted-media-upload";
@@ -319,6 +348,7 @@ describe("accepted Part media routes", () => {
         sourceId: source.id,
         revisionId: nextSourceRevision.id,
         observed: nextObserved,
+        sourceVersion: nextSourceRevision.upstream_revision_key,
       });
       const nextDraft = repo.recomputePlanDraft({
         profileId: profile.id,

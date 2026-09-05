@@ -1,8 +1,8 @@
 import {
-  productionSetupSchema,
   type ProductionGroupingField,
   type ProductionGroupingRule,
 } from "@print-partner/contracts";
+import { parseStoredProductionSetup } from "./production-setup-store.js";
 
 export type ProductionPackingUnit = Readonly<{
   token: string;
@@ -84,11 +84,5 @@ export function loadProductionPackingRules(
   raw: string | null | undefined,
   profileId: number,
 ): readonly ProductionGroupingRule[] {
-  if (!raw) return [];
-  try {
-    const parsed = productionSetupSchema.safeParse(JSON.parse(raw));
-    return parsed.success && parsed.data.profile_id === profileId ? parsed.data.rules : [];
-  } catch {
-    return [];
-  }
+  return parseStoredProductionSetup(raw, profileId)?.rules ?? [];
 }

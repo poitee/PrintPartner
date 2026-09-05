@@ -16,9 +16,9 @@ import {
 } from "node:fs/promises";
 import { dirname, join, posix, resolve } from "node:path";
 import {
+  Readable,
   Transform,
   Writable,
-  type Readable,
   type TransformCallback,
 } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -86,6 +86,17 @@ export type MaterializeSourceSnapshotInput = {
   files: readonly SnapshotFile[];
   selection: SnapshotSelection;
   openFile(file: SnapshotFile): Promise<SnapshotFileResponse>;
+};
+
+export type DeriveFileReplacementInput = {
+  sourceId: number;
+  baseRevisionKey: string;
+  sourceVersion: string;
+  replacement: {
+    path: SourceRelativePath;
+    kind: SnapshotFileKind;
+    content: Buffer;
+  };
 };
 
 type SnapshotManifest = {
@@ -315,12 +326,18 @@ async function writeSnapshotFile(args: {
   const destination = join(args.candidateDir, ...args.file.path.split("/"));
   await mkdir(dirname(destination), { recursive: true });
   const response = await args.openFile(args.file);
-  const contentLengthBytes = parseOptionalByteCount(
-    response.contentLengthBytes,
-    `Content-Length for ${args.file.path}`,
-  );
-  if (contentLengthBytes != null && contentLengthBytes > args.maxBytes) {
-    throw new Error(`Source snapshot exceeds the ${MAX_SOURCE_SNAPSHOT_BYTES} byte stored-content limit`);
+  let contentLengthBytes: number | null;
+  try {
+    contentLengthBytes = parseOptionalByteCount(
+      response.contentLengthBytes,
+      `Content-Length for ${args.file.path}`,
+    );
+    if (contentLengthBytes != null && contentLengthBytes > args.maxBytes) {
+      throw new Error(`Source snapshot exceeds the ${MAX_SOURCE_SNAPSHOT_BYTES} byte stored-content limit`);
+    }
+  } catch (error) {
+    response.stream.destroy();
+    throw error;
   }
   const meter = byteMeter(args.maxBytes);
   await pipeline(
@@ -571,6 +588,87 @@ export class LocalSourceSnapshotStore {
       renameDirectory:
         options.dependencies?.renameDirectory ?? defaultDependencies.renameDirectory,
     };
+  }
+
+  async deriveFileReplacement(
+    input: DeriveFileReplacementInput,
+  ): Promise<PublishedSourceSnapshot> {
+    validateSourceId(input.sourceId);
+    validateRevisionKey(input.baseRevisionKey);
+    if (!input.sourceVersion.trim()) throw new Error("Source version is required");
+    const replacementPath = sourceRelativePath(input.replacement.path);
+    const replacementKind = parseFileKind(input.replacement.kind);
+    const replacementContent = Buffer.from(input.replacement.content);
+    const baseDir = join(
+      this.#reposDir,
+      String(input.sourceId),
+      "revisions",
+      input.baseRevisionKey,
+    );
+    const base = await loadExistingSnapshot({
+      finalDir: baseDir,
+      revisionKey: input.baseRevisionKey,
+    });
+    const replacementFile: SnapshotContentFile = {
+      path: replacementPath,
+      kind: replacementKind,
+      sizeBytes: replacementContent.byteLength,
+      sha256: createHash("sha256").update(replacementContent).digest("hex"),
+    };
+    const derivedContent = [
+      ...base.files.filter((file) => file.path !== replacementPath),
+      replacementFile,
+    ].sort(compareByPath);
+    const derivedDigest = manifestDigest(derivedContent);
+    if (derivedDigest === base.digest) {
+      return {
+        upstreamRevisionKey: input.baseRevisionKey,
+        manifestDigest: base.digest,
+        snapshotLocator: posix.join(
+          String(input.sourceId),
+          "revisions",
+          input.baseRevisionKey,
+        ),
+        absolutePath: baseDir,
+        files: base.files,
+        selection: base.selection,
+        publication: "reused",
+      };
+    }
+
+    const derivedIdentityDigest = createHash("sha256")
+      .update(JSON.stringify({
+        manifestDigest: derivedDigest,
+        selection: base.selection,
+        sourceVersion: input.sourceVersion,
+      }))
+      .digest("hex");
+    const upstreamRevisionKey = `derived-${derivedIdentityDigest}`;
+    const files: SnapshotFile[] = derivedContent.map((file) => ({
+      path: file.path,
+      kind: file.kind,
+      sizeHintBytes: file.sizeBytes,
+    }));
+    return this.materialize({
+      sourceId: input.sourceId,
+      upstreamRevisionKey,
+      files,
+      selection: base.selection,
+      openFile: async (file) => {
+        if (file.path === replacementPath) {
+          return {
+            stream: Readable.from(replacementContent),
+            contentLengthBytes: replacementContent.byteLength,
+          };
+        }
+        const baseFile = base.files.find((candidate) => candidate.path === file.path);
+        if (!baseFile) throw new Error(`Base Source snapshot file is missing: ${file.path}`);
+        return {
+          stream: createReadStream(join(baseDir, ...file.path.split("/"))),
+          contentLengthBytes: baseFile.sizeBytes,
+        };
+      },
+    });
   }
 
   async materialize(input: MaterializeSourceSnapshotInput): Promise<PublishedSourceSnapshot> {

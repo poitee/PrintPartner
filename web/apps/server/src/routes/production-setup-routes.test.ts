@@ -26,6 +26,55 @@ async function fixture() {
 }
 
 describe("production setup routes", () => {
+  it("applies independent commands without replacing unrelated choices", async () => {
+    const { app, ports } = await fixture();
+    try {
+      const profile = ports.repository.createProfile("Concurrent choices");
+      const route = await app.inject({
+        method: "PATCH",
+        url: `/plans/${profile.id}/production-setup`,
+        payload: { kind: "set_route", route: "stl" },
+      });
+      const rules = await app.inject({
+        method: "PATCH",
+        url: `/plans/${profile.id}/production-setup`,
+        payload: {
+          kind: "replace_rules",
+          rules: [{ id: "by-color", enabled: true, kind: "separate_by", field: "color" }],
+        },
+      });
+
+      expect(route.statusCode).toBe(200);
+      expect(rules.statusCode).toBe(200);
+      expect(rules.json()).toMatchObject({
+        route: "stl",
+        rules: [{ id: "by-color", enabled: true, kind: "separate_by", field: "color" }],
+      });
+
+      const loaded = await app.inject({
+        method: "GET",
+        url: `/plans/${profile.id}/production-setup`,
+      });
+      expect(loaded.json()).toEqual(rules.json());
+
+      const replacement = await app.inject({
+        method: "PUT",
+        url: `/plans/${profile.id}/production-setup`,
+        payload: {
+          preferred_slicer_instance_id: null,
+          selection: { mode: "all_incomplete" },
+          printer_assignments: [],
+          route: null,
+          rules: [],
+        },
+      });
+      expect(replacement.statusCode).toBe(404);
+    } finally {
+      await app.close();
+      ports.db.close();
+    }
+  });
+
   it("persists editable production choices per Build", async () => {
     const { app, ports } = await fixture();
     try {
@@ -35,6 +84,7 @@ describe("production setup routes", () => {
         preferred_slicer_instance_id: "orca-main",
         selection: { mode: "custom", selected_unit_tokens: ["unit:a:1"] },
         printer_assignments: [{ token: "unit:a:1", printer_id: "printer-one" }],
+        route: "plates",
         rules: [
           {
             id: "rule-xy",
@@ -46,11 +96,28 @@ describe("production setup routes", () => {
         ],
       };
 
-      const saved = await app.inject({
-        method: "PUT",
+      const commands = [
+        {
+          kind: "set_preferred_slicer_instance",
+          preferred_slicer_instance_id: setup.preferred_slicer_instance_id,
+        },
+        { kind: "set_selection", selection: setup.selection },
+        { kind: "replace_printer_assignments", printer_assignments: setup.printer_assignments },
+        { kind: "set_route", route: setup.route },
+        { kind: "replace_rules", rules: setup.rules },
+      ];
+      let saved = await app.inject({
+        method: "GET",
         url: `/plans/${first.id}/production-setup`,
-        payload: setup,
       });
+      for (const command of commands) {
+        saved = await app.inject({
+          method: "PATCH",
+          url: `/plans/${first.id}/production-setup`,
+          payload: command,
+        });
+        expect(saved.statusCode).toBe(200);
+      }
       expect(saved.statusCode).toBe(200);
       expect(saved.json()).toMatchObject({
         format: "production-setup-v1",
@@ -104,11 +171,10 @@ describe("production setup routes", () => {
       const profile = ports.repository.createProfile("Validation Build");
       const before = await app.inject({ method: "GET", url: `/plans/${profile.id}/production-setup` });
       const rejected = await app.inject({
-        method: "PUT",
+        method: "PATCH",
         url: `/plans/${profile.id}/production-setup`,
         payload: {
-          preferred_slicer_instance_id: null,
-          selection: { mode: "all_incomplete" },
+          kind: "replace_rules",
           rules: [{ id: "bad", enabled: true, kind: "keep_together", field: "unknown" }],
         },
       });
@@ -125,17 +191,11 @@ describe("production setup routes", () => {
     const { app, ports } = await fixture();
     try {
       const profile = ports.repository.createProfile("Route Build");
-      const base = {
-        preferred_slicer_instance_id: null,
-        selection: { mode: "all_incomplete" },
-        rules: [],
-      };
-
       for (const route of ["plates", "stl", "external", null] as const) {
         const saved = await app.inject({
-          method: "PUT",
+          method: "PATCH",
           url: `/plans/${profile.id}/production-setup`,
-          payload: { ...base, route },
+          payload: { kind: "set_route", route },
         });
         expect(saved.statusCode).toBe(200);
         expect(saved.json().route).toBe(route);
@@ -172,9 +232,9 @@ describe("production setup routes", () => {
       });
 
       const rejected = await app.inject({
-        method: "PUT",
+        method: "PATCH",
         url: `/plans/${profile.id}/production-setup`,
-        payload: { ...base, route: "plate" },
+        payload: { kind: "set_route", route: "plate" },
       });
       expect(rejected.statusCode).toBe(400);
     } finally {

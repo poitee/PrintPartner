@@ -3,10 +3,16 @@
  * Parses html.duckduckgo.com result markup with simple regexes.
  */
 
-import { OutboundUrlError, safeOutboundFetch } from "../../lib/outbound-url.js";
-import type { SearchHit, WebSearchOptions } from "./types.js";
+import { OutboundUrlError } from "../../lib/outbound-url.js";
+import { cancelResponseBody, readBoundedResponseText } from "../../lib/bounded-response.js";
+import type {
+  SearchAdapterDependencies,
+  SearchHit,
+  WebSearchOptions,
+} from "./types.js";
 
 const DDG_HTML = "https://html.duckduckgo.com/html/";
+const MAX_SEARCH_RESPONSE_BYTES = 4 * 1024 * 1024;
 
 function decodeHtmlEntities(s: string): string {
   return s
@@ -73,8 +79,9 @@ export function parseDuckDuckGoHtml(html: string, maxResults: number): SearchHit
 
 export async function searchDuckDuckGo(
   options: WebSearchOptions,
-  fetchFn: typeof safeOutboundFetch = safeOutboundFetch,
+  dependencies: SearchAdapterDependencies,
 ): Promise<{ hits: SearchHit[]; error?: string }> {
+  const { fetchFn, signal } = dependencies;
   const q = options.site ? `site:${options.site} ${options.query}` : options.query;
   const maxResults = Math.min(Math.max(options.maxResults ?? 5, 1), 20);
   const url = `${DDG_HTML}?q=${encodeURIComponent(q)}`;
@@ -85,11 +92,13 @@ export async function searchDuckDuckGo(
         Accept: "text/html",
         "User-Agent": "PrintPartner-Search/1.0",
       },
+      signal,
     });
     if (!res.ok) {
+      await cancelResponseBody(res);
       return { hits: [], error: `DuckDuckGo HTTP ${res.status}` };
     }
-    const html = await res.text();
+    const html = await readBoundedResponseText(res, MAX_SEARCH_RESPONSE_BYTES);
     const hits = parseDuckDuckGoHtml(html, maxResults);
     if (!hits.length) {
       return {

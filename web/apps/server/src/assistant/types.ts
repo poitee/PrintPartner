@@ -6,6 +6,7 @@ export type AssistantChatParams = {
   messages: AssistantChatMessage[];
   model: string;
   maxTokens: number;
+  signal?: AbortSignal;
 };
 
 export type AssistantStreamHandlers = {
@@ -37,6 +38,7 @@ export type AssistantToolsParams = {
   model: string;
   maxTokens: number;
   tools: AssistantToolSpec[];
+  signal?: AbortSignal;
 };
 
 export type AssistantCompletionResult = {

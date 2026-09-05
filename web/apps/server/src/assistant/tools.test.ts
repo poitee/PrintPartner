@@ -7,10 +7,15 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createSelfHostPorts } from "../adapters/self-host/index.js";
 import { InProcessJobRunner } from "../routes/jobs.js";
 import { encodeAcceptedPlate3mf, type StlMesh } from "@print-partner/domain";
-import { invokeAssistantTool, applyAssistantAction } from "./tools.js";
+import {
+  ASSISTANT_TOOL_SPECS,
+  invokeAssistantTool,
+  applyAssistantAction,
+} from "./tools.js";
 import { inferStackPresetId, summarizeOtherBuildsAsExamples } from "./example-builds.js";
 import { buildAssistantSystemPrompt } from "./assistant-context.js";
 import { hydrateBuildPlanningBrief, newBuildPlanningBrief, readBuildPlanningBrief, saveBuildPlanningBrief } from "../services/build-planning.js";
+import { loadKitManifest } from "../services/kit-manifest-store.js";
 
 const FIXTURE = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -88,6 +93,178 @@ describe("assistant tools + example builds", () => {
     expect(inventory.artifacts).toEqual(expect.arrayContaining([expect.objectContaining({ path: "STLs/screen/screen_rail.stl" })]));
     const found = JSON.parse((await invokeAssistantTool("search_source_files", { source_id: source.id, query: "screen_rail" }, { repo })).content);
     expect(found.files).toEqual([{ path: "STLs/screen/screen_rail.stl", byte_size: 12 }]);
+  });
+
+  it("proposes and applies multi-value kit selections without flattening them", async () => {
+    const plan = repo.createProfile("Multi-select plan");
+    const tool = ASSISTANT_TOOL_SPECS.find(
+      (candidate) => candidate.name === "update_kit_selections",
+    );
+    expect(tool?.input_schema.properties.selections).toEqual({
+      type: "object",
+      additionalProperties: {
+        oneOf: [
+          { type: "string", minLength: 1 },
+          {
+            type: "array",
+            items: { type: "string", minLength: 1 },
+            uniqueItems: true,
+          },
+        ],
+      },
+    });
+
+    const proposal = await invokeAssistantTool(
+      "update_kit_selections",
+      {
+        plan_id: plan.id,
+        selections: { extras: ["skirts", "panels"] },
+      },
+      { repo },
+    );
+
+    expect(proposal.proposedAction?.params.selections).toEqual({
+      extras: ["skirts", "panels"],
+    });
+    expect(proposal.proposedAction?.summary).toContain("extras=skirts, panels");
+
+    const applied = await applyAssistantAction(proposal.proposedAction!, {
+      repo,
+      jobs: { start: async () => "unused" } as never,
+    });
+    expect(applied.ok).toBe(true);
+    expect(loadKitManifest(repo, plan.id).selections).toEqual({
+      extras: ["skirts", "panels"],
+    });
+
+    const source = repo.createSource({
+      name: "Mapped extras",
+      source_kind: "local",
+    });
+    expect(source.name).toBe("Mapped extras");
+    const mapping = await invokeAssistantTool(
+      "propose_source_mapping",
+      {
+        plan_id: plan.id,
+        source_name: source.name,
+        category: "mods",
+        option_groups: { mods: ["handles", "feet"] },
+      },
+      { repo },
+    );
+    expect(mapping.proposedAction?.params.option_groups).toEqual({
+      mods: ["handles", "feet"],
+    });
+    const mapped = await applyAssistantAction(mapping.proposedAction!, {
+      repo,
+      jobs: { start: async () => "unused" } as never,
+    });
+    expect(mapped.ok).toBe(true);
+    expect(loadKitManifest(repo, plan.id).selections).toEqual({
+      extras: ["skirts", "panels"],
+      mods: ["handles", "feet"],
+    });
+  });
+
+  it("rejects malformed and over-limit kit selections at assistant boundaries", async () => {
+    const sourceDirectory = join(dataDir, "repos", "assistant-options");
+    mkdirSync(sourceDirectory, { recursive: true });
+    writeFileSync(
+      join(sourceDirectory, "print-partner.manifest.yaml"),
+      `format: print-partner-manifest
+version: 2
+option_groups:
+  extras:
+    rule: pick_n
+    min: 1
+    max: 2
+    variants:
+      - id: skirts
+        parts: ["skirts/**"]
+      - id: panels
+        parts: ["panels/**"]
+      - id: screen
+        parts: ["screen/**"]
+  optional_extras:
+    rule: pick_any
+    min: 0
+    variants:
+      - id: badge
+        parts: ["badge/**"]
+`,
+    );
+    const source = repo.createSource({
+      name: "Assistant options",
+      source_kind: "local",
+      local_path: sourceDirectory,
+    });
+    const plan = repo.createProfile("Bounded selections", source.id);
+
+    const malformed = await invokeAssistantTool(
+      "update_kit_selections",
+      { plan_id: plan.id, selections: { extras: ["skirts", 4] } },
+      { repo },
+    );
+    expect(JSON.parse(malformed.content).error).toContain("selections.extras[1]");
+    expect(malformed.proposedAction).toBeUndefined();
+
+    const overLimit = await invokeAssistantTool(
+      "update_kit_selections",
+      {
+        plan_id: plan.id,
+        selections: { extras: ["skirts", "panels", "screen"] },
+      },
+      { repo },
+    );
+    expect(JSON.parse(overLimit.content).error).toBe(
+      "selections.extras must contain no more than 2 variant ids",
+    );
+    expect(overLimit.proposedAction).toBeUndefined();
+
+    const requiredEmpty = await invokeAssistantTool(
+      "update_kit_selections",
+      { plan_id: plan.id, selections: { extras: [] } },
+      { repo },
+    );
+    expect(requiredEmpty.proposedAction?.params.selections).toEqual({ extras: [] });
+
+    const optionalEmpty = await invokeAssistantTool(
+      "update_kit_selections",
+      { plan_id: plan.id, selections: { optional_extras: [] } },
+      { repo },
+    );
+    expect(optionalEmpty.proposedAction?.params.selections).toEqual({
+      optional_extras: [],
+    });
+    const appliedEmpty = await applyAssistantAction(optionalEmpty.proposedAction!, {
+      repo,
+      jobs: { start: async () => "unused" } as never,
+    });
+    expect(appliedEmpty.ok).toBe(true);
+    expect(loadKitManifest(repo, plan.id).selections).toEqual({ optional_extras: [] });
+
+    const valid = await invokeAssistantTool(
+      "update_kit_selections",
+      {
+        plan_id: plan.id,
+        selections: { extras: ["skirts", "panels"] },
+      },
+      { repo },
+    );
+    const rejectedApply = await applyAssistantAction(
+      {
+        ...valid.proposedAction!,
+        params: {
+          selections: { extras: ["skirts", "panels", "screen"] },
+        },
+      },
+      { repo, jobs: { start: async () => "unused" } as never },
+    );
+    expect(rejectedApply).toMatchObject({
+      ok: false,
+      detail: "action.params.selections.extras must contain no more than 2 variant ids",
+    });
+    expect(loadKitManifest(repo, plan.id).selections).toEqual({ optional_extras: [] });
   });
 
   it("lists the library category tree with subcategory counts", async () => {
@@ -308,6 +485,17 @@ describe("assistant tools + example builds", () => {
     expect(JSON.parse(content).status).toBe("proposed");
     // Layers unchanged until apply
     expect(repo.getProfileLayers(plan.id).length).toBeGreaterThanOrEqual(1);
+
+    const applied = await applyAssistantAction(proposedAction!, {
+      repo,
+      dataDir: FIXTURE,
+      jobs: { start: async () => "unused" } as never,
+    });
+    expect(applied.ok).toBe(true);
+    expect(loadKitManifest(repo, plan.id).selections).toEqual({
+      toolhead: "example_toolhead",
+      probe: "example_probe",
+    });
   });
 
   it("attaches an uploaded STL/3MF Source to Build planning after confirmation", async () => {

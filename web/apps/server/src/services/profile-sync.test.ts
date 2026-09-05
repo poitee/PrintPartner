@@ -148,7 +148,7 @@ describe("profile-sync watcher end-to-end", () => {
       expect(after.length).toBe(1); // still one row — upsert, not duplicate
       expect(JSON.parse(after[0]!.resolvedFlatConfig ?? "{}").layer_height).toBe("0.28");
 
-      handle.stop();
+      await handle.stop();
     } finally {
       sqlite.close();
       rmSync(base, { recursive: true, force: true });

@@ -150,11 +150,12 @@ export function createProductMcpServer(deps: ProductMcpDeps): Server {
     return integrationsPort;
   }
 
-  function toolCtx(): ToolContext {
+  function toolCtx(signal?: AbortSignal): ToolContext {
     const repo = getRepo();
     const runtime = resolveAssistantRuntime(repo, config);
     return {
       repo,
+      signal,
       tenantId,
       jobs,
       activePlanId: defaultPlanId,
@@ -317,7 +318,7 @@ export function createProductMcpServer(deps: ProductMcpDeps): Server {
     };
   });
 
-  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
     assertEnabled();
     const name = request.params.name;
     const args =
@@ -435,7 +436,7 @@ export function createProductMcpServer(deps: ProductMcpDeps): Server {
         };
       }
 
-      const result = await invokeAssistantTool(name, args, toolCtx());
+      const result = await invokeAssistantTool(name, args, toolCtx(extra.signal));
       if (result.proposedAction && !isAssistantUiAction(result.proposedAction.type)) {
         pending.set(result.proposedAction.id, result.proposedAction);
       }

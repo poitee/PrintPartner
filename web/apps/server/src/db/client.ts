@@ -32,6 +32,9 @@ import {
   ACCEPTED_PLATE_EDIT_SCHEMA_VERSION,
   applyAcceptedPlateEditSchema,
 } from "./accepted-plate-edit-schema.js";
+import {
+  repairSourceRevisionTenantOwnershipSqlite,
+} from "./source-revision-tenant-repair.js";
 
 export type DrizzleDb = BetterSQLite3Database<typeof schema>;
 
@@ -118,6 +121,7 @@ export class SqliteDatabase {
         if (!/duplicate column name/i.test(msg)) throw e;
       }
     }
+    repairSourceRevisionTenantOwnershipSqlite(this.sqlite);
     // SQLite validates trigger bodies during RENAME, so add referenced profile columns first.
     const partCols = this.sqlite.pragma("table_info(parts)") as { name: string }[];
     if (!partCols.some((c) => c.name === "spoolman_spool_id")) {

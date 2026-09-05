@@ -143,7 +143,12 @@ function trackedFixture() {
     syncedAt: "2026-08-21T11:00:00.000Z",
     completeness: "complete",
   });
-  context.repo.activateSourceRevision({ sourceId: source.id, revisionId: sourceRevision.id, observed });
+  context.repo.activateSourceRevision({
+    sourceId: source.id,
+    revisionId: sourceRevision.id,
+    observed,
+    sourceVersion: sourceRevision.upstream_revision_key,
+  });
   const profile = context.repo.createProfile("Accepted", source.id);
   const draft = context.repo.recomputePlanDraft({
     profileId: profile.id,

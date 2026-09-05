@@ -13,6 +13,15 @@ import type { Stats } from "node:fs";
 import type { ReadEntry } from "tar";
 import Database from "better-sqlite3";
 import type { SqliteDatabase } from "../db/client.js";
+import {
+  backupRootForArchivePath,
+  FULL_BACKUP_ROOT_PATHS,
+  FULL_BACKUP_ROOTS,
+  isFullBackupRoot,
+  LEGACY_BACKUP_ROOTS,
+  type FullBackupRoot,
+} from "./backup-scope.js";
+import { readFreeDiskBytes } from "./storage-inventory.js";
 
 export type BackupDatabase = {
   readonly dbPath: string;
@@ -22,21 +31,45 @@ export type BackupDatabase = {
 
 export type CreateBackupOptions = Readonly<{
   includeDataDirectories?: boolean;
+  validationLimits?: BackupValidationLimits;
 }>;
 
-export type BackupMetadata = {
+type BackupMetadataBase = Readonly<{
   version: string;
   createdAt: string;
   appVersion: string;
-  formatVersion: 1;
-};
+}>;
 
-const BACKUP_FORMAT_VERSION = 1;
+export type BackupMetadataV1 = BackupMetadataBase &
+  Readonly<{
+    version: "1";
+    formatVersion: 1;
+  }>;
+
+type BackupScope =
+  | Readonly<{
+      kind: "full";
+      includedRoots: readonly FullBackupRoot[];
+    }>
+  | Readonly<{
+      kind: "database-only";
+      includedRoots: readonly [];
+    }>;
+
+export type BackupMetadataV2 = BackupMetadataBase &
+  Readonly<{
+    version: "2";
+    formatVersion: 2;
+    scope: BackupScope;
+  }>;
+
+export type BackupMetadata = BackupMetadataV1 | BackupMetadataV2;
+
+const BACKUP_FORMAT_VERSION = 2;
 const BACKUP_METADATA_FILE = "backup-metadata.json";
 const BACKUP_DATABASE_FILE = "print-partner.db";
 const BACKUP_WAL_FILE = "print-partner.db-wal";
-const BACKUP_DIRECTORIES = ["repos", "sources", "exports", "thumbs", "covers"] as const;
-const BACKUP_ROOT_FILES = new Set([
+const BACKUP_CORE_FILES = new Set([
   BACKUP_METADATA_FILE,
   BACKUP_DATABASE_FILE,
   BACKUP_WAL_FILE,
@@ -44,9 +77,10 @@ const BACKUP_ROOT_FILES = new Set([
 const SQLITE_HEADER = Buffer.from("SQLite format 3\0", "binary");
 const MAX_METADATA_BYTES = 64 * 1024;
 const DEFAULT_MAX_BACKUP_ENTRIES = 100_000;
-const DEFAULT_MAX_BACKUP_TOTAL_BYTES = 20 * 1024 * 1024 * 1024;
-const DEFAULT_MAX_BACKUP_ENTRY_BYTES = 8 * 1024 * 1024 * 1024;
+export const MAX_BACKUP_ENTRY_BYTES = 8 * 1024 * 1024 * 1024;
+export const MAX_BACKUP_EXPANDED_BYTES = 20 * 1024 * 1024 * 1024;
 const DEFAULT_MAX_DECOMPRESSION_RATIO = 200;
+const RESTORE_FREE_SPACE_RESERVE_BYTES = 64 * 1024 * 1024;
 
 export type BackupValidationLimits = {
   maxEntries?: number;
@@ -54,6 +88,30 @@ export type BackupValidationLimits = {
   maxEntryBytes?: number;
   maxDecompressionRatio?: number;
 };
+
+export type RestorePreflight = Readonly<{
+  archiveBytes: number;
+  requiredBytes: number;
+  freeBytes: number;
+  sufficient: boolean;
+}>;
+
+export type RestoreInspectionOptions = BackupValidationLimits &
+  Readonly<{
+    readFreeBytes?: (path: string) => Promise<number>;
+  }>;
+
+export class InsufficientRestoreSpaceError extends Error {
+  readonly preflight: RestorePreflight;
+
+  constructor(preflight: RestorePreflight) {
+    super(
+      `Insufficient disk space for restore: ${preflight.requiredBytes} bytes required, ${preflight.freeBytes} bytes free`,
+    );
+    this.name = "InsufficientRestoreSpaceError";
+    this.preflight = preflight;
+  }
+}
 
 type ResolvedBackupLimits = Required<BackupValidationLimits>;
 
@@ -71,11 +129,25 @@ function positiveLimit(value: number | undefined, fallback: number): number {
 function resolveBackupLimits(limits: BackupValidationLimits = {}): ResolvedBackupLimits {
   return {
     maxEntries: positiveLimit(limits.maxEntries, DEFAULT_MAX_BACKUP_ENTRIES),
-    maxTotalBytes: positiveLimit(limits.maxTotalBytes, DEFAULT_MAX_BACKUP_TOTAL_BYTES),
-    maxEntryBytes: positiveLimit(limits.maxEntryBytes, DEFAULT_MAX_BACKUP_ENTRY_BYTES),
+    maxTotalBytes: positiveLimit(limits.maxTotalBytes, MAX_BACKUP_EXPANDED_BYTES),
+    maxEntryBytes: positiveLimit(limits.maxEntryBytes, MAX_BACKUP_ENTRY_BYTES),
     maxDecompressionRatio: positiveLimit(
       limits.maxDecompressionRatio,
       DEFAULT_MAX_DECOMPRESSION_RATIO,
+    ),
+  };
+}
+
+function resolveCreationLimits(limits: BackupValidationLimits = {}): ResolvedBackupLimits {
+  const defaults = resolveBackupLimits();
+  const requested = resolveBackupLimits(limits);
+  return {
+    maxEntries: Math.min(requested.maxEntries, defaults.maxEntries),
+    maxTotalBytes: Math.min(requested.maxTotalBytes, defaults.maxTotalBytes),
+    maxEntryBytes: Math.min(requested.maxEntryBytes, defaults.maxEntryBytes),
+    maxDecompressionRatio: Math.min(
+      requested.maxDecompressionRatio,
+      defaults.maxDecompressionRatio,
     ),
   };
 }
@@ -99,7 +171,7 @@ function archiveEntryError(entry: ReadEntry, seen: Set<string>): Error | null {
   ) {
     return new Error(`Unsafe backup entry path: ${rawPath}`);
   }
-  if (BACKUP_ROOT_FILES.has(path)) {
+  if (BACKUP_CORE_FILES.has(path)) {
     if (entry.type !== "File" && entry.type !== "OldFile") {
       return new Error(`Backup root entry must be a regular file: ${rawPath}`);
     }
@@ -107,19 +179,23 @@ function archiveEntryError(entry: ReadEntry, seen: Set<string>): Error | null {
       return new Error(`Backup metadata exceeds ${MAX_METADATA_BYTES} byte limit`);
     }
   } else {
-    const directory = BACKUP_DIRECTORIES.find(
-      (candidate) => path === candidate || path.startsWith(`${candidate}/`),
-    );
-    if (!directory) return new Error(`Unexpected backup entry: ${rawPath}`);
-    if (
-      entry.type !== "File" &&
-      entry.type !== "OldFile" &&
-      entry.type !== "Directory"
-    ) {
-      return new Error(`Unsupported backup entry type for ${rawPath}: ${entry.type}`);
-    }
-    if (path === directory && entry.type !== "Directory") {
-      return new Error(`Backup directory root has invalid type: ${rawPath}`);
+    const root = backupRootForArchivePath(path);
+    if (!root) return new Error(`Unexpected backup entry: ${rawPath}`);
+    if (root.kind === "file") {
+      if (entry.type !== "File" && entry.type !== "OldFile") {
+        return new Error(`Backup root entry must be a regular file: ${rawPath}`);
+      }
+    } else {
+      if (
+        entry.type !== "File" &&
+        entry.type !== "OldFile" &&
+        entry.type !== "Directory"
+      ) {
+        return new Error(`Unsupported backup entry type for ${rawPath}: ${entry.type}`);
+      }
+      if (path === root.path && entry.type !== "Directory") {
+        return new Error(`Backup directory root has invalid type: ${rawPath}`);
+      }
     }
   }
   if (seen.has(path)) return new Error(`Duplicate backup entry: ${rawPath}`);
@@ -166,22 +242,79 @@ function assertRequiredArchiveEntries(seen: Set<string>): void {
   }
 }
 
-function readValidatedMetadata(tempDir: string): BackupMetadata {
-  const metadataContent = readFileSync(join(tempDir, BACKUP_METADATA_FILE), "utf-8");
-  const metadata = JSON.parse(metadataContent) as Partial<BackupMetadata> | null;
+async function scanBackupArchive(
+  backupPath: string,
+  configuredLimits: BackupValidationLimits = {},
+): Promise<number> {
+  const limits = resolveBackupLimits(configuredLimits);
+  const state: ArchiveGuardState = {
+    entries: 0,
+    totalBytes: 0,
+    seen: new Set(),
+    error: null,
+  };
+  await tar.t({
+    file: resolve(backupPath),
+    gzip: true,
+    strict: true,
+    maxDecompressionRatio: limits.maxDecompressionRatio,
+    onReadEntry: (entry) => {
+      guardArchiveEntry(entry, state, limits);
+    },
+  });
+  if (state.error) throw state.error;
+  assertRequiredArchiveEntries(state.seen);
+  return state.totalBytes;
+}
+
+export async function inspectRestore(
+  backupPath: string,
+  dataDir: string,
+  options: RestoreInspectionOptions = {},
+): Promise<RestorePreflight> {
+  await fs.mkdir(dataDir, { recursive: true });
+  const archiveBytes = await scanBackupArchive(backupPath, options);
+  const requiredBytes = archiveBytes + RESTORE_FREE_SPACE_RESERVE_BYTES;
+  if (!Number.isSafeInteger(requiredBytes)) {
+    throw new Error("Restore disk requirement exceeds the supported numeric range");
+  }
+  const freeBytes = await (options.readFreeBytes ?? readFreeDiskBytes)(dataDir);
+  if (!Number.isSafeInteger(freeBytes) || freeBytes < 0) {
+    throw new Error("Could not determine available disk space for restore");
+  }
+  return {
+    archiveBytes,
+    requiredBytes,
+    freeBytes,
+    sufficient: freeBytes >= requiredBytes,
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function sameRoots(left: readonly FullBackupRoot[], right: readonly FullBackupRoot[]): boolean {
+  if (left.length !== right.length) return false;
+  const leftSet = new Set(left);
+  return leftSet.size === left.length && right.every((root) => leftSet.has(root));
+}
+
+function parseBackupMetadata(value: unknown): BackupMetadata {
+  const metadata = value;
   if (
-    !metadata ||
-    typeof metadata !== "object" ||
+    !isRecord(metadata) ||
     typeof metadata.version !== "string" ||
     typeof metadata.createdAt !== "string" ||
     Number.isNaN(Date.parse(metadata.createdAt)) ||
     typeof metadata.appVersion !== "string" ||
+    typeof metadata.formatVersion !== "number" ||
     !Number.isInteger(metadata.formatVersion) ||
-    (metadata.formatVersion as number) < 1
+    metadata.formatVersion < 1
   ) {
     throw new Error("Invalid backup metadata: missing or invalid required fields");
   }
-  if ((metadata.formatVersion as number) > BACKUP_FORMAT_VERSION) {
+  if (metadata.formatVersion > BACKUP_FORMAT_VERSION) {
     throw new Error(
       `Backup format version ${metadata.formatVersion} is newer than supported ${BACKUP_FORMAT_VERSION}`,
     );
@@ -189,6 +322,70 @@ function readValidatedMetadata(tempDir: string): BackupMetadata {
   if (metadata.version !== String(metadata.formatVersion)) {
     throw new Error("Invalid backup metadata: version fields do not match");
   }
+  if (metadata.formatVersion === 1 && metadata.version === "1") {
+    return {
+      version: "1",
+      createdAt: metadata.createdAt,
+      appVersion: metadata.appVersion,
+      formatVersion: 1,
+    };
+  }
+  if (
+    metadata.formatVersion !== 2 ||
+    metadata.version !== "2" ||
+    !isRecord(metadata.scope) ||
+    (metadata.scope.kind !== "full" && metadata.scope.kind !== "database-only") ||
+    !Array.isArray(metadata.scope.includedRoots) ||
+    !metadata.scope.includedRoots.every(isFullBackupRoot)
+  ) {
+    throw new Error("Invalid backup metadata: format v2 requires a valid scope");
+  }
+  const includedRoots = metadata.scope.includedRoots;
+  if (metadata.scope.kind === "database-only") {
+    if (includedRoots.length !== 0) {
+      throw new Error("Invalid backup metadata: scope roots do not match its kind");
+    }
+    return {
+      version: "2",
+      createdAt: metadata.createdAt,
+      appVersion: metadata.appVersion,
+      formatVersion: 2,
+      scope: { kind: "database-only", includedRoots: [] },
+    };
+  }
+  if (!sameRoots(includedRoots, FULL_BACKUP_ROOT_PATHS)) {
+    throw new Error("Invalid backup metadata: scope roots do not match its kind");
+  }
+  return {
+    version: "2",
+    createdAt: metadata.createdAt,
+    appVersion: metadata.appVersion,
+    formatVersion: 2,
+    scope: {
+      kind: "full",
+      includedRoots: [...includedRoots],
+    },
+  };
+}
+
+function assertArchiveMatchesScope(metadata: BackupMetadata, seen: Set<string>): void {
+  const includedRoots = new Set<string>(
+    metadata.formatVersion === 1 ? LEGACY_BACKUP_ROOTS : metadata.scope.includedRoots,
+  );
+  for (const path of seen) {
+    if (BACKUP_CORE_FILES.has(path)) continue;
+    const root = backupRootForArchivePath(path);
+    if (root && !includedRoots.has(root.path)) {
+      throw new Error(`Backup entry is outside the declared scope: ${path}`);
+    }
+  }
+}
+
+function readValidatedMetadata(tempDir: string, seen: Set<string>): BackupMetadata {
+  const metadataContent = readFileSync(join(tempDir, BACKUP_METADATA_FILE), "utf-8");
+  const parsedMetadata: unknown = JSON.parse(metadataContent);
+  const metadata = parseBackupMetadata(parsedMetadata);
+  assertArchiveMatchesScope(metadata, seen);
   const database = readFileSync(join(tempDir, BACKUP_DATABASE_FILE));
   if (
     database.length < SQLITE_HEADER.length ||
@@ -212,7 +409,7 @@ function readValidatedMetadata(tempDir: string): BackupMetadata {
   } finally {
     sqlite?.close();
   }
-  return metadata as BackupMetadata;
+  return metadata;
 }
 
 async function extractValidatedBackup(
@@ -239,12 +436,12 @@ async function extractValidatedBackup(
       const safe = guardArchiveEntry(readEntry, state, limits);
       if (!safe || readEntry.meta) return false;
       const path = normalizedArchivePath(readEntry.path);
-      return extractDataDirectories || BACKUP_ROOT_FILES.has(path);
+      return extractDataDirectories || BACKUP_CORE_FILES.has(path);
     },
   });
   if (state.error) throw state.error;
   assertRequiredArchiveEntries(state.seen);
-  return readValidatedMetadata(tempDir);
+  return readValidatedMetadata(tempDir, state.seen);
 }
 
 /**
@@ -267,11 +464,16 @@ export async function createBackup(
     throw new Error("SQLite database connection failed; cannot create backup");
   }
 
-  const metadata: BackupMetadata = {
-    version: String(BACKUP_FORMAT_VERSION),
+  const full = options.includeDataDirectories !== false;
+  const scope: BackupScope = full
+    ? { kind: "full", includedRoots: [...FULL_BACKUP_ROOT_PATHS] }
+    : { kind: "database-only", includedRoots: [] };
+  const metadata: BackupMetadataV2 = {
+    version: "2",
     createdAt: new Date().toISOString(),
     appVersion,
     formatVersion: BACKUP_FORMAT_VERSION,
+    scope,
   };
 
   mkdirSync(dataDir, { recursive: true });
@@ -292,16 +494,24 @@ export async function createBackup(
     );
 
     const archiveEntries: string[] = [];
-    for (const directory of options.includeDataDirectories === false ? [] : BACKUP_DIRECTORIES) {
-      const source = join(dataDir, directory);
+    for (const root of full ? FULL_BACKUP_ROOTS : []) {
+      const source = join(dataDir, root.path);
       try {
         const stats = await fs.lstat(source);
-        if (!stats.isDirectory() || stats.isSymbolicLink()) continue;
+        if (stats.isSymbolicLink()) {
+          throw new Error(`Backup root cannot be a symbolic link: ${root.path}`);
+        }
+        if (
+          (root.kind === "directory" && !stats.isDirectory()) ||
+          (root.kind === "file" && !stats.isFile())
+        ) {
+          throw new Error(`Backup root has the wrong file type: ${root.path}`);
+        }
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+        if (isMissingPathError(error)) continue;
         throw error;
       }
-      archiveEntries.push(directory);
+      archiveEntries.push(root.path);
     }
 
     const snapshotRelativePath = join(
@@ -336,6 +546,10 @@ export async function createBackup(
     } finally {
       await archiveHandle.close();
     }
+    await validateBackup(
+      temporaryArchivePath,
+      resolveCreationLimits(options.validationLimits),
+    );
     await fs.rename(temporaryArchivePath, resolve(outputPath));
   } finally {
     try {
@@ -375,6 +589,194 @@ export async function validateBackup(
   }
 }
 
+type RestoreReplacement =
+  | Readonly<{
+      kind: "publish";
+      livePath: string;
+      previousPath: string;
+      stagedPath: string;
+    }>
+  | Readonly<{
+      kind: "remove";
+      livePath: string;
+      previousPath: string;
+    }>;
+
+type PreviousRestorePath =
+  | Readonly<{ kind: "absent" }>
+  | Readonly<{ kind: "moved"; path: string }>;
+
+type ActivatedRestorePath = Readonly<{
+  failedPath: string;
+  livePath: string;
+  previous: PreviousRestorePath;
+}>;
+
+type RestoreFileTransaction = Readonly<{
+  activate(): Promise<void>;
+  rollback(): Promise<Error[]>;
+}>;
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function isMissingPathError(error: unknown): boolean {
+  return error instanceof Error && "code" in error && error.code === "ENOENT";
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await fs.lstat(path);
+    return true;
+  } catch (error) {
+    if (isMissingPathError(error)) return false;
+    throw error;
+  }
+}
+
+function restoreFailure(primaryError: unknown, recoveryErrors: readonly Error[]): Error {
+  const recoveryDetail = recoveryErrors.length
+    ? ` Recovery also failed: ${recoveryErrors.map((error) => error.message).join("; ")}`
+    : "";
+  const cause = primaryError instanceof Error ? primaryError : new Error(String(primaryError));
+  return new Error(`Restore failed: ${cause.message}.${recoveryDetail}`, { cause });
+}
+
+function createRestoreFileTransaction(
+  replacements: readonly RestoreReplacement[],
+): RestoreFileTransaction {
+  const activated: ActivatedRestorePath[] = [];
+
+  return {
+    async activate() {
+      for (const replacement of replacements) {
+        let previous: PreviousRestorePath = { kind: "absent" };
+        if (await pathExists(replacement.livePath)) {
+          await fs.rename(replacement.livePath, replacement.previousPath);
+          previous = { kind: "moved", path: replacement.previousPath };
+        }
+        activated.push({
+          failedPath: `${replacement.previousPath}.failed`,
+          livePath: replacement.livePath,
+          previous,
+        });
+        if (replacement.kind === "publish") {
+          await fs.rename(replacement.stagedPath, replacement.livePath);
+        }
+      }
+    },
+
+    async rollback() {
+      const errors: Error[] = [];
+      for (let index = activated.length - 1; index >= 0; index -= 1) {
+        const entry = activated[index];
+        if (!entry) continue;
+        let livePathExists: boolean;
+        try {
+          livePathExists = await pathExists(entry.livePath);
+        } catch (error) {
+          errors.push(
+            new Error(`Could not inspect failed restored path ${entry.livePath}: ${errorMessage(error)}`, {
+              cause: error,
+            }),
+          );
+          continue;
+        }
+        if (livePathExists) {
+          try {
+            await fs.rename(entry.livePath, entry.failedPath);
+          } catch (error) {
+            errors.push(
+              new Error(`Could not move failed restored path ${entry.livePath}: ${errorMessage(error)}`, {
+                cause: error,
+              }),
+            );
+            continue;
+          }
+        }
+        if (entry.previous.kind === "moved") {
+          try {
+            await fs.rename(entry.previous.path, entry.livePath);
+          } catch (error) {
+            errors.push(
+              new Error(`Could not restore previous path ${entry.livePath}: ${errorMessage(error)}`, {
+                cause: error,
+              }),
+            );
+          }
+        }
+      }
+      return errors;
+    },
+  };
+}
+
+async function restoreReplacements(
+  tempDir: string,
+  dataDir: string,
+  databasePath: string,
+  metadata: BackupMetadata,
+): Promise<RestoreReplacement[]> {
+  const previousRoot = join(tempDir, ".previous");
+  await fs.mkdir(previousRoot);
+  const replacements: RestoreReplacement[] = [];
+
+  const roots =
+    metadata.formatVersion === 1
+      ? LEGACY_BACKUP_ROOTS
+      : metadata.scope.includedRoots;
+  for (const root of roots) {
+    const stagedPath = join(tempDir, root);
+    const staged = await pathExists(stagedPath);
+    if (metadata.formatVersion === 1 && !staged) continue;
+    replacements.push(
+      staged
+        ? {
+            kind: "publish",
+            stagedPath,
+            livePath: join(dataDir, root),
+            previousPath: join(previousRoot, root),
+          }
+        : {
+            kind: "remove",
+            livePath: join(dataDir, root),
+            previousPath: join(previousRoot, root),
+          },
+    );
+  }
+
+  replacements.push({
+    kind: "publish",
+    stagedPath: join(tempDir, BACKUP_DATABASE_FILE),
+    livePath: databasePath,
+    previousPath: join(previousRoot, BACKUP_DATABASE_FILE),
+  });
+
+  const stagedWalPath = join(tempDir, BACKUP_WAL_FILE);
+  replacements.push(
+    (await pathExists(stagedWalPath))
+      ? {
+          kind: "publish",
+          stagedPath: stagedWalPath,
+          livePath: `${databasePath}-wal`,
+          previousPath: join(previousRoot, `${BACKUP_DATABASE_FILE}-wal`),
+        }
+      : {
+          kind: "remove",
+          livePath: `${databasePath}-wal`,
+          previousPath: join(previousRoot, `${BACKUP_DATABASE_FILE}-wal`),
+        },
+    {
+      kind: "remove",
+      livePath: `${databasePath}-shm`,
+      previousPath: join(previousRoot, `${BACKUP_DATABASE_FILE}-shm`),
+    },
+  );
+
+  return replacements;
+}
+
 /**
  * Restores a backup archive, replacing current data.
  * Should only be called when the application is stopped or in maintenance mode.
@@ -383,106 +785,77 @@ export async function restoreBackup(
   backupPath: string,
   dataDir: string,
   sqlite: SqliteDatabase | null,
+  options: RestoreInspectionOptions = {},
 ): Promise<BackupMetadata> {
   if (!sqlite) {
     throw new Error("SQLite database not available; restore requires self-host mode");
   }
 
   mkdirSync(dataDir, { recursive: true });
+  const preflight = await inspectRestore(backupPath, dataDir, options);
+  if (!preflight.sufficient) {
+    throw new InsufficientRestoreSpaceError(preflight);
+  }
   const tempDir = mkdtempSync(join(dataDir, ".restore-tmp-"));
-  let databaseClosed = false;
+  let preserveRecoveryFiles = false;
 
   try {
-    // Parse, validate, and safely extract every entry before mutating live data.
-    const metadata = await extractValidatedBackup(resolve(backupPath), tempDir, true);
-
-    // Close the database only after the complete archive has passed validation.
-    sqlite.close();
-    databaseClosed = true;
-
-    // Backup current data (safety measure)
-    const currentBackupDir = join(dataDir, ".pre-restore-backup");
-    mkdirSync(currentBackupDir, { recursive: true });
-
-    for (const dir of BACKUP_DIRECTORIES) {
-      const currentPath = join(dataDir, dir);
-      const backupPath = join(currentBackupDir, dir);
-      try {
-        await fs.cp(currentPath, backupPath, { recursive: true, force: true });
-      } catch {
-        // Directory might not exist yet; that's OK
-      }
-    }
-
-    // Backup current database
+    let metadata: BackupMetadata;
+    let transaction: RestoreFileTransaction;
     try {
-      const currentDb = readFileSync(sqlite.dbPath);
-      writeFileSync(join(currentBackupDir, "print-partner.db.bak"), currentDb);
-    } catch {
-      // Database might not exist yet
+      metadata = await extractValidatedBackup(resolve(backupPath), tempDir, true, options);
+      transaction = createRestoreFileTransaction(
+        await restoreReplacements(tempDir, dataDir, sqlite.dbPath, metadata),
+      );
+    } catch (error) {
+      throw restoreFailure(error, []);
     }
 
-    // Restore files
-    for (const dir of BACKUP_DIRECTORIES) {
-      const restoredPath = join(tempDir, dir);
-      const targetPath = join(dataDir, dir);
-
-      try {
-        const stats = await fs.stat(restoredPath);
-        if (stats.isDirectory()) {
-          await fs.rm(targetPath, { recursive: true, force: true });
-          await fs.cp(restoredPath, targetPath, { recursive: true });
-        }
-      } catch {
-        // Directory doesn't exist in backup; skip it
-      }
-    }
-
-    // Restore database
-    const restoredDb = join(tempDir, BACKUP_DATABASE_FILE);
     try {
-      const dbContent = readFileSync(restoredDb);
-      writeFileSync(sqlite.dbPath, dbContent);
-
-      // Never retain journal state from the database being replaced.
-      await fs.rm(sqlite.dbPath + "-wal", { force: true });
-      await fs.rm(sqlite.dbPath + "-shm", { force: true });
-
-      // Restore the matching WAL when the backup includes one.
-      const restoredWal = join(tempDir, BACKUP_WAL_FILE);
-      try {
-        const walContent = readFileSync(restoredWal);
-        writeFileSync(sqlite.dbPath + "-wal", walContent);
-      } catch {
-        // WAL file doesn't exist; that's OK
-      }
-    } catch (e) {
-      // eslint-disable-next-line preserve-caught-error
-      throw new Error(`Failed to restore database: ${e instanceof Error ? e.message : String(e)}`);
+      sqlite.close();
+    } catch (error) {
+      throw restoreFailure(error, []);
     }
 
-    // Reconnect to restored database
-    sqlite.connect();
+    try {
+      await transaction.activate();
+      sqlite.connect();
+      return metadata;
+    } catch (error) {
+      const recoveryErrors: Error[] = [];
+      try {
+        sqlite.close();
+      } catch (closeError) {
+        recoveryErrors.push(
+          new Error(`Could not close the failed restored database: ${errorMessage(closeError)}`, {
+            cause: closeError,
+          }),
+        );
+      }
 
-    return metadata;
-  } catch (e) {
-    const capturedError = e instanceof Error ? e : new Error(String(e));
-    // Try to reconnect to the database even if restore failed
-    if (databaseClosed) {
+      const rollbackErrors = await transaction.rollback();
+      recoveryErrors.push(...rollbackErrors);
+      preserveRecoveryFiles = rollbackErrors.length > 0;
+
       try {
         sqlite.connect();
-      } catch (reconnectErr) {
-        // Reconnect failed; database state is unknown
-        console.error("[backup-restore] Failed to reconnect after restore error:", reconnectErr);
+      } catch (reconnectError) {
+        recoveryErrors.push(
+          new Error(`Could not reconnect the previous database: ${errorMessage(reconnectError)}`, {
+            cause: reconnectError,
+          }),
+        );
       }
+
+      throw restoreFailure(error, recoveryErrors);
     }
-    // eslint-disable-next-line preserve-caught-error
-    throw new Error(`Restore failed: ${capturedError.message}`, { cause: capturedError });
   } finally {
-    try {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    } catch {
-      // Ignore cleanup errors
+    if (!preserveRecoveryFiles) {
+      try {
+        await fs.rm(tempDir, { recursive: true, force: true });
+      } catch {
+        // A completed restore or rollback does not depend on workspace cleanup.
+      }
     }
   }
 }

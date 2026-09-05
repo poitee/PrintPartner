@@ -1,5 +1,4 @@
-# Path hints — folder/filename patterns → suggested manifest categories.
-# Used by manifest draft generation and Kit Studio Author tree badges.
+# Path hints: folder and filename patterns for inferred manifest option groups.
 #
 # Only conventions that hold across projects ship here. Rules naming a specific
 # mod, vendor or machine belong in your own data directory, not in the product:
@@ -7,48 +6,23 @@
 #
 # rules:
 #   - path: glob matched against the repo-relative path
-#     option_group: <category_id from kit-catalog.yaml>   (optional)
-#     variant_id: <variant id used in kit selections>     (optional)
-#     requirement: required | optional                    (optional)
-#     label: badge text
-#     confidence: high | medium | low
+#     option_group: <category_id from kit-catalog.yaml>
+#     variant_id: <variant id used in kit selections>
+#     label: <display name>                               (optional)
 version: 1
 
 rules:
-  - path: "**/PrintedParts/**"
-    requirement: required
-    label: Printed parts
-    confidence: medium
-
-  - path: "**/STLs/**"
-    requirement: required
-    label: STLs folder
-    confidence: medium
-
-  - path: "**/printed/**"
-    requirement: required
-    label: Printed folder
-    confidence: medium
-
-  - path: "**/frame/**"
-    requirement: required
-    label: Frame parts
-    confidence: medium
-
   - path: "**/electronics/**"
     option_group: controller
     variant_id: stock
     label: Electronics
-    confidence: medium
 
   - path: "**/chain/**"
     option_group: cable_routing
     variant_id: umbilical
     label: Cable chain
-    confidence: medium
 
   - path: "**/stock_toolhead/**"
     option_group: toolhead
     variant_id: stock
     label: Stock toolhead
-    confidence: high

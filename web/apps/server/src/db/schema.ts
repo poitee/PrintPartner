@@ -30,6 +30,9 @@ export const projects = sqliteTable(
     sourceKind: text("source_kind").notNull().default("github"),
     role: text("role").notNull().default("unassigned"),
     metadataJson: text("metadata_json"),
+    legacyManifestCutover: integer("legacy_manifest_cutover", { mode: "boolean" })
+      .notNull()
+      .default(false),
     currentSourceRevisionId: integer("current_source_revision_id").references(
       (): AnySQLiteColumn => sourceRevisions.id,
       { onDelete: "restrict" },
@@ -1148,7 +1151,7 @@ export const appEvents = sqliteTable("app_events", {
 });
 
 export const schemaVersionKey = "schema_version";
-export const currentSchemaVersion = 31;
+export const currentSchemaVersion = 33;
 
 export const SQLITE_PARTS_INVALIDATE_ACCEPTED_REVISION_UPDATE = `CREATE TRIGGER IF NOT EXISTS trg_parts_invalidate_accepted_revision_update
     AFTER UPDATE ON parts
@@ -1195,7 +1198,8 @@ export const schemaMigrations: string[] = [
     manifest_community_slug TEXT,
     source_kind TEXT NOT NULL DEFAULT 'github',
     role TEXT NOT NULL DEFAULT 'unassigned',
-    metadata_json TEXT
+    metadata_json TEXT,
+    legacy_manifest_cutover INTEGER NOT NULL DEFAULT 0
   )`,
   `CREATE UNIQUE INDEX IF NOT EXISTS uq_projects_tenant_name ON projects (tenant_id, name)`,
   `CREATE TABLE IF NOT EXISTS build_profiles (
@@ -2794,4 +2798,6 @@ export const schemaMigrations: string[] = [
     BEGIN
       SELECT RAISE(ABORT, 'Accepted Plate unit is immutable');
     END`,
+  // v32 - durable cutover from mutable workspace manifests to Source revisions.
+  `ALTER TABLE projects ADD COLUMN legacy_manifest_cutover INTEGER NOT NULL DEFAULT 0`,
 ];

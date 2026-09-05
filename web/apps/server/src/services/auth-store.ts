@@ -89,6 +89,17 @@ export class AuthStore {
     return Number(rows[0]?.n ?? 0);
   }
 
+  listTenantIds(): string[] {
+    const rows: unknown[] = this.db.select().from(this.schema.users).all();
+    const tenantIds: string[] = [];
+    for (const row of rows) {
+      if (typeof row === "object" && row !== null && "id" in row && typeof row.id === "string") {
+        tenantIds.push(row.id);
+      }
+    }
+    return tenantIds.sort();
+  }
+
   findUserByEmail(email: string): DbUser | null {
     const row = this.db
       .select()
@@ -124,9 +135,11 @@ export class AuthStore {
     passwordHash?: string | null;
     isAdmin?: boolean;
   }): DbUser {
-    const id = randomUUID();
-    const now = new Date().toISOString();
     const isFirst = this.countUsers() === 0;
+    const id = isFirst && this.claimDefaultTenantForFirstUser
+      ? this.schema.DEFAULT_TENANT_ID
+      : randomUUID();
+    const now = new Date().toISOString();
     const user = this.db
       .insert(this.schema.users)
       .values({
@@ -140,7 +153,6 @@ export class AuthStore {
       .returning()
       .get() as DbUser;
     if (!user) throw new Error("Failed to create user");
-    if (isFirst && this.claimDefaultTenantForFirstUser) this.reassignDefaultTenant(id);
     return mapUser(user);
   }
 
@@ -260,20 +272,6 @@ export class AuthStore {
     if (!row) return null;
     this.db.delete(this.schema.passwordResetTokens).where(eq(this.schema.passwordResetTokens.id, id)).run();
     return row.userId;
-  }
-
-  reassignDefaultTenant(userId: string): void {
-    const tables = [
-      this.schema.projects,
-      this.schema.buildProfiles,
-      this.schema.profileLayers,
-      this.schema.parts,
-      this.schema.printProgress,
-      this.schema.appSettings,
-    ] as const;
-    for (const table of tables) {
-      this.db.update(table).set({ tenantId: userId }).where(eq(table.tenantId, "default")).run();
-    }
   }
 
   createPlanShare(input: {

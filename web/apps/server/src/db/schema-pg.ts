@@ -32,6 +32,7 @@ export const projects = pgTable(
     sourceKind: text("source_kind").notNull().default("github"),
     role: text("role").notNull().default("unassigned"),
     metadataJson: text("metadata_json"),
+    legacyManifestCutover: boolean("legacy_manifest_cutover").notNull().default(false),
     currentSourceRevisionId: integer("current_source_revision_id").references(
       (): AnyPgColumn => sourceRevisions.id,
       { onDelete: "restrict" },
@@ -1135,4 +1136,4 @@ export const appEvents = pgTable("app_events", {
 });
 
 export const schemaVersionKey = "schema_version";
-export const currentSchemaVersion = 31;
+export const currentSchemaVersion = 33;

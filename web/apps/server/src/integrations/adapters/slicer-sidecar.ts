@@ -28,13 +28,33 @@
  */
 
 import type { IntegrationConfig, IntegrationTestResult } from "@print-partner/contracts";
-import { unzipSync } from "fflate";
+import { Unzip, UnzipInflate } from "fflate";
 import type { IntegrationAdapter } from "../store.js";
 import { assertSafeOutboundUrl } from "../../lib/outbound-url.js";
+import {
+  cancelResponseBody,
+  isJsonObject,
+  readBoundedResponseBody,
+  ResponseBodyTooLargeError,
+} from "../../lib/bounded-response.js";
 
 export type SlicerKind = "orca" | "prusa" | "bambu";
 
 export const SLICER_KINDS: readonly SlicerKind[] = ["orca", "prusa", "bambu"] as const;
+
+const MAX_CONTROL_RESPONSE_BYTES = 64 * 1024;
+const MAX_SLICE_RESPONSE_BYTES = 512 * 1024 * 1024;
+const MAX_SLICE_ARCHIVE_ENTRIES = 256;
+const MAX_SLICE_ARCHIVE_EXPANDED_BYTES = 512 * 1024 * 1024;
+const MAX_SLICE_ARCHIVE_COMPRESSION_RATIO = 200;
+const MAX_SLICE_ARCHIVE_ENTRY_NAME_BYTES = 4 * 1024;
+const ZIP_LOCAL_FILE_HEADER = 0x04034b50;
+const ZIP_CENTRAL_DIRECTORY_HEADER = 0x02014b50;
+const ZIP_END_OF_CENTRAL_DIRECTORY = 0x06054b50;
+const ZIP_LOCAL_FILE_HEADER_BYTES = 30;
+const ZIP_CENTRAL_DIRECTORY_HEADER_BYTES = 46;
+const ZIP_END_OF_CENTRAL_DIRECTORY_BYTES = 22;
+const ZIP_MAX_COMMENT_BYTES = 0xffff;
 
 export function isSlicerKind(value: unknown): value is SlicerKind {
   return typeof value === "string" && (SLICER_KINDS as readonly string[]).includes(value);
@@ -163,6 +183,20 @@ function normUrl(raw: unknown): string | null {
   return raw.trim().replace(/\/+$/, "");
 }
 
+function healthResponseIsHealthy(body: unknown): boolean {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) return false;
+  const hasPositiveSignal =
+    ("ok" in body && body.ok === true) ||
+    ("status" in body && body.status === "ok");
+  return (
+    hasPositiveSignal &&
+    (!("ok" in body) || body.ok !== false) &&
+    (!("status" in body) || body.status !== "unhealthy") &&
+    (!("exists" in body) || body.exists !== false) &&
+    (!("executable" in body) || body.executable !== false)
+  );
+}
+
 function toBlob(bytes: Uint8Array): Blob {
   return new Blob([bytes as Uint8Array<ArrayBuffer>], { type: "application/octet-stream" });
 }
@@ -174,18 +208,127 @@ function base64ToBytes(b64: string): Uint8Array {
   return bytes;
 }
 
+async function readSidecarBody(response: Response, maxBytes: number): Promise<Uint8Array> {
+  try {
+    return await readBoundedResponseBody(response, maxBytes);
+  } catch (error) {
+    if (error instanceof ResponseBodyTooLargeError) {
+      throw new SlicerSidecarError(`Slicer sidecar response exceeds ${maxBytes} bytes`, {
+        code: "response_too_large",
+        status: response.status,
+      });
+    }
+    throw error;
+  }
+}
+
+async function readSidecarJson(response: Response, maxBytes: number): Promise<unknown> {
+  const bytes = await readSidecarBody(response, maxBytes);
+  return JSON.parse(new TextDecoder().decode(bytes));
+}
+
+function invalidJsonResponse(
+  protocol: "v1" | "legacy",
+  status: number,
+  field?: string,
+): SlicerSidecarError {
+  const suffix = field ? `: ${field} has the wrong type` : "";
+  return new SlicerSidecarError(
+    `Slicer sidecar returned an invalid ${protocol} JSON response${suffix}`,
+    { code: "invalid_response", status },
+  );
+}
+
+function optionalStringField(
+  body: Record<string, unknown>,
+  field: string,
+  protocol: "v1" | "legacy",
+  status: number,
+): string | undefined {
+  const value = body[field];
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") throw invalidJsonResponse(protocol, status, field);
+  return value;
+}
+
+function parseV1SliceResponse(value: unknown, status: number): {
+  gcodeBase64?: string;
+  gcodeFilename?: string;
+  thumbnailBase64?: string;
+  thumbnailFilename?: string;
+  warnings: string[];
+} {
+  if (!isJsonObject(value)) throw invalidJsonResponse("v1", status);
+  if (value.ok !== undefined && typeof value.ok !== "boolean") {
+    throw invalidJsonResponse("v1", status, "ok");
+  }
+  if (value.ok === false) {
+    throw new SlicerSidecarError("Slicer sidecar reported failure", {
+      code: "sidecar_error",
+      status,
+    });
+  }
+
+  let warnings: string[] = [];
+  if (value.meta !== undefined) {
+    if (!isJsonObject(value.meta)) throw invalidJsonResponse("v1", status, "meta");
+    if (value.meta.warnings !== undefined) {
+      if (
+        !Array.isArray(value.meta.warnings) ||
+        value.meta.warnings.some((warning) => typeof warning !== "string")
+      ) {
+        throw invalidJsonResponse("v1", status, "meta.warnings");
+      }
+      warnings = [...value.meta.warnings];
+    }
+  }
+
+  return {
+    gcodeBase64: optionalStringField(value, "gcode_base64", "v1", status),
+    gcodeFilename: optionalStringField(value, "gcode_filename", "v1", status),
+    thumbnailBase64: optionalStringField(value, "thumbnail_base64", "v1", status),
+    thumbnailFilename: optionalStringField(value, "thumbnail_filename", "v1", status),
+    warnings,
+  };
+}
+
+function parseLegacySliceResponse(value: unknown, status: number): {
+  gcode?: string;
+  thumbnail?: string;
+  filename?: string;
+} {
+  if (!isJsonObject(value)) throw invalidJsonResponse("legacy", status);
+  return {
+    gcode: optionalStringField(value, "gcode", "legacy", status),
+    thumbnail: optionalStringField(value, "thumbnail", "legacy", status),
+    filename: optionalStringField(value, "filename", "legacy", status),
+  };
+}
+
 /** Read an {ok:false, error:{...}} envelope, tolerating non-JSON bodies. */
 async function sidecarErrorFromResponse(res: Response): Promise<SlicerSidecarError> {
-  const text = await res.text().catch(() => "");
+  let text: string;
   try {
-    const body = JSON.parse(text) as {
-      error?: { code?: string; message?: string; details?: Record<string, unknown> };
-    };
-    if (body?.error?.message) {
-      return new SlicerSidecarError(body.error.message, {
-        code: body.error.code ?? "sidecar_error",
+    text = new TextDecoder().decode(
+      await readBoundedResponseBody(res, MAX_CONTROL_RESPONSE_BYTES),
+    );
+  } catch (error) {
+    if (error instanceof ResponseBodyTooLargeError) {
+      return new SlicerSidecarError("Slicer sidecar error response was too large", {
+        code: "response_too_large",
         status: res.status,
-        details: body.error.details ?? {},
+      });
+    }
+    text = "";
+  }
+  try {
+    const body: unknown = JSON.parse(text);
+    const error = isJsonObject(body) && isJsonObject(body.error) ? body.error : null;
+    if (error && typeof error.message === "string" && error.message) {
+      return new SlicerSidecarError(error.message, {
+        code: typeof error.code === "string" ? error.code : "sidecar_error",
+        status: res.status,
+        details: isJsonObject(error.details) ? error.details : {},
       });
     }
   } catch {
@@ -219,21 +362,11 @@ async function sliceV1(base: string, req: SliceRequest): Promise<SliceResult> {
 
   if (!res.ok) throw await sidecarErrorFromResponse(res);
 
-  const json = (await res.json()) as {
-    ok?: boolean;
-    meta?: { warnings?: string[] };
-    gcode_base64?: string;
-    gcode_filename?: string;
-    thumbnail_base64?: string;
-    thumbnail_filename?: string;
-  };
-  if (json.ok === false) {
-    throw new SlicerSidecarError("Slicer sidecar reported failure", {
-      code: "sidecar_error",
-      status: res.status,
-    });
-  }
-  const gcode = json.gcode_base64 ? base64ToBytes(json.gcode_base64) : new Uint8Array(0);
+  const json = parseV1SliceResponse(
+    await readSidecarJson(res, MAX_SLICE_RESPONSE_BYTES),
+    res.status,
+  );
+  const gcode = json.gcodeBase64 ? base64ToBytes(json.gcodeBase64) : new Uint8Array(0);
   if (!gcode.length) {
     throw new SlicerSidecarError("Slicer sidecar returned no gcode", {
       code: "empty_gcode",
@@ -242,11 +375,11 @@ async function sliceV1(base: string, req: SliceRequest): Promise<SliceResult> {
   }
   return {
     gcode,
-    thumbnail: json.thumbnail_base64 ? base64ToBytes(json.thumbnail_base64) : new Uint8Array(0),
-    ...(json.gcode_filename ? { filename: json.gcode_filename } : {}),
-    ...(json.thumbnail_filename ? { thumbnail_filename: json.thumbnail_filename } : {}),
+    thumbnail: json.thumbnailBase64 ? base64ToBytes(json.thumbnailBase64) : new Uint8Array(0),
+    ...(json.gcodeFilename ? { filename: json.gcodeFilename } : {}),
+    ...(json.thumbnailFilename ? { thumbnail_filename: json.thumbnailFilename } : {}),
     protocol: "v1",
-    warnings: json.meta?.warnings ?? [],
+    warnings: json.warnings,
   };
 }
 
@@ -282,24 +415,39 @@ async function sliceLegacy(base: string, req: SliceRequest): Promise<SliceResult
 
   const contentType = res.headers.get("content-type") ?? "";
   if (contentType.includes("application/zip") || contentType.includes("application/octet-stream")) {
-    return { ...extractSliceZip(new Uint8Array(await res.arrayBuffer())), protocol: "legacy" };
+    return {
+      ...extractSliceZip(await readSidecarBody(res, MAX_SLICE_RESPONSE_BYTES)),
+      protocol: "legacy",
+    };
   }
   if (contentType.includes("application/json")) {
-    const json = (await res.json()) as {
-      gcode?: string;
-      thumbnail?: string;
-      filename?: string;
-    };
+    const json = parseLegacySliceResponse(
+      await readSidecarJson(res, MAX_SLICE_RESPONSE_BYTES),
+      res.status,
+    );
+    const gcode = json.gcode ? base64ToBytes(json.gcode) : new Uint8Array(0);
+    if (!gcode.length) {
+      throw new SlicerSidecarError("Slicer sidecar returned no gcode", {
+        code: "empty_gcode",
+        status: res.status,
+      });
+    }
     return {
-      gcode: json.gcode ? base64ToBytes(json.gcode) : new Uint8Array(0),
+      gcode,
       thumbnail: json.thumbnail ? base64ToBytes(json.thumbnail) : new Uint8Array(0),
       ...(json.filename ? { filename: json.filename } : {}),
       protocol: "legacy",
     };
   }
-  // Fall back: treat entire body as raw gcode
+  const gcode = await readSidecarBody(res, MAX_SLICE_RESPONSE_BYTES);
+  if (!gcode.length) {
+    throw new SlicerSidecarError("Slicer sidecar returned no gcode", {
+      code: "empty_gcode",
+      status: res.status,
+    });
+  }
   return {
-    gcode: new Uint8Array(await res.arrayBuffer()),
+    gcode,
     thumbnail: new Uint8Array(0),
     protocol: "legacy",
   };
@@ -333,29 +481,236 @@ export async function slicerSidecarSlice(
   }
 }
 
-function extractSliceZip(buf: Uint8Array): SliceResult {
-  let files: Record<string, Uint8Array>;
-  try {
-    files = unzipSync(buf);
-  } catch (e) {
-    throw new SlicerSidecarError("Slicer sidecar zip was not readable", {
-      code: "invalid_zip",
-      details: { cause: e instanceof Error ? e.message : String(e) },
-    });
-  }
+function archiveTooLarge(): SlicerSidecarError {
+  return new SlicerSidecarError("Slicer sidecar zip exceeds the extraction budget", {
+    code: "archive_too_large",
+  });
+}
 
-  let gcode = new Uint8Array(0);
-  let thumbnail = new Uint8Array(0);
-  let thumbnailName: string | undefined;
-  for (const [name, data] of Object.entries(files)) {
-    if (name.endsWith(".gcode") || name.endsWith(".bgcode")) {
-      if (!gcode.length || data.length > gcode.length) gcode = new Uint8Array(data);
-    }
-    if (/plate_\d+\.png$/i.test(name)) {
-      thumbnail = new Uint8Array(data);
-      thumbnailName = name.split("/").pop();
+function invalidZip(cause?: unknown): SlicerSidecarError {
+  return new SlicerSidecarError("Slicer sidecar zip was not readable", {
+    code: "invalid_zip",
+    ...(cause === undefined
+      ? {}
+      : { details: { cause: cause instanceof Error ? cause.message : String(cause) } }),
+  });
+}
+
+function outputKind(name: string): "gcode" | "thumbnail" | null {
+  const lower = name.toLowerCase();
+  if (lower.endsWith("/") || lower.endsWith("\\")) return null;
+  if (lower.endsWith(".gcode") || lower.endsWith(".bgcode")) return "gcode";
+  return /(?:^|\/)plate_\d+\.png$/.test(lower) ? "thumbnail" : null;
+}
+
+function equalBytes(left: Uint8Array, right: Uint8Array): boolean {
+  if (left.byteLength !== right.byteLength) return false;
+  return left.every((value, index) => value === right[index]);
+}
+
+function inspectSliceZipDirectory(buf: Uint8Array): number {
+  if (buf.byteLength < ZIP_END_OF_CENTRAL_DIRECTORY_BYTES) throw invalidZip();
+  const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  const firstCandidate = Math.max(
+    0,
+    buf.byteLength - ZIP_END_OF_CENTRAL_DIRECTORY_BYTES - ZIP_MAX_COMMENT_BYTES,
+  );
+  let endOffset = -1;
+  for (
+    let offset = buf.byteLength - ZIP_END_OF_CENTRAL_DIRECTORY_BYTES;
+    offset >= firstCandidate;
+    offset -= 1
+  ) {
+    if (view.getUint32(offset, true) !== ZIP_END_OF_CENTRAL_DIRECTORY) continue;
+    const commentBytes = view.getUint16(offset + 20, true);
+    if (offset + ZIP_END_OF_CENTRAL_DIRECTORY_BYTES + commentBytes === buf.byteLength) {
+      endOffset = offset;
+      break;
     }
   }
+  if (endOffset < 0) throw invalidZip();
+
+  const disk = view.getUint16(endOffset + 4, true);
+  const directoryDisk = view.getUint16(endOffset + 6, true);
+  const entriesOnDisk = view.getUint16(endOffset + 8, true);
+  const entryCount = view.getUint16(endOffset + 10, true);
+  const directoryBytes = view.getUint32(endOffset + 12, true);
+  const directoryOffset = view.getUint32(endOffset + 16, true);
+  if (entryCount === 0xffff || entryCount > MAX_SLICE_ARCHIVE_ENTRIES) {
+    throw archiveTooLarge();
+  }
+  if (disk !== 0 || directoryDisk !== 0 || entriesOnDisk !== entryCount) throw invalidZip();
+  const directoryEnd = directoryOffset + directoryBytes;
+  if (!Number.isSafeInteger(directoryEnd) || directoryEnd !== endOffset) throw invalidZip();
+
+  const decoder = new TextDecoder();
+  let cursor = directoryOffset;
+  let declaredExpandedBytes = 0;
+  for (let index = 0; index < entryCount; index += 1) {
+    if (
+      cursor + ZIP_CENTRAL_DIRECTORY_HEADER_BYTES > directoryEnd ||
+      view.getUint32(cursor, true) !== ZIP_CENTRAL_DIRECTORY_HEADER
+    ) {
+      throw invalidZip();
+    }
+    const flags = view.getUint16(cursor + 8, true);
+    const compression = view.getUint16(cursor + 10, true);
+    const compressedBytes = view.getUint32(cursor + 20, true);
+    const expandedBytes = view.getUint32(cursor + 24, true);
+    const nameBytes = view.getUint16(cursor + 28, true);
+    const extraBytes = view.getUint16(cursor + 30, true);
+    const commentBytes = view.getUint16(cursor + 32, true);
+    const localOffset = view.getUint32(cursor + 42, true);
+    const entryEnd =
+      cursor + ZIP_CENTRAL_DIRECTORY_HEADER_BYTES + nameBytes + extraBytes + commentBytes;
+    if (nameBytes > MAX_SLICE_ARCHIVE_ENTRY_NAME_BYTES || entryEnd > directoryEnd) {
+      throw invalidZip();
+    }
+    if (expandedBytes === 0xffff_ffff) throw archiveTooLarge();
+    if (compressedBytes === 0xffff_ffff || localOffset === 0xffff_ffff) throw invalidZip();
+
+    const centralName = buf.subarray(
+      cursor + ZIP_CENTRAL_DIRECTORY_HEADER_BYTES,
+      cursor + ZIP_CENTRAL_DIRECTORY_HEADER_BYTES + nameBytes,
+    );
+    const kind = outputKind(decoder.decode(centralName));
+    if (kind) {
+      declaredExpandedBytes += expandedBytes;
+      if (
+        !Number.isSafeInteger(declaredExpandedBytes) ||
+        declaredExpandedBytes > MAX_SLICE_ARCHIVE_EXPANDED_BYTES
+      ) {
+        throw archiveTooLarge();
+      }
+    }
+
+    if (
+      localOffset + ZIP_LOCAL_FILE_HEADER_BYTES > directoryOffset ||
+      view.getUint32(localOffset, true) !== ZIP_LOCAL_FILE_HEADER
+    ) {
+      throw invalidZip();
+    }
+    const localFlags = view.getUint16(localOffset + 6, true);
+    const localCompression = view.getUint16(localOffset + 8, true);
+    const localCompressedBytes = view.getUint32(localOffset + 18, true);
+    const localExpandedBytes = view.getUint32(localOffset + 22, true);
+    const localNameBytes = view.getUint16(localOffset + 26, true);
+    const localExtraBytes = view.getUint16(localOffset + 28, true);
+    const localNameStart = localOffset + ZIP_LOCAL_FILE_HEADER_BYTES;
+    const localNameEnd = localNameStart + localNameBytes;
+    if (
+      flags !== localFlags ||
+      compression !== localCompression ||
+      (kind !== null && compression !== 0 && compression !== 8) ||
+      (kind !== null && (flags & 1) !== 0) ||
+      localNameBytes > MAX_SLICE_ARCHIVE_ENTRY_NAME_BYTES ||
+      localNameEnd + localExtraBytes > directoryOffset ||
+      !equalBytes(centralName, buf.subarray(localNameStart, localNameEnd))
+    ) {
+      throw invalidZip();
+    }
+    if (
+      (flags & 8) === 0 &&
+      (compressedBytes !== localCompressedBytes || expandedBytes !== localExpandedBytes)
+    ) {
+      throw invalidZip();
+    }
+    cursor = entryEnd;
+  }
+  if (cursor !== directoryEnd) throw invalidZip();
+  return entryCount;
+}
+
+function concatenate(chunks: readonly Uint8Array[], byteLength: number): Uint8Array {
+  const result = new Uint8Array(byteLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return result;
+}
+
+function extractSliceZip(buf: Uint8Array): SliceResult {
+  const expectedEntries = inspectSliceZipDirectory(buf);
+  const ratioBudget = buf.byteLength * MAX_SLICE_ARCHIVE_COMPRESSION_RATIO;
+  const expandedBudget = Math.min(MAX_SLICE_ARCHIVE_EXPANDED_BYTES, ratioBudget);
+  let discoveredEntries = 0;
+  let activeEntries = 0;
+  let expandedBytes = 0;
+  let failure: SlicerSidecarError | null = null;
+  let gcode: Uint8Array = new Uint8Array(0);
+  let thumbnail: Uint8Array = new Uint8Array(0);
+  let thumbnailName: string | undefined;
+  const unzip = new Unzip((file) => {
+    discoveredEntries += 1;
+    if (discoveredEntries > MAX_SLICE_ARCHIVE_ENTRIES) {
+      failure = archiveTooLarge();
+      file.terminate();
+      return;
+    }
+    const kind = outputKind(file.name);
+    if (!kind) {
+      file.terminate();
+      return;
+    }
+    if (
+      file.originalSize !== undefined &&
+      file.originalSize > MAX_SLICE_ARCHIVE_EXPANDED_BYTES
+    ) {
+      failure = archiveTooLarge();
+      file.terminate();
+      return;
+    }
+
+    activeEntries += 1;
+    let entryBytes = 0;
+    const chunks: Uint8Array[] = [];
+    file.ondata = (error, chunk, final) => {
+      if (failure) return;
+      if (error) {
+        failure = invalidZip(error);
+        file.terminate();
+        return;
+      }
+      entryBytes += chunk.byteLength;
+      expandedBytes += chunk.byteLength;
+      if (
+        !Number.isSafeInteger(expandedBytes) ||
+        expandedBytes > expandedBudget
+      ) {
+        failure = archiveTooLarge();
+        file.terminate();
+        return;
+      }
+      if (chunk.byteLength > 0) chunks.push(new Uint8Array(chunk));
+      if (!final) return;
+      activeEntries -= 1;
+      if (file.originalSize !== undefined && entryBytes !== file.originalSize) {
+        failure = invalidZip(new Error(`${file.name} expanded size does not match its header`));
+        return;
+      }
+      const data = concatenate(chunks, entryBytes);
+      if (kind === "gcode") {
+        if (!gcode.length || data.length > gcode.length) gcode = data;
+        return;
+      }
+      thumbnail = data;
+      thumbnailName = file.name.split("/").pop();
+    };
+    file.start();
+  });
+  unzip.register(UnzipInflate);
+  try {
+    for (let offset = 0; offset < buf.byteLength && !failure; offset += 4_096) {
+      const end = Math.min(buf.byteLength, offset + 4_096);
+      unzip.push(buf.subarray(offset, end), end === buf.byteLength);
+    }
+  } catch (error) {
+    if (!failure) failure = invalidZip(error);
+  }
+  if (failure) throw failure;
+  if (discoveredEntries !== expectedEntries || activeEntries !== 0) throw invalidZip();
   if (!gcode.length) {
     throw new SlicerSidecarError("Slicer sidecar zip contained no gcode", {
       code: "empty_gcode",
@@ -387,10 +742,29 @@ export const slicerSidecarAdapter: IntegrationAdapter = {
           method: "GET",
           signal: AbortSignal.timeout(10_000),
         });
-        if (res.ok) {
+        if (!res.ok) {
+          await cancelResponseBody(res);
+          lastMessage = `Sidecar returned HTTP ${res.status}`;
+          continue;
+        }
+
+        const contentType = (res.headers.get("content-type") ?? "").toLowerCase();
+        if (!contentType.includes("application/json")) {
+          await cancelResponseBody(res);
           return { ok: true, message: `Slicer sidecar reachable (${slicer}, ${attempt.protocol})` };
         }
-        lastMessage = `Sidecar returned HTTP ${res.status}`;
+
+        let body: unknown;
+        try {
+          body = await readSidecarJson(res, MAX_CONTROL_RESPONSE_BYTES);
+        } catch {
+          lastMessage = "Sidecar returned an invalid JSON health response";
+          continue;
+        }
+        if (healthResponseIsHealthy(body)) {
+          return { ok: true, message: `Slicer sidecar reachable (${slicer}, ${attempt.protocol})` };
+        }
+        lastMessage = "Sidecar health check reported unhealthy";
       } catch (e) {
         lastMessage = e instanceof Error ? e.message : String(e);
       }

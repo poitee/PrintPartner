@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { buildApp } from "../app.js";
 import { createSelfHostPorts } from "../adapters/self-host/index.js";
 import { loadConfig } from "../config.js";
+import {
+  KIT_BUNDLE_UPLOAD_TOO_LARGE_DETAIL,
+  MAX_KIT_BUNDLE_UPLOAD_BYTES,
+} from "../services/upload-limits.js";
 
 describe("administrative route authentication", () => {
   it("allows unambiguous loopback administration", async () => {
@@ -94,6 +98,33 @@ describe("administrative route authentication", () => {
         });
         expect.soft(response.statusCode, `${request.method} ${request.url}`).toBe(401);
       }
+    } finally {
+      await app.close();
+      ports.db.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an oversized local kit bundle before reading it", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pp-admin-import-limit-"));
+    const kitPath = join(dir, "oversized.print-partner-kit.zip");
+    writeFileSync(kitPath, "");
+    truncateSync(kitPath, MAX_KIT_BUNDLE_UPLOAD_BYTES + 1);
+    const config = { ...loadConfig(), dataDir: dir };
+    const ports = createSelfHostPorts(dir);
+    await ports.db.connect();
+    const app = await buildApp(config, ports);
+
+    try {
+      const response = await app.inject({
+        method: "POST",
+        url: "/admin/import-kit-bundle",
+        remoteAddress: "127.0.0.1",
+        payload: { path: kitPath },
+      });
+
+      expect(response.statusCode).toBe(413);
+      expect(response.json()).toEqual({ detail: KIT_BUNDLE_UPLOAD_TOO_LARGE_DETAIL });
     } finally {
       await app.close();
       ports.db.close();

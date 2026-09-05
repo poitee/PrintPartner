@@ -8,6 +8,9 @@ import { createPorts } from "../app.js";
 import { loadConfig } from "../config.js";
 import type { AppRepository } from "../db/repository.js";
 import { createJobRunner } from "../routes/jobs.js";
+import {
+  migrateLegacySourceManifestOverridesForTenant,
+} from "../services/source-manifest-migration.js";
 import { createProductMcpServer } from "./product-mcp.js";
 
 const request = `Build an Example Printer R2 350mm using the upstream repository as the structural base and the vendor repository as the vendor-kit overlay. Use the Example Toolhead, Example Extruder, Example Hotend, Example Probe over USB, and an Example Controller with a USB umbilical. Primary color is Forest Green and accent color is Bright Orange. Do not choose between conflicting source files without asking me.`;
@@ -39,6 +42,7 @@ async function main(): Promise<void> {
     if (ports.getRepository) return ports.getRepository("default");
     throw new Error("Repository unavailable");
   };
+  await migrateLegacySourceManifestOverridesForTenant(getRepo(), "default");
   const pending = new Map<string, AssistantProposedAction>();
   const jobs = createJobRunner(getRepo, config.dataDir);
   const server = createProductMcpServer({

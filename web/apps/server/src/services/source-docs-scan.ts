@@ -7,6 +7,7 @@ import {
 import { basename, join, relative, resolve } from "node:path";
 import type { SyncDocKind } from "./github-sync.js";
 import { DOCS_TEXT_DIR, docTitleFromPath } from "./pdf-text-extract.js";
+import { resolvedFileUnderRoot } from "../lib/secure-path.js";
 
 export type DiscoveredDoc = {
   path: string;
@@ -80,9 +81,8 @@ export function readMarkdownDoc(repoRoot: string, relativePath: string): string 
   const normalized = relativePath.replace(/\\/g, "/").replace(/^\/+/, "");
   if (!normalized || normalized.includes("..")) return null;
   const absRoot = resolve(repoRoot);
-  const full = resolve(absRoot, normalized);
-  if (full !== absRoot && !full.startsWith(`${absRoot}/`)) return null;
-  if (!existsSync(full)) return null;
+  const full = resolvedFileUnderRoot(absRoot, resolve(absRoot, normalized));
+  if (!full) return null;
   try {
     return readFileSync(full, "utf8");
   } catch {

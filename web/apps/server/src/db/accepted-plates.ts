@@ -266,6 +266,7 @@ export type AcceptedPlateDependencies = Readonly<{
   tenantId: string;
   reposDir: string;
   sqlite: boolean;
+  resolveSourceSnapshotPath: (sourceId: number, locator: string) => string | null;
   transaction: <T>(operation: () => T) => T;
   readTransaction: <T>(operation: () => T) => T;
   clock?: () => Date;
@@ -311,6 +312,7 @@ function currentAccepted(
     profileId: expected.profileId,
     reposDir: dependencies.reposDir,
     sqlite: dependencies.sqlite,
+    resolveSourceSnapshotPath: dependencies.resolveSourceSnapshotPath,
   });
   if (accepted.kind === "empty") return { kind: "stale_accepted_plan" };
   if (accepted.kind !== "ready") {
@@ -510,6 +512,7 @@ function readAcceptedPlateState(
       profileId,
       reposDir: dependencies.reposDir,
       sqlite: dependencies.sqlite,
+      resolveSourceSnapshotPath: dependencies.resolveSourceSnapshotPath,
     });
     if (accepted.kind === "empty") return { kind: "empty_plan" };
     if (accepted.kind !== "ready") {

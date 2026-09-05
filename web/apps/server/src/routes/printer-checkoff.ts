@@ -26,6 +26,10 @@ import {
 import { getIntegrationAdapter } from "../integrations/registry.js";
 import { sendProblem } from "../lib/api-error.js";
 import {
+  readBoundedResponseChunks,
+  ResponseBodyTooLargeError,
+} from "../lib/bounded-response.js";
+import {
   observePrinterCheckoffFileDrift,
   printerStoredFileIdentity,
   reconcilePrinterCheckoff,
@@ -72,6 +76,7 @@ import {
   printFileRejectionMessage,
   MAX_CLASSIFIABLE_BYTES,
 } from "../lib/print-file-classification.js";
+import { MAX_PRINT_FILE_UPLOAD_BYTES as MAX_UPLOAD_BYTES } from "../services/upload-limits.js";
 
 type RouteDeps = {
   repo: AppRepository;
@@ -250,25 +255,21 @@ const MAX_INSPECT_MS = 30_000;
  * printer host is untrusted network input even on a private LAN.
  */
 async function readBoundedBody(response: Response): Promise<Uint8Array | null> {
-  const declared = Number(response.headers.get("content-length"));
-  if (Number.isFinite(declared) && declared > MAX_CLASSIFIABLE_BYTES) return null;
-  const reader = response.body?.getReader();
-  if (!reader) {
-    const whole = new Uint8Array(await response.arrayBuffer());
-    return whole.byteLength > MAX_CLASSIFIABLE_BYTES ? null : whole;
-  }
   const deadline = Date.now() + MAX_INSPECT_MS;
   const chunks: Uint8Array[] = [];
   let total = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > MAX_CLASSIFIABLE_BYTES || Date.now() > deadline) {
-      await reader.cancel();
-      return null;
+  try {
+    for await (const chunk of readBoundedResponseChunks(
+      response,
+      MAX_CLASSIFIABLE_BYTES,
+    )) {
+      if (Date.now() > deadline) return null;
+      total += chunk.byteLength;
+      chunks.push(chunk);
     }
-    chunks.push(value);
+  } catch (error) {
+    if (error instanceof ResponseBodyTooLargeError) return null;
+    throw error;
   }
   const body = new Uint8Array(total);
   let offset = 0;
@@ -377,7 +378,6 @@ async function inspectRemoteFile(
  * upload arrives and a spent one is dropped on the spot, so none of this needs
  * a background sweeper.
  */
-const MAX_UPLOAD_BYTES = 64 * 1024 * 1024;
 const MAX_PENDING_UPLOAD_BYTES = 2 * MAX_UPLOAD_BYTES;
 const UPLOAD_TTL_MS = 15 * 60_000;
 

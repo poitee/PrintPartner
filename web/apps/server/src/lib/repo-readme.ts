@@ -1,12 +1,14 @@
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { resolvedFileUnderRoot } from "./secure-path.js";
 
 const README_NAMES = ["README.md", "readme.md", "Readme.md"] as const;
 
 export function findReadme(repoPath: string): string | null {
+  const root = resolve(repoPath);
   for (const name of README_NAMES) {
-    const candidate = join(repoPath, name);
-    if (existsSync(candidate)) return candidate;
+    const candidate = resolvedFileUnderRoot(root, join(root, name));
+    if (candidate) return candidate;
   }
   return null;
 }

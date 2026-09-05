@@ -4,12 +4,13 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
-  statSync,
   writeFileSync,
 } from "node:fs";
 import { join, resolve } from "node:path";
 import { readReadmeText } from "./repo-readme.js";
 import { safeOutboundFetch } from "./outbound-url.js";
+import { cancelResponseBody, readBoundedResponseBody } from "./bounded-response.js";
+import { resolvedFileUnderRoot } from "./secure-path.js";
 
 const IMAGE_EXTS = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg"]);
 const IMG_MD_RE = /!\[[^\]]*\]\(([^)]+)\)/g;
@@ -20,6 +21,7 @@ const OG_IMAGE_RE_ALT =
   /<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i;
 const USER_AGENT = "PrintPartner/2.0 (source cover)";
 const MAX_BYTES = 3_000_000;
+const MAX_PAGE_BYTES = 1_000_000;
 
 export type SourceCoverProject = {
   id: number;
@@ -83,13 +85,10 @@ function resolveImageRef(repoRoot: string, ref: string): string | null {
   const root = resolve(repoRoot);
   const candidate = resolve(root, cleaned.replace(/^\.\//, ""));
   if (candidate !== root && !candidate.startsWith(`${root}/`)) return null;
-  try {
-    if (!statSync(candidate).isFile()) return null;
-  } catch {
-    return null;
-  }
-  const ext = candidate.slice(candidate.lastIndexOf(".")).toLowerCase();
-  return IMAGE_EXTS.has(ext) ? candidate : null;
+  const file = resolvedFileUnderRoot(root, candidate);
+  if (!file) return null;
+  const ext = file.slice(file.lastIndexOf(".")).toLowerCase();
+  return IMAGE_EXTS.has(ext) ? file : null;
 }
 
 export function findRepoCoverPath(repoRoot: string): string | null {
@@ -116,12 +115,8 @@ export function findRepoCoverPath(repoRoot: string): string | null {
     "banner.png",
     "thumbnail.png",
   ]) {
-    const candidate = join(repoRoot, name);
-    try {
-      if (statSync(candidate).isFile()) return candidate;
-    } catch {
-      /* skip */
-    }
+    const candidate = resolvedFileUnderRoot(repoRoot, join(repoRoot, name));
+    if (candidate) return candidate;
   }
 
   for (const sub of ["assets", "images", "img", ".github"]) {
@@ -135,12 +130,8 @@ export function findRepoCoverPath(repoRoot: string): string | null {
     }
     entries.sort();
     for (const entry of entries) {
-      const path = join(folder, entry);
-      try {
-        if (!statSync(path).isFile()) continue;
-      } catch {
-        continue;
-      }
+      const path = resolvedFileUnderRoot(repoRoot, join(folder, entry));
+      if (!path) continue;
       const ext = path.slice(path.lastIndexOf(".")).toLowerCase();
       if (IMAGE_EXTS.has(ext)) return path;
     }
@@ -222,11 +213,17 @@ export async function downloadRemoteImage(url: string): Promise<Buffer | null> {
       headers: { "User-Agent": USER_AGENT },
       signal: AbortSignal.timeout(20_000),
     });
-    if (!response.ok) return null;
+    if (!response.ok) {
+      await cancelResponseBody(response);
+      return null;
+    }
     const contentType = (response.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();
-    if (!contentType.startsWith("image/")) return null;
-    const data = Buffer.from(await response.arrayBuffer());
-    if (!data.length || data.length > MAX_BYTES) return null;
+    if (!contentType.startsWith("image/")) {
+      await cancelResponseBody(response);
+      return null;
+    }
+    const data = Buffer.from(await readBoundedResponseBody(response, MAX_BYTES));
+    if (!data.length) return null;
     return data;
   } catch {
     return null;
@@ -286,8 +283,14 @@ export async function ensureSourceCover(
           headers: { "User-Agent": USER_AGENT },
           signal: AbortSignal.timeout(15_000),
         });
-        if (!response.ok) continue;
-        const imageUrl = extractOgImageUrl(await response.text());
+        if (!response.ok) {
+          await cancelResponseBody(response);
+          continue;
+        }
+        const page = new TextDecoder().decode(
+          await readBoundedResponseBody(response, MAX_PAGE_BYTES),
+        );
+        const imageUrl = extractOgImageUrl(page);
         if (imageUrl) {
           const cached = await downloadToCache(coversRoot, project, imageUrl, "og_image");
           if (cached) return cached;

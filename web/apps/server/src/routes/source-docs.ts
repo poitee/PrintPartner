@@ -18,18 +18,17 @@ import {
 import { readMarkdownDoc, walkSourceDocs } from "../services/source-docs-scan.js";
 import { indexSourceDocsFromDisk } from "../services/source-docs-index.js";
 import { sourcePdfTextStorage } from "../services/source-workspace.js";
+import { resolvedFileUnderRoot } from "../lib/secure-path.js";
 
 const GITHUB_PAT_KEY = "github_pat";
 
 type RouteDeps = { repo: AppRepository };
 
-function safeUnderRoot(root: string, relativePath: string): string | null {
+function resolvedDocumentPath(root: string, relativePath: string): string | null {
   const normalized = relativePath.replace(/\\/g, "/").replace(/^\/+/, "");
   if (!normalized || normalized.includes("..")) return null;
   const absRoot = resolve(root);
-  const dest = resolve(absRoot, normalized);
-  if (dest !== absRoot && !dest.startsWith(`${absRoot}/`)) return null;
-  return dest;
+  return resolvedFileUnderRoot(absRoot, resolve(absRoot, normalized));
 }
 
 function ensureDocsIndexed(repo: AppRepository, sourceId: number, localPath: string): void {
@@ -87,8 +86,8 @@ export async function registerSourceDocsRoutes(
     }
     const docPath = ((request.params as { "*": string })["*"] ?? "").replace(/\\/g, "/");
     const download = String((request.query as { download?: string }).download ?? "") === "1";
-    const abs = safeUnderRoot(row.localPath, docPath);
-    if (!abs || !existsSync(abs)) {
+    const abs = resolvedDocumentPath(row.localPath, docPath);
+    if (!abs) {
       return reply.status(404).send({ detail: "Document not found" });
     }
 

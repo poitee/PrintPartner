@@ -65,13 +65,12 @@ describe("checkAppUpdate", () => {
   });
 
   it("reports update when GitHub latest is newer", async () => {
-    const fetchImpl = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({
         tag_name: "v0.2.0",
         html_url: "https://github.com/poitee/PrintPartner/releases/tag/v0.2.0",
-      }),
-    });
+      }), { status: 200 }),
+    );
     const result = await checkAppUpdate(baseConfig, { fetchImpl });
     expect(result.update_available).toBe(true);
     expect(result.latest_version).toBe("v0.2.0");
@@ -88,10 +87,12 @@ describe("checkAppUpdate", () => {
 
   it("caches successful checks within TTL", async () => {
     let now = 1_000_000;
-    const fetchImpl = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ tag_name: "0.5.0", html_url: "https://example.com/r" }),
-    });
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({ tag_name: "0.5.0", html_url: "https://example.com/r" }),
+        { status: 200 },
+      ),
+    );
     await checkAppUpdate(baseConfig, { fetchImpl, now: () => now });
     now += 60_000;
     await checkAppUpdate(baseConfig, { fetchImpl, now: () => now });

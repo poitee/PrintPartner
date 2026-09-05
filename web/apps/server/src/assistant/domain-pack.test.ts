@@ -9,6 +9,8 @@ import {
   backfillAdvisorNotesFromDomainPack,
   importAssistantDomainPack,
   loadAssistantDomainPack,
+  normalizeAliasEntry,
+  normalizeStacks,
 } from "./domain-pack.js";
 
 const FIXTURE = join(
@@ -106,6 +108,37 @@ describe("assistant domain pack", () => {
     expect(pack).toContain("LDO Trident R2: base=Voron-Trident@VTr2");
     expect(pack).toContain("probe_slot");
     expect(pack).not.toMatch(/"" →/);
+  });
+
+  it("preserves and validates multi-value selections from domain data", () => {
+    const alias = normalizeAliasEntry({
+      phrases: ["panel bundle"],
+      resolve: {
+        source_name: "Example-Printer",
+        selection: { extras: ["skirts", "panels"] },
+      },
+    });
+    expect(alias?.resolve.selection).toEqual({
+      extras: ["skirts", "panels"],
+    });
+
+    const stacks = normalizeStacks([
+      {
+        name: "Panel bundle",
+        base: { source_name: "Example-Printer" },
+        default_selections: { extras: ["skirts", "panels"] },
+      },
+    ]);
+    expect(stacks[0]?.stack.default_selections).toEqual({
+      extras: ["skirts", "panels"],
+    });
+
+    expect(() =>
+      normalizeAliasEntry({
+        phrases: ["broken bundle"],
+        resolve: { selection: { extras: ["skirts", 4] } },
+      }),
+    ).toThrow("alias.resolve.selection.extras[1]");
   });
 
   it("imports research payload into dataDir and returns notes count 0 without matching sources", () => {

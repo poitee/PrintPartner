@@ -19,6 +19,9 @@ import {
   type PostgresSyncQuery,
   type PostgresSyncResult,
 } from "./sync-db-bridge.js";
+import {
+  repairSourceRevisionTenantOwnershipPostgres,
+} from "./source-revision-tenant-repair.js";
 
 export type PostgresDrizzleDb = NodePgDatabase<typeof schema>;
 
@@ -136,6 +139,7 @@ const MIGRATION_SQL = join(
 export const postgresPostInitMigrations: string[] = [
   "ALTER TABLE parts ADD COLUMN IF NOT EXISTS spoolman_spool_id TEXT",
   "ALTER TABLE projects ADD COLUMN IF NOT EXISTS tag TEXT",
+  "ALTER TABLE projects ADD COLUMN IF NOT EXISTS legacy_manifest_cutover BOOLEAN NOT NULL DEFAULT FALSE",
   "ALTER TABLE build_profiles ADD COLUMN IF NOT EXISTS config_modified_at TEXT",
   "ALTER TABLE build_profiles ADD COLUMN IF NOT EXISTS last_recomputed_at TEXT",
   "ALTER TABLE build_profiles ADD COLUMN IF NOT EXISTS archived_at TEXT",
@@ -1952,6 +1956,7 @@ export class PostgresDatabase {
     }
     const client = await this.pool.connect();
     try {
+      await repairSourceRevisionTenantOwnershipPostgres(client);
       await removeLegacyPrintPlansAndStampPostgres(client);
       await client.query(
         `INSERT INTO app_settings (tenant_id, key, value) VALUES ($1, $2, $3)

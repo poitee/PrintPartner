@@ -76,7 +76,12 @@ function applyTrackedPlan(repo: AppRepository, sourceId: number, profileId: numb
     syncedAt: "2026-08-21T12:00:00.000Z",
     completeness: "complete",
   });
-  repo.activateSourceRevision({ sourceId, revisionId: revision.id, observed });
+  repo.activateSourceRevision({
+    sourceId,
+    revisionId: revision.id,
+    observed,
+    sourceVersion: revision.upstream_revision_key,
+  });
   const draft = repo.recomputePlanDraft({
     profileId,
     actor: "test:user",

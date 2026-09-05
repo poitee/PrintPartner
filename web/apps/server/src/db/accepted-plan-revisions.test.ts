@@ -3,12 +3,12 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { ACCEPTED_PLATE_EDIT_SCHEMA_VERSION } from "./accepted-plate-edit-schema.js";
 import { backfillAcceptedPlanRevisions } from "./accepted-plan-revisions.js";
 import { getDb, SqliteDatabase } from "./client.js";
 import { repairCompatibilityDirtyBuilds } from "./compatibility-dirty-repair.js";
 import { AppRepository } from "./repository.js";
 import { backfillCurrentRequiredUnitSets } from "./required-units.js";
+import { currentSchemaVersion } from "./schema.js";
 import {
   AcceptedOperationalRowTextLimitError,
   digestPlanRevisionParts,
@@ -192,7 +192,7 @@ describe("accepted Plan revision backfill", () => {
       migratedRaw
         .prepare("SELECT value FROM app_settings WHERE tenant_id = 'default' AND key = 'schema_version'")
         .get(),
-    ).toEqual({ value: String(ACCEPTED_PLATE_EDIT_SCHEMA_VERSION) });
+    ).toEqual({ value: String(currentSchemaVersion) });
     migrated.close();
   });
 
@@ -1037,7 +1037,7 @@ describe("accepted Plan revision backfill", () => {
     expect(utf8Bytes(Object.values(revision))).toBe(MAX_ACCEPTED_OPERATIONAL_ROW_TEXT_BYTES);
     expect(
       migratedRaw.prepare("SELECT value FROM app_settings WHERE key = 'schema_version'").get(),
-    ).toEqual({ value: String(ACCEPTED_PLATE_EDIT_SCHEMA_VERSION) });
+    ).toEqual({ value: String(currentSchemaVersion) });
     migrated.close();
   });
 
@@ -1276,7 +1276,7 @@ describe("accepted Plan revision backfill", () => {
       rawDatabase(upgraded)
         .prepare("SELECT value FROM app_settings WHERE key = 'schema_version'")
         .get(),
-    ).toEqual({ value: String(ACCEPTED_PLATE_EDIT_SCHEMA_VERSION) });
+    ).toEqual({ value: String(currentSchemaVersion) });
     expect(
       rawDatabase(upgraded)
         .prepare(

@@ -13,6 +13,7 @@ import { AppRepository } from "./repository.js";
 import { MAX_PLAN_DRAFT_LIFECYCLE_VERSION } from "../services/plan-drafts.js";
 import { acceptedPlanBasis } from "./accepted-plan-progress.js";
 import { parseRequiredUnitToken } from "../services/required-units.js";
+import { currentSchemaVersion } from "./schema.js";
 
 const tempDirs: string[] = [];
 
@@ -97,7 +98,12 @@ function trackedSource(input: {
     syncedAt: "2026-08-20T12:00:00.000Z",
     completeness: "complete",
   });
-  input.repo.activateSourceRevision({ sourceId: source.id, revisionId: revision.id, observed });
+  input.repo.activateSourceRevision({
+    sourceId: source.id,
+    revisionId: revision.id,
+    observed,
+    sourceVersion: revision.upstream_revision_key,
+  });
   return { source, revision, snapshotRoot };
 }
 
@@ -2536,7 +2542,7 @@ describe("saved Plan drafts", () => {
             WHERE tenant_id = 'default' AND key = 'schema_version'`,
         )
         .get(),
-    ).toEqual({ value: "31" });
+    ).toEqual({ value: String(currentSchemaVersion) });
     migrated.close();
   });
 
@@ -2615,7 +2621,7 @@ describe("saved Plan drafts", () => {
       (reopened as unknown as { sqlite: Database.Database }).sqlite
         .prepare("SELECT value FROM app_settings WHERE key = 'schema_version'")
         .get(),
-    ).toEqual({ value: "31" });
+    ).toEqual({ value: String(currentSchemaVersion) });
     reopened.close();
   });
 
@@ -3114,6 +3120,7 @@ describe("saved Plan drafts", () => {
       sourceId: first.tracked.source.id,
       revisionId: movedRevision.id,
       observed,
+      sourceVersion: movedRevision.upstream_revision_key,
     });
     const naming = first.repo.getGlobalNaming();
     expect(
@@ -3442,7 +3449,12 @@ describe("saved Plan drafts", () => {
       syncedAt: "2026-08-21T12:00:00.000Z",
       completeness: "complete",
     });
-    repo.activateSourceRevision({ sourceId: first.tracked.source.id, revisionId: movedRevision.id, observed });
+    repo.activateSourceRevision({
+      sourceId: first.tracked.source.id,
+      revisionId: movedRevision.id,
+      observed,
+      sourceVersion: movedRevision.upstream_revision_key,
+    });
 
     const created = repo.recomputePlanDraft({
       profileId: profile.id,

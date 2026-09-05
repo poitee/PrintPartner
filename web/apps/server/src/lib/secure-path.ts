@@ -153,7 +153,18 @@ export function openStlThumbStream(
   return readStreamForFileUnderRoot(thumbsDir, thumbPath);
 }
 
-export function readBufferUnderDataDir(dataDir: string, userPath: string): Buffer {
+export class DataDirFileTooLargeError extends Error {
+  constructor(readonly maxBytes: number) {
+    super(`Data directory file exceeds ${maxBytes} bytes`);
+    this.name = "DataDirFileTooLargeError";
+  }
+}
+
+export function readBufferUnderDataDir(
+  dataDir: string,
+  userPath: string,
+  maxBytes: number,
+): Buffer {
   const root = resolve(dataDir);
   const resolved = resolve(userPath);
   if (resolved !== root && !resolved.startsWith(`${root}/`)) {
@@ -165,6 +176,7 @@ export function readBufferUnderDataDir(dataDir: string, userPath: string): Buffe
   }
   const file = resolveFileByWalk(root, relative);
   if (!file) throw new Error("Kit file not found");
+  if (statSync(file).size > maxBytes) throw new DataDirFileTooLargeError(maxBytes);
   return readFileSync(file);
 }
 

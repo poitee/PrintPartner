@@ -1,5 +1,9 @@
 import type { AppRepository } from "../db/repository.js";
+import type { ManifestSelections } from "@print-partner/contracts";
 import { loadKitCatalog } from "./kit-catalog.js";
+import { parseManifestSelections } from "./manifest-selections.js";
+import { manifestSelectionsInputError } from "./manifest-apply.js";
+import { buildPlanOptionGroups } from "./plan-manifest-builder.js";
 
 type StackPreset = {
   base: string;
@@ -8,7 +12,7 @@ type StackPreset = {
   /** Optional GitHub branch to set on the base source when applying. */
   base_branch?: string | null;
   addon_sources: string[];
-  default_selections: Record<string, string>;
+  default_selections?: ManifestSelections;
 };
 
 type CatalogBase = { source_name: string };
@@ -70,6 +74,55 @@ function projectIdByName(repo: AppRepository, name: string): number | null {
   return source?.id ?? null;
 }
 
+function projectedPresetSourceIds(
+  repo: AppRepository,
+  profileId: number,
+  baseProjectId: number,
+  addonSourceNames: readonly string[],
+  catalog: Record<string, unknown>,
+): number[] {
+  let addons = repo
+    .getProfileLayers(profileId)
+    .flatMap((layer) => {
+      const projectId = layer.project_id;
+      if (layer.layer_type === "base" || projectId == null) return [];
+      return [
+        {
+          projectId,
+          sourceName: layer.project_name ?? repo.getSource(projectId)?.name ?? "",
+        },
+      ];
+    });
+
+  for (const sourceName of addonSourceNames) {
+    const projectId = projectIdByName(repo, sourceName);
+    if (projectId == null) continue;
+    const categoryId = catalogCategoryForSource(catalog, sourceName);
+    const categories = catalog.addon_categories as
+      | Record<string, CatalogAddonCategory>
+      | undefined;
+    const category = categoryId ? categories?.[categoryId] : undefined;
+
+    if (category && (category.rule ?? "pick_one") === "pick_one") {
+      const categoryNames = new Set(category.sources.map((source) => source.name));
+      const insertionIndex = addons.findIndex((source) =>
+        categoryNames.has(source.sourceName),
+      );
+      addons = addons.filter((source) => !categoryNames.has(source.sourceName));
+      const next = { projectId, sourceName };
+      if (insertionIndex >= 0) addons.splice(insertionIndex, 0, next);
+      else addons.push(next);
+      continue;
+    }
+
+    if (!addons.some((source) => source.projectId === projectId)) {
+      addons.push({ projectId, sourceName });
+    }
+  }
+
+  return [baseProjectId, ...addons.map((source) => source.projectId)];
+}
+
 export function applyStackPresetToProfile(
   repo: AppRepository,
   profileId: number,
@@ -80,7 +133,7 @@ export function applyStackPresetToProfile(
   preset_id: string;
   missing_sources: string[];
   layers: ReturnType<AppRepository["getProfileLayers"]>;
-  selections: Record<string, string>;
+  selections: ManifestSelections;
   base_source_name: string;
   tag: string | null;
   branch: string | null;
@@ -92,6 +145,10 @@ export function applyStackPresetToProfile(
     presets != null ? resolveStackPresetId(presetId, presets) : null;
   const preset = resolvedId != null ? presets?.[resolvedId] : undefined;
   if (!preset || resolvedId == null) throw new Error(`Unknown stack preset: ${presetId}`);
+  const defaultSelections = parseManifestSelections(
+    preset.default_selections ?? {},
+    `stack_presets.${resolvedId}.default_selections`,
+  );
 
   const bases = catalog.bases as Record<string, CatalogBase> | undefined;
   const baseDef = bases?.[preset.base];
@@ -102,6 +159,25 @@ export function applyStackPresetToProfile(
   if (baseProjectId == null) {
     throw new Error(`Sync ${baseDef.source_name} on Sources before applying this preset.`);
   }
+
+  const optionGroups = buildPlanOptionGroups(
+    repo,
+    profileId,
+    dataDir ?? null,
+    projectedPresetSourceIds(
+      repo,
+      profileId,
+      baseProjectId,
+      preset.addon_sources,
+      catalog,
+    ),
+  );
+  const selectionError = manifestSelectionsInputError(
+    optionGroups,
+    defaultSelections,
+    `stack_presets.${resolvedId}.default_selections`,
+  );
+  if (selectionError) throw new Error(selectionError);
 
   const ref = stackPresetBaseRef(preset);
   let needsSync = false;
@@ -177,7 +253,7 @@ export function applyStackPresetToProfile(
     preset_id: resolvedId,
     missing_sources: missing,
     layers,
-    selections: { ...preset.default_selections },
+    selections: defaultSelections,
     base_source_name: baseDef.source_name,
     tag: refreshed?.tag ?? null,
     branch: refreshed?.branch ?? null,

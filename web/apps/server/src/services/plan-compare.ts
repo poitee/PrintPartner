@@ -1,6 +1,11 @@
+import type { ManifestSelection, ManifestSelections } from "@print-partner/contracts";
 import type { AppRepository } from "../db/repository.js";
 import { deriveBuildRecipe } from "./build-recipe.js";
 import { loadKitManifest } from "./kit-manifest-store.js";
+import {
+  formatManifestSelection,
+  manifestSelectionEqual,
+} from "./manifest-selections.js";
 
 export type PlanCompareDiff = {
   plan_a: { id: number; name: string };
@@ -9,9 +14,9 @@ export type PlanCompareDiff = {
   addons: { only_a: string[]; only_b: string[]; shared: string[] };
   refs: Array<{ source: string; a: string | null; b: string | null; same: boolean }>;
   kit_selections: {
-    only_a: Record<string, string>;
-    only_b: Record<string, string>;
-    changed: Array<{ key: string; a: string; b: string }>;
+    only_a: ManifestSelections;
+    only_b: ManifestSelections;
+    changed: Array<{ key: string; a: ManifestSelection; b: ManifestSelection }>;
   };
   recent_decisions: {
     a: Array<{ label: string; kind: string; summary: string }>;
@@ -73,12 +78,14 @@ export function comparePlans(
 
   const selA = loadKitManifest(repo, planAId).selections;
   const selB = loadKitManifest(repo, planBId).selections;
-  const onlyASel: Record<string, string> = {};
-  const onlyBSel: Record<string, string> = {};
-  const changed: Array<{ key: string; a: string; b: string }> = [];
+  const onlyASel: ManifestSelections = {};
+  const onlyBSel: ManifestSelections = {};
+  const changed: Array<{ key: string; a: ManifestSelection; b: ManifestSelection }> = [];
   for (const [k, v] of Object.entries(selA)) {
     if (!(k in selB)) onlyASel[k] = v;
-    else if (selB[k] !== v) changed.push({ key: k, a: v, b: selB[k]! });
+    else if (!manifestSelectionEqual(v, selB[k]!)) {
+      changed.push({ key: k, a: v, b: selB[k]! });
+    }
   }
   for (const [k, v] of Object.entries(selB)) {
     if (!(k in selA)) onlyBSel[k] = v;
@@ -100,7 +107,9 @@ export function comparePlans(
     bullets.push(`Ref ${r.source}: ${r.a ?? "—"} vs ${r.b ?? "—"}`);
   }
   for (const c of changed.slice(0, 6)) {
-    bullets.push(`Selection ${c.key}: ${c.a} → ${c.b}`);
+    bullets.push(
+      `Selection ${c.key}: ${formatManifestSelection(c.a)} → ${formatManifestSelection(c.b)}`,
+    );
   }
   for (const d of decisionsA.slice(-3)) {
     if (d.kind === "applied_action" || d.kind === "choice") {

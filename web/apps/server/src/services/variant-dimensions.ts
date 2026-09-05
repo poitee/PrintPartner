@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import type { AppRepository } from "../db/repository.js";
 import { loadManifestYaml } from "./manifest-apply.js";
-import { findEditableSourceManifestPath } from "./source-workspace.js";
+import { findSourceManifestPath } from "./source-workspace.js";
 
 export type VariantDimensionMap = Record<string, Array<string | number>>;
 
@@ -20,11 +20,7 @@ export function getSourceVariantDimensions(
 ): VariantDimensionMap {
   const proj = repo.getProjectRow(sourceId);
   if (!proj?.localPath) return {};
-  const manifestPath = findEditableSourceManifestPath({
-    reposDir: repo.reposDir,
-    sourceId,
-    contentRoot: proj.localPath,
-  });
+  const manifestPath = findSourceManifestPath(proj.localPath);
   if (!manifestPath) return {};
   try {
     const doc = loadManifestYaml(readFileSync(manifestPath, "utf8"));

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildResolveSearchInput,
   getSearchSetupGuidance,
@@ -6,9 +6,11 @@ import {
   resolveSearchProvider,
   searchConfigured,
   searchOverridesFromRuntime,
+  searchWeb,
   type ResolveSearchInput,
 } from "./index.js";
 import { parseDuckDuckGoHtml } from "./duckduckgo.js";
+import { searchBrave } from "./brave.js";
 import { loadConfig } from "../../config.js";
 
 function baseInput(over: Partial<ResolveSearchInput> = {}): ResolveSearchInput {
@@ -179,5 +181,143 @@ describe("parseDuckDuckGoHtml", () => {
       url: "https://example.com/kit",
     });
     expect(hits[0]!.snippet).toMatch(/great kit/i);
+  });
+});
+
+describe("remote search response limits", () => {
+  it("parses a bounded Brave response", async () => {
+    const response = new Response(JSON.stringify({
+      web: {
+        results: [{
+          title: "Voron documentation",
+          url: "https://docs.vorondesign.com/",
+          description: "Build documentation",
+        }],
+      },
+    }));
+
+    const result = await searchBrave(
+      { query: "Voron" },
+      "search-key",
+      {
+        fetchFn: async () => response,
+        signal: new AbortController().signal,
+      },
+    );
+
+    expect(result).toEqual({
+      hits: [{
+        title: "Voron documentation",
+        url: "https://docs.vorondesign.com/",
+        snippet: "Build documentation",
+      }],
+    });
+  });
+
+  it("cancels a Brave response whose declared size exceeds the limit", async () => {
+    const cancel = vi.fn();
+    const response = new Response(new ReadableStream({ cancel }), {
+      headers: { "Content-Length": String(2 * 1024 * 1024 + 1) },
+    });
+
+    const result = await searchBrave(
+      { query: "Voron" },
+      "search-key",
+      {
+        fetchFn: async () => response,
+        signal: new AbortController().signal,
+      },
+    );
+
+    expect(result.hits).toEqual([]);
+    expect(result.error).toContain("Response body exceeds 2097152 bytes");
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it("stops a search when its caller aborts", async () => {
+    const controller = new AbortController();
+    let requestSignal: AbortSignal | null | undefined;
+    const fetchFn = vi.fn<typeof fetch>().mockImplementation(
+      async (_input, init) => {
+        requestSignal = init?.signal;
+        return await new Promise<Response>((resolve, reject) => {
+          const fallback = setTimeout(
+            () => resolve(new Response(JSON.stringify({ web: { results: [] } }))),
+            250,
+          );
+          requestSignal?.addEventListener(
+            "abort",
+            () => {
+              clearTimeout(fallback);
+              reject(requestSignal?.reason);
+            },
+            { once: true },
+          );
+        });
+      },
+    );
+    const config = {
+      ...loadConfig(),
+      searchProvider: "brave" as const,
+      searchApiKey: "search-key",
+      aiProvider: "none" as const,
+    };
+
+    const pending = searchWeb(
+      { query: "Voron" },
+      config,
+      { fetchFn, signal: controller.signal, timeoutMs: 1_000 },
+    );
+    controller.abort(new Error("caller stopped"));
+
+    const result = await pending;
+    expect(result.hits).toEqual([]);
+    expect(result.error).toContain("caller stopped");
+    expect(requestSignal?.aborted).toBe(true);
+  });
+
+  it("keeps the search deadline active while reading the response body", async () => {
+    let requestSignal: AbortSignal | null | undefined;
+    const fetchFn = vi.fn<typeof fetch>().mockImplementation(
+      async (_input, init) => {
+        requestSignal = init?.signal;
+        return new Response(
+          new ReadableStream({
+            start(streamController) {
+              const fallback = setTimeout(
+                () => streamController.error(new Error("test stream fallback")),
+                250,
+              );
+              requestSignal?.addEventListener(
+                "abort",
+                () => {
+                  clearTimeout(fallback);
+                  streamController.error(requestSignal?.reason);
+                },
+                { once: true },
+              );
+            },
+          }),
+          { headers: { "Content-Type": "application/json" } },
+        );
+      },
+    );
+    const config = {
+      ...loadConfig(),
+      searchProvider: "brave" as const,
+      searchApiKey: "search-key",
+      aiProvider: "none" as const,
+    };
+
+    const result = await searchWeb(
+      { query: "Voron" },
+      config,
+      { fetchFn, timeoutMs: 25 },
+    );
+
+    expect(result.hits).toEqual([]);
+    expect(result.error).toMatch(/aborted|timeout/i);
+    expect(result.error).not.toContain("test stream fallback");
+    expect(requestSignal?.aborted).toBe(true);
   });
 });

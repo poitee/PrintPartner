@@ -5,11 +5,12 @@ import {
   loadManifestYaml,
   matchKeyMatches,
   mergeOptionGroups,
+  resolvePlanManifestSelections,
   type ManifestOptionGroup,
 } from "./manifest-apply.js";
 import { inferOptionGroupsFromPaths } from "./path-hints.js";
 import { inferSiblingFolderOptionGroups } from "./repo-tree-summary.js";
-import { findEditableSourceManifestPath } from "./source-workspace.js";
+import { findSourceManifestPath } from "./source-workspace.js";
 
 const CANONICAL_REPO_FILENAME = "print-partner.manifest.yaml";
 
@@ -66,6 +67,7 @@ function trackVariantSources(
 function resolveSourceOptionGroups(
   document: ReturnType<typeof loadManifestYaml>,
   scanned: ScannedManifestPart[],
+  dataDir: string | null,
 ): Record<string, ManifestOptionGroup> {
   const groups: Record<string, ManifestOptionGroup> = {};
   const declaredGroups = document.option_groups ?? {};
@@ -73,7 +75,10 @@ function resolveSourceOptionGroups(
   if (!Object.keys(declaredGroups).length) {
     mergeOptionGroups(
       groups,
-      inferOptionGroupsFromPaths(scanned.map((part) => part.relative_path)),
+      inferOptionGroupsFromPaths(
+        scanned.map((part) => part.relative_path),
+        dataDir,
+      ),
     );
     mergeOptionGroups(
       groups,
@@ -86,9 +91,17 @@ function resolveSourceOptionGroups(
 function prepareManifestSources(
   repo: AppRepository,
   profileId: number,
+  dataDir: string | null,
+  projectedSourceIds?: readonly number[],
 ): PreparedManifestSource[] {
   const sources: PreparedManifestSource[] = [];
-  for (const layer of repo.getProfileLayers(profileId)) {
+  const layers = projectedSourceIds
+    ? projectedSourceIds.map((projectId, index) => ({
+        project_id: projectId,
+        layer_type: index === 0 ? "base" : "addon",
+      }))
+    : repo.getProfileLayers(profileId);
+  for (const layer of layers) {
     if (!layer.project_id) continue;
     const project = repo.getProjectRow(layer.project_id);
     if (!project?.localPath) continue;
@@ -96,11 +109,7 @@ function prepareManifestSources(
     let manifestYaml = "";
     let document = loadManifestYaml("");
     let exists = false;
-    const manifestPath = findEditableSourceManifestPath({
-      reposDir: repo.reposDir,
-      sourceId: project.id,
-      contentRoot: project.localPath,
-    });
+    const manifestPath = findSourceManifestPath(project.localPath);
     if (manifestPath) {
       try {
         manifestYaml = readFileSync(manifestPath, "utf8");
@@ -124,7 +133,7 @@ function prepareManifestSources(
       manifestYaml,
       document,
       scanned,
-      optionGroups: resolveSourceOptionGroups(document, scanned),
+      optionGroups: resolveSourceOptionGroups(document, scanned, dataDir),
     });
   }
   return sources;
@@ -134,20 +143,31 @@ function prepareManifestSources(
 export function buildPlanOptionGroups(
   repo: AppRepository,
   profileId: number,
+  dataDir: string | null,
+  projectedSourceIds?: readonly number[],
 ): Record<string, ManifestOptionGroup> {
   const merged: Record<string, ManifestOptionGroup> = {};
-  for (const source of prepareManifestSources(repo, profileId)) {
+  for (const source of prepareManifestSources(
+    repo,
+    profileId,
+    dataDir,
+    projectedSourceIds,
+  )) {
     mergeOptionGroups(merged, source.optionGroups);
   }
   return merged;
 }
 
-export function buildPlanManifestBuilder(repo: AppRepository, profileId: number) {
+export function buildPlanManifestBuilder(
+  repo: AppRepository,
+  profileId: number,
+  dataDir: string | null,
+) {
   const mergedGroups: Record<string, ManifestOptionGroup> = {};
   const variantSources: Record<string, Record<string, Array<{ source_id: number; source_name: string }>>> = {};
   const sourceRows: Array<Record<string, unknown>> = [];
 
-  for (const source of prepareManifestSources(repo, profileId)) {
+  for (const source of prepareManifestSources(repo, profileId, dataDir)) {
     mergeOptionGroups(mergedGroups, source.optionGroups);
     trackVariantSources(
       variantSources,
@@ -181,6 +201,7 @@ export function buildPlanManifestBuilder(repo: AppRepository, profileId: number)
   return {
     profile_id: profileId,
     sources: sourceRows,
+    resolved_selections: resolvePlanManifestSelections(repo, profileId),
     merged_option_groups: Object.fromEntries(
       Object.entries(mergedGroups).map(([gid, group]) => [
         gid,
@@ -188,6 +209,8 @@ export function buildPlanManifestBuilder(repo: AppRepository, profileId: number)
           rule: group.rule,
           label: group.label ?? null,
           parts: group.parts,
+          min: group.min ?? null,
+          max: group.max ?? null,
           variants: (group.variants ?? []).map((v) => {
             const sources = variantSources[gid]?.[v.id] ?? [];
             return {

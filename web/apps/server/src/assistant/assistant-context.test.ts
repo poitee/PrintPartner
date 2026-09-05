@@ -24,7 +24,10 @@ const sampleCatalog = {
       label: "2.4 + SB + Tap",
       base: "voron_2_4",
       addon_sources: ["Voron-Stealthburner", "Voron-Tap"],
-      default_selections: { probe: "tap" },
+      default_selections: {
+        probe: "tap",
+        extras: ["skirts", "panels"],
+      },
     },
   },
 };
@@ -37,6 +40,7 @@ describe("summarizeKitCatalog", () => {
     expect(text).toContain("toolhead");
     expect(text).toContain("v24_sb_tap");
     expect(text).toContain("probe=tap");
+    expect(text).toContain("extras=skirts, panels");
   });
 });
 

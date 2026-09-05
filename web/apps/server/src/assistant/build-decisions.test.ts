@@ -4,6 +4,7 @@ import {
   detectBuildDecisions,
   detectBuildDecisionsHeuristic,
   refineBuildDecisionsWithLlm,
+  selectionsFromSuggestedDecisions,
 } from "./build-decisions.js";
 import { summarizeRepoTreePaths } from "../services/repo-tree-summary.js";
 import { EMU_TREE_FIXTURE } from "../services/emu-tree.fixture.js";
@@ -26,6 +27,27 @@ function guideExtract(overrides?: Partial<GuideExtract>): GuideExtract {
 }
 
 describe("detectBuildDecisionsHeuristic (EMU-like fixture)", () => {
+  it("preserves multi-value selections from a suggested decision", () => {
+    expect(
+      selectionsFromSuggestedDecisions([
+        {
+          id: "extras",
+          label: "Extras",
+          kind: "optional_mod",
+          evidence: "Curated choice",
+          suggested_selection: "bundle",
+          options: [
+            {
+              id: "bundle",
+              label: "Skirts and panels",
+              selection: { extras: ["skirts", "panels"] },
+            },
+          ],
+        },
+      ]),
+    ).toEqual({ extras: ["skirts", "panels"] });
+  });
+
   it("mines electronics + lane config from README and suggests from user constraints", () => {
     const readme = `
 # EMU

@@ -379,6 +379,7 @@ describe("accepted Plan read routes", () => {
         sourceId: source.id,
         revisionId: historicalRevision.id,
         observed: observedSource,
+        sourceVersion: historicalRevision.upstream_revision_key,
       });
       const uninitializedProfile = repo.createProfile(
         "Uninitialized accepted route Plan",

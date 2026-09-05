@@ -3,7 +3,6 @@ import { moonrakerAdapter } from "./adapters/moonraker.js";
 import { prusalinkAdapter } from "./adapters/prusalink.js";
 import { bambuAdapter } from "./adapters/bambu.js";
 import { spoolmanAdapter } from "./adapters/spoolman.js";
-import { slicerFolderAdapter } from "./adapters/slicer-folder.js";
 import { slicerSidecarAdapter } from "./adapters/slicer-sidecar.js";
 import { aiAssistantAdapter } from "./adapters/ai-assistant.js";
 import { homeAssistantAdapter } from "./adapters/home-assistant.js";
@@ -13,7 +12,6 @@ const adapters: IntegrationAdapter[] = [
   prusalinkAdapter,
   bambuAdapter,
   spoolmanAdapter,
-  slicerFolderAdapter,
   slicerSidecarAdapter,
   aiAssistantAdapter,
   homeAssistantAdapter,

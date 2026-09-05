@@ -10,6 +10,16 @@ import { writeAcceptedExportFile } from "./accepted-export-publication.js";
 const KIT_FORMAT = "print-partner-kit";
 const KIT_VERSION = 3;
 const KIT_JSON_NAME = "kit.json";
+export const MAX_KIT_JSON_BYTES = 16 * 1024 * 1024;
+export const KIT_JSON_TOO_LARGE_DETAIL =
+  "Kit bundle data exceeds the 16 MiB expanded JSON limit";
+
+export class KitJsonTooLargeError extends Error {
+  constructor() {
+    super(KIT_JSON_TOO_LARGE_DETAIL);
+    this.name = "KitJsonTooLargeError";
+  }
+}
 
 export type KitBundlePartWithoutProgress = Readonly<{
   matchKey: string;
@@ -141,6 +151,11 @@ function parseKitBundleRaw(raw: string): Record<string, unknown> {
   return data;
 }
 
+function parseKitJsonBytes(bytes: Buffer): Record<string, unknown> {
+  if (bytes.length > MAX_KIT_JSON_BYTES) throw new KitJsonTooLargeError();
+  return parseKitBundleRaw(bytes.toString("utf8"));
+}
+
 /** Parse kit.json or .print-partner-kit.zip bytes from a browser upload. */
 export function parseKitBundleBuffer(buf: Buffer, filename?: string): Record<string, unknown> {
   const name = (filename ?? "").toLowerCase();
@@ -152,9 +167,11 @@ export function parseKitBundleBuffer(buf: Buffer, filename?: string): Record<str
     const zip = new AdmZip(buf);
     const entry = zip.getEntry(KIT_JSON_NAME);
     if (!entry) throw new Error(`Missing ${KIT_JSON_NAME} in kit archive`);
-    return parseKitBundleRaw(entry.getData().toString("utf8"));
+    if (entry.header.size > MAX_KIT_JSON_BYTES)
+      throw new KitJsonTooLargeError();
+    return parseKitJsonBytes(entry.getData());
   }
-  return parseKitBundleRaw(buf.toString("utf8"));
+  return parseKitJsonBytes(buf);
 }
 
 export function loadKitBundleBytes(path: string): Record<string, unknown> {

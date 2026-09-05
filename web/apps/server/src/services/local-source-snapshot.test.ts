@@ -7,6 +7,7 @@ import { Readable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   LocalSourceSnapshotStore,
+  MAX_SOURCE_SNAPSHOT_BYTES,
   SOURCE_SNAPSHOT_MANIFEST_FILE,
   sourceRelativePath,
   type SnapshotFile,
@@ -151,6 +152,100 @@ describe("LocalSourceSnapshotStore", () => {
     );
   });
 
+  it("derives one file replacement while preserving the selected content policy", async () => {
+    const reposDir = tempReposDir();
+    const store = new LocalSourceSnapshotStore({ reposDir });
+    const part = file("parts/part.stl", "stl", "solid part");
+    const omittedReadme = file("README.md", "readme", "omitted notes");
+    const baseSelection = selection([{
+      path: omittedReadme.descriptor.path,
+      kind: "readme",
+      sizeHintBytes: omittedReadme.content.byteLength,
+      reason: "documentation-byte-budget",
+    }]);
+    const first = await store.materialize({
+      sourceId: 81,
+      upstreamRevisionKey: "commit-a",
+      files: [part.descriptor],
+      selection: baseSelection,
+      openFile: async () => response(part.content),
+    });
+
+    const derived = await store.deriveFileReplacement({
+      sourceId: 81,
+      baseRevisionKey: "commit-a",
+      sourceVersion: "commit-a",
+      replacement: {
+        path: sourceRelativePath("print-partner.manifest.yaml"),
+        kind: "artifact",
+        content: Buffer.from("format: print-partner-manifest-v2\nversion: 2\n"),
+      },
+    });
+
+    expect(derived.upstreamRevisionKey).not.toBe(first.upstreamRevisionKey);
+    expect(derived.selection).toEqual(first.selection);
+    expect(derived.files.map((entry) => entry.path)).toEqual([
+      "parts/part.stl",
+      "print-partner.manifest.yaml",
+    ]);
+    expect(existsSync(join(first.absolutePath, "print-partner.manifest.yaml"))).toBe(false);
+    expect(readFileSync(join(first.absolutePath, "parts/part.stl"), "utf8")).toBe(
+      "solid part",
+    );
+  });
+
+  it("keeps derived snapshots distinct when equal content has different selection metadata", async () => {
+    const reposDir = tempReposDir();
+    const store = new LocalSourceSnapshotStore({ reposDir });
+    const part = file("parts/part.stl", "stl", "solid part");
+    const firstSelection = selection();
+    const secondSelection = {
+      ...selection(),
+      maxDocumentationBytes: 1024,
+    };
+    for (const [upstreamRevisionKey, snapshotSelection] of [
+      ["commit-a", firstSelection],
+      ["commit-b", secondSelection],
+    ] as const) {
+      await store.materialize({
+        sourceId: 82,
+        upstreamRevisionKey,
+        files: [part.descriptor],
+        selection: snapshotSelection,
+        openFile: async () => response(part.content),
+      });
+    }
+
+    const replacement = {
+      path: sourceRelativePath("print-partner.manifest.yaml"),
+      kind: "artifact" as const,
+      content: Buffer.from("format: print-partner-manifest-v2\nversion: 2\n"),
+    };
+    const firstDerived = await store.deriveFileReplacement({
+      sourceId: 82,
+      baseRevisionKey: "commit-a",
+      sourceVersion: "upstream-a",
+      replacement,
+    });
+    const secondDerived = await store.deriveFileReplacement({
+      sourceId: 82,
+      baseRevisionKey: "commit-b",
+      sourceVersion: "upstream-a",
+      replacement,
+    });
+    const nextUpstreamDerived = await store.deriveFileReplacement({
+      sourceId: 82,
+      baseRevisionKey: "commit-a",
+      sourceVersion: "upstream-b",
+      replacement,
+    });
+
+    expect(secondDerived.upstreamRevisionKey).not.toBe(firstDerived.upstreamRevisionKey);
+    expect(nextUpstreamDerived.upstreamRevisionKey).not.toBe(firstDerived.upstreamRevisionKey);
+    expect(firstDerived.selection).toEqual(firstSelection);
+    expect(secondDerived.selection).toEqual(secondSelection);
+  });
+
   it("removes a failed candidate and leaves the previous revision intact", async () => {
     const reposDir = tempReposDir();
     const store = new LocalSourceSnapshotStore({ reposDir });
@@ -213,6 +308,41 @@ describe("LocalSourceSnapshotStore", () => {
 
     expect(existsSync(join(reposDir, "10", "revisions", "short-download"))).toBe(false);
     expect(await candidateNames(reposDir, 10)).toEqual([]);
+  });
+
+  it.each([
+    ["invalid", -1, "non-negative safe integer"],
+    ["oversized", MAX_SOURCE_SNAPSHOT_BYTES + 1, "stored-content limit"],
+  ])("closes a response stream with an %s declared length", async (
+    label,
+    contentLengthBytes,
+    errorMessage,
+  ) => {
+    const reposDir = tempReposDir();
+    const store = new LocalSourceSnapshotStore({ reposDir });
+    const stream = Readable.from(Buffer.from("unread"));
+
+    await expect(
+      store.materialize({
+        sourceId: 103,
+        upstreamRevisionKey: `${label}-response`,
+        files: [
+          {
+            path: sourceRelativePath("part.stl"),
+            kind: "stl",
+            sizeHintBytes: null,
+          },
+        ],
+        selection: selection(),
+        openFile: async () => ({
+          stream,
+          contentLengthBytes,
+        }),
+      }),
+    ).rejects.toThrow(errorMessage);
+
+    expect(stream.destroyed).toBe(true);
+    expect(await candidateNames(reposDir, 103)).toEqual([]);
   });
 
   it("enforces the documentation budget using actual bytes when tree size is unknown", async () => {

@@ -4,9 +4,12 @@ import type { Pool } from "pg";
 import * as schema from "./schema-pg.js";
 import {
   asSyncDb,
+  compareAndSetPostgresSetting,
   registerPostgresSyncQuery,
   runSerializedSettingsMutation,
+  unregisterPostgresSyncQuery,
   type AppDrizzleDb,
+  type PostgresSettingCompareAndSet,
 } from "./sync-db-bridge.js";
 
 describe("runSerializedSettingsMutation", () => {
@@ -24,6 +27,98 @@ describe("runSerializedSettingsMutation", () => {
   it("releases the lock so a later call can run", () => {
     runSerializedSettingsMutation(() => "first");
     expect(runSerializedSettingsMutation(() => "second")).toBe("second");
+  });
+});
+
+describe("compareAndSetPostgresSetting", () => {
+  it("uses one conditional update for a stored expectation", () => {
+    const postgres = drizzle.mock({ schema });
+    const queries: Array<{ sql: string; params: unknown[] }> = [];
+    registerPostgresSyncQuery(postgres, ({ sql, params }) => {
+      queries.push({ sql: sql.replace(/\s+/g, " ").trim(), params });
+      return { rows: [], rowCount: queries.length === 1 ? 1 : 0 };
+    });
+
+    try {
+      const input: PostgresSettingCompareAndSet = {
+        tenantId: "farm-a",
+        key: "production_setup:7",
+        expected: { kind: "stored", value: "old" },
+        value: "new",
+      };
+      expect(compareAndSetPostgresSetting(postgres, input)).toBe(true);
+      expect(compareAndSetPostgresSetting(postgres, input)).toBe(false);
+      expect(queries).toHaveLength(2);
+      expect(queries[0]?.sql).toContain(
+        "UPDATE app_settings SET value = $3",
+      );
+      expect(queries[0]?.sql).toContain(
+        "WHERE tenant_id = $1 AND key = $2 AND value = $4",
+      );
+      expect(queries[0]?.params).toEqual([
+        "farm-a",
+        "production_setup:7",
+        "new",
+        "old",
+      ]);
+    } finally {
+      unregisterPostgresSyncQuery(postgres);
+    }
+  });
+
+  it("does not let a missing-row expectation match an existing empty row", () => {
+    const postgres = drizzle.mock({ schema });
+    registerPostgresSyncQuery(postgres, ({ sql, params }) => {
+      expect(sql).toContain("ON CONFLICT (tenant_id, key) DO NOTHING");
+      expect(params).toEqual(["farm-a", "production_setup:7", "new"]);
+      return { rows: [], rowCount: 0 };
+    });
+
+    try {
+      expect(compareAndSetPostgresSetting(postgres, {
+        tenantId: "farm-a",
+        key: "production_setup:7",
+        expected: { kind: "missing" },
+        value: "new",
+      })).toBe(false);
+    } finally {
+      unregisterPostgresSyncQuery(postgres);
+    }
+  });
+
+  it("does not insert when a stored row disappears before the write", () => {
+    const postgres = drizzle.mock({ schema });
+    registerPostgresSyncQuery(postgres, ({ sql }) => {
+      expect(sql.trim()).toMatch(/^UPDATE app_settings/);
+      return { rows: [], rowCount: 0 };
+    });
+
+    try {
+      expect(compareAndSetPostgresSetting(postgres, {
+        tenantId: "farm-a",
+        key: "production_setup:7",
+        expected: { kind: "stored", value: "old" },
+        value: "new",
+      })).toBe(false);
+    } finally {
+      unregisterPostgresSyncQuery(postgres);
+    }
+  });
+
+  it("rejects a compare-and-set result above the unique-row limit", () => {
+    const postgres = drizzle.mock({ schema });
+    registerPostgresSyncQuery(postgres, () => ({ rows: [], rowCount: 2 }));
+
+    try {
+      expect(() => compareAndSetPostgresSetting(postgres, {
+        tenantId: "farm-a",
+        key: "production_setup:7",
+        expected: { kind: "missing" },
+        value: "new",
+      })).toThrow(/compare-and-set changed 2 rows/);
+    } finally {
+      unregisterPostgresSyncQuery(postgres);
+    }
   });
 });
 

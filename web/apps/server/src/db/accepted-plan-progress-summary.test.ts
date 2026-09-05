@@ -134,7 +134,12 @@ function trackedProgressFixture() {
     syncedAt: "2026-08-21T11:00:00.000Z",
     completeness: "complete",
   });
-  context.repo.activateSourceRevision({ sourceId: source.id, revisionId: sourceRevision.id, observed });
+  context.repo.activateSourceRevision({
+    sourceId: source.id,
+    revisionId: sourceRevision.id,
+    observed,
+    sourceVersion: sourceRevision.upstream_revision_key,
+  });
   const profile = context.repo.createProfile("Tracked Progress", source.id);
   const created = context.repo.recomputePlanDraft({
     profileId: profile.id,
@@ -399,6 +404,7 @@ describe("accepted Plan Progress summary batch", () => {
       sourceId: context.source.id,
       revisionId: workingRevision.id,
       observed,
+      sourceVersion: workingRevision.upstream_revision_key,
     });
 
     expect(read(context, [context.profile.id]).get(context.profile.id)).toEqual(acceptedBefore);
@@ -409,6 +415,7 @@ describe("accepted Plan Progress summary batch", () => {
       sourceId: context.source.id,
       revisionId: context.sourceRevision.id,
       observed,
+      sourceVersion: context.sourceRevision.upstream_revision_key,
     });
     const reconciled = context.repo.savePlanDraftRequiredUnitReconciliation({
       profileId: context.profile.id,

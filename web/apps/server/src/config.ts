@@ -69,7 +69,7 @@ export type ServerConfig = {
   integrationApiKey: string | null;
   /** When false, skip GitHub / override version checks for app updates */
   updateCheckEnabled: boolean;
-  /** Public URL for password reset links (e.g. https://print.example.com). Falls back to request Host. */
+  /** Canonical public URL for password reset links. Required for SMTP delivery. */
   appPublicUrl: string | null;
   smtpHost: string | null;
   smtpPort: number;
@@ -157,6 +157,9 @@ export function validateProductionConfig(config: ServerConfig): void {
   }
   if (config.deployMode === "saas" && config.authRequired && !config.sessionSecret && !config.saasBasicAuth) {
     throw new Error("SESSION_SECRET or SAAS_BASIC_AUTH is required when SaaS auth is enabled");
+  }
+  if (config.smtpConfigured && !config.appPublicUrl) {
+    throw new Error("APP_PUBLIC_URL is required when SMTP password-reset email is enabled");
   }
   if (
     config.deployMode === "saas" &&

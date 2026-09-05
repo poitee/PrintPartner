@@ -31,10 +31,14 @@ import {
 } from "./middleware/api-key.js";
 import { registerRequestLoggingMiddleware } from "./middleware/request-logging.js";
 import { validateProductionConfig } from "./config.js";
-import { setRequestTenantId } from "./middleware/tenant-context.js";
+import {
+  getRequestTenantId,
+  setRequestTenantId,
+  tenantStorage,
+} from "./middleware/tenant-context.js";
 import fastifyStatic from "@fastify/static";
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { isBrowserDocumentNavigation, isSpaClientPath } from "./lib/spa-nav.js";
 import type { SaasDbStore } from "./adapters/saas/index.js";
 import type { SelfHostDbStore } from "./adapters/self-host/index.js";
@@ -51,10 +55,25 @@ import {
   type ExternalAccessMode,
 } from "@print-partner/contracts";
 import { readExternalAccessSettings } from "./services/external-access.js";
+import { listActivePrinterSendQueue } from "./services/printer-send-queue-store.js";
+import { sweepExpiredTransferArtifacts } from "./services/transfer-artifact-retention.js";
+import { migrateLegacySourceManifestOverridesForTenant } from "./services/source-manifest-migration.js";
 import {
   MAX_SOURCE_UPLOAD_FILES,
   MAX_SOURCE_UPLOAD_PARTS,
 } from "./services/archive-import.js";
+import {
+  KIT_BUNDLE_UPLOAD_TOO_LARGE_DETAIL,
+  MAX_KIT_BUNDLE_UPLOAD_BYTES,
+  MAX_JSON_BODY_BYTES,
+  MAX_SOURCE_UPLOAD_BYTES,
+} from "./services/upload-limits.js";
+import { getLogger } from "./services/logger.js";
+import type { ManagedProfileSyncHandle } from "./services/profile-sync-manager.js";
+import {
+  ISOLATED_SOURCE_FILESYSTEM,
+  TRUSTED_SINGLE_USER_SOURCE_FILESYSTEM,
+} from "./services/source-filesystem-policy.js";
 
 export type RuntimePorts = AppPorts & {
   repository?: AppRepository;
@@ -71,7 +90,12 @@ export function createPorts(config: ServerConfig): RuntimePorts {
   if (config.deployMode === "saas") {
     return createSaasPorts(config.dataDir) as RuntimePorts;
   }
-  return createSelfHostPorts(config.dataDir);
+  return createSelfHostPorts(
+    config.dataDir,
+    config.multiUser
+      ? ISOLATED_SOURCE_FILESYSTEM
+      : TRUSTED_SINGLE_USER_SOURCE_FILESYSTEM,
+  );
 }
 
 function resolveRepository(ports: RuntimePorts): AppRepository | null {
@@ -102,11 +126,40 @@ function resolveAuthStore(ports: RuntimePorts, config: ServerConfig): AuthStore 
   return null;
 }
 
+function configuredTenantIds(config: ServerConfig, authStore: AuthStore | null): string[] {
+  const tenantIds = config.multiUser ? (authStore?.listTenantIds() ?? []) : ["default"];
+  if (config.deployMode === "saas" && config.saasBasicAuth) {
+    const [login] = config.saasBasicAuth.split(":");
+    tenantIds.push(`basic-${login ?? "basic"}`);
+  }
+  if (config.deployMode === "saas" && config.saasAllowAnonymous) {
+    tenantIds.push("anonymous");
+  }
+  if (tenantIds.length === 0) tenantIds.push("default");
+  return [...new Set(tenantIds)];
+}
+
+function activePrinterUploadDirectories(
+  repository: AppRepository,
+  tenantIds: readonly string[],
+): ReadonlySet<string> {
+  const directories = new Set<string>();
+  for (const tenantId of tenantIds) {
+    tenantStorage.run(tenantId, () => {
+      for (const item of listActivePrinterSendQueue(repository)) {
+        directories.add(resolve(dirname(item.artifact_path)));
+      }
+    });
+  }
+  return directories;
+}
+
 const ADMIN_ROUTE_PREFIXES = [
   "/admin",
   "/backups",
   "/settings/api-keys",
   "/settings/logging",
+  "/slicer-instances",
   "/api/v1/integrations",
   "/api/v1/webhooks",
 ];
@@ -121,8 +174,7 @@ function isAdministrativeRoute(url: string): boolean {
 export async function buildApp(config: ServerConfig, ports: RuntimePorts) {
   const app = Fastify({
     logger: true,
-    // No request body ceiling — uploads are bounded by disk, not by policy.
-    bodyLimit: Number.MAX_SAFE_INTEGER,
+    bodyLimit: MAX_JSON_BODY_BYTES,
     trustProxy: config.trustProxy,
   });
   app.addHook("onSend", async (_request, reply, payload) => {
@@ -139,6 +191,9 @@ export async function buildApp(config: ServerConfig, ports: RuntimePorts) {
 
   await app.register(cookie);
   registerTenantMiddleware(app, config, authStore);
+  app.addHook("onRequest", async (request) => {
+    setRequestTenantId(request.tenantId ?? "default");
+  });
   registerAuthRoutes(app, config, authStore);
   const externalAccessMode = (): ExternalAccessMode =>
     repository === null
@@ -177,7 +232,7 @@ export async function buildApp(config: ServerConfig, ports: RuntimePorts) {
   await app.register(websocket);
   await app.register(multipart, {
     limits: {
-      fileSize: Infinity,
+      fileSize: MAX_SOURCE_UPLOAD_BYTES,
       files: MAX_SOURCE_UPLOAD_FILES,
       parts: MAX_SOURCE_UPLOAD_PARTS,
     },
@@ -188,10 +243,6 @@ export async function buildApp(config: ServerConfig, ports: RuntimePorts) {
     if (isAdministrativeRoute(request.url)) {
       return requireAdmin(request, reply);
     }
-  });
-
-  app.addHook("preHandler", async (request) => {
-    setRequestTenantId(request.tenantId ?? "default");
   });
 
   if (config.staticDir && existsSync(config.staticDir)) {
@@ -212,6 +263,47 @@ export async function buildApp(config: ServerConfig, ports: RuntimePorts) {
     if (config.deployMode === "self-host") {
       migrateLegacySelfHostExports(config.dataDir, repository);
     }
+    const backgroundTenantIds = () => configuredTenantIds(config, authStore);
+    const migrateLegacySourceManifests = async (): Promise<void> => {
+      for (const tenantId of backgroundTenantIds()) {
+        const report = await migrateLegacySourceManifestOverridesForTenant(
+          repository,
+          tenantId,
+        );
+        if (report.migrated.length > 0) {
+          app.log.info(
+            { tenantId, sourceIds: report.migrated.map((item) => item.sourceId) },
+            "Migrated legacy Source manifest overrides",
+          );
+        }
+        for (const migrated of report.migrated) {
+          if (!migrated.changedDuringMigration) continue;
+          app.log.warn(
+            {
+              tenantId,
+              sourceId: migrated.sourceId,
+              backupPath: migrated.backupPath,
+            },
+            "Legacy Source manifest changed during migration; the changed bytes remain archived",
+          );
+        }
+        for (const retained of report.retained) {
+          app.log.warn(
+            {
+              tenantId,
+              sourceId: retained.sourceId,
+              legacyPath: retained.legacyPath,
+              reason: retained.reason,
+            },
+            "Retained legacy Source manifest override",
+          );
+        }
+      }
+    };
+    await migrateLegacySourceManifests();
+    sweepExpiredTransferArtifacts(join(config.dataDir, "exports"), {
+      protectedDirectories: activePrinterUploadDirectories(repository, backgroundTenantIds()),
+    });
     const thumbsDir = join(config.dataDir, "thumbs");
     const coversDir = join(config.dataDir, "covers");
     const getRepo = () => repository;
@@ -221,6 +313,24 @@ export async function buildApp(config: ServerConfig, ports: RuntimePorts) {
     let sqlite = null;
     if ("sqlite" in ports.db) {
       sqlite = (ports.db as SelfHostDbStore).sqlite ?? null;
+    }
+
+    let profileSyncHandle: ManagedProfileSyncHandle | null = null;
+    if (config.deployMode === "self-host" && !config.multiUser) {
+      const { startManagedProfileSync } = await import("./services/profile-sync-manager.js");
+      const { broadcastProfileSync, registerProfileSyncWebSocket } = await import(
+        "./services/profile-sync-broadcast.js"
+      );
+      registerProfileSyncWebSocket(app);
+      profileSyncHandle = startManagedProfileSync({
+        repository,
+        listTenantIds: backgroundTenantIds,
+        emit: (tenantId, event) => broadcastProfileSync(tenantId, event),
+        prepareTenant: () => repository.seedStockSlicerInstancesIfEmpty(process.env),
+      });
+      app.addHook("onClose", async () => {
+        await profileSyncHandle?.stop();
+      });
     }
 
     const coreDeps = {
@@ -233,6 +343,21 @@ export async function buildApp(config: ServerConfig, ports: RuntimePorts) {
       config,
       jobs,
       authStore,
+      ...(profileSyncHandle
+        ? {
+            reloadProfileSync: async () => {
+              const tenantId = getRequestTenantId();
+              try {
+                await profileSyncHandle.reloadTenant(tenantId);
+              } catch (error) {
+                getLogger().log(
+                  "warn",
+                  `[profile-sync] reload failed for tenant ${tenantId}: ${error instanceof Error ? error.message : String(error)}`,
+                );
+              }
+            },
+          }
+        : {}),
     };
 
     await registerCoreRoutes(app, coreDeps, { planSummaryContract: "accepted" });
@@ -244,36 +369,20 @@ export async function buildApp(config: ServerConfig, ports: RuntimePorts) {
 
     // Start background source watcher
     const { startSourceWatcher } = await import("./services/source-watcher.js");
-    const watcherHandle = startSourceWatcher(
-      repository,
-      coreDeps.reposDir,
-      jobs,
-      () => {
+    const watcherHandle = startSourceWatcher({
+      repo: repository,
+      reposDir: coreDeps.reposDir,
+      listTenantIds: backgroundTenantIds,
+      getSettings: () => {
         const webhookUrl = repository.getSetting("discord_notify_webhook_url") || null;
         const notifyOnUpdate = repository.getSetting("discord_notify_on_update", "1") !== "0";
         const notifyOnSync = repository.getSetting("discord_notify_on_sync", "0") !== "0";
         const autoSyncUpdates = repository.getSetting("discord_auto_sync_updates", "1") !== "0";
         return { discordWebhookUrl: webhookUrl, notifyOnUpdate, notifyOnSync, autoSyncUpdates };
       },
-    );
+    });
     app.addHook("onClose", async () => {
       watcherHandle.stop();
-    });
-
-    // Start background slicer profile-sync watcher (chokidar over shared config volumes)
-    const { startManagedProfileSync } = await import("./services/profile-sync-manager.js");
-    const { broadcastProfileSync, registerProfileSyncWebSocket } = await import(
-      "./services/profile-sync-broadcast.js"
-    );
-    registerProfileSyncWebSocket(app);
-    // Seed stock slicer instances once so watchers + Export links have defaults.
-    repository.seedStockSlicerInstancesIfEmpty(process.env);
-    const profileSyncHandle = startManagedProfileSync(repository, (event) =>
-      broadcastProfileSync(event),
-    );
-    void profileSyncHandle.syncAll();
-    app.addHook("onClose", async () => {
-      profileSyncHandle.stop();
     });
 
     // Register backup routes (available regardless of auth mode)
@@ -288,6 +397,7 @@ export async function buildApp(config: ServerConfig, ports: RuntimePorts) {
               repository.replaceDatabase(restoredDb);
               authStore?.replaceDatabase(restoredDb);
             },
+            afterDatabaseRefresh: migrateLegacySourceManifests,
           }
         : {}),
     });
@@ -327,13 +437,29 @@ export async function buildApp(config: ServerConfig, ports: RuntimePorts) {
           return reply.status(401).send({ detail: "Authentication required" });
         }
         const body = request.body as { path?: unknown; new_name?: unknown };
-        const { readBufferUnderDataDir, trimmedString } = await import("./lib/secure-path.js");
+        const { DataDirFileTooLargeError, readBufferUnderDataDir, trimmedString } =
+          await import("./lib/secure-path.js");
         const path = trimmedString(body.path);
         if (!path) return reply.status(400).send({ detail: "path is required" });
-        const { parseKitBundleBuffer } = await import("./services/export-kit.js");
-        const buf = readBufferUnderDataDir(config.dataDir, path);
-        const data = parseKitBundleBuffer(buf, path);
-        return repository.importKitBundle(data, trimmedString(body.new_name) || null);
+        const { KIT_JSON_TOO_LARGE_DETAIL, KitJsonTooLargeError, parseKitBundleBuffer } =
+          await import("./services/export-kit.js");
+        try {
+          const buf = readBufferUnderDataDir(
+            config.dataDir,
+            path,
+            MAX_KIT_BUNDLE_UPLOAD_BYTES,
+          );
+          const data = parseKitBundleBuffer(buf, path);
+          return repository.importKitBundle(data, trimmedString(body.new_name) || null);
+        } catch (error) {
+          if (error instanceof DataDirFileTooLargeError) {
+            return reply.status(413).send({ detail: KIT_BUNDLE_UPLOAD_TOO_LARGE_DETAIL });
+          }
+          if (error instanceof KitJsonTooLargeError) {
+            return reply.status(413).send({ detail: KIT_JSON_TOO_LARGE_DETAIL });
+          }
+          throw error;
+        }
       },
     );
 

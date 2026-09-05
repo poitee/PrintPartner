@@ -1,11 +1,16 @@
 import { randomUUID } from "node:crypto";
-import { rmSync } from "node:fs";
 import { basename } from "node:path";
 import type { FastifyRequest } from "fastify";
 import {
+  cleanupPrinterUploadArtifactDir,
   isAllowedPrinterUploadFilename,
   streamPrinterUploadArtifact,
 } from "./printer-upload-job.js";
+import {
+  MAX_MULTIPART_FIELD_BYTES,
+  MAX_PRINT_FILE_UPLOAD_BYTES,
+  PRINT_FILE_UPLOAD_TOO_LARGE_DETAIL,
+} from "./upload-limits.js";
 
 export type PrinterUploadMultipartError = {
   status: number;
@@ -33,11 +38,7 @@ export type ParsePrinterUploadMultipartOptions = {
 
 function cleanupArtifact(path: string | null): void {
   if (!path) return;
-  try {
-    rmSync(path, { force: true });
-  } catch {
-    /* ignore */
-  }
+  cleanupPrinterUploadArtifactDir(path);
 }
 
 /**
@@ -62,7 +63,15 @@ export async function parsePrinterUploadMultipart(
   let unlabeledNamesRaw: string | undefined;
 
   try {
-    for await (const part of request.parts()) {
+    for await (const part of request.parts({
+      limits: {
+        fileSize: MAX_PRINT_FILE_UPLOAD_BYTES,
+        files: 1,
+        fields: 8,
+        fieldSize: MAX_MULTIPART_FIELD_BYTES,
+        parts: 9,
+      },
+    })) {
       if (part.type === "field") {
         const value = String(await part.value);
         if (part.fieldname === "printer_id") printerId = value.trim();
@@ -127,7 +136,7 @@ export async function parsePrinterUploadMultipart(
             error: {
               status: 413,
               title: "Payload Too Large",
-              detail: message,
+              detail: PRINT_FILE_UPLOAD_TOO_LARGE_DETAIL,
             },
           };
         }

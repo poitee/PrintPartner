@@ -1,6 +1,7 @@
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const github = vi.hoisted(() => ({
@@ -32,6 +33,7 @@ import {
   resolveGithubUrlRef,
   syncGithubSource,
 } from "./github-sync.js";
+import { LocalSourceSnapshotStore, sourceRelativePath } from "./local-source-snapshot.js";
 
 const COMMIT_A = "a".repeat(40);
 const COMMIT_B = "b".repeat(40);
@@ -131,10 +133,13 @@ describe("atomic GitHub Source sync", () => {
     setTree(COMMIT_A, [
       { path: "parts/bracket.stl", type: "blob", mode: "100644", size: 99 },
       { path: "README.md", type: "blob", mode: "100644", size: 8 },
+      { path: "print-partner.manifest.yaml", type: "blob", mode: "100644", size: 42 },
     ]);
+    const manifest = "format: print-partner-manifest\nversion: 2\n";
     const fetchMock = rawResponse({
       "parts/bracket.stl": "solid bracket",
       "README.md": "# Notes\n",
+      "print-partner.manifest.yaml": manifest,
     });
     vi.stubGlobal("fetch", fetchMock);
 
@@ -148,10 +153,14 @@ describe("atomic GitHub Source sync", () => {
     expect(result.commitSha).toBe(COMMIT_A);
     expect(result.downloaded).toBe(1);
     expect(result.docsDownloaded).toBe(1);
-    expect(result.snapshot.snapshotLocator).toBe(`7/revisions/${COMMIT_A}`);
+    expect(result.snapshot.upstreamRevisionKey).toBe(`${COMMIT_A}.snapshot-v2`);
+    expect(result.snapshot.snapshotLocator).toBe(`7/revisions/${COMMIT_A}.snapshot-v2`);
     expect(readFileSync(join(result.snapshot.absolutePath, "parts/bracket.stl"), "utf8"))
       .toBe("solid bracket");
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(
+      readFileSync(join(result.snapshot.absolutePath, "print-partner.manifest.yaml"), "utf8"),
+    ).toBe(manifest);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
     for (const [url, init] of fetchMock.mock.calls) {
       expect(String(url)).toContain(`/${COMMIT_A}/`);
       expect(init?.signal).toBeInstanceOf(AbortSignal);
@@ -187,6 +196,44 @@ describe("atomic GitHub Source sync", () => {
     expect(
       readFileSync(join(result.snapshot.absolutePath, "README.md"), "utf8"),
     ).toBe(decoded);
+  });
+
+  it("reserves the documentation budget for the canonical manifest", async () => {
+    const root = reposRoot();
+    const manifest = "format: print-partner-manifest\nversion: 2\n";
+    setTree(COMMIT_A, [
+      {
+        path: "print-partner.manifest.yaml",
+        type: "blob",
+        mode: "100644",
+        size: Buffer.byteLength(manifest),
+      },
+      { path: "README.md", type: "blob", mode: "100644", size: 8 },
+    ]);
+    const fetchMock = rawResponse({
+      "print-partner.manifest.yaml": manifest,
+      "README.md": "# Notes\n",
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await syncGithubSource({
+      url: "https://github.com/example/printer",
+      branch: "main",
+      reposDir: root,
+      sourceId: 12,
+      options: { maxDocsBytes: Buffer.byteLength(manifest) },
+    });
+
+    expect(readFileSync(join(result.snapshot.absolutePath, "print-partner.manifest.yaml"), "utf8"))
+      .toBe(manifest);
+    expect(result.docPaths).toEqual([]);
+    expect(result.snapshot.selection.omittedFiles).toEqual([
+      expect.objectContaining({
+        path: "README.md",
+        reason: "documentation-byte-budget",
+      }),
+    ]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("rejects truncated trees and excessive STL sets before creating a candidate", async () => {
@@ -263,6 +310,126 @@ describe("atomic GitHub Source sync", () => {
     expect(readFileSync(join(activeB.localPath!, "parts/new.stl"), "utf8")).toBe("new");
     expect(readFileSync(join(activeA.localPath!, "parts/old.stl"), "utf8")).toBe("old");
     expect(repo.listSourceRevisions(source.id)).toHaveLength(2);
+  });
+
+  it("reuses a legacy same-commit snapshot when no canonical manifest exists", async () => {
+    const root = reposRoot();
+    const legacyStore = new LocalSourceSnapshotStore({ reposDir: root });
+    const legacy = await legacyStore.materialize({
+      sourceId: 16,
+      upstreamRevisionKey: COMMIT_A,
+      files: [{
+        path: sourceRelativePath("part.stl"),
+        kind: "stl",
+        sizeHintBytes: 3,
+      }],
+      selection: {
+        maxStlFiles: 500,
+        maxDocumentationBytes: 1024 * 1024 * 1024,
+        omittedFiles: [],
+      },
+      openFile: async () => ({
+        stream: Readable.from([Buffer.from("old")]),
+        contentLengthBytes: 3,
+      }),
+    });
+    setTree(COMMIT_A, [
+      { path: "part.stl", type: "blob", mode: "100644", size: 3 },
+    ]);
+    const fetchMock = rawResponse({ "part.stl": "old" });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await syncGithubSource({
+      url: "https://github.com/example/legacy-no-manifest",
+      branch: "main",
+      reposDir: root,
+      sourceId: 16,
+    });
+    expect(result.snapshot.publication).toBe("reused");
+    expect(result.snapshot.upstreamRevisionKey).toBe(COMMIT_A);
+    expect(result.snapshot.absolutePath).toBe(legacy.absolutePath);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(readdirSync(join(root, "16", "revisions"))).toEqual([COMMIT_A]);
+  });
+
+  it("upgrades a legacy snapshot at the same commit without changing the remote version", async () => {
+    const dataDir = reposRoot();
+    const ports = createSelfHostPorts(dataDir);
+    await ports.db.connect();
+    try {
+      const repo = ports.repository!;
+      const source = repo.createSource({
+        name: "Legacy snapshot",
+        url: "https://github.com/example/legacy-snapshot",
+        source_kind: "github",
+      });
+      const legacyStore = new LocalSourceSnapshotStore({ reposDir: repo.reposDir });
+      const legacy = await legacyStore.materialize({
+        sourceId: source.id,
+        upstreamRevisionKey: COMMIT_A,
+        files: [{
+          path: sourceRelativePath("part.stl"),
+          kind: "stl",
+          sizeHintBytes: 3,
+        }],
+        selection: {
+          maxStlFiles: 500,
+          maxDocumentationBytes: 1024,
+          omittedFiles: [],
+        },
+        openFile: async () => ({
+          stream: Readable.from([Buffer.from("old")]),
+          contentLengthBytes: 3,
+        }),
+      });
+      const legacyRevision = repo.recordSourceRevision({
+        sourceId: source.id,
+        upstreamRevisionKey: COMMIT_A,
+        manifestDigest: legacy.manifestDigest,
+        snapshotLocator: legacy.snapshotLocator,
+        syncedAt: "2026-09-01T00:00:00.000Z",
+        completeness: "complete",
+      });
+      const observed = repo.getSourceActivationObservation(source.id);
+      if (!observed) throw new Error("Expected Source activation observation");
+      repo.activateSourceRevision({
+        sourceId: source.id,
+        revisionId: legacyRevision.id,
+        observed,
+        sourceVersion: COMMIT_A,
+      });
+
+      const manifest = "format: print-partner-manifest\nversion: 2\n";
+      setTree(COMMIT_A, [
+        { path: "part.stl", type: "blob", mode: "100644", size: 3 },
+        {
+          path: "print-partner.manifest.yaml",
+          type: "blob",
+          mode: "100644",
+          size: Buffer.byteLength(manifest),
+        },
+      ]);
+      vi.stubGlobal("fetch", rawResponse({
+        "part.stl": "old",
+        "print-partner.manifest.yaml": manifest,
+      }));
+
+      await syncProjectById(repo, repo.reposDir, source.id);
+
+      const active = repo.getProjectRow(source.id)!;
+      expect(active.lastCommitSha).toBe(COMMIT_A);
+      expect(active.localPath).toContain(`${COMMIT_A}.snapshot-v2`);
+      expect(readFileSync(join(active.localPath!, "print-partner.manifest.yaml"), "utf8"))
+        .toBe(manifest);
+      expect(repo.listSourceRevisions(source.id).map((revision) => revision.upstream_revision_key))
+        .toEqual([COMMIT_A, `${COMMIT_A}.snapshot-v2`]);
+      expect(existsSync(legacy.absolutePath)).toBe(true);
+
+      await syncProjectById(repo, repo.reposDir, source.id);
+      expect(repo.listSourceRevisions(source.id)).toHaveLength(2);
+    } finally {
+      ports.db.close();
+    }
   });
 
   it("rejects selected symlinks and raw download failures without publishing", async () => {

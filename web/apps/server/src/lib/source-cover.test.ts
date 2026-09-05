@@ -83,11 +83,11 @@ describe("source cover resolution", () => {
     const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => ({
-        ok: true,
-        headers: { get: (k: string) => (k === "content-type" ? "image/png" : null) },
-        arrayBuffer: async () => png.buffer.slice(png.byteOffset, png.byteOffset + png.byteLength),
-      })),
+      vi.fn(async () =>
+        new Response(png, {
+          headers: { "content-type": "image/png" },
+        }),
+      ),
     );
 
     const path = await ensureSourceCover(coversRoot, project);
@@ -108,5 +108,26 @@ describe("source cover resolution", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
 
     vi.unstubAllGlobals();
+  });
+
+  it("rejects a cover whose declared size exceeds the download budget", async () => {
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(png, {
+          headers: {
+            "content-type": "image/png",
+            "content-length": "3000001",
+          },
+        }),
+      ),
+    );
+
+    try {
+      await expect(downloadRemoteImage("https://cdn.example.com/cover.png")).resolves.toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

@@ -23,10 +23,13 @@ import {
   finalizeUploadedSource,
   MAX_SOURCE_UPLOAD_FILES,
   MAX_SOURCE_UPLOAD_PARTS,
-  MAX_SOURCE_UPLOAD_BYTES,
   writeUploadedFiles,
   writeUploadedZip,
 } from "../services/archive-import.js";
+import {
+  MAX_SOURCE_UPLOAD_BYTES,
+  SOURCE_UPLOAD_TOO_LARGE_DETAIL,
+} from "../services/upload-limits.js";
 import { PLACEHOLDER_PNG } from "../lib/thumbnails.js";
 import { importReposTxt, parseReposTxtText } from "../services/repos-txt.js";
 import { coverMediaType, ensureSourceCover } from "../lib/source-cover.js";
@@ -65,7 +68,9 @@ async function prefetchSourceCover(deps: RouteDeps, sourceId: number): Promise<v
 }
 
 export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps): Promise<void> {
-  app.get("/sources", async () => ({ sources: deps.repo.listSources() }));
+  app.get("/sources", async () => ({
+    sources: deps.repo.listSources().map((source) => deps.repo.sourceSummaryForClient(source)),
+  }));
 
   app.get("/sources/activity", async (request) => {
     const requested = Number((request.query as { limit?: string }).limit ?? 20);
@@ -130,7 +135,7 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
     const id = Number((request.params as { id: string }).id);
     const source = deps.repo.getSource(id);
     if (!source) return reply.status(404).send({ detail: "Source not found" });
-    return source;
+    return deps.repo.sourceSummaryForClient(source);
   });
 
   app.post("/sources", async (request, reply) => {
@@ -177,7 +182,7 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
           }
         } catch { /* best effort */ }
       }
-      return newSource;
+      return deps.repo.sourceSummaryForClient(newSource);
     } catch (e) {
       return reply.status(400).send({ detail: e instanceof Error ? e.message : String(e) });
     }
@@ -196,7 +201,7 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
         requestedUrl && (effectiveKind === "github" || effectiveKind === "git")
           ? normalizeGithubSourceLocation(requestedUrl, requestedBranch ?? existing?.branch)
           : null;
-      return deps.repo.updateSource(id, {
+      const updated = deps.repo.updateSource(id, {
         name: body.name != null ? String(body.name) : undefined,
         url: githubLocation?.url ?? requestedUrl,
         branch: githubLocation?.branch ?? requestedBranch,
@@ -209,6 +214,7 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
             ? (body.metadata as Record<string, unknown>)
             : undefined,
       });
+      return deps.repo.sourceSummaryForClient(updated);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       return reply.status(msg.includes("not found") ? 404 : 400).send({ detail: msg });
@@ -217,8 +223,15 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
 
   app.delete("/sources/:id", async (request, reply) => {
     const id = Number((request.params as { id: string }).id);
-    if (!deps.repo.getSource(id)) return reply.status(404).send({ detail: "Source not found" });
-    deps.repo.deleteSource(id);
+    const result = deps.repo.deleteSource(id);
+    if (result.kind === "not_found") {
+      return reply.status(404).send({ detail: "Source not found" });
+    }
+    if (result.kind === "retained_history") {
+      return reply.status(409).send({
+        detail: "Source has immutable revision history and cannot be deleted",
+      });
+    }
     return reply.status(204).send();
   });
 
@@ -264,7 +277,9 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
       }
     }
     return {
-      updated: updated.filter((s): s is NonNullable<typeof s> => s != null),
+      updated: updated
+        .filter((source): source is NonNullable<typeof source> => source != null)
+        .map((source) => deps.repo.sourceSummaryForClient(source)),
       results,
       succeeded: results.filter((r) => r.ok).length,
       failed: results.filter((r) => !r.ok).length,
@@ -302,11 +317,21 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
     const id = Number((request.params as { id: string }).id);
     const row = deps.repo.getProjectRow(id);
     if (!row) return reply.status(404).send({ detail: "Source not found" });
-    const data = await request.file();
+    const data = await request.file({
+      limits: {
+        fileSize: MAX_SOURCE_UPLOAD_BYTES,
+        files: 1,
+        fields: 0,
+        parts: 1,
+      },
+    });
     if (!data) return reply.status(400).send({ detail: "ZIP file required" });
     const chunks: Buffer[] = [];
     for await (const chunk of data.file) {
       chunks.push(Buffer.from(chunk));
+    }
+    if (data.file.truncated) {
+      return reply.status(413).send({ detail: SOURCE_UPLOAD_TOO_LARGE_DETAIL });
     }
     const buffer = Buffer.concat(chunks);
     let extractDir: string;
@@ -338,7 +363,7 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
     indexSourceDocsFromDisk(deps.repo, id, updated.local_path ?? extractDir);
     void prefetchSourceCover(deps, id);
     return {
-      ...updated,
+      ...deps.repo.sourceSummaryForClient(updated),
       imported_files: buffer.length,
       stl_count: stlCount,
       artifacts: scanSourceArtifacts(updated.local_path ?? extractDir),
@@ -373,21 +398,25 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
         }
         continue;
       }
-      if (part.type !== "file" || part.fieldname !== "files") continue;
+      if (part.type !== "file") continue;
+      if (part.fieldname !== "files") {
+        part.file.resume();
+        continue;
+      }
       const chunks: Buffer[] = [];
       for await (const chunk of part.file) {
         const buffer = Buffer.from(chunk);
         uploadedBytes += buffer.length;
         if (uploadedBytes > MAX_SOURCE_UPLOAD_BYTES) {
           return reply.status(413).send({
-            detail: "Uploaded source exceeds the 256 MiB upload limit",
+            detail: SOURCE_UPLOAD_TOO_LARGE_DETAIL,
           });
         }
         chunks.push(buffer);
       }
       if (part.file.truncated) {
         return reply.status(413).send({
-          detail: "Uploaded source exceeds the 256 MiB upload limit",
+          detail: SOURCE_UPLOAD_TOO_LARGE_DETAIL,
         });
       }
       const buffer = Buffer.concat(chunks);
@@ -438,7 +467,7 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
     indexSourceDocsFromDisk(deps.repo, id, updated.local_path ?? result.extractDir);
     void prefetchSourceCover(deps, id);
     return {
-      ...updated,
+      ...deps.repo.sourceSummaryForClient(updated),
       imported_files: result.fileCount,
       stl_count: result.stlCount,
       artifacts: scanSourceArtifacts(updated.local_path ?? result.extractDir),
@@ -591,6 +620,8 @@ export async function syncProjectById(
 }> {
   const row = repo.getProjectRow(projectId);
   if (!row) throw new Error("Source not found");
+  const observed = repo.getSourceActivationObservation(projectId);
+  if (!observed) throw new Error("Source not found");
   const token = repo.getSetting(GITHUB_PAT_KEY);
   const maxDocsBytes = options?.maxDocsBytes ?? DEFAULT_SOURCE_DOCS_MAX_BYTES;
 
@@ -618,7 +649,7 @@ export async function syncProjectById(
     });
     const revision = repo.recordSourceRevision({
       sourceId: projectId,
-      upstreamRevisionKey: result.commitSha,
+      upstreamRevisionKey: result.snapshot.upstreamRevisionKey,
       manifestDigest: result.snapshot.manifestDigest,
       snapshotLocator: result.snapshot.snapshotLocator,
       syncedAt: new Date().toISOString(),
@@ -627,7 +658,8 @@ export async function syncProjectById(
     const activated = repo.activateSourceRevision({
       sourceId: projectId,
       revisionId: revision.id,
-      observed: row,
+      observed,
+      sourceVersion: result.commitSha,
     });
     repo.markSourceRevisionCurrent(projectId, revision.id);
     const activePath = activated.local_path;

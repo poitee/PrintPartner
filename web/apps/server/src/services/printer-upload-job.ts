@@ -150,9 +150,6 @@ async function runPrinterUploadJobInner(
     ? input.unlabeled_names.filter((n) => typeof n === "string" && n.trim())
     : [];
   let checkoffLinkId: string | undefined;
-  // GRE-232: stamp plan_id (profile_id) at send — immutable after create.
-  // Spine change must not rebind; create even when object parse found no units.
-  // Fetch-from-printer uses the same resolve helper (stored wins; unbound → spine).
   const planId = resolvePlanIdForPrinterFetch(input.profile_id, null);
   if (planId != null) {
     const link = createPrinterCheckoffLink(repo, {
@@ -214,19 +211,11 @@ export async function streamPrinterUploadArtifact(
   try {
     await pipeline(file, createWriteStream(path));
   } catch (err) {
-    try {
-      rmSync(path, { force: true });
-    } catch {
-      /* ignore */
-    }
+    cleanupPrinterUploadArtifactDir(path);
     throw err;
   }
   if (file.truncated) {
-    try {
-      rmSync(path, { force: true });
-    } catch {
-      /* ignore */
-    }
+    cleanupPrinterUploadArtifactDir(path);
     throw new Error("Upload exceeded size limit");
   }
   return path;

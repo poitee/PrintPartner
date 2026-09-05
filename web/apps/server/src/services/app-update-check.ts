@@ -1,5 +1,12 @@
 import type { AppUpdateCheckResponse } from "@print-partner/contracts";
 import type { ServerConfig } from "../config.js";
+import {
+  cancelResponseBody,
+  isJsonObject,
+  readBoundedJsonResponse,
+} from "../lib/bounded-response.js";
+
+const MAX_GITHUB_RELEASE_RESPONSE_BYTES = 1024 * 1024;
 
 export type UpdateCheckConfig = Pick<
   ServerConfig,
@@ -10,12 +17,6 @@ export type UpdateCheckConfig = Pick<
   | "latestVersionOverride"
   | "updateCheckCacheHours"
 >;
-
-type GitHubRelease = {
-  tag_name?: string;
-  html_url?: string;
-  body?: string;
-};
 
 type CacheEntry = {
   expiresAt: number;
@@ -84,11 +85,19 @@ async function fetchLatestFromGitHub(
       "User-Agent": "PrintPartner-UpdateCheck",
     },
   });
-  if (!res.ok) return null;
-  const body = (await res.json()) as GitHubRelease;
-  const tag = body.tag_name?.trim();
+  if (!res.ok) {
+    await cancelResponseBody(res);
+    return null;
+  }
+  const body = await readBoundedJsonResponse(res, MAX_GITHUB_RELEASE_RESPONSE_BYTES);
+  if (!isJsonObject(body)) return null;
+  const tag = "tag_name" in body && typeof body.tag_name === "string"
+    ? body.tag_name.trim()
+    : "";
   if (!tag) return null;
-  const releaseUrl = body.html_url?.trim() || `https://github.com/${repo}/releases/latest`;
+  const releaseUrl = "html_url" in body && typeof body.html_url === "string"
+    ? body.html_url.trim() || `https://github.com/${repo}/releases/latest`
+    : `https://github.com/${repo}/releases/latest`;
   return { version: tag, releaseUrl };
 }
 

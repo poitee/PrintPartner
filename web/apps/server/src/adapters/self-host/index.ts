@@ -5,18 +5,27 @@ import type { AuthProvider, DbStore, JobRunner, RepoSource, StoragePort } from "
 import { getDb, SqliteDatabase } from "../../db/client.js";
 import { AppRepository } from "../../db/repository.js";
 import { createJobRunner } from "../../routes/jobs.js";
+import {
+  TRUSTED_SINGLE_USER_SOURCE_FILESYSTEM,
+  type SourceFilesystemPolicy,
+} from "../../services/source-filesystem-policy.js";
 
 export class SelfHostDbStore implements DbStore {
   readonly sqlite: SqliteDatabase;
   repository: AppRepository | null = null;
 
-  constructor(readonly dataDir: string) {
+  constructor(
+    readonly dataDir: string,
+    private readonly sourceFilesystemPolicy: SourceFilesystemPolicy,
+  ) {
     this.sqlite = new SqliteDatabase(dataDir);
   }
 
   async connect(): Promise<void> {
     this.sqlite.connect();
-    this.repository = new AppRepository(getDb(this.sqlite), undefined, this.sqlite.reposDir);
+    this.repository = new AppRepository(getDb(this.sqlite), undefined, this.sqlite.reposDir, undefined, {
+      sourceFilesystemPolicy: this.sourceFilesystemPolicy,
+    });
   }
 
   async close(): Promise<void> {
@@ -87,8 +96,11 @@ export type SelfHostPorts = {
   sourcesDir: string;
 };
 
-export function createSelfHostPorts(dataDir: string): SelfHostPorts {
-  const dbStore = new SelfHostDbStore(dataDir);
+export function createSelfHostPorts(
+  dataDir: string,
+  sourceFilesystemPolicy: SourceFilesystemPolicy = TRUSTED_SINGLE_USER_SOURCE_FILESYSTEM,
+): SelfHostPorts {
+  const dbStore = new SelfHostDbStore(dataDir, sourceFilesystemPolicy);
   const getRepo = () => {
     if (!dbStore.repository) throw new Error("Database not connected");
     return dbStore.repository;

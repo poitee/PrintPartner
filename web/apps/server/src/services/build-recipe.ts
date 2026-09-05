@@ -4,6 +4,7 @@ import { loadKitCatalog } from "./kit-catalog.js";
 import { loadKitManifest } from "./kit-manifest-store.js";
 import { inferStackPresetId } from "../assistant/example-builds.js";
 import { resolveStackPresetId, stackPresetBaseRef } from "./stack-preset.js";
+import { formatManifestSelection } from "./manifest-selections.js";
 
 function sourceRef(
   repo: AppRepository,
@@ -70,7 +71,9 @@ export function deriveBuildRecipe(repo: AppRepository, planId: number): BuildRec
     stack_preset ? `## Stack preset\n- \`${stack_preset}\`\n` : "",
     `## Kit selections`,
     ...(Object.keys(kit.selections).length
-      ? Object.entries(kit.selections).map(([k, v]) => `- ${k}: ${v}`)
+      ? Object.entries(kit.selections).map(
+          ([key, selection]) => `- ${key}: ${formatManifestSelection(selection)}`,
+        )
       : ["- (none)"]),
     "",
     `## Decisions (${decisions.length})`,

@@ -87,6 +87,29 @@ export const productionSetupInputSchema = z.object({
   rules: z.array(productionGroupingRuleSchema).max(200),
 });
 
+export const productionSetupCommandSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("set_preferred_slicer_instance"),
+    preferred_slicer_instance_id: productionSetupInputSchema.shape.preferred_slicer_instance_id,
+  }).strict(),
+  z.object({
+    kind: z.literal("set_selection"),
+    selection: productionSelectionSchema,
+  }).strict(),
+  z.object({
+    kind: z.literal("replace_printer_assignments"),
+    printer_assignments: z.array(productionPrinterAssignmentSchema).max(20_000),
+  }).strict(),
+  z.object({
+    kind: z.literal("set_route"),
+    route: productionRouteSchema.nullable(),
+  }).strict(),
+  z.object({
+    kind: z.literal("replace_rules"),
+    rules: z.array(productionGroupingRuleSchema).max(200),
+  }).strict(),
+]);
+
 export const productionSetupSchema = productionSetupInputSchema.extend({
   format: z.literal("production-setup-v1"),
   profile_id: z.number().int().positive(),
@@ -98,6 +121,7 @@ export type ProductionGroupingRule = z.infer<typeof productionGroupingRuleSchema
 export type ProductionSelection = z.infer<typeof productionSelectionSchema>;
 export type ProductionPrinterAssignment = z.infer<typeof productionPrinterAssignmentSchema>;
 export type ProductionSetupInput = z.infer<typeof productionSetupInputSchema>;
+export type ProductionSetupCommand = z.infer<typeof productionSetupCommandSchema>;
 export type ProductionSetup = z.infer<typeof productionSetupSchema>;
 
 export function defaultProductionSetup(profileId: number): ProductionSetup {
