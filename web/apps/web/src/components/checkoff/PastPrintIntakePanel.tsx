@@ -32,6 +32,8 @@ import { RadioGroup, RadioGroupItem } from "../ui/radio-group";
 import { StatusBadge } from "../ui/status-badge";
 import InlineOperationError from "../printers/InlineOperationError";
 import PrinterFilesView from "../printers/PrinterFilesView";
+import UnmatchedObjectReview from "../printers/UnmatchedObjectReview";
+import { allocateObjectChoices, type ObjectMatchChoices } from "../printers/objectMatchChoices";
 import { failureMessage, useAsyncView } from "../printers/asyncView";
 import { printFileCheckSummary } from "../printers/printFileClassification";
 import { requiredUnitToken } from "../printers/printFileAssignment";
@@ -548,7 +550,7 @@ function suggestionCaption(basis: UploadedPrintFileCheck["suggestion_basis"]): s
     case "filename":
       return "Matched from the file name, because the file carries no object labels. Check every unit before you record it.";
     case "none":
-      return "Nothing in this file matched a Required unit. Pick the units this print covered by hand.";
+      return "No additional automatically matched units.";
     default: {
       const _exhaustive: never = basis;
       return _exhaustive;
@@ -585,10 +587,13 @@ function UploadedPrintRecord({
   const [showProblems, setShowProblems] = useState(false);
   const [rejected, setRejected] = useState<string | null>(null);
   const [state, setState] = useState<UploadState>({ phase: "choosing" });
+  const [objectChoices, setObjectChoices] = useState<ObjectMatchChoices>(new Map());
+  const matchReview = "check" in state ? state.check.match_review : undefined;
+  const selection = allocateObjectChoices(matchReview, objectChoices, confirmedTokens);
 
   const problems = recordProblems({
     printer,
-    confirmedUnitCount: confirmedTokens.size,
+    confirmedUnitCount: selection.tokens.size,
     checked,
   });
   const visibleProblems = showProblems ? problems : [];
@@ -605,6 +610,7 @@ function UploadedPrintRecord({
         object_names: chosen.objectNames,
       });
       setConfirmedTokens(new Set(check.suggested_units.map(requiredUnitToken)));
+      setObjectChoices(new Map());
       setShowProblems(false);
       setState({ phase: "confirming", chosen, check });
     } catch (error) {
@@ -683,7 +689,7 @@ function UploadedPrintRecord({
 
   const record = async (chosen: ReadPrintFile, check: UploadedPrintFileCheck) => {
     setShowProblems(true);
-    if (problems.length > 0 || printer === null || checked === null) return;
+    if (problems.length > 0 || printer === null || checked === null || selection.shortages.length > 0) return;
     setState({ phase: "saving", chosen, check });
     let link: RecordedLink | null = null;
     try {
@@ -701,7 +707,8 @@ function UploadedPrintRecord({
         tracking: "manual",
         completed: true,
         plan_revision_id: check.plan_revision_id,
-        unit_tokens: [...confirmedTokens],
+        unit_tokens: [...selection.tokens],
+        ...(matchReview ? { object_mappings: selection.mappings } : {}),
       });
       link = result.link;
     } catch (error) {
@@ -959,7 +966,7 @@ function UploadedPrintRecord({
               <UnitConfirmation
                 units={answered.check.suggested_units}
                 caption={suggestionCaption(answered.check.suggestion_basis)}
-                unlabeledNames={answered.check.unlabeled_names}
+                unlabeledNames={matchReview ? [] : answered.check.unlabeled_names}
                 confirmedTokens={confirmedTokens}
                 disabled={written}
                 onToggle={(token, confirmed) =>
@@ -973,6 +980,9 @@ function UploadedPrintRecord({
                 errorId={unitsErrorId}
                 error={unitsProblem}
               />
+
+              {matchReview ? <UnmatchedObjectReview review={matchReview} choices={objectChoices}
+                onChange={setObjectChoices} shortages={selection.shortages} disabled={written || busy} /> : null}
 
               <fieldset
                 className="stack-row"
@@ -1087,6 +1097,7 @@ function UploadedPrintRecord({
                   size="shop"
                   className="self-start"
                   loading={state.phase === "saving"}
+                  disabled={selection.shortages.length > 0}
                   onClick={() => void record(answered.chosen, answered.check)}
                 >
                   Record this print

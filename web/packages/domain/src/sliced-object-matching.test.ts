@@ -1,8 +1,22 @@
 import { describe, expect, it } from "vitest";
 import {
+  suggestSlicedObjectNames,
   interpretSlicedObjectName,
   matchSlicedObjectName,
 } from "./sliced-object-matching.js";
+
+describe("import name suggestions", () => {
+  it("ranks equivalent dimension spelling without treating it as automatic evidence", () => {
+    expect(suggestSlicedObjectNames("wago_221-415_mount_3by5.stl", [
+      "wago_221-415_mount_3x6.stl", "wago_221-415_mount_3x5.stl", "other.stl",
+    ])).toEqual(["wago_221-415_mount_3x5.stl"]);
+  });
+  it("does not suggest opposite directions or different dimensions", () => {
+    expect(suggestSlicedObjectNames("mount_left_350.stl", [
+      "mount_right_350.stl", "mount_left_250.stl", "mount_left_350_rev.stl",
+    ])).toEqual(["mount_left_350_rev.stl"]);
+  });
+});
 
 describe("interpretSlicedObjectName", () => {
   it.each([

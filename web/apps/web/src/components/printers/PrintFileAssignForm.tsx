@@ -22,6 +22,8 @@ import { Checkbox } from "../ui/checkbox";
 import { RadioGroup, RadioGroupItem } from "../ui/radio-group";
 import { StatusBadge } from "../ui/status-badge";
 import InlineOperationError from "./InlineOperationError";
+import UnmatchedObjectReview from "./UnmatchedObjectReview";
+import { allocateObjectChoices, type ObjectMatchChoices } from "./objectMatchChoices";
 import { failureMessage } from "./asyncView";
 import {
   printFileCheckSummary,
@@ -104,6 +106,9 @@ export default function PrintFileAssignForm({
   const [confirmedTokens, setConfirmedTokens] = useState<ReadonlySet<string>>(new Set());
   const [errorGate, setErrorGate] = useState<ErrorGate>("none");
   const [assign, setAssign] = useState<AssignState>({ phase: "unchecked" });
+  const [objectChoices, setObjectChoices] = useState<ObjectMatchChoices>(new Map());
+  const matchReview = "preview" in assign ? assign.preview.match_review : undefined;
+  const selection = allocateObjectChoices(matchReview, objectChoices, confirmedTokens);
   const checkAction = useRef<HTMLButtonElement>(null);
   const checkResult = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -114,7 +119,7 @@ export default function PrintFileAssignForm({
   const buildId = chosenBuildId(buildValue);
   const errors = validatePrintFileAssignment({
     buildId,
-    confirmedUnitCount: confirmedTokens.size,
+    confirmedUnitCount: selection.tokens.size,
     completed,
   });
   // The units question only exists once a check has answered, so before the
@@ -147,6 +152,7 @@ export default function PrintFileAssignForm({
               object_names: chosen.objectNames,
             });
       setConfirmedTokens(new Set(preview.suggested_units.map(requiredUnitToken)));
+      setObjectChoices(new Map());
       setErrorGate("none");
       setAssign({ phase: "confirming", preview });
     } catch (error) {
@@ -159,7 +165,7 @@ export default function PrintFileAssignForm({
 
   const save = async (preview: AssignmentCheck) => {
     setErrorGate("save");
-    if (errors.length > 0 || buildId == null) return;
+    if (errors.length > 0 || buildId == null || selection.shortages.length > 0) return;
     setAssign({ phase: "saving", preview });
     try {
       const base = {
@@ -170,7 +176,8 @@ export default function PrintFileAssignForm({
         tracking,
         completed,
         plan_revision_id: preview.plan_revision_id,
-        unit_tokens: [...confirmedTokens],
+        unit_tokens: [...selection.tokens],
+        ...(matchReview ? { object_mappings: selection.mappings } : {}),
       };
       const result = isUploadedCheck(preview)
         ? await assignUploadedPrinterFile({ ...base, upload_token: preview.upload_token })
@@ -358,6 +365,9 @@ export default function PrintFileAssignForm({
                 error={unitsError}
               />
 
+              {matchReview ? <UnmatchedObjectReview review={matchReview} choices={objectChoices}
+                onChange={setObjectChoices} shortages={selection.shortages} disabled={busy} /> : null}
+
               <label
                 htmlFor={completedFieldId}
                 className="flex items-start gap-2 rounded-md border border-border bg-background p-3 text-body"
@@ -393,6 +403,7 @@ export default function PrintFileAssignForm({
                 <Button
                   size="shop"
                   loading={assign.phase === "saving"}
+                  disabled={selection.shortages.length > 0}
                   onClick={() => void save(answered.preview)}
                 >
                   {completed ? "Assign and send to Checkoff" : "Assign print file"}
@@ -523,7 +534,7 @@ function UnitConfirmation({
         </p>
       ) : null}
 
-      {preview.unlabeled_names.length > 0 ? (
+      {!preview.match_review && preview.unlabeled_names.length > 0 ? (
         <div
           className={cn(
             "rounded-md p-2.5",
@@ -554,7 +565,7 @@ function basisCaption(basis: PrintFileAssignmentPreview["suggestion_basis"]): st
     case "filename":
       return "Matched from the file name, because the file carries no object labels. Check it before you assign.";
     case "none":
-      return "Nothing in this file matched a Required unit. Assign it anyway to keep the record, then check off by hand.";
+      return "No additional automatically matched units.";
     default: {
       const _exhaustive: never = basis;
       return _exhaustive;

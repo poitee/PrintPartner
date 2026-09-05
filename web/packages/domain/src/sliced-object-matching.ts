@@ -202,6 +202,21 @@ function fuzzyScore(leftKey: string, rightKey: string): { distance: number; scor
   return { distance, score: 1 - distance / Math.max(left.length, right.length, 1) };
 }
 
+/** Advisory import candidates only; selecting one always requires the operator. */
+export function suggestSlicedObjectNames(rawName: string, filenames: readonly string[]): string[] {
+  const key = (name: string) => interpretSlicedObjectName(name).basenameKey
+    .replace(/(\d+)(?:_?by_?|x)(\d+)/g, "$1x$2");
+  const observed = key(rawName);
+  if (!observed) return [];
+  const numbers = (value: string) => (value.match(/\d+/g) ?? []).join(",");
+  return filenames.map((filename) => ({ filename, key: key(filename) }))
+    .filter((row) => semanticTokensAgree(observed, row.key) && numbers(observed) === numbers(row.key))
+    .map((row) => ({ ...row, score: fuzzyScore(observed, row.key).score }))
+    .filter((row) => row.score >= 0.6)
+    .sort((a, b) => b.score - a.score || a.filename.localeCompare(b.filename))
+    .slice(0, 3).map((row) => row.filename);
+}
+
 /**
  * Match one slicer label to library filenames. Exact path and basename evidence
  * wins; bounded fuzzy matching is allowed only for a unique semantic match.

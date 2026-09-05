@@ -26,6 +26,18 @@ const INSPECTED = {
 const UNREADABLE = /shape this app cannot read/;
 
 describe("parsePrintFileAssignmentPreview", () => {
+  it("validates the plan review before offering manual choices", () => {
+    const match_review = { objects: [{ object_index: 0, name: "part.stl" }], parts: [
+      { part_id: 1, filename: "part.stl", relative_path: "source/part.stl", units: [{ part_id: 1, unit_index: 0 }] },
+    ] };
+    expect(parsePrintFileAssignmentPreview({ ...INSPECTED, match_review }).match_review).toEqual(match_review);
+    expect(() => parsePrintFileAssignmentPreview({ ...INSPECTED, match_review: {
+      ...match_review, objects: [...match_review.objects, ...match_review.objects],
+    } })).toThrow(UNREADABLE);
+    expect(() => parsePrintFileAssignmentPreview({ ...INSPECTED, match_review: {
+      ...match_review, parts: [{ ...match_review.parts[0], units: [{ part_id: 99, unit_index: 0 }] }],
+    } })).toThrow(UNREADABLE);
+  });
   it("reads a check that read the bytes", () => {
     expect(parsePrintFileAssignmentPreview(INSPECTED)).toEqual({
       inspected: true,
