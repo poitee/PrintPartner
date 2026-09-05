@@ -51,9 +51,6 @@ The app service has a healthcheck that polls `GET /health` every 30s using Node'
 | `CORS_ORIGIN` / `ALLOWED_ORIGINS` | `true` | CORS allowed origin(s). Use commas for multiple origins. |
 | `PP_VERSION` | `3.3.0-web` (baked into release images) | Health payload version |
 | `PP_COMMIT` / `PP_TAG` / `PP_BUILD_DATE` | baked into release images | Read-only release provenance reported by `GET /health`. Source builds report a development identity. |
-| `SENTRY_ENABLED` | `0` | Set to `1` to enable server-side printer error reporting. Requires a valid `SENTRY_DSN`. |
-| `SENTRY_DSN` | unset | DSN for your chosen Sentry project. An absent or invalid DSN leaves reporting disabled. |
-| `SENTRY_ENVIRONMENT` | `production` in self-host Compose | Sentry environment label. Direct server runs default to `production` when `NODE_ENV=production`, otherwise `development`. |
 | `BASIC_AUTH_USER` / `BASIC_AUTH_PASS` | unset | Optional HTTP Basic protection |
 | `MULTI_USER` | `0` | Set to `1` to enable multiple tenant-scoped accounts. Requires `SESSION_SECRET`. Host filesystem profile sync is disabled in this mode. |
 | `SINGLE_USER_AUTH` | `0` | Set to `1` to require login with one administrator account. The first registration claims existing self-host data. |
@@ -86,32 +83,6 @@ responses set `local_path` to `null`. Use `content_available` to determine
 whether server-managed content can be browsed.
 
 **URL ingest safety (MCP tools):** `ingest_guide_url`, `fetch_web_page`, and `web_search` use the same SSRF guard as cover/image fetches (`safeOutboundFetch`): HTTP(S) only, DNS-resolved, private/loopback/metadata blocked. Guide and search text is untrusted evidence. Mutations require confirm-to-apply. There is no autonomous crawler.
-
-### Enable printer error reporting
-
-Choose a Sentry project before you enable reporting. Add its DSN and the following
-settings to your deployment environment or Compose `.env` file:
-
-```dotenv
-SENTRY_ENABLED=1
-SENTRY_DSN=
-SENTRY_ENVIRONMENT=production
-```
-
-Fill in `SENTRY_DSN` locally, then recreate the Print Partner container. Do not
-commit the configured `.env` file. Both Compose files pass these settings to the
-server. Set `SENTRY_ENABLED=0` and recreate the container to disable reporting.
-
-Only printer browse, download, and inspection failures are reported. Events
-contain fixed error categories, optional HTTP status and response-started flags,
-and the existing app version, commit, and environment. They exclude printer
-addresses, credentials, filenames, file contents, request data, and user details.
-Automatic logs, metrics, sessions, tracing, and profiling are disabled. Browser
-reporting is not configured. Local error messages still work without Sentry.
-
-Confirm a sanitized printer failure appears in your chosen project before you
-treat reporting as live. These settings do not create a Sentry project or change
-your Sentry subscription.
 
 ### HTTP MCP (preferred on live host)
 

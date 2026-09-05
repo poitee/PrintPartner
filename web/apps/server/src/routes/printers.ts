@@ -29,7 +29,6 @@ import type {
 import { sendProblem } from "../lib/api-error.js";
 import { cancelResponseBody } from "../lib/bounded-response.js";
 import { getLogger } from "../services/logger.js";
-import { reportPrinterFailure } from "../services/printer-error-reporting.js";
 
 type RouteDeps = { repo: AppRepository };
 
@@ -132,7 +131,7 @@ async function withPrinterCapability<Access, Result = never>(args: {
   /** What to answer when the resolved adapter does not offer that capability. */
   unsupported: () => Result | FastifyReply;
   /** Server log line and public fallback detail for an upstream failure. */
-  failure: { log: string; detail: string; operation?: "browse" | "download" };
+  failure: { log: string; detail: string };
   use: (access: Access, config: IntegrationConfig) => Promise<Result | FastifyReply>;
 }): Promise<Result | FastifyReply> {
   const capability = printerHostCapability(args.repo, args.printerId);
@@ -142,13 +141,6 @@ async function withPrinterCapability<Access, Result = never>(args: {
   try {
     return await args.use(access, capability.integration.config);
   } catch (error) {
-    if (args.failure.operation) {
-      reportPrinterFailure({
-        operation: args.failure.operation,
-        failure: error instanceof Error && error.name === "TimeoutError" ? "timeout" : "upstream_error",
-        headersSent: args.reply.raw.headersSent,
-      });
-    }
     args.log.warn(
       { printerId: args.printerId, integrationId: capability.integration.id },
       args.failure.log,
@@ -204,11 +196,7 @@ export async function registerPrinterRoutes(app: FastifyInstance, deps: RouteDep
         select: (adapter) => adapter.files,
         unsupported: () =>
           sendProblem(reply, 501, "Not Implemented", "Printer host does not support file browsing"),
-        failure: {
-          log: "Printer file browsing failed",
-          detail: "Could not browse printer files",
-          operation: "browse",
-        },
+        failure: { log: "Printer file browsing failed", detail: "Could not browse printer files" },
         use: (files, config) => files.browse(config, path),
       });
     },
@@ -234,11 +222,7 @@ export async function registerPrinterRoutes(app: FastifyInstance, deps: RouteDep
         select: (adapter) => adapter.files,
         unsupported: () =>
           sendProblem(reply, 501, "Not Implemented", "Printer host does not support file browsing"),
-        failure: {
-          log: "Printer file open failed",
-          detail: "Could not open printer file",
-          operation: "download",
-        },
+        failure: { log: "Printer file open failed", detail: "Could not open printer file" },
         use: async (files, config) => {
           const startedAt = Date.now();
           // Only open something the host actually listed, so a crafted path
@@ -249,19 +233,9 @@ export async function registerPrinterRoutes(app: FastifyInstance, deps: RouteDep
           );
           if (!listed) return sendProblem(reply, 404, "Not Found", "Printer file not found");
           const response = await files.open(config, filePath);
-          if (!response.ok || !response.body) {
-            reportPrinterFailure({
-              operation: "download", failure: "upstream_error",
-              status: response.status, headersSent: false,
-            });
-          }
           return sendUpstreamResponse(reply, response, (error) => {
             if (request.raw.aborted || reply.raw.destroyed) return;
             const failure = error.name === "TimeoutError" ? "timeout" : "stream_interrupted";
-            reportPrinterFailure({
-              operation: "download", failure,
-              status: reply.statusCode, headersSent: reply.raw.headersSent,
-            });
             getLogger().logWorkflow({
               method: "GET",
               url: "/printers/:id/files/content",

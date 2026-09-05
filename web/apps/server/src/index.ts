@@ -1,9 +1,7 @@
 import { loadConfig } from "./config.js";
 import { startServer } from "./app.js";
-import { initializePrinterErrorReporting, shutdownPrinterErrorReporting } from "./services/printer-error-reporting.js";
 
 const config = loadConfig();
-initializePrinterErrorReporting(config);
 
 startServer(config)
   .then(({ app, ports }) => {
@@ -16,11 +14,9 @@ startServer(config)
         try {
           await app.close();
           await ports.db.close();
-          await shutdownPrinterErrorReporting();
           process.exit(0);
         } catch (err) {
           app.log.error(err, "graceful shutdown failed");
-          await shutdownPrinterErrorReporting();
           process.exit(1);
         }
       })();
@@ -28,8 +24,7 @@ startServer(config)
     process.once("SIGTERM", shutdown);
     process.once("SIGINT", shutdown);
   })
-  .catch(async (err) => {
+  .catch((err) => {
     console.error(err);
-    await shutdownPrinterErrorReporting();
     process.exit(1);
   });

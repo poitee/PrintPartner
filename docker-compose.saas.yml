@@ -98,9 +98,6 @@ services:
       MULTI_USER: "${PP_DEV_MULTI_USER:-0}"
       SESSION_SECRET: "${PP_DEV_SESSION_SECRET:-print-partner-dev-only-session-secret}"
       CORS_ORIGIN: "true"
-      SENTRY_ENABLED: "${SENTRY_ENABLED:-0}"
-      SENTRY_DSN: "${SENTRY_DSN:-}"
-      SENTRY_ENVIRONMENT: "${SENTRY_ENVIRONMENT:-development}"
       # Optional server-side Ollama runtime (the former in-app advisor UI is removed).
       # AI_ENABLED: "1"
       # AI_PROVIDER: "ollama"

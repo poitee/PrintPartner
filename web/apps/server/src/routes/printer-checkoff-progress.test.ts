@@ -43,7 +43,6 @@ import {
 import { AcceptedPlanOperationalIntegrityError } from "../db/accepted-plan-operational.js";
 import { loadFleet, parsePrinterMachine, saveFleet } from "../services/printer-fleet.js";
 import { MAX_CLASSIFIABLE_BYTES } from "../lib/print-file-classification.js";
-import * as printerErrorReporting from "../services/printer-error-reporting.js";
 
 const cleanup: Array<() => Promise<void>> = [];
 
@@ -1041,8 +1040,6 @@ describe("printer progress route", () => {
 
   it.each(["declared", "streamed"])("cancels a %s oversized remote file without recording a print", async (sizeMode) => {
     const { app, repo, plan } = await setup();
-    const report = vi.spyOn(printerErrorReporting, "reportPrinterFailure").mockImplementation(() => {});
-    cleanup.push(async () => { report.mockRestore(); });
     saveFleet(repo, [parsePrinterMachine({
       id: "core-one", name: "Core One", model: "Custom",
       bed_width_mm: 250, bed_depth_mm: 210, max_filament_slots: 1,
@@ -1094,7 +1091,6 @@ describe("printer progress route", () => {
     expect(preview.statusCode).toBe(409);
     expect(preview.json().detail).toBe("That print file is too large to inspect");
     expect(cancel).toHaveBeenCalledOnce();
-    expect(report).not.toHaveBeenCalled();
     expect(deliveredBytes).toBeLessThanOrEqual(MAX_CLASSIFIABLE_BYTES + chunk.byteLength);
     expect(loadPrinterCheckoffLinks(repo)).toEqual([]);
     expect(repo.readAcceptedPlanOperationalSnapshot(plan.id)).toEqual(before);
@@ -1102,7 +1098,6 @@ describe("printer progress route", () => {
 
   it.each(["http", "timeout", "transport"])("handles terminal %s inspection failure without recording a print", async (failureKind) => {
     const { app, repo, plan } = await setup();
-    const report = vi.spyOn(printerErrorReporting, "reportPrinterFailure").mockImplementation(() => {});
     saveFleet(repo, [parsePrinterMachine({
       id: "core-one", name: "Core One", model: "Custom",
       bed_width_mm: 250, bed_depth_mm: 210, max_filament_slots: 1,
@@ -1137,17 +1132,11 @@ describe("printer progress route", () => {
       expect(preview.json()).toMatchObject({ inspected: false });
       expect(preview.body).not.toContain("Private upstream error text");
       if (failureKind === "http") expect(cancel).toHaveBeenCalledOnce();
-      expect(report).toHaveBeenCalledExactlyOnceWith({
-        operation: "inspect",
-        failure: failureKind === "timeout" ? "timeout" : "upstream_error",
-        ...(failureKind === "http" ? { status: 503 } : {}),
-      });
       expect(loadPrinterCheckoffLinks(repo)).toEqual([]);
       expect(repo.readAcceptedPlanOperationalSnapshot(plan.id)).toEqual(before);
     } finally {
       browse.mockRestore();
       open.mockRestore();
-      report.mockRestore();
     }
   });
 

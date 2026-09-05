@@ -33,11 +33,6 @@ export type ServerConfig = {
   exchangeDir: string;
   version: string;
   releaseIdentity: RuntimeReleaseIdentity;
-  printerErrorReporting: {
-    enabled: boolean;
-    dsn: string | null;
-    environment: string;
-  };
   corsOrigin: string | boolean | string[];
   staticDir: string | null;
   databaseUrl: string | null;
@@ -313,11 +308,6 @@ export function loadConfig(): ServerConfig {
     exchangeDir: (process.env.PP_EXCHANGE_DIR ?? "").trim() || "/exchange",
     version: releaseIdentity.runtime_version,
     releaseIdentity,
-    printerErrorReporting: {
-      enabled: process.env.SENTRY_ENABLED === "1",
-      dsn: process.env.SENTRY_DSN?.trim() || null,
-      environment: process.env.SENTRY_ENVIRONMENT?.trim() || (isProd ? "production" : "development"),
-    },
     corsOrigin: parseCorsOrigin(process.env.ALLOWED_ORIGINS ?? process.env.CORS_ORIGIN),
     staticDir: process.env.STATIC_DIR ?? null,
     databaseUrl: process.env.DATABASE_URL ?? null,

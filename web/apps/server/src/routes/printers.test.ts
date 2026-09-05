@@ -21,11 +21,6 @@ import { getLogger } from "../services/logger.js";
  */
 
 const registry = vi.hoisted(() => ({ adapter: undefined as IntegrationAdapter | undefined }));
-const reporting = vi.hoisted(() => ({ report: vi.fn() }));
-
-vi.mock("../services/printer-error-reporting.js", () => ({
-  reportPrinterFailure: reporting.report,
-}));
 
 vi.mock("../integrations/registry.js", () => ({
   getIntegrationAdapter: () => registry.adapter,
@@ -36,7 +31,6 @@ const cleanup: Array<() => Promise<void>> = [];
 
 afterEach(async () => {
   registry.adapter = undefined;
-  reporting.report.mockReset();
   for (const fn of cleanup.splice(0)) await fn();
 });
 
@@ -262,9 +256,6 @@ describe("GET /printers/:id/files", () => {
 
     expect(res.statusCode).toBe(502);
     expect(res.json().detail).toBe("Moonraker refused the request");
-    expect(reporting.report).toHaveBeenCalledExactlyOnceWith({
-      operation: "browse", failure: "upstream_error", headersSent: false,
-    });
   });
 
   it("answers 501 when the linked host cannot browse files", async () => {
@@ -278,7 +269,7 @@ describe("GET /printers/:id/files", () => {
 });
 
 describe("GET /printers/:id/files/content", () => {
-  it.each([200, 404])("reports an unusable HTTP %s file response once and cancels its body", async (status) => {
+  it.each([200, 404])("rejects an unusable HTTP %s file response and cancels its body", async (status) => {
     const { app } = await setup();
     const cancel = vi.fn();
     registry.adapter = fakeAdapter({
@@ -291,9 +282,6 @@ describe("GET /printers/:id/files/content", () => {
     const res = await app.inject({ method: "GET", url: "/printers/hosted/files/content?path=bracket.gcode" });
 
     expect(res.statusCode).toBe(status === 404 ? 404 : 502);
-    expect(reporting.report).toHaveBeenCalledExactlyOnceWith({
-      operation: "download", failure: "upstream_error", status, headersSent: false,
-    });
     expect(cancel).toHaveBeenCalledTimes(status === 404 ? 1 : 0);
   });
 
@@ -325,9 +313,6 @@ describe("GET /printers/:id/files/content", () => {
         context: { printerId: "hosted", failure: "stream_interrupted" },
       }));
       expect(JSON.stringify(log.mock.calls)).not.toMatch(/private-customer|secret-password|upstream-host/);
-      expect(reporting.report).toHaveBeenCalledExactlyOnceWith({
-        operation: "download", failure: "stream_interrupted", status: 200, headersSent: true,
-      });
     } finally {
       log.mockRestore();
     }

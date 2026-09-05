@@ -64,7 +64,6 @@ import {
 import { normalizePrinterFilename } from "../services/printer-checkoff.js";
 import { filterLinkedUnattributedPrints } from "./printer-checkoff-route-model.js";
 import { loadFleet } from "../services/printer-fleet.js";
-import { reportPrinterFailure } from "../services/printer-error-reporting.js";
 import { deductSpoolmanFilamentAfterVerify } from "../services/spoolman-deduct.js";
 import {
   confirmAcceptedPrinterUnits,
@@ -336,16 +335,11 @@ async function inspectRemoteFile(
   try {
     const response = await gateway.files.open(gateway.config, remotePath);
     if (!response.ok) {
-      reportPrinterFailure({ operation: "inspect", failure: "upstream_error", status: response.status });
       await cancelResponseBody(response);
       return { outcome: "unreadable" };
     }
     bytes = await readBoundedBody(response);
-  } catch (error) {
-    reportPrinterFailure({
-      operation: "inspect",
-      failure: error instanceof Error && error.name === "TimeoutError" ? "timeout" : "upstream_error",
-    });
+  } catch {
     return { outcome: "unreadable" };
   }
   if (!bytes) return { outcome: "rejected", detail: "That print file is too large to inspect" };

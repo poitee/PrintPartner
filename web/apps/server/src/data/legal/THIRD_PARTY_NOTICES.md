@@ -37,7 +37,6 @@ Transitive packages are recorded in `web/package-lock.json` and remain subject t
 | @radix-ui/react-switch | 1.3.7 | MIT | https://radix-ui.com/primitives |
 | @radix-ui/react-tabs | 1.1.21 | MIT | https://radix-ui.com/primitives |
 | @radix-ui/react-tooltip | 1.2.16 | MIT | https://radix-ui.com/primitives |
-| @sentry/node | 10.73.0 | MIT | https://github.com/getsentry/sentry-javascript/tree/master/packages/node |
 | @tailwindcss/vite | 4.3.3 | MIT | https://tailwindcss.com |
 | @tanstack/react-query | 5.102.4 | MIT | https://tanstack.com/query |
 | adm-zip | 0.6.0 | MIT | https://github.com/cthackers/adm-zip |
