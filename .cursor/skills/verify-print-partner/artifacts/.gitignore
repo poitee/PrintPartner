@@ -2,3 +2,4 @@
 # --evidence-dir points at this folder; default evidence lives under /tmp.
 *
 !.gitignore
+!PROVE_IT.md

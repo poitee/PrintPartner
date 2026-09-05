@@ -548,12 +548,16 @@ async function cmdTheme(values) {
         timeout: 60_000,
       });
       await page.waitForSelector("#main-content", { state: "visible", timeout: 60_000 });
-      const themeGroup = page.getByRole("group", { name: "Theme" });
+      const themeGroup = page
+        .locator("#main-content")
+        .getByRole("group", { name: "Theme" });
       await themeGroup.waitFor({ state: "visible", timeout: 30_000 });
       // Segmented control options use title=Light/Dark/System
-      const option = themeGroup.getByRole("radio", { name: new RegExp(preference, "i") })
-        .or(themeGroup.getByTitle(new RegExp(`^${preference}$`, "i")))
-        .or(themeGroup.locator(`[title="${preference[0].toUpperCase()}${preference.slice(1)}"]`));
+      const label = preference[0].toUpperCase() + preference.slice(1);
+      const option = themeGroup
+        .getByRole("radio", { name: new RegExp(`^${label}$`, "i") })
+        .or(themeGroup.getByTitle(label))
+        .or(themeGroup.locator(`[title="${label}"]`));
       await option.first().click({ timeout: 15_000 }).catch(async () => {
         // Fallback: set via localStorage and reload (still observable via UI chrome)
         await page.evaluate((pref) => {
