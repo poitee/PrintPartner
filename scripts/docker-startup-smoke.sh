@@ -61,7 +61,7 @@ docker exec --user 1000:1000 "$container" sh -ec '
   "$found"
 '
 curl --fail --silent --show-error --max-time 10 \
-  -H 'X-API-Key: startup-smoke-only' -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer startup-smoke-only' -H 'Content-Type: application/json' \
   -d '{"name":"Startup persistence smoke"}' "$address/plans" \
   | node -e 'let s="";process.stdin.on("data",x=>s+=x).on("end",()=>{const p=JSON.parse(s);require("node:assert/strict").equal(p.name,"Startup persistence smoke");require("node:assert/strict").ok(Number.isInteger(p.id));})'
 docker stop --time 30 "$container" >/dev/null
@@ -71,7 +71,7 @@ docker start "$container" >/dev/null
 address="http://$(docker port "$container" 8080/tcp)"
 wait_for_health
 curl --fail --silent --show-error --max-time 10 \
-  -H 'X-API-Key: startup-smoke-only' "$address/plans" \
+  -H 'Authorization: Bearer startup-smoke-only' "$address/plans" \
   | node -e 'let s="";process.stdin.on("data",x=>s+=x).on("end",()=>{const p=JSON.parse(s);require("node:assert/strict").ok(p.profiles.some(x=>x.name==="Startup persistence smoke"));})'
 docker exec --user 1000:1000 "$container" sh -ec 'test "$(cat /data/private/sentinel)" = preserved'
 docker stop --time 30 "$container" >/dev/null
