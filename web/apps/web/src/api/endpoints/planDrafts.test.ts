@@ -57,6 +57,12 @@ describe("plan draft endpoints", () => {
     expect(
       new Headers(http.calls[0]?.[1]?.headers).get("Idempotency-Key"),
     ).toMatch(/^idem-/);
+    expect(http.requestJson(0)).toEqual({ apply_manifest: false });
+  });
+
+  it("only reapplies kit defaults when variants are explicitly changed", async () => {
+    http.respond(jsonResponse(workspace));
+    await recomputePlanDraft(7, { applyManifest: true });
     expect(http.requestJson(0)).toEqual({ apply_manifest: true });
   });
 
@@ -121,6 +127,7 @@ describe("plan draft endpoints", () => {
     expect(http.requestJson(2)).toMatchObject({ remap_checkoff_links: true });
     expect(http.requestJson(3)).toEqual({ expected_lifecycle_version: 0 });
     expect(http.requestJson(4)).toEqual({
+      expected_source_state: "open",
       expected_source_lifecycle_version: 0,
       expected_source_snapshot_digest: draft.snapshot_digest,
     });

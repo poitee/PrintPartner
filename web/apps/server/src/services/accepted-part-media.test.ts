@@ -32,6 +32,23 @@ function part(
 }
 
 describe("acceptedPartMediaIdentity", () => {
+  it.each([
+    { colorId: "asa::black", hex: "#000000", oldHex: "#bfb1a3" },
+    { colorId: "asa::super-grey", hex: "#747874", oldHex: "#baa895" },
+  ])("renders $colorId in its filament color instead of packaging tan", ({ colorId, hex, oldHex }) => {
+    const acceptedPart = part({ filamentColorId: colorId });
+    for (const variant of ["mesh", "thumbnail", "preview"] as const) {
+      const corrected = acceptedPartMediaIdentity(acceptedPart, variant);
+      const previous = acceptedPartMediaIdentity(
+        part({ filamentColorId: colorId, filamentCustomHex: oldHex }),
+        variant,
+      );
+
+      expect(corrected.hex).toBe(hex);
+      expect(corrected.basis).not.toBe(previous.basis);
+    }
+  });
+
   it("returns the normalized accepted custom color and full derivative basis", () => {
     expect(
       acceptedPartMediaIdentity(

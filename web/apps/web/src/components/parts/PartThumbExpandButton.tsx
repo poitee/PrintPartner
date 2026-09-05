@@ -26,8 +26,8 @@ export default function PartThumbExpandButton<P extends PreviewDialogPart & { id
     return (
       <span
         className="sheet-thumb-btn"
-        aria-label={`3D preview for ${part.filename} is available after publication`}
-        title="3D preview is available after this Working Plan is published"
+        aria-label={`3D preview for ${part.filename} is available after saving`}
+        title="3D preview is available once this file is saved to the Plan"
       >
         <PartThumb
           partId={part.id}

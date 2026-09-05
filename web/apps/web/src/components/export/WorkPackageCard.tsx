@@ -20,10 +20,8 @@ type Props = Readonly<{
 function factLine(pkg: WorkPackage): string[] {
   const facts: string[] = [];
   const links = pkg.links;
-  if (links.acceptedPlan) facts.push(`Plan revision ${links.acceptedPlan.version} accepted`);
-  if (links.plateRevision) facts.push(`Plate revision ${links.plateRevision.number}`);
   if (pkg.unitCount > 0) {
-    facts.push(`${pkg.unitCount} Required ${pkg.unitCount === 1 ? "unit" : "units"}`);
+    facts.push(`${pkg.unitCount} ${pkg.unitCount === 1 ? "part" : "parts"}`);
   }
   if (pkg.plateCount > 0) {
     facts.push(`${pkg.plateCount} ${pkg.plateCount === 1 ? "Plate" : "Plates"}`);

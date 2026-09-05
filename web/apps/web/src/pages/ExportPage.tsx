@@ -455,10 +455,10 @@ export default function ExportPage() {
     >
       <div className="space-y-1">
         <h4 id="production-choose-units-heading" className="text-sm font-semibold">
-          Choose Required units
+          Choose parts
         </h4>
         <p className="text-xs text-muted-foreground">
-          Completed units stay out unless you choose them again.
+          Finished parts stay out unless you choose them again.
         </p>
       </div>
       {setupSaving ? (
@@ -495,7 +495,7 @@ export default function ExportPage() {
         className="grid gap-1 rounded-lg border border-border bg-card p-2 shadow-sm sm:grid-cols-3"
       >
         {[
-          { href: "#plate-builder-units", label: "Required units", status: `${selectedTokens.length} selected` },
+          { href: "#plate-builder-units", label: "Parts", status: `${selectedTokens.length} selected` },
           { href: "#plate-builder-printers", label: "Printers", status: printerAssignmentStatus },
           { href: "#plate-builder-layout", label: "Plate layout", status: plateLayoutStatus },
         ].map((item) => (
@@ -532,7 +532,7 @@ export default function ExportPage() {
               <Link className="font-medium underline underline-offset-2" to={settingsPrintersRoute()}>
                 Add a printer in Settings
               </Link>{" "}
-              to assign the selected Required units and prepare Plates.
+              to prepare plates for the selected parts.
             </div>
           ) : null}
 
@@ -660,7 +660,7 @@ export default function ExportPage() {
         accent
         eyebrow={planIdentity ? `Make · ${planIdentity}` : "Make"}
         title="Production"
-        description="Decide how this Build's Required units get made, then work through the tasks for that route."
+        description="Prepare plates or download the files you want to print."
       />
       <BuildSummaryHeader currentStageId="production" />
 
@@ -705,7 +705,7 @@ export default function ExportPage() {
         <Card>
           <CardContent className="pt-6">
             <p className="text-sm text-muted-foreground">
-              Open a Build to decide how Required units get made.
+              Open a Build to prepare its prints.
             </p>
           </CardContent>
         </Card>
@@ -737,17 +737,15 @@ export default function ExportPage() {
             >
               {route === "external" && !changingRoute ? (
                 <section
-                  className="space-y-3 rounded-lg border border-primary/40 bg-primary-soft p-4"
-                  aria-labelledby="past-print-route-moved-heading"
+                  className="space-y-3"
+                  aria-labelledby="past-print-heading"
                 >
                   <div className="space-y-1">
-                    <h3 id="past-print-route-moved-heading" className="text-sm font-semibold">
-                      Past prints now belong in Checkoff
+                    <h3 id="past-print-heading" className="text-sm font-semibold">
+                      Already printed these parts?
                     </h3>
                     <p className="text-sm text-muted-foreground">
-                      Browse watched printers, recover a missed job, or upload G-code, binary
-                      G-code, or 3MF from the Checkoff printer desk. Production now prepares new
-                      plates and STL downloads.
+                      Record finished prints in Checkoff, or prepare a new print here.
                     </p>
                   </div>
                   <div className="flex flex-wrap gap-2">

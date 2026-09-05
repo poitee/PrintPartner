@@ -158,7 +158,7 @@ export function extractRebasePartDecisions(input: {
         ? newPlanDraftPartDecisionBaseline()
         : baseById.get(part.baseRevisionPartId);
     if (!baseline) throw new Error("Plan draft rebase predecessor is missing");
-    if (part.included !== baseline.included) {
+    if (part.baseRevisionPartId === null || part.included !== baseline.included) {
       decisions.push({ kind: "set_included", sourcePartId: part.id, value: part.included });
     }
     if (part.quantityOverride !== baseline.quantityOverride) {
@@ -382,7 +382,10 @@ export function mergeRebasedPlanDraft(input: {
     const nextTarget = nextById.get(target.id);
     if (!nextTarget) throw new Error("Plan draft rebase target snapshot is missing");
     if (decision.kind === "set_included") {
-      if (target.included !== baseline.included && target.included !== decision.value) {
+      if (
+        (sourcePart.baseRevisionPartId !== null || target.baseRevisionPartId !== null) &&
+        target.included !== baseline.included && target.included !== decision.value
+      ) {
         conflicts.push({
           kind: "concurrent_decision",
           sourcePartId: decision.sourcePartId,

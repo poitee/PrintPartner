@@ -69,7 +69,7 @@ const workspace = {
 } satisfies BuildWorkflowWorkspace;
 
 describe("WorkflowProgress", () => {
-  it("shows contextual stage summaries and keeps every stage navigable", () => {
+  it("explains each page without publishing jargon and keeps every stage navigable", () => {
     render(
       <MemoryRouter>
         <WorkflowProgress
@@ -80,10 +80,11 @@ describe("WorkflowProgress", () => {
     );
 
     expect(screen.queryByText("Needs attention")).toBeNull();
-    expect(screen.getByText("5 Plan choices to finish before publishing.")).toBeTruthy();
+    expect(screen.queryByText(/publishing|publish a plan/i)).toBeNull();
+    expect(screen.getByText("Choose files, quantities, and colors.")).toBeTruthy();
     expect(screen.getAllByRole("link")).toHaveLength(4);
     expect(screen.getByRole("link", {
-      name: "Plan. 5 Plan choices to finish before publishing.",
+      name: "Plan. Choose files, quantities, and colors.",
     }).getAttribute("href")).toBe("/plan?profile=5");
   });
 });

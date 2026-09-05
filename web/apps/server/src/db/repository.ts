@@ -1,6 +1,7 @@
 import {
   DEFAULT_NAMING_PROFILE,
   importRulesForProject,
+  pathMatchesRules,
   mergeLayers,
   MergeWouldWipeProfileError,
   mergeNamingProfiles,
@@ -4002,8 +4003,11 @@ export class AppRepository {
       readonly baseRevisionId: number | null;
       readonly basePlanVersion: number;
     },
-    excludedPathsBySourceId?: ReadonlyMap<number, ReadonlySet<string>>,
-    includedPathsBySourceId?: ReadonlyMap<number, ReadonlySet<string>>,
+    options: {
+      readonly excludedPathsBySourceId?: ReadonlyMap<number, ReadonlySet<string>>;
+      readonly includedPathsBySourceId?: ReadonlyMap<number, ReadonlySet<string>>;
+      readonly applyManifest?: boolean;
+    } = {},
   ): PreparePlanDraftResult {
     const accepted =
       base.baseRevisionId == null
@@ -4033,29 +4037,36 @@ export class AppRepository {
       };
     }
     const scans: Array<[string, ReturnType<typeof scanRepo>]> = [];
+    const availableScans: Array<[string, ReturnType<typeof scanRepo>]> = [];
     for (const layer of capture.layers) {
       if (!layer.localPath) continue;
-      const excludedPaths = excludedPathsBySourceId?.get(layer.projectId);
-      const includedPaths = includedPathsBySourceId?.get(layer.projectId);
-      scans.push([
-        layer.sourceLayer,
-        scanRepo(
+      const excludedPaths = options.excludedPathsBySourceId?.get(layer.projectId);
+      const includedPaths = options.includedPathsBySourceId?.get(layer.projectId);
+      const available = scanRepo(
           layer.localPath,
           layer.sourceLayer,
-          layer.importRules,
+          null,
           resolveNamingProfile(layer.namingProfile, null),
         ).filter(
           (part) =>
             !excludedPaths?.has(part.relativePath) &&
             (!includedPaths || matchesPlanningPathScope(part.relativePath, includedPaths)),
-        ),
+        );
+      availableScans.push([layer.sourceLayer, available]);
+      scans.push([
+        layer.sourceLayer,
+        available.filter((part) => layer.importRules === null || pathMatchesRules(part.relativePath, layer.importRules)),
       ]);
     }
     if (!scans.length) return { kind: "no_layers" };
-    if (scans.every(([, rows]) => rows.length === 0)) return { kind: "no_stls" };
+    if (availableScans.every(([, rows]) => rows.length === 0)) return { kind: "no_stls" };
     let merged: ReturnType<typeof mergeLayers>;
+    const defaultIncludedKeys = new Set<string>();
     try {
       merged = mergeLayers(scans, existingParts, { geometryCompare: false });
+      for (const part of merged.parts) defaultIncludedKeys.add(part.matchKey);
+      const available = mergeLayers(availableScans, existingParts, { geometryCompare: false });
+      merged.parts.push(...available.parts.filter((part) => !defaultIncludedKeys.has(part.matchKey)));
       if (!merged.parts.length && (accepted?.parts.length ?? 0) > 0) {
         throw new MergeWouldWipeProfileError("Scan found no STL files");
       }
@@ -4082,7 +4093,10 @@ export class AppRepository {
       } => {
         const prior = acceptedByKey.get(part.matchKey);
         const defaults = roleDefaults[normalizePartRole(part.role)];
-        const editableBaseline = prior ?? newPlanDraftPartDecisionBaseline();
+        const editableBaseline = prior ?? {
+          ...newPlanDraftPartDecisionBaseline(),
+          included: defaultIncludedKeys.has(part.matchKey),
+        };
         const quantityOverride = editableBaseline.quantityOverride;
         const trackingKind = trackingBySourceLayer.get(part.sourceLayer);
         if (!trackingKind) throw new Error("Draft Part Source layer is not captured");
@@ -4117,12 +4131,19 @@ export class AppRepository {
         };
       },
     );
-    const draftParts = applyManifestToDraftParts(
+    const manifestParts = applyManifestToDraftParts(
       this,
       profileId,
       scannedDraftParts,
       buildPlanOptionGroups(this, profileId, dirname(this.reposDir)),
     );
+    const draftParts = options.applyManifest === false
+      ? manifestParts.map((part) => {
+          const prior = acceptedByKey.get(part.partKey);
+          const included = prior?.included ?? (defaultIncludedKeys.has(part.partKey) && part.included);
+          return included === part.included ? part : { ...part, included };
+        })
+      : manifestParts;
     return {
       kind: "prepared",
       value: {
@@ -4199,6 +4220,7 @@ export class AppRepository {
     idempotencyKey: string;
     excludedPathsBySourceId?: ReadonlyMap<number, ReadonlySet<string>>;
     includedPathsBySourceId?: ReadonlyMap<number, ReadonlySet<string>>;
+    applyManifest?: boolean;
   }): RecomputePlanDraftResult {
     const actor = requiredText(input.actor, "Plan draft actor");
     const idempotencyKey = requiredText(input.idempotencyKey, "Plan draft idempotency key");
@@ -4240,8 +4262,7 @@ export class AppRepository {
     const preparation = this.preparePlanDraft(
       input.profileId,
       profile,
-      input.excludedPathsBySourceId,
-      input.includedPathsBySourceId,
+      input,
     );
     if (preparation.kind !== "prepared") return preparation;
     const prepared = preparation.value;
@@ -4435,6 +4456,7 @@ export class AppRepository {
   rebasePlanDraft(input: {
     readonly profileId: number;
     readonly sourceDraftId: number;
+    readonly expectedSourceState?: "open" | "abandoned";
     readonly expectedSourceLifecycleVersion: number;
     readonly expectedSourceSnapshotDigest: string;
     readonly actor: string;
@@ -4446,17 +4468,20 @@ export class AppRepository {
       input.expectedSourceSnapshotDigest,
       "Expected source Plan draft snapshot digest",
     );
+    const expectedSourceState = input.expectedSourceState ?? "abandoned";
     if (
       !Number.isSafeInteger(input.expectedSourceLifecycleVersion) ||
       input.expectedSourceLifecycleVersion < 0 ||
-      input.expectedSourceLifecycleVersion > MAX_PLAN_DRAFT_LIFECYCLE_VERSION
+      input.expectedSourceLifecycleVersion > MAX_PLAN_DRAFT_LIFECYCLE_VERSION ||
+      (expectedSourceState === "open" && input.expectedSourceLifecycleVersion === MAX_PLAN_DRAFT_LIFECYCLE_VERSION)
     ) {
       throw new Error("Expected source Plan draft lifecycle version is invalid");
     }
+    const sourceGeneration = input.expectedSourceLifecycleVersion + (expectedSourceState === "open" ? 1 : 0);
     const storedInput = {
       profileId: input.profileId,
       sourceDraftId: input.sourceDraftId,
-      sourceLifecycleVersion: input.expectedSourceLifecycleVersion,
+      sourceLifecycleVersion: sourceGeneration,
       sourceSnapshotDigest: expectedDigest,
       actor,
       idempotencyKey,
@@ -4478,7 +4503,7 @@ export class AppRepository {
     if (!sourceHeader) return { kind: "not_found" };
     const source = this.getPlanDraft(input.profileId, input.sourceDraftId);
     if (!source) return { kind: "not_found" };
-    if (source.state !== "abandoned") return { kind: "not_abandoned", state: source.state };
+    if (source.state !== expectedSourceState) return { kind: "not_abandoned", state: source.state };
     if (source.lifecycleVersion !== input.expectedSourceLifecycleVersion || source.snapshotDigest !== expectedDigest) {
       return { kind: "source_conflict", draft: source };
     }
@@ -4496,7 +4521,22 @@ export class AppRepository {
     if (this.planDraftNeedsAcceptedBaseline(input.profileId, profile)) {
       return { kind: "accepted_baseline_required" };
     }
-    if (profile.baseRevisionId === source.baseRevisionId && profile.basePlanVersion === source.basePlanVersion) {
+    const sourceInputDigest = digestPlanInputs(canonicalPlanInputs(source.inputs.map((input) => ({
+      source_id: input.sourceId,
+      source_layer: input.sourceLayer,
+      layer_order: input.layerOrder,
+      tracking_kind: input.trackingKind,
+      source_revision_id: input.sourceRevisionId,
+      manifest_digest: input.manifestDigest,
+      effective_naming_digest: input.effectiveNamingDigest,
+    }))));
+    const inputsAreCurrent = () =>
+      digestPlanInputs(this.capturePlanInputs(input.profileId).inputs.map(({ source_name: _name, ...identity }) => identity)) ===
+      sourceInputDigest;
+    if (
+      profile.baseRevisionId === source.baseRevisionId && profile.basePlanVersion === source.basePlanVersion &&
+      inputsAreCurrent()
+    ) {
       return this.transaction((): RebasePlanDraftResult => {
         const transactionStored = this.storedRebasePlanDraft(storedInput);
         if (transactionStored) return transactionStored;
@@ -4514,7 +4554,7 @@ export class AppRepository {
         if (!currentSourceHeader) return { kind: "not_found" };
         const currentSource = this.getPlanDraft(input.profileId, input.sourceDraftId);
         if (!currentSource) return { kind: "not_found" };
-        if (currentSource.state !== "abandoned") {
+        if (currentSource.state !== expectedSourceState) {
           return { kind: "not_abandoned", state: currentSource.state };
         }
         if (
@@ -4540,13 +4580,12 @@ export class AppRepository {
         if (this.planDraftNeedsAcceptedBaseline(input.profileId, currentProfile)) {
           return { kind: "accepted_baseline_required" };
         }
-        return currentProfile.baseRevisionId === currentSource.baseRevisionId &&
-          currentProfile.basePlanVersion === currentSource.basePlanVersion
-          ? { kind: "base_unchanged" }
-          : { kind: "base_changed" };
+        if (currentProfile.baseRevisionId !== currentSource.baseRevisionId ||
+          currentProfile.basePlanVersion !== currentSource.basePlanVersion) return { kind: "base_changed" };
+        return inputsAreCurrent() ? { kind: "base_unchanged" } : { kind: "inputs_changed" };
       }, "immediate");
     }
-    const preparation = this.preparePlanDraft(input.profileId, profile);
+    const preparation = this.preparePlanDraft(input.profileId, profile, { applyManifest: false });
     if (preparation.kind !== "prepared") return preparation;
     const prepared = preparation.value;
     const virtualDraft: PlanDraftSnapshot = {
@@ -4603,7 +4642,7 @@ export class AppRepository {
         if (!currentSourceHeader) return { kind: "not_found" };
         const currentSource = this.getPlanDraft(input.profileId, input.sourceDraftId);
         if (!currentSource) return { kind: "not_found" };
-        if (currentSource.state !== "abandoned") {
+        if (currentSource.state !== expectedSourceState) {
           return { kind: "not_abandoned", state: currentSource.state };
         }
         if (
@@ -4630,12 +4669,6 @@ export class AppRepository {
           return { kind: "accepted_baseline_required" };
         }
         if (
-          currentProfile.baseRevisionId === currentSource.baseRevisionId &&
-          currentProfile.basePlanVersion === currentSource.basePlanVersion
-        ) {
-          return { kind: "base_unchanged" };
-        }
-        if (
           currentProfile.baseRevisionId !== prepared.baseRevisionId ||
           currentProfile.basePlanVersion !== prepared.basePlanVersion
         ) {
@@ -4643,6 +4676,20 @@ export class AppRepository {
         }
         if (this.capturePlanInputs(input.profileId).fingerprint !== prepared.capture.fingerprint) {
           return { kind: "inputs_changed" };
+        }
+        if (expectedSourceState === "open") {
+          const abandoned = this.db.update(this.schema.planDrafts)
+            .set({ state: "abandoned", lifecycleVersion: sourceGeneration })
+            .where(and(
+              eq(this.schema.planDrafts.tenantId, this.tenantId),
+              eq(this.schema.planDrafts.profileId, input.profileId),
+              eq(this.schema.planDrafts.id, input.sourceDraftId),
+              eq(this.schema.planDrafts.state, "open"),
+              eq(this.schema.planDrafts.lifecycleVersion, input.expectedSourceLifecycleVersion),
+              eq(this.schema.planDrafts.snapshotDigest, expectedDigest),
+            ))
+            .run();
+          if (abandoned.changes !== 1) return { kind: "source_conflict", draft: currentSource };
         }
         const inserted = this.db
           .insert(this.schema.planDrafts)
@@ -4654,7 +4701,7 @@ export class AppRepository {
             state: "open",
             lifecycleVersion: 0,
             rebasedFromDraftId: input.sourceDraftId,
-            rebasedFromLifecycleVersion: input.expectedSourceLifecycleVersion,
+            rebasedFromLifecycleVersion: sourceGeneration,
             rebasedFromSnapshotDigest: expectedDigest,
             digestFormat: PLAN_DRAFT_DIGEST_FORMAT,
             snapshotDigest: merged.draft.snapshotDigest,
@@ -4693,7 +4740,7 @@ export class AppRepository {
           persisted.snapshotDigest !== merged.draft.snapshotDigest ||
           persisted.origin.kind !== "rebase" ||
           persisted.origin.sourceDraftId !== input.sourceDraftId ||
-          persisted.origin.sourceLifecycleVersion !== input.expectedSourceLifecycleVersion ||
+          persisted.origin.sourceLifecycleVersion !== sourceGeneration ||
           persisted.origin.sourceSnapshotDigest !== expectedDigest ||
           persisted.baseRevisionId !== prepared.baseRevisionId ||
           persisted.basePlanVersion !== prepared.basePlanVersion ||

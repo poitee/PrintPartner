@@ -267,7 +267,7 @@ function platesSummary(status: WorkPackageStatus, unitCount: number, plateCount:
   switch (status) {
     case "preparing":
       return unitCount === 0
-        ? "Choose the Required units you want to make next."
+        ? "Choose the parts you want to print next."
         : `${plural(unitCount, "unit", "units")} chosen. Finish the Plate setup.`;
     case "ready_to_slice":
       return `${plural(unitCount, "unit", "units")} on ${plural(plateCount, "Plate", "Plates")}. Export them for your slicer.`;
@@ -291,16 +291,16 @@ function benchSummary(input: {
 }): string {
   switch (input.route) {
     case null:
-      return "Choose how you want to make these units.";
+      return "Choose how you want to print these parts.";
     case "plates":
       return platesSummary(input.status, input.unitCount, input.plateCount);
     case "stl":
       return input.unitCount === 0
-        ? "Choose the Required units you want the files for."
+        ? "Choose the parts you want to download."
         : `${plural(input.unitCount, "unit", "units")} ready to download. PrintPartner cannot see what you print from these files, so record the result in Checkoff.`;
     case "external":
       return input.recordedPrintCount === 0
-        ? "Record a print you already made. Pick the file, then say which Required units it covers."
+        ? "Record a print you already made. Pick the file, then choose the parts it contains."
         : `${plural(input.recordedPrintCount, "print", "prints")} recorded. Verify them in Checkoff, or record another.`;
     default: {
       const _exhaustive: never = input.route;
@@ -495,11 +495,11 @@ export function projectWorkPackages(input: WorkPackageProjectionInput): WorkPack
             title: "Next work package",
             status: "preparing",
             statusLabel: WORK_PACKAGE_STATUS_LABEL.preparing,
-            summary: "This Build has no accepted Required units yet.",
+            summary: "No parts chosen yet.",
             unitCount: 0,
             completedUnitCount: 0,
             plateCount: 0,
-            blockedReason: "Accept a Plan revision with Required units before you prepare work.",
+            blockedReason: "Choose the parts to print on Plan before preparing work.",
             links: {
               acceptedPlan: null,
               unitTokens: [],

@@ -215,6 +215,7 @@ const abandonPlanDraftRequestSchema = z.strictObject({
 export type AbandonPlanDraftRequest = z.infer<typeof abandonPlanDraftRequestSchema>;
 
 const rebasePlanDraftRequestSchema = z.strictObject({
+  expected_source_state: z.enum(["open", "abandoned"]).optional(),
   expected_source_lifecycle_version: nonnegativeVersion,
   expected_source_snapshot_digest: digest,
 });

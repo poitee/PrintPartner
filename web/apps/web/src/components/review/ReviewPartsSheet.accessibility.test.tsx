@@ -169,10 +169,10 @@ describe("ReviewPartsSheet accessibility", () => {
       </MemoryRouter>,
     );
 
-    expect(screen.getByText(/change the Working Plan\. They are not accepted yet/i)).toBeTruthy();
-    expect(screen.getByRole("columnheader", { name: "Proposed qty" })).toBeTruthy();
+    expect(screen.queryByText(/Working Plan|not accepted yet/i)).toBeNull();
+    expect(screen.getByRole("columnheader", { name: "Qty" })).toBeTruthy();
     expect(screen.getByRole("spinbutton", { name: "Quantity for bracket.stl" }).getAttribute("value")).toBe("4");
-    expect(screen.getByText(/Accepted: qty 2, included/)).toBeTruthy();
+    expect(screen.getByText(/Previously saved: qty 2, included/)).toBeTruthy();
   });
 
   it("removes a proposed part with one click", async () => {

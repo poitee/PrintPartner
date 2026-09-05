@@ -26,12 +26,15 @@ export async function fetchPlanDraftWorkspace(
   return parsePlanDraftWorkspace(await engineFetch(`/plans/${profileId}/drafts/${draftId}`));
 }
 
-export async function recomputePlanDraft(profileId: number): Promise<PlanDraftWorkspace> {
+export async function recomputePlanDraft(
+  profileId: number,
+  options?: { applyManifest?: boolean },
+): Promise<PlanDraftWorkspace> {
   return parsePlanDraftWorkspace(
     await engineFetch(`/plans/${profileId}/drafts/recompute`, {
       method: "POST",
       headers: { "Idempotency-Key": randomIdempotencyKey() },
-      body: JSON.stringify({ apply_manifest: true }),
+      body: JSON.stringify({ apply_manifest: options?.applyManifest ?? false }),
     }),
   );
 }
@@ -110,6 +113,7 @@ export async function rebasePlanDraft(
       method: "POST",
       headers: { "Idempotency-Key": randomIdempotencyKey() },
       body: JSON.stringify({
+        expected_source_state: draft.state === "open" ? "open" : "abandoned",
         expected_source_lifecycle_version: draft.lifecycle_version,
         expected_source_snapshot_digest: draft.snapshot_digest,
       }),

@@ -63,7 +63,8 @@
       "shopify_product_id": 8004738646228,
       "shopify_variant_id": 44020687274196,
       "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-asa-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-house-asa-west3d-3d-printing-supplies-ambrosia-filament-7471073.png?v=1751537564",
-      "hex": "#bfb1a3"
+      "hex": "#000000",
+      "hex_source": "manual_preview_approximation"
     },
     {
       "id": "asa::bloody-murder-blood-orange",
@@ -252,7 +253,8 @@
       "shopify_product_id": 8004738646228,
       "shopify_variant_id": 46039862935764,
       "swatch_url": "https://cdn.shopify.com/s/files/1/0596/0692/5480/files/ambrosia-asa-filament-of-the-gods-1kg-bambu-ams-friendly-cardboard-spools-premium-3d-printing-filament-house-asa-west3d-3d-printing-supplies-ambrosia-filament-8308029.png?v=1755306884",
-      "hex": "#baa895"
+      "hex": "#747874",
+      "hex_source": "manual_preview_approximation"
     },
     {
       "id": "asa::terracotta",

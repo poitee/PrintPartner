@@ -899,7 +899,7 @@ export default function SourcesPage() {
         accent
         eyebrow="Workshop"
         title="Source Library"
-        description={`${headerSubtitle} · Add, sync, and watch reusable print projects.`}
+        description={`${headerSubtitle} · Add sources and their files here, then attach them to a Build on Sources.`}
         actions={headerActions}
       />
       <DeskNextStep>{libraryNextStep}</DeskNextStep>
@@ -1094,7 +1094,7 @@ export default function SourcesPage() {
               <EmptyState
                 icon={FolderGit2}
                 title="No sources yet"
-                description="Add a source to start the desk loop."
+                description="Add a source and its print files here. You can then attach it to a Build on Sources."
                 action={{ label: "Add source", onClick: () => openAddWizard() }}
               />
             ) : filtered.length === 0 ? (

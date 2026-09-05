@@ -264,7 +264,7 @@ describe("ExportPage work packages", () => {
 
   it("names the Plate preparation sections without ordinals or step circles", () => {
     renderAt("/export?task=prepare-plates");
-    expect(screen.getByRole("heading", { name: "Choose Required units" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Choose parts" })).toBeTruthy();
     expect(screen.queryByRole("navigation", { name: "Plate builder" })).toBeNull();
     const sections = screen.getByRole("navigation", { name: "Plate preparation sections" });
     for (const link of within(sections).getAllByRole("link")) {
@@ -300,7 +300,7 @@ describe("ExportPage work packages", () => {
   it("keeps the old numbered stage links working as aliases", async () => {
     renderAt("/export?stage=parts");
     const sections = screen.getByRole("navigation", { name: "Plate preparation sections" });
-    expect(within(sections).getByRole("link", { name: /Required units.*2 selected/ }).getAttribute("href"))
+    expect(within(sections).getByRole("link", { name: /Parts.*2 selected/ }).getAttribute("href"))
       .toBe("#plate-builder-units");
     expect(within(sections).getByRole("link", { name: /Printers.*Assigned/ }).getAttribute("href"))
       .toBe("#plate-builder-printers");
@@ -359,7 +359,7 @@ describe("ExportPage work packages", () => {
     state.workspace = { kind: "empty_plan" };
     renderAt("/export");
     expect(
-      screen.getByText("Accept a Plan revision with Required units before you prepare work."),
+      screen.getByText("Choose the parts to print on Plan before preparing work."),
     ).toBeTruthy();
   });
 });
@@ -423,7 +423,7 @@ describe("ExportPage route question", () => {
     state.route = "stl";
     renderAt("/export");
     const list = screen.getByLabelText("Choose and download STL files");
-    expect(within(list).getByText("Choose Required units")).toBeTruthy();
+    expect(within(list).getByText("Choose parts")).toBeTruthy();
     expect(within(list).getByText("Download sorted STL files")).toBeTruthy();
     for (const absent of ["Prepare Plates", "Export for slicing", "Add sliced file", "Send or start"]) {
       expect(within(list).queryByText(absent)).toBeNull();
@@ -435,7 +435,8 @@ describe("ExportPage route question", () => {
   it("hands Builds with the former record route over to Checkoff", () => {
     state.route = "external";
     renderAt("/export");
-    expect(screen.getByRole("heading", { name: "Past prints now belong in Checkoff" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Already printed these parts?" })).toBeTruthy();
+    expect(screen.queryByText(/now belong|Production now prepares/)).toBeNull();
     expect(screen.queryByLabelText("Add each manually prepared print")).toBeNull();
     expect(
       screen.getByRole("link", { name: "Add a past print in Checkoff" }).getAttribute("href"),

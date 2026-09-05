@@ -47,12 +47,18 @@ type HookProps = {
   profileId: number;
   pendingSelections: ManifestSelections;
   savedSelections: ManifestSelections;
+  onPersisted?: (kit: KitManifest) => Promise<void>;
 };
 
 function renderAutosave(onSaved = vi.fn()) {
   const baseKit = kit({});
+  const initialProps: HookProps = {
+    profileId: 7,
+    pendingSelections: {},
+    savedSelections: {},
+  };
   const hook = renderHook(
-    ({ profileId, pendingSelections, savedSelections }: HookProps) =>
+    ({ profileId, pendingSelections, savedSelections, onPersisted }: HookProps) =>
       useKitManifestAutosave({
         profileId,
         pendingSelections,
@@ -62,13 +68,10 @@ function renderAutosave(onSaved = vi.fn()) {
         disabled: false,
         baseKit,
         onSaved,
+        onPersisted,
       }),
     {
-      initialProps: {
-        profileId: 7,
-        pendingSelections: {},
-        savedSelections: {},
-      },
+      initialProps,
     },
   );
   return { ...hook, onSaved };
@@ -78,6 +81,46 @@ describe("useKitManifestAutosave", () => {
   afterEach(() => {
     cleanup();
     vi.clearAllMocks();
+  });
+
+  it("retries a failed Plan refresh after the variant itself was saved", async () => {
+    const savedKit = kit({ extras: ["skirts"] });
+    mocks.savePlanKitManifest.mockResolvedValueOnce(savedKit);
+    const onPersisted = vi.fn()
+      .mockRejectedValueOnce(new Error("Plan could not save"))
+      .mockResolvedValueOnce(undefined);
+    const { result, rerender } = renderAutosave();
+    act(() => rerender({ profileId: 7, pendingSelections: {}, savedSelections: {}, onPersisted }));
+
+    act(() => result.current.saveUserEdit(savedKit.selections));
+    await waitFor(() => expect(result.current.status).toBe("error"));
+    await act(async () => result.current.saveNow());
+
+    expect(onPersisted).toHaveBeenCalledTimes(2);
+    expect(onPersisted).toHaveBeenLastCalledWith(savedKit);
+    expect(mocks.savePlanKitManifest).toHaveBeenCalledTimes(1);
+    expect(result.current.status).toBe("saved");
+  });
+
+  it("applies a saved variant to its original Build after switching Builds", async () => {
+    const firstSave = deferred<KitManifest>();
+    mocks.savePlanKitManifest.mockImplementationOnce(() => firstSave.promise);
+    const applyFirstPlan = vi.fn().mockResolvedValue(undefined);
+    const applySecondPlan = vi.fn().mockResolvedValue(undefined);
+    const { result, onSaved, rerender } = renderAutosave();
+    act(() => rerender({ profileId: 7, pendingSelections: {}, savedSelections: {}, onPersisted: applyFirstPlan }));
+    act(() => result.current.saveUserEdit({ extras: ["skirts"] }));
+    act(() => rerender({ profileId: 8, pendingSelections: {}, savedSelections: {}, onPersisted: applySecondPlan }));
+
+    await act(async () => {
+      firstSave.resolve(kit({ extras: ["skirts"] }));
+      await firstSave.promise;
+    });
+
+    expect(applyFirstPlan).toHaveBeenCalledExactlyOnceWith(kit({ extras: ["skirts"] }));
+    expect(applySecondPlan).not.toHaveBeenCalled();
+    expect(onSaved).not.toHaveBeenCalled();
+    expect(result.current.status).toBe("idle");
   });
 
   it("serializes rapid edits and coalesces the queue to the latest selections", async () => {

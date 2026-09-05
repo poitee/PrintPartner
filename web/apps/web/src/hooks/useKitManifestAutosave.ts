@@ -19,7 +19,8 @@ type Options = {
   userEdited: boolean;
   disabled: boolean;
   baseKit: KitManifest | null;
-  onSaved: (kit: KitManifest) => void;
+  onPersisted?: (kit: KitManifest) => Promise<void>;
+  onSaved: (kit: KitManifest) => void | Promise<void>;
   onRegisterFlush?: (profileId: number, flush: () => Promise<void>) => void;
   onUnregisterFlush?: (profileId: number) => void;
 };
@@ -36,6 +37,7 @@ type ProfileSaveState = {
   lastPendingSelectionsProp: ManifestSelections;
   lastSavedSelectionsProp: ManifestSelections;
   lastBaseKitProp: KitManifest | null;
+  pendingConfirmation: KitManifest | null;
 };
 
 export function useKitManifestAutosave({
@@ -46,6 +48,7 @@ export function useKitManifestAutosave({
   userEdited,
   disabled,
   baseKit,
+  onPersisted,
   onSaved,
   onRegisterFlush,
   onUnregisterFlush,
@@ -60,6 +63,7 @@ export function useKitManifestAutosave({
     pendingSelections,
     savedSelections,
     baseKit,
+    pendingConfirmation: null,
     loaded,
     disabled,
     lastPendingSelectionsProp: pendingSelections,
@@ -74,6 +78,7 @@ export function useKitManifestAutosave({
       pendingSelections,
       savedSelections,
       baseKit,
+      pendingConfirmation: null,
       loaded,
       disabled,
       lastPendingSelectionsProp: pendingSelections,
@@ -107,10 +112,11 @@ export function useKitManifestAutosave({
   }, []);
 
   const drainQueuedSelections = useCallback(async () => {
-    while (saveState.queuedSelections) {
-      const selectionsToSave = saveState.queuedSelections;
+    while (saveState.queuedSelections || saveState.pendingConfirmation) {
+      const selectionsToSave = saveState.queuedSelections ?? saveState.savedSelections;
       saveState.queuedSelections = null;
-      if (selectionsEqual(selectionsToSave, saveState.savedSelections)) continue;
+      const needsSave = !selectionsEqual(selectionsToSave, saveState.savedSelections);
+      if (!needsSave && !saveState.pendingConfirmation) continue;
 
       const isCurrentProfile = saveStateRef.current === saveState;
       if (isCurrentProfile) {
@@ -131,16 +137,23 @@ export function useKitManifestAutosave({
           choice_tree: kitBase?.choice_tree ?? [],
           category_links: kitBase?.category_links ?? [],
         };
-        const saved = await savePlanKitManifest(profileId, kit);
-        saveState.baseKit = saved;
-        saveState.savedSelections = { ...saved.selections };
+        if (needsSave) {
+          const saved = await savePlanKitManifest(profileId, kit);
+          saveState.baseKit = saved;
+          saveState.savedSelections = { ...saved.selections };
+          saveState.pendingConfirmation = saved;
+        }
+        if (saveState.pendingConfirmation) await onPersisted?.(saveState.pendingConfirmation);
         if (saveStateRef.current === saveState) {
-          onSaved(saved);
+          if (saveState.pendingConfirmation) await onSaved(saveState.pendingConfirmation);
+          saveState.pendingConfirmation = null;
           setStatus("saved");
           savedClearTimerRef.current = setTimeout(() => {
             setStatus((current) => (current === "saved" ? "idle" : current));
             savedClearTimerRef.current = null;
           }, KIT_MANIFEST_SAVED_CLEAR_MS);
+        } else {
+          saveState.pendingConfirmation = null;
         }
       } catch {
         saveState.queuedSelections = null;
@@ -148,7 +161,7 @@ export function useKitManifestAutosave({
         return;
       }
     }
-  }, [clearSavedTimer, onSaved, profileId, saveState]);
+  }, [clearSavedTimer, onPersisted, onSaved, profileId, saveState]);
 
   const saveSelections = useCallback(
     async (selectionsOverride?: ManifestSelections) => {
@@ -156,7 +169,8 @@ export function useKitManifestAutosave({
       const selectionsToSave = selectionsOverride ?? saveState.pendingSelections;
       if (
         !saveState.inFlight &&
-        selectionsEqual(selectionsToSave, saveState.savedSelections)
+        selectionsEqual(selectionsToSave, saveState.savedSelections) &&
+        !saveState.pendingConfirmation
       ) {
         return;
       }
@@ -183,7 +197,7 @@ export function useKitManifestAutosave({
     if (saveState.inFlight) {
       await saveState.inFlight;
     }
-    if (!selectionsEqual(saveState.pendingSelections, saveState.savedSelections)) {
+    if (saveState.pendingConfirmation || !selectionsEqual(saveState.pendingSelections, saveState.savedSelections)) {
       await saveSelections(saveState.pendingSelections);
     }
   }, [saveSelections, saveState]);

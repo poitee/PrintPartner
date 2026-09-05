@@ -40,46 +40,43 @@ function workspace(
       remaining_units: 7,
     },
     ...overrides,
-  } as BuildWorkflowWorkspace;
+  };
 }
 
 describe("buildSummaryLine", () => {
-  it("reports the accepted revision with unit counts", () => {
+  it("reports only printed and remaining counts", () => {
     expect(buildSummaryLine(workspace())).toEqual({
-      facts: ["Plan revision 4 accepted", "18 Required units", "11 verified"],
-      hasUnacceptedChanges: false,
+      facts: ["11 of 18 printed", "7 remaining"],
     });
   });
 
-  it("replaces unit counts with the working change count", () => {
+  it("keeps internal working changes out of the progress summary", () => {
     const summary = buildSummaryLine(
       workspace({ working_plan: { kind: "ready", draft_id: 9, change_count: 7 } }),
     );
     expect(summary.facts).toEqual([
-      "Plan revision 4 accepted",
-      "7 working changes not yet accepted",
+      "11 of 18 printed",
+      "7 remaining",
     ]);
-    expect(summary.hasUnacceptedChanges).toBe(true);
   });
 
-  it("names an unresolved working Plan without claiming it is ready", () => {
+  it("does not turn internal draft issues into a production status report", () => {
     const summary = buildSummaryLine(
       workspace({
         working_plan: { kind: "needs_attention", draft_id: 9, change_count: 7, issue_count: 2 },
       }),
     );
-    expect(summary.facts[1]).toBe("2 working Plan issues to resolve");
-    expect(summary.hasUnacceptedChanges).toBe(false);
+    expect(summary.facts).toEqual(["11 of 18 printed", "7 remaining"]);
   });
 
-  it("says when no Plan revision is accepted yet", () => {
+  it("omits the empty revision report", () => {
     const summary = buildSummaryLine(
       workspace({
         accepted_plan: { kind: "none" },
         active_work: { ...workspace().active_work, total_units: 0, remaining_units: 0 },
       }),
     );
-    expect(summary.facts).toEqual(["No accepted Plan revision"]);
+    expect(summary.facts).toEqual([]);
   });
 
   it("uses singular wording for one unit", () => {
@@ -88,7 +85,7 @@ describe("buildSummaryLine", () => {
         active_work: { ...workspace().active_work, total_units: 1, remaining_units: 0 },
       }),
     );
-    expect(summary.facts).toContain("1 Required unit");
+    expect(summary.facts).toContain("1 of 1 printed");
   });
 });
 
@@ -127,19 +124,13 @@ describe("buildActiveWorkChips", () => {
     });
   });
 
-  it("names Source updates as next-Plan context, not as a current-Plan warning", () => {
+  it("keeps source bookkeeping out of active print work", () => {
     const chips = buildActiveWorkChips(
       workspace({
         sources: { kind: "stale", attached_count: 2, issue_count: 1 },
       }),
     );
-    expect(chips).toEqual([
-      {
-        id: "source_changes",
-        label: "Source updates available for the next Plan",
-        tone: "neutral",
-      },
-    ]);
+    expect(chips).toEqual([]);
   });
 
   it("carries its own text so tone never stands alone", () => {

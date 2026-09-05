@@ -167,7 +167,7 @@ describe("projectWorkPackages bench status without a route", () => {
     const { bench } = projectWorkPackages(input({ setup: setupOn(null) }));
     expect(bench?.route).toBeNull();
     expect(bench?.status).toBe("preparing");
-    expect(bench?.summary).toBe("Choose how you want to make these units.");
+    expect(bench?.summary).toBe("Choose how you want to print these parts.");
   });
 
   it("carries the route on the empty-plan package too, so the question still shows", () => {
@@ -182,7 +182,7 @@ describe("projectWorkPackages bench status on the unit-files route", () => {
   it("is Preparing until units are chosen", () => {
     const { bench } = projectWorkPackages(input({ setup: setupOn("stl"), selectedTokens: [] }));
     expect(bench?.status).toBe("preparing");
-    expect(bench?.summary).toBe("Choose the Required units you want the files for.");
+    expect(bench?.summary).toBe("Choose the parts you want to download.");
   });
 
   it("rests at Ready to download and never waits for a slicer", () => {
@@ -239,7 +239,7 @@ describe("projectWorkPackages bench status on the Plates route", () => {
   it("is Preparing when nothing is selected", () => {
     const { bench } = projectWorkPackages(input({ selectedTokens: [] }));
     expect(bench?.status).toBe("preparing");
-    expect(bench?.summary).toContain("Choose the Required units");
+    expect(bench?.summary).toContain("Choose the parts");
   });
 
   it("is Preparing while units are still unassigned", () => {
@@ -292,7 +292,7 @@ describe("projectWorkPackages bench status on the Plates route", () => {
 
   it("blocks the bench package when the Build has no Required units", () => {
     const { bench } = projectWorkPackages(input({ workspace: { kind: "empty_plan" } }));
-    expect(bench?.blockedReason).toContain("Accept a Plan revision");
+    expect(bench?.blockedReason).toContain("Choose the parts to print");
   });
 });
 

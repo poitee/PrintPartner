@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "test:browser": "node test/browser/skip-link.browser.mjs && node test/browser/checkoff-sheet-dark.browser.mjs"
+    "test:browser": "node test/browser/skip-link.browser.mjs && node test/browser/checkoff-sheet-dark.browser.mjs && node test/browser/filament-preview-colors.browser.mjs"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

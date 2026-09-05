@@ -206,9 +206,9 @@ function platesTasks(input: PlatesTaskInput): ProductionTask[] {
     id: "prepare-plates",
     label: "Prepare Plates",
     hint: noPlan
-      ? "No accepted Required units yet."
+      ? "No parts chosen yet."
       : !selected
-        ? "Choose the Required units this package will make."
+        ? "Choose the parts to print."
         : input.printerCount === 0
           ? `${plural(input.selectedCount, "unit", "units")} chosen. Add a printer in Settings to continue.`
           : !assigned
@@ -218,8 +218,8 @@ function platesTasks(input: PlatesTaskInput): ProductionTask[] {
             : unplaced > 0
               ? `${plural(unplaced, "unit does", "units do")} not fit where they are. Review the Plate layout.`
               : ready
-                ? `Plate revision ${ready.plate_revision_number} has ${plural(ready.plates.length, "Plate", "Plates")} ready to export.`
-                : "Choose Required units, assign printers, and review the Plate layout.",
+                ? `${plural(ready.plates.length, "Plate", "Plates")} ready to export.`
+                : "Choose parts, assign printers, and review the Plate layout.",
     state: noPlan
       ? "blocked"
       : preparationFailed
@@ -235,7 +235,7 @@ function platesTasks(input: PlatesTaskInput): ProductionTask[] {
           ? "Complete"
           : "Needs your decision",
     disabledReason: noPlan
-      ? "Accept a Plan revision with Required units on the Plan workspace first."
+      ? "Choose the parts to print on Plan first."
       : null,
   };
 
@@ -344,16 +344,16 @@ function stlTasks(input: StlTaskInput): ProductionTask[] {
 
   const chooseUnits: ProductionTask = {
     id: "choose-units",
-    label: "Choose Required units",
+    label: "Choose parts",
     hint: noPlan
-      ? "No accepted Required units yet."
+      ? "No parts chosen yet."
       : selected
         ? `${plural(input.selectedCount, "unit", "units")} chosen out of ${input.totalUnitCount}.`
-        : "Choose the Required units you want the files for.",
+        : "Choose the parts you want to download.",
     state: noPlan ? "blocked" : selected ? "complete" : "needs_attention",
     statusLabel: noPlan ? "Unavailable" : selected ? "Complete" : "Needs your decision",
     disabledReason: noPlan
-      ? "Accept a Plan revision with Required units on the Plan workspace first."
+      ? "Choose the parts to print on Plan first."
       : null,
   };
 
@@ -391,7 +391,7 @@ function externalTasks(input: ExternalTaskInput): ProductionTask[] {
       : "needs_attention";
   const statusLabel = noPlan ? "Unavailable" : recorded ? "Complete" : "Needs your decision";
   const disabledReason = noPlan
-    ? "Accept a Plan revision with Required units on the Plan workspace first."
+    ? "Choose the parts to print on Plan first."
     : null;
   const recordedLine = `${plural(input.recordedPrintCount, "print", "prints")} recorded for this Build.`;
 
@@ -400,7 +400,7 @@ function externalTasks(input: ExternalTaskInput): ProductionTask[] {
       id: "pick-print-file",
       label: "Choose the print file",
       hint: noPlan
-        ? "No accepted Required units yet."
+        ? "No parts chosen yet."
         : recorded
           ? recordedLine
           : "Pick a file from a linked printer, or upload G-code, binary G-code or a 3MF file.",
@@ -410,9 +410,9 @@ function externalTasks(input: ExternalTaskInput): ProductionTask[] {
     },
     {
       id: "attribute-units",
-      label: "Attribute it to Required units",
+      label: "Choose the printed parts",
       hint: noPlan
-        ? "No accepted Required units yet."
+        ? "No parts chosen yet."
         : recorded
           ? "Every recorded print carries the units it covers."
           : "Say which Required units this print already made.",
@@ -424,7 +424,7 @@ function externalTasks(input: ExternalTaskInput): ProductionTask[] {
       id: "confirm-record",
       label: "Confirm the record",
       hint: noPlan
-        ? "No accepted Required units yet."
+        ? "No parts chosen yet."
         : recorded
           ? "Units you had already checked are checked off. Anything else is waiting in Checkoff."
           : "Say whether you have checked the parts, then confirm. Units you have checked are checked off here.",

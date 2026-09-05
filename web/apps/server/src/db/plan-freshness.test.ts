@@ -213,7 +213,7 @@ describe("Plan freshness", () => {
       const plan = repo.createProfile("Refused plan", tracked.source.id);
       acceptPlanForTest(repo, plan.id);
       const accepted = repo.getAcceptedPlanRevisionInputSet(plan.id);
-      repo.updateImportRules(tracked.source.id, ["missing/"]);
+      rmSync(join(reposDir, tracked.revision.snapshot_locator, "parts", "bracket.stl"));
 
       expect(acceptPlanForTest(repo, plan.id)).toMatchObject({ merged: false, reason: "no_stls" });
       expect(repo.getAcceptedPlanRevisionInputSet(plan.id)).toEqual(accepted);

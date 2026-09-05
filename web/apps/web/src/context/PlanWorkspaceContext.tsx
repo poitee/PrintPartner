@@ -17,6 +17,7 @@ import {
   type RequiredUnitDecisionContract,
 } from "@print-partner/contracts";
 import { EngineHttpError } from "../api/engineTransport";
+import { planSaveError, planSaveHasMergeConflict } from "../lib/planSaveError";
 import {
   abandonPlanDraft,
   applyPlanDraft,
@@ -74,6 +75,8 @@ type BuildDraftUiState = Readonly<{
   recentlyAppliedDraftId: number | null;
   draftMutationError: string | null;
   busyPartId: number | null;
+  saving: boolean;
+  mergeConflict: boolean;
 }>;
 
 const EMPTY_BUILD_DRAFT_UI_STATE: BuildDraftUiState = {
@@ -81,6 +84,8 @@ const EMPTY_BUILD_DRAFT_UI_STATE: BuildDraftUiState = {
   recentlyAppliedDraftId: null,
   draftMutationError: null,
   busyPartId: null,
+  saving: false,
+  mergeConflict: false,
 };
 
 type PlanWorkspaceValue = {
@@ -89,6 +94,10 @@ type PlanWorkspaceValue = {
   error: string | null;
   progressSummary: string;
   refresh: () => Promise<void>;
+  preparePlan: (options?: { applyManifest?: boolean }) => Promise<void>;
+  saving: boolean;
+  mergeConflict: boolean;
+  discardPendingEdits: () => Promise<void>;
   draftWorkspace: PlanDraftWorkspace | null;
   draftLoading: boolean;
   draftError: string | null;
@@ -108,6 +117,7 @@ type PlanWorkspaceValue = {
     update: QuantityUpdate,
   ) => Promise<void>;
   setIncluded: (part: PlanEditablePart, included: boolean) => Promise<void>;
+  setFilesIncluded: (parts: readonly PlanEditablePart[], included: boolean) => Promise<void>;
   setSpoolmanSpool: (
     partId: number,
     spoolman_spool_id: string | null,
@@ -150,6 +160,7 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
   >(() => new Map());
   const draftUiByBuildRef = useRef(draftUiByBuild);
   const draftEditQueueByBuild = useRef<Map<number, Promise<void>>>(new Map());
+  const closedDraftIds = useRef(new Set<number>());
   const selectedDraftUi =
     selectedProfileId == null
       ? EMPTY_BUILD_DRAFT_UI_STATE
@@ -159,6 +170,8 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
     recentlyAppliedDraftId,
     draftMutationError,
     busyPartId,
+    saving,
+    mergeConflict,
   } = selectedDraftUi;
 
   const updateDraftUi = useCallback(
@@ -209,7 +222,7 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (selectedProfileId == null || activeDraftId != null) return;
-    const open = latestOpenDraftId(draftListQuery.data, recentlyAppliedDraftId);
+    const open = latestOpenDraftId(draftListQuery.data?.filter((draft) => !closedDraftIds.current.has(draft.draft_id)), recentlyAppliedDraftId);
     if (open != null) {
       updateDraftUi(selectedProfileId, (current) => ({
         ...current,
@@ -296,11 +309,12 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
         draftQuery.data?.profile_id === profileId
           ? draftQuery.data
           : undefined;
-      return profileDraftId != null
+      const workspace = profileDraftId != null
         ? (queryClient.getQueryData<PlanDraftWorkspace>(
             queryKeys.planDraft(profileId, profileDraftId),
           ) ?? selectedWorkspace)
         : selectedWorkspace;
+      return workspace && !closedDraftIds.current.has(workspace.draft.draft_id) ? workspace : undefined;
     },
     [draftQuery.data, queryClient, selectedProfileId],
   );
@@ -326,13 +340,13 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
   );
 
   const startPlanDraftForProfile = useCallback(
-    async (profileId: number) => {
+    async (profileId: number, options?: { applyManifest?: boolean }) => {
       updateDraftUi(profileId, (current) => ({
         ...current,
         draftMutationError: null,
       }));
       try {
-        return storeWorkspace(await recomputePlanDraft(profileId));
+        return storeWorkspace(await (options ? recomputePlanDraft(profileId, options) : recomputePlanDraft(profileId)));
       } catch (error) {
         updateDraftUi(profileId, (current) => ({
           ...current,
@@ -416,7 +430,7 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
       const recentlyApplied =
         draftUiByBuildRef.current.get(profileId)?.recentlyAppliedDraftId ??
         null;
-      const openDraftId = latestOpenDraftId(drafts, recentlyApplied);
+      const openDraftId = latestOpenDraftId(drafts.filter((draft) => !closedDraftIds.current.has(draft.draft_id)), recentlyApplied);
       if (openDraftId == null) return null;
       try {
         const workspace = await queryClient.ensureQueryData({
@@ -436,171 +450,29 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
       storeWorkspace,
     ]);
 
-  const editActivePlanDraft = useCallback(
-    (decisions: PlanDraftPartDecisionContract[]) => {
-      const profileId = selectedProfileId;
-      if (profileId == null)
-        return Promise.reject(
-          new Error("Select a Build before editing its Working Plan"),
-        );
-      return enqueueDraftEdit(profileId, async () => {
-        const workspace = await resolveOpenDraftWorkspace(profileId);
-        if (!workspace)
-          throw new Error("Create a Working Plan from Sources first");
-        return editWorkspaceParts(workspace, decisions);
-      });
-    },
-    [
-      editWorkspaceParts,
-      enqueueDraftEdit,
-      resolveOpenDraftWorkspace,
-      selectedProfileId,
-    ],
-  );
+  const rebaseWorkspace = useCallback(async (workspace: PlanDraftWorkspace) => {
+    const next = await rebasePlanDraft(workspace.profile_id, workspace.draft);
+    closedDraftIds.current.add(workspace.draft.draft_id);
+    return storeWorkspace(next);
+  }, [storeWorkspace]);
 
-  const editDraft = useCallback(
-    (part: PlanEditablePart, edit: DraftPartEdit) => {
-      const profileId = selectedProfileId;
-      if (profileId == null)
-        return Promise.reject(
-          new Error("Select a Build before editing its Working Plan"),
-        );
-      return enqueueDraftEdit(profileId, async () => {
-        updateDraftUi(profileId, (current) => ({
-          ...current,
-          busyPartId: part.id,
-          draftMutationError: null,
-        }));
-        const fail: (message: string) => never = (message) => {
-          updateDraftUi(profileId, (current) => ({
-            ...current,
-            draftMutationError: message,
-          }));
-          throw new Error(message);
-        };
-        try {
-          for (let attempt = 0; attempt < 2; attempt += 1) {
-            const open = await resolveOpenDraftWorkspace(profileId);
-            const workspace =
-              open ??
-              (attempt === 0
-                ? await startPlanDraftForProfile(profileId)
-                : null);
-            if (!workspace) fail("Create a Working Plan from Sources first");
-            const match = resolveDraftPart(workspace.parts, part);
-            if (match.kind !== "resolved")
-              fail(draftPartMatchError(match, part.filename));
-            const draftPartId = match.part.draft_part_id;
-            const decision: PlanDraftPartDecisionContract =
-              edit.kind === "set_included"
-                ? {
-                    kind: "set_included",
-                    draft_part_ids: [draftPartId],
-                    value: edit.value,
-                  }
-                : {
-                    kind: "set_quantity_override",
-                    draft_part_ids: [draftPartId],
-                    value: Math.max(
-                      1,
-                      Math.floor(
-                        typeof edit.value === "function"
-                          ? edit.value(match.part.quantity_effective)
-                          : edit.value,
-                      ),
-                    ),
-                  };
-            try {
-              await persistDraftEdit(workspace, [decision]);
-              return;
-            } catch (error) {
-              const replaced = replaceFromConflict(profileId, error);
-              if (replaced && attempt === 0) continue;
-              const message = replaced
-                ? "The Working Plan changed. Review it and retry this edit."
-                : error instanceof Error
-                  ? error.message
-                  : String(error);
-              updateDraftUi(profileId, (current) => ({
-                ...current,
-                draftMutationError: message,
-              }));
-              throw new Error(message, { cause: error });
-            }
-          }
-        } finally {
-          updateDraftUi(profileId, (current) => ({
-            ...current,
-            busyPartId: null,
-          }));
-        }
-      });
-    },
-    [
-      enqueueDraftEdit,
-      persistDraftEdit,
-      replaceFromConflict,
-      resolveOpenDraftWorkspace,
-      selectedProfileId,
-      startPlanDraftForProfile,
-      updateDraftUi,
-    ],
-  );
-
-  const setQuantity = useCallback(
-    async (part: PlanEditablePart, update: QuantityUpdate) => {
-      if (!review) return;
-      await editDraft(part, { kind: "set_quantity", value: update });
-    },
-    [review, editDraft],
-  );
-
-  const setIncluded = useCallback(
-    async (part: PlanEditablePart, included: boolean) => {
-      if (!review) return;
-      await editDraft(part, { kind: "set_included", value: included });
-    },
-    [review, editDraft],
-  );
-
-  const reconcileActivePlanDraft = useCallback(
-    async (decisions: RequiredUnitDecisionContract[]) => {
-      if (selectedProfileId == null)
-        throw new Error("No Working Plan is open");
-      const workspace = currentDraftWorkspace(selectedProfileId);
-      if (!workspace) throw new Error("No Working Plan is open");
-      const next = await reconcilePlanDraft({
-        profileId: workspace.profile_id,
-        draftId: workspace.draft.draft_id,
-        expectedSnapshotDigest: workspace.draft.snapshot_digest,
-        decisions,
-      });
-      return storeWorkspace(next);
-    },
-    [currentDraftWorkspace, selectedProfileId, storeWorkspace],
-  );
-
-  const applyActivePlanDraft = useCallback(
-    async (options?: { remapCheckoffLinks?: boolean }) => {
-      if (selectedProfileId == null)
-        throw new Error("No Working Plan is open");
-      const workspace = currentDraftWorkspace(selectedProfileId);
-      if (!workspace) throw new Error("No Working Plan is open");
+  const applyWorkspace = useCallback(
+    async (workspace: PlanDraftWorkspace, options?: { remapCheckoffLinks?: boolean }) => {
       if (!workspace.diff.base_is_current)
-        throw new Error("Refresh this Working Plan before acceptance");
+        throw new Error("The Plan changed in another window. Retry to combine it with your saved edits.");
       if (
         workspace.reconciliation.kind === "unresolved" &&
         workspace.reconciliation.conflicts.length > 0
       ) {
-        throw new Error("Resolve Required-unit changes before acceptance");
+        throw new Error("A changed file affects previous print progress. Choose what to keep below.");
       }
       let receipt: ApplyPlanDraftReceipt;
       try {
         receipt = await applyPlanDraft(workspace, options);
       } catch (error) {
         if (isWorkingPlanInputsChanged(error)) {
-          await startPlanDraftForProfile(workspace.profile_id);
-          throw new WorkingPlanChangedError("rebuilt_from_sources", {
+          await rebaseWorkspace(workspace);
+          throw new WorkingPlanChangedError("refreshed", {
             cause: error,
           });
         }
@@ -609,6 +481,7 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
         }
         throw error;
       }
+      closedDraftIds.current.add(workspace.draft.draft_id);
       updateDraftUi(workspace.profile_id, (current) => ({
         ...current,
         recentlyAppliedDraftId: workspace.draft.draft_id,
@@ -643,14 +516,218 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
       return receipt;
     },
     [
-      currentDraftWorkspace,
       queryClient,
       replaceFromConflict,
+      rebaseWorkspace,
+      updateDraftUi,
+    ],
+  );
+
+  const preparePlan = useCallback((options?: { applyManifest?: boolean }) => {
+    const profileId = selectedProfileId;
+    if (profileId == null) return Promise.reject(new Error("Choose a Build first"));
+    return enqueueDraftEdit(profileId, async () => {
+      updateDraftUi(profileId, (current) => ({ ...current, saving: true, draftMutationError: null, mergeConflict: false }));
+      try {
+        let workspace = await resolveOpenDraftWorkspace(profileId);
+        if (workspace && (!workspace.diff.base_is_current || workspace.draft.state === "abandoned")) {
+          workspace = await rebaseWorkspace(workspace);
+        }
+        if (workspace && options?.applyManifest) {
+          await applyWorkspace(workspace, { remapCheckoffLinks: true });
+          workspace = null;
+        }
+        workspace ??= await startPlanDraftForProfile(profileId, options);
+        if (workspace.draft.base.revision_id != null && workspace.diff.base_is_current &&
+            workspace.diff.added.length === 0 && workspace.diff.changed.length === 0 && workspace.diff.removed.length === 0) {
+          await abandonPlanDraft(profileId, workspace.draft);
+          closedDraftIds.current.add(workspace.draft.draft_id);
+          updateDraftUi(profileId, (current) => ({ ...current, activeDraftId: null, recentlyAppliedDraftId: workspace.draft.draft_id }));
+          queryClient.removeQueries({ queryKey: queryKeys.planDraft(profileId, workspace.draft.draft_id), exact: true });
+          await queryClient.invalidateQueries({ queryKey: queryKeys.planDrafts(profileId) });
+        } else {
+          await applyWorkspace(workspace, { remapCheckoffLinks: true });
+        }
+      } catch (error) {
+        updateDraftUi(profileId, (current) => ({ ...current, draftMutationError: planSaveError(error), mergeConflict: planSaveHasMergeConflict(error) }));
+        throw error;
+      } finally {
+        updateDraftUi(profileId, (current) => ({ ...current, saving: false }));
+      }
+    });
+  }, [applyWorkspace, enqueueDraftEdit, queryClient, rebaseWorkspace, resolveOpenDraftWorkspace, selectedProfileId, startPlanDraftForProfile, updateDraftUi]);
+
+  const editActivePlanDraft = useCallback(
+    (decisions: PlanDraftPartDecisionContract[]) => {
+      const profileId = selectedProfileId;
+      if (profileId == null)
+        return Promise.reject(
+          new Error("Select a Build before editing its Working Plan"),
+        );
+      return enqueueDraftEdit(profileId, async () => {
+        const workspace = await resolveOpenDraftWorkspace(profileId);
+        if (!workspace)
+          throw new Error("Create a Working Plan from Sources first");
+        return editWorkspaceParts(workspace, decisions);
+      });
+    },
+    [
+      editWorkspaceParts,
+      enqueueDraftEdit,
+      resolveOpenDraftWorkspace,
+      selectedProfileId,
+    ],
+  );
+
+  const editDraft = useCallback(
+    (parts: readonly PlanEditablePart[], edit: DraftPartEdit) => {
+      const profileId = selectedProfileId;
+      if (parts.length === 0) return Promise.resolve();
+      if (profileId == null)
+        return Promise.reject(
+          new Error("Select a Build before editing its Working Plan"),
+        );
+      return enqueueDraftEdit(profileId, async () => {
+        updateDraftUi(profileId, (current) => ({
+          ...current,
+          busyPartId: parts[0]?.id ?? null,
+          saving: true,
+          draftMutationError: null,
+          mergeConflict: false,
+        }));
+        const fail: (message: string) => never = (message) => {
+          updateDraftUi(profileId, (current) => ({
+            ...current,
+            draftMutationError: message,
+          }));
+          throw new Error(message);
+        };
+        try {
+          for (let attempt = 0; attempt < 2; attempt += 1) {
+            const open = await resolveOpenDraftWorkspace(profileId);
+            let workspace =
+              open ??
+              (attempt === 0
+                ? await startPlanDraftForProfile(profileId)
+                : null);
+            if (!workspace) fail("Create a Working Plan from Sources first");
+            if (!workspace.diff.base_is_current || workspace.draft.state === "abandoned") {
+              workspace = await rebaseWorkspace(workspace);
+            }
+            const decisions = parts.map((part): PlanDraftPartDecisionContract => {
+              const match = resolveDraftPart(workspace.parts, part);
+              if (match.kind !== "resolved")
+                fail(draftPartMatchError(match, part.filename));
+              const draftPartId = match.part.draft_part_id;
+              return edit.kind === "set_included"
+                ? {
+                    kind: "set_included",
+                    draft_part_ids: [draftPartId],
+                    value: edit.value,
+                  }
+                : {
+                    kind: "set_quantity_override",
+                    draft_part_ids: [draftPartId],
+                    value: Math.max(
+                      1,
+                      Math.floor(
+                        typeof edit.value === "function"
+                          ? edit.value(match.part.quantity_effective)
+                          : edit.value,
+                      ),
+                    ),
+                  };
+            });
+            try {
+              const edited = await persistDraftEdit(workspace, decisions);
+              await applyWorkspace(edited, { remapCheckoffLinks: true });
+              return;
+            } catch (error) {
+              const replaced = replaceFromConflict(profileId, error);
+              if (replaced && attempt === 0) continue;
+              const message = replaced
+                ? "The Plan changed in another window. Retry this edit."
+                : planSaveError(error);
+              updateDraftUi(profileId, (current) => ({
+                ...current,
+                draftMutationError: message,
+              }));
+              throw new Error(message, { cause: error });
+            }
+          }
+        } catch (error) {
+          updateDraftUi(profileId, (current) => ({
+            ...current,
+            draftMutationError: planSaveError(error),
+            mergeConflict: planSaveHasMergeConflict(error),
+          }));
+          throw error;
+        } finally {
+          updateDraftUi(profileId, (current) => ({
+            ...current,
+            busyPartId: null,
+            saving: false,
+          }));
+        }
+      });
+    },
+    [
+      applyWorkspace,
+      enqueueDraftEdit,
+      persistDraftEdit,
+      rebaseWorkspace,
+      replaceFromConflict,
+      resolveOpenDraftWorkspace,
       selectedProfileId,
       startPlanDraftForProfile,
       updateDraftUi,
     ],
   );
+
+  const setQuantity = useCallback(
+    async (part: PlanEditablePart, update: QuantityUpdate) => {
+      if (!review) return;
+      await editDraft([part], { kind: "set_quantity", value: update });
+    },
+    [review, editDraft],
+  );
+
+  const setIncluded = useCallback(
+    async (part: PlanEditablePart, included: boolean) => {
+      if (!review) return;
+      await editDraft([part], { kind: "set_included", value: included });
+    },
+    [review, editDraft],
+  );
+
+  const setFilesIncluded = useCallback(
+    (parts: readonly PlanEditablePart[], included: boolean) => editDraft(parts, { kind: "set_included", value: included }),
+    [editDraft],
+  );
+
+  const reconcileActivePlanDraft = useCallback(
+    async (decisions: RequiredUnitDecisionContract[]) => {
+      if (selectedProfileId == null)
+        throw new Error("No Working Plan is open");
+      const workspace = currentDraftWorkspace(selectedProfileId);
+      if (!workspace) throw new Error("No Working Plan is open");
+      const next = await reconcilePlanDraft({
+        profileId: workspace.profile_id,
+        draftId: workspace.draft.draft_id,
+        expectedSnapshotDigest: workspace.draft.snapshot_digest,
+        decisions,
+      });
+      return storeWorkspace(next);
+    },
+    [currentDraftWorkspace, selectedProfileId, storeWorkspace],
+  );
+
+  const applyActivePlanDraft = useCallback(async (options?: { remapCheckoffLinks?: boolean }) => {
+    if (selectedProfileId == null) throw new Error("No Plan is open");
+    const workspace = currentDraftWorkspace(selectedProfileId);
+    if (!workspace) throw new Error("No Plan changes to save");
+    return applyWorkspace(workspace, options);
+  }, [applyWorkspace, currentDraftWorkspace, selectedProfileId]);
 
   const rebaseActivePlanDraft = useCallback(async () => {
     if (selectedProfileId == null)
@@ -664,16 +741,7 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
       draftMutationError: null,
     }));
     try {
-      const abandoned =
-        workspace.draft.state === "abandoned"
-          ? workspace.draft
-          : await abandonPlanDraft(workspace.profile_id, workspace.draft);
-      if (workspace.draft !== abandoned) {
-        storeWorkspace({ ...workspace, draft: abandoned });
-      }
-      return storeWorkspace(
-        await rebasePlanDraft(workspace.profile_id, abandoned),
-      );
+      return await rebaseWorkspace(workspace);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       updateDraftUi(workspace.profile_id, (current) => ({
@@ -682,7 +750,34 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
       }));
       throw error;
     }
-  }, [currentDraftWorkspace, selectedProfileId, storeWorkspace, updateDraftUi]);
+  }, [currentDraftWorkspace, rebaseWorkspace, selectedProfileId, updateDraftUi]);
+
+  const discardPendingEdits = useCallback(() => {
+    const profileId = selectedProfileId;
+    if (profileId == null) return Promise.reject(new Error("Choose a Build first"));
+    return enqueueDraftEdit(profileId, async () => {
+      updateDraftUi(profileId, (current) => ({ ...current, saving: true }));
+      try {
+        const workspace = await resolveOpenDraftWorkspace(profileId);
+        if (workspace) {
+          await abandonPlanDraft(profileId, workspace.draft);
+          closedDraftIds.current.add(workspace.draft.draft_id);
+          queryClient.removeQueries({ queryKey: queryKeys.planDraft(profileId, workspace.draft.draft_id), exact: true });
+        }
+        updateDraftUi(profileId, (current) => ({ ...current, activeDraftId: null, draftMutationError: null, mergeConflict: false }));
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: queryKeys.planDrafts(profileId) }),
+          invalidatePlanReview(queryClient, profileId),
+          queryClient.invalidateQueries({ queryKey: queryKeys.buildWorkflow(profileId) }),
+        ]);
+      } catch (error) {
+        updateDraftUi(profileId, (current) => ({ ...current, draftMutationError: planSaveError(error) }));
+        throw error;
+      } finally {
+        updateDraftUi(profileId, (current) => ({ ...current, saving: false }));
+      }
+    });
+  }, [enqueueDraftEdit, queryClient, resolveOpenDraftWorkspace, selectedProfileId, updateDraftUi]);
 
   const setSpoolmanSpool = useCallback(
     async (partId: number, spoolman_spool_id: string | null) => {
@@ -769,6 +864,10 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
           ? draftListQuery.error.message
           : null),
       startPlanDraft,
+      preparePlan,
+      saving,
+      mergeConflict,
+      discardPendingEdits,
       applyActivePlanDraft,
       rebaseActivePlanDraft,
       reconcileActivePlanDraft,
@@ -784,6 +883,7 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
       refresh,
       setQuantity,
       setIncluded,
+      setFilesIncluded,
       setSpoolmanSpool,
       toggleUnit,
       toggleAssembled,
@@ -798,6 +898,10 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
       draftListQuery.isLoading,
       draftMutationError,
       startPlanDraft,
+      preparePlan,
+      saving,
+      mergeConflict,
+      discardPendingEdits,
       applyActivePlanDraft,
       rebaseActivePlanDraft,
       reconcileActivePlanDraft,
@@ -807,6 +911,7 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
       refresh,
       setQuantity,
       setIncluded,
+      setFilesIncluded,
       setSpoolmanSpool,
       toggleUnit,
       toggleAssembled,

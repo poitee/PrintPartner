@@ -66,6 +66,35 @@ describe("KitManifestOptions multi-select groups", () => {
     vi.clearAllMocks();
   });
 
+  it.each([false, true])("hides loaded empty options with compact=%s", async (compact) => {
+    vi.mocked(fetchPlanManifestBuilder).mockResolvedValueOnce({
+      profile_id: 7,
+      sources: [],
+      merged_option_groups: {},
+      resolved_selections: {},
+    });
+    render(<MemoryRouter><KitManifestOptions profileId={7} compact={compact} /></MemoryRouter>);
+
+    await waitFor(() => expect(screen.queryByText("Loading kit options…")).toBeNull());
+    expect(screen.queryByText("Kit variants")).toBeNull();
+    expect(screen.queryByText(/manifest|Build Working Plan/)).toBeNull();
+  });
+
+  it("keeps load errors visible instead of treating them as empty options", async () => {
+    vi.mocked(fetchPlanManifestBuilder).mockRejectedValueOnce(new Error("Could not load kit variants"));
+    render(<MemoryRouter><KitManifestOptions profileId={7} compact /></MemoryRouter>);
+
+    expect(await screen.findByText("Could not load kit variants")).toBeTruthy();
+  });
+
+  it("describes automatic saving without a separate Plan action", async () => {
+    render(<MemoryRouter><KitManifestOptions profileId={7} /></MemoryRouter>);
+
+    await screen.findByRole("button", { name: "Skirts" });
+    expect(screen.getByText(/Changes save automatically/)).toBeTruthy();
+    expect(screen.queryByText(/Build Working Plan/)).toBeNull();
+  });
+
   it("shows resolved repository defaults before the user saves an override", async () => {
     vi.mocked(fetchPlanManifestBuilder).mockResolvedValueOnce({
       profile_id: 7,
