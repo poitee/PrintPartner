@@ -144,18 +144,58 @@ export async function fetchPrinterStorageListing(options: {
  * `path` is the only identifier a provider gives an entry, so it is what the
  * content route takes.
  */
-export async function openPrinterStoredFile(options: {
+type StoredFileDownload = {
   printerId: string;
   file: PrinterStoredFile;
-}): Promise<File> {
+  signal?: AbortSignal;
+  onProgress?: (progress: { receivedBytes: number; totalBytes?: number }) => void;
+};
+
+export async function openPrinterStoredFile(options: StoredFileDownload): Promise<File> {
+  return (await downloadStoredFile(options)).file;
+}
+
+export async function openPrinterStoredFileForAssignment(options: StoredFileDownload & { profileId: number }) {
+  const opened = await downloadStoredFile(options);
+  if (!opened.snapshotToken) throw new Error("The server did not retain this file preview. Reopen the file after updating PrintPartner.");
+  return { file: opened.file, snapshotToken: opened.snapshotToken };
+}
+
+async function downloadStoredFile(options: StoredFileDownload & { profileId?: number }) {
   const params = new URLSearchParams({ path: options.file.path });
+  if (options.profileId !== undefined) params.set("profile_id", String(options.profileId));
   let blob: Blob;
+  let snapshotToken: string | null;
   try {
     const response = await engineFetchStream({
       path: `/printers/${encodeURIComponent(options.printerId)}/files/content?${params}`,
       failureMessage: "Could not download the printer file",
+      signal: options.signal,
     });
-    blob = await response.blob();
+    snapshotToken = response.headers.get("x-printpartner-snapshot");
+    const total = Number(response.headers.get("content-length"));
+    const totalBytes = Number.isFinite(total) && total > 0 ? total : undefined;
+    if (!response.body) throw new Error("The printer returned no file data");
+    const reader = response.body.getReader();
+    const chunks: Uint8Array<ArrayBuffer>[] = [];
+    let receivedBytes = 0;
+    try {
+      while (true) {
+        options.signal?.throwIfAborted();
+        const { done, value } = await reader.read();
+        if (done) break;
+        receivedBytes += value.byteLength;
+        if (receivedBytes > 256 * 1024 * 1024) throw new Error("Printer file exceeds the 256 MB limit");
+        chunks.push(new Uint8Array(value));
+        options.onProgress?.({ receivedBytes, totalBytes });
+      }
+    } catch (error) {
+      await reader.cancel().catch(() => undefined);
+      throw error;
+    } finally {
+      reader.releaseLock();
+    }
+    blob = new Blob(chunks, { type: response.headers.get("content-type") ?? "application/octet-stream" });
   } catch (error) {
     if (error instanceof EngineHttpError) throw error;
     throw new Error(
@@ -164,10 +204,11 @@ export async function openPrinterStoredFile(options: {
     );
   }
   const modified = options.file.modified_at ? Date.parse(options.file.modified_at) : Number.NaN;
-  return new File([blob], options.file.name, {
+  const file = new File([blob], options.file.name, {
     type: blob.type || "application/octet-stream",
     lastModified: Number.isNaN(modified) ? Date.now() : modified,
   });
+  return { file, snapshotToken };
 }
 
 /**

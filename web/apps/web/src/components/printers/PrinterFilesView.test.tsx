@@ -9,6 +9,7 @@ import { build, host, printer } from "./testFixtures";
 const api = vi.hoisted(() => ({
   fetchPrinterStorageListing: vi.fn(),
   openPrinterStoredFile: vi.fn(),
+  openPrinterStoredFileForAssignment: vi.fn(),
   previewPrinterFileAssignment: vi.fn(),
   assignPrinterFile: vi.fn(),
   uploadPrintFileForAssignment: vi.fn(),
@@ -20,6 +21,7 @@ vi.mock("../../api/endpoints/printers", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../api/endpoints/printers")>()),
   fetchPrinterStorageListing: api.fetchPrinterStorageListing,
   openPrinterStoredFile: api.openPrinterStoredFile,
+  openPrinterStoredFileForAssignment: api.openPrinterStoredFileForAssignment,
   printerStoredFileUrl: () => "/stored-file",
 }));
 
@@ -63,7 +65,7 @@ const JOBS: PrinterStorageListing = {
   ],
 };
 
-function renderView(overrides?: { canBrowse?: boolean; profiles?: ProfileSummary[] }) {
+function renderView(overrides?: { canBrowse?: boolean; profiles?: ProfileSummary[]; pastPrint?: boolean }) {
   const onAssigned = vi.fn();
   render(
     <PrinterFilesView
@@ -73,6 +75,7 @@ function renderView(overrides?: { canBrowse?: boolean; profiles?: ProfileSummary
       profiles={overrides?.profiles ?? [build]}
       selectedProfileId={build.id}
       onAssigned={onAssigned}
+      pastPrint={overrides?.pastPrint}
     />,
   );
   return { onAssigned };
@@ -203,6 +206,8 @@ describe("PrinterFilesView", () => {
 
     // Step one writes nothing, and there is no way to assign yet.
     const check = await screen.findByRole("button", { name: "Check this file" });
+    expect(screen.queryByRole("heading", { name: "Files on Voron One" })).toBeNull();
+    expect(document.activeElement).toBe(check);
     expect(screen.queryByRole("button", { name: "Assign print file" })).toBeNull();
 
     fireEvent.click(check);
@@ -239,6 +244,36 @@ describe("PrinterFilesView", () => {
       });
     });
     expect(onAssigned).toHaveBeenCalled();
+  });
+
+  it("replaces the file browser with cancellable reading feedback", async () => {
+    let finish: ((file: File) => void) | undefined;
+    api.openPrinterStoredFile.mockImplementationOnce(() => new Promise<File>((resolve) => {
+      finish = resolve;
+    }));
+    renderView();
+    fireEvent.click(await screen.findByRole("button", { name: "jobs" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Open" }));
+    expect(screen.queryByRole("heading", { name: "Files on Voron One" })).toBeNull();
+    expect(screen.getByRole("status").textContent).toContain("Reading");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel reading" }));
+    expect(await screen.findByRole("heading", { name: "Files on Voron One" })).toBeTruthy();
+    finish?.(new File(["binary"], "bracket.bgcode"));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Check this file" })).toBeNull());
+    expect(api.parseSlicedObjectsFile).not.toHaveBeenCalled();
+  });
+
+  it("passes the same opened snapshot through past-print check and assignment", async () => {
+    api.openPrinterStoredFileForAssignment.mockResolvedValue({ file: new File(["binary"], "bracket.bgcode"), snapshotToken: "snapshot-one" });
+    renderView({ pastPrint: true });
+    fireEvent.click(await screen.findByRole("button", { name: "jobs" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Open" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Check this file" }));
+    await waitFor(() => expect(api.previewPrinterFileAssignment).toHaveBeenCalledWith(expect.objectContaining({ snapshot_token: "snapshot-one", remote_path: "jobs/bracket.bgcode" })));
+    fireEvent.click(await screen.findByRole("button", { name: "Assign print file" }));
+    await waitFor(() => expect(api.assignPrinterFile).toHaveBeenCalledWith(expect.objectContaining({ snapshot_token: "snapshot-one" })));
+    expect(api.openPrinterStoredFileForAssignment).toHaveBeenCalledTimes(1);
+    expect(api.openPrinterStoredFile).not.toHaveBeenCalled();
   });
 
   it("sends only the units the operator left confirmed", async () => {

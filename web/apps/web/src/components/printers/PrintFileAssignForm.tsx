@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { Download } from "lucide-react";
 import type { ProfileSummary } from "@print-partner/contracts";
 import {
@@ -39,6 +39,7 @@ export type ChosenPrintFile = Readonly<{
   file: File;
   /** Set when the bytes came from the printer host rather than the operator's computer. */
   remotePath?: string;
+  snapshotToken?: string;
   objectNames: string[];
 }>;
 
@@ -103,6 +104,12 @@ export default function PrintFileAssignForm({
   const [confirmedTokens, setConfirmedTokens] = useState<ReadonlySet<string>>(new Set());
   const [errorGate, setErrorGate] = useState<ErrorGate>("none");
   const [assign, setAssign] = useState<AssignState>({ phase: "unchecked" });
+  const checkAction = useRef<HTMLButtonElement>(null);
+  const checkResult = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (assign.phase === "unchecked") checkAction.current?.focus();
+    if (assign.phase === "confirming" || assign.phase === "check_failed" || assign.phase === "save_failed") checkResult.current?.focus();
+  }, [assign.phase]);
 
   const buildId = chosenBuildId(buildValue);
   const errors = validatePrintFileAssignment({
@@ -136,6 +143,7 @@ export default function PrintFileAssignForm({
               printer_id: printer.id,
               filename: chosen.file.name,
               remote_path: chosen.remotePath,
+              ...(chosen.snapshotToken ? { snapshot_token: chosen.snapshotToken } : {}),
               object_names: chosen.objectNames,
             });
       setConfirmedTokens(new Set(preview.suggested_units.map(requiredUnitToken)));
@@ -166,7 +174,9 @@ export default function PrintFileAssignForm({
       };
       const result = isUploadedCheck(preview)
         ? await assignUploadedPrinterFile({ ...base, upload_token: preview.upload_token })
-        : await assignPrinterFile({ ...base, remote_path: chosen.remotePath });
+        : await assignPrinterFile({ ...base, remote_path: chosen.remotePath,
+            ...(chosen.snapshotToken ? { snapshot_token: chosen.snapshotToken } : {}),
+          });
       onAssigned(result.link);
     } catch (error) {
       setAssign({
@@ -299,7 +309,7 @@ export default function PrintFileAssignForm({
           <Button variant="ghost" onClick={onCancel}>
             Cancel
           </Button>
-          <Button size="shop" onClick={() => void check()}>
+          <Button ref={checkAction} size="shop" onClick={() => void check()}>
             Check this file
           </Button>
         </div>
@@ -312,16 +322,19 @@ export default function PrintFileAssignForm({
       ) : null}
 
       {assign.phase === "check_failed" ? (
+        <div className="stack-section" ref={checkResult} tabIndex={-1}>
         <InlineOperationError
           title={`Could not check ${chosen.file.name}`}
           message={assign.message}
           onRetry={() => void check()}
           retryLabel="Check again"
         />
+        <Button variant="outline" onClick={onCancel}>Choose another file</Button>
+        </div>
       ) : null}
 
       {answered ? (
-        <>
+        <div className="stack-section" ref={checkResult} tabIndex={-1}>
           <CheckPanel
             summary={answered.summary}
             printer={printer}
@@ -393,7 +406,7 @@ export default function PrintFileAssignForm({
               </Button>
             </div>
           )}
-        </>
+        </div>
       ) : null}
     </section>
   );

@@ -11,6 +11,7 @@ import { strToU8 } from "fflate";
 import { getDb, SqliteDatabase } from "../db/client.js";
 import { AppRepository } from "../db/repository.js";
 import { registerPrinterCheckoffRoutes } from "./printer-checkoff.js";
+import { registerPrinterRoutes } from "./printers.js";
 import {
   bgcode,
   hostileZip,
@@ -43,6 +44,7 @@ import {
 import { AcceptedPlanOperationalIntegrityError } from "../db/accepted-plan-operational.js";
 import { loadFleet, parsePrinterMachine, saveFleet } from "../services/printer-fleet.js";
 import { MAX_CLASSIFIABLE_BYTES } from "../lib/print-file-classification.js";
+import { capturePrinterFile, readPrinterFileSnapshot, printerFileSnapshotSource } from "../services/printer-file-snapshots.js";
 
 const cleanup: Array<() => Promise<void>> = [];
 
@@ -91,6 +93,7 @@ async function setup() {
   // the tests exercise.
   await app.register(multipart, { limits: { fileSize: Infinity, files: 100, parts: 101 } });
   await registerPrinterCheckoffRoutes(app, { repo, integrations });
+  await registerPrinterRoutes(app, { repo });
   await app.register(
     async (v1) => registerPrinterCheckoffRoutes(v1, { repo, integrations }),
     { prefix: "/api/v1" },
@@ -122,6 +125,116 @@ function response(body: unknown, status = 200) {
     headers: { "content-type": "application/json" },
   });
 }
+
+it("expires snapshots and rejects different builds, printers, paths, names and reconfigured sources", async () => {
+  const { repo, plan } = await setup();
+  saveFleet(repo, [parsePrinterMachine({ id: "core-one", name: "Core One", integration_id: "prusa-1" })]);
+  const scope = { profileId: plan.id, printerId: "core-one", remotePath: "bracket.bgcode", filename: "bracket.bgcode" };
+  const source = printerFileSnapshotSource(repo, "core-one");
+  const captured = capturePrinterFile(repo, scope, {}, new Response(bgcode([{ payload: 20 }])), source);
+  await captured.response.arrayBuffer();
+  expect(readPrinterFileSnapshot(repo, captured.token, scope)?.outcome).toBe("inspected");
+  for (const changed of [{ profileId: plan.id + 1 }, { printerId: "other" }, { remotePath: "other.bgcode" }, { filename: "other.bgcode" }]) {
+    expect(readPrinterFileSnapshot(repo, captured.token, { ...scope, ...changed })).toBeNull();
+  }
+  const now = Date.now();
+  const clock = vi.spyOn(Date, "now").mockReturnValue(now + 16 * 60_000);
+  expect(readPrinterFileSnapshot(repo, captured.token, scope)).toBeNull();
+  clock.mockRestore();
+  const second = capturePrinterFile(repo, scope, {}, new Response(bgcode([{ payload: 20 }])), source);
+  await second.response.arrayBuffer();
+  repo.setSetting("integrations", "[]");
+  expect(readPrinterFileSnapshot(repo, second.token, scope)).toBeNull();
+  expect(() => capturePrinterFile(repo, scope, {}, new Response(bgcode([{ payload: 20 }])), source)).toThrow("unavailable");
+});
+
+it("cancels an unfinished capture without a reusable token and releases its reservation", async () => {
+  const { repo, plan } = await setup();
+  saveFleet(repo, [parsePrinterMachine({ id: "core-one", name: "Core One", integration_id: "prusa-1" })]);
+  const scope = { profileId: plan.id, printerId: "core-one", remotePath: "bracket.bgcode", filename: "bracket.bgcode" };
+  const cancel = vi.fn();
+  const source = printerFileSnapshotSource(repo, "core-one");
+  const captured = capturePrinterFile(repo, scope, {}, new Response(new ReadableStream<Uint8Array>({ cancel })), source);
+  expect(readPrinterFileSnapshot(repo, captured.token, scope)).toBeNull();
+  await captured.response.body?.cancel();
+  expect(cancel).toHaveBeenCalledOnce();
+  expect(readPrinterFileSnapshot(repo, captured.token, scope)).toBeNull();
+  const next = capturePrinterFile(repo, scope, {}, new Response(bgcode([{ payload: 20 }])), source);
+  await next.response.arrayBuffer();
+  expect(readPrinterFileSnapshot(repo, next.token, scope)?.outcome).toBe("inspected");
+});
+
+it("cancels the provider stream when the HTTP download client disconnects", async () => {
+  const { app, repo, plan } = await setup();
+  saveFleet(repo, [parsePrinterMachine({ id: "core-one", name: "Core One", integration_id: "prusa-1" })]);
+  const files = getIntegrationAdapter("prusalink")?.files;
+  if (!files) throw new Error("Missing Prusa adapter");
+  const cancel = vi.fn();
+  const browse = vi.spyOn(files, "browse").mockResolvedValue({ path: "", entries: [{ kind: "file", path: "bracket.bgcode", name: "bracket.bgcode" }] });
+  const open = vi.spyOn(files, "open").mockImplementation(async () => new Response(new ReadableStream<Uint8Array>({
+    start(stream) { stream.enqueue(new Uint8Array([1, 2, 3])); }, cancel,
+  })));
+  const controller = new AbortController();
+  try {
+    const address = await app.listen({ port: 0, host: "127.0.0.1" });
+    const downloaded = await fetch(`${address}/printers/core-one/files/content?path=bracket.bgcode&profile_id=${plan.id}`, { signal: controller.signal });
+    const token = downloaded.headers.get("x-printpartner-snapshot");
+    expect(token).toEqual(expect.any(String));
+    const reader = downloaded.body?.getReader();
+    await reader?.read();
+    controller.abort();
+    await vi.waitFor(() => expect(cancel).toHaveBeenCalledOnce());
+    expect(readPrinterFileSnapshot(repo, String(token), { profileId: plan.id, printerId: "core-one", remotePath: "bracket.bgcode", filename: "bracket.bgcode" })).toBeNull();
+    await reader?.cancel().catch(() => undefined);
+    reader?.releaseLock();
+  } finally {
+    controller.abort();
+    app.server.closeAllConnections();
+    open.mockRestore();
+    browse.mockRestore();
+  }
+});
+
+it.each(["host", "manual"])("reuses opened bytes through preview and %s assignment", async (tracking) => {
+  const { app, repo, plan, planRevisionId } = await setup();
+  saveFleet(repo, [parsePrinterMachine({ id: "core-one", name: "Core One", integration_id: "prusa-1" })]);
+  const files = getIntegrationAdapter("prusalink")?.files;
+  if (!files) throw new Error("Missing Prusa adapter");
+  const bytes = bgcode([{ payload: 20 }]);
+  const browse = vi.spyOn(files, "browse").mockResolvedValue({ path: "", entries: [
+    { kind: "file", path: "bracket.bgcode", name: "bracket.bgcode", modified_at: "2026-09-05T12:00:00Z" },
+  ] });
+  const open = vi.spyOn(files, "open").mockImplementation(async () => new Response(bytes));
+  try {
+    const content = await app.inject({ method: "GET", url: `/printers/core-one/files/content?path=bracket.bgcode&profile_id=${plan.id}` });
+    expect(content.statusCode).toBe(200);
+    const token = content.headers["x-printpartner-snapshot"];
+    expect(token).toEqual(expect.any(String));
+    const payload = { profile_id: plan.id, printer_id: "core-one", filename: "bracket.bgcode", remote_path: "bracket.bgcode", snapshot_token: token, object_names: [], tracking };
+    for (const change of [{ filename: "different.bgcode" }, { remote_path: "elsewhere.bgcode" }, { snapshot_token: "unknown" }]) {
+      const invalid = await app.inject({ method: "POST", url: "/printer-checkoff/file-assignments/preview", payload: { ...payload, ...change } });
+      expect(invalid.statusCode).toBe(409);
+    }
+    const preview = await app.inject({ method: "POST", url: "/printer-checkoff/file-assignments/preview", payload });
+    expect(preview.statusCode).toBe(200);
+    expect(preview.json().inspected).toBe(true);
+    const observe = vi.spyOn(repo, "observePrinterCheckoffRemoteFile");
+    const failed = await app.inject({ method: "POST", url: "/printer-checkoff/file-assignments", payload: { ...payload, completed: true, plan_revision_id: -1, unit_tokens: [] } });
+    expect(failed.statusCode).not.toBe(200);
+    const assigned = await app.inject({ method: "POST", url: "/printer-checkoff/file-assignments", payload: { ...payload, completed: true, plan_revision_id: planRevisionId, unit_tokens: [] } });
+    expect(assigned.statusCode).toBe(200);
+    expect(assigned.json().link).toMatchObject({ remote_path: "bracket.bgcode", remote_identity: { sha256: createHash("sha256").update(bytes).digest("hex") } });
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(observe).not.toHaveBeenCalled();
+    expect(browse).toHaveBeenCalledTimes(1);
+    const replay = await app.inject({ method: "POST", url: "/printer-checkoff/file-assignments/preview", payload });
+    expect(replay.statusCode).toBe(409);
+    expect(open).toHaveBeenCalledTimes(1);
+  } finally {
+    open.mockRestore();
+    browse.mockRestore();
+  }
+});
 
 function acceptedPrintUnits(repo: AppRepository, profileId: number, partId: number): boolean[] {
   const accepted = repo.readAcceptedPlanOperationalSnapshot(profileId);

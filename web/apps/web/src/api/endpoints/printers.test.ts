@@ -101,6 +101,22 @@ describe("stored printer file downloads", () => {
   const interruptedMessage =
     "The printer file download was interrupted. Try again, or upload the file from your computer.";
 
+  it("reports received bytes and forwards cancellation", async () => {
+    const controller = new AbortController();
+    const onProgress = vi.fn();
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(new Response(new ReadableStream<Uint8Array>({
+      start(stream) {
+        stream.enqueue(new Uint8Array([1, 2]));
+        stream.enqueue(new Uint8Array([3]));
+        stream.close();
+      },
+    }), { headers: { "Content-Length": "3" } }));
+    vi.stubGlobal("fetch", fetch);
+    await openPrinterStoredFile({ printerId: "p1", file, signal: controller.signal, onProgress });
+    expect(fetch.mock.calls[0]?.[1]?.signal).toBe(controller.signal);
+    expect(onProgress.mock.calls).toEqual([[{ receivedBytes: 2, totalBytes: 3 }], [{ receivedBytes: 3, totalBytes: 3 }]]);
+  });
+
   it("explains a connection failure before the response arrives", async () => {
     vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockRejectedValueOnce(new TypeError("Failed to fetch")));
 
