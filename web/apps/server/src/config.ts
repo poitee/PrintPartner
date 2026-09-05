@@ -131,7 +131,17 @@ export type ServerConfig = {
 
 const DEFAULT_DATA_DIR = process.env.PRINT_PARTNER_DATA_DIR ?? "./data";
 const require = createRequire(import.meta.url);
-const appPackage = require("../../../package.json") as { version: string };
+const requireFromServerPackage = createRequire(require.resolve("@print-partner/server/package.json"));
+const appPackage: unknown = requireFromServerPackage("../../package.json");
+if (
+  typeof appPackage !== "object" ||
+  appPackage === null ||
+  !("version" in appPackage) ||
+  typeof appPackage.version !== "string"
+) {
+  throw new Error("Application package must contain a version string");
+}
+const appVersion = appPackage.version;
 
 function parseDeployMode(raw: string | undefined): DeployMode {
   if (raw === "saas") return "saas";
@@ -229,7 +239,7 @@ function aiCredentialsPresent(
 export function loadConfig(): ServerConfig {
   const deployMode = parseDeployMode(process.env.DEPLOY_MODE);
   const releaseIdentity = resolveRuntimeReleaseIdentity({
-    packageVersion: appPackage.version,
+    packageVersion: appVersion,
     deployMode,
     env: process.env,
   });
