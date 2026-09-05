@@ -9,6 +9,7 @@ import JSZip from "jszip";
 export type SlicedObjectSource =
   | "exclude_object_define"
   | "m486"
+  | "prusa_objects_info"
   | "3mf_object"
   | "cura_mesh"
   | "comment";
@@ -80,6 +81,8 @@ function pushUnique(
 
 /** Extract object labels from G-code / comment text. */
 export function parseGcodeObjectText(text: string): ParsedSlicedObject[] {
+  const inventory = parsePrusaObjectsInfo(text);
+  if (inventory.length > 0) return inventory;
   const out: ParsedSlicedObject[] = [];
   const seen = new Set<string>();
 
@@ -128,6 +131,33 @@ export function parseGcodeObjectText(text: string): ParsedSlicedObject[] {
   }
 
   return out;
+}
+
+function parsePrusaObjectsInfo(text: string): ParsedSlicedObject[] {
+  for (const match of text.matchAll(/^\s*;?\s*objects_info\s*=\s*(\{[^\r\n]*\})\s*$/gm)) {
+    let value: unknown;
+    try {
+      value = JSON.parse(match[1]!);
+    } catch {
+      continue;
+    }
+    if (
+      typeof value !== "object" || value === null ||
+      !("objects" in value) || !Array.isArray(value.objects)
+    ) continue;
+    const objects: ParsedSlicedObject[] = [];
+    for (const item of value.objects) {
+      if (
+        typeof item !== "object" || item === null ||
+        !("name" in item) || typeof item.name !== "string" || !item.name.trim()
+      ) continue;
+      objects.push({ name: item.name.trim(), source: "prusa_objects_info" });
+    }
+    // This inventory describes placed instances, including identical copies.
+    // Movement commands can repeat the same labels on every layer.
+    if (objects.length > 0) return objects;
+  }
+  return [];
 }
 
 /** Extract estimated print time and filament weight from gcode header comments. */
@@ -399,7 +429,9 @@ async function parse3mfArchive(
           lower.endsWith(".bgcode")
             ? extractAsciiChunks(await entry.async("uint8array"))
             : await entry.async("string");
-        merge(parseGcodeObjectText(text));
+        const rows = parseGcodeObjectText(text);
+        const newRows = rows.filter((row) => !seen.has(row.name.trim().toLowerCase()));
+        merge(newRows, rows.some((row) => row.source === "prusa_objects_info"));
         // Parse stats from the first gcode entry that has them.
         if (printTime == null && filamentWeightG == null) {
           const stats = parseGcodeStats(text);
