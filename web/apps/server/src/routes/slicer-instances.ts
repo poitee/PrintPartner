@@ -5,7 +5,6 @@ import type {
   SlicerInstanceKind,
 } from "../services/slicer-instances.js";
 import { validateSlicerGuiUrl } from "../services/slicer-instances.js";
-import { reloadManagedProfileSync } from "../services/profile-sync-manager.js";
 import {
   createDockerAdapterForSpec,
   createFakeDockerAdapter,
@@ -20,6 +19,7 @@ type RouteDeps = {
   deployMode?: "self-host" | "saas";
   /** Injected for tests; production resolves per instance target. */
   docker?: SlicerDockerAdapter;
+  reloadProfileSync?: () => Promise<void>;
 };
 
 const KINDS: ReadonlySet<string> = new Set(["orca", "prusa", "bambu", "custom"]);
@@ -88,10 +88,6 @@ function defaultDialectForKind(kind: SlicerInstanceKind): SlicerDialect {
   return "orca_json";
 }
 
-function afterWatcherAffectingChange(): void {
-  reloadManagedProfileSync();
-}
-
 function resolveDocker(deps: RouteDeps, row: SlicerInstanceRow): SlicerDockerAdapter {
   if (deps.docker) return deps.docker;
   return createDockerAdapterForSpec(specFromInstanceRow(row));
@@ -142,7 +138,7 @@ export async function registerSlicerInstanceRoutes(
 
   app.post("/slicer-instances/seed-defaults", async () => {
     const inserted = deps.repo.seedStockSlicerInstancesIfEmpty();
-    if (inserted > 0) afterWatcherAffectingChange();
+    if (inserted > 0) await deps.reloadProfileSync?.();
     return {
       inserted,
       instances: deps.repo.listSlicerInstances().map(asInstanceJson),
@@ -207,7 +203,7 @@ export async function registerSlicerInstanceRoutes(
           : (dockerDefaults?.volumes_json ?? "[]"),
       envJson: typeof body.env_json === "string" ? body.env_json : (dockerDefaults?.env_json ?? "{}"),
     });
-    afterWatcherAffectingChange();
+    await deps.reloadProfileSync?.();
     return reply.status(201).send(asInstanceJson(row));
   });
 
@@ -275,7 +271,7 @@ export async function registerSlicerInstanceRoutes(
         typeof body.volumes_json === "string" ? body.volumes_json : existing.volumesJson,
       envJson: typeof body.env_json === "string" ? body.env_json : existing.envJson,
     });
-    afterWatcherAffectingChange();
+    await deps.reloadProfileSync?.();
     return asInstanceJson(row);
   });
 
@@ -284,7 +280,7 @@ export async function registerSlicerInstanceRoutes(
     if (!deps.repo.deleteSlicerInstance(id)) {
       return reply.status(404).send({ detail: "Slicer instance not found" });
     }
-    afterWatcherAffectingChange();
+    await deps.reloadProfileSync?.();
     return reply.status(204).send();
   });
 

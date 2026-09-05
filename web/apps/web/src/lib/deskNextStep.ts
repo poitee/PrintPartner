@@ -1,5 +1,5 @@
 /**
- * One next-step line per spine page (GRE-226). Exact copy; hide when done.
+ * One next-step line per spine page. Exact copy; hide when done.
  */
 export const DESK_NEXT_STEP = {
   library: "Add a source, then New Build.",

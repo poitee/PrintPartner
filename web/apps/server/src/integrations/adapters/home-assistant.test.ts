@@ -13,6 +13,13 @@ function makeConfig(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
 describe("homeAssistantAdapter", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -26,21 +33,14 @@ describe("homeAssistantAdapter", () => {
     it("returns ok with version when /api/ is reachable and entity_id is valid", async () => {
       const fetchMock = vi
         .fn()
-        .mockResolvedValueOnce({
-          ok: true,
-          status: 200,
-          headers: new Headers(),
-          json: async () => ({ message: "API running.", version: "2024.1.0" }),
-        })
-        .mockResolvedValueOnce({
-          ok: true,
-          status: 200,
-          headers: new Headers(),
-          json: async () => ({
+        .mockResolvedValueOnce(jsonResponse({
+          message: "API running.",
+          version: "2024.1.0",
+        }))
+        .mockResolvedValueOnce(jsonResponse({
             state: "idle",
             attributes: { friendly_name: "Printer State" },
-          }),
-        });
+          }));
       vi.stubGlobal("fetch", fetchMock);
 
       const result = await homeAssistantAdapter.testConnection(makeConfig());
@@ -51,12 +51,7 @@ describe("homeAssistantAdapter", () => {
     });
 
     it("sends Bearer token in Authorization header", async () => {
-      const fetchMock = vi.fn().mockResolvedValue({
-        ok: true,
-        status: 200,
-        headers: new Headers(),
-        json: async () => ({ message: "API running." }),
-      });
+      const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ message: "API running." }));
       vi.stubGlobal("fetch", fetchMock);
 
       await homeAssistantAdapter.testConnection(
@@ -101,18 +96,8 @@ describe("homeAssistantAdapter", () => {
     it("returns ok=false when entity_id is not found", async () => {
       const fetchMock = vi
         .fn()
-        .mockResolvedValueOnce({
-          ok: true,
-          status: 200,
-          headers: new Headers(),
-          json: async () => ({ message: "API running." }),
-        })
-        .mockResolvedValueOnce({
-          ok: false,
-          status: 404,
-          headers: new Headers(),
-          json: async () => ({}),
-        });
+        .mockResolvedValueOnce(jsonResponse({ message: "API running." }))
+        .mockResolvedValueOnce(jsonResponse({}, 404));
       vi.stubGlobal("fetch", fetchMock);
 
       const result = await homeAssistantAdapter.testConnection(makeConfig());
@@ -123,18 +108,11 @@ describe("homeAssistantAdapter", () => {
     it("does not forward token on cross-origin redirect", async () => {
       const fetchMock = vi
         .fn()
-        .mockResolvedValueOnce({
-          ok: false,
+        .mockResolvedValueOnce(new Response(null, {
           status: 302,
-          headers: new Headers({ location: "http://192.168.1.99:8123/api/" }),
-          arrayBuffer: async () => new ArrayBuffer(0),
-        })
-        .mockResolvedValueOnce({
-          ok: true,
-          status: 200,
-          headers: new Headers(),
-          json: async () => ({ message: "API running." }),
-        });
+          headers: { location: "http://192.168.1.99:8123/api/" },
+        }))
+        .mockResolvedValueOnce(jsonResponse({ message: "API running." }));
       vi.stubGlobal("fetch", fetchMock);
 
       const result = await homeAssistantAdapter.testConnection(
@@ -164,15 +142,10 @@ describe("homeAssistantAdapter", () => {
     it("maps HA 'printing' state with progress and filename", async () => {
       vi.stubGlobal(
         "fetch",
-        vi.fn().mockResolvedValue({
-          ok: true,
-          status: 200,
-          headers: new Headers(),
-          json: async () => ({
+        vi.fn().mockResolvedValue(jsonResponse({
             state: "printing",
             attributes: { progress: 42, filename: "benchy.gcode" },
-          }),
-        }),
+          })),
       );
 
       const status = await homeAssistantAdapter.getStatus!(makeConfig());
@@ -185,15 +158,10 @@ describe("homeAssistantAdapter", () => {
     it("maps HA 'paused' state and keeps progress", async () => {
       vi.stubGlobal(
         "fetch",
-        vi.fn().mockResolvedValue({
-          ok: true,
-          status: 200,
-          headers: new Headers(),
-          json: async () => ({
+        vi.fn().mockResolvedValue(jsonResponse({
             state: "paused",
             attributes: { progress: 67 },
-          }),
-        }),
+          })),
       );
 
       const status = await homeAssistantAdapter.getStatus!(makeConfig());
@@ -204,15 +172,10 @@ describe("homeAssistantAdapter", () => {
     it("maps HA 'done' state to complete and clears progress", async () => {
       vi.stubGlobal(
         "fetch",
-        vi.fn().mockResolvedValue({
-          ok: true,
-          status: 200,
-          headers: new Headers(),
-          json: async () => ({
+        vi.fn().mockResolvedValue(jsonResponse({
             state: "done",
             attributes: { progress: 100, filename: "test.gcode" },
-          }),
-        }),
+          })),
       );
 
       const status = await homeAssistantAdapter.getStatus!(makeConfig());
@@ -224,12 +187,7 @@ describe("homeAssistantAdapter", () => {
     it("maps HA 'idle' state", async () => {
       vi.stubGlobal(
         "fetch",
-        vi.fn().mockResolvedValue({
-          ok: true,
-          status: 200,
-          headers: new Headers(),
-          json: async () => ({ state: "idle", attributes: {} }),
-        }),
+        vi.fn().mockResolvedValue(jsonResponse({ state: "idle", attributes: {} })),
       );
 
       const status = await homeAssistantAdapter.getStatus!(makeConfig());
@@ -239,12 +197,7 @@ describe("homeAssistantAdapter", () => {
     it("maps HA 'unavailable' state to offline", async () => {
       vi.stubGlobal(
         "fetch",
-        vi.fn().mockResolvedValue({
-          ok: true,
-          status: 200,
-          headers: new Headers(),
-          json: async () => ({ state: "unavailable", attributes: {} }),
-        }),
+        vi.fn().mockResolvedValue(jsonResponse({ state: "unavailable", attributes: {} })),
       );
 
       const status = await homeAssistantAdapter.getStatus!(makeConfig());
@@ -285,15 +238,10 @@ describe("homeAssistantAdapter", () => {
     it("normalises progress expressed as a string percentage", async () => {
       vi.stubGlobal(
         "fetch",
-        vi.fn().mockResolvedValue({
-          ok: true,
-          status: 200,
-          headers: new Headers(),
-          json: async () => ({
+        vi.fn().mockResolvedValue(jsonResponse({
             state: "printing",
             attributes: { progress: "75.8" },
-          }),
-        }),
+          })),
       );
 
       const status = await homeAssistantAdapter.getStatus!(makeConfig());
@@ -320,12 +268,7 @@ describe("homeAssistantAdapter", () => {
     it("returns a single device entry when entity_id is configured", async () => {
       vi.stubGlobal(
         "fetch",
-        vi.fn().mockResolvedValue({
-          ok: true,
-          status: 200,
-          headers: new Headers(),
-          json: async () => ({ state: "idle", attributes: {} }),
-        }),
+        vi.fn().mockResolvedValue(jsonResponse({ state: "idle", attributes: {} })),
       );
 
       const devices = await homeAssistantAdapter.listDevices!(makeConfig());

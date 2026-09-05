@@ -31,11 +31,19 @@ export default function GitHubRefField({
   const [manual, setManual] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const requestIdRef = useRef(0);
+  const latestSelectionRef = useRef({
+    branch,
+    tag,
+    onBranchChange,
+    onTagChange,
+  });
+  latestSelectionRef.current = { branch, tag, onBranchChange, onTagChange };
 
   const value = refType === "tag" ? tag : branch;
   const onValueChange = refType === "tag" ? onTagChange : onBranchChange;
 
   useEffect(() => {
+    const requestId = ++requestIdRef.current;
     const trimmed = url.trim();
     if (!GITHUB_REPO_RE.test(trimmed)) {
       setOptions(null);
@@ -50,7 +58,6 @@ export default function GitHubRefField({
     setError(null);
 
     debounceRef.current = setTimeout(() => {
-      const requestId = ++requestIdRef.current;
       void (async () => {
         try {
           if (refType === "tag") {
@@ -59,8 +66,9 @@ export default function GitHubRefField({
             setOptions(result.tags);
             setManual(false);
             setError(null);
-            if (result.tags.length > 0 && !result.tags.includes(tag)) {
-              onTagChange(result.tags[0]);
+            const latest = latestSelectionRef.current;
+            if (result.tags.length > 0 && !result.tags.includes(latest.tag)) {
+              latest.onTagChange(result.tags[0]);
             }
           } else {
             const result = await fetchGithubBranches(trimmed);
@@ -68,11 +76,15 @@ export default function GitHubRefField({
             setOptions(result.branches);
             setManual(false);
             setError(null);
+            const latest = latestSelectionRef.current;
             if (result.url_branch) {
-              onBranchChange(result.url_branch);
+              latest.onBranchChange(result.url_branch);
               if (!result.branches.includes(result.url_branch)) setManual(true);
-            } else if (!branch.trim() || !result.branches.includes(branch)) {
-              onBranchChange(result.default_branch);
+            } else if (
+              !latest.branch.trim() ||
+              !result.branches.includes(latest.branch)
+            ) {
+              latest.onBranchChange(result.default_branch);
             }
           }
         } catch (e) {
@@ -88,8 +100,8 @@ export default function GitHubRefField({
 
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
+      if (requestIdRef.current === requestId) requestIdRef.current += 1;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- branch/tag value changes should not re-fetch
   }, [url, refType]);
 
   const showDropdown = options != null && options.length > 0 && !manual;

@@ -1,4 +1,5 @@
 import { safeOutboundFetch } from "../lib/outbound-url.js";
+import { cancelResponseBody, readBoundedResponseText } from "../lib/bounded-response.js";
 import type { AcceptedProfileProgress } from "../db/repository.js";
 import { getLogger } from "./logger.js";
 
@@ -39,6 +40,8 @@ const EVENT_META: Record<
     titleTemplate: "Good morning — farm digest",
   },
 };
+
+const MAX_ERROR_RESPONSE_BYTES = 64 * 1024;
 
 function shortSha(sha: string | null | undefined): string {
   return sha ? sha.slice(0, 7) : "unknown";
@@ -197,10 +200,13 @@ export async function postDiscordWebhook(
       lastStatus = response.status;
 
       if (response.ok) {
+        await cancelResponseBody(response);
         return { ok: true, status: response.status, attempts: attempt };
       }
 
-      const text = await response.text().catch(() => "");
+      const text = await readBoundedResponseText(response, MAX_ERROR_RESPONSE_BYTES).catch(
+        () => "",
+      );
       lastError = describeFailure(response.status, text);
 
       if (!isRetryable(response.status)) {

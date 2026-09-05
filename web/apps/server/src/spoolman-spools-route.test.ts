@@ -21,19 +21,22 @@ describe("GET /api/v1/integrations/:id/spoolman/spools", () => {
       vi.fn(async (url: string | URL) => {
         const path = String(url);
         if (path.includes("/api/v1/spool")) {
-          return {
-            ok: true,
-            json: async () => [
+          return new Response(
+            JSON.stringify([
               {
                 id: 3,
                 filament_id: 7,
                 remaining_weight: 412.5,
                 location: "Shelf A",
               },
-            ],
-          };
+            ]),
+            { headers: { "content-type": "application/json" } },
+          );
         }
-        return { ok: false, status: 404, json: async () => ({}) };
+        return new Response("{}", {
+          status: 404,
+          headers: { "content-type": "application/json" },
+        });
       }),
     );
 

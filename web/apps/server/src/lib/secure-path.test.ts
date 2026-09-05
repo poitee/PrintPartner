@@ -78,8 +78,10 @@ describe("secure-path", () => {
   it("readBufferUnderDataDir rejects paths outside data dir", () => {
     const dataDir = tempDir();
     writeFileSync(join(dataDir, "kit.print-partner-kit"), "{}");
-    expect(() => readBufferUnderDataDir(dataDir, "/etc/passwd")).toThrow();
-    expect(readBufferUnderDataDir(dataDir, join(dataDir, "kit.print-partner-kit")).length).toBeGreaterThan(0);
+    expect(() => readBufferUnderDataDir(dataDir, "/etc/passwd", 1024)).toThrow();
+    expect(
+      readBufferUnderDataDir(dataDir, join(dataDir, "kit.print-partner-kit"), 1024).length,
+    ).toBeGreaterThan(0);
   });
 
   it("trimmedString only accepts strings", () => {

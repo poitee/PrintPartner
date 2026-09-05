@@ -58,7 +58,12 @@ function activateRevision(
     syncedAt: new Date().toISOString(),
     completeness: "complete",
   });
-  repo.activateSourceRevision({ sourceId, revisionId: revision.id, observed });
+  repo.activateSourceRevision({
+    sourceId,
+    revisionId: revision.id,
+    observed,
+    sourceVersion: revision.upstream_revision_key,
+  });
   return revision;
 }
 
@@ -114,6 +119,7 @@ describe("Plan freshness", () => {
         sourceId: tracked.source.id,
         revisionId: tracked.revision.id,
         observed,
+        sourceVersion: tracked.revision.upstream_revision_key,
       });
       acceptPlanForTest(repo, plan.id);
 

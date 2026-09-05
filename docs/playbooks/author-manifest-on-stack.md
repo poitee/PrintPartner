@@ -15,6 +15,7 @@ Repository maintainers should publish the manifest with the source. Community ma
 - Keep one base source per Build.
 - Model toolheads, probes, and other overlays as add-on sources.
 - Use the same category or choice id when related variants span repositories.
+- Use `pick_one` for one variant, `pick_any` for an unrestricted set, and `pick_n` with inclusive `min` and `max` bounds for a limited set.
 - Use `replaces` or a shared slot when an add-on replaces a base part.
 - Never store absolute paths or database ids in a published manifest.
 
@@ -27,16 +28,34 @@ A choice can collect variants from several sources. Give the category the same i
 Example:
 
 ```yaml
-choices:
-  - id: toolhead
-    mode: pick_one
+option_groups:
+  toolhead:
+    rule: pick_one
     variants:
       - id: stealthburner
         parts:
-          - match: Stealthburner/**
+          - Stealthburner/**
 ```
 
 An add-on repository may contribute another `toolhead` variant with a different path. Print Partner merges the choice by id when both sources are attached to a Build.
+
+For `pick_any` and `pick_n`, Print Partner stores selected ids as a YAML list. Keep the list values unique. Do not join ids with commas or another delimiter. Repository defaults must contain at least one id. In a plan, omit the selection key to inherit the repository default, or use an empty list to select no variants explicitly. A plan with fewer selections than the group's minimum remains incomplete.
+
+```yaml
+option_groups:
+  cosmetic_parts:
+    rule: pick_n
+    min: 1
+    max: 2
+    variants:
+      - id: skirts
+        parts: ["skirts/**"]
+      - id: panels
+        parts: ["panels/**"]
+selections:
+  cosmetic_parts:
+    - skirts
+```
 
 ## Validate the result
 

@@ -34,6 +34,7 @@ import {
   type DomainImportPayload,
 } from "../assistant/domain-pack.js";
 import { sendProblem } from "../lib/api-error.js";
+import { MAX_ASSISTANT_ACTION_BODY_BYTES } from "../services/upload-limits.js";
 
 type RouteDeps = {
   repo: AppRepository;
@@ -41,7 +42,6 @@ type RouteDeps = {
   jobs: InProcessJobRunner;
 };
 
-/** Apply/dismiss + decision/feedback data. In-app chat is gone (GRE-225); use HTTP MCP. */
 export async function registerAssistantRoutes(
   app: FastifyInstance,
   deps: RouteDeps,
@@ -181,7 +181,10 @@ export async function registerAssistantRoutes(
 
   app.post(
     "/assistant/actions/apply",
-    { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } },
+    {
+      bodyLimit: MAX_ASSISTANT_ACTION_BODY_BYTES,
+      config: { rateLimit: { max: 20, timeWindow: "1 minute" } },
+    },
     async (request, reply) => {
       const body = (request.body ?? {}) as AssistantActionApplyRequest;
       const action = body.action as AssistantProposedAction | undefined;
@@ -250,7 +253,10 @@ export async function registerAssistantRoutes(
 
   app.post(
     "/assistant/actions/dismiss",
-    { config: { rateLimit: { max: 40, timeWindow: "1 minute" } } },
+    {
+      bodyLimit: MAX_ASSISTANT_ACTION_BODY_BYTES,
+      config: { rateLimit: { max: 40, timeWindow: "1 minute" } },
+    },
     async (request, reply) => {
       const body = (request.body ?? {}) as { action?: AssistantProposedAction };
       const action = body.action;

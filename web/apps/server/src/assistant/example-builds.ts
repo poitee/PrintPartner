@@ -3,6 +3,7 @@ import { loadKitCatalog } from "../services/kit-catalog.js";
 import { loadKitManifest } from "../services/kit-manifest-store.js";
 import { loadRoleFilamentDefaults } from "../services/role-filament-store.js";
 import { aggregateFeedbackScores, collectCatalogFeedbackTokens } from "./history.js";
+import { formatManifestSelection } from "../services/manifest-selections.js";
 
 const MAX_EXAMPLE_PLANS = 5;
 const MAX_EXAMPLE_CHARS = 4500;
@@ -81,7 +82,11 @@ function summarizeOnePlan(
       `addons=[${addonNames.join(", ") || "none"}]`,
       presetId ? `inferred_stack_preset=${presetId}` : null,
       selectionEntries.length
-        ? `kit_selections={${selectionEntries.map(([k, v]) => `${k}=${v}`).join(", ")}}`
+        ? `kit_selections={${selectionEntries
+            .map(([key, selection]) =>
+              `${key}=${formatManifestSelection(selection)}`,
+            )
+            .join(", ")}}`
         : "kit_selections={}",
       filamentLines.length ? `role_filaments={${filamentLines.join(", ")}}` : null,
     ]

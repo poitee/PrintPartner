@@ -21,9 +21,8 @@ describe("GET /filaments/catalog Spoolman merge", () => {
       vi.fn(async (url: string | URL) => {
         const path = String(url);
         if (path.includes("/api/v1/filament")) {
-          return {
-            ok: true,
-            json: async () => [
+          return new Response(
+            JSON.stringify([
               {
                 id: 1,
                 name: "Red",
@@ -31,10 +30,14 @@ describe("GET /filaments/catalog Spoolman merge", () => {
                 material: "PLA",
                 color_hex: "#ff0000",
               },
-            ],
-          };
+            ]),
+            { headers: { "content-type": "application/json" } },
+          );
         }
-        return { ok: false, status: 404, json: async () => ({}) };
+        return new Response("{}", {
+          status: 404,
+          headers: { "content-type": "application/json" },
+        });
       }),
     );
 
@@ -79,10 +82,9 @@ describe("GET /filaments/catalog Spoolman merge", () => {
   it("surfaces spoolman_error when Spoolman filaments request fails", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => ({
-        ok: false,
+      vi.fn(async () => new Response("{}", {
         status: 503,
-        json: async () => ({}),
+        headers: { "content-type": "application/json" },
       })),
     );
 

@@ -8,7 +8,9 @@ import {
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as yaml from "js-yaml";
+import type { ManifestSelections } from "@print-partner/contracts";
 import type { AppRepository } from "../db/repository.js";
+import { parseManifestSelections } from "../services/manifest-selections.js";
 import {
   formatCompatibilityDigestLine,
   normalizeCompatibility,
@@ -37,7 +39,7 @@ export type AliasResolve = {
   branch?: string | null;
   addons?: string[];
   notes?: string | null;
-  selection?: Record<string, string>;
+  selection?: ManifestSelections;
 };
 
 export type SourceIdentity = {
@@ -51,7 +53,7 @@ export type SourceDecisionYaml = {
   id: string;
   kind?: string;
   label?: string;
-  options?: Array<{ id: string; label?: string; selection?: Record<string, string> }>;
+  options?: Array<{ id: string; label?: string; selection?: ManifestSelections }>;
 };
 
 export type AliasEntry = {
@@ -65,7 +67,7 @@ export type StackEntry = {
   base_tag?: string | null;
   catalog_base_id?: string | null;
   addon_sources?: string[];
-  default_selections?: Record<string, string>;
+  default_selections?: ManifestSelections;
   notes?: string;
 };
 
@@ -262,14 +264,13 @@ function refToTagOrBranch(ref: unknown): { tag?: string | null; branch?: string 
   return { tag: value, branch: null };
 }
 
-function normalizeSelectionMap(raw: unknown): Record<string, string> | undefined {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
-  const out: Record<string, string> = {};
-  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
-    if (v == null || v === "") continue;
-    out[k] = String(v);
-  }
-  return Object.keys(out).length ? out : undefined;
+function normalizeSelectionMap(
+  raw: unknown,
+  path: string,
+): ManifestSelections | undefined {
+  if (raw == null) return undefined;
+  const selections = parseManifestSelections(raw, path);
+  return Object.keys(selections).length ? selections : undefined;
 }
 
 /** Accept both schema docs (phrases/resolve) and research-output (phrase/ref) shapes. */
@@ -285,7 +286,8 @@ export function normalizeAliasEntry(raw: unknown): AliasEntry | null {
         : [];
     if (!phrases.length && !resolveRaw.source_name) return null;
     const selection =
-      normalizeSelectionMap(resolveRaw.selection) ?? normalizeSelectionMap(o.selection);
+      normalizeSelectionMap(resolveRaw.selection, "alias.resolve.selection") ??
+      normalizeSelectionMap(o.selection, "alias.selection");
     return {
       phrases,
       resolve: {
@@ -301,7 +303,7 @@ export function normalizeAliasEntry(raw: unknown): AliasEntry | null {
     .filter(Boolean);
   if (!phrases.length && !o.source_name) return null;
   const { tag, branch } = refToTagOrBranch(o.ref);
-  const selection = normalizeSelectionMap(o.selection);
+  const selection = normalizeSelectionMap(o.selection, "alias.selection");
   return {
     phrases,
     resolve: {
@@ -423,7 +425,10 @@ export function loadSourceDecisionsYaml(
           options.push({
             id: oid,
             label: typeof o.label === "string" ? o.label : undefined,
-            selection: normalizeSelectionMap(o.selection),
+            selection: normalizeSelectionMap(
+              o.selection,
+              `decisions.${id}.options.${oid}.selection`,
+            ),
           });
         }
         out.push({
@@ -465,14 +470,10 @@ export function normalizeStacks(raw: unknown): Array<{ id: string; stack: StackE
         base_tag: tag ?? branch ?? (baseRef != null ? String(baseRef) : null),
         catalog_base_id: o.catalog_base_id != null ? String(o.catalog_base_id) : null,
         addon_sources: splitAddonNames(o.addons ?? o.addon_sources),
-        default_selections:
-          o.default_selections && typeof o.default_selections === "object"
-            ? Object.fromEntries(
-                Object.entries(o.default_selections as Record<string, unknown>).map(
-                  ([k, v]) => [k, String(v)],
-                ),
-              )
-            : undefined,
+        default_selections: normalizeSelectionMap(
+          o.default_selections,
+          `stacks[${i}].default_selections`,
+        ),
         notes: o.notes != null ? String(o.notes) : undefined,
       };
       out.push({ id: name, stack });
@@ -480,10 +481,19 @@ export function normalizeStacks(raw: unknown): Array<{ id: string; stack: StackE
     return out;
   }
   if (typeof raw === "object") {
-    return Object.entries(raw as Record<string, StackEntry>).map(([id, stack]) => ({
-      id,
-      stack: stack ?? {},
-    }));
+    return Object.entries(raw as Record<string, StackEntry>).map(([id, stack]) => {
+      const defaultSelections = normalizeSelectionMap(
+        stack?.default_selections,
+        `stacks.${id}.default_selections`,
+      );
+      return {
+        id,
+        stack: {
+          ...(stack ?? {}),
+          ...(defaultSelections ? { default_selections: defaultSelections } : {}),
+        },
+      };
+    });
   }
   return [];
 }

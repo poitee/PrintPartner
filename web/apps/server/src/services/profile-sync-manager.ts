@@ -1,34 +1,133 @@
 import type { AppRepository } from "../db/repository.js";
+import { tenantStorage } from "../middleware/tenant-context.js";
 import {
   buildProfileSyncSettings,
   buildProfileSyncSettingsFromInstances,
   startProfileSyncWatcher,
-  type ProfileSyncEmitter,
+  type ProfileSyncResult,
+  type ProfileSyncWatcherFactory,
+  type ProfileSyncWatcherHandle,
 } from "./profile-sync.js";
+import { getLogger } from "./logger.js";
 
-type WatcherHandle = { stop: () => void; syncAll: () => Promise<void> };
+const DEFAULT_TENANT_REFRESH_MS = 60_000;
 
-let handle: WatcherHandle | null = null;
-let emit: ProfileSyncEmitter = () => {};
-let repo: AppRepository | null = null;
+export type ManagedProfileSyncHandle = {
+  stop: () => Promise<void>;
+  syncAll: () => Promise<void>;
+  reloadTenant: (tenantId: string) => Promise<void>;
+  reconcileTenants: () => Promise<void>;
+};
+
+type ManagedProfileSyncOptions = Readonly<{
+  repository: AppRepository;
+  listTenantIds: () => readonly string[];
+  emit: (tenantId: string, event: ProfileSyncResult) => void;
+  createWatcher?: ProfileSyncWatcherFactory;
+  prepareTenant?: () => void;
+  tenantRefreshMs?: number;
+}>;
 
 export function startManagedProfileSync(
-  repository: AppRepository,
-  emitter: ProfileSyncEmitter,
-): WatcherHandle {
-  handle?.stop();
-  repo = repository;
-  emit = emitter;
-  const watcher = startProfileSyncWatcher(repository, resolveSettings(repository), emitter);
-  handle = watcher;
+  options: ManagedProfileSyncOptions,
+): ManagedProfileSyncHandle {
+  const createWatcher = options.createWatcher ?? startProfileSyncWatcher;
+  const watchers = new Map<string, ProfileSyncWatcherHandle>();
+  let lifecycle = Promise.resolve();
+  let stopped = false;
+  const tenantRefreshMs = options.tenantRefreshMs ?? DEFAULT_TENANT_REFRESH_MS;
+  if (!Number.isSafeInteger(tenantRefreshMs) || tenantRefreshMs < 0) {
+    throw new RangeError("tenantRefreshMs must be a non-negative safe integer");
+  }
+
+  function startTenant(tenantId: string, prepare: boolean): ProfileSyncWatcherHandle {
+    return tenantStorage.run(tenantId, () => {
+      if (prepare) options.prepareTenant?.();
+      return createWatcher(
+        options.repository,
+        resolveSettings(options.repository),
+        (event) => options.emit(tenantId, event),
+        (work) => tenantStorage.run(tenantId, work),
+      );
+    });
+  }
+
+  function desiredTenantIds(): Set<string> {
+    return new Set(
+      options.listTenantIds().map((tenantId) => tenantId.trim()).filter(Boolean),
+    );
+  }
+
+  function enqueueLifecycle(work: () => Promise<void>): Promise<void> {
+    const run = lifecycle.catch(() => {}).then(work);
+    lifecycle = run;
+    return run;
+  }
+
+  function reloadTenant(tenantId: string): Promise<void> {
+    const normalizedTenantId = tenantId.trim();
+    if (!normalizedTenantId) return Promise.resolve();
+    return enqueueLifecycle(async () => {
+      if (stopped) return;
+      const currentWatcher = watchers.get(normalizedTenantId);
+      watchers.delete(normalizedTenantId);
+      await currentWatcher?.stop();
+      if (stopped) return;
+      watchers.set(normalizedTenantId, startTenant(normalizedTenantId, false));
+    });
+  }
+
+  function reconcileTenants(): Promise<void> {
+    return enqueueLifecycle(async () => {
+      if (stopped) return;
+      const desired = desiredTenantIds();
+      const closing: Promise<void>[] = [];
+      for (const [tenantId, watcher] of watchers) {
+        if (desired.has(tenantId)) continue;
+        watchers.delete(tenantId);
+        closing.push(watcher.stop());
+      }
+      await Promise.all(closing);
+      if (stopped) return;
+      for (const tenantId of desired) {
+        if (!watchers.has(tenantId)) watchers.set(tenantId, startTenant(tenantId, true));
+      }
+    });
+  }
+
+  for (const tenantId of desiredTenantIds()) {
+    watchers.set(tenantId, startTenant(tenantId, true));
+  }
+  const refreshTimer = tenantRefreshMs > 0
+    ? setInterval(() => {
+        void reconcileTenants().catch((error: unknown) => {
+          getLogger().log(
+            "error",
+            `[profile-sync] tenant refresh failed: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        });
+      }, tenantRefreshMs)
+    : null;
+  refreshTimer?.unref();
+
   return {
     stop: () => {
-      watcher.stop();
-      if (handle === watcher) handle = null;
+      if (stopped) return lifecycle;
+      stopped = true;
+      if (refreshTimer) clearInterval(refreshTimer);
+      return enqueueLifecycle(async () => {
+        const activeWatchers = [...watchers.values()];
+        watchers.clear();
+        await Promise.all(activeWatchers.map((watcher) => watcher.stop()));
+      });
     },
-    syncAll: async () => {
-      await watcher.syncAll();
-    },
+    syncAll: () =>
+      enqueueLifecycle(async () => {
+        if (stopped) return;
+        await Promise.all([...watchers.values()].map((watcher) => watcher.syncAll()));
+      }),
+    reloadTenant,
+    reconcileTenants,
   };
 }
 
@@ -44,13 +143,4 @@ function resolveSettings(repository: AppRepository) {
     );
   }
   return buildProfileSyncSettings(process.env);
-}
-
-/** Stop and restart watchers from the current instance table (best-effort). */
-export function reloadManagedProfileSync(): void {
-  if (!repo) return;
-  handle?.stop();
-  const watcher = startProfileSyncWatcher(repo, resolveSettings(repo), emit);
-  handle = watcher;
-  void watcher.syncAll();
 }

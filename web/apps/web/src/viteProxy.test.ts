@@ -43,4 +43,21 @@ describe("Vite development API proxy", () => {
       expect(bypass!(apiFetch), `${path} API fetch was not proxied`).toBeUndefined();
     }
   });
+
+  it("serves the app for a legacy dynamic studio navigation", () => {
+    const options = config.server?.proxy?.["/plans"];
+    const bypass = (options as { bypass?: (req: IncomingMessage) => string | undefined })
+      .bypass;
+    const documentLoad = {
+      url: "/plans/42/studio?from=bookmark",
+      headers: { "sec-fetch-mode": "navigate", accept: "text/html" },
+    } as unknown as IncomingMessage;
+    const apiFetch = {
+      url: "/plans/42/studio",
+      headers: { accept: "application/json" },
+    } as unknown as IncomingMessage;
+
+    expect(bypass?.(documentLoad)).toBe(documentLoad.url);
+    expect(bypass?.(apiFetch)).toBeUndefined();
+  });
 });

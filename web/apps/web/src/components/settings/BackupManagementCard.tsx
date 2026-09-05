@@ -15,6 +15,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "../ui/dialog";
+import { statusTone } from "../../lib/statusTone";
+import { cn } from "../../lib/utils";
 
 type Backup = Readonly<{
   name: string;
@@ -22,20 +24,62 @@ type Backup = Readonly<{
   size: number;
 }>;
 
-type BackupMetadata = Readonly<{
+type BackupMetadataBase = Readonly<{
   version: string;
   createdAt: string;
   appVersion: string;
-  formatVersion: number;
+}>;
+
+type BackupMetadata =
+  | (BackupMetadataBase & Readonly<{ version: "1"; formatVersion: 1 }>)
+  | (BackupMetadataBase &
+      Readonly<{
+        version: "2";
+        formatVersion: 2;
+        scope:
+          | Readonly<{ kind: "full"; includedRoots: readonly string[] }>
+          | Readonly<{ kind: "database-only"; includedRoots: readonly [] }>;
+      }>);
+
+type RestorePreflight = Readonly<{
+  archiveBytes: number;
+  requiredBytes: number;
+  freeBytes: number;
+  sufficient: boolean;
+}>;
+
+type StorageCategory = Readonly<{
+  key: string;
+  label: string;
+  bytes: number;
+  files: number;
+}>;
+
+type StorageInventory = Readonly<{
+  categories: readonly StorageCategory[];
+  totalBytes: number;
+  backupContentBytes: number;
+  freeBytes: number;
 }>;
 
 type RestoreTarget =
-  | Readonly<{ kind: "stored"; backup: Backup }>
-  | Readonly<{ kind: "upload"; file: File; metadata: BackupMetadata }>;
+  | Readonly<{
+      kind: "stored";
+      backup: Backup;
+      metadata: BackupMetadata;
+      preflight: RestorePreflight;
+    }>
+  | Readonly<{
+      kind: "upload";
+      file: File;
+      metadata: BackupMetadata;
+      preflight: RestorePreflight;
+    }>;
 
 type RestoreFlow =
   | Readonly<{ phase: "idle" }>
   | Readonly<{ phase: "validating" }>
+  | Readonly<{ phase: "checking"; backup: Backup }>
   | Readonly<{ phase: "confirming"; target: RestoreTarget }>
   | Readonly<{ phase: "restoring"; target: RestoreTarget }>;
 
@@ -47,8 +91,9 @@ function isBackup(value: unknown): value is Backup {
     typeof value.name === "string" &&
     "createdAt" in value &&
     typeof value.createdAt === "string" &&
+    !Number.isNaN(Date.parse(value.createdAt)) &&
     "size" in value &&
-    typeof value.size === "number"
+    isNonNegativeNumber(value.size)
   );
 }
 
@@ -60,32 +105,173 @@ function parseBackupList(value: unknown): Backup[] {
 }
 
 function isBackupMetadata(value: unknown): value is BackupMetadata {
+  if (
+    !(
+      typeof value === "object" &&
+      value !== null &&
+      "version" in value &&
+      typeof value.version === "string" &&
+      "createdAt" in value &&
+      typeof value.createdAt === "string" &&
+      !Number.isNaN(Date.parse(value.createdAt)) &&
+      "appVersion" in value &&
+      typeof value.appVersion === "string" &&
+      "formatVersion" in value &&
+      isNonNegativeNumber(value.formatVersion)
+    )
+  ) {
+    return false;
+  }
+  if (value.version === "1" && value.formatVersion === 1) return true;
   return (
-    typeof value === "object" &&
-    value !== null &&
-    "version" in value &&
-    typeof value.version === "string" &&
-    "createdAt" in value &&
-    typeof value.createdAt === "string" &&
-    "appVersion" in value &&
-    typeof value.appVersion === "string" &&
-    "formatVersion" in value &&
-    typeof value.formatVersion === "number"
+    value.version === "2" &&
+    value.formatVersion === 2 &&
+    "scope" in value &&
+    typeof value.scope === "object" &&
+    value.scope !== null &&
+    "kind" in value.scope &&
+    (value.scope.kind === "full" || value.scope.kind === "database-only") &&
+    "includedRoots" in value.scope &&
+    Array.isArray(value.scope.includedRoots) &&
+    value.scope.includedRoots.every((root) => typeof root === "string") &&
+    (value.scope.kind === "full" || value.scope.includedRoots.length === 0)
   );
 }
 
-function parseValidationMetadata(value: unknown): BackupMetadata {
+function isNonNegativeNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function parseRestorePreflight(value: unknown): RestorePreflight {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("archiveBytes" in value) ||
+    !isNonNegativeNumber(value.archiveBytes) ||
+    !("requiredBytes" in value) ||
+    !isNonNegativeNumber(value.requiredBytes) ||
+    !("freeBytes" in value) ||
+    !isNonNegativeNumber(value.freeBytes) ||
+    !("sufficient" in value) ||
+    typeof value.sufficient !== "boolean" ||
+    value.archiveBytes > value.requiredBytes ||
+    value.sufficient !== (value.freeBytes >= value.requiredBytes)
+  ) {
+    throw new Error("The server returned an invalid restore preflight");
+  }
+  return {
+    archiveBytes: value.archiveBytes,
+    requiredBytes: value.requiredBytes,
+    freeBytes: value.freeBytes,
+    sufficient: value.sufficient,
+  };
+}
+
+function isStorageCategory(value: unknown): value is StorageCategory {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "key" in value &&
+    typeof value.key === "string" &&
+    "label" in value &&
+    typeof value.label === "string" &&
+    "bytes" in value &&
+    isNonNegativeNumber(value.bytes) &&
+    "files" in value &&
+    isNonNegativeNumber(value.files)
+  );
+}
+
+function parseValidation(value: unknown): Readonly<{
+  metadata: BackupMetadata;
+  preflight: RestorePreflight;
+}> {
   if (
     typeof value !== "object" ||
     value === null ||
     !("valid" in value) ||
     value.valid !== true ||
     !("metadata" in value) ||
-    !isBackupMetadata(value.metadata)
+    !isBackupMetadata(value.metadata) ||
+    !("restorePreflight" in value)
   ) {
     throw new Error("The server could not verify this backup");
   }
-  return value.metadata;
+  return {
+    metadata: value.metadata,
+    preflight: parseRestorePreflight(value.restorePreflight),
+  };
+}
+
+function parseInspection(value: unknown): Readonly<{
+  metadata: BackupMetadata;
+  preflight: RestorePreflight;
+}> {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("metadata" in value) ||
+    !isBackupMetadata(value.metadata) ||
+    !("restorePreflight" in value)
+  ) {
+    throw new Error("The server returned an invalid backup inspection");
+  }
+  return {
+    metadata: value.metadata,
+    preflight: parseRestorePreflight(value.restorePreflight),
+  };
+}
+
+function restoreScopeDescription(metadata: BackupMetadata): string {
+  if (metadata.formatVersion === 1) {
+    return "This legacy backup replaces the database and archived data paths. Paths absent from the archive stay unchanged.";
+  }
+  if (metadata.scope.kind === "database-only") {
+    return "This database-only backup leaves stored files unchanged and replaces only the database.";
+  }
+  return "This full backup replaces the database and every scoped data path. A scoped path that was absent when the backup was created is removed.";
+}
+
+function parseStorageInventory(value: unknown): StorageInventory {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("categories" in value) ||
+    !Array.isArray(value.categories) ||
+    !value.categories.every(isStorageCategory) ||
+    !("totalBytes" in value) ||
+    !isNonNegativeNumber(value.totalBytes) ||
+    !("backupContentBytes" in value) ||
+    !isNonNegativeNumber(value.backupContentBytes) ||
+    !("freeBytes" in value) ||
+    !isNonNegativeNumber(value.freeBytes)
+  ) {
+    throw new Error("The server returned an invalid storage inventory");
+  }
+  const measuredTotal = value.categories.reduce(
+    (total, category) => total + category.bytes,
+    0,
+  );
+  if (!Number.isSafeInteger(measuredTotal) || measuredTotal !== value.totalBytes) {
+    throw new Error("The server returned an inconsistent storage inventory");
+  }
+  return {
+    categories: value.categories,
+    totalBytes: value.totalBytes,
+    backupContentBytes: value.backupContentBytes,
+    freeBytes: value.freeBytes,
+  };
+}
+
+function formatSize(bytes: number): string {
+  if (bytes === 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB", "PB"] as const;
+  const unitIndex = Math.min(
+    Math.floor(Math.log(bytes) / Math.log(1024)),
+    units.length - 1,
+  );
+  const value = parseFloat((bytes / 1024 ** unitIndex).toFixed(2));
+  return `${value} ${units[unitIndex]}`;
 }
 
 async function responseError(response: Response, fallback: string): Promise<Error> {
@@ -109,7 +295,9 @@ export default function BackupManagementCard() {
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const restoreDescriptionId = useId();
   const [backups, setBackups] = useState<Backup[]>([]);
+  const [storage, setStorage] = useState<StorageInventory | null>(null);
   const [loading, setLoading] = useState(false);
+  const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [restoreFlow, setRestoreFlow] = useState<RestoreFlow>({ phase: "idle" });
 
@@ -117,10 +305,16 @@ export default function BackupManagementCard() {
     setLoading(true);
     setError(null);
     try {
-      const response = await fetch("/backups");
-      if (!response.ok) throw new Error("Failed to load backups");
-      const data: unknown = await response.json();
-      setBackups(parseBackupList(data));
+      const [backupsResponse, storageResponse] = await Promise.all([
+        fetch("/backups"),
+        fetch("/backups/storage"),
+      ]);
+      if (!backupsResponse.ok) throw new Error("Failed to load backups");
+      const backupData: unknown = await backupsResponse.json();
+      setBackups(parseBackupList(backupData));
+      if (!storageResponse.ok) throw new Error("Failed to inspect server storage");
+      const storageData: unknown = await storageResponse.json();
+      setStorage(parseStorageInventory(storageData));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unknown error");
     } finally {
@@ -131,13 +325,15 @@ export default function BackupManagementCard() {
   useEffect(() => {
     loadBackups();
     // Refresh when the tab regains focus
-    const onFocus = () => void loadBackups();
+    const onFocus = () => {
+      if (document.visibilityState === "visible") void loadBackups();
+    };
     document.addEventListener("visibilitychange", onFocus);
     return () => document.removeEventListener("visibilitychange", onFocus);
   }, [loadBackups]);
 
   const handleCreateBackup = async () => {
-    setLoading(true);
+    setCreating(true);
     try {
       const response = await fetch("/backups", { method: "POST" });
       if (!response.ok) throw new Error("Backup creation failed");
@@ -145,26 +341,17 @@ export default function BackupManagementCard() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create backup");
     } finally {
-      setLoading(false);
+      setCreating(false);
     }
   };
 
-  const handleDownload = async (id: string) => {
-    try {
-      const response = await fetch(`/backups/${id}`);
-      if (!response.ok) throw new Error("Download failed");
-      const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = id;
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Download failed");
-    }
+  const handleDownload = (id: string) => {
+    const link = document.createElement("a");
+    link.href = `/backups/${encodeURIComponent(id)}`;
+    link.download = id;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   const handleUploadFile = async (file: File) => {
@@ -185,10 +372,33 @@ export default function BackupManagementCard() {
       });
       if (!response.ok) throw await responseError(response, "Backup validation failed");
       const value: unknown = await response.json();
-      const metadata = parseValidationMetadata(value);
-      setRestoreFlow({ phase: "confirming", target: { kind: "upload", file, metadata } });
+      const { metadata, preflight } = parseValidation(value);
+      setRestoreFlow({
+        phase: "confirming",
+        target: { kind: "upload", file, metadata, preflight },
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Backup validation failed");
+      setRestoreFlow({ phase: "idle" });
+    }
+  };
+
+  const handleStoredRestore = async (backup: Backup) => {
+    setError(null);
+    setRestoreFlow({ phase: "checking", backup });
+    try {
+      const response = await fetch(
+        `/backups/${encodeURIComponent(backup.name)}/preflight`,
+      );
+      if (!response.ok) throw await responseError(response, "Backup preflight failed");
+      const value: unknown = await response.json();
+      const { metadata, preflight } = parseInspection(value);
+      setRestoreFlow({
+        phase: "confirming",
+        target: { kind: "stored", backup, metadata, preflight },
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Backup preflight failed");
       setRestoreFlow({ phase: "idle" });
     }
   };
@@ -222,20 +432,14 @@ export default function BackupManagementCard() {
 
   const handleDelete = async (id: string) => {
     try {
-      const response = await fetch(`/backups/${id}`, { method: "DELETE" });
+      const response = await fetch(`/backups/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+      });
       if (!response.ok) throw new Error("Delete failed");
       await loadBackups();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Delete failed");
     }
-  };
-
-  const formatSize = (bytes: number) => {
-    if (bytes === 0) return "0 B";
-    const k = 1024;
-    const sizes = ["B", "KB", "MB", "GB"];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
   };
 
   const formatDate = (timestamp: string) => {
@@ -248,6 +452,7 @@ export default function BackupManagementCard() {
       : null;
   const restoring = restoreFlow.phase === "restoring";
   const validating = restoreFlow.phase === "validating";
+  const checking = restoreFlow.phase === "checking";
 
   return (
     <Card>
@@ -260,7 +465,12 @@ export default function BackupManagementCard() {
       </CardHeader>
       <CardContent className="space-y-4">
         {error && (
-          <div className="flex gap-2 rounded-lg bg-destructive-soft p-3 text-sm text-destructive">
+          <div
+            className={cn("flex gap-2 rounded-lg p-3 text-sm", statusTone({
+              tone: "error",
+              emphasis: "soft",
+            }))}
+          >
             <AlertCircle className="h-4 w-4 flex-shrink-0" />
             <span>{error}</span>
           </div>
@@ -282,11 +492,11 @@ export default function BackupManagementCard() {
         <div className="grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
           <Button
             onClick={handleCreateBackup}
-            disabled={loading || validating || restoring}
+            disabled={loading || creating || validating || checking || restoring}
           >
-            {loading ? (
+            {creating ? (
               <>
-                <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                <RefreshCw className="mr-2 h-4 w-4 animate-spin" aria-hidden />
                 Creating...
               </>
             ) : (
@@ -296,7 +506,7 @@ export default function BackupManagementCard() {
           <Button
             onClick={() => uploadInputRef.current?.click()}
             variant="outline"
-            disabled={loading || validating || restoring}
+            disabled={loading || creating || validating || checking || restoring}
           >
             {validating ? (
               <RefreshCw className="h-4 w-4 animate-spin" aria-hidden />
@@ -308,7 +518,7 @@ export default function BackupManagementCard() {
           <Button
             onClick={loadBackups}
             variant="outline"
-            disabled={loading || validating || restoring}
+            disabled={loading || creating || validating || checking || restoring}
             aria-label="Refresh backup list"
           >
             <RefreshCw className="h-4 w-4" aria-hidden />
@@ -319,6 +529,36 @@ export default function BackupManagementCard() {
           Downloaded backups use the <code className="font-mono">.tar.gz</code> format. PrintPartner
           checks an uploaded file before it shows the restore confirmation.
         </p>
+
+        {storage && (
+          <section aria-label="Server storage" className="space-y-3 rounded-lg border p-3">
+            <div className="grid gap-1 text-sm sm:grid-cols-2">
+              <p>
+                <span className="font-medium">Estimated backup contents:</span>{" "}
+                {formatSize(storage.backupContentBytes)}
+              </p>
+              <p>
+                <span className="font-medium">Application data:</span>{" "}
+                {formatSize(storage.totalBytes)}
+              </p>
+              <p>
+                <span className="font-medium">Server free space:</span>{" "}
+                {formatSize(storage.freeBytes)}
+              </p>
+            </div>
+            <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-muted-foreground sm:grid-cols-4">
+              {storage.categories.map((category) => (
+                <div key={category.key}>
+                  <dt>{category.label}</dt>
+                  <dd className="font-medium text-foreground">
+                    {formatSize(category.bytes)} · {category.files}{" "}
+                    {category.files === 1 ? "file" : "files"}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          </section>
+        )}
 
         {backups.length > 0 ? (
           <div className="space-y-2">
@@ -342,21 +582,20 @@ export default function BackupManagementCard() {
                       onClick={() => handleDownload(backup.name)}
                       size="sm"
                       variant="outline"
+                      aria-label={`Download backup ${backup.name}`}
                     >
                       <Download className="h-4 w-4" />
                     </Button>
                     <Button
-                      onClick={() => {
-                        setError(null);
-                        setRestoreFlow({
-                          phase: "confirming",
-                          target: { kind: "stored", backup },
-                        });
-                      }}
+                      onClick={() => void handleStoredRestore(backup)}
                       size="sm"
                       variant="outline"
+                      disabled={checking || validating || restoring}
                     >
-                      Restore
+                      {restoreFlow.phase === "checking" &&
+                      restoreFlow.backup.name === backup.name
+                        ? "Checking..."
+                        : "Restore"}
                     </Button>
                     <ConfirmDialog
                       trigger={
@@ -415,13 +654,35 @@ export default function BackupManagementCard() {
                   </p>
                 </div>
                 <p id={restoreDescriptionId} className="text-sm text-muted-foreground">
-                  Restoring replaces the current database and stored files. PrintPartner saves a
-                  rollback copy first, then reloads the app.
+                  {restoreScopeDescription(restoreTarget.metadata)} PrintPartner stages the
+                  replacement, keeps the current data available for rollback, then reloads the
+                  app.
                 </p>
+                <div
+                  className={cn("rounded-lg p-3 text-sm", statusTone({
+                    tone: restoreTarget.preflight.sufficient ? "info" : "error",
+                    emphasis: "soft",
+                  }))}
+                  role={restoreTarget.preflight.sufficient ? "status" : "alert"}
+                >
+                  {restoreTarget.preflight.sufficient ? (
+                    <p>
+                      Restore needs {formatSize(restoreTarget.preflight.requiredBytes)} of free
+                      space. This server currently reports{" "}
+                      {formatSize(restoreTarget.preflight.freeBytes)} free.
+                    </p>
+                  ) : (
+                    <p>
+                      This server does not have enough free space. Restore needs{" "}
+                      {formatSize(restoreTarget.preflight.requiredBytes)}, but only{" "}
+                      {formatSize(restoreTarget.preflight.freeBytes)} is free.
+                    </p>
+                  )}
+                </div>
                 <div className="flex gap-2 pt-4">
                   <Button
                     onClick={handleRestore}
-                    disabled={restoring}
+                    disabled={restoring || !restoreTarget.preflight.sufficient}
                     className="flex-1"
                   >
                     {restoring ? "Restoring..." : "Restore this backup"}

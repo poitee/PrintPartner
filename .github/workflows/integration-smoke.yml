@@ -67,7 +67,7 @@ jobs:
           PORT: "18765"
           STATIC_DIR: ${{ github.workspace }}/web/apps/web/dist
         run: |
-          node apps/server/dist/index.js >"${RUNNER_TEMP}/postgres-server.log" 2>&1 &
+          node apps/server/dist/current/index.js >"${RUNNER_TEMP}/postgres-server.log" 2>&1 &
           for ((attempt = 1; attempt <= 60; attempt++)); do
             if curl --fail --silent http://127.0.0.1:18765/health \
               | python3 -c 'import json,sys; data=json.load(sys.stdin); assert data["db"]["driver"] == "postgres"; assert data["db"]["connected"] is True'

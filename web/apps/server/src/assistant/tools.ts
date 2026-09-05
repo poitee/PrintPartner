@@ -23,6 +23,11 @@ import { acceptedPlanBasis, acceptedProgressSummary } from "../db/accepted-plan-
 import type { IntegrationPort } from "../integrations/store.js";
 import { loadKitCatalog } from "../services/kit-catalog.js";
 import { loadKitManifest, saveKitManifest } from "../services/kit-manifest-store.js";
+import {
+  formatManifestSelection,
+  parseManifestSelections,
+} from "../services/manifest-selections.js";
+import { manifestSelectionsInputError } from "../services/manifest-apply.js";
 import { readAcceptedPlanReview, summarizeAcceptedPlanReview } from "../services/accepted-plan-review.js";
 import { preloadSpoolmanForColorIds } from "../services/filament-resolve.js";
 import { loadFilamentCatalog } from "../services/filament-catalog.js";
@@ -82,12 +87,15 @@ import {
 } from "./source-tool-model.js";
 import { suggestSourceContributions } from "../services/source-contribution-suggestions.js";
 import { listPrintableArtifactPaths, scanSourceArtifacts } from "../services/source-artifacts.js";
-import { buildPlanManifestBuilder } from "../services/plan-manifest-builder.js";
+import {
+  buildPlanManifestBuilder,
+  buildPlanOptionGroups,
+} from "../services/plan-manifest-builder.js";
 import { PlanDraftWorkspaceService } from "../services/plan-draft-workspace.js";
 import { finalizeUploadedSource, writeUploadedFiles, writeUploadedZip } from "../services/archive-import.js";
 import { indexSourceDocsFromDisk } from "../services/source-docs-index.js";
+import { resolvedFileUnderRoot } from "../lib/secure-path.js";
 import { publishLocalSourceWorkingTree } from "../services/local-source-revision.js";
-import { resolveStoredSnapshotPath } from "../db/stored-snapshot-path.js";
 import { addCustomFilament, listCustomFilaments } from "../services/custom-filaments.js";
 import { extractThreeMfMeshes } from "../services/three-mf-import.js";
 import {
@@ -124,6 +132,17 @@ export type AssistantToolSpec = {
     required?: string[];
   };
   tier: "read" | "mutate";
+};
+
+const MANIFEST_SELECTION_VALUE_SCHEMA = {
+  oneOf: [
+    { type: "string", minLength: 1 },
+    {
+      type: "array",
+      items: { type: "string", minLength: 1 },
+      uniqueItems: true,
+    },
+  ],
 };
 
 export const ASSISTANT_TOOL_SPECS: AssistantToolSpec[] = [
@@ -773,8 +792,9 @@ export const ASSISTANT_TOOL_SPECS: AssistantToolSpec[] = [
         },
         option_groups: {
           type: "object",
-          additionalProperties: { type: "string" },
-          description: "Optional kit selection key/values to propose",
+          additionalProperties: MANIFEST_SELECTION_VALUE_SCHEMA,
+          description:
+            "Optional kit selections to propose. Use arrays for pick_any and pick_n groups. An empty array explicitly selects none; groups with a positive minimum remain incomplete.",
         },
         rationale: { type: "string" },
       },
@@ -862,14 +882,15 @@ export const ASSISTANT_TOOL_SPECS: AssistantToolSpec[] = [
   },
   {
     name: "update_kit_selections",
-    description: "PROPOSE merging kit manifest selection key/values. Requires user confirmation.",
+    description:
+      "PROPOSE merging kit manifest selections. Use one variant id for a pick_one group and an array of variant ids for pick_any or pick_n. An empty array explicitly selects none; groups with a positive minimum remain incomplete. Requires user confirmation.",
     input_schema: {
       type: "object",
       properties: {
         plan_id: { type: "number" },
         selections: {
           type: "object",
-          additionalProperties: { type: "string" },
+          additionalProperties: MANIFEST_SELECTION_VALUE_SCHEMA,
         },
       },
       required: ["plan_id", "selections"],
@@ -1280,7 +1301,7 @@ export const ASSISTANT_TOOL_SPECS: AssistantToolSpec[] = [
   {
     name: "propose_add_source",
     description:
-      "PROPOSE creating a new Source from a GitHub / Printables / Makerworld / local path. Do NOT use for product storefront URLs (use ingest_guide_url). Requires user confirmation via Apply.",
+      "PROPOSE creating a new Source from GitHub, Printables, Makerworld, or a subsequent file upload. Do NOT use for product storefront URLs (use ingest_guide_url). Requires user confirmation via Apply.",
     input_schema: {
       type: "object",
       properties: {
@@ -1293,7 +1314,6 @@ export const ASSISTANT_TOOL_SPECS: AssistantToolSpec[] = [
         tag: { type: "string" },
         branch: { type: "string" },
         role: { type: "string" },
-        local_path: { type: "string" },
         plan_id: { type: "number" },
         rationale: { type: "string" },
       },
@@ -1394,6 +1414,7 @@ export const ASSISTANT_TOOL_SPECS: AssistantToolSpec[] = [
 
 export type ToolContext = {
   repo: AppRepository;
+  signal?: AbortSignal;
   tenantId?: string;
   jobs?: InProcessJobRunner;
   activePlanId?: number | null;
@@ -1420,6 +1441,11 @@ type ThreeMfCheckoffInput = Readonly<{
   filename?: unknown;
 }>;
 
+function resolvedSourceFile(sourceRoot: string, relativePath: string): string | null {
+  const candidate = safeRepoPath(sourceRoot, relativePath);
+  return candidate ? resolvedFileUnderRoot(sourceRoot, candidate) : null;
+}
+
 function readThreeMfCheckoffBytes(
   repo: AppRepository,
   input: ThreeMfCheckoffInput,
@@ -1439,8 +1465,8 @@ function readThreeMfCheckoffBytes(
     if (sourceId == null || !path) return { error: "content_base64 or source_id plus path is required" };
     const source = repo.getSource(sourceId);
     if (!source?.local_path) return { error: "Source is not synchronized" };
-    const absolute = safeRepoPath(source.local_path, path);
-    if (!absolute || !existsSync(absolute)) return { error: "3MF path not found" };
+    const absolute = resolvedSourceFile(source.local_path, path);
+    if (!absolute) return { error: "3MF path not found" };
     filename = path.split(/[\\/]/).pop() || filename;
     try {
       const stat = statSync(absolute);
@@ -1547,7 +1573,15 @@ function listSourceFiles(localPath: string): Array<{ path: string; byte_size: nu
 }
 
 function compareSourceRoots(rootA: string, rootB: string): Array<Record<string, unknown>> {
-  const hashFiles = (root: string) => new Map(listSourceFiles(root).map((file) => [file.path, createHash("sha256").update(readFileSync(join(root, file.path))).digest("hex")]));
+  const hashFiles = (root: string) =>
+    new Map(
+      listSourceFiles(root).flatMap((file) => {
+        const path = resolvedSourceFile(root, file.path);
+        return path
+          ? [[file.path, createHash("sha256").update(readFileSync(path)).digest("hex")] as const]
+          : [];
+      }),
+    );
   const a = hashFiles(rootA);
   const b = hashFiles(rootB);
   const differences: Array<Record<string, unknown>> = [];
@@ -1632,8 +1666,8 @@ const README_CANDIDATES = ["README.md", "Readme.md", "readme.md", "ReadMe.md", "
 /** Root README text from a synced source dir (best-effort). */
 function localReadmeText(localPath: string): string | null {
   for (const candidate of README_CANDIDATES) {
-    const resolved = safeRepoPath(localPath, candidate);
-    if (!resolved || !existsSync(resolved)) continue;
+    const resolved = resolvedSourceFile(localPath, candidate);
+    if (!resolved) continue;
     try {
       return readFileSync(resolved, "utf8").slice(0, 48_000);
     } catch {
@@ -1935,7 +1969,7 @@ export async function invokeAssistantTool(
         const planId = resolvePlanId(input, ctx, false);
         if (planId == null) return { content: JSON.stringify({ error: "plan_id required" }) };
         if (!ctx.repo.getOwnedProfileIdentity(planId)) return { content: JSON.stringify({ error: "Plan not found" }) };
-        const manifest = buildPlanManifestBuilder(ctx.repo, planId);
+        const manifest = buildPlanManifestBuilder(ctx.repo, planId, ctx.dataDir ?? null);
         return {
           content: JSON.stringify({
             plan_id: planId,
@@ -1982,7 +2016,7 @@ export async function invokeAssistantTool(
         const files = source.local_path ? listSourceFiles(source.local_path) : [];
         return {
           content: JSON.stringify({
-            source,
+            source: ctx.repo.sourceSummaryForClient(source),
             sync: {
               synchronized: Boolean(source.local_path && source.last_synced_at && source.last_commit_sha),
               last_synced_at: source.last_synced_at,
@@ -2027,8 +2061,8 @@ export async function invokeAssistantTool(
         const revisionA = ctx.repo.getSourceRevision(revisionAId);
         const revisionB = ctx.repo.getSourceRevision(revisionBId);
         if (!source || !revisionA || !revisionB || revisionA.source_id !== sourceId || revisionB.source_id !== sourceId) return { content: JSON.stringify({ error: "Source revisions not found for Source" }) };
-        const rootA = resolveStoredSnapshotPath(ctx.repo.reposDir, revisionA.snapshot_locator);
-        const rootB = resolveStoredSnapshotPath(ctx.repo.reposDir, revisionB.snapshot_locator);
+        const rootA = ctx.repo.resolveSourceSnapshotPath(sourceId, revisionA.snapshot_locator);
+        const rootB = ctx.repo.resolveSourceSnapshotPath(sourceId, revisionB.snapshot_locator);
         if (!rootA || !rootB || !existsSync(rootA) || !existsSync(rootB)) return { content: JSON.stringify({ error: "Source revision snapshots are unavailable" }) };
         const differences = compareSourceRoots(rootA, rootB);
         const counts: Record<string, number> = {};
@@ -2057,7 +2091,7 @@ export async function invokeAssistantTool(
         const files = source.local_path ? listSourceFiles(source.local_path) : [];
         const licenseFiles = files.filter((file) => /(^|\/)(license|copying|notice)(\.|$)/i.test(file.path)).map((file) => file.path);
         const authorSignals = source.local_path ? (localReadmeText(source.local_path)?.match(/(?:author|maintainer|copyright)[:\s]+[^\n]+/i)?.[0] ?? null) : null;
-        return { content: JSON.stringify({ source, revisions: ctx.repo.listSourceRevisions(source.id), provenance: { url: source.url || null, pinned_revision: source.last_commit_sha, manifest_hashes: ctx.repo.listSourceRevisions(source.id).map((revision) => revision.manifest_digest), author_signal: authorSignals, license_files: licenseFiles, commercial_print_permission: licenseFiles.length > 0 ? "review_license_file" : "unknown", confidence: source.last_commit_sha ? "revision_pinned" : "unverified" } }) };
+        return { content: JSON.stringify({ source: ctx.repo.sourceSummaryForClient(source), revisions: ctx.repo.listSourceRevisions(source.id), provenance: { url: source.url || null, pinned_revision: source.last_commit_sha, manifest_hashes: ctx.repo.listSourceRevisions(source.id).map((revision) => revision.manifest_digest), author_signal: authorSignals, license_files: licenseFiles, commercial_print_permission: licenseFiles.length > 0 ? "review_license_file" : "unknown", confidence: source.last_commit_sha ? "revision_pinned" : "unverified" } }) };
       }
       case "analyze_stl_mesh": {
         const path = String(input.path ?? "").trim();
@@ -2067,7 +2101,7 @@ export async function invokeAssistantTool(
         if (sourceId != null) {
           const source = ctx.repo.getSource(sourceId);
           if (!source?.local_path) return { content: JSON.stringify({ error: "Source is not synchronized" }) };
-          absolute = safeRepoPath(source.local_path, path);
+          absolute = resolvedSourceFile(source.local_path, path);
         }
         if (!absolute || !existsSync(absolute)) return { content: JSON.stringify({ error: "STL path not found" }) };
         try {
@@ -2916,13 +2950,19 @@ export async function invokeAssistantTool(
             content: sourceNotFoundError(ctx.repo, sourceName, "Call list_sources first."),
           };
         }
-        const optionGroups =
-          input.option_groups && typeof input.option_groups === "object"
-            ? (input.option_groups as Record<string, unknown>)
-            : {};
-        const cleanGroups: Record<string, string> = {};
-        for (const [k, v] of Object.entries(optionGroups)) {
-          if (typeof v === "string") cleanGroups[k] = v;
+        const selections = parseManifestSelections(
+          input.option_groups ?? {},
+          "option_groups",
+        );
+        if (planId != null) {
+          const selectionError = manifestSelectionsInputError(
+            buildPlanOptionGroups(ctx.repo, planId, ctx.dataDir ?? null),
+            selections,
+            "option_groups",
+          );
+          if (selectionError) {
+            return { content: JSON.stringify({ error: selectionError }) };
+          }
         }
         const rationale = typeof input.rationale === "string" ? input.rationale.trim() : "";
         return proposeChecked(
@@ -2932,16 +2972,18 @@ export async function invokeAssistantTool(
           `Map ${sourceName} → ${category}`,
           rationale ||
             `Set Library category to “${category}”${
-              Object.keys(cleanGroups).length
-                ? ` and propose kit selections ${Object.entries(cleanGroups)
-                    .map(([k, v]) => `${k}=${v}`)
+              Object.keys(selections).length
+                ? ` and propose kit selections ${Object.entries(selections)
+                    .map(([groupId, selection]) =>
+                      `${groupId}=${formatManifestSelection(selection)}`,
+                    )
                     .join(", ")}`
                 : ""
             }.`,
           {
             source_name: sourceName,
             category,
-            option_groups: cleanGroups,
+            option_groups: selections,
             plan_id: planId,
           },
         );
@@ -3196,30 +3238,33 @@ export async function invokeAssistantTool(
 
       case "update_kit_selections": {
         const planId = resolvePlanId(input, ctx);
-        const selections =
-          input.selections && typeof input.selections === "object"
-            ? (input.selections as Record<string, unknown>)
-            : null;
-        if (planId == null || !selections) {
+        if (planId == null || input.selections == null) {
           return {
             content: JSON.stringify({
               error: "plan_id and selections required",
             }),
           };
         }
-        const clean: Record<string, string> = {};
-        for (const [k, v] of Object.entries(selections)) {
-          if (typeof v === "string") clean[k] = v;
+        const selections = parseManifestSelections(input.selections);
+        const selectionError = manifestSelectionsInputError(
+          buildPlanOptionGroups(ctx.repo, planId, ctx.dataDir ?? null),
+          selections,
+          "selections",
+        );
+        if (selectionError) {
+          return { content: JSON.stringify({ error: selectionError }) };
         }
         return proposeChecked(
           ctx,
           "update_kit_selections",
           planId,
           "Update kit selections",
-          `Merge kit selections: ${Object.entries(clean)
-            .map(([k, v]) => `${k}=${v}`)
+          `Merge kit selections: ${Object.entries(selections)
+            .map(([groupId, selection]) =>
+              `${groupId}=${formatManifestSelection(selection)}`,
+            )
             .join(", ")}`,
-          { selections: clean },
+          { selections },
         );
       }
 
@@ -3630,6 +3675,7 @@ export async function invokeAssistantTool(
           maxBytes,
           llm: ctx.assistant?.configured ? ctx.assistant : null,
           vocabulary: guideVocabulary(ctx),
+          signal: ctx.signal,
         });
         return { content: JSON.stringify(result) };
       }
@@ -3640,7 +3686,11 @@ export async function invokeAssistantTool(
         const site = typeof input.site === "string" ? input.site.trim() : "";
         const env = loadConfig();
         const overrides = ctx.runtime ? searchOverridesFromRuntime(ctx.runtime) : undefined;
-        const result = await searchWeb({ query, ...(site ? { site } : {}), maxResults: 5 }, env, overrides);
+        const result = await searchWeb(
+          { query, ...(site ? { site } : {}), maxResults: 5 },
+          env,
+          { ...overrides, signal: ctx.signal },
+        );
         return { content: JSON.stringify(result) };
       }
 
@@ -3659,6 +3709,7 @@ export async function invokeAssistantTool(
         const maxBytes = ctx.runtime?.assistantGuideIngestMaxBytes ?? env.assistantGuideIngestMaxBytes;
         const page = await fetchWebPageText(url, {
           maxBytes,
+          signal: ctx.signal,
         });
         return { content: JSON.stringify(page) };
       }
@@ -3694,7 +3745,7 @@ export async function invokeAssistantTool(
             }),
           };
         }
-        const resolved = safeRepoPath(source.local_path, relPath);
+        const resolved = resolvedSourceFile(source.local_path, relPath);
         if (!resolved) {
           return {
             content: JSON.stringify({
@@ -3780,6 +3831,7 @@ export async function invokeAssistantTool(
             await ingestGuideText(text, {
               llm: ctx.assistant?.configured ? ctx.assistant : null,
               vocabulary: guideVocabulary(ctx),
+              signal: ctx.signal,
             }),
           ),
         };
@@ -3830,6 +3882,7 @@ export async function invokeAssistantTool(
           sourceName: resolved.source_name ?? null,
           dataDir: ctx.dataDir,
           llm: ctx.assistant?.configured ? ctx.assistant : null,
+          signal: ctx.signal,
         });
         const suggestedSelections = selectionsFromSuggestedDecisions(result.decisions);
         const firstFocusable = result.decisions.find((d) =>
@@ -3922,6 +3975,13 @@ export async function invokeAssistantTool(
         const branch = typeof input.branch === "string" ? input.branch.trim() : "";
         const role = typeof input.role === "string" ? input.role.trim() : "";
         const local_path = typeof input.local_path === "string" ? input.local_path.trim() : "";
+        if (local_path && !ctx.repo.allowsUserSourceLocalPaths()) {
+          return {
+            content: JSON.stringify({
+              error: "local_path is unavailable in multi-user and SaaS deployments",
+            }),
+          };
+        }
         const rationale = typeof input.rationale === "string" ? input.rationale.trim() : "";
         const planId = resolvePlanId(input, ctx) ?? 0;
         return proposeChecked(
@@ -4377,7 +4437,13 @@ export async function applyAssistantAction(
         if (Object.keys(clean).length === 0) return { ok: false, detail: "patch has no supported fields" };
         if (clean.metadata != null && (typeof clean.metadata !== "object" || Array.isArray(clean.metadata))) return { ok: false, detail: "metadata must be an object" };
         const updated = deps.repo.updateSource(sourceId, clean as Parameters<AppRepository["updateSource"]>[1]);
-        outcome = { ok: true, result: { source: updated, previous_source: source } };
+        outcome = {
+          ok: true,
+          result: {
+            source: deps.repo.sourceSummaryForClient(updated),
+            previous_source: deps.repo.sourceSummaryForClient(source),
+          },
+        };
         break;
       }
       case "propose_update_source_naming": {
@@ -4560,7 +4626,7 @@ export async function applyAssistantAction(
           outcome = {
             ok: true,
             result: {
-              source: updated,
+              source: deps.repo.sourceSummaryForClient(updated),
               imported_files: importedFiles,
               stl_count: stlCount,
               artifacts: updated.local_path ? scanSourceArtifacts(updated.local_path) : [],
@@ -5165,6 +5231,11 @@ export async function applyAssistantAction(
       case "apply_stack_preset": {
         const presetId = String(action.params.preset_id ?? "");
         const result = applyStackPresetToProfile(deps.repo, planId, presetId, deps.dataDir);
+        const current = loadKitManifest(deps.repo, planId);
+        saveKitManifest(deps.repo, planId, {
+          ...current,
+          selections: result.selections,
+        });
         const excludeMerged = mergeConfirmedSuggestedExcludes(deps.repo, planId, action.params ?? {});
         outcome = {
           ok: true,
@@ -5247,7 +5318,7 @@ export async function applyAssistantAction(
         outcome = {
           ok: true,
           result: {
-            source: updated,
+            source: deps.repo.sourceSummaryForClient(updated),
             needs_sync: true,
             source_name: sourceName,
             message: `Ref updated. Sync “${sourceName}” before using STLs from this release.`,
@@ -5293,7 +5364,19 @@ export async function applyAssistantAction(
         break;
       }
       case "update_kit_selections": {
-        const selections = (action.params.selections ?? {}) as Record<string, string>;
+        if (action.params.selections == null) {
+          return { ok: false, detail: "action.params.selections is required" };
+        }
+        const selections = parseManifestSelections(
+          action.params.selections,
+          "action.params.selections",
+        );
+        const selectionError = manifestSelectionsInputError(
+          buildPlanOptionGroups(deps.repo, planId, deps.dataDir ?? null),
+          selections,
+          "action.params.selections",
+        );
+        if (selectionError) return { ok: false, detail: selectionError };
         const current = loadKitManifest(deps.repo, planId);
         const saved = saveKitManifest(deps.repo, planId, {
           ...current,
@@ -5345,11 +5428,22 @@ export async function applyAssistantAction(
         const source = sourceByName(deps.repo, sourceName);
         if (!source) return { ok: false, detail: `Source not found: ${sourceName}` };
         if (!category) return { ok: false, detail: "category required" };
+        const optionGroups = parseManifestSelections(
+          action.params.option_groups ?? {},
+          "action.params.option_groups",
+        );
+        const targetPlan = asInt(action.params.plan_id) ?? (action.plan_id > 0 ? action.plan_id : null);
+        if (targetPlan != null) {
+          const selectionError = manifestSelectionsInputError(
+            buildPlanOptionGroups(deps.repo, targetPlan, deps.dataDir ?? null),
+            optionGroups,
+            "action.params.option_groups",
+          );
+          if (selectionError) return { ok: false, detail: selectionError };
+        }
         deps.repo.updateSource(source.id, {
           metadata: { category },
         });
-        const optionGroups = (action.params.option_groups ?? {}) as Record<string, string>;
-        const targetPlan = asInt(action.params.plan_id) ?? (action.plan_id > 0 ? action.plan_id : null);
         if (targetPlan != null && Object.keys(optionGroups).length > 0) {
           const current = loadKitManifest(deps.repo, targetPlan);
           saveKitManifest(deps.repo, targetPlan, {
@@ -5360,7 +5454,9 @@ export async function applyAssistantAction(
         outcome = {
           ok: true,
           result: {
-            source: deps.repo.getSource(source.id),
+            source: deps.repo.sourceSummaryForClient(
+              deps.repo.getSource(source.id) ?? source,
+            ),
             option_groups: optionGroups,
           },
         };
@@ -5378,7 +5474,12 @@ export async function applyAssistantAction(
         deps.repo.updateSource(source.id, { metadata: { category } });
         outcome = {
           ok: true,
-          result: { source: deps.repo.getSource(source.id), category: category || null },
+          result: {
+            source: deps.repo.sourceSummaryForClient(
+              deps.repo.getSource(source.id) ?? source,
+            ),
+            category: category || null,
+          },
         };
         break;
       }
@@ -5543,6 +5644,12 @@ export async function applyAssistantAction(
         const branch = typeof action.params.branch === "string" ? action.params.branch.trim() : undefined;
         const role = typeof action.params.role === "string" ? action.params.role.trim() : undefined;
         const local_path = typeof action.params.local_path === "string" ? action.params.local_path.trim() : undefined;
+        if (local_path && !deps.repo.allowsUserSourceLocalPaths()) {
+          return {
+            ok: false,
+            detail: "local_path is unavailable in multi-user and SaaS deployments",
+          };
+        }
         if ((source_kind === "printables" || source_kind === "makerworld") && !url) {
           return { ok: false, detail: `url required for ${source_kind}` };
         }
@@ -5560,7 +5667,7 @@ export async function applyAssistantAction(
         outcome = {
           ok: true,
           result: {
-            source: created,
+            source: deps.repo.sourceSummaryForClient(created),
             needs_sync: needsSync,
             source_name: created.name,
             follow_up_hint:

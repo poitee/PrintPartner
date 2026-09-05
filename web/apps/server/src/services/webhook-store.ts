@@ -2,6 +2,7 @@ import { createHmac } from "node:crypto";
 import type { WebhookRegistration, WebhookEvent } from "@print-partner/contracts";
 import type { AppRepository } from "../db/repository.js";
 import { assertSafeOutboundUrl, safeOutboundFetch, OutboundUrlError } from "../lib/outbound-url.js";
+import { cancelResponseBody } from "../lib/bounded-response.js";
 import { getLogger } from "./logger.js";
 
 const SETTINGS_KEY = "integration_webhooks_v1";
@@ -119,6 +120,7 @@ export async function dispatchWebhooks(
           },
           { allowPrivate: true }
         );
+        await cancelResponseBody(response);
 
         // Log webhook delivery
         logger.logWorkflow({

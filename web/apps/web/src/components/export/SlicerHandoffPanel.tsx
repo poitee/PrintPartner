@@ -162,10 +162,8 @@ export default function SlicerHandoffPanel({ onFailure }: Props = {}) {
     const current = productionSetup.data;
     if (!current) return;
     void productionSetup.save({
+      kind: "set_preferred_slicer_instance",
       preferred_slicer_instance_id: nextId,
-      selection: current.selection,
-      printer_assignments: current.printer_assignments,
-      rules: current.rules,
     }).catch((error: unknown) => {
       setFailure({
         message: error instanceof Error ? error.message : "Could not save your slicer choice.",

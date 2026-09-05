@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   statSync,
@@ -8,6 +9,7 @@ import {
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { PDFParse } from "pdf-parse";
+import { resolvedFileUnderRoot } from "../lib/secure-path.js";
 
 export const DOCS_TEXT_DIR = ".docs-text";
 
@@ -48,7 +50,31 @@ function safeUnderRoot(root: string, relative: string): string | null {
   const absRoot = resolve(root);
   const dest = resolve(absRoot, normalized);
   if (dest !== absRoot && !dest.startsWith(`${absRoot}/`)) return null;
-  return dest;
+  return resolvedFileUnderRoot(absRoot, dest);
+}
+
+function existingCacheFile(cacheRoot: string, path: string): string | null {
+  try {
+    const rootStat = lstatSync(cacheRoot);
+    if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) return null;
+  } catch {
+    return null;
+  }
+  return resolvedFileUnderRoot(cacheRoot, path);
+}
+
+function writableCacheFile(cacheRoot: string, path: string): string | null {
+  const root = resolve(cacheRoot);
+  const candidate = resolve(path);
+  if (candidate === root || !candidate.startsWith(`${root}/`)) return null;
+  try {
+    const rootStat = lstatSync(root);
+    if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) return null;
+    if (existsSync(candidate) && !existingCacheFile(root, candidate)) return null;
+    return candidate;
+  } catch {
+    return null;
+  }
 }
 
 export function contentHashForFile(filePath: string): string {
@@ -76,9 +102,11 @@ function writeSidecar(
   pageCount: number,
 ): string {
   mkdirSync(cacheRoot, { recursive: true });
-  const path = sidecarPathForHash(cacheRoot, hash);
+  const path = writableCacheFile(cacheRoot, sidecarPathForHash(cacheRoot, hash));
+  const chunksPath = writableCacheFile(cacheRoot, chunkSidecarPath(cacheRoot, hash));
+  if (!path || !chunksPath) throw new Error("PDF cache path is unavailable");
   writeFileSync(
-    chunkSidecarPath(cacheRoot, hash),
+    chunksPath,
     JSON.stringify({ version: 1, pageCount, chunks }),
     "utf8",
   );
@@ -104,8 +132,8 @@ type CachedPdfChunks = {
 };
 
 function readCachedChunks(cacheRoot: string, hash: string): CachedPdfChunks | null {
-  const path = chunkSidecarPath(cacheRoot, hash);
-  if (!existsSync(path)) return null;
+  const path = existingCacheFile(cacheRoot, chunkSidecarPath(cacheRoot, hash));
+  if (!path) return null;
   try {
     const raw: unknown = JSON.parse(readFileSync(path, "utf8"));
     if (Array.isArray(raw) && raw.every(isPdfPageChunk)) {
@@ -149,11 +177,12 @@ function readSidecar(
   hash: string,
 ): { text: string; chunks: PdfPageChunk[]; pageCount: number; cachePath: string } | null {
   const cachePath = sidecarPathForHash(cacheRoot, hash);
-  if (!existsSync(cachePath)) return null;
-  const text = readFileSync(cachePath, "utf8");
+  const resolvedCachePath = existingCacheFile(cacheRoot, cachePath);
+  if (!resolvedCachePath) return null;
+  const text = readFileSync(resolvedCachePath, "utf8");
   const cached = readCachedChunks(cacheRoot, hash);
   const chunks = cached?.chunks ?? [{ pageStart: 1, pageEnd: 1, text }];
-  return { text, chunks, pageCount: cached?.pageCount ?? 1, cachePath };
+  return { text, chunks, pageCount: cached?.pageCount ?? 1, cachePath: resolvedCachePath };
 }
 
 function findCachedSidecar(

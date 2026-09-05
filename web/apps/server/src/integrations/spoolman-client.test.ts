@@ -90,10 +90,7 @@ describe("spoolman-client", () => {
   it("testSpoolmanConnection succeeds on /info", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => ({
-        ok: true,
-        json: async () => ({ version: "0.22.0" }),
-      })),
+      vi.fn(async () => new Response(JSON.stringify({ version: "0.22.0" }))),
     );
     const result = await testSpoolmanConnection({ base_url: "http://127.0.0.1:7912" });
     expect(result.ok).toBe(true);
@@ -134,9 +131,7 @@ describe("spoolman-client", () => {
   it("listSpoolmanFilaments parses array response with vendor objects", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => ({
-        ok: true,
-        json: async () => [
+      vi.fn(async () => new Response(JSON.stringify([
           {
             id: 1,
             name: "A",
@@ -144,8 +139,7 @@ describe("spoolman-client", () => {
             material: "PLA",
             color_hex: "#111111",
           },
-        ],
-      })),
+        ]))),
     );
     const rows = await listSpoolmanFilaments({ base_url: "http://127.0.0.1:7912" });
     expect(rows).toHaveLength(1);

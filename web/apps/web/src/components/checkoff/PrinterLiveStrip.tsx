@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useQueries } from "@tanstack/react-query";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { Printer } from "lucide-react";
 import type { PrinterHostStatus } from "@print-partner/contracts";
-import { fetchIntegrationStatus, fetchIntegrations } from "../../api/endpoints/integrations";
+import { fetchIntegrations } from "../../api/endpoints/integrations";
 import { fetchPrinters } from "../../api/endpoints/printers";
 import { reconcilePrinterCheckoff } from "../../api/endpoints/checkoff";
 import { settingsPrintersRoute } from "../../lib/routes";
@@ -19,6 +20,7 @@ import { statusTone } from "../../lib/statusTone";
 import { quietPrinterLoadError, quietPrinterStatusMessage } from "../../lib/printerErrorCopy";
 import { usePrinterStatusPollMs } from "../../hooks/usePrinterStatusPollMs";
 import { cn } from "@/lib/utils";
+import { usePrinterStatuses } from "../../queries/printerStatuses";
 
 const LIVE_STRIP_HOST_TYPES = new Set<LiveStripHostType>([
   "moonraker",
@@ -54,11 +56,48 @@ type Props = {
   className?: string;
 };
 
+type ReconcileResult = Awaited<ReturnType<typeof reconcilePrinterCheckoff>>;
+
+type ReconcileOutcome =
+  | Readonly<{
+      kind: "success";
+      integrationId: string;
+      result: ReconcileResult;
+    }>
+  | Readonly<{
+      kind: "failure";
+      integrationId: string;
+      status: PrinterHostStatus;
+    }>;
+
+async function reconcileHost(integrationId: string): Promise<ReconcileOutcome> {
+  try {
+    const result = await reconcilePrinterCheckoff({ integration_id: integrationId });
+    return { kind: "success", integrationId, result };
+  } catch (error) {
+    const rawMessage = error instanceof Error ? error.message : String(error);
+    return {
+      kind: "failure",
+      integrationId,
+      status: {
+        state: "offline",
+        message: quietPrinterStatusMessage(rawMessage) ?? "Unavailable",
+      },
+    };
+  }
+}
+
+function printerCheckoffReconciliationKey(
+  integrationId: string,
+): readonly ["printer-checkoff-reconcile", string] {
+  return ["printer-checkoff-reconcile", integrationId];
+}
+
 /**
  * Sticky Progress banner: live status for fleet machines linked to a printer host.
  * Moonraker/PrusaLink: reconcile may queue verify after finish (no Progress mutation).
  * Bambu: status poll only.
- * CoS lock: never auto-tick Progress units from printing/complete host status —
+ * Never auto-tick Progress units from printing/complete host status:
  * units stay operator-ticked; Confirm in verify is the only automated path.
  */
 export default function PrinterLiveStrip({
@@ -69,13 +108,9 @@ export default function PrinterLiveStrip({
   className,
 }: Props) {
   const [hosts, setHosts] = useState<LinkedHost[]>([]);
-  const [statusById, setStatusById] = useState<Record<string, PrinterHostStatus>>({});
   const [loadError, setLoadError] = useState<string | null>(null);
-  const requestId = useRef(0);
-  const refreshPending = useRef(false);
-  const hostsRef = useRef(hosts);
-  hostsRef.current = hosts;
   const toastedLinks = useRef(new Set<string>());
+  const handledReconciliations = useRef(new WeakSet<ReconcileOutcome>());
   const onCheckoffUpdateRef = useRef(onCheckoffUpdate);
   onCheckoffUpdateRef.current = onCheckoffUpdate;
   const onLiveStateChangeRef = useRef(onLiveStateChange);
@@ -84,10 +119,57 @@ export default function PrinterLiveStrip({
   onUnattributedUpdateRef.current = onUnattributedUpdate;
   const pollMs = usePrinterStatusPollMs();
 
+  const directStatusIntegrationIds = useMemo(
+    () => hosts
+      .filter((host) => !host.reconcileCheckoff)
+      .map((host) => host.integrationId),
+    [hosts],
+  );
+  const { statusByIntegration: directStatuses } = usePrinterStatuses(
+    directStatusIntegrationIds,
+    engineReady,
+  );
+  const reconcileIntegrationIds = useMemo(
+    () => hosts
+      .filter((host) => host.reconcileCheckoff)
+      .map((host) => host.integrationId),
+    [hosts],
+  );
+  const reconciliation = useQueries({
+    queries: reconcileIntegrationIds.map((integrationId) => ({
+      queryKey: printerCheckoffReconciliationKey(integrationId),
+      queryFn: () => reconcileHost(integrationId),
+      enabled: engineReady,
+      staleTime: pollMs,
+      refetchInterval: pollMs,
+      refetchIntervalInBackground: false,
+      retry: false,
+      gcTime: 0,
+    })),
+    combine: (results) => {
+      const outcomes: ReconcileOutcome[] = [];
+      const statuses: Record<string, PrinterHostStatus> = {};
+      for (const result of results) {
+        if (!result.data) continue;
+        outcomes.push(result.data);
+        statuses[result.data.integrationId] = result.data.kind === "success"
+          ? result.data.result.status
+          : result.data.status;
+      }
+      return {
+        outcomes,
+        statuses,
+      };
+    },
+  });
+  const statusById = useMemo(
+    () => ({ ...directStatuses, ...reconciliation.statuses }),
+    [directStatuses, reconciliation.statuses],
+  );
+
   const refreshRoster = useCallback(async () => {
     if (!engineReady) {
       setHosts([]);
-      setStatusById({});
       setLoadError(null);
       return;
     }
@@ -122,114 +204,38 @@ export default function PrinterLiveStrip({
     }
   }, [engineReady]);
 
-  const refreshStatuses = useCallback(async (linked: LinkedHost[]) => {
-    if (refreshPending.current) return;
-    refreshPending.current = true;
-    try {
-      const id = ++requestId.current;
-      if (!linked.length) {
-        if (id === requestId.current) setStatusById({});
-        return;
-      }
-      // Prune status map to only currently linked printers, keeping existing values so
-      // nothing flashes offline while we wait for slow reconcile responses.
-      // Do NOT clear to {} first — that's what causes the offline flash.
-      if (id === requestId.current) {
-        const linkedIds = new Set(linked.map((h) => h.integrationId));
-        setStatusById((prev) => {
-          const next: Record<string, PrinterHostStatus> = {};
-          for (const [k, v] of Object.entries(prev)) {
-            if (linkedIds.has(k)) next[k] = v;
-          }
-          return next;
-        });
-      }
-      let receivedReconcileResult = false;
-      await Promise.allSettled(
-        linked.map(async (h) => {
-          try {
-            let status: PrinterHostStatus;
-            if (!h.reconcileCheckoff) {
-              status = await fetchIntegrationStatus(h.integrationId);
-            } else {
-              const reconcileResult = await reconcilePrinterCheckoff({
-                integration_id: h.integrationId,
-              });
-              const { updates, created_links: createdLinks, status: s } = reconcileResult;
-              status = s;
-              for (const row of updates ?? []) {
-                if (toastedLinks.current.has(row.link_id)) continue;
-                toastedLinks.current.add(row.link_id);
-                if (row.event === "awaiting_verify") {
-                  toast.success("Print finished — see highlighted parts");
-                } else {
-                  toast.error(
-                    `${row.host_name} ${row.host_outcome === "cancelled" ? "cancelled" : "failed"} ${row.filename} — review send`,
-                  );
-                }
-                onCheckoffUpdateRef.current?.(row.profile_id);
-              }
-              for (const link of createdLinks ?? []) {
-                onCheckoffUpdateRef.current?.(link.profile_id);
-              }
-              // A per-host result is only a hint to refresh the authoritative global list.
-              const unattributed = (reconcileResult as Record<string, unknown>).unattributed;
-              if (Array.isArray(unattributed)) {
-                receivedReconcileResult = true;
-              }
-            }
-            if (id === requestId.current) {
-              setStatusById((prev) => ({ ...prev, [h.integrationId]: status }));
-            }
-          } catch (e) {
-            const raw = e instanceof Error ? e.message : String(e);
-            if (id === requestId.current) {
-              setStatusById((prev) => ({
-                ...prev,
-                [h.integrationId]: {
-                  state: "offline" as const,
-                  message: quietPrinterStatusMessage(raw) ?? "Unavailable",
-                },
-              }));
-            }
-          }
-        }),
-      );
-      if (id === requestId.current && receivedReconcileResult) {
-        onUnattributedUpdateRef.current?.();
-      }
-    } finally {
-      refreshPending.current = false;
-    }
-  }, []);
-
   useEffect(() => {
     void refreshRoster();
   }, [refreshRoster]);
 
   useEffect(() => {
-    if (!engineReady || hosts.length === 0) return;
-
-    let cancelled = false;
-    const tick = () => {
-      if (cancelled || document.hidden) return;
-      void refreshStatuses(hostsRef.current);
-    };
-
-    tick();
-    const timer = window.setInterval(tick, pollMs);
-    const onVisibility = () => {
-      if (!document.hidden) tick();
-    };
-    document.addEventListener("visibilitychange", onVisibility);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", onVisibility);
-      requestId.current += 1;
-    };
-  }, [engineReady, hosts, refreshStatuses, pollMs]);
+    let receivedReconcileResult = false;
+    for (const outcome of reconciliation.outcomes) {
+      if (handledReconciliations.current.has(outcome)) continue;
+      handledReconciliations.current.add(outcome);
+      if (outcome.kind === "failure") continue;
+      const { result } = outcome;
+      for (const row of result.updates ?? []) {
+        if (toastedLinks.current.has(row.link_id)) continue;
+        toastedLinks.current.add(row.link_id);
+        if (row.event === "awaiting_verify") {
+          toast.success("Print finished. See highlighted parts.");
+        } else {
+          toast.error(
+            `${row.host_name} ${row.host_outcome === "cancelled" ? "cancelled" : "failed"} ${row.filename}. Review the send.`,
+          );
+        }
+        onCheckoffUpdateRef.current?.(row.profile_id);
+      }
+      for (const link of result.created_links ?? []) {
+        onCheckoffUpdateRef.current?.(link.profile_id);
+      }
+      if ("unattributed" in result && Array.isArray(result.unattributed)) {
+        receivedReconcileResult = true;
+      }
+    }
+    if (receivedReconcileResult) onUnattributedUpdateRef.current?.();
+  }, [reconciliation]);
 
   useEffect(() => {
     const activeIntegrationIds = hosts

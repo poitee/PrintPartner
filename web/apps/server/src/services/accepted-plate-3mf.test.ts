@@ -246,7 +246,12 @@ endsolid tracked`);
       syncedAt: "2026-08-21T12:00:00.000Z",
       completeness: "complete",
     });
-    repo.activateSourceRevision({ sourceId: source.id, revisionId: sourceRevision.id, observed });
+    repo.activateSourceRevision({
+      sourceId: source.id,
+      revisionId: sourceRevision.id,
+      observed,
+      sourceVersion: sourceRevision.upstream_revision_key,
+    });
     const profile = repo.createProfile("Tracked 3MF Build", source.id);
     const created = repo.recomputePlanDraft({ profileId: profile.id, actor: "test:user", idempotencyKey: "3mf-draft" });
     if (created.kind !== "created") throw new Error("tracked draft was not created");

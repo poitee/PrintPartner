@@ -16,7 +16,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { getDb, SqliteDatabase } from "../db/client.js";
 import { AppRepository } from "../db/repository.js";
 import { SOURCE_SNAPSHOT_MANIFEST_FILE } from "./local-source-snapshot.js";
-import { publishLocalSourceWorkingTree } from "./local-source-revision.js";
+import {
+  publishLocalSourceWorkingTree,
+  publishSourceManifestRevision,
+} from "./local-source-revision.js";
 
 vi.mock("node:fs/promises", { spy: true });
 
@@ -153,6 +156,8 @@ describe("publishLocalSourceWorkingTree", () => {
 
   it("records and activates a tracked snapshot from a local working tree", async () => {
     const { sqlite, repo, source, workingTree, dir } = fixture();
+    const manifest = "format: print-partner-manifest\nversion: 2\n";
+    writeFileSync(join(workingTree, "print-partner.manifest.yaml"), manifest);
     const activated = await publishLocalSourceWorkingTree({
       repo,
       reposDir: sqlite.reposDir,
@@ -166,8 +171,15 @@ describe("publishLocalSourceWorkingTree", () => {
       `${source.id}/revisions/${revision?.upstream_revision_key}`,
     );
     const snapshotStl = join(dir, "repos", revision!.snapshot_locator, "cube.stl");
+    const snapshotManifest = join(
+      dir,
+      "repos",
+      revision!.snapshot_locator,
+      "print-partner.manifest.yaml",
+    );
     expect(existsSync(snapshotStl)).toBe(true);
     expect(readFileSync(snapshotStl, "utf8")).toBe("solid cube\nendsolid cube\n");
+    expect(readFileSync(snapshotManifest, "utf8")).toBe(manifest);
     expect(existsSync(join(dir, "repos", revision!.snapshot_locator, SOURCE_SNAPSHOT_MANIFEST_FILE))).toBe(
       true,
     );
@@ -258,6 +270,43 @@ describe("publishLocalSourceWorkingTree", () => {
       "AAAA",
     );
     expect(readFileSync(join(workingTree, "z.stl"), "utf8")).toBe("BBBB");
+    sqlite.close();
+  });
+
+  it("does not ingest managed revision directories when retrying a workspace publication", async () => {
+    const { sqlite, repo, source } = fixture();
+    const workspace = source.local_path;
+    if (!workspace) throw new Error("Expected a local Source workspace");
+    mkdirSync(workspace, { recursive: true });
+    writeFileSync(join(workspace, "cube.stl"), "solid workspace\nendsolid workspace\n");
+    const manifestYaml = "project: workspace\nparts: []\n";
+    writeFileSync(join(workspace, "print-partner.manifest.yaml"), manifestYaml);
+    const activate = repo.activateSourceRevision.bind(repo);
+    const spy = vi.spyOn(repo, "activateSourceRevision").mockImplementationOnce((input) => {
+      repo.updateSource(source.id, { branch: "release" });
+      return activate(input);
+    });
+
+    await expect(publishSourceManifestRevision({
+      repo,
+      sourceId: source.id,
+      manifestYaml,
+    })).rejects.toThrow("Source changed during sync");
+    expect(existsSync(join(workspace, "revisions"))).toBe(true);
+    spy.mockRestore();
+
+    const activated = await publishSourceManifestRevision({
+      repo,
+      sourceId: source.id,
+      manifestYaml,
+    });
+
+    expect(readdirSync(activated.local_path!, { recursive: true }).sort()).toEqual([
+      SOURCE_SNAPSHOT_MANIFEST_FILE,
+      "cube.stl",
+      "print-partner.manifest.yaml",
+    ]);
+    expect(repo.listSourceRevisions(source.id)).toHaveLength(1);
     sqlite.close();
   });
 });

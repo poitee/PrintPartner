@@ -189,9 +189,9 @@ export {
   type PrinterProfileAssignmentInput,
 } from "./endpoints/printerSettings";
 export {
+  applyProductionSetupCommand,
   fetchProductionSetup,
   fetchProfileLibrary,
-  saveProductionSetup,
   type ProfileLibraryRow,
 } from "./endpoints/productionSetup";
 export {

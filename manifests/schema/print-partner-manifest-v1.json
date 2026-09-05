@@ -75,6 +75,20 @@
           "items": { "$ref": "#/$defs/variant" }
         }
       },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "rule": { "const": "pick_one" } },
+            "required": ["rule"]
+          },
+          "then": {
+            "properties": {
+              "min": { "maximum": 1 },
+              "max": { "maximum": 1 }
+            }
+          }
+        }
+      ],
       "additionalProperties": false
     },
     "partRule": {

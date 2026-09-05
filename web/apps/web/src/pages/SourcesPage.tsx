@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { ChevronDown, FolderGit2, Library, Search } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -38,7 +38,7 @@ import SourcesToolbar, {
   type SyncFilter,
 } from "../components/sources/SourcesToolbar";
 import { kindLabel, type SourceKind } from "../components/sources/sourceLabels";
-import { UNCategorized_FILTER } from "../components/sources/sourceLabels";
+import { UNCATEGORISED_FILTER } from "../components/sources/sourceLabels";
 import { Button } from "../components/ui/button";
 import { Checkbox } from "../components/ui/checkbox";
 import ConfirmDialog from "../components/ConfirmDialog";
@@ -77,6 +77,7 @@ import {
 import { useEngineHealth } from "../hooks/useEngineHealth";
 import { useJobRunner } from "../hooks/useJobRunner";
 import { deskNextStepLine } from "../lib/deskNextStep";
+import { sourceContentAvailable } from "../lib/sourceContentAvailable";
 import {
   attachedSourceIds,
   buildLibraryCardMeta,
@@ -137,17 +138,31 @@ import {
   useSaveSourceCategoriesMutation,
   useSourceCategoriesQuery,
 } from "../queries/sourceCategories";
+import { invalidateSourceContent } from "../queries/sourceContent";
 import { queryKeys } from "../queries/keys";
 
 type SourceDetailTab = "docs" | "rules" | "naming";
 type SourcesLocationState = { stlSearch?: boolean };
 const EMPTY_SOURCE_CATEGORIES: string[] = [];
 
+function sourceIdFromSearchParams(searchParams: URLSearchParams): number | null {
+  const value = searchParams.get("source");
+  if (!value || !/^[1-9]\d*$/.test(value)) return null;
+  const id = Number(value);
+  return Number.isSafeInteger(id) ? id : null;
+}
+
+function detailTabFromSearchParams(searchParams: URLSearchParams): SourceDetailTab {
+  const value = searchParams.get("tab");
+  return value === "rules" || value === "naming" ? value : "docs";
+}
+
 type WizardForm = SourceWizardDraft;
 
 export default function SourcesPage() {
   const location = useLocation();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { formatDate } = useDateFormat();
   const { health, error: healthError, loading: healthLoading } = useEngineHealth();
   const { busy, runJob } = useJobRunner("sync");
@@ -158,12 +173,16 @@ export default function SourcesPage() {
   const { profiles, selectedProfileId } = useProfileSelection();
   const persistedUi = useMemo(() => loadPersistedSourcesUi(), []);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [wizardError, setWizardError] = useState<string | null>(null);
   const [wizardOpen, setWizardOpen] = useState(false);
+  const [savingSource, setSavingSource] = useState(false);
+  const savingSourceRef = useRef(false);
   const [editId, setEditId] = useState<number | null>(null);
   const [form, setForm] = useState<WizardForm>(newSourceWizardDraft([]));
-  const [detailSourceId, setDetailSourceId] = useState<number | null>(null);
-  const [detailTab, setDetailTab] = useState<SourceDetailTab>("docs");
-  const [highlightPath, setHighlightPath] = useState<string | null>(null);
+  const detailSourceId = sourceIdFromSearchParams(searchParams);
+  const detailTab = detailTabFromSearchParams(searchParams);
+  const highlightPath =
+    detailTab === "rules" ? searchParams.get("file") || null : null;
   const [deleteTarget, setDeleteTarget] = useState<SourceSummary | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [reposImportNote, setReposImportNote] = useState<string | null>(null);
@@ -277,8 +296,12 @@ export default function SourcesPage() {
   const refresh = useCallback(async () => {
     if (!engineReady) return;
     setLoadError(null);
-    await Promise.allSettled([refetchSources(), categoriesQuery.refetch()]);
-  }, [categoriesQuery, engineReady, refetchSources]);
+    await Promise.allSettled([
+      refetchSources(),
+      categoriesQuery.refetch(),
+      invalidateSourceContent(queryClient),
+    ]);
+  }, [categoriesQuery, engineReady, queryClient, refetchSources]);
 
   const onCategoriesReorder = useCallback(async (next: string[]) => {
     try {
@@ -358,7 +381,7 @@ export default function SourcesPage() {
     }
   };
 
-  const hasSyncedSources = sources.some((s) => Boolean(s.local_path));
+  const hasSyncedSources = sources.some(sourceContentAvailable);
 
   const showSourceSkeletons = sourcesLoading && !sourcesLoaded;
 
@@ -401,14 +424,31 @@ export default function SourcesPage() {
     sourceCount: sources.length,
   });
 
+  const setDetailLocation = (
+    sourceId: number | null,
+    tab: SourceDetailTab = "docs",
+    path: string | null = null,
+  ) => {
+    const next = new URLSearchParams(searchParams);
+    if (sourceId == null) {
+      next.delete("source");
+      next.delete("tab");
+      next.delete("file");
+    } else {
+      next.set("source", String(sourceId));
+      next.set("tab", tab);
+      if (tab === "rules" && path) next.set("file", path);
+      else next.delete("file");
+    }
+    setSearchParams(next, { replace: true });
+  };
+
   const openDetail = (
     source: SourceSummary,
     tab: SourceDetailTab = "docs",
     path: string | null = null,
   ) => {
-    setDetailSourceId(source.id);
-    setDetailTab(tab);
-    setHighlightPath(path);
+    setDetailLocation(source.id, tab, path);
   };
 
   const onStlHit = (hit: StlSearchHit) => {
@@ -443,6 +483,7 @@ export default function SourcesPage() {
   const openAddWizard = (kind?: SourceKind) => {
     setForm(newSourceWizardDraft(categories, kind));
     setEditId(null);
+    setWizardError(null);
     setWizardOpen(true);
   };
 
@@ -470,6 +511,7 @@ export default function SourcesPage() {
   const openEditWizard = (s: SourceSummary) => {
     setForm(sourceWizardDraftFromSource(s));
     setEditId(s.id);
+    setWizardError(null);
     setWizardOpen(true);
   };
 
@@ -528,17 +570,30 @@ export default function SourcesPage() {
   };
 
   const saveSource = async () => {
-    setLoadError(null);
+    if (savingSourceRef.current) return;
+    savingSourceRef.current = true;
+    setSavingSource(true);
+    setWizardError(null);
     try {
       const payload = sourceSavePayloadFromDraft(form);
       if (editId == null) {
         const created = await createSourceMutation.mutateAsync(payload);
-        const uploaded = await uploadPendingContent(
-          created.id,
-          form.source_kind,
-          form.pendingFiles,
-          form.pendingZip,
-        );
+        setEditId(created.id);
+        let uploaded: boolean;
+        try {
+          uploaded = await uploadPendingContent(
+            created.id,
+            form.source_kind,
+            form.pendingFiles,
+            form.pendingZip,
+          );
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          throw new Error(
+            `The Source was created, but its files were not uploaded. ${detail} Select Save to retry.`,
+            { cause: error },
+          );
+        }
         setWizardOpen(false);
         if (uploaded) await invalidateSourceDependents(queryClient);
         if (created.source_kind === "github") syncSources([created.id]);
@@ -551,16 +606,19 @@ export default function SourcesPage() {
           form.pendingFiles.length > 0 || form.pendingZip
             ? await uploadPendingContent(
             editId,
-            form.source_kind,
-            form.pendingFiles,
-            form.pendingZip,
-              )
+              form.source_kind,
+              form.pendingFiles,
+              form.pendingZip,
+            )
             : false;
         setWizardOpen(false);
         if (uploaded) await invalidateSourceDependents(queryClient);
       }
     } catch (e) {
-      setLoadError(e instanceof Error ? e.message : String(e));
+      setWizardError(e instanceof Error ? e.message : String(e));
+    } finally {
+      savingSourceRef.current = false;
+      setSavingSource(false);
     }
   };
 
@@ -570,7 +628,7 @@ export default function SourcesPage() {
     setLoadError(null);
     try {
       await deleteSourceMutation.mutateAsync(deleteTarget.id);
-      if (detailSourceId === deleteTarget.id) setDetailSourceId(null);
+      if (detailSourceId === deleteTarget.id) setDetailLocation(null);
       setDeleteTarget(null);
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : String(e));
@@ -925,8 +983,8 @@ export default function SourcesPage() {
                 type="button"
                 size="sm"
                 className="shrink-0"
-                variant={categoryFilter === UNCategorized_FILTER ? "secondary" : "ghost"}
-                onClick={() => setCategoryFilter(UNCategorized_FILTER)}
+                variant={categoryFilter === UNCATEGORISED_FILTER ? "secondary" : "ghost"}
+                onClick={() => setCategoryFilter(UNCATEGORISED_FILTER)}
               >
                 Uncategorised
               </Button>
@@ -1162,11 +1220,11 @@ export default function SourcesPage() {
             <div className="space-y-1">
               <Label htmlFor="source-category">Category</Label>
               <Select
-                value={form.category || UNCategorized_FILTER}
+                value={form.category || UNCATEGORISED_FILTER}
                 onValueChange={(v) =>
                   setForm((f) => ({
                     ...f,
-                    category: v === UNCategorized_FILTER ? "" : v,
+                    category: v === UNCATEGORISED_FILTER ? "" : v,
                   }))
                 }
               >
@@ -1174,7 +1232,7 @@ export default function SourcesPage() {
                   <SelectValue placeholder={sourceCategoryLabel(null)} />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value={UNCategorized_FILTER}>
+                  <SelectItem value={UNCATEGORISED_FILTER}>
                     {sourceCategoryLabel(null)}
                   </SelectItem>
                   {categoryOptions.map((option) => (
@@ -1347,13 +1405,21 @@ export default function SourcesPage() {
             )}
           </div>
           <div className="flex justify-end gap-2 pt-2">
-            {loadError && wizardOpen && (
-              <p className="mr-auto self-center text-sm text-destructive">{loadError}</p>
+            {wizardError && wizardOpen && (
+              <p className="mr-auto self-center text-sm text-destructive" role="alert">
+                {wizardError}
+              </p>
             )}
-            <Button variant="ghost" onClick={() => setWizardOpen(false)}>
+            <Button
+              variant="ghost"
+              disabled={savingSource}
+              onClick={() => setWizardOpen(false)}
+            >
               Cancel
             </Button>
-            <Button onClick={() => void saveSource()}>Save</Button>
+            <Button disabled={savingSource} onClick={() => void saveSource()}>
+              {savingSource ? "Saving…" : "Save"}
+            </Button>
           </div>
         </DialogContent>
       </Dialog>
@@ -1388,13 +1454,14 @@ export default function SourcesPage() {
         source={detailSource}
         open={detailSource != null}
         onOpenChange={(open) => {
-          if (!open) {
-            setDetailSourceId(null);
-            setHighlightPath(null);
-          }
+          if (!open) setDetailLocation(null);
         }}
-        initialTab={detailTab}
+        tab={detailTab}
         highlightPath={highlightPath}
+        onTabChange={(tab) => setDetailLocation(detailSourceId, tab)}
+        onHighlightPathChange={(path) =>
+          setDetailLocation(detailSourceId, "rules", path)
+        }
         busy={busy}
         categories={categories}
         onEdit={openEditWizard}

@@ -10,10 +10,24 @@ import type {
 import type { IntegrationAdapter, PrinterUploadSource } from "../store.js";
 import { assertSafeOutboundUrl } from "../../lib/outbound-url.js";
 import {
+  cancelResponseBody,
+  isJsonObject as isRecord,
+  readBoundedJsonResponse,
+  readBoundedResponseText,
+} from "../../lib/bounded-response.js";
+import {
   encodeStoragePath,
   joinStoragePath,
   safeStoragePath,
 } from "./storage-path.js";
+
+const MAX_METADATA_RESPONSE_BYTES = 2 * 1024 * 1024;
+const MAX_DIRECTORY_RESPONSE_BYTES = 8 * 1024 * 1024;
+const MAX_ERROR_RESPONSE_BYTES = 64 * 1024;
+
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
 
 function normalizeBaseUrl(raw: unknown): string | null {
   if (typeof raw !== "string" || !raw.trim()) return null;
@@ -35,11 +49,7 @@ function authHeaders(config: IntegrationConfig): Record<string, string> {
 const MAX_REDIRECTS = 5;
 
 async function drainResponseBody(res: Response): Promise<void> {
-  try {
-    await res.arrayBuffer();
-  } catch {
-    /* ignore */
-  }
+  await cancelResponseBody(res);
 }
 
 /**
@@ -158,14 +168,16 @@ async function browseStorage(
     { signal: AbortSignal.timeout(15_000) },
   );
   if (!response.ok) {
+    await cancelResponseBody(response);
     throw new Error(`Moonraker directory listing returned HTTP ${response.status}`);
   }
   // Moonraker's HTTP API wraps nearly every success in `{ "result": ... }`.
   // Reading the payload fields off the top level silently yields an empty
   // listing against a real host, which is how this went unnoticed.
-  const body = await response.json() as { result?: { dirs?: unknown; files?: unknown } };
-  const dirRows = directoryRows(body.result?.dirs);
-  const fileRows = directoryRows(body.result?.files);
+  const body = await readBoundedJsonResponse(response, MAX_DIRECTORY_RESPONSE_BYTES);
+  const result = isRecord(body) && isRecord(body.result) ? body.result : null;
+  const dirRows = directoryRows(result?.dirs);
+  const fileRows = directoryRows(result?.files);
   const prefix = requested ? `${requested}/` : "";
 
   const directories = dirRows.flatMap((row): PrinterStorageEntry[] => {
@@ -217,13 +229,15 @@ async function readWebcams(config: IntegrationConfig): Promise<MoonrakerWebcam[]
     { signal: AbortSignal.timeout(10_000) },
   );
   if (!response.ok) {
+    await cancelResponseBody(response);
     if (response.status === 404) return [];
     throw new Error(`Moonraker webcam list returned HTTP ${response.status}`);
   }
   // Same `result` envelope as every other Moonraker HTTP endpoint.
-  const body = await response.json() as { result?: { webcams?: unknown } };
-  const webcams = body.result?.webcams;
-  return Array.isArray(webcams) ? webcams as MoonrakerWebcam[] : [];
+  const body = await readBoundedJsonResponse(response, MAX_METADATA_RESPONSE_BYTES);
+  const result = isRecord(body) && isRecord(body.result) ? body.result : null;
+  const webcams = result?.webcams;
+  return Array.isArray(webcams) ? webcams.filter(isRecord) : [];
 }
 
 function cameraId(camera: MoonrakerWebcam, index: number): string {
@@ -335,9 +349,13 @@ function mapPrintState(raw: string | undefined): PrinterHostStatus["state"] {
 async function querySystemUptime(baseUrl: string, config: IntegrationConfig): Promise<number | undefined> {
   try {
     const response = await moonrakerFetch(`${baseUrl}/machine/proc_stats`, config);
-    if (!response.ok) return undefined;
-    const body = await response.json() as { result?: { system_uptime?: unknown } };
-    const value = body.result?.system_uptime;
+    if (!response.ok) {
+      await cancelResponseBody(response);
+      return undefined;
+    }
+    const body = await readBoundedJsonResponse(response, MAX_METADATA_RESPONSE_BYTES);
+    const result = isRecord(body) && isRecord(body.result) ? body.result : null;
+    const value = result?.system_uptime;
     return typeof value === "number" && Number.isFinite(value) && value >= 0
       ? Math.round(value)
       : undefined;
@@ -356,29 +374,28 @@ async function queryStatus(config: IntegrationConfig): Promise<PrinterHostStatus
     config,
   );
   if (!res.ok) {
+    await cancelResponseBody(res);
     return { state: "offline", message: `Moonraker returned HTTP ${res.status}` };
   }
-  const body = (await res.json()) as {
-    result?: {
-      status?: {
-        print_stats?: { state?: string; filename?: string };
-        virtual_sdcard?: { progress?: number };
-        display_status?: { progress?: number };
-        extruder?: { temperature?: number; target?: number };
-        heater_bed?: { temperature?: number; target?: number };
-      };
-    };
-  };
-  const status = body.result?.status;
-  const printStats = status?.print_stats;
+  const body = await readBoundedJsonResponse(res, MAX_METADATA_RESPONSE_BYTES);
+  const result = isRecord(body) && isRecord(body.result) ? body.result : null;
+  const status = isRecord(result?.status) ? result.status : null;
+  const printStats = isRecord(status?.print_stats) ? status.print_stats : null;
+  const virtualSdCard = isRecord(status?.virtual_sdcard) ? status.virtual_sdcard : null;
+  const displayStatus = isRecord(status?.display_status) ? status.display_status : null;
+  const extruder = isRecord(status?.extruder) ? status.extruder : null;
+  const heaterBed = isRecord(status?.heater_bed) ? status.heater_bed : null;
   const progressFraction =
-    status?.virtual_sdcard?.progress ?? status?.display_status?.progress;
+    virtualSdCard?.progress ?? displayStatus?.progress;
   const progress =
     typeof progressFraction === "number" && Number.isFinite(progressFraction)
       ? Math.round(Math.min(100, Math.max(0, progressFraction * 100)))
       : undefined;
-  const filename = printStats?.filename?.trim() || undefined;
-  const state = mapPrintState(printStats?.state);
+  const filename = typeof printStats?.filename === "string"
+    ? printStats.filename.trim() || undefined
+    : undefined;
+  const rawState = typeof printStats?.state === "string" ? printStats.state : undefined;
+  const state = mapPrintState(rawState);
   const uptimeSeconds = await querySystemUptime(baseUrl, config);
   return {
     state,
@@ -386,10 +403,10 @@ async function queryStatus(config: IntegrationConfig): Promise<PrinterHostStatus
     filename,
     ip_address: new URL(baseUrl).hostname,
     uptime_seconds: uptimeSeconds,
-    nozzle_temperature_c: status?.extruder?.temperature,
-    nozzle_target_c: status?.extruder?.target,
-    bed_temperature_c: status?.heater_bed?.temperature,
-    bed_target_c: status?.heater_bed?.target,
+    nozzle_temperature_c: finiteNumber(extruder?.temperature),
+    nozzle_target_c: finiteNumber(extruder?.target),
+    bed_temperature_c: finiteNumber(heaterBed?.temperature),
+    bed_target_c: finiteNumber(heaterBed?.target),
     message:
       state === "printing" && filename
         ? `Printing ${filename}`
@@ -399,7 +416,7 @@ async function queryStatus(config: IntegrationConfig): Promise<PrinterHostStatus
             : "Complete"
           : state === "idle"
             ? "Idle"
-            : printStats?.state,
+            : rawState,
   };
 }
 
@@ -412,20 +429,18 @@ async function fetchObjectList(config: IntegrationConfig): Promise<string[]> {
       config,
       { signal: AbortSignal.timeout(8_000) },
     );
-    if (!res.ok) return [];
-    const body = (await res.json()) as {
-      result?: {
-        status?: {
-          exclude_object?: {
-            objects?: Array<{ name?: string }>;
-          };
-        };
-      };
-    };
-    const objects = body.result?.status?.exclude_object?.objects;
+    if (!res.ok) {
+      await cancelResponseBody(res);
+      return [];
+    }
+    const body = await readBoundedJsonResponse(res, MAX_METADATA_RESPONSE_BYTES);
+    const result = isRecord(body) && isRecord(body.result) ? body.result : null;
+    const status = isRecord(result?.status) ? result.status : null;
+    const excludeObject = isRecord(status?.exclude_object) ? status.exclude_object : null;
+    const objects = excludeObject?.objects;
     if (!Array.isArray(objects)) return [];
     return objects
-      .map((o) => (typeof o.name === "string" ? o.name.trim() : ""))
+      .map((object) => isRecord(object) && typeof object.name === "string" ? object.name.trim() : "")
       .filter((n) => n.length > 0);
   } catch {
     return [];
@@ -488,10 +503,12 @@ export const moonrakerAdapter: IntegrationAdapter = {
         signal: AbortSignal.timeout(8000),
       });
       if (!res.ok) {
+        await cancelResponseBody(res);
         return { ok: false, message: `Moonraker returned HTTP ${res.status}` };
       }
-      const body = (await res.json()) as { result?: { klippy_state?: string } };
-      const state = body.result?.klippy_state ?? "unknown";
+      const body = await readBoundedJsonResponse(res, MAX_METADATA_RESPONSE_BYTES);
+      const result = isRecord(body) && isRecord(body.result) ? body.result : null;
+      const state = typeof result?.klippy_state === "string" ? result.klippy_state : "unknown";
       return { ok: true, message: `Connected (klippy: ${state})` };
     } catch (e) {
       return {
@@ -543,11 +560,15 @@ export const moonrakerAdapter: IntegrationAdapter = {
         config,
         { signal: AbortSignal.timeout(8_000) },
       );
-      if (!res.ok) return null;
-      const body = (await res.json()) as {
-        result?: { status?: { print_stats?: { filament_used?: number } } };
-      };
-      const used = body.result?.status?.print_stats?.filament_used;
+      if (!res.ok) {
+        await cancelResponseBody(res);
+        return null;
+      }
+      const body = await readBoundedJsonResponse(res, MAX_METADATA_RESPONSE_BYTES);
+      const result = isRecord(body) && isRecord(body.result) ? body.result : null;
+      const status = isRecord(result?.status) ? result.status : null;
+      const printStats = isRecord(status?.print_stats) ? status.print_stats : null;
+      const used = printStats?.filament_used;
       if (typeof used === "number" && Number.isFinite(used) && used >= 0) {
         return used;
       }
@@ -586,12 +607,15 @@ export const moonrakerAdapter: IntegrationAdapter = {
         signal: AbortSignal.timeout(120_000),
       });
       if (!uploadRes.ok) {
-        const text = await uploadRes.text().catch(() => "");
+        const text = await readBoundedResponseText(uploadRes, MAX_ERROR_RESPONSE_BYTES).catch(
+          () => "",
+        );
         return {
           ok: false,
           message: `Upload failed (HTTP ${uploadRes.status})${text ? `: ${text.slice(0, 200)}` : ""}`,
         };
       }
+      await cancelResponseBody(uploadRes);
 
       let started = false;
       if (options?.start) {
@@ -601,7 +625,9 @@ export const moonrakerAdapter: IntegrationAdapter = {
           signal: AbortSignal.timeout(15_000),
         });
         if (!startRes.ok) {
-          const text = await startRes.text().catch(() => "");
+          const text = await readBoundedResponseText(startRes, MAX_ERROR_RESPONSE_BYTES).catch(
+            () => "",
+          );
           return {
             ok: true,
             remote_path: safeName,
@@ -609,6 +635,7 @@ export const moonrakerAdapter: IntegrationAdapter = {
             message: `Uploaded, but start failed (HTTP ${startRes.status})${text ? `: ${text.slice(0, 200)}` : ""}`,
           };
         }
+        await cancelResponseBody(startRes);
         started = true;
       }
 

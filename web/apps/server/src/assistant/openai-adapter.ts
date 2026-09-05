@@ -1,5 +1,11 @@
 import type { AssistantChatMessage } from "@print-partner/contracts";
+import {
+  isJsonObject as isRecord,
+  readBoundedJsonResponse,
+  readBoundedResponseChunks,
+} from "../lib/bounded-response.js";
 import { readProviderHttpError } from "./provider-error.js";
+import { fetchAssistantProvider } from "./provider-fetch.js";
 import type {
   AssistantChatParams,
   AssistantCompletionResult,
@@ -9,6 +15,8 @@ import type {
   AssistantToolMessage,
   AssistantToolsParams,
 } from "./types.js";
+
+const MAX_COMPLETION_RESPONSE_BYTES = 32 * 1024 * 1024;
 
 type OpenAiDeps = {
   provider: "openai" | "ollama";
@@ -87,9 +95,7 @@ function toOpenAiToolMessages(system: string, messages: AssistantToolMessage[]):
 function parseArgs(raw: string): Record<string, unknown> {
   try {
     const parsed = JSON.parse(raw || "{}") as unknown;
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : {};
+    return isRecord(parsed) ? parsed : {};
   } catch {
     return {};
   }
@@ -145,7 +151,7 @@ function toOllamaToolMessages(system: string, messages: AssistantToolMessage[]):
         role: "assistant",
         content: m.content ?? "",
         tool_calls: m.toolCalls.map((c) => ({
-          function: { name: c.name, arguments: (c.input ?? {}) as Record<string, unknown> },
+          function: { name: c.name, arguments: c.input ?? {} },
         })),
       });
     } else {
@@ -188,7 +194,7 @@ export function createOpenAiCompatibleAssistant(deps: OpenAiDeps): AssistantPort
   async function request(params: AssistantChatParams, stream: boolean): Promise<Response> {
     const effectiveModel = resolveModel(params.model);
     if (isOllama) {
-      return fetch(ollamaChatUrl, {
+      return fetchAssistantProvider(ollamaChatUrl, {
         method: "POST",
         headers: buildHeaders(),
         body: JSON.stringify({
@@ -197,9 +203,10 @@ export function createOpenAiCompatibleAssistant(deps: OpenAiDeps): AssistantPort
           stream,
           options: { num_ctx: ollamaNumCtx, num_predict: params.maxTokens },
         }),
+        signal: params.signal,
       });
     }
-    return fetch(completionsUrl, {
+    return fetchAssistantProvider(completionsUrl, {
       method: "POST",
       headers: buildHeaders(),
       body: JSON.stringify({
@@ -208,6 +215,7 @@ export function createOpenAiCompatibleAssistant(deps: OpenAiDeps): AssistantPort
         messages: toOpenAiMessages(params.system, params.messages),
         stream,
       }),
+      signal: params.signal,
     });
   }
 
@@ -220,16 +228,17 @@ export function createOpenAiCompatibleAssistant(deps: OpenAiDeps): AssistantPort
     async complete(params) {
       const res = await request(params, false);
       if (!res.ok) throw new Error(await readProviderHttpError(label, res));
+      const body = await readBoundedJsonResponse(res, MAX_COMPLETION_RESPONSE_BYTES);
       if (isOllama) {
-        const body = (await res.json()) as { message?: { content?: string } };
-        const text = body.message?.content?.trim() ?? "";
+        const message = isRecord(body) && isRecord(body.message) ? body.message : null;
+        const text = typeof message?.content === "string" ? message.content.trim() : "";
         if (!text) throw new Error("Model returned an empty response");
         return text;
       }
-      const body = (await res.json()) as {
-        choices?: Array<{ message?: { content?: string } }>;
-      };
-      const text = body.choices?.[0]?.message?.content?.trim() ?? "";
+      const choices = isRecord(body) && Array.isArray(body.choices) ? body.choices : [];
+      const choice = isRecord(choices[0]) ? choices[0] : null;
+      const message = isRecord(choice?.message) ? choice.message : null;
+      const text = typeof message?.content === "string" ? message.content.trim() : "";
       if (!text) throw new Error("Model returned an empty response");
       return text;
     },
@@ -239,7 +248,7 @@ export function createOpenAiCompatibleAssistant(deps: OpenAiDeps): AssistantPort
       const headers = buildHeaders();
 
       if (isOllama) {
-        const res = await fetch(ollamaChatUrl, {
+        const res = await fetchAssistantProvider(ollamaChatUrl, {
           method: "POST",
           headers,
           body: JSON.stringify({
@@ -256,6 +265,7 @@ export function createOpenAiCompatibleAssistant(deps: OpenAiDeps): AssistantPort
             })),
             options: { num_ctx: ollamaNumCtx, num_predict: params.maxTokens },
           }),
+          signal: params.signal,
         });
         if (!res.ok) {
           const detail = await readProviderHttpError(label, res);
@@ -264,26 +274,26 @@ export function createOpenAiCompatibleAssistant(deps: OpenAiDeps): AssistantPort
           (err as Error & { toolsUnsupported?: boolean }).toolsUnsupported = true;
           throw err;
         }
-        const body = (await res.json()) as {
-          message?: {
-            content?: string | null;
-            tool_calls?: Array<{
-              function?: { name?: string; arguments?: Record<string, unknown> | string };
-            }>;
-          };
-        };
-        const msg = body.message;
-        const toolCalls: AssistantToolCallRequest[] = (msg?.tool_calls ?? [])
-          .filter((c) => c.function?.name)
-          .map((c, i) => ({
-            id: `call_${i}`,
-            name: c.function!.name!,
+        const body = await readBoundedJsonResponse(res, MAX_COMPLETION_RESPONSE_BYTES);
+        const message = isRecord(body) && isRecord(body.message) ? body.message : null;
+        const rawToolCalls = Array.isArray(message?.tool_calls) ? message.tool_calls : [];
+        const toolCalls: AssistantToolCallRequest[] = rawToolCalls.flatMap((rawCall, index) => {
+          if (!isRecord(rawCall) || !isRecord(rawCall.function)) return [];
+          const name = rawCall.function.name;
+          if (typeof name !== "string" || !name) return [];
+          const rawArguments = rawCall.function.arguments;
+          return [{
+            id: `call_${index}`,
+            name,
             input:
-              typeof c.function!.arguments === "string"
-                ? parseArgs(c.function!.arguments)
-                : ((c.function!.arguments ?? {}) as Record<string, unknown>),
-          }));
-        const content = (msg?.content ?? "").trim();
+              typeof rawArguments === "string"
+                ? parseArgs(rawArguments)
+                : isRecord(rawArguments)
+                  ? rawArguments
+                  : {},
+          }];
+        });
+        const content = typeof message?.content === "string" ? message.content.trim() : "";
         return {
           content,
           toolCalls,
@@ -291,7 +301,7 @@ export function createOpenAiCompatibleAssistant(deps: OpenAiDeps): AssistantPort
         };
       }
 
-      const res = await fetch(completionsUrl, {
+      const res = await fetchAssistantProvider(completionsUrl, {
         method: "POST",
         headers,
         body: JSON.stringify({
@@ -308,6 +318,7 @@ export function createOpenAiCompatibleAssistant(deps: OpenAiDeps): AssistantPort
           })),
           tool_choice: "auto",
         }),
+        signal: params.signal,
       });
 
       // Older models may reject tools — signal degrade to caller.
@@ -321,28 +332,24 @@ export function createOpenAiCompatibleAssistant(deps: OpenAiDeps): AssistantPort
         throw new Error(detail);
       }
 
-      const body = (await res.json()) as {
-        choices?: Array<{
-          finish_reason?: string;
-          message?: {
-            content?: string | null;
-            tool_calls?: Array<{
-              id?: string;
-              function?: { name?: string; arguments?: string };
-            }>;
-          };
-        }>;
-      };
-      const choice = body.choices?.[0];
-      const msg = choice?.message;
-      const toolCalls: AssistantToolCallRequest[] = (msg?.tool_calls ?? [])
-        .filter((c) => c.function?.name)
-        .map((c, i) => ({
-          id: c.id || `call_${i}`,
-          name: c.function!.name!,
-          input: parseArgs(c.function!.arguments ?? "{}"),
-        }));
-      const content = (msg?.content ?? "").trim();
+      const body = await readBoundedJsonResponse(res, MAX_COMPLETION_RESPONSE_BYTES);
+      const choices = isRecord(body) && Array.isArray(body.choices) ? body.choices : [];
+      const choice = isRecord(choices[0]) ? choices[0] : null;
+      const message = isRecord(choice?.message) ? choice.message : null;
+      const rawToolCalls = Array.isArray(message?.tool_calls) ? message.tool_calls : [];
+      const toolCalls: AssistantToolCallRequest[] = rawToolCalls.flatMap((rawCall, index) => {
+        if (!isRecord(rawCall) || !isRecord(rawCall.function)) return [];
+        const name = rawCall.function.name;
+        if (typeof name !== "string" || !name) return [];
+        return [{
+          id: typeof rawCall.id === "string" && rawCall.id ? rawCall.id : `call_${index}`,
+          name,
+          input: parseArgs(
+            typeof rawCall.function.arguments === "string" ? rawCall.function.arguments : "{}",
+          ),
+        }];
+      });
+      const content = typeof message?.content === "string" ? message.content.trim() : "";
       const stopReason =
         toolCalls.length > 0 || choice?.finish_reason === "tool_calls" ? "tool_use" : "end_turn";
       return { content, toolCalls, stopReason };
@@ -359,43 +366,54 @@ export function createOpenAiCompatibleAssistant(deps: OpenAiDeps): AssistantPort
           handlers.onError(new Error("Stream body missing"));
           return;
         }
-        const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
+        const processLine = (line: string): void => {
+          const trimmed = line.trim();
+          if (!trimmed) return;
+          if (isOllama) {
+            // Native /api/chat streams NDJSON objects.
+            try {
+              const event: unknown = JSON.parse(trimmed);
+              const message = isRecord(event) && isRecord(event.message)
+                ? event.message
+                : null;
+              const token = typeof message?.content === "string" ? message.content : "";
+              if (token) handlers.onToken(token);
+            } catch {
+              /* skip malformed NDJSON chunk */
+            }
+            return;
+          }
+          if (!trimmed.startsWith("data:")) return;
+          const payload = trimmed.slice(5).trim();
+          if (!payload || payload === "[DONE]") return;
+          try {
+            const event: unknown = JSON.parse(payload);
+            const choices = isRecord(event) && Array.isArray(event.choices)
+              ? event.choices
+              : [];
+            const choice = isRecord(choices[0]) ? choices[0] : null;
+            const delta = isRecord(choice?.delta) ? choice.delta : null;
+            const token = typeof delta?.content === "string" ? delta.content : "";
+            if (token) handlers.onToken(token);
+          } catch {
+            /* skip malformed SSE chunk */
+          }
+        };
+        for await (const value of readBoundedResponseChunks(
+          res,
+          MAX_COMPLETION_RESPONSE_BYTES,
+        )) {
           buffer += decoder.decode(value, { stream: true });
           const lines = buffer.split("\n");
           buffer = lines.pop() ?? "";
           for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed) continue;
-            if (isOllama) {
-              // Native /api/chat streams NDJSON objects.
-              try {
-                const event = JSON.parse(trimmed) as { message?: { content?: string } };
-                const token = event.message?.content;
-                if (token) handlers.onToken(token);
-              } catch {
-                /* skip malformed NDJSON chunk */
-              }
-              continue;
-            }
-            if (!trimmed.startsWith("data:")) continue;
-            const payload = trimmed.slice(5).trim();
-            if (!payload || payload === "[DONE]") continue;
-            try {
-              const event = JSON.parse(payload) as {
-                choices?: Array<{ delta?: { content?: string } }>;
-              };
-              const token = event.choices?.[0]?.delta?.content;
-              if (token) handlers.onToken(token);
-            } catch {
-              /* skip malformed SSE chunk */
-            }
+            processLine(line);
           }
         }
+        buffer += decoder.decode();
+        processLine(buffer);
         handlers.onDone();
       } catch (e) {
         handlers.onError(e instanceof Error ? e : new Error(String(e)));

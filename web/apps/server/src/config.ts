@@ -69,7 +69,7 @@ export type ServerConfig = {
   integrationApiKey: string | null;
   /** When false, skip GitHub / override version checks for app updates */
   updateCheckEnabled: boolean;
-  /** Public URL for password reset links (e.g. https://print.example.com). Falls back to request Host. */
+  /** Canonical public URL for password reset links. Required for SMTP delivery. */
   appPublicUrl: string | null;
   smtpHost: string | null;
   smtpPort: number;
@@ -131,7 +131,17 @@ export type ServerConfig = {
 
 const DEFAULT_DATA_DIR = process.env.PRINT_PARTNER_DATA_DIR ?? "./data";
 const require = createRequire(import.meta.url);
-const appPackage = require("../../../package.json") as { version: string };
+const requireFromServerPackage = createRequire(require.resolve("@print-partner/server/package.json"));
+const appPackage: unknown = requireFromServerPackage("../../package.json");
+if (
+  typeof appPackage !== "object" ||
+  appPackage === null ||
+  !("version" in appPackage) ||
+  typeof appPackage.version !== "string"
+) {
+  throw new Error("Application package must contain a version string");
+}
+const appVersion = appPackage.version;
 
 function parseDeployMode(raw: string | undefined): DeployMode {
   if (raw === "saas") return "saas";
@@ -157,6 +167,9 @@ export function validateProductionConfig(config: ServerConfig): void {
   }
   if (config.deployMode === "saas" && config.authRequired && !config.sessionSecret && !config.saasBasicAuth) {
     throw new Error("SESSION_SECRET or SAAS_BASIC_AUTH is required when SaaS auth is enabled");
+  }
+  if (config.smtpConfigured && !config.appPublicUrl) {
+    throw new Error("APP_PUBLIC_URL is required when SMTP password-reset email is enabled");
   }
   if (
     config.deployMode === "saas" &&
@@ -226,7 +239,7 @@ function aiCredentialsPresent(
 export function loadConfig(): ServerConfig {
   const deployMode = parseDeployMode(process.env.DEPLOY_MODE);
   const releaseIdentity = resolveRuntimeReleaseIdentity({
-    packageVersion: appPackage.version,
+    packageVersion: appVersion,
     deployMode,
     env: process.env,
   });

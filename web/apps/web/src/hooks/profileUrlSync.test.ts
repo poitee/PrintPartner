@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   parseProfileParam,
-  profileIdFromUrl,
   searchParamsWithProfile,
   shouldSyncProfileToPath,
 } from "./profileUrlSync";
@@ -25,22 +24,9 @@ describe("shouldSyncProfileToPath", () => {
     expect(shouldSyncProfileToPath("/production")).toBe(false);
     expect(shouldSyncProfileToPath("/export")).toBe(true);
   });
-});
 
-describe("profileIdFromUrl", () => {
-  const valid = [1, 2, 3];
-
-  it("returns url id when it differs from selection", () => {
-    expect(profileIdFromUrl(2, valid, 1)).toBe(2);
-  });
-
-  it("returns undefined when url matches selection (avoids sync fight)", () => {
-    expect(profileIdFromUrl(2, valid, 2)).toBeUndefined();
-  });
-
-  it("returns undefined for unknown or missing url ids", () => {
-    expect(profileIdFromUrl(null, valid, 1)).toBeUndefined();
-    expect(profileIdFromUrl(99, valid, 1)).toBeUndefined();
+  it("does not compete with the legacy studio redirect", () => {
+    expect(shouldSyncProfileToPath("/plans/2/studio")).toBe(false);
   });
 });
 
@@ -65,12 +51,11 @@ describe("searchParamsWithProfile", () => {
 
   it("does not loop when user picks a new plan before url catches up", () => {
     const prev = new URLSearchParams("profile=1");
-    // State is already 2; url still says 1 — state->url should update, not no-op.
+    // State is already 2 while the URL still says 1. State-to-URL sync must update it.
     const next = searchParamsWithProfile(prev, 2);
     expect(next?.get("profile")).toBe("2");
     // After url catches up, further writes are no-ops.
     const settled = new URLSearchParams("profile=2");
     expect(searchParamsWithProfile(settled, 2)).toBeUndefined();
-    expect(profileIdFromUrl(2, [1, 2, 3], 2)).toBeUndefined();
   });
 });

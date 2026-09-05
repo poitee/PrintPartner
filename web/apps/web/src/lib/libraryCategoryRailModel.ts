@@ -8,7 +8,7 @@ import {
 import { moveItemById } from "./reorderList";
 import { rollupCategoryCount } from "./sourceCategoryAssignment";
 import { categorySwatch } from "./librarySourceMeta";
-import { UNCategorized_FILTER, type SourceKind } from "../components/sources/sourceLabels";
+import { UNCATEGORISED_FILTER, type SourceKind } from "../components/sources/sourceLabels";
 
 export type LibraryAddKind = SourceKind | "plan_bundle" | "repos_txt";
 
@@ -87,8 +87,8 @@ export function buildLibraryCategoryRows(
     },
     ...categoryRows,
     {
-      id: UNCategorized_FILTER,
-      name: UNCategorized_FILTER,
+      id: UNCATEGORISED_FILTER,
+      name: UNCATEGORISED_FILTER,
       label: "Uncategorised",
       depth: 0,
       count: uncategorized,

@@ -190,7 +190,12 @@ function trackedApplyFixture(tenantId = "default") {
     syncedAt: "2026-08-20T12:00:00.000Z",
     completeness: "complete",
   });
-  context.repo.activateSourceRevision({ sourceId: source.id, revisionId: sourceRevision.id, observed });
+  context.repo.activateSourceRevision({
+    sourceId: source.id,
+    revisionId: sourceRevision.id,
+    observed,
+    sourceVersion: sourceRevision.upstream_revision_key,
+  });
   const profile = context.repo.createProfile("Tracked operational Build", source.id);
   const created = context.repo.recomputePlanDraft({
     profileId: profile.id,
@@ -555,6 +560,7 @@ describe("accepted Plan operational snapshot", () => {
       sourceId: context.source.id,
       revisionId: newer.id,
       observed,
+      sourceVersion: newer.upstream_revision_key,
     });
     context.raw
       .prepare(

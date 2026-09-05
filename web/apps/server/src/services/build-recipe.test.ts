@@ -10,7 +10,7 @@ describe("recipeToReplaySteps", () => {
       base: { source_name: "Voron-Trident", project_id: 1, tag: "VTr2", branch: null },
       addons: [{ source_name: "LDO-Extras", project_id: 2, tag: null, branch: "main" }],
       stack_preset: "ldo_trident_r2",
-      kit_selections: { size: "300" },
+      kit_selections: { size: "300", extras: ["skirts", "panels"] },
       include: [],
       exclude: [],
       decision_count: 0,
@@ -26,7 +26,10 @@ describe("recipeToReplaySteps", () => {
     expect(steps[0]!.params.preset_id).toBe("ldo_trident_r2");
     expect(steps[1]!.params.tag).toBe("VTr2");
     expect(steps[2]!.params.source_name).toBe("LDO-Extras");
-    expect(steps[3]!.params.selections).toEqual({ size: "300" });
+    expect(steps[3]!.params.selections).toEqual({
+      size: "300",
+      extras: ["skirts", "panels"],
+    });
   });
 
   it("emits only the preset when there are no supplemental refs/addons/selections", () => {

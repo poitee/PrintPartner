@@ -35,6 +35,7 @@ vi.mock("../context/PlanWorkspaceContext", () => ({
 vi.mock("../context/ProfileContext", () => ({
   useProfileSelection: () => ({ profiles: [], selectedProfileId: null }),
 }));
+vi.mock("../components/sources/SourceWatchPanel", () => ({ default: () => null }));
 
 function LocationStateProbe() {
   const location = useLocation();

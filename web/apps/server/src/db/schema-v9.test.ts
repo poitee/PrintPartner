@@ -19,6 +19,12 @@ import {
   SQLITE_LEGACY_PRINT_PLAN_REMOVAL,
   removeLegacyPrintPlansAndStampPostgres,
 } from "./legacy-print-plan-removal.js";
+import {
+  SOURCE_REVISION_TENANT_REPAIR_STATEMENTS,
+  STRANDED_SOURCE_REVISION_QUERY,
+  repairSourceRevisionTenantOwnershipPostgres,
+  repairSourceRevisionTenantOwnershipSqlite,
+} from "./source-revision-tenant-repair.js";
 
 /**
  * Cumulative SQLite migration and PostgreSQL DDL parity checks.
@@ -394,6 +400,44 @@ function rawSqlite(sqlite: SqliteDatabase) {
   return (sqlite as unknown as { sqlite: import("better-sqlite3").Database }).sqlite;
 }
 
+function referenceSourceRevision(
+  raw: Database.Database,
+  input: {
+    tenantId: string;
+    profileId: number;
+    sourceId: number;
+    revisionId: number;
+    manifestDigest: string;
+    digestSeed: string;
+  },
+): void {
+  const inputSet = raw.prepare(
+    `INSERT INTO plan_revision_input_sets (
+       tenant_id, profile_id, input_set_digest, expected_input_count,
+       format_version, recorded_at
+     ) VALUES (?, ?, ?, 1, 1, ?)`,
+  ).run(
+    input.tenantId,
+    input.profileId,
+    input.digestSeed.repeat(64),
+    "2026-09-04T00:00:00.000Z",
+  );
+  raw.prepare(
+    `INSERT INTO plan_revision_inputs (
+       tenant_id, input_set_id, source_id, source_layer, layer_order,
+       tracking_kind, source_revision_id, manifest_digest,
+       effective_naming_digest
+     ) VALUES (?, ?, ?, 'base:source', 0, 'revision', ?, ?, ?)`,
+  ).run(
+    input.tenantId,
+    Number(inputSet.lastInsertRowid),
+    input.sourceId,
+    input.revisionId,
+    input.manifestDigest,
+    input.digestSeed.toUpperCase().repeat(64),
+  );
+}
+
 function replacePlanInputsWithV17Table(raw: Database.Database): void {
   raw.pragma("foreign_keys = OFF");
   raw.exec(`
@@ -442,7 +486,7 @@ describe("database schema migrations (SQLite)", () => {
     });
   });
 
-  it("creates the current schema and records schema version 31", () => {
+  it("creates the current schema and records its version", () => {
     withSqlite((sqlite) => {
       const tables = sqliteTableNames(sqlite);
       for (const table of [
@@ -462,11 +506,510 @@ describe("database schema migrations (SQLite)", () => {
         rawSqlite(sqlite)
           .prepare("SELECT value FROM app_settings WHERE tenant_id = ? AND key = ?")
           .get("default", "schema_version") as { value: string },
-      ).toMatchObject({ value: "31" });
+      ).toMatchObject({ value: String(currentSchemaVersion) });
       expect(sqliteColumnNames(sqlite, "projects")).toContain(
         "current_source_revision_id",
       );
+      expect(sqliteColumnNames(sqlite, "projects")).toContain(
+        "legacy_manifest_cutover",
+      );
     });
+  });
+
+  it("adds the v32 legacy manifest cutover with a false default", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pp-schema-v32-upgrade-"));
+    try {
+      const first = new SqliteDatabase(dir);
+      first.connect();
+      const source = new AppRepository(
+        getDb(first),
+        undefined,
+        first.reposDir,
+      ).createSource({
+        name: "Pre-v32 Source",
+      });
+      rawSqlite(first).exec(`
+        ALTER TABLE projects DROP COLUMN legacy_manifest_cutover;
+        UPDATE app_settings SET value = '31'
+          WHERE tenant_id = 'default' AND key = 'schema_version';
+      `);
+      first.close();
+
+      const upgraded = new SqliteDatabase(dir);
+      upgraded.connect();
+      expect(sqliteColumnNames(upgraded, "projects")).toContain(
+        "legacy_manifest_cutover",
+      );
+      expect(
+        rawSqlite(upgraded)
+          .prepare("SELECT legacy_manifest_cutover FROM projects WHERE id = ?")
+          .get(source.id),
+      ).toEqual({ legacy_manifest_cutover: 0 });
+      upgraded.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("repairs Source revision ownership from a historical partial tenant claim", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pp-schema-v33-source-tenant-repair-"));
+    const claimedTenantId = "11111111-1111-4111-8111-111111111111";
+    try {
+      const legacy = new SqliteDatabase(dir);
+      legacy.connect();
+      const legacyRepo = new AppRepository(
+        getDb(legacy),
+        "default",
+        legacy.reposDir,
+      );
+      const source = legacyRepo.createSource({ name: "Partially claimed Source" });
+      const profile = legacyRepo.createProfile("Partially claimed Plan", source.id);
+      const raw = rawSqlite(legacy);
+      const part = raw
+        .prepare(
+          `INSERT INTO parts (
+             tenant_id, profile_id, match_key, relative_path, filename,
+             source_layer, status, role, quantity_auto, quantity_effective,
+             included, notes
+           ) VALUES ('default', ?, 'cube.stl', 'cube.stl', 'cube.stl',
+             'base:source', 'base', 'primary', 1, 1, 1, '')`,
+        )
+        .run(profile.id);
+      raw.prepare(
+        `INSERT INTO print_progress (
+           tenant_id, part_id, unit_index, completed, assembled
+         ) VALUES ('default', ?, 0, 0, 0)`,
+      ).run(Number(part.lastInsertRowid));
+      const revision = legacyRepo.recordSourceRevision({
+        sourceId: source.id,
+        upstreamRevisionKey: "commit-a",
+        manifestDigest: "a".repeat(64),
+        snapshotLocator: `${source.id}/revisions/commit-a`,
+        syncedAt: "2026-09-04T00:00:00.000Z",
+        completeness: "complete",
+      });
+      raw.prepare(
+        "UPDATE projects SET current_source_revision_id = ? WHERE id = ?",
+      ).run(revision.id, source.id);
+      raw.prepare(
+        `UPDATE app_settings SET value = '31'
+          WHERE tenant_id = 'default' AND key = 'schema_version'`,
+      ).run();
+      for (const table of [
+        "projects",
+        "build_profiles",
+        "profile_layers",
+        "parts",
+        "print_progress",
+        "app_settings",
+      ]) {
+        raw.prepare(
+          `UPDATE ${table} SET tenant_id = ? WHERE tenant_id = 'default'`,
+        ).run(claimedTenantId);
+      }
+      expect(
+        raw.prepare(
+          "SELECT value FROM app_settings WHERE tenant_id = 'default' AND key = 'schema_version'",
+        ).get(),
+      ).toBeUndefined();
+      expect(
+        raw.prepare(
+          "SELECT value FROM app_settings WHERE tenant_id = ? AND key = 'schema_version'",
+        ).get(claimedTenantId),
+      ).toEqual({ value: "31" });
+      legacy.close();
+
+      const upgraded = new SqliteDatabase(dir);
+      upgraded.connect();
+      const claimedRepo = new AppRepository(
+        getDb(upgraded),
+        claimedTenantId,
+        upgraded.reposDir,
+      );
+      expect(claimedRepo.getSource(source.id)?.current_source_revision_id).toBe(
+        revision.id,
+      );
+      expect(claimedRepo.getSourceRevision(revision.id)).toMatchObject({
+        id: revision.id,
+        source_id: source.id,
+      });
+      expect(
+        rawSqlite(upgraded)
+          .prepare("SELECT tenant_id FROM source_revisions WHERE id = ?")
+          .get(revision.id),
+      ).toEqual({ tenant_id: claimedTenantId });
+      expect(rawSqlite(upgraded).pragma("foreign_key_check")).toEqual([]);
+      for (const table of [
+        "projects",
+        "build_profiles",
+        "profile_layers",
+        "parts",
+        "print_progress",
+      ]) {
+        expect(
+          rawSqlite(upgraded)
+            .prepare(`SELECT DISTINCT tenant_id FROM ${table}`)
+            .all(),
+        ).toEqual([{ tenant_id: claimedTenantId }]);
+      }
+      upgraded.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("atomically repairs an active revision after an owner-tenant sync crashes before activation", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pp-source-tenant-crash-collision-"));
+    const claimedTenantId = "33333333-3333-4333-8333-333333333333";
+    try {
+      const legacy = new SqliteDatabase(dir);
+      legacy.connect();
+      const db = getDb(legacy);
+      const raw = rawSqlite(legacy);
+      const defaultRepo = new AppRepository(db, "default", legacy.reposDir);
+      const source = defaultRepo.createSource({ name: "Interrupted resync" });
+      const activeRevision = defaultRepo.recordSourceRevision({
+        sourceId: source.id,
+        upstreamRevisionKey: "commit-a",
+        manifestDigest: "a".repeat(64),
+        snapshotLocator: `${source.id}/revisions/commit-a`,
+        syncedAt: "2026-09-03T00:00:00.000Z",
+        completeness: "complete",
+      });
+      raw.prepare(
+        `UPDATE projects
+            SET tenant_id = ?, current_source_revision_id = ?
+          WHERE id = ?`,
+      ).run(claimedTenantId, activeRevision.id, source.id);
+      const duplicate = new AppRepository(db, claimedTenantId, legacy.reposDir)
+        .recordSourceRevision({
+          sourceId: source.id,
+          upstreamRevisionKey: "commit-a",
+          manifestDigest: activeRevision.manifest_digest,
+          snapshotLocator: activeRevision.snapshot_locator,
+          syncedAt: "2026-09-04T00:00:00.000Z",
+          completeness: "complete",
+        });
+
+      expect(() =>
+        repairSourceRevisionTenantOwnershipSqlite(raw, {
+          afterStatements: () => {
+            throw new Error("simulated repair crash");
+          },
+        }),
+      ).toThrow("simulated repair crash");
+      expect(
+        raw.prepare(
+          `SELECT id, tenant_id FROM source_revisions
+            WHERE project_id = ? ORDER BY id`,
+        ).all(source.id),
+      ).toEqual([
+        { id: activeRevision.id, tenant_id: "default" },
+        { id: duplicate.id, tenant_id: claimedTenantId },
+      ]);
+
+      repairSourceRevisionTenantOwnershipSqlite(raw);
+      const repairedRows = raw.prepare(
+        `SELECT id, tenant_id, upstream_revision_key, snapshot_locator
+           FROM source_revisions
+          WHERE project_id = ? ORDER BY id`,
+      ).all(source.id);
+      expect(repairedRows).toEqual([
+        {
+          id: activeRevision.id,
+          tenant_id: claimedTenantId,
+          upstream_revision_key: activeRevision.upstream_revision_key,
+          snapshot_locator: activeRevision.snapshot_locator,
+        },
+      ]);
+      expect(
+        new AppRepository(db, claimedTenantId, legacy.reposDir)
+          .getSource(source.id)?.current_source_revision_id,
+      ).toBe(activeRevision.id);
+      expect(raw.pragma("foreign_key_check")).toEqual([]);
+      legacy.close();
+
+      const reopened = new SqliteDatabase(dir);
+      expect(() => reopened.connect()).not.toThrow();
+      expect(
+        rawSqlite(reopened)
+          .prepare(
+            `SELECT id, tenant_id, upstream_revision_key, snapshot_locator
+               FROM source_revisions WHERE project_id = ?`,
+          )
+          .all(source.id),
+      ).toEqual(repairedRows);
+      reopened.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps referenced history when an owner-tenant resync is already active", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pp-schema-v33-source-tenant-collision-"));
+    const claimedTenantId = "22222222-2222-4222-8222-222222222222";
+    try {
+      const legacy = new SqliteDatabase(dir);
+      legacy.connect();
+      const db = getDb(legacy);
+      const raw = rawSqlite(legacy);
+      const defaultRepo = new AppRepository(db, "default", legacy.reposDir);
+      const source = defaultRepo.createSource({ name: "Resynced Source" });
+      const profile = defaultRepo.createProfile("Historical Plan");
+      const historicalRevision = defaultRepo.recordSourceRevision({
+        sourceId: source.id,
+        upstreamRevisionKey: "commit-a",
+        manifestDigest: "a".repeat(64),
+        snapshotLocator: `${source.id}/revisions/historical-commit-a`,
+        syncedAt: "2026-09-03T00:00:00.000Z",
+        completeness: "complete",
+      });
+      referenceSourceRevision(raw, {
+        tenantId: "default",
+        profileId: profile.id,
+        sourceId: source.id,
+        revisionId: historicalRevision.id,
+        manifestDigest: historicalRevision.manifest_digest,
+        digestSeed: "b",
+      });
+      raw.prepare("UPDATE projects SET tenant_id = ? WHERE id = ?")
+        .run(claimedTenantId, source.id);
+      raw.prepare("UPDATE build_profiles SET tenant_id = ? WHERE id = ?")
+        .run(claimedTenantId, profile.id);
+
+      const claimedRepo = new AppRepository(db, claimedTenantId, legacy.reposDir);
+      const currentRevision = claimedRepo.recordSourceRevision({
+        sourceId: source.id,
+        upstreamRevisionKey: "commit-a",
+        manifestDigest: "d".repeat(64),
+        snapshotLocator: `${source.id}/revisions/current-commit-a`,
+        syncedAt: "2026-09-04T00:00:00.000Z",
+        completeness: "complete",
+      });
+      raw.prepare(
+        "UPDATE projects SET current_source_revision_id = ? WHERE id = ?",
+      ).run(currentRevision.id, source.id);
+      raw.prepare(
+        `UPDATE app_settings SET value = '31'
+          WHERE tenant_id = 'default' AND key = 'schema_version'`,
+      ).run();
+      legacy.close();
+
+      const upgraded = new SqliteDatabase(dir);
+      upgraded.connect();
+      const repairedRows = rawSqlite(upgraded)
+        .prepare(
+          `SELECT id, tenant_id, upstream_revision_key
+             FROM source_revisions
+            WHERE project_id = ?
+            ORDER BY id`,
+        )
+        .all(source.id);
+      expect(repairedRows).toEqual([
+        {
+          id: historicalRevision.id,
+          tenant_id: "default",
+          upstream_revision_key: "commit-a",
+        },
+        {
+          id: currentRevision.id,
+          tenant_id: claimedTenantId,
+          upstream_revision_key: "commit-a",
+        },
+      ]);
+      expect(
+        rawSqlite(upgraded)
+          .prepare("SELECT source_revision_id FROM plan_revision_inputs")
+          .get(),
+      ).toEqual({ source_revision_id: historicalRevision.id });
+      expect(rawSqlite(upgraded).pragma("foreign_key_check")).toEqual([]);
+      expect(
+        new AppRepository(getDb(upgraded), claimedTenantId, upgraded.reposDir)
+          .getSource(source.id)?.current_source_revision_id,
+      ).toBe(currentRevision.id);
+      upgraded.close();
+
+      const reopened = new SqliteDatabase(dir);
+      reopened.connect();
+      expect(
+        rawSqlite(reopened)
+          .prepare(
+            `SELECT id, tenant_id, upstream_revision_key
+               FROM source_revisions
+              WHERE project_id = ?
+              ORDER BY id`,
+          )
+          .all(source.id),
+      ).toEqual(repairedRows);
+      reopened.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("repoints an active mismatch to identical protected owner history", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pp-source-tenant-identical-collision-"));
+    const claimedTenantId = "55555555-5555-4555-8555-555555555555";
+    try {
+      const legacy = new SqliteDatabase(dir);
+      legacy.connect();
+      const db = getDb(legacy);
+      const raw = rawSqlite(legacy);
+      const defaultRepo = new AppRepository(db, "default", legacy.reposDir);
+      const source = defaultRepo.createSource({ name: "Identical collision" });
+      const profile = defaultRepo.createProfile("Identical collision Plan");
+      const activeRevision = defaultRepo.recordSourceRevision({
+        sourceId: source.id,
+        upstreamRevisionKey: "commit-a",
+        manifestDigest: "a".repeat(64),
+        snapshotLocator: `${source.id}/revisions/commit-a`,
+        syncedAt: "2026-09-03T00:00:00.000Z",
+        completeness: "complete",
+      });
+      raw.prepare(
+        `UPDATE projects
+            SET tenant_id = ?, current_source_revision_id = ?
+          WHERE id = ?`,
+      ).run(claimedTenantId, activeRevision.id, source.id);
+      raw.prepare("UPDATE build_profiles SET tenant_id = ? WHERE id = ?")
+        .run(claimedTenantId, profile.id);
+      const protectedRevision = new AppRepository(
+        db,
+        claimedTenantId,
+        legacy.reposDir,
+      ).recordSourceRevision({
+        sourceId: source.id,
+        upstreamRevisionKey: activeRevision.upstream_revision_key,
+        manifestDigest: activeRevision.manifest_digest,
+        snapshotLocator: activeRevision.snapshot_locator,
+        syncedAt: "2026-09-04T00:00:00.000Z",
+        completeness: "complete",
+      });
+      referenceSourceRevision(raw, {
+        tenantId: claimedTenantId,
+        profileId: profile.id,
+        sourceId: source.id,
+        revisionId: protectedRevision.id,
+        manifestDigest: protectedRevision.manifest_digest,
+        digestSeed: "e",
+      });
+      legacy.close();
+
+      const upgraded = new SqliteDatabase(dir);
+      upgraded.connect();
+      expect(
+        rawSqlite(upgraded)
+          .prepare("SELECT current_source_revision_id FROM projects WHERE id = ?")
+          .get(source.id),
+      ).toEqual({ current_source_revision_id: protectedRevision.id });
+      expect(
+        rawSqlite(upgraded)
+          .prepare(
+            `SELECT id, tenant_id, upstream_revision_key, snapshot_locator
+               FROM source_revisions WHERE project_id = ? ORDER BY id`,
+          )
+          .all(source.id),
+      ).toEqual([
+        {
+          id: activeRevision.id,
+          tenant_id: "default",
+          upstream_revision_key: activeRevision.upstream_revision_key,
+          snapshot_locator: activeRevision.snapshot_locator,
+        },
+        {
+          id: protectedRevision.id,
+          tenant_id: claimedTenantId,
+          upstream_revision_key: protectedRevision.upstream_revision_key,
+          snapshot_locator: protectedRevision.snapshot_locator,
+        },
+      ]);
+      expect(rawSqlite(upgraded).pragma("foreign_key_check")).toEqual([]);
+      upgraded.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed when an active stranded revision conflicts with protected owner history", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pp-source-tenant-protected-collision-"));
+    const claimedTenantId = "44444444-4444-4444-8444-444444444444";
+    try {
+      const legacy = new SqliteDatabase(dir);
+      legacy.connect();
+      const db = getDb(legacy);
+      const raw = rawSqlite(legacy);
+      const defaultRepo = new AppRepository(db, "default", legacy.reposDir);
+      const source = defaultRepo.createSource({ name: "Protected collision" });
+      const profile = defaultRepo.createProfile("Protected collision Plan");
+      const activeRevision = defaultRepo.recordSourceRevision({
+        sourceId: source.id,
+        upstreamRevisionKey: "commit-a",
+        manifestDigest: "a".repeat(64),
+        snapshotLocator: `${source.id}/revisions/historical-commit-a`,
+        syncedAt: "2026-09-03T00:00:00.000Z",
+        completeness: "complete",
+      });
+      raw.prepare(
+        `UPDATE projects
+            SET tenant_id = ?, current_source_revision_id = ?
+          WHERE id = ?`,
+      ).run(claimedTenantId, activeRevision.id, source.id);
+      raw.prepare("UPDATE build_profiles SET tenant_id = ? WHERE id = ?")
+        .run(claimedTenantId, profile.id);
+      const protectedRevision = new AppRepository(
+        db,
+        claimedTenantId,
+        legacy.reposDir,
+      ).recordSourceRevision({
+        sourceId: source.id,
+        upstreamRevisionKey: "commit-a",
+        manifestDigest: "b".repeat(64),
+        snapshotLocator: `${source.id}/revisions/conflicting-commit-a`,
+        syncedAt: "2026-09-04T00:00:00.000Z",
+        completeness: "complete",
+      });
+      referenceSourceRevision(raw, {
+        tenantId: claimedTenantId,
+        profileId: profile.id,
+        sourceId: source.id,
+        revisionId: protectedRevision.id,
+        manifestDigest: protectedRevision.manifest_digest,
+        digestSeed: "c",
+      });
+      legacy.close();
+
+      const blocked = new SqliteDatabase(dir);
+      expect(() => blocked.connect()).toThrow(/manual recovery is required/i);
+      blocked.close();
+      const preserved = new Database(join(dir, "print-partner.db"));
+      expect(
+        preserved.prepare(
+          `SELECT id, tenant_id, upstream_revision_key, snapshot_locator
+             FROM source_revisions WHERE project_id = ? ORDER BY id`,
+        ).all(source.id),
+      ).toEqual([
+        {
+          id: activeRevision.id,
+          tenant_id: "default",
+          upstream_revision_key: "commit-a",
+          snapshot_locator: `${source.id}/revisions/historical-commit-a`,
+        },
+        {
+          id: protectedRevision.id,
+          tenant_id: claimedTenantId,
+          upstream_revision_key: "commit-a",
+          snapshot_locator: `${source.id}/revisions/conflicting-commit-a`,
+        },
+      ]);
+      expect(
+        preserved.prepare(
+          "SELECT current_source_revision_id FROM projects WHERE id = ?",
+        ).get(source.id),
+      ).toEqual({ current_source_revision_id: activeRevision.id });
+      preserved.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("creates every v16 revision column", () => {
@@ -846,7 +1389,7 @@ describe("database schema migrations (SQLite)", () => {
         rawSqlite(upgraded)
           .prepare("SELECT value FROM app_settings WHERE tenant_id = 'default' AND key = 'schema_version'")
           .get(),
-      ).toEqual({ value: "31" });
+      ).toEqual({ value: String(currentSchemaVersion) });
       upgraded.close();
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -941,7 +1484,7 @@ describe("database schema migrations (SQLite)", () => {
       ).toEqual([]);
       expect(
         upgradedRaw.prepare("SELECT value FROM app_settings WHERE tenant_id = 'default' AND key = 'schema_version'").get(),
-      ).toEqual({ value: "31" });
+      ).toEqual({ value: String(currentSchemaVersion) });
       expect(Object.fromEntries(
         V27_TABLES.map((table) => [table, upgradedRaw.prepare(`SELECT * FROM ${table} ORDER BY 1`).all()]),
       )).toEqual(acceptedBefore);
@@ -1221,7 +1764,7 @@ describe("database schema migrations (SQLite)", () => {
 const POSTGRES_DDL = (() => {
   const initPath = join(
     dirname(fileURLToPath(import.meta.url)),
-    "../../drizzle/postgres/0000_init.sql",
+    "../data/postgres/0000_init.sql",
   );
   return [readFileSync(initPath, "utf8"), ...postgresPostInitMigrations].join("\n");
 })();
@@ -1264,8 +1807,25 @@ function pgAddedColumns(table: string): string[] {
 
 describe("database schema migrations (Postgres DDL parity)", () => {
   it("keeps SQLite and Postgres schema_version constants in lockstep", () => {
-    expect(sqliteSchema.currentSchemaVersion).toBe(31);
-    expect(pgSchema.currentSchemaVersion).toBe(31);
+    expect(sqliteSchema.currentSchemaVersion).toBe(33);
+    expect(pgSchema.currentSchemaVersion).toBe(33);
+  });
+
+  it("repairs PostgreSQL Source ownership in one transaction", async () => {
+    const queries: string[] = [];
+    await repairSourceRevisionTenantOwnershipPostgres({
+      query: async (sql) => {
+        queries.push(sql);
+        return { rows: [] };
+      },
+    });
+
+    expect(queries).toEqual([
+      "BEGIN",
+      ...SOURCE_REVISION_TENANT_REPAIR_STATEMENTS,
+      STRANDED_SOURCE_REVISION_QUERY,
+      "COMMIT",
+    ]);
   });
 
   it("uses the same exact legacy print Plan key grammar in SQLite and Postgres", () => {
@@ -1350,12 +1910,13 @@ describe("database schema migrations (Postgres DDL parity)", () => {
     }
   });
 
-  it("adds the v17 current revision pointer in Postgres DDL", () => {
+  it("adds the Source revision pointer and legacy manifest cutover in Postgres DDL", () => {
     const present = new Set([
       ...pgCreatedColumns("projects"),
       ...pgAddedColumns("projects"),
     ]);
     expect(present).toContain("current_source_revision_id");
+    expect(present).toContain("legacy_manifest_cutover");
   });
 
   it("adds every v18 accepted-input column in Postgres DDL", () => {

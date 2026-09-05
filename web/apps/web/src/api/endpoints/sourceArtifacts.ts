@@ -1,10 +1,10 @@
-import type { SourceSummary } from "@print-partner/contracts";
+import type { ManifestSelections, SourceSummary } from "@print-partner/contracts";
 import { engineFetch, engineFetchMultipart } from "../engineTransport";
 
 type ChoiceTreeNode = {
   id: string;
   label?: string;
-  type?: "pick_one" | "pick_any" | "addon_toggle";
+  type?: "pick_one" | "pick_any" | "pick_n" | "addon_toggle";
   group?: string;
   source_id?: string;
   replaces_slot?: string;
@@ -44,12 +44,12 @@ export type RepoManifestVariant = {
 };
 
 export type RepoManifestOptionGroup = {
-  rule: string;
+  rule: "pick_one" | "pick_any" | "pick_n";
   label?: string;
   parts?: Array<{ match: string } | string>;
   variants?: RepoManifestVariant[];
-  min?: number;
-  max?: number;
+  min?: number | null;
+  max?: number | null;
 };
 
 export type RepoManifestDocument = {
@@ -68,7 +68,7 @@ export type RepoManifestDocument = {
     branch?: string;
     role?: string;
   }>;
-  selections?: Record<string, string>;
+  selections?: ManifestSelections;
   option_groups?: Record<string, RepoManifestOptionGroup>;
   slots?: Record<string, RepoManifestSlot>;
   parts?: RepoManifestPartRule[];
@@ -90,6 +90,7 @@ export type ManifestBuilderBootstrap = {
     source_kind: string | null;
     role: string;
     local_path: string | null;
+    content_available?: boolean;
   };
   exists: boolean;
   manifest_kind: string | null;
@@ -160,7 +161,7 @@ export async function fetchRepoManifest(sourceId: number): Promise<{
 
 export async function putRepoManifest(
   sourceId: number,
-  body: { yaml?: string; document?: RepoManifestDocument },
+  body: { yaml: string },
 ): Promise<{
   source_id: number;
   path: string;

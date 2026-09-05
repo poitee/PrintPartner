@@ -1,4 +1,11 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -51,6 +58,36 @@ afterEach(() => {
 });
 
 describe("PDF text cache roots", () => {
+  it("rejects a PDF symlink that escapes the content root", async () => {
+    const root = tempRoot();
+    const contentRoot = join(root, "revisions", "commit-a");
+    mkdirSync(contentRoot, { recursive: true });
+    const outsidePdf = join(root, "outside.pdf");
+    writeFileSync(outsidePdf, minimalPdf("outside secret"), "binary");
+    symlinkSync(outsidePdf, join(contentRoot, "manual.pdf"));
+
+    const result = await extractPdfText(contentRoot, "manual.pdf");
+
+    expect(result).toMatchObject({ status: "error", error: "PDF not found" });
+    expect(readCachedPdfText(contentRoot, "manual.pdf")).toBeNull();
+  });
+
+  it("rejects a cached sidecar symlink that escapes its cache root", () => {
+    const root = tempRoot();
+    const contentRoot = join(root, "revisions", "commit-a");
+    const cacheRoot = join(root, "derived", "pdf-text");
+    mkdirSync(contentRoot, { recursive: true });
+    mkdirSync(cacheRoot, { recursive: true });
+    const pdfPath = join(contentRoot, "manual.pdf");
+    writeFileSync(pdfPath, "PDF bytes", "utf8");
+    const hash = contentHashForFile(pdfPath);
+    const outside = join(root, "outside.txt");
+    writeFileSync(outside, "outside cached secret", "utf8");
+    symlinkSync(outside, sidecarPathForHash(cacheRoot, hash));
+
+    expect(readCachedPdfText(contentRoot, "manual.pdf", { cacheRoot })).toBeNull();
+  });
+
   it("writes extracted text to a cache root outside immutable content", async () => {
     const root = tempRoot();
     const contentRoot = join(root, "revisions", "commit-a");

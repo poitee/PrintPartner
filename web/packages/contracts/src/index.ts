@@ -197,7 +197,6 @@ export type IntegrationType =
   | "prusalink"
   | "bambu"
   | "spoolman"
-  | "slicer_folder"
   | "slicer_sidecar"
   | "ai_assistant"
   | "home_assistant";
@@ -730,6 +729,8 @@ export type SourceSummary = {
   branch: string;
   tag: string | null;
   local_path: string | null;
+  /** Server-side Source content is available without exposing its filesystem path. */
+  content_available?: boolean;
   last_synced_at: string | null;
   last_commit_sha: string | null;
   current_source_revision_id: number | null;
@@ -799,9 +800,9 @@ export type ReviewPart = PartRow & {
   printed_count: number;
   /** Checkoff: not fully printed yet. */
   missing: boolean;
-  /** On-disk STL absent for an included part (GRE-235). */
+  /** On-disk STL absent for an included part. */
   stl_missing?: boolean;
-  /** Included part has STL but no cached thumbnail PNG (GRE-235). */
+  /** Included part has STL but no cached thumbnail PNG. */
   thumb_empty?: boolean;
   filament_display: string;
 };
@@ -986,6 +987,10 @@ export type PlanDecisionCreateRequest = {
   result?: Record<string, unknown> | null;
 };
 
+export type ManifestSelection = string | string[];
+
+export type ManifestSelections = Record<string, ManifestSelection>;
+
 export type BuildRecipe = {
   plan_id: number;
   plan_name: string;
@@ -1002,7 +1007,7 @@ export type BuildRecipe = {
     branch: string | null;
   }>;
   stack_preset: string | null;
-  kit_selections: Record<string, string>;
+  kit_selections: ManifestSelections;
   include: string[];
   exclude: string[];
   decision_count: number;

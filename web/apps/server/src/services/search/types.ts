@@ -1,6 +1,7 @@
 /** Pluggable web search backends for assistant research tools. */
 
 import type { SearchProviderId } from "@print-partner/contracts";
+import type { safeOutboundFetch } from "../../lib/outbound-url.js";
 
 export type { SearchProviderId };
 
@@ -18,6 +19,11 @@ export type WebSearchOptions = {
   site?: string;
   maxResults?: number;
 };
+
+export type SearchAdapterDependencies = Readonly<{
+  fetchFn: typeof safeOutboundFetch;
+  signal: AbortSignal;
+}>;
 
 export type WebSearchResult = {
   provider: SearchProviderId;

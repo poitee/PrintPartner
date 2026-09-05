@@ -1,5 +1,6 @@
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
+import { cancelResponseBody } from "./bounded-response.js";
 
 /**
  * SSRF guard for outbound HTTP fetches of user-controlled URLs.
@@ -212,6 +213,7 @@ export async function safeOutboundFetch(
     if (response.status >= 300 && response.status < 400) {
       const location = response.headers.get("location");
       if (!location) return response;
+      await cancelResponseBody(response);
       url = await assertSafeOutboundUrl(new URL(location, url).toString(), options);
       continue;
     }

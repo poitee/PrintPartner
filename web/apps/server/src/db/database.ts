@@ -5,6 +5,11 @@ import { PostgresDatabase } from "./client-postgres.js";
 import { AppRepository as Repo } from "./repository.js";
 import * as pgSchema from "./schema-pg.js";
 import * as sqliteSchema from "./schema.js";
+import {
+  ISOLATED_SOURCE_FILESYSTEM,
+  TRUSTED_SINGLE_USER_SOURCE_FILESYSTEM,
+  type SourceFilesystemPolicy,
+} from "../services/source-filesystem-policy.js";
 
 /** App data: SQLite (self-host) or Postgres (saas + DATABASE_URL). */
 export type DatabaseBundle = {
@@ -15,6 +20,7 @@ export type DatabaseBundle = {
   reposDir: string;
   sourcesDir: string;
   dataDir: string;
+  sourceFilesystemPolicy: SourceFilesystemPolicy;
 };
 
 export function openDatabaseBundle(
@@ -24,6 +30,10 @@ export function openDatabaseBundle(
 ): DatabaseBundle {
   mkdirSync(dataDir, { recursive: true });
   const usePostgres = deployMode === "saas" && Boolean(databaseUrl);
+  const sourceFilesystemPolicy =
+    deployMode === "saas"
+      ? ISOLATED_SOURCE_FILESYSTEM
+      : TRUSTED_SINGLE_USER_SOURCE_FILESYSTEM;
 
   if (usePostgres && databaseUrl) {
     const postgres = new PostgresDatabase(databaseUrl, dataDir);
@@ -36,6 +46,7 @@ export function openDatabaseBundle(
       reposDir: postgres.reposDir,
       sourcesDir: postgres.sourcesDir,
       dataDir,
+      sourceFilesystemPolicy,
     };
   }
 
@@ -45,10 +56,13 @@ export function openDatabaseBundle(
     driver: "sqlite",
     sqlite,
     postgres: databaseUrl ? new PostgresDatabase(databaseUrl, dataDir) : null,
-    repository: new Repo(getDb(sqlite), undefined, sqlite.reposDir),
+    repository: new Repo(getDb(sqlite), undefined, sqlite.reposDir, undefined, {
+      sourceFilesystemPolicy,
+    }),
     reposDir: sqlite.reposDir,
     sourcesDir: sqlite.sourcesDir,
     dataDir,
+    sourceFilesystemPolicy,
   };
 }
 
@@ -62,6 +76,7 @@ export function repositoryForTenant(bundle: DatabaseBundle, tenantId: string): A
       tenantId,
       bundle.reposDir,
       pgSchema as unknown as SchemaTables,
+      { sourceFilesystemPolicy: bundle.sourceFilesystemPolicy },
     );
   }
   if (!bundle.sqlite) throw new Error("SQLite bundle not connected");
@@ -70,6 +85,7 @@ export function repositoryForTenant(bundle: DatabaseBundle, tenantId: string): A
     tenantId,
     bundle.sqlite.reposDir,
     sqliteSchema as unknown as SchemaTables,
+    { sourceFilesystemPolicy: bundle.sourceFilesystemPolicy },
   );
 }
 
@@ -81,6 +97,7 @@ export async function connectBundle(bundle: DatabaseBundle): Promise<void> {
       "default",
       bundle.reposDir,
       pgSchema as unknown as SchemaTables,
+      { sourceFilesystemPolicy: bundle.sourceFilesystemPolicy },
     );
     return;
   }
@@ -91,6 +108,7 @@ export async function connectBundle(bundle: DatabaseBundle): Promise<void> {
       undefined,
       bundle.reposDir,
       sqliteSchema as unknown as SchemaTables,
+      { sourceFilesystemPolicy: bundle.sourceFilesystemPolicy },
     );
   }
   if (bundle.postgres && !bundle.postgres.drizzle) {

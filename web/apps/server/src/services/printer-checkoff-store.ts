@@ -299,8 +299,6 @@ export function createPrinterCheckoffLink(
     ?.filter((n) => typeof n === "string" && n.trim())
     .map((n) => n.trim().slice(0, 200))
     .slice(0, 200);
-  // GRE-232: allow plan-only links (empty units / unlabeled) so Send stamps plan_id
-  // even when object parse found nothing. Unlabeled-only Send still works.
   const filename = input.filename.trim();
   const integrationId = input.integration_id.trim();
   const printerId = input.printer_id.trim();

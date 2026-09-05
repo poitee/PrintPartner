@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { moonrakerAdapter } from "./moonraker.js";
 
+function jsonResponse(body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
 describe("moonrakerAdapter", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -8,10 +14,9 @@ describe("moonrakerAdapter", () => {
   });
 
   it("testConnection reports klippy state and sends API key headers", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ result: { klippy_state: "ready" } }),
-    });
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({ result: { klippy_state: "ready" } }),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     const result = await moonrakerAdapter.testConnection({
@@ -29,17 +34,14 @@ describe("moonrakerAdapter", () => {
   it("getStatus maps print_stats and virtual_sdcard progress", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue({
-        ok: true,
-        json: async () => ({
+      vi.fn().mockResolvedValue(jsonResponse({
           result: {
             status: {
               print_stats: { state: "printing", filename: "frame_x.gcode" },
               virtual_sdcard: { progress: 0.42 },
             },
           },
-        }),
-      }),
+        })),
     );
 
     const status = await moonrakerAdapter.getStatus!({
@@ -53,17 +55,14 @@ describe("moonrakerAdapter", () => {
   it("getStatus maps print_stats complete distinctly from idle", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue({
-        ok: true,
-        json: async () => ({
+      vi.fn().mockResolvedValue(jsonResponse({
           result: {
             status: {
               print_stats: { state: "complete", filename: "frame_x.gcode" },
               virtual_sdcard: { progress: 1 },
             },
           },
-        }),
-      }),
+        })),
     );
 
     const status = await moonrakerAdapter.getStatus!({
@@ -76,18 +75,13 @@ describe("moonrakerAdapter", () => {
   it("getStatus maps cancelled to idle (no auto-checkoff)", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue({
-        ok: true,
-        status: 200,
-        headers: new Headers(),
-        json: async () => ({
+      vi.fn().mockResolvedValue(jsonResponse({
           result: {
             status: {
               print_stats: { state: "cancelled", filename: "frame_x.gcode" },
             },
           },
-        }),
-      }),
+        })),
     );
 
     const status = await moonrakerAdapter.getStatus!({
@@ -99,18 +93,13 @@ describe("moonrakerAdapter", () => {
   it("getStatus maps unrecognized print states to unknown (not idle)", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue({
-        ok: true,
-        status: 200,
-        headers: new Headers(),
-        json: async () => ({
+      vi.fn().mockResolvedValue(jsonResponse({
           result: {
             status: {
               print_stats: { state: "klippy_shutdown", filename: "x.gcode" },
             },
           },
-        }),
-      }),
+        })),
     );
 
     const status = await moonrakerAdapter.getStatus!({
@@ -122,19 +111,11 @@ describe("moonrakerAdapter", () => {
   it("does not forward API key across cross-origin redirects", async () => {
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce({
-        ok: false,
+      .mockResolvedValueOnce(new Response(null, {
         status: 302,
-        headers: new Headers({ location: "http://192.168.1.50:7125/server/info" }),
-        arrayBuffer: async () => new ArrayBuffer(0),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        headers: new Headers(),
-        json: async () => ({ result: { klippy_state: "ready" } }),
-        arrayBuffer: async () => new ArrayBuffer(0),
-      });
+        headers: { location: "http://192.168.1.50:7125/server/info" },
+      }))
+      .mockResolvedValueOnce(jsonResponse({ result: { klippy_state: "ready" } }));
     vi.stubGlobal("fetch", fetchMock);
 
     const result = await moonrakerAdapter.testConnection({
@@ -156,14 +137,8 @@ describe("moonrakerAdapter", () => {
   it("uploadFile posts multipart then starts print when requested", async () => {
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ result: { item: { path: "frame_x.gcode" } } }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ result: "ok" }),
-      });
+      .mockResolvedValueOnce(jsonResponse({ result: { item: { path: "frame_x.gcode" } } }))
+      .mockResolvedValueOnce(jsonResponse({ result: "ok" }));
     vi.stubGlobal("fetch", fetchMock);
 
     const result = await moonrakerAdapter.uploadFile!(
@@ -181,10 +156,7 @@ describe("moonrakerAdapter", () => {
   });
 
   it("uploadFile without start does not call print/start", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({}),
-    });
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({}));
     vi.stubGlobal("fetch", fetchMock);
 
     const result = await moonrakerAdapter.uploadFile!(
@@ -206,10 +178,7 @@ describe("moonrakerAdapter", () => {
     const path = join(dir, "from_disk.gcode");
     writeFileSync(path, "; from disk");
     try {
-      const fetchMock = vi.fn().mockResolvedValue({
-        ok: true,
-        json: async () => ({}),
-      });
+      const fetchMock = vi.fn().mockResolvedValue(jsonResponse({}));
       vi.stubGlobal("fetch", fetchMock);
 
       const result = await moonrakerAdapter.uploadFile!(

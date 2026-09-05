@@ -60,7 +60,16 @@ export function decisionFingerprint(
   }
   if (p.selections && typeof p.selections === "object") {
     const sels = Object.entries(p.selections as Record<string, unknown>)
-      .map(([k, v]) => `${k}=${String(v)}`)
+      .map(([key, value]) => {
+        const encoded = Array.isArray(value)
+          ? JSON.stringify(
+              [...value].sort((left, right) =>
+                String(left).localeCompare(String(right)),
+              ),
+            )
+          : String(value);
+        return `${key}=${encoded}`;
+      })
       .sort();
     if (sels.length) parts.push(`selections={${sels.join(",")}}`);
   }

@@ -1,16 +1,15 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Printer } from "lucide-react";
 import { fetchFilamentCatalog, type FilamentCatalog } from "../../api/endpoints/filaments";
 import {
   createIntegration,
   deleteIntegration,
-  fetchIntegrationStatus,
   fetchIntegrations,
   testIntegration,
   updateIntegration,
   type IntegrationSummary,
 } from "../../api/endpoints/integrations";
-import type { PrinterHostStatus, ProfileSummary } from "@print-partner/contracts";
+import type { ProfileSummary } from "@print-partner/contracts";
 import { fetchProfiles } from "../../api/endpoints/plans";
 import {
   addPrinter,
@@ -79,6 +78,7 @@ import {
 } from "../../lib/printerSettingsModel";
 import { printerStatusTone } from "../../lib/printerLiveStrip";
 import { statusTone } from "../../lib/statusTone";
+import { usePrinterStatuses } from "../../queries/printerStatuses";
 
 type Props = {
   engineReady: boolean;
@@ -110,9 +110,6 @@ export default function PrintersSettingsCard({ engineReady }: Props) {
   const [printers, setPrinters] = useState<PrinterMachine[]>([]);
   const [presets, setPresets] = useState<PrinterPreset[]>([]);
   const [hosts, setHosts] = useState<IntegrationSummary[]>([]);
-  const [statusByIntegration, setStatusByIntegration] = useState<
-    Record<string, PrinterHostStatus>
-  >({});
   const [loadError, setLoadError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -151,46 +148,17 @@ export default function PrintersSettingsCard({ engineReady }: Props) {
   );
 
   const hostsById = useMemo(() => new Map(hosts.map((h) => [h.id, h])), [hosts]);
-
-  const statusRequestId = useRef(0);
-
-  const refreshStatuses = useCallback(async (fleet: PrinterMachine[]) => {
-    const requestId = ++statusRequestId.current;
-    const ids = [
-      ...new Set(
-        fleet
-          .map((p) => p.integration_id?.trim())
-          .filter((id): id is string => Boolean(id)),
-      ),
-    ];
-    if (!ids.length) {
-      if (requestId === statusRequestId.current) setStatusByIntegration({});
-      return;
-    }
-    const entries = await Promise.all(
-      ids.map(async (id) => {
-        try {
-          return [id, await fetchIntegrationStatus(id)] as const;
-        } catch (e) {
-          return [
-            id,
-            {
-              state: "offline" as const,
-              message: e instanceof Error ? e.message : String(e),
-            },
-          ] as const;
-        }
-      }),
-    );
-    if (requestId !== statusRequestId.current) return;
-    setStatusByIntegration(Object.fromEntries(entries));
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      statusRequestId.current += 1;
-    };
-  }, []);
+  const statusIntegrationIds = useMemo(
+    () => printers.flatMap((printer) => {
+      const integrationId = printer.integration_id?.trim();
+      return integrationId ? [integrationId] : [];
+    }),
+    [printers],
+  );
+  const { statusByIntegration, refresh: refreshStatus } = usePrinterStatuses(
+    statusIntegrationIds,
+    engineReady,
+  );
 
   const refresh = useCallback(async () => {
     if (!engineReady) return;
@@ -212,11 +180,10 @@ export default function PrintersSettingsCard({ engineReady }: Props) {
       setPlanBindings(bindings);
       setProfiles(profileList);
       setCatalog(filamentCatalog);
-      void refreshStatuses(fleet);
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : String(e));
     }
-  }, [engineReady, refreshStatuses]);
+  }, [engineReady]);
 
   useEffect(() => {
     void refresh();
@@ -351,7 +318,6 @@ export default function PrintersSettingsCard({ engineReady }: Props) {
           ? `Connection added to ${printer.name}. Use Bambu Connect from Production.`
           : `Connection added to ${printer.name}. Send from Production when it is idle.`,
       );
-      void refreshStatuses(saved);
       await refresh();
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : String(e));
@@ -367,7 +333,7 @@ export default function PrintersSettingsCard({ engineReady }: Props) {
     try {
       const result = await testIntegration(integrationId);
       setMessage(result.ok ? result.message ?? "Connected." : result.message ?? "Test failed.");
-      void refreshStatuses(printers);
+      void refreshStatus(integrationId);
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -383,6 +349,7 @@ export default function PrintersSettingsCard({ engineReady }: Props) {
     try {
       await updateIntegration(integrationId, { config: { enabled } });
       await refresh();
+      void refreshStatus(integrationId);
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : String(e));
     } finally {

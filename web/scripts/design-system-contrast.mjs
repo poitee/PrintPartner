@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-/* eslint-disable no-undef -- standalone Node doc generator, not part of the app build. */
 /**
  * Emit the text-contrast tables in docs/design-system.md from the tokens that
  * actually ship in web/apps/web/src/index.css.
@@ -13,6 +12,7 @@
  */
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -113,11 +113,13 @@ if (process.argv.includes("--check")) {
   const stale = [...darkTable.markdown.split("\n"), ...lightTable.markdown.split("\n")]
     .filter((line) => line.startsWith("| ") && !line.startsWith("| ---") && !doc.includes(line));
   if (stale.length) {
-    console.error(`docs/design-system.md is stale. ${stale.length} row(s) do not match index.css:`);
-    for (const line of stale) console.error(`  ${line}`);
+    process.stderr.write(
+      `docs/design-system.md is stale. ${stale.length} row(s) do not match index.css:\n`,
+    );
+    for (const line of stale) process.stderr.write(`  ${line}\n`);
     process.exit(1);
   }
-  console.log("docs/design-system.md contrast tables match index.css");
+  process.stdout.write("docs/design-system.md contrast tables match index.css\n");
 } else {
-  console.log(out);
+  process.stdout.write(`${out}\n`);
 }

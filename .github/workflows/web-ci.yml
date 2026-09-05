@@ -78,6 +78,8 @@ jobs:
           docker compose -f docker-compose.yml -f pp-compose.yml config
       - name: Build production image
         run: docker build --tag print-partner:ci .
+      - name: Verify fresh-volume ownership and restart persistence
+        run: bash scripts/docker-startup-smoke.sh print-partner:ci
       - name: Build pinned OrcaSlicer sidecar
         run: docker build --tag print-partner-slicer-sidecar:ci slicer-sidecar
       - name: Create local smoke source

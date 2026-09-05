@@ -1,4 +1,8 @@
-import type { AcceptedPlanBasisContract, PartRow } from "@print-partner/contracts";
+import type {
+  AcceptedPlanBasisContract,
+  ManifestSelections,
+  PartRow,
+} from "@print-partner/contracts";
 import { parseAcceptedPlanBasis } from "@print-partner/contracts";
 import { engineFetch } from "../engineTransport";
 import type {
@@ -12,7 +16,7 @@ import type { ProfileLayer } from "./plans";
 export type ChoiceTreeNode = {
   id: string;
   label?: string;
-  type?: "pick_one" | "pick_any" | "addon_toggle";
+  type?: "pick_one" | "pick_any" | "pick_n" | "addon_toggle";
   group?: string;
   source_id?: string;
   replaces_slot?: string;
@@ -25,7 +29,7 @@ export type KitManifest = {
   layers: string[];
   base_source_id?: string | null;
   addon_source_ids?: string[];
-  selections: Record<string, string>;
+  selections: ManifestSelections;
   include: string[];
   exclude: string[];
   replacements?: Record<string, string>;
@@ -53,7 +57,7 @@ export type ManifestV2 = {
     branch: string | null;
     role: string | null;
   }>;
-  selections: Record<string, string>;
+  selections: ManifestSelections;
   option_groups: Record<
     string,
     {
@@ -91,6 +95,7 @@ export type PlanManifestBuilderSource = {
 export type PlanManifestBuilderBootstrap = {
   profile_id: number;
   sources: PlanManifestBuilderSource[];
+  resolved_selections?: ManifestSelections;
   merged_option_groups: Record<string, RepoManifestOptionGroup>;
 };
 
@@ -163,7 +168,7 @@ export type KitCatalogStackPreset = {
   label: string;
   base: string;
   addon_sources: string[];
-  default_selections?: Record<string, string>;
+  default_selections?: ManifestSelections;
 };
 
 export type KitCatalog = {
@@ -216,9 +221,9 @@ export type ReviewPart = PartRow & {
   assembled_units?: boolean[];
   /** Checkoff: not fully printed yet (printed_count < qty). */
   missing: boolean;
-  /** On-disk STL absent for an included part (GRE-235). */
+  /** On-disk STL absent for an included part. */
   stl_missing?: boolean;
-  /** Included part has STL but no cached thumbnail PNG (GRE-235). */
+  /** Included part has STL but no cached thumbnail PNG. */
   thumb_empty?: boolean;
   filament_display: string;
   filament_hex?: string | null;

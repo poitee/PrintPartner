@@ -22,7 +22,7 @@ On **Sources**:
 
 If the base source matches a catalog entry, its manifest options show available stack presets. A preset attaches the expected sources and selects its default variants.
 
-You can change any choice after applying the preset. Source cards show the files contributed by each selection.
+You can change any choice after applying the preset. Some groups allow one variant, any number of variants, or a bounded number. The picker shows the allowed count and prevents selections above the maximum. A group below its minimum contributes no parts until you select enough variants.
 
 ## 5. Select files and colors
 

@@ -1,6 +1,13 @@
 import type { AiProviderId, IntegrationConfig, IntegrationTestResult } from "@print-partner/contracts";
 import type { IntegrationAdapter } from "../store.js";
 import { assertSafeOutboundUrl } from "../../lib/outbound-url.js";
+import {
+  cancelResponseBody,
+  isJsonObject as isRecord,
+  readBoundedJsonResponse,
+} from "../../lib/bounded-response.js";
+
+const MAX_MODEL_LIST_RESPONSE_BYTES = 4 * 1024 * 1024;
 
 /**
  * Connection-test adapter for `ai_assistant` integrations.
@@ -107,10 +114,13 @@ export const aiAssistantAdapter: IntegrationAdapter = {
         }
         const res = await safeGet(`${baseUrl}/api/tags`, {}, true);
         if (!res.ok) {
+          await cancelResponseBody(res);
           return { ok: false, message: `Ollama returned HTTP ${res.status}` };
         }
-        const body = (await res.json()) as { models?: Array<{ name?: unknown; model?: unknown }> };
-        const models = Array.isArray(body.models) ? body.models : [];
+        const body = await readBoundedJsonResponse(res, MAX_MODEL_LIST_RESPONSE_BYTES);
+        const models = isRecord(body) && Array.isArray(body.models)
+          ? body.models.filter(isRecord)
+          : [];
         const count = models.length;
         if (!ollamaModelInstalled(models, model)) {
           const installed = listModelNames(models);
@@ -136,8 +146,10 @@ export const aiAssistantAdapter: IntegrationAdapter = {
         const headers: Record<string, string> = { authorization: `Bearer ${apiKey}` };
         const res = await safeGet(`${baseUrl}/v1/models`, { headers }, true);
         if (!res.ok) {
+          await cancelResponseBody(res);
           return { ok: false, message: `OpenAI-compatible API returned HTTP ${res.status}` };
         }
+        await cancelResponseBody(res);
         return { ok: true, message: "Connected (OpenAI-compatible)" };
       }
 
@@ -155,8 +167,10 @@ export const aiAssistantAdapter: IntegrationAdapter = {
         false,
       );
       if (!res.ok) {
+        await cancelResponseBody(res);
         return { ok: false, message: `Anthropic returned HTTP ${res.status}` };
       }
+      await cancelResponseBody(res);
       return { ok: true, message: "Connected (Anthropic)" };
     } catch (e) {
       return {

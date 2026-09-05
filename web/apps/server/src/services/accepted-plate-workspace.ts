@@ -38,6 +38,7 @@ import {
   loadProductionPackingRules,
   productionPackingBuckets,
 } from "./production-packing-rules.js";
+import { productionSetupSettingKey } from "./production-setup-store.js";
 import {
   acceptedPrinter,
   basisContract,
@@ -582,7 +583,7 @@ export async function initializeAcceptedPlates(
   }
   const packingRules = loadProductionPackingRules(
     dependencies.repository.getSetting?.(
-      `production_setup:${command.profileId}`,
+      productionSetupSettingKey(command.profileId),
     ),
     command.profileId,
   );
@@ -899,7 +900,7 @@ export function arrangeAcceptedPlates(
   }
   const packingRules = loadProductionPackingRules(
     dependencies.repository.getSetting?.(
-      `production_setup:${command.profileId}`,
+      productionSetupSettingKey(command.profileId),
     ),
     command.profileId,
   );

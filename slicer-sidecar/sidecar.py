@@ -6,7 +6,8 @@ Wraps a slicer CLI (OrcaSlicer / PrusaSlicer / BambuStudio) headless mode and
 exposes an HTTP API matching the contract expected by Print Partner's
 slicer-sidecar adapter (web/apps/server/src/integrations/adapters/slicer-sidecar.ts):
 
-  GET  /health        -> 200 {"status": "ok"}
+  GET  /health        -> 200 when the slicer binary is executable;
+                        503 otherwise
   POST /slice         -> multipart/form-data:
                             model             (required) - 3mf or stl file bytes
                             machine_config    (optional) - JSON object, printer/machine settings
@@ -42,11 +43,54 @@ Path(WORKDIR_ROOT).mkdir(parents=True, exist_ok=True)
 
 @app.get("/health")
 def health():
-    return jsonify({"status": "ok", "slicer": SLICER_KIND, "bin": SLICER_BIN, "exists": os.path.exists(SLICER_BIN)})
+    exists = os.path.exists(SLICER_BIN)
+    executable = os.path.isfile(SLICER_BIN) and os.access(SLICER_BIN, os.X_OK)
+    return (
+        jsonify(
+            {
+                "status": "ok" if executable else "unhealthy",
+                "slicer": SLICER_KIND,
+                "bin": SLICER_BIN,
+                "exists": exists,
+                "executable": executable,
+            }
+        ),
+        200 if executable else 503,
+    )
 
 
 def _write_json(path: Path, data) -> None:
     path.write_text(json.dumps(data), encoding="utf-8")
+
+
+class InvalidSliceConfig(ValueError):
+    pass
+
+
+def _parse_json_object(raw, field_name):
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise InvalidSliceConfig(f"{field_name} must be a JSON object") from error
+    if not isinstance(parsed, dict):
+        raise InvalidSliceConfig(f"{field_name} must be a JSON object")
+    return parsed
+
+
+def _parse_filament_configs(raw):
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise InvalidSliceConfig(
+            "filament_configs must be a JSON array of objects"
+        ) from error
+    if not isinstance(parsed, list) or any(not isinstance(item, dict) for item in parsed):
+        raise InvalidSliceConfig("filament_configs must be a JSON array of objects")
+    return parsed
 
 
 @app.post("/slice")
@@ -55,6 +99,19 @@ def slice_endpoint():
         return jsonify({"error": "missing 'model' file field"}), 400
 
     model_file = request.files["model"]
+    try:
+        machine_config = _parse_json_object(
+            request.form.get("machine_config"), "machine_config"
+        )
+        process_config = _parse_json_object(
+            request.form.get("process_config"), "process_config"
+        )
+        filament_configs = _parse_filament_configs(
+            request.form.get("filament_configs")
+        )
+    except InvalidSliceConfig as error:
+        return jsonify({"error": str(error)}), 400
+
     job_id = uuid.uuid4().hex[:12]
     job_dir = Path(WORKDIR_ROOT) / job_id
     out_dir = job_dir / "out"
@@ -69,26 +126,20 @@ def slice_endpoint():
         model_file.save(str(model_path))
 
         settings_paths = []
-        machine_config_raw = request.form.get("machine_config")
-        process_config_raw = request.form.get("process_config")
-        filament_configs_raw = request.form.get("filament_configs")
-
-        if machine_config_raw:
+        if machine_config is not None:
             machine_path = job_dir / "machine.json"
-            _write_json(machine_path, json.loads(machine_config_raw))
+            _write_json(machine_path, machine_config)
             settings_paths.append(str(machine_path))
-        if process_config_raw:
+        if process_config is not None:
             process_path = job_dir / "process.json"
-            _write_json(process_path, json.loads(process_config_raw))
+            _write_json(process_path, process_config)
             settings_paths.append(str(process_path))
 
         filament_paths = []
-        if filament_configs_raw:
-            filament_list = json.loads(filament_configs_raw)
-            for i, fc in enumerate(filament_list):
-                fpath = job_dir / f"filament_{i}.json"
-                _write_json(fpath, fc)
-                filament_paths.append(str(fpath))
+        for i, filament_config in enumerate(filament_configs):
+            fpath = job_dir / f"filament_{i}.json"
+            _write_json(fpath, filament_config)
+            filament_paths.append(str(fpath))
 
         cmd = [SLICER_BIN, "--slice", "0", "--outputdir", str(out_dir)]
         if settings_paths:
@@ -111,13 +162,29 @@ def slice_endpoint():
         )
         elapsed = time.time() - start
 
+        if proc.returncode != 0:
+            return (
+                jsonify(
+                    {
+                        "error": "slicer exited with a non-zero status",
+                        "return_code": proc.returncode,
+                        "stdout_tail": proc.stdout[-2000:],
+                        "stderr_tail": proc.stderr[-2000:],
+                        "elapsed_s": elapsed,
+                    }
+                ),
+                502,
+            )
+
         gcode_files = sorted(out_dir.glob("*.gcode")) + sorted(out_dir.glob("*.bgcode"))
         result_json_path = out_dir / "result.json"
         result_meta = {}
         if result_json_path.exists():
             try:
-                result_meta = json.loads(result_json_path.read_text())
-            except Exception:
+                parsed_result_meta = json.loads(result_json_path.read_text())
+                if isinstance(parsed_result_meta, dict):
+                    result_meta = parsed_result_meta
+            except (OSError, UnicodeError, json.JSONDecodeError):
                 pass
 
         if not gcode_files:
@@ -152,8 +219,9 @@ def slice_endpoint():
         )
     except subprocess.TimeoutExpired:
         return jsonify({"error": f"slicing timed out after {SLICE_TIMEOUT_S}s"}), 504
-    except Exception as e:  # noqa: BLE001
-        return jsonify({"error": str(e)}), 500
+    except (OSError, subprocess.SubprocessError):
+        app.logger.exception("Slicing operation failed")
+        return jsonify({"error": "slicing failed"}), 500
     finally:
         shutil.rmtree(job_dir, ignore_errors=True)
 

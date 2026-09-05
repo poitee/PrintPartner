@@ -1,17 +1,26 @@
 /** Pure helpers for active-plan selection (testable without React). */
 
 /**
- * After the profiles list changes, decide whether to keep, clear, or replace
- * the selected plan id.
+ * After the Build list or URL changes, decide whether to keep, clear, or
+ * replace the selected Build ID.
  *
  * Returns `undefined` to leave selection unchanged (including when a newly
- * created plan is selected before it appears in the fetched list).
+ * created Build is selected before it appears in the fetched list).
  */
 export function reconcileSelectedProfileId(
   profileIds: readonly number[],
   selectedProfileId: number | null,
   previousProfileIds: readonly number[],
+  urlProfileId: number | null = null,
+  pendingSelectionId: number | null = null,
 ): number | null | undefined {
+  if (
+    urlProfileId != null &&
+    profileIds.includes(urlProfileId) &&
+    !shouldBlockUrlProfileSync(urlProfileId, pendingSelectionId, selectedProfileId)
+  ) {
+    return selectedProfileId === urlProfileId ? undefined : urlProfileId;
+  }
   if (profileIds.length === 0) {
     return selectedProfileId == null ? undefined : null;
   }

@@ -29,6 +29,7 @@ import { librarySourceDragId } from "../lib/sourceCategoryDnD";
 import { statusTone } from "../lib/statusTone";
 import { cn } from "@/lib/utils";
 import { attachedSourceStateLabel } from "../lib/sourceFilePickerModel";
+import { sourceContentAvailable } from "../lib/sourceContentAvailable";
 
 type Props = {
   sourceId: number;
@@ -86,6 +87,7 @@ export default function SourceFilePickerCard({
   const [docsOpen, setDocsOpen] = useState(false);
   const [rulesOpen, setRulesOpen] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
+  const hasContent = sourceContentAvailable(source);
 
   const activeSync = activeJobs.find(
     (j) =>
@@ -110,7 +112,7 @@ export default function SourceFilePickerCard({
   );
 
   const loadSelectionSummary = useCallback(async () => {
-    if (!source?.local_path) return;
+    if (!hasContent) return;
     try {
       const tree = await fetchStlTree(sourceId);
       setSelectedCount(tree.selected);
@@ -118,7 +120,7 @@ export default function SourceFilePickerCard({
     } catch {
       /* tree unavailable until sync */
     }
-  }, [source?.local_path, sourceId]);
+  }, [hasContent, sourceId]);
 
   const onSavedWithRefresh = useCallback(
     (rules: string[]) => {
@@ -282,7 +284,7 @@ export default function SourceFilePickerCard({
         </div>
         <div className="ml-auto flex w-full flex-wrap items-center gap-3 sm:w-auto sm:flex-nowrap">
           <span className="font-mono text-micro font-medium tabular-nums">{pickLabel}</span>
-          {(source?.local_path || source?.source_kind === "github") && (
+          {(hasContent || source?.source_kind === "github") && (
             <button
               type="button"
               className="text-xs text-muted-foreground hover:text-foreground"
@@ -292,7 +294,7 @@ export default function SourceFilePickerCard({
               Docs
             </button>
           )}
-          {source?.local_path && (
+          {hasContent && (
             <button
               type="button"
               className="text-xs text-muted-foreground hover:text-foreground"
@@ -356,7 +358,7 @@ export default function SourceFilePickerCard({
         </div>
       )}
 
-      {source?.local_path && expanded && (
+      {hasContent && expanded && (
         <div className="space-y-3 border-t border-border pt-3">
           {expandedExtra}
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -461,7 +463,7 @@ export default function SourceFilePickerCard({
             </SheetDescription>
           </SheetHeader>
           <div className="mt-4">
-            {source?.local_path ? (
+            {hasContent ? (
               <ImportRulesTree
                 key={`rules-sheet-${sourceId}`}
                 projectId={sourceId}

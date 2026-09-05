@@ -13,6 +13,7 @@ import {
   updateSource,
 } from "../api/endpoints/sources";
 import { queryKeys } from "./keys";
+import { invalidateSourceContent } from "./sourceContent";
 
 function upsertSources(
   current: SourceSummary[] | undefined,
@@ -38,6 +39,7 @@ export async function invalidateSourceDependents(queryClient: QueryClient): Prom
     queryClient.invalidateQueries({ queryKey: queryKeys.sources }),
     queryClient.invalidateQueries({ queryKey: queryKeys.profiles }),
     queryClient.invalidateQueries({ queryKey: queryKeys.planReviews }),
+    invalidateSourceContent(queryClient),
   ]);
 }
 

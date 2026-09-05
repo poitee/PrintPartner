@@ -4,7 +4,7 @@ This folder holds **community-submitted** kit manifests for STL repositories tha
 
 ## Authoritative owner manifest (preferred)
 
-Project maintainers should add **`print-partner.manifest.yaml`** at the **root** of their STL repository. Print Partner loads it automatically on **Sources → Sync**. Power users can edit repo YAML via the manifest API or community PR flow below.
+Project maintainers should add **`print-partner.manifest.yaml`** at the **root** of their STL repository. Print Partner loads it automatically on **Sources → Sync**. Power users can edit repo YAML through the manifest API or the community pull-request flow below. Each API save publishes a new immutable Source revision. It does not modify the synced upstream files.
 
 ## Submit a community manifest
 
@@ -43,6 +43,39 @@ selections:
   toolhead: example_toolhead
   probe: example_probe
 ```
+
+## Option-group selections
+
+Manifest v2 stores a `pick_one` selection as a string. It stores `pick_any` and `pick_n` selections as YAML lists, including lists with one id. Do not join several ids into one string.
+
+| Rule | Selection value | Count |
+|------|-----------------|-------|
+| `pick_one` | One variant id string | Zero or one while editing |
+| `pick_any` | A list of variant ids | Any number, limited by `min` or `max` when present |
+| `pick_n` | A list of variant ids | The inclusive `min` and `max` range |
+
+Lists must contain unique, non-empty variant ids. Omit a group from `selections` when it has no selections.
+
+The runtime reads an existing scalar value in a multi-choice group as a one-item selection. New clients write a list for every multi-choice group.
+
+```yaml
+option_groups:
+  extras:
+    rule: pick_n
+    min: 1
+    max: 2
+    variants:
+      - id: skirts
+        parts: ["skirts/**"]
+      - id: panels
+        parts: ["panels/**"]
+selections:
+  extras:
+    - skirts
+    - panels
+```
+
+Print Partner includes the union of the selected variants' `parts`. A selected variant's `excludes` patterns take precedence. A selection below `min` or above `max` includes no parts from that group until its count returns to the allowed range.
 
 See `docs/kit-catalog.yaml` → `stack_presets` for reference preset ids.
 

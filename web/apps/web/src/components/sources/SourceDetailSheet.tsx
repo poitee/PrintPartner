@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { X } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -12,19 +12,16 @@ import {
   saveImportRules,
 } from "../../api/endpoints/sources";
 import {
-  fetchSourceDocMarkdown,
-  fetchSourceDocs,
-  fetchSourceNotes,
-  type SourceNote,
-} from "../../api/endpoints/sourceContent";
-import {
   fetchSourceNaming,
   isSourceNamingNotFoundError,
   saveSourceNaming,
   sourceNamingErrorMessage,
 } from "../../api/endpoints/sourceNaming";
 import { fetchStlNaming, mergeStlNamingProfiles } from "../../api/endpoints/stlNaming";
+import { useSourceContent } from "../../queries/sourceContent";
 import { sourceNamingDirty } from "../../lib/sourceDetailModel";
+import { statusTone } from "../../lib/statusTone";
+import { cn } from "@/lib/utils";
 import { StlNamingEditorEmbedded } from "../settings/StlNamingEditor";
 import ImportRulesTree from "../ImportRulesTree";
 const Preview3D = lazy(() => import("../Preview3D"));
@@ -48,7 +45,7 @@ import {
   SheetTitle,
 } from "../ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
-import { UNCategorized_FILTER } from "./sourceLabels";
+import { UNCATEGORISED_FILTER } from "./sourceLabels";
 import { invalidateProfiles } from "../../queries/profiles";
 import { queryClient } from "../../queries/queryClient";
 
@@ -59,8 +56,10 @@ type Props = {
   source: SourceSummary | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  initialTab?: DetailTab;
-  highlightPath?: string | null;
+  tab: DetailTab;
+  highlightPath: string | null;
+  onTabChange: (tab: DetailTab) => void;
+  onHighlightPathChange: (path: string | null) => void;
   busy?: boolean;
   categories?: string[];
   onEdit: (source: SourceSummary) => void;
@@ -70,12 +69,39 @@ type Props = {
   runImportScan: (sourceId: number) => void;
 };
 
+function SourceDetailsLoadError({ error, onRetry }: { error: unknown; onRetry: () => void }) {
+  return (
+    <div
+      className={cn(
+        "space-y-2 rounded-md p-4 text-sm",
+        statusTone({ tone: "error", emphasis: "soft" }),
+      )}
+      role="alert"
+    >
+      <p>
+        Could not load Source details: {error instanceof Error ? error.message : String(error)}
+      </p>
+      <Button
+        type="button"
+        size="sm"
+        variant="secondary"
+        aria-label="Retry loading Source details"
+        onClick={onRetry}
+      >
+        Retry
+      </Button>
+    </div>
+  );
+}
+
 export default function SourceDetailSheet({
   source,
   open,
   onOpenChange,
-  initialTab = "docs",
-  highlightPath = null,
+  tab,
+  highlightPath,
+  onTabChange,
+  onHighlightPathChange,
   busy = false,
   categories = [],
   onEdit,
@@ -84,17 +110,13 @@ export default function SourceDetailSheet({
   onSaveRules,
   runImportScan,
 }: Props) {
-  const [tab, setTab] = useState<DetailTab>(initialTab);
   const [docsSubTab, setDocsSubTab] = useState<DocsSubTab>("synced");
-  const [docs, setDocs] = useState<
-    Array<{ path: string; title: string; kind?: string; extract_status?: string }>
-  >([]);
-  const [notes, setNotes] = useState<SourceNote[]>([]);
-  const [activeDoc, setActiveDoc] = useState<string | null>(null);
-  const [docContent, setDocContent] = useState("");
+  const content = useSourceContent(source?.id ?? 0, { enabled: open && source != null });
   const [activeNoteId, setActiveNoteId] = useState<number | null>(null);
   const [pendingRules, setPendingRules] = useState<string[]>([]);
-  const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
+  const [rulesOwnerId, setRulesOwnerId] = useState<number | null>(null);
+  const [rulesLoading, setRulesLoading] = useState(false);
+  const [rulesLoadError, setRulesLoadError] = useState<string | null>(null);
   const [scanResult, setScanResult] = useState<string | null>(null);
 
   const [globalNaming, setGlobalNaming] = useState<StlNamingProfile>(DEFAULT_STL_NAMING_PROFILE);
@@ -104,8 +126,12 @@ export default function SourceDetailSheet({
   const [savedOverride, setSavedOverride] = useState<StlNamingProfileOverride>({});
   const [namingLoadError, setNamingLoadError] = useState<string | null>(null);
   const [namingApiMissing, setNamingApiMissing] = useState(false);
+  const [namingOwnerId, setNamingOwnerId] = useState<number | null>(null);
+  const [namingLoading, setNamingLoading] = useState(false);
   const [namingSaving, setNamingSaving] = useState(false);
   const [namingNote, setNamingNote] = useState<string | null>(null);
+  const rulesGenerationRef = useRef(0);
+  const namingGenerationRef = useRef(0);
 
   const previewProfile = useMemo(
     () => (useDefaults ? globalNaming : overrideDraft),
@@ -121,6 +147,10 @@ export default function SourceDetailSheet({
   });
 
   const loadNaming = useCallback(async (sourceId: number) => {
+    const generation = namingGenerationRef.current + 1;
+    namingGenerationRef.current = generation;
+    setNamingOwnerId(null);
+    setNamingLoading(true);
     setNamingLoadError(null);
     setNamingApiMissing(false);
     setNamingNote(null);
@@ -129,104 +159,103 @@ export default function SourceDetailSheet({
         fetchStlNaming(),
         fetchSourceNaming(sourceId),
       ]);
+      if (namingGenerationRef.current !== generation) return;
       setGlobalNaming(global);
       setUseDefaults(sourceNaming.use_defaults);
       setSavedUseDefaults(sourceNaming.use_defaults);
       setSavedOverride(sourceNaming.override);
       setOverrideDraft(mergeStlNamingProfiles(global, sourceNaming.override));
+      setNamingOwnerId(sourceId);
     } catch (e) {
+      if (namingGenerationRef.current !== generation) return;
       if (isSourceNamingNotFoundError(e)) {
         setNamingApiMissing(true);
         setNamingLoadError("Unable to load naming overrides because this Source no longer exists.");
       } else {
         setNamingLoadError(sourceNamingErrorMessage(e));
       }
+    } finally {
+      if (namingGenerationRef.current === generation) setNamingLoading(false);
     }
   }, []);
 
-  useEffect(() => {
-    if (!open || !source) return;
-    setTab(initialTab);
-    setDocsSubTab("synced");
-    setSelectedFilePath(highlightPath);
-    setScanResult(null);
-    setActiveDoc(null);
-    setDocContent("");
-    setActiveNoteId(null);
-    setNotes([]);
-    void (async () => {
-      try {
-        const [docList, noteList] = await Promise.all([
-          fetchSourceDocs(source.id),
-          fetchSourceNotes(source.id),
-        ]);
-        setDocs(docList);
-        setNotes(noteList);
-        if (docList.length > 0) {
-          const first = docList[0].path;
-          setActiveDoc(first);
-          const md = await fetchSourceDocMarkdown(source.id, first);
-          setDocContent(md);
-        } else if (noteList.length > 0) {
-          setDocsSubTab("notes");
-          setActiveNoteId(noteList[0].id);
-        }
-      } catch {
-        setDocs([]);
-        setNotes([]);
-      }
-      if (initialTab === "rules" || highlightPath) {
-        try {
-          const data = await fetchImportRules(source.id);
-          setPendingRules(data.rules);
-        } catch {
-          setPendingRules([]);
-        }
-      }
-      if (initialTab === "naming") {
-        await loadNaming(source.id);
-      }
-    })();
-  }, [open, source, initialTab, highlightPath, loadNaming]);
-
-  const loadDoc = async (path: string) => {
-    if (!source) return;
-    setActiveDoc(path);
+  const loadRules = useCallback(async (sourceId: number) => {
+    const generation = rulesGenerationRef.current + 1;
+    rulesGenerationRef.current = generation;
+    setRulesOwnerId(null);
+    setRulesLoading(true);
+    setPendingRules([]);
+    setRulesLoadError(null);
     try {
-      const md = await fetchSourceDocMarkdown(source.id, path);
-      setDocContent(md);
-    } catch {
-      setDocContent("");
+      const data = await fetchImportRules(sourceId);
+      if (rulesGenerationRef.current === generation) {
+        setPendingRules(data.rules);
+        setRulesOwnerId(sourceId);
+      }
+    } catch (error) {
+      if (rulesGenerationRef.current !== generation) return;
+      setPendingRules([]);
+      const detail = error instanceof Error ? error.message : String(error);
+      setRulesLoadError(`Could not load import rules: ${detail}`);
+    } finally {
+      if (rulesGenerationRef.current === generation) setRulesLoading(false);
     }
-  };
+  }, []);
 
-  const onTabChange = async (value: string) => {
-    const next = value as DetailTab;
-    setTab(next);
-    if (!source) return;
-    if (next === "rules") {
-      const data = await fetchImportRules(source.id);
-      setPendingRules(data.rules);
+  const sourceId = open ? source?.id ?? null : null;
+
+  useEffect(() => {
+    rulesGenerationRef.current += 1;
+    namingGenerationRef.current += 1;
+    if (sourceId == null) return;
+    setDocsSubTab("synced");
+    setScanResult(null);
+    setNamingSaving(false);
+    setActiveNoteId(null);
+    setRulesOwnerId(null);
+    setPendingRules([]);
+    setRulesLoadError(null);
+    setNamingOwnerId(null);
+    return () => {
+      rulesGenerationRef.current += 1;
+      namingGenerationRef.current += 1;
+    };
+  }, [sourceId]);
+
+  useEffect(() => {
+    if (sourceId == null) return;
+    if (tab === "rules") void loadRules(sourceId);
+    if (tab === "naming") void loadNaming(sourceId);
+  }, [loadNaming, loadRules, sourceId, tab]);
+
+  useEffect(() => {
+    if (!open || !source || content.loading || content.loadError) return;
+    if (content.docs.length === 0 && content.notes.length > 0) {
+      setDocsSubTab("notes");
+      setActiveNoteId(content.notes[0].id);
     }
-    if (next === "naming") {
-      await loadNaming(source.id);
-    }
-  };
+  }, [content.docs.length, content.loadError, content.loading, content.notes, open, source]);
 
   const saveRules = async () => {
-    if (!source) return;
+    if (!source || rulesOwnerId !== source.id || rulesLoading) return;
+    const generation = rulesGenerationRef.current + 1;
+    rulesGenerationRef.current = generation;
     try {
       await saveImportRules(source.id, pendingRules);
+      if (rulesGenerationRef.current !== generation) return;
       runImportScan(source.id);
       onSaveRules();
       setScanResult("Rules saved — import scan started.");
     } catch (e) {
+      if (rulesGenerationRef.current !== generation) return;
       setScanResult(e instanceof Error ? e.message : String(e));
     }
   };
 
   const saveNaming = async () => {
-    if (!source) return;
+    if (!source || namingOwnerId !== source.id || namingLoading) return;
+    const generation = namingGenerationRef.current + 1;
+    namingGenerationRef.current = generation;
     setNamingSaving(true);
     setNamingLoadError(null);
     setNamingNote(null);
@@ -237,23 +266,28 @@ export default function SourceDetailSheet({
           ? { use_defaults: true }
           : { use_defaults: false, override: overrideDraft },
       );
+      if (namingGenerationRef.current !== generation) return;
       setSavedUseDefaults(saved.use_defaults);
       setSavedOverride(saved.override);
       setOverrideDraft(mergeStlNamingProfiles(globalNaming, saved.override));
       await invalidateProfiles(queryClient);
+      if (namingGenerationRef.current !== generation) return;
       setNamingNote("Naming rules saved.");
     } catch (e) {
+      if (namingGenerationRef.current !== generation) return;
       const msg = sourceNamingErrorMessage(e);
       setNamingLoadError(msg);
       toast.error(msg);
     } finally {
-      setNamingSaving(false);
+      if (namingGenerationRef.current === generation) setNamingSaving(false);
     }
   };
 
   if (!source) return null;
 
-  const activeNote = notes.find((note) => note.id === activeNoteId) ?? null;
+  const activeNote = content.notes.find((note) => note.id === activeNoteId) ?? null;
+  const rulesReady = rulesOwnerId === source.id && !rulesLoading;
+  const namingReady = namingOwnerId === source.id && !namingLoading;
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange} modal={false}>
@@ -297,11 +331,11 @@ export default function SourceDetailSheet({
                     Category
                   </Label>
                   <Select
-                    value={source.category?.trim() || UNCategorized_FILTER}
+                    value={source.category?.trim() || UNCATEGORISED_FILTER}
                     onValueChange={(v) =>
                       onAssignCategory(
                         source,
-                        v === UNCategorized_FILTER ? null : v,
+                        v === UNCATEGORISED_FILTER ? null : v,
                       )
                     }
                     disabled={busy}
@@ -313,7 +347,7 @@ export default function SourceDetailSheet({
                       <SelectValue placeholder="Uncategorised" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value={UNCategorized_FILTER}>Uncategorised</SelectItem>
+                      <SelectItem value={UNCATEGORISED_FILTER}>Uncategorised</SelectItem>
                       {(() => {
                         const current = source.category?.trim() || "";
                         const options =
@@ -342,7 +376,11 @@ export default function SourceDetailSheet({
           </div>
         </SheetHeader>
 
-        <Tabs value={tab} onValueChange={(v) => void onTabChange(v)} className="flex min-h-0 flex-1 flex-col">
+        <Tabs
+          value={tab}
+          onValueChange={(value) => onTabChange(value as DetailTab)}
+          className="flex min-h-0 flex-1 flex-col"
+        >
           <TabsList className="mx-4 mt-2 w-fit">
             <TabsTrigger value="docs">Docs</TabsTrigger>
             <TabsTrigger value="rules">Import files</TabsTrigger>
@@ -357,22 +395,28 @@ export default function SourceDetailSheet({
             >
               <TabsList className="w-fit">
                 <TabsTrigger value="synced">
-                  Synced docs{docs.length > 0 ? ` (${docs.length})` : ""}
+                  Synced docs{content.docs.length > 0 ? ` (${content.docs.length})` : ""}
                 </TabsTrigger>
                 <TabsTrigger value="notes">
-                  Source notes{notes.length > 0 ? ` (${notes.length})` : ""}
+                  Source notes{content.notes.length > 0 ? ` (${content.notes.length})` : ""}
                 </TabsTrigger>
               </TabsList>
               <TabsContent value="synced" className="mt-0 min-h-0 flex-1 overflow-hidden">
-                {docs.length === 0 ? (
+                {content.loading ? (
+                  <p className="rounded-md border border-border p-4 text-sm text-muted-foreground" role="status">
+                    Loading Source details…
+                  </p>
+                ) : content.loadError ? (
+                  <SourceDetailsLoadError error={content.loadError} onRetry={content.reload} />
+                ) : content.docs.length === 0 ? (
                   <div className="space-y-2 rounded-md border border-border p-4 text-sm text-muted-foreground">
                     <p>
-                      Sync this source to pull README/PDFs from the repository into Synced docs.
+                      Sync this Source to pull README or PDF files into Synced docs.
                     </p>
-                    {notes.length > 0 ? (
+                    {content.notes.length > 0 ? (
                       <p>
-                        {notes.length} Source note{notes.length === 1 ? "" : "s"} available — open
-                        the Source notes tab. Empty Synced docs does not mean import failed.
+                        {content.notes.length} Source note{content.notes.length === 1 ? "" : "s"} available.
+                        Open the Source notes tab. Empty Synced docs does not mean the import failed.
                       </p>
                     ) : !source.last_synced_at ? (
                       <p>This source has not been synced yet.</p>
@@ -384,12 +428,12 @@ export default function SourceDetailSheet({
                   <div className="grid h-full gap-4 md:grid-cols-[160px_1fr]">
                     <ScrollArea className="h-full rounded-md border border-border">
                       <ul className="p-2 text-sm">
-                        {docs.map((d) => (
+                        {content.docs.map((d) => (
                           <li key={d.path}>
                             <button
                               type="button"
-                              className={`w-full rounded px-2 py-1 text-left hover:bg-accent ${activeDoc === d.path ? "bg-accent" : ""}`}
-                              onClick={() => void loadDoc(d.path)}
+                              className={`w-full rounded px-2 py-1 text-left hover:bg-accent ${content.activeDoc === d.path ? "bg-accent" : ""}`}
+                              onClick={() => content.selectDocument(d.path)}
                             >
                               {d.title}
                               {d.kind === "pdf" &&
@@ -405,15 +449,44 @@ export default function SourceDetailSheet({
                       </ul>
                     </ScrollArea>
                     <ScrollArea className="h-full rounded-md border border-border">
-                      <pre className="whitespace-pre-wrap p-3 text-xs">
-                        {docContent || "Select a document."}
-                      </pre>
+                      {content.documentLoading ? (
+                        <p className="p-3 text-xs text-muted-foreground" role="status">
+                          Loading document…
+                        </p>
+                      ) : content.documentError ? (
+                        <div className="space-y-2 p-3 text-xs text-destructive" role="alert">
+                          <p>
+                            Could not load this document: {content.documentError instanceof Error
+                              ? content.documentError.message
+                              : String(content.documentError)}
+                          </p>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="secondary"
+                            aria-label="Retry loading document"
+                            onClick={content.retryDocument}
+                          >
+                            Retry
+                          </Button>
+                        </div>
+                      ) : (
+                        <pre className="whitespace-pre-wrap p-3 text-xs">
+                          {content.documentContent || "Select a document."}
+                        </pre>
+                      )}
                     </ScrollArea>
                   </div>
                 )}
               </TabsContent>
               <TabsContent value="notes" className="mt-0 min-h-0 flex-1 overflow-hidden">
-                {notes.length === 0 ? (
+                {content.loading ? (
+                  <p className="rounded-md border border-border p-4 text-sm text-muted-foreground" role="status">
+                    Loading Source details…
+                  </p>
+                ) : content.loadError ? (
+                  <SourceDetailsLoadError error={content.loadError} onRetry={content.reload} />
+                ) : content.notes.length === 0 ? (
                   <p className="rounded-md border border-border p-4 text-sm text-muted-foreground">
                     No Source notes yet. Import a domain research pack (workflow / pitfalls /
                     quotes) or add Source notes.
@@ -422,7 +495,7 @@ export default function SourceDetailSheet({
                   <div className="grid h-full gap-4 md:grid-cols-[160px_1fr]">
                     <ScrollArea className="h-full rounded-md border border-border">
                       <ul className="p-2 text-sm">
-                        {notes.map((n) => (
+                        {content.notes.map((n) => (
                           <li key={n.id}>
                             <button
                               type="button"
@@ -450,15 +523,33 @@ export default function SourceDetailSheet({
             value="rules"
             className="mt-0 flex min-h-0 flex-1 flex-col gap-3 overflow-hidden px-4 pb-4"
           >
-            {selectedFilePath && (
+            {rulesLoadError ? (
+              <div className="flex items-center gap-2 text-sm text-destructive" role="alert">
+                <p className="min-w-0 flex-1">{rulesLoadError}</p>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => void loadRules(source.id)}
+                >
+                  Retry
+                </Button>
+              </div>
+            ) : null}
+            {rulesLoading ? (
+              <p className="text-sm text-muted-foreground" role="status">
+                Loading import rules…
+              </p>
+            ) : null}
+            {highlightPath && (
               <div className="h-40 shrink-0 overflow-hidden rounded-md border border-border">
                 <Suspense fallback={<div className="flex items-center justify-center h-40">Loading 3D…</div>}>
                   <Preview3D
                     partId={null}
                     sourceId={source.id}
-                    relativePath={selectedFilePath}
+                    relativePath={highlightPath}
                     preferSource
-                    filename={selectedFilePath.split("/").pop() ?? selectedFilePath}
+                    filename={highlightPath.split("/").pop() ?? highlightPath}
                     className="h-full w-full"
                     instructions="sr-only"
                   />
@@ -469,15 +560,17 @@ export default function SourceDetailSheet({
               <div className="p-3">
                 <ImportRulesTree
                   projectId={source.id}
-                  disabled={busy}
-                  onRulesChange={setPendingRules}
-                  selectedFilePath={selectedFilePath}
-                  onFileSelect={setSelectedFilePath}
+                  disabled={busy || !rulesReady}
+                  onRulesChange={(rules) => {
+                    if (rulesReady) setPendingRules(rules);
+                  }}
+                  selectedFilePath={highlightPath}
+                  onFileSelect={onHighlightPathChange}
                 />
               </div>
             </ScrollArea>
             {scanResult && <p className="text-sm text-muted-foreground">{scanResult}</p>}
-            <Button onClick={() => void saveRules()} disabled={busy}>
+            <Button onClick={() => void saveRules()} disabled={busy || !rulesReady}>
               Save rules
             </Button>
           </TabsContent>
@@ -493,6 +586,11 @@ export default function SourceDetailSheet({
                   <strong>Rebuild the Plan</strong> after reviewing this source change.
                 </p>
                 {namingLoadError && <p className="text-sm text-destructive">{namingLoadError}</p>}
+                {namingLoading && (
+                  <p className="text-sm text-muted-foreground" role="status">
+                    Loading naming rules…
+                  </p>
+                )}
                 {namingNote && <p className="text-sm text-muted-foreground">{namingNote}</p>}
                 <label
                   className="flex items-center gap-2 text-sm"
@@ -501,7 +599,7 @@ export default function SourceDetailSheet({
                   <Checkbox
                     id="source-naming-use-defaults"
                     checked={useDefaults}
-                    disabled={namingApiMissing || namingSaving || busy}
+                    disabled={!namingReady || namingApiMissing || namingSaving || busy}
                     onCheckedChange={(next) => setUseDefaults(next === true)}
                   />
                   <span>Use app default naming rules</span>
@@ -514,7 +612,7 @@ export default function SourceDetailSheet({
                       onChange={setOverrideDraft}
                       previewProfile={previewProfile}
                       compact
-                      disabled={namingApiMissing || namingSaving || busy}
+                      disabled={!namingReady || namingApiMissing || namingSaving || busy}
                     />
                   </div>
                 )}
@@ -527,7 +625,7 @@ export default function SourceDetailSheet({
             </ScrollArea>
             <Button
               onClick={() => void saveNaming()}
-              disabled={busy || namingSaving || namingApiMissing || !namingDirty}
+              disabled={busy || !namingReady || namingSaving || namingApiMissing || !namingDirty}
             >
               {namingSaving ? "Saving…" : "Save naming"}
             </Button>

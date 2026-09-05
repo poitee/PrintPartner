@@ -15,6 +15,10 @@ import {
   writeAcceptedMediaPng,
 } from "../lib/accepted-media-cache.js";
 import {
+  MAX_THUMBNAIL_UPLOAD_BYTES,
+  THUMBNAIL_UPLOAD_TOO_LARGE_DETAIL,
+} from "../services/upload-limits.js";
+import {
   acceptedPartMediaIdentity,
 } from "../services/accepted-part-media.js";
 import { acceptedPlanBasis, type AcceptedProgressFailure } from "../db/accepted-plan-progress.js";
@@ -501,9 +505,22 @@ export async function registerPartRoutes(app: FastifyInstance, deps: RouteDeps):
       if (typeof ifMatch !== "string" || !/^"[0-9a-f]{64}"$/.test(ifMatch)) {
         return reply.status(400).send({ detail: "Strong If-Match header required" });
       }
-      const file = await request.file();
+      const file = await request.file({
+        throwFileSizeLimit: false,
+        limits: {
+          fileSize: MAX_THUMBNAIL_UPLOAD_BYTES,
+          files: 1,
+          fields: 0,
+          parts: 1,
+        },
+      });
       if (!file) return reply.status(400).send({ detail: "PNG file required" });
       const buf = await file.toBuffer();
+      if (file.file.truncated) {
+        return reply.status(413).send({
+          detail: THUMBNAIL_UPLOAD_TOO_LARGE_DETAIL,
+        });
+      }
 
       const accepted = deps.repo.readAcceptedPlanOperationalSnapshot(profileId);
       if (accepted.kind === "empty") {

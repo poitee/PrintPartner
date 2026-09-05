@@ -22,6 +22,9 @@ import type { AppRepository } from "../db/repository.js";
 import { createProductMcpServer } from "./product-mcp.js";
 import { mcpAccessEnabled } from "@print-partner/contracts";
 import { readExternalAccessSettings } from "../services/external-access.js";
+import {
+  migrateLegacySourceManifestOverridesForTenant,
+} from "../services/source-manifest-migration.js";
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -40,6 +43,24 @@ async function main(): Promise<void> {
     if (ports.getRepository) return ports.getRepository("default");
     throw new Error("No repository available");
   };
+
+  const migration = await migrateLegacySourceManifestOverridesForTenant(
+    getRepo(),
+    "default",
+  );
+  for (const retained of migration.retained) {
+    console.error(
+      `Retained legacy Source manifest override for Source ${retained.sourceId}: ${retained.reason}`,
+    );
+  }
+  for (const migrated of migration.migrated) {
+    if (!migrated.changedDuringMigration) continue;
+    const backupPath = migrated.backupPath ?? "an unknown path";
+    console.error(
+      `Legacy Source manifest for Source ${migrated.sourceId} changed during migration; ` +
+        `the changed bytes remain archived at ${backupPath}`,
+    );
+  }
 
   if (!mcpAccessEnabled(readExternalAccessSettings(getRepo()).mode)) {
     throw new Error("MCP access is turned off in Print Partner Settings.");

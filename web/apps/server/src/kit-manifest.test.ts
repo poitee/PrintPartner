@@ -4,7 +4,11 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createSelfHostPorts } from "./adapters/self-host/index.js";
-import { loadKitManifest, saveKitManifest } from "./services/kit-manifest-store.js";
+import {
+  kitManifestSettingKey,
+  loadKitManifest,
+  saveKitManifest,
+} from "./services/kit-manifest-store.js";
 import {
   loadManifestYaml,
   selectionIncludesPart,
@@ -12,6 +16,25 @@ import {
 import { buildPlanManifestBuilder } from "./services/plan-manifest-builder.js";
 
 describe("kit manifest store", () => {
+  it("discards a stored manifest whose selections cross the JSON boundary malformed", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pp-kit-invalid-selection-"));
+    process.env.PRINT_PARTNER_DATA_DIR = dir;
+    const ports = createSelfHostPorts(dir);
+    await ports.db.connect();
+    const repo = ports.repository!;
+    const plan = repo.createProfile("Invalid selection");
+
+    repo.setSetting(
+      kitManifestSettingKey(plan.id),
+      JSON.stringify({ selections: { extras: ["skirts", "skirts"] } }),
+    );
+
+    expect(loadKitManifest(repo, plan.id).selections).toEqual({});
+
+    await ports.db.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   it("round-trips selections through save and load", async () => {
     const dir = mkdtempSync(join(tmpdir(), "pp-kit-"));
     process.env.PRINT_PARTNER_DATA_DIR = dir;
@@ -54,7 +77,17 @@ option_groups:
     const loaded = loadKitManifest(repo, plan.id);
     expect(loaded.selections).toEqual({ toolhead: "stock", probe: "stock" });
 
-    const builder = buildPlanManifestBuilder(repo, plan.id);
+    saveKitManifest(repo, plan.id, {
+      selections: { extras: ["skirts", "panels"] },
+    });
+    expect(loadKitManifest(repo, plan.id).selections).toEqual({
+      extras: ["skirts", "panels"],
+    });
+    saveKitManifest(repo, plan.id, {
+      selections: { toolhead: "stock", probe: "stock" },
+    });
+
+    const builder = buildPlanManifestBuilder(repo, plan.id, dir);
     expect(Object.keys(builder.merged_option_groups)).toContain("toolhead");
     expect(builder.merged_option_groups.toolhead?.variants?.[0]?.id).toBe("stock");
 
@@ -101,7 +134,7 @@ option_groups:
     repo.updateSource(source.id, { local_path: repoPath });
 
     const plan = repo.createProfile("EMU plan", source.id);
-    const builder = buildPlanManifestBuilder(repo, plan.id);
+    const builder = buildPlanManifestBuilder(repo, plan.id, dir);
     const groups = builder.merged_option_groups;
 
     // Optional folder → include/skip toggle.
@@ -112,6 +145,76 @@ option_groups:
     // Each user mod → its own include/skip group so Build pickers appear.
     expect(groups["user_mods_emu_lite"]?.rule).toBe("pick_one");
     expect(groups["user_mods_tpu_feet"]?.rule).toBe("pick_one");
+
+    await ports.db.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("applies bounded multi-select variants to a recomputed Working Plan", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pp-kit-multi-"));
+    process.env.PRINT_PARTNER_DATA_DIR = dir;
+    const ports = createSelfHostPorts(dir);
+    await ports.db.connect();
+    const repo = ports.repository!;
+
+    const source = repo.createSource({ name: "Extras", source_kind: "local" });
+    const repoPath = join(dir, "repos", String(source.id));
+    for (const variant of ["skirts", "panels", "screen"]) {
+      mkdirSync(join(repoPath, "extras", variant), { recursive: true });
+      writeFileSync(join(repoPath, "extras", variant, `${variant}.stl`), `solid ${variant}`);
+    }
+    writeFileSync(
+      join(repoPath, "print-partner.manifest.yaml"),
+      `format: print-partner-manifest
+version: 2
+option_groups:
+  extras:
+    rule: pick_n
+    min: 2
+    max: 2
+    variants:
+      - id: skirts
+        parts: ["extras/skirts/**"]
+      - id: panels
+        parts: ["extras/panels/**"]
+      - id: screen
+        parts: ["extras/screen/**"]
+selections:
+  extras: [skirts, panels]
+`,
+    );
+    repo.updateSource(source.id, { local_path: repoPath });
+    const plan = repo.createProfile("Extras Build", source.id);
+    acceptPlanForTest(repo, plan.id);
+
+    const builder = buildPlanManifestBuilder(repo, plan.id, dir);
+    const group = builder.merged_option_groups.extras;
+    expect(group).toMatchObject({ rule: "pick_n", min: 2, max: 2 });
+    expect(builder.resolved_selections).toEqual({ extras: ["skirts", "panels"] });
+
+    saveKitManifest(repo, plan.id, {
+      selections: { extras: ["skirts", "panels"] },
+    });
+    const valid = repo.recomputePlanDraft({
+      profileId: plan.id,
+      actor: "test:user",
+      idempotencyKey: "valid-multi-selection",
+    });
+    if (valid.kind !== "created") throw new Error("valid multi-select draft was not created");
+    expect(
+      valid.draft.parts.filter((part) => part.included).map((part) => part.filename).sort(),
+    ).toEqual(["panels.stl", "skirts.stl"]);
+
+    saveKitManifest(repo, plan.id, { selections: { extras: "skirts" } });
+    const belowMinimum = repo.recomputePlanDraft({
+      profileId: plan.id,
+      actor: "test:user",
+      idempotencyKey: "incomplete-multi-selection",
+    });
+    if (belowMinimum.kind !== "created") {
+      throw new Error("incomplete multi-select draft was not created");
+    }
+    expect(belowMinimum.draft.parts.every((part) => !part.included)).toBe(true);
 
     await ports.db.close();
     rmSync(dir, { recursive: true, force: true });
@@ -151,7 +254,7 @@ option_groups:
     repo.updateImportRules(source.id, ["STL Files/Spindle-Mounts/"]);
 
     const plan = repo.createProfile("Milo V2.0", source.id);
-    const builder = buildPlanManifestBuilder(repo, plan.id);
+    const builder = buildPlanManifestBuilder(repo, plan.id, dir);
     expect(builder.merged_option_groups.controller?.variants[0]?.id).toBe("stock");
     const [spindleGroupId, spindleGroup] = Object.entries(builder.merged_option_groups).find(
       ([, group]) => group.label === "Spindle-Mounts",
@@ -201,5 +304,45 @@ option_groups:
     expect(selectionIncludesPart("STLs/stock_toolhead/part.stl", group, "stealthburner")).toBe(
       false,
     );
+  });
+
+  it("rejects inverted option-group bounds at the runtime parser", () => {
+    expect(() =>
+      loadManifestYaml(`format: print-partner-manifest
+version: 2
+option_groups:
+  toolhead:
+    rule: pick_n
+    min: 2
+    max: 1
+    parts: ["**/toolhead/**"]
+`),
+    ).toThrow("option_groups.toolhead.min must not exceed max");
+  });
+
+  it("rejects option-group defaults that contradict their rule or maximum", () => {
+    expect(() =>
+      loadManifestYaml(`option_groups:
+  toolhead:
+    rule: pick_one
+    max: 2
+    parts: ["**/toolhead/**"]
+`),
+    ).toThrow("option_groups.toolhead pick_one bounds must not exceed 1");
+
+    expect(() =>
+      loadManifestYaml(`option_groups:
+  extras:
+    rule: pick_n
+    max: 1
+    variants:
+      - id: skirts
+        parts: ["skirts/**"]
+      - id: panels
+        parts: ["panels/**"]
+selections:
+  extras: [skirts, panels]
+`),
+    ).toThrow("selections.extras must contain no more than 1 variant id");
   });
 });

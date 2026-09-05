@@ -1,4 +1,8 @@
-import type { AssistantChatMessage, AssistantProposedAction } from "@print-partner/contracts";
+import type {
+  AssistantChatMessage,
+  AssistantProposedAction,
+  ManifestSelections,
+} from "@print-partner/contracts";
 import { randomUUID } from "node:crypto";
 import { ASSISTANT_TOOL_SPECS, invokeAssistantTool, type ToolContext } from "./tools.js";
 import {
@@ -12,6 +16,7 @@ import { isDismissedFingerprint } from "./preferences-digest.js";
 import { loadKitCatalog } from "../services/kit-catalog.js";
 import { type BuildDecision, applyUserConstraintsToDecisions } from "./build-decisions.js";
 import { findIdentityForSource, loadAliasEntries } from "./domain-pack.js";
+import { formatManifestSelection } from "../services/manifest-selections.js";
 import type {
   AssistantPort,
   AssistantToolCallRequest,
@@ -292,7 +297,9 @@ export function appendAliasDrivenHints(
       const hasKitUpdate = proposedActions.some((a) => a.type === "update_kit_selections");
       if (!hasKitUpdate) {
         const summaryBits = Object.entries(r.selection)
-          .map(([k, v]) => `${k}=${v}`)
+          .map(([key, selection]) =>
+            `${key}=${formatManifestSelection(selection)}`,
+          )
           .join(", ");
         proposedActions.push({
           id: randomUUID(),
@@ -460,7 +467,7 @@ export function appendBuildDecisionHints(
 
   // Only soft-Apply choices the user actually stated — not LLM defaults
   // for unrelated PCB/combiner variants.
-  const suggested: Record<string, string> = {};
+  const suggested: ManifestSelections = {};
   for (const d of decisions) {
     if (!d.suggested_selection) continue;
     const opt = d.options.find((o) => o.id === d.suggested_selection);
@@ -486,7 +493,9 @@ export function appendBuildDecisionHints(
   }
   if (!hasKitUpdate && Object.keys(suggested).length > 0) {
     const summaryBits = Object.entries(suggested)
-      .map(([k, v]) => `${k}=${v}`)
+      .map(([key, selection]) =>
+        `${key}=${formatManifestSelection(selection)}`,
+      )
       .join(", ");
     proposedActions.push({
       id: randomUUID(),
@@ -687,6 +696,7 @@ export async function runAssistantTurn(
       model,
       maxTokens,
       tools: ASSISTANT_TOOL_SPECS,
+      signal: toolCtx.signal,
     });
     lastContent = result.content || lastContent;
 

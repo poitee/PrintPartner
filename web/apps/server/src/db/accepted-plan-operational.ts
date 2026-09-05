@@ -14,7 +14,6 @@ import {
   validateRequiredUnitObjectName,
 } from "../services/required-units.js";
 import type { PlanRevisionInput } from "@print-partner/contracts";
-import { resolveStoredSnapshotPath } from "./stored-snapshot-path.js";
 import {
   ACCEPTED_READ_PAGE_SIZE,
   ACCEPTED_TEXT_PAGE_SIZE,
@@ -184,6 +183,7 @@ type AcceptedPlanOperationalReadDependencies = {
   readonly profileId: number;
   readonly reposDir: string;
   readonly sqlite: boolean;
+  readonly resolveSourceSnapshotPath: (sourceId: number, locator: string) => string | null;
 };
 
 function corrupt(code: AcceptedPlanCorruptionCode, message: string): never {
@@ -757,12 +757,20 @@ function loadAcceptedInputs(input: {
   readonly schema: AcceptedPlanOperationalSchema;
   readonly tenantId: string;
   readonly profileId: number;
-  readonly reposDir: string;
   readonly sqlite: boolean;
+  readonly resolveSourceSnapshotPath: (sourceId: number, locator: string) => string | null;
   readonly revision: typeof defaultSchema.planRevisions.$inferSelect;
   readonly acceptedInputs: readonly (typeof defaultSchema.planAcceptedInputSets.$inferSelect)[];
 }): AcceptedInputState {
-  const { db, schema, tenantId, profileId, reposDir, revision, acceptedInputs } = input;
+  const {
+    db,
+    schema,
+    tenantId,
+    profileId,
+    revision,
+    acceptedInputs,
+    resolveSourceSnapshotPath,
+  } = input;
   if (revision.provenanceKind === "legacy") {
     validateAcceptedPlanInputHeaderRows({
       tenantId,
@@ -910,7 +918,7 @@ function loadAcceptedInputs(input: {
         .where(eq(schema.sourceRevisions.id, row.sourceRevisionId))
         .get();
       const snapshotRoot = sourceRevision
-        ? resolveStoredSnapshotPath(reposDir, sourceRevision.snapshotLocator)
+        ? resolveSourceSnapshotPath(row.sourceId, sourceRevision.snapshotLocator)
         : null;
       if (
         !sourceRevision ||
@@ -987,7 +995,7 @@ function loadAcceptedInputs(input: {
         .where(eq(schema.sourceRevisions.id, row.sourceRevisionId))
         .get();
       const snapshotRoot = sourceRevision
-        ? resolveStoredSnapshotPath(reposDir, sourceRevision.snapshotLocator)
+        ? resolveSourceSnapshotPath(row.sourceId, sourceRevision.snapshotLocator)
         : null;
       if (
         !sourceRevision ||
@@ -1874,8 +1882,8 @@ function loadAcceptedPlanOperationalSnapshot(
     schema,
     tenantId,
     profileId,
-    reposDir: dependencies.reposDir,
     sqlite: dependencies.sqlite,
+    resolveSourceSnapshotPath: dependencies.resolveSourceSnapshotPath,
     revision,
     acceptedInputs,
   });

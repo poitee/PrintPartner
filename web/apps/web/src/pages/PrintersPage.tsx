@@ -1,16 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { Files, Printer } from "lucide-react";
-import type { PrinterHostStatus } from "@print-partner/contracts";
 import {
-  fetchIntegrationStatus,
   fetchIntegrations,
   type IntegrationSummary,
 } from "../api/endpoints/integrations";
-import {
-  fetchPrinterCheckoffLinks,
-  type PrinterCheckoffLink,
-} from "../api/endpoints/checkoff";
+import { fetchPrinterCheckoffLinks } from "../api/endpoints/checkoff";
 import { fetchPrinters, type PrinterMachine } from "../api/endpoints/printers";
 import PageHeader from "../components/layout/PageHeader";
 import PageHeaderActions from "../components/layout/PageHeaderActions";
@@ -47,6 +43,7 @@ import {
 } from "../lib/printersPageModel";
 import { cn } from "@/lib/utils";
 import PrinterWorkspaceSheet from "../components/printers/PrinterWorkspaceSheet";
+import { usePrinterStatuses } from "../queries/printerStatuses";
 
 const HOST_TYPES = new Set<LiveStripHostType>(["moonraker", "prusalink", "bambu"]);
 
@@ -68,13 +65,27 @@ export default function PrintersPage() {
   const pollMs = usePrinterStatusPollMs();
   const [printers, setPrinters] = useState<PrinterDesk[]>([]);
   const [workspacePrinterId, setWorkspacePrinterId] = useState<string | null>(null);
-  const [statusById, setStatusById] = useState<Record<string, PrinterHostStatus>>({});
-  const [checkoffLinks, setCheckoffLinks] = useState<PrinterCheckoffLink[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [rosterLoading, setRosterLoading] = useState(true);
-  const requestId = useRef(0);
-  const printersRef = useRef(printers);
-  printersRef.current = printers;
+
+  const statusIntegrationIds = useMemo(
+    () => printers.flatMap((row) => row.host ? [row.host.id] : []),
+    [printers],
+  );
+  const { statusByIntegration: statusById, refresh: refreshStatus } = usePrinterStatuses(
+    statusIntegrationIds,
+    engineReady,
+  );
+  const checkoffLinksQuery = useQuery({
+    queryKey: ["printer-checkoff-links"],
+    queryFn: () => fetchPrinterCheckoffLinks(),
+    enabled: engineReady,
+    staleTime: pollMs,
+    refetchInterval: pollMs,
+    refetchIntervalInBackground: false,
+    retry: false,
+  });
+  const checkoffLinks = checkoffLinksQuery.data?.links ?? [];
 
   const planNameById = useMemo(() => {
     const map = new Map<number, string>();
@@ -85,20 +96,16 @@ export default function PrintersPage() {
   const refreshRoster = useCallback(async () => {
     if (!engineReady) {
       setPrinters([]);
-      setStatusById({});
-      setCheckoffLinks([]);
       setLoadError(null);
       setRosterLoading(false);
       return;
     }
     setRosterLoading(true);
+    setLoadError(null);
     try {
-      const [fleet, integrations, checkoff] = await Promise.all([
+      const [fleet, integrations] = await Promise.all([
         fetchPrinters(),
         fetchIntegrations(),
-        fetchPrinterCheckoffLinks()
-          .then((r) => r)
-          .catch(() => null),
       ]);
       const byId = new Map(integrations.map((i) => [i.id, i]));
       const next: PrinterDesk[] = [];
@@ -117,82 +124,17 @@ export default function PrintersPage() {
         });
       }
       setPrinters(next);
-      // Keep last successful links on transient failure (avoid flashing "No plan.").
-      if (checkoff) setCheckoffLinks(checkoff.links ?? []);
       setLoadError(null);
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : String(e));
-      setPrinters([]);
-      setCheckoffLinks([]);
     } finally {
       setRosterLoading(false);
     }
   }, [engineReady]);
 
-  const refreshStatuses = useCallback(async (rows: PrinterDesk[]) => {
-    const id = ++requestId.current;
-    if (!rows.length) {
-      if (id === requestId.current) {
-        setStatusById({});
-        setCheckoffLinks([]);
-      }
-      return;
-    }
-    const integrationIds = [
-      ...new Set(rows.flatMap((row) => row.host ? [row.host.id] : [])),
-    ];
-    const [entries, checkoff] = await Promise.all([
-      Promise.all(
-        integrationIds.map(async (integrationId) => {
-          try {
-            return [integrationId, await fetchIntegrationStatus(integrationId)] as const;
-          } catch (e) {
-            return [
-              integrationId,
-              {
-                state: "offline" as const,
-                message: e instanceof Error ? e.message : String(e),
-              },
-            ] as const;
-          }
-        }),
-      ),
-      fetchPrinterCheckoffLinks()
-        .then((r) => r)
-        .catch(() => null),
-    ]);
-    if (id !== requestId.current) return;
-    setStatusById(Object.fromEntries(entries));
-    if (checkoff) setCheckoffLinks(checkoff.links ?? []);
-  }, []);
-
   useEffect(() => {
     void refreshRoster();
   }, [refreshRoster]);
-
-  useEffect(() => {
-    if (!engineReady || printers.length === 0) return;
-
-    let cancelled = false;
-    const tick = () => {
-      if (cancelled || document.hidden) return;
-      void refreshStatuses(printersRef.current);
-    };
-
-    tick();
-    const timer = window.setInterval(tick, pollMs);
-    const onVisibility = () => {
-      if (!document.hidden) tick();
-    };
-    document.addEventListener("visibilitychange", onVisibility);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", onVisibility);
-      requestId.current += 1;
-    };
-  }, [engineReady, printers, refreshStatuses, pollMs]);
 
   const workspacePrinter = printers.find(
     (row) => row.printer.id === workspacePrinterId,
@@ -216,9 +158,12 @@ export default function PrintersPage() {
       />
 
       {loadError && (
-        <p className="text-sm text-destructive" role="alert">
-          Could not load printers: {loadError}
-        </p>
+        <div className="flex flex-wrap items-center gap-3 text-sm text-destructive" role="alert">
+          <p>Could not load printers: {loadError}</p>
+          <Button size="sm" variant="secondary" onClick={() => void refreshRoster()}>
+            Retry
+          </Button>
+        </div>
       )}
 
       {!engineReady ? (
@@ -230,11 +175,11 @@ export default function PrintersPage() {
             ? "Engine offline — start the print-partner engine to view printers."
             : "Connecting to the engine…"}
         </p>
-      ) : rosterLoading ? (
+      ) : rosterLoading && printers.length === 0 ? (
         <p className="text-sm text-muted-foreground" role="status">
           Loading printers…
         </p>
-      ) : printers.length === 0 ? (
+      ) : loadError && printers.length === 0 ? null : printers.length === 0 ? (
         <Card>
           <CardHeader>
             <CardTitle className="text-base">No printers</CardTitle>
@@ -281,24 +226,28 @@ export default function PrintersPage() {
                   <CardContent className="space-y-2 pt-0">
                     {filename ? (
                       (() => {
-                        const planCaption = liveJobPlanCaption(
-                          findPlanNameForLiveJob({
-                            printerId: printer.id,
-                            filename,
-                            links: checkoffLinks,
-                            planNameById,
-                          }),
-                        );
+                        const planCaption = checkoffLinksQuery.isPending
+                          ? null
+                          : liveJobPlanCaption(
+                              findPlanNameForLiveJob({
+                                printerId: printer.id,
+                                filename,
+                                links: checkoffLinks,
+                                planNameById,
+                              }),
+                            );
                         return (
                           <p
                             className="truncate font-mono text-xs text-muted-foreground"
-                            title={`${filename} · ${planCaption}`}
+                            title={planCaption ? `${filename} · ${planCaption}` : filename}
                           >
                             {filename}
-                            <span className="font-sans text-muted-foreground/80">
-                              {" · "}
-                              {planCaption}
-                            </span>
+                            {planCaption ? (
+                              <span className="font-sans text-muted-foreground/80">
+                                {" · "}
+                                {planCaption}
+                              </span>
+                            ) : null}
                           </p>
                         );
                       })()
@@ -374,7 +323,10 @@ export default function PrintersPage() {
           profiles={profiles}
           selectedProfileId={selectedProfileId}
           links={checkoffLinks}
-          onChanged={() => void refreshStatuses(printersRef.current)}
+          onChanged={() => {
+            if (workspacePrinter.host) void refreshStatus(workspacePrinter.host.id);
+            void checkoffLinksQuery.refetch();
+          }}
         />
       ) : null}
     </PageShell>

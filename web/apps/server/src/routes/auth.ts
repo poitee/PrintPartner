@@ -5,10 +5,11 @@ import { isBrowserDocumentNavigation, isSpaClientPath, isStaticAssetPath } from 
 import { isMcpTransportRequest } from "../lib/mcp-transport-path.js";
 import { hashPassword, validatePasswordStrength, verifyPassword } from "../services/password.js";
 import type { AuthStore } from "../services/auth-store.js";
+import { cancelResponseBody, readBoundedResponseBody } from "../lib/bounded-response.js";
 import {
   buildPasswordResetUrl,
   deliverPasswordResetEmail,
-  requestPublicOrigin,
+  passwordResetPublicOrigin,
 } from "../services/password-reset-mail.js";
 import { toPublicUser, type SessionUser } from "./auth-types.js";
 import type { AuthIdentityProvider } from "./auth-types.js";
@@ -16,6 +17,11 @@ import {
   defaultDisplayName,
   isValidEmailInput,
   normalizeEmailInput,
+  parseDiscordOAuthProfile,
+  parseGitHubOAuthProfile,
+  parseOAuthAccessToken,
+  readOAuthError,
+  selectVerifiedGitHubEmail,
 } from "./auth-route-model.js";
 
 declare module "fastify" {
@@ -29,6 +35,57 @@ export type { SessionUser } from "./auth-types.js";
 export { toPublicUser } from "./auth-types.js";
 
 const authRateLimit = { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } };
+const MAX_OAUTH_RESPONSE_BYTES = 256 * 1024;
+const OAUTH_PROVIDER_TIMEOUT_MS = 15_000;
+
+class OAuthProviderRequestError extends Error {
+  constructor(
+    readonly kind: "timeout" | "network",
+    cause: unknown,
+  ) {
+    super(kind === "timeout" ? "OAuth provider timed out" : "OAuth provider request failed", {
+      cause,
+    });
+    this.name = "OAuthProviderRequestError";
+  }
+}
+
+async function fetchOAuthProvider(
+  input: string,
+  init: RequestInit = {},
+): Promise<Response> {
+  try {
+    return await fetch(input, {
+      ...init,
+      signal: AbortSignal.timeout(OAUTH_PROVIDER_TIMEOUT_MS),
+    });
+  } catch (error) {
+    const errorName = error instanceof Error ? error.name : "";
+    throw new OAuthProviderRequestError(
+      errorName === "TimeoutError" || errorName === "AbortError" ? "timeout" : "network",
+      error,
+    );
+  }
+}
+
+function replyToOAuthProviderFailure(
+  provider: "GitHub" | "Discord",
+  error: unknown,
+  request: FastifyRequest,
+  reply: FastifyReply,
+): FastifyReply {
+  if (!(error instanceof OAuthProviderRequestError)) throw error;
+  request.log.warn(
+    { err: error.cause, provider, failure: error.kind },
+    "OAuth provider request failed",
+  );
+  const timedOut = error.kind === "timeout";
+  return reply.status(timedOut ? 504 : 502).send({
+    detail: timedOut
+      ? `${provider} OAuth provider timed out`
+      : `${provider} OAuth provider unavailable`,
+  });
+}
 
 function setSessionCookie(reply: FastifyReply, rawToken: string, secure: boolean): void {
   reply.setCookie("pp_session", rawToken, {
@@ -61,6 +118,15 @@ function singleUserOAuthCanContinue(
 ): boolean {
   if (!config.singleUserAuth || authStore.countUsers() === 0) return true;
   return Boolean(authStore.findIdentity(provider, providerUserId));
+}
+
+async function readJsonResponse(response: Response): Promise<unknown> {
+  try {
+    const bytes = await readBoundedResponseBody(response, MAX_OAUTH_RESPONSE_BYTES);
+    return JSON.parse(new TextDecoder().decode(bytes)) as unknown;
+  } catch {
+    return null;
+  }
 }
 
 export function registerAuthRoutes(
@@ -167,15 +233,21 @@ export function registerAuthRoutes(
       const user = authStore.findUserByEmail(emailRaw);
       let devResetUrl: string | undefined;
       if (user?.email) {
-        authStore.invalidatePasswordResetTokens(user.id);
-        const raw = authStore.createPasswordResetToken(user.id);
-        const origin = config.appPublicUrl ?? requestPublicOrigin(request.headers);
-        const resetUrl = buildPasswordResetUrl(origin, raw);
-        const delivery = await deliverPasswordResetEmail(config, request.log, {
-          to: user.email,
-          resetUrl,
-        });
-        devResetUrl = delivery.devResetUrl;
+        const origin = passwordResetPublicOrigin(config, request);
+        if (origin) {
+          authStore.invalidatePasswordResetTokens(user.id);
+          const raw = authStore.createPasswordResetToken(user.id);
+          const resetUrl = buildPasswordResetUrl(origin, raw);
+          const delivery = await deliverPasswordResetEmail(config, request.log, {
+            to: user.email,
+            resetUrl,
+          });
+          devResetUrl = delivery.devResetUrl;
+        } else {
+          request.log.error(
+            "Password reset email is unavailable because APP_PUBLIC_URL is not configured",
+          );
+        }
       }
 
       const response: { ok: true; message: string; dev_reset_url?: string } = {
@@ -274,44 +346,56 @@ export function registerAuthRoutes(
       if (!query.code || !query.state || query.state !== stateCookie) {
         return reply.status(400).send({ detail: "Invalid OAuth state" });
       }
-      const tokenRes = await fetch("https://github.com/login/oauth/access_token", {
-        method: "POST",
-        headers: { Accept: "application/json", "Content-Type": "application/json" },
-        body: JSON.stringify({
-          client_id: config.githubClientId,
-          client_secret: config.githubClientSecret,
-          code: query.code,
-          redirect_uri: config.githubCallbackUrl,
-        }),
-      });
-      const tokenJson = (await tokenRes.json()) as { access_token?: string; error?: string };
-      if (!tokenJson.access_token) {
-        return reply.status(401).send({ detail: tokenJson.error ?? "OAuth failed" });
-      }
-      const userRes = await fetch("https://api.github.com/user", {
-        headers: { Authorization: `Bearer ${tokenJson.access_token}`, Accept: "application/json" },
-      });
-      const ghUser = (await userRes.json()) as { login?: string; id?: number; email?: string | null; name?: string };
-      const login = ghUser.login ?? "github-user";
-      const providerUserId = String(ghUser.id ?? login);
-      let email = ghUser.email ?? null;
-      if (!email) {
-        const emailsRes = await fetch("https://api.github.com/user/emails", {
-          headers: { Authorization: `Bearer ${tokenJson.access_token}`, Accept: "application/json" },
+      try {
+        const tokenRes = await fetchOAuthProvider("https://github.com/login/oauth/access_token", {
+          method: "POST",
+          headers: { Accept: "application/json", "Content-Type": "application/json" },
+          body: JSON.stringify({
+            client_id: config.githubClientId,
+            client_secret: config.githubClientSecret,
+            code: query.code,
+            redirect_uri: config.githubCallbackUrl,
+          }),
         });
-        const emails = (await emailsRes.json()) as Array<{ email: string; primary?: boolean; verified?: boolean }>;
-        email = emails.find((e) => e.primary && e.verified)?.email ?? emails[0]?.email ?? null;
+        const tokenJson = await readJsonResponse(tokenRes);
+        const accessToken = parseOAuthAccessToken(tokenJson);
+        if (!tokenRes.ok || !accessToken) {
+          return reply.status(401).send({ detail: readOAuthError(tokenJson) ?? "OAuth failed" });
+        }
+        const userRes = await fetchOAuthProvider("https://api.github.com/user", {
+          headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
+        });
+        const ghUser = parseGitHubOAuthProfile(await readJsonResponse(userRes));
+        if (!userRes.ok || !ghUser) {
+          return reply.status(502).send({ detail: "GitHub returned an invalid user profile" });
+        }
+        const githubIdentityIsLinked = Boolean(
+          authStore.findIdentity("github", ghUser.providerUserId),
+        );
+        let email: string | null = null;
+        if (!githubIdentityIsLinked) {
+          const emailsRes = await fetchOAuthProvider("https://api.github.com/user/emails", {
+            headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
+          });
+          if (emailsRes.ok) {
+            email = selectVerifiedGitHubEmail(await readJsonResponse(emailsRes));
+          } else {
+            await cancelResponseBody(emailsRes);
+          }
+        }
+        if (!singleUserOAuthCanContinue(config, authStore, "github", ghUser.providerUserId)) {
+          return reply.status(403).send({ detail: "The single-user administrator already exists" });
+        }
+        const user = authStore.upsertOAuthUser({
+          provider: "github",
+          providerUserId: ghUser.providerUserId,
+          displayName: ghUser.displayName,
+          email,
+        });
+        finishOAuthLogin(authStore, user, reply, config.authSuccessRedirect, config.sessionCookieSecure);
+      } catch (error) {
+        return replyToOAuthProviderFailure("GitHub", error, request, reply);
       }
-      if (!singleUserOAuthCanContinue(config, authStore, "github", providerUserId)) {
-        return reply.status(403).send({ detail: "The single-user administrator already exists" });
-      }
-      const user = authStore.upsertOAuthUser({
-        provider: "github",
-        providerUserId,
-        displayName: ghUser.name ?? login,
-        email,
-      });
-      finishOAuthLogin(authStore, user, reply, config.authSuccessRedirect, config.sessionCookieSecure);
     });
   } else {
     app.get("/auth/github", async (_request, reply) => {
@@ -349,50 +433,51 @@ export function registerAuthRoutes(
       if (!query.code || !query.state || query.state !== stateCookie) {
         return reply.status(400).send({ detail: "Invalid OAuth state" });
       }
-      const body = new URLSearchParams({
-        client_id: config.discordClientId!,
-        client_secret: config.discordClientSecret!,
-        grant_type: "authorization_code",
-        code: query.code,
-        redirect_uri: config.discordCallbackUrl!,
-      });
-      const tokenRes = await fetch("https://discord.com/api/oauth2/token", {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body,
-      });
-      const tokenJson = (await tokenRes.json()) as { access_token?: string; error?: string };
-      if (!tokenJson.access_token) {
-        return reply.status(401).send({ detail: tokenJson.error ?? "Discord OAuth failed" });
+      try {
+        const body = new URLSearchParams({
+          client_id: config.discordClientId!,
+          client_secret: config.discordClientSecret!,
+          grant_type: "authorization_code",
+          code: query.code,
+          redirect_uri: config.discordCallbackUrl!,
+        });
+        const tokenRes = await fetchOAuthProvider("https://discord.com/api/oauth2/token", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body,
+        });
+        const tokenJson = await readJsonResponse(tokenRes);
+        const accessToken = parseOAuthAccessToken(tokenJson);
+        if (!tokenRes.ok || !accessToken) {
+          return reply.status(401).send({ detail: readOAuthError(tokenJson) ?? "Discord OAuth failed" });
+        }
+        const userRes = await fetchOAuthProvider("https://discord.com/api/users/@me", {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        const dcUser = parseDiscordOAuthProfile(await readJsonResponse(userRes));
+        if (!userRes.ok || !dcUser) {
+          return reply.status(502).send({ detail: "Discord returned an invalid user profile" });
+        }
+        if (
+          !singleUserOAuthCanContinue(
+            config,
+            authStore,
+            "discord",
+            dcUser.providerUserId,
+          )
+        ) {
+          return reply.status(403).send({ detail: "The single-user administrator already exists" });
+        }
+        const user = authStore.upsertOAuthUser({
+          provider: "discord",
+          providerUserId: dcUser.providerUserId,
+          displayName: dcUser.displayName,
+          email: dcUser.email,
+        });
+        finishOAuthLogin(authStore, user, reply, config.authSuccessRedirect, config.sessionCookieSecure);
+      } catch (error) {
+        return replyToOAuthProviderFailure("Discord", error, request, reply);
       }
-      const userRes = await fetch("https://discord.com/api/users/@me", {
-        headers: { Authorization: `Bearer ${tokenJson.access_token}` },
-      });
-      const dcUser = (await userRes.json()) as {
-        id?: string;
-        username?: string;
-        global_name?: string | null;
-        email?: string | null;
-      };
-      const login = dcUser.username ?? "discord-user";
-      const providerUserId = dcUser.id ?? login;
-      if (
-        !singleUserOAuthCanContinue(
-          config,
-          authStore,
-          "discord",
-          providerUserId,
-        )
-      ) {
-        return reply.status(403).send({ detail: "The single-user administrator already exists" });
-      }
-      const user = authStore.upsertOAuthUser({
-        provider: "discord",
-        providerUserId,
-        displayName: dcUser.global_name ?? login,
-        email: dcUser.email ?? null,
-      });
-      finishOAuthLogin(authStore, user, reply, config.authSuccessRedirect, config.sessionCookieSecure);
     });
   } else {
     app.get("/auth/discord", async (_request, reply) => {

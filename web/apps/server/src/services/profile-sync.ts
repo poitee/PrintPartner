@@ -50,6 +50,20 @@ export type ProfileSyncResult = {
 
 export type ProfileSyncEmitter = (event: ProfileSyncResult) => void;
 
+export type ProfileSyncContextRunner = <T>(work: () => T) => T;
+
+export type ProfileSyncWatcherHandle = {
+  stop: () => Promise<void>;
+  syncAll: () => Promise<void>;
+};
+
+export type ProfileSyncWatcherFactory = (
+  repo: AppRepository,
+  settings: ProfileSyncSettings,
+  emit: ProfileSyncEmitter,
+  runInContext?: ProfileSyncContextRunner,
+) => ProfileSyncWatcherHandle;
+
 const DEBOUNCE_MS = 1000;
 
 /** Extract a scalar string from a raw slicer value (string, number, [x], {value}). */
@@ -352,11 +366,12 @@ export function startProfileSyncWatcher(
   repo: AppRepository,
   settings: ProfileSyncSettings,
   emit: ProfileSyncEmitter,
-): { stop: () => void; syncAll: () => Promise<void> } {
+  runInContext: ProfileSyncContextRunner = (work) => work(),
+): ProfileSyncWatcherHandle {
   const log = getLogger();
   if (!settings.enabled || settings.roots.length === 0) {
     log.log("info", "[profile-sync] disabled — no slicer config volumes mounted");
-    return { stop: () => {}, syncAll: async () => {} };
+    return { stop: async () => {}, syncAll: async () => {} };
   }
 
   const pending = new Map<string, NodeJS.Timeout>();
@@ -374,7 +389,7 @@ export function startProfileSyncWatcher(
     );
   }
 
-  function handleFile(absolute: string): void {
+  function readProfileFile(absolute: string): void {
     const match = locate(absolute);
     if (!match) return;
     const { root, kind } = match;
@@ -388,6 +403,10 @@ export function startProfileSyncWatcher(
       const msg = err instanceof Error ? err.message : String(err);
       log.log("warn", `[profile-sync] failed to parse ${absolute}: ${msg}`);
     }
+  }
+
+  function handleFile(absolute: string): void {
+    runInContext(() => readProfileFile(absolute));
   }
 
   for (const root of settings.roots) {
@@ -413,11 +432,12 @@ export function startProfileSyncWatcher(
   }
 
   function locate(absolute: string): { root: SlicerWatchRoot; kind: ProfileKind } | null {
+    const normalizedAbsolute = absolute.replace(/\\/g, "/");
     for (const root of settings.roots) {
       for (const [kind, dir] of Object.entries(root.dirs) as Array<[ProfileKind, string | undefined]>) {
         if (!dir) continue;
-        const dirPath = join(root.baseDir, dir);
-        if (absolute.startsWith(dirPath + "/") || absolute === dirPath) {
+        const dirPath = join(root.baseDir, dir).replace(/\\/g, "/");
+        if (normalizedAbsolute.startsWith(`${dirPath}/`) || normalizedAbsolute === dirPath) {
           return { root, kind };
         }
       }
@@ -446,10 +466,10 @@ export function startProfileSyncWatcher(
   }
 
   return {
-    stop() {
-      for (const w of watchers) void w.close();
+    async stop() {
       for (const t of pending.values()) clearTimeout(t);
       pending.clear();
+      await Promise.all(watchers.map((watcher) => watcher.close()));
       log.log("info", "[profile-sync] stopped");
     },
     syncAll,

@@ -1,4 +1,9 @@
-import type { PlanSnapshot, PlanSnapshotSource, PlanSnapshotSummary } from "@print-partner/contracts";
+import type {
+  ManifestSelections,
+  PlanSnapshot,
+  PlanSnapshotSource,
+  PlanSnapshotSummary,
+} from "@print-partner/contracts";
 import type { AppRepository } from "../db/repository.js";
 import { loadKitManifest, saveKitManifest } from "./kit-manifest-store.js";
 import { deriveBuildRecipe } from "./build-recipe.js";
@@ -14,7 +19,7 @@ export type PlanSnapshotPayload = {
   }>;
   kit_manifest: {
     name: string | null;
-    selections: Record<string, string>;
+    selections: ManifestSelections;
     include: string[];
     exclude: string[];
     replacements: Record<string, string>;

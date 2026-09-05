@@ -1,5 +1,6 @@
 import type { DrizzleDb } from "./client.js";
 import type { PostgresDrizzleDb } from "./client-postgres.js";
+import type { SettingCompareAndSetInput } from "./setting-compare-and-set.js";
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
@@ -29,6 +30,10 @@ export type PostgresSyncResult = {
 
 export type PostgresSyncQueryFn = (query: PostgresSyncQuery) => PostgresSyncResult;
 
+export type PostgresSettingCompareAndSet = Readonly<SettingCompareAndSetInput & {
+  tenantId: string;
+}>;
+
 export const POSTGRES_SYNC_MAX_RESULT_ROWS = 10_000;
 export const POSTGRES_SYNC_MAX_RESULT_BYTES = 8 * 1024 * 1024;
 
@@ -43,6 +48,36 @@ export function registerPostgresSyncQuery(
 
 export function unregisterPostgresSyncQuery(db: AppDrizzleDb): void {
   postgresSyncQueries.delete(db);
+}
+
+export function compareAndSetPostgresSetting(
+  db: AppDrizzleDb,
+  input: PostgresSettingCompareAndSet,
+): boolean {
+  const query = postgresSyncQueries.get(db);
+  if (!query) {
+    throw new Error("Postgres synchronous query bridge is not registered");
+  }
+  const result = input.expected.kind === "missing"
+    ? query({
+        sql: `INSERT INTO app_settings (tenant_id, key, value)
+          VALUES ($1, $2, $3)
+          ON CONFLICT (tenant_id, key) DO NOTHING`,
+        params: [input.tenantId, input.key, input.value],
+      })
+    : query({
+        sql: `UPDATE app_settings
+          SET value = $3
+          WHERE tenant_id = $1 AND key = $2 AND value = $4`,
+        params: [input.tenantId, input.key, input.value, input.expected.value],
+      });
+  assertPostgresSyncResultWithinLimits(result);
+  if (result.rowCount !== 0 && result.rowCount !== 1) {
+    throw new Error(
+      `Postgres setting compare-and-set changed ${result.rowCount.toLocaleString("en-US")} rows`,
+    );
+  }
+  return result.rowCount === 1;
 }
 
 /** True when Drizzle exposes sync SQLite-style builders (`.all` / sync `.transaction`). */

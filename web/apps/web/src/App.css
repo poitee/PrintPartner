@@ -459,7 +459,7 @@
 
 /* ---- Checkoff / Review printable sheet (mirrors export-html.ts) ---- */
 
-/* GRE-222: on-screen sheet uses available width (no 880px cap). Print stays paper below. */
+/* On-screen sheet uses available width. Print stays paper-sized below. */
 
 .checkoff-sheet {
   background: var(--paper-bg);
@@ -472,10 +472,10 @@
   font-family: system-ui, sans-serif;
 }
 
-/* GRE-234: on screen, dark desk uses card tokens — not blinding paper white.
-   @media print below forces GRE-233 paper white for ink-friendly output. */
+/* On screen, the dark desk uses card tokens instead of paper white.
+   The print media rule below restores paper white for ink-friendly output. */
 
-/* GRE-233: Progress Print sheet is print-only — desk loop is the screen UI.
+/* The Progress print sheet is print-only; the desk loop is the screen UI.
    `.is-print-prep` briefly mounts off-screen so thumbs can load before window.print. */
 
 @media screen {
@@ -1080,7 +1080,7 @@
     print-color-adjust: exact;
   }
 
-  /* GRE-233 / GRE-215: never avoid a whole repo/folder/header — that left
+  /* Never avoid a whole repo, folder, or header because that leaves
      title + tally alone on page 1 when the first group was taller than a page.
      Keep only a single part row together. */
   .sheet-header {

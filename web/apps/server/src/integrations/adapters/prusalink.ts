@@ -10,8 +10,19 @@ import type {
 import { createReadStream, statSync } from "node:fs";
 import type { IntegrationAdapter, PrinterUploadSource } from "../store.js";
 import { assertSafeOutboundUrl } from "../../lib/outbound-url.js";
+import {
+  cancelResponseBody,
+  isJsonObject as isRecord,
+  readBoundedJsonResponse,
+  readBoundedResponseText,
+  readResponsePrefix,
+} from "../../lib/bounded-response.js";
 import { buildDigestAuthorization, parseWwwAuthenticate } from "../digest-auth.js";
 import { encodeStoragePath, joinStoragePath, safeStoragePath } from "./storage-path.js";
+
+const MAX_METADATA_RESPONSE_BYTES = 2 * 1024 * 1024;
+const MAX_DIRECTORY_RESPONSE_BYTES = 8 * 1024 * 1024;
+const MAX_ERROR_RESPONSE_BYTES = 64 * 1024;
 
 function normalizeBaseUrl(raw: unknown): string | null {
   if (typeof raw !== "string" || !raw.trim()) return null;
@@ -42,11 +53,7 @@ function configuredStorageRoot(config: IntegrationConfig): string | null {
  * Every hop is SSRF-checked with allowPrivate.
  */
 async function drainResponseBody(res: Response): Promise<void> {
-  try {
-    await res.arrayBuffer();
-  } catch {
-    /* ignore */
-  }
+  await cancelResponseBody(res);
 }
 
 async function obtainDigestChallenge(
@@ -171,6 +178,68 @@ type PrusaJobBody = {
   };
 };
 
+function parseFileMeta(value: unknown): PrusaFileMeta | undefined {
+  if (!isRecord(value)) return undefined;
+  const file: PrusaFileMeta = {};
+  if (typeof value.name === "string") file.name = value.name;
+  if (typeof value.display_name === "string") file.display_name = value.display_name;
+  if (typeof value.path === "string") file.path = value.path;
+  return file;
+}
+
+function parseJobBody(value: unknown): PrusaJobBody {
+  if (!isRecord(value)) return {};
+  const body: PrusaJobBody = {};
+  if (typeof value.state === "string") body.state = value.state;
+  const file = parseFileMeta(value.file);
+  if (file) body.file = file;
+  if (typeof value.progress === "number") body.progress = value.progress;
+  if (typeof value.time_remaining === "number") body.time_remaining = value.time_remaining;
+  if (typeof value.consumed_material === "number") {
+    body.consumed_material = value.consumed_material;
+  }
+  if (isRecord(value.refs)) {
+    const refs: NonNullable<PrusaJobBody["refs"]> = {};
+    if (typeof value.refs.download === "string") refs.download = value.refs.download;
+    if (typeof value.refs.icon === "string") refs.icon = value.refs.icon;
+    if (typeof value.refs.thumbnail === "string") refs.thumbnail = value.refs.thumbnail;
+    body.refs = refs;
+  }
+  return body;
+}
+
+function parseStatusBody(value: unknown): PrusaStatusBody {
+  if (!isRecord(value)) return {};
+  const body: PrusaStatusBody = {};
+  if (isRecord(value.printer)) {
+    const printer: NonNullable<PrusaStatusBody["printer"]> = {};
+    if (typeof value.printer.state === "string") printer.state = value.printer.state;
+    if (typeof value.printer.status === "string") printer.status = value.printer.status;
+    if (typeof value.printer.temp_nozzle === "number") {
+      printer.temp_nozzle = value.printer.temp_nozzle;
+    }
+    if (typeof value.printer.target_nozzle === "number") {
+      printer.target_nozzle = value.printer.target_nozzle;
+    }
+    if (typeof value.printer.temp_bed === "number") printer.temp_bed = value.printer.temp_bed;
+    if (typeof value.printer.target_bed === "number") {
+      printer.target_bed = value.printer.target_bed;
+    }
+    body.printer = printer;
+  }
+  if (isRecord(value.job)) {
+    const job: NonNullable<PrusaStatusBody["job"]> = {};
+    if (typeof value.job.progress === "number") job.progress = value.job.progress;
+    const file = parseFileMeta(value.job.file);
+    if (file) job.file = file;
+    if (typeof value.job.time_remaining === "number") {
+      job.time_remaining = value.job.time_remaining;
+    }
+    body.job = job;
+  }
+  return body;
+}
+
 function filenameFromFile(file: PrusaFileMeta | undefined): string | undefined {
   return file?.display_name ?? file?.name ?? file?.path ?? undefined;
 }
@@ -187,7 +256,9 @@ async function readJobFileMeta(
       await drainResponseBody(res);
       return {};
     }
-    const body = (await res.json()) as PrusaJobBody;
+    const body = parseJobBody(
+      await readBoundedJsonResponse(res, MAX_METADATA_RESPONSE_BYTES),
+    );
     const progressRaw = body.progress;
     const progress =
       typeof progressRaw === "number" && Number.isFinite(progressRaw)
@@ -220,12 +291,16 @@ async function readStatus(config: IntegrationConfig): Promise<PrinterHostStatus>
     signal: AbortSignal.timeout(8000),
   });
   if (res.status === 204) {
+    await drainResponseBody(res);
     return { state: "idle", message: "Idle" };
   }
   if (!res.ok) {
+    await drainResponseBody(res);
     return { state: "offline", message: `PrusaLink returned HTTP ${res.status}` };
   }
-  const body = (await res.json()) as PrusaStatusBody;
+  const body = parseStatusBody(
+    await readBoundedJsonResponse(res, MAX_METADATA_RESPONSE_BYTES),
+  );
   const rawState = body.printer?.state ?? body.printer?.status;
   const state = mapPrinterState(rawState);
   const progressRaw = body.job?.progress;
@@ -272,11 +347,6 @@ async function readStatus(config: IntegrationConfig): Promise<PrinterHostStatus>
   };
 }
 
-type PrusaStorage = {
-  path?: unknown;
-  available?: unknown;
-};
-
 type PrusaFileInfo = {
   name?: unknown;
   display_name?: unknown;
@@ -286,6 +356,19 @@ type PrusaFileInfo = {
   children?: unknown;
   refs?: { download?: unknown };
 };
+
+function parseFileInfo(value: unknown): PrusaFileInfo | null {
+  if (!isRecord(value)) return null;
+  return {
+    name: value.name,
+    display_name: value.display_name,
+    type: value.type,
+    size: value.size,
+    m_timestamp: value.m_timestamp,
+    children: value.children,
+    refs: isRecord(value.refs) ? { download: value.refs.download } : undefined,
+  };
+}
 
 function prusaFileUrl(baseUrl: string, providerPath: string): string {
   const suffix = providerPath.includes("/") ? "" : "/";
@@ -320,9 +403,10 @@ async function resolveStorageRoot(config: IntegrationConfig, baseUrl: string): P
     await drainResponseBody(response);
     throw new Error(`PrusaLink storage list returned HTTP ${response.status}`);
   }
-  const body = await response.json() as { storage_list?: unknown };
-  const storages = Array.isArray(body.storage_list) ? body.storage_list as PrusaStorage[] : [];
+  const body = await readBoundedJsonResponse(response, MAX_METADATA_RESPONSE_BYTES);
+  const storages = isRecord(body) && Array.isArray(body.storage_list) ? body.storage_list : [];
   for (const storage of storages) {
+    if (!isRecord(storage)) continue;
     if (storage.available === false || typeof storage.path !== "string") continue;
     const root = safeStoragePath(storage.path, { trimTrailing: true });
     if (root) return root;
@@ -363,8 +447,12 @@ async function browseStorage(
     await drainResponseBody(response);
     throw new Error(`PrusaLink file listing returned HTTP ${response.status}`);
   }
-  const folder = await response.json() as PrusaFileInfo;
-  const children = Array.isArray(folder.children) ? folder.children as PrusaFileInfo[] : [];
+  const folder = parseFileInfo(
+    await readBoundedJsonResponse(response, MAX_DIRECTORY_RESPONSE_BYTES),
+  );
+  const children = Array.isArray(folder?.children)
+    ? folder.children.map(parseFileInfo).filter((child) => child !== null)
+    : [];
 
   const entries: PrinterStorageEntry[] = [];
   for (const child of children) {
@@ -412,6 +500,15 @@ type PrusaCameraInfo = {
   config?: { name?: unknown };
 };
 
+function parseCameraInfo(value: unknown): PrusaCameraInfo | null {
+  if (!isRecord(value)) return null;
+  return {
+    camera_id: value.camera_id,
+    connected: value.connected,
+    config: isRecord(value.config) ? { name: value.config.name } : undefined,
+  };
+}
+
 async function readCameras(config: IntegrationConfig): Promise<PrusaCameraInfo[]> {
   const baseUrl = normalizeBaseUrl(config.base_url ?? config.baseUrl);
   if (!baseUrl) throw new Error("base_url is required");
@@ -420,11 +517,14 @@ async function readCameras(config: IntegrationConfig): Promise<PrusaCameraInfo[]
     signal: AbortSignal.timeout(10_000),
   });
   if (!response.ok) {
+    await drainResponseBody(response);
     if (response.status === 404 || response.status === 403 || response.status === 503) return [];
     throw new Error(`PrusaLink camera list returned HTTP ${response.status}`);
   }
-  const body = await response.json() as unknown;
-  return Array.isArray(body) ? body as PrusaCameraInfo[] : [];
+  const body = await readBoundedJsonResponse(response, MAX_METADATA_RESPONSE_BYTES);
+  return Array.isArray(body)
+    ? body.map(parseCameraInfo).filter((camera) => camera !== null)
+    : [];
 }
 
 async function listCameras(config: IntegrationConfig): Promise<PrinterCamera[]> {
@@ -460,8 +560,10 @@ export const prusalinkAdapter: IntegrationAdapter = {
         },
       );
       if (!metadataResponse.ok) return metadataResponse;
-      const metadata = await metadataResponse.json() as PrusaFileInfo;
-      const downloadRef = typeof metadata.refs?.download === "string"
+      const metadata = parseFileInfo(
+        await readBoundedJsonResponse(metadataResponse, MAX_METADATA_RESPONSE_BYTES),
+      );
+      const downloadRef = typeof metadata?.refs?.download === "string"
         ? metadata.refs.download.trim()
         : "";
       if (!downloadRef) throw new Error("PrusaLink did not advertise a download URL");
@@ -504,17 +606,18 @@ export const prusalinkAdapter: IntegrationAdapter = {
         signal: AbortSignal.timeout(8000),
       });
       if (infoRes.ok) {
-        const info = (await infoRes.json()) as {
-          name?: string;
-          hostname?: string;
-          printer_model?: string;
-        };
-        const label = info.name ?? info.hostname ?? info.printer_model ?? "PrusaLink";
+        const info = await readBoundedJsonResponse(infoRes, MAX_METADATA_RESPONSE_BYTES);
+        const label = isRecord(info)
+          ? [info.name, info.hostname, info.printer_model]
+              .find((value): value is string => typeof value === "string" && value.length > 0)
+            ?? "PrusaLink"
+          : "PrusaLink";
         const status = await readStatus(config).catch(() => null);
         const statePart = status?.state ? `, state: ${status.state}` : "";
         return { ok: true, message: `Connected (${label}${statePart})` };
       }
       // Fall back to status if /info is unavailable on older builds.
+      await drainResponseBody(infoRes);
       const status = await readStatus(config);
       if (status.state === "offline") {
         return { ok: false, message: status.message ?? `PrusaLink returned HTTP ${infoRes.status}` };
@@ -570,7 +673,9 @@ export const prusalinkAdapter: IntegrationAdapter = {
         await drainResponseBody(jobRes);
         return [];
       }
-      const job = (await jobRes.json()) as PrusaJobBody;
+      const job = parseJobBody(
+        await readBoundedJsonResponse(jobRes, MAX_METADATA_RESPONSE_BYTES),
+      );
 
       // Only parse for active/finished jobs
       const rawState = (job.state ?? "").toUpperCase();
@@ -586,7 +691,7 @@ export const prusalinkAdapter: IntegrationAdapter = {
         ? downloadPath
         : `${baseUrl}${downloadPath.startsWith("/") ? "" : "/"}${downloadPath}`;
 
-      // Download only the first 65536 bytes (bgcode metadata block is not compressed)
+      // Some PrusaLink versions ignore Range, so cap the consumed prefix as well.
       const fileRes = await prusalinkFetch(downloadUrl, config, {
         headers: { Range: "bytes=0-65535" },
         signal: AbortSignal.timeout(15_000),
@@ -596,7 +701,7 @@ export const prusalinkAdapter: IntegrationAdapter = {
         return [];
       }
 
-      const buf = await fileRes.arrayBuffer();
+      const buf = await readResponsePrefix(fileRes, 65_536);
       const text = new TextDecoder("latin1").decode(buf);
 
       // Find objects_info={ and extract the JSON by counting braces
@@ -622,11 +727,11 @@ export const prusalinkAdapter: IntegrationAdapter = {
       if (jsonEnd === -1) return [];
 
       const jsonStr = text.slice(jsonStart, jsonEnd + 1);
-      const parsed = JSON.parse(jsonStr) as { objects?: { name?: string }[] };
-      if (!Array.isArray(parsed.objects)) return [];
+      const parsed: unknown = JSON.parse(jsonStr);
+      if (!isRecord(parsed) || !Array.isArray(parsed.objects)) return [];
 
       return parsed.objects
-        .map((o) => (typeof o.name === "string" ? o.name : ""))
+        .map((object) => isRecord(object) && typeof object.name === "string" ? object.name : "")
         .filter((n) => n.length > 0);
     } catch {
       return [];
@@ -644,7 +749,9 @@ export const prusalinkAdapter: IntegrationAdapter = {
         await drainResponseBody(res);
         return null;
       }
-      const body = (await res.json()) as PrusaJobBody;
+      const body = parseJobBody(
+        await readBoundedJsonResponse(res, MAX_METADATA_RESPONSE_BYTES),
+      );
       const consumed = body.consumed_material;
       if (typeof consumed === "number" && Number.isFinite(consumed) && consumed >= 0) {
         return consumed;
@@ -705,12 +812,14 @@ export const prusalinkAdapter: IntegrationAdapter = {
       });
 
       if (res.status !== 201 && res.status !== 204 && !res.ok) {
-        const text = await res.text().catch(() => "");
+        const text = await readBoundedResponseText(res, MAX_ERROR_RESPONSE_BYTES).catch(() => "");
         return {
           ok: false,
           message: `Upload failed (HTTP ${res.status})${text ? `: ${text.slice(0, 200)}` : ""}`,
         };
       }
+
+      await drainResponseBody(res);
 
       return {
         ok: true,

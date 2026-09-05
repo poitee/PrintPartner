@@ -10,6 +10,7 @@
  */
 
 import type { GuideExtract, GuideExtractLlm } from "../services/guide-ingest.js";
+import type { ManifestSelections } from "@print-partner/contracts";
 import {
   slugifyTreePath,
   type RepoTreeSummary,
@@ -24,7 +25,7 @@ export type BuildDecisionOption = {
   label: string;
   evidence?: string;
   /** Kit-selection key/values that enact this option (use with update_kit_selections). */
-  selection?: Record<string, string>;
+  selection?: ManifestSelections;
 };
 
 export type BuildDecision = {
@@ -273,8 +274,8 @@ export function applyUserConstraintsToDecisions(
  */
 export function selectionsFromSuggestedDecisions(
   decisions: BuildDecision[],
-): Record<string, string> {
-  const out: Record<string, string> = {};
+): ManifestSelections {
+  const out: ManifestSelections = {};
   for (const d of decisions) {
     if (!d.suggested_selection) continue;
     const opt = d.options.find((o) => o.id === d.suggested_selection);
@@ -419,7 +420,11 @@ function parseLlmDecisionPatches(raw: string): LlmDecisionPatch[] | null {
 /** Guarded LLM refine: relabel/reorder/suggest only — never invent. */
 export async function refineBuildDecisionsWithLlm(
   heuristic: BuildDecision[],
-  context: { treeSummary?: RepoTreeSummary | null; guideExtract?: GuideExtract | null },
+  context: {
+    treeSummary?: RepoTreeSummary | null;
+    guideExtract?: GuideExtract | null;
+    signal?: AbortSignal;
+  },
   llm: GuideExtractLlm,
 ): Promise<BuildDecision[] | null> {
   if (!llm.configured || !llm.model || !heuristic.length) return null;
@@ -447,6 +452,7 @@ export async function refineBuildDecisionsWithLlm(
       ],
       model: llm.model,
       maxTokens: 700,
+      signal: context.signal,
     });
     const patches = parseLlmDecisionPatches(raw);
     if (!patches) return null;
@@ -486,12 +492,17 @@ export async function detectBuildDecisions(params: {
   sourceName?: string | null;
   dataDir?: string | null;
   llm?: GuideExtractLlm | null;
+  signal?: AbortSignal;
 }): Promise<DetectBuildDecisionsResult> {
   const heuristic = detectBuildDecisionsHeuristic(params);
   if (params.llm?.configured && heuristic.decisions.length) {
     const refined = await refineBuildDecisionsWithLlm(
       heuristic.decisions,
-      { treeSummary: params.treeSummary, guideExtract: params.guideExtract },
+      {
+        treeSummary: params.treeSummary,
+        guideExtract: params.guideExtract,
+        signal: params.signal,
+      },
       params.llm,
     );
     if (refined) {

@@ -14,7 +14,8 @@ CREATE TABLE IF NOT EXISTS projects (
   manifest_community_slug TEXT,
   source_kind TEXT NOT NULL DEFAULT 'github',
   role TEXT NOT NULL DEFAULT 'unassigned',
-  metadata_json TEXT
+  metadata_json TEXT,
+  legacy_manifest_cutover BOOLEAN NOT NULL DEFAULT FALSE
 );
 CREATE UNIQUE INDEX IF NOT EXISTS uq_projects_tenant_name ON projects (tenant_id, name);
 

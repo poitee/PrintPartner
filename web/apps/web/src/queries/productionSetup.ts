@@ -1,9 +1,24 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { ProductionSetup, ProductionSetupInput } from "@print-partner/contracts";
-import { fetchProductionSetup, saveProductionSetup } from "../api/endpoints/productionSetup";
+import {
+  useIsMutating,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
+import type { ProductionSetup, ProductionSetupCommand } from "@print-partner/contracts";
+import {
+  applyProductionSetupCommand,
+  fetchProductionSetup,
+} from "../api/endpoints/productionSetup";
 
 export const productionSetupKey = (profileId: number | null) =>
   ["production-setup", profileId] as const;
+
+export const productionSetupMutationKey = (profileId: number | null) =>
+  ["production-setup-command", profileId] as const;
+
+export const productionSetupMutationScope = (profileId: number | null) => ({
+  id: `production-setup:${profileId ?? "none"}`,
+});
 
 export function useProductionSetup(profileId: number | null, enabled = true) {
   const queryClient = useQueryClient();
@@ -13,31 +28,29 @@ export function useProductionSetup(profileId: number | null, enabled = true) {
     enabled: enabled && profileId != null,
   });
   const mutation = useMutation({
-    /**
-     * The patch is merged over the record in the cache, read at call time so a
-     * queued save cannot revert a field it never knew about. A caller changing
-     * the route does not restate the selection, the printer assignments and the
-     * rules, and cannot blank them by forgetting one.
-     */
-    mutationFn: (patch: Partial<ProductionSetupInput>) => {
-      const current = queryClient.getQueryData<ProductionSetup>(productionSetupKey(profileId));
-      if (profileId == null || current == null) {
+    mutationKey: productionSetupMutationKey(profileId),
+    scope: productionSetupMutationScope(profileId),
+    retry: false,
+    mutationFn: (command: ProductionSetupCommand) => {
+      if (profileId == null) {
         return Promise.reject(new Error("Production setup has not loaded yet."));
       }
-      return saveProductionSetup(profileId, {
-        preferred_slicer_instance_id: current.preferred_slicer_instance_id,
-        selection: current.selection,
-        printer_assignments: current.printer_assignments,
-        route: current.route,
-        rules: current.rules,
-        ...patch,
-      });
+      return applyProductionSetupCommand(profileId, command);
     },
+    onMutate: () => queryClient.cancelQueries({ queryKey: productionSetupKey(profileId) }),
     onSuccess: (saved) => queryClient.setQueryData(productionSetupKey(profileId), saved),
   });
+  const saving = useIsMutating({
+    mutationKey: productionSetupMutationKey(profileId),
+    exact: true,
+  }) > 0;
 
-  const save = (patch: Partial<ProductionSetupInput>): Promise<ProductionSetup> =>
-    mutation.mutateAsync(patch);
+  const save = (command: ProductionSetupCommand): Promise<ProductionSetup> => {
+    if (profileId == null || query.data == null) {
+      return Promise.reject(new Error("Production setup has not loaded yet."));
+    }
+    return mutation.mutateAsync(command);
+  };
 
-  return { ...query, save, saving: mutation.isPending, saveError: mutation.error };
+  return { ...query, save, saving, saveError: mutation.error };
 }

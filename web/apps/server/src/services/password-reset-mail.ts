@@ -1,4 +1,4 @@
-import type { FastifyBaseLogger } from "fastify";
+import type { FastifyBaseLogger, FastifyRequest } from "fastify";
 import nodemailer from "nodemailer";
 import type { ServerConfig } from "../config.js";
 
@@ -12,16 +12,18 @@ export function buildPasswordResetUrl(publicOrigin: string, rawToken: string): s
   return `${base}/reset-password?token=${encodeURIComponent(rawToken)}`;
 }
 
-export function requestPublicOrigin(headers: {
-  "x-forwarded-proto"?: string;
-  "x-forwarded-host"?: string;
-  host?: string;
-}): string {
-  const protoHeader = headers["x-forwarded-proto"];
-  const proto = protoHeader?.split(",")[0]?.trim() || "http";
-  const hostHeader = headers["x-forwarded-host"] ?? headers.host ?? "localhost:8080";
-  const host = hostHeader.split(",")[0]?.trim() || "localhost:8080";
-  return `${proto}://${host}`;
+type PasswordResetOriginConfig = Pick<
+  ServerConfig,
+  "appPublicUrl" | "passwordResetDevExpose" | "smtpConfigured"
+>;
+
+export function passwordResetPublicOrigin(
+  config: PasswordResetOriginConfig,
+  request: Pick<FastifyRequest, "host" | "protocol">,
+): string | null {
+  if (config.appPublicUrl) return config.appPublicUrl;
+  if (config.smtpConfigured || !config.passwordResetDevExpose) return null;
+  return `${request.protocol}://${request.host}`;
 }
 
 export async function deliverPasswordResetEmail(
@@ -58,13 +60,16 @@ export async function deliverPasswordResetEmail(
     return { sent: true };
   }
 
-  log.warn(
-    { to: input.to, resetUrl: input.resetUrl },
-    "SMTP not configured — password reset link logged (set SMTP_HOST and SMTP_FROM to send email)",
-  );
-
   if (config.passwordResetDevExpose) {
+    log.warn(
+      { to: input.to, resetUrl: input.resetUrl },
+      "SMTP not configured; development password reset link logged",
+    );
     return { sent: false, devResetUrl: input.resetUrl };
   }
+  log.warn(
+    { to: input.to },
+    "SMTP not configured; password reset email was not sent",
+  );
   return { sent: false };
 }

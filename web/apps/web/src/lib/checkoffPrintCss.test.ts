@@ -4,7 +4,6 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 /**
- * GRE-233 / GRE-215: Progress Print sheet pagination + screen chrome.
  * Contract is encoded in App.css so a large first repo cannot push part rows
  * off page 1 (title + tally alone).
  */
@@ -45,7 +44,6 @@ describe("checkoff print CSS (GRE-233)", () => {
 
   it("avoids breaking only a single part row", () => {
     expect(printCss).toMatch(/\.sheet-table tr\s*\{[^}]*break-inside:\s*avoid/s);
-    // Continuous layout must not undo part-row keep-together (GRE-233 lock).
     expect(printCss).not.toMatch(
       /\.checkoff-sheet-print-continuous[\s\S]*?\.sheet-table tr\s*\{[^}]*break-inside:\s*auto/s,
     );

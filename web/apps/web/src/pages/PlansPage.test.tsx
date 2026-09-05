@@ -142,12 +142,12 @@ describe("PlansPage", () => {
       </MemoryRouter>,
     );
 
-    expect(screen.getByRole("link", { name: "Checkoff for Voron" }).getAttribute("href")).toBe(
-      "/progress?profile=7",
-    );
-    expect(screen.getByRole("link", { name: "Production for Voron" }).getAttribute("href")).toBe(
-      "/export?profile=7",
-    );
+    const checkoff = screen.getByRole("link", { name: "Checkoff for Voron" });
+    const production = screen.getByRole("link", { name: "Production for Voron" });
+    expect(checkoff.getAttribute("href")).toBe("/progress?profile=7");
+    expect(production.getAttribute("href")).toBe("/export?profile=7");
+    expect(checkoff.className).toContain("min-h-11");
+    expect(production.className).toContain("min-h-11");
   });
 
   it("filters the Builds list by name", () => {

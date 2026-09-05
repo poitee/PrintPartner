@@ -1,14 +1,23 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { resolvedFileUnderRoot } from "../lib/secure-path.js";
 import type {
   AcceptedProfileProgress,
   AcceptedProfileSummary,
   AppRepository,
 } from "../db/repository.js";
 import { readAcceptedPlanReview } from "../services/accepted-plan-review.js";
-import { loadKitManifest, saveKitManifest } from "../services/kit-manifest-store.js";
-import { buildPlanManifestBuilder } from "../services/plan-manifest-builder.js";
+import {
+  loadKitManifest,
+  parseKitManifestUpdate,
+  saveKitManifest,
+} from "../services/kit-manifest-store.js";
+import {
+  buildPlanManifestBuilder,
+  buildPlanOptionGroups,
+} from "../services/plan-manifest-builder.js";
+import { manifestSelectionsInputError } from "../services/manifest-apply.js";
 import { preloadSpoolmanForColorIds, enrichRoleFilamentRows } from "../services/filament-resolve.js";
 import { clearPartThumbnailCacheAtHexes, clearPlanThumbnailCache } from "../services/plan-thumbnails.js";
 import {
@@ -490,7 +499,12 @@ export async function registerPlanRoutes(
       if (!row?.localPath) continue;
       let text: string;
       try {
-        text = readFileSync(join(row.localPath, "pp-phases.json"), "utf8");
+        const path = resolvedFileUnderRoot(
+          row.localPath,
+          join(row.localPath, "pp-phases.json"),
+        );
+        if (!path) continue;
+        text = readFileSync(path, "utf8");
       } catch {
         continue;
       }
@@ -764,9 +778,24 @@ export async function registerPlanRoutes(
   app.put("/plans/:id/kit-manifest", async (request, reply) => {
     const id = Number((request.params as { id: string }).id);
     if (!deps.repo.getOwnedProfileIdentity(id)) return reply.status(404).send({ detail: "Profile not found" });
-    const body = request.body as { kit?: Record<string, unknown> };
-    const kit = saveKitManifest(deps.repo, id, (body.kit ?? {}) as Parameters<typeof saveKitManifest>[2]);
-    return { profile_id: id, kit };
+    const body: unknown = request.body;
+    if (body == null || typeof body !== "object" || Array.isArray(body) || !("kit" in body)) {
+      return reply.status(400).send({ detail: "kit is required" });
+    }
+    try {
+      const update = parseKitManifestUpdate(body.kit);
+      if (update.selections) {
+        const groups = buildPlanOptionGroups(deps.repo, id, deps.dataDir);
+        const error = manifestSelectionsInputError(groups, update.selections);
+        if (error) throw new Error(error);
+      }
+      const kit = saveKitManifest(deps.repo, id, update);
+      return { profile_id: id, kit };
+    } catch (error) {
+      return reply.status(400).send({
+        detail: error instanceof Error ? error.message : "Invalid kit manifest",
+      });
+    }
   });
 
   app.get("/plans/:id/manifest-v2", async (request, reply) => {
@@ -796,7 +825,7 @@ export async function registerPlanRoutes(
   app.get("/plans/:id/plan-manifest-builder", async (request, reply) => {
     const id = Number((request.params as { id: string }).id);
     if (!deps.repo.getOwnedProfileIdentity(id)) return reply.status(404).send({ detail: "Profile not found" });
-    return buildPlanManifestBuilder(deps.repo, id);
+    return buildPlanManifestBuilder(deps.repo, id, deps.dataDir);
   });
 
   app.get("/plans/:id/decisions", async (request, reply) => {

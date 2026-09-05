@@ -10,13 +10,27 @@ import { promises as fs } from "node:fs";
 import { pipeline } from "node:stream/promises";
 import type { SqliteDatabase } from "../db/client.js";
 import { resolvedFileUnderRoot } from "../lib/secure-path.js";
-import { createBackup, restoreBackup, validateBackup } from "../services/backup-restore.js";
+import {
+  createBackup,
+  inspectRestore,
+  InsufficientRestoreSpaceError,
+  restoreBackup,
+  validateBackup,
+  type BackupMetadata,
+  type RestorePreflight,
+} from "../services/backup-restore.js";
+import { inspectStorage, type StorageInventory } from "../services/storage-inventory.js";
+import {
+  BACKUP_UPLOAD_TOO_LARGE_DETAIL,
+  MAX_BACKUP_UPLOAD_BYTES,
+} from "../services/upload-limits.js";
 
 type RouteDeps = {
   dataDir: string;
   sqlite: SqliteDatabase | null;
   appVersion: string;
   refreshDatabaseConsumers?: () => void;
+  afterDatabaseRefresh?: () => Promise<void>;
 };
 
 export function safeBackupUploadPath(root: string, multipartFilename: string): string {
@@ -53,10 +67,34 @@ function safeStoredBackupPath(backupsDir: string, name: string): string | null {
   return resolvedFileUnderRoot(backupsDir, join(backupsDir, name));
 }
 
+async function removeTemporaryUploadDirectory(path: string): Promise<void> {
+  try {
+    await fs.rm(path, { recursive: true, force: true });
+  } catch {
+    // A failed best-effort cleanup must not replace the upload response.
+  }
+}
+
 export async function registerBackupRoutes(
   app: FastifyInstance,
   deps: RouteDeps,
 ): Promise<void> {
+  let restoreInProgress = false;
+
+  app.get<{ Reply: StorageInventory | { detail: string } }>(
+    "/backups/storage",
+    async (_request, reply) => {
+      try {
+        return reply.send(await inspectStorage(deps.dataDir));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return reply.status(500).send({
+          detail: `Failed to inspect storage: ${message}`,
+        });
+      }
+    },
+  );
+
   /**
    * POST /backups
    * Creates a new backup archive.
@@ -141,6 +179,33 @@ export async function registerBackupRoutes(
     },
   );
 
+  app.get<{
+    Params: { name: string };
+    Reply:
+      | { metadata: BackupMetadata; restorePreflight: RestorePreflight }
+      | { detail: string };
+  }>("/backups/:name/preflight", async (request, reply) => {
+    try {
+      const backupsDir = join(deps.dataDir, "backups");
+      const backupPath = safeStoredBackupPath(backupsDir, request.params.name);
+      if (!backupPath) {
+        return reply.status(404).send({ detail: "Backup file not found" });
+      }
+      const stats = await fs.stat(backupPath);
+      if (!stats.isFile()) {
+        return reply.status(404).send({ detail: "Backup file not found" });
+      }
+      const metadata = await validateBackup(backupPath);
+      const restorePreflight = await inspectRestore(backupPath, deps.dataDir);
+      return reply.send({ metadata, restorePreflight });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return reply.status(400).send({
+        detail: `Backup preflight failed: ${message}`,
+      });
+    }
+  });
+
   /**
    * GET /backups/:name
    * Downloads a specific backup file.
@@ -191,7 +256,11 @@ export async function registerBackupRoutes(
    * Validates a backup file without extracting it.
    * Expects the backup file as form data.
    */
-  app.post<{ Reply: { valid: boolean; metadata?: object } | { detail: string } }>(
+  app.post<{
+    Reply:
+      | { valid: true; metadata: object; restorePreflight: RestorePreflight }
+      | { detail: string };
+  }>(
     "/backups/validate",
     {
       schema: {
@@ -200,7 +269,14 @@ export async function registerBackupRoutes(
     },
     async (request, reply) => {
       try {
-        const data = await request.file();
+        const data = await request.file({
+          limits: {
+            fileSize: MAX_BACKUP_UPLOAD_BYTES,
+            files: 1,
+            fields: 0,
+            parts: 1,
+          },
+        });
         if (!data) {
           return reply.status(400).send({
             detail: "No backup file provided",
@@ -213,19 +289,23 @@ export async function registerBackupRoutes(
         try {
           const tempFilePath = safeBackupUploadPath(tempDir, data.filename);
           await pipeline(data.file, createWriteStream(tempFilePath, { flags: "wx" }));
+          if (data.file.truncated) {
+            await removeTemporaryUploadDirectory(tempDir);
+            return reply.status(413).send({
+              detail: BACKUP_UPLOAD_TOO_LARGE_DETAIL,
+            });
+          }
 
           const metadata = await validateBackup(tempFilePath);
+          const restorePreflight = await inspectRestore(tempFilePath, deps.dataDir);
 
           return reply.send({
             valid: true,
             metadata,
+            restorePreflight,
           });
         } finally {
-          try {
-            await fs.rm(tempDir, { recursive: true, force: true });
-          } catch {
-            // Ignore cleanup errors
-          }
+          await removeTemporaryUploadDirectory(tempDir);
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -244,7 +324,9 @@ export async function registerBackupRoutes(
    */
   app.post<{
     Body: { backupName?: string };
-    Reply: { success: boolean; message: string } | { detail: string };
+    Reply:
+      | { success: boolean; message: string }
+      | { detail: string; preflight?: RestorePreflight };
   }>(
     "/backups/restore",
     {
@@ -252,11 +334,25 @@ export async function registerBackupRoutes(
       schema: { consumes: ["multipart/form-data"] },
     },
     async (request, reply) => {
+      let restoreCommitted = false;
+      if (restoreInProgress) {
+        return reply.status(409).send({
+          detail: "A backup restore is already in progress",
+        });
+      }
+      restoreInProgress = true;
       let tempDir: string | null = null;
       try {
         let backupPath: string;
         if (request.isMultipart()) {
-          const data = await request.file();
+          const data = await request.file({
+            limits: {
+              fileSize: MAX_BACKUP_UPLOAD_BYTES,
+              files: 1,
+              fields: 0,
+              parts: 1,
+            },
+          });
           if (!data) {
             return reply.status(400).send({
               detail: "No backup file provided",
@@ -266,6 +362,13 @@ export async function registerBackupRoutes(
           tempDir = mkdtempSync(join(deps.dataDir, ".restore-upload-"));
           const tempFilePath = safeBackupUploadPath(tempDir, data.filename);
           await pipeline(data.file, createWriteStream(tempFilePath, { flags: "wx" }));
+          if (data.file.truncated) {
+            await removeTemporaryUploadDirectory(tempDir);
+            tempDir = null;
+            return reply.status(413).send({
+              detail: BACKUP_UPLOAD_TOO_LARGE_DETAIL,
+            });
+          }
           backupPath = tempFilePath;
         } else {
           const name = request.body?.backupName?.trim();
@@ -289,12 +392,31 @@ export async function registerBackupRoutes(
         }
 
         const metadata = await restoreBackup(backupPath, deps.dataDir, deps.sqlite);
+        restoreCommitted = true;
         deps.refreshDatabaseConsumers?.();
+        await deps.afterDatabaseRefresh?.();
         return reply.send({
           success: true,
           message: `Backup restored successfully (${metadata.createdAt}).`,
         });
       } catch (error) {
+        if (error instanceof InsufficientRestoreSpaceError) {
+          return reply.status(507).send({
+            detail: error.message,
+            preflight: error.preflight,
+          });
+        }
+        if (restoreCommitted) {
+          try {
+            deps.refreshDatabaseConsumers?.();
+          } catch {
+            // The restored database is already committed. Preserve the post-commit error.
+          }
+          const message = error instanceof Error ? error.message : String(error);
+          return reply.status(500).send({
+            detail: `Backup restored, but live refresh failed: ${message}`,
+          });
+        }
         // restoreBackup reconnects SQLite after both success and failure. Any
         // long-lived repository must follow that new connection before the
         // next request arrives.
@@ -306,15 +428,12 @@ export async function registerBackupRoutes(
         }
         const message = error instanceof Error ? error.message : String(error);
         return reply.status(500).send({
-          detail: `Restore failed: ${message}`,
+          detail: message.startsWith("Restore failed:") ? message : `Restore failed: ${message}`,
         });
       } finally {
+        restoreInProgress = false;
         if (tempDir) {
-          try {
-            await fs.rm(tempDir, { recursive: true, force: true });
-          } catch {
-            // Ignore cleanup errors
-          }
+          await removeTemporaryUploadDirectory(tempDir);
         }
       }
     },

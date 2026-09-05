@@ -1,5 +1,5 @@
-import { existsSync, readdirSync, statSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { readdirSync, realpathSync, statSync } from "node:fs";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { safeRepoPath } from "@print-partner/domain";
 import type { AppRepository, PartDbRow } from "../db/repository.js";
 
@@ -7,6 +7,25 @@ export type ProfileStlIndex = {
   byLayer: Map<string, string>;
   fallbackRoots: string[];
 };
+
+function resolvedRepoFile(repoRoot: string, path: string): string | null {
+  try {
+    const root = realpathSync(resolve(repoRoot));
+    const file = realpathSync(resolve(path));
+    const relativePath = relative(root, file);
+    if (
+      relativePath === ".." ||
+      relativePath.startsWith(`..${sep}`) ||
+      isAbsolute(relativePath) ||
+      !statSync(file).isFile()
+    ) {
+      return null;
+    }
+    return file;
+  } catch {
+    return null;
+  }
+}
 
 /** Case-insensitive path walk for Linux Docker volumes (macOS dev may differ). */
 export function resolveCaseInsensitiveRepoPath(
@@ -16,7 +35,6 @@ export function resolveCaseInsensitiveRepoPath(
   const segments = relativePath.replace(/\\/g, "/").split("/").filter(Boolean);
   if (!segments.length) return null;
   let current = resolve(repoRoot);
-  const root = current;
   for (const segment of segments) {
     let entries: string[];
     try {
@@ -28,18 +46,13 @@ export function resolveCaseInsensitiveRepoPath(
     if (!match) return null;
     current = join(current, match);
   }
-  try {
-    if (!statSync(current).isFile()) return null;
-    if (!current.startsWith(root + "/") && current !== root) return null;
-    return current;
-  } catch {
-    return null;
-  }
+  return resolvedRepoFile(repoRoot, current);
 }
 
 export function resolveRepoStlPath(repoRoot: string, relativePath: string): string | null {
   const exact = safeRepoPath(repoRoot, relativePath);
-  if (exact && existsSync(exact)) return exact;
+  const resolvedExact = exact ? resolvedRepoFile(repoRoot, exact) : null;
+  if (resolvedExact) return resolvedExact;
   return resolveCaseInsensitiveRepoPath(repoRoot, relativePath);
 }
 

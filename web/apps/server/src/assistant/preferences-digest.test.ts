@@ -38,6 +38,23 @@ describe("decisionFingerprint", () => {
       }),
     ).toBe("apply_build_recipe|source_name=Voron-Trident;workflow=sync_then_recompute");
   });
+
+  it("fingerprints multi-value selections without scalar delimiter collisions", () => {
+    const multi = decisionFingerprint("update_kit_selections", {
+      selections: { extras: ["skirts", "panels"] },
+    });
+
+    expect(multi).toBe(
+      decisionFingerprint("update_kit_selections", {
+        selections: { extras: ["panels", "skirts"] },
+      }),
+    );
+    expect(multi).not.toBe(
+      decisionFingerprint("update_kit_selections", {
+        selections: { extras: "panels,skirts" },
+      }),
+    );
+  });
 });
 
 describe("isNoisePreferencePattern", () => {

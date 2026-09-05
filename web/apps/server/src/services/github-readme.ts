@@ -1,6 +1,7 @@
-import { Octokit } from "@octokit/rest";
 import { githubRefName, parseGithubUrl } from "./github-sync.js";
+import { createGithubClient } from "./github-client.js";
 import { readReadmeText } from "../lib/repo-readme.js";
+import { isJsonObject } from "../lib/bounded-response.js";
 
 type CacheEntry = { markdown: string; fetchedAt: number; source: "live" | "disk" };
 
@@ -61,20 +62,19 @@ export async function fetchGithubReadme(options: {
     }
 
     try {
-      const octokit = new Octokit(options.token ? { auth: options.token } : {});
+      const octokit = createGithubClient(options.token);
       const res = await octokit.repos.getReadme({
         owner: ref.owner,
         repo: ref.repo,
         ref: refName,
         mediaType: { format: "raw" },
       });
-      const markdown =
-        typeof res.data === "string"
-          ? res.data
-          : Buffer.from(
-              (res.data as { content?: string; encoding?: string }).content ?? "",
-              ((res.data as { encoding?: string }).encoding as BufferEncoding) || "base64",
-            ).toString("utf8");
+      const data: unknown = res.data;
+      const markdown = typeof data === "string"
+        ? data
+        : isJsonObject(data) && typeof data.content === "string"
+          ? Buffer.from(data.content, "base64").toString("utf8")
+          : "";
       cache.set(key, { markdown, fetchedAt: Date.now(), source: "live" });
       return { markdown, source: "live", cached: false, path: "README.md" };
     } catch {

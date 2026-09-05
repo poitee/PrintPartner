@@ -6,6 +6,15 @@ import type {
 } from "@print-partner/contracts";
 import type { IntegrationAdapter, PrinterUploadSource } from "../store.js";
 import { assertSafeOutboundUrl } from "../../lib/outbound-url.js";
+import {
+  cancelResponseBody,
+  isJsonObject as isRecord,
+  readBoundedJsonResponse,
+  readBoundedResponseText,
+} from "../../lib/bounded-response.js";
+
+const MAX_METADATA_RESPONSE_BYTES = 1024 * 1024;
+const MAX_ERROR_RESPONSE_BYTES = 64 * 1024;
 
 /**
  * Home Assistant integration adapter.
@@ -50,11 +59,7 @@ function entityId(config: IntegrationConfig): string | null {
 const MAX_REDIRECTS = 5;
 
 async function drainResponseBody(res: Response): Promise<void> {
-  try {
-    await res.arrayBuffer();
-  } catch {
-    /* ignore */
-  }
+  await cancelResponseBody(res);
 }
 
 /**
@@ -115,16 +120,6 @@ function mapHaState(raw: string | undefined): PrinterHostStatus["state"] {
   return "unknown";
 }
 
-type HaStateResponse = {
-  state?: string;
-  attributes?: {
-    progress?: number | string;
-    filename?: string;
-    friendly_name?: string;
-    [key: string]: unknown;
-  };
-};
-
 async function queryEntityStatus(
   config: IntegrationConfig,
 ): Promise<PrinterHostStatus> {
@@ -142,23 +137,25 @@ async function queryEntityStatus(
   });
 
   if (res.status === 404) {
+    await cancelResponseBody(res);
     return {
       state: "offline",
       message: `Entity '${eid}' not found in Home Assistant`,
     };
   }
   if (!res.ok) {
+    await cancelResponseBody(res);
     return {
       state: "offline",
       message: `Home Assistant returned HTTP ${res.status}`,
     };
   }
 
-  const body = (await res.json()) as HaStateResponse;
-  const rawState = body.state;
+  const body = await readBoundedJsonResponse(res, MAX_METADATA_RESPONSE_BYTES);
+  const rawState = isRecord(body) && typeof body.state === "string" ? body.state : undefined;
   const state = mapHaState(rawState);
 
-  const attrs = body.attributes ?? {};
+  const attrs = isRecord(body) && isRecord(body.attributes) ? body.attributes : {};
   const rawProgress = attrs.progress;
   const progressNum =
     typeof rawProgress === "number"
@@ -211,6 +208,7 @@ export const homeAssistantAdapter: IntegrationAdapter = {
         signal: AbortSignal.timeout(8_000),
       });
       if (!res.ok) {
+        await cancelResponseBody(res);
         if (res.status === 401) {
           return { ok: false, message: "Unauthorized — check your Long-Lived Access Token" };
         }
@@ -219,8 +217,9 @@ export const homeAssistantAdapter: IntegrationAdapter = {
           message: `Home Assistant returned HTTP ${res.status}`,
         };
       }
-      const body = (await res.json()) as { message?: string; version?: string };
-      const versionPart = body.version ? ` (HA ${body.version})` : "";
+      const body = await readBoundedJsonResponse(res, MAX_METADATA_RESPONSE_BYTES);
+      const version = isRecord(body) && typeof body.version === "string" ? body.version : "";
+      const versionPart = version ? ` (HA ${version})` : "";
 
       // Optionally verify entity_id is readable if provided
       const eid = entityId(config);
@@ -237,19 +236,23 @@ export const homeAssistantAdapter: IntegrationAdapter = {
           };
         }
         if (stateRes.status === 404) {
+          await cancelResponseBody(stateRes);
           return {
             ok: false,
             message: `Connected but entity '${eid}' was not found`,
           };
         }
         if (!stateRes.ok) {
+          await cancelResponseBody(stateRes);
           return {
             ok: true,
             message: `Connected${versionPart} (entity check returned HTTP ${stateRes.status})`,
           };
         }
-        const stateBody = (await stateRes.json()) as HaStateResponse;
-        const state = stateBody.state ?? "unknown";
+        const stateBody = await readBoundedJsonResponse(stateRes, MAX_METADATA_RESPONSE_BYTES);
+        const state = isRecord(stateBody) && typeof stateBody.state === "string"
+          ? stateBody.state
+          : "unknown";
         return {
           ok: true,
           message: `Connected${versionPart} · ${eid}: ${state}`,
@@ -349,12 +352,14 @@ export const homeAssistantAdapter: IntegrationAdapter = {
       // HA webhooks return 200 OK with an empty body on success when the
       // automation fires, or 200 with {} if no one is listening.
       if (!res.ok) {
-        const text = await res.text().catch(() => "");
+        const text = await readBoundedResponseText(res, MAX_ERROR_RESPONSE_BYTES).catch(() => "");
         return {
           ok: false,
           message: `HA webhook returned HTTP ${res.status}${text ? `: ${text.slice(0, 200)}` : ""}`,
         };
       }
+
+      await cancelResponseBody(res);
 
       return {
         ok: true,

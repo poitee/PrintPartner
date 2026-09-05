@@ -7,6 +7,13 @@ describe("selectionsEqual", () => {
       true,
     );
     expect(selectionsEqual({ toolhead: "sb" }, { toolhead: "stock" })).toBe(false);
+    expect(
+      selectionsEqual(
+        { extras: ["skirts", "panels"] },
+        { extras: ["panels", "skirts"] },
+      ),
+    ).toBe(true);
+    expect(selectionsEqual({ extras: "skirts" }, { extras: ["skirts"] })).toBe(true);
   });
 });
 

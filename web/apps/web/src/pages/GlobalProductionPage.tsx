@@ -151,6 +151,11 @@ export default function GlobalProductionPage() {
     void refreshFarm();
   }, [refreshFarm]);
 
+  const refreshAfterPrinterEvent = useCallback(() => {
+    void refreshFarm();
+    void reloadProfiles();
+  }, [refreshFarm, reloadProfiles]);
+
   const jobs = useMemo(
     () =>
       activeLinks
@@ -200,8 +205,8 @@ export default function GlobalProductionPage() {
           <Suspense fallback={null}>
             <PrinterLiveStrip
               engineReady
-              onCheckoffUpdate={() => void refreshFarm()}
-              onUnattributedUpdate={() => void refreshFarm()}
+              onCheckoffUpdate={refreshAfterPrinterEvent}
+              onUnattributedUpdate={refreshAfterPrinterEvent}
             />
           </Suspense>
 
@@ -224,8 +229,8 @@ export default function GlobalProductionPage() {
                         key={print.id}
                         print={print}
                         profiles={profiles}
-                        onClaimed={() => void refreshFarm()}
-                        onDismissed={() => void refreshFarm()}
+                        onClaimed={refreshAfterPrinterEvent}
+                        onDismissed={refreshAfterPrinterEvent}
                       />
                     ))}
                   </div>
@@ -283,7 +288,9 @@ export default function GlobalProductionPage() {
       ) : profilesState === "loading" ? (
         <Card>
           <CardContent className="pt-6">
-            <p className="text-sm text-muted-foreground">Loading production…</p>
+            <p className="text-sm text-muted-foreground" role="status">
+              Loading production…
+            </p>
           </CardContent>
         </Card>
       ) : rows.length === 0 ? (

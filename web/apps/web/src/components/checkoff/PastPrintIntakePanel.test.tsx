@@ -85,12 +85,17 @@ const CHECK = {
 
 function renderPanel() {
   const onRecorded = vi.fn();
+  const onProgressChanged = vi.fn();
   render(
     <MemoryRouter>
-      <PastPrintIntakePanel profileId={build.id} onRecorded={onRecorded} />
+      <PastPrintIntakePanel
+        profileId={build.id}
+        onRecorded={onRecorded}
+        onProgressChanged={onProgressChanged}
+      />
     </MemoryRouter>,
   );
-  return { onRecorded };
+  return { onProgressChanged, onRecorded };
 }
 
 /**
@@ -189,7 +194,7 @@ describe("PastPrintIntakePanel", () => {
   });
 
   it("checks the confirmed units off when the operator has already checked the parts", async () => {
-    const { onRecorded } = renderPanel();
+    const { onProgressChanged, onRecorded } = renderPanel();
 
     fireEvent.click(screen.getByRole("radio", { name: /On this computer/ }));
     await pickFile();
@@ -232,6 +237,7 @@ describe("PastPrintIntakePanel", () => {
       });
     });
     expect(onRecorded).toHaveBeenCalledTimes(1);
+    expect(onProgressChanged).toHaveBeenCalledTimes(1);
     expect(
       await screen.findByText(/bracket.bgcode is on the record and 1 Required unit is checked off/),
     ).toBeTruthy();
@@ -241,7 +247,7 @@ describe("PastPrintIntakePanel", () => {
   });
 
   it("leaves the units for Checkoff when the parts are not checked yet", async () => {
-    const { onRecorded } = renderPanel();
+    const { onProgressChanged, onRecorded } = renderPanel();
 
     fireEvent.click(screen.getByRole("radio", { name: /On this computer/ }));
     await pickFile();
@@ -255,6 +261,7 @@ describe("PastPrintIntakePanel", () => {
     // Verify-first stands: nothing was checked off on the operator's behalf.
     expect(api.verifyPrinterCheckoff).not.toHaveBeenCalled();
     expect(onRecorded).toHaveBeenCalledTimes(1);
+    expect(onProgressChanged).not.toHaveBeenCalled();
 
     expect(
       await screen.findByText(/bracket.bgcode is on the record, covering 1 Required unit/),
@@ -337,7 +344,7 @@ describe("PastPrintIntakePanel", () => {
     api.verifyPrinterCheckoff.mockRejectedValueOnce(
       new Error("Confirm must include lower incomplete units first"),
     );
-    const { onRecorded } = renderPanel();
+    const { onProgressChanged, onRecorded } = renderPanel();
 
     fireEvent.click(screen.getByRole("radio", { name: /On this computer/ }));
     await pickFile();
@@ -355,6 +362,7 @@ describe("PastPrintIntakePanel", () => {
     expect(alert.textContent).toContain("1 Required unit is still waiting to be checked");
     // The print is on the record, so the work package hears about it either way.
     expect(onRecorded).toHaveBeenCalledTimes(1);
+    expect(onProgressChanged).not.toHaveBeenCalled();
     // Nothing claims the units are checked off, and nothing offers to record twice.
     expect(screen.queryByText(/is checked off/)).toBeNull();
     expect(screen.queryByRole("button", { name: "Record this print" })).toBeNull();
@@ -369,6 +377,7 @@ describe("PastPrintIntakePanel", () => {
       decisions: [{ part_id: 41, unit_index: 0, result: "confirmed" }],
     });
     expect(await screen.findByText(/1 Required unit is checked off/)).toBeTruthy();
+    expect(onProgressChanged).toHaveBeenCalledTimes(1);
   });
 
   it("lets a failed check-off be left for Checkoff without claiming it is done", async () => {

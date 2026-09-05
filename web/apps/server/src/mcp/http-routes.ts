@@ -27,6 +27,7 @@ import type { ServerConfig } from "../config.js";
 import type { AppRepository } from "../db/repository.js";
 import type { InProcessJobRunner } from "../routes/jobs.js";
 import { sendProblem } from "../lib/api-error.js";
+import { MAX_ASSISTANT_ACTION_BODY_BYTES } from "../services/upload-limits.js";
 import {
   createProductMcpServer,
   isLoopbackBindHost,
@@ -239,7 +240,10 @@ export async function registerMcpHttpRoutes(
     if (!assertMcpHttpAllowed(deps.config, request, reply, deps.validateApiKey)) return reply;
   };
 
-  app.post("/mcp", { preHandler: mcpAuth }, async (request, reply) => {
+  app.post("/mcp", {
+    bodyLimit: MAX_ASSISTANT_ACTION_BODY_BYTES,
+    preHandler: mcpAuth,
+  }, async (request, reply) => {
     const sessionId = readMcpSessionId(request.headers["mcp-session-id"]);
 
     try {

@@ -2,17 +2,19 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { prusalinkAdapter } from "./prusalink.js";
 
 function digest401() {
-  return {
-    ok: false,
+  return new Response(null, {
     status: 401,
-    headers: new Headers({
+    headers: {
       "www-authenticate":
         'Digest realm="Printer API", nonce="abc", qop="auth", algorithm=MD5',
-    }),
-    arrayBuffer: async () => new ArrayBuffer(0),
-    json: async () => ({}),
-    text: async () => "",
-  };
+    },
+  });
+}
+
+function jsonResponse(body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    headers: { "Content-Type": "application/json" },
+  });
 }
 
 const prusaConfig = {
@@ -91,23 +93,11 @@ describe("prusalinkAdapter", () => {
       // obtainDigestChallenge GET /status
       .mockResolvedValueOnce(digest401())
       // GET /info with Authorization
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        headers: new Headers(),
-        arrayBuffer: async () => new ArrayBuffer(0),
-        json: async () => ({ name: "Prusa MK4" }),
-      })
+      .mockResolvedValueOnce(jsonResponse({ name: "Prusa MK4" }))
       // readStatus: challenge GET /status
       .mockResolvedValueOnce(digest401())
       // readStatus: GET /status with Authorization
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        headers: new Headers(),
-        arrayBuffer: async () => new ArrayBuffer(0),
-        json: async () => ({ printer: { state: "IDLE" } }),
-      });
+      .mockResolvedValueOnce(jsonResponse({ printer: { state: "IDLE" } }));
     vi.stubGlobal("fetch", fetchMock);
 
     const result = await prusalinkAdapter.testConnection({
@@ -249,30 +239,18 @@ describe("prusalinkAdapter", () => {
       .fn()
       // status challenge + status
       .mockResolvedValueOnce(digest401())
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        headers: new Headers(),
-        arrayBuffer: async () => new ArrayBuffer(0),
-        json: async () => ({
+      .mockResolvedValueOnce(jsonResponse({
           printer: { state: "PRINTING" },
           job: {
             progress: 33.3,
             time_remaining: 1200,
           },
-        }),
-      })
+        }))
       // job challenge + job (file lives here)
       .mockResolvedValueOnce(digest401())
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        headers: new Headers(),
-        arrayBuffer: async () => new ArrayBuffer(0),
-        json: async () => ({
+      .mockResolvedValueOnce(jsonResponse({
           file: { display_name: "benchy.bgcode" },
-        }),
-      });
+        }));
     vi.stubGlobal("fetch", fetchMock);
 
     const status = await prusalinkAdapter.getStatus!({
@@ -292,13 +270,7 @@ describe("prusalinkAdapter", () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(digest401())
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        headers: new Headers(),
-        arrayBuffer: async () => new ArrayBuffer(0),
-        json: async () => ({ printer: { state: "READY" } }),
-      });
+      .mockResolvedValueOnce(jsonResponse({ printer: { state: "READY" } }));
     vi.stubGlobal("fetch", fetchMock);
 
     const status = await prusalinkAdapter.getStatus!({
@@ -316,16 +288,10 @@ describe("prusalinkAdapter", () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(digest401())
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        headers: new Headers(),
-        arrayBuffer: async () => new ArrayBuffer(0),
-        json: async () => ({
+      .mockResolvedValueOnce(jsonResponse({
           printer: { state: "FINISHED" },
           job: { file: { name: "done.bgcode" }, progress: 100 },
-        }),
-      });
+        }));
     vi.stubGlobal("fetch", fetchMock);
 
     const status = await prusalinkAdapter.getStatus!({
@@ -334,6 +300,31 @@ describe("prusalinkAdapter", () => {
     });
     expect(status.state).toBe("complete");
     expect(status.filename).toBe("done.bgcode");
+  });
+
+  it("reads object metadata when PrusaLink ignores the range request", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(digest401())
+      .mockResolvedValueOnce(jsonResponse({
+        state: "PRINTING",
+        refs: { download: "/api/files/local/active.bgcode" },
+      }))
+      .mockResolvedValueOnce(digest401())
+      .mockResolvedValueOnce(new Response(
+        'objects_info={"objects":[{"name":"bracket.stl"}]} trailing gcode',
+        {
+          status: 200,
+          headers: { "content-length": String(8 * 1024 * 1024) },
+        },
+      ));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(prusalinkAdapter.getObjectList!(prusaConfig)).resolves.toEqual([
+      "bracket.stl",
+    ]);
+    const downloadRequest = fetchMock.mock.calls[3]?.[1] as RequestInit;
+    expect(new Headers(downloadRequest.headers).get("Range")).toBe("bytes=0-65535");
   });
 
   it("browses one directory, surfacing subfolders as directory entries", async () => {

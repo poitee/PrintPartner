@@ -77,13 +77,15 @@ function isDocumentNavigation(req: IncomingMessage): boolean {
   return accept.includes("text/html") && !accept.includes("application/json");
 }
 
-function spaExactBypass(req: IncomingMessage): string | undefined {
+function spaNavigationBypass(req: IncomingMessage): string | undefined {
   const raw = req.url ?? "";
   let pathname = raw.split("?", 1)[0] ?? "";
   if (pathname.length > 1 && pathname.endsWith("/")) {
     pathname = pathname.slice(0, -1);
   }
-  if (SPA_EXACT_PATHS.has(pathname) && isDocumentNavigation(req)) return raw;
+  const isSpaPath =
+    SPA_EXACT_PATHS.has(pathname) || /^\/plans\/\d+\/studio$/.test(pathname);
+  if (isSpaPath && isDocumentNavigation(req)) return raw;
   return undefined;
 }
 
@@ -96,7 +98,7 @@ const proxy: Record<string, ProxyOptions> = Object.fromEntries(
     };
     const exact = `/${prefix}`;
     if (SPA_EXACT_PATHS.has(exact)) {
-      options.bypass = spaExactBypass;
+      options.bypass = spaNavigationBypass;
     }
     return [`/${prefix}`, options];
   }),

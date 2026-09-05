@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import GlobalProductionPage from "./GlobalProductionPage";
@@ -42,6 +42,7 @@ const state = vi.hoisted(() => ({
 const api = vi.hoisted(() => ({
   fetchPrinterCheckoffLinks: vi.fn(),
   fetchUnattributedPrints: vi.fn(),
+  reloadProfiles: vi.fn(),
 }));
 
 vi.mock("../hooks/useEngineHealth", () => ({
@@ -54,7 +55,7 @@ vi.mock("../context/ProfileContext", () => ({
     setSelectedProfileId: vi.fn(),
     loading: state.loading,
     error: state.error,
-    reloadProfiles: vi.fn(),
+    reloadProfiles: api.reloadProfiles,
   }),
 }));
 vi.mock("../api/endpoints/checkoff", () => ({
@@ -62,7 +63,9 @@ vi.mock("../api/endpoints/checkoff", () => ({
   fetchUnattributedPrints: (...args: unknown[]) => api.fetchUnattributedPrints(...args),
 }));
 vi.mock("../components/checkoff/PrinterLiveStrip", () => ({
-  default: () => <div>Live printers</div>,
+  default: ({ onCheckoffUpdate }: { onCheckoffUpdate: () => void }) => (
+    <button type="button" onClick={onCheckoffUpdate}>Live printers</button>
+  ),
 }));
 vi.mock("../components/checkoff/UnattributedPrintCard", () => ({
   default: ({ print }: { print: { filename: string } }) => <p>{print.filename}</p>,
@@ -76,6 +79,7 @@ describe("GlobalProductionPage", () => {
     state.error = null;
     api.fetchPrinterCheckoffLinks.mockReset();
     api.fetchUnattributedPrints.mockReset();
+    api.reloadProfiles.mockReset();
     api.fetchPrinterCheckoffLinks.mockImplementation(async (options?: { state?: string }) => {
       if (options?.state === "awaiting_verify") {
         return {
@@ -162,5 +166,18 @@ describe("GlobalProductionPage", () => {
     expect(screen.getByRole("link", { name: "Failed for Done Build" }).getAttribute("href")).toBe(
       "/progress?profile=8",
     );
+  });
+
+  it("refreshes Build remaining counts after a printer event", async () => {
+    render(
+      <MemoryRouter>
+        <GlobalProductionPage />
+      </MemoryRouter>,
+    );
+    await screen.findByRole("button", { name: "Live printers" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Live printers" }));
+
+    expect(api.reloadProfiles).toHaveBeenCalledOnce();
   });
 });

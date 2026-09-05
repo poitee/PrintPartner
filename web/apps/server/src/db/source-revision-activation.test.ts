@@ -79,6 +79,7 @@ describe("Source revision activation", () => {
         sourceId: source.id,
         revisionId: revision.id,
         observed,
+        sourceVersion: revision.upstream_revision_key,
       });
 
       expect(activated).toMatchObject({
@@ -119,6 +120,7 @@ describe("Source revision activation", () => {
           sourceId: first.id,
           revisionId: secondRevision.id,
           observed,
+          sourceVersion: secondRevision.upstream_revision_key,
         }),
       ).toThrow(/revision not found for source/i);
       expect(() =>
@@ -126,6 +128,7 @@ describe("Source revision activation", () => {
           sourceId: first.id,
           revisionId: otherRevision.id,
           observed,
+          sourceVersion: otherRevision.upstream_revision_key,
         }),
       ).toThrow(/revision not found for source/i);
       expect(defaultRepo.getSource(first.id)?.current_source_revision_id).toBeNull();
@@ -142,11 +145,13 @@ describe("Source revision activation", () => {
         sourceId: source.id,
         revisionId: revision.id,
         observed,
+        sourceVersion: revision.upstream_revision_key,
       });
       const retry = defaultRepo.activateSourceRevision({
         sourceId: source.id,
         revisionId: revision.id,
         observed,
+        sourceVersion: revision.upstream_revision_key,
       });
 
       expect(retry).toEqual(first);
@@ -244,6 +249,7 @@ describe("Source revision activation", () => {
           sourceId: source.id,
           revisionId: target.id,
           observed,
+          sourceVersion: target.upstream_revision_key,
         }),
       ).toThrow(/changed during sync/i);
       expect(defaultRepo.getSource(source.id)?.last_synced_at).toBeNull();
@@ -277,6 +283,7 @@ describe("Source revision activation", () => {
           sourceId: source.id,
           revisionId: absolute.id,
           observed,
+          sourceVersion: absolute.upstream_revision_key,
         }),
       ).toThrow(/storage-relative/i);
       expect(() =>
@@ -284,6 +291,7 @@ describe("Source revision activation", () => {
           sourceId: source.id,
           revisionId: traversing.id,
           observed,
+          sourceVersion: traversing.upstream_revision_key,
         }),
       ).toThrow(/storage-relative/i);
     });

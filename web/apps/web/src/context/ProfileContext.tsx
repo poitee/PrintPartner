@@ -10,27 +10,25 @@ import {
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { ProfileSummary } from "@print-partner/contracts";
+import { useSearchParams } from "react-router-dom";
 import { useEngineHealth } from "../hooks/useEngineHealth";
 import { reconcileSelectedProfileId } from "../hooks/profileSelection";
+import { parseProfileParam } from "../hooks/profileUrlSync";
 import { queryKeys } from "../queries/keys";
 import { useProfilesQuery } from "../queries/profiles";
 import { useAuth } from "./AuthContext";
 
 const STORAGE_KEY = "pp-selected-profile-id";
 
-type SetSelectedProfileOptions = {
-  /** When true, selection came from `?profile=` — do not mark URL sync as pending. */
-  fromUrl?: boolean;
-};
-
 type ProfileContextValue = {
   profiles: ProfileSummary[];
   selectedProfileId: number | null;
-  setSelectedProfileId: (id: number | null, options?: SetSelectedProfileOptions) => void;
-  /** Local selection not yet reflected in `?profile=` — used by URL sync. */
+  setSelectedProfileId: (id: number | null) => void;
+  /** Local selection not yet reflected in `?profile=`. */
   pendingSelectionId: number | null;
   clearPendingSelection: (matchedUrlId?: number | null) => void;
   reloadProfiles: () => Promise<void>;
+  profilesLoaded: boolean;
   loading: boolean;
   error: string | null;
 };
@@ -54,6 +52,7 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
   const canLoadProfiles =
     !authLoading && Boolean(health?.ok) && (!multiUser || user !== null);
   const qc = useQueryClient();
+  const [searchParams] = useSearchParams();
   const {
     data: profiles = [],
     isLoading,
@@ -65,11 +64,11 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
   const [selectedProfileId, setSelectedProfileIdState] = useState<number | null>(readStoredId);
   const [pendingSelectionId, setPendingSelectionId] = useState<number | null>(null);
   const previousProfileIdsRef = useRef<number[]>([]);
+  const urlProfileId = parseProfileParam(searchParams.get("profile"));
 
-  const setSelectedProfileId = useCallback(
-    (id: number | null, options?: SetSelectedProfileOptions) => {
-      if (options?.fromUrl) setPendingSelectionId(null);
-      else setPendingSelectionId(id);
+  const commitSelectedProfileId = useCallback(
+    (id: number | null, pending: boolean) => {
+      setPendingSelectionId(pending ? id : null);
       setSelectedProfileIdState(id);
       try {
         if (id == null) sessionStorage.removeItem(STORAGE_KEY);
@@ -79,6 +78,10 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
       }
     },
     [],
+  );
+  const setSelectedProfileId = useCallback(
+    (id: number | null) => commitSelectedProfileId(id, true),
+    [commitSelectedProfileId],
   );
 
   const clearPendingSelection = useCallback((matchedUrlId?: number | null) => {
@@ -96,11 +99,24 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
     const nextIds = profiles.map((p) => p.id);
     previousProfileIdsRef.current = nextIds;
 
-    const next = reconcileSelectedProfileId(nextIds, selectedProfileId, previousIds);
+    const next = reconcileSelectedProfileId(
+      nextIds,
+      selectedProfileId,
+      previousIds,
+      urlProfileId,
+      pendingSelectionId,
+    );
     if (next !== undefined) {
-      setSelectedProfileId(next);
+      commitSelectedProfileId(next, false);
     }
-  }, [isSuccess, profiles, selectedProfileId, setSelectedProfileId]);
+  }, [
+    isSuccess,
+    profiles,
+    selectedProfileId,
+    urlProfileId,
+    pendingSelectionId,
+    commitSelectedProfileId,
+  ]);
 
   const reloadProfiles = useCallback(async () => {
     if (!canLoadProfiles) return;
@@ -116,6 +132,7 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
       pendingSelectionId,
       clearPendingSelection,
       reloadProfiles,
+      profilesLoaded: isSuccess,
       loading: isLoading,
       error:
         queryError instanceof Error
@@ -131,6 +148,7 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
       pendingSelectionId,
       clearPendingSelection,
       reloadProfiles,
+      isSuccess,
       isLoading,
       queryError,
     ],

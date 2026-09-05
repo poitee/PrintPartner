@@ -21,7 +21,7 @@ import { registerManifestRoutes } from "./manifest.js";
 describe("manifest registry route errors", () => {
   it("returns an explicit server error for an invalid embedded registry", async () => {
     const app = Fastify();
-    await registerManifestRoutes(app, { repo: {} as AppRepository });
+    await registerManifestRoutes(app, { repo: {} as AppRepository, dataDir: null });
 
     try {
       const response = await app.inject({ method: "GET", url: "/manifest-registry" });

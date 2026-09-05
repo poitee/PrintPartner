@@ -1,9 +1,10 @@
 import type { ReviewPart } from "../../api/endpoints/planManifests";
+import type { QuantityUpdate } from "../../context/PlanWorkspaceContext";
 
 type QuantityStepperProps = {
   part: ReviewPart;
   disabled?: boolean;
-  onChange: (quantity: number) => void;
+  onChange: (update: QuantityUpdate) => void;
 };
 
 export default function QuantityStepper({
@@ -21,7 +22,7 @@ export default function QuantityStepper({
           type="button"
           className="qty-btn"
           disabled={disabled || quantity <= 1}
-          onClick={() => onChange(quantity - 1)}
+          onClick={() => onChange((current) => current - 1)}
           aria-label={`Decrease quantity for ${part.filename}`}
         >
           −
@@ -42,7 +43,7 @@ export default function QuantityStepper({
           type="button"
           className="qty-btn"
           disabled={disabled}
-          onClick={() => onChange(quantity + 1)}
+          onClick={() => onChange((current) => current + 1)}
           aria-label={`Increase quantity for ${part.filename}`}
         >
           +

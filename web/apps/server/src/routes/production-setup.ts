@@ -1,34 +1,19 @@
 import type { FastifyInstance } from "fastify";
 import {
-  defaultProductionSetup,
-  productionSetupInputSchema,
-  productionSetupSchema,
-  type ProductionSetup,
+  productionSetupCommandSchema,
 } from "@print-partner/contracts";
 import type { AppRepository } from "../db/repository.js";
+import {
+  loadProductionSetup,
+  ProductionSetupWriteConflictError,
+  updateProductionSetup,
+} from "../services/production-setup-store.js";
 
 type RouteDeps = { repo: AppRepository };
-
-function settingKey(profileId: number): string {
-  return `production_setup:${profileId}`;
-}
 
 function parseProfileId(raw: string): number | null {
   const value = Number(raw);
   return Number.isInteger(value) && value > 0 ? value : null;
-}
-
-function loadSetup(repo: AppRepository, profileId: number): ProductionSetup {
-  const raw = repo.getSetting(settingKey(profileId));
-  if (!raw) return defaultProductionSetup(profileId);
-  try {
-    const parsed = productionSetupSchema.safeParse(JSON.parse(raw));
-    return parsed.success && parsed.data.profile_id === profileId
-      ? parsed.data
-      : defaultProductionSetup(profileId);
-  } catch {
-    return defaultProductionSetup(profileId);
-  }
 }
 
 export async function registerProductionSetupRoutes(
@@ -41,29 +26,33 @@ export async function registerProductionSetupRoutes(
     if (!deps.repo.getProfileHeader(profileId)) {
       return reply.status(404).send({ detail: "Build not found" });
     }
-    return loadSetup(deps.repo, profileId);
+    return loadProductionSetup(deps.repo, profileId);
   });
 
-  app.put("/plans/:id/production-setup", async (request, reply) => {
+  app.patch("/plans/:id/production-setup", async (request, reply) => {
     const profileId = parseProfileId((request.params as { id: string }).id);
     if (!profileId) return reply.status(400).send({ detail: "invalid Build id" });
     if (!deps.repo.getProfileHeader(profileId)) {
       return reply.status(404).send({ detail: "Build not found" });
     }
-    const parsed = productionSetupInputSchema.safeParse(request.body);
+    const parsed = productionSetupCommandSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.status(400).send({
         detail: "Invalid production setup",
         issues: parsed.error.issues.map((issue) => ({ path: issue.path, message: issue.message })),
       });
     }
-    const setup: ProductionSetup = {
-      format: "production-setup-v1",
-      profile_id: profileId,
-      ...parsed.data,
-      updated_at: new Date().toISOString(),
-    };
-    deps.repo.setSetting(settingKey(profileId), JSON.stringify(setup));
-    return setup;
+    try {
+      return updateProductionSetup(deps.repo, {
+        profileId,
+        command: parsed.data,
+        updatedAt: new Date().toISOString(),
+      });
+    } catch (error) {
+      if (error instanceof ProductionSetupWriteConflictError) {
+        return reply.status(409).send({ detail: error.message });
+      }
+      throw error;
+    }
   });
 }

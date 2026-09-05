@@ -151,6 +151,7 @@ describe("Source revision repository", () => {
           sourceId: source.id,
           revisionId: revision.id,
           observed,
+          sourceVersion: revision.upstream_revision_key,
         }),
       ).toThrow(/storage-relative/i);
     });
@@ -276,7 +277,7 @@ describe("Source revision repository", () => {
   it("prevents Source deletion once immutable revision history exists", () => {
     withRepos(({ defaultRepo }) => {
       const disposable = addSource(defaultRepo, "Disposable");
-      expect(() => defaultRepo.deleteSource(disposable.id)).not.toThrow();
+      expect(defaultRepo.deleteSource(disposable.id)).toEqual({ kind: "deleted" });
 
       const retained = addSource(defaultRepo, "Retained");
       defaultRepo.recordSourceRevision({
@@ -287,7 +288,7 @@ describe("Source revision repository", () => {
         syncedAt: "2026-08-20T10:00:00.000Z",
         completeness: "complete",
       });
-      expect(() => defaultRepo.deleteSource(retained.id)).toThrow(/revision history/i);
+      expect(defaultRepo.deleteSource(retained.id)).toEqual({ kind: "retained_history" });
       expect(defaultRepo.getSource(retained.id)).not.toBeNull();
     });
   });

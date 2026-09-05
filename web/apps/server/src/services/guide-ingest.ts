@@ -4,6 +4,11 @@
 
 import { OutboundUrlError, safeOutboundFetch } from "../lib/outbound-url.js";
 import {
+  cancelResponseBody,
+  readBoundedResponseBody,
+  ResponseBodyTooLargeError,
+} from "../lib/bounded-response.js";
+import {
   EMPTY_KIT_VOCABULARY,
   vocabularyNames,
   type KitVocabulary,
@@ -51,6 +56,7 @@ export type GuideExtractLlm = {
     messages: Array<{ role: "user" | "assistant" | "system"; content: string }>;
     model: string;
     maxTokens: number;
+    signal?: AbortSignal;
   }) => Promise<string>;
 };
 
@@ -125,6 +131,7 @@ export async function fetchWebPageText(
     maxBytes?: number;
     maxChars?: number;
     fetchFn?: typeof safeOutboundFetch;
+    signal?: AbortSignal;
   },
 ): Promise<FetchWebPageTextResult> {
   const maxBytes = options?.maxBytes ?? DEFAULT_GUIDE_INGEST_MAX_BYTES;
@@ -137,8 +144,10 @@ export async function fetchWebPageText(
         Accept: "text/html,text/plain,*/*;q=0.8",
         "User-Agent": "PrintPartner-WebFetch/1.0",
       },
+      signal: options?.signal,
     });
     if (!res.ok) {
+      await cancelResponseBody(res);
       return {
         ok: false,
         url: rawUrl,
@@ -147,16 +156,7 @@ export async function fetchWebPageText(
         error: `HTTP ${res.status} fetching URL`,
       };
     }
-    const buf = Buffer.from(await res.arrayBuffer());
-    if (buf.byteLength > maxBytes) {
-      return {
-        ok: false,
-        url: rawUrl,
-        text: "",
-        untrusted_banner: WEB_PAGE_UNTRUSTED_BANNER,
-        error: `Page body exceeds max bytes (${maxBytes})`,
-      };
-    }
+    const buf = Buffer.from(await readBoundedResponseBody(res, maxBytes));
     const html = buf.toString("utf8");
     const title = extractHtmlTitle(html);
     const full = htmlToPlainText(html, maxChars + 1);
@@ -173,7 +173,9 @@ export async function fetchWebPageText(
     };
   } catch (e) {
     const msg =
-      e instanceof OutboundUrlError
+      e instanceof ResponseBodyTooLargeError
+        ? `Page body exceeds max bytes (${maxBytes})`
+        : e instanceof OutboundUrlError
         ? e.message
         : e instanceof Error
           ? e.message
@@ -755,6 +757,7 @@ export async function refineGuideExtractWithLlm(
   heuristic: GuideExtract,
   llm: GuideExtractLlm,
   vocabulary: KitVocabulary = EMPTY_KIT_VOCABULARY,
+  signal?: AbortSignal,
 ): Promise<GuideExtract | null> {
   if (!llm.configured || !llm.model) return null;
   const excerpt = text.slice(0, 10_000);
@@ -771,6 +774,7 @@ export async function refineGuideExtractWithLlm(
       ],
       model: llm.model,
       maxTokens: 800,
+      signal,
     });
     return parseLlmGuideExtract(raw, heuristic, excerpt, vocabulary);
   } catch {
@@ -783,9 +787,10 @@ async function finalizeExtract(
   heuristic: GuideExtract,
   vocabulary: KitVocabulary,
   llm?: GuideExtractLlm | null,
+  signal?: AbortSignal,
 ): Promise<{ extract: GuideExtract; extract_method: "heuristic" | "llm" }> {
   if (llm?.configured) {
-    const refined = await refineGuideExtractWithLlm(text, heuristic, llm, vocabulary);
+    const refined = await refineGuideExtractWithLlm(text, heuristic, llm, vocabulary, signal);
     if (refined) return { extract: refined, extract_method: "llm" };
   }
   return { extract: heuristic, extract_method: "heuristic" };
@@ -856,6 +861,7 @@ export async function ingestGuideUrl(
     fetchFn?: typeof safeOutboundFetch;
     llm?: GuideExtractLlm | null;
     vocabulary?: KitVocabulary | null;
+    signal?: AbortSignal;
   },
 ): Promise<GuideIngestResult> {
   const maxBytes = options?.maxBytes ?? DEFAULT_GUIDE_INGEST_MAX_BYTES;
@@ -865,8 +871,10 @@ export async function ingestGuideUrl(
     const res = await fetchFn(rawUrl, {
       redirect: "manual",
       headers: { Accept: "text/html,text/plain,*/*;q=0.8", "User-Agent": "PrintPartner-GuideIngest/1.0" },
+      signal: options?.signal,
     });
     if (!res.ok) {
+      await cancelResponseBody(res);
       return {
         ok: false,
         error: `HTTP ${res.status} fetching guide URL`,
@@ -877,18 +885,7 @@ export async function ingestGuideUrl(
         extract_method: "heuristic",
       };
     }
-    const buf = Buffer.from(await res.arrayBuffer());
-    if (buf.byteLength > maxBytes) {
-      return {
-        ok: false,
-        error: `Guide body exceeds max bytes (${maxBytes})`,
-        url: rawUrl,
-        untrusted_text: "",
-        extract: emptyExtract(),
-        banner: BANNER,
-        extract_method: "heuristic",
-      };
-    }
+    const buf = Buffer.from(await readBoundedResponseBody(res, maxBytes));
     const html = buf.toString("utf8");
     const untrusted_text = htmlToPlainText(html);
     const heuristic = extractGuideAdvice(untrusted_text, { html, vocabulary });
@@ -897,6 +894,7 @@ export async function ingestGuideUrl(
       heuristic,
       vocabulary,
       options?.llm,
+      options?.signal,
     );
     const extract = seedExtractFromGuideUrl(finalized, rawUrl, untrusted_text, vocabulary);
     return {
@@ -909,7 +907,9 @@ export async function ingestGuideUrl(
     };
   } catch (e) {
     const msg =
-      e instanceof OutboundUrlError
+      e instanceof ResponseBodyTooLargeError
+        ? `Guide body exceeds max bytes (${maxBytes})`
+        : e instanceof OutboundUrlError
         ? e.message
         : e instanceof Error
           ? e.message
@@ -928,7 +928,11 @@ export async function ingestGuideUrl(
 
 export async function ingestGuideText(
   text: string,
-  options?: { llm?: GuideExtractLlm | null; vocabulary?: KitVocabulary | null },
+  options?: {
+    llm?: GuideExtractLlm | null;
+    vocabulary?: KitVocabulary | null;
+    signal?: AbortSignal;
+  },
 ): Promise<GuideIngestResult> {
   const vocabulary = options?.vocabulary ?? EMPTY_KIT_VOCABULARY;
   const clipped =
@@ -941,6 +945,7 @@ export async function ingestGuideText(
     heuristic,
     vocabulary,
     options?.llm,
+    options?.signal,
   );
   return {
     ok: true,

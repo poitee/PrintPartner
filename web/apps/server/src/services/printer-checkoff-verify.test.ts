@@ -392,7 +392,6 @@ describe("printer checkoff verify-first flow", () => {
     expect(loaded?.unlabeled_names).toEqual(["Object_A", "Object_B"]);
     expect(loaded?.units).toEqual([]);
 
-    // GRE-232: plan-only bind (no units / unlabeled) is allowed so Send stamps plan_id.
     const planOnly = createPrinterCheckoffLink(repo, {
       profile_id: plan.id,
       integration_id: "int-trident",

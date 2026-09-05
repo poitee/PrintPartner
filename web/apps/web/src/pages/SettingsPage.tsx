@@ -448,6 +448,7 @@ export default function SettingsPage() {
             <div className="flex flex-wrap items-center gap-2">
               <input
                 className={inputClass}
+                aria-label="Filament name"
                 placeholder="Name"
                 disabled={!filamentsReady}
                 value={newFilamentName}
@@ -455,6 +456,7 @@ export default function SettingsPage() {
               />
               <input
                 type="color"
+                aria-label="Filament color"
                 disabled={!filamentsReady}
                 value={newFilamentHex}
                 onChange={(e) => setNewFilamentHex(e.target.value)}
@@ -462,6 +464,7 @@ export default function SettingsPage() {
               />
               <input
                 className={`hex-input ${inputClass}`}
+                aria-label="Filament hex color"
                 disabled={!filamentsReady}
                 value={newFilamentHex}
                 onChange={(e) => setNewFilamentHex(e.target.value)}

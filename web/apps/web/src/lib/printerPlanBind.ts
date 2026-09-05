@@ -1,7 +1,3 @@
-/**
- * GRE-232: quiet Send / Printers farm plan bind chrome (no second picker).
- */
-
 export function sendPlanBindCopy(planName: string | null | undefined): {
   line: string;
   canSend: boolean;

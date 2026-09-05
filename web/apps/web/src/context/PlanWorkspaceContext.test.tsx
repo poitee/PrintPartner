@@ -87,13 +87,32 @@ const replacementWorkspace: PlanDraftWorkspace = {
   draft: { ...savedWorkspace.draft, snapshot_digest: "b".repeat(64) },
 };
 
+const otherWorkspace: PlanDraftWorkspace = {
+  ...savedWorkspace,
+  profile_id: 8,
+  draft: {
+    ...savedWorkspace.draft,
+    draft_id: 19,
+    snapshot_digest: "e".repeat(64),
+  },
+  parts: savedWorkspace.parts.map((part) => ({
+    ...part,
+    draft_part_id: 27,
+  })),
+};
+
 const draftQueryState = vi.hoisted(() => ({
   hasOpenDraft: true,
+  hasOtherWorkspace: false,
   hasWorkspace: true,
   /** Models a click landing before GET /plans/:id/drafts has resolved. */
   listPending: false,
   workspace: null as PlanDraftWorkspace | null,
 }));
+
+const profileSelectionState = vi.hoisted<{
+  selectedProfileId: number | null;
+}>(() => ({ selectedProfileId: 7 }));
 
 const editedWorkspace: PlanDraftWorkspace = {
   ...replacementWorkspace,
@@ -120,7 +139,9 @@ vi.mock("../hooks/useEngineHealth", () => ({
 }));
 
 vi.mock("./ProfileContext", () => ({
-  useProfileSelection: () => ({ selectedProfileId: 7 }),
+  useProfileSelection: () => ({
+    selectedProfileId: profileSelectionState.selectedProfileId,
+  }),
 }));
 
 vi.mock("../queries/planReview", () => ({
@@ -144,24 +165,45 @@ vi.mock("../queries/profiles", () => ({
 }));
 
 vi.mock("../queries/planDraft", () => ({
-  usePlanDraftListQuery: () => ({
-    data:
-      draftQueryState.hasOpenDraft && !draftQueryState.listPending
-        ? [savedWorkspace.draft]
-        : undefined,
-    isLoading: draftQueryState.listPending,
-    error: null,
-  }),
-  usePlanDraftWorkspaceQuery: vi.fn(
-    (_profileId: number | null, draftId: number | null) => ({
+  usePlanDraftListQuery: (profileId: number | null) => {
+    const workspace =
+      profileId === savedWorkspace.profile_id
+        ? savedWorkspace
+        : profileId === otherWorkspace.profile_id &&
+            draftQueryState.hasOtherWorkspace
+          ? otherWorkspace
+          : null;
+    return {
       data:
-        draftQueryState.hasWorkspace &&
-        draftId === savedWorkspace.draft.draft_id
-          ? (draftQueryState.workspace ?? savedWorkspace)
+        workspace &&
+        draftQueryState.hasOpenDraft &&
+        !draftQueryState.listPending
+          ? [workspace.draft]
           : undefined,
-      isLoading: false,
+      isLoading: draftQueryState.listPending,
       error: null,
-    }),
+    };
+  },
+  usePlanDraftWorkspaceQuery: vi.fn(
+    (profileId: number | null, draftId: number | null) => {
+      const workspace =
+        profileId === savedWorkspace.profile_id
+          ? (draftQueryState.workspace ?? savedWorkspace)
+          : profileId === otherWorkspace.profile_id &&
+              draftQueryState.hasOtherWorkspace
+            ? otherWorkspace
+            : null;
+      return {
+        data:
+          workspace &&
+          draftQueryState.hasWorkspace &&
+          draftId === workspace.draft.draft_id
+            ? workspace
+            : undefined,
+        isLoading: false,
+        error: null,
+      };
+    },
   ),
 }));
 
@@ -175,13 +217,43 @@ function wrapper(client: QueryClient) {
   };
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, reject, resolve };
+}
+
+function workspaceWithQuantity(
+  snapshotDigest: string,
+  quantity: number,
+): PlanDraftWorkspace {
+  return {
+    ...savedWorkspace,
+    draft: {
+      ...savedWorkspace.draft,
+      snapshot_digest: snapshotDigest,
+    },
+    parts: savedWorkspace.parts.map((part) => ({
+      ...part,
+      quantity_override: quantity,
+      quantity_effective: quantity,
+    })),
+  };
+}
+
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
 });
 
 beforeEach(() => {
+  profileSelectionState.selectedProfileId = 7;
   draftQueryState.hasOpenDraft = true;
+  draftQueryState.hasOtherWorkspace = false;
   draftQueryState.hasWorkspace = true;
   draftQueryState.listPending = false;
   draftQueryState.workspace = null;
@@ -399,6 +471,238 @@ describe("PlanWorkspaceProvider saved draft lifecycle", () => {
     expect(client.getQueryData(queryKeys.planDraft(7, 9))).toEqual(
       editedWorkspace,
     );
+    expect(hook.result.current.draftError).toBeNull();
+  });
+
+  it("serializes rapid quantity edits against each saved snapshot", async () => {
+    const first = deferred<PlanDraftWorkspace>();
+    const second = deferred<PlanDraftWorkspace>();
+    const third = deferred<PlanDraftWorkspace>();
+    vi.mocked(editPlanDraftParts)
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise)
+      .mockReturnValueOnce(third.promise);
+    const client = new QueryClient();
+    const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(client) });
+    await waitFor(() =>
+      expect(hook.result.current.draftWorkspace?.draft.draft_id).toBe(9),
+    );
+
+    let edits!: Promise<void>[];
+    act(() => {
+      edits = [
+        hook.result.current.setQuantity(planRow, (quantity) => quantity + 1),
+        hook.result.current.setQuantity(planRow, (quantity) => quantity + 1),
+        hook.result.current.setQuantity(planRow, (quantity) => quantity + 1),
+      ];
+    });
+
+    await waitFor(() => expect(editPlanDraftParts).toHaveBeenCalledTimes(1));
+    expect(editPlanDraftParts).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        expectedSnapshotDigest: "a".repeat(64),
+        decisions: [
+          {
+            kind: "set_quantity_override",
+            draft_part_ids: [17],
+            value: 2,
+          },
+        ],
+      }),
+    );
+
+    await act(async () => {
+      first.resolve(workspaceWithQuantity("b".repeat(64), 2));
+      await first.promise;
+    });
+    await waitFor(() => expect(editPlanDraftParts).toHaveBeenCalledTimes(2));
+    expect(editPlanDraftParts).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        expectedSnapshotDigest: "b".repeat(64),
+        decisions: [
+          {
+            kind: "set_quantity_override",
+            draft_part_ids: [17],
+            value: 3,
+          },
+        ],
+      }),
+    );
+
+    await act(async () => {
+      second.resolve(workspaceWithQuantity("c".repeat(64), 3));
+      await second.promise;
+    });
+    await waitFor(() => expect(editPlanDraftParts).toHaveBeenCalledTimes(3));
+    expect(editPlanDraftParts).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        expectedSnapshotDigest: "c".repeat(64),
+        decisions: [
+          {
+            kind: "set_quantity_override",
+            draft_part_ids: [17],
+            value: 4,
+          },
+        ],
+      }),
+    );
+
+    await act(async () => {
+      third.resolve(workspaceWithQuantity("d".repeat(64), 4));
+      await Promise.all(edits);
+    });
+    expect(client.getQueryData(queryKeys.planDraft(7, 9))).toEqual(
+      workspaceWithQuantity("d".repeat(64), 4),
+    );
+  });
+
+  it("keeps a completed Build A edit out of Build B's active draft state", async () => {
+    const edit = deferred<PlanDraftWorkspace>();
+    vi.mocked(editPlanDraftParts).mockReturnValueOnce(edit.promise);
+    const client = new QueryClient();
+    const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(client) });
+    await waitFor(() =>
+      expect(hook.result.current.draftWorkspace?.draft.draft_id).toBe(9),
+    );
+
+    let editPromise: Promise<PlanDraftWorkspace> | null = null;
+    act(() => {
+      editPromise = hook.result.current.editActivePlanDraft([
+        { kind: "set_included", draft_part_ids: [17], value: false },
+      ]);
+    });
+    await waitFor(() => expect(editPlanDraftParts).toHaveBeenCalledOnce());
+
+    profileSelectionState.selectedProfileId = 8;
+    hook.rerender();
+    await waitFor(() =>
+      expect(vi.mocked(usePlanDraftWorkspaceQuery)).toHaveBeenLastCalledWith(
+        8,
+        null,
+        true,
+      ),
+    );
+
+    const pendingEdit = editPromise;
+    if (!pendingEdit) throw new Error("Expected the Build A edit to be pending");
+    await act(async () => {
+      edit.resolve(editedWorkspace);
+      await pendingEdit;
+    });
+
+    expect(client.getQueryData(queryKeys.planDraft(7, 9))).toEqual(
+      editedWorkspace,
+    );
+    expect(client.getQueryData(queryKeys.planDraft(8, 9))).toBeUndefined();
+    expect(hook.result.current.draftWorkspace).toBeNull();
+    expect(vi.mocked(usePlanDraftWorkspaceQuery)).not.toHaveBeenCalledWith(
+      8,
+      9,
+      true,
+    );
+  });
+
+  it("does not make Build B wait behind Build A's edit queue", async () => {
+    const buildAEdit = deferred<PlanDraftWorkspace>();
+    const editedOtherWorkspace: PlanDraftWorkspace = {
+      ...otherWorkspace,
+      draft: {
+        ...otherWorkspace.draft,
+        snapshot_digest: "f".repeat(64),
+      },
+      parts: otherWorkspace.parts.map((part) => ({
+        ...part,
+        included: false,
+      })),
+    };
+    vi.mocked(editPlanDraftParts)
+      .mockReturnValueOnce(buildAEdit.promise)
+      .mockResolvedValueOnce(editedOtherWorkspace);
+    draftQueryState.hasOtherWorkspace = true;
+    const client = new QueryClient();
+    const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(client) });
+    await waitFor(() =>
+      expect(hook.result.current.draftWorkspace?.draft.draft_id).toBe(9),
+    );
+
+    let buildAEditPromise: Promise<PlanDraftWorkspace> | null = null;
+    act(() => {
+      buildAEditPromise = hook.result.current.editActivePlanDraft([
+        { kind: "set_included", draft_part_ids: [17], value: false },
+      ]);
+    });
+    await waitFor(() => expect(editPlanDraftParts).toHaveBeenCalledOnce());
+
+    profileSelectionState.selectedProfileId = 8;
+    hook.rerender();
+    await waitFor(() =>
+      expect(hook.result.current.draftWorkspace?.draft.draft_id).toBe(19),
+    );
+
+    let buildBEditPromise: Promise<PlanDraftWorkspace> | null = null;
+    act(() => {
+      buildBEditPromise = hook.result.current.editActivePlanDraft([
+        { kind: "set_included", draft_part_ids: [27], value: false },
+      ]);
+    });
+    await waitFor(() => expect(editPlanDraftParts).toHaveBeenCalledTimes(2));
+    expect(editPlanDraftParts).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ profileId: 8, draftId: 19 }),
+    );
+
+    const pendingBuildBEdit = buildBEditPromise;
+    if (!pendingBuildBEdit)
+      throw new Error("Expected the Build B edit to be pending");
+    await act(async () => {
+      await pendingBuildBEdit;
+    });
+    expect(client.getQueryData(queryKeys.planDraft(8, 19))).toEqual(
+      editedOtherWorkspace,
+    );
+
+    const pendingBuildAEdit = buildAEditPromise;
+    if (!pendingBuildAEdit)
+      throw new Error("Expected the Build A edit to be pending");
+    await act(async () => {
+      buildAEdit.resolve(editedWorkspace);
+      await pendingBuildAEdit;
+    });
+  });
+
+  it("keeps Build A's late busy and error state out of Build B", async () => {
+    const buildAEdit = deferred<PlanDraftWorkspace>();
+    vi.mocked(editPlanDraftParts).mockReturnValueOnce(buildAEdit.promise);
+    const client = new QueryClient();
+    const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(client) });
+    await waitFor(() =>
+      expect(hook.result.current.draftWorkspace?.draft.draft_id).toBe(9),
+    );
+
+    let buildAEditPromise: Promise<void> | null = null;
+    act(() => {
+      buildAEditPromise = hook.result.current.setIncluded(planRow, false);
+    });
+    await waitFor(() => expect(editPlanDraftParts).toHaveBeenCalledOnce());
+    expect(hook.result.current.busyPartId).toBe(planRow.id);
+
+    profileSelectionState.selectedProfileId = 8;
+    hook.rerender();
+    expect(hook.result.current.busyPartId).toBeNull();
+    expect(hook.result.current.draftError).toBeNull();
+
+    const pendingBuildAEdit = buildAEditPromise;
+    if (!pendingBuildAEdit)
+      throw new Error("Expected the Build A edit to be pending");
+    await act(async () => {
+      buildAEdit.reject(new Error("Build A disk full"));
+      await expect(pendingBuildAEdit).rejects.toThrow("Build A disk full");
+    });
+
+    expect(hook.result.current.busyPartId).toBeNull();
     expect(hook.result.current.draftError).toBeNull();
   });
 

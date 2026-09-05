@@ -1,4 +1,5 @@
 import type { PlanReview, ReviewPart } from "../../api/endpoints/planManifests";
+import type { QuantityUpdate } from "../../context/PlanWorkspaceContext";
 import { partSourceNote } from "../../lib/partsGroups";
 import { partWarningNote } from "../../lib/partWarnings";
 import { statusTone } from "../../lib/statusTone";
@@ -10,7 +11,8 @@ type Props = {
   part: ReviewPart;
   review: PlanReview;
   busy: boolean;
-  onQtyChange: (part: ReviewPart, qty: number) => void;
+  quantityDisabled: boolean;
+  onQtyChange: (part: ReviewPart, update: QuantityUpdate) => void;
   onRemove: (part: ReviewPart) => void;
   onRestore: (part: ReviewPart) => void;
   onPreview: (part: ReviewPart) => void;
@@ -23,6 +25,7 @@ export default function PartsGridCard({
   part,
   review,
   busy,
+  quantityDisabled,
   onQtyChange,
   onRemove,
   onRestore,
@@ -71,8 +74,10 @@ export default function PartsGridCard({
             <button
               type="button"
               className="qty-btn h-7 min-w-7 text-xs"
-              disabled={busy || qty <= 1}
-              onClick={() => onQtyChange(part, qty - 1)}
+              disabled={quantityDisabled || qty <= 1}
+              onClick={() =>
+                onQtyChange(part, (current) => current - 1)
+              }
               aria-label={`Decrease quantity for ${part.filename}`}
             >
               −
@@ -83,8 +88,10 @@ export default function PartsGridCard({
             <button
               type="button"
               className="qty-btn h-7 min-w-7 text-xs"
-              disabled={busy}
-              onClick={() => onQtyChange(part, qty + 1)}
+              disabled={quantityDisabled}
+              onClick={() =>
+                onQtyChange(part, (current) => current + 1)
+              }
               aria-label={`Increase quantity for ${part.filename}`}
             >
               +

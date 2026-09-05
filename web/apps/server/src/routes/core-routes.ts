@@ -45,6 +45,7 @@ export type CoreRouteDeps = {
   config: ServerConfig;
   jobs: InProcessJobRunner;
   authStore?: AuthStore | null;
+  reloadProfileSync?: () => Promise<void>;
 };
 
 export type CoreRouteOptions = {
@@ -93,6 +94,7 @@ export async function registerCoreRoutes(
   await registerSlicerInstanceRoutes(app, {
     repo: deps.repo,
     deployMode: deps.config.deployMode,
+    ...(deps.reloadProfileSync ? { reloadProfileSync: deps.reloadProfileSync } : {}),
   });
   await registerSlicerHandoffRoutes(app, {
     repo: deps.repo,
@@ -102,7 +104,7 @@ export async function registerCoreRoutes(
     reposDir: deps.reposDir,
   });
   await registerProfileLibraryRoutes(app, { repo: deps.repo });
-  await registerManifestRoutes(app, { repo: deps.repo });
+  await registerManifestRoutes(app, { repo: deps.repo, dataDir: deps.dataDir });
 
   const authStore = options.authStore ?? deps.authStore;
   if (deps.config.multiUser && authStore) {

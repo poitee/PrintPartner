@@ -25,6 +25,69 @@ def _load_yaml(path: Path) -> tuple[Any | None, list[str]]:
         return None, [f"{path}: YAML parse failed: {error}"]
 
 
+def _validate_option_group_semantics(
+    path: Path, document: dict[str, Any]
+) -> list[str]:
+    option_groups = document.get("option_groups")
+    if not isinstance(option_groups, dict):
+        return []
+    selections = document.get("selections")
+    selection_map = selections if isinstance(selections, dict) else {}
+
+    errors: list[str] = []
+    for group_id, raw_group in sorted(
+        option_groups.items(), key=lambda item: str(item[0])
+    ):
+        if not isinstance(raw_group, dict):
+            continue
+        minimum = raw_group.get("min")
+        maximum = raw_group.get("max")
+        if (
+            isinstance(minimum, int)
+            and not isinstance(minimum, bool)
+            and isinstance(maximum, int)
+            and not isinstance(maximum, bool)
+            and minimum > maximum
+        ):
+            errors.append(
+                f"{path}: option_groups.{group_id}.min must not exceed max"
+            )
+
+        rule = raw_group.get("rule", "pick_one")
+        effective_maximum: int | None = None
+        if rule == "pick_one":
+            effective_maximum = (
+                min(maximum, 1)
+                if isinstance(maximum, int) and not isinstance(maximum, bool)
+                else 1
+            )
+        elif (
+            rule in ("pick_any", "pick_n")
+            and isinstance(maximum, int)
+            and not isinstance(maximum, bool)
+            and maximum >= 0
+        ):
+            effective_maximum = maximum
+
+        selection = selection_map.get(group_id)
+        selection_count: int | None = None
+        if isinstance(selection, str):
+            selection_count = 1
+        elif isinstance(selection, list):
+            selection_count = len(selection)
+        if (
+            effective_maximum is not None
+            and selection_count is not None
+            and selection_count > effective_maximum
+        ):
+            unit = "variant id" if effective_maximum == 1 else "variant ids"
+            errors.append(
+                f"{path}: selections.{group_id} must contain no more than "
+                f"{effective_maximum} {unit}"
+            )
+    return errors
+
+
 def validate_manifest(path: Path, schema_dir: Path = SCHEMA_DIR) -> list[str]:
     """Return deterministic validation errors for one versioned manifest."""
     document, errors = _load_yaml(path)
@@ -57,6 +120,7 @@ def validate_manifest(path: Path, schema_dir: Path = SCHEMA_DIR) -> list[str]:
     for error in validation_errors:
         field = ".".join(str(part) for part in error.absolute_path) or "<root>"
         rendered.append(f"{path}: schema validation failed at {field}: {error.message}")
+    rendered.extend(_validate_option_group_semantics(path, document))
     return rendered
 
 

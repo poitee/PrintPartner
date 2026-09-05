@@ -1,5 +1,4 @@
 import { join } from "node:path";
-import { rmSync } from "node:fs";
 import type { FastifyInstance } from "fastify";
 import {
   DATE_FORMAT_DEFAULT,
@@ -38,7 +37,10 @@ import { getIntegrationAdapter } from "../integrations/registry.js";
 import { getIntegrationConfig } from "../integrations/store.js";
 import { loadFleet } from "../services/printer-fleet.js";
 import { parsePrinterUploadMultipart } from "../services/printer-upload-multipart.js";
-import { runPrinterUploadJob } from "../services/printer-upload-job.js";
+import {
+  cleanupPrinterUploadArtifactDir,
+  runPrinterUploadJob,
+} from "../services/printer-upload-job.js";
 import { reconcileSendQueueJobResult } from "../services/printer-send-queue.js";
 import { getLogger } from "../services/logger.js";
 import {
@@ -1070,7 +1072,6 @@ export async function registerJobRoutes(
         const checkoff_units = parseCheckoffUnits(checkoffUnitsRaw);
         const unlabeledParsed = parseUnlabeledNames(unlabeledNamesRaw);
         const unlabeled_names = unlabeledParsed.length ? unlabeledParsed : undefined;
-        // GRE-232: Send must bind to a plan (active spine). No plan → reject.
         if (profileId == null) {
           return sendProblem(
             reply,
@@ -1149,11 +1150,7 @@ export async function registerJobRoutes(
         return { job_id };
       } finally {
         if (artifactPath) {
-          try {
-            rmSync(artifactPath, { force: true });
-          } catch {
-            /* ignore */
-          }
+          cleanupPrinterUploadArtifactDir(artifactPath);
         }
       }
     },

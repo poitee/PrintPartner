@@ -5,7 +5,7 @@ import {
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
 } from "../ui/dropdown-menu";
-import { UNCategorized_FILTER } from "./sourceLabels";
+import { UNCATEGORISED_FILTER } from "./sourceLabels";
 import { categoryMenuOptions } from "../../lib/sourceCategoryOptions";
 
 type Props = {
@@ -23,7 +23,7 @@ export default function SourceCategoryAssignSubmenu({
   onAssign,
   disabled,
 }: Props) {
-  const value = current?.trim() ? current.trim() : UNCategorized_FILTER;
+  const value = current?.trim() ? current.trim() : UNCATEGORISED_FILTER;
   const options = categoryMenuOptions(categories);
 
   return (
@@ -33,11 +33,11 @@ export default function SourceCategoryAssignSubmenu({
         <DropdownMenuRadioGroup
           value={value}
           onValueChange={(next) =>
-            onAssign(next === UNCategorized_FILTER ? null : next)
+            onAssign(next === UNCATEGORISED_FILTER ? null : next)
           }
         >
-          <DropdownMenuRadioItem value={UNCategorized_FILTER}>
-            Uncategorized
+          <DropdownMenuRadioItem value={UNCATEGORISED_FILTER}>
+            Uncategorised
           </DropdownMenuRadioItem>
           {options.map((option) => (
             <DropdownMenuRadioItem

@@ -199,6 +199,73 @@ describe("guide ingest", () => {
     expect(page).not.toHaveProperty("extract");
   });
 
+  it("cancels an unread error response from fetchWebPageText", async () => {
+    const cancel = vi.fn();
+    const fetchFn = vi.fn(async () =>
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("upstream failure"));
+          },
+          cancel,
+        }),
+        { status: 503 },
+      ),
+    ) as unknown as typeof import("../lib/outbound-url.js").safeOutboundFetch;
+
+    const page = await fetchWebPageText("https://example.com/page", { fetchFn });
+
+    expect(page).toMatchObject({ ok: false, error: "HTTP 503 fetching URL" });
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it("cancels an unread error response from ingestGuideUrl", async () => {
+    const cancel = vi.fn();
+    const fetchFn = vi.fn(async () =>
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("upstream failure"));
+          },
+          cancel,
+        }),
+        { status: 503 },
+      ),
+    ) as unknown as typeof import("../lib/outbound-url.js").safeOutboundFetch;
+
+    const result = await ingestGuideUrl("https://example.com/guide", {
+      fetchFn,
+      vocabulary,
+    });
+
+    expect(result).toMatchObject({ ok: false, error: "HTTP 503 fetching guide URL" });
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it("cancels a page whose declared body exceeds the byte budget", async () => {
+    const cancel = vi.fn();
+    const fetchFn = vi.fn(async () =>
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("small body"));
+            controller.close();
+          },
+          cancel,
+        }),
+        { status: 200, headers: { "content-length": "11" } },
+      ),
+    ) as unknown as typeof import("../lib/outbound-url.js").safeOutboundFetch;
+
+    const page = await fetchWebPageText("https://example.com/page", {
+      fetchFn,
+      maxBytes: 10,
+    });
+
+    expect(page).toMatchObject({ ok: false, error: "Page body exceeds max bytes (10)" });
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
   it("seeds the URL's own repo as subject from raw.githubusercontent.com", async () => {
     const md = `# Voron Tap\nUnlike Klicky, Tap docks to the toolhead.\n`;
     const fetchFn = vi.fn(async () =>
@@ -268,18 +335,28 @@ describe("guide ingest", () => {
 
   it("LLM prompt names only this workspace's vocabulary", async () => {
     let captured = "";
+    let capturedSignal: AbortSignal | undefined;
+    const controller = new AbortController();
     const llm: GuideExtractLlm = {
       configured: true,
       model: "test-model",
-      complete: async ({ system }) => {
+      complete: async ({ system, signal }) => {
         captured = system;
+        capturedSignal = signal;
         return "{}";
       },
     };
-    await refineGuideExtractWithLlm("anything", extractGuideAdvice("anything"), llm, MMU_VOCABULARY);
+    await refineGuideExtractWithLlm(
+      "anything",
+      extractGuideAdvice("anything"),
+      llm,
+      MMU_VOCABULARY,
+      controller.signal,
+    );
     expect(captured).toContain("BoxTurtle");
     expect(captured).toContain("TurtleNeck");
     expect(captured).not.toMatch(/voron|klicky|trident/i);
+    expect(capturedSignal).toBe(controller.signal);
   });
 
   it("LLM refine filters invented addon names to catalog (or open_questions)", async () => {

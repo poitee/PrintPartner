@@ -222,7 +222,7 @@ export default function HelpPage() {
             <div>
               <CardTitle className="text-base">Kit variants</CardTitle>
               <CardDescription>
-                Optional per-repo manifests that let you pick one variant per group on Plan.
+                Optional per-repo manifests that define one-choice and multi-choice groups on Plan.
               </CardDescription>
             </div>
           </div>
@@ -235,7 +235,7 @@ export default function HelpPage() {
             </li>
             <li>
               Expand the base source card → <strong className="font-medium text-foreground">Kit variants</strong>{" "}
-              and pick one option per group (selections save automatically).
+              and choose the options required by each group (selections save automatically).
             </li>
             <li>
               Run <strong className="font-medium text-foreground">Update plan</strong> so variant
@@ -246,8 +246,9 @@ export default function HelpPage() {
             <li>
               Add a repo-root{" "}
               <code className="font-mono text-xs">print-partner.manifest.yaml</code> with{" "}
-              <code className="font-mono text-xs">pick_one</code> option groups, then sync the
-              source.
+              <code className="font-mono text-xs">pick_one</code>,{" "}
+              <code className="font-mono text-xs">pick_any</code>, or{" "}
+              <code className="font-mono text-xs">pick_n</code> option groups, then sync the source.
             </li>
             <li>
               Stack presets (when configured) attach base + addon layers and pre-fill variant

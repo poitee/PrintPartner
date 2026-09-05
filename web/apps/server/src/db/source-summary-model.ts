@@ -55,6 +55,7 @@ export function sourceSummary(row: SourceSummaryProjectRow, docCount = 0): Sourc
     branch: row.branch ?? "main",
     tag: row.tag ?? null,
     local_path: row.localPath,
+    content_available: Boolean(row.localPath),
     last_synced_at: row.lastSyncedAt,
     last_commit_sha: row.lastCommitSha,
     current_source_revision_id: row.currentSourceRevisionId,

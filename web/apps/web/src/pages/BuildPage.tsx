@@ -75,6 +75,7 @@ import { libraryRoute, settingsRoute } from "../lib/routes";
 import { groupMergeConflictsByFilename } from "../lib/mergeConflictGroups";
 import { takeKitImportResult } from "../lib/kitImportStash";
 import { statusTone } from "../lib/statusTone";
+import { sourceContentAvailable } from "../lib/sourceContentAvailable";
 import { cn } from "@/lib/utils";
 import { useProfileSelection } from "../context/ProfileContext";
 import { usePlanActions } from "../context/PlanActionsContext";
@@ -410,7 +411,7 @@ function BuildPageContent() {
           id: row.sourceId,
           name: row.sourceName,
           layerType: row.layerType,
-          synced: reviewLayer ? reviewLayer.synced : Boolean(source?.local_path),
+          synced: reviewLayer ? reviewLayer.synced : sourceContentAvailable(source),
           updatesAvailable: source?.update_status === "updates_available",
         };
       }),

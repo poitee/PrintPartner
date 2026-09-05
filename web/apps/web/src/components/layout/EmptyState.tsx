@@ -21,7 +21,6 @@ type Props = {
   size?: "default" | "sm";
 };
 
-/** Page empty — thin wrapper over shadcn Empty (GRE-226). */
 export default function EmptyState({
   icon: Icon,
   title,

@@ -1,11 +1,11 @@
 import { isCategoryPathWithin, normalizeCategoryPath } from "@print-partner/contracts";
-import { UNCategorized_FILTER } from "../components/sources/sourceLabels";
+import { UNCATEGORISED_FILTER } from "../components/sources/sourceLabels";
 
 export function reconcileSourceCategoryFilter(
   categoryFilter: string,
   categories: readonly string[],
 ): string {
-  if (categoryFilter === "all" || categoryFilter === UNCategorized_FILTER) {
+  if (categoryFilter === "all" || categoryFilter === UNCATEGORISED_FILTER) {
     return categoryFilter;
   }
   return categories.includes(categoryFilter) ? categoryFilter : "all";
@@ -29,7 +29,7 @@ export function matchesSourceCategoryFilter(
   categoryFilter: string,
 ): boolean {
   const bucket = sourceCategoryBucket(category);
-  if (categoryFilter === UNCategorized_FILTER) return bucket == null;
+  if (categoryFilter === UNCATEGORISED_FILTER) return bucket == null;
   if (categoryFilter === "all") return true;
   return bucket != null && isCategoryPathWithin(bucket, categoryFilter);
 }

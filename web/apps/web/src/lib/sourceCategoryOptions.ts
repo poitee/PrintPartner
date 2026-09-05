@@ -6,7 +6,7 @@
 
 import { categoryDepth, categoryLeafName, normalizeCategoryPath } from "@print-partner/contracts";
 import type { CSSProperties } from "react";
-import { UNCategorized_FILTER } from "../components/sources/sourceLabels";
+import { UNCATEGORISED_FILTER } from "../components/sources/sourceLabels";
 
 export type CategoryMenuOption = {
   /** Full path — the stored value, e.g. `"Printers/Frame"`. */
@@ -26,7 +26,7 @@ export function categoryMenuOptions(
   for (const raw of categories) {
     const path = normalizeCategoryPath(raw);
     // The Uncategorised sentinel is offered separately by every caller.
-    if (!path || path === UNCategorized_FILTER) continue;
+    if (!path || path === UNCATEGORISED_FILTER) continue;
     const depth = categoryDepth(path);
     options.push({
       path,

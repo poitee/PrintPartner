@@ -1,13 +1,24 @@
-import { OutboundUrlError, safeOutboundFetch } from "../../lib/outbound-url.js";
-import type { SearchHit, WebSearchOptions } from "./types.js";
+import { OutboundUrlError } from "../../lib/outbound-url.js";
+import {
+  cancelResponseBody,
+  isJsonObject as isRecord,
+  readBoundedJsonResponse,
+} from "../../lib/bounded-response.js";
+import type {
+  SearchAdapterDependencies,
+  SearchHit,
+  WebSearchOptions,
+} from "./types.js";
 
 const EXA_ENDPOINT = "https://api.exa.ai/search";
+const MAX_SEARCH_RESPONSE_BYTES = 2 * 1024 * 1024;
 
 export async function searchExa(
   options: WebSearchOptions,
   apiKey: string,
-  fetchFn: typeof safeOutboundFetch = safeOutboundFetch,
+  dependencies: SearchAdapterDependencies,
 ): Promise<{ hits: SearchHit[]; error?: string }> {
+  const { fetchFn, signal } = dependencies;
   const q = options.site ? `site:${options.site} ${options.query}` : options.query;
   const numResults = Math.min(Math.max(options.maxResults ?? 5, 1), 20);
 
@@ -26,26 +37,29 @@ export async function searchExa(
         type: "auto",
         contents: { text: { maxCharacters: 500 } },
       }),
+      signal,
     });
     if (!res.ok) {
+      await cancelResponseBody(res);
       return { hits: [], error: `Exa Search HTTP ${res.status}` };
     }
-    const body = (await res.json()) as {
-      results?: Array<{
-        title?: string;
-        url?: string;
-        text?: string;
-        snippet?: string;
-      }>;
-    };
-    const hits: SearchHit[] = (body.results ?? [])
-      .filter((r) => r.url && (r.title || r.url))
-      .slice(0, numResults)
-      .map((r) => ({
-        title: String(r.title || r.url),
-        url: String(r.url),
-        snippet: String(r.text ?? r.snippet ?? "").slice(0, 500),
-      }));
+    const body = await readBoundedJsonResponse(res, MAX_SEARCH_RESPONSE_BYTES);
+    const results = isRecord(body) && Array.isArray(body.results)
+      ? body.results.filter(isRecord)
+      : [];
+    const hits: SearchHit[] = results.flatMap((result) => {
+      if (typeof result.url !== "string") return [];
+      return [{
+        title: typeof result.title === "string" && result.title ? result.title : result.url,
+        url: result.url,
+        snippet:
+          typeof result.text === "string"
+            ? result.text.slice(0, 500)
+            : typeof result.snippet === "string"
+              ? result.snippet.slice(0, 500)
+              : "",
+      }];
+    }).slice(0, numResults);
     return { hits };
   } catch (err) {
     const msg =

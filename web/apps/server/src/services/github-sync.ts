@@ -1,6 +1,7 @@
-import { Octokit } from "@octokit/rest";
+import type { Octokit } from "@octokit/rest";
 import { resolve } from "node:path";
 import { Readable } from "node:stream";
+import { cancelResponseBody } from "../lib/bounded-response.js";
 import {
   LocalSourceSnapshotStore,
   sourceRelativePath,
@@ -11,6 +12,10 @@ import {
   type SnapshotFileResponse,
 } from "./local-source-snapshot.js";
 import { summarizeRepoTreePaths, type RepoTreeSummary } from "./repo-tree-summary.js";
+import { createGithubClient } from "./github-client.js";
+import { SOURCE_MANIFEST_FILENAME } from "./source-workspace.js";
+
+const GITHUB_SNAPSHOT_FORMAT_VERSION = 2;
 
 function safeRepoFilePath(repoDir: string, relativePath: string): string | null {
   const normalized = relativePath.replace(/\\/g, "/").replace(/^\/+/, "");
@@ -168,7 +173,7 @@ export async function listGithubBranches(
 }> {
   const ref = parseGithubUrl(url);
   if (!ref) throw new Error("Invalid GitHub repository URL");
-  const octokit = new Octokit(token ? { auth: token } : {});
+  const octokit = createGithubClient(token);
   const repoMeta = await octokit.repos.get({ owner: ref.owner, repo: ref.repo });
   const branches = await octokit.paginate(octokit.repos.listBranches, {
     owner: ref.owner,
@@ -193,7 +198,7 @@ export async function listGithubTags(
 ): Promise<{ owner: string; repo: string; tags: string[] }> {
   const ref = parseGithubUrl(url);
   if (!ref) throw new Error("Invalid GitHub repository URL");
-  const octokit = new Octokit(token ? { auth: token } : {});
+  const octokit = createGithubClient(token);
   const tags = await octokit.paginate(octokit.repos.listTags, {
     owner: ref.owner,
     repo: ref.repo,
@@ -256,6 +261,7 @@ async function openRawFile(
   if (token) headers.Authorization = `Bearer ${token}`;
   const res = await fetch(url, { headers, signal: AbortSignal.timeout(timeoutMs) });
   if (!res.ok) {
+    await cancelResponseBody(res);
     throw new Error(`GitHub raw download failed for ${path}: HTTP ${res.status}`);
   }
   if (!res.body) throw new Error(`GitHub raw download returned no body for ${path}`);
@@ -334,7 +340,7 @@ export async function fetchGithubRepoTreeSummary(
 ): Promise<GithubRepoTreeSummary> {
   const parsed = parseGithubUrl(url);
   if (!parsed) throw new Error("Invalid GitHub repository URL");
-  const octokit = new Octokit(token ? { auth: token } : {});
+  const octokit = createGithubClient(token);
   let refName = await resolveGithubRefName(octokit, url, parsed, ref);
   let resolved: { commitSha: string; entries: RepoTreeEntry[]; truncated: boolean };
   try {
@@ -379,7 +385,14 @@ export type SyncGithubSourceInput = {
 
 function snapshotKind(path: string): SnapshotFileKind | null {
   if (path.toLowerCase().endsWith(".stl")) return "stl";
+  if (path === SOURCE_MANIFEST_FILENAME) return "artifact";
   return classifyDocPath(path);
+}
+
+function githubSnapshotRevisionKey(commitSha: string, hasCanonicalManifest: boolean): string {
+  return hasCanonicalManifest
+    ? `${commitSha}.snapshot-v${GITHUB_SNAPSHOT_FORMAT_VERSION}`
+    : commitSha;
 }
 
 function isRegularBlob(entry: RepoTreeEntry): boolean {
@@ -403,7 +416,7 @@ export async function syncGithubSource(input: SyncGithubSourceInput): Promise<Sy
   const { url, branch, reposDir, sourceId, token, options } = input;
   const ref = parseGithubUrl(url);
   if (!ref) throw new Error("Invalid GitHub repository URL");
-  const octokit = new Octokit(token ? { auth: token } : {});
+  const octokit = createGithubClient(token);
 
   const tagName = options?.tag?.trim() || null;
   const refName = tagName || await resolveGithubRefName(octokit, url, ref, branch);
@@ -422,7 +435,10 @@ export async function syncGithubSource(input: SyncGithubSourceInput): Promise<Sy
 
   const selectedEntries = selectedTreeFiles(entries);
   const stlBlobs = selectedEntries.filter((item) => snapshotKind(item.path) === "stl");
-  const docBlobs = selectedEntries.filter((item) => snapshotKind(item.path) !== "stl");
+  const manifestBlobs = selectedEntries.filter(
+    (item) => item.path === SOURCE_MANIFEST_FILENAME,
+  );
+  const docBlobs = selectedEntries.filter((item) => classifyDocPath(item.path) !== null);
 
   const stlPaths = stlBlobs.map((b) => b.path).sort();
   const maxStlFiles = options?.maxStlFiles ?? 500;
@@ -444,7 +460,12 @@ export async function syncGithubSource(input: SyncGithubSourceInput): Promise<Sy
     throw new Error("GitHub file timeout must be a positive safe integer");
   }
 
-  let docsBudgetUsed = 0;
+  let docsBudgetUsed = manifestBlobs.reduce((sum, entry) => sum + (entry.size ?? 0), 0);
+  if (docsBudgetUsed > maxDocsBytes) {
+    throw new Error(
+      `GitHub Source manifest exceeds the ${maxDocsBytes} byte documentation limit`,
+    );
+  }
   const selectedDocs: RepoTreeEntry[] = [];
   const omittedFiles: OmittedSnapshotFile[] = [];
   for (const entry of [...docBlobs].sort((a, b) => a.path.localeCompare(b.path))) {
@@ -473,20 +494,20 @@ export async function syncGithubSource(input: SyncGithubSourceInput): Promise<Sy
     docsBudgetUsed += size;
   }
 
-  const files: SnapshotFile[] = [...stlBlobs, ...selectedDocs].map((entry) => ({
+  const files: SnapshotFile[] = [...stlBlobs, ...manifestBlobs, ...selectedDocs].map((entry) => ({
     path: sourceRelativePath(entry.path),
     kind: snapshotKind(entry.path)!,
     sizeHintBytes: entry.size,
   }));
   const totals = {
     stls: stlBlobs.length,
-    docs: selectedDocs.length,
+    docs: manifestBlobs.length + selectedDocs.length,
   };
   const progress = { stls: 0, docs: 0 };
   const store = new LocalSourceSnapshotStore({ reposDir });
   const snapshot = await store.materialize({
     sourceId,
-    upstreamRevisionKey: commitSha,
+    upstreamRevisionKey: githubSnapshotRevisionKey(commitSha, manifestBlobs.length > 0),
     files,
     selection: {
       maxStlFiles,
@@ -511,7 +532,9 @@ export async function syncGithubSource(input: SyncGithubSourceInput): Promise<Sy
   });
 
   const snapshotStls = snapshot.files.filter((file) => file.kind === "stl");
-  const snapshotDocs = snapshot.files.filter((file) => file.kind !== "stl");
+  const snapshotDocs = snapshot.files.filter(
+    (file) => file.kind !== "stl" && file.kind !== "artifact",
+  );
   const docEntries: SyncDocEntry[] = snapshotDocs.map((entry) => {
     const kind = classifyDocPath(entry.path);
     if (!kind) throw new Error(`Published snapshot has an invalid document path: ${entry.path}`);

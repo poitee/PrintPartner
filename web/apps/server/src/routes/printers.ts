@@ -27,6 +27,7 @@ import type {
   PrinterCamera,
 } from "@print-partner/contracts";
 import { sendProblem } from "../lib/api-error.js";
+import { cancelResponseBody } from "../lib/bounded-response.js";
 
 type RouteDeps = { repo: AppRepository };
 
@@ -78,11 +79,7 @@ function publicCapabilityError(
 
 async function sendUpstreamResponse(reply: FastifyReply, response: Response) {
   if (!response.ok || !response.body) {
-    try {
-      await response.arrayBuffer();
-    } catch {
-      /* ignore */
-    }
+    await cancelResponseBody(response);
     return sendProblem(
       reply,
       response.status === 404 ? 404 : 502,

@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,6 +17,44 @@ const FIXTURE = join(
   dirname(fileURLToPath(import.meta.url)),
   "../test-fixtures/kit-workspace",
 );
+
+function writeOverLimitPreset(dataDir: string): string {
+  const sourceDirectory = join(dataDir, "repos", "bounded-preset");
+  mkdirSync(sourceDirectory, { recursive: true });
+  writeFileSync(
+    join(sourceDirectory, "print-partner.manifest.yaml"),
+    `format: print-partner-manifest
+version: 2
+option_groups:
+  extras:
+    rule: pick_n
+    max: 1
+    variants:
+      - id: skirts
+        parts: ["skirts/**"]
+      - id: panels
+        parts: ["panels/**"]
+`,
+  );
+  writeFileSync(
+    join(dataDir, "kit-catalog.yaml"),
+    `version: 1
+bases:
+  bounded:
+    source_name: Bounded-Printer
+addon_categories: {}
+stack_presets:
+  invalid_bundle:
+    label: Invalid bundle
+    base: bounded
+    base_tag: future
+    addon_sources: []
+    default_selections:
+      extras: [skirts, panels]
+`,
+  );
+  return sourceDirectory;
+}
 
 describe("resolveStackPresetId", () => {
   const presets = {
@@ -123,6 +161,90 @@ describe("applyStackPresetToProfile base_tag", () => {
     expect(() => applyStackPresetToProfile(repo, plan.id, "example_kit_r2", null)).toThrow(
       /Unknown stack preset/,
     );
+  });
+
+  it("preserves array selections from an external catalog preset", () => {
+    writeFileSync(
+      join(dataDir, "kit-catalog.yaml"),
+      `version: 1
+bases:
+  example_printer:
+    source_name: Example-Printer
+addon_categories: {}
+stack_presets:
+  panel_bundle:
+    label: Panel bundle
+    base: example_printer
+    addon_sources: []
+    default_selections:
+      extras: [skirts, panels]
+`,
+    );
+    const base = repo.createSource({
+      name: "Example-Printer",
+      source_kind: "local",
+    });
+    const plan = repo.createProfile("Panel bundle", base.id);
+
+    const result = applyStackPresetToProfile(
+      repo,
+      plan.id,
+      "panel_bundle",
+      dataDir,
+    );
+
+    expect(result.selections).toEqual({ extras: ["skirts", "panels"] });
+  });
+
+  it("rejects malformed catalog selections before changing the plan", () => {
+    writeFileSync(
+      join(dataDir, "kit-catalog.yaml"),
+      `version: 1
+bases:
+  example_printer:
+    source_name: Example-Printer
+addon_categories: {}
+stack_presets:
+  broken:
+    label: Broken preset
+    base: example_printer
+    addon_sources: []
+    default_selections:
+      extras: [skirts, 4]
+`,
+    );
+    repo.createSource({ name: "Example-Printer", source_kind: "local" });
+    const plan = repo.createProfile("Unchanged plan");
+
+    expect(() =>
+      applyStackPresetToProfile(repo, plan.id, "broken", dataDir),
+    ).toThrow("stack_presets.broken.default_selections.extras[1]");
+    expect(repo.getProfileLayers(plan.id)).toEqual([]);
+  });
+
+  it("rejects an over-limit preset before changing refs or layers", () => {
+    const targetDirectory = writeOverLimitPreset(dataDir);
+    const original = repo.createSource({
+      name: "Original-Printer",
+      source_kind: "local",
+    });
+    const target = repo.createSource({
+      name: "Bounded-Printer",
+      source_kind: "github",
+      branch: "main",
+      local_path: targetDirectory,
+    });
+    const plan = repo.createProfile("Unchanged bounded plan", original.id);
+
+    expect(() =>
+      applyStackPresetToProfile(repo, plan.id, "invalid_bundle", dataDir),
+    ).toThrow(
+      "stack_presets.invalid_bundle.default_selections.extras must contain no more than 1 variant id",
+    );
+    expect(repo.getProfileLayers(plan.id).map((layer) => layer.project_id)).toEqual([
+      original.id,
+    ]);
+    expect(repo.getSource(target.id)).toMatchObject({ branch: "main", tag: null });
   });
 });
 

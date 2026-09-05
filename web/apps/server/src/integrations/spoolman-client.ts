@@ -1,16 +1,19 @@
 import type { IntegrationConfig } from "@print-partner/contracts";
 import type { CatalogColor } from "../services/filament-catalog.js";
 import { assertSafeOutboundUrl } from "../lib/outbound-url.js";
+import {
+  cancelResponseBody,
+  isJsonObject as isRecord,
+  readBoundedJsonResponse,
+  readBoundedResponseText,
+} from "../lib/bounded-response.js";
 
 const REQUEST_TIMEOUT_MS = 8000;
+const MAX_METADATA_RESPONSE_BYTES = 256 * 1024;
+const MAX_INVENTORY_RESPONSE_BYTES = 16 * 1024 * 1024;
+const MAX_ERROR_RESPONSE_BYTES = 64 * 1024;
 const SPOOLMAN_FILAMENT_ID_RE = /^spoolman:([^:]+):filament:(\d+)$/;
 const SPOOLMAN_SPOOL_ID_RE = /^spoolman:([^:]+):spool:(\d+)$/;
-
-export type SpoolmanVendorRef =
-  | string
-  | null
-  | undefined
-  | { id?: number; name?: string | null };
 
 export type SpoolmanFilament = {
   id: number;
@@ -77,10 +80,10 @@ export function normalizeSpoolmanHex(raw: string | null | undefined): string {
   return trimmed.startsWith("#") ? trimmed : `#${trimmed}`;
 }
 
-export function normalizeSpoolmanVendor(vendor: SpoolmanVendorRef): string {
+export function normalizeSpoolmanVendor(vendor: unknown): string {
   if (vendor == null) return "";
   if (typeof vendor === "string") return vendor.trim();
-  if (typeof vendor === "object") return String(vendor.name ?? "").trim();
+  if (isRecord(vendor)) return typeof vendor.name === "string" ? vendor.name.trim() : "";
   return "";
 }
 
@@ -90,25 +93,24 @@ export function normalizeSpoolmanFilament(raw: Record<string, unknown>): Spoolma
   return {
     id,
     name: raw.name != null ? String(raw.name) : null,
-    vendor: normalizeSpoolmanVendor(raw.vendor as SpoolmanVendorRef) || null,
+    vendor: normalizeSpoolmanVendor(raw.vendor) || null,
     material: raw.material != null ? String(raw.material) : null,
     color_hex: raw.color_hex != null ? String(raw.color_hex) : null,
   };
 }
 
 export function parseSpoolmanFilamentList(body: unknown): SpoolmanFilament[] {
+  const envelope = isRecord(body) ? body : null;
   const rows: unknown[] = Array.isArray(body)
     ? body
-    : body && typeof body === "object"
-      ? ((body as { items?: unknown[]; results?: unknown[]; data?: unknown[] }).items ??
-        (body as { results?: unknown[] }).results ??
-        (body as { data?: unknown[] }).data ??
-        [])
+    : envelope
+      ? [envelope.items, envelope.results, envelope.data]
+        .find((value): value is unknown[] => Array.isArray(value)) ?? []
       : [];
   const out: SpoolmanFilament[] = [];
   for (const row of rows) {
-    if (!row || typeof row !== "object") continue;
-    const filament = normalizeSpoolmanFilament(row as Record<string, unknown>);
+    if (!isRecord(row)) continue;
+    const filament = normalizeSpoolmanFilament(row);
     if (filament) out.push(filament);
   }
   return out;
@@ -232,8 +234,14 @@ export async function testSpoolmanConnection(
       if (res.ok) {
         let detail = "";
         try {
-          const body = (await res.json()) as { version?: string; status?: string };
-          detail = body.version ? `v${body.version}` : body.status ? String(body.status) : "";
+          const body = await readBoundedJsonResponse(res, MAX_METADATA_RESPONSE_BYTES);
+          if (body && typeof body === "object" && !Array.isArray(body)) {
+            detail = "version" in body && typeof body.version === "string"
+              ? `v${body.version}`
+              : "status" in body && typeof body.status === "string"
+                ? body.status
+                : "";
+          }
         } catch {
           /* ignore parse errors */
         }
@@ -242,6 +250,7 @@ export async function testSpoolmanConnection(
           message: detail ? `Connected (${detail})` : "Connected",
         };
       }
+      await cancelResponseBody(res);
       lastError = `Spoolman returned HTTP ${res.status} on ${path}`;
     } catch (e) {
       lastError = e instanceof Error ? e.message : String(e);
@@ -265,9 +274,10 @@ export async function listSpoolmanFilaments(
     throw new Error(`Spoolman filaments request failed: ${detail}`, { cause: e });
   }
   if (!res.ok) {
+    await cancelResponseBody(res);
     throw new Error(`Spoolman filaments request failed: HTTP ${res.status}`);
   }
-  const body = await res.json();
+  const body = await readBoundedJsonResponse(res, MAX_INVENTORY_RESPONSE_BYTES);
   return parseSpoolmanFilamentList(body);
 }
 
@@ -277,8 +287,8 @@ export function normalizeSpoolmanSpool(raw: Record<string, unknown>): SpoolmanSp
   let filamentId = Number(raw.filament_id);
   if (!Number.isFinite(filamentId)) {
     const filament = raw.filament;
-    if (filament && typeof filament === "object") {
-      filamentId = Number((filament as Record<string, unknown>).id);
+    if (isRecord(filament)) {
+      filamentId = Number(filament.id);
     }
   }
   if (!Number.isFinite(filamentId)) return null;
@@ -296,18 +306,17 @@ export function normalizeSpoolmanSpool(raw: Record<string, unknown>): SpoolmanSp
 }
 
 export function parseSpoolmanSpoolList(body: unknown): SpoolmanSpool[] {
+  const envelope = isRecord(body) ? body : null;
   const rows: unknown[] = Array.isArray(body)
     ? body
-    : body && typeof body === "object"
-      ? ((body as { items?: unknown[]; results?: unknown[]; data?: unknown[] }).items ??
-        (body as { results?: unknown[] }).results ??
-        (body as { data?: unknown[] }).data ??
-        [])
+    : envelope
+      ? [envelope.items, envelope.results, envelope.data]
+        .find((value): value is unknown[] => Array.isArray(value)) ?? []
       : [];
   const out: SpoolmanSpool[] = [];
   for (const row of rows) {
-    if (!row || typeof row !== "object") continue;
-    const spool = normalizeSpoolmanSpool(row as Record<string, unknown>);
+    if (!isRecord(row)) continue;
+    const spool = normalizeSpoolmanSpool(row);
     if (spool) out.push(spool);
   }
   return out;
@@ -318,9 +327,10 @@ export async function listSpoolmanSpools(config: IntegrationConfig): Promise<Spo
   if (!baseUrl) return [];
   const res = await spoolmanFetch(baseUrl, config, "/spool");
   if (!res.ok) {
+    await cancelResponseBody(res);
     throw new Error(`Spoolman spools request failed: HTTP ${res.status}`);
   }
-  const body = await res.json();
+  const body = await readBoundedJsonResponse(res, MAX_INVENTORY_RESPONSE_BYTES);
   return parseSpoolmanSpoolList(body);
 }
 
@@ -347,7 +357,8 @@ export async function useSpoolFilament(
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
   if (!res.ok) {
-    const text = await res.text().catch(() => "");
+    const text = await readBoundedResponseText(res, MAX_ERROR_RESPONSE_BYTES).catch(() => "");
     throw new Error(`Spoolman use spool failed: HTTP ${res.status}${text ? `: ${text.slice(0, 200)}` : ""}`);
   }
+  await cancelResponseBody(res);
 }

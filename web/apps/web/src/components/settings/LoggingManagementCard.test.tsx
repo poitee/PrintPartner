@@ -51,6 +51,7 @@ describe("LoggingManagementCard", () => {
     expect(await screen.findByText("/plans/12/drafts/40/apply")).toBeTruthy();
     expect(screen.getByText("422")).toBeTruthy();
     expect(screen.getByText("Plan publication did not complete")).toBeTruthy();
+    expect(screen.getByRole("switch", { name: "Workflow Tracking" })).toBeTruthy();
   });
 
   it("clears a transient viewer error after a successful refresh", async () => {

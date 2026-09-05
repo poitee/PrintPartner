@@ -100,6 +100,31 @@ describe("loadConfig", () => {
     }
   });
 
+  it("requires a canonical public URL for production password-reset email", () => {
+    const previous = {
+      NODE_ENV: process.env.NODE_ENV,
+      SMTP_HOST: process.env.SMTP_HOST,
+      SMTP_FROM: process.env.SMTP_FROM,
+      APP_PUBLIC_URL: process.env.APP_PUBLIC_URL,
+    };
+    try {
+      process.env.NODE_ENV = "production";
+      process.env.SMTP_HOST = "smtp.example.com";
+      process.env.SMTP_FROM = "noreply@example.com";
+      delete process.env.APP_PUBLIC_URL;
+
+      expect(() => validateProductionConfig(loadConfig())).toThrow(/APP_PUBLIC_URL/);
+
+      process.env.APP_PUBLIC_URL = "https://print.example.com";
+      expect(() => validateProductionConfig(loadConfig())).not.toThrow();
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
   it("keeps AI disabled unless AI_ENABLED=1 with credentials", () => {
     const prev = {
       AI_ENABLED: process.env.AI_ENABLED,

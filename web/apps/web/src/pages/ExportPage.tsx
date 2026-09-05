@@ -345,7 +345,7 @@ export default function ExportPage() {
 
   /**
    * The answer is durable, so it goes straight to the production setup. The
-   * patch names only `route`, which is how the Required-unit selection survives
+   * command names only `route`, which is how the Required-unit selection survives
    * a switch: nothing else in the record is touched, and SC 3.3.7 Redundant
    * Entry is satisfied without asking the operator to choose units again.
    *
@@ -355,7 +355,7 @@ export default function ExportPage() {
   const saveRoute = (next: ProductionRoute) => {
     setRouteFailure(null);
     void productionSetup
-      .save({ route: next })
+      .save({ kind: "set_route", route: next })
       .then(() => {
         setPendingRouteChange(null);
         setChangingRoute(false);
