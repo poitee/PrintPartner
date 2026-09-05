@@ -12,7 +12,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import type { PlanDraftWorkspace } from "@print-partner/contracts";
-import { editPlanDraftParts } from "../../api/endpoints/planDrafts";
+import { applyPlanDraft, editPlanDraftParts, listPlanDrafts, recomputePlanDraft } from "../../api/endpoints/planDrafts";
 import type { PlanReview, ReviewPart } from "../../api/endpoints/planManifests";
 import { queryKeys } from "../../queries/keys";
 import { PlanWorkspaceProvider, usePlanWorkspace } from "../../context/PlanWorkspaceContext";
@@ -81,6 +81,7 @@ vi.mock("../../api/endpoints/planDrafts", async (importOriginal) => {
     recomputePlanDraft: vi.fn(),
     rebasePlanDraft: vi.fn(),
     applyPlanDraft: vi.fn(),
+    listPlanDrafts: vi.fn(),
     abandonPlanDraft: vi.fn(),
     reconcilePlanDraft: vi.fn(),
   };
@@ -234,6 +235,7 @@ afterEach(() => {
 });
 
 beforeEach(() => {
+  vi.resetAllMocks();
   localStorage.clear();
   // Table layout is the surface with the "Proposed inclusion" column.
   localStorage.setItem(
@@ -244,6 +246,17 @@ beforeEach(() => {
     }),
   );
   vi.mocked(editPlanDraftParts).mockImplementation(async () => state.workspace!);
+  vi.mocked(listPlanDrafts).mockResolvedValue([]);
+  vi.mocked(applyPlanDraft).mockImplementation(async (workspace) => ({
+    profile_id: workspace.profile_id,
+    draft_id: workspace.draft.draft_id,
+    revision_id: 4,
+    plan_version: 2,
+    draft_lifecycle_version: 1,
+    revision_digest: "c".repeat(64),
+    required_unit_mapping_digest: "d".repeat(64),
+    applied_at: "2026-08-21T12:00:00.000Z",
+  }));
 });
 
 describe("Plan sheet Working Plan edits", () => {
@@ -254,7 +267,7 @@ describe("Plan sheet Working Plan edits", () => {
     ]);
 
     renderSheet();
-    await screen.findByRole("columnheader", { name: "Proposed inclusion" });
+    await screen.findByRole("columnheader", { name: "Actions" });
     await userEvent.click(screen.getByRole("button", { name: "Remove" }));
 
     await waitFor(() =>
@@ -287,7 +300,7 @@ describe("Plan sheet Working Plan edits", () => {
     ]);
 
     renderSheet();
-    await screen.findByRole("columnheader", { name: "Proposed inclusion" });
+    await screen.findByRole("columnheader", { name: "Actions" });
     const removes = screen.getAllByRole("button", { name: "Remove" });
     await userEvent.click(removes[0]!);
 
@@ -307,7 +320,7 @@ describe("Plan sheet Working Plan edits", () => {
     ]);
 
     renderSheet();
-    await screen.findByRole("columnheader", { name: "Proposed inclusion" });
+    await screen.findByRole("columnheader", { name: "Actions" });
     await userEvent.click(screen.getByRole("button", { name: "Remove" }));
 
     await waitFor(() =>
@@ -338,7 +351,7 @@ describe("Plan sheet Working Plan edits", () => {
     ]);
 
     renderSheet();
-    await screen.findByRole("columnheader", { name: "Proposed inclusion" });
+    await screen.findByRole("columnheader", { name: "Actions" });
 
     expect(screen.getByText("motor.stl")).toBeTruthy();
     expect(screen.queryByText("bracket.stl")).toBeNull();
@@ -364,7 +377,7 @@ describe("Plan sheet Working Plan edits", () => {
     ]);
 
     renderSheet();
-    await screen.findByRole("columnheader", { name: "Proposed inclusion" });
+    await screen.findByRole("columnheader", { name: "Actions" });
     await userEvent.click(screen.getAllByRole("button", { name: "Remove" })[0]!);
 
     await waitFor(() =>
@@ -391,13 +404,16 @@ describe("Plan sheet Working Plan edits", () => {
     const secondWorkspace = workspaceWithQuantity(initialWorkspace, "b", 2);
     const thirdWorkspace = workspaceWithQuantity(initialWorkspace, "c", 3);
     const fourthWorkspace = workspaceWithQuantity(initialWorkspace, "d", 4);
+    vi.mocked(recomputePlanDraft)
+      .mockResolvedValueOnce({ ...secondWorkspace, draft: { ...secondWorkspace.draft, draft_id: 10 } })
+      .mockResolvedValueOnce({ ...thirdWorkspace, draft: { ...thirdWorkspace.draft, draft_id: 11 } });
     vi.mocked(editPlanDraftParts)
       .mockReturnValueOnce(pending.promise)
       .mockResolvedValueOnce(thirdWorkspace)
       .mockResolvedValueOnce(fourthWorkspace);
 
     renderSheet();
-    await screen.findByRole("columnheader", { name: "Proposed inclusion" });
+    await screen.findByRole("columnheader", { name: "Actions" });
     const increase = screen.getByRole("button", {
       name: "Increase quantity for bracket.stl",
     });
@@ -439,7 +455,7 @@ describe("Plan sheet Working Plan edits", () => {
     vi.mocked(editPlanDraftParts).mockRejectedValueOnce(new Error("disk full"));
 
     renderSheet();
-    await screen.findByRole("columnheader", { name: "Proposed inclusion" });
+    await screen.findByRole("columnheader", { name: "Actions" });
     await userEvent.click(screen.getByRole("button", { name: "Remove" }));
 
     await waitFor(() =>

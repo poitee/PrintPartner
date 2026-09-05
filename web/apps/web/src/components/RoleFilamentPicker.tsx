@@ -728,7 +728,7 @@ export default function RoleFilamentPicker({
         )}
         <Button variant="outline" size="sm" disabled={disabled} onClick={onSaveColors}>
           <Download className="h-4 w-4" aria-hidden />
-          Save colors
+          Export colors
         </Button>
         <Button
           variant="outline"

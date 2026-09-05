@@ -1,10 +1,8 @@
 // @vitest-environment jsdom
 
 /**
- * Plan is the publication checkpoint. This drives the real decision path:
- * pending choices, the Required-unit answers that complete them, and the durable
- * receipt that stays on the page afterwards. Only the engine HTTP layer is
- * mocked.
+ * Legacy acceptance components still exercise the provider's reconciliation and
+ * recovery boundary. The main Plan page now saves edits directly.
  */
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -15,6 +13,8 @@ import { MemoryRouter } from "react-router-dom";
 import type { PlanDraftWorkspace, PlanFreshness } from "@print-partner/contracts";
 import {
   applyPlanDraft,
+  abandonPlanDraft,
+  rebasePlanDraft,
   recomputePlanDraft,
   reconcilePlanDraft,
 } from "../../api/endpoints/planDrafts";
@@ -270,6 +270,8 @@ beforeEach(() => {
   vi.mocked(reconcilePlanDraft).mockReset();
   vi.mocked(recomputePlanDraft).mockReset();
   vi.mocked(applyPlanDraft).mockReset();
+  vi.mocked(abandonPlanDraft).mockReset();
+  vi.mocked(rebasePlanDraft).mockReset();
 });
 
 afterEach(() => {
@@ -431,9 +433,9 @@ describe("Plan acceptance checkpoint", () => {
     expect(await screen.findByText(/part-1.stl: printed 6 units, new quantity is 4/)).toBeTruthy();
   });
 
-  it("rebuilds from current Sources instead of retrying an unchanged Working Plan", async () => {
+  it("rebases saved edits onto current Sources before retrying the Plan", async () => {
     const user = userEvent.setup();
-    const rebuiltWorkspace: PlanDraftWorkspace = {
+    const rebasedWorkspace: PlanDraftWorkspace = {
       ...resolvedWorkspace(),
       draft: {
         ...resolvedWorkspace().draft,
@@ -441,10 +443,11 @@ describe("Plan acceptance checkpoint", () => {
         snapshot_digest: "c".repeat(64),
       },
     };
-    state.setWorkspace(resolvedWorkspace());
-    vi.mocked(recomputePlanDraft).mockImplementation(async () => {
-      state.setWorkspace(rebuiltWorkspace);
-      return rebuiltWorkspace;
+    const originalWorkspace = resolvedWorkspace();
+    state.setWorkspace(originalWorkspace);
+    vi.mocked(rebasePlanDraft).mockImplementation(async () => {
+      state.setWorkspace(rebasedWorkspace);
+      return rebasedWorkspace;
     });
     vi.mocked(applyPlanDraft)
       .mockRejectedValueOnce(new EngineHttpError("Sources changed", 409, {
@@ -466,9 +469,11 @@ describe("Plan acceptance checkpoint", () => {
       name: "Publish Plan revision 2 for Production",
     }));
 
-    expect(await screen.findByText("Working Plan rebuilt from Sources")).toBeTruthy();
-    expect(screen.getByText(/Sources changed after this Working Plan was created/)).toBeTruthy();
-    expect(recomputePlanDraft).toHaveBeenCalledWith(7);
+    expect(await screen.findByText("Working Plan refreshed")).toBeTruthy();
+    expect(screen.getAllByText(/Review the updated quantities and choices/).length).toBeGreaterThan(0);
+    expect(abandonPlanDraft).not.toHaveBeenCalled();
+    expect(rebasePlanDraft).toHaveBeenCalledWith(7, originalWorkspace.draft);
+    expect(recomputePlanDraft).not.toHaveBeenCalled();
     expect(screen.queryByText(/choice before publishing/)).toBeNull();
 
     await user.click(screen.getByRole("button", {
@@ -476,7 +481,7 @@ describe("Plan acceptance checkpoint", () => {
     }));
 
     await waitFor(() => expect(applyPlanDraft).toHaveBeenCalledTimes(2));
-    expect(applyPlanDraft).toHaveBeenLastCalledWith(rebuiltWorkspace, undefined);
+    expect(applyPlanDraft).toHaveBeenLastCalledWith(rebasedWorkspace, undefined);
     expect(await screen.findByText("Plan revision 2 published")).toBeTruthy();
   });
 

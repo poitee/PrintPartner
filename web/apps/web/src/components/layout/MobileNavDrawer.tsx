@@ -97,7 +97,7 @@ export default function MobileNavDrawer({ onNavigate, sourceUpdateCount }: Props
         <span className="block">{item.label}</span>
         {item.id === "library" ? (
           <span className="block truncate text-micro font-normal text-muted-foreground" aria-hidden>
-            Add, sync, and watch projects
+            Add sources and their files
           </span>
         ) : null}
       </span>

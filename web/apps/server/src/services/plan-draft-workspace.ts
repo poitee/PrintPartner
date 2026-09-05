@@ -168,6 +168,7 @@ export class PlanDraftWorkspaceService {
     readonly profileId: number;
     readonly actorId: string;
     readonly idempotencyKey: string;
+    readonly applyManifest?: boolean;
   }): PlanDraftWorkspaceResult {
     if (!this.repo.canMutateAcceptedPlan()) return { kind: "transaction_unavailable" };
     if (!this.repo.getOwnedProfileIdentity(input.profileId)) return { kind: "profile_not_found" };
@@ -175,6 +176,7 @@ export class PlanDraftWorkspaceService {
       profileId: input.profileId,
       actor: input.actorId,
       idempotencyKey: input.idempotencyKey,
+      applyManifest: input.applyManifest,
     });
     if (result.kind !== "created" && result.kind !== "existing") {
       return this.recomputeFailure(result);
@@ -301,6 +303,7 @@ export class PlanDraftWorkspaceService {
     const result = this.repo.rebasePlanDraft({
       profileId: input.profileId,
       sourceDraftId: input.draftId,
+      expectedSourceState: input.request.expected_source_state,
       expectedSourceLifecycleVersion: input.request.expected_source_lifecycle_version,
       expectedSourceSnapshotDigest: input.request.expected_source_snapshot_digest,
       actor: input.actorId,

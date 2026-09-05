@@ -23,8 +23,9 @@ type Props = {
   baseSourceName?: string | null;
   buildStale?: boolean;
   disabled?: boolean;
-  /** Nested inside a source card — omit outer card chrome. */
+  /** Omit outer card chrome when nested in the Plan. */
   compact?: boolean;
+  onUpdated?: () => Promise<void>;
 };
 
 function groupLabel(groupId: string, group: RepoManifestOptionGroup): string {
@@ -59,6 +60,7 @@ export default function KitManifestOptions({
   buildStale = false,
   disabled = false,
   compact = false,
+  onUpdated,
 }: Props) {
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -86,6 +88,7 @@ export default function KitManifestOptions({
     userEdited,
     disabled,
     baseKit: savedKit,
+    onPersisted: onUpdated,
     onSaved,
     onRegisterFlush: registerFlush,
     onUnregisterFlush: unregisterFlush,
@@ -210,49 +213,11 @@ export default function KitManifestOptions({
     return <p className="text-sm text-muted-foreground">Loading kit options…</p>;
   }
 
-  if (visibleGroups.length === 0) {
-    const emptyHint = (
-      <p className="text-xs text-muted-foreground">
-        No variant manifest on this source — add a{" "}
-        <code className="font-mono">print-partner.manifest.yaml</code> to the repo after sync.{" "}
-        <Link to="/help#kit-variants" className="text-primary hover:underline">
-          Learn about kit variants
-        </Link>
-      </p>
-    );
-
-    if (compact) {
-      return (
-        <details className="group rounded-md border border-border">
-          <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-3 py-2.5 [&::-webkit-details-marker]:hidden">
-            <TitleHeading className="text-xs font-semibold text-muted-foreground">
-              {title}
-            </TitleHeading>
-            <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" />
-          </summary>
-          <div className="border-t border-border px-3 pb-3 pt-2">{emptyHint}</div>
-        </details>
-      );
-    }
-
-    return (
-      <section className="rounded-lg border border-border bg-card p-4">
-        <div className="mb-1">
-          <TitleHeading className="text-sm font-semibold">{title}</TitleHeading>
-          <p className="text-xs text-muted-foreground">
-            Choose the options required by each group, then run{" "}
-            <strong className="font-medium text-foreground">Build Working Plan</strong> to include it.
-          </p>
-        </div>
-        {emptyHint}
-      </section>
-    );
-  }
+  if (visibleGroups.length === 0) return null;
 
   const staleHint = buildStale ? (
     <p className="text-xs text-warning">
-      Choose <strong className="font-medium text-foreground">Build Working Plan</strong> to include variant
-      parts to Review and Checkoff.
+      Source options have changed. Check your selections below.
     </p>
   ) : null;
 
@@ -373,7 +338,7 @@ export default function KitManifestOptions({
           dirty && "border-primary/40",
         )}
         open={detailsOpen || undefined}
-        onToggle={(e) => setDetailsOpen((e.target as HTMLDetailsElement).open)}
+        onToggle={(e) => setDetailsOpen(e.currentTarget.open)}
       >
         <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-3 py-2.5 [&::-webkit-details-marker]:hidden">
           <TitleHeading className="text-xs font-semibold text-muted-foreground">
@@ -383,8 +348,7 @@ export default function KitManifestOptions({
         </summary>
         <div className="space-y-2 border-t border-border px-3 pb-3 pt-2">
           <p className="text-micro text-muted-foreground">
-            Choose the required options, then{" "}
-            <strong className="font-medium text-foreground">Build Working Plan</strong>.{" "}
+            Choose the variants to print. Changes save automatically.{" "}
             <Link to="/help#kit-variants" className="text-primary hover:underline">
               Help
             </Link>
@@ -405,8 +369,7 @@ export default function KitManifestOptions({
       <div className="mb-1">
         <TitleHeading className="text-sm font-semibold">{title}</TitleHeading>
         <p className="text-xs text-muted-foreground">
-          Choose the options required by each group, then run{" "}
-          <strong className="font-medium text-foreground">Build Working Plan</strong> to include it.{" "}
+          Choose the variants to print. Changes save automatically.{" "}
           <Link to="/help#kit-variants" className="text-primary hover:underline">
             Help
           </Link>

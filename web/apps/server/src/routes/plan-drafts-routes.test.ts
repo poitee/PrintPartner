@@ -14,7 +14,7 @@ import * as pgSchema from "../db/schema-pg.js";
 import * as sqliteSchema from "../db/schema.js";
 import { registerPostgresSyncQuery, unregisterPostgresSyncQuery } from "../db/sync-db-bridge.js";
 import { registerPlanDraftRoutes } from "./plan-drafts.js";
-import { acceptPlanForTest } from "../test/accept-plan.js";
+import { acceptPlanForTest, editAcceptedPartsForTest } from "../test/accept-plan.js";
 import { acceptedPlanBasis } from "../db/accepted-plan-progress.js";
 import { newBuildPlanningBrief, saveBuildPlanningBrief } from "../services/build-planning.js";
 
@@ -50,6 +50,43 @@ async function fixture() {
 }
 
 describe("Plan draft routes", () => {
+  it("preserves file choices on ordinary recompute and applies kit choices only on request", async () => {
+    const { app, repo, profile, sourceRoot } = await fixture();
+    writeFileSync(join(sourceRoot, "print-partner.manifest.yaml"), `option_groups:
+  bracket:
+    rule: pick_one
+    variants:
+      - id: standard
+        parts: [bracket.stl]
+selections:
+  bracket: standard
+`);
+    expect(acceptPlanForTest(repo, profile.id).merged).toBe(true);
+    const part = repo.getAcceptedPlanRevision(profile.id)?.parts[0];
+    if (part?.projectionPartId == null) throw new Error("accepted bracket is missing");
+    editAcceptedPartsForTest(repo, profile.id, [{ projectionPartId: part.projectionPartId, included: false }]);
+
+    for (const applyManifest of [false, true]) {
+      const response = await app.inject({
+        method: "POST",
+        url: `/plans/${profile.id}/drafts/recompute`,
+        headers: { "idempotency-key": `manifest-mode-${applyManifest}` },
+        payload: { apply_manifest: applyManifest },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({ parts: [{ included: applyManifest }] });
+    }
+    for (const payload of [{}, { apply_manifest: "false" }, { apply_manifest: 0 }]) {
+      const response = await app.inject({
+        method: "POST",
+        url: `/plans/${profile.id}/drafts/recompute`,
+        headers: { "idempotency-key": "invalid-manifest-mode" },
+        payload,
+      });
+      expect(response.statusCode).toBe(400);
+    }
+  });
+
   it("reports changed Sources separately from a stale Working Plan identity", async () => {
     const { app, repo, profile } = await fixture();
     const createdResponse = await app.inject({
@@ -79,6 +116,60 @@ describe("Plan draft routes", () => {
 
     expect(response.statusCode).toBe(409);
     expect(response.json()).toEqual({ code: "inputs_changed" });
+
+    const recovered = await app.inject({
+      method: "POST",
+      url: `/plans/${profile.id}/drafts/${created.draft.draft_id}/rebase`,
+      headers: { "idempotency-key": "recover-open-source-change" },
+      payload: {
+        expected_source_state: "open",
+        expected_source_lifecycle_version: created.draft.lifecycle_version,
+        expected_source_snapshot_digest: created.draft.snapshot_digest,
+      },
+    });
+    expect(recovered.statusCode).toBe(200);
+    expect(recovered.json()).toMatchObject({ draft: { state: "open" } });
+    expect(repo.getPlanDraft(profile.id, created.draft.draft_id)?.state).toBe("abandoned");
+  });
+
+  it("keeps a conflicting open draft visible and editable after a failed refresh", async () => {
+    const { app, repo, profile, sourceRoot } = await fixture();
+    const created = (await app.inject({
+      method: "POST", url: `/plans/${profile.id}/drafts/recompute`,
+      headers: { "idempotency-key": "open-conflict-draft" }, payload: { apply_manifest: false },
+    })).json();
+    const target = created.parts[0];
+    const edited = (await app.inject({
+      method: "PATCH", url: `/plans/${profile.id}/drafts/${created.draft.draft_id}/parts`,
+      payload: { expected_snapshot_digest: created.draft.snapshot_digest, decisions: [
+        { kind: "set_quantity_override", draft_part_ids: [target.draft_part_id], value: 2 },
+      ] },
+    })).json();
+    rmSync(join(sourceRoot, "bracket.stl"));
+    writeFileSync(join(sourceRoot, "replacement.stl"), "solid replacement");
+    const source = repo.createSource({ name: "Changed Sources", url: "https://example.test/changed-sources" });
+    repo.addAddonLayer(profile.id, source.id);
+    const response = await app.inject({
+      method: "POST", url: `/plans/${profile.id}/drafts/${edited.draft.draft_id}/rebase`,
+      headers: { "idempotency-key": "failed-open-refresh" },
+      payload: {
+        expected_source_state: "open",
+        expected_source_lifecycle_version: edited.draft.lifecycle_version,
+        expected_source_snapshot_digest: edited.draft.snapshot_digest,
+      },
+    });
+    expect(response.statusCode).toBe(422);
+    expect(response.json()).toMatchObject({ code: "merge_conflicts" });
+    const listed = (await app.inject({ method: "GET", url: `/plans/${profile.id}/drafts` })).json();
+    expect(listed.drafts).toContainEqual(expect.objectContaining({ draft_id: edited.draft.draft_id, state: "open" }));
+    const retryEdit = await app.inject({
+      method: "PATCH", url: `/plans/${profile.id}/drafts/${edited.draft.draft_id}/parts`,
+      payload: { expected_snapshot_digest: edited.draft.snapshot_digest, decisions: [
+        { kind: "set_quantity_override", draft_part_ids: [target.draft_part_id], value: 3 },
+      ] },
+    });
+    expect(retryEdit.statusCode).toBe(200);
+    expect(retryEdit.json()).toMatchObject({ parts: [{ quantity_effective: 3 }] });
   });
 
   it("returns the current Working Plan when publication uses a stale identity", async () => {

@@ -283,7 +283,7 @@ function acceptedPart(input: {
 }
 
 describe("Plan draft rebase merge", () => {
-  it("extracts new-Part inclusion and quantity decisions from the known default baseline", () => {
+  it("retains each new file's inclusion choice because Library defaults may exclude it", () => {
     const source = draftFixture();
     source.parts[0]!.baseRevisionPartId = null;
     source.parts[0]!.included = false;
@@ -295,7 +295,20 @@ describe("Plan draft rebase merge", () => {
     expect(extractRebasePartDecisions({ source, baseParts: [] })).toEqual([
       { kind: "set_included", sourcePartId: 31, value: false },
       { kind: "set_quantity_override", sourcePartId: 31, value: 5 },
+      { kind: "set_included", sourcePartId: 32, value: true },
     ]);
+  });
+
+  it("keeps a new file selected when rebasing over an excluded Library default", () => {
+    const source = draftFixture();
+    const sourcePart = source.parts[0];
+    if (!sourcePart) throw new Error("source file is unavailable");
+    source.parts = [{ ...sourcePart, baseRevisionPartId: null, included: true, quantityOverride: null }];
+    const fresh = draftFixture();
+    fresh.parts = [{ ...source.parts[0], id: 41, draftId: fresh.id, included: false }];
+
+    const result = mergeRebasedPlanDraft({ source, sourceBaseParts: [], fresh, currentBaseParts: [] });
+    expect(result).toMatchObject({ kind: "merged", draft: { parts: [{ included: true }] } });
   });
 
   it("emits no delta for an explicit no-op and extracts a quantity clear", () => {

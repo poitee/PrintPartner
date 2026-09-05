@@ -149,7 +149,7 @@ function UtilityLink({
         <span className="block text-sm font-medium">{link.label}</span>
         {isLibrary ? (
           <span className="block truncate text-micro font-normal text-muted-foreground" aria-hidden>
-            Add, sync, and watch projects
+            Add sources and their files
           </span>
         ) : null}
       </span>

@@ -116,6 +116,16 @@ describe("Plan draft contracts", () => {
       expected_source_lifecycle_version: 3,
       expected_source_snapshot_digest: digest,
     });
+    expect(parseRebasePlanDraftRequest({
+      expected_source_state: "open",
+      expected_source_lifecycle_version: 0,
+      expected_source_snapshot_digest: digest,
+    })).toMatchObject({ expected_source_state: "open" });
+    expect(() => parseRebasePlanDraftRequest({
+      expected_source_state: "consumed",
+      expected_source_lifecycle_version: 0,
+      expected_source_snapshot_digest: digest,
+    })).toThrow();
     const expected = {
       profile_id: 7,
       plan_version: 2,

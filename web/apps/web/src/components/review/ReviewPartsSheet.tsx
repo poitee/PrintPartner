@@ -430,7 +430,7 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
       const proposedChange = draftWorkspace && accepted && (
         accepted.included !== part.included || accepted.quantity_effective !== part.quantity_effective
       )
-        ? `Accepted: qty ${accepted.quantity_effective}, ${accepted.included ? "included" : "excluded"}`
+        ? `Previously saved: qty ${accepted.quantity_effective}, ${accepted.included ? "included" : "excluded"}`
         : null;
       return {
         note: [warn ?? partSourceNote(part), proposedChange].filter(Boolean).join("; "),
@@ -485,11 +485,11 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
                 <th className="sheet-cell-spool">Spool</th>
               )}
               <th className="sheet-cell-qty">
-                {viewMode === "edit" && draftWorkspace ? "Proposed qty" : "Qty"}
+                Qty
               </th>
               {viewMode === "edit" ? (
                 <th className="sheet-cell-actions">
-                  {draftWorkspace ? "Proposed inclusion" : "Actions"}
+                  Actions
                 </th>
               ) : (
                 <th className="sheet-cell-printed">Printed</th>
@@ -550,11 +550,6 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
 
   return (
     <section className="space-y-3">
-      {draftWorkspace && ui.viewMode === "edit" && (
-        <p className="no-print rounded-md border border-primary/40 bg-primary-soft px-3 py-2 text-sm">
-          Quantity and inclusion controls change the Working Plan. They are not accepted yet.
-        </p>
-      )}
       <div className="no-print checkoff-sticky flex flex-col gap-3 rounded-lg border border-border bg-card p-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div

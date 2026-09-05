@@ -1,261 +1,104 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type RefObject,
-} from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { Package, Printer } from "lucide-react";
-import BuildSummaryHeader from "../components/build/BuildSummaryHeader";
-import WorkingPlanReviewCard from "../components/build/WorkingPlanReviewCard";
-import EmptyState from "../components/layout/EmptyState";
-import PageHeader from "../components/layout/PageHeader";
-import PageHeaderActions from "../components/layout/PageHeaderActions";
-import PageShell from "../components/layout/PageShell";
-import ReviewPartsSheet, {
-  type ReviewPartsSheetHandle,
-} from "../components/review/ReviewPartsSheet";
-import {
-  PlanAcceptanceProvider,
-  usePlanAcceptance,
-} from "../components/review/PlanAcceptanceContext";
-import PlanAcceptanceActionCard from "../components/review/PlanAcceptanceActionCard";
-import PlanAcceptanceConfirmation from "../components/review/PlanAcceptanceConfirmation";
-import PlanAcceptedRevisionCard from "../components/review/PlanAcceptedRevisionCard";
-import PlanIssuesSection from "../components/review/PlanIssuesSection";
-import PlanSourceNotice from "../components/review/PlanSourceNotice";
-import { Button } from "../components/ui/button";
-import { Card, CardContent } from "../components/ui/card";
 import type { StlNamingFolderRule } from "@print-partner/contracts";
-import { startSync } from "../api/endpoints/jobs";
+import PageHeader from "../components/layout/PageHeader";
+import PageShell from "../components/layout/PageShell";
+import EmptyState from "../components/layout/EmptyState";
+import PlanRolesCard from "../components/build/PlanRolesCard";
+import KitManifestOptions from "../components/KitManifestOptions";
+import PlanFileSelection from "../components/review/PlanFileSelection";
+import PlanProgressChoices from "../components/review/PlanProgressChoices";
+import ReviewPartsSheet, { type ReviewPartsSheetHandle } from "../components/review/ReviewPartsSheet";
+import { Button } from "../components/ui/button";
 import { fetchStlNaming } from "../api/endpoints/stlNaming";
-import { buildSourcesRoute, productionRoute, progressRoute } from "../lib/routes";
-import { planHeaderSummary } from "../lib/planAcceptanceModel";
 import { useProfileSelection } from "../context/ProfileContext";
 import { usePlanWorkspace } from "../context/PlanWorkspaceContext";
-import { useEngineHealth } from "../hooks/useEngineHealth";
-import { useJobRunner } from "../hooks/useJobRunner";
-import { resolveEngineState } from "../lib/workflowState";
+import { usePlanLayersQuery } from "../queries/planLayers";
+import { buildSourcesRoute, productionRoute, progressRoute } from "../lib/routes";
+import { statusTone } from "../lib/statusTone";
+import { cn } from "../lib/utils";
 
-/** Published state, open working changes, then parts, then the one publish action. */
-function PlanReviewSections({
-  sheetRef,
-  folderRules,
-  disabled,
-}: {
-  sheetRef: RefObject<ReviewPartsSheetHandle | null>;
-  folderRules: StlNamingFolderRule[];
-  disabled: boolean;
-}) {
-  const { model, buildId } = usePlanAcceptance();
-  const { review } = usePlanWorkspace();
-  const { profiles } = useProfileSelection();
-  if (!review) return null;
-  const planName = profiles.find((p) => p.id === buildId)?.name ?? review.plan_name ?? "Plan";
-
-  return (
-    <>
-      <PlanAcceptedRevisionCard />
-      <PlanSourceNotice />
-      <WorkingPlanReviewCard />
-      <PlanIssuesSection />
-
-      <section id="plan-parts" aria-labelledby="plan-parts-heading" className="space-y-2">
-        <div>
-          <h2 id="plan-parts-heading" className="text-sm font-semibold">
-            Parts and quantities
-          </h2>
-          {!model.working && (
-            <p className="text-sm text-muted-foreground">
-              These are the values of the published revision.
-            </p>
-          )}
-        </div>
-        <ReviewPartsSheet
-          ref={sheetRef}
-          review={review}
-          planName={planName}
-          disabled={disabled}
-          folderRules={folderRules}
-        />
-      </section>
-
-      <PlanAcceptanceActionCard />
-
-      <section aria-labelledby="plan-downstream-heading" className="space-y-2 print:hidden">
-        <h2 id="plan-downstream-heading" className="text-sm font-semibold">
-          Where this work continues
-        </h2>
-        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
-          {model.downstream.map((link) => (
-            <Button
-              key={link.id}
-              className="min-h-11 w-full sm:w-auto"
-              variant={link.qualifier || link.id === "checkoff" ? "secondary" : "default"}
-              asChild
-            >
-              <Link to={link.id === "production" ? productionRoute(buildId) : progressRoute(buildId)}>
-                {link.qualifier ? `${link.label} (${link.qualifier})` : link.label}
-              </Link>
-            </Button>
-          ))}
-          <Button className="min-h-11 w-full sm:w-auto" variant="ghost" asChild>
-            <Link to={buildSourcesRoute(buildId)}>Back to Sources</Link>
-          </Button>
-        </div>
-      </section>
-    </>
-  );
-}
-
-/**
- * Plan is the publication checkpoint.
- *
- * The page answers two questions in order. What does Production use right now?
- * What, if anything, must happen before a new revision can be published?
- */
 export default function PartsPage() {
-  const { health, error: engineError, loading: healthLoading } = useEngineHealth();
   const { selectedProfileId } = useProfileSelection();
-  const {
-    review,
-    loading,
-    error: workspaceError,
-    draftError,
-    draftLoading,
-    draftWorkspace,
-    refresh,
-  } = usePlanWorkspace();
-  const syncJob = useJobRunner("sync");
+  const { review, loading, error, draftError, draftWorkspace, draftLoading, preparePlan, saving, refresh, mergeConflict, discardPendingEdits } = usePlanWorkspace();
+  const layers = usePlanLayersQuery(selectedProfileId);
   const sheetRef = useRef<ReviewPartsSheetHandle>(null);
+  const prepared = useRef<number | null>(null);
   const [folderRules, setFolderRules] = useState<StlNamingFolderRule[]>([]);
-  const [syncError, setSyncError] = useState<string | null>(null);
-  const engineState = resolveEngineState({
-    health,
-    loading: healthLoading,
-    error: engineError,
-  });
-  const engineReady = engineState === "ready";
+  const hasSources = layers.data?.some((layer) => layer.project_id != null) ?? false;
 
   useEffect(() => {
-    void fetchStlNaming()
-      .then((profile) => {
-        setFolderRules(
-          (profile.folder_rules ?? []).filter((r) => r.functional_class != null),
-        );
-      })
-      .catch(() => {/* the functional-class filter is optional */});
+    void fetchStlNaming().then((profile) => setFolderRules(profile.folder_rules ?? [])).catch(() => {});
   }, []);
 
-  const syncSources = useCallback(() => {
-    const unsynced = review?.layers.filter((l) => l.project_id != null) ?? [];
-    const ids = [...new Set(unsynced.map((l) => l.project_id!).filter(Boolean))];
-    if (ids.length === 0) return;
-    setSyncError(null);
-    void syncJob.runJob(
-      () => startSync(ids),
-      (snap) => {
-        if (snap.status === "error") {
-          setSyncError(snap.message || "Source sync failed. Try again.");
-          return;
-        }
-        if (selectedProfileId != null) void refresh();
-      },
-    );
-  }, [refresh, review, selectedProfileId, syncJob]);
+  useEffect(() => {
+    if (selectedProfileId == null || !review || loading || draftLoading || !hasSources) return;
+    if (prepared.current === selectedProfileId) return;
+    prepared.current = selectedProfileId;
+    void preparePlan().catch(() => {});
+  }, [draftLoading, hasSources, loading, preparePlan, review, selectedProfileId]);
 
-  const headerSummary = useMemo(
-    () => planHeaderSummary({ review, draft: draftWorkspace }),
-    [draftWorkspace, review],
-  );
-
-  const hasParts = (draftWorkspace?.parts.length ?? 0) > 0
-    || (review?.part_groups.some((group) => group.parts.length > 0) ?? false);
-
-  const onPrint = useCallback(() => {
-    void sheetRef.current?.print();
-  }, []);
-
+  const disabled = saving || loading || draftLoading;
   return (
     <PageShell>
       <PageHeader
         eyebrow="Prepare"
         icon={Package}
-        accent
         title="Plan"
-        description={headerSummary}
+        description="Choose files, quantities, and colors for this Build."
         actions={
-          <PageHeaderActions>
-            <Button
-              variant="ghost"
-              className="min-h-11 w-full sm:w-auto"
-              onClick={onPrint}
-              disabled={selectedProfileId == null || !hasParts}
-            >
-              <Printer className="mr-1 h-4 w-4" />
-              Print
-            </Button>
-          </PageHeaderActions>
-        }
-      />
-
-      <BuildSummaryHeader currentStageId="plan" />
-
-      <PlanAcceptanceProvider
-        onSyncSources={syncSources}
-        syncBusy={syncJob.busy}
-      >
-        <PlanAcceptanceConfirmation />
-
-        {workspaceError && (
-          <div className="flex flex-wrap items-center gap-3 text-sm text-destructive" role="alert">
-            <p>Could not load this Plan: {workspaceError}</p>
-            <Button size="sm" variant="secondary" onClick={() => void refresh()}>
-              Retry
+          <div className="flex items-center gap-3">
+            <span role="status" className="text-xs text-muted-foreground">
+              {saving ? "Saving…" : draftError ? "Not saved" : review?.accepted_basis ? "Saved" : ""}
+            </span>
+            <Button variant="ghost" disabled={!review?.accepted_basis || disabled} onClick={() => void sheetRef.current?.print()}>
+              <Printer className="mr-1 h-4 w-4" /> Print
             </Button>
           </div>
-        )}
-        {draftError && (
-          <p className="text-sm text-destructive" role="alert">{draftError}</p>
-        )}
-        {syncError && (
-          <p className="text-sm text-destructive" role="alert">{syncError}</p>
-        )}
-
-        {engineState !== "ready" ? (
-          <Card>
-            <CardContent className="pt-6">
-              <p className="text-sm text-muted-foreground">
-                {engineState === "offline"
-                  ? "Engine offline. Start the print-partner engine to review this Plan."
-                  : "Connecting to the engine…"}
-              </p>
-            </CardContent>
-          </Card>
-        ) : selectedProfileId == null ? (
-          <EmptyState
-            icon={Package}
-            title="No Build selected"
-            description="Choose a Build in the header, or create one, to review its Plan."
-          />
-        ) : loading && !review ? (
-          <Card>
-            <CardContent className="pt-6">
-              <p className="text-sm text-muted-foreground" role="status">
-                Loading this Plan…
-              </p>
-            </CardContent>
-          </Card>
-        ) : review ? (
-          <PlanReviewSections
-            sheetRef={sheetRef}
-            folderRules={folderRules}
-            disabled={!engineReady || loading || draftLoading}
-          />
-        ) : null}
-      </PlanAcceptanceProvider>
+        }
+      />
+      {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+      {draftError && (
+        <div role="alert" className={cn("space-y-2 rounded-lg border p-4", statusTone({ tone: "error", emphasis: "soft" }))}>
+          <p className="text-sm">{draftError}</p>
+          {mergeConflict && (
+            <div className="space-y-2">
+              <p className="text-sm">Your pending choices remain below. To start from the latest saved Plan, discard these pending edits and make your changes again. Finished print progress is kept.</p>
+              <Button variant="secondary" disabled={saving} onClick={() => void discardPendingEdits().catch(() => {})}>Discard pending edits and use saved Plan</Button>
+            </div>
+          )}
+          <Button variant="secondary" disabled={saving} onClick={() => void preparePlan().catch(() => {})}>Retry save</Button>
+        </div>
+      )}
+      {draftWorkspace && <PlanProgressChoices key={`${draftWorkspace.profile_id}:${draftWorkspace.draft.snapshot_digest}`} workspace={draftWorkspace} />}
+      {selectedProfileId == null ? (
+        <EmptyState icon={Package} title="No Build selected" description="Choose a Build to edit its Plan." />
+      ) : !hasSources && !layers.isLoading ? (
+        <div className="space-y-3">
+          <p className="text-sm text-muted-foreground">Add a source from the Library to get started.</p>
+          <Button asChild><Link to={buildSourcesRoute(selectedProfileId)}>Add sources</Link></Button>
+        </div>
+      ) : !review?.accepted_basis ? (
+        <p className="text-sm text-muted-foreground">{saving || loading || draftLoading ? "Loading your files…" : "Your files will appear here once the sources are ready."}</p>
+      ) : (
+        <>
+          <KitManifestOptions profileId={selectedProfileId} disabled={disabled} onUpdated={() => preparePlan({ applyManifest: true })} compact />
+          <PlanFileSelection profileId={selectedProfileId} disabled={disabled} />
+          <section id="materials" className="space-y-2">
+            <h2 className="text-sm font-semibold">Colors and materials</h2>
+            <PlanRolesCard profileId={selectedProfileId} refreshKey={review.accepted_basis.plan_version} disabled={disabled} onUpdated={refresh} />
+          </section>
+          <section id="plan-parts" className="space-y-2">
+            <h2 className="text-sm font-semibold">Parts and quantities</h2>
+            <ReviewPartsSheet ref={sheetRef} review={review} planName={review.plan_name} folderRules={folderRules} disabled={disabled} />
+          </section>
+          <div className="flex flex-wrap gap-2 print:hidden">
+            <Button asChild><Link to={productionRoute(selectedProfileId)}>Open Production</Link></Button>
+            <Button variant="secondary" asChild><Link to={progressRoute(selectedProfileId)}>Open Checkoff</Link></Button>
+          </div>
+        </>
+      )}
     </PageShell>
   );
 }

@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation } from "react-router-dom";
-import { toast } from "sonner";
 import {
   Archive,
   Copy,
@@ -14,25 +13,18 @@ import {
 import MergeConflictBanner from "../components/MergeConflictBanner";
 import PlanSpecialRequestField from "../components/PlanSpecialRequestField";
 import BuildRecipePanel from "../components/build/BuildRecipePanel";
-import PlanRolesCard from "../components/build/PlanRolesCard";
 import BuildPlanningCard from "../components/build/BuildPlanningCard";
-import BuildSummaryHeader from "../components/build/BuildSummaryHeader";
-import BuildSourceGuide from "../components/build/BuildSourceGuide";
 import { useBuildPlanningQuery } from "../components/build/useBuildPlanningQuery";
 import EmptyState from "../components/layout/EmptyState";
 import PageHeader from "../components/layout/PageHeader";
 import PageHeaderActions from "../components/layout/PageHeaderActions";
 import PageShell from "../components/layout/PageShell";
-import TaskList, { type WorkflowTask } from "../components/layout/TaskList";
-import KitManifestOptions from "../components/KitManifestOptions";
 import SourceCategorySheet from "../components/sources/SourceCategorySheet";
-import SourceFilePickerCard from "../components/SourceFilePickerCard";
+import SourceCardCover from "../components/SourceCardCover";
 import ShareImportSetupPanel, {
   type UnmatchedSource,
 } from "../components/share/ShareImportSetupPanel";
-import type { StlNamingProfile } from "@print-partner/contracts";
 import {
-  DEFAULT_STL_NAMING_PROFILE,
   mcpAccessEnabled,
 } from "@print-partner/contracts";
 import type { KitImportJobResult } from "../api/endpoints/imports";
@@ -52,13 +44,11 @@ import {
   CardHeader,
   CardTitle,
 } from "../components/ui/card";
-import { fetchStlNaming } from "../api/endpoints/stlNaming";
 import { startSync } from "../api/endpoints/jobs";
 import type { ProfileLayer } from "../api/endpoints/plans";
 import type { RoleFilamentRow } from "../api/endpoints/filaments";
 import {
   useSourcesQuery,
-  useUpdateSourceMutation,
   type SourceSummary,
 } from "../queries/sources";
 import { useSourceCategoriesQuery } from "../queries/sourceCategories";
@@ -71,7 +61,7 @@ import {
   useReplacePlanLayerMutation,
   useSetPlanBaseLayerMutation,
 } from "../queries/planLayers";
-import { libraryRoute, settingsRoute } from "../lib/routes";
+import { libraryRoute, settingsRoute, planRoute } from "../lib/routes";
 import { groupMergeConflictsByFilename } from "../lib/mergeConflictGroups";
 import { takeKitImportResult } from "../lib/kitImportStash";
 import { statusTone } from "../lib/statusTone";
@@ -85,12 +75,8 @@ import { useKitManifestSaveRegistry } from "../context/KitManifestSaveContext";
 import { useEngineHealth } from "../hooks/useEngineHealth";
 import { useExternalAccessSettingsQuery } from "../queries/externalAccess";
 import { useJobRunner } from "../hooks/useJobRunner";
-import { meshColorForStlPath } from "../lib/rolePreviewColor";
 import { buildPageDerivedState } from "../lib/buildPageViewModel";
 import {
-  sourcesSetupTasks,
-  type SourcesSetupAction,
-  type SourcesSetupHandlerId,
   type SourcesSetupSource,
 } from "../lib/sourcesSetupTasks";
 import {
@@ -113,25 +99,11 @@ type BuildLocationState = {
 const EMPTY_SOURCES: SourceSummary[] = [];
 const EMPTY_LAYERS: ProfileLayer[] = [];
 
-/** Move the reader to a section and let a screen reader announce it. */
-function revealSection(id: string) {
-  const element = document.getElementById(id);
-  if (!element) return;
-  element.scrollIntoView({ behavior: "smooth", block: "start" });
-  if (!element.hasAttribute("tabindex")) element.setAttribute("tabindex", "-1");
-  element.focus({ preventScroll: true });
-}
-
-export default function BuildPage() {
-  return <BuildPageContent />;
-}
-
 /**
- * Sources is a setup workspace. It answers "are the inputs ready for a Plan?"
- * with a task list, one primary action, the attached sources, and the advanced
- * settings behind a disclosure. Working Plan review and acceptance live on Plan.
+ * Sources attaches Library projects to this Build. File, quantity, and color
+ * choices live on Plan.
  */
-function BuildPageContent() {
+export default function BuildPage() {
   const location = useLocation();
   const { health, error: engineError, loading: healthLoading } = useEngineHealth();
   const {
@@ -156,9 +128,7 @@ function BuildPageContent() {
   const [pendingBaseSourceId, setPendingBaseSourceId] = useState("");
   const [kitImportSetup, setKitImportSetup] = useState<KitImportJobResult | null>(null);
   const [categoriesSheetOpen, setCategoriesSheetOpen] = useState(false);
-  const filamentRefreshKey = 0;
   const [roleFilaments, setRoleFilaments] = useState<RoleFilamentRow[]>([]);
-  const [namingProfile, setNamingProfile] = useState<StlNamingProfile>(DEFAULT_STL_NAMING_PROFILE);
   const [attachOpen, setAttachOpen] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
@@ -180,7 +150,6 @@ function BuildPageContent() {
   const addAddonMutation = useAddPlanAddonLayerMutation(layerProfileId);
   const replaceLayerMutation = useReplacePlanLayerMutation(layerProfileId);
   const deleteLayerMutation = useDeletePlanLayerMutation(layerProfileId);
-  const updateSourceMutation = useUpdateSourceMutation();
   const externalAccessQuery = useExternalAccessSettingsQuery(engineReady);
   const showMcpTools = externalAccessQuery.data
     ? mcpAccessEnabled(externalAccessQuery.data.mode)
@@ -223,26 +192,6 @@ function BuildPageContent() {
   );
 
   useEffect(() => {
-    if (!health?.ok) return;
-    void fetchStlNaming()
-      .then(setNamingProfile)
-      .catch((e) =>
-        toast.error("Could not load STL naming settings", {
-          description: e instanceof Error ? e.message : String(e),
-        }),
-      );
-  }, [health?.ok]);
-
-  const resolvePreviewMeshColor = useCallback(
-    (relativePath: string) => meshColorForStlPath(relativePath, namingProfile, roleFilaments),
-    [namingProfile, roleFilaments],
-  );
-
-  const onRoleFilamentsUpdated = useCallback(async () => {
-    await refreshPlan();
-  }, [refreshPlan]);
-
-  useEffect(() => {
     const state = location.state as BuildLocationState | null;
     if (state?.kitImport) {
       setKitImportSetup(state.kitImport);
@@ -256,30 +205,6 @@ function BuildPageContent() {
       if (stashed) setKitImportSetup(stashed);
     }
   }, [location.state, selectedProfileId]);
-
-  const assignSourceCategory = useCallback(
-    async (sourceId: number, category: string | null) => {
-      const source = sources.find((s) => s.id === sourceId);
-      if (!source) return;
-      const previous = source.category ?? null;
-      const next = category?.trim() || null;
-      if (previous === next) return;
-      try {
-        const updated = await updateSourceMutation.mutateAsync({
-          id: sourceId,
-          body: { category: next },
-        });
-        toast.success(
-          next
-            ? `Moved “${updated.name}” to ${next}`
-            : `Moved “${updated.name}” to Uncategorised`,
-        );
-      } catch (e) {
-        toast.error(e instanceof Error ? e.message : String(e));
-      }
-    },
-    [sources, updateSourceMutation],
-  );
 
   useEffect(() => {
     const previousId = previousSelectedProfileIdRef.current;
@@ -353,7 +278,7 @@ function BuildPageContent() {
     [sourceCardLayers, sourceById],
   );
 
-  const { archiveAllowed, headerSubtitle } = buildPageDerivedState({
+  const { archiveAllowed } = buildPageDerivedState({
     selectedProfile,
     review,
     attachedSources,
@@ -461,91 +386,6 @@ function BuildPageContent() {
     syncTargets,
   ]);
 
-  const setup = useMemo(
-    () =>
-      sourcesSetupTasks({
-        buildId: selectedProfileId ?? 0,
-        specialRequest: selectedProfile?.special_request,
-        sources: setupSources,
-        mergeConflictCount: mergeConflicts.length,
-        roleFilaments,
-        syncing: syncJob.busy,
-      }),
-    [
-      mergeConflicts.length,
-      roleFilaments,
-      selectedProfile,
-      selectedProfileId,
-      setupSources,
-      syncJob.busy,
-    ],
-  );
-
-  const runSetupHandler = useCallback(
-    (handler: SourcesSetupHandlerId) => {
-      switch (handler) {
-        case "confirm_request": {
-          revealSection("build-request");
-          const field = document.getElementById(
-            `plan-special-request-${selectedProfileId ?? 0}`,
-          );
-          if (field instanceof HTMLInputElement) field.focus();
-          return;
-        }
-        case "attach_source":
-          if (!needsBaseSource) setAttachOpen(true);
-          revealSection("attached-sources");
-          return;
-        case "sync_sources":
-          void syncAttachedSources();
-          return;
-        case "resolve_differences":
-          revealSection("attached-sources");
-          return;
-        case "assign_colors":
-          revealSection("materials");
-          return;
-        default: {
-          const exhaustive: never = handler;
-          return exhaustive;
-        }
-      }
-    },
-    [needsBaseSource, selectedProfileId, syncAttachedSources],
-  );
-
-  const tasks = useMemo<WorkflowTask[]>(
-    () =>
-      setup.tasks.map((task) => {
-        const action = task.action;
-        const base: WorkflowTask = {
-          id: task.id,
-          label: task.label,
-          hint: task.hint,
-          state: task.state,
-          statusLabel: task.statusLabel,
-          error:
-            task.id === "sync-sources" && syncError
-              ? {
-                  message: syncError,
-                  onRetry: () => void syncAttachedSources(),
-                  retryLabel: "Retry sync",
-                }
-              : undefined,
-        };
-        if (!action) return base;
-        if (action.kind === "route") return { ...base, to: action.to };
-        return {
-          ...base,
-          actionLabel: action.label,
-          onAction: () => runSetupHandler(action.handler),
-        };
-      }),
-    [runSetupHandler, setup.tasks, syncAttachedSources, syncError],
-  );
-
-  const primaryAction: SourcesSetupAction = setup.primary.action;
-
   const onChangeLayerProject = async (layer: ProfileLayer, projectId: number) => {
     if (selectedProfileId == null) return;
     setLoadError(null);
@@ -602,23 +442,11 @@ function BuildPageContent() {
         accent
         eyebrow="Prepare"
         title="Sources"
-        description={headerSubtitle}
+        description="Attach sources from the Library to this Build."
         actions={workspaceReady ? (
           <PageHeaderActions>
-            {primaryAction.kind === "route" ? (
-              <Button className="min-h-11 w-full sm:w-auto" asChild>
-                <Link to={primaryAction.to}>{primaryAction.label}</Link>
-              </Button>
-            ) : (
-              <Button
-                className="min-h-11 w-full sm:w-auto"
-                onClick={() => runSetupHandler(primaryAction.handler)}
-                disabled={busy || !engineReady}
-                loading={busy}
-              >
-                {primaryAction.label}
-              </Button>
-            )}
+            <Button className="min-h-11" asChild><Link to={planRoute(selectedProfileId)}>Open Plan</Link></Button>
+            <Button variant="secondary" disabled={busy || !engineReady} onClick={() => void syncAttachedSources()}>Sync sources</Button>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
@@ -668,7 +496,7 @@ function BuildPageContent() {
         ) : undefined}
       />
 
-      <BuildSummaryHeader currentStageId="sources" />
+      {syncError && <p role="alert" className="text-sm text-destructive">{syncError}</p>}
 
       {(profilesBackgroundError ||
         profileDataBackgroundError ||
@@ -688,17 +516,6 @@ function BuildPageContent() {
         </div>
       )}
 
-      {workspaceReady && (
-        <TaskList
-          title="Setup tasks"
-          description={
-            setup.ready
-              ? "The inputs are ready. Review the Working Plan on Plan."
-              : "Get the inputs ready before the Plan is reviewed."
-          }
-          tasks={tasks}
-        />
-      )}
 
       {engineState !== "ready" ? (
         <Card>
@@ -731,7 +548,7 @@ function BuildPageContent() {
         <EmptyState
           icon={Hammer}
           title="No Build yet"
-          description="Use New Build in the sidebar (or the + button on mobile) to name a Build, then attach sources and pick STL files below."
+          description="Create a Build, attach its Library projects here, then choose what to print on Plan."
           action={{
             label: "New Build",
             onClick: openCreatePlan,
@@ -841,16 +658,14 @@ function BuildPageContent() {
                   Attach from Library
                 </Button>
                 <Button variant="outline" size="sm" asChild>
-                  <Link to={libraryRoute()}>Manage Source Library</Link>
+                  <Link to={libraryRoute()}>Add sources to Library</Link>
                 </Button>
               </div>
             </div>
             <p className="max-w-3xl text-xs text-muted-foreground">
-              Attach the Library projects that contain this Build's parts. For each source, choose
-              the folders or individual STL files that belong in the Plan.
+              Add sources and their files in the Source Library, then attach them to this Build here. Choose files, quantities, and colors on Plan.
             </p>
 
-            <BuildSourceGuide profileId={selectedProfileId} />
 
             {mergeConflicts.length > 0 && (
               <MergeConflictBanner
@@ -869,8 +684,8 @@ function BuildPageContent() {
                     <div className="min-w-0 flex-1 space-y-1">
                       <CardTitle className="text-sm">Choose base source</CardTitle>
                       <CardDescription className="text-xs">
-                        Pick the main kit project for this Build before adding addons or
-                        importing files.
+                        Pick the main Library project for this Build. You can attach
+                        more projects below.
                       </CardDescription>
                     </div>
                   </div>
@@ -900,25 +715,17 @@ function BuildPageContent() {
 
             <div className="flex flex-col gap-2">
               {sourceCardLayers.map((row) => (
-                <SourceFilePickerCard
-                  key={row.key}
-                  sourceId={row.sourceId}
-                  sourceName={row.sourceName}
-                  layerType={row.layerType}
-                  source={sourceById.get(row.sourceId) ?? null}
-                  allSources={sources}
-                  disabled={!engineReady || busy}
-                  onChangeSource={(projectId) => void onChangeLayerProject(row.layer, projectId)}
-                  onAssignCategory={(category) =>
-                    void assignSourceCategory(row.sourceId, category)
-                  }
-                  onRemove={
-                    row.layerType === "addon"
-                      ? () => void onRemoveLayer(row.layer)
-                      : undefined
-                  }
-                  meshColorForPath={resolvePreviewMeshColor}
-                />
+                <div key={row.key} className="flex flex-wrap items-center gap-3 rounded-lg border border-border bg-card p-4">
+                  <SourceCardCover sourceId={row.sourceId} name={row.sourceName} sourceKind={sourceById.get(row.sourceId)?.source_kind ?? "github"} thumb />
+                  <div className="min-w-0 flex-1">
+                    <h3 className="text-sm font-semibold">{row.sourceName}</h3>
+                    <p className="text-xs text-muted-foreground">{row.layerType === "base" ? "Main source" : "Additional source"}</p>
+                  </div>
+                  <select aria-label={`Change ${row.sourceName} source`} className="max-w-full rounded-md border border-input bg-background p-2 text-sm" value={row.sourceId} disabled={!engineReady || busy} onChange={(event) => void onChangeLayerProject(row.layer, Number(event.target.value))}>
+                    {sources.map((source) => <option key={source.id} value={source.id}>{source.name}</option>)}
+                  </select>
+                  {row.layerType === "addon" && <Button variant="ghost" disabled={busy} onClick={() => void onRemoveLayer(row.layer)}>Remove</Button>}
+                </div>
               ))}
             </div>
 
@@ -961,17 +768,6 @@ function BuildPageContent() {
             )}
           </section>
 
-          <section id="materials" className="space-y-3">
-            <h2 className="text-sm font-semibold tracking-wide">Materials and colors</h2>
-            <PlanRolesCard
-              profileId={selectedProfileId}
-              disabled={!engineReady || busy}
-              refreshKey={filamentRefreshKey}
-              roleFilaments={roleFilaments}
-              onRolesChange={setRoleFilaments}
-              onUpdated={onRoleFilamentsUpdated}
-            />
-          </section>
 
           {showMcpTools && planningQuery.data ? (
             <section id="assistant-changes" className="space-y-3">
@@ -1012,15 +808,6 @@ function BuildPageContent() {
                 ) : null}
               </div>
 
-              {baseLayer?.project_id != null ? (
-                <KitManifestOptions
-                  profileId={selectedProfileId}
-                  baseSourceName={baseLayer.project_name ?? "base"}
-                  buildStale={buildStale}
-                  disabled={!engineReady || busy}
-                  compact
-                />
-              ) : null}
 
               <BuildRecipePanel profileId={selectedProfileId} />
             </div>

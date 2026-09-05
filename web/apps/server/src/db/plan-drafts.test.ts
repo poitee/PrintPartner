@@ -14,6 +14,8 @@ import { MAX_PLAN_DRAFT_LIFECYCLE_VERSION } from "../services/plan-drafts.js";
 import { acceptedPlanBasis } from "./accepted-plan-progress.js";
 import { parseRequiredUnitToken } from "../services/required-units.js";
 import { currentSchemaVersion } from "./schema.js";
+import { acceptPlanForTest, editAcceptedPartsForTest } from "../test/accept-plan.js";
+import { saveKitManifest } from "../services/kit-manifest-store.js";
 
 const tempDirs: string[] = [];
 
@@ -340,6 +342,140 @@ afterEach(() => {
 });
 
 describe("saved Plan drafts", () => {
+  it("offers files outside Library defaults without selecting them or changing another Build", () => {
+    const { database, repo } = fixture();
+    const { source } = trackedSource({
+      repo,
+      database,
+      name: "Library defaults",
+      files: { "frame.stl": "solid frame", "optional/cover.stl": "solid cover" },
+    });
+    repo.updateImportRules(source.id, ["frame.stl"]);
+    const first = repo.createProfile("First Build", source.id);
+    const second = repo.createProfile("Second Build", source.id);
+    const libraryBefore = repo.getProjectRow(source.id);
+
+    expect(acceptPlanForTest(repo, first.id).merged).toBe(true);
+    const available = repo.getAcceptedPlanRevision(first.id)?.parts;
+    expect(available).toEqual(expect.arrayContaining([
+      expect.objectContaining({ partKey: "frame.stl", included: true }),
+      expect.objectContaining({ partKey: "optional/cover.stl", included: false }),
+    ]));
+    const cover = available?.find((part) => part.partKey === "optional/cover.stl");
+    if (cover?.projectionPartId == null) throw new Error("optional file is unavailable");
+    editAcceptedPartsForTest(repo, first.id, [{
+      projectionPartId: cover.projectionPartId,
+      included: true,
+      quantityOverride: 3,
+    }]);
+    expect(acceptPlanForTest(repo, first.id).merged).toBe(true);
+    expect(repo.getAcceptedPlanRevision(first.id)?.parts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ partKey: "optional/cover.stl", included: true, quantityEffective: 3 }),
+    ]));
+
+    expect(acceptPlanForTest(repo, second.id).merged).toBe(true);
+    expect(repo.getAcceptedPlanRevision(second.id)?.parts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ partKey: "optional/cover.stl", included: false, quantityEffective: 1 }),
+    ]));
+    expect(repo.getProjectRow(source.id)).toEqual(libraryBefore);
+    database.close();
+  });
+
+  it("offers all files when Library defaults select none and keeps explicit path scopes", () => {
+    const { database, repo } = fixture();
+    const { source } = trackedSource({
+      repo,
+      database,
+      name: "Empty defaults",
+      files: { "frame.stl": "solid frame", "optional/cover.stl": "solid cover", "optional/gear.stl": "solid gear" },
+    });
+    repo.updateImportRules(source.id, []);
+    const profile = repo.createProfile("Choose files", source.id);
+    const draft = repo.recomputePlanDraft({ profileId: profile.id, actor: "test", idempotencyKey: "all-available" });
+    expect(draft.kind).toBe("created");
+    if (draft.kind !== "created") throw new Error("available-file draft was not created");
+    expect(draft.draft.parts).toHaveLength(3);
+    expect(draft.draft.parts.every((part) => !part.included)).toBe(true);
+
+    const scoped = repo.recomputePlanDraft({
+      profileId: profile.id,
+      actor: "test",
+      idempotencyKey: "scope-preserved",
+      includedPathsBySourceId: new Map([[source.id, new Set(["optional/**"])]]),
+      excludedPathsBySourceId: new Map([[source.id, new Set(["optional/gear.stl"])]]),
+    });
+    expect(scoped.kind).toBe("created");
+    if (scoped.kind !== "created") throw new Error("scoped draft was not created");
+    expect(scoped.draft.parts.map((part) => part.partKey)).toEqual(["optional/cover.stl"]);
+    database.close();
+  });
+
+  it("does not replace a selected base file with an unselected overlay candidate", () => {
+    const { database, repo } = fixture();
+    const base = trackedSource({ repo, database, name: "Base defaults", files: { "frame.stl": "solid base" } });
+    const overlay = trackedSource({
+      repo, database, name: "Overlay defaults", files: { "frame.stl": "solid replacement", "cover.stl": "solid cover" },
+    });
+    repo.updateImportRules(overlay.source.id, ["cover.stl"]);
+    const profile = repo.createProfile("Layered choices", base.source.id);
+    repo.addAddonLayer(profile.id, overlay.source.id);
+    const draft = repo.recomputePlanDraft({ profileId: profile.id, actor: "test", idempotencyKey: "overlay-defaults" });
+    expect(draft.kind).toBe("created");
+    if (draft.kind !== "created") throw new Error("layered draft was not created");
+    expect(draft.draft.parts.find((part) => part.partKey === "frame.stl")).toMatchObject({
+      sourceLayer: "base:Base defaults",
+      artifactDigest: createHash("sha256").update("solid base").digest("hex"),
+      included: true,
+    });
+    database.close();
+  });
+
+  it("preserves saved file choices until kit selections are explicitly reapplied", () => {
+    const { database, repo } = fixture();
+    const sourceRoot = join(database.reposDir, "kit-choice-source");
+    mkdirSync(sourceRoot, { recursive: true });
+    writeFileSync(join(sourceRoot, "frame.stl"), "solid frame");
+    writeFileSync(join(sourceRoot, "cover.stl"), "solid cover");
+    writeFileSync(join(sourceRoot, "print-partner.manifest.yaml"), `option_groups:
+  cover:
+    rule: pick_one
+    variants:
+      - id: cover
+        parts: [cover.stl]
+selections:
+  cover: cover
+`);
+    const source = repo.createSource({ name: "Kit choices", source_kind: "local", local_path: sourceRoot });
+    repo.updateImportRules(source.id, ["frame.stl"]);
+    const profile = repo.createProfile("Kit Build", source.id);
+    const initial = repo.recomputePlanDraft({
+      profileId: profile.id, actor: "test", idempotencyKey: "preserve-new-defaults", applyManifest: false,
+    });
+    expect(initial.kind).toBe("created");
+    if (initial.kind !== "created") throw new Error("initial kit draft missing");
+    expect(initial.draft.parts.find((part) => part.partKey === "cover.stl")?.included).toBe(false);
+
+    expect(acceptPlanForTest(repo, profile.id).merged).toBe(true);
+    const cover = repo.getAcceptedPlanRevision(profile.id)?.parts.find((part) => part.partKey === "cover.stl");
+    if (cover?.projectionPartId == null) throw new Error("kit cover is unavailable");
+    editAcceptedPartsForTest(repo, profile.id, [{ projectionPartId: cover.projectionPartId, included: false }]);
+    const reopened = repo.recomputePlanDraft({
+      profileId: profile.id, actor: "test", idempotencyKey: "preserve-file-choice", applyManifest: false,
+    });
+    expect(reopened.kind).toBe("created");
+    if (reopened.kind !== "created") throw new Error("reopened kit draft missing");
+    expect(reopened.draft.parts.find((part) => part.partKey === "cover.stl")?.included).toBe(false);
+
+    saveKitManifest(repo, profile.id, { selections: { cover: "cover" } });
+    const reapplied = repo.recomputePlanDraft({
+      profileId: profile.id, actor: "test", idempotencyKey: "apply-kit-choice", applyManifest: true,
+    });
+    expect(reapplied.kind).toBe("created");
+    if (reapplied.kind !== "created") throw new Error("updated kit draft missing");
+    expect(reapplied.draft.parts.find((part) => part.partKey === "cover.stl")?.included).toBe(true);
+    database.close();
+  });
+
   it("persists and diffs an empty-baseline recompute without changing accepted or compatibility state", () => {
     const { database, raw, repo } = fixture();
     const sourceRoot = join(database.reposDir, "local-source");
@@ -1832,6 +1968,102 @@ describe("saved Plan drafts", () => {
     reopened.close();
   });
 
+  it("rebases saved choices after Sources change without requiring a new accepted Plan", () => {
+    const { database, raw, profile, repo, draft } = editableDraftFixture();
+    const gear = draft.parts.find((part) => part.partKey === "gear.stl");
+    if (!gear) throw new Error("gear is unavailable");
+    const edited = repo.editPlanDraftPartsBatch({
+      profileId: profile.id,
+      draftId: draft.id,
+      expectedSnapshotDigest: draft.snapshotDigest,
+      decisions: [
+        { kind: "set_included", partIds: [gear.id], value: false },
+        { kind: "set_quantity_override", partIds: [gear.id], value: 7 },
+      ],
+    });
+    if (edited.kind !== "updated") throw new Error("choice was not saved");
+    const extra = trackedSource({ repo, database, name: "Added Source", files: { "new.stl": "solid new" } });
+    repo.addAddonLayer(profile.id, extra.source.id);
+    const abandoned = repo.transitionPlanDraft({
+      profileId: profile.id, draftId: draft.id, transition: { kind: "abandon", expectedLifecycleVersion: 0 },
+    });
+    if (abandoned.kind !== "transitioned") throw new Error("draft was not abandoned");
+    const acceptedBefore = snapshotTables(raw, ACCEPTED_STATE_TABLES);
+    const rebased = repo.rebasePlanDraft({
+      profileId: profile.id,
+      sourceDraftId: draft.id,
+      expectedSourceLifecycleVersion: 1,
+      expectedSourceSnapshotDigest: edited.draft.snapshotDigest,
+      actor: "test:user",
+      idempotencyKey: "same-base-new-source",
+    });
+    expect(rebased.kind).toBe("rebased");
+    if (rebased.kind !== "rebased") throw new Error("Source-change rebase failed");
+    expect(rebased.draft).toMatchObject({
+      baseRevisionId: draft.baseRevisionId,
+      basePlanVersion: draft.basePlanVersion,
+      parts: expect.arrayContaining([
+        expect.objectContaining({ partKey: "gear.stl", included: false, quantityEffective: 7 }),
+        expect.objectContaining({ partKey: "new.stl" }),
+      ]),
+    });
+    expect(snapshotTables(raw, ACCEPTED_STATE_TABLES)).toEqual(acceptedBefore);
+    database.close();
+  });
+
+  it("rebases an open draft atomically and retries against the abandoned source generation", () => {
+    const { database, profile, repo, draft } = editableDraftFixture();
+    const extra = trackedSource({ repo, database, name: "New open Source", files: { "new.stl": "solid new" } });
+    repo.addAddonLayer(profile.id, extra.source.id);
+    const request: Parameters<AppRepository["rebasePlanDraft"]>[0] = {
+      profileId: profile.id,
+      sourceDraftId: draft.id,
+      expectedSourceState: "open",
+      expectedSourceLifecycleVersion: 0,
+      expectedSourceSnapshotDigest: draft.snapshotDigest,
+      actor: "test:user",
+      idempotencyKey: "open-source-rebase",
+    };
+    expect(repo.rebasePlanDraft({ ...request, expectedSourceSnapshotDigest: "f".repeat(64) }).kind).toBe("source_conflict");
+    expect(repo.getPlanDraft(profile.id, draft.id)?.state).toBe("open");
+    const result = repo.rebasePlanDraft(request);
+    expect(result.kind).toBe("rebased");
+    if (result.kind !== "rebased") throw new Error("open rebase failed");
+    expect(result.draft).toMatchObject({ state: "open", origin: {
+      kind: "rebase", sourceDraftId: draft.id, sourceLifecycleVersion: 1,
+    } });
+    expect(repo.getPlanDraft(profile.id, draft.id)).toMatchObject({ state: "abandoned", lifecycleVersion: 1 });
+    expect(repo.rebasePlanDraft(request)).toEqual({ kind: "existing", draft: result.draft });
+    database.close();
+  });
+
+  it("keeps an open draft unchanged and editable when rebase cannot find a chosen file", () => {
+    const { database, raw, profile, repo, draft } = editableDraftFixture();
+    const gear = draft.parts.find((part) => part.partKey === "gear.stl");
+    if (!gear) throw new Error("gear is unavailable");
+    const edited = repo.editPlanDraftParts({
+      profileId: profile.id, draftId: draft.id, expectedSnapshotDigest: draft.snapshotDigest,
+      decision: { kind: "set_quantity_override", partIds: [gear.id], value: 7 },
+    });
+    if (edited.kind !== "updated") throw new Error("choice was not saved");
+    rmSync(join(database.reposDir, "editable-source", "gear.stl"));
+    const extra = trackedSource({ repo, database, name: "Conflicting Source", files: { "new.stl": "solid new" } });
+    repo.addAddonLayer(profile.id, extra.source.id);
+    const before = snapshotTables(raw, APPLY_STATE_TABLES);
+    expect(repo.rebasePlanDraft({
+      profileId: profile.id, sourceDraftId: draft.id, expectedSourceState: "open",
+      expectedSourceLifecycleVersion: 0, expectedSourceSnapshotDigest: edited.draft.snapshotDigest,
+      actor: "test:user", idempotencyKey: "failed-open-rebase",
+    })).toMatchObject({ kind: "merge_conflicts", conflicts: [{ kind: "target_missing", sourcePartId: gear.id }] });
+    expect(snapshotTables(raw, APPLY_STATE_TABLES)).toEqual(before);
+    expect(repo.getPlanDraft(profile.id, draft.id)).toEqual(edited.draft);
+    expect(repo.editPlanDraftParts({
+      profileId: profile.id, draftId: draft.id, expectedSnapshotDigest: edited.draft.snapshotDigest,
+      decision: { kind: "set_quantity_override", partIds: [gear.id], value: 8 },
+    }).kind).toBe("updated");
+    database.close();
+  });
+
   it("refuses a same-base rebase and detects lifecycle ABA", () => {
     const { database, raw, profile, repo, draft } = editableDraftFixture();
     const abandoned = repo.transitionPlanDraft({
@@ -2262,14 +2494,17 @@ describe("saved Plan drafts", () => {
     database.close();
   });
 
-  it("rolls back every rebase row when a result Part insert fails", () => {
+  it.each<{ sourceState: "open" | "abandoned" }>([{ sourceState: "open" }, { sourceState: "abandoned" }])(
+    "rolls back every rebase row and the $sourceState source state when a result Part insert fails", ({ sourceState }) => {
     const { database, raw, profile, repo, draft } = editableDraftFixture();
-    const abandoned = repo.transitionPlanDraft({
-      profileId: profile.id,
-      draftId: draft.id,
-      transition: { kind: "abandon", expectedLifecycleVersion: 0 },
-    });
-    if (abandoned.kind !== "transitioned") throw new Error("test draft was not abandoned");
+    if (sourceState === "abandoned") {
+      const abandoned = repo.transitionPlanDraft({
+        profileId: profile.id,
+        draftId: draft.id,
+        transition: { kind: "abandon", expectedLifecycleVersion: 0 },
+      });
+      if (abandoned.kind !== "transitioned") throw new Error("test draft was not abandoned");
+    }
     advanceEmptyAcceptedRevision({
       raw,
       profileId: profile.id,
@@ -2297,7 +2532,8 @@ describe("saved Plan drafts", () => {
       repo.rebasePlanDraft({
         profileId: profile.id,
         sourceDraftId: draft.id,
-        expectedSourceLifecycleVersion: 1,
+        expectedSourceState: sourceState,
+        expectedSourceLifecycleVersion: sourceState === "open" ? 0 : 1,
         expectedSourceSnapshotDigest: draft.snapshotDigest,
         actor: "test:user",
         idempotencyKey: "rollback-rebase",

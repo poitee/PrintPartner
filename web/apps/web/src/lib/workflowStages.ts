@@ -63,6 +63,15 @@ export function buildWorkflowStages(
   return stages.map(
     (stage): WorkflowStage => ({
       ...stage,
+      status: {
+        ...stage.status,
+        summary: selectedBuildId == null ? stage.status.summary : {
+          sources: "Add projects from the Library.",
+          plan: "Choose files, quantities, and colors.",
+          production: "Prepare and send prints.",
+          checkoff: "Record finished parts.",
+        }[stage.id],
+      },
       to: stageRoute(stage.id, selectedBuildId),
     }),
   );

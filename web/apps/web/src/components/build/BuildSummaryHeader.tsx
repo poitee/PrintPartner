@@ -1,11 +1,8 @@
-import { Link } from "react-router-dom";
-import { ArrowRight } from "lucide-react";
 import { useProfileSelection } from "../../context/ProfileContext";
-import { buildWorkflowStages, type WorkflowStageId } from "../../lib/workflowStages";
+import { type WorkflowStageId } from "../../lib/workflowStages";
 import { buildActiveWorkChips, buildSummaryLine } from "../../lib/buildSummaryModel";
 import { statusTone } from "../../lib/statusTone";
 import { useBuildWorkflowQuery } from "../../queries/buildWorkflow";
-import { Button } from "../ui/button";
 import { cn } from "@/lib/utils";
 
 type Props = {
@@ -14,15 +11,10 @@ type Props = {
 };
 
 /**
- * Current-state summary on every Build stage. The instrument header already
- * names the Build. This block answers which accepted revision is in force,
- * what is happening in the background, and the one next action.
- *
- * It reads the server-owned Build Workflow projection, so the browser and MCP
- * agree on status and next action. It is not a stepper. Stage navigation stays
- * in the rail.
+ * Print progress and actionable job status. Plan bookkeeping stays out of the
+ * main workflow.
  */
-export default function BuildSummaryHeader({ currentStageId, className }: Props) {
+export default function BuildSummaryHeader({ className }: Props) {
   const { selectedProfileId } = useProfileSelection();
   const workflowQuery = useBuildWorkflowQuery(selectedProfileId);
   const workspace = workflowQuery.data;
@@ -30,19 +22,15 @@ export default function BuildSummaryHeader({ currentStageId, className }: Props)
 
   const summary = buildSummaryLine(workspace);
   const chips = buildActiveWorkChips(workspace);
-  const action = workspace.next_action;
-  const actionStage = buildWorkflowStages(workspace, selectedProfileId).find(
-    (stage) => stage.id === action.stage_id,
-  );
-  const onThisStage = action.stage_id === currentStageId;
+  if (summary.facts.length === 0 && chips.length === 0) return null;
 
   return (
     <section
       className={cn("desk-nameplate", className)}
-      aria-label="Build summary and next action"
+      aria-label="Print progress"
       data-testid="build-summary-header"
     >
-      <div className="flex flex-col gap-1 border-b border-border px-4 py-3">
+      <div className="flex flex-col gap-1 px-4 py-3">
         <p className="text-body text-muted-foreground">
           {summary.facts.join(" · ")}
         </p>
@@ -60,27 +48,6 @@ export default function BuildSummaryHeader({ currentStageId, className }: Props)
               </li>
             ))}
           </ul>
-        ) : null}
-      </div>
-
-      <div
-        className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
-        data-testid="build-next-action"
-      >
-        <div className="min-w-0">
-          <p className="font-mono text-micro font-semibold uppercase tracking-[0.14em] text-primary">
-            Next
-          </p>
-          <p className="mt-0.5 text-sm font-medium text-foreground">{action.label}</p>
-          <p className="mt-0.5 text-xs text-muted-foreground">{action.reason}</p>
-        </div>
-        {!onThisStage && actionStage ? (
-          <Button variant="secondary" className="min-h-11 shrink-0" asChild>
-            <Link to={actionStage.to}>
-              Open {actionStage.label}
-              <ArrowRight className="ml-1 h-4 w-4" aria-hidden />
-            </Link>
-          </Button>
         ) : null}
       </div>
     </section>

@@ -257,7 +257,7 @@ describe("productionTasks on the unit-files route", () => {
   it("blocks both tasks with a reason when the Build has no accepted units", () => {
     const tasks = productionTasks(stlInput({ pkg: noPlan, selectedCount: 0 }));
     expect(byId(tasks, "choose-units").state).toBe("blocked");
-    expect(byId(tasks, "choose-units").disabledReason).toContain("Accept a Plan revision");
+    expect(byId(tasks, "choose-units").disabledReason).toContain("Choose the parts to print");
   });
 });
 
@@ -289,7 +289,7 @@ describe("productionTasks on the record-a-print route", () => {
     const tasks = productionTasks(externalInput({ pkg: noPlan }));
     for (const task of tasks) {
       expect(task.state).toBe("blocked");
-      expect(task.disabledReason).toContain("Accept a Plan revision");
+      expect(task.disabledReason).toContain("Choose the parts to print");
     }
   });
 });

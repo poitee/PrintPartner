@@ -119,8 +119,9 @@ export async function registerPlanDraftRoutes(
   app.post("/plans/:id/drafts/recompute", async (request, reply) => {
     const profileId = positiveId((request.params as { id: string }).id);
     const key = idempotencyKey(request);
-    const body = request.body as { apply_manifest?: unknown } | null;
-    if (profileId == null || key == null || body?.apply_manifest !== true) {
+    const body = request.body;
+    if (profileId == null || key == null || body === null || typeof body !== "object" ||
+      !("apply_manifest" in body) || typeof body.apply_manifest !== "boolean") {
       return invalidRequest(reply);
     }
     try {
@@ -128,6 +129,7 @@ export async function registerPlanDraftRoutes(
         profileId,
         actorId: actorId(request),
         idempotencyKey: key,
+        applyManifest: body.apply_manifest,
       }));
     } catch {
       request.log.error({ failure: "unexpected", profileId }, "Plan draft recompute failed");

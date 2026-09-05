@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="/src/index.css" />
+    <title>Filament preview color regression</title>
+  </head>
+  <body style="padding: 24px; display: flex; gap: 24px">
+    <figure><figcaption>ASA Black</figcaption><img id="black" alt="ASA Black preview" /></figure>
+    <figure><figcaption>ASA Super Grey</figcaption><img id="grey" alt="ASA Super Grey preview" /></figure>
+    <script type="module">
+      import { generatePartThumbnail } from "/src/lib/stlThumbnail.ts";
+
+      for (const [id, target] of [[1, "black"], [2, "grey"]]) {
+        const url = await generatePartThumbnail(id);
+        if (!url) throw new Error(`No thumbnail for ${target}`);
+        const image = document.getElementById(target);
+        image.src = url;
+        await image.decode();
+      }
+      document.body.dataset.ready = "true";
+    </script>
+  </body>
+</html>

@@ -275,9 +275,8 @@ selections:
     });
     if (result.kind !== "created") throw new Error("Milo draft was not created");
 
-    expect(result.draft.parts.map((part) => part.relativePath)).not.toContain(
-      "STL Files/Archive/unchecked.stl",
-    );
+    expect(result.draft.parts.find((part) => part.relativePath === "STL Files/Archive/unchecked.stl"))
+      .toMatchObject({ included: false });
     expect(
       result.draft.parts.filter((part) => part.included).map((part) => part.relativePath),
     ).toEqual([
