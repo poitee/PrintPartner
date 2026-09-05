@@ -30,6 +30,7 @@ export type CheckoffPrinterActivity = {
   watchingLinks: PrinterCheckoffLink[];
   awaitingLinks: PrinterCheckoffLink[];
   failedLinks: PrinterCheckoffLink[];
+  verifiedLinks: PrinterCheckoffLink[];
   phaseManifest: PlanPhaseManifestResponse | null;
   auxiliaryError: string | null;
   refreshUnattributed: () => Promise<void>;
@@ -53,6 +54,7 @@ export function useCheckoffPrinterActivity(input: {
   const [watchingLinks, setWatchingLinks] = useState<PrinterCheckoffLink[]>([]);
   const [awaitingLinks, setAwaitingLinks] = useState<PrinterCheckoffLink[]>([]);
   const [failedLinks, setFailedLinks] = useState<PrinterCheckoffLink[]>([]);
+  const [verifiedLinks, setVerifiedLinks] = useState<PrinterCheckoffLink[]>([]);
   const [phaseManifest, setPhaseManifest] = useState<PlanPhaseManifestResponse | null>(null);
   const [auxiliaryErrors, setAuxiliaryErrors] = useState<AuxiliaryErrors>({});
   const unattributedRequestId = useRef(0);
@@ -96,7 +98,7 @@ export function useCheckoffPrinterActivity(input: {
   const refreshLinks = useCallback(() => {
     if (!engineReady) return;
     const read = (
-      state: "watching" | "awaiting_verify" | "host_failed",
+      state: "watching" | "awaiting_verify" | "host_failed" | "verified",
       key: string,
       apply: (links: PrinterCheckoffLink[]) => void,
     ) => {
@@ -113,6 +115,7 @@ export function useCheckoffPrinterActivity(input: {
     read("watching", "watching-links", setWatchingLinks);
     read("awaiting_verify", "awaiting-links", setAwaitingLinks);
     read("host_failed", "failed-links", setFailedLinks);
+    read("verified", "verified-links", setVerifiedLinks);
   }, [engineReady, markSuccess, profileId, reportError]);
 
   useEffect(() => {
@@ -155,6 +158,7 @@ export function useCheckoffPrinterActivity(input: {
     watchingLinks,
     awaitingLinks,
     failedLinks,
+    verifiedLinks,
     phaseManifest,
     auxiliaryError: currentAuxiliaryError(auxiliaryErrors),
     refreshUnattributed,

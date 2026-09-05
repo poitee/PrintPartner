@@ -4,6 +4,8 @@ import type { CheckoffRepoGroup } from "../../lib/checkoffGroups";
 import type { PrintSheetLayout } from "./CheckoffPrintSheetButton";
 import CheckoffSheetRow from "./CheckoffSheetRow";
 import { cn } from "@/lib/utils";
+import type { PrinterCheckoffLink } from "@print-partner/contracts";
+import AdditionalPrintItems from "./AdditionalPrintItems";
 
 type Props = {
   sheetRef: Ref<HTMLElement>;
@@ -11,6 +13,7 @@ type Props = {
   partCount: number;
   printedLine: string;
   groups: CheckoffRepoGroup[];
+  additionalPrints?: PrinterCheckoffLink[];
   layout: PrintSheetLayout;
   /** True while the browser is preparing the sheet for the print dialog. */
   printPrep: boolean;
@@ -30,6 +33,7 @@ export default function CheckoffPrintSheet({
   partCount,
   printedLine,
   groups,
+  additionalPrints = [],
   layout,
   printPrep,
   busyPartId,
@@ -98,6 +102,7 @@ export default function CheckoffPrintSheet({
           ))}
         </section>
       ))}
+      <AdditionalPrintItems links={additionalPrints} />
     </article>
   );
 }

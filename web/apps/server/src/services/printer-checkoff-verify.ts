@@ -18,6 +18,7 @@ import {
 } from "./printer-outcomes-store.js";
 import { acceptedPlanBasis, type AcceptedUnitDecision } from "../db/accepted-plan-progress.js";
 import { parseRequiredUnitToken } from "./required-units.js";
+import { readAdditionalDecisions } from "./imported-print-inventory.js";
 
 export type VerifyPrinterCheckoffResult = {
   link: PrinterCheckoffLink;
@@ -28,8 +29,9 @@ export type VerifyPrinterCheckoffResult = {
 
 function parseDecisions(
   raw: unknown,
+  allowEmpty = false,
 ): PrintVerifyDecision[] | { error: string } {
-  if (!Array.isArray(raw) || raw.length === 0) {
+  if (!Array.isArray(raw) || (!allowEmpty && raw.length === 0)) {
     return { error: "decisions required (reject needs a reason)" };
   }
   const out: PrintVerifyDecision[] = [];
@@ -88,6 +90,7 @@ export function verifyPrinterCheckoff(
   repo: AppRepository,
   linkId: string,
   rawDecisions: unknown,
+  rawAdditionalDecisions?: unknown,
 ): VerifyPrinterCheckoffResult | { error: string; status: number } {
   if (!repo.canMutateAcceptedPlan()) {
     return { error: "Accepted Plan update is unavailable", status: 503 };
@@ -98,7 +101,9 @@ export function verifyPrinterCheckoff(
     return { error: "Link is not awaiting verify", status: 409 };
   }
 
-  const parsed = parseDecisions(rawDecisions);
+  const additionalDecisions = readAdditionalDecisions(rawAdditionalDecisions);
+  if (!additionalDecisions) return { error: "Invalid additional part decisions", status: 400 };
+  const parsed = parseDecisions(rawDecisions, additionalDecisions.length > 0);
   if ("error" in parsed) {
     return { error: parsed.error, status: 400 };
   }
@@ -155,6 +160,7 @@ export function verifyPrinterCheckoff(
     linkId: link.id,
     expectedLink: link,
     decisions: tokenDecisions,
+    additionalDecisions,
   });
   if (result.kind === "verified") {
     return {

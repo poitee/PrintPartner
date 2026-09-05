@@ -53,6 +53,7 @@ type AttentionLink = {
   host_outcome?: string;
   units: { part_id: number; unit_index: number }[];
   resolved_units?: { part_id: number; unit_index: number }[];
+  imported_inventory?: { extras: { checkoff: { result: string } }[] };
 };
 
 type AttentionPrint = {
@@ -92,13 +93,18 @@ export function buildCheckoffAttentionItems(input: {
 
   for (const link of input.awaitingLinks) {
     const units = pendingLinkUnitCount(link);
+    const extras = link.imported_inventory?.extras.filter((extra) => extra.checkoff.result === "pending").length ?? 0;
+    const quantity = [
+      ...(units || !extras ? [`${units} ${plural(units, "unit", "units")}`] : []),
+      ...(extras ? [`${extras} additional ${plural(extras, "item", "items")}`] : []),
+    ].join(" and ");
     items.push({
       id: `awaiting:${link.id}`,
       kind: "awaiting_verification",
       title: link.filename,
       hostName: link.host_name,
       statusLabel: "Needs verification",
-      hint: `${link.host_name} finished ${units} ${plural(units, "unit", "units")}. Confirm or reject them.`,
+      hint: `${link.host_name} finished ${quantity}. Confirm or reject them.`,
       unitCount: units,
     });
   }

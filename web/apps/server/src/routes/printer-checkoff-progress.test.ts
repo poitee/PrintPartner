@@ -913,6 +913,49 @@ describe("printer progress route", () => {
     expect(acceptedPrintUnits(repo, plan.id, bracket.id)).toEqual([false]);
   });
 
+  it.each([{ names: [] }, { names: Array.from({ length: 201 }, () => "bracket.stl") }])("retains unknown and excess inventory without changing Plan counts (%#)", async ({ names }) => {
+    const { app, repo, plan, bracket, planRevisionId } = await setup();
+    const result = await app.inject({ method: "POST", url: "/printer-checkoff/file-assignments", payload: {
+      profile_id: plan.id, filename: "unrecognized.bgcode", tracking: "manual", completed: true,
+      plan_revision_id: planRevisionId, object_names: names, unit_tokens: [], retain_unmatched: true,
+    } });
+    expect(result.statusCode).toBe(200);
+    const id = result.json().link.id;
+    const count = names.length || 1;
+    expect(getPrinterCheckoffLink(repo, id)?.imported_inventory?.extras).toHaveLength(count);
+    await app.inject({ method: "GET", url: `/printer-checkoff?state=awaiting_verify&profile_id=${plan.id}` });
+    expect(getPrinterCheckoffLink(repo, id)?.units).toEqual([]);
+    for (const additional_decisions of [[{ index: count, result: "confirmed" }], [{ index: 0, result: "confirmed" }, { index: 0, result: "confirmed" }]]) {
+      const invalid = await app.inject({ method: "POST", url: "/printer-checkoff/verify", payload: { link_id: id, decisions: [], additional_decisions } });
+      expect(invalid.statusCode).toBe(400);
+    }
+    const first = await app.inject({ method: "POST", url: "/printer-checkoff/verify", payload: { link_id: id, decisions: [], additional_decisions: [{ index: 0, result: "confirmed" }] } });
+    expect(first.statusCode).toBe(200);
+    expect(first.json().link.state).toBe(count > 1 ? "awaiting_verify" : "verified");
+    if (count > 1) {
+      const rest = await app.inject({ method: "POST", url: "/printer-checkoff/verify", payload: { link_id: id, decisions: [], additional_decisions: names.slice(1).map((_name, i) => ({ index: i + 1, result: "rejected", reason: "warping" })) } });
+      expect(rest.statusCode).toBe(200);
+      expect(rest.json().link.state).toBe("verified");
+    }
+    const saved = getPrinterCheckoffLink(repo, id);
+    expect(saved?.imported_inventory?.extras[0]?.checkoff.result).toBe("confirmed");
+    expect(acceptedPrintUnits(repo, plan.id, bracket.id)).toEqual([false]);
+    expect(saved?.units_marked).toBe(0);
+  });
+
+  it("does not count repeated canonical labels as additional physical copies", async () => {
+    const { app, plan, bracket, acceptedPart, planRevisionId } = await setup();
+    const name = acceptedPart.units[0]!.objectName;
+    const result = await app.inject({ method: "POST", url: "/printer-checkoff/file-assignments", payload: {
+      profile_id: plan.id, filename: "labeled.bgcode", tracking: "manual", completed: true,
+      plan_revision_id: planRevisionId, object_names: [name, name],
+      unit_tokens: [`${bracket.id}:0`], retain_unmatched: true,
+    } });
+    expect(result.statusCode).toBe(200);
+    expect(result.json().link.units).toHaveLength(1);
+    expect(result.json().link.imported_inventory.extras).toEqual([]);
+  });
+
   it("persists explicit object mappings and clears only the mapped unmatched occurrence", async () => {
     const { app, repo, plan, bracket, planRevisionId } = await setup();
     saveFleet(repo, [parsePrinterMachine({ id: "offline-printer", name: "Garage printer", model: "Custom", bed_width_mm: 250, bed_depth_mm: 210, max_filament_slots: 1, loaded_filaments: [] })]);
@@ -934,12 +977,24 @@ describe("printer progress route", () => {
       expect(loadPrinterCheckoffLinks(repo)).toHaveLength(0);
     }
     const result = await app.inject({ method: "POST", url: "/printer-checkoff/file-assignments", payload: {
-      ...base, object_mappings: [{ object_index: 0, part_id: bracket.id, unit_index: 0 }],
+      ...base, object_mappings: [{ object_index: 0, part_id: bracket.id, unit_index: 0 }], retain_unmatched: true, completed: true,
     } });
     expect(result.statusCode).toBe(200);
     expect(result.json().link.unlabeled_names).toEqual(["brackett.stl"]);
     expect(getPrinterCheckoffLink(repo, result.json().link.id)?.unlabeled_names).toEqual(["brackett.stl"]);
     expect(acceptedPrintUnits(repo, plan.id, bracket.id)).toEqual([false]);
+    const verified = await app.inject({ method: "POST", url: "/printer-checkoff/verify", payload: {
+      link_id: result.json().link.id, decisions: [{ part_id: bracket.id, unit_index: 0, result: "confirmed" }],
+    } });
+    expect(verified.statusCode).toBe(200);
+    expect(verified.json().link.state).toBe("awaiting_verify");
+    const extra = await app.inject({ method: "POST", url: "/printer-checkoff/verify", payload: {
+      link_id: result.json().link.id, decisions: [], additional_decisions: [{ index: 0, result: "confirmed" }],
+    } });
+    expect(extra.statusCode).toBe(200);
+    expect(extra.json().link.state).toBe("verified");
+    expect(acceptedPrintUnits(repo, plan.id, bracket.id)).toEqual([true]);
+    expect(extra.json().link.units_marked).toBe(1);
   });
 
   it("binds only the units the operator confirmed, never a filename match", async () => {

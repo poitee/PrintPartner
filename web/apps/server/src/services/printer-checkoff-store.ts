@@ -12,6 +12,7 @@ import type {
   ThreeMfKind,
 } from "@print-partner/contracts";
 import type { AppRepository } from "../db/repository.js";
+import { readImportedInventory } from "./imported-print-inventory.js";
 
 const SETTINGS_KEY = "printer.checkoff_links";
 const MAX_LINKS = 200;
@@ -64,6 +65,7 @@ export type CreatePrinterCheckoffLinkInput = {
   units: PrinterCheckoffUnit[];
   /** Object names that did not map to units — preview only, never confirmable. */
   unlabeled_names?: string[];
+  imported_inventory?: PrinterCheckoffLink["imported_inventory"];
   /** Upload & start — allow complete with cleared filename before first poll. */
   started?: boolean;
 };
@@ -226,6 +228,7 @@ function parseLink(raw: unknown): PrinterCheckoffLink | null {
     remote_identity: parseFileIdentity(row.remote_identity),
     remote_drift: parseFileDrift(row.remote_drift),
     classification: parseClassification(row.classification),
+    imported_inventory: readImportedInventory(row.imported_inventory),
     units,
     unlabeled_names: unlabeled_names?.length ? unlabeled_names : undefined,
     resolved_units: parseResolved(row.resolved_units),
@@ -279,7 +282,7 @@ export function trimPrinterCheckoffLinks(links: PrinterCheckoffLink[]): PrinterC
   const active: PrinterCheckoffLink[] = [];
   const done: PrinterCheckoffLink[] = [];
   for (const link of links) {
-    if (terminal.has(link.state)) done.push(link);
+    if (terminal.has(link.state) && !link.imported_inventory?.extras.length) done.push(link);
     else active.push(link);
   }
   const keepDone = Math.max(0, MAX_LINKS - active.length);
@@ -321,6 +324,7 @@ export function createPrinterCheckoffLink(
           : undefined,
       remote_identity: parseFileIdentity(input.remote_identity),
       classification: input.classification,
+      imported_inventory: input.imported_inventory,
       units,
       unlabeled_names,
       state: "watching",
@@ -350,6 +354,7 @@ export type PrinterCheckoffLinkPatch = Partial<
     | "resolved_units"
     | "units"
     | "unlabeled_names"
+    | "imported_inventory"
     | "remote_identity"
     | "remote_drift"
   >

@@ -482,6 +482,20 @@ export type PrintOutcomesSummary = {
  * Created at Export send with immutable profile_id (plan). Host `complete` →
  * awaiting_verify (user confirms). Plan-only links (no units) bind farm status.
  */
+export type AdditionalPrintResult =
+  | { result: "confirmed" }
+  | { result: "rejected"; reason: PrintRejectReason; note?: string };
+
+export type AdditionalPrintDecision = AdditionalPrintResult & { index: number };
+
+export type ImportedPrintInventory = {
+  extras: Array<{
+    name: string;
+    kind: "object" | "file";
+    checkoff: { result: "pending" } | (AdditionalPrintResult & { checked_at: string });
+  }>;
+};
+
 export type PrinterCheckoffLink = {
   id: string;
   profile_id: number;
@@ -505,6 +519,7 @@ export type PrinterCheckoffLink = {
   units: PrinterCheckoffUnit[];
   /** Parsed object names that did not map to Progress units (visible, not confirmable). */
   unlabeled_names?: string[];
+  imported_inventory?: ImportedPrintInventory;
   /** Units already confirmed/rejected via verify API. */
   resolved_units?: PrintVerifyDecision[];
   state: PrinterCheckoffLinkState;

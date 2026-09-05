@@ -166,6 +166,7 @@ describe("PrinterWorkspaceSheet", () => {
         object_names: ["bracket.stl"],
         tracking: "host",
         completed: false,
+        retain_unmatched: true,
         plan_revision_id: 9,
         unit_tokens: ["41:0"],
       });

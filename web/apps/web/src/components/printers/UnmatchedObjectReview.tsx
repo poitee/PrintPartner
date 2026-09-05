@@ -21,10 +21,10 @@ export default function UnmatchedObjectReview(props: Props) {
   if (groups.size === 0 && !props.review.notices?.length) return null;
   return <fieldset disabled={props.disabled} className="stack-row rounded-md border border-border p-3">
     <legend className="text-body font-medium">Match remaining objects</legend>
-    {groups.size > 0 ? <p className="text-meta text-muted-foreground">Suggestions are not selected automatically. Choose a plan part or leave the object unmatched. Nothing is marked printed here.</p> : null}
+    <p className="text-meta text-muted-foreground">Suggestions are not selected automatically. Unmatched objects and extra copies will be imported as additional parts for Checkoff and the printed sheet. Plan quantities will not change.</p>
     {props.review.notices?.map((notice, index) => <p key={index} className="text-meta text-muted-foreground">{notice}</p>)}
     {[...groups].map(([name, indices]) => <ObjectGroup key={name} {...props} name={name} indices={indices} />)}
-    {props.shortages.map((message) => <p key={message} role="alert" className="text-meta text-destructive">{message}</p>)}
+    {props.shortages.map((message) => <p key={message} role="alert" className="text-meta text-muted-foreground">{message}</p>)}
   </fieldset>;
 }
 
@@ -57,12 +57,12 @@ function ObjectGroup({ review, choices, onChange, name, indices }: Props & { nam
       className="min-h-11 w-full rounded-md border border-input bg-background px-3 text-body">
       <option value="">Leave unmatched</option>
       <optgroup label={needle ? "Plan search results" : "Suggested matches"}>
-        {options.map((part) => <option key={part.part_id} value={part.part_id} disabled={part.units.length === 0}>
+        {options.map((part) => <option key={part.part_id} value={part.part_id}>
           {part.source_label ? `${part.source_label} / ` : ""}{part.relative_path} ({part.units.length} remaining)
         </option>)}
       </optgroup>
     </select>
-    {options.length === 0 ? <p className="text-meta text-muted-foreground">No matching plan parts. Search by another name, or leave unmatched. Parts outside this plan must be added in Plan first.</p> : null}
+    {options.length === 0 ? <p className="text-meta text-muted-foreground">No matching plan parts. You can still import this object for Checkoff and the printed sheet.</p> : null}
     {partId !== undefined ? <div className="flex flex-wrap items-center gap-2">
       <label htmlFor={`${id}-copies`} className="text-meta">Copies to match for {name}</label>
       <input id={`${id}-copies`} type="number" min={1} max={indices.length} value={count}

@@ -93,6 +93,7 @@ export async function fetchPrinterCheckoffLinks(options?: {
 export async function verifyPrinterCheckoff(options: {
   link_id: string;
   decisions: PrintVerifyDecision[];
+  additional_decisions?: import("@print-partner/contracts").AdditionalPrintDecision[];
 }): Promise<{
   link: PrinterCheckoffLink;
   units_confirmed: number;
@@ -391,6 +392,7 @@ export async function previewPrinterFileAssignment(options: {
  */
 export type PrintFileAssignmentBase = {
   object_mappings?: PrinterObjectMapping[];
+  retain_unmatched?: boolean;
   profile_id: number;
   filename: string;
   object_names: string[];

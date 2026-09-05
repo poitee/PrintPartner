@@ -21,6 +21,8 @@ import {
   normalizeSourceCategories,
 } from "@print-partner/domain";
 import { createHash } from "node:crypto";
+import type { AdditionalPrintDecision, ImportedPrintInventory } from "@print-partner/contracts";
+import { resolveAdditionalDecisions } from "../services/imported-print-inventory.js";
 import { inArray } from "drizzle-orm";
 import {
   copyProductionSetup,
@@ -1038,7 +1040,7 @@ export class AppRepository {
         if (JSON.stringify(current) !== JSON.stringify(command.expectedLink)) {
           return { kind: "link_changed" as const };
         }
-        if (current.state !== "awaiting_verify" || current.units.length > 0) {
+        if (current.state !== "awaiting_verify" || current.units.length > 0 || current.imported_inventory) {
           return { kind: "not_repairable" as const };
         }
         profileId = current.profile_id;
@@ -1115,6 +1117,16 @@ export class AppRepository {
         return { kind: "no_match" as const };
       }
       const units = attribution.units.map((unit) => ({ ...unit }));
+      let inventory: ImportedPrintInventory | undefined;
+      if (command.kind === "create" && command.retainUnmatched) {
+        const extras: ImportedPrintInventory["extras"] = attribution.outcomes.flatMap((outcome) =>
+          "unit" in outcome || outcome.kind === "duplicate_observation" ? [] : [{
+            name: outcome.rawName, kind: "object", checkoff: { result: "pending" },
+          }],
+        );
+        if (!objectNames.length && !units.length) extras.push({ name: command.link.filename, kind: "file", checkoff: { result: "pending" } });
+        inventory = { extras };
+      }
       const unlabeledNames = attribution.unmatchedObjectNames.length
         ? [...attribution.unmatchedObjectNames]
         : undefined;
@@ -1160,6 +1172,7 @@ export class AppRepository {
         classification: linkInput.classification,
         units,
         unlabeled_names: unlabeledNames,
+        imported_inventory: inventory,
         started: linkInput.started,
       });
       if (!link) throw new Error("Accepted printer link creation failed");
@@ -1402,6 +1415,7 @@ export class AppRepository {
     readonly linkId: string;
     readonly expectedLink: PrinterCheckoffLink;
     readonly decisions: readonly AcceptedUnitDecision[];
+    readonly additionalDecisions?: readonly AdditionalPrintDecision[];
   }):
     | {
         readonly kind: "verified";
@@ -1424,6 +1438,8 @@ export class AppRepository {
       if (current.state !== "awaiting_verify") {
         return { kind: "not_awaiting_verify" as const };
       }
+      const inventory = resolveAdditionalDecisions(current.imported_inventory, command.additionalDecisions ?? [], new Date().toISOString());
+      if (inventory === null || (!command.decisions.length && !command.additionalDecisions?.length)) return { kind: "invalid_decisions" as const };
       const pending = new Set(
         current.units
           .filter(
@@ -1460,12 +1476,14 @@ export class AppRepository {
         })),
       ];
       const resolvedKeys = new Set(resolvedUnits.map((decision) => `${decision.part_id}:${decision.unit_index}`));
-      const fullyDone = current.units.every((unit) => resolvedKeys.has(`${unit.part_id}:${unit.unit_index}`));
+      const fullyDone = current.units.every((unit) => resolvedKeys.has(`${unit.part_id}:${unit.unit_index}`)) &&
+        !(inventory?.extras.some((extra) => extra.checkoff.result === "pending"));
       const updated = updatePrinterCheckoffLink(
         this,
         current.id,
         {
           resolved_units: resolvedUnits,
+          imported_inventory: inventory,
           state: fullyDone ? "verified" : "awaiting_verify",
           applied_at: fullyDone ? new Date().toISOString() : current.applied_at,
           units_marked: (current.units_marked ?? 0) + applied.unitsConfirmed,
