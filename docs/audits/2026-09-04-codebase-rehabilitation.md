@@ -120,6 +120,8 @@ The temporary automation and logs are under `/tmp/pp-upgrade-proof-rHPJ7A`; thes
 
 `cd web && npm run test:release` now passes 36 tests, including four Docker startup guards. `bash -n scripts/docker-startup-smoke.sh` passes. The new container smoke test creates its own root-owned named volume, checks the running process and database owner, and verifies graceful shutdown and persistence across a restart. Web CI runs this test against the production image. Local execution is blocked by Docker socket permissions and password-required sudo; container results must come from CI.
 
+The first PR CI pass exposed a PostgreSQL packaging defect. Its initial SQL migration still used a path relative to the former flat `dist` directory. A built-artifact test reproduced the missing file. The migration now lives under `src/data/postgres` and is copied and required in every atomic server release. The test passes through the production adapter's migration loader and stops at the database query boundary. It runs as `npm run test:runtime` after the production build in `npm run quality`. The rebuilt artifact, focused lint, and 61 schema and database-bridge tests passed locally. The live PostgreSQL smoke test remains the integration proof.
+
 ## Known limits
 
 - Artifact deduplication and a complete revision, export, and backup retention policy remain open.

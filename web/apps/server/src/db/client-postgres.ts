@@ -120,11 +120,11 @@ function runPostgresSyncQuery(
 
 const MIGRATION_SQL = join(
   dirname(fileURLToPath(import.meta.url)),
-  "../../drizzle/postgres/0000_init.sql",
+  "../data/postgres/0000_init.sql",
 );
 
 /**
- * DDL applied after drizzle/postgres/0000_init.sql, in order.
+ * DDL applied after data/postgres/0000_init.sql, in order.
  *
  * Everything here must be idempotent (IF NOT EXISTS / ADD COLUMN IF NOT EXISTS)
  * because it is re-run on every process start. Postgres, unlike SQLite, does

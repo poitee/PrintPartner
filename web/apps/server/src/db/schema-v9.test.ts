@@ -1764,7 +1764,7 @@ describe("database schema migrations (SQLite)", () => {
 const POSTGRES_DDL = (() => {
   const initPath = join(
     dirname(fileURLToPath(import.meta.url)),
-    "../../drizzle/postgres/0000_init.sql",
+    "../data/postgres/0000_init.sql",
   );
   return [readFileSync(initPath, "utf8"), ...postgresPostInitMigrations].join("\n");
 })();
