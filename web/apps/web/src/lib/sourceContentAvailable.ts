@@ -7,4 +7,3 @@ export function sourceContentAvailable(
 ): boolean {
   return source?.content_available ?? Boolean(source?.local_path);
 }
-

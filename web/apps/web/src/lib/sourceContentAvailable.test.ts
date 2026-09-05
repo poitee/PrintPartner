@@ -11,4 +11,3 @@ describe("sourceContentAvailable", () => {
     expect(sourceContentAvailable({ local_path: null })).toBe(false);
   });
 });
-
