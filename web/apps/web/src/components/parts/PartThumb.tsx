@@ -13,6 +13,12 @@ import {
 } from "../../lib/thumbnailCache";
 
 const DEFAULT_THUMB_PX = 96;
+const MAX_RENDER_ATTEMPTS = 3;
+
+type ThumbnailState =
+  | { readonly kind: "loading" }
+  | { readonly kind: "ready"; readonly url: string }
+  | { readonly kind: "failed" };
 
 export default memo(function PartThumb({
   partId,
@@ -31,7 +37,7 @@ export default memo(function PartThumb({
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const acceptedBasisRef = useRef<string | null>(null);
-  const [src, setSrc] = useState<string | null>(null);
+  const [thumbnail, setThumbnail] = useState<ThumbnailState>({ kind: "loading" });
   const [visible, setVisible] = useState(eager);
   const [intersecting, setIntersecting] = useState(eager);
   const cacheVersion = useSyncExternalStore(
@@ -69,7 +75,9 @@ export default memo(function PartThumb({
     let cancelled = false;
     let objectUrl: string | null = null;
     let probe: HTMLImageElement | null = null;
-    setSrc(null);
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    let renderAttempts = 0;
+    setThumbnail({ kind: "loading" });
 
     const priority = intersecting ? 1 : 0;
 
@@ -80,16 +88,31 @@ export default memo(function PartThumb({
     };
 
     const renderClientSide = () => {
-      void generatePartThumbnail(partId, { priority, cacheVersion }).then((url) => {
-        if (cancelled) {
-          if (url) URL.revokeObjectURL(url);
-          return;
+      if (cancelled) return;
+      renderAttempts += 1;
+      const retry = () => {
+        if (cancelled) return;
+        if (renderAttempts < MAX_RENDER_ATTEMPTS) {
+          retryTimer = setTimeout(renderClientSide, 500 * 2 ** (renderAttempts - 1));
+        } else {
+          setThumbnail({ kind: "failed" });
         }
-        if (url) {
-          objectUrl = url;
-          setSrc(url);
-        }
-      });
+      };
+      void generatePartThumbnail(partId, { priority, cacheVersion }).then(
+        (url) => {
+          if (cancelled) {
+            if (url) URL.revokeObjectURL(url);
+            return;
+          }
+          if (url) {
+            objectUrl = url;
+            setThumbnail({ kind: "ready", url });
+          } else {
+            retry();
+          }
+        },
+        retry,
+      );
     };
 
     const loadServerThumbnail = async () => {
@@ -124,7 +147,7 @@ export default memo(function PartThumb({
           if (cancelled) return;
           if (probe && probe.naturalWidth > 1 && probe.naturalHeight > 1) {
             acceptedThumbnailBlobCache.set(metadata.basis, blob);
-            setSrc(objectUrl);
+            if (objectUrl) setThumbnail({ kind: "ready", url: objectUrl });
           } else {
             clearObjectUrl();
             renderClientSide();
@@ -146,6 +169,7 @@ export default memo(function PartThumb({
 
     return () => {
       cancelled = true;
+      clearTimeout(retryTimer);
       if (probe) {
         probe.onload = null;
         probe.onerror = null;
@@ -158,9 +182,14 @@ export default memo(function PartThumb({
   const px = sizePx ?? (compact ? 56 : DEFAULT_THUMB_PX);
   const label = fallbackLabel?.trim().slice(0, 3) || null;
   return (
-    <div ref={ref} className="sheet-thumb" style={{ width: px, height: px }}>
-      {src ? (
-        <img className="sheet-thumb-img" src={src} alt="" />
+    <div
+      ref={ref}
+      className="sheet-thumb"
+      style={{ width: px, height: px }}
+      title={thumbnail.kind === "failed" ? "Thumbnail unavailable. Open the 3D preview or refresh thumbnails to try again." : undefined}
+    >
+      {thumbnail.kind === "ready" ? (
+        <img className="sheet-thumb-img" src={thumbnail.url} alt="" />
       ) : label ? (
         <span
           className="sheet-thumb-fallback"

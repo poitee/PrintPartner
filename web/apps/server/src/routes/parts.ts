@@ -27,7 +27,7 @@ import {
   resolveFilamentAssignment,
 } from "../db/accepted-part-filament.js";
 import { getColorById, resolvePartFilamentHex } from "../services/filament-catalog.js";
-import type { PartRow } from "@print-partner/contracts";
+import { THUMBNAIL_RENDERER_VERSION, type PartRow } from "@print-partner/contracts";
 import { parseRequiredUnitToken } from "../services/required-units.js";
 import { acceptedStateDetail } from "./accepted-state-detail.js";
 import { sendAcceptedFilamentFailure } from "./accepted-filament-failure.js";
@@ -550,6 +550,11 @@ export async function registerPartRoutes(app: FastifyInstance, deps: RouteDeps):
         return reply.status(409).send({ detail: "Accepted Part artifact is unavailable" });
       }
       verified.lease.close();
+      if (request.headers["x-thumbnail-renderer-version"] !== THUMBNAIL_RENDERER_VERSION) {
+        return reply.status(409).send({
+          detail: "Thumbnail renderer is out of date; refresh the app and retry",
+        });
+      }
       const { basis: thumbnailBasis } = acceptedPartMediaIdentity(part, "thumbnail");
       try {
         writeAcceptedMediaPng({ thumbsDir: deps.thumbsDir, basis: thumbnailBasis, png: buf });

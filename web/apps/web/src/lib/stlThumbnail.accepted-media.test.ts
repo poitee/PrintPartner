@@ -10,6 +10,7 @@ const runtime = vi.hoisted(() => ({
   uploadPartThumbnail: vi.fn(),
   render: vi.fn(),
   deferBlob: false,
+  loseContextOnRender: false,
   blobCallbacks: [] as BlobCallback[],
 }));
 
@@ -17,6 +18,7 @@ vi.mock("three", async (importOriginal) => {
   const actual = await importOriginal<typeof import("three")>();
   class TestWebGLRenderer {
     readonly domElement: HTMLCanvasElement;
+    private contextLost = false;
 
     constructor(options: { canvas: HTMLCanvasElement }) {
       this.domElement = options.canvas;
@@ -34,8 +36,14 @@ vi.mock("three", async (importOriginal) => {
 
     setPixelRatio() {}
     setSize() {}
+    dispose() {}
+    getContext() { return { isContextLost: () => this.contextLost }; }
     render() {
       runtime.render();
+      if (runtime.loseContextOnRender) {
+        runtime.loseContextOnRender = false;
+        this.contextLost = true;
+      }
     }
   }
 
@@ -87,6 +95,7 @@ describe("accepted STL thumbnail mesh loading", () => {
     runtime.uploadPartThumbnail.mockReset().mockResolvedValue(undefined);
     runtime.render.mockReset();
     runtime.deferBlob = false;
+    runtime.loseContextOnRender = false;
     runtime.blobCallbacks.length = 0;
     Object.defineProperty(URL, "createObjectURL", {
       configurable: true,
@@ -238,6 +247,62 @@ describe("accepted STL thumbnail mesh loading", () => {
     expect(runtime.render).toHaveBeenCalledTimes(1);
     expect(runtime.uploadPartThumbnail).toHaveBeenCalledTimes(2);
     expect(runtime.uploadPartThumbnail.mock.calls.map(([partId]) => partId)).toEqual([501, 502]);
+  });
+
+  it("releases the thumbnail queue when a canvas capture never calls back", async () => {
+    const stl = new TextEncoder().encode("solid test\nfacet normal 0 0 1\nouter loop\nvertex 0 0 0\nvertex 1 0 0\nvertex 0 1 0\nendloop\nendfacet\nendsolid test");
+    runtime.fetchWithRetry
+      .mockResolvedValueOnce(meshResponse(200, stl, "e".repeat(64)))
+      .mockResolvedValueOnce(meshResponse(200, stl, "f".repeat(64)));
+    runtime.deferBlob = true;
+    vi.useFakeTimers();
+    const first = generatePartThumbnail(701);
+    let second: Promise<string | null> | undefined;
+    try {
+      await vi.waitFor(() => expect(runtime.render).toHaveBeenCalledOnce());
+      runtime.deferBlob = false;
+      second = generatePartThumbnail(702);
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(runtime.render).toHaveBeenCalledTimes(2);
+      await expect(first).resolves.toBeNull();
+      await expect(second).resolves.toBe("blob:thumbnail");
+      expect(runtime.uploadPartThumbnail.mock.calls.map(([partId]) => partId)).toEqual([702]);
+    } finally {
+      runtime.deferBlob = false;
+      for (const callback of runtime.blobCallbacks.splice(0)) {
+        callback(new Blob(["late png"], { type: "image/png" }));
+      }
+      await Promise.all([first, second]);
+      vi.useRealTimers();
+    }
+  });
+
+  it("renders a fresh image after Refresh thumbnails even when the mesh basis is unchanged", async () => {
+    const stl = new TextEncoder().encode("solid refresh\nfacet normal 0 0 1\nouter loop\nvertex 0 0 0\nvertex 1 0 0\nvertex 0 1 0\nendloop\nendfacet\nendsolid refresh");
+    const refreshBasis = "ab".repeat(32);
+    runtime.fetchWithRetry
+      .mockResolvedValueOnce(meshResponse(200, stl, refreshBasis))
+      .mockResolvedValueOnce(meshResponse(200, stl, refreshBasis));
+
+    await expect(generatePartThumbnail(801, { cacheVersion: 0 })).resolves.toBe("blob:thumbnail");
+    await expect(generatePartThumbnail(801, { cacheVersion: 1 })).resolves.toBe("blob:thumbnail");
+
+    expect(runtime.render).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not cache or upload a blank capture from a lost graphics context", async () => {
+    const stl = new TextEncoder().encode("solid loss\nfacet normal 0 0 1\nouter loop\nvertex 0 0 0\nvertex 1 0 0\nvertex 0 1 0\nendloop\nendfacet\nendsolid loss");
+    runtime.fetchWithRetry
+      .mockResolvedValueOnce(meshResponse(200, stl, "ac".repeat(32)))
+      .mockResolvedValueOnce(meshResponse(200, stl, "ac".repeat(32)));
+    runtime.loseContextOnRender = true;
+
+    await expect(generatePartThumbnail(802)).resolves.toBeNull();
+    expect(runtime.uploadPartThumbnail).not.toHaveBeenCalled();
+    await expect(generatePartThumbnail(802)).resolves.toBe("blob:thumbnail");
+    expect(runtime.render).toHaveBeenCalledTimes(2);
+    expect(runtime.uploadPartThumbnail).toHaveBeenCalledOnce();
   });
 
   it("refetches unconditionally when a 304 basis has no local bytes", async () => {

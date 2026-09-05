@@ -15,6 +15,7 @@ import {
 } from "node:fs";
 import type { Stats } from "node:fs";
 import { join, resolve } from "node:path";
+import { THUMBNAIL_RENDERER_VERSION } from "@print-partner/contracts";
 
 export type AcceptedMediaVariant = "mesh" | "thumbnail" | "preview";
 
@@ -47,7 +48,9 @@ export function acceptedMediaBasis(input: AcceptedMediaBasisInput): string {
     throw new Error("Invalid accepted artifact digest");
   }
   const payload = [
-    "accepted-media-v1",
+    input.variant === "thumbnail"
+      ? `accepted-thumbnail-v${THUMBNAIL_RENDERER_VERSION}`
+      : "accepted-media-v1",
     input.variant,
     input.expectedSha256,
     normalizedRole(input.role),

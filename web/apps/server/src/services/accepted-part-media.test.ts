@@ -57,7 +57,7 @@ describe("acceptedPartMediaIdentity", () => {
       ),
     ).toEqual({
       hex: "#abcdef",
-      basis: "45845a1f88700fea820122a66735163f0553d932bb688ecf0a0242cd55239c6e",
+      basis: "8e6bd4983ef47cafe525dd19811eef8f054c00429aff409e2b8728eca47d2e93",
     });
   });
 

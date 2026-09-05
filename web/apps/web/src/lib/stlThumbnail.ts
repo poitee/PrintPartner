@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { THUMBNAIL_RENDERER_VERSION } from "@print-partner/contracts";
 import { DEFAULT_FILAMENT_HEX } from "./colorPresets";
 import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
 import {
@@ -18,6 +19,7 @@ const DEFAULT_COLOR = DEFAULT_FILAMENT_HEX;
 const MESH_CACHE_MAX = 48;
 const BLOB_CACHE_MAX = 96;
 const MAX_FETCH_ATTEMPTS = 3;
+const CAPTURE_TIMEOUT_MS = 5_000;
 
 let sharedRenderer: THREE.WebGLRenderer | null = null;
 let sharedLoader: STLLoader | null = null;
@@ -56,6 +58,10 @@ function optionalAcceptedPartMediaMetadata(response: Response) {
 
 /** Reuse one WebGL context because browsers cap the number of live contexts. */
 function getRenderer(): THREE.WebGLRenderer {
+  if (sharedRenderer?.getContext().isContextLost()) {
+    sharedRenderer.dispose();
+    sharedRenderer = null;
+  }
   if (!sharedRenderer) {
     const canvas = document.createElement("canvas");
     canvas.width = SIZE;
@@ -96,19 +102,19 @@ function cachedMeshBuffer(basis: string): ArrayBuffer | null {
 type BlobEntry = { blob: Blob; lastUsed: number };
 const blobCache = new Map<string, BlobEntry>();
 
-function blobCacheKey(basis: string, hex: string): string {
-  return `${basis}:${hex.toLowerCase().replace(/^#/, "")}`;
+function blobCacheKey(basis: string, hex: string, cacheVersion: number): string {
+  return `${THUMBNAIL_RENDERER_VERSION}:${cacheVersion}:${basis}:${hex.toLowerCase().replace(/^#/, "")}`;
 }
 
-function getCachedBlob(basis: string, hex: string): Blob | null {
-  const entry = blobCache.get(blobCacheKey(basis, hex));
+function getCachedBlob(key: string): Blob | null {
+  const entry = blobCache.get(key);
   if (!entry) return null;
   entry.lastUsed = Date.now();
   return entry.blob;
 }
 
-function rememberBlob(basis: string, hex: string, blob: Blob): void {
-  blobCache.set(blobCacheKey(basis, hex), { blob, lastUsed: Date.now() });
+function rememberBlob(key: string, blob: Blob): void {
+  blobCache.set(key, { blob, lastUsed: Date.now() });
   if (blobCache.size <= BLOB_CACHE_MAX) return;
   let oldestKey: string | null = null;
   let oldestAt = Number.POSITIVE_INFINITY;
@@ -156,14 +162,28 @@ function renderBufferToBlob(buffer: ArrayBuffer, hex: string): Promise<Blob | nu
   camera.position.set(maxDim * 1.4, maxDim * 1.1, maxDim * 1.6);
   camera.lookAt(0, 0, 0);
 
-  renderer.render(scene, camera);
-
   return new Promise((resolve) => {
-    renderer.domElement.toBlob((blob) => {
+    let settled = false;
+    const finish = (blob: Blob | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
       geometry.dispose();
       material.dispose();
-      resolve(blob);
-    }, "image/png");
+      const captured = blob && !renderer.getContext().isContextLost() ? blob : null;
+      if (!captured) {
+        renderer.dispose();
+        if (sharedRenderer === renderer) sharedRenderer = null;
+      }
+      resolve(captured);
+    };
+    const timeout = setTimeout(() => finish(null), CAPTURE_TIMEOUT_MS);
+    try {
+      renderer.render(scene, camera);
+      renderer.domElement.toBlob(finish, "image/png");
+    } catch {
+      finish(null);
+    }
   });
 }
 
@@ -328,22 +348,23 @@ async function renderAcceptedMeshBlob(
   mesh: AcceptedMeshBuffer,
   resolvedHex: string,
   priority: number,
+  cacheVersion: number,
 ): Promise<Blob | null> {
-  const cachedBlob = getCachedBlob(mesh.basis, resolvedHex);
+  const cacheKey = blobCacheKey(mesh.basis, resolvedHex, cacheVersion);
+  const cachedBlob = getCachedBlob(cacheKey);
   if (cachedBlob) return cachedBlob;
 
-  const cacheKey = blobCacheKey(mesh.basis, resolvedHex);
   const existing = inFlightBlobRenders.get(cacheKey);
   if (existing) return existing;
 
   const render = renderQueue.enqueue(async () => {
     // Another queued Part may have rendered the same artifact and color while
     // this task waited for the shared canvas.
-    const queuedCacheHit = getCachedBlob(mesh.basis, resolvedHex);
+    const queuedCacheHit = getCachedBlob(cacheKey);
     if (queuedCacheHit) return queuedCacheHit;
 
     const blob = await renderBufferToBlob(mesh.buffer, resolvedHex);
-    if (blob) rememberBlob(mesh.basis, resolvedHex, blob);
+    if (blob) rememberBlob(cacheKey, blob);
     return blob;
   }, priority);
   inFlightBlobRenders.set(cacheKey, render);
@@ -361,7 +382,8 @@ export function generatePartThumbnail(
   partId: number,
   options?: { priority?: number; cacheVersion?: number },
 ): Promise<string | null> {
-  const requestKey = `${partId}:${options?.cacheVersion ?? 0}`;
+  const cacheVersion = options?.cacheVersion ?? getThumbnailCacheVersion();
+  const requestKey = `${partId}:${cacheVersion}`;
   const existing = inFlightPartThumbnails.get(requestKey);
   if (existing) {
     return existing.then((blob) => (blob ? URL.createObjectURL(blob) : null));
@@ -377,7 +399,7 @@ export function generatePartThumbnail(
       // Mesh I/O and cache work can overlap across Parts. Only the shared
       // WebGL canvas render and capture must run one at a time. Render work is
       // also shared by different Parts that resolve to the same basis/color.
-      blob = await renderAcceptedMeshBlob(mesh, resolvedHex, options?.priority ?? 0);
+      blob = await renderAcceptedMeshBlob(mesh, resolvedHex, options?.priority ?? 0, cacheVersion);
     } catch {
       return null;
     }

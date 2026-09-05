@@ -1,0 +1,1 @@
+export const THUMBNAIL_RENDERER_VERSION = "2";

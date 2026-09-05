@@ -22,6 +22,8 @@ vi.mock("three", async (importOriginal) => {
 
   class TestWebGLRenderer {
     domElement = document.createElement("canvas");
+    shadowMap = { enabled: false, type: 0 };
+    outputColorSpace = "";
 
     constructor() {
       this.domElement.toBlob = (callback) => callback(new Blob(["png"], { type: "image/png" }));
@@ -29,6 +31,7 @@ vi.mock("three", async (importOriginal) => {
 
     setPixelRatio() {}
     setSize() {}
+    setClearColor() {}
     dispose() {}
     render(_scene: unknown, camera: NonNullable<typeof previewRuntime.camera>) {
       previewRuntime.camera = camera;
@@ -183,18 +186,27 @@ describe("Preview3D accessibility", () => {
     expect(previewRuntime.uploadPartThumbnail).not.toHaveBeenCalled();
   });
 
-  it("uploads a matching accepted-color render with its mesh basis", async () => {
-    render(<Preview3D partId={7} filename="gantry.stl" meshColor="#112233" />);
+  it.each(["opening", "rotating"])(
+    "does not overwrite the shared thumbnail when %s an accepted-color studio preview",
+    async (interaction) => {
+      render(
+        <Preview3D
+          partId={7}
+          filename="gantry.stl"
+          meshColor="#112233"
+          appearance="studio"
+        />,
+      );
 
-    await screen.findByRole("application");
-    await new Promise((resolve) => setTimeout(resolve, 950));
+      const preview = await screen.findByRole("application");
+      if (interaction === "rotating") {
+        expect(fireEvent.keyDown(preview, { key: "ArrowLeft" })).toBe(false);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 950));
 
-    expect(previewRuntime.uploadPartThumbnail).toHaveBeenCalledWith(
-      7,
-      expect.any(Blob),
-      "a".repeat(64),
-    );
-  });
+      expect(previewRuntime.uploadPartThumbnail).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     ["missing", undefined],
