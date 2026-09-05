@@ -103,6 +103,58 @@ describe("prusalinkAdapter", () => {
     vi.restoreAllMocks();
   });
 
+  it.each([false, true])("reads slow directory streams, stalled=%s", async (stalled) => {
+    vi.useFakeTimers();
+    vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(new DOMException("Timed out", "TimeoutError")), ms);
+      return controller.signal;
+    });
+    const chunks = ['{"type":"FOLDER",', '"children":[', '{"name":"part.bgcode",',
+      '"type":"PRINT_FILE"}', ']}'];
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input, init) => {
+      if (String(input).endsWith("/api/v1/status")) return digest401();
+      const signal = init?.signal;
+      if (!signal) throw new Error("Expected bounded directory request");
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          let index = 0;
+          const timer = setInterval(() => {
+            if (stalled) {
+              controller.enqueue(new Uint8Array());
+              return;
+            }
+            controller.enqueue(new TextEncoder().encode(chunks[index++]));
+            if (index === chunks.length) {
+              clearInterval(timer);
+              controller.close();
+            }
+          }, 5_000);
+          signal.addEventListener("abort", () => {
+            clearInterval(timer);
+            controller.error(signal.reason);
+          }, { once: true });
+        },
+      }));
+    }));
+    try {
+      const result = prusalinkAdapter.files!.browse({ ...prusaConfig, storage: "usb" }, "")
+        .then((listing) => ({ kind: "complete", listing }), (error: unknown) => ({ kind: "failed", error }));
+      await vi.advanceTimersByTimeAsync(25_000);
+      if (stalled) {
+        expect(await result).toMatchObject({ kind: "failed", error: { name: "TimeoutError" } });
+      } else {
+        expect(await result).toMatchObject({ kind: "complete", listing: {
+          entries: [{ name: "part.bgcode" }],
+        } });
+      }
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
   it("requires password for testConnection", async () => {
     const result = await prusalinkAdapter.testConnection({
       base_url: "http://127.0.0.1",

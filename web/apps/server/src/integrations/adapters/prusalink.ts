@@ -136,7 +136,15 @@ async function prusalinkFetch(
   return res;
 }
 
-async function downloadPrintFile(url: string, config: IntegrationConfig): Promise<Response> {
+async function fetchWithIdleTimeout(
+  url: string,
+  config: IntegrationConfig,
+  { idleMs, headers, timeoutMessage }: {
+    idleMs: number;
+    headers?: RequestInit["headers"];
+    timeoutMessage: string;
+  },
+): Promise<Response> {
   const abortController = new AbortController();
   let idleTimer: ReturnType<typeof setTimeout> | undefined;
   let finished = false;
@@ -148,16 +156,16 @@ async function downloadPrintFile(url: string, config: IntegrationConfig): Promis
     clearTimeout(idleTimer);
     idleTimer = setTimeout(() => {
       abortController.abort(new DOMException(
-        "PrusaLink download received no data for 120 seconds",
+        timeoutMessage,
         "TimeoutError",
       ));
-    }, FILE_DOWNLOAD_IDLE_MS);
+    }, idleMs);
     idleTimer.unref();
   };
 
   resetIdleTimer();
   try {
-    const response = await prusalinkFetch(url, config, { signal: abortController.signal });
+    const response = await prusalinkFetch(url, config, { headers, signal: abortController.signal });
     if (!response.body) {
       finish();
       return response;
@@ -203,6 +211,13 @@ async function downloadPrintFile(url: string, config: IntegrationConfig): Promis
     finish();
     throw error;
   }
+}
+
+function downloadPrintFile(url: string, config: IntegrationConfig): Promise<Response> {
+  return fetchWithIdleTimeout(url, config, {
+    idleMs: FILE_DOWNLOAD_IDLE_MS,
+    timeoutMessage: "PrusaLink download received no data for 120 seconds",
+  });
 }
 
 function mapPrinterState(raw: string | undefined): PrinterHostStatus["state"] {
@@ -506,9 +521,10 @@ async function browseStorage(
   const providerPath = joinStoragePath(await resolveStorageRoot(config, baseUrl), relative);
   if (!providerPath) throw new Error("Invalid PrusaLink storage path");
 
-  const response = await prusalinkFetch(prusaFileUrl(baseUrl, providerPath), config, {
+  const response = await fetchWithIdleTimeout(prusaFileUrl(baseUrl, providerPath), config, {
     headers: { Accept: "application/json" },
-    signal: AbortSignal.timeout(15_000),
+    idleMs: 15_000,
+    timeoutMessage: "PrusaLink file listing received no data for 15 seconds",
   });
   if (!response.ok) {
     await drainResponseBody(response);
