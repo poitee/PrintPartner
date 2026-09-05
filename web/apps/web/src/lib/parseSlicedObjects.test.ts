@@ -8,6 +8,22 @@ import {
 } from "./parseSlicedObjects";
 
 describe("parseGcodeObjectText", () => {
+  it("reads Prusa objects_info and preserves copies without double-counting commands", () => {
+    const text = `; objects_info = {"objects":[{"name":"Left cover.stl"},{"name":"Left cover.stl"},{"name":"Right cover.stl"}]}
+M486 A"Left cover.stl"
+; printing object Right_cover.stl id:0 copy 0`;
+    expect(parseGcodeObjectText(text).map((o) => o.name)).toEqual([
+      "Left cover.stl", "Left cover.stl", "Right cover.stl",
+    ]);
+  });
+
+  it("ignores malformed Prusa metadata and still reads ordinary labels", () => {
+    const text = `objects_info={"objects":[{"name":42}]}
+objects_info={broken}
+M486 A"clip.stl"`;
+    expect(parseGcodeObjectText(text).map((o) => o.name)).toEqual(["clip.stl"]);
+  });
+
   it("parses EXCLUDE_OBJECT_DEFINE NAME= forms (dummy spike)", () => {
     const text = `
 ; header
@@ -213,5 +229,27 @@ describe("parseSlicedObjectsFile", () => {
     const result = await parseSlicedObjectsFile(file);
     expect(result.format).toBe("bgcode");
     expect(result.names).toContain("bin_01");
+  });
+
+  it("reads Prusa binary metadata inventory including repeated names", async () => {
+    const metadata = new TextEncoder().encode('objects_info={"objects":[{"name":"clip.stl"},{"name":"clip.stl"}]}\n');
+    const bytes = new Uint8Array(metadata.length + 20);
+    bytes.set(new TextEncoder().encode("GCDE"));
+    const header = new DataView(bytes.buffer);
+    header.setUint32(4, 1, true);
+    header.setUint16(10, 3, true);
+    header.setUint32(14, metadata.length, true);
+    bytes.set(metadata, 20);
+    const result = await parseSlicedObjectsFile(new File([bytes], "plate.bgcode"));
+    expect(result.names).toEqual(["clip.stl", "clip.stl"]);
+    expect(result.unlabeled).toBe(false);
+  });
+
+  it("preserves Prusa metadata copies inside a sliced 3MF", async () => {
+    const zip = new JSZip();
+    zip.file("Metadata/plate_1.gcode", 'objects_info={"objects":[{"name":"clip.stl"},{"name":"clip.stl"}]}\nG1 X0');
+    const blob = await zip.generateAsync({ type: "blob" });
+    const result = await parseSlicedObjectsFile(new File([blob], "plate.3mf"));
+    expect(result.names).toEqual(["clip.stl", "clip.stl"]);
   });
 });
