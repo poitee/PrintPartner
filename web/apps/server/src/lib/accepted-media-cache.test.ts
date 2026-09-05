@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   existsSync,
   fstatSync,
@@ -53,6 +54,17 @@ afterEach(() => {
 });
 
 describe("acceptedMediaBasis", () => {
+  it("invalidates old thumbnail renders without changing mesh or preview identities", () => {
+    for (const variant of ["mesh", "thumbnail", "preview"] as const) {
+      const legacyBasis = createHash("sha256").update([
+        "accepted-media-v1", variant, "a".repeat(64), "primary", "#abcdef",
+      ].join("\0")).digest("hex");
+      const current = acceptedMediaBasis({ expectedSha256: "a".repeat(64), role: "primary", hex: "#abcdef", variant });
+      if (variant === "thumbnail") expect(current).not.toBe(legacyBasis);
+      else expect(current).toBe(legacyBasis);
+    }
+  });
+
   it("returns the full canonical content basis", () => {
     const basis = acceptedMediaBasis({
       expectedSha256: "a".repeat(64),
@@ -61,7 +73,7 @@ describe("acceptedMediaBasis", () => {
       variant: "thumbnail",
     });
 
-    expect(basis).toBe("45845a1f88700fea820122a66735163f0553d932bb688ecf0a0242cd55239c6e");
+    expect(basis).toBe("8e6bd4983ef47cafe525dd19811eef8f054c00429aff409e2b8728eca47d2e93");
     expect(basis).toHaveLength(64);
   });
 

@@ -1,3 +1,4 @@
+import { THUMBNAIL_RENDERER_VERSION } from "@print-partner/contracts";
 import { resolveEngineUrl } from "../contractRequest";
 import { engineFetch, engineSendMultipart } from "../engineTransport";
 
@@ -54,7 +55,10 @@ export async function uploadPartThumbnail(
   form.append("file", pngBlob, "thumbnail.png");
   await engineSendMultipart({
     path: `/parts/${partId}/thumbnail`,
-    headers: { "If-Match": `"${meshBasis}"` },
+    headers: {
+      "If-Match": `"${meshBasis}"`,
+      "X-Thumbnail-Renderer-Version": THUMBNAIL_RENDERER_VERSION,
+    },
     form,
     failureMessage: "Thumbnail upload failed",
   });

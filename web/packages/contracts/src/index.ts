@@ -3,6 +3,7 @@
 export * from "./source-naming.js";
 export * from "./source-category-tree.js";
 export * from "./accepted-plates.js";
+export * from "./accepted-media.js";
 export * from "./plan-drafts.js";
 export * from "./production-setup.js";
 export * from "./build-workflow.js";

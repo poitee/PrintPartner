@@ -16,18 +16,15 @@ import {
   CSS2DRenderer,
 } from "three/examples/jsm/renderers/CSS2DRenderer.js";
 import {
-  acceptedPartMediaMetadata,
   partMeshUrl,
   partPreviewUrl,
   sourceStlMeshUrl,
   sourceStlPreviewUrl,
-  uploadPartThumbnail,
 } from "../api/endpoints/media";
 import { fetchWithRetry } from "../lib/fetchWithRetry";
 import {
   contrastBackground,
   formatMm,
-  normalizedRenderHex,
   previewErrorMessage,
   previewTarget,
   previewUrlWithColor,
@@ -151,14 +148,6 @@ function disposeDimensionGroup(group: THREE.Group) {
   group.clear();
 }
 
-function optionalAcceptedPartMediaMetadata(response: Response) {
-  try {
-    return acceptedPartMediaMetadata(response);
-  } catch {
-    return null;
-  }
-}
-
 export default function Preview3D({
   partId,
   sourceId = null,
@@ -202,8 +191,7 @@ export default function Preview3D({
     themeRef.current = theme;
   }, [theme]);
 
-  // Re-tint the live scene in place. Rebuilding it would refetch the mesh and
-  // re-upload a thumbnail for what is only a colour change.
+  // Re-tint the live scene without refetching the mesh for a colour change.
   useEffect(() => {
     const material = materialRef.current;
     if (material) {
@@ -335,9 +323,6 @@ export default function Preview3D({
           await showPngFallback(response.status);
           return;
         }
-        const acceptedMedia =
-          target.kind === "part" ? optionalAcceptedPartMediaMetadata(response) : null;
-
         const buffer = await response.arrayBuffer();
         if (cancelled) return;
 
@@ -457,22 +442,6 @@ export default function Preview3D({
         animate();
 
         setMode("mesh");
-        if (
-          target.kind === "part" &&
-          acceptedMedia?.renderHex != null &&
-          normalizedRenderHex(resolvedColor) === acceptedMedia.renderHex
-        ) {
-          const partIdForThumb = target.partId;
-          const meshBasis = acceptedMedia.basis;
-          setTimeout(() => {
-            if (cancelled || !renderer) return;
-            renderer.domElement.toBlob((blob) => {
-              if (blob) {
-                void uploadPartThumbnail(partIdForThumb, blob, meshBasis).catch(() => {});
-              }
-            }, "image/png");
-          }, 900);
-        }
       } catch {
         if (!cancelled) await showPngFallback();
       }

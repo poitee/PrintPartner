@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { THUMBNAIL_RENDERER_VERSION } from "@print-partner/contracts";
 import {
   acceptedPartMediaMetadata,
   acceptedPartMediaRevalidationHeaders,
@@ -38,7 +39,10 @@ describe("accepted Part media API boundary", () => {
 
   it("uploads with the exact strong mesh basis precondition", async () => {
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
-      expect(init?.headers).toEqual({ "If-Match": `"${basis}"` });
+      expect(init?.headers).toEqual({
+        "If-Match": `"${basis}"`,
+        "X-Thumbnail-Renderer-Version": THUMBNAIL_RENDERER_VERSION,
+      });
       return new Response(null, { status: 200 });
     });
     vi.stubGlobal("fetch", fetchMock);

@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { THUMBNAIL_RENDERER_VERSION } from "@print-partner/contracts";
 
 vi.mock("../services/upload-limits.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../services/upload-limits.js")>()),
@@ -28,6 +29,10 @@ import {
   writeAcceptedMediaPng,
 } from "../lib/accepted-media-cache.js";
 import { PLACEHOLDER_PNG } from "../lib/thumbnails.js";
+import { acceptPlanForTest } from "../test/accept-plan.js";
+import { acceptedPartMediaIdentity } from "../services/accepted-part-media.js";
+import { acceptedPlanBasis } from "../db/accepted-plan-progress.js";
+import { parseRequiredUnitToken } from "../services/required-units.js";
 
 const directories: string[] = [];
 const png = Buffer.concat([
@@ -52,6 +57,136 @@ afterEach(() => {
 });
 
 describe("accepted Part media routes", () => {
+  it("ignores legacy thumbnail PNGs and refuses old writers without changing accepted work", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "pp-thumbnail-version-"));
+    directories.push(directory);
+    const ports = createSelfHostPorts(directory);
+    await ports.db.connect();
+    const repo = ports.repository;
+    const source = repo.createSource({ name: "Renderer proof", url: "https://github.com/a/b" });
+    const observed = repo.getProjectRow(source.id);
+    if (!observed) throw new Error("test Source is missing");
+    const locator = `${source.id}/revisions/renderer-proof`;
+    const sourceRoot = join(directory, "repos", locator);
+    mkdirSync(sourceRoot, { recursive: true });
+    writeFileSync(join(sourceRoot, "bracket_x2.stl"), "solid renderer proof");
+    const revision = repo.recordSourceRevision({
+      sourceId: source.id,
+      upstreamRevisionKey: "renderer-proof",
+      manifestDigest: "a".repeat(64),
+      snapshotLocator: locator,
+      syncedAt: "2026-09-05T00:00:00.000Z",
+      completeness: "complete",
+    });
+    repo.activateSourceRevision({
+      sourceId: source.id,
+      revisionId: revision.id,
+      observed,
+      sourceVersion: "renderer-proof",
+    });
+    const profile = repo.createProfile("Renderer proof", source.id);
+    expect(acceptPlanForTest(repo, profile.id).merged).toBe(true);
+    const accepted = repo.readAcceptedPlanOperationalSnapshot(profile.id);
+    if (accepted.kind !== "ready") throw new Error("test Plan is missing");
+    const unit = accepted.snapshot.parts[0]?.units[0];
+    if (!unit) throw new Error("test print unit is missing");
+    expect(
+      repo.setAcceptedUnitCompletion({
+        expected: acceptedPlanBasis(accepted.snapshot),
+        token: parseRequiredUnitToken(unit.token),
+        completed: true,
+      }).kind,
+    ).toBe("updated");
+    const before = repo.readAcceptedPlanOperationalSnapshot(profile.id);
+    if (before.kind !== "ready") throw new Error("test Plan is missing");
+    const part = before.snapshot.parts[0];
+    if (!part || part.artifact.kind !== "tracked") throw new Error("test Part is missing");
+    const meshIdentity = acceptedPartMediaIdentity(part, "mesh");
+    const thumbnailIdentity = acceptedPartMediaIdentity(part, "thumbnail");
+    const artifactDigest = part.artifact.expectedSha256;
+    const legacyBasis = (variant: "mesh" | "thumbnail") =>
+      createHash("sha256").update([
+        "accepted-media-v1",
+        variant,
+        artifactDigest,
+        part.effectiveRole.trim().toLowerCase(),
+        meshIdentity.hex ?? "",
+      ].join("\0")).digest("hex");
+    const oldThumbnailBasis = legacyBasis("thumbnail");
+    const thumbsDir = join(directory, "thumbs");
+    writeAcceptedMediaPng({ thumbsDir, basis: oldThumbnailBasis, png });
+    const app = await buildApp(
+      { ...loadConfig(), dataDir: directory, corsOrigin: "https://print.example" },
+      ports,
+    );
+    try {
+      const oldCacheProbe = await app.inject({
+        method: "GET",
+        url: `/parts/${part.projectionPartId}/thumbnail`,
+        headers: { "if-none-match": `"${oldThumbnailBasis}"` },
+      });
+      expect(oldCacheProbe.statusCode).toBe(200);
+      expect(oldCacheProbe.headers["x-thumbnail-placeholder"]).toBe("1");
+      expect(oldCacheProbe.headers["cache-control"]).toBe("no-store");
+      expect(readAcceptedMediaPng({ thumbsDir, basis: oldThumbnailBasis })).toEqual(png);
+      const mesh = await app.inject({ method: "GET", url: `/parts/${part.projectionPartId}/mesh` });
+      expect(mesh.headers.etag).toBe(`"${legacyBasis("mesh")}"`);
+
+      for (const version of [undefined, "1"]) {
+        const boundary = `old-renderer-${version}`;
+        const response = await app.inject({
+          method: "POST",
+          url: `/parts/${part.projectionPartId}/thumbnail`,
+          headers: {
+            "content-type": `multipart/form-data; boundary=${boundary}`,
+            "if-match": `"${meshIdentity.basis}"`,
+            ...(version === undefined ? {} : { "x-thumbnail-renderer-version": version }),
+          },
+          payload: multipartPng(boundary, png),
+        });
+        expect(response.statusCode).toBe(409);
+        expect(response.json()).toEqual({
+          detail: "Thumbnail renderer is out of date; refresh the app and retry",
+        });
+        expect(readAcceptedMediaPng({ thumbsDir, basis: thumbnailIdentity.basis })).toBeNull();
+      }
+      const boundary = "current-renderer";
+      const uploaded = await app.inject({
+        method: "POST",
+        url: `/parts/${part.projectionPartId}/thumbnail`,
+        headers: {
+          "content-type": `multipart/form-data; boundary=${boundary}`,
+          "if-match": `"${meshIdentity.basis}"`,
+          "x-thumbnail-renderer-version": THUMBNAIL_RENDERER_VERSION,
+        },
+        payload: multipartPng(boundary, png),
+      });
+      expect(uploaded.statusCode).toBe(200);
+      const regenerated = await app.inject({
+        method: "GET",
+        url: `/parts/${part.projectionPartId}/thumbnail`,
+        headers: { "if-none-match": `"${oldThumbnailBasis}"` },
+      });
+      expect(regenerated.statusCode).toBe(200);
+      expect(regenerated.headers.etag).toBe(`"${thumbnailIdentity.basis}"`);
+      expect(regenerated.rawPayload).toEqual(png);
+      expect(repo.readAcceptedPlanOperationalSnapshot(profile.id)).toEqual(before);
+      const preflight = await app.inject({
+        method: "OPTIONS",
+        url: `/parts/${part.projectionPartId}/thumbnail`,
+        headers: {
+          origin: "https://print.example",
+          "access-control-request-method": "POST",
+          "access-control-request-headers": "if-match,x-thumbnail-renderer-version",
+        },
+      });
+      expect(preflight.statusCode).toBe(204);
+      expect(preflight.headers["access-control-allow-headers"]).toContain("x-thumbnail-renderer-version");
+    } finally {
+      await app.close();
+    }
+  });
+
   it("serves, uploads, revalidates, and regenerates accepted Part media", async () => {
     const directory = mkdtempSync(join(tmpdir(), "pp-accepted-part-media-"));
     directories.push(directory);
@@ -199,6 +334,7 @@ describe("accepted Part media routes", () => {
         headers: {
           "content-type": `multipart/form-data; boundary=${oversizedBoundary}`,
           "if-match": `"${expectedBasis}"`,
+          "x-thumbnail-renderer-version": THUMBNAIL_RENDERER_VERSION,
         },
         payload: multipartPng(
           oversizedBoundary,
@@ -218,6 +354,7 @@ describe("accepted Part media routes", () => {
         headers: {
           "content-type": `multipart/form-data; boundary=${boundary}`,
           "if-match": `"${expectedBasis}"`,
+          "x-thumbnail-renderer-version": THUMBNAIL_RENDERER_VERSION,
         },
         payload: multipartPng(boundary, png),
       });
@@ -255,6 +392,7 @@ describe("accepted Part media routes", () => {
         headers: {
           "content-type": `multipart/form-data; boundary=${staleBoundary}`,
           "if-match": `"${"f".repeat(64)}"`,
+          "x-thumbnail-renderer-version": THUMBNAIL_RENDERER_VERSION,
         },
         payload: multipartPng(staleBoundary, Buffer.concat([png, Buffer.from("stale")])),
       });
@@ -274,6 +412,7 @@ describe("accepted Part media routes", () => {
         url: `/parts/${part.id}/thumbnail`,
         headers: {
           "content-type": `multipart/form-data; boundary=${missingPreconditionBoundary}`,
+          "x-thumbnail-renderer-version": THUMBNAIL_RENDERER_VERSION,
         },
         payload: multipartPng(missingPreconditionBoundary, png),
       });
@@ -287,6 +426,7 @@ describe("accepted Part media routes", () => {
         headers: {
           "content-type": `multipart/form-data; boundary=${invalidBoundary}`,
           "if-match": `"${expectedBasis}"`,
+          "x-thumbnail-renderer-version": THUMBNAIL_RENDERER_VERSION,
         },
         payload: multipartPng(invalidBoundary, Buffer.from("not a png")),
       });
@@ -413,6 +553,7 @@ describe("accepted Part media routes", () => {
         headers: {
           "content-type": `multipart/form-data; boundary=${staleApplyBoundary}`,
           "if-match": `"${expectedBasis}"`,
+          "x-thumbnail-renderer-version": THUMBNAIL_RENDERER_VERSION,
         },
         payload: applyDuringMultipart,
       });

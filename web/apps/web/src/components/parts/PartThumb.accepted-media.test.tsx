@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, waitFor } from "@testing-library/react";
+import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const runtime = vi.hoisted(() => ({
@@ -66,6 +66,7 @@ describe("PartThumb accepted server object URL lifecycle", () => {
 
   afterEach(() => {
     cleanup();
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
@@ -99,5 +100,42 @@ describe("PartThumb accepted server object URL lifecycle", () => {
 
     await waitFor(() => expect(runtime.generatePartThumbnail).toHaveBeenCalledOnce());
     expect(URL.createObjectURL).not.toHaveBeenCalled();
+  });
+
+  it.each(["empty", "rejected"])("retries a %s client render without requiring a page reload", async (failure) => {
+    runtime.fetchWithRetry.mockResolvedValue(new Response(null, { status: 404 }));
+    if (failure === "empty") runtime.generatePartThumbnail.mockResolvedValueOnce(null);
+    else runtime.generatePartThumbnail.mockRejectedValueOnce(new Error("WebGL context lost"));
+    runtime.generatePartThumbnail.mockResolvedValueOnce("blob:recovered");
+
+    const { container } = render(<PartThumb partId={7} eager fallbackLabel="ABC" />);
+
+    await waitFor(() => {
+      expect(container.querySelector("img")?.getAttribute("src")).toBe("blob:recovered");
+    }, { timeout: 2500 });
+    expect(runtime.generatePartThumbnail).toHaveBeenCalledTimes(2);
+  });
+
+  it("cancels a pending render retry when the card unmounts", async () => {
+    runtime.fetchWithRetry.mockResolvedValue(new Response(null, { status: 404 }));
+    runtime.generatePartThumbnail.mockResolvedValue(null);
+    const { unmount } = render(<PartThumb partId={7} eager />);
+    await waitFor(() => expect(runtime.generatePartThumbnail).toHaveBeenCalledOnce());
+    unmount();
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+
+    expect(runtime.generatePartThumbnail).toHaveBeenCalledOnce();
+  });
+
+  it("stops retrying a persistent failure and explains how to recover", async () => {
+    vi.useFakeTimers();
+    runtime.fetchWithRetry.mockResolvedValue(new Response(null, { status: 404 }));
+    runtime.generatePartThumbnail.mockResolvedValue(null);
+    const { container } = render(<PartThumb partId={7} eager fallbackLabel="ABC" />);
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(20_000); });
+
+    expect(runtime.generatePartThumbnail).toHaveBeenCalledTimes(3);
+    expect(container.firstElementChild?.getAttribute("title")).toContain("refresh thumbnails");
   });
 });

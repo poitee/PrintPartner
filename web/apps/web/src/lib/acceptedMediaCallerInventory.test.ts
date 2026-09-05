@@ -62,10 +62,9 @@ describe("known accepted Part browser media caller inventory", () => {
       ],
       partThumbnailUrl: ["api/engine.ts", "components/parts/PartThumb.tsx"],
       partPreviewUrl: ["api/engine.ts", "components/Preview3D.tsx"],
-      uploadPartThumbnail: ["api/engine.ts", "components/Preview3D.tsx", "lib/stlThumbnail.ts"],
+      uploadPartThumbnail: ["api/engine.ts", "lib/stlThumbnail.ts"],
       acceptedPartMediaMetadata: [
         "api/engine.ts",
-        "components/Preview3D.tsx",
         "components/parts/PartThumb.tsx",
         "lib/stlThumbnail.ts",
       ],
