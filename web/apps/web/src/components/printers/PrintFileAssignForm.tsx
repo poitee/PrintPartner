@@ -165,7 +165,7 @@ export default function PrintFileAssignForm({
 
   const save = async (preview: AssignmentCheck) => {
     setErrorGate("save");
-    if (errors.length > 0 || buildId == null || selection.shortages.length > 0) return;
+    if (errors.length > 0 || buildId == null) return;
     setAssign({ phase: "saving", preview });
     try {
       const base = {
@@ -177,6 +177,7 @@ export default function PrintFileAssignForm({
         completed,
         plan_revision_id: preview.plan_revision_id,
         unit_tokens: [...selection.tokens],
+        retain_unmatched: true,
         ...(matchReview ? { object_mappings: selection.mappings } : {}),
       };
       const result = isUploadedCheck(preview)
@@ -403,7 +404,6 @@ export default function PrintFileAssignForm({
                 <Button
                   size="shop"
                   loading={assign.phase === "saving"}
-                  disabled={selection.shortages.length > 0}
                   onClick={() => void save(answered.preview)}
                 >
                   {completed ? "Assign and send to Checkoff" : "Assign print file"}

@@ -69,6 +69,15 @@ describe("buildCheckoffAttentionItems", () => {
     expect(items[2]?.statusLabel).toBe("Needs your decision");
   });
 
+  it("names pending additional items even when no Plan units remain", () => {
+    const [item] = buildCheckoffAttentionItems({
+      awaitingLinks: [{ ...awaitingLink, units: [], imported_inventory: { extras: [
+        { checkoff: { result: "confirmed" } }, { checkoff: { result: "pending" } },
+      ] } }], failedLinks: [], unattributedPrints: [],
+    });
+    expect(item?.hint).toBe("Core One finished 1 additional item. Confirm or reject them.");
+  });
+
   it("names a cancelled job as cancelled", () => {
     const [item] = buildCheckoffAttentionItems({
       awaitingLinks: [],

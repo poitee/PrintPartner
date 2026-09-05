@@ -26,6 +26,7 @@ import CheckoffMoveToDialog, {
 import CheckoffPrinterStatusCard from "../components/checkoff/CheckoffPrinterStatusCard";
 import PastPrintIntakePanel from "../components/checkoff/PastPrintIntakePanel";
 import CheckoffPrintSheet from "../components/checkoff/CheckoffPrintSheet";
+import AdditionalPrintItems from "../components/checkoff/AdditionalPrintItems";
 import CheckoffPrintSheetButton, {
   type PrintSheetLayout,
 } from "../components/checkoff/CheckoffPrintSheetButton";
@@ -179,6 +180,8 @@ export default function CheckoffPage() {
     profileId: selectedProfileId,
     externalError: trackingError,
   });
+  const additionalPrints = [...activity.awaitingLinks, ...activity.watchingLinks, ...activity.failedLinks, ...(activity.verifiedLinks ?? [])]
+    .filter((link) => link.profile_id === selectedProfileId && link.imported_inventory?.extras.length);
 
   // Re-fetch when the service worker flushes its offline checkoff queue
   useSyncComplete(
@@ -646,7 +649,7 @@ export default function CheckoffPage() {
                   layout={printLayout}
                   onLayoutChange={setPrintLayout}
                   onPrint={() => void onPrint()}
-                  disabled={sheetParts.length === 0}
+                  disabled={sheetParts.length === 0 && additionalPrints.length === 0}
                 />
               </PageHeaderActions>
             )
@@ -828,13 +831,15 @@ export default function CheckoffPage() {
         </>
       )}
 
-      {sheetParts.length > 0 ? (
+      {view === "completed" ? <div className="no-print"><AdditionalPrintItems links={additionalPrints.filter((link) => link.state === "verified")} /></div> : null}
+      {sheetParts.length > 0 || additionalPrints.length > 0 ? (
         <CheckoffPrintSheet
           sheetRef={sheetRef}
           planName={planName}
           partCount={sheetParts.length}
           printedLine={printedLine}
           groups={sheetGroups}
+          additionalPrints={additionalPrints}
           layout={printLayout}
           printPrep={printPrep}
           busyPartId={busyPartId}
@@ -851,7 +856,7 @@ export default function CheckoffPage() {
               layout={printLayout}
               onLayoutChange={setPrintLayout}
               onPrint={() => void onPrint()}
-              disabled={sheetParts.length === 0}
+              disabled={sheetParts.length === 0 && additionalPrints.length === 0}
             />
           )}
           <Button className="min-h-11 w-full sm:w-auto" variant="ghost" asChild>

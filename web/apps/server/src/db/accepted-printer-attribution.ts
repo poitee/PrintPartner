@@ -182,6 +182,7 @@ export type MaterializeAcceptedPrinterLinkCommand =
        */
       confirmedUnits: readonly Readonly<PrinterCheckoffUnit>[];
       objectMappings?: readonly PrinterObjectMapping[];
+      retainUnmatched?: boolean;
       link: AcceptedPrinterLinkMetadata;
     }>
   | Readonly<{

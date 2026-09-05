@@ -7,6 +7,7 @@ import {
   UNMANAGED_PRINTER_NAME,
   type PrinterCheckoffUnit,
   type PrintVerifyDecision,
+  type PrinterCheckoffLink,
 } from "@print-partner/contracts";
 import {
   assignUploadedPrinterFile,
@@ -66,6 +67,7 @@ type PrinterDesk = Readonly<{
 type RecordedPrint = Readonly<{
   filename: string;
   unitCount: number;
+  additionalCount?: number;
   units: "checked_off" | "awaiting_check";
 }>;
 
@@ -90,7 +92,7 @@ function recordedOutcome(print: RecordedPrint): Readonly<{
   body: string;
   linkLabel: string;
 }> {
-  const units = requiredUnitCount(print.unitCount);
+  const units = `${requiredUnitCount(print.unitCount)}${print.additionalCount ? ` and ${print.additionalCount} additional items` : ""}`;
   switch (print.units) {
     case "checked_off":
       return {
@@ -353,6 +355,7 @@ export default function PastPrintIntakePanel({
                     finish({
                       filename: link.filename,
                       unitCount: link.units.length,
+                      additionalCount: link.imported_inventory?.extras.length,
                       // This path hands the file to the shared assignment form,
                       // which does not ask whether the parts were checked.
                       units: "awaiting_check",
@@ -404,6 +407,7 @@ type RecordedLink = Readonly<{
   id: string;
   filename: string;
   units: readonly PrinterCheckoffUnit[];
+  imported_inventory?: PrinterCheckoffLink["imported_inventory"];
 }>;
 
 /**
@@ -523,12 +527,6 @@ function recordProblems(input: {
   const problems: RecordFieldError[] = [];
   if (input.printer === null) {
     problems.push({ field: "printer", message: "Say which printer made this print" });
-  }
-  if (input.confirmedUnitCount === 0) {
-    problems.push({
-      field: "units",
-      message: "Confirm at least one Required unit this print covers",
-    });
   }
   if (input.checked === null) {
     problems.push({ field: "checked", message: "Say whether you have checked the parts" });
@@ -670,7 +668,11 @@ function UploadedPrintRecord({
       }),
     );
     try {
-      await verifyPrinterCheckoff({ link_id: input.link.id, decisions });
+      const additional = input.link.imported_inventory?.extras.flatMap((extra, index) =>
+        extra.checkoff.result === "pending" ? [{ index, result: "confirmed" as const }] : []) ?? [];
+      await verifyPrinterCheckoff({ link_id: input.link.id, decisions,
+        ...(additional.length ? { additional_decisions: additional } : {}),
+      });
     } catch (error) {
       setState({
         phase: "checkoff_failed",
@@ -683,13 +685,14 @@ function UploadedPrintRecord({
     onFinished({
       filename: input.link.filename,
       unitCount: decisions.length,
+      additionalCount: input.link.imported_inventory?.extras.length,
       units: "checked_off",
     });
   };
 
   const record = async (chosen: ReadPrintFile, check: UploadedPrintFileCheck) => {
     setShowProblems(true);
-    if (problems.length > 0 || printer === null || checked === null || selection.shortages.length > 0) return;
+    if (problems.length > 0 || printer === null || checked === null) return;
     setState({ phase: "saving", chosen, check });
     let link: RecordedLink | null = null;
     try {
@@ -708,6 +711,7 @@ function UploadedPrintRecord({
         completed: true,
         plan_revision_id: check.plan_revision_id,
         unit_tokens: [...selection.tokens],
+        retain_unmatched: true,
         ...(matchReview ? { object_mappings: selection.mappings } : {}),
       });
       link = result.link;
@@ -727,6 +731,7 @@ function UploadedPrintRecord({
       onFinished({
         filename: link.filename,
         unitCount: link.units.length,
+        additionalCount: link.imported_inventory?.extras.length,
         units: "awaiting_check",
       });
       return;
@@ -1083,6 +1088,7 @@ function UploadedPrintRecord({
                       onFinished({
                         filename: state.link.filename,
                         unitCount: state.link.units.length,
+                        additionalCount: state.link.imported_inventory?.extras.length,
                         units: "awaiting_check",
                       })
                     }
@@ -1097,7 +1103,6 @@ function UploadedPrintRecord({
                   size="shop"
                   className="self-start"
                   loading={state.phase === "saving"}
-                  disabled={selection.shortages.length > 0}
                   onClick={() => void record(answered.chosen, answered.check)}
                 >
                   Record this print

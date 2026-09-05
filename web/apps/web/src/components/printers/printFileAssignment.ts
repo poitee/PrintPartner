@@ -33,13 +33,6 @@ export function validatePrintFileAssignment(input: {
   if (input.buildId == null) {
     errors.push({ field: "build", message: "Choose the Build this print belongs to" });
   }
-  if (input.completed && input.confirmedUnitCount === 0) {
-    errors.push({
-      field: "units",
-      message:
-        "Confirm at least one Required unit, or clear \u201cThis print is already finished\u201d. A finished print with no units has nothing to check off.",
-    });
-  }
   return errors;
 }
 

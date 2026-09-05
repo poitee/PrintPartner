@@ -47,7 +47,7 @@ const awaiting: PrinterCheckoffLink = {
   created_at: "2026-08-27T09:00:00.000Z",
 };
 
-function renderPanel() {
+function renderPanel(link = awaiting) {
   const onActivityRefresh = vi.fn();
   render(
     <QueryClientProvider client={new QueryClient()}>
@@ -55,7 +55,7 @@ function renderPanel() {
         engineReady
         profileId={7}
         parts={[part]}
-        activityLinks={{ watching: [], awaiting: [awaiting], failed: [] }}
+        activityLinks={{ watching: link.state === "watching" ? [link] : [], awaiting: link.state === "awaiting_verify" ? [link] : [], failed: [] }}
         onActivityRefresh={onActivityRefresh}
       />
     </QueryClientProvider>,
@@ -64,6 +64,23 @@ function renderPanel() {
 }
 
 describe("PrintVerifyPanel recovery", () => {
+  it("confirms selected additional copies without requiring Plan units", async () => {
+    api.verifyPrinterCheckoff.mockResolvedValue({ units_confirmed: 0, units_rejected: 0 });
+    renderPanel({ ...awaiting, units: [], imported_inventory: { extras: [
+      { name: "extra.stl", kind: "object", checkoff: { result: "pending" } },
+      { name: "extra.stl", kind: "object", checkoff: { result: "pending" } },
+    ] } });
+    fireEvent.click(screen.getAllByRole("checkbox")[1]!);
+    fireEvent.click(screen.getByRole("button", { name: /Confirm/ }));
+    await waitFor(() => expect(api.verifyPrinterCheckoff).toHaveBeenCalledWith({ link_id: "link-1", decisions: [], additional_decisions: [{ index: 0, result: "confirmed" }] }));
+  });
+  it("shows unknown-only inventory while a print is still being watched", () => {
+    renderPanel({ ...awaiting, state: "watching", units: [], imported_inventory: { extras: [
+      { name: "extra.stl", kind: "object", checkoff: { result: "pending" } },
+    ] } });
+    expect(screen.getByText("extra.stl")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Confirm" })).toBeNull();
+  });
   beforeEach(() => {
     api.verifyPrinterCheckoff.mockReset();
     api.dismissPrinterCheckoff.mockReset();

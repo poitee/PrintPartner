@@ -27,8 +27,10 @@ import {
 import { statusTone } from "../../lib/statusTone";
 import ObjectProposalRows from "../export/ObjectProposalRows";
 import CheckoffRowErrorNotice from "./CheckoffRowErrorNotice";
+import AdditionalPrintItems from "./AdditionalPrintItems";
 import { Button } from "../ui/button";
 import { cn } from "@/lib/utils";
+import type { AdditionalPrintDecision } from "@print-partner/contracts";
 
 const REJECT_REASONS: { value: PrintRejectReason; label: string }[] = [
   { value: "bed_adhesion", label: "Bed adhesion" },
@@ -83,7 +85,7 @@ function pendingUnits(link: PrinterCheckoffLink) {
 }
 
 function linkPreviewRows(link: PrinterCheckoffLink, parts: ReviewPart[]): ObjectPreviewRow[] {
-  const unlabeled = (link.unlabeled_names ?? []).filter((n) => typeof n === "string" && n.trim());
+  const unlabeled = link.imported_inventory ? [] : (link.unlabeled_names ?? []).filter((n) => typeof n === "string" && n.trim());
   return buildPreviewRowsFromUnits(pendingUnits(link), parts, unlabeled);
 }
 
@@ -112,6 +114,9 @@ export default function PrintVerifyPanel({
   const [links, setLinks] = useState<PrinterCheckoffLink[]>([]);
   const [failedLinks, setFailedLinks] = useState<PrinterCheckoffLink[]>([]);
   const [busy, setBusy] = useState(false);
+  const [excludedExtras, setExcludedExtras] = useState<ReadonlySet<string>>(new Set());
+  const selectedExtras = (link: PrinterCheckoffLink) => (link.imported_inventory?.extras ?? [])
+    .flatMap((extra, index) => extra.checkoff.result === "pending" && !excludedExtras.has(`${link.id}:${index}`) ? [index] : []);
   const [rejectTarget, setRejectTarget] = useState<{
     linkId: string;
   } | null>(null);
@@ -215,11 +220,13 @@ export default function PrintVerifyPanel({
     link: PrinterCheckoffLink,
     decisions: Parameters<typeof verifyPrinterCheckoff>[0]["decisions"],
     action: CheckoffMutationAction,
+    additionalDecisions: AdditionalPrintDecision[] = [],
   ) => {
     setBusy(true);
     try {
-      const result = await verifyPrinterCheckoff({ link_id: link.id, decisions });
+      const result = await verifyPrinterCheckoff({ link_id: link.id, decisions, ...(additionalDecisions.length ? { additional_decisions: additionalDecisions } : {}) });
       const parts: string[] = [];
+      if (additionalDecisions.length) parts.push(`Recorded checks for ${additionalDecisions.length} additional ${additionalDecisions.length === 1 ? "item" : "items"}`);
       if (result.units_confirmed > 0) {
         parts.push(
           `Confirmed ${result.units_confirmed} unit${result.units_confirmed === 1 ? "" : "s"} printed`,
@@ -247,7 +254,7 @@ export default function PrintVerifyPanel({
         filename: link.filename,
         action,
         cause: e,
-        retry: () => void runVerify(link, decisions, action),
+        retry: () => void runVerify(link, decisions, action, additionalDecisions),
       });
     } finally {
       setBusy(false);
@@ -256,7 +263,7 @@ export default function PrintVerifyPanel({
 
   const onConfirmAll = (link: PrinterCheckoffLink) => {
     const units = pendingUnits(link);
-    if (!units.length) return;
+    if (!units.length && !selectedExtras(link).length) return;
     void runVerify(
       link,
       units.map((u) => ({
@@ -265,6 +272,7 @@ export default function PrintVerifyPanel({
         result: "confirmed" as const,
       })),
       "verification",
+      selectedExtras(link).map((index) => ({ index, result: "confirmed" })),
     );
   };
 
@@ -273,7 +281,7 @@ export default function PrintVerifyPanel({
     const link = displayLinks.find((l) => l.id === rejectTarget.linkId);
     if (!link) return;
     const units = pendingUnits(link);
-    if (!units.length) return;
+    if (!units.length && !selectedExtras(link).length) return;
     void runVerify(
       link,
       units.map((u) => ({
@@ -284,6 +292,7 @@ export default function PrintVerifyPanel({
         note: rejectNote.trim() || undefined,
       })),
       "rejection",
+      selectedExtras(link).map((index) => ({ index, result: "rejected", reason: rejectReason, note: rejectNote.trim() || undefined })),
     );
   };
 
@@ -393,7 +402,7 @@ export default function PrintVerifyPanel({
       {showWatching
         ? watchingForDisplay.map((link) => {
             const rows = linkPreviewRows(link, parts);
-            if (!rows.length) return null;
+            if (!rows.length && !link.imported_inventory?.extras.length) return null;
             return (
               <div
                 key={`watching:${link.id}`}
@@ -410,6 +419,7 @@ export default function PrintVerifyPanel({
                     <span className="font-mono text-foreground">{link.filename}</span>
                   </p>
                   <ObjectProposalRows rows={rows} printing />
+                  <AdditionalPrintItems links={[link]} />
                 </div>
               </div>
             );
@@ -440,11 +450,27 @@ export default function PrintVerifyPanel({
                     . Confirm marks them printed. Reject leaves them remaining.
                   </p>
                   <ObjectProposalRows rows={rows} />
+                  {link.imported_inventory?.extras.some((extra) => extra.checkoff.result === "pending") ? (
+                    <fieldset className="space-y-2" disabled={busy}>
+                      <legend className="font-medium">Additional parts and files</legend>
+                      <p className="text-sm text-muted-foreground">These checks do not change Plan quantities. Clear any copies you want to check later.</p>
+                      {link.imported_inventory.extras.map((extra, index) => extra.checkoff.result === "pending" ? (
+                        <label key={index} className="flex items-center gap-2 text-sm">
+                          <input type="checkbox" checked={!excludedExtras.has(`${link.id}:${index}`)} onChange={(event) => {
+                            const next = new Set(excludedExtras);
+                            if (event.target.checked) next.delete(`${link.id}:${index}`); else next.add(`${link.id}:${index}`);
+                            setExcludedExtras(next);
+                          }} />
+                          {extra.name} {extra.kind === "file" ? "(object names and quantity unknown)" : `· copy ${index + 1}`}
+                        </label>
+                      ) : null)}
+                    </fieldset>
+                  ) : null}
                 </div>
                 <div className="flex shrink-0 flex-wrap gap-2">
                   <Button
                     className="min-h-11"
-                    disabled={busy || units.length === 0}
+                    disabled={busy || (units.length === 0 && selectedExtras(link).length === 0)}
                     onClick={() => onConfirmAll(link)}
                   >
                     <Check className="mr-1 h-4 w-4" aria-hidden />
@@ -453,7 +479,7 @@ export default function PrintVerifyPanel({
                   <Button
                     variant="outline"
                     className="min-h-11"
-                    disabled={busy || units.length === 0}
+                    disabled={busy || (units.length === 0 && selectedExtras(link).length === 0)}
                     onClick={() => {
                       setRejectReason("bed_adhesion");
                       setRejectNote("");

@@ -104,6 +104,13 @@ describe("printer-checkoff helpers", () => {
     const trimmed = trimPrinterCheckoffLinks([...done, watching]);
     expect(trimmed.some((l) => l.id === "w1")).toBe(true);
   });
+  it("retains imported extras after ordinary terminal history is trimmed", () => {
+    const saved = link({ id: "inventory", state: "verified", imported_inventory: { extras: [
+      { name: "extra.stl", kind: "object", checkoff: { result: "confirmed", checked_at: "2026-09-05" } },
+    ] } });
+    const history = Array.from({ length: 210 }, (_, i) => link({ id: `new-${i}`, state: "verified" }));
+    expect(trimPrinterCheckoffLinks([saved, ...history]).find((item) => item.id === "inventory")).toEqual(saved);
+  });
 });
 
 describe("decideCheckoffReconcile", () => {

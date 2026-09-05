@@ -143,7 +143,7 @@ function repairEmptyAwaitingLinks(
   beforeRepair: (link: PrinterCheckoffLink) => void,
 ): PrinterCheckoffLink[] {
   return links.map((link) => {
-    if (link.state !== "awaiting_verify" || link.units.length > 0) return link;
+    if (link.state !== "awaiting_verify" || link.units.length > 0 || link.imported_inventory) return link;
     beforeRepair(link);
     const repaired = repo.materializeAcceptedPrinterLink({ kind: "repair", expectedLink: link });
     return repaired.kind === "repaired" ? repaired.link : link;
@@ -580,6 +580,10 @@ function parsePrintFileRequest(repo: AppRepository, raw: unknown): PrintFileRequ
     fromPrinterStorage: remotePath !== undefined,
   });
   if (printer.outcome === "invalid") return printer;
+  if (Array.isArray(body.object_names) && (body.object_names.length > 500 ||
+    body.object_names.some((name) => typeof name !== "string" || name.trim().length > 200))) {
+    return invalid("Import supports at most 500 object names of up to 200 characters; no objects were imported");
+  }
   return {
     outcome: "parsed",
     profileId,
@@ -934,14 +938,14 @@ export async function registerPrinterCheckoffRoutes(
     "/printer-checkoff/verify",
     { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
     async (request, reply) => {
-      const body = request.body as { link_id?: string; decisions?: unknown };
+      const body = request.body as { link_id?: string; decisions?: unknown; additional_decisions?: unknown };
       const linkId = String(body.link_id ?? "").trim();
       if (!linkId) {
         return sendProblem(reply, 400, "Bad Request", "link_id is required");
       }
       let result;
       try {
-        result = verifyPrinterCheckoff(deps.repo, linkId, body.decisions);
+        result = verifyPrinterCheckoff(deps.repo, linkId, body.decisions, body.additional_decisions);
       } catch (error) {
         if (error instanceof AcceptedPlanOperationalIntegrityError) {
           request.log.error(
@@ -1213,6 +1217,7 @@ export async function registerPrinterCheckoffRoutes(
         plan_revision_id?: unknown;
         unit_tokens?: unknown;
         object_mappings?: unknown;
+        retain_unmatched?: unknown;
       };
       const parsed = parsePrintFileRequest(deps.repo, request.body);
       if (parsed.outcome === "invalid") {
@@ -1311,7 +1316,8 @@ export async function registerPrinterCheckoffRoutes(
           expectedPlanRevisionId: planRevisionId,
           objectNames: parsed.objectNames,
           confirmedUnits,
-          objectMappings,
+          objectMappings: body.retain_unmatched === true ? objectMappings ?? [] : objectMappings,
+          retainUnmatched: body.retain_unmatched === true,
           link: {
             integrationId: parsed.integrationId,
             printerId: parsed.printerId,

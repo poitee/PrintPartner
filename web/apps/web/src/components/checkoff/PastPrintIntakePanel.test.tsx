@@ -252,6 +252,7 @@ describe("PastPrintIntakePanel", () => {
         completed: true,
         plan_revision_id: 9,
         unit_tokens: ["41:0"],
+        retain_unmatched: true,
       });
     });
 
@@ -427,6 +428,8 @@ describe("PastPrintIntakePanel", () => {
   });
 
   it("sends only the units the operator left confirmed", async () => {
+    api.assignUploadedPrinterFile.mockResolvedValue({ link: { id: "extra-only", filename: "bracket.bgcode", units: [],
+      imported_inventory: { extras: [{ name: "bracket.stl", kind: "object", checkoff: { result: "pending" } }] } } });
     renderPanel();
 
     fireEvent.click(screen.getByRole("radio", { name: /On this computer/ }));
@@ -437,10 +440,8 @@ describe("PastPrintIntakePanel", () => {
     answerChecked("checked");
     fireEvent.click(screen.getByRole("button", { name: "Record this print" }));
 
-    // A finished print with no units has nothing to check off, so it is refused.
-    const summary = await screen.findByRole("alert");
-    expect(summary.textContent).toContain("Confirm at least one Required unit");
-    expect(api.assignUploadedPrinterFile).not.toHaveBeenCalled();
+    await waitFor(() => expect(api.assignUploadedPrinterFile).toHaveBeenCalledWith(expect.objectContaining({ unit_tokens: [], retain_unmatched: true })));
+    await waitFor(() => expect(api.verifyPrinterCheckoff).toHaveBeenCalledWith({ link_id: "extra-only", decisions: [], additional_decisions: [{ index: 0, result: "confirmed" }] }));
   });
 
   it("will not record a print until the printer and the check are both answered", async () => {

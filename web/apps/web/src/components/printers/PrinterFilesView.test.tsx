@@ -179,7 +179,7 @@ describe("PrinterFilesView", () => {
     expect(screen.queryByLabelText("Choose part for done.stl")).toBeNull();
   });
 
-  it("blocks a shortage until the user reduces the copy count", async () => {
+  it("warns about surplus copies without blocking import", async () => {
     api.previewPrinterFileAssignment.mockResolvedValue({
       inspected: true, classification: { format: "bgcode" }, print_ready: true,
       suggested_units: [], suggestion_basis: "none", unlabeled_names: ["brackett.stl", "brackett.stl"], plan_revision_id: 9,
@@ -191,8 +191,8 @@ describe("PrinterFilesView", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Open" }));
     fireEvent.click(await screen.findByRole("button", { name: "Check this file" }));
     fireEvent.change(await screen.findByLabelText("Choose part for brackett.stl"), { target: { value: "41" } });
-    expect(screen.getByRole("alert").textContent).toContain("Not enough remaining units");
-    expect(screen.getByRole("button", { name: "Assign print file" })).toHaveProperty("disabled", true);
+    expect(screen.getByRole("alert").textContent).toContain("additional parts");
+    expect(screen.getByRole("button", { name: "Assign print file" })).toHaveProperty("disabled", false);
     fireEvent.change(screen.getByLabelText("Copies to match for brackett.stl"), { target: { value: "1" } });
     expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.getByRole("button", { name: "Assign print file" })).toHaveProperty("disabled", false);
@@ -296,6 +296,7 @@ describe("PrinterFilesView", () => {
         completed: false,
         plan_revision_id: 9,
         unit_tokens: ["41:0"],
+        retain_unmatched: true,
       });
     });
     expect(onAssigned).toHaveBeenCalled();
@@ -536,6 +537,7 @@ describe("PrinterFilesView", () => {
         completed: false,
         plan_revision_id: 9,
         unit_tokens: ["41:0"],
+        retain_unmatched: true,
         upload_token: "upload-one",
       });
     });

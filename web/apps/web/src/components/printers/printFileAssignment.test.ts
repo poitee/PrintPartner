@@ -41,13 +41,13 @@ describe("validatePrintFileAssignment", () => {
     ).toEqual([{ field: "build", message: "Choose the Build this print belongs to" }]);
   });
 
-  it("refuses to send a finished print with nothing to check off", () => {
+  it("allows a finished print without recognized plan units", () => {
     const errors = validatePrintFileAssignment({
       buildId: 7,
       confirmedUnitCount: 0,
       completed: true,
     });
-    expect(errors.map((error) => error.field)).toEqual(["units"]);
+    expect(errors).toEqual([]);
   });
 
   it("reports every problem at once, so the summary is complete", () => {
@@ -56,7 +56,7 @@ describe("validatePrintFileAssignment", () => {
       confirmedUnitCount: 0,
       completed: true,
     });
-    expect(errors.map((error) => error.field)).toEqual(["build", "units"]);
+    expect(errors.map((error) => error.field)).toEqual(["build"]);
   });
 });
 
