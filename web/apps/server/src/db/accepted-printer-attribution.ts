@@ -4,6 +4,7 @@ import type {
   PrinterFileDriftReason,
   PrinterFileIdentity,
   PrintFileClassification,
+  PrinterObjectMapping,
 } from "@print-partner/contracts";
 import {
   interpretSlicedObjectName,
@@ -20,12 +21,13 @@ import type { UnattributedPrint } from "../services/unattributed-print-store.js"
 export type AcceptedPrinterObservation = Readonly<{
   objectNames: readonly string[];
   fallbackFilename?: string;
+  positiveOnly?: boolean;
 }>;
 
 type AcceptedPrinterMatchedOutcome = Readonly<{
   inputIndex: number;
   rawName: string;
-  kind: "required_object_name" | "legacy_filename";
+  kind: "required_object_name" | "legacy_filename" | "user_confirmed";
   unit: Readonly<PrinterCheckoffUnit>;
 }>;
 
@@ -179,6 +181,7 @@ export type MaterializeAcceptedPrinterLinkCommand =
        * a mapping but never creates one, so there is no filename fallback here.
        */
       confirmedUnits: readonly Readonly<PrinterCheckoffUnit>[];
+      objectMappings?: readonly PrinterObjectMapping[];
       link: AcceptedPrinterLinkMetadata;
     }>
   | Readonly<{
@@ -239,10 +242,12 @@ function parsedObjectName(rawName: string): string {
 function matchingAcceptedParts(
   rawName: string,
   parts: readonly AcceptedOperationalPart[],
+  positiveOnly = false,
 ): readonly AcceptedOperationalPart[] {
   const paths = parts.map((part) => part.relativePath || part.filename);
   const matched = matchSlicedObjectName(rawName, paths);
   if (matched.kind === "unmatched") return [];
+  if (positiveOnly && matched.basis === "fuzzy") return [];
   const matchingPaths = new Set(
     (matched.kind === "matched" ? [matched.filename] : matched.filenames).map((path) =>
       path.toLowerCase(),
@@ -308,7 +313,7 @@ export function resolveAcceptedPrinterAttribution(
 
   for (const [inputIndex, rawName] of observation.objectNames.entries()) {
     if (outcomesByIndex.has(inputIndex)) continue;
-    const parts = matchingAcceptedParts(rawName, acceptedParts);
+    const parts = matchingAcceptedParts(rawName, acceptedParts, observation.positiveOnly);
     if (parts.length > 1) {
       outcomesByIndex.set(inputIndex, { inputIndex, rawName, kind: "ambiguous_filename" });
       continue;
@@ -343,8 +348,9 @@ export function resolveAcceptedPrinterAttribution(
   let fallback: AcceptedPrinterAttribution["fallback"] = recognizedCanonical
     ? "recognized_observation"
     : "unused";
-  if (units.length === 0 && !recognizedCanonical && observation.fallbackFilename?.trim()) {
-    const parts = matchingAcceptedParts(observation.fallbackFilename, acceptedParts);
+  if (units.length === 0 && !recognizedCanonical && observation.fallbackFilename?.trim() &&
+    (!observation.positiveOnly || observation.objectNames.length === 0)) {
+    const parts = matchingAcceptedParts(observation.fallbackFilename, acceptedParts, observation.positiveOnly);
     if (parts.length === 1) {
       const fallbackSlot = availableSlots.find(
         (slot) => slot.part.projectionPartId === parts[0]!.projectionPartId,
@@ -365,4 +371,33 @@ export function resolveAcceptedPrinterAttribution(
     ),
     fallback,
   };
+}
+
+export function applyConfirmedObjectMappings(
+  suggestion: AcceptedPrinterAttribution,
+  confirmedUnits: readonly PrinterCheckoffUnit[],
+  mappings: readonly PrinterObjectMapping[],
+): AcceptedPrinterAttribution | null {
+  const key = (unit: PrinterCheckoffUnit) => `${unit.part_id}:${unit.unit_index}`;
+  const confirmed = new Map(confirmedUnits.map((unit) => [key(unit), unit]));
+  const indexed = new Map<number, PrinterCheckoffUnit>();
+  const used = new Set<string>();
+  for (const mapping of mappings) {
+    const outcome = suggestion.outcomes[mapping.object_index];
+    const unit = confirmed.get(key(mapping));
+    if (!outcome || (outcome.kind !== "unmatched" && outcome.kind !== "ambiguous_filename") ||
+      !unit || indexed.has(mapping.object_index) || used.has(key(unit))) return null;
+    indexed.set(mapping.object_index, unit);
+    used.add(key(unit));
+  }
+  const outcomes = suggestion.outcomes.map((outcome): AcceptedPrinterNameOutcome => {
+    const mapped = indexed.get(outcome.inputIndex);
+    if (mapped) return { inputIndex: outcome.inputIndex, rawName: outcome.rawName, kind: "user_confirmed", unit: mapped };
+    if ("unit" in outcome && (!confirmed.has(key(outcome.unit)) || used.has(key(outcome.unit)))) {
+      return { inputIndex: outcome.inputIndex, rawName: outcome.rawName, kind: "unmatched" };
+    }
+    return outcome;
+  });
+  return { ...suggestion, units: confirmedUnits, outcomes, fallback: "unused",
+    unmatchedObjectNames: outcomes.flatMap((outcome) => "unit" in outcome ? [] : [outcome.rawName]) };
 }

@@ -72,6 +72,15 @@ function snapshot(
 }
 
 describe("accepted printer attribution", () => {
+  it("keeps fuzzy import matches unselected without changing watcher matching", () => {
+    const accepted = snapshot([{ id: 41, filename: "z_tensioner_left.stl", units: [{ index: 0, token: token(1) }] }]);
+    const observation = { objectNames: ["z_tensionr_left.stl"] };
+    expect(resolveAcceptedPrinterAttribution(accepted, observation).units).toHaveLength(1);
+    expect(resolveAcceptedPrinterAttribution(accepted, { ...observation, positiveOnly: true }).units).toEqual([]);
+    expect(resolveAcceptedPrinterAttribution(accepted, {
+      ...observation, fallbackFilename: "z_tensioner_left.bgcode", positiveOnly: true,
+    }).units).toEqual([]);
+  });
   it("maps an exact case-insensitive Required-unit Object name", () => {
     const accepted = snapshot([
       {

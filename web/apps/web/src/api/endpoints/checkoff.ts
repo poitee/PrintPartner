@@ -5,6 +5,8 @@ import type {
   PrinterCheckoffUnit,
   PrinterHostStatus,
   PrintFileClassification,
+  PrintFileMatchReview,
+  PrinterObjectMapping,
   PrintOutcomeEvent,
   PrintOutcomesSummary,
   PrintVerifyDecision,
@@ -188,6 +190,7 @@ export async function dismissUnattributedPrint(id: string): Promise<void> {
 
 /** The parts of a print file check that do not depend on reading the bytes. */
 type PrintFileCheckBasis = {
+  match_review?: PrintFileMatchReview;
   /** Required units the file's object names or filename point at. */
   suggested_units: PrinterCheckoffUnit[];
   /** What the suggestion was drawn from, so the operator can judge it. */
@@ -253,6 +256,43 @@ function readNames(value: unknown): string[] | null {
   return value.every((name) => typeof name === "string") ? [...value] : null;
 }
 
+function readMatchReview(value: unknown): PrintFileMatchReview | null {
+  if (typeof value !== "object" || value === null || !("objects" in value) || !("parts" in value) ||
+    !Array.isArray(value.objects) || !Array.isArray(value.parts)) return null;
+  const result: PrintFileMatchReview = { objects: [], parts: [] };
+  if ("notices" in value) {
+    const notices = readNames(value.notices);
+    if (!notices) return null;
+    result.notices = notices;
+  }
+  const indices = new Set<number>();
+  const ids = new Set<number>();
+  for (const entry of value.objects) {
+    const item: unknown = entry;
+    if (typeof item !== "object" || item === null || !("object_index" in item) || !("name" in item) || typeof item.object_index !== "number" ||
+      !Number.isInteger(item.object_index) || item.object_index < 0 || typeof item.name !== "string" ||
+      indices.has(item.object_index)) return null;
+    indices.add(item.object_index);
+    result.objects.push({ object_index: item.object_index, name: item.name });
+  }
+  for (const entry of value.parts) {
+    const item: unknown = entry;
+    if (typeof item !== "object" || item === null || !("part_id" in item) || !("filename" in item) ||
+      !("relative_path" in item) || !("units" in item) || typeof item.part_id !== "number" ||
+      !Number.isInteger(item.part_id) || item.part_id <= 0 || ids.has(item.part_id) ||
+      typeof item.filename !== "string" || typeof item.relative_path !== "string") return null;
+    const units = readSuggestedUnits(item.units);
+    if (!units || units.some((unit) => unit.part_id !== item.part_id || unit.unit_index < 0) ||
+      new Set(units.map((unit) => unit.unit_index)).size !== units.length) return null;
+    ids.add(item.part_id);
+    const sourceLabel = "source_label" in item ? item.source_label : undefined;
+    if (sourceLabel !== undefined && typeof sourceLabel !== "string") return null;
+    result.parts.push({ part_id: item.part_id, filename: item.filename, relative_path: item.relative_path, units,
+      ...(typeof sourceLabel === "string" ? { source_label: sourceLabel } : {}) });
+  }
+  return result;
+}
+
 /**
  * Narrow the preview reply before the UI switches on it.
  *
@@ -299,6 +339,11 @@ export function parsePrintFileAssignmentPreview(value: unknown): PrintFileAssign
     unlabeled_names: unlabeledNames,
     plan_revision_id: revisionId,
   };
+  if ("match_review" in value) {
+    const review = readMatchReview(value.match_review);
+    if (!review) throw unreadable;
+    basisFields.match_review = review;
+  }
 
   if (value.inspected === false) {
     if ("classification" in value || "print_ready" in value) throw unreadable;
@@ -345,6 +390,7 @@ export async function previewPrinterFileAssignment(options: {
  * that one field.
  */
 export type PrintFileAssignmentBase = {
+  object_mappings?: PrinterObjectMapping[];
   profile_id: number;
   filename: string;
   object_names: string[];

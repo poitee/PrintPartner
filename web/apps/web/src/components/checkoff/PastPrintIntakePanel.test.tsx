@@ -154,6 +154,32 @@ describe("PastPrintIntakePanel", () => {
 
   afterEach(cleanup);
 
+  it("lets an uploaded print search the plan and explicitly choose an unmatched object", async () => {
+    api.uploadPrintFileForAssignment.mockResolvedValue({ ...CHECK,
+      suggested_units: [], suggestion_basis: "none", unlabeled_names: ["unknown.stl"],
+      match_review: { objects: [{ object_index: 0, name: "unknown.stl" }], parts: [
+        { part_id: 41, filename: "bracket.stl", relative_path: "parts/bracket.stl", units: [{ part_id: 41, unit_index: 0 }] },
+      ] },
+    });
+    renderPanel();
+    fireEvent.click(screen.getByRole("radio", { name: /On this computer/ }));
+    await pickFile();
+    const choice = await screen.findByLabelText("Choose part for unknown.stl");
+    expect(choice).toHaveProperty("value", "");
+    fireEvent.change(screen.getByLabelText("Search plan for unknown.stl"), { target: { value: "bracket" } });
+    fireEvent.change(choice, { target: { value: "41" } });
+    fireEvent.change(choice, { target: { value: "" } });
+    expect(screen.getByText("1 copy left unmatched")).toBeTruthy();
+    fireEvent.change(choice, { target: { value: "41" } });
+    answerPrinter("sd-card");
+    answerChecked("not_checked");
+    fireEvent.click(screen.getByRole("button", { name: "Record this print" }));
+    await waitFor(() => expect(api.assignUploadedPrinterFile).toHaveBeenCalledWith(expect.objectContaining({
+      unit_tokens: ["41:0"], object_mappings: [{ object_index: 0, part_id: 41, unit_index: 0 }],
+    })));
+    expect(api.verifyPrinterCheckoff).not.toHaveBeenCalled();
+  });
+
   it("asks where the file is without answering for the operator", async () => {
     renderPanel();
 

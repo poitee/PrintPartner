@@ -450,6 +450,24 @@ export type PrintOutcomeEvent = {
   link_id?: string;
 };
 
+export type PrinterObjectMapping = {
+  object_index: number;
+  part_id: number;
+  unit_index: number;
+};
+
+export type PrintFileMatchReview = {
+  notices?: string[];
+  objects: Array<{ object_index: number; name: string }>;
+  parts: Array<{
+    part_id: number;
+    filename: string;
+    relative_path: string;
+    source_label?: string;
+    units: PrinterCheckoffUnit[];
+  }>;
+};
+
 export type PrintOutcomesSummary = {
   profile_id: number;
   total_confirmed: number;

@@ -123,6 +123,29 @@ describe("PrinterFilesView", () => {
 
   afterEach(cleanup);
 
+  it("requires a manual choice for unmatched copies and submits their explicit mappings", async () => {
+    api.previewPrinterFileAssignment.mockResolvedValue({
+      inspected: true, classification: { format: "bgcode" }, print_ready: true,
+      suggested_units: [], suggestion_basis: "none", unlabeled_names: ["brackett.stl", "brackett.stl"], plan_revision_id: 9,
+      match_review: {
+        objects: [{ object_index: 0, name: "brackett.stl" }, { object_index: 1, name: "brackett.stl" }],
+        parts: [{ part_id: 41, filename: "bracket.stl", relative_path: "parts/bracket.stl", units: [0, 1].map((unit_index) => ({ part_id: 41, unit_index })) }],
+      },
+    });
+    renderView();
+    fireEvent.click(await screen.findByRole("button", { name: "Open" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Check this file" }));
+    const select = await screen.findByLabelText("Choose part for brackett.stl");
+    expect(select).toHaveProperty("value", "");
+    expect(api.assignPrinterFile).not.toHaveBeenCalled();
+    fireEvent.change(select, { target: { value: "41" } });
+    fireEvent.click(screen.getByRole("button", { name: "Assign print file" }));
+    await waitFor(() => expect(api.assignPrinterFile).toHaveBeenCalledWith(expect.objectContaining({
+      unit_tokens: ["41:0", "41:1"],
+      object_mappings: [{ object_index: 0, part_id: 41, unit_index: 0 }, { object_index: 1, part_id: 41, unit_index: 1 }],
+    })));
+  });
+
   it("walks into a folder and back out to the root", async () => {
     renderView();
 
@@ -141,6 +164,38 @@ describe("PrinterFilesView", () => {
 
     expect(await screen.findByText("loose.gcode")).toBeTruthy();
     expect(screen.queryByText("bracket.bgcode")).toBeNull();
+  });
+
+  it("keeps already-completed object explanations visible without offering extra copies", async () => {
+    api.previewPrinterFileAssignment.mockResolvedValue({
+      inspected: true, classification: { format: "bgcode" }, print_ready: true,
+      suggested_units: [], suggestion_basis: "none", unlabeled_names: ["done.stl"], plan_revision_id: 9,
+      match_review: { objects: [], parts: [], notices: ["done.stl is already checked off."] },
+    });
+    renderView();
+    fireEvent.click(await screen.findByRole("button", { name: "Open" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Check this file" }));
+    expect(await screen.findByText("done.stl is already checked off.")).toBeTruthy();
+    expect(screen.queryByLabelText("Choose part for done.stl")).toBeNull();
+  });
+
+  it("blocks a shortage until the user reduces the copy count", async () => {
+    api.previewPrinterFileAssignment.mockResolvedValue({
+      inspected: true, classification: { format: "bgcode" }, print_ready: true,
+      suggested_units: [], suggestion_basis: "none", unlabeled_names: ["brackett.stl", "brackett.stl"], plan_revision_id: 9,
+      match_review: { objects: [{ object_index: 0, name: "brackett.stl" }, { object_index: 1, name: "brackett.stl" }], parts: [
+        { part_id: 41, filename: "bracket.stl", relative_path: "parts/bracket.stl", units: [{ part_id: 41, unit_index: 0 }] },
+      ] },
+    });
+    renderView();
+    fireEvent.click(await screen.findByRole("button", { name: "Open" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Check this file" }));
+    fireEvent.change(await screen.findByLabelText("Choose part for brackett.stl"), { target: { value: "41" } });
+    expect(screen.getByRole("alert").textContent).toContain("Not enough remaining units");
+    expect(screen.getByRole("button", { name: "Assign print file" })).toHaveProperty("disabled", true);
+    fireEvent.change(screen.getByLabelText("Copies to match for brackett.stl"), { target: { value: "1" } });
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByRole("button", { name: "Assign print file" })).toHaveProperty("disabled", false);
   });
 
   it("searches the current folder and sorts files using printer metadata", async () => {

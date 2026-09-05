@@ -216,6 +216,7 @@ import { normalizePrinterFilename } from "../services/printer-checkoff.js";
 import { appendPrintOutcomes } from "../services/printer-outcomes-store.js";
 import {
   confirmAcceptedPrinterUnits,
+  applyConfirmedObjectMappings,
   detectPrinterFileDrift,
   resolveAcceptedPrinterAttribution,
   type MaterializeAcceptedPrinterLinkCommand,
@@ -1092,6 +1093,7 @@ export class AppRepository {
       const suggestion = resolveAcceptedPrinterAttribution(accepted.snapshot, {
         objectNames,
         fallbackFilename,
+        positiveOnly: command.kind === "create" && command.objectMappings !== undefined,
       });
       let attribution = suggestion;
       if (command.kind === "create") {
@@ -1104,6 +1106,11 @@ export class AppRepository {
         // carry no Required-unit labels, is still attributed to the Build. It
         // just carries no units.
         attribution = { ...suggestion, units: confirmed.units, fallback: "unused" };
+        if (command.objectMappings !== undefined) {
+          const mapped = applyConfirmedObjectMappings(suggestion, confirmed.units, command.objectMappings);
+          if (!mapped) return { kind: "no_match" as const };
+          attribution = mapped;
+        }
       } else if (attribution.units.length === 0) {
         return { kind: "no_match" as const };
       }

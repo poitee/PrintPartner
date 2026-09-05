@@ -11,6 +11,8 @@ import {
   type PrinterCheckoffUnit,
   type PrinterFileIdentity,
   type PrintFileClassification,
+  type PrintFileMatchReview,
+  type PrinterObjectMapping,
   type IntegrationConfig,
 } from "@print-partner/contracts";
 import type { AppRepository } from "../db/repository.js";
@@ -633,8 +635,9 @@ function suggestPrintFileAttribution(
   suggestion_basis: "none" | "filename" | "object_names";
   unlabeled_names: string[];
   plan_revision_id: number;
+  match_review: PrintFileMatchReview;
 } {
-  const suggestion = resolveAcceptedPrinterAttribution(snapshot, observation);
+  const suggestion = resolveAcceptedPrinterAttribution(snapshot, { ...observation, positiveOnly: true });
   const named = confirmAcceptedPrinterUnits({ snapshot, confirmed: suggestion.units });
   return {
     suggested_units:
@@ -649,6 +652,21 @@ function suggestPrintFileAttribution(
           : "object_names",
     unlabeled_names: [...suggestion.unmatchedObjectNames],
     plan_revision_id: snapshot.revisionId,
+    match_review: {
+      notices: suggestion.outcomes.flatMap((outcome) =>
+        outcome.kind === "already_completed" ? [`${outcome.rawName} is already checked off.`] :
+        outcome.kind === "duplicate_observation" ? [`${outcome.rawName} repeats the same identified unit; it is not another copy.`] : []),
+      objects: suggestion.outcomes.flatMap((outcome) =>
+        outcome.kind === "unmatched" || outcome.kind === "ambiguous_filename"
+          ? [{ object_index: outcome.inputIndex, name: outcome.rawName }] : []),
+      parts: snapshot.parts.filter((part) => part.included && part.units.some((unit) => unit.required))
+        .map((part) => ({
+          part_id: part.projectionPartId, filename: part.filename,
+          relative_path: part.relativePath || part.filename, source_label: part.sourceLayer,
+          units: part.units.filter((unit) => unit.required && !unit.completed)
+            .map((unit) => ({ part_id: part.projectionPartId, unit_index: unit.unitIndex, object_name: unit.objectName })),
+        })),
+    },
   };
 }
 
@@ -1194,6 +1212,7 @@ export async function registerPrinterCheckoffRoutes(
         completed?: unknown;
         plan_revision_id?: unknown;
         unit_tokens?: unknown;
+        object_mappings?: unknown;
       };
       const parsed = parsePrintFileRequest(deps.repo, request.body);
       if (parsed.outcome === "invalid") {
@@ -1212,12 +1231,32 @@ export async function registerPrinterCheckoffRoutes(
         );
       }
       const confirmedUnits: PrinterCheckoffUnit[] = [];
+      if (body.unit_tokens.length > 500) {
+        return sendProblem(reply, 400, "Bad Request", "At most 500 units can be assigned at once");
+      }
       for (const rawToken of body.unit_tokens.slice(0, 500)) {
         const unit = typeof rawToken === "string" ? parsePrinterCheckoffUnitToken(rawToken) : null;
         if (!unit) {
           return sendProblem(reply, 400, "Bad Request", "unit_tokens holds an unreadable unit");
         }
         confirmedUnits.push(unit);
+      }
+      let objectMappings: PrinterObjectMapping[] | undefined;
+      if (body.object_mappings !== undefined) {
+        if (!Array.isArray(body.object_mappings) || body.object_mappings.length > 500) {
+          return sendProblem(reply, 400, "Bad Request", "object_mappings must be a list of at most 500 choices");
+        }
+        objectMappings = [];
+        for (const entry of body.object_mappings) {
+          const value: unknown = entry;
+          if (typeof value !== "object" || value === null ||
+            !("object_index" in value) || typeof value.object_index !== "number" || !Number.isInteger(value.object_index) || value.object_index < 0 ||
+            !("part_id" in value) || typeof value.part_id !== "number" || !Number.isInteger(value.part_id) || value.part_id <= 0 ||
+            !("unit_index" in value) || typeof value.unit_index !== "number" || !Number.isInteger(value.unit_index) || value.unit_index < 0) {
+            return sendProblem(reply, 400, "Bad Request", "object_mappings contains an invalid choice");
+          }
+          objectMappings.push({ object_index: value.object_index, part_id: value.part_id, unit_index: value.unit_index });
+        }
       }
 
       // The bytes decide. Nothing the client sent about this file is trusted.
@@ -1272,6 +1311,7 @@ export async function registerPrinterCheckoffRoutes(
           expectedPlanRevisionId: planRevisionId,
           objectNames: parsed.objectNames,
           confirmedUnits,
+          objectMappings,
           link: {
             integrationId: parsed.integrationId,
             printerId: parsed.printerId,

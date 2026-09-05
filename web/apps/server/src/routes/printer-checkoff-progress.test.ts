@@ -913,6 +913,35 @@ describe("printer progress route", () => {
     expect(acceptedPrintUnits(repo, plan.id, bracket.id)).toEqual([false]);
   });
 
+  it("persists explicit object mappings and clears only the mapped unmatched occurrence", async () => {
+    const { app, repo, plan, bracket, planRevisionId } = await setup();
+    saveFleet(repo, [parsePrinterMachine({ id: "offline-printer", name: "Garage printer", model: "Custom", bed_width_mm: 250, bed_depth_mm: 210, max_filament_slots: 1, loaded_filaments: [] })]);
+    const base = { profile_id: plan.id, printer_id: "offline-printer", filename: "external.bgcode",
+      tracking: "manual", plan_revision_id: planRevisionId, object_names: ["brackett.stl", "brackett.stl"],
+      unit_tokens: [`${bracket.id}:0`] };
+    const preview = await app.inject({ method: "POST", url: "/printer-checkoff/file-assignments/preview", payload: base });
+    expect(preview.json()).toMatchObject({ suggested_units: [], match_review: {
+      objects: [{ object_index: 0, name: "brackett.stl" }, { object_index: 1, name: "brackett.stl" }],
+      parts: [{ part_id: bracket.id, filename: "bracket.stl", units: [{ part_id: bracket.id, unit_index: 0 }] }],
+    } });
+    for (const object_mappings of [
+      [{ object_index: 99, part_id: bracket.id, unit_index: 0 }],
+      [{ object_index: 0, part_id: bracket.id, unit_index: 0 }, { object_index: 1, part_id: bracket.id, unit_index: 0 }],
+      [{ object_index: 0, part_id: bracket.id, unit_index: 99 }],
+    ]) {
+      const rejected = await app.inject({ method: "POST", url: "/printer-checkoff/file-assignments", payload: { ...base, object_mappings } });
+      expect(rejected.statusCode).toBe(409);
+      expect(loadPrinterCheckoffLinks(repo)).toHaveLength(0);
+    }
+    const result = await app.inject({ method: "POST", url: "/printer-checkoff/file-assignments", payload: {
+      ...base, object_mappings: [{ object_index: 0, part_id: bracket.id, unit_index: 0 }],
+    } });
+    expect(result.statusCode).toBe(200);
+    expect(result.json().link.unlabeled_names).toEqual(["brackett.stl"]);
+    expect(getPrinterCheckoffLink(repo, result.json().link.id)?.unlabeled_names).toEqual(["brackett.stl"]);
+    expect(acceptedPrintUnits(repo, plan.id, bracket.id)).toEqual([false]);
+  });
+
   it("binds only the units the operator confirmed, never a filename match", async () => {
     const { app, repo, plan, bracket, planRevisionId } = await setup();
     saveFleet(repo, [parsePrinterMachine({
