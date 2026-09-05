@@ -4,9 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
-    "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.build.json && node ../../scripts/copy-embedded-manifests.mjs",
-    "start": "node dist/index.js",
+    "dev": "tsx watch --conditions=development src/index.ts",
+    "build": "node ../../scripts/atomic-package-build.mjs --project tsconfig.build.json --copy src/data data --require-file data/ambrosia_fallback.json --require-file data/assistant-domain/_global/alias_map.yaml --require-file data/assistant-domain/_global/merge_conflicts.yaml --require-file data/assistant-domain/_global/pitfalls.md --require-file data/assistant-domain/_global/stacks.yaml --require-file data/assistant-domain/sources/README.md --require-file data/kit-catalog.yaml --require-file data/legal/ATTRIBUTION.md --require-file data/legal/LICENSE --require-file data/legal/LICENSE-SUMMARY.md --require-file data/legal/THIRD_PARTY_NOTICES.md --require-file data/manifests/registry-index.yaml --require-file data/path-hints.yaml --require-file data/printer_presets.json",
+    "start": "node dist/current/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "mcp": "tsx src/mcp/stdio-server.ts",

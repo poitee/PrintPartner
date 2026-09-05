@@ -74,4 +74,4 @@ EXPOSE 8080
 # Starts as root so entrypoint can chown named-volume /data, then drops to ppuser.
 # Do not set USER here — compose must not force user: "1000:1000" either.
 ENTRYPOINT ["docker-entrypoint.sh"]
-CMD ["node", "dist/index.js"]
+CMD ["node", "dist/current/index.js"]
