@@ -322,6 +322,9 @@ function bgcodeHeaderIsValid(bytes: Uint8Array): boolean {
   let blocks = 0;
   while (cursor < bytes.byteLength) {
     if (cursor + BGCODE_BLOCK_HEADER_BYTES > bytes.byteLength) return false;
+    const blockType = view.getUint16(cursor, true);
+    if (blockType > 5) return false;
+    const parameterBytes = blockType === 5 ? 6 : 2;
     const compression = view.getUint16(cursor + 2, true);
     const uncompressedSize = view.getUint32(cursor + 4, true);
     let payloadStart = cursor + BGCODE_BLOCK_HEADER_BYTES;
@@ -331,7 +334,7 @@ function bgcodeHeaderIsValid(bytes: Uint8Array): boolean {
       payloadSize = view.getUint32(payloadStart, true);
       payloadStart += BGCODE_COMPRESSED_SIZE_BYTES;
     }
-    const next = payloadStart + payloadSize + checksumBytes;
+    const next = payloadStart + parameterBytes + payloadSize + checksumBytes;
     if (next <= cursor || next > bytes.byteLength) return false;
     cursor = next;
     blocks += 1;

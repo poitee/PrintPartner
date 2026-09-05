@@ -75,7 +75,7 @@ export function hostileZip(
 }
 
 export function bgcode(blocks: ReadonlyArray<{ payload: number }>): Uint8Array {
-  const total = 10 + blocks.reduce((sum, block) => sum + 8 + block.payload, 0);
+  const total = 10 + blocks.reduce((sum, block) => sum + 8 + 2 + block.payload, 0);
   const bytes = new Uint8Array(total);
   const view = new DataView(bytes.buffer);
   bytes.set(new TextEncoder().encode("GCDE"), 0);
@@ -86,7 +86,8 @@ export function bgcode(blocks: ReadonlyArray<{ payload: number }>): Uint8Array {
     view.setUint16(cursor, 1, true);
     view.setUint16(cursor + 2, 0, true);
     view.setUint32(cursor + 4, block.payload, true);
-    cursor += 8 + block.payload;
+    view.setUint16(cursor + 8, 0, true);
+    cursor += 8 + 2 + block.payload;
   }
   return bytes;
 }

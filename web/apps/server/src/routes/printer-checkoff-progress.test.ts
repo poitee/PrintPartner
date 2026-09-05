@@ -973,7 +973,7 @@ describe("printer progress route", () => {
       integration_id: "prusa-1",
     })]);
     const before = repo.readAcceptedPlanOperationalSnapshot(plan.id);
-    const bytes = bgcode([{ payload: 42 }]);
+    const bytes = bgcode([{ payload: 40 }]);
     const cancel = vi.fn();
     let receivedChunks = 0;
     let elapsedMs = 0;
