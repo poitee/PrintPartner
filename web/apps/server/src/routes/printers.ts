@@ -28,6 +28,8 @@ import type {
 } from "@print-partner/contracts";
 import { sendProblem } from "../lib/api-error.js";
 import { cancelResponseBody } from "../lib/bounded-response.js";
+import { getLogger } from "../services/logger.js";
+import { reportPrinterFailure } from "../services/printer-error-reporting.js";
 
 type RouteDeps = { repo: AppRepository };
 
@@ -77,7 +79,11 @@ function publicCapabilityError(
   return sendProblem(reply, 503, "Service Unavailable", "Printer host is unavailable");
 }
 
-async function sendUpstreamResponse(reply: FastifyReply, response: Response) {
+async function sendUpstreamResponse(
+  reply: FastifyReply,
+  response: Response,
+  onStreamError?: (error: Error) => void,
+) {
   if (!response.ok || !response.body) {
     await cancelResponseBody(response);
     return sendProblem(
@@ -94,7 +100,9 @@ async function sendUpstreamResponse(reply: FastifyReply, response: Response) {
   if (contentType) reply.header("Content-Type", contentType);
   if (contentLength) reply.header("Content-Length", contentLength);
   reply.header("Cache-Control", "private, no-store");
-  return reply.send(Readable.fromWeb(response.body));
+  const stream = Readable.fromWeb(response.body);
+  if (onStreamError) stream.once("error", onStreamError);
+  return reply.send(stream);
 }
 
 /**
@@ -124,7 +132,7 @@ async function withPrinterCapability<Access, Result = never>(args: {
   /** What to answer when the resolved adapter does not offer that capability. */
   unsupported: () => Result | FastifyReply;
   /** Server log line and public fallback detail for an upstream failure. */
-  failure: { log: string; detail: string };
+  failure: { log: string; detail: string; operation?: "browse" | "download" };
   use: (access: Access, config: IntegrationConfig) => Promise<Result | FastifyReply>;
 }): Promise<Result | FastifyReply> {
   const capability = printerHostCapability(args.repo, args.printerId);
@@ -134,6 +142,13 @@ async function withPrinterCapability<Access, Result = never>(args: {
   try {
     return await args.use(access, capability.integration.config);
   } catch (error) {
+    if (args.failure.operation) {
+      reportPrinterFailure({
+        operation: args.failure.operation,
+        failure: error instanceof Error && error.name === "TimeoutError" ? "timeout" : "upstream_error",
+        headersSent: args.reply.raw.headersSent,
+      });
+    }
     args.log.warn(
       { printerId: args.printerId, integrationId: capability.integration.id },
       args.failure.log,
@@ -189,7 +204,11 @@ export async function registerPrinterRoutes(app: FastifyInstance, deps: RouteDep
         select: (adapter) => adapter.files,
         unsupported: () =>
           sendProblem(reply, 501, "Not Implemented", "Printer host does not support file browsing"),
-        failure: { log: "Printer file browsing failed", detail: "Could not browse printer files" },
+        failure: {
+          log: "Printer file browsing failed",
+          detail: "Could not browse printer files",
+          operation: "browse",
+        },
         use: (files, config) => files.browse(config, path),
       });
     },
@@ -215,8 +234,13 @@ export async function registerPrinterRoutes(app: FastifyInstance, deps: RouteDep
         select: (adapter) => adapter.files,
         unsupported: () =>
           sendProblem(reply, 501, "Not Implemented", "Printer host does not support file browsing"),
-        failure: { log: "Printer file open failed", detail: "Could not open printer file" },
+        failure: {
+          log: "Printer file open failed",
+          detail: "Could not open printer file",
+          operation: "download",
+        },
         use: async (files, config) => {
+          const startedAt = Date.now();
           // Only open something the host actually listed, so a crafted path
           // cannot reach a file outside the browsable storage tree.
           const listing = await files.browse(config, directory);
@@ -224,7 +248,33 @@ export async function registerPrinterRoutes(app: FastifyInstance, deps: RouteDep
             (entry) => entry.kind === "file" && entry.path === filePath,
           );
           if (!listed) return sendProblem(reply, 404, "Not Found", "Printer file not found");
-          return sendUpstreamResponse(reply, await files.open(config, filePath));
+          const response = await files.open(config, filePath);
+          if (!response.ok || !response.body) {
+            reportPrinterFailure({
+              operation: "download", failure: "upstream_error",
+              status: response.status, headersSent: false,
+            });
+          }
+          return sendUpstreamResponse(reply, response, (error) => {
+            if (request.raw.aborted || reply.raw.destroyed) return;
+            const failure = error.name === "TimeoutError" ? "timeout" : "stream_interrupted";
+            reportPrinterFailure({
+              operation: "download", failure,
+              status: reply.statusCode, headersSent: reply.raw.headersSent,
+            });
+            getLogger().logWorkflow({
+              method: "GET",
+              url: "/printers/:id/files/content",
+              statusCode: reply.statusCode,
+              duration: Date.now() - startedAt,
+              severity: "error",
+              message: "Printer file download interrupted",
+              context: {
+                printerId: request.params.id,
+                failure,
+              },
+            });
+          });
         },
       });
     },

@@ -26,6 +26,7 @@ import {
 import { getIntegrationAdapter } from "../integrations/registry.js";
 import { sendProblem } from "../lib/api-error.js";
 import {
+  cancelResponseBody,
   readBoundedResponseChunks,
   ResponseBodyTooLargeError,
 } from "../lib/bounded-response.js";
@@ -63,6 +64,7 @@ import {
 import { normalizePrinterFilename } from "../services/printer-checkoff.js";
 import { filterLinkedUnattributedPrints } from "./printer-checkoff-route-model.js";
 import { loadFleet } from "../services/printer-fleet.js";
+import { reportPrinterFailure } from "../services/printer-error-reporting.js";
 import { deductSpoolmanFilamentAfterVerify } from "../services/spoolman-deduct.js";
 import {
   confirmAcceptedPrinterUnits,
@@ -247,15 +249,10 @@ function materializeProblem(
   }
 }
 
-/** How long PrintPartner will spend pulling one file from a printer host. */
-const MAX_INSPECT_MS = 30_000;
-
 /**
- * Read a provider response into memory under a byte and time budget, because a
- * printer host is untrusted network input even on a private LAN.
+ * Bound the bytes buffered for classification. The adapter owns download timeouts.
  */
 async function readBoundedBody(response: Response): Promise<Uint8Array | null> {
-  const deadline = Date.now() + MAX_INSPECT_MS;
   const chunks: Uint8Array[] = [];
   let total = 0;
   try {
@@ -263,7 +260,6 @@ async function readBoundedBody(response: Response): Promise<Uint8Array | null> {
       response,
       MAX_CLASSIFIABLE_BYTES,
     )) {
-      if (Date.now() > deadline) return null;
       total += chunk.byteLength;
       chunks.push(chunk);
     }
@@ -339,9 +335,17 @@ async function inspectRemoteFile(
   let bytes: Uint8Array | null;
   try {
     const response = await gateway.files.open(gateway.config, remotePath);
-    if (!response.ok) return { outcome: "unreadable" };
+    if (!response.ok) {
+      reportPrinterFailure({ operation: "inspect", failure: "upstream_error", status: response.status });
+      await cancelResponseBody(response);
+      return { outcome: "unreadable" };
+    }
     bytes = await readBoundedBody(response);
-  } catch {
+  } catch (error) {
+    reportPrinterFailure({
+      operation: "inspect",
+      failure: error instanceof Error && error.name === "TimeoutError" ? "timeout" : "upstream_error",
+    });
     return { outcome: "unreadable" };
   }
   if (!bytes) return { outcome: "rejected", detail: "That print file is too large to inspect" };

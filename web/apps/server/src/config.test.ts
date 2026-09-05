@@ -1,7 +1,37 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadConfig, validateProductionConfig } from "./config.js";
 
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 describe("loadConfig", () => {
+  it("keeps printer reporting opt-in even when a DSN is present", () => {
+    vi.stubEnv("SENTRY_ENABLED", undefined);
+    vi.stubEnv("SENTRY_DSN", "https://publickey@o123.ingest.sentry.io/456");
+    vi.stubEnv("SENTRY_ENVIRONMENT", "staging");
+    expect(loadConfig().printerErrorReporting).toEqual({
+      enabled: false,
+      dsn: "https://publickey@o123.ingest.sentry.io/456",
+      environment: "staging",
+    });
+
+    vi.stubEnv("SENTRY_ENABLED", "1");
+    expect(loadConfig().printerErrorReporting.enabled).toBe(true);
+  });
+
+  it("loads disabled reporting without a destination and uses the runtime environment", () => {
+    vi.stubEnv("SENTRY_ENABLED", undefined);
+    vi.stubEnv("SENTRY_DSN", undefined);
+    vi.stubEnv("SENTRY_ENVIRONMENT", undefined);
+    vi.stubEnv("NODE_ENV", "production");
+    expect(loadConfig().printerErrorReporting).toEqual({
+      enabled: false,
+      dsn: null,
+      environment: "production",
+    });
+  });
+
   it("does not require an unused session secret for self-host single-user auth", () => {
     const previous = {
       NODE_ENV: process.env.NODE_ENV,

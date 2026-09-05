@@ -42,6 +42,8 @@ import {
 } from "../services/unattributed-print-store.js";
 import { AcceptedPlanOperationalIntegrityError } from "../db/accepted-plan-operational.js";
 import { loadFleet, parsePrinterMachine, saveFleet } from "../services/printer-fleet.js";
+import { MAX_CLASSIFIABLE_BYTES } from "../lib/print-file-classification.js";
+import * as printerErrorReporting from "../services/printer-error-reporting.js";
 
 const cleanup: Array<() => Promise<void>> = [];
 
@@ -957,6 +959,196 @@ describe("printer progress route", () => {
     expect(assigned.json().detail).toContain("upload the file");
     expect(assigned.json().detail).not.toContain("printer's storage");
     expect(loadPrinterCheckoffLinks(repo)).toEqual([]);
+  });
+
+  it("previews a steadily progressing remote file beyond 30 seconds without recording a print", async () => {
+    const { app, repo, plan } = await setup();
+    saveFleet(repo, [parsePrinterMachine({
+      id: "core-one",
+      name: "Core One",
+      model: "Custom",
+      bed_width_mm: 250,
+      bed_depth_mm: 210,
+      max_filament_slots: 1,
+      loaded_filaments: [],
+      integration_id: "prusa-1",
+    })]);
+    const before = repo.readAcceptedPlanOperationalSnapshot(plan.id);
+    const bytes = bgcode([{ payload: 42 }]);
+    const cancel = vi.fn();
+    let receivedChunks = 0;
+    let elapsedMs = 0;
+    const startedAt = Date.now();
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => startedAt + elapsedMs);
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/status")) return response({ printer: { state: "IDLE" } });
+      if (url.endsWith("/api/v1/storage")) {
+        return response({ storage_list: [{ path: "usb", available: true }] });
+      }
+      if (url.endsWith("/api/v1/files/usb/")) {
+        return response({
+          children: [{ name: "bracket.bgcode", type: "PRINT_FILE", size: bytes.byteLength }],
+        });
+      }
+      if (url.endsWith("/api/v1/files/usb/bracket.bgcode")) {
+        return response({ refs: { download: "/api/v1/files/usb/bracket.bgcode/raw" } });
+      }
+      if (url.endsWith("/raw")) {
+        let offset = 0;
+        return new Response(new ReadableStream<Uint8Array>({
+          pull(controller) {
+            elapsedMs += 10_000;
+            receivedChunks += 1;
+            controller.enqueue(bytes.subarray(offset, offset + 10));
+            offset += 10;
+            if (offset >= bytes.byteLength) controller.close();
+          },
+          cancel,
+        }, { highWaterMark: 0 }));
+      }
+      throw new Error(`unexpected host call ${url}`);
+    }));
+
+    try {
+      const preview = await app.inject({
+        method: "POST",
+        url: "/printer-checkoff/file-assignments/preview",
+        payload: {
+          profile_id: plan.id,
+          printer_id: "core-one",
+          filename: "bracket.bgcode",
+          remote_path: "bracket.bgcode",
+          object_names: ["bracket.stl"],
+        },
+      });
+
+      expect(preview.statusCode, JSON.stringify(preview.json())).toBe(200);
+      expect(preview.json()).toMatchObject({
+        inspected: true,
+        classification: { format: "bgcode" },
+        print_ready: true,
+      });
+      expect(receivedChunks).toBe(6);
+      expect(elapsedMs).toBe(60_000);
+      expect(cancel).not.toHaveBeenCalled();
+      expect(loadPrinterCheckoffLinks(repo)).toEqual([]);
+      expect(repo.readAcceptedPlanOperationalSnapshot(plan.id)).toEqual(before);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it.each(["declared", "streamed"])("cancels a %s oversized remote file without recording a print", async (sizeMode) => {
+    const { app, repo, plan } = await setup();
+    const report = vi.spyOn(printerErrorReporting, "reportPrinterFailure").mockImplementation(() => {});
+    cleanup.push(async () => { report.mockRestore(); });
+    saveFleet(repo, [parsePrinterMachine({
+      id: "core-one", name: "Core One", model: "Custom",
+      bed_width_mm: 250, bed_depth_mm: 210, max_filament_slots: 1,
+      loaded_filaments: [], integration_id: "prusa-1",
+    })]);
+    const before = repo.readAcceptedPlanOperationalSnapshot(plan.id);
+    const chunk = new Uint8Array(8 * 1024 * 1024);
+    const cancel = vi.fn();
+    let deliveredBytes = 0;
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/status")) return response({ printer: { state: "IDLE" } });
+      if (url.endsWith("/api/v1/storage")) {
+        return response({ storage_list: [{ path: "usb", available: true }] });
+      }
+      if (url.endsWith("/api/v1/files/usb/")) {
+        return response({ children: [{ name: "large.bgcode", type: "PRINT_FILE" }] });
+      }
+      if (url.endsWith("/api/v1/files/usb/large.bgcode")) {
+        return response({ refs: { download: "/api/v1/files/usb/large.bgcode/raw" } });
+      }
+      if (url.endsWith("/raw")) {
+        return new Response(new ReadableStream<Uint8Array>({
+          pull(controller) {
+            deliveredBytes += chunk.byteLength;
+            controller.enqueue(chunk);
+          },
+          cancel,
+        }, { highWaterMark: 0 }), {
+          headers: sizeMode === "declared"
+            ? { "content-length": String(MAX_CLASSIFIABLE_BYTES + 1) }
+            : {},
+        });
+      }
+      throw new Error(`unexpected host call ${url}`);
+    }));
+
+    const preview = await app.inject({
+      method: "POST",
+      url: "/printer-checkoff/file-assignments/preview",
+      payload: {
+        profile_id: plan.id,
+        printer_id: "core-one",
+        filename: "large.bgcode",
+        remote_path: "large.bgcode",
+      },
+    });
+
+    expect(preview.statusCode).toBe(409);
+    expect(preview.json().detail).toBe("That print file is too large to inspect");
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(report).not.toHaveBeenCalled();
+    expect(deliveredBytes).toBeLessThanOrEqual(MAX_CLASSIFIABLE_BYTES + chunk.byteLength);
+    expect(loadPrinterCheckoffLinks(repo)).toEqual([]);
+    expect(repo.readAcceptedPlanOperationalSnapshot(plan.id)).toEqual(before);
+  });
+
+  it.each(["http", "timeout", "transport"])("handles terminal %s inspection failure without recording a print", async (failureKind) => {
+    const { app, repo, plan } = await setup();
+    const report = vi.spyOn(printerErrorReporting, "reportPrinterFailure").mockImplementation(() => {});
+    saveFleet(repo, [parsePrinterMachine({
+      id: "core-one", name: "Core One", model: "Custom",
+      bed_width_mm: 250, bed_depth_mm: 210, max_filament_slots: 1,
+      loaded_filaments: [], integration_id: "prusa-1",
+    })]);
+    const files = getIntegrationAdapter("prusalink")?.files;
+    if (!files) throw new Error("Prusa file access is missing");
+    const before = repo.readAcceptedPlanOperationalSnapshot(plan.id);
+    const cancel = vi.fn();
+    const browse = vi.spyOn(files, "browse").mockResolvedValue({ path: "", entries: [] });
+    const open = vi.spyOn(files, "open").mockImplementation(async () => {
+      if (failureKind === "http") {
+        return new Response(new ReadableStream<Uint8Array>({ cancel }), { status: 503 });
+      }
+      const error = new Error("Private upstream error text");
+      error.name = failureKind === "timeout" ? "TimeoutError" : "Error";
+      throw error;
+    });
+
+    try {
+      const preview = await app.inject({
+        method: "POST",
+        url: "/printer-checkoff/file-assignments/preview",
+        payload: {
+          profile_id: plan.id,
+          printer_id: "core-one",
+          filename: "bracket.bgcode",
+          remote_path: "bracket.bgcode",
+        },
+      });
+      expect(preview.statusCode).toBe(200);
+      expect(preview.json()).toMatchObject({ inspected: false });
+      expect(preview.body).not.toContain("Private upstream error text");
+      if (failureKind === "http") expect(cancel).toHaveBeenCalledOnce();
+      expect(report).toHaveBeenCalledExactlyOnceWith({
+        operation: "inspect",
+        failure: failureKind === "timeout" ? "timeout" : "upstream_error",
+        ...(failureKind === "http" ? { status: 503 } : {}),
+      });
+      expect(loadPrinterCheckoffLinks(repo)).toEqual([]);
+      expect(repo.readAcceptedPlanOperationalSnapshot(plan.id)).toEqual(before);
+    } finally {
+      browse.mockRestore();
+      open.mockRestore();
+      report.mockRestore();
+    }
   });
 
   it("refuses a slicer-project 3MF read off a real host, whatever the client claims", async () => {

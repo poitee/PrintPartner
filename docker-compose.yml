@@ -24,6 +24,9 @@ services:
       SINGLE_USER_AUTH: "${SINGLE_USER_AUTH:-0}"
       SESSION_SECRET: "${SESSION_SECRET:-}"
       SESSION_COOKIE_SECURE: "${SESSION_COOKIE_SECURE:-0}"
+      SENTRY_ENABLED: "${SENTRY_ENABLED:-0}"
+      SENTRY_DSN: "${SENTRY_DSN:-}"
+      SENTRY_ENVIRONMENT: "${SENTRY_ENVIRONMENT:-production}"
       # Optional: require API key for /api/v1 automation (slicers, scripts)
       # PRINT_PARTNER_API_KEY: "change-me-to-a-long-random-secret"
       # Optional: expose Swagger UI at /api/v1/docs in production (useful for integrations and MCP tool testing)
