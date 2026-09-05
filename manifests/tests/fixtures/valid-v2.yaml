@@ -22,6 +22,20 @@ option_groups:
       - id: addon
         parts:
           - "**/addon/**"
+  extras:
+    rule: pick_any
+    variants:
+      - id: skirts
+        parts:
+          - "**/skirts/**"
+      - id: panels
+        parts:
+          - "**/panels/**"
+selections:
+  toolhead: addon
+  extras:
+    - skirts
+    - panels
 parts:
   - match: "**/*.stl"
     requirement: required
