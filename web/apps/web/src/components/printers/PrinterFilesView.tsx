@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronRight, FileCode2, Folder, FolderOpen, RefreshCw, Search, Upload } from "lucide-react";
 import type {
   PrinterStorageEntry,
@@ -9,6 +9,7 @@ import type { PrinterCheckoffLink } from "../../api/endpoints/checkoff";
 import {
   fetchPrinterStorageListing,
   openPrinterStoredFile,
+  openPrinterStoredFileForAssignment,
   type PrinterMachine,
 } from "../../api/endpoints/printers";
 import type { IntegrationSummary } from "../../api/endpoints/integrations";
@@ -29,6 +30,7 @@ type Props = {
   profiles: ProfileSummary[];
   selectedProfileId: number | null;
   onAssigned: (link: PrinterCheckoffLink) => void;
+  pastPrint?: boolean;
 };
 
 type FileSource = "printer" | "computer";
@@ -36,7 +38,7 @@ type FileSource = "printer" | "computer";
 /** Reading a file's bytes and object labels, before any Build is involved. */
 type InspectState =
   | { phase: "idle" }
-  | { phase: "running"; label: string }
+  | { phase: "running"; label: string; receivedBytes?: number; totalBytes?: number }
   | { phase: "failed"; title: string; message: string; retry: () => void };
 
 const PRINT_FILE_PATTERN = /\.(?:gcode|gco|bgcode|3mf)$/i;
@@ -55,18 +57,30 @@ export default function PrinterFilesView({
   profiles,
   selectedProfileId,
   onAssigned,
+  pastPrint = false,
 }: Props) {
   const [source, setSource] = useState<FileSource>(canBrowse ? "printer" : "computer");
   const [chosen, setChosen] = useState<ChosenPrintFile | null>(null);
   const [inspect, setInspect] = useState<InspectState>({ phase: "idle" });
+  const activeRead = useRef<AbortController | null>(null);
+  const resultPanel = useRef<HTMLDivElement>(null);
+  useEffect(() => () => activeRead.current?.abort(), []);
+  useEffect(() => {
+    if (inspect.phase !== "idle") resultPanel.current?.focus();
+  }, [inspect.phase]);
 
   const inspectFile = async (file: File, remotePath?: string) => {
+    const controller = new AbortController();
+    activeRead.current?.abort();
+    activeRead.current = controller;
     setInspect({ phase: "running", label: file.name });
     try {
       const parsed = await parseSlicedObjectsFile(file);
+      if (controller.signal.aborted) return;
       setChosen({ file, remotePath, objectNames: parsed.names });
       setInspect({ phase: "idle" });
     } catch (error) {
+      if (controller.signal.aborted) return;
       setInspect({
         phase: "failed",
         title: `Could not read ${file.name}`,
@@ -77,13 +91,28 @@ export default function PrinterFilesView({
   };
 
   const openStoredFile = async (storedFile: PrinterStoredFile) => {
+    const controller = new AbortController();
+    activeRead.current?.abort();
+    activeRead.current = controller;
     setInspect({ phase: "running", label: storedFile.name });
     try {
-      const file = await openPrinterStoredFile({ printerId: printer.id, file: storedFile });
+      const options = {
+        printerId: printer.id, file: storedFile, signal: controller.signal,
+        onProgress: (progress: { receivedBytes: number; totalBytes?: number }) => {
+          if (!controller.signal.aborted) setInspect({ phase: "running", label: storedFile.name, ...progress });
+        },
+      };
+      const opened = pastPrint && selectedProfileId !== null
+        ? await openPrinterStoredFileForAssignment({ ...options, profileId: selectedProfileId })
+        : { file: await openPrinterStoredFile(options), snapshotToken: undefined };
+      const { file, snapshotToken } = opened;
+      if (controller.signal.aborted) return;
       const parsed = await parseSlicedObjectsFile(file);
-      setChosen({ file, remotePath: storedFile.path, objectNames: parsed.names });
+      if (controller.signal.aborted) return;
+      setChosen({ file, remotePath: storedFile.path, snapshotToken, objectNames: parsed.names });
       setInspect({ phase: "idle" });
     } catch (error) {
+      if (controller.signal.aborted) return;
       setInspect({
         phase: "failed",
         title: `Could not open ${storedFile.name}`,
@@ -94,10 +123,11 @@ export default function PrinterFilesView({
   };
 
   const busy = inspect.phase === "running";
+  const browsing = inspect.phase === "idle" && !chosen;
 
   return (
-    <div className="stack-section">
-      {canBrowse ? (
+    <div className="stack-section" ref={resultPanel} tabIndex={-1}>
+      {canBrowse && browsing ? (
         <div className="stack-row rounded-lg border border-border bg-surface-sunken p-3">
           <p className="text-body font-medium">Where is the file?</p>
           <SegmentedControl
@@ -120,7 +150,7 @@ export default function PrinterFilesView({
         </div>
       ) : null}
 
-      {source === "printer" && canBrowse ? (
+      {browsing ? source === "printer" && canBrowse ? (
         <StorageBrowser
           printer={printer}
           busy={busy}
@@ -128,21 +158,37 @@ export default function PrinterFilesView({
         />
       ) : (
         <LocalFilePicker busy={busy} onPick={(file) => void inspectFile(file)} />
-      )}
+      ) : null}
 
       {inspect.phase === "running" ? (
+        <div className="stack-section rounded-lg border border-border p-4">
         <p className="text-body text-muted-foreground" role="status">
           Reading {inspect.label}…
         </p>
+        <p className="text-meta text-muted-foreground">Large files can take several minutes. Nothing is being sent to the printer.</p>
+        {inspect.receivedBytes !== undefined ? (
+          <p className="text-meta" role="status">
+            {(inspect.receivedBytes / 1024 / 1024).toFixed(1)} MB received
+            {inspect.totalBytes ? ` of ${(inspect.totalBytes / 1024 / 1024).toFixed(1)} MB` : ""}
+          </p>
+        ) : null}
+        <Button variant="outline" onClick={() => {
+          activeRead.current?.abort();
+          setInspect({ phase: "idle" });
+        }}>Cancel reading</Button>
+        </div>
       ) : null}
 
       {inspect.phase === "failed" ? (
+        <div className="stack-section">
         <InlineOperationError
           title={inspect.title}
           message={inspect.message}
           onRetry={inspect.retry}
           retryLabel="Try again"
         />
+        <Button variant="outline" onClick={() => setInspect({ phase: "idle" })}>Choose another file</Button>
+        </div>
       ) : null}
 
       {chosen ? (

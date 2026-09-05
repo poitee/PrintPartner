@@ -78,6 +78,7 @@ import {
   MAX_CLASSIFIABLE_BYTES,
 } from "../lib/print-file-classification.js";
 import { MAX_PRINT_FILE_UPLOAD_BYTES as MAX_UPLOAD_BYTES } from "../services/upload-limits.js";
+import { readPrinterFileSnapshot, consumePrinterFileSnapshot } from "../services/printer-file-snapshots.js";
 
 type RouteDeps = {
   repo: AppRepository;
@@ -448,6 +449,7 @@ type PrintFileRequest =
       /** Where the bytes came from. A file has one source or none, never two. */
       remotePath?: string;
       uploadToken?: string;
+      snapshotToken?: string;
       objectNames: string[];
       integrationId: string;
     }
@@ -538,6 +540,7 @@ function parsePrintFileRequest(repo: AppRepository, raw: unknown): PrintFileRequ
     filename?: unknown;
     remote_path?: unknown;
     upload_token?: unknown;
+    snapshot_token?: unknown;
     object_names?: unknown;
     tracking?: unknown;
   };
@@ -565,6 +568,10 @@ function parsePrintFileRequest(repo: AppRepository, raw: unknown): PrintFileRequ
   if (remotePath && uploadToken) {
     return invalid("Send remote_path or upload_token, not both");
   }
+  const snapshotToken = typeof body.snapshot_token === "string" ? body.snapshot_token.trim() : undefined;
+  if (body.snapshot_token !== undefined && (!snapshotToken || !remotePath || uploadToken)) {
+    return invalid("A snapshot token requires its original printer file path");
+  }
   const printer = resolveAssignmentPrinter(repo, {
     printerId: typeof body.printer_id === "string" ? body.printer_id.trim() : "",
     tracking: body.tracking,
@@ -579,6 +586,7 @@ function parsePrintFileRequest(repo: AppRepository, raw: unknown): PrintFileRequ
     filename,
     remotePath,
     uploadToken,
+    snapshotToken,
     objectNames: Array.isArray(body.object_names)
       ? body.object_names
           .filter((value): value is string => typeof value === "string")
@@ -601,6 +609,12 @@ async function inspectPrintFile(
   repo: AppRepository,
   parsed: ParsedPrintFileRequest,
 ): Promise<PrintFileInspection> {
+  if (parsed.snapshotToken && parsed.remotePath) {
+    return readPrinterFileSnapshot(repo, parsed.snapshotToken, {
+      profileId: parsed.profileId, printerId: parsed.printerId,
+      remotePath: parsed.remotePath, filename: parsed.filename,
+    }) ?? { outcome: "rejected", detail: "This file preview expired or its source changed. Cancel and reopen the file." };
+  }
   if (parsed.remotePath) return inspectRemoteFile(repo, parsed.integrationId, parsed.remotePath);
   if (parsed.uploadToken) return inspectUploadedFile(parsed.uploadToken, parsed.profileId);
   return { outcome: "unreadable" };
@@ -1230,7 +1244,7 @@ export async function registerPrinterCheckoffRoutes(
         }
         classification = inspection.classification;
         remoteIdentity = inspection.identity;
-        if (parsed.remotePath) {
+        if (parsed.remotePath && !parsed.snapshotToken) {
           // Another link may already point at this path. Re-observing it here
           // is what turns a changed provider file into recorded drift. An
           // upload has no path to drift against, so there is nothing to record.
@@ -1297,6 +1311,7 @@ export async function registerPrinterCheckoffRoutes(
       // The link now carries everything the bytes said, so the copy PrintPartner
       // was holding has no reader left.
       if (parsed.uploadToken) pendingUploads.delete(parsed.uploadToken);
+      if (parsed.snapshotToken) consumePrinterFileSnapshot(deps.repo, parsed.snapshotToken);
       if (body.completed !== true) {
         return { link: materialized.link, attribution: materialized.attribution };
       }

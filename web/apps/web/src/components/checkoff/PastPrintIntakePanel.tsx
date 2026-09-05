@@ -340,6 +340,7 @@ export default function PastPrintIntakePanel({
                   puts it in front of you in Checkoff.
                 </p>
                 <PrinterFilesView
+                  pastPrint
                   key={chosen.printer.id}
                   printer={chosen.printer}
                   host={chosen.host}

@@ -325,6 +325,7 @@ export async function previewPrinterFileAssignment(options: {
   printer_id: string;
   filename: string;
   remote_path?: string;
+  snapshot_token?: string;
   object_names: string[];
 }): Promise<PrintFileAssignmentPreview> {
   return parsePrintFileAssignmentPreview(
@@ -361,7 +362,7 @@ export type PrintFileAssignmentBase = {
  * are `${part_id}:${unit_index}` and may be empty when nothing maps yet.
  */
 export async function assignPrinterFile(
-  options: PrintFileAssignmentBase & { printer_id: string; remote_path?: string },
+  options: PrintFileAssignmentBase & { printer_id: string; remote_path?: string; snapshot_token?: string },
 ): Promise<{ link: PrinterCheckoffLink }> {
   return engineFetch("/printer-checkoff/file-assignments", {
     method: "POST",

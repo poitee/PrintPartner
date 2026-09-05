@@ -29,6 +29,8 @@ import type {
 import { sendProblem } from "../lib/api-error.js";
 import { cancelResponseBody } from "../lib/bounded-response.js";
 import { getLogger } from "../services/logger.js";
+import { capturePrinterFile, printerFileSnapshotSource } from "../services/printer-file-snapshots.js";
+import { printerStoredFileIdentity } from "../services/printer-checkoff.js";
 
 type RouteDeps = { repo: AppRepository };
 
@@ -202,10 +204,14 @@ export async function registerPrinterRoutes(app: FastifyInstance, deps: RouteDep
     },
   );
 
-  app.get<{ Params: { id: string }; Querystring: { path?: unknown } }>(
+  app.get<{ Params: { id: string }; Querystring: { path?: unknown; profile_id?: unknown } }>(
     "/printers/:id/files/content",
     { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } },
     async (request, reply) => {
+      const profileId = request.query.profile_id === undefined ? undefined : Number(request.query.profile_id);
+      if (profileId !== undefined && (!Number.isInteger(profileId) || profileId <= 0 || !deps.repo.getProfileHeader(profileId))) {
+        return sendProblem(reply, 400, "Bad Request", "Choose an existing Build before opening a print file");
+      }
       const requested = String(request.query.path ?? "").trim();
       if (!requested) return sendProblem(reply, 400, "Bad Request", "path is required");
       const filePath = safeStoragePath(requested, { trimTrailing: true });
@@ -225,14 +231,27 @@ export async function registerPrinterRoutes(app: FastifyInstance, deps: RouteDep
         failure: { log: "Printer file open failed", detail: "Could not open printer file" },
         use: async (files, config) => {
           const startedAt = Date.now();
+          const snapshotSource = profileId === undefined ? null : printerFileSnapshotSource(deps.repo, request.params.id);
           // Only open something the host actually listed, so a crafted path
           // cannot reach a file outside the browsable storage tree.
           const listing = await files.browse(config, directory);
-          const listed = listing.entries.some(
+          const listed = listing.entries.find(
             (entry) => entry.kind === "file" && entry.path === filePath,
           );
           if (!listed) return sendProblem(reply, 404, "Not Found", "Printer file not found");
-          const response = await files.open(config, filePath);
+          let response = await files.open(config, filePath);
+          if (request.raw.aborted || reply.raw.destroyed) {
+            await cancelResponseBody(response);
+            return reply;
+          }
+          if (profileId !== undefined && listed.kind === "file" && response.ok && response.body) {
+            const captured = capturePrinterFile(deps.repo, {
+              profileId, printerId: request.params.id, remotePath: filePath, filename: listed.name,
+            }, printerStoredFileIdentity(listed), response, snapshotSource);
+            response = captured.response;
+            reply.header("X-PrintPartner-Snapshot", captured.token);
+            reply.header("Access-Control-Expose-Headers", "X-PrintPartner-Snapshot");
+          }
           return sendUpstreamResponse(reply, response, (error) => {
             if (request.raw.aborted || reply.raw.destroyed) return;
             const failure = error.name === "TimeoutError" ? "timeout" : "stream_interrupted";
