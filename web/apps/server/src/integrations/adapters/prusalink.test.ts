@@ -72,6 +72,31 @@ function storageFetchMock({ downloadRef = "/api/files/local/jobs/BRACK~1.BGC/raw
   });
 }
 
+function useFakeDownloadClock() {
+  vi.useFakeTimers();
+  const nativeTimeout = AbortSignal.timeout;
+  vi.spyOn(AbortSignal, "timeout").mockImplementation((milliseconds) => {
+    if (milliseconds !== 120_000) return nativeTimeout(milliseconds);
+    const controller = new AbortController();
+    setTimeout(() => {
+      controller.abort(new DOMException("The operation timed out", "TimeoutError"));
+    }, milliseconds);
+    return controller.signal;
+  });
+}
+
+function stubDownloadResponse(response: (signal: AbortSignal) => Response) {
+  const fallback = storageFetchMock();
+  vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input, init) => {
+    if (!String(input).endsWith("/api/files/local/jobs/BRACK~1.BGC/raw")) {
+      return fallback(input);
+    }
+    const signal = init?.signal;
+    if (!signal) throw new Error("The download request must have an abort signal");
+    return response(signal);
+  }));
+}
+
 describe("prusalinkAdapter", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -366,6 +391,166 @@ describe("prusalinkAdapter", () => {
     expect(fetchMock.mock.calls.some((call) =>
       String(call[0]).endsWith("/api/files/local/jobs/BRACK~1.BGC/raw"),
     )).toBe(true);
+  });
+
+  it("keeps a progressing file download alive beyond two minutes", async () => {
+    useFakeDownloadClock();
+    stubDownloadResponse((signal) => {
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          let sent = 0;
+          const timer = setInterval(() => {
+            controller.enqueue(new TextEncoder().encode("gcode-chunk\n"));
+            sent += 1;
+            if (sent === 13) {
+              clearInterval(timer);
+              controller.close();
+            }
+          }, 10_000);
+          signal.addEventListener("abort", () => {
+            clearInterval(timer);
+            controller.error(signal.reason);
+          }, { once: true });
+        },
+      }));
+    });
+
+    try {
+      const response = await prusalinkAdapter.files!.open(prusaConfig, "jobs/BRACK~1.BGC");
+      if (!response.body) throw new Error("The download must contain a response body");
+      const reader = response.body.getReader();
+      const chunks: string[] = [];
+      const finished = (async () => {
+        for (;;) {
+          const chunk = await reader.read();
+          if (chunk.done) return chunks.join("");
+          chunks.push(new TextDecoder().decode(chunk.value));
+        }
+      })().then(
+        (body) => ({ kind: "complete", body }),
+        (error: unknown) => ({ kind: "failed", error }),
+      );
+
+      await vi.advanceTimersByTimeAsync(119_000);
+      expect(chunks).toHaveLength(11);
+      await vi.advanceTimersByTimeAsync(11_000);
+
+      expect(await finished).toEqual({
+        kind: "complete",
+        body: "gcode-chunk\n".repeat(13),
+      });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("times out a stalled file body even when it emits empty chunks", async () => {
+    useFakeDownloadClock();
+    stubDownloadResponse((signal) => new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        const timer = setInterval(() => controller.enqueue(new Uint8Array()), 10_000);
+        signal.addEventListener("abort", () => {
+          clearInterval(timer);
+          controller.error(signal.reason);
+        }, { once: true });
+      },
+    })));
+    try {
+      const response = await prusalinkAdapter.files!.open(prusaConfig, "jobs/BRACK~1.BGC");
+      const result = response.arrayBuffer().then(
+        () => ({ kind: "complete" }),
+        (error: unknown) => ({ kind: "failed", error }),
+      );
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(await result).toEqual({
+        kind: "failed",
+        error: expect.objectContaining({ name: "TimeoutError" }),
+      });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("aborts the download and clears its idle timer when the caller cancels", async () => {
+    useFakeDownloadClock();
+    const cancelled = vi.fn();
+    let downloadSignal: AbortSignal | undefined;
+    stubDownloadResponse((signal) => {
+      downloadSignal = signal;
+      return new Response(new ReadableStream<Uint8Array>({ cancel: cancelled }));
+    });
+    try {
+      const response = await prusalinkAdapter.files!.open(prusaConfig, "jobs/BRACK~1.BGC");
+      await response.body!.cancel("User stopped");
+      expect(cancelled).toHaveBeenCalledWith("User stopped");
+      expect(downloadSignal?.aborted).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(cancelled).toHaveBeenCalledOnce();
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a recent print file and navigable folders after 500 older directory entries", async () => {
+    const latestName = "idler_housing_x2_0.4n_0.2mm_ASA_COREONE_6h33m.bgcode";
+    const fallback = storageFetchMock();
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      if (String(input).endsWith("/api/v1/files/local/")) {
+        return jsonResponse({
+          type: "FOLDER",
+          children: [
+            { name: "jobs", type: "FOLDER" },
+            { name: "archive", type: "FOLDER" },
+            ...Array.from({ length: 498 }, (_, index) => ({
+              name: `OLD${index}.BGC`,
+              display_name: `older-print-${index}.bgcode`,
+              type: "PRINT_FILE",
+              m_timestamp: Date.parse("2026-05-26T00:00:00.000Z") / 1_000,
+            })),
+            {
+              name: "IDLER~1.BGC",
+              display_name: latestName,
+              type: "PRINT_FILE",
+              m_timestamp: Date.parse("2026-09-06T00:00:00.000Z") / 1_000,
+            },
+            { name: "new-jobs", type: "FOLDER" },
+          ],
+        });
+      }
+      if (String(input).endsWith("/api/v1/files/local/new-jobs")) {
+        return jsonResponse({
+          type: "FOLDER",
+          children: [{ name: "BRACKET.GCO", display_name: "bracket.gcode", type: "PRINT_FILE" }],
+        });
+      }
+      return fallback(input);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const listing = await prusalinkAdapter.files!.browse(prusaConfig, "");
+
+    expect(listing.entries.find((entry) => entry.path === "IDLER~1.BGC")).toEqual({
+      kind: "file",
+      path: "IDLER~1.BGC",
+      name: latestName,
+      modified_at: "2026-09-06T00:00:00.000Z",
+    });
+    expect(listing.entries.find((entry) => entry.path === "new-jobs")).toEqual({
+      kind: "directory",
+      path: "new-jobs",
+      name: "new-jobs",
+    });
+    expect(listing.entries).toHaveLength(502);
+    expect(await prusalinkAdapter.files!.browse(prusaConfig, "new-jobs")).toEqual({
+      path: "new-jobs",
+      entries: [{ kind: "file", path: "new-jobs/BRACKET.GCO", name: "bracket.gcode" }],
+    });
   });
 
   it("rejects traversal, backslash, and NUL paths before any request", async () => {

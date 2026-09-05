@@ -28,6 +28,7 @@ import type {
 } from "@print-partner/contracts";
 import { sendProblem } from "../lib/api-error.js";
 import { cancelResponseBody } from "../lib/bounded-response.js";
+import { getLogger } from "../services/logger.js";
 
 type RouteDeps = { repo: AppRepository };
 
@@ -77,7 +78,11 @@ function publicCapabilityError(
   return sendProblem(reply, 503, "Service Unavailable", "Printer host is unavailable");
 }
 
-async function sendUpstreamResponse(reply: FastifyReply, response: Response) {
+async function sendUpstreamResponse(
+  reply: FastifyReply,
+  response: Response,
+  onStreamError?: (error: Error) => void,
+) {
   if (!response.ok || !response.body) {
     await cancelResponseBody(response);
     return sendProblem(
@@ -94,7 +99,9 @@ async function sendUpstreamResponse(reply: FastifyReply, response: Response) {
   if (contentType) reply.header("Content-Type", contentType);
   if (contentLength) reply.header("Content-Length", contentLength);
   reply.header("Cache-Control", "private, no-store");
-  return reply.send(Readable.fromWeb(response.body));
+  const stream = Readable.fromWeb(response.body);
+  if (onStreamError) stream.once("error", onStreamError);
+  return reply.send(stream);
 }
 
 /**
@@ -217,6 +224,7 @@ export async function registerPrinterRoutes(app: FastifyInstance, deps: RouteDep
           sendProblem(reply, 501, "Not Implemented", "Printer host does not support file browsing"),
         failure: { log: "Printer file open failed", detail: "Could not open printer file" },
         use: async (files, config) => {
+          const startedAt = Date.now();
           // Only open something the host actually listed, so a crafted path
           // cannot reach a file outside the browsable storage tree.
           const listing = await files.browse(config, directory);
@@ -224,7 +232,23 @@ export async function registerPrinterRoutes(app: FastifyInstance, deps: RouteDep
             (entry) => entry.kind === "file" && entry.path === filePath,
           );
           if (!listed) return sendProblem(reply, 404, "Not Found", "Printer file not found");
-          return sendUpstreamResponse(reply, await files.open(config, filePath));
+          const response = await files.open(config, filePath);
+          return sendUpstreamResponse(reply, response, (error) => {
+            if (request.raw.aborted || reply.raw.destroyed) return;
+            const failure = error.name === "TimeoutError" ? "timeout" : "stream_interrupted";
+            getLogger().logWorkflow({
+              method: "GET",
+              url: "/printers/:id/files/content",
+              statusCode: reply.statusCode,
+              duration: Date.now() - startedAt,
+              severity: "error",
+              message: "Printer file download interrupted",
+              context: {
+                printerId: request.params.id,
+                failure,
+              },
+            });
+          });
         },
       });
     },

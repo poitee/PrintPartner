@@ -23,6 +23,7 @@ import { encodeStoragePath, joinStoragePath, safeStoragePath } from "./storage-p
 const MAX_METADATA_RESPONSE_BYTES = 2 * 1024 * 1024;
 const MAX_DIRECTORY_RESPONSE_BYTES = 8 * 1024 * 1024;
 const MAX_ERROR_RESPONSE_BYTES = 64 * 1024;
+const FILE_DOWNLOAD_IDLE_MS = 120_000;
 
 function normalizeBaseUrl(raw: unknown): string | null {
   if (typeof raw !== "string" || !raw.trim()) return null;
@@ -133,6 +134,75 @@ async function prusalinkFetch(
   }
 
   return res;
+}
+
+async function downloadPrintFile(url: string, config: IntegrationConfig): Promise<Response> {
+  const abortController = new AbortController();
+  let idleTimer: ReturnType<typeof setTimeout> | undefined;
+  let finished = false;
+  const finish = () => {
+    finished = true;
+    clearTimeout(idleTimer);
+  };
+  const resetIdleTimer = () => {
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      abortController.abort(new DOMException(
+        "PrusaLink download received no data for 120 seconds",
+        "TimeoutError",
+      ));
+    }, FILE_DOWNLOAD_IDLE_MS);
+    idleTimer.unref();
+  };
+
+  resetIdleTimer();
+  try {
+    const response = await prusalinkFetch(url, config, { signal: abortController.signal });
+    if (!response.body) {
+      finish();
+      return response;
+    }
+    const reader = response.body.getReader();
+    const body = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        try {
+          const chunk = await reader.read();
+          if (finished) return;
+          if (chunk.done) {
+            finish();
+            reader.releaseLock();
+            controller.close();
+            return;
+          }
+          if (chunk.value.byteLength > 0) resetIdleTimer();
+          controller.enqueue(chunk.value);
+        } catch (error) {
+          if (finished) return;
+          finish();
+          reader.releaseLock();
+          controller.error(error);
+        }
+      },
+      async cancel(reason: unknown) {
+        finish();
+        const cancelled = reader.cancel(reason);
+        abortController.abort(reason);
+        try {
+          await cancelled;
+        } finally {
+          reader.releaseLock();
+        }
+      },
+    });
+    return new Response(body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    });
+  } catch (error) {
+    finish();
+    throw error;
+  }
 }
 
 function mapPrinterState(raw: string | undefined): PrinterHostStatus["state"] {
@@ -382,9 +452,6 @@ function displayName(row: PrusaFileInfo): string {
   return typeof row.name === "string" ? row.name.trim() : "";
 }
 
-/** One directory is one screen for an operator, so one response is bounded too. */
-const MAX_STORAGE_ENTRIES = 500;
-
 /**
  * The provider storage prefix that browsing and downloading resolve against.
  *
@@ -456,7 +523,6 @@ async function browseStorage(
 
   const entries: PrinterStorageEntry[] = [];
   for (const child of children) {
-    if (entries.length >= MAX_STORAGE_ENTRIES) break;
     // A child name is one segment. Anything else is the printer reporting a
     // path where a name belongs, and it is not this directory's to serve.
     const name = typeof child.name === "string"
@@ -571,9 +637,7 @@ export const prusalinkAdapter: IntegrationAdapter = {
       if (new URL(downloadUrl).origin !== new URL(baseUrl).origin) {
         throw new Error("PrusaLink advertised a cross-origin download URL");
       }
-      return prusalinkFetch(downloadUrl, config, {
-        signal: AbortSignal.timeout(120_000),
-      });
+      return downloadPrintFile(downloadUrl, config);
     },
   },
 

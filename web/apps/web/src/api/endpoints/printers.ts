@@ -3,7 +3,7 @@ import type {
   PrinterStorageListing,
   PrinterStoredFile,
 } from "@print-partner/contracts";
-import { engineFetch, engineFetchStream } from "../engineTransport";
+import { EngineHttpError, engineFetch, engineFetchStream } from "../engineTransport";
 import { resolveEngineUrl } from "../contractRequest";
 
 export type PrinterMachine = {
@@ -149,10 +149,20 @@ export async function openPrinterStoredFile(options: {
   file: PrinterStoredFile;
 }): Promise<File> {
   const params = new URLSearchParams({ path: options.file.path });
-  const response = await engineFetchStream({
-    path: `/printers/${encodeURIComponent(options.printerId)}/files/content?${params}`,
-  });
-  const blob = await response.blob();
+  let blob: Blob;
+  try {
+    const response = await engineFetchStream({
+      path: `/printers/${encodeURIComponent(options.printerId)}/files/content?${params}`,
+      failureMessage: "Could not download the printer file",
+    });
+    blob = await response.blob();
+  } catch (error) {
+    if (error instanceof EngineHttpError) throw error;
+    throw new Error(
+      "The printer file download was interrupted. Try again, or upload the file from your computer.",
+      { cause: error },
+    );
+  }
   const modified = options.file.modified_at ? Date.parse(options.file.modified_at) : Number.NaN;
   return new File([blob], options.file.name, {
     type: blob.type || "application/octet-stream",
