@@ -1,0 +1,4 @@
+# Verification evidence (gitignored). Prove-it runs write here only when
+# --evidence-dir points at this folder; default evidence lives under /tmp.
+*
+!.gitignore
