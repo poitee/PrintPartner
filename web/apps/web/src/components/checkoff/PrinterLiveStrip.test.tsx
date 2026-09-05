@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import PrinterLiveStrip from "./PrinterLiveStrip";
@@ -35,6 +37,15 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+function renderWithQueryClient(children: ReactNode) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  return render(
+    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>,
+  );
+}
+
 describe("PrinterLiveStrip", () => {
   it("does not overlap reconcile polls for one printer", async () => {
     vi.useFakeTimers();
@@ -54,8 +65,9 @@ describe("PrinterLiveStrip", () => {
       },
     ]);
     api.reconcilePrinterCheckoff.mockReturnValue(new Promise(() => {}));
+    api.fetchIntegrationStatus.mockResolvedValue({ state: "idle" });
 
-    render(
+    renderWithQueryClient(
       <MemoryRouter>
         <PrinterLiveStrip engineReady />
       </MemoryRouter>,
@@ -67,6 +79,63 @@ describe("PrinterLiveStrip", () => {
     await vi.advanceTimersByTimeAsync(180_000);
 
     expect(api.reconcilePrinterCheckoff).toHaveBeenCalledTimes(1);
+    expect(api.fetchIntegrationStatus).not.toHaveBeenCalled();
+  });
+
+  it("shows a healthy reconciled host while another host poll is still running", async () => {
+    api.fetchPrinters.mockResolvedValue([
+      {
+        id: "printer-a",
+        name: "Printer A",
+        integration_id: "prusa-a",
+      },
+      {
+        id: "printer-b",
+        name: "Printer B",
+        integration_id: "prusa-b",
+      },
+    ]);
+    api.fetchIntegrations.mockResolvedValue([
+      {
+        id: "prusa-a",
+        name: "Printer A",
+        type: "prusalink",
+        config: { enabled: true },
+      },
+      {
+        id: "prusa-b",
+        name: "Printer B",
+        type: "prusalink",
+        config: { enabled: true },
+      },
+    ]);
+    api.reconcilePrinterCheckoff.mockImplementation(
+      ({ integration_id }: { integration_id: string }) => {
+        if (integration_id === "prusa-a") return new Promise(() => undefined);
+        return Promise.resolve({
+          status: { state: "printing", filename: "bracket.bgcode" },
+          updates: [],
+          created_links: [],
+          unattributed: [],
+        });
+      },
+    );
+    const onUnattributedUpdate = vi.fn();
+
+    renderWithQueryClient(
+      <MemoryRouter>
+        <PrinterLiveStrip
+          engineReady
+          onUnattributedUpdate={onUnattributedUpdate}
+        />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText("Printing bracket.bgcode")).toBeTruthy();
+    expect(api.fetchIntegrationStatus).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(onUnattributedUpdate).toHaveBeenCalledOnce();
+    });
   });
 
   it("notifies Progress when reconcile discovers a currently printing link", async () => {
@@ -108,10 +177,11 @@ describe("PrinterLiveStrip", () => {
         },
       ],
     });
+    api.fetchIntegrationStatus.mockResolvedValue({ state: "printing" });
     const onCheckoffUpdate = vi.fn();
     const onUnattributedUpdate = vi.fn();
 
-    render(
+    renderWithQueryClient(
       <MemoryRouter>
         <PrinterLiveStrip
           engineReady
@@ -165,9 +235,10 @@ describe("PrinterLiveStrip", () => {
         unattributed: integration_id === "prusa-a" ? [{ id: "print-a" }] : [],
       }),
     );
+    api.fetchIntegrationStatus.mockResolvedValue({ state: "idle" });
     const onUnattributedUpdate = vi.fn();
 
-    render(
+    renderWithQueryClient(
       <MemoryRouter>
         <PrinterLiveStrip
           engineReady

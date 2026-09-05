@@ -14,12 +14,13 @@ import { useProductionSelection } from "./useProductionSelection";
 
 const setupState = vi.hoisted(() => ({
   data: undefined as ProductionSetup | undefined,
+  save: vi.fn<(command: unknown) => Promise<unknown>>(),
 }));
 
 vi.mock("../queries/productionSetup", () => ({
   useProductionSetup: (_profileId: number | null, enabled: boolean) => ({
     data: enabled ? setupState.data : undefined,
-    save: vi.fn().mockResolvedValue(undefined),
+    save: setupState.save,
     isPending: false,
     saving: false,
     error: null,
@@ -52,6 +53,7 @@ function unit(token: RequiredUnitToken, completed = false): ProductionSelectable
 describe("useProductionSelection", () => {
   beforeEach(() => {
     setupState.data = undefined;
+    setupState.save.mockReset().mockResolvedValue(undefined);
   });
 
   it("preserves manual selection across workspace-only refetches", () => {
@@ -121,6 +123,10 @@ describe("useProductionSelection", () => {
     expect([...result.current.selection]).toEqual([first]);
 
     act(() => result.current.setSelection(new Set([second])));
+    expect(setupState.save).toHaveBeenCalledWith({
+      kind: "set_selection",
+      selection: { mode: "custom", selected_unit_tokens: [second] },
+    });
     setupState.data = {
       ...setupState.data,
       selection: { mode: "custom", selected_unit_tokens: [second] },

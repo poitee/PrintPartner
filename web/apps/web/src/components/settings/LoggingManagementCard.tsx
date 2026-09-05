@@ -241,12 +241,15 @@ export default function LoggingManagementCard() {
 
           <div className="flex items-center justify-between">
             <div>
-              <label className="text-sm font-medium">Workflow Tracking</label>
+              <label className="text-sm font-medium" htmlFor="workflow-tracking">
+                Workflow Tracking
+              </label>
               <p className="text-xs text-muted-foreground mt-1">
                 Track HTTP requests and integration events
               </p>
             </div>
             <Switch
+              id="workflow-tracking"
               checked={config.enableWorkflowTracking}
               onCheckedChange={(checked) =>
                 handleConfigChange({ enableWorkflowTracking: checked })

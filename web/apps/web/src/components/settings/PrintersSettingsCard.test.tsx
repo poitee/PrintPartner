@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import type { ReactNode } from "react";
 import type { IntegrationSummary } from "../../api/endpoints/integrations";
 import type { PrinterDetailsInput, PrinterMachine } from "../../api/endpoints/printers";
 import PrintersSettingsCard from "./PrintersSettingsCard";
@@ -64,6 +66,15 @@ vi.mock("../../api/endpoints/printers", () => ({
 vi.mock("../../api/endpoints/slicers", () => ({
   fetchSlicerProfileOptions: api.fetchSlicerProfileOptions,
 }));
+
+function renderWithQueryClient(children: ReactNode) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  return render(
+    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>,
+  );
+}
 
 afterEach(cleanup);
 
@@ -152,7 +163,7 @@ describe("PrintersSettingsCard", () => {
       return next;
     });
 
-    render(<PrintersSettingsCard engineReady />);
+    renderWithQueryClient(<PrintersSettingsCard engineReady />);
 
     fireEvent.change(await screen.findByLabelText("Name"), {
       target: { value: "Shop Voron" },
@@ -232,7 +243,7 @@ describe("PrintersSettingsCard", () => {
       },
     );
 
-    render(<PrintersSettingsCard engineReady />);
+    renderWithQueryClient(<PrintersSettingsCard engineReady />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Edit printer" }));
     expect(
@@ -363,7 +374,7 @@ describe("PrintersSettingsCard", () => {
     );
     api.updateIntegration.mockResolvedValue(undefined);
 
-    render(<PrintersSettingsCard engineReady />);
+    renderWithQueryClient(<PrintersSettingsCard engineReady />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Edit printer" }));
     const preset = screen.getByLabelText<HTMLSelectElement>("Edit printer preset");

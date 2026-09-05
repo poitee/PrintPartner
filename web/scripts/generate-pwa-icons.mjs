@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-/* eslint-disable no-undef -- standalone Node asset generator, not part of the app build. */
 /**
  * Rasterise the PWA icons from their SVG sources.
  *
@@ -15,6 +14,7 @@
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 import { browserExecutable } from "../apps/web/test/browser/browserExecutable.mjs";
@@ -51,7 +51,7 @@ try {
     const shot = await page.locator("svg").screenshot({ omitBackground: true });
     writeFileSync(join(dir, out), shot);
     await page.close();
-    console.log(`${join(dir, out)}  ${size}x${size}  ${shot.length} bytes`);
+    process.stdout.write(`${join(dir, out)}  ${size}x${size}  ${shot.length} bytes\n`);
   }
 } finally {
   await browser.close();

@@ -13,8 +13,6 @@ export function useProductionSelection(
   persist = true,
 ) {
   const setup = useProductionSetup(profileId, persist);
-  const setupRef = useRef(setup.data);
-  setupRef.current = setup.data;
   const identity = `${profileId ?? ""}:${select ?? ""}:${setup.data ? "ready" : "loading"}:${units.map((unit) => unit.token).sort().join(",")}`;
   const previousIdentity = useRef(identity);
   const [selection, setSelection] = useState<ReadonlySet<RequiredUnitToken>>(() =>
@@ -45,13 +43,10 @@ export function useProductionSelection(
   const setPersistedSelection = useCallback((action: SetStateAction<ReadonlySet<RequiredUnitToken>>) => {
     setSelection((current) => {
       const next = typeof action === "function" ? action(current) : action;
-      const currentSetup = setupRef.current;
-      if (persist && profileId != null && currentSetup) {
+      if (persist && profileId != null) {
         void setup.save({
-          preferred_slicer_instance_id: currentSetup.preferred_slicer_instance_id,
+          kind: "set_selection",
           selection: { mode: "custom", selected_unit_tokens: [...next] },
-          printer_assignments: currentSetup.printer_assignments,
-          rules: currentSetup.rules,
         }).catch(() => undefined);
       }
       return next;

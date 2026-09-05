@@ -5,7 +5,6 @@ type Props = {
   className?: string;
 };
 
-/** One quiet next-step line under a spine page header (GRE-226). */
 export default function DeskNextStep({ children, className }: Props) {
   if (!children) return null;
   return (

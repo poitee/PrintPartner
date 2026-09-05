@@ -262,7 +262,7 @@ export default function SlicersSettingsCard({ engineReady }: SlicersSettingsCard
                 setDraftDialect(defaultSlicerDialect(kind));
               }}
             >
-              <SelectTrigger className="h-8 w-[10rem]">
+              <SelectTrigger className="h-8 w-[10rem]" aria-label="Slicer kind">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -276,18 +276,21 @@ export default function SlicersSettingsCard({ engineReady }: SlicersSettingsCard
             </Select>
             <Input
               className="h-8 max-w-[12rem]"
+              aria-label="Slicer name"
               placeholder="Name"
               value={draftName}
               onChange={(e) => setDraftName(e.target.value)}
             />
             <Input
               className="h-8 max-w-[14rem]"
+              aria-label="Slicer GUI URL"
               placeholder="GUI URL"
               value={draftGuiUrl}
               onChange={(e) => setDraftGuiUrl(e.target.value)}
             />
             <Input
               className="h-8 max-w-[16rem] font-mono"
+              aria-label="Slicer watch path"
               placeholder="Watch path"
               value={draftWatchPath}
               onChange={(e) => setDraftWatchPath(e.target.value)}
@@ -297,7 +300,7 @@ export default function SlicersSettingsCard({ engineReady }: SlicersSettingsCard
                 value={draftDialect}
                 onValueChange={(v) => setDraftDialect(v as SlicerDialect)}
               >
-                <SelectTrigger className="h-8 w-[10rem]">
+                <SelectTrigger className="h-8 w-[10rem]" aria-label="Slicer dialect">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>

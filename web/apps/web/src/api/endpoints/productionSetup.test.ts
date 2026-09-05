@@ -1,32 +1,27 @@
 import { describe, expect, it } from "vitest";
 import { jsonResponse, createEndpointTestHttp } from "../endpointTestHttp";
 import {
+  applyProductionSetupCommand,
   fetchProductionSetup,
   fetchProfileLibrary,
-  saveProductionSetup,
 } from "./productionSetup";
 
 const http = createEndpointTestHttp();
 
 describe("production setup endpoints", () => {
-  it("fetches and saves production setup", async () => {
+  it("fetches production setup and applies one command", async () => {
     http
       .respond(jsonResponse({ profile_id: 7 }))
       .respond(jsonResponse({ profile_id: 7 }));
 
-    const setup = {
-      preferred_slicer_instance_id: "slicer",
-      selection: { mode: "all_incomplete" as const },
-      printer_assignments: [{ token: "unit", printer_id: "printer" }],
-      route: "plates" as const,
-      rules: [],
-    };
+    const command = { kind: "set_route", route: "plates" } as const;
 
     await fetchProductionSetup(7);
-    await saveProductionSetup(7, setup);
+    await applyProductionSetupCommand(7, command);
 
     expect(http.calls[0]?.[0]).toContain("/plans/7/production-setup");
-    expect(http.requestJson(1)).toEqual(setup);
+    expect(http.request(1).method).toBe("PATCH");
+    expect(http.requestJson(1)).toEqual(command);
   });
 
   it("fetches the synced slicer profile library", async () => {

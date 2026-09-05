@@ -249,7 +249,33 @@ export default function SourceWatchPanel({
             <h3 id="source-watch-activity-heading" className="text-sm font-semibold">
               Recent source alerts
             </h3>
-            {activity.data && activity.data.length > 0 ? (
+            {activity.error ? (
+              <div
+                className={cn(
+                  "space-y-2 rounded-md p-3 text-xs",
+                  statusTone({ tone: "error", emphasis: "soft" }),
+                )}
+                role="alert"
+              >
+                <p>
+                  Could not load recent source alerts: {activity.error instanceof Error
+                    ? activity.error.message
+                    : String(activity.error)}
+                </p>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  aria-label="Retry source alerts"
+                  onClick={() => void activity.refetch()}
+                >
+                  Retry
+                </Button>
+              </div>
+            ) : activity.isLoading ? (
+              <p className="rounded-md border border-dashed border-border p-3 text-xs text-muted-foreground" role="status">
+                Loading recent source alerts…
+              </p>
+            ) : activity.data && activity.data.length > 0 ? (
               <ul className="space-y-1.5">
                 {activity.data.slice(0, 3).map((event) => (
                   <li

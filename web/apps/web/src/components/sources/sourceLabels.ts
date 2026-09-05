@@ -21,4 +21,4 @@ export function kindLabel(kind: string): string {
   return KIND_LABELS[kind as SourceKind] ?? kind;
 }
 
-export const UNCategorized_FILTER = "__uncategorized__";
+export const UNCATEGORISED_FILTER = "__uncategorized__";

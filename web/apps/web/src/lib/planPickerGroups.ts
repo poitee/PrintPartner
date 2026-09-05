@@ -1,5 +1,3 @@
-/** Pure grouping for the one-spine plan picker (GRE-218). */
-
 export const RECENT_PLAN_LIMIT = 5;
 
 export type PlanPickerRow = {

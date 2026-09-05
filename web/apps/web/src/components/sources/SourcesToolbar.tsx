@@ -12,7 +12,7 @@ import {
   SelectValue,
 } from "../ui/select";
 import { kindLabel } from "./sourceLabels";
-import { UNCategorized_FILTER } from "./sourceLabels";
+import { UNCATEGORISED_FILTER } from "./sourceLabels";
 
 export type SourceViewMode = "grid" | "list";
 export type SyncFilter = "all" | "synced" | "unsynced" | "updates";
@@ -149,7 +149,7 @@ export default function SourcesToolbar({
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All categories</SelectItem>
-                  <SelectItem value={UNCategorized_FILTER}>Uncategorized</SelectItem>
+                  <SelectItem value={UNCATEGORISED_FILTER}>Uncategorised</SelectItem>
                   {categories.map((c) => (
                     <SelectItem key={c} value={c}>
                       {c}
@@ -212,10 +212,10 @@ export default function SourcesToolbar({
               type="button"
               size="sm"
               className="shrink-0"
-              variant={categoryFilter === UNCategorized_FILTER ? "secondary" : "ghost"}
-              onClick={() => onCategoryFilterChange(UNCategorized_FILTER)}
+              variant={categoryFilter === UNCATEGORISED_FILTER ? "secondary" : "ghost"}
+              onClick={() => onCategoryFilterChange(UNCATEGORISED_FILTER)}
             >
-              Uncategorized
+              Uncategorised
             </Button>
             {categories.map((c) => (
               <Button

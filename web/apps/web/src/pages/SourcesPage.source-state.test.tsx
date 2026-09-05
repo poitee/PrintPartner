@@ -3,7 +3,7 @@
 import { QueryClient, QueryClientProvider, useQueryClient } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import type { SourceSummary } from "@print-partner/contracts";
 import { queryKeys } from "../queries/keys";
 import SourcesPage from "./SourcesPage";
@@ -64,9 +64,46 @@ vi.mock("../context/ProfileContext", () => ({
   useProfileSelection: () => ({ profiles: [], selectedProfileId: null }),
 }));
 vi.mock("../components/sources/SourceDetailSheet", () => ({
-  default: ({ source, open }: { source: SourceSummary | null; open: boolean }) =>
-    open && source ? <output data-testid="detail-source">{source.name}</output> : null,
+  default: ({
+    source,
+    open,
+    tab,
+    highlightPath,
+    onOpenChange,
+    onTabChange,
+    onHighlightPathChange,
+  }: {
+    source: SourceSummary | null;
+    open: boolean;
+    tab?: string;
+    highlightPath?: string | null;
+    onOpenChange: (open: boolean) => void;
+    onTabChange?: (tab: "docs" | "rules" | "naming") => void;
+    onHighlightPathChange?: (path: string | null) => void;
+  }) =>
+    open && source ? (
+      <div>
+        <output data-testid="detail-source">{source.name}</output>
+        <output data-testid="detail-route-state">
+          {tab ?? "docs"}|{highlightPath ?? ""}
+        </output>
+        <button type="button" onClick={() => onHighlightPathChange?.("parts/new.stl")}>
+          Select another file
+        </button>
+        <button type="button" onClick={() => onTabChange?.("naming")}>
+          Show naming
+        </button>
+        <button type="button" onClick={() => onOpenChange(false)}>
+          Close details
+        </button>
+      </div>
+    ) : null,
 }));
+vi.mock("../components/sources/SourceWatchPanel", () => ({ default: () => null }));
+
+function LocationSearchProbe() {
+  return <output data-testid="location-search">{useLocation().search}</output>;
+}
 
 function ReplaceCachedSource() {
   const queryClient = useQueryClient();
@@ -119,6 +156,39 @@ describe("SourcesPage Source state ownership", () => {
 
     expect(await screen.findByRole("button", { name: "Open Updated Source" })).toBeTruthy();
     expect(screen.getByTestId("detail-source").textContent).toBe("Updated Source");
+  });
+
+  it("restores and updates Source detail context through the URL", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Number.POSITIVE_INFINITY } },
+    });
+    queryClient.setQueryData(queryKeys.sources, [source("Linked Source")]);
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter
+          initialEntries={["/library?source=7&tab=rules&file=parts%2Fwidget.stl"]}
+        >
+          <SourcesPage />
+          <LocationSearchProbe />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    expect((await screen.findByTestId("detail-source")).textContent).toBe("Linked Source");
+    expect(screen.getByTestId("detail-route-state").textContent).toBe(
+      "rules|parts/widget.stl",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Select another file" }));
+    await screen.findByText("?source=7&tab=rules&file=parts%2Fnew.stl");
+
+    fireEvent.click(screen.getByRole("button", { name: "Show naming" }));
+    await screen.findByText("?source=7&tab=naming");
+
+    fireEvent.click(screen.getByRole("button", { name: "Close details" }));
+    await screen.findByTestId("location-search");
+    expect(screen.getByTestId("location-search").textContent).toBe("");
   });
 
   it("names each row action menu for its Source", async () => {

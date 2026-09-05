@@ -183,6 +183,25 @@ function baseWorkspace(parts: PlanDraftWorkspace["parts"]): PlanDraftWorkspace {
   };
 }
 
+function workspaceWithQuantity(
+  workspace: PlanDraftWorkspace,
+  digestCharacter: string,
+  quantity: number,
+): PlanDraftWorkspace {
+  return {
+    ...workspace,
+    draft: {
+      ...workspace.draft,
+      snapshot_digest: digestCharacter.repeat(64),
+    },
+    parts: workspace.parts.map((part) => ({
+      ...part,
+      quantity_override: quantity,
+      quantity_effective: quantity,
+    })),
+  };
+}
+
 function baseReview(parts: ReviewPart[]): PlanReview {
   return {
     profile_id: 7,
@@ -199,6 +218,14 @@ function baseReview(parts: ReviewPart[]): PlanReview {
     has_blockers: false,
     part_groups: [{ folder: "frame", source_layer: "base:Voron", parts }],
   };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
 }
 
 afterEach(() => {
@@ -219,7 +246,7 @@ beforeEach(() => {
   vi.mocked(editPlanDraftParts).mockImplementation(async () => state.workspace!);
 });
 
-describe("Plan: Remove under Proposed inclusion", () => {
+describe("Plan sheet Working Plan edits", () => {
   it("sends a set_included edit for a part with a unique part_key", async () => {
     state.review = baseReview([reviewPart({ id: 42, match_key: "frame/bracket.stl" })]);
     state.workspace = baseWorkspace([
@@ -346,5 +373,77 @@ describe("Plan: Remove under Proposed inclusion", () => {
       ),
     );
     expect(editPlanDraftParts).not.toHaveBeenCalled();
+  });
+
+  it("keeps quantity steps available while the preceding edit is saving", async () => {
+    const pending = deferred<PlanDraftWorkspace>();
+    state.review = baseReview([
+      reviewPart({ id: 42, match_key: "frame/bracket.stl" }),
+    ]);
+    const initialWorkspace = baseWorkspace([
+      draftPart({
+        draft_part_id: 17,
+        base_revision_part_id: 42,
+        part_key: "frame/bracket.stl",
+      }),
+    ]);
+    state.workspace = initialWorkspace;
+    const secondWorkspace = workspaceWithQuantity(initialWorkspace, "b", 2);
+    const thirdWorkspace = workspaceWithQuantity(initialWorkspace, "c", 3);
+    const fourthWorkspace = workspaceWithQuantity(initialWorkspace, "d", 4);
+    vi.mocked(editPlanDraftParts)
+      .mockReturnValueOnce(pending.promise)
+      .mockResolvedValueOnce(thirdWorkspace)
+      .mockResolvedValueOnce(fourthWorkspace);
+
+    renderSheet();
+    await screen.findByRole("columnheader", { name: "Proposed inclusion" });
+    const increase = screen.getByRole("button", {
+      name: "Increase quantity for bracket.stl",
+    });
+    await userEvent.click(increase);
+    await waitFor(() => expect(editPlanDraftParts).toHaveBeenCalledTimes(1));
+
+    expect((increase as HTMLButtonElement).disabled).toBe(false);
+    await userEvent.click(increase);
+    await userEvent.click(increase);
+    expect(editPlanDraftParts).toHaveBeenCalledTimes(1);
+
+    pending.resolve(secondWorkspace);
+    await waitFor(() => expect(editPlanDraftParts).toHaveBeenCalledTimes(3));
+    expect(editPlanDraftParts).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        expectedSnapshotDigest: "c".repeat(64),
+        decisions: [
+          expect.objectContaining({
+            kind: "set_quantity_override",
+            value: 4,
+          }),
+        ],
+      }),
+    );
+  });
+
+  it("renders a rejected Plan edit as an alert", async () => {
+    state.review = baseReview([
+      reviewPart({ id: 42, match_key: "frame/bracket.stl" }),
+    ]);
+    state.workspace = baseWorkspace([
+      draftPart({
+        draft_part_id: 17,
+        base_revision_part_id: 42,
+        part_key: "frame/bracket.stl",
+      }),
+    ]);
+    vi.mocked(editPlanDraftParts).mockRejectedValueOnce(new Error("disk full"));
+
+    renderSheet();
+    await screen.findByRole("columnheader", { name: "Proposed inclusion" });
+    await userEvent.click(screen.getByRole("button", { name: "Remove" }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("draft-error").textContent).toBe("disk full"),
+    );
   });
 });

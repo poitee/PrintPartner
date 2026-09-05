@@ -379,7 +379,7 @@ export default function PlansPage() {
                         </TableCell>
                         <TableCell className="px-0 py-2.5 pr-3">
                           <Link
-                            className="text-xs underline-offset-2 hover:underline"
+                            className="inline-flex min-h-11 items-center px-2 text-xs underline-offset-2 hover:underline"
                             to={progressRoute(plan.id)}
                             aria-label={`Checkoff for ${plan.name}`}
                           >
@@ -388,7 +388,7 @@ export default function PlansPage() {
                         </TableCell>
                         <TableCell className="px-0 py-2.5 pr-3">
                           <Link
-                            className="text-xs underline-offset-2 hover:underline"
+                            className="inline-flex min-h-11 items-center px-2 text-xs underline-offset-2 hover:underline"
                             to={productionRoute(plan.id)}
                             aria-label={`Production for ${plan.name}`}
                           >
@@ -432,14 +432,14 @@ function BuildStatusLinks({ id, name }: { id: number; name: string }) {
   return (
     <div className="flex flex-wrap gap-3 text-xs">
       <Link
-        className="underline-offset-2 hover:underline"
+        className="inline-flex min-h-11 items-center px-2 underline-offset-2 hover:underline"
         to={progressRoute(id)}
         aria-label={`Checkoff for ${name}`}
       >
         Checkoff
       </Link>
       <Link
-        className="underline-offset-2 hover:underline"
+        className="inline-flex min-h-11 items-center px-2 underline-offset-2 hover:underline"
         to={productionRoute(id)}
         aria-label={`Production for ${name}`}
       >

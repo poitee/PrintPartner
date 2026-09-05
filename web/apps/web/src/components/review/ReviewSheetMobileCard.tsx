@@ -1,6 +1,7 @@
 import { useId } from "react";
 import { Check } from "lucide-react";
 import type { ReviewPart } from "../../api/endpoints/planManifests";
+import type { QuantityUpdate } from "../../context/PlanWorkspaceContext";
 import type { RoleFilamentRow, SpoolmanSpoolRow } from "../../api/endpoints/filaments";
 import type { ReviewViewMode } from "../../lib/persistedReviewPartsUi";
 import PartThumbExpandButton from "../parts/PartThumbExpandButton";
@@ -14,11 +15,12 @@ type Props = {
   part: ReviewPart;
   viewMode?: ReviewViewMode;
   busy: boolean;
+  quantityDisabled: boolean;
   spoolmanConfigured?: boolean;
   roleFilaments?: RoleFilamentRow[];
   spools?: SpoolmanSpoolRow[];
   spoolsLoading?: boolean;
-  onQtyChange: (part: ReviewPart, qty: number) => void;
+  onQtyChange: (part: ReviewPart, update: QuantityUpdate) => void;
   onRemove: () => void;
   onRestore: () => void;
   onSpoolChange?: (partId: number, spoolman_spool_id: string | null) => void;
@@ -33,7 +35,7 @@ function MobileQtyStepper({
 }: {
   part: ReviewPart;
   disabled?: boolean;
-  onChange: (qty: number) => void;
+  onChange: (update: QuantityUpdate) => void;
 }) {
   const qty = part.quantity_override ?? part.quantity_effective;
   return (
@@ -42,7 +44,7 @@ function MobileQtyStepper({
         type="button"
         className="qty-btn rounded-md border min-h-10 min-w-10"
         disabled={disabled || qty <= 1}
-        onClick={() => onChange(qty - 1)}
+        onClick={() => onChange((current) => current - 1)}
         aria-label={`Decrease quantity for ${part.filename}`}
       >
         −
@@ -54,7 +56,7 @@ function MobileQtyStepper({
         type="button"
         className="qty-btn rounded-md border min-h-10 min-w-10"
         disabled={disabled}
-        onClick={() => onChange(qty + 1)}
+        onClick={() => onChange((current) => current + 1)}
         aria-label={`Increase quantity for ${part.filename}`}
       >
         +
@@ -67,6 +69,7 @@ export default function ReviewSheetMobileCard({
   part,
   viewMode = "edit",
   busy,
+  quantityDisabled,
   spoolmanConfigured,
   roleFilaments = [],
   spools = [],
@@ -184,8 +187,8 @@ export default function ReviewSheetMobileCard({
           <>
             <MobileQtyStepper
               part={part}
-              disabled={busy}
-              onChange={(n) => onQtyChange(part, n)}
+              disabled={quantityDisabled}
+              onChange={(update) => onQtyChange(part, update)}
             />
             <Button
               type="button"

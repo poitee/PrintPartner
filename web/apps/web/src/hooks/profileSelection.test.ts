@@ -29,6 +29,14 @@ describe("reconcileSelectedProfileId", () => {
   it("keeps a newly created selection until the list catches up", () => {
     expect(reconcileSelectedProfileId([1], 42, [1])).toBeUndefined();
   });
+
+  it("prefers an explicit URL Build during first hydration", () => {
+    expect(reconcileSelectedProfileId([1, 2], null, [], 2, null)).toBe(2);
+  });
+
+  it("keeps a pending local selection ahead of a stale URL", () => {
+    expect(reconcileSelectedProfileId([1, 2], 2, [1, 2], 1, 2)).toBeUndefined();
+  });
 });
 
 describe("shouldBlockUrlProfileSync", () => {

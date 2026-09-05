@@ -1,24 +1,22 @@
 import { useEffect, useRef } from "react";
 import { useLocation, useSearchParams } from "react-router-dom";
 import { useProfileSelection } from "../context/ProfileContext";
-import { shouldBlockUrlProfileSync } from "./profileSelection";
 import {
   parseProfileParam,
-  profileIdFromUrl,
   searchParamsWithProfile,
   shouldSyncProfileToPath,
 } from "./profileUrlSync";
 
-/** Bidirectional sync between selected plan and ?profile= URL param. */
+/** Publish local Build selections without overwriting an unresolved URL selection. */
 export function useProfileUrlSync() {
   const [searchParams, setSearchParams] = useSearchParams();
   const location = useLocation();
   const {
     profiles,
     selectedProfileId,
-    setSelectedProfileId,
     pendingSelectionId,
     clearPendingSelection,
+    profilesLoaded,
   } = useProfileSelection();
 
   // Latest params, read inside the state -> URL effect without making it a dep
@@ -26,40 +24,23 @@ export function useProfileUrlSync() {
   const searchParamsRef = useRef(searchParams);
   searchParamsRef.current = searchParams;
 
-  const selectedRef = useRef(selectedProfileId);
-  selectedRef.current = selectedProfileId;
-
-  const pendingRef = useRef(pendingSelectionId);
-  pendingRef.current = pendingSelectionId;
-
-  // URL -> state when the query or plan list changes (not when selection changes).
+  // ProfileProvider owns URL -> state so initial hydration and profile-list
+  // reconciliation are one transition. This effect only publishes local choices.
   useEffect(() => {
-    const urlId = parseProfileParam(searchParams.get("profile"));
+    if (!shouldSyncProfileToPath(location.pathname)) return;
+    const currentParams = searchParamsRef.current;
+    const urlId = parseProfileParam(currentParams.get("profile"));
+    const urlSelectsKnownProfile =
+      urlId != null &&
+      (!profilesLoaded || profiles.some((profile) => profile.id === urlId));
     if (
-      shouldBlockUrlProfileSync(urlId, pendingRef.current, selectedRef.current)
+      pendingSelectionId == null &&
+      urlSelectsKnownProfile &&
+      urlId !== selectedProfileId
     ) {
       return;
     }
-    if (urlId != null && urlId === pendingRef.current) {
-      clearPendingSelection(urlId);
-    }
-    const nextId = profileIdFromUrl(
-      urlId,
-      profiles.map((p) => p.id),
-      selectedRef.current,
-    );
-    if (nextId != null) {
-      setSelectedProfileId(nextId, { fromUrl: true });
-    }
-    // selectedProfileId intentionally omitted — including it fights state -> URL sync.
-  }, [searchParams, profiles, setSelectedProfileId, clearPendingSelection]);
-
-  // State -> URL. Only navigate when the param actually changes; calling
-  // setSearchParams on a no-op still replaces history and drops location.state
-  // (e.g. the kit-import payload passed to the Build page).
-  useEffect(() => {
-    if (!shouldSyncProfileToPath(location.pathname)) return;
-    const next = searchParamsWithProfile(searchParamsRef.current, selectedProfileId);
+    const next = searchParamsWithProfile(currentParams, selectedProfileId);
     if (next) {
       setSearchParams(next, { replace: true });
     }
@@ -69,5 +50,13 @@ export function useProfileUrlSync() {
     ) {
       clearPendingSelection(selectedProfileId);
     }
-  }, [location.pathname, selectedProfileId, setSearchParams, clearPendingSelection]);
+  }, [
+    location.pathname,
+    selectedProfileId,
+    pendingSelectionId,
+    profilesLoaded,
+    profiles,
+    setSearchParams,
+    clearPendingSelection,
+  ]);
 }

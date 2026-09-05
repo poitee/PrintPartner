@@ -40,6 +40,7 @@ type Props = Readonly<{
   profileId: number;
   /** Called once a print is on the record, so Checkoff can refresh its activity. */
   onRecorded: () => void;
+  onProgressChanged: () => void;
 }>;
 
 /** Where the bytes of an already finished print are. */
@@ -127,7 +128,11 @@ function recordedOutcome(print: RecordedPrint): Readonly<{
  * the classification and the assignment stay in one place rather than being
  * forked for Checkoff.
  */
-export default function PastPrintIntakePanel({ profileId, onRecorded }: Props) {
+export default function PastPrintIntakePanel({
+  profileId,
+  onProgressChanged,
+  onRecorded,
+}: Props) {
   const fieldPrefix = useId();
   const { profiles } = useProfileSelection();
   const [source, setSource] = useState<FileSource | null>(null);
@@ -368,6 +373,7 @@ export default function PastPrintIntakePanel({ profileId, onRecorded }: Props) {
           profileId={profileId}
           printers={desks.map((desk) => desk.printer)}
           onPrintRecorded={onRecorded}
+          onProgressChanged={onProgressChanged}
           onFinished={(print) => setRecorded((current) => [...current, print])}
         />
       ) : null}
@@ -553,6 +559,7 @@ function UploadedPrintRecord({
   profileId,
   printers,
   onPrintRecorded,
+  onProgressChanged,
   onFinished,
 }: {
   profileId: number;
@@ -562,6 +569,7 @@ function UploadedPrintRecord({
    * the record stands whether or not the check-off that follows it succeeds.
    */
   onPrintRecorded: () => void;
+  onProgressChanged: () => void;
   /** Nothing is left to do here, and this is what is now true. */
   onFinished: (print: RecordedPrint) => void;
 }) {
@@ -656,18 +664,20 @@ function UploadedPrintRecord({
     );
     try {
       await verifyPrinterCheckoff({ link_id: input.link.id, decisions });
-      onFinished({
-        filename: input.link.filename,
-        unitCount: decisions.length,
-        units: "checked_off",
-      });
     } catch (error) {
       setState({
         phase: "checkoff_failed",
         ...input,
         message: failureMessage(error, "The server did not check the units off."),
       });
+      return;
     }
+    onProgressChanged();
+    onFinished({
+      filename: input.link.filename,
+      unitCount: decisions.length,
+      units: "checked_off",
+    });
   };
 
   const record = async (chosen: ReadPrintFile, check: UploadedPrintFileCheck) => {

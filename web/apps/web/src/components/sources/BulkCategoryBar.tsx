@@ -62,7 +62,7 @@ export default function BulkCategoryBar({
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="max-h-72 overflow-y-auto">
-          <DropdownMenuItem onClick={() => onAssign(null)}>Uncategorized</DropdownMenuItem>
+          <DropdownMenuItem onClick={() => onAssign(null)}>Uncategorised</DropdownMenuItem>
           {categoryMenuOptions(categories).map((option) => (
             <DropdownMenuItem
               key={option.path}

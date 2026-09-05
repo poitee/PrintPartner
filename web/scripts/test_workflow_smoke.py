@@ -9,6 +9,7 @@ from tempfile import TemporaryDirectory
 from threading import Thread
 import unittest
 from urllib.parse import urlparse
+from zipfile import ZipFile
 
 
 SCRIPT = Path(__file__).with_name("workflow-smoke.sh")
@@ -60,10 +61,16 @@ class SmokeHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         path = urlparse(self.path).path
         if path == "/sources":
+            if self._json_body() != {"name": 'Smoke "Source"', "source_kind": "local"}:
+                self._send({"detail": "invalid managed Source request"}, 400)
+                return
             self._send({"id": 1})
-        elif path == "/sources/1/upload-files":
+        elif path in {"/sources/1/upload-files", "/sources/1/upload-zip"}:
             self._send({"id": 1, "stl_count": 1})
         elif path == "/plans":
+            if self._json_body() != {"name": 'Smoke "Plan"'}:
+                self._send({"detail": "invalid Plan request"}, 400)
+                return
             self._send({"id": 1})
         elif path == "/plans/1/drafts/recompute":
             digest = "a" * 64
@@ -131,7 +138,15 @@ class SmokeHandler(BaseHTTPRequestHandler):
 
 
 class WorkflowSmokeTests(unittest.TestCase):
-    def run_smoke(self, *, parts: int = 1, exports: int = 1, asset_status: int = 200):
+    def run_smoke(
+        self,
+        *,
+        parts: int = 1,
+        exports: int = 1,
+        asset_status: int = 200,
+        upload: str | None = "file",
+        both_uploads: bool = False,
+    ):
         handler = type(
             "ScenarioHandler",
             (SmokeHandler,),
@@ -144,13 +159,21 @@ class WorkflowSmokeTests(unittest.TestCase):
             with TemporaryDirectory() as directory:
                 fixture = Path(directory) / "cube.stl"
                 fixture.write_text("solid cube\nendsolid cube\n")
+                archive = Path(directory) / "source.zip"
+                with ZipFile(archive, "w") as bundle:
+                    bundle.write(fixture, "cube.stl")
                 env = {
                     **os.environ,
                     "BASE": f"http://127.0.0.1:{server.server_port}",
                     "SOURCE_KIND": "local",
-                    "SOURCE_URL": directory,
-                    "SOURCE_UPLOAD_FILE": str(fixture),
+                    "SOURCE_NAME": 'Smoke "Source"',
+                    "PLAN_NAME": 'Smoke "Plan"',
+                    "SOURCE_UPLOAD_FILE": str(fixture) if upload == "file" else "",
+                    "SOURCE_UPLOAD_ZIP": str(archive) if upload == "zip" else "",
                 }
+                if both_uploads:
+                    env["SOURCE_UPLOAD_FILE"] = str(fixture)
+                    env["SOURCE_UPLOAD_ZIP"] = str(archive)
                 return subprocess.run(
                     ["bash", str(SCRIPT)],
                     env=env,
@@ -167,6 +190,20 @@ class WorkflowSmokeTests(unittest.TestCase):
     def test_accepts_nonempty_workflow(self) -> None:
         result = self.run_smoke()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_accepts_archive_upload(self) -> None:
+        result = self.run_smoke(upload="zip")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_rejects_untracked_local_folder(self) -> None:
+        result = self.run_smoke(upload=None)
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("requires SOURCE_UPLOAD_FILE or SOURCE_UPLOAD_ZIP", result.stderr)
+
+    def test_rejects_ambiguous_local_upload(self) -> None:
+        result = self.run_smoke(both_uploads=True)
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("Set only one", result.stderr)
 
     def test_rejects_zero_parts(self) -> None:
         result = self.run_smoke(parts=0)

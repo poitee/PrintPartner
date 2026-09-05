@@ -1,4 +1,4 @@
-import type { ProductionSetup, ProductionSetupInput } from "@print-partner/contracts";
+import type { ProductionSetup, ProductionSetupCommand } from "@print-partner/contracts";
 import { engineFetch } from "../engineTransport";
 
 /** Row shape from GET /profile-library — mirrors AppRepository.ProfileLibraryRow on the server. */
@@ -8,8 +8,6 @@ export type ProfileLibraryRow = {
   name: string;
   slicerFormat: string | null;
   materialType: string | null;
-  resolvedFlatConfig: string | null;
-  sourcePath: string | null;
   syncedFromSlicerVersion: string | null;
   lastSyncedAt: string | null;
   importedAt: string;
@@ -19,13 +17,13 @@ export async function fetchProductionSetup(profileId: number): Promise<Productio
   return engineFetch<ProductionSetup>(`/plans/${profileId}/production-setup`);
 }
 
-export async function saveProductionSetup(
+export async function applyProductionSetupCommand(
   profileId: number,
-  setup: ProductionSetupInput,
+  command: ProductionSetupCommand,
 ): Promise<ProductionSetup> {
   return engineFetch<ProductionSetup>(`/plans/${profileId}/production-setup`, {
-    method: "PUT",
-    body: JSON.stringify(setup),
+    method: "PATCH",
+    body: JSON.stringify(command),
   });
 }
 

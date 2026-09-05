@@ -210,7 +210,12 @@ export default function PartsPage() {
         <PlanAcceptanceConfirmation />
 
         {workspaceError && (
-          <p className="text-sm text-destructive" role="alert">{workspaceError}</p>
+          <div className="flex flex-wrap items-center gap-3 text-sm text-destructive" role="alert">
+            <p>Could not load this Plan: {workspaceError}</p>
+            <Button size="sm" variant="secondary" onClick={() => void refresh()}>
+              Retry
+            </Button>
+          </div>
         )}
         {draftError && (
           <p className="text-sm text-destructive" role="alert">{draftError}</p>
@@ -238,7 +243,9 @@ export default function PartsPage() {
         ) : loading && !review ? (
           <Card>
             <CardContent className="pt-6">
-              <p className="text-sm text-muted-foreground">Loading this Plan…</p>
+              <p className="text-sm text-muted-foreground" role="status">
+                Loading this Plan…
+              </p>
             </CardContent>
           </Card>
         ) : review ? (

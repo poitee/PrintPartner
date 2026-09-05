@@ -90,9 +90,7 @@ export default function ProductionRulesPanel({ profileId }: { profileId: number 
     if (!current) return;
     try {
       await setup.save({
-        preferred_slicer_instance_id: current.preferred_slicer_instance_id,
-        selection: current.selection,
-        printer_assignments: current.printer_assignments,
+        kind: "replace_rules",
         rules,
       });
     } catch (error) {

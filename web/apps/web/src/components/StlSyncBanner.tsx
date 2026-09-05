@@ -11,7 +11,7 @@ type Props = {
 };
 
 /**
- * GRE-235 Parts banner — one line for running / still-missing / failed.
+ * Parts banner: one line for running, still-missing, or failed.
  * Hide Sync while running; Sync is retry after fail or when files still gone.
  */
 export default function StlSyncBanner({

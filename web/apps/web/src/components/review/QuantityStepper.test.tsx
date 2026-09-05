@@ -40,8 +40,34 @@ describe("QuantityStepper", () => {
     fireEvent.click(screen.getByRole("button", { name: "Increase quantity for gear.stl" }));
     fireEvent.click(screen.getByRole("button", { name: "Decrease quantity for gear.stl" }));
 
-    expect(onChange).toHaveBeenNthCalledWith(1, 3);
-    expect(onChange).toHaveBeenNthCalledWith(2, 1);
+    const increase = onChange.mock.calls[0]?.[0] as (
+      currentQuantity: number,
+    ) => number;
+    const decrease = onChange.mock.calls[1]?.[0] as (
+      currentQuantity: number,
+    ) => number;
+    expect(increase(2)).toBe(3);
+    expect(decrease(2)).toBe(1);
+  });
+
+  it("applies rapid steps in click order before the parent rerenders", () => {
+    const onChange = vi.fn<
+      (quantity: number | ((currentQuantity: number) => number)) => void
+    >();
+
+    render(<QuantityStepper part={part()} onChange={onChange} />);
+
+    const increase = screen.getByRole("button", {
+      name: "Increase quantity for gear.stl",
+    });
+    fireEvent.click(increase);
+    fireEvent.click(increase);
+    fireEvent.click(increase);
+
+    const quantity = onChange.mock.calls.reduce((current, [update]) => {
+      return typeof update === "function" ? update(current) : update;
+    }, 2);
+    expect(quantity).toBe(5);
   });
 
   it("shows when printed units exceed the edited quantity", () => {

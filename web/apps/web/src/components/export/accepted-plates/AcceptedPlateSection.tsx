@@ -164,10 +164,8 @@ export default function AcceptedPlateSection({
       }]),
     ];
     void productionSetup.save({
-      preferred_slicer_instance_id: current.preferred_slicer_instance_id,
-      selection: current.selection,
+      kind: "replace_printer_assignments",
       printer_assignments: printerAssignments,
-      rules: current.rules,
     }).catch((error: unknown) => {
       setFailure({
         message: failureMessage(error, "Could not save printer assignments."),

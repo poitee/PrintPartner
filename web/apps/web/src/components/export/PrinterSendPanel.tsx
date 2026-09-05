@@ -1,7 +1,7 @@
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { fetchIntegrationStatus, fetchIntegrations } from "../../api/endpoints/integrations";
+import { fetchIntegrations } from "../../api/endpoints/integrations";
 import { fetchPrinters, type PrinterMachine } from "../../api/endpoints/printers";
 import {
   bambuConnectDownloadUrl,
@@ -9,7 +9,6 @@ import {
   startPrinterUpload,
 } from "../../api/endpoints/productionSend";
 import type { ReviewPart } from "../../api/endpoints/planManifests";
-import type { PrinterHostStatus } from "@print-partner/contracts";
 import { useJobRunner } from "../../hooks/useJobRunner";
 import {
   parseSlicedObjectsFile,
@@ -29,7 +28,6 @@ import {
   printerSendStatusVariant,
   resolveStickyPrinterId,
 } from "../../lib/printerSendModel";
-import { usePrinterStatusPollMs } from "../../hooks/usePrinterStatusPollMs";
 import { settingsPrintersRoute } from "../../lib/routes";
 import { statusTone } from "../../lib/statusTone";
 import { cn } from "../../lib/utils";
@@ -48,6 +46,7 @@ import {
   sendPlanBindCopy,
 } from "../../lib/printerPlanBind";
 import { readStickyId, writeStickyId } from "../../lib/stickyIdStorage";
+import { usePrinterStatuses } from "../../queries/printerStatuses";
 
 const PRINTER_ID_STORAGE_KEY = "pp-export-printer-id";
 const BAMBU_PRINTER_ID_STORAGE_KEY = "pp-export-bambu-printer-id";
@@ -77,7 +76,6 @@ export default function PrinterSendPanel({
   onFailure,
 }: Props) {
   const printerUploadJob = useJobRunner("printer-upload");
-  const pollMs = usePrinterStatusPollMs();
   const planBind = sendPlanBindCopy(planName ?? null);
 
   const [linkedPrinters, setLinkedPrinters] = useState<PrinterMachine[]>([]);
@@ -91,9 +89,6 @@ export default function PrinterSendPanel({
   const [selectedBambuPrinterId, setSelectedBambuPrinterId] = useState(
     () => readStickyId(BAMBU_PRINTER_ID_STORAGE_KEY),
   );
-  const [hostStatusByIntegration, setHostStatusByIntegration] = useState<
-    Record<string, PrinterHostStatus>
-  >({});
   const [chosenFile, setChosenFileState] = useState<File | null>(null);
   const [sendFailure, setSendFailureState] = useState<PrinterSendFailure | null>(null);
   const [objectParse, setObjectParse] = useState<ParseSlicedObjectsResult | null>(null);
@@ -128,6 +123,17 @@ export default function PrinterSendPanel({
   const hasLinked = linkedPrinters.length > 0;
   const hasBambuLinked = bambuPrinters.length > 0;
   const busy = printerUploadJob.busy || bambuBusy || parseBusy;
+  const statusIntegrationIds = useMemo(
+    () => [...linkedPrinters, ...bambuPrinters].flatMap((printer) => {
+      const integrationId = printer.integration_id?.trim();
+      return integrationId ? [integrationId] : [];
+    }),
+    [bambuPrinters, linkedPrinters],
+  );
+  const { statusByIntegration: hostStatusByIntegration } = usePrinterStatuses(
+    statusIntegrationIds,
+    engineReady,
+  );
 
   useEffect(() => {
     if (!engineReady) return;
@@ -164,56 +170,6 @@ export default function PrinterSendPanel({
       cancelled = true;
     };
   }, [engineReady]);
-
-  // Poll host status for badges only — do NOT auto-drain the farm send queue while
-  // Export is open. Queue drain/dispatch is Progress-only.
-  useEffect(() => {
-    if (!engineReady || (linkedPrinters.length === 0 && bambuPrinters.length === 0)) {
-      setHostStatusByIntegration({});
-      return;
-    }
-    let cancelled = false;
-    const integrationIds = [
-      ...new Set(
-        [...linkedPrinters, ...bambuPrinters]
-          .map((p) => p.integration_id?.trim())
-          .filter((id): id is string => Boolean(id)),
-      ),
-    ];
-
-    const tick = async () => {
-      if (cancelled || document.hidden) return;
-      const entries = await Promise.all(
-        integrationIds.map(async (id) => {
-          try {
-            return [id, await fetchIntegrationStatus(id)] as const;
-          } catch (e) {
-            return [
-              id,
-              {
-                state: "offline" as const,
-                message: e instanceof Error ? e.message : String(e),
-              },
-            ] as const;
-          }
-        }),
-      );
-      if (cancelled) return;
-      setHostStatusByIntegration(Object.fromEntries(entries));
-    };
-
-    void tick();
-    const timer = window.setInterval(() => void tick(), pollMs);
-    const onVisibility = () => {
-      if (!document.hidden) void tick();
-    };
-    document.addEventListener("visibilitychange", onVisibility);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", onVisibility);
-    };
-  }, [engineReady, linkedPrinters, bambuPrinters, pollMs]);
 
   // Re-propose when remaining parts change after a successful local parse.
   useEffect(() => {
@@ -307,7 +263,6 @@ export default function PrinterSendPanel({
           file,
           printer_id: selectedPrinterId,
           start,
-          // GRE-232: always stamp active spine plan at send (immutable after).
           profile_id: profileId,
           checkoff_units: units,
           unlabeled_names: unlabeled,
@@ -451,7 +406,6 @@ export default function PrinterSendPanel({
         const result = await startBambuConnectHandoff({
           file,
           printer_id: selectedBambuPrinterId,
-          // GRE-232: stamp active spine plan at handoff.
           profile_id: profileId,
           checkoff_units: handoffUnits,
         });

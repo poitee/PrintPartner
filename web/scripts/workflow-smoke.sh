@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Full workflow API smoke test for Print Partner web (self-host).
 # Usage: BASE=http://localhost:8080 ./web/scripts/workflow-smoke.sh
+# Local archive: SOURCE_KIND=local SOURCE_UPLOAD_ZIP=source.zip BASE=... ./web/scripts/workflow-smoke.sh
 set -euo pipefail
 
 BASE="${BASE:-http://localhost:8080}"
@@ -8,8 +9,30 @@ SOURCE_URL="${SOURCE_URL:-https://github.com/Klipper3d/klipper}"
 SOURCE_BRANCH="${SOURCE_BRANCH:-master}"
 SOURCE_KIND="${SOURCE_KIND:-github}"
 SOURCE_UPLOAD_FILE="${SOURCE_UPLOAD_FILE:-}"
+SOURCE_UPLOAD_ZIP="${SOURCE_UPLOAD_ZIP:-}"
 PLAN_NAME="${PLAN_NAME:-smoke-test-plan-$(date +%s)}"
 SOURCE_NAME="${SOURCE_NAME:-Smoke Source ${PLAN_NAME}}"
+
+if [[ -n "$SOURCE_UPLOAD_FILE" && -n "$SOURCE_UPLOAD_ZIP" ]]; then
+  echo "Set only one of SOURCE_UPLOAD_FILE or SOURCE_UPLOAD_ZIP." >&2
+  exit 2
+fi
+if [[ "$SOURCE_KIND" == "local" && -z "$SOURCE_UPLOAD_FILE" && -z "$SOURCE_UPLOAD_ZIP" ]]; then
+  echo "SOURCE_KIND=local requires SOURCE_UPLOAD_FILE or SOURCE_UPLOAD_ZIP so the smoke test can create an immutable Source revision." >&2
+  exit 2
+fi
+if [[ "$SOURCE_KIND" != "local" && ( -n "$SOURCE_UPLOAD_FILE" || -n "$SOURCE_UPLOAD_ZIP" ) ]]; then
+  echo "SOURCE_UPLOAD_FILE and SOURCE_UPLOAD_ZIP require SOURCE_KIND=local." >&2
+  exit 2
+fi
+if [[ -n "$SOURCE_UPLOAD_FILE" && ! -r "$SOURCE_UPLOAD_FILE" ]]; then
+  echo "SOURCE_UPLOAD_FILE is not readable: $SOURCE_UPLOAD_FILE" >&2
+  exit 2
+fi
+if [[ -n "$SOURCE_UPLOAD_ZIP" && ! -r "$SOURCE_UPLOAD_ZIP" ]]; then
+  echo "SOURCE_UPLOAD_ZIP is not readable: $SOURCE_UPLOAD_ZIP" >&2
+  exit 2
+fi
 
 AUTH_ARGS=()
 if [[ -n "${PRINT_PARTNER_API_KEY:-}" ]]; then
@@ -48,9 +71,9 @@ grep -q '"ok":true' /tmp/pp-smoke-health.txt
 
 echo "== 1. POST /sources =="
 if [[ "$SOURCE_KIND" == "local" ]]; then
-  SOURCE_PAYLOAD="{\"name\":\"$SOURCE_NAME\",\"local_path\":\"$SOURCE_URL\",\"source_kind\":\"local\"}"
+  SOURCE_PAYLOAD=$(python3 -c 'import json,sys; print(json.dumps({"name":sys.argv[1],"source_kind":"local"}))' "$SOURCE_NAME")
 else
-  SOURCE_PAYLOAD="{\"name\":\"$SOURCE_NAME\",\"url\":\"$SOURCE_URL\",\"branch\":\"$SOURCE_BRANCH\",\"source_kind\":\"$SOURCE_KIND\"}"
+  SOURCE_PAYLOAD=$(python3 -c 'import json,sys; print(json.dumps({"name":sys.argv[1],"url":sys.argv[2],"branch":sys.argv[3],"source_kind":sys.argv[4]}))' "$SOURCE_NAME" "$SOURCE_URL" "$SOURCE_BRANCH" "$SOURCE_KIND")
 fi
 SRC_RESP=$(request -s -w "\nHTTP:%{http_code}" -X POST "$BASE/sources" \
   -H 'Content-Type: application/json' \
@@ -67,8 +90,15 @@ if [[ -n "$SOURCE_UPLOAD_FILE" ]]; then
     | python3 -m json.tool
 fi
 
+if [[ -n "$SOURCE_UPLOAD_ZIP" ]]; then
+  echo "== 1b. POST /sources/$SOURCE_ID/upload-zip =="
+  request --silent -X POST "$BASE/sources/$SOURCE_ID/upload-zip" \
+    -F "file=@${SOURCE_UPLOAD_ZIP}" \
+    | python3 -m json.tool
+fi
+
 if [[ "$SOURCE_KIND" == "local" ]]; then
-  echo "== 2. Local source is already mounted; sync not required =="
+  echo "== 2. Local upload published an immutable revision; sync not required =="
 else
   echo "== 2. POST /jobs/sync =="
   SYNC_RESP=$(request -s -w "\nHTTP:%{http_code}" -X POST "$BASE/jobs/sync" \
@@ -81,9 +111,10 @@ else
 fi
 
 echo "== 3. POST /plans =="
+PLAN_PAYLOAD=$(python3 -c 'import json,sys; print(json.dumps({"name":sys.argv[1]}))' "$PLAN_NAME")
 PLAN_RESP=$(request -s -w "\nHTTP:%{http_code}" -X POST "$BASE/plans" \
   -H 'Content-Type: application/json' \
-  -d "{\"name\":\"$PLAN_NAME\"}")
+  -d "$PLAN_PAYLOAD")
 echo "$PLAN_RESP" | body_only
 echo "HTTP:$(echo "$PLAN_RESP" | http_code)"
 PLAN_ID=$(echo "$PLAN_RESP" | body_only | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")

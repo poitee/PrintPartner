@@ -6,21 +6,9 @@ export function parseProfileParam(raw: string | null): number | null {
   return Number.isFinite(id) && id > 0 ? id : null;
 }
 
-/** Global Production spans every build, so it must not inherit the selected build. */
+/** Leave global Production and redirect-only routes in control of their URLs. */
 export function shouldSyncProfileToPath(pathname: string): boolean {
-  return pathname !== "/production";
-}
-
-/** When URL profile differs from selection, return the id to apply; else undefined. */
-export function profileIdFromUrl(
-  urlId: number | null,
-  validIds: readonly number[],
-  selectedProfileId: number | null,
-): number | undefined {
-  if (urlId == null) return undefined;
-  if (!validIds.includes(urlId)) return undefined;
-  if (selectedProfileId === urlId) return undefined;
-  return urlId;
+  return pathname !== "/production" && !/^\/plans\/\d+\/studio$/.test(pathname);
 }
 
 /** Merge selected plan into search params; return undefined when unchanged. */

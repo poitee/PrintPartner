@@ -16,7 +16,10 @@ import {
   type RoleFilamentRow,
   type SpoolmanSpoolRow,
 } from "../../api/endpoints/filaments";
-import { usePlanWorkspace } from "../../context/PlanWorkspaceContext";
+import {
+  usePlanWorkspace,
+  type QuantityUpdate,
+} from "../../context/PlanWorkspaceContext";
 import { useSpoolmanEnabled } from "../../hooks/useSpoolmanEnabled";
 import { groupCheckoffParts } from "../../lib/checkoffGroups";
 import { formatCheckoffSummary } from "../../lib/checkoffProgress";
@@ -69,6 +72,7 @@ function ReviewSheetRow({
   part,
   viewMode,
   busy,
+  quantityDisabled,
   compact,
   eager,
   note,
@@ -87,6 +91,7 @@ function ReviewSheetRow({
   part: ReviewPart;
   viewMode: ReviewViewMode;
   busy: boolean;
+  quantityDisabled: boolean;
   compact: boolean;
   eager?: boolean;
   note: string;
@@ -95,7 +100,7 @@ function ReviewSheetRow({
   roleFilaments: RoleFilamentRow[];
   spools: SpoolmanSpoolRow[];
   spoolsLoading?: boolean;
-  onQtyChange: (part: ReviewPart, qty: number) => void;
+  onQtyChange: (part: ReviewPart, update: QuantityUpdate) => void;
   onRemove: (part: ReviewPart) => void;
   onRestore: (part: ReviewPart) => void;
   onSpoolChange: (partId: number, spoolman_spool_id: string | null) => void;
@@ -220,8 +225,8 @@ function ReviewSheetRow({
       <td className="sheet-cell-qty">
         <QuantityStepper
           part={part}
-          disabled={busy || !part.included}
-          onChange={(n) => onQtyChange(part, n)}
+          disabled={quantityDisabled || !part.included}
+          onChange={(update) => onQtyChange(part, update)}
         />
       </td>
       <td className="sheet-cell-actions">
@@ -394,8 +399,8 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
 
   // Draft edits report failures through draftError (rendered by the Plan page),
   // so swallowing the rejection here does not hide the outcome.
-  const onQtyChange = (part: ReviewPart, next: number) => {
-    void setQuantity(part, next).catch(() => {});
+  const onQtyChange = (part: ReviewPart, update: QuantityUpdate) => {
+    void setQuantity(part, update).catch(() => {});
   };
 
   const onRemove = (part: ReviewPart) => {
@@ -451,6 +456,7 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
               part={part}
               viewMode={viewMode}
               busy={busyPartId === part.id || Boolean(disabled)}
+              quantityDisabled={Boolean(disabled)}
               spoolmanConfigured={spoolmanConfigured}
               roleFilaments={roleFilaments}
               spools={spools}
@@ -500,6 +506,7 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
                   part={part}
                   viewMode={viewMode}
                   busy={busyPartId === part.id || Boolean(disabled)}
+                  quantityDisabled={Boolean(disabled)}
                   compact={isMobileLayout || ui.compactMode}
                   eager={printPrep}
                   note={note}
@@ -531,6 +538,7 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
           part={part}
           review={review}
           busy={busyPartId === part.id || Boolean(disabled)}
+          quantityDisabled={Boolean(disabled)}
           onQtyChange={onQtyChange}
           onRemove={onRemove}
           onRestore={onRestore}

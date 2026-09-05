@@ -1,6 +1,6 @@
 import type { PlanReview, ReviewPart } from "../api/endpoints/planManifests";
 
-/** Auto-start / banner triggers for GRE-235 (not Progress ticks / Library no-plan). */
+/** Events evaluated by the STL auto-start policy. */
 export type StlAutoSyncTrigger =
   | "plan_select"
   | "parts_open"
@@ -94,7 +94,6 @@ export function shouldAutoStartStlSync(opts: {
   return true;
 }
 
-/** Parts banner state machine (GRE-235 design lock). */
 export function stlSyncBannerMode(opts: {
   running: boolean;
   failed: boolean;

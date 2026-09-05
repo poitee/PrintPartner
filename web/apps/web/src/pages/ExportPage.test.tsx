@@ -392,7 +392,10 @@ describe("ExportPage route question", () => {
     renderAt("/export");
     chooseRoute(/Download sorted STL files/);
     continueOn();
-    await waitFor(() => expect(state.save).toHaveBeenCalledWith({ route: "stl" }));
+    await waitFor(() => expect(state.save).toHaveBeenCalledWith({
+      kind: "set_route",
+      route: "stl",
+    }));
   });
 
   it("keeps a failed answer on screen with an inline Retry, not a toast", async () => {
@@ -409,7 +412,10 @@ describe("ExportPage route question", () => {
 
     fireEvent.click(within(alert).getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(state.save).toHaveBeenCalledTimes(2));
-    expect(state.save.mock.calls).toEqual([[{ route: "plates" }], [{ route: "plates" }]]);
+    expect(state.save.mock.calls).toEqual([
+      [{ kind: "set_route", route: "plates" }],
+      [{ kind: "set_route", route: "plates" }],
+    ]);
     expect(screen.getByRole("alert").textContent).toContain("Engine offline");
   });
 
@@ -450,7 +456,10 @@ describe("ExportPage route question", () => {
     fireEvent.click(screen.getByRole("button", { name: "Change production method" }));
     chooseRoute(/Download sorted STL files/);
     continueOn();
-    await waitFor(() => expect(state.save).toHaveBeenCalledWith({ route: "stl" }));
+    await waitFor(() => expect(state.save).toHaveBeenCalledWith({
+      kind: "set_route",
+      route: "stl",
+    }));
     expect(screen.queryByText("This work package will stop using:")).toBeNull();
   });
 
@@ -474,7 +483,10 @@ describe("ExportPage route question", () => {
     fireEvent.click(
       screen.getByRole("button", { name: 'Change to "Download sorted STL files"' }),
     );
-    await waitFor(() => expect(state.save).toHaveBeenCalledWith({ route: "stl" }));
+    await waitFor(() => expect(state.save).toHaveBeenCalledWith({
+      kind: "set_route",
+      route: "stl",
+    }));
   });
 
   it("leaves the route alone when the operator keeps it", () => {

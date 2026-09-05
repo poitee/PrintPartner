@@ -20,7 +20,7 @@ describe("source artifact endpoints", () => {
       .respond(
         jsonResponse({
           source_id: 7,
-          path: "print-partner.yaml",
+          path: "print-partner.manifest.yaml",
           exists: true,
           manifest_kind: "yaml",
           yaml: "x",
@@ -30,7 +30,7 @@ describe("source artifact endpoints", () => {
       .respond(
         jsonResponse({
           source_id: 7,
-          path: "print-partner.yaml",
+          path: "print-partner.manifest.yaml",
           saved: true,
           yaml: "x",
           document: {},
@@ -52,7 +52,7 @@ describe("source artifact endpoints", () => {
           yaml: "x",
           document: {},
           scanned_parts: [],
-          path: "print-partner.yaml",
+          path: "print-partner.manifest.yaml",
         }),
       )
       .respond(jsonResponse({ project_id: 7, part_count: 2, yaml: "draft" }));

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { ManifestSelections } from "@print-partner/contracts";
 import {
   fetchPlanKitManifest,
   savePlanKitManifest,
@@ -12,8 +13,8 @@ import {
 
 type Options = {
   profileId: number;
-  pendingSelections: Record<string, string>;
-  savedSelections: Record<string, string>;
+  pendingSelections: ManifestSelections;
+  savedSelections: ManifestSelections;
   loaded: boolean;
   userEdited: boolean;
   disabled: boolean;
@@ -21,6 +22,20 @@ type Options = {
   onSaved: (kit: KitManifest) => void;
   onRegisterFlush?: (profileId: number, flush: () => Promise<void>) => void;
   onUnregisterFlush?: (profileId: number) => void;
+};
+
+type ProfileSaveState = {
+  profileId: number;
+  inFlight: Promise<void> | null;
+  queuedSelections: ManifestSelections | null;
+  pendingSelections: ManifestSelections;
+  savedSelections: ManifestSelections;
+  baseKit: KitManifest | null;
+  loaded: boolean;
+  disabled: boolean;
+  lastPendingSelectionsProp: ManifestSelections;
+  lastSavedSelectionsProp: ManifestSelections;
+  lastBaseKitProp: KitManifest | null;
 };
 
 export function useKitManifestAutosave({
@@ -36,20 +51,51 @@ export function useKitManifestAutosave({
   onUnregisterFlush,
 }: Options) {
   const [status, setStatus] = useState<KitManifestSaveStatus>("idle");
-  const saveInFlightRef = useRef<Promise<void> | null>(null);
   const savedClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const pendingRef = useRef(pendingSelections);
-  const savedRef = useRef(savedSelections);
-  const loadedRef = useRef(loaded);
-  const disabledRef = useRef(disabled);
-  const baseKitRef = useRef(baseKit);
-
-  pendingRef.current = pendingSelections;
-  savedRef.current = savedSelections;
-  loadedRef.current = loaded;
-  disabledRef.current = disabled;
-  baseKitRef.current = baseKit;
+  const saveStateRef = useRef<ProfileSaveState>({
+    profileId,
+    inFlight: null,
+    queuedSelections: null,
+    pendingSelections,
+    savedSelections,
+    baseKit,
+    loaded,
+    disabled,
+    lastPendingSelectionsProp: pendingSelections,
+    lastSavedSelectionsProp: savedSelections,
+    lastBaseKitProp: baseKit,
+  });
+  if (saveStateRef.current.profileId !== profileId) {
+    saveStateRef.current = {
+      profileId,
+      inFlight: null,
+      queuedSelections: null,
+      pendingSelections,
+      savedSelections,
+      baseKit,
+      loaded,
+      disabled,
+      lastPendingSelectionsProp: pendingSelections,
+      lastSavedSelectionsProp: savedSelections,
+      lastBaseKitProp: baseKit,
+    };
+  }
+  const saveState = saveStateRef.current;
+  saveState.loaded = loaded;
+  saveState.disabled = disabled;
+  if (saveState.lastPendingSelectionsProp !== pendingSelections) {
+    saveState.lastPendingSelectionsProp = pendingSelections;
+    saveState.pendingSelections = pendingSelections;
+  }
+  if (saveState.lastSavedSelectionsProp !== savedSelections) {
+    saveState.lastSavedSelectionsProp = savedSelections;
+    saveState.savedSelections = savedSelections;
+  }
+  if (saveState.lastBaseKitProp !== baseKit) {
+    saveState.lastBaseKitProp = baseKit;
+    saveState.baseKit = baseKit;
+  }
 
   const dirty = loaded && userEdited && !selectionsEqual(pendingSelections, savedSelections);
 
@@ -60,77 +106,97 @@ export function useKitManifestAutosave({
     }
   }, []);
 
-  const saveSelections = useCallback(
-    async (selectionsOverride?: Record<string, string>) => {
-      if (!loadedRef.current || disabledRef.current) return;
-      const selectionsToSave = selectionsOverride ?? pendingRef.current;
-      if (selectionsEqual(selectionsToSave, savedRef.current)) return;
+  const drainQueuedSelections = useCallback(async () => {
+    while (saveState.queuedSelections) {
+      const selectionsToSave = saveState.queuedSelections;
+      saveState.queuedSelections = null;
+      if (selectionsEqual(selectionsToSave, saveState.savedSelections)) continue;
 
-      if (saveInFlightRef.current) {
-        await saveInFlightRef.current;
-        if (selectionsEqual(selectionsToSave, savedRef.current)) return;
+      const isCurrentProfile = saveStateRef.current === saveState;
+      if (isCurrentProfile) {
+        clearSavedTimer();
+        setStatus("saving");
       }
-
-      clearSavedTimer();
-      setStatus("saving");
-
-      const run = (async () => {
-        try {
-          const kitBase = baseKitRef.current;
-          const kit: KitManifest = {
-            name: kitBase?.name ?? null,
-            layers: kitBase?.layers ?? [],
-            base_source_id: kitBase?.base_source_id ?? null,
-            addon_source_ids: kitBase?.addon_source_ids ?? [],
-            selections: selectionsToSave,
-            include: kitBase?.include ?? [],
-            exclude: kitBase?.exclude ?? [],
-            replacements: kitBase?.replacements ?? {},
-            choice_tree: kitBase?.choice_tree ?? [],
-            category_links: kitBase?.category_links ?? [],
-          };
-          const saved = await savePlanKitManifest(profileId, kit);
-          savedRef.current = { ...saved.selections };
+      try {
+        const kitBase = saveState.baseKit;
+        const kit: KitManifest = {
+          name: kitBase?.name ?? null,
+          layers: kitBase?.layers ?? [],
+          base_source_id: kitBase?.base_source_id ?? null,
+          addon_source_ids: kitBase?.addon_source_ids ?? [],
+          selections: selectionsToSave,
+          include: kitBase?.include ?? [],
+          exclude: kitBase?.exclude ?? [],
+          replacements: kitBase?.replacements ?? {},
+          choice_tree: kitBase?.choice_tree ?? [],
+          category_links: kitBase?.category_links ?? [],
+        };
+        const saved = await savePlanKitManifest(profileId, kit);
+        saveState.baseKit = saved;
+        saveState.savedSelections = { ...saved.selections };
+        if (saveStateRef.current === saveState) {
           onSaved(saved);
           setStatus("saved");
           savedClearTimerRef.current = setTimeout(() => {
             setStatus((current) => (current === "saved" ? "idle" : current));
             savedClearTimerRef.current = null;
           }, KIT_MANIFEST_SAVED_CLEAR_MS);
-        } catch {
-          setStatus("error");
-        } finally {
-          saveInFlightRef.current = null;
         }
-      })();
+      } catch {
+        saveState.queuedSelections = null;
+        if (saveStateRef.current === saveState) setStatus("error");
+        return;
+      }
+    }
+  }, [clearSavedTimer, onSaved, profileId, saveState]);
 
-      saveInFlightRef.current = run;
-      await run;
+  const saveSelections = useCallback(
+    async (selectionsOverride?: ManifestSelections) => {
+      if (!saveState.loaded || saveState.disabled) return;
+      const selectionsToSave = selectionsOverride ?? saveState.pendingSelections;
+      if (
+        !saveState.inFlight &&
+        selectionsEqual(selectionsToSave, saveState.savedSelections)
+      ) {
+        return;
+      }
+
+      saveState.queuedSelections = selectionsToSave;
+      const activeRun = saveState.inFlight;
+      if (activeRun) {
+        await activeRun;
+        return;
+      }
+
+      const run = drainQueuedSelections();
+      saveState.inFlight = run;
+      try {
+        await run;
+      } finally {
+        if (saveState.inFlight === run) saveState.inFlight = null;
+      }
     },
-    [clearSavedTimer, onSaved, profileId],
+    [drainQueuedSelections, saveState],
   );
 
   const flushSave = useCallback(async () => {
-    if (saveInFlightRef.current) {
-      await saveInFlightRef.current;
+    if (saveState.inFlight) {
+      await saveState.inFlight;
     }
-    if (!selectionsEqual(pendingRef.current, savedRef.current)) {
-      await saveSelections(pendingRef.current);
+    if (!selectionsEqual(saveState.pendingSelections, saveState.savedSelections)) {
+      await saveSelections(saveState.pendingSelections);
     }
-  }, [saveSelections]);
+  }, [saveSelections, saveState]);
 
   const saveUserEdit = useCallback(
-    (selections: Record<string, string>) => {
-      pendingRef.current = selections;
+    (selections: ManifestSelections) => {
+      saveState.pendingSelections = selections;
       clearSavedTimer();
       setStatus("pending");
       void saveSelections(selections);
     },
-    [clearSavedTimer, saveSelections],
+    [clearSavedTimer, saveSelections, saveState],
   );
-
-  const flushSaveRef = useRef(flushSave);
-  flushSaveRef.current = flushSave;
 
   useEffect(() => {
     if (!onRegisterFlush) return;
@@ -141,15 +207,15 @@ export function useKitManifestAutosave({
   useEffect(() => {
     const flushOnHidden = () => {
       if (document.visibilityState === "hidden") {
-        void flushSaveRef.current();
+        void flushSave();
       }
     };
     document.addEventListener("visibilitychange", flushOnHidden);
     return () => {
       document.removeEventListener("visibilitychange", flushOnHidden);
-      void flushSaveRef.current();
+      void flushSave();
     };
-  }, [profileId]);
+  }, [flushSave]);
 
   useEffect(() => {
     return () => clearSavedTimer();

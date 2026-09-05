@@ -49,6 +49,7 @@ export default function SlicerInstanceRow({
       <div className="flex flex-wrap items-center gap-2">
         <Input
           className="h-8 max-w-[12rem]"
+          aria-label={`Name for ${row.name}`}
           defaultValue={row.name}
           disabled={busy}
           onBlur={(event) => {
@@ -68,6 +69,7 @@ export default function SlicerInstanceRow({
         <div className="ml-auto flex items-center gap-2">
           <span className="text-xs text-muted-foreground">Enabled</span>
           <Switch
+            aria-label={`${row.name} enabled`}
             checked={row.enabled}
             disabled={busy}
             onCheckedChange={(value) => onToggle(row, value)}
