@@ -52,12 +52,14 @@ Review every integration URL before saving it. Keep printer firmware and unauthe
 
 ## Uploads and archives
 
-Zip files, source archives, backups, and print artifacts are untrusted input. The server does not cap upload size — it normalizes filenames and resolves extracted files under controlled directories. Disk space is the only bound on an upload.
+Zip files, Source archives, backups, and print artifacts are untrusted input. The server applies route-specific upload, field, file-count, and expansion limits. Ordinary JSON requests are limited to 16 MiB. Source uploads are limited to 256 MiB, kit and print-file uploads to 64 MiB, and backup uploads to 20 GiB. Source archives can expand to at most 1 GiB of stored content. The server also normalizes filenames and resolves extracted files under controlled directories.
+
+These limits reduce resource-exhaustion risk, but they are not storage quotas or reservations. Buffered chunks and archive processing can temporarily require additional memory or disk space.
 
 Operators should also:
 
-- monitor free disk space under `/data`, which bounds upload size
-- put a request body limit on the reverse proxy if you need one
+- monitor free disk space under `/data`
+- set lower request limits at the reverse proxy when the deployment needs them
 - avoid importing archives from unknown sources
 - keep antivirus or malware scanning at the host boundary when required by local policy
 

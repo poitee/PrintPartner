@@ -43,6 +43,36 @@ List stored backups:
 curl --fail --silent http://127.0.0.1:8080/backups | jq .
 ```
 
+Inspect current storage use, estimated backup contents before compression, and
+free space on the data filesystem:
+
+```bash
+curl --fail --silent http://127.0.0.1:8080/backups/storage | jq .
+```
+
+The Settings backup panel presents the same inventory by Database, Source
+revisions, Working Source files, Exports, Thumbnails, Covers, Assistant
+knowledge, Configuration, Stored backups, and Other application data. The
+estimate is a point-in-time sum of logical file sizes. It is not the exact
+compressed archive size or allocated block count.
+
+A format v2 full backup covers 11 durable roots: `repos`, `sources`, `exports`,
+`thumbs`, `covers`, `assistant-domain`, `manifests`, `custom_filaments.json`,
+`kit-catalog.json`, `kit-catalog.yaml`, and `path-hints.yaml`. You can add
+deployment-specific path conventions to `/data/path-hints.yaml`. Print Partner
+validates that file and merges its rules with the packaged generic conventions.
+If a full v2 archive declares a covered root but contains no entry for it,
+restore removes the current root. A v2 database-only archive leaves all 11
+roots unchanged. Legacy v1 archives replace only legacy roots that are present
+in the archive, so an omitted path is retained.
+
+The built-in backup format allows at most 20 GiB of expanded archive content,
+8 GiB for one archive entry, and 100,000 entries. The server validates a new
+backup against these restore limits before it publishes the archive. If the
+estimated contents approach 20 GiB, use a tested filesystem or volume snapshot
+instead. Do not delete immutable Source revisions or accepted exports without
+a retention policy that explicitly permits the deletion.
+
 Download one archive:
 
 ```bash
@@ -58,7 +88,30 @@ Back up before upgrades, major imports, or storage changes.
 
 ## Restore a backup
 
-List backups and choose the exact stored filename. Restoring replaces current application data.
+List backups and choose the exact stored filename. Check the archive and
+available capacity before restoring:
+
+```bash
+export PP_BACKUP_NAME='print-partner-backup-2026-08-22T12-00-00-000Z.tar.gz'
+curl --fail --silent \
+  "http://127.0.0.1:8080/backups/$PP_BACKUP_NAME/preflight" | jq .
+```
+
+The preflight reports the validated, uncompressed archive bytes, required free
+space including a safety reserve, current free space, and whether capacity is
+sufficient. Free space can change after this check. The server repeats the
+check immediately before extraction and returns HTTP 507 before closing SQLite
+when capacity is insufficient.
+
+The compressed upload limit is 20 GiB. Independently, validation rejects more
+than 20 GiB of expanded content, any entry larger than 8 GiB, or more than
+100,000 entries.
+
+Restoring replaces current application data. Stop or finish Source syncs,
+imports, printer transfers, and other mutation jobs first. One server process
+rejects overlapping restore requests, but it does not drain background jobs or
+coordinate restore state with another Print Partner process that shares the same
+data directory.
 
 ```bash
 export PP_BACKUP_NAME='print-partner-backup-2026-08-22T12-00-00-000Z.tar.gz'
@@ -76,9 +129,32 @@ curl --fail --silent http://127.0.0.1:8080/health | jq .
 
 Test restore procedures on a disposable copy before depending on them for recovery.
 
+Restore validates and extracts into a sibling staging directory before it
+closes SQLite. It activates each top-level directory and the database with
+same-filesystem renames, removes stale SQLite journal files, and rolls the
+activated paths back if activation or reconnect fails. If rollback itself
+fails, the server preserves the recovery workspace and reports the recovery
+errors. A process or host crash during activation still requires manual
+inspection because restore has no durable crash journal.
+
 ## Update
 
 Read [CHANGELOG.md](CHANGELOG.md), then update:
+
+Run only one Print Partner version against a self-host data directory during an upgrade. Do not use a rolling deployment that shares the SQLite database or `/data` between old and new application instances. The startup migration preserves a concurrently changed legacy Source manifest as a recoverable backup, but it cannot make an uncoordinated old writer part of the new revision transaction.
+
+If the installation first enabled `MULTI_USER` on v3.3.0 after it already held
+data, retain an offline pre-upgrade backup. That release could assign only part
+of the bootstrap tenant to the first account. The current upgrade prevents that
+partial claim for new accounts. It repairs an active Source ownership mismatch
+only when the result is unambiguous. It does not generally recover or re-tenant
+inactive Source history, and it stops startup for manual recovery when a
+protected revision conflicts. Review ownership on every installation that ran
+the v3.3 claim path. Do not discard the backup until inactive Source revisions,
+Source documents and notes, Plan drafts and revisions and their dependent
+history, accepted Plates, slicer and printer configuration, print jobs,
+telemetry, and events have been checked under the first account. Split or
+conflicting history requires graph-aware recovery.
 
 ```bash
 git pull --ff-only
@@ -88,7 +164,9 @@ docker compose up -d
 
 Before Print Partner opens an existing SQLite database with a new application release, it creates and validates a database backup under `/data/backups`. Startup stops before migration if the backup fails. The backup filename identifies the target application and schema versions. Restarting the same release reuses the backup instead of creating duplicates.
 
-This automatic backup protects database records during an update. Continue to create and download a full backup before storage changes or major imports. Full backups also contain source files, exports, thumbnails, and covers.
+This automatic backup protects database records during an update. Continue to
+create and download a full backup before storage changes or major imports. The
+full-backup scope is listed in [Back up data](#back-up-data).
 
 Watch startup and migration logs:
 
@@ -200,7 +278,12 @@ docker compose exec print-partner du -sh /data
 
 Compose prefixes named volumes with the project name, so `docker volume inspect print-partner-data` often misses the real volume.
 
-Large consumers are usually synced repositories, thumbnails, exports, and backup archives. Download old backups before deleting their server-side copies.
+The Settings backup panel shows the server-side breakdown and estimated backup
+contents. Large consumers are usually immutable Source revisions, Working
+Source files, exports, thumbnails, and backup archives. Print Partner does not
+automatically delete Source revisions, exports, or stored backups. Download old
+backups before deleting their server-side copies, and do not remove revision or
+export files directly from `/data`.
 
 The default image prepares `/data` as root, then runs Node as uid 1000. Do not add a fixed `user:` setting unless a bind mount has already been prepared for that uid.
 

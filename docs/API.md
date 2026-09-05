@@ -71,6 +71,12 @@ POST   /jobs/sync
 
 Sync and scanning operations use background jobs when the work may outlive one request.
 
+`local_path` is an operator-facing capability for trusted, single-tenant
+self-host deployments. SaaS and multi-user deployments reject it on Source
+create and update requests, confine content to the Source's managed workspace,
+and return `local_path: null`. Clients must use the `content_available` boolean
+to decide whether Source files and documents are available.
+
 ### Builds and Plans
 
 The API retains the historical `plans` resource name for Builds.
@@ -89,6 +95,19 @@ POST   /plans/:id/drafts/:draftId/apply
 ```
 
 Applying a draft creates the accepted Plan revision used by Checkoff and Production. Callers should not update accepted state by patching part rows directly.
+
+Production Setup is a Build-owned resource:
+
+```text
+GET   /plans/:id/production-setup
+PATCH /plans/:id/production-setup
+```
+
+Each `PATCH` body is one typed command: `set_preferred_slicer_instance`,
+`set_selection`, `replace_printer_assignments`, `set_route`, or
+`replace_rules`. Read the returned resource after a `409` conflict before you
+retry. The former full-record `PUT` operation was removed; clients that used it
+must send the corresponding field commands instead.
 
 ### Checkoff
 
@@ -135,6 +154,44 @@ Printer fleet entries describe planning geometry. Integration records hold the h
 
 See [Printer setup](integrations/PRINTER_SETUP.md).
 
+### Backups and storage
+
+Backup routes are administrative, unprefixed browser API operations:
+
+```text
+GET    /backups
+POST   /backups
+GET    /backups/storage
+GET    /backups/:name
+GET    /backups/:name/preflight
+POST   /backups/validate
+POST   /backups/restore
+DELETE /backups/:name
+```
+
+Use `GET /backups/storage` to read the logical-byte inventory and estimated
+backup contents. Use the preflight endpoint before restoring a stored archive.
+Uploaded archive validation returns the same restore preflight with its backup
+metadata. Restore repeats archive and capacity checks immediately before it
+extracts data. It returns `507` without closing SQLite when the data filesystem
+does not have the required free space.
+
+Backup uploads accept at most 20 GiB of compressed data. Archive validation
+also limits expanded content to 20 GiB, one entry to 8 GiB, the archive to
+100,000 entries, and the expansion ratio to 200:1. `POST /backups` validates the
+completed archive against the same restore policy before it publishes the file.
+
+Format v2 metadata declares either `scope.kind: "database-only"` with no
+included roots or `scope.kind: "full"` with all 11 durable roots. The full scope
+includes Source revisions, Working Source files, generated media and exports,
+Assistant knowledge, manifest and kit configuration, custom filaments, and
+`path-hints.yaml`. A full restore treats an absent scoped path as absent state;
+a database-only restore leaves those paths unchanged. Format v1 archives keep
+their compatibility behavior and replace only legacy roots that are present.
+
+See [Operations](../OPERATIONS.md) for the restore procedure and concurrency
+limits.
+
 ## Background jobs
 
 A background operation returns:
@@ -178,6 +235,7 @@ Typical status codes:
 | `404` | Resource not found |
 | `409` | Revision or state conflict |
 | `413` | Upload exceeds the configured limit |
+| `507` | Data filesystem has insufficient space for restore |
 | `429` | Rate limit exceeded |
 | `500` | Unexpected server error |
 

@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import {
   applyReleasePlan,
@@ -13,6 +14,8 @@ import {
   renderReleaseIdentity,
   resolveTagCommit,
 } from "./release.mjs";
+
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 function write(root, path, contents) {
   const absolute = join(root, path);
@@ -140,6 +143,17 @@ test("release identity output is deterministic and binds the digest to the peele
     github_release_url:
       "https://github.com/poitee/PrintPartner/releases/tag/v3.2.0",
   });
+});
+
+test("release guide asks maintainers for the next version", () => {
+  const currentVersion = JSON.parse(readFileSync(join(REPO_ROOT, "web/package.json"), "utf8")).version;
+  const deployGuide = readFileSync(join(REPO_ROOT, "web/DEPLOY.md"), "utf8");
+
+  assert.doesNotMatch(
+    deployGuide,
+    new RegExp(`release\\.mjs prepare ${currentVersion.replaceAll(".", "\\.")}`),
+  );
+  assert.match(deployGuide, /NEXT_VERSION=X\.Y\.Z/);
 });
 
 test("annotated tag validation uses the peeled commit, not the tag object", () => {
