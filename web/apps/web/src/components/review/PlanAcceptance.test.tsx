@@ -433,7 +433,7 @@ describe("Plan acceptance checkpoint", () => {
     expect(await screen.findByText(/part-1.stl: printed 6 units, new quantity is 4/)).toBeTruthy();
   });
 
-  it("rebases saved edits onto current Sources before retrying the Plan", async () => {
+  it("rebases saved edits onto current Sources and saves without another click", async () => {
     const user = userEvent.setup();
     const rebasedWorkspace: PlanDraftWorkspace = {
       ...resolvedWorkspace(),
@@ -469,16 +469,11 @@ describe("Plan acceptance checkpoint", () => {
       name: "Publish Plan revision 2 for Production",
     }));
 
-    expect(await screen.findByText("Working Plan refreshed")).toBeTruthy();
-    expect(screen.getAllByText(/Review the updated quantities and choices/).length).toBeGreaterThan(0);
+    expect(await screen.findByText("Plan revision 2 published")).toBeTruthy();
     expect(abandonPlanDraft).not.toHaveBeenCalled();
     expect(rebasePlanDraft).toHaveBeenCalledWith(7, originalWorkspace.draft);
     expect(recomputePlanDraft).not.toHaveBeenCalled();
     expect(screen.queryByText(/choice before publishing/)).toBeNull();
-
-    await user.click(screen.getByRole("button", {
-      name: "Publish Plan revision 2 for Production",
-    }));
 
     await waitFor(() => expect(applyPlanDraft).toHaveBeenCalledTimes(2));
     expect(applyPlanDraft).toHaveBeenLastCalledWith(rebasedWorkspace, undefined);

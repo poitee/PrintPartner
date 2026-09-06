@@ -132,7 +132,7 @@ selections:
     expect(repo.getPlanDraft(profile.id, created.draft.draft_id)?.state).toBe("abandoned");
   });
 
-  it("keeps a conflicting open draft visible and editable after a failed refresh", async () => {
+  it("refreshes disappeared source files without blocking the Plan", async () => {
     const { app, repo, profile, sourceRoot } = await fixture();
     const created = (await app.inject({
       method: "POST", url: `/plans/${profile.id}/drafts/recompute`,
@@ -158,14 +158,16 @@ selections:
         expected_source_snapshot_digest: edited.draft.snapshot_digest,
       },
     });
-    expect(response.statusCode).toBe(422);
-    expect(response.json()).toMatchObject({ code: "merge_conflicts" });
+    expect(response.statusCode).toBe(200);
+    const refreshed = response.json();
+    expect(refreshed.parts).toMatchObject([{ filename: "replacement.stl" }]);
+    expect(repo.getPlanDraft(profile.id, edited.draft.draft_id)?.parts[0]?.quantityOverride).toBe(2);
     const listed = (await app.inject({ method: "GET", url: `/plans/${profile.id}/drafts` })).json();
-    expect(listed.drafts).toContainEqual(expect.objectContaining({ draft_id: edited.draft.draft_id, state: "open" }));
+    expect(listed.drafts).toContainEqual(expect.objectContaining({ draft_id: refreshed.draft.draft_id, state: "open" }));
     const retryEdit = await app.inject({
-      method: "PATCH", url: `/plans/${profile.id}/drafts/${edited.draft.draft_id}/parts`,
-      payload: { expected_snapshot_digest: edited.draft.snapshot_digest, decisions: [
-        { kind: "set_quantity_override", draft_part_ids: [target.draft_part_id], value: 3 },
+      method: "PATCH", url: `/plans/${profile.id}/drafts/${refreshed.draft.draft_id}/parts`,
+      payload: { expected_snapshot_digest: refreshed.draft.snapshot_digest, decisions: [
+        { kind: "set_quantity_override", draft_part_ids: [refreshed.parts[0].draft_part_id], value: 3 },
       ] },
     });
     expect(retryEdit.statusCode).toBe(200);

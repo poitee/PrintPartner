@@ -897,7 +897,7 @@ describe("PlanWorkspaceProvider saved draft lifecycle", () => {
     );
   });
 
-  it("rebases changed Sources without discarding the open Plan's edits", async () => {
+  it("rebases changed Sources and finishes saving without a manual retry", async () => {
     const rebuiltWorkspace: PlanDraftWorkspace = {
       ...replacementWorkspace,
       draft: {
@@ -930,21 +930,13 @@ describe("PlanWorkspaceProvider saved draft lifecycle", () => {
     vi.mocked(rebasePlanDraft).mockResolvedValue(rebuiltWorkspace);
 
     await act(async () => {
-      await expect(hook.result.current.applyActivePlanDraft()).rejects.toThrow(
-        "Another change reached this Working Plan",
-      );
+      await hook.result.current.applyActivePlanDraft();
     });
 
     expect(recomputePlanDraft).not.toHaveBeenCalled();
     expect(rebasePlanDraft).toHaveBeenCalledWith(7, savedWorkspace.draft);
     expect(abandonPlanDraft).not.toHaveBeenCalled();
-    expect(client.getQueryData(queryKeys.planDraft(7, 10))).toEqual(
-      rebuiltWorkspace,
-    );
-
-    await act(async () => {
-      await hook.result.current.applyActivePlanDraft();
-    });
+    expect(hook.result.current.draftError).toBeNull();
 
     expect(applyPlanDraft).toHaveBeenCalledTimes(2);
     expect(applyPlanDraft).toHaveBeenNthCalledWith(
