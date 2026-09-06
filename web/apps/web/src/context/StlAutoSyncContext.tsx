@@ -28,7 +28,6 @@ import {
   type StlSyncBannerMode,
 } from "../lib/stlAutoSync";
 import { flattenReviewParts } from "../lib/reviewParts";
-import { warmupPartThumbnails } from "../lib/stlThumbnail";
 
 type StlAutoSyncValue = {
   busy: boolean;
@@ -147,14 +146,6 @@ export function StlAutoSyncProvider({ children }: { children: ReactNode }) {
       refresh,
     ],
   );
-
-  const emptyThumbKey = useMemo(() => emptyThumbPartIds(parts).join(","), [parts]);
-
-  useEffect(() => {
-    if (!emptyThumbKey) return;
-    const ids = emptyThumbKey.split(",").map(Number);
-    void warmupPartThumbnails(ids);
-  }, [emptyThumbKey]);
 
   const runSync = useCallback(() => {
     if (selectedProfileId == null || !review) return;

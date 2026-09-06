@@ -50,6 +50,23 @@ async function fixture() {
 }
 
 describe("Plan draft routes", () => {
+  it("keeps exhausted media requests from blocking Plan edits", async () => {
+    const { app, profile } = await fixture();
+    for (let index = 0; index < 1000; index += 1) {
+      const response = await app.inject({ method: "GET", url: "/parts/999999/mesh" });
+      expect(response.statusCode).toBe(404);
+    }
+    const limited = await app.inject({ method: "GET", url: "/parts/999999/thumbnail" });
+    expect(limited.statusCode).toBe(429);
+    const drafts = await app.inject({ method: "GET", url: `/plans/${profile.id}/drafts` });
+    expect(drafts.statusCode).toBe(200);
+    for (let index = 0; index < 999; index += 1) {
+      expect((await app.inject({ method: "GET", url: `/plans/${profile.id}/drafts` })).statusCode).toBe(200);
+    }
+    expect((await app.inject({ method: "GET", url: `/plans/${profile.id}/drafts` })).statusCode).toBe(429);
+    expect((await app.inject({ method: "GET", url: "/health" })).statusCode).toBe(200);
+  });
+
   it("preserves file choices on ordinary recompute and applies kit choices only on request", async () => {
     const { app, repo, profile, sourceRoot } = await fixture();
     writeFileSync(join(sourceRoot, "print-partner.manifest.yaml"), `option_groups:
