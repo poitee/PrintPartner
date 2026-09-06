@@ -810,6 +810,8 @@ describe("PlanWorkspaceProvider saved draft lifecycle", () => {
 
   it("does not Apply implicitly and invalidates every accepted projection after explicit Apply", async () => {
     const client = new QueryClient();
+    const refreshReview = vi.fn().mockResolvedValue(acceptedReview);
+    client.setQueryDefaults(queryKeys.planReview(7, false), { queryFn: refreshReview });
     for (const key of [
       queryKeys.planReview(7, false),
       queryKeys.profiles,
@@ -830,9 +832,8 @@ describe("PlanWorkspaceProvider saved draft lifecycle", () => {
     });
 
     expect(applyPlanDraft).toHaveBeenCalledWith(savedWorkspace, undefined);
-    expect(
-      client.getQueryState(queryKeys.planReview(7, false))?.isInvalidated,
-    ).toBe(true);
+    expect(refreshReview).toHaveBeenCalledOnce();
+    expect(client.getQueryData(queryKeys.planReview(7, false))).toEqual(acceptedReview);
     expect(client.getQueryState(queryKeys.profiles)?.isInvalidated).toBe(true);
     expect(client.getQueryState(queryKeys.checkoff(7))?.isInvalidated).toBe(
       true,

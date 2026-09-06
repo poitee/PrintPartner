@@ -89,7 +89,7 @@ export default function PartsPage() {
       ) : (
         <>
           <KitManifestOptions profileId={selectedProfileId} disabled={disabled} onUpdated={() => preparePlan({ applyManifest: true })} compact />
-          <PlanFileSelection profileId={selectedProfileId} disabled={disabled} />
+          <PlanFileSelection profileId={selectedProfileId} disabled={loading} />
           <section id="materials" className="space-y-2">
             <h2 className="text-sm font-semibold">Colors and materials</h2>
             <PlanRolesCard profileId={selectedProfileId} refreshKey={review.accepted_basis.plan_version} disabled={disabled} onUpdated={refresh} />

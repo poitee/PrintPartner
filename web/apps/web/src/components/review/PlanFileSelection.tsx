@@ -6,6 +6,7 @@ import type { ReviewPart } from "../../api/endpoints/planManifests";
 import type { StlTreeNode } from "../../api/importRulesTree";
 import { TreeRows } from "../ImportRulesTree";
 import { Input } from "../ui/input";
+import { planFileIdentity } from "../../hooks/usePlanFileChoices";
 
 function fileTree(parts: readonly ReviewPart[], included: (part: ReviewPart) => boolean): StlTreeNode[] {
   const roots: StlTreeNode[] = [];
@@ -30,12 +31,12 @@ function fileTree(parts: readonly ReviewPart[], included: (part: ReviewPart) => 
 export default function PlanFileSelection({ profileId, disabled }: { profileId: number; disabled: boolean }) {
   const { data, error } = usePlanReviewQuery(profileId, { includeExcluded: true });
   const layers = usePlanLayersQuery(profileId);
-  const { setFilesIncluded, draftWorkspace } = usePlanWorkspace();
+  const { setFilesIncluded, draftWorkspace, pendingFileChoices } = usePlanWorkspace();
   const [search, setSearch] = useState("");
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const groups = data?.part_groups ?? [];
   const pendingByKey = new Map(draftWorkspace?.parts.map((part) => [part.part_key, part.included]));
-  const isIncluded = (part: ReviewPart) => pendingByKey.get(part.match_key) ?? part.included;
+  const isIncluded = (part: ReviewPart) => pendingFileChoices?.get(planFileIdentity(part))?.included ?? pendingByKey.get(part.match_key) ?? part.included;
   const selected = groups.flatMap((group) => group.parts).filter(isIncluded).length;
   const query = search.trim().toLowerCase();
   return (

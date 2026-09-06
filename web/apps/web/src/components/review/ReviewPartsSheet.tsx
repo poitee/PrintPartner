@@ -56,6 +56,7 @@ import { Checkbox } from "../ui/checkbox";
 import QuantityStepper from "./QuantityStepper";
 import { Button } from "../ui/button";
 import { cn } from "@/lib/utils";
+import { planFileIdentity } from "../../hooks/usePlanFileChoices";
 
 type Props = {
   review: PlanReview;
@@ -270,6 +271,7 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
   const { profiles } = useProfileSelection();
   const {
     draftWorkspace,
+    pendingFileChoices,
     setQuantity,
     setIncluded,
     setSpoolmanSpool,
@@ -369,9 +371,14 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
     [acceptedParts],
   );
   const allParts = useMemo(() => {
-    if (!draftWorkspace || ui.viewMode !== "edit") return acceptedParts;
-    return workingPlanReviewParts(acceptedParts, draftWorkspace);
-  }, [acceptedParts, draftWorkspace, ui.viewMode]);
+    if (ui.viewMode !== "edit") return acceptedParts;
+    const parts = draftWorkspace ? workingPlanReviewParts(acceptedParts, draftWorkspace) : acceptedParts;
+    if (!pendingFileChoices?.size) return parts;
+    return parts.map((part) => {
+      const choice = pendingFileChoices.get(planFileIdentity(part));
+      return choice ? { ...part, included: choice.included } : part;
+    });
+  }, [acceptedParts, draftWorkspace, pendingFileChoices, ui.viewMode]);
 
   const facets = useMemo(() => collectReviewFacets(allParts), [allParts]);
 
