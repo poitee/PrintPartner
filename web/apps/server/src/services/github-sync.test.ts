@@ -44,6 +44,7 @@ type TreeItem = {
   type: "blob" | "tree" | "commit";
   mode: string;
   size?: number;
+  sha?: string;
 };
 
 function reposRoot(): string {
@@ -126,6 +127,33 @@ describe("atomic GitHub Source sync", () => {
         branch: "feature/new-ui",
       });
     }
+  });
+
+  it.each([false, true])("syncs identical case-only STL aliases regardless of tree order (%s)", async (reverse) => {
+    const path = "STL/Toolhead Board Mounts/A4T - THB Mount - WWBMG - NH36";
+    const entries: TreeItem[] = [
+      { path: `${path}.STL`, type: "blob", mode: "100644", size: 5, sha: COMMIT_B },
+      { path: `${path}.stl`, type: "blob", mode: "100644", size: 5, sha: COMMIT_B },
+    ];
+    setTree(COMMIT_A, reverse ? entries.reverse() : entries);
+    const fetchMock = rawResponse({ [`${path}.STL`]: "solid", [`${path}.stl`]: "solid" });
+    vi.stubGlobal("fetch", fetchMock);
+    const input = { url: "https://github.com/example/printer", branch: "main", reposDir: reposRoot(), sourceId: 7 };
+    const result = await syncGithubSource(input);
+    expect(result.stlPaths).toEqual([`${path}.STL`]);
+    expect(result.downloaded).toBe(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect((await syncGithubSource(input)).snapshot.publication).toBe("reused");
+  });
+
+  it.each([undefined, COMMIT_A])("rejects case collisions without identical blob identity (%s)", async (sha) => {
+    setTree(COMMIT_A, [
+      { path: "part.STL", type: "blob", mode: "100644", size: 5, sha: COMMIT_B },
+      { path: "part.stl", type: "blob", mode: "100644", size: 5, sha },
+    ]);
+    await expect(syncGithubSource({ url: "https://github.com/example/printer", branch: "main", reposDir: reposRoot(), sourceId: 7 }))
+      .rejects.toThrow(/Duplicate Source snapshot path/);
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it("pins every raw download to the resolved commit and publishes a complete snapshot", async () => {

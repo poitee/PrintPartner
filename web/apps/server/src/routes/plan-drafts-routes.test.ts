@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify from "fastify";
 import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
@@ -50,6 +50,23 @@ async function fixture() {
 }
 
 describe("Plan draft routes", () => {
+  it("lists draft identities without loading and hashing historical part snapshots", async () => {
+    const { app, repo, profile } = await fixture();
+    for (let index = 0; index < 20; index += 1) {
+      repo.recomputePlanDraft({ profileId: profile.id, actor: "test", idempotencyKey: `history-${index}` });
+    }
+    const snapshots = vi.spyOn(repo, "getPlanDraft");
+    try {
+      const response = await app.inject({ method: "GET", url: `/plans/${profile.id}/drafts` });
+      expect(response.statusCode).toBe(200);
+      expect(response.json().drafts).toHaveLength(20);
+      expect(response.json().drafts[19]).toEqual(expect.objectContaining({ state: "open", snapshot_digest: expect.any(String) }));
+      expect(snapshots).not.toHaveBeenCalled();
+    } finally {
+      snapshots.mockRestore();
+    }
+  });
+
   it("keeps exhausted media requests from blocking Plan edits", async () => {
     const { app, profile } = await fixture();
     for (let index = 0; index < 1000; index += 1) {

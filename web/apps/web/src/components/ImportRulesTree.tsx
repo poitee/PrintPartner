@@ -43,7 +43,7 @@ type Props = {
   enableFileCategoryDrag?: boolean;
 };
 
-function TreeRows({
+export function TreeRows({
   nodes,
   depth,
   filter,

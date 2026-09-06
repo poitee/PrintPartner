@@ -287,6 +287,7 @@ type RepoTreeEntry = {
   type: "blob" | "tree" | "commit";
   mode: string | null;
   size: number | null;
+  blobSha: string | null;
 };
 
 /** Resolve a ref to a commit and list the full recursive tree (no blob downloads). */
@@ -316,6 +317,7 @@ async function fetchGithubTreeEntries(
       type: item.type,
       mode: item.mode ?? null,
       size: typeof item.size === "number" ? item.size : null,
+      blobSha: typeof item.sha === "string" && /^[a-f0-9]{40}$/i.test(item.sha) ? item.sha.toLowerCase() : null,
     });
   }
   return { commitSha, entries, truncated: tree.data.truncated === true };
@@ -401,11 +403,19 @@ function isRegularBlob(entry: RepoTreeEntry): boolean {
 
 function selectedTreeFiles(entries: readonly RepoTreeEntry[]): RepoTreeEntry[] {
   const selected: RepoTreeEntry[] = [];
-  for (const entry of entries) {
+  const byFoldedPath = new Map<string, RepoTreeEntry>();
+  for (const entry of [...entries].sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0)) {
     if (!snapshotKind(entry.path)) continue;
     if (!isRegularBlob(entry)) {
       throw new Error(`GitHub Source contains an unsupported selected entry: ${entry.path}`);
     }
+    const foldedPath = sourceRelativePath(entry.path).toLocaleLowerCase("en-US");
+    const prior = byFoldedPath.get(foldedPath);
+    if (prior) {
+      if (entry.blobSha != null && entry.blobSha === prior.blobSha && snapshotKind(entry.path) === snapshotKind(prior.path)) continue;
+      throw new Error(`Duplicate Source snapshot path: ${entry.path}; case-insensitive paths do not have identical Git blob identities`);
+    }
+    byFoldedPath.set(foldedPath, entry);
     selected.push(entry);
   }
   return selected;

@@ -57,7 +57,7 @@ export type PlanDraftIdentityResult =
   | { readonly kind: "ready"; readonly draft: PlanDraftIdentity }
   | PlanDraftWorkspaceFailure;
 
-function identity(draft: PlanDraftSnapshot): PlanDraftIdentity {
+function identity(draft: Pick<PlanDraftSnapshot, "id" | "state" | "lifecycleVersion" | "snapshotDigest" | "baseRevisionId" | "basePlanVersion">): PlanDraftIdentity {
   return {
     draft_id: draft.id,
     state: draft.state,
@@ -116,7 +116,7 @@ export class PlanDraftWorkspaceService {
 
   list(profileId: number): PlanDraftIdentity[] | null {
     if (!this.repo.getOwnedProfileIdentity(profileId)) return null;
-    return this.repo.listPlanDrafts(profileId).map(identity);
+    return this.repo.listPlanDraftIdentities(profileId).map(identity);
   }
 
   read(profileId: number, draftId: number): PlanDraftWorkspaceResult {

@@ -3993,16 +3993,21 @@ export class AppRepository {
     return draft;
   }
 
-  listPlanDrafts(profileId: number): PlanDraftSnapshot[] {
+  listPlanDraftIdentities(profileId: number) {
     this.requireProfile(profileId);
     return this.db
-      .select({ id: this.schema.planDrafts.id })
+      .select({
+        id: this.schema.planDrafts.id,
+        state: this.schema.planDrafts.state,
+        lifecycleVersion: this.schema.planDrafts.lifecycleVersion,
+        snapshotDigest: this.schema.planDrafts.snapshotDigest,
+        baseRevisionId: this.schema.planDrafts.baseRevisionId,
+        basePlanVersion: this.schema.planDrafts.basePlanVersion,
+      })
       .from(this.schema.planDrafts)
       .where(and(eq(this.schema.planDrafts.tenantId, this.tenantId), eq(this.schema.planDrafts.profileId, profileId)))
       .orderBy(asc(this.schema.planDrafts.createdAt), asc(this.schema.planDrafts.id))
-      .all()
-      .map((row) => this.getPlanDraft(profileId, row.id))
-      .filter((draft): draft is PlanDraftSnapshot => draft != null);
+      .all();
   }
 
   private planDraftNeedsAcceptedBaseline(
