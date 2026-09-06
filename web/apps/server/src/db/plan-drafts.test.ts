@@ -5,7 +5,9 @@ import { once } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as artifactDigest from "../services/artifact-digest.js";
+import { PlanDraftWorkspaceService } from "../services/plan-draft-workspace.js";
 import { backfillAcceptedPlanRevisions } from "./accepted-plan-revisions.js";
 import { backfillCurrentRequiredUnitSets } from "./required-units.js";
 import { getDb, SqliteDatabase } from "./client.js";
@@ -18,6 +20,116 @@ import { acceptPlanForTest, editAcceptedPartsForTest } from "../test/accept-plan
 import { saveKitManifest } from "../services/kit-manifest-store.js";
 
 const tempDirs: string[] = [];
+
+it("starts ordinary edits from current accepted parts without reading model bytes", () => {
+  const { repo, database, raw } = fixture();
+  const tracked = trackedSource({ repo, database, name: "Fast edits", files: {
+    "part.stl": "solid part", "other.stl": "solid other",
+  } });
+  const profile = repo.createProfile("Fast edit Build", tracked.source.id);
+  expect(acceptPlanForTest(repo, profile.id).merged).toBe(true);
+  const before = snapshotTables(raw, ACCEPTED_STATE_TABLES);
+  const hash = vi.spyOn(artifactDigest, "sha256File");
+  try {
+    const result = new PlanDraftWorkspaceService(repo).recompute({
+      profileId: profile.id, actorId: "test", idempotencyKey: "fast-edit", applyManifest: false,
+    });
+    expect(result.kind).toBe("ready");
+    expect(hash).not.toHaveBeenCalled();
+    expect(snapshotTables(raw, ACCEPTED_STATE_TABLES)).toEqual(before);
+    if (result.kind !== "ready") throw new Error("Expected ready draft");
+    const full = new PlanDraftWorkspaceService(repo).recompute({
+      profileId: profile.id, actorId: "test", idempotencyKey: "full-scan", applyManifest: true,
+    });
+    expect(full.kind).toBe("ready");
+    if (full.kind !== "ready") throw new Error("Expected full draft");
+    expect(result.workspace.diff).toEqual(full.workspace.diff);
+  } finally {
+    hash.mockRestore();
+  }
+});
+
+it.each(["manifest", "configuration", "new revision"])(
+  "rescans Sources for %s instead of reusing accepted parts", (change) => {
+    const { repo, database } = fixture();
+    const tracked = trackedSource({ repo, database, name: "Fallback", files: { "part.stl": "solid part" } });
+    const profile = repo.createProfile("Fallback Build", tracked.source.id);
+    expect(acceptPlanForTest(repo, profile.id).merged).toBe(true);
+    if (change === "configuration") repo.markProfileConfigModified(profile.id);
+    if (change === "new revision") {
+      const observed = repo.getProjectRow(tracked.source.id);
+      if (!observed) throw new Error("Source missing");
+      const revision = repo.recordSourceRevision({
+        sourceId: tracked.source.id, upstreamRevisionKey: "b", manifestDigest: "b".repeat(64),
+        snapshotLocator: `${tracked.source.id}/revisions/a`, syncedAt: "2026-09-06T00:00:00.000Z", completeness: "complete",
+      });
+      repo.activateSourceRevision({ sourceId: tracked.source.id, revisionId: revision.id, observed, sourceVersion: "b" });
+    }
+    const hash = vi.spyOn(artifactDigest, "sha256File");
+    try {
+      new PlanDraftWorkspaceService(repo).recompute({
+        profileId: profile.id, actorId: "test", idempotencyKey: "fallback", applyManifest: change === "manifest",
+      });
+      expect(hash).toHaveBeenCalled();
+    } finally { hash.mockRestore(); }
+  },
+);
+
+it("applies a fast selection edit while preserving the other part's completed unit", () => {
+  const { repo, database, raw } = fixture();
+  const tracked = trackedSource({ repo, database, name: "Progress", files: {
+    "done.stl": "solid done", "optional.stl": "solid optional",
+  } });
+  const profile = repo.createProfile("Progress Build", tracked.source.id);
+  expect(acceptPlanForTest(repo, profile.id).merged).toBe(true);
+  const done = repo.getAcceptedPlanRevision(profile.id)?.parts.find((part) => part.filename === "done.stl");
+  if (!done?.projectionPartId) throw new Error("Completed part missing");
+  raw.prepare(`INSERT INTO print_progress (tenant_id, part_id, unit_index, completed, assembled)
+    VALUES ('default', ?, 0, 1, 1) ON CONFLICT DO UPDATE SET completed = 1, assembled = 1`).run(done.projectionPartId);
+  const readProgress = () => raw.prepare(`SELECT p.match_key, pp.unit_index, pp.completed, pp.assembled
+    FROM print_progress pp JOIN parts p ON pp.part_id = p.id
+    WHERE p.profile_id = ? ORDER BY p.match_key, pp.unit_index`).all(profile.id);
+  const progressBefore = readProgress();
+  const service = new PlanDraftWorkspaceService(repo);
+  const prepared = service.recompute({ profileId: profile.id, actorId: "test", idempotencyKey: "edit", applyManifest: false });
+  if (prepared.kind !== "ready") throw new Error("Draft not ready");
+  const draft = repo.getPlanDraft(profile.id, prepared.workspace.draft.draft_id);
+  const optional = draft?.parts.find((part) => part.filename === "optional.stl");
+  if (!draft || !optional) throw new Error("Optional part missing");
+  const edited = service.editParts({ profileId: profile.id, draftId: draft.id, actorId: "test", request: {
+    expected_snapshot_digest: draft.snapshotDigest,
+    decision: { kind: "set_included", draft_part_ids: [optional.id], value: false },
+  } });
+  if (edited.kind !== "ready") throw new Error("Edit not ready");
+  const ready = repo.getPlanDraft(profile.id, draft.id);
+  if (!ready || ready.baseRevisionId == null) throw new Error("Ready draft missing");
+  const applied = repo.applyPlanChanges({
+    profileId: profile.id, draftId: ready.id, expectedSnapshotDigest: ready.snapshotDigest,
+    expectedLifecycleVersion: ready.lifecycleVersion,
+    expectedBase: { kind: "revision", revisionId: ready.baseRevisionId, planVersion: ready.basePlanVersion },
+    actorId: "test", idempotencyKey: "apply-fast",
+  });
+  expect(applied.kind).toBe("applied");
+  expect(repo.getAcceptedPlanRevision(profile.id)?.parts.find((part) => part.filename === "optional.stl")?.included).toBe(false);
+  expect(readProgress()).toEqual(progressBefore);
+});
+
+it("discovers new local files when an untracked source is edited", () => {
+  const { repo, database } = fixture();
+  const root = join(database.reposDir, "local-files");
+  mkdirSync(root);
+  writeFileSync(join(root, "part.stl"), "solid original");
+  const source = repo.createSource({ name: "Local", source_kind: "local", local_path: root });
+  const profile = repo.createProfile("Local Build", source.id);
+  expect(acceptPlanForTest(repo, profile.id).merged).toBe(true);
+  writeFileSync(join(root, "new.stl"), "solid new");
+  const result = new PlanDraftWorkspaceService(repo).recompute({
+    profileId: profile.id, actorId: "test", idempotencyKey: "local-files", applyManifest: false,
+  });
+  if (result.kind !== "ready") throw new Error("Local draft not ready");
+  const draft = repo.getPlanDraft(profile.id, result.workspace.draft.draft_id);
+  expect(draft?.parts.map((part) => part.filename)).toContain("new.stl");
+});
 
 const ACCEPTED_STATE_TABLES = [
   "parts",

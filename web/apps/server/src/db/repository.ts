@@ -4037,6 +4037,7 @@ export class AppRepository {
       readonly excludedPathsBySourceId?: ReadonlyMap<number, ReadonlySet<string>>;
       readonly includedPathsBySourceId?: ReadonlyMap<number, ReadonlySet<string>>;
       readonly applyManifest?: boolean;
+      readonly preferAccepted?: boolean;
     } = {},
   ): PreparePlanDraftResult {
     const accepted =
@@ -4044,6 +4045,33 @@ export class AppRepository {
         ? null
         : this.getPlanRevisionById(profileId, base.baseRevisionId, base.basePlanVersion);
     const capture = this.capturePlanInputs(profileId);
+    const draftInputs: PlanSnapshotInput[] = capture.inputs.map((captured) => ({
+      sourceId: captured.source_id,
+      sourceLayer: captured.source_layer,
+      layerOrder: captured.layer_order,
+      trackingKind: captured.tracking_kind,
+      sourceRevisionId: captured.source_revision_id,
+      manifestDigest: captured.manifest_digest,
+      effectiveNamingDigest: captured.effective_naming_digest,
+    }));
+    if (
+      options.preferAccepted && options.applyManifest === false && accepted &&
+      !options.excludedPathsBySourceId && !options.includedPathsBySourceId &&
+      capture.inputs.length > 0 && capture.inputs.every((input) => input.tracking_kind === "revision") &&
+      this.getProfileHeader(profileId)?.freshness.status === "current"
+    ) {
+      // Validate stored provenance and parts before reusing their artifact identities.
+      // Actual artifact reads still verify bytes; an edit does not rediscover Sources.
+      const operational = this.readAcceptedPlanOperationalSnapshot(profileId);
+      if (operational.kind === "ready") {
+        const parts = this.rebaseAcceptedParts(profileId, base.baseRevisionId)
+          .map(({ id, projectionPartId: _projectionPartId, ...part }) => ({ ...part, baseRevisionPartId: id }));
+        return { kind: "prepared", value: {
+          ...base, capture, inputs: draftInputs, parts,
+          snapshotDigest: digestPlanDraft({ ...base, inputs: draftInputs, parts }),
+        } };
+      }
+    }
     const acceptedByKey = new Map<string, AcceptedPlanRevisionPart>();
     for (const part of [...(accepted?.parts ?? [])].sort((left, right) => left.id - right.id)) {
       if (!acceptedByKey.has(part.partKey)) acceptedByKey.set(part.partKey, part);
@@ -4105,15 +4133,6 @@ export class AppRepository {
       throw error;
     }
     const roleDefaults = loadRoleFilamentDefaults(this, profileId);
-    const draftInputs: PlanSnapshotInput[] = capture.inputs.map((captured) => ({
-      sourceId: captured.source_id,
-      sourceLayer: captured.source_layer,
-      layerOrder: captured.layer_order,
-      trackingKind: captured.tracking_kind,
-      sourceRevisionId: captured.source_revision_id,
-      manifestDigest: captured.manifest_digest,
-      effectiveNamingDigest: captured.effective_naming_digest,
-    }));
     const trackingBySourceLayer = new Map(draftInputs.map((captured) => [captured.sourceLayer, captured.trackingKind]));
     const scannedDraftParts = merged.parts.map(
       (
@@ -4251,6 +4270,7 @@ export class AppRepository {
     excludedPathsBySourceId?: ReadonlyMap<number, ReadonlySet<string>>;
     includedPathsBySourceId?: ReadonlyMap<number, ReadonlySet<string>>;
     applyManifest?: boolean;
+    preferAccepted?: boolean;
   }): RecomputePlanDraftResult {
     const actor = requiredText(input.actor, "Plan draft actor");
     const idempotencyKey = requiredText(input.idempotencyKey, "Plan draft idempotency key");

@@ -189,6 +189,7 @@ export class PlanDraftWorkspaceService {
       actor: input.actorId,
       idempotencyKey: input.idempotencyKey,
       applyManifest: input.applyManifest,
+      preferAccepted: input.applyManifest === false,
     }));
     if (result.kind !== "created" && result.kind !== "existing") {
       return this.recomputeFailure(result);
