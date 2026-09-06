@@ -10,6 +10,7 @@ import SpoolRemainingBadge from "../SpoolRemainingBadge";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { cn } from "@/lib/utils";
+import AllCopiesCheckbox from "./AllCopiesCheckbox";
 
 type Props = {
   part: ReviewPart;
@@ -25,6 +26,7 @@ type Props = {
   onRestore: () => void;
   onSpoolChange?: (partId: number, spoolman_spool_id: string | null) => void;
   onToggleUnit?: (part: ReviewPart, unitIndex: number) => void;
+  onSetAllPrinted?: (part: ReviewPart, completed: boolean) => void;
   onPreview: (part: ReviewPart) => void;
 };
 
@@ -79,6 +81,7 @@ export default function ReviewSheetMobileCard({
   onRestore,
   onSpoolChange,
   onToggleUnit,
+  onSetAllPrinted,
   onPreview,
 }: Props) {
   const done =
@@ -113,6 +116,15 @@ export default function ReviewSheetMobileCard({
           </div>
         </div>
 
+        {onSetAllPrinted && (
+          <AllCopiesCheckbox
+            filename={part.filename}
+            quantity={part.quantity_effective}
+            printedCount={part.printed_count}
+            disabled={busy || !part.included}
+            onChange={(completed) => onSetAllPrinted(part, completed)}
+          />
+        )}
         {part.included && part.quantity_effective > 0 && onToggleUnit && (
           <>
             <div className="checkoff-mobile-actions">

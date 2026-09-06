@@ -83,6 +83,7 @@ type PhaseCardProps = {
   showBlockingOnly: boolean;
   assemblyTrackingEnabled?: boolean;
   onIncrement: (part: ReviewPart) => void;
+  onSetAllPrinted?: (part: ReviewPart, completed: boolean) => void;
   onDecrement: (part: ReviewPart) => void;
   onPreview: (part: ReviewPart) => void;
   onToggleAssembled?: (part: ReviewPart, unitIndex: number) => void;
@@ -96,6 +97,7 @@ function PhaseCard({
   showBlockingOnly,
   assemblyTrackingEnabled,
   onIncrement,
+  onSetAllPrinted,
   onDecrement,
   onPreview,
   onToggleAssembled,
@@ -200,6 +202,7 @@ function PhaseCard({
               awaitingVerify={awaitingPartIds.get(part.id)}
               assemblyTrackingEnabled={assemblyTrackingEnabled}
               onIncrement={onIncrement}
+              onSetAllPrinted={onSetAllPrinted}
               onDecrement={onDecrement}
               onPreview={onPreview}
               onToggleAssembled={onToggleAssembled}
@@ -227,6 +230,7 @@ type PhaseProgressViewProps = {
   busyPartId: number | null;
   assemblyTrackingEnabled?: boolean;
   onIncrement: (part: ReviewPart) => void;
+  onSetAllPrinted?: (part: ReviewPart, completed: boolean) => void;
   onDecrement: (part: ReviewPart) => void;
   onPreview: (part: ReviewPart) => void;
   onToggleAssembled?: (part: ReviewPart, unitIndex: number) => void;
@@ -239,6 +243,7 @@ export default function PhaseProgressView({
   busyPartId,
   assemblyTrackingEnabled,
   onIncrement,
+  onSetAllPrinted,
   onDecrement,
   onPreview,
   onToggleAssembled,
@@ -288,6 +293,7 @@ export default function PhaseProgressView({
           showBlockingOnly={showBlockingOnly}
           assemblyTrackingEnabled={assemblyTrackingEnabled}
           onIncrement={onIncrement}
+          onSetAllPrinted={onSetAllPrinted}
           onDecrement={onDecrement}
           onPreview={onPreview}
           onToggleAssembled={onToggleAssembled}

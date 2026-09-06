@@ -76,6 +76,14 @@ function renderWorklist(overrides: Partial<React.ComponentProps<typeof CheckoffW
 describe("CheckoffWorklist ordering without a drag", () => {
   afterEach(cleanup);
 
+  it.each([false, true])("checks all copies for only the chosen row, mobile=%s", (mobile) => {
+    const onSetAllPrinted = vi.fn();
+    renderWorklist({ mobile, onSetAllPrinted });
+    fireEvent.click(screen.getByRole("checkbox", { name: "All copies printed for gantry.stl" }));
+    expect(onSetAllPrinted).toHaveBeenCalledExactlyOnceWith(parts[0], true);
+    expect(screen.getByRole("checkbox", { name: "All copies printed for belt.stl" }).getAttribute("aria-checked")).toBe("false");
+  });
+
   it("moves a row down with a single click", () => {
     const props = renderWorklist();
 

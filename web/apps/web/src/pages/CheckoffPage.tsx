@@ -506,16 +506,16 @@ export default function CheckoffPage() {
   );
 
   const decrementPart = useCallback(
-    (part: ReviewPart) => {
-      const idx = lastCompletedUnit(part.print_units);
-      if (idx < 0) return;
+    (part: ReviewPart, scope: "one" | "all" = "one") => {
+      if (lastCompletedUnit(part.print_units) < 0) return;
+      const idx = scope === "all" ? 0 : lastCompletedUnit(part.print_units);
       runMutation({ part, action: "correction", run: () => toggleUnit(part.id, idx, false) });
     },
     [runMutation, toggleUnit],
   );
 
   const onDecrement = useCallback(
-    (part: ReviewPart) => {
+    (part: ReviewPart, scope: "one" | "all" = "one") => {
       if (lastCompletedUnit(part.print_units) < 0) return;
       const impact = checkoffCorrectionImpact({
         printingOn: printingPartIds.get(part.id),
@@ -523,17 +523,34 @@ export default function CheckoffPage() {
         filamentDisplay: part.filament_display,
       });
       if (!checkoffCorrectionNeedsReason(impact)) {
-        decrementPart(part);
+        decrementPart(part, scope);
         return;
       }
       setCorrectionTarget({
         partId: part.id,
         filename: part.filename,
         printedCount: part.printed_count,
+        scope,
         impact,
       });
     },
     [awaitingPartIds, decrementPart, printingPartIds],
+  );
+
+  const onSetAllPrinted = useCallback(
+    (part: ReviewPart, completed: boolean) => {
+      if (!part.included || part.quantity_effective <= 0) return;
+      if (!completed) {
+        onDecrement(part, "all");
+        return;
+      }
+      runMutation({
+        part,
+        action: "checkoff",
+        run: () => toggleUnit(part.id, part.quantity_effective - 1, true),
+      });
+    },
+    [onDecrement, runMutation, toggleUnit],
   );
 
   const onConfirmCorrection = useCallback(
@@ -548,14 +565,14 @@ export default function CheckoffPage() {
         setConsolePrefs((prev) =>
           withCheckoffCorrection(prev, selectedProfileId, {
             partId: part.id,
-            unitIndex: lastCompletedUnit(part.print_units),
+            unitIndex: target.scope === "all" ? 0 : lastCompletedUnit(part.print_units),
             reason,
             note: input.note,
             at: new Date().toISOString(),
           }),
         );
       }
-      decrementPart(part);
+      decrementPart(part, target.scope);
     },
     [correctionTarget, decrementPart, partsById, selectedProfileId],
   );
@@ -791,6 +808,7 @@ export default function CheckoffPage() {
           {view === "remaining" && phaseProgress ? (
             <PhaseProgressView
               phases={phaseProgress}
+              onSetAllPrinted={onSetAllPrinted}
               busyPartId={busyPartId}
               assemblyTrackingEnabled={assemblyTrackingEnabled}
               onIncrement={onIncrement}
@@ -803,6 +821,7 @@ export default function CheckoffPage() {
           ) : (
             <CheckoffWorklist
               rows={filteredRows}
+              onSetAllPrinted={onSetAllPrinted}
               partsById={partsById}
               mobile={isMobileLayout}
               busyPartId={busyPartId}

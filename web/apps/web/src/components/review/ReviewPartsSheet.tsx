@@ -52,6 +52,7 @@ import PartSpoolPicker from "../PartSpoolPicker";
 import SpoolRemainingBadge from "../SpoolRemainingBadge";
 import PartsGridCard from "./PartsGridCard";
 import ReviewSheetMobileCard from "./ReviewSheetMobileCard";
+import AllCopiesCheckbox from "./AllCopiesCheckbox";
 import { Checkbox } from "../ui/checkbox";
 import QuantityStepper from "./QuantityStepper";
 import { Button } from "../ui/button";
@@ -87,6 +88,7 @@ function ReviewSheetRow({
   onRestore,
   onSpoolChange,
   onToggleUnit,
+  onSetAllPrinted,
   onPreview,
 }: {
   part: ReviewPart;
@@ -106,6 +108,7 @@ function ReviewSheetRow({
   onRestore: (part: ReviewPart) => void;
   onSpoolChange: (partId: number, spoolman_spool_id: string | null) => void;
   onToggleUnit: (part: ReviewPart, unitIndex: number) => void;
+  onSetAllPrinted: (part: ReviewPart, completed: boolean) => void;
   onPreview: (part: ReviewPart) => void;
 }) {
   const printDone =
@@ -142,6 +145,13 @@ function ReviewSheetRow({
         <td className="sheet-cell-qty sheet-cell-qty-readonly">{part.quantity_effective}</td>
         <td className="sheet-cell-printed">
           <div className="sheet-units">
+            <AllCopiesCheckbox
+              filename={part.filename}
+              quantity={part.quantity_effective}
+              printedCount={part.printed_count}
+              disabled={busy || !part.included}
+              onChange={(completed) => onSetAllPrinted(part, completed)}
+            />
             {part.print_units.map((unitDone, idx) => {
               const unitId = `${unitFieldId}-${idx}`;
               return (
@@ -431,6 +441,14 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
     [toggleUnit],
   );
 
+  const onSetAllPrinted = useCallback(
+    (part: ReviewPart, completed: boolean) => {
+      void toggleUnit(part.id, completed ? part.quantity_effective - 1 : 0, completed)
+        .catch(() => toast.error("Could not save printed copies. Please try again."));
+    },
+    [toggleUnit],
+  );
+
   const noteForPart = useCallback(
     (part: ReviewPart) => {
       const warn = partWarningNote(part, review);
@@ -474,6 +492,7 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
               onRestore={() => onRestore(part)}
               onSpoolChange={onSpoolChange}
               onToggleUnit={onToggleUnit}
+              onSetAllPrinted={onSetAllPrinted}
               onPreview={setPreviewPart}
             />
           ))}
@@ -528,6 +547,7 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
                   onRestore={onRestore}
                   onSpoolChange={onSpoolChange}
                   onToggleUnit={onToggleUnit}
+                  onSetAllPrinted={onSetAllPrinted}
                   onPreview={setPreviewPart}
                 />
               );

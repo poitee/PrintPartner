@@ -25,6 +25,7 @@ import CheckoffRowActionsMenu, {
 import { AssembledToggles, StatusBadges } from "./CheckoffRowStatus";
 import CheckoffRowMoveButtons from "./CheckoffRowMoveButtons";
 import CheckoffRowErrorNotice from "./CheckoffRowErrorNotice";
+import AllCopiesCheckbox from "../review/AllCopiesCheckbox";
 
 type Props = {
   part: ReviewPart;
@@ -47,6 +48,7 @@ type Props = {
   /** Provenance for a corrected row, shown in the Completed view. */
   correctionNote?: string;
   onIncrement: (part: ReviewPart) => void;
+  onSetAllPrinted?: (part: ReviewPart, completed: boolean) => void;
   onDecrement: (part: ReviewPart) => void;
   onPreview: (part: ReviewPart) => void;
   /** Called when user clicks Claim on a suggested printer. */
@@ -106,6 +108,7 @@ const ProgressPartRow = memo(function ProgressPartRow({
   onRetry,
   correctionNote,
   onIncrement,
+  onSetAllPrinted,
   onDecrement,
   onPreview,
   onClaim,
@@ -118,6 +121,15 @@ const ProgressPartRow = memo(function ProgressPartRow({
   const canInc = nextUnitToComplete(part.print_units) >= 0;
   const canDec = lastCompletedUnit(part.print_units) >= 0;
   const countLabel = `${part.printed_count} of ${qty}`;
+  const allCopies = onSetAllPrinted ? (
+    <AllCopiesCheckbox
+      filename={part.filename}
+      quantity={qty}
+      printedCount={part.printed_count}
+      disabled={busy || !part.included}
+      onChange={(completed) => onSetAllPrinted(part, completed)}
+    />
+  ) : null;
   const stateLabel = unitStateLabel(part.printed_count, qty);
 
   const menuActions: CheckoffRowAction[] = [
@@ -213,6 +225,7 @@ const ProgressPartRow = memo(function ProgressPartRow({
             disabled={busy}
           />
         </div>
+        {allCopies}
         {correctionNote ? (
           <p className="text-micro text-muted-foreground">{correctionNote}</p>
         ) : null}
@@ -282,6 +295,7 @@ const ProgressPartRow = memo(function ProgressPartRow({
           aria-label={`${part.filename} ${pct}% printed`}
         />
         <div className="ml-auto flex items-center gap-2">
+          {allCopies}
           <Button
             type="button"
             variant="outline"
