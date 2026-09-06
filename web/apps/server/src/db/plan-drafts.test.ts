@@ -540,7 +540,7 @@ selections:
       "2026-08-20T12:00:00.000Z",
       profile.id,
     );
-    expect(repo.listPlanDrafts(profile.id).map((draft) => draft.id)).toEqual([
+    expect(repo.listPlanDraftIdentities(profile.id).map((draft) => draft.id)).toEqual([
       result.draft.id,
       second.draft.id,
     ]);

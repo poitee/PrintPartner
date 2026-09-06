@@ -1,54 +1,86 @@
 import { useState } from "react";
 import { usePlanReviewQuery } from "../../queries/planReview";
+import { usePlanLayersQuery } from "../../queries/planLayers";
 import { usePlanWorkspace } from "../../context/PlanWorkspaceContext";
-import { sourceLabelFromLayer } from "../../lib/reviewParts";
-import { Checkbox } from "../ui/checkbox";
-import { Button } from "../ui/button";
+import type { ReviewPart } from "../../api/endpoints/planManifests";
+import type { StlTreeNode } from "../../api/importRulesTree";
+import { TreeRows } from "../ImportRulesTree";
 import { Input } from "../ui/input";
+
+function fileTree(parts: readonly ReviewPart[], included: (part: ReviewPart) => boolean): StlTreeNode[] {
+  const roots: StlTreeNode[] = [];
+  for (const part of parts) {
+    const folders = part.relative_path.split("/").slice(0, -1);
+    let children = roots;
+    let path = "";
+    for (const name of folders) {
+      path = path ? `${path}/${name}` : name;
+      let folder = children.find((node) => node.kind === "folder" && node.path === path);
+      if (!folder) {
+        folder = { kind: "folder", name, path, check_state: "unchecked", children: [] };
+        children.push(folder);
+      }
+      if (folder.kind === "folder") children = folder.children;
+    }
+    children.push({ kind: "file", name: part.filename, path: part.relative_path, checked: included(part) });
+  }
+  return roots;
+}
 
 export default function PlanFileSelection({ profileId, disabled }: { profileId: number; disabled: boolean }) {
   const { data, error } = usePlanReviewQuery(profileId, { includeExcluded: true });
-  const { setIncluded, setFilesIncluded, draftWorkspace } = usePlanWorkspace();
+  const layers = usePlanLayersQuery(profileId);
+  const { setFilesIncluded, draftWorkspace } = usePlanWorkspace();
   const [search, setSearch] = useState("");
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const groups = data?.part_groups ?? [];
   const pendingByKey = new Map(draftWorkspace?.parts.map((part) => [part.part_key, part.included]));
-  const isIncluded = (part: { match_key: string; included: boolean }) => pendingByKey.get(part.match_key) ?? part.included;
+  const isIncluded = (part: ReviewPart) => pendingByKey.get(part.match_key) ?? part.included;
   const selected = groups.flatMap((group) => group.parts).filter(isIncluded).length;
   const query = search.trim().toLowerCase();
   return (
     <section id="plan-files" className="space-y-3 rounded-lg border border-border bg-card p-4">
       <div>
         <h2 className="text-sm font-semibold">Files to print</h2>
-        <p className="text-xs text-muted-foreground">{selected} selected. Choose files below; these choices only affect this Build.</p>
+        <p className="text-xs text-muted-foreground">{selected} selected. Choices apply only to this Build.</p>
       </div>
-      {error && <p role="alert" className="text-sm text-destructive">Could not load the files. Reload to try again.</p>}
+      {(error || layers.error) && <p role="alert">Could not load the files and sources. Reload to try again.</p>}
       <Input aria-label="Find files" placeholder="Find a file or folder…" value={search} onChange={(event) => setSearch(event.target.value)} />
-      <div className="max-h-96 space-y-2 overflow-auto">
-        {groups.map((group) => {
-          const files = group.parts.filter((part) => !query || `${group.folder} ${part.filename} ${sourceLabelFromLayer(group.source_layer)}`.toLowerCase().includes(query));
-          if (files.length === 0) return null;
+      <div className="max-h-[36rem] space-y-3 overflow-auto">
+        {layers.data?.filter((layer) => layer.project_id != null).map((layer) => {
+          const sourceLayer = `${layer.layer_type}:${layer.project_name}`;
+          const all = groups.filter((group) => group.source_layer === sourceLayer).flatMap((group) => group.parts);
+          const files = all.filter((part) => `${layer.project_name} ${part.relative_path}`.toLowerCase().includes(query));
+          if (query && files.length === 0 && !layer.project_name?.toLowerCase().includes(query)) return null;
+          const prefix = `${layer.id}:`;
           return (
-            <details key={`${group.source_layer}:${group.folder}`} open={query ? true : undefined} className="rounded-md border border-border p-3">
-              <summary className="cursor-pointer text-sm font-medium">{sourceLabelFromLayer(group.source_layer)} / {group.folder === "(root)" ? "Files" : group.folder || "Files"} <span className="text-xs text-muted-foreground">({files.filter(isIncluded).length}/{files.length})</span></summary>
-              <div className="mt-2 space-y-1">
-                <div className="flex gap-2 py-1">
-                  <Button variant="secondary" size="sm" disabled={disabled || files.every(isIncluded)} onClick={() => void setFilesIncluded(files, true).catch(() => {})}>{query ? "Select shown files" : "Select folder"}</Button>
-                  <Button variant="ghost" size="sm" disabled={disabled || !files.some(isIncluded)} onClick={() => void setFilesIncluded(files, false).catch(() => {})}>{query ? "Clear shown files" : "Clear folder"}</Button>
-                </div>
-                {files.map((part) => {
-                  return (
-                    <label key={part.id} className="flex min-h-10 items-center gap-3 rounded px-2 text-sm hover:bg-muted">
-                      <Checkbox checked={isIncluded(part)} disabled={disabled} onCheckedChange={(checked) => void setIncluded(part, checked === true).catch(() => {})} />
-                      <span className="break-all">{part.filename}</span>
-                    </label>
-                  );
-                })}
-              </div>
-            </details>
+            <section key={layer.id} className="rounded-md border border-border p-3" aria-label={layer.project_name ?? "Source"}>
+              <h3 className="mb-2 text-sm font-semibold">{layer.project_name}</h3>
+              {all.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No printable files from this source are available in Plan. Check its files and repository URL in the <a className="underline" href="/library">Source Library</a>, then sync on <a className="underline" href={`/sources?profile=${profileId}`}>Sources</a>.</p>
+              ) : (
+                <ul className="list-none p-0">
+                  <TreeRows nodes={fileTree(files, isIncluded)} depth={0} filter="" sortBy="name" variant="inline"
+                    projectId={layer.project_id ?? layer.id} disabled={disabled}
+                    collapsedFolders={query ? new Set() : new Set([...collapsed].filter((key) => key.startsWith(prefix)).map((key) => key.slice(prefix.length)))}
+                    onToggleFolderExpand={(path) => setCollapsed((current) => {
+                      const next = new Set(current);
+                      if (next.has(prefix + path)) next.delete(prefix + path); else next.add(prefix + path);
+                      return next;
+                    })}
+                    onToggleFile={(path, checked) => void setFilesIncluded(files.filter((part) => part.relative_path === path), checked).catch(() => {})}
+                    onFileSelect={(path) => {
+                      const part = files.find((file) => file.relative_path === path);
+                      if (part) void setFilesIncluded([part], !isIncluded(part)).catch(() => {});
+                    }}
+                    onToggleFolder={(path, checked) => void setFilesIncluded(files.filter((part) => part.relative_path.startsWith(`${path}/`)), checked).catch(() => {})}
+                  />
+                </ul>
+              )}
+            </section>
           );
         })}
       </div>
-      {query && !groups.some((group) => group.parts.some((part) => `${group.folder} ${part.filename} ${sourceLabelFromLayer(group.source_layer)}`.toLowerCase().includes(query))) && <p className="text-sm text-muted-foreground">No matching files.</p>}
     </section>
   );
 }
