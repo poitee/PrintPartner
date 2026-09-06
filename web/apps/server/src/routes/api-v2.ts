@@ -24,6 +24,6 @@ export async function registerApiV2PlanPlugin(
     },
     { summaryContract: "accepted" },
   );
-  await registerPlanDraftRoutes(app, { repo: deps.repo });
+  await registerPlanDraftRoutes(app, deps);
   await registerAcceptedPlateRoutes(app, { repo: deps.repo, reposDir: deps.reposDir });
 }

@@ -17,14 +17,16 @@ import { registerPlanDraftRoutes } from "./plan-drafts.js";
 import { acceptPlanForTest, editAcceptedPartsForTest } from "../test/accept-plan.js";
 import { acceptedPlanBasis } from "../db/accepted-plan-progress.js";
 import { newBuildPlanningBrief, saveBuildPlanningBrief } from "../services/build-planning.js";
+import * as filamentResolve from "../services/filament-resolve.js";
 
 const cleanups: Array<() => Promise<void>> = [];
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   for (const cleanup of cleanups.splice(0)) await cleanup();
 });
 
-async function fixture() {
+async function fixture(options: { tracked?: boolean } = {}) {
   const root = mkdtempSync(join(tmpdir(), "pp-plan-draft-routes-"));
   const previousDataDir = process.env.PRINT_PARTNER_DATA_DIR;
   process.env.PRINT_PARTNER_DATA_DIR = root;
@@ -32,10 +34,18 @@ async function fixture() {
   await ports.db.connect();
   const repo = ports.repository;
   const source = repo.createSource({ name: "Draft source", url: "https://example.test/draft" });
-  const sourceRoot = join(root, "repos", String(source.id));
+  const locator = options.tracked ? `${source.id}/revisions/test` : String(source.id);
+  const sourceRoot = join(root, "repos", locator);
   mkdirSync(sourceRoot, { recursive: true });
   writeFileSync(join(sourceRoot, "bracket.stl"), "solid bracket\nendsolid bracket\n");
   repo.updateSource(source.id, { local_path: sourceRoot });
+  if (options.tracked) {
+    const observed = repo.getProjectRow(source.id);
+    if (!observed) throw new Error("Test Source missing");
+    const revision = repo.recordSourceRevision({ sourceId: source.id, upstreamRevisionKey: "test", manifestDigest: "a".repeat(64),
+      snapshotLocator: locator, syncedAt: "2026-09-06T00:00:00.000Z", completeness: "complete" });
+    repo.activateSourceRevision({ sourceId: source.id, revisionId: revision.id, observed, sourceVersion: "test" });
+  }
   const profile = repo.createProfile("Draft Build", source.id);
   const before = repo.readAcceptedProfileSummary(profile.id);
   const app = await buildApp(loadConfig(), ports);
@@ -50,6 +60,101 @@ async function fixture() {
 }
 
 describe("Plan draft routes", () => {
+  it("rejects invalid save requests before running the command", async () => {
+    const { app, repo, profile } = await fixture();
+    const save = vi.spyOn(repo, "savePlanChoices");
+    for (const headers of [{}, { "idempotency-key": "invalid-save" }]) {
+      const response = await app.inject({ method: "POST", url: `/plans/${profile.id}/save`, headers, payload: {} });
+      expect(response.statusCode).toBe(400);
+    }
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it("saves a file choice in one request with one reconciliation and confirmed Plan state", async () => {
+    const { app, repo, profile } = await fixture({ tracked: true });
+    expect(acceptPlanForTest(repo, profile.id).merged).toBe(true);
+    const before = (await app.inject({ method: "GET", url: `/plans/${profile.id}/review?include_excluded=true` })).json();
+    const part = before.part_groups[0].parts[0];
+    const reconcile = vi.spyOn(repo, "savePlanDraftRequiredUnitReconciliation");
+    const payload = {
+      expected_base: { revision_id: before.accepted_basis.plan_revision_id, plan_version: before.accepted_basis.plan_version },
+      expected_draft: null,
+      decisions: [{ kind: "set_included", target: { source_layer: part.source_layer, relative_path: part.relative_path, part_key: part.match_key }, value: false }],
+      remap_checkoff_links: true,
+    };
+    const response = await app.inject({ method: "POST", url: `/plans/${profile.id}/save`, headers: { "idempotency-key": "one-save" }, payload });
+    expect(response.statusCode, response.body).toBe(200);
+    expect(reconcile).toHaveBeenCalledOnce();
+    const saved = response.json();
+    expect(saved.receipt.plan_version).toBe(before.accepted_basis.plan_version + 1);
+    expect(saved.review.part_groups[0].parts[0].included).toBe(false);
+    expect(saved.review.totals.included_parts).toBe(0);
+    expect(saved.profile.id).toBe(profile.id);
+    const replay = await app.inject({ method: "POST", url: `/plans/${profile.id}/save`, headers: { "idempotency-key": "one-save" }, payload });
+    expect(replay.statusCode).toBe(200);
+    expect(replay.json().receipt).toEqual(saved.receipt);
+    expect(reconcile).toHaveBeenCalledOnce();
+    expect((await app.inject({ method: "GET", url: `/plans/${profile.id}/review?include_excluded=true` })).json().accepted_basis).toEqual(saved.review.accepted_basis);
+  });
+
+  it("replays a committed save when response enrichment failed", async () => {
+    const { app, repo, profile } = await fixture({ tracked: true });
+    expect(acceptPlanForTest(repo, profile.id).merged).toBe(true);
+    const before = (await app.inject({ method: "GET", url: `/plans/${profile.id}/review?include_excluded=true` })).json();
+    const part = before.part_groups[0].parts[0];
+    const payload = {
+      expected_base: { revision_id: before.accepted_basis.plan_revision_id, plan_version: before.accepted_basis.plan_version },
+      expected_draft: null, remap_checkoff_links: true,
+      decisions: [{ kind: "set_quantity_override", target: { source_layer: part.source_layer, relative_path: part.relative_path, part_key: part.match_key }, value: 3 }],
+    };
+    vi.spyOn(filamentResolve, "preloadSpoolmanForColorIds").mockRejectedValueOnce(new Error("Response interrupted"));
+    const reconcile = vi.spyOn(repo, "savePlanDraftRequiredUnitReconciliation");
+    const failed = await app.inject({ method: "POST", url: `/plans/${profile.id}/save`, headers: { "idempotency-key": "lost-response" }, payload });
+    expect(failed.statusCode).toBe(500);
+    const replay = await app.inject({ method: "POST", url: `/plans/${profile.id}/save`, headers: { "idempotency-key": "lost-response" }, payload });
+    expect(replay.statusCode, replay.body).toBe(200);
+    expect(replay.json().receipt.plan_version).toBe(before.accepted_basis.plan_version + 1);
+    expect(replay.json().review.part_groups[0].parts[0].quantity_effective).toBe(3);
+    expect(reconcile).toHaveBeenCalledOnce();
+    const changed = await app.inject({ method: "POST", url: `/plans/${profile.id}/save`, headers: { "idempotency-key": "lost-response" }, payload: {
+      ...payload, decisions: [{ ...payload.decisions[0], value: 4 }],
+    } });
+    expect(changed.statusCode).toBe(409);
+    expect(changed.json().code).toBe("idempotency_conflict");
+  });
+
+  it("captures Review and summary before a later save during enrichment", async () => {
+    const { app, repo, profile } = await fixture({ tracked: true });
+    expect(acceptPlanForTest(repo, profile.id).merged).toBe(true);
+    const before = (await app.inject({ method: "GET", url: `/plans/${profile.id}/review?include_excluded=true` })).json();
+    const part = before.part_groups[0].parts[0];
+    const payload = {
+      expected_base: { revision_id: before.accepted_basis.plan_revision_id, plan_version: before.accepted_basis.plan_version },
+      expected_draft: null, remap_checkoff_links: true,
+      decisions: [{ kind: "set_quantity_override", target: { source_layer: part.source_layer, relative_path: part.relative_path, part_key: part.match_key }, value: 3 }],
+    };
+    const originalLoader = filamentResolve.preloadSpoolmanForColorIds;
+    vi.spyOn(filamentResolve, "preloadSpoolmanForColorIds").mockImplementationOnce(async (...args) => {
+      const accepted = repo.readAcceptedPlanOperationalSnapshot(profile.id);
+      if (accepted.kind !== "ready") throw new Error("Accepted test Plan missing");
+      const later = repo.savePlanChoices({
+        profileId: profile.id, actorId: "later-editor", idempotencyKey: "later-save", expectedDraft: null,
+        expectedBase: { kind: "revision", revisionId: accepted.snapshot.revisionId, planVersion: accepted.snapshot.planVersion },
+        remapCheckoffLinks: true,
+        changes: [{ kind: "set_quantity_override", target: { partKey: part.match_key, relativePath: part.relative_path, sourceLayer: part.source_layer }, value: 4 }],
+      });
+      expect(later.kind).toBe("saved");
+      return originalLoader(...args);
+    });
+    const response = await app.inject({ method: "POST", url: `/plans/${profile.id}/save`, headers: { "idempotency-key": "captured-save" }, payload });
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json().review.part_groups[0].parts[0].quantity_effective).toBe(3);
+    expect(response.json().profile.accepted_progress.total_units).toBe(3);
+    const latest = (await app.inject({ method: "GET", url: `/plans/${profile.id}/review?include_excluded=true` })).json();
+    expect(latest.part_groups[0].parts[0].quantity_effective).toBe(4);
+    expect(latest.accepted_basis.plan_version).toBe(response.json().review.accepted_basis.plan_version + 1);
+  });
+
   it("lists draft identities without loading and hashing historical part snapshots", async () => {
     const { app, repo, profile } = await fixture();
     for (let index = 0; index < 20; index += 1) {
@@ -716,7 +821,7 @@ selections:
       pgSchema as unknown as SchemaTables,
     );
     const app = Fastify();
-    await registerPlanDraftRoutes(app, { repo });
+    await registerPlanDraftRoutes(app, { repo, reposDir: "/tmp/unused", thumbsDir: "/tmp/unused", dataDir: "/tmp/unused" });
     await app.ready();
     const digest = "a".repeat(64);
     try {

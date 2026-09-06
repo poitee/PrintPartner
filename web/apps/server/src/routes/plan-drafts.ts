@@ -7,15 +7,19 @@ import {
   parseEditPlanDraftPartsRequest,
   parseReconcilePlanDraftRequest,
   parseRebasePlanDraftRequest,
+  parseSavePlanChoicesRequest,
 } from "@print-partner/contracts";
-import type { AppRepository } from "../db/repository.js";
+import type { AcceptedPlanBase, AppRepository } from "../db/repository.js";
+import { projectCapturedPlanReview } from "../services/accepted-plan-review.js";
+import { preloadSpoolmanForColorIds } from "../services/filament-resolve.js";
+import { toProfileSummary } from "./plan-summary-presenter.js";
 import {
   PlanDraftWorkspaceService,
   type ApplyDraftWorkspaceResult,
   type PlanDraftWorkspaceResult,
 } from "../services/plan-draft-workspace.js";
 
-type RouteDeps = { readonly repo: AppRepository };
+type RouteDeps = { readonly repo: AppRepository; readonly reposDir: string; readonly thumbsDir: string; readonly dataDir: string };
 
 function positiveId(value: string): number | null {
   const parsed = Number(value);
@@ -90,6 +94,76 @@ export async function registerPlanDraftRoutes(
 ): Promise<void> {
   const service = new PlanDraftWorkspaceService(deps.repo, (timing) => {
     app.log.info(timing, "Plan phase timing");
+  });
+
+  app.post("/plans/:id/save", async (request, reply) => {
+    const profileId = positiveId((request.params as { id: string }).id);
+    const key = idempotencyKey(request);
+    if (profileId == null || key == null) return invalidRequest(reply);
+    try {
+      const parsed = parseSavePlanChoicesRequest(request.body);
+      const expectedBase: AcceptedPlanBase = parsed.expected_base.revision_id == null
+        ? { kind: "empty", planVersion: 0 }
+        : { kind: "revision", revisionId: parsed.expected_base.revision_id, planVersion: parsed.expected_base.plan_version };
+      const started = performance.now();
+      const result = deps.repo.savePlanChoices({
+        profileId, actorId: actorId(request), idempotencyKey: key, expectedBase,
+        expectedDraft: parsed.expected_draft == null ? null : {
+          id: parsed.expected_draft.draft_id,
+          lifecycleVersion: parsed.expected_draft.lifecycle_version,
+          snapshotDigest: parsed.expected_draft.snapshot_digest,
+        },
+        remapCheckoffLinks: parsed.remap_checkoff_links,
+        changes: parsed.decisions.map(({ target, ...decision }) => ({ ...decision,
+          target: { partKey: target.part_key, relativePath: target.relative_path, sourceLayer: target.source_layer },
+        })),
+      });
+      if (result.kind !== "saved") {
+        if (result.kind === "transaction_unavailable") return sendFailure(reply, result);
+        const open = result.kind === "draft_changed" ? service.list(profileId)?.filter((draft) => draft.state === "open").at(-1) : null;
+        const changed = open ? service.read(profileId, open.draft_id) : null;
+        const status = result.kind === "not_found" ? 404
+          : result.kind === "production_active" ? 423
+          : ["base_changed", "draft_changed", "inputs_changed", "idempotency_conflict", "not_open", "accepted_baseline_required"].includes(result.kind) ? 409 : 422;
+        return reply.status(status).send({ code: result.kind,
+          detail: "Plan choices could not be saved. Your pending choices have been kept.",
+          ...(changed?.kind === "ready" ? { workspace: changed.workspace } : {}),
+          ...(result.kind === "production_active" ? { checkoff_link_count: result.checkoffLinkCount, send_queue_item_count: result.sendQueueItemCount } : {}),
+          ...(result.kind === "checkoff_remap_unsafe" ? { unmappable: result.unmappable } : {}),
+        });
+      }
+      const committed = performance.now();
+      const captured = deps.repo.transaction(() => ({
+        accepted: deps.repo.readAcceptedPlanOperationalSnapshot(profileId),
+        summary: deps.repo.readAcceptedProfileSummary(profileId),
+      }));
+      if (captured.accepted.kind !== "ready" || captured.summary.kind !== "found" ||
+        captured.accepted.snapshot.planVersion < result.receipt.planVersion) {
+        throw new Error("Saved Plan snapshot is unavailable");
+      }
+      const snapshotMs = performance.now() - committed;
+      const review = await projectCapturedPlanReview({
+        snapshot: captured.accepted.snapshot, includeExcluded: true,
+        reposDir: deps.reposDir, thumbsDir: deps.thumbsDir,
+        loadFilamentContext: (colorIds) => preloadSpoolmanForColorIds({ repo: deps.repo, dataDir: deps.dataDir }, colorIds),
+        reportTiming: (timing) => request.log.info({ ...timing, profileId,
+          commandMs: committed - started, snapshotMs, totalMs: performance.now() - started,
+        }, "Plan save timing"),
+      });
+      const receipt = result.receipt;
+      return {
+        receipt: { profile_id: receipt.profileId, draft_id: receipt.draftId,
+          revision_id: receipt.revisionId, plan_version: receipt.planVersion,
+          draft_lifecycle_version: receipt.draftLifecycleVersion,
+          revision_digest: receipt.revisionDigest,
+          required_unit_mapping_digest: receipt.requiredUnitMappingDigest, applied_at: receipt.appliedAt },
+        review, profile: toProfileSummary(captured.summary.summary), closed_draft_ids: result.closedDraftIds,
+      };
+    } catch (error) {
+      if (isPlanDraftContractError(error)) return invalidRequest(reply);
+      request.log.error({ failure: "unexpected", profileId }, "Plan choices save failed");
+      return reply.status(500).send({ detail: "Plan save could not be confirmed. Retry with your retained choices.", code: "internal_error" });
+    }
   });
 
   app.get("/plans/:id/drafts", async (request, reply) => {

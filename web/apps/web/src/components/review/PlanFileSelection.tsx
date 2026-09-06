@@ -50,7 +50,7 @@ export default function PlanFileSelection({ profileId, disabled }: { profileId: 
       <div className="max-h-[36rem] space-y-3 overflow-auto">
         {layers.data?.filter((layer) => layer.project_id != null).map((layer) => {
           const sourceLayer = `${layer.layer_type}:${layer.project_name}`;
-          const all = groups.filter((group) => group.source_layer === sourceLayer).flatMap((group) => group.parts);
+          const all = groups.flatMap((group) => group.parts).filter((part) => part.source_layer === sourceLayer);
           const files = all.filter((part) => `${layer.project_name} ${part.relative_path}`.toLowerCase().includes(query));
           if (query && files.length === 0 && !layer.project_name?.toLowerCase().includes(query)) return null;
           const prefix = `${layer.id}:`;

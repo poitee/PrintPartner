@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 
 /**
- * Plan stage: clicking Remove under "Proposed inclusion" must reach the draft
- * edit API. Drives the real click path through the real PlanWorkspaceProvider —
+ * Plan stage: clicking Remove under "Proposed inclusion" saves a stable file
+ * target. Drives the real click path through the real PlanWorkspaceProvider.
  * only the engine HTTP layer is mocked.
  */
 
@@ -12,7 +12,8 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import type { PlanDraftWorkspace } from "@print-partner/contracts";
-import { applyPlanDraft, editPlanDraftParts, listPlanDrafts, recomputePlanDraft } from "../../api/endpoints/planDrafts";
+import { applyPlanDraft, editPlanDraftParts, listPlanDrafts, recomputePlanDraft, savePlanChoices, type SavePlanChoicesResponse } from "../../api/endpoints/planDrafts";
+import { EngineHttpError } from "../../api/engineTransport";
 import type { PlanReview, ReviewPart } from "../../api/endpoints/planManifests";
 import { queryKeys } from "../../queries/keys";
 import { PlanWorkspaceProvider, usePlanWorkspace } from "../../context/PlanWorkspaceContext";
@@ -78,6 +79,7 @@ vi.mock("../../api/endpoints/planDrafts", async (importOriginal) => {
   return {
     ...actual,
     editPlanDraftParts: vi.fn(),
+    savePlanChoices: vi.fn(),
     recomputePlanDraft: vi.fn(),
     rebasePlanDraft: vi.fn(),
     applyPlanDraft: vi.fn(),
@@ -223,6 +225,26 @@ function baseReview(parts: ReviewPart[]): PlanReview {
   };
 }
 
+function saveResponse(workspace: PlanDraftWorkspace): SavePlanChoicesResponse {
+  const quantity = workspace.parts[0]?.quantity_effective ?? 1;
+  const version = Math.max(2, quantity);
+  return {
+    receipt: { profile_id: 7, draft_id: workspace.draft.draft_id, revision_id: version + 2, plan_version: version,
+      draft_lifecycle_version: 1, revision_digest: "c".repeat(64), required_unit_mapping_digest: "d".repeat(64), applied_at: "2026-08-21T12:00:00.000Z" },
+    review: { ...baseReview(workspace.parts.map((part) => reviewPart({
+      id: part.draft_part_id + 100, match_key: part.part_key, relative_path: part.relative_path,
+      filename: part.filename, source_layer: part.source_layer, included: part.included,
+      quantity_override: part.quantity_override, quantity_effective: part.quantity_effective,
+    }))), accepted_basis: { profile_id: 7, plan_version: version, plan_revision_id: version + 2,
+      plan_revision_digest: "c".repeat(64), required_unit_mapping_digest: "d".repeat(64) } },
+    profile: { id: 7, name: "Voron", order_number: null, special_request: null, part_count: workspace.parts.length,
+      accepted_progress: { kind: "empty" }, build_stale: false,
+      freshness: { status: "current", accepted_input_set_id: 1, accepted_at: "2026-08-21T12:00:00.000Z" },
+      archived_at: null, last_used_at: null },
+    closed_draft_ids: [workspace.draft.draft_id],
+  };
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((resolvePromise) => {
@@ -248,6 +270,7 @@ beforeEach(() => {
     }),
   );
   vi.mocked(editPlanDraftParts).mockImplementation(async () => state.workspace!);
+  vi.mocked(savePlanChoices).mockImplementation(async () => saveResponse(state.workspace!));
   vi.mocked(listPlanDrafts).mockResolvedValue([]);
   vi.mocked(applyPlanDraft).mockImplementation(async (workspace) => ({
     profile_id: workspace.profile_id,
@@ -273,11 +296,10 @@ describe("Plan sheet Working Plan edits", () => {
     await userEvent.click(screen.getByRole("button", { name: "Remove" }));
 
     await waitFor(() =>
-      expect(editPlanDraftParts).toHaveBeenCalledWith(
-        expect.objectContaining({
-          decisions: [{ kind: "set_included", draft_part_ids: [17], value: false }],
-        }),
-      ),
+      expect(savePlanChoices).toHaveBeenCalledWith(7,
+        expect.objectContaining({ decisions: [{ kind: "set_included", target: {
+          part_key: "frame/bracket.stl", relative_path: "frame/bracket.stl", source_layer: "base:Voron",
+        }, value: false }] }), expect.any(String)),
     );
   });
 
@@ -307,11 +329,10 @@ describe("Plan sheet Working Plan edits", () => {
     await userEvent.click(removes[0]!);
 
     await waitFor(() =>
-      expect(editPlanDraftParts).toHaveBeenCalledWith(
-        expect.objectContaining({
-          decisions: [{ kind: "set_included", draft_part_ids: [17], value: false }],
-        }),
-      ),
+      expect(savePlanChoices).toHaveBeenCalledWith(7,
+        expect.objectContaining({ decisions: [{ kind: "set_included", target: {
+          part_key: "frame/bracket.stl", relative_path: "frame/bracket.stl", source_layer: "base:Voron",
+        }, value: false }] }), expect.any(String)),
     );
   });
 
@@ -326,11 +347,10 @@ describe("Plan sheet Working Plan edits", () => {
     await userEvent.click(screen.getByRole("button", { name: "Remove" }));
 
     await waitFor(() =>
-      expect(editPlanDraftParts).toHaveBeenCalledWith(
-        expect.objectContaining({
-          decisions: [{ kind: "set_included", draft_part_ids: [17], value: false }],
-        }),
-      ),
+      expect(savePlanChoices).toHaveBeenCalledWith(7,
+        expect.objectContaining({ decisions: [{ kind: "set_included", target: {
+          part_key: "bracket.stl", relative_path: "frame/bracket.stl", source_layer: "base:Voron",
+        }, value: false }] }), expect.any(String)),
     );
   });
 
@@ -362,11 +382,10 @@ describe("Plan sheet Working Plan edits", () => {
 
     // The one row present is the draft's, so the edit lands rather than erroring.
     await waitFor(() =>
-      expect(editPlanDraftParts).toHaveBeenCalledWith(
-        expect.objectContaining({
-          decisions: [{ kind: "set_included", draft_part_ids: [17], value: false }],
-        }),
-      ),
+      expect(savePlanChoices).toHaveBeenCalledWith(7,
+        expect.objectContaining({ decisions: [{ kind: "set_included", target: {
+          part_key: "frame/motor.stl", relative_path: "frame/motor.stl", source_layer: "base:Voron",
+        }, value: false }] }), expect.any(String)),
     );
     expect(screen.getByTestId("draft-error").textContent).toBe("");
   });
@@ -387,11 +406,11 @@ describe("Plan sheet Working Plan edits", () => {
         /2 Parts matching bracket\.stl/,
       ),
     );
-    expect(editPlanDraftParts).not.toHaveBeenCalled();
+    expect(savePlanChoices).not.toHaveBeenCalled();
   });
 
   it("keeps quantity steps available while the preceding edit is saving", async () => {
-    const pending = deferred<PlanDraftWorkspace>();
+    const pending = deferred<SavePlanChoicesResponse>();
     state.review = baseReview([
       reviewPart({ id: 42, match_key: "frame/bracket.stl" }),
     ]);
@@ -409,10 +428,10 @@ describe("Plan sheet Working Plan edits", () => {
     vi.mocked(recomputePlanDraft)
       .mockResolvedValueOnce({ ...secondWorkspace, draft: { ...secondWorkspace.draft, draft_id: 10 } })
       .mockResolvedValueOnce({ ...thirdWorkspace, draft: { ...thirdWorkspace.draft, draft_id: 11 } });
-    vi.mocked(editPlanDraftParts)
+    vi.mocked(savePlanChoices)
       .mockReturnValueOnce(pending.promise)
-      .mockResolvedValueOnce(thirdWorkspace)
-      .mockResolvedValueOnce(fourthWorkspace);
+      .mockResolvedValueOnce(saveResponse(thirdWorkspace))
+      .mockResolvedValueOnce(saveResponse(fourthWorkspace));
 
     renderSheet();
     await screen.findByRole("columnheader", { name: "Actions" });
@@ -420,26 +439,26 @@ describe("Plan sheet Working Plan edits", () => {
       name: "Increase quantity for bracket.stl",
     });
     await userEvent.click(increase);
-    await waitFor(() => expect(editPlanDraftParts).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(savePlanChoices).toHaveBeenCalledTimes(1));
 
     expect((increase as HTMLButtonElement).disabled).toBe(false);
     await userEvent.click(increase);
     await userEvent.click(increase);
-    expect(editPlanDraftParts).toHaveBeenCalledTimes(1);
+    expect(savePlanChoices).toHaveBeenCalledTimes(1);
 
-    pending.resolve(secondWorkspace);
-    await waitFor(() => expect(editPlanDraftParts).toHaveBeenCalledTimes(3));
-    expect(editPlanDraftParts).toHaveBeenNthCalledWith(
-      3,
+    pending.resolve(saveResponse(secondWorkspace));
+    await waitFor(() => expect(savePlanChoices).toHaveBeenCalledTimes(3));
+    expect(savePlanChoices).toHaveBeenNthCalledWith(
+      3, 7,
       expect.objectContaining({
-        expectedSnapshotDigest: "c".repeat(64),
+        expected_base: { revision_id: 5, plan_version: 3 },
         decisions: [
           expect.objectContaining({
             kind: "set_quantity_override",
             value: 4,
           }),
         ],
-      }),
+      }), expect.any(String),
     );
   });
 
@@ -454,7 +473,7 @@ describe("Plan sheet Working Plan edits", () => {
         part_key: "frame/bracket.stl",
       }),
     ]);
-    vi.mocked(editPlanDraftParts).mockRejectedValueOnce(new Error("disk full"));
+    vi.mocked(savePlanChoices).mockRejectedValueOnce(new EngineHttpError("disk full", 422));
 
     renderSheet();
     await screen.findByRole("columnheader", { name: "Actions" });

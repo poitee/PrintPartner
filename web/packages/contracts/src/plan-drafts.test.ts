@@ -8,11 +8,30 @@ import {
   parsePlanDraftWorkspace,
   parseReconcilePlanDraftRequest,
   parseRebasePlanDraftRequest,
+  parseSavePlanChoicesRequest,
 } from "./plan-drafts.js";
 
 const digest = "a".repeat(64);
 
 describe("Plan draft contracts", () => {
+  it("validates stable file targets and concurrency evidence for one save", () => {
+    const target = { part_key: "frame.stl", relative_path: "Frame/frame.stl", source_layer: "base:Voron" };
+    const request = {
+      expected_base: { revision_id: 3, plan_version: 2 }, expected_draft: null,
+      remap_checkoff_links: true,
+      decisions: [{ kind: "set_included", target, value: false }],
+    };
+    expect(parseSavePlanChoicesRequest(request)).toEqual(request);
+    expect(() => parseSavePlanChoicesRequest({ ...request, decisions: [] })).toThrow();
+    expect(() => parseSavePlanChoicesRequest({ ...request, decisions: [...request.decisions, ...request.decisions] })).toThrow();
+    expect(() => parseSavePlanChoicesRequest({ ...request, decisions: [{ kind: "set_quantity_override", target, value: 10_001 }] })).toThrow();
+    expect(() => parseSavePlanChoicesRequest({ ...request, bypass_safety: true })).toThrow();
+    expect(() => parseSavePlanChoicesRequest({ ...request, expected_draft: {
+      draft_id: 9, state: "open", lifecycle_version: 0, snapshot_digest: digest,
+      base: { revision_id: 2, plan_version: 1 },
+    } })).toThrow();
+  });
+
   it("parses a strict saved draft workspace", () => {
     expect(parsePlanDraftWorkspace({
       profile_id: 7,

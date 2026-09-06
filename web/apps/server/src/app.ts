@@ -363,7 +363,7 @@ export async function buildApp(config: ServerConfig, ports: RuntimePorts) {
     };
 
     await registerCoreRoutes(app, coreDeps, { planSummaryContract: "accepted" });
-    await registerPlanDraftRoutes(app, { repo: repository });
+    await registerPlanDraftRoutes(app, coreDeps);
     await registerAcceptedPlateRoutes(app, {
       repo: repository,
       reposDir: coreDeps.reposDir,
