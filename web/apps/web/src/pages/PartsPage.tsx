@@ -9,6 +9,7 @@ import PlanRolesCard from "../components/build/PlanRolesCard";
 import KitManifestOptions from "../components/KitManifestOptions";
 import PlanFileSelection from "../components/review/PlanFileSelection";
 import PlanProgressChoices from "../components/review/PlanProgressChoices";
+import PendingPlanFiles from "../components/review/PendingPlanFiles";
 import ReviewPartsSheet, { type ReviewPartsSheetHandle } from "../components/review/ReviewPartsSheet";
 import { Button } from "../components/ui/button";
 import { fetchStlNaming } from "../api/endpoints/stlNaming";
@@ -72,7 +73,9 @@ export default function PartsPage() {
         </div>
       )}
       {draftWorkspace && <PlanProgressChoices key={`${draftWorkspace.profile_id}:${draftWorkspace.draft.snapshot_digest}`} workspace={draftWorkspace} />}
-      {selectedProfileId == null ? (
+      {draftWorkspace && (mergeConflict || !review?.accepted_basis) ? (
+        <PendingPlanFiles key={`${draftWorkspace.profile_id}:${draftWorkspace.draft.draft_id}`} workspace={draftWorkspace} disabled={disabled} />
+      ) : selectedProfileId == null ? (
         <EmptyState icon={Package} title="No Build selected" description="Choose a Build to edit its Plan." />
       ) : !hasSources && !layers.isLoading ? (
         <div className="space-y-3">

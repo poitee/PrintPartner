@@ -549,13 +549,13 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
           await applyWorkspace(workspace, { remapCheckoffLinks: true });
         }
       } catch (error) {
-        updateDraftUi(profileId, (current) => ({ ...current, draftMutationError: planSaveError(error), mergeConflict: planSaveHasMergeConflict(error) }));
+        updateDraftUi(profileId, (current) => ({ ...current, draftMutationError: planSaveError(error, currentDraftWorkspace(profileId)), mergeConflict: planSaveHasMergeConflict(error) }));
         throw error;
       } finally {
         updateDraftUi(profileId, (current) => ({ ...current, saving: false }));
       }
     });
-  }, [applyWorkspace, enqueueDraftEdit, queryClient, rebaseWorkspace, resolveOpenDraftWorkspace, selectedProfileId, startPlanDraftForProfile, updateDraftUi]);
+  }, [applyWorkspace, currentDraftWorkspace, enqueueDraftEdit, queryClient, rebaseWorkspace, resolveOpenDraftWorkspace, selectedProfileId, startPlanDraftForProfile, updateDraftUi]);
 
   const editActivePlanDraft = useCallback(
     (decisions: PlanDraftPartDecisionContract[]) => {
