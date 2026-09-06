@@ -211,6 +211,11 @@ function storedTextBytes(sqlite: boolean, columns: readonly AnyColumn[]): SQL<nu
 
 export const acceptedPlanStoredTextBytes = storedTextBytes;
 
+function textPageSize(sqlite: boolean): number {
+  // PostgreSQL's sync bridge needs smaller serialized text results; SQLite has no bridge.
+  return sqlite ? ACCEPTED_READ_PAGE_SIZE : ACCEPTED_TEXT_PAGE_SIZE;
+}
+
 function validateStoredTextBytes(
   bytes: number,
   code: AcceptedPlanCorruptionCode,
@@ -762,6 +767,7 @@ function loadAcceptedInputs(input: {
   readonly revision: typeof defaultSchema.planRevisions.$inferSelect;
   readonly acceptedInputs: readonly (typeof defaultSchema.planAcceptedInputSets.$inferSelect)[];
 }): AcceptedInputState {
+  const pageSize = textPageSize(input.sqlite);
   const {
     db,
     schema,
@@ -869,10 +875,10 @@ function loadAcceptedInputs(input: {
             ),
       )
       .orderBy(asc(schema.planRevisionInputs.id))
-      .limit(ACCEPTED_TEXT_PAGE_SIZE)
+      .limit(pageSize)
       .all();
     rows.push(...page);
-    if (page.length < ACCEPTED_TEXT_PAGE_SIZE) break;
+    if (page.length < pageSize) break;
     lastInputId = page.at(-1)!.id;
   }
   if (
@@ -1090,6 +1096,7 @@ function loadAcceptedParts(input: {
   readonly inputState: AcceptedInputState;
   readonly sqlite: boolean;
 }): LoadedAcceptedPart[] {
+  const pageSize = textPageSize(input.sqlite);
   const { db, schema, tenantId, profileId, revisionParts, inputState, sqlite } = input;
   let lastProjectionPreflightId: number | null = null;
   while (true) {
@@ -1156,10 +1163,10 @@ function loadAcceptedParts(input: {
           : and(eq(schema.parts.profileId, profileId), gt(schema.parts.id, lastProjectionId)),
       )
       .orderBy(asc(schema.parts.id))
-      .limit(ACCEPTED_TEXT_PAGE_SIZE)
+      .limit(pageSize)
       .all();
     projectionRows.push(...page);
-    if (page.length < ACCEPTED_TEXT_PAGE_SIZE) break;
+    if (page.length < pageSize) break;
     lastProjectionId = page.at(-1)!.id;
   }
   lastProjectionId = null;
@@ -1177,10 +1184,10 @@ function loadAcceptedParts(input: {
           : and(eq(schema.parts.profileId, profileId), gt(schema.parts.id, lastProjectionId)),
       )
       .orderBy(asc(schema.parts.id))
-      .limit(ACCEPTED_TEXT_PAGE_SIZE)
+      .limit(pageSize)
       .all();
     projectionBooleanEvidence.push(...page);
-    if (page.length < ACCEPTED_TEXT_PAGE_SIZE) break;
+    if (page.length < pageSize) break;
     lastProjectionId = page.at(-1)!.id;
   }
   const revisionBooleanEvidence: Array<{
@@ -1295,6 +1302,7 @@ function loadRequiredUnits(input: {
   readonly mappingDigest: string;
   readonly byPart: ReadonlyMap<number, readonly UnitWithoutProgress[]>;
 } {
+  const pageSize = textPageSize(input.sqlite);
   const { db, schema, tenantId, profileId, revisionId, requiredSet, parts, sqlite } = input;
   let lastMappingPreflight:
     | { readonly revisionPartId: number; readonly unitIndex: number; readonly tenantId: string }
@@ -1349,7 +1357,7 @@ function loadRequiredUnits(input: {
         asc(schema.planRevisionRequiredUnits.unitIndex),
         asc(schema.planRevisionRequiredUnits.tenantId),
       )
-      .limit(ACCEPTED_TEXT_PAGE_SIZE)
+      .limit(pageSize)
       .all();
     for (const row of page) {
       validateStoredTextBytes(
@@ -1358,7 +1366,7 @@ function loadRequiredUnits(input: {
         "Accepted Plan Required-unit mapping text is corrupt",
       );
     }
-    if (page.length < ACCEPTED_TEXT_PAGE_SIZE) break;
+    if (page.length < pageSize) break;
     const last: (typeof page)[number] = page.at(-1)!;
     lastMappingPreflight = {
       revisionPartId: last.revisionPartId,
@@ -1407,10 +1415,10 @@ function loadRequiredUnits(input: {
         asc(schema.planRevisionRequiredUnits.unitIndex),
         asc(schema.planRevisionRequiredUnits.tenantId),
       )
-      .limit(ACCEPTED_TEXT_PAGE_SIZE)
+      .limit(pageSize)
       .all();
     mappings.push(...page);
-    if (page.length < ACCEPTED_TEXT_PAGE_SIZE) break;
+    if (page.length < pageSize) break;
     const last: (typeof page)[number] = page.at(-1)!;
     lastMapping = {
       revisionPartId: last.revisionPartId,
@@ -1420,7 +1428,7 @@ function loadRequiredUnits(input: {
   }
   const tokens = mappings.map((mapping) => mapping.requiredUnitToken);
   const units: Array<typeof defaultSchema.requiredUnits.$inferSelect> = [];
-  for (const tokenChunk of chunks(tokens, ACCEPTED_TEXT_PAGE_SIZE)) {
+  for (const tokenChunk of chunks(tokens, pageSize)) {
     const preflight = db
       .select({
         token: schema.requiredUnits.token,
@@ -1453,7 +1461,7 @@ function loadRequiredUnits(input: {
   }
   const creationRevisionIds = [...new Set(units.map((unit) => unit.createdInRevisionId))];
   const creationRevisions: Array<{ id: number; tenantId: string; profileId: number }> = [];
-  for (const revisionIds of chunks(creationRevisionIds, ACCEPTED_TEXT_PAGE_SIZE)) {
+  for (const revisionIds of chunks(creationRevisionIds, pageSize)) {
     const preflight = db
       .select({
         id: schema.planRevisions.id,
@@ -1505,7 +1513,7 @@ function loadRequiredUnits(input: {
             ),
       )
       .orderBy(asc(schema.requiredUnits.token))
-      .limit(ACCEPTED_TEXT_PAGE_SIZE)
+      .limit(pageSize)
       .all();
     for (const row of page) {
       validateStoredTextBytes(
@@ -1514,7 +1522,7 @@ function loadRequiredUnits(input: {
         "Accepted Plan Required-unit text is corrupt",
       );
     }
-    if (page.length < ACCEPTED_TEXT_PAGE_SIZE) break;
+    if (page.length < pageSize) break;
     lastCreatedPreflightToken = page.at(-1)!.token;
   }
   const createdHere: Array<typeof defaultSchema.requiredUnits.$inferSelect> = [];
@@ -1532,10 +1540,10 @@ function loadRequiredUnits(input: {
             ),
       )
       .orderBy(asc(schema.requiredUnits.token))
-      .limit(ACCEPTED_TEXT_PAGE_SIZE)
+      .limit(pageSize)
       .all();
     createdHere.push(...page);
-    if (page.length < ACCEPTED_TEXT_PAGE_SIZE) break;
+    if (page.length < pageSize) break;
     lastCreatedToken = page.at(-1)!.token;
   }
   return validateAcceptedPlanRequiredUnitRows({
@@ -1562,6 +1570,7 @@ function loadProgress(input: {
   readonly parts: readonly LoadedAcceptedPart[];
   readonly sqlite: boolean;
 }): ReadonlyMap<string, { readonly completed: boolean; readonly assembled: boolean }> {
+  const pageSize = textPageSize(input.sqlite);
   const { db, schema, tenantId, parts } = input;
   const projectionIds = parts.map((part) => part.value.projectionPartId);
   if (projectionIds.length === 0) return new Map();
@@ -1620,10 +1629,10 @@ function loadProgress(input: {
               ),
         )
         .orderBy(asc(schema.printProgress.id))
-        .limit(ACCEPTED_TEXT_PAGE_SIZE)
+        .limit(pageSize)
         .all();
       rows.push(...page);
-      if (page.length < ACCEPTED_TEXT_PAGE_SIZE) break;
+      if (page.length < pageSize) break;
       lastProgressId = page.at(-1)!.id;
     }
   }
@@ -1695,6 +1704,7 @@ function terminalIdentityEqual(
 function loadAcceptedPlanOperationalSnapshot(
   dependencies: AcceptedPlanOperationalReadDependencies,
 ): ReadAcceptedPlanOperationalSnapshotResult {
+  const pageSize = textPageSize(dependencies.sqlite);
   const { db, schema, tenantId, profileId } = dependencies;
   const profileText = db
     .select({
@@ -1864,10 +1874,10 @@ function loadAcceptedPlanOperationalSnapshot(
             ),
       )
       .orderBy(asc(schema.planRevisionParts.id))
-      .limit(ACCEPTED_TEXT_PAGE_SIZE)
+      .limit(pageSize)
       .all();
     revisionParts.push(...page);
-    if (page.length < ACCEPTED_TEXT_PAGE_SIZE) break;
+    if (page.length < pageSize) break;
     lastRevisionPartId = page.at(-1)!.id;
   }
   validateAcceptedPlanRevisionRows({

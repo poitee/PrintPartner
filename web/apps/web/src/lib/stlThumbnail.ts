@@ -229,6 +229,8 @@ class RenderQueue {
 }
 
 const renderQueue = new RenderQueue();
+const warmupQueue = new RenderQueue();
+const pendingWarmups = new Map<string, Promise<void>>();
 const inFlightPartThumbnails = new Map<string, Promise<Blob | null>>();
 const inFlightBlobRenders = new Map<string, Promise<Blob | null>>();
 
@@ -422,9 +424,16 @@ export async function warmupPartThumbnails(partIds: readonly number[]): Promise<
   const unique = [...new Set(partIds)];
   const cacheVersion = getThumbnailCacheVersion();
   await Promise.all(
-    unique.map(async (partId) => {
-      const url = await generatePartThumbnail(partId, { priority: 0, cacheVersion });
-      if (url) URL.revokeObjectURL(url);
+    unique.map((partId) => {
+      const key = `${partId}:${cacheVersion}`;
+      const pending = pendingWarmups.get(key);
+      if (pending) return pending;
+      const task = warmupQueue.enqueue(async () => {
+        const url = await generatePartThumbnail(partId, { priority: 0, cacheVersion });
+        if (url) URL.revokeObjectURL(url);
+      }).finally(() => pendingWarmups.delete(key));
+      pendingWarmups.set(key, task);
+      return task;
     }),
   );
 }
