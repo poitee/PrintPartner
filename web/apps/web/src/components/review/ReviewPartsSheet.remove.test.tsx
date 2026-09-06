@@ -285,6 +285,28 @@ beforeEach(() => {
 });
 
 describe("Plan sheet Working Plan edits", () => {
+  it.each(["grid", "table"] as const)("saves a typed %s quantity through the Plan workspace once on Enter", async (layoutMode) => {
+    localStorage.setItem(REVIEW_PARTS_UI_STORAGE_KEY, serializePersistedReviewPartsUi({
+      ...parsePersistedReviewPartsUi(null), layoutMode,
+    }));
+    state.review = baseReview([reviewPart({ id: 42, match_key: "frame/bracket.stl" })]);
+    state.workspace = baseWorkspace([
+      draftPart({ draft_part_id: 17, base_revision_part_id: 42, part_key: "frame/bracket.stl" }),
+    ]);
+    vi.mocked(savePlanChoices).mockResolvedValue(saveResponse(workspaceWithQuantity(state.workspace, "b", 25)));
+    renderSheet();
+    const input = await screen.findByRole("spinbutton", { name: "Quantity for bracket.stl" });
+    await userEvent.clear(input);
+    await userEvent.type(input, "25");
+    expect(savePlanChoices).not.toHaveBeenCalled();
+    await userEvent.keyboard("{Enter}");
+    await waitFor(() => expect(savePlanChoices).toHaveBeenCalledTimes(1));
+    expect(savePlanChoices).toHaveBeenCalledWith(7,
+      expect.objectContaining({ decisions: [{ kind: "set_quantity_override", target: {
+        part_key: "frame/bracket.stl", relative_path: "frame/bracket.stl", source_layer: "base:Voron",
+      }, value: 25 }] }), expect.any(String));
+  });
+
   it("sends a set_included edit for a part with a unique part_key", async () => {
     state.review = baseReview([reviewPart({ id: 42, match_key: "frame/bracket.stl" })]);
     state.workspace = baseWorkspace([

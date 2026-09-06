@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReviewPart } from "../../api/endpoints/planManifests";
 import QuantityStepper from "./QuantityStepper";
@@ -31,6 +33,77 @@ function part(overrides: Partial<ReviewPart> = {}): ReviewPart {
 
 describe("QuantityStepper", () => {
   afterEach(cleanup);
+
+  function EditableQuantity() {
+    const [quantity, setQuantity] = useState(2);
+    return <QuantityStepper part={part({ quantity_override: quantity })} onChange={setQuantity} />;
+  }
+
+  it("commits a typed number once on Enter, not while typing", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(<QuantityStepper part={part()} onChange={onChange} />);
+    const input = screen.getByRole("spinbutton", { name: "Quantity for gear.stl" });
+    await user.clear(input);
+    await user.type(input, "25");
+    expect(onChange).not.toHaveBeenCalled();
+    await user.keyboard("{Enter}");
+    expect(onChange.mock.calls).toEqual([[25]]);
+  });
+
+  it("keeps typing and both step buttons synchronized", async () => {
+    const user = userEvent.setup();
+    render(<EditableQuantity />);
+    const input = screen.getByRole("spinbutton");
+    await user.clear(input);
+    await user.type(input, "25");
+    await user.click(screen.getByRole("button", { name: "Increase quantity for gear.stl" }));
+    expect(input).toHaveProperty("value", "26");
+    await user.click(screen.getByRole("button", { name: "Decrease quantity for gear.stl" }));
+    expect(input).toHaveProperty("value", "25");
+    await user.clear(input);
+    await user.type(input, "12");
+    await user.tab();
+    expect(input).toHaveProperty("value", "12");
+  });
+
+  it.each(["", "0", "-1", "1.5", "10001"])("does not save invalid input %s", async (value) => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(<QuantityStepper part={part()} onChange={onChange} />);
+    const input = screen.getByRole("spinbutton");
+    await user.clear(input);
+    if (value) await user.type(input, value);
+    await user.tab();
+    expect(onChange).not.toHaveBeenCalled();
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+    expect(screen.getByText("Enter a whole number from 1 to 10,000.")).toBeTruthy();
+  });
+
+  it("preserves unfinished typing across updates and lets Escape cancel it", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const { rerender } = render(<QuantityStepper part={part()} onChange={onChange} />);
+    const input = screen.getByRole("spinbutton");
+    await user.clear(input);
+    await user.type(input, "25");
+    rerender(<QuantityStepper part={part({ quantity_override: 3 })} onChange={onChange} />);
+    expect(input).toHaveProperty("value", "25");
+    await user.keyboard("{Escape}");
+    await user.tab();
+    expect(input).toHaveProperty("value", "3");
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("honors quantity bounds and disabled controls", () => {
+    const { rerender } = render(<QuantityStepper part={part({ quantity_override: 1 })} onChange={vi.fn()} />);
+    expect(screen.getByRole("button", { name: "Decrease quantity for gear.stl" }).hasAttribute("disabled")).toBe(true);
+    rerender(<QuantityStepper part={part({ quantity_override: 10000 })} onChange={vi.fn()} />);
+    expect(screen.getByRole("button", { name: "Increase quantity for gear.stl" }).hasAttribute("disabled")).toBe(true);
+    rerender(<QuantityStepper part={part()} onChange={vi.fn()} disabled />);
+    expect(screen.getByRole("spinbutton").hasAttribute("disabled")).toBe(true);
+    expect(screen.getAllByRole("button").every((button) => button.hasAttribute("disabled"))).toBe(true);
+  });
 
   it("increments and decrements from the effective quantity", () => {
     const onChange = vi.fn();

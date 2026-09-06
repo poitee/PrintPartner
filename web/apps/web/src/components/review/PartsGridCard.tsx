@@ -6,6 +6,7 @@ import { statusTone } from "../../lib/statusTone";
 import PartThumbExpandButton from "../parts/PartThumbExpandButton";
 import { Button } from "../ui/button";
 import { cn } from "@/lib/utils";
+import QuantityStepper from "./QuantityStepper";
 
 type Props = {
   part: ReviewPart;
@@ -70,33 +71,11 @@ export default function PartsGridCard({
           {note}
         </p>
         {part.included && (
-          <div className="qty-control mt-0.5 flex items-center gap-1">
-            <button
-              type="button"
-              className="qty-btn h-7 min-w-7 text-xs"
-              disabled={quantityDisabled || qty <= 1}
-              onClick={() =>
-                onQtyChange(part, (current) => current - 1)
-              }
-              aria-label={`Decrease quantity for ${part.filename}`}
-            >
-              −
-            </button>
-            <span className="min-w-[2ch] text-center text-xs font-semibold tabular-nums">
-              {qty}
-            </span>
-            <button
-              type="button"
-              className="qty-btn h-7 min-w-7 text-xs"
-              disabled={quantityDisabled}
-              onClick={() =>
-                onQtyChange(part, (current) => current + 1)
-              }
-              aria-label={`Increase quantity for ${part.filename}`}
-            >
-              +
-            </button>
-          </div>
+          <QuantityStepper
+            part={part}
+            disabled={quantityDisabled}
+            onChange={(update) => onQtyChange(part, update)}
+          />
         )}
         <Button
           type="button"

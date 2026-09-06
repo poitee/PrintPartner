@@ -10,6 +10,7 @@ import SpoolRemainingBadge from "../SpoolRemainingBadge";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { cn } from "@/lib/utils";
+import QuantityStepper from "./QuantityStepper";
 
 type Props = {
   part: ReviewPart;
@@ -27,43 +28,6 @@ type Props = {
   onToggleUnit?: (part: ReviewPart, unitIndex: number) => void;
   onPreview: (part: ReviewPart) => void;
 };
-
-function MobileQtyStepper({
-  part,
-  disabled,
-  onChange,
-}: {
-  part: ReviewPart;
-  disabled?: boolean;
-  onChange: (update: QuantityUpdate) => void;
-}) {
-  const qty = part.quantity_override ?? part.quantity_effective;
-  return (
-    <div className="qty-control flex items-center gap-1">
-      <button
-        type="button"
-        className="qty-btn rounded-md border min-h-10 min-w-10"
-        disabled={disabled || qty <= 1}
-        onClick={() => onChange((current) => current - 1)}
-        aria-label={`Decrease quantity for ${part.filename}`}
-      >
-        −
-      </button>
-      <span className="qty-display min-w-[2.5ch] text-center text-base font-semibold tabular-nums">
-        {qty}
-      </span>
-      <button
-        type="button"
-        className="qty-btn rounded-md border min-h-10 min-w-10"
-        disabled={disabled}
-        onClick={() => onChange((current) => current + 1)}
-        aria-label={`Increase quantity for ${part.filename}`}
-      >
-        +
-      </button>
-    </div>
-  );
-}
 
 export default function ReviewSheetMobileCard({
   part,
@@ -185,7 +149,7 @@ export default function ReviewSheetMobileCard({
       <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
         {part.included ? (
           <>
-            <MobileQtyStepper
+            <QuantityStepper
               part={part}
               disabled={quantityDisabled}
               onChange={(update) => onQtyChange(part, update)}
