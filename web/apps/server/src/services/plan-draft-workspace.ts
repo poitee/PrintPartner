@@ -112,7 +112,19 @@ function requiredUnitDecision(decision: RequiredUnitDecisionContract): RequiredU
 }
 
 export class PlanDraftWorkspaceService {
-  constructor(private readonly repo: AppRepository) {}
+  constructor(
+    private readonly repo: AppRepository,
+    private readonly reportTiming?: (event: { phase: string; profileId: number; durationMs: number }) => void,
+  ) {}
+
+  private measure<T>(phase: string, profileId: number, run: () => T): T {
+    const started = performance.now();
+    try {
+      return run();
+    } finally {
+      this.reportTiming?.({ phase, profileId, durationMs: performance.now() - started });
+    }
+  }
 
   list(profileId: number): PlanDraftIdentity[] | null {
     if (!this.repo.getOwnedProfileIdentity(profileId)) return null;
@@ -172,12 +184,12 @@ export class PlanDraftWorkspaceService {
   }): PlanDraftWorkspaceResult {
     if (!this.repo.canMutateAcceptedPlan()) return { kind: "transaction_unavailable" };
     if (!this.repo.getOwnedProfileIdentity(input.profileId)) return { kind: "profile_not_found" };
-    const result = this.repo.recomputePlanDraft({
+    const result = this.measure("draft.recompute", input.profileId, () => this.repo.recomputePlanDraft({
       profileId: input.profileId,
       actor: input.actorId,
       idempotencyKey: input.idempotencyKey,
       applyManifest: input.applyManifest,
-    });
+    }));
     if (result.kind !== "created" && result.kind !== "existing") {
       return this.recomputeFailure(result);
     }
@@ -206,12 +218,12 @@ export class PlanDraftWorkspaceService {
           partIds: decision.draft_part_ids,
           value: decision.value,
         });
-    const result = this.repo.editPlanDraftPartsBatch({
+    const result = this.measure("draft.edit", input.profileId, () => this.repo.editPlanDraftPartsBatch({
       profileId: input.profileId,
       draftId: input.draftId,
       expectedSnapshotDigest: input.request.expected_snapshot_digest,
       decisions,
-    });
+    }));
     if (result.kind !== "updated" && result.kind !== "unchanged") {
       return this.editFailure(input.profileId, input.draftId, result);
     }
@@ -257,7 +269,7 @@ export class PlanDraftWorkspaceService {
           revisionId: input.request.expected_base.revision_id,
           planVersion: input.request.expected_base.plan_version,
         };
-    const result = this.repo.applyPlanChanges({
+    const result = this.measure("draft.apply", input.profileId, () => this.repo.applyPlanChanges({
       profileId: input.profileId,
       draftId: input.draftId,
       expectedSnapshotDigest: input.request.expected_snapshot_digest,
@@ -266,7 +278,7 @@ export class PlanDraftWorkspaceService {
       actorId: input.actorId,
       idempotencyKey: input.idempotencyKey,
       remapCheckoffLinks: input.request.remap_checkoff_links,
-    });
+    }));
     return this.applyResult(input.profileId, input.draftId, result);
   }
 
@@ -316,7 +328,7 @@ export class PlanDraftWorkspaceService {
   }
 
   private workspace(draft: PlanDraftSnapshot): PlanDraftWorkspace {
-    const diff = this.repo.diffPlanDraft(draft.profileId, draft.id);
+    const diff = this.measure("draft.diff", draft.profileId, () => this.repo.diffPlanDraft(draft.profileId, draft.id));
     const selected = draft.requiredUnitReconciliation
       ? this.repo.getPlanDraftRequiredUnitReconciliation(
           draft.profileId,
@@ -373,14 +385,14 @@ export class PlanDraftWorkspaceService {
     if (draft.requiredUnitReconciliation) {
       return { kind: "ready", workspace: this.workspace(draft) };
     }
-    const result = this.repo.savePlanDraftRequiredUnitReconciliation({
+    const result = this.measure("draft.reconcile", draft.profileId, () => this.repo.savePlanDraftRequiredUnitReconciliation({
       profileId: draft.profileId,
       draftId: draft.id,
       expectedSnapshotDigest: draft.snapshotDigest,
       decisions: [],
       actorId,
       idempotencyKey: `auto-${draft.snapshotDigest}`,
-    });
+    }));
     if (result.kind === "saved" || result.kind === "existing") {
       return { kind: "ready", workspace: this.workspace(result.draft) };
     }

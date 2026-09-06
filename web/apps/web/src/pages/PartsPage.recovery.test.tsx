@@ -15,7 +15,7 @@ const state = vi.hoisted(() => ({
   edit: vi.fn(),
   workspace: null as PlanDraftWorkspace | null,
 }));
-vi.mock("../context/ProfileContext", () => ({ useProfileSelection: () => ({ selectedProfileId: 7 }) }));
+vi.mock("../context/ProfileContext", () => ({ useProfileSelection: () => ({ selectedProfileId: 7, profiles: [] }) }));
 vi.mock("../context/PlanWorkspaceContext", () => ({
   usePlanWorkspace: () => ({
     review: null,

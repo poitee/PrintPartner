@@ -21,13 +21,14 @@ import { statusTone } from "../lib/statusTone";
 import { cn } from "../lib/utils";
 
 export default function PartsPage() {
-  const { selectedProfileId } = useProfileSelection();
+  const { selectedProfileId, profiles } = useProfileSelection();
   const { review, loading, error, draftError, draftWorkspace, draftLoading, preparePlan, saving, refresh, mergeConflict, discardPendingEdits } = usePlanWorkspace();
   const layers = usePlanLayersQuery(selectedProfileId);
   const sheetRef = useRef<ReviewPartsSheetHandle>(null);
   const prepared = useRef<number | null>(null);
   const [folderRules, setFolderRules] = useState<StlNamingFolderRule[]>([]);
   const hasSources = layers.data?.some((layer) => layer.project_id != null) ?? false;
+  const sourceInputsCurrent = profiles.find((profile) => profile.id === selectedProfileId)?.freshness.status === "current";
 
   useEffect(() => {
     void fetchStlNaming().then((profile) => setFolderRules(profile.folder_rules ?? [])).catch(() => {});
@@ -37,8 +38,9 @@ export default function PartsPage() {
     if (selectedProfileId == null || !review || loading || draftLoading || !hasSources) return;
     if (prepared.current === selectedProfileId) return;
     prepared.current = selectedProfileId;
+    if (review.accepted_basis && sourceInputsCurrent && !draftWorkspace && !draftError) return;
     void preparePlan().catch(() => {});
-  }, [draftLoading, hasSources, loading, preparePlan, review, selectedProfileId]);
+  }, [draftError, draftLoading, draftWorkspace, hasSources, loading, preparePlan, review, selectedProfileId, sourceInputsCurrent]);
 
   const disabled = saving || loading || draftLoading;
   return (

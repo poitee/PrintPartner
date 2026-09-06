@@ -88,7 +88,9 @@ export async function registerPlanDraftRoutes(
   app: FastifyInstance,
   deps: RouteDeps,
 ): Promise<void> {
-  const service = new PlanDraftWorkspaceService(deps.repo);
+  const service = new PlanDraftWorkspaceService(deps.repo, (timing) => {
+    app.log.info(timing, "Plan phase timing");
+  });
 
   app.get("/plans/:id/drafts", async (request, reply) => {
     const profileId = positiveId((request.params as { id: string }).id);

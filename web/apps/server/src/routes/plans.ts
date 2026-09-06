@@ -583,6 +583,7 @@ export async function registerPlanRoutes(
         includeExcluded: include_excluded,
         reposDir: deps.reposDir,
         thumbsDir: deps.thumbsDir,
+        reportTiming: (timings) => request.log.info({ profileId: id, includeExcluded: include_excluded, ...timings }, "Plan review timing"),
         loadFilamentContext: (colorIds) =>
           preloadSpoolmanForColorIds({ repo: deps.repo, dataDir: deps.dataDir }, colorIds),
       });

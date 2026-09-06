@@ -9,7 +9,7 @@ import type {
 import type { SpoolSummary } from "../integrations/spoolman-client.js";
 import { formatSpoolSummaryBadge } from "../integrations/spoolman-client.js";
 import { observeAcceptedMediaPng } from "../lib/accepted-media-cache.js";
-import { observeAcceptedArtifact, observeAcceptedSnapshotRoot } from "./accepted-artifacts.js";
+import { createAcceptedArtifactObserver, observeAcceptedSnapshotRoot } from "./accepted-artifacts.js";
 import {
   acceptedPartMediaIdentity,
 } from "./accepted-part-media.js";
@@ -75,6 +75,7 @@ export type ReadAcceptedPlanReviewInput = {
   readonly includeExcluded: boolean;
   readonly reposDir: string;
   readonly thumbsDir: string | null;
+  readonly reportTiming?: (timings: { snapshotMs: number; filamentMs: number; observationMs: number; projectionMs: number }) => void;
   readonly loadFilamentContext?: (
     colorIds: readonly (string | null)[],
   ) => Promise<AcceptedFilamentContext>;
@@ -368,6 +369,7 @@ function observeAcceptedPlanReview(input: {
   >;
 } {
   const availableInputRoots = new Set<number>();
+  const observeAcceptedArtifact = createAcceptedArtifactObserver();
   if (input.snapshot.provenance.kind === "tracked") {
     for (const acceptedInput of input.snapshot.provenance.inputs) {
       if (
@@ -409,7 +411,9 @@ export async function readAcceptedPlanReview(
 ): Promise<ReadAcceptedPlanReviewResult> {
   const profile = input.repo.getOwnedProfileIdentity(input.profileId);
   if (!profile) return { kind: "not_found" };
+  const started = performance.now();
   const accepted = input.repo.readAcceptedPlanOperationalSnapshot(input.profileId);
+  const snapshotDone = performance.now();
   if (accepted.kind === "empty") {
     return { kind: "empty", body: emptyReview(input.profileId, profile.name) };
   }
@@ -419,18 +423,24 @@ export async function readAcceptedPlanReview(
   const filamentContext = input.loadFilamentContext
     ? await input.loadFilamentContext(accepted.snapshot.parts.map((part) => part.filamentColorId))
     : undefined;
+  const filamentDone = performance.now();
   const observations = observeAcceptedPlanReview({
     snapshot: accepted.snapshot,
     reposDir: input.reposDir,
     thumbsDir: input.thumbsDir,
   });
-  return {
-    kind: "ready",
-    body: projectAcceptedPlanReview({
-      snapshot: accepted.snapshot,
-      includeExcluded: input.includeExcluded,
-      ...observations,
-      filamentContext,
-    }),
-  };
+  const observationDone = performance.now();
+  const body = projectAcceptedPlanReview({
+    snapshot: accepted.snapshot,
+    includeExcluded: input.includeExcluded,
+    ...observations,
+    filamentContext,
+  });
+  input.reportTiming?.({
+    snapshotMs: snapshotDone - started,
+    filamentMs: filamentDone - snapshotDone,
+    observationMs: observationDone - filamentDone,
+    projectionMs: performance.now() - observationDone,
+  });
+  return { kind: "ready", body };
 }
