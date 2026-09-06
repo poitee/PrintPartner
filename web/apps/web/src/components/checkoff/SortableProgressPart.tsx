@@ -32,6 +32,7 @@ type PartProps = {
   correctionNote?: string;
   onToggleUnit: (part: ReviewPart, unitIndex: number) => void;
   onIncrement: (part: ReviewPart) => void;
+  onSetAllPrinted?: (part: ReviewPart, completed: boolean) => void;
   onDecrement: (part: ReviewPart) => void;
   onPreview: (part: ReviewPart) => void;
   onClaim?: (suggestion: SuggestedPrinterClaim) => void;
@@ -90,6 +91,7 @@ export default memo(function SortableProgressPart(props: Props) {
             part={props.part}
             busy={props.busy}
             onToggleUnit={props.onToggleUnit}
+            onSetAllPrinted={props.onSetAllPrinted}
             onPreview={props.onPreview}
             printingOn={props.printingOn}
             awaitingVerify={props.awaitingVerify}
@@ -107,6 +109,7 @@ export default memo(function SortableProgressPart(props: Props) {
             part={props.part}
             busy={props.busy}
             onIncrement={props.onIncrement}
+            onSetAllPrinted={props.onSetAllPrinted}
             onDecrement={props.onDecrement}
             onPreview={props.onPreview}
             printingOn={props.printingOn}

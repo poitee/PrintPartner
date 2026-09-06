@@ -56,6 +56,7 @@ type Props = {
   onMoveTo: (target: CheckoffMoveTarget) => void;
   onToggleUnit: (part: ReviewPart, unitIndex: number) => void;
   onIncrement: (part: ReviewPart) => void;
+  onSetAllPrinted?: (part: ReviewPart, completed: boolean) => void;
   onDecrement: (part: ReviewPart) => void;
   onPreview: (part: ReviewPart) => void;
   onClaim: (suggestion: SuggestedPrinterClaim) => void;
@@ -89,6 +90,7 @@ export default function CheckoffWorklist({
   onMoveTo,
   onToggleUnit,
   onIncrement,
+  onSetAllPrinted,
   onDecrement,
   onPreview,
   onClaim,
@@ -182,6 +184,7 @@ export default function CheckoffWorklist({
                 correctionNote={correction ? formatCheckoffCorrection(correction) : undefined}
                 onToggleUnit={onToggleUnit}
                 onIncrement={onIncrement}
+                onSetAllPrinted={onSetAllPrinted}
                 onDecrement={onDecrement}
                 onPreview={onPreview}
                 onToggleAssembled={onToggleAssembled}

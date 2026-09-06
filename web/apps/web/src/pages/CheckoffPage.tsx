@@ -484,6 +484,18 @@ export default function CheckoffPage() {
     [runMutation, toggleUnit],
   );
 
+  const onSetAllPrinted = useCallback(
+    (part: ReviewPart, completed: boolean) => {
+      if (!part.included || part.quantity_effective <= 0) return;
+      runMutation({
+        part,
+        action: completed ? "checkoff" : "correction",
+        run: () => toggleUnit(part.id, completed ? part.quantity_effective - 1 : 0, completed),
+      });
+    },
+    [runMutation, toggleUnit],
+  );
+
   const onToggleAssembled = useCallback(
     (part: ReviewPart, unitIndex: number) => {
       const next = !(part.assembled_units?.[unitIndex] ?? false);
@@ -791,6 +803,7 @@ export default function CheckoffPage() {
           {view === "remaining" && phaseProgress ? (
             <PhaseProgressView
               phases={phaseProgress}
+              onSetAllPrinted={onSetAllPrinted}
               busyPartId={busyPartId}
               assemblyTrackingEnabled={assemblyTrackingEnabled}
               onIncrement={onIncrement}
@@ -803,6 +816,7 @@ export default function CheckoffPage() {
           ) : (
             <CheckoffWorklist
               rows={filteredRows}
+              onSetAllPrinted={onSetAllPrinted}
               partsById={partsById}
               mobile={isMobileLayout}
               busyPartId={busyPartId}
