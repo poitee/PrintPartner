@@ -2037,16 +2037,16 @@ selections:
     database.close();
   });
 
-  it("lets the user exclude a missing file without discarding other pending choices", () => {
+  it.each([true, false])("refreshes a missing file automatically (previously included: %s) and retains other choices", (included) => {
     const { database, profile, repo, draft } = editableDraftFixture();
     const gear = draft.parts.find((part) => part.partKey === "gear.stl");
     const kept = draft.parts.find((part) => part.id !== gear?.id);
     if (!gear || !kept) throw new Error("fixture parts unavailable");
     const edited = repo.editPlanDraftParts({ profileId: profile.id, draftId: draft.id, expectedSnapshotDigest: draft.snapshotDigest,
-      decision: { kind: "set_quantity_override", partIds: [kept.id], value: 7 } });
+      decision: { kind: "set_quantity_override", partIds: [kept.id, gear.id], value: 7 } });
     if (edited.kind !== "updated") throw new Error("edit failed");
-    const excluded = repo.editPlanDraftParts({ profileId: profile.id, draftId: draft.id, expectedSnapshotDigest: edited.draft.snapshotDigest,
-      decision: { kind: "set_included", partIds: [gear.id], value: false } });
+    const excluded = included ? edited : repo.editPlanDraftParts({ profileId: profile.id, draftId: draft.id, expectedSnapshotDigest: edited.draft.snapshotDigest,
+      decision: { kind: "set_included", partIds: [gear.id], value: included } });
     if (excluded.kind !== "updated") throw new Error("exclude failed");
     rmSync(join(database.reposDir, "editable-source", "gear.stl"));
     const extra = trackedSource({ repo, database, name: "Updated Source", files: { "new.stl": "solid new" } });
@@ -2061,8 +2061,8 @@ selections:
     database.close();
   });
 
-  it("keeps an open draft unchanged and editable when rebase cannot find a chosen file", () => {
-    const { database, raw, profile, repo, draft } = editableDraftFixture();
+  it("refreshes removed files while retaining historical choices and progress", () => {
+    const { database, profile, repo, draft } = editableDraftFixture();
     const gear = draft.parts.find((part) => part.partKey === "gear.stl");
     if (!gear) throw new Error("gear is unavailable");
     const edited = repo.editPlanDraftParts({
@@ -2073,18 +2073,15 @@ selections:
     rmSync(join(database.reposDir, "editable-source", "gear.stl"));
     const extra = trackedSource({ repo, database, name: "Conflicting Source", files: { "new.stl": "solid new" } });
     repo.addAddonLayer(profile.id, extra.source.id);
-    const before = snapshotTables(raw, APPLY_STATE_TABLES);
+    const before = repo.readAcceptedPlanOperationalSnapshot(profile.id);
     expect(repo.rebasePlanDraft({
       profileId: profile.id, sourceDraftId: draft.id, expectedSourceState: "open",
       expectedSourceLifecycleVersion: 0, expectedSourceSnapshotDigest: edited.draft.snapshotDigest,
       actor: "test:user", idempotencyKey: "failed-open-rebase",
-    })).toMatchObject({ kind: "merge_conflicts", conflicts: [{ kind: "target_missing", sourcePartId: gear.id }] });
-    expect(snapshotTables(raw, APPLY_STATE_TABLES)).toEqual(before);
-    expect(repo.getPlanDraft(profile.id, draft.id)).toEqual(edited.draft);
-    expect(repo.editPlanDraftParts({
-      profileId: profile.id, draftId: draft.id, expectedSnapshotDigest: edited.draft.snapshotDigest,
-      decision: { kind: "set_quantity_override", partIds: [gear.id], value: 8 },
-    }).kind).toBe("updated");
+    })).toMatchObject({ kind: "rebased" });
+    expect(repo.readAcceptedPlanOperationalSnapshot(profile.id)).toEqual(before);
+    expect(repo.getPlanDraft(profile.id, draft.id)?.parts).toEqual(edited.draft.parts);
+    expect(repo.getPlanDraft(profile.id, draft.id)?.state).toBe("abandoned");
     database.close();
   });
 

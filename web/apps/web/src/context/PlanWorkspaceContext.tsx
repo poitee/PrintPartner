@@ -467,19 +467,20 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
         throw new Error("A changed file affects previous print progress. Choose what to keep below.");
       }
       let receipt: ApplyPlanDraftReceipt;
-      try {
-        receipt = await applyPlanDraft(workspace, options);
-      } catch (error) {
-        if (isWorkingPlanInputsChanged(error)) {
-          await rebaseWorkspace(workspace);
-          throw new WorkingPlanChangedError("refreshed", {
-            cause: error,
-          });
+      for (let refreshAttempt = 0; ; refreshAttempt += 1) {
+        try {
+          receipt = await applyPlanDraft(workspace, options);
+          break;
+        } catch (error) {
+          if (isWorkingPlanInputsChanged(error) && refreshAttempt < 2) {
+            workspace = await rebaseWorkspace(workspace);
+            continue;
+          }
+          if (replaceFromConflict(workspace.profile_id, error)) {
+            throw new WorkingPlanChangedError("refreshed", { cause: error });
+          }
+          throw error;
         }
-        if (replaceFromConflict(workspace.profile_id, error)) {
-          throw new WorkingPlanChangedError("refreshed", { cause: error });
-        }
-        throw error;
       }
       closedDraftIds.current.add(workspace.draft.draft_id);
       updateDraftUi(workspace.profile_id, (current) => ({
