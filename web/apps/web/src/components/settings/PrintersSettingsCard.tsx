@@ -131,6 +131,7 @@ export default function PrintersSettingsCard({ engineReady }: Props) {
 
   const [hostType, setHostType] = useState<HostType>("moonraker");
   const [newName, setNewName] = useState("");
+  const [connectNewPrinter, setConnectNewPrinter] = useState(false);
   const [newUrl, setNewUrl] = useState(DEFAULT_PRINTER_HOST_URLS.moonraker);
   const [apiKey, setApiKey] = useState("");
   const [username, setUsername] = useState("");
@@ -151,9 +152,12 @@ export default function PrintersSettingsCard({ engineReady }: Props) {
   const statusIntegrationIds = useMemo(
     () => printers.flatMap((printer) => {
       const integrationId = printer.integration_id?.trim();
-      return integrationId ? [integrationId] : [];
+      const host = integrationId ? hostsById.get(integrationId) : undefined;
+      return printer.enabled !== false && integrationId && host && host.config.enabled !== false
+        ? [integrationId]
+        : [];
     }),
-    [printers],
+    [printers, hostsById],
   );
   const { statusByIntegration, refresh: refreshStatus } = usePrinterStatuses(
     statusIntegrationIds,
@@ -288,8 +292,12 @@ export default function PrintersSettingsCard({ engineReady }: Props) {
       setPrinters((prev) => [...prev, created]);
       setNewName("");
       setMessage(
-        `${name} added for planning and local 3MF. Add a connection later for status and sending.`,
+        connectNewPrinter
+          ? `${name} added. Configure and save its connection below to enable communication.`
+          : `${name} added for manual use. No printer connection is enabled.`,
       );
+      if (connectNewPrinter) setConnectingId(created.id);
+      setConnectNewPrinter(false);
       await refresh();
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : String(e));
@@ -349,7 +357,7 @@ export default function PrintersSettingsCard({ engineReady }: Props) {
     try {
       await updateIntegration(integrationId, { config: { enabled } });
       await refresh();
-      void refreshStatus(integrationId);
+      if (enabled) void refreshStatus(integrationId);
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -586,7 +594,7 @@ export default function PrintersSettingsCard({ engineReady }: Props) {
         <div className="space-y-2 rounded-md border border-border p-3">
           <p className="text-sm font-medium">Add printer</p>
           <p className="text-xs text-muted-foreground">
-            A host connection is optional until you want live status or sending.
+            Printers are manual by default. You can plan, export files, and record prints without connecting.
           </p>
           <label className="block text-sm">
             <span className="mb-1 block text-muted-foreground">Name</span>
@@ -657,6 +665,17 @@ export default function PrintersSettingsCard({ engineReady }: Props) {
             </div>
           )}
 
+          <label className="flex items-center gap-2 text-sm">
+            <Checkbox
+              checked={connectNewPrinter}
+              onCheckedChange={(checked) => setConnectNewPrinter(checked === true)}
+              disabled={!engineReady || busy}
+            />
+            Connect to this printer
+          </label>
+          <p className="text-xs text-muted-foreground">
+            Optional. Configure a connection after adding the printer for live status, file access, and sending.
+          </p>
           <Button className="min-h-10" disabled={!canAdd} onClick={() => void onAddPrinter()}>
             Add printer
           </Button>
@@ -705,7 +724,7 @@ export default function PrintersSettingsCard({ engineReady }: Props) {
                     )}
                     title={status?.message}
                   >
-                    {statusPillLabel(status)}
+                    {enabled ? statusPillLabel(status) : "Connection off"}
                   </span>
                 </div>
 
@@ -720,12 +739,12 @@ export default function PrintersSettingsCard({ engineReady }: Props) {
                       disabled={busy || !linkedId}
                       onCheckedChange={(next) => void onToggleEnabled(printer, next === true)}
                     />
-                    Enabled
+                    Communication enabled
                   </label>
                   <Button
                     variant="secondary"
                     size="sm"
-                    disabled={!engineReady || testingId === linkedId || !linkedId}
+                    disabled={!engineReady || testingId === linkedId || !linkedId || !enabled}
                     onClick={() => void onTest(linkedId)}
                   >
                     {testingId === linkedId ? "Testing…" : "Test connection"}

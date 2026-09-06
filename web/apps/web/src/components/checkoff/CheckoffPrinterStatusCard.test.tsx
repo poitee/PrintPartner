@@ -8,11 +8,20 @@ import CheckoffPrinterStatusCard from "./CheckoffPrinterStatusCard";
 afterEach(cleanup);
 
 describe("CheckoffPrinterStatusCard", () => {
+  it("offers manual print records without implying monitoring is required", () => {
+    render(<MemoryRouter><CheckoffPrinterStatusCard connectedPrinters={0} printingJobs={0} queuedJobs={0}
+      failedJobs={0} printersRoute="/printers" onAddPastPrint={vi.fn()} /></MemoryRouter>);
+    expect(screen.getByRole("heading", { name: "Print records" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Add a past print" })).toBeTruthy();
+    expect(screen.queryByText(/Watched jobs/)).toBeNull();
+  });
+
   it("keeps printer context and recovery actions visible", () => {
     const onAddPastPrint = vi.fn();
     render(
       <MemoryRouter>
         <CheckoffPrinterStatusCard
+          connectedPrinters={1}
           printingJobs={2}
           queuedJobs={1}
           failedJobs={0}

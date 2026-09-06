@@ -663,6 +663,7 @@ export default function CheckoffPage() {
         <PlanSpecialRequestLine note={specialRequest} />
 
         <CheckoffPrinterStatusCard
+          connectedPrinters={liveStrip.hostCount}
           className="no-print"
           printingJobs={workflow?.active_work.printing_jobs ?? 0}
           queuedJobs={workflow?.active_work.queued_jobs ?? 0}
@@ -673,7 +674,7 @@ export default function CheckoffPage() {
           <Suspense
             fallback={
               <p className="text-xs text-muted-foreground" role="status">
-                Loading live printer activity…
+                Loading print records…
               </p>
             }
           >

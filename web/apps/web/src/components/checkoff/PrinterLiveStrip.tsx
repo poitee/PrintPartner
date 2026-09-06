@@ -174,14 +174,13 @@ export default function PrinterLiveStrip({
       return;
     }
     try {
-      const [fleet, integrations] = await Promise.all([
-        fetchPrinters(),
-        fetchIntegrations(),
-      ]);
+      const fleet = await fetchPrinters();
+      const linkedMachines = fleet.filter((machine) => machine.enabled !== false && machine.integration_id?.trim());
+      const integrations = linkedMachines.length > 0 ? await fetchIntegrations() : [];
       const byId = new Map(integrations.map((i) => [i.id, i]));
       const seen = new Set<string>();
       const next: LinkedHost[] = [];
-      for (const machine of fleet) {
+      for (const machine of linkedMachines) {
         const id = machine.integration_id?.trim();
         if (!id || seen.has(id)) continue;
         const host = byId.get(id);
