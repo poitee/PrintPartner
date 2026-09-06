@@ -210,15 +210,17 @@ export async function buildApp(config: ServerConfig, ports: RuntimePorts) {
   );
 
   await app.register(cors, { origin: config.corsOrigin, credentials: true });
-  // Register rate limiting with smart defaults
-  // Global: 1000 requests per minute per IP
-  // Health check: allowed via allowList
-  // Static files still handled separately
+  // Media and application traffic have separate bounded budgets per IP.
   await app.register(rateLimit, {
     max: 1000,
     timeWindow: "1 minute",
     cache: 10000, // Store limit info for max 10k IPs
-    allowList: ["/health"], // Skip rate limiting for health checks
+    keyGenerator: (request) => {
+      const path = request.url.split("?", 1)[0];
+      const media = /^(?:\/api\/v[12])?\/parts\/\d+\/(?:mesh|thumbnail)$/.test(path);
+      return `${request.ip}:${media ? "media" : "app"}`;
+    },
+    allowList: (request) => /^(?:\/api\/v[12])?\/health(?:\?|$)/.test(request.url),
     redis: undefined, // Use in-memory store for single-instance deployments
   });
   // Compress SPA assets and API JSON; event streams are excluded so MCP and

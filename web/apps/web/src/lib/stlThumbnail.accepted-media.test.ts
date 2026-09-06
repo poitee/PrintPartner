@@ -68,7 +68,6 @@ import {
   decimateGeometryForThumbnail,
   generatePartThumbnail,
   loadAcceptedMeshBuffer,
-  warmupPartThumbnails,
 } from "./stlThumbnail";
 
 const basis = "a".repeat(64);
@@ -395,76 +394,4 @@ describe("accepted STL thumbnail mesh loading", () => {
     });
   });
 
-  it("warms each unique Part id once", async () => {
-    runtime.fetchWithRetry.mockResolvedValue(new Response(null, { status: 404 }));
-
-    await warmupPartThumbnails([701, 701, 702]);
-
-    expect(runtime.fetchWithRetry).toHaveBeenCalledTimes(2);
-    expect(URL.revokeObjectURL).not.toHaveBeenCalled();
-  });
-
-  it("revokes warmup object URLs after a successful render", async () => {
-    function binaryStl(): Uint8Array<ArrayBuffer> {
-      const bytes = new Uint8Array(84 + 50);
-      const view = new DataView(bytes.buffer);
-      view.setUint32(80, 1, true);
-      const vertices = [
-        [0, 0, 0],
-        [1, 0, 0],
-        [0, 1, 0],
-      ];
-      let offset = 96;
-      for (const vertex of vertices) {
-        for (const coordinate of vertex) {
-          view.setFloat32(offset, coordinate, true);
-          offset += 4;
-        }
-      }
-      return bytes;
-    }
-
-    runtime.fetchWithRetry.mockResolvedValueOnce(meshResponse(200, binaryStl(), "e".repeat(64)));
-
-    await warmupPartThumbnails([801]);
-
-    expect(URL.createObjectURL).toHaveBeenCalledOnce();
-    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:thumbnail");
-    expect(runtime.uploadPartThumbnail).toHaveBeenCalledOnce();
-  });
-
-  it("limits background mesh requests across concurrent warmups", async () => {
-    const pending: Array<(response: Response) => void> = [];
-    runtime.fetchWithRetry.mockImplementation(() => new Promise<Response>((resolve) => pending.push(resolve)));
-    const first = warmupPartThumbnails([910, 911]);
-    const second = warmupPartThumbnails([912]);
-    const repeated = warmupPartThumbnails([911]);
-    await vi.waitFor(() => expect(pending.length).toBeGreaterThan(0));
-    const initiallyStarted = runtime.fetchWithRetry.mock.calls.length;
-    for (let index = 0; index < 3; index += 1) {
-      await vi.waitFor(() => expect(pending.length).toBeGreaterThan(0));
-      pending.shift()?.(new Response(null, { status: 404 }));
-    }
-    await Promise.all([first, second, repeated]);
-    expect(initiallyStarted).toBe(1);
-    expect(runtime.fetchWithRetry).toHaveBeenCalledTimes(3);
-  });
-
-  it("joins an in-flight generate instead of starting a second render", async () => {
-    let settle!: (response: Response) => void;
-    runtime.fetchWithRetry.mockImplementationOnce(
-      () =>
-        new Promise<Response>((resolve) => {
-          settle = resolve;
-        }),
-    );
-
-    const visible = generatePartThumbnail(901);
-    await vi.waitFor(() => expect(runtime.fetchWithRetry).toHaveBeenCalledTimes(1));
-
-    const warmup = warmupPartThumbnails([901]);
-    settle(new Response(null, { status: 404 }));
-    await expect(Promise.all([visible, warmup])).resolves.toEqual([null, undefined]);
-    expect(runtime.fetchWithRetry).toHaveBeenCalledTimes(1);
-  });
 });

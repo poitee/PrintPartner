@@ -70,6 +70,20 @@ describe("PartThumb accepted server object URL lifecycle", () => {
     vi.unstubAllGlobals();
   });
 
+  it("does not fetch offscreen thumbnails, but still loads them for printing", async () => {
+    vi.stubGlobal("IntersectionObserver", class {
+      observe() {}
+      disconnect() {}
+    });
+    const { rerender } = render(<PartThumb partId={7} />);
+    await act(async () => {});
+    expect(runtime.fetchWithRetry).not.toHaveBeenCalled();
+    expect(runtime.generatePartThumbnail).not.toHaveBeenCalled();
+
+    rerender(<PartThumb partId={7} eager />);
+    await waitFor(() => expect(runtime.generatePartThumbnail).toHaveBeenCalledOnce());
+  });
+
   it.each(["invalid", "error"] as const)(
     "revokes the server URL before the %s fallback render",
     async (probeResult) => {
