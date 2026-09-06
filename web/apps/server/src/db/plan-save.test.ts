@@ -95,6 +95,27 @@ function editedDraft(context: ReturnType<typeof fixture>, explicitDecisions = fa
 }
 
 describe("savePlanChoices", () => {
+  it("prepares each repeated insert once per save instead of once per part or unit", () => {
+    const context = fixture();
+    const prepare = vi.spyOn(Database.prototype, "prepare");
+    try {
+      expect(context.repo.savePlanChoices({ ...context.command, changes: [
+        ...context.command.changes,
+        { kind: "set_quantity_override", value: 4, target: {
+          partKey: context.done.partKey, relativePath: context.done.relativePath, sourceLayer: context.done.sourceLayer,
+        } },
+      ] }).kind).toBe("saved");
+      const repeatedTables = ["plan_draft_parts", "plan_draft_required_unit_assignments", "parts",
+        "plan_revision_parts", "required_units", "plan_revision_required_units", "print_progress"];
+      expect(Object.fromEntries(repeatedTables.map((table) => [table,
+        prepare.mock.calls.filter(([query]) => query.startsWith(`insert into "${table}"`)).length,
+      ]))).toEqual(Object.fromEntries(repeatedTables.map((table) => [table, 1])));
+      const accepted = context.repo.getAcceptedPlanRevision(context.profile.id);
+      expect(accepted?.parts).toHaveLength(2);
+      expect(accepted?.parts.map((part) => part.geometrySame)).toEqual([null, null]);
+    } finally { prepare.mockRestore(); }
+  });
+
   it("publishes a choice and quantity in one native apply and one final reconciliation", () => {
     const context = fixture();
     const apply = vi.spyOn(context.repo, "applyPlanChanges");

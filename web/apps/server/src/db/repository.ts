@@ -4317,10 +4317,24 @@ export class AppRepository {
       }).run();
     }
     const partIds: number[] = [];
+    // Bind nullable geometry explicitly: a boolean column's placeholder encoder maps null to false.
+    const insertPart = this.db.insert(this.schema.planDraftParts).values({
+      tenantId: this.tenantId, draftId: inserted.id,
+      baseRevisionPartId: sql.placeholder("baseRevisionPartId"),
+      partKey: sql.placeholder("partKey"), relativePath: sql.placeholder("relativePath"),
+      filename: sql.placeholder("filename"), sourceLayer: sql.placeholder("sourceLayer"),
+      status: sql.placeholder("status"), roleInferred: sql.placeholder("roleInferred"),
+      roleOverride: sql.placeholder("roleOverride"), filamentColorId: sql.placeholder("filamentColorId"),
+      filamentCustomHex: sql.placeholder("filamentCustomHex"), spoolmanSpoolId: sql.placeholder("spoolmanSpoolId"),
+      quantityInferred: sql.placeholder("quantityInferred"), quantityOverride: sql.placeholder("quantityOverride"),
+      quantityEffective: sql.placeholder("quantityEffective"), included: sql.placeholder("included"),
+      notes: sql.placeholder("notes"), githubBlobUrl: sql.placeholder("githubBlobUrl"),
+      geometrySame: sql`${sql.placeholder("geometrySame")}`, requirement: sql.placeholder("requirement"),
+      optionGroupId: sql.placeholder("optionGroupId"), manifestSource: sql.placeholder("manifestSource"),
+      artifactDigest: sql.placeholder("artifactDigest"),
+    }).returning({ id: this.schema.planDraftParts.id }).prepare();
     for (const part of input.parts) {
-      const saved = this.db.insert(this.schema.planDraftParts).values({
-        tenantId: this.tenantId, draftId: inserted.id, ...part,
-      }).returning({ id: this.schema.planDraftParts.id }).get();
+      const saved = insertPart.get({ ...part, geometrySame: part.geometrySame == null ? null : Number(part.geometrySame) });
       if (!saved) throw new Error("Plan draft Part could not be created");
       partIds.push(saved.id);
     }
@@ -5467,31 +5481,31 @@ export class AppRepository {
         })
         .get();
       if (!inserted) throw new Error("Required-unit reconciliation could not be created");
+      const insertDecision = this.db.insert(this.schema.planDraftRequiredUnitDecisions).values({
+        tenantId: this.tenantId, reconciliationId: inserted.id,
+        targetDraftPartId: sql.placeholder("targetDraftPartId"), kind: sql.placeholder("kind"),
+        predecessorRevisionPartId: sql.placeholder("predecessorRevisionPartId"),
+      }).prepare();
       for (const decision of input.decisions) {
-        this.db
-          .insert(this.schema.planDraftRequiredUnitDecisions)
-          .values({
-            tenantId: this.tenantId,
-            reconciliationId: inserted.id,
-            targetDraftPartId: decision.targetDraftPartId,
-            kind: decision.kind,
-            predecessorRevisionPartId: decision.kind === "replace" ? null : decision.predecessorRevisionPartId,
-          })
-          .run();
+        insertDecision.run({
+          targetDraftPartId: decision.targetDraftPartId,
+          kind: decision.kind,
+          predecessorRevisionPartId: decision.kind === "replace" ? null : decision.predecessorRevisionPartId,
+        });
       }
       if (result.kind === "ready") {
+        const insertAssignment = this.db.insert(this.schema.planDraftRequiredUnitAssignments).values({
+          tenantId: this.tenantId, reconciliationId: inserted.id,
+          targetDraftPartId: sql.placeholder("targetDraftPartId"), unitIndex: sql.placeholder("unitIndex"),
+          kind: sql.placeholder("kind"), requiredUnitToken: sql.placeholder("requiredUnitToken"),
+        }).prepare();
         for (const assignment of result.assignments) {
-          this.db
-            .insert(this.schema.planDraftRequiredUnitAssignments)
-            .values({
-              tenantId: this.tenantId,
-              reconciliationId: inserted.id,
-              targetDraftPartId: assignment.draftPartId,
-              unitIndex: assignment.unitIndex,
-              kind: assignment.kind,
-              requiredUnitToken: assignment.kind === "reuse" ? assignment.token : null,
-            })
-            .run();
+          insertAssignment.run({
+            targetDraftPartId: assignment.draftPartId,
+            unitIndex: assignment.unitIndex,
+            kind: assignment.kind,
+            requiredUnitToken: assignment.kind === "reuse" ? assignment.token : null,
+          });
         }
       }
       const finalized = this.db
@@ -6338,67 +6352,40 @@ export class AppRepository {
         .run();
       const projectionByDraftPart = new Map<number, number>();
       const revisionPartByDraftPart = new Map<number, number>();
+      const insertProjection = this.db.insert(this.schema.parts).values({
+        tenantId: this.tenantId, profileId,
+        matchKey: sql.placeholder("partKey"), relativePath: sql.placeholder("relativePath"),
+        filename: sql.placeholder("filename"), sourceLayer: sql.placeholder("sourceLayer"),
+        status: sql.placeholder("status"), role: sql.placeholder("effectiveRole"),
+        filamentColorId: sql.placeholder("filamentColorId"), filamentCustomHex: sql.placeholder("filamentCustomHex"),
+        spoolmanSpoolId: sql.placeholder("spoolmanSpoolId"), quantityAuto: sql.placeholder("quantityInferred"),
+        quantityOverride: sql.placeholder("quantityOverride"), quantityEffective: sql.placeholder("quantityEffective"),
+        included: sql.placeholder("included"), notes: sql.placeholder("notes"),
+        githubBlobUrl: sql.placeholder("githubBlobUrl"), geometrySame: sql`${sql.placeholder("geometrySame")}`,
+        requirement: sql.placeholder("requirement"), optionGroupId: sql.placeholder("optionGroupId"),
+        manifestSource: sql.placeholder("manifestSource"),
+      }).returning({ id: this.schema.parts.id }).prepare();
+      const insertRevisionPart = this.db.insert(this.schema.planRevisionParts).values({
+        tenantId: this.tenantId, revisionId: revision.id,
+        projectionPartId: sql.placeholder("projectionPartId"), partKey: sql.placeholder("partKey"),
+        relativePath: sql.placeholder("relativePath"), filename: sql.placeholder("filename"),
+        sourceLayer: sql.placeholder("sourceLayer"), status: sql.placeholder("status"),
+        roleInferred: sql.placeholder("roleInferred"), roleOverride: sql.placeholder("roleOverride"),
+        filamentColorId: sql.placeholder("filamentColorId"), filamentCustomHex: sql.placeholder("filamentCustomHex"),
+        spoolmanSpoolId: sql.placeholder("spoolmanSpoolId"), quantityInferred: sql.placeholder("quantityInferred"),
+        quantityOverride: sql.placeholder("quantityOverride"), quantityEffective: sql.placeholder("quantityEffective"),
+        included: sql.placeholder("included"), notes: sql.placeholder("notes"),
+        githubBlobUrl: sql.placeholder("githubBlobUrl"), geometrySame: sql`${sql.placeholder("geometrySame")}`,
+        requirement: sql.placeholder("requirement"), optionGroupId: sql.placeholder("optionGroupId"),
+        manifestSource: sql.placeholder("manifestSource"), artifactDigest: sql.placeholder("artifactDigest"),
+      }).returning({ id: this.schema.planRevisionParts.id }).prepare();
       for (const part of prepared.parts) {
-        const projection = this.db
-          .insert(this.schema.parts)
-          .values({
-            tenantId: this.tenantId,
-            profileId,
-            matchKey: part.partKey,
-            relativePath: part.relativePath,
-            filename: part.filename,
-            sourceLayer: part.sourceLayer,
-            status: part.status,
-            role: part.effectiveRole,
-            filamentColorId: part.filamentColorId,
-            filamentCustomHex: part.filamentCustomHex,
-            spoolmanSpoolId: part.spoolmanSpoolId,
-            quantityAuto: part.quantityInferred,
-            quantityOverride: part.quantityOverride,
-            quantityEffective: part.quantityEffective,
-            included: part.included,
-            notes: part.notes,
-            githubBlobUrl: part.githubBlobUrl,
-            geometrySame: part.geometrySame,
-            requirement: part.requirement,
-            optionGroupId: part.optionGroupId,
-            manifestSource: part.manifestSource,
-          })
-          .returning({ id: this.schema.parts.id })
-          .get();
+        const values = { ...part, geometrySame: part.geometrySame == null ? null : Number(part.geometrySame) };
+        const projection = insertProjection.get(values);
         if (!projection) throw new Error("Compatibility Part could not be created");
         if (oldPartIds.includes(projection.id)) throw new Error("Compatibility Part ID was reused");
         projectionByDraftPart.set(part.draftPartId, projection.id);
-        const revisionPart = this.db
-          .insert(this.schema.planRevisionParts)
-          .values({
-            tenantId: this.tenantId,
-            revisionId: revision.id,
-            projectionPartId: projection.id,
-            partKey: part.partKey,
-            relativePath: part.relativePath,
-            filename: part.filename,
-            sourceLayer: part.sourceLayer,
-            status: part.status,
-            roleInferred: part.roleInferred,
-            roleOverride: part.roleOverride,
-            filamentColorId: part.filamentColorId,
-            filamentCustomHex: part.filamentCustomHex,
-            spoolmanSpoolId: part.spoolmanSpoolId,
-            quantityInferred: part.quantityInferred,
-            quantityOverride: part.quantityOverride,
-            quantityEffective: part.quantityEffective,
-            included: part.included,
-            notes: part.notes,
-            githubBlobUrl: part.githubBlobUrl,
-            geometrySame: part.geometrySame,
-            requirement: part.requirement,
-            optionGroupId: part.optionGroupId,
-            manifestSource: part.manifestSource,
-            artifactDigest: part.artifactDigest,
-          })
-          .returning({ id: this.schema.planRevisionParts.id })
-          .get();
+        const revisionPart = insertRevisionPart.get({ ...values, projectionPartId: projection.id });
         if (!revisionPart) throw new Error("Accepted Plan revision Part could not be created");
         revisionPartByDraftPart.set(part.draftPartId, revisionPart.id);
       }
@@ -6411,25 +6398,22 @@ export class AppRepository {
         }
         this.applyCheckoffRemap(checkoffRemapPlan, finalRemap);
       }
-      for (const allocatedUnit of allocated.values()) {
-        this.db
-          .insert(this.schema.requiredUnits)
-          .values({
-            token: allocatedUnit.token,
-            tenantId: this.tenantId,
-            profileId,
-            createdInRevisionId: revision.id,
-            objectName: allocatedUnit.objectName,
-            createdAt: appliedAt,
-          })
-          .run();
-      }
+      const insertUnit = this.db.insert(this.schema.requiredUnits).values({
+        tenantId: this.tenantId, profileId, createdInRevisionId: revision.id, createdAt: appliedAt,
+        token: sql.placeholder("token"), objectName: sql.placeholder("objectName"),
+      }).prepare();
+      for (const allocatedUnit of allocated.values()) insertUnit.run(allocatedUnit);
       const mappingRows: Array<{
         revisionPartId: number;
         unitIndex: number;
         token: string;
         objectName: string;
       }> = [];
+      const insertMapping = this.db.insert(this.schema.planRevisionRequiredUnits).values({
+        tenantId: this.tenantId, revisionId: revision.id,
+        revisionPartId: sql.placeholder("revisionPartId"), unitIndex: sql.placeholder("unitIndex"),
+        requiredUnitToken: sql.placeholder("token"),
+      }).prepare();
       for (const assignment of prepared.mappings) {
         const revisionPartId = revisionPartByDraftPart.get(assignment.draftPartId);
         if (!revisionPartId) throw new Error("Accepted revision Part mapping is missing");
@@ -6438,16 +6422,7 @@ export class AppRepository {
         if (!token) throw new Error("Required-unit assignment token is missing");
         const objectName = assignment.kind === "reuse" ? objectNames.get(token) : allocatedUnit?.objectName;
         if (!objectName) throw new Error("Required-unit Object name is missing");
-        this.db
-          .insert(this.schema.planRevisionRequiredUnits)
-          .values({
-            tenantId: this.tenantId,
-            revisionId: revision.id,
-            revisionPartId,
-            unitIndex: assignment.unitIndex,
-            requiredUnitToken: token,
-          })
-          .run();
+        insertMapping.run({ revisionPartId, unitIndex: assignment.unitIndex, token });
         mappingRows.push({
           revisionPartId,
           unitIndex: assignment.unitIndex,
@@ -6474,20 +6449,20 @@ export class AppRepository {
         })
         .run();
       const progressBySlot = new Map(prepared.progress.map((row) => [`${row.draftPartId}:${row.unitIndex}`, row]));
+      const insertProgress = this.db.insert(this.schema.printProgress).values({
+        tenantId: this.tenantId, partId: sql.placeholder("partId"), unitIndex: sql.placeholder("unitIndex"),
+        completed: sql.placeholder("completed"), assembled: sql.placeholder("assembled"),
+      }).prepare();
       for (const assignment of prepared.mappings) {
         const projectionPartId = projectionByDraftPart.get(assignment.draftPartId);
         const progress = progressBySlot.get(`${assignment.draftPartId}:${assignment.unitIndex}`);
         if (!projectionPartId || !progress) throw new Error("Published progress target is missing");
-        this.db
-          .insert(this.schema.printProgress)
-          .values({
-            tenantId: this.tenantId,
-            partId: projectionPartId,
-            unitIndex: assignment.unitIndex,
-            completed: progress.completed,
-            assembled: progress.assembled,
-          })
-          .run();
+        insertProgress.run({
+          partId: projectionPartId,
+          unitIndex: assignment.unitIndex,
+          completed: progress.completed,
+          assembled: progress.assembled,
+        });
       }
       this.acceptPlanRevisionInputSet(profileId, inputSet.id, appliedAt);
       const pointed = this.db

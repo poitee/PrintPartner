@@ -33,3 +33,19 @@ It creates an isolated temporary database with 350 initially selected files acro
 The September 6 local run measured new-path p95 server times of 385 ms for single files and 279 ms for ten-file batches, compared with 660 ms and 485 ms for the old sequence. These are local server timings, not network or browser timings.
 
 An isolated development-browser pass observed 19 of 20 single-file/folder saves below 0.9 seconds; one single-file sample took 3.45 seconds. Timings include browser-control and polling overhead. No checkbox reversals or error alerts occurred, and three quick reversals retained the final selection. Live-host latency still needs measurement after deployment.
+
+## Database statement reuse
+
+Live verification after PR55 measured nine click-to-Saved samples at 1.54 to 2.44 seconds, with no observed checkbox reversals. Only four were below two seconds. Eight supplied server timing records showed the save command averaging 1209 ms and accepted snapshot/summary reads averaging 251 ms. Filament lookup averaged less than one millisecond. The two-second live target was not met.
+
+To profile the save endpoint against the isolated fixture, excluding the old multi-request path:
+
+```sh
+node --conditions=development --import tsx scripts/plan-save-benchmark.mts --single-request-only --profile
+```
+
+The command prints the path to a `save.cpuprofile` file. Profiling starts after fixture setup and captures 30 single-file and 30 ten-file saves. Import the file into a JavaScript CPU profiler to inspect the call tree.
+
+The local profile identified repeated SQL construction and statement compilation in the per-part and per-unit insert loops. The save now prepares each repeated insert once within its operation and reuses it for each row. Row order, returned identities, transaction boundaries, reconciliation, native Apply and verification remain unchanged. Nullable geometry booleans bind explicit SQL values so unknown geometry stays `NULL`, distinct from `false`.
+
+With profiling enabled in both runs, single-file p95 fell from 235 to 164 ms and ten-file p95 from 237 to 164 ms. Sampled time inside `savePlanChoices` fell from 8.80 to 4.34 seconds across the 60 saves. These are local measurements; deployment and live click-to-Saved acceptance must still be verified. A real SQLite regression checks that the seven repeated insert statements are prepared once per save rather than once per part or unit, while existing tests retain rollback, retry, source-change and completed-progress coverage.
