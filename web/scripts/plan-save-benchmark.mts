@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
+import { Session } from "node:inspector/promises";
 import { parsePlanDraftWorkspace } from "@print-partner/contracts";
 import { buildApp } from "../apps/server/src/app.js";
 import { loadConfig } from "../apps/server/src/config.js";
@@ -68,10 +69,19 @@ if (process.argv.includes("--serve")) {
   process.once("SIGTERM", () => { void stop(); });
   process.once("SIGINT", () => { void stop(); });
 } else {
+  const profiler = process.argv.includes("--profile") ? new Session() : null;
+  let profiling = false;
   try {
     let review = await request<AcceptedPlanReviewBody>("GET", "/review?include_excluded=true");
     if (review.totals.included_parts !== 350) throw new Error("Benchmark must start with all 350 files selected");
-    for (const mode of ["existing", "single-request"]) {
+    if (profiler) {
+      profiler.connect();
+      await profiler.post("Profiler.enable");
+      await profiler.post("Profiler.start");
+      profiling = true;
+    }
+    const modes = process.argv.includes("--single-request-only") ? ["single-request"] : ["existing", "single-request"];
+    for (const mode of modes) {
       for (const count of [1, 10]) {
         const durations: number[] = [];
         for (let index = 0; index < 30; index += 1) {
@@ -119,5 +129,17 @@ if (process.argv.includes("--serve")) {
         if (mode === "single-request" && (p95 == null || p95 >= 2000)) process.exitCode = 1;
       }
     }
-  } finally { await app.close(); await ports.db.close(); }
+  } finally {
+    try {
+      if (profiler && profiling) {
+        const { profile: cpuProfile } = await profiler.post("Profiler.stop");
+        const path = join(root, "save.cpuprofile");
+        writeFileSync(path, JSON.stringify(cpuProfile));
+        console.log(JSON.stringify({ kind: "save-cpu-profile", path }));
+      }
+    } finally {
+      profiler?.disconnect();
+      await app.close(); await ports.db.close();
+    }
+  }
 }
