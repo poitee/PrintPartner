@@ -433,6 +433,23 @@ describe("accepted STL thumbnail mesh loading", () => {
     expect(runtime.uploadPartThumbnail).toHaveBeenCalledOnce();
   });
 
+  it("limits background mesh requests across concurrent warmups", async () => {
+    const pending: Array<(response: Response) => void> = [];
+    runtime.fetchWithRetry.mockImplementation(() => new Promise<Response>((resolve) => pending.push(resolve)));
+    const first = warmupPartThumbnails([910, 911]);
+    const second = warmupPartThumbnails([912]);
+    const repeated = warmupPartThumbnails([911]);
+    await vi.waitFor(() => expect(pending.length).toBeGreaterThan(0));
+    const initiallyStarted = runtime.fetchWithRetry.mock.calls.length;
+    for (let index = 0; index < 3; index += 1) {
+      await vi.waitFor(() => expect(pending.length).toBeGreaterThan(0));
+      pending.shift()?.(new Response(null, { status: 404 }));
+    }
+    await Promise.all([first, second, repeated]);
+    expect(initiallyStarted).toBe(1);
+    expect(runtime.fetchWithRetry).toHaveBeenCalledTimes(3);
+  });
+
   it("joins an in-flight generate instead of starting a second render", async () => {
     let settle!: (response: Response) => void;
     runtime.fetchWithRetry.mockImplementationOnce(

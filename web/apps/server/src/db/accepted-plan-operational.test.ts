@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { drizzle } from "drizzle-orm/node-postgres";
 import type { Pool } from "pg";
 import { backfillAcceptedPlanRevisions } from "./accepted-plan-revisions.js";
@@ -1524,6 +1524,36 @@ describe("accepted Plan operational snapshot", () => {
     ).toThrowError(AcceptedOperationalRowTextLimitError);
     expect(snapshot(context.raw)).toEqual(before);
     context.database.close();
+  });
+
+  it("reads a 259-part SQLite Plan without hundreds of tiny queries", () => {
+    const context = fixture();
+    const profile = context.repo.createProfile("Save performance");
+    const insert = context.raw.prepare(`INSERT INTO parts (
+      tenant_id, profile_id, match_key, relative_path, filename, source_layer,
+      status, role, quantity_auto, quantity_effective, included, notes
+    ) VALUES ('default', ?, ?, ?, ?, 'base', 'base', 'primary', 1, 1, 1, '')`);
+    for (let index = 0; index < 259; index += 1) {
+      const filename = `part-${index}.stl`;
+      insert.run(profile.id, filename, filename, filename);
+    }
+    backfillAcceptedPlanRevisions(context.raw, "2026-08-20T12:00:00.000Z");
+    backfillCurrentRequiredUnitSets(context.raw, {
+      now: () => "2026-08-20T12:01:00.000Z",
+      tokenFactory: tokenFactory(50_000),
+    });
+    const queries = vi.spyOn(context.raw, "prepare");
+    try {
+      const result = context.repo.readAcceptedPlanOperationalSnapshot(profile.id);
+      expect(result.kind).toBe("ready");
+      if (result.kind !== "ready") throw new Error("Missing accepted snapshot");
+      expect(result.snapshot.parts).toHaveLength(259);
+      expect(result.snapshot.parts.every((part) => part.units.length === 1)).toBe(true);
+      expect(queries.mock.calls.length).toBeLessThan(100);
+    } finally {
+      queries.mockRestore();
+      context.database.close();
+    }
   });
 
   it("keeps an exact-limit control-character page below the PostgreSQL bridge cap", () => {
