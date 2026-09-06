@@ -113,6 +113,8 @@ vi.mock("../../queries/planReview", () => ({
 }));
 
 vi.mock("../../queries/profiles", () => ({
+  refreshProfileSummary: (client: QueryClient) =>
+    client.invalidateQueries({ queryKey: queryKeys.profiles }),
   invalidateProfiles: (client: QueryClient) =>
     client.invalidateQueries({ queryKey: queryKeys.profiles }),
 }));

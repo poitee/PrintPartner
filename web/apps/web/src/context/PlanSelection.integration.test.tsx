@@ -8,6 +8,7 @@ import { fetchPlanReview } from "../api/endpoints/planManifests";
 import { applyPlanDraft, editPlanDraftParts, fetchPlanDraftWorkspace, listPlanDrafts, recomputePlanDraft } from "../api/endpoints/planDrafts";
 import PlanFileSelection from "../components/review/PlanFileSelection";
 import { PlanWorkspaceProvider, usePlanWorkspace } from "./PlanWorkspaceContext";
+import { queryKeys } from "../queries/keys";
 
 const selection = vi.hoisted(() => ({ profileId: 7 }));
 vi.mock("./ProfileContext", () => ({ useProfileSelection: () => ({ selectedProfileId: selection.profileId }) }));
@@ -57,6 +58,7 @@ function Picker() {
   const plan = usePlanWorkspace();
   return <>
     <span role="status">{plan.saving ? "Saving" : plan.draftError ? "Not saved" : "Saved"}</span>
+    <span data-testid="active-draft">{plan.draftWorkspace?.draft.draft_id ?? "none"}</span>
     {plan.draftError && <p role="alert">{plan.draftError}</p>}
     <button onClick={() => void plan.preparePlan().catch(() => {})}>Retry save</button>
     <button onClick={() => void plan.setQuantity(part, 2).catch(() => {})}>Set quantity</button>
@@ -179,6 +181,7 @@ it.each(["create", "edit", "apply", "refresh"])("retains and retries a choice wh
   if (phase === "refresh") vi.mocked(fetchPlanReview).mockRejectedValue(new Error("offline"));
   fireEvent.click(checkbox());
   await waitFor(() => expect(screen.getByRole("status").textContent).toBe("Not saved"));
+  if (phase === "refresh") expect(screen.getByTestId("active-draft").textContent).toBe("none");
   expect(checked()).toBe("false");
   expect(screen.getAllByRole("alert").map((alert) => alert.textContent).join(" ")).toMatch(/disk full|offline/);
   vi.mocked(recomputePlanDraft).mockResolvedValue(workspace(true, 10));
@@ -268,4 +271,23 @@ it("batches different files with their individual final choices", async () => {
     { kind: "set_included", draft_part_ids: [17], value: true },
     { kind: "set_included", draft_part_ids: [18], value: false },
   ]);
+});
+
+it("does not refresh summaries between autosave write stages", async () => {
+  const edit = deferred<PlanDraftWorkspace>();
+  vi.mocked(editPlanDraftParts).mockReturnValueOnce(edit.promise);
+  const invalidate = vi.spyOn(client, "invalidateQueries");
+  mount();
+  await waitFor(() => expect(checked()).toBe("true"));
+  fireEvent.click(checkbox());
+  await waitFor(() => expect(editPlanDraftParts).toHaveBeenCalledOnce());
+  const summaryRefreshes = () => invalidate.mock.calls.filter(([filter]) =>
+    JSON.stringify(filter?.queryKey) === JSON.stringify(queryKeys.planDrafts(7)) ||
+    JSON.stringify(filter?.queryKey) === JSON.stringify(queryKeys.buildWorkflow(7)),
+  );
+  expect(summaryRefreshes()).toHaveLength(0);
+  vi.mocked(fetchPlanReview).mockResolvedValue(review(false));
+  await act(async () => { edit.resolve(workspace(false)); });
+  await waitFor(() => expect(screen.getByRole("status").textContent).toBe("Saved"));
+  expect(summaryRefreshes()).toHaveLength(2);
 });

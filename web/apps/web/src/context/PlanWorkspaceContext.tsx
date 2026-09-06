@@ -38,7 +38,7 @@ import {
   usePatchPartProgressMutation,
   usePlanReviewQuery,
 } from "../queries/planReview";
-import { invalidateProfiles } from "../queries/profiles";
+import { invalidateProfiles, refreshProfileSummary } from "../queries/profiles";
 import { queryKeys } from "../queries/keys";
 import {
   usePlanDraftListQuery,
@@ -260,7 +260,7 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
   }, [health?.ok, queryClient, selectedProfileId]);
 
   const storeWorkspace = useCallback(
-    (workspace: PlanDraftWorkspace) => {
+    (workspace: PlanDraftWorkspace, refreshSummaries = true) => {
       updateDraftUi(workspace.profile_id, (current) => ({
         ...current,
         activeDraftId: workspace.draft.draft_id,
@@ -269,12 +269,10 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
         queryKeys.planDraft(workspace.profile_id, workspace.draft.draft_id),
         workspace,
       );
-      void queryClient.invalidateQueries({
-        queryKey: queryKeys.planDrafts(workspace.profile_id),
-      });
-      void queryClient.invalidateQueries({
-        queryKey: queryKeys.buildWorkflow(workspace.profile_id),
-      });
+      if (refreshSummaries) {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.planDrafts(workspace.profile_id) });
+        void queryClient.invalidateQueries({ queryKey: queryKeys.buildWorkflow(workspace.profile_id) });
+      }
       return workspace;
     },
     [queryClient, updateDraftUi],
@@ -342,13 +340,13 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
   );
 
   const startPlanDraftForProfile = useCallback(
-    async (profileId: number, options?: { applyManifest?: boolean }) => {
+    async (profileId: number, options?: { applyManifest?: boolean }, refreshSummaries = true) => {
       updateDraftUi(profileId, (current) => ({
         ...current,
         draftMutationError: null,
       }));
       try {
-        return storeWorkspace(await (options ? recomputePlanDraft(profileId, options) : recomputePlanDraft(profileId)));
+        return storeWorkspace(await (options ? recomputePlanDraft(profileId, options) : recomputePlanDraft(profileId)), refreshSummaries);
       } catch (error) {
         updateDraftUi(profileId, (current) => ({
           ...current,
@@ -371,6 +369,7 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
     async (
       workspace: PlanDraftWorkspace,
       decisions: PlanDraftPartDecisionContract[],
+      refreshSummaries = true,
     ) =>
       storeWorkspace(
         await editPlanDraftParts({
@@ -379,6 +378,7 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
           expectedSnapshotDigest: workspace.draft.snapshot_digest,
           decisions,
         }),
+        refreshSummaries,
       ),
     [storeWorkspace],
   );
@@ -493,7 +493,7 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
           predicate: (query) => query.queryKey[0] === "planReview" && query.queryKey[1] === workspace.profile_id,
           refetchType: "all",
         }, { throwOnError: true }),
-        invalidateProfiles(queryClient),
+        refreshProfileSummary(queryClient, workspace.profile_id),
         queryClient.invalidateQueries({
           queryKey: queryKeys.checkoff(workspace.profile_id),
         }),
@@ -506,12 +506,13 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
         queryClient.invalidateQueries({
           queryKey: queryKeys.buildWorkflow(workspace.profile_id),
         }),
-      ]);
-      updateDraftUi(workspace.profile_id, (current) => ({
-        ...current,
-        recentlyAppliedDraftId: workspace.draft.draft_id,
-        activeDraftId: null,
-      }));
+      ]).finally(() => {
+        updateDraftUi(workspace.profile_id, (current) => ({
+          ...current,
+          recentlyAppliedDraftId: workspace.draft.draft_id,
+          activeDraftId: current.activeDraftId === workspace.draft.draft_id ? null : current.activeDraftId,
+        }));
+      });
       queryClient.removeQueries({
         queryKey: queryKeys.planDraft(workspace.profile_id, workspace.draft.draft_id),
         exact: true,
@@ -610,7 +611,7 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
             let workspace =
               open ??
               (attempt === 0
-                ? await startPlanDraftForProfile(profileId)
+                ? await startPlanDraftForProfile(profileId, undefined, false)
                 : null);
             if (!workspace) fail("Create a Working Plan from Sources first");
             if (!workspace.diff.base_is_current || workspace.draft.state === "abandoned") {
@@ -641,7 +642,7 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
                   };
             });
             try {
-              const edited = await persistDraftEdit(workspace, decisions);
+              const edited = await persistDraftEdit(workspace, decisions, false);
               await applyWorkspace(edited, { remapCheckoffLinks: true });
               return;
             } catch (error) {

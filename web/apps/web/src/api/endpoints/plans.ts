@@ -19,6 +19,10 @@ export async function fetchProfiles(): Promise<ProfileSummary[]> {
   return body.profiles;
 }
 
+export async function fetchProfile(profileId: number): Promise<ProfileSummary> {
+  return engineFetch(`/plans/${profileId}`);
+}
+
 export async function createProfile(
   name: string,
   baseProjectId?: number,

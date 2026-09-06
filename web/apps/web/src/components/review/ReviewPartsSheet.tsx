@@ -283,7 +283,7 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
   const [spoolsLoading, setSpoolsLoading] = useState(false);
   const persisted = useMemo(() => loadPersistedReviewPartsUi(), []);
   const [ui, setUi] = useState<PersistedReviewPartsUi>(persisted);
-  const needsExcluded = ui.includedFilter !== "included";
+  const needsExcluded = ui.includedFilter !== "included" || Boolean(pendingFileChoices?.size);
   const excludedReviewQuery = usePlanReviewQuery(includedReview.profile_id, {
     includeExcluded: true,
     enabled: needsExcluded,
@@ -371,8 +371,9 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
     [acceptedParts],
   );
   const allParts = useMemo(() => {
-    if (ui.viewMode !== "edit") return acceptedParts;
-    const parts = draftWorkspace ? workingPlanReviewParts(acceptedParts, draftWorkspace) : acceptedParts;
+    const parts = ui.viewMode === "edit" && draftWorkspace
+      ? workingPlanReviewParts(acceptedParts, draftWorkspace)
+      : acceptedParts;
     if (!pendingFileChoices?.size) return parts;
     return parts.map((part) => {
       const choice = pendingFileChoices.get(planFileIdentity(part));

@@ -6,6 +6,7 @@ import {
   deleteProfile,
   duplicateProfile,
   fetchProfiles,
+  fetchProfile,
   touchProfileLastUsed,
   updateProfile,
 } from "../api/endpoints/plans";
@@ -135,6 +136,15 @@ export function useDuplicateProfileMutation() {
 
 export function invalidateProfiles(qc: ReturnType<typeof useQueryClient>) {
   return qc.invalidateQueries({ queryKey: queryKeys.profiles });
+}
+
+export async function refreshProfileSummary(qc: ReturnType<typeof useQueryClient>, profileId: number) {
+  if (!qc.getQueryData<ProfileSummary[]>(queryKeys.profiles)) return invalidateProfiles(qc);
+  const updated = await fetchProfile(profileId);
+  await qc.cancelQueries({ queryKey: queryKeys.profiles, exact: true });
+  qc.setQueryData<ProfileSummary[]>(queryKeys.profiles, (current) =>
+    current?.map((profile) => profile.id === profileId ? updated : profile),
+  );
 }
 
 export type { ProfileSummary };
