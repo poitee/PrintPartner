@@ -208,6 +208,45 @@ const applyPlanDraftReceiptSchema = z.strictObject({
 
 export type ApplyPlanDraftReceipt = z.infer<typeof applyPlanDraftReceiptSchema>;
 
+const planFileTargetSchema = z.strictObject({
+  part_key: z.string().min(1).max(4_096),
+  relative_path: z.string().min(1).max(4_096),
+  source_layer: z.string().max(1_000).nullable(),
+});
+
+const planChoiceSchema = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("set_included"), target: planFileTargetSchema, value: z.boolean() }),
+  z.strictObject({ kind: z.literal("set_quantity_override"), target: planFileTargetSchema, value: positiveId.max(10_000).nullable() }),
+]);
+
+const savePlanChoicesRequestSchema = z.strictObject({
+  expected_base: planDraftBasisSchema,
+  expected_draft: planDraftIdentitySchema.nullable(),
+  remap_checkoff_links: z.boolean(),
+  decisions: z.array(planChoiceSchema).min(1).max(10_000),
+}).superRefine((value, context) => {
+  if (value.expected_draft && (value.expected_draft.state !== "open" ||
+    value.expected_draft.base.revision_id !== value.expected_base.revision_id ||
+    value.expected_draft.base.plan_version !== value.expected_base.plan_version)) {
+    context.addIssue({ code: "custom", path: ["expected_draft"], message: "The selected draft must be open on the expected Plan base" });
+  }
+  const targets = new Set<string>();
+  for (const decision of value.decisions) {
+    const key = JSON.stringify([decision.kind, decision.target.source_layer, decision.target.relative_path, decision.target.part_key]);
+    if (targets.has(key)) {
+      context.addIssue({ code: "custom", path: ["decisions"], message: "A file field may be edited only once per save" });
+      return;
+    }
+    targets.add(key);
+  }
+});
+
+export type SavePlanChoicesRequest = z.infer<typeof savePlanChoicesRequestSchema>;
+
+export function parseSavePlanChoicesRequest(value: unknown): SavePlanChoicesRequest {
+  return savePlanChoicesRequestSchema.parse(value);
+}
+
 const abandonPlanDraftRequestSchema = z.strictObject({
   expected_lifecycle_version: nonnegativeVersion,
 });

@@ -14,6 +14,8 @@ import {
   listPlanDrafts,
   recomputePlanDraft,
   rebasePlanDraft,
+  savePlanChoices,
+  type SavePlanChoicesResponse,
 } from "../api/endpoints/planDrafts";
 import type { PlanReview } from "../api/endpoints/planManifests";
 import { queryKeys } from "../queries/keys";
@@ -82,6 +84,32 @@ const planRow = {
   filename: "bracket.stl",
 };
 
+function savedChoices(quantity = 1, planVersion = 2): SavePlanChoicesResponse {
+  return {
+    receipt: {
+      profile_id: 7, draft_id: 9, revision_id: planVersion + 2, plan_version: planVersion,
+      draft_lifecycle_version: 1, revision_digest: "c".repeat(64),
+      required_unit_mapping_digest: "d".repeat(64), applied_at: "2026-08-21T12:00:00.000Z",
+    },
+    review: {
+      ...acceptedReview,
+      accepted_basis: { profile_id: 7, plan_revision_id: planVersion + 2, plan_version: planVersion,
+        plan_revision_digest: "c".repeat(64), required_unit_mapping_digest: "d".repeat(64) },
+      part_groups: [{ folder: "frame", source_layer: "base:Voron", parts: [{
+        ...planRow, id: 52, included: false, status: "unchanged", role: "structural",
+        requirement: null, option_group_id: null, filament_color_id: null, filament_display: "Unassigned",
+        quantity_auto: 1, quantity_override: quantity, quantity_effective: quantity,
+        printed_count: 0, print_units: [], missing: true,
+      }] }],
+    },
+    profile: { id: 7, name: "Accepted Plan", order_number: null, special_request: null,
+      part_count: 1, accepted_progress: { kind: "ready", total_units: 0, remaining_units: 0 },
+      build_stale: false, freshness: { status: "current", accepted_input_set_id: 1, accepted_at: "2026-08-21T12:00:00.000Z" },
+      archived_at: null, last_used_at: null },
+    closed_draft_ids: [9],
+  };
+}
+
 const replacementWorkspace: PlanDraftWorkspace = {
   ...savedWorkspace,
   draft: { ...savedWorkspace.draft, snapshot_digest: "b".repeat(64) },
@@ -132,6 +160,7 @@ vi.mock("../api/endpoints/planDrafts", () => ({
   reconcilePlanDraft: vi.fn(),
   recomputePlanDraft: vi.fn(),
   rebasePlanDraft: vi.fn(),
+  savePlanChoices: vi.fn(),
 }));
 
 vi.mock("../hooks/useEngineHealth", () => ({
@@ -160,6 +189,8 @@ vi.mock("../queries/planReview", () => ({
 }));
 
 vi.mock("../queries/profiles", () => ({
+  refreshProfileSummary: (client: QueryClient) =>
+    client.invalidateQueries({ queryKey: queryKeys.profiles }),
   invalidateProfiles: (client: QueryClient) =>
     client.invalidateQueries({ queryKey: queryKeys.profiles }),
 }));
@@ -227,24 +258,6 @@ function deferred<T>() {
   return { promise, reject, resolve };
 }
 
-function workspaceWithQuantity(
-  snapshotDigest: string,
-  quantity: number,
-): PlanDraftWorkspace {
-  return {
-    ...savedWorkspace,
-    draft: {
-      ...savedWorkspace.draft,
-      snapshot_digest: snapshotDigest,
-    },
-    parts: savedWorkspace.parts.map((part) => ({
-      ...part,
-      quantity_override: quantity,
-      quantity_effective: quantity,
-    })),
-  };
-}
-
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
@@ -257,6 +270,8 @@ beforeEach(() => {
   draftQueryState.hasWorkspace = true;
   draftQueryState.listPending = false;
   draftQueryState.workspace = null;
+  vi.mocked(savePlanChoices).mockReset();
+  vi.mocked(savePlanChoices).mockResolvedValue(savedChoices());
   vi.mocked(listPlanDrafts).mockImplementation(async () =>
     draftQueryState.hasOpenDraft ? [savedWorkspace.draft] : [],
   );
@@ -329,27 +344,34 @@ describe("PlanWorkspaceProvider saved draft lifecycle", () => {
   });
 
   it("keeps failed autosave edits and names the linked print", async () => {
-    vi.mocked(applyPlanDraft).mockRejectedValueOnce(new EngineHttpError("Cannot move print", 422, {
+    vi.mocked(savePlanChoices).mockRejectedValueOnce(new EngineHttpError("Cannot move print", 422, {
       code: "checkoff_remap_unsafe", unmappable: [{ filename: "bracket.stl", reason: "removed" }],
     }));
     const client = new QueryClient();
     const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(client) });
     await waitFor(() => expect(hook.result.current.draftWorkspace).not.toBeNull());
     await act(async () => { await expect(hook.result.current.setIncluded(planRow, false)).rejects.toThrow("bracket.stl"); });
-    expect(client.getQueryData<PlanDraftWorkspace>(queryKeys.planDraft(7, 9))?.parts[0]?.included).toBe(false);
+    expect([...hook.result.current.pendingFileChoices.values()][0]?.included).toBe(false);
     expect(hook.result.current.draftError).toContain("Restore the affected file");
     expect(abandonPlanDraft).not.toHaveBeenCalled();
   });
 
-  it("saves folder choices together in a single edit and apply", async () => {
-    const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(new QueryClient()) });
+  it("saves folder choices with one request and hydrates confirmed state without refetching", async () => {
+    const client = new QueryClient();
+    const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(client) });
     await waitFor(() => expect(hook.result.current.draftWorkspace).not.toBeNull());
     await act(async () => { await hook.result.current.setFilesIncluded([planRow], false); });
-    expect(editPlanDraftParts).toHaveBeenCalledOnce();
-    expect(applyPlanDraft).toHaveBeenCalledOnce();
+    expect(savePlanChoices).toHaveBeenCalledOnce();
+    expect(editPlanDraftParts).not.toHaveBeenCalled();
+    expect(applyPlanDraft).not.toHaveBeenCalled();
+    expect(listPlanDrafts).not.toHaveBeenCalled();
+    expect(recomputePlanDraft).not.toHaveBeenCalled();
+    expect(client.getQueryData<PlanReview>(queryKeys.planReview(7, true))?.accepted_basis?.plan_version).toBe(2);
+    expect(client.getQueryData<PlanReview>(queryKeys.planReview(7, false))?.accepted_basis?.plan_version).toBe(2);
+    expect(hook.result.current.saving).toBe(false);
   });
 
-  it("starts a saved draft before editing inclusion from the Plan section", async () => {
+  it("saves inclusion from the accepted Plan without creating a draft in the browser", async () => {
     const freshWorkspace: PlanDraftWorkspace = {
       ...savedWorkspace,
       draft: {
@@ -388,13 +410,11 @@ describe("PlanWorkspaceProvider saved draft lifecycle", () => {
       await hook.result.current.setIncluded(planRow, false);
     });
 
-    expect(recomputePlanDraft).toHaveBeenCalledWith(7);
-    expect(editPlanDraftParts).toHaveBeenCalledWith({
-      profileId: 7,
-      draftId: 11,
-      expectedSnapshotDigest: "c".repeat(64),
-      decisions: [{ kind: "set_included", draft_part_ids: [17], value: false }],
-    });
+    expect(recomputePlanDraft).not.toHaveBeenCalled();
+    expect(savePlanChoices).toHaveBeenCalledWith(7, expect.objectContaining({
+      expected_draft: null,
+      decisions: [{ kind: "set_included", target: { part_key: planRow.match_key, relative_path: planRow.relative_path, source_layer: planRow.source_layer }, value: false }],
+    }), expect.any(String));
   });
 
   it("loads the persisted open draft instead of rebuilding when its workspace GET has not resolved", async () => {
@@ -409,19 +429,17 @@ describe("PlanWorkspaceProvider saved draft lifecycle", () => {
     });
 
     expect(recomputePlanDraft).not.toHaveBeenCalled();
-    expect(fetchPlanDraftWorkspace).toHaveBeenCalledWith(7, 9);
-    expect(editPlanDraftParts).toHaveBeenCalledTimes(1);
-    expect(editPlanDraftParts).toHaveBeenCalledWith(
-      expect.objectContaining({
-        draftId: 9,
-        expectedSnapshotDigest: "a".repeat(64),
-      }),
-    );
+    expect(fetchPlanDraftWorkspace).not.toHaveBeenCalled();
+    expect(savePlanChoices).toHaveBeenCalledWith(7,
+      expect.objectContaining({ expected_draft: savedWorkspace.draft }), expect.any(String));
   });
 
-  it("waits for the draft list rather than rebuilding when a click lands mid-load", async () => {
+  it("recovers the persisted draft when a click lands before the draft list loads", async () => {
     draftQueryState.hasWorkspace = false;
     draftQueryState.listPending = true;
+    vi.mocked(savePlanChoices).mockRejectedValueOnce(new EngineHttpError("Draft changed", 409, {
+      code: "draft_changed", workspace: savedWorkspace,
+    }));
     const client = new QueryClient();
     const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(client) });
 
@@ -430,14 +448,19 @@ describe("PlanWorkspaceProvider saved draft lifecycle", () => {
     });
 
     expect(recomputePlanDraft).not.toHaveBeenCalled();
-    expect(listPlanDrafts).toHaveBeenCalledWith(7);
-    expect(editPlanDraftParts).toHaveBeenCalledTimes(1);
+    expect(listPlanDrafts).not.toHaveBeenCalled();
+    expect(savePlanChoices).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(savePlanChoices).mock.calls[0]?.[1].expected_draft).toBeNull();
+    expect(vi.mocked(savePlanChoices).mock.calls[1]?.[1].expected_draft).toEqual(savedWorkspace.draft);
   });
 
   it("does not rebuild when the cached draft list is stale and empty", async () => {
     draftQueryState.hasWorkspace = false;
     const client = new QueryClient();
     client.setQueryData(queryKeys.planDrafts(7), []);
+    vi.mocked(savePlanChoices).mockRejectedValueOnce(new EngineHttpError("Draft changed", 409, {
+      code: "draft_changed", workspace: savedWorkspace,
+    }));
     const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(client) });
 
     await act(async () => {
@@ -445,13 +468,9 @@ describe("PlanWorkspaceProvider saved draft lifecycle", () => {
     });
 
     expect(recomputePlanDraft).not.toHaveBeenCalled();
-    expect(listPlanDrafts).toHaveBeenCalledWith(7);
-    expect(editPlanDraftParts).toHaveBeenCalledWith(
-      expect.objectContaining({
-        draftId: 9,
-        expectedSnapshotDigest: "a".repeat(64),
-      }),
-    );
+    expect(listPlanDrafts).not.toHaveBeenCalled();
+    expect(savePlanChoices).toHaveBeenLastCalledWith(7,
+      expect.objectContaining({ expected_draft: savedWorkspace.draft }), expect.any(String));
   });
 
   it("clears a previous Plan-sheet error when a later editActivePlanDraft succeeds", async () => {
@@ -486,52 +505,35 @@ describe("PlanWorkspaceProvider saved draft lifecycle", () => {
     await waitFor(() =>
       expect(hook.result.current.draftWorkspace?.draft.draft_id).toBe(9),
     );
-    vi.mocked(editPlanDraftParts)
+    vi.mocked(savePlanChoices)
       .mockRejectedValueOnce(
         new EngineHttpError("Draft changed", 409, {
           code: "draft_changed",
           workspace: replacementWorkspace,
         }),
       )
-      .mockResolvedValueOnce(editedWorkspace);
+      .mockResolvedValueOnce(savedChoices());
 
     await act(async () => {
       await hook.result.current.setIncluded(planRow, false);
     });
 
-    expect(editPlanDraftParts).toHaveBeenCalledTimes(2);
-    expect(editPlanDraftParts).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        expectedSnapshotDigest: "a".repeat(64),
-      }),
-    );
-    expect(editPlanDraftParts).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        expectedSnapshotDigest: "b".repeat(64),
-      }),
-    );
-    expect(applyPlanDraft).toHaveBeenCalledWith(editedWorkspace, { remapCheckoffLinks: true });
+    expect(savePlanChoices).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(savePlanChoices).mock.calls[0]?.[1].expected_draft?.snapshot_digest).toBe("a".repeat(64));
+    expect(vi.mocked(savePlanChoices).mock.calls[1]?.[1].expected_draft?.snapshot_digest).toBe("b".repeat(64));
+    expect(vi.mocked(savePlanChoices).mock.calls[0]?.[2]).not.toBe(vi.mocked(savePlanChoices).mock.calls[1]?.[2]);
     expect(client.getQueryData(queryKeys.planDraft(7, 9))).toBeUndefined();
     expect(hook.result.current.draftError).toBeNull();
   });
 
   it("serializes rapid quantity edits against each saved snapshot", async () => {
-    const first = deferred<PlanDraftWorkspace>();
-    const second = deferred<PlanDraftWorkspace>();
-    const third = deferred<PlanDraftWorkspace>();
-    vi.mocked(editPlanDraftParts)
+    const first = deferred<SavePlanChoicesResponse>();
+    const second = deferred<SavePlanChoicesResponse>();
+    const third = deferred<SavePlanChoicesResponse>();
+    vi.mocked(savePlanChoices)
       .mockReturnValueOnce(first.promise)
       .mockReturnValueOnce(second.promise)
       .mockReturnValueOnce(third.promise);
-    const nextWorkspace = (digest: string, quantity: number, draftId: number): PlanDraftWorkspace => ({
-      ...workspaceWithQuantity(digest, quantity),
-      draft: { ...savedWorkspace.draft, draft_id: draftId, snapshot_digest: digest },
-    });
-    vi.mocked(recomputePlanDraft)
-      .mockResolvedValueOnce(nextWorkspace("b".repeat(64), 2, 10))
-      .mockResolvedValueOnce(nextWorkspace("c".repeat(64), 3, 11));
     const client = new QueryClient();
     const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(client) });
     await waitFor(() =>
@@ -547,66 +549,47 @@ describe("PlanWorkspaceProvider saved draft lifecycle", () => {
       ];
     });
 
-    await waitFor(() => expect(editPlanDraftParts).toHaveBeenCalledTimes(1));
-    expect(editPlanDraftParts).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        expectedSnapshotDigest: "a".repeat(64),
-        decisions: [
-          {
-            kind: "set_quantity_override",
-            draft_part_ids: [17],
-            value: 2,
-          },
-        ],
-      }),
-    );
+    await waitFor(() => expect(savePlanChoices).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(savePlanChoices).mock.calls[0]?.[1].decisions[0]?.value).toBe(2);
 
     await act(async () => {
-      first.resolve(workspaceWithQuantity("b".repeat(64), 2));
+      first.resolve(savedChoices(2, 2));
       await first.promise;
     });
-    await waitFor(() => expect(editPlanDraftParts).toHaveBeenCalledTimes(2));
-    expect(editPlanDraftParts).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        expectedSnapshotDigest: "b".repeat(64),
-        decisions: [
-          {
-            kind: "set_quantity_override",
-            draft_part_ids: [17],
-            value: 3,
-          },
-        ],
-      }),
-    );
+    await waitFor(() => expect(savePlanChoices).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(savePlanChoices).mock.calls[1]?.[1].decisions[0]?.value).toBe(3);
+    expect(vi.mocked(savePlanChoices).mock.calls[1]?.[1].expected_base.plan_version).toBe(2);
 
     await act(async () => {
-      second.resolve(nextWorkspace("c".repeat(64), 3, 10));
+      second.resolve(savedChoices(3, 3));
       await second.promise;
     });
-    await waitFor(() => expect(editPlanDraftParts).toHaveBeenCalledTimes(3));
-    expect(editPlanDraftParts).toHaveBeenNthCalledWith(
-      3,
-      expect.objectContaining({
-        expectedSnapshotDigest: "c".repeat(64),
-        decisions: [
-          {
-            kind: "set_quantity_override",
-            draft_part_ids: [17],
-            value: 4,
-          },
-        ],
-      }),
-    );
+    await waitFor(() => expect(savePlanChoices).toHaveBeenCalledTimes(3));
+    expect(vi.mocked(savePlanChoices).mock.calls[2]?.[1].decisions[0]?.value).toBe(4);
+    expect(vi.mocked(savePlanChoices).mock.calls[2]?.[1].expected_base.plan_version).toBe(3);
 
     await act(async () => {
-      third.resolve(nextWorkspace("d".repeat(64), 4, 11));
+      third.resolve(savedChoices(4, 4));
       await Promise.all(edits);
     });
-    expect(applyPlanDraft).toHaveBeenCalledTimes(3);
-    expect(applyPlanDraft).toHaveBeenLastCalledWith(nextWorkspace("d".repeat(64), 4, 11), { remapCheckoffLinks: true });
-    expect(client.getQueryData(queryKeys.planDraft(7, 11))).toBeUndefined();
+    expect(applyPlanDraft).not.toHaveBeenCalled();
+    expect(client.getQueryData<PlanReview>(queryKeys.planReview(7, true))?.part_groups[0]?.parts[0]?.quantity_effective).toBe(4);
+  });
+
+  it.each(["inputs_changed", "base_changed"])("recovers %s during the combined save without a manual retry", async (code) => {
+    const changed = { ...savedWorkspace, diff: { ...savedWorkspace.diff, base_is_current: false } };
+    vi.mocked(savePlanChoices).mockRejectedValueOnce(new EngineHttpError("Changed", 409, {
+      code, workspace: code === "base_changed" ? changed : savedWorkspace,
+    })).mockResolvedValueOnce({ ...savedChoices(1, 3), closed_draft_ids: [10] });
+    const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(new QueryClient()) });
+    await waitFor(() => expect(hook.result.current.draftWorkspace).not.toBeNull());
+    await act(async () => { await hook.result.current.setIncluded(planRow, false); });
+    expect(savePlanChoices).toHaveBeenCalledTimes(2);
+    expect(rebasePlanDraft).toHaveBeenCalledWith(7, savedWorkspace.draft);
+    expect(vi.mocked(savePlanChoices).mock.calls[1]?.[1].expected_draft?.draft_id).toBe(10);
+    expect(vi.mocked(savePlanChoices).mock.calls[0]?.[2]).not.toBe(vi.mocked(savePlanChoices).mock.calls[1]?.[2]);
+    expect(recomputePlanDraft).not.toHaveBeenCalled();
+    expect(hook.result.current.draftError).toBeNull();
   });
 
   it("keeps a completed Build A edit out of Build B's active draft state", async () => {
@@ -724,8 +707,8 @@ describe("PlanWorkspaceProvider saved draft lifecycle", () => {
   });
 
   it("keeps Build A's late busy and error state out of Build B", async () => {
-    const buildAEdit = deferred<PlanDraftWorkspace>();
-    vi.mocked(editPlanDraftParts).mockReturnValueOnce(buildAEdit.promise);
+    const buildAEdit = deferred<SavePlanChoicesResponse>();
+    vi.mocked(savePlanChoices).mockReturnValueOnce(buildAEdit.promise);
     const client = new QueryClient();
     const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(client) });
     await waitFor(() =>
@@ -736,7 +719,7 @@ describe("PlanWorkspaceProvider saved draft lifecycle", () => {
     act(() => {
       buildAEditPromise = hook.result.current.setIncluded(planRow, false);
     });
-    await waitFor(() => expect(editPlanDraftParts).toHaveBeenCalledOnce());
+    await waitFor(() => expect(savePlanChoices).toHaveBeenCalledOnce());
     expect(hook.result.current.busyPartId).toBe(planRow.id);
 
     profileSelectionState.selectedProfileId = 8;
@@ -748,7 +731,7 @@ describe("PlanWorkspaceProvider saved draft lifecycle", () => {
     if (!pendingBuildAEdit)
       throw new Error("Expected the Build A edit to be pending");
     await act(async () => {
-      buildAEdit.reject(new Error("Build A disk full"));
+      buildAEdit.reject(new EngineHttpError("Build A disk full", 422));
       await expect(pendingBuildAEdit).rejects.toThrow("Build A disk full");
     });
 
@@ -810,6 +793,8 @@ describe("PlanWorkspaceProvider saved draft lifecycle", () => {
 
   it("does not Apply implicitly and invalidates every accepted projection after explicit Apply", async () => {
     const client = new QueryClient();
+    const refreshReview = vi.fn().mockResolvedValue(acceptedReview);
+    client.setQueryDefaults(queryKeys.planReview(7, false), { queryFn: refreshReview });
     for (const key of [
       queryKeys.planReview(7, false),
       queryKeys.profiles,
@@ -830,9 +815,8 @@ describe("PlanWorkspaceProvider saved draft lifecycle", () => {
     });
 
     expect(applyPlanDraft).toHaveBeenCalledWith(savedWorkspace, undefined);
-    expect(
-      client.getQueryState(queryKeys.planReview(7, false))?.isInvalidated,
-    ).toBe(true);
+    expect(refreshReview).toHaveBeenCalledOnce();
+    expect(client.getQueryData(queryKeys.planReview(7, false))).toEqual(acceptedReview);
     expect(client.getQueryState(queryKeys.profiles)?.isInvalidated).toBe(true);
     expect(client.getQueryState(queryKeys.checkoff(7))?.isInvalidated).toBe(
       true,

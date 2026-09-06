@@ -14,6 +14,8 @@ import {
   rebasePlanDraft,
   recomputePlanDraft,
   reconcilePlanDraft,
+  savePlanChoices,
+  type SavePlanChoicesResponse,
 } from "./planDrafts";
 
 const basis = {
@@ -47,7 +49,54 @@ const workspace: PlanDraftWorkspace = {
 
 const http = createEndpointTestHttp();
 
+const saveRequest = {
+  expected_base: draft.base, expected_draft: draft, remap_checkoff_links: true,
+  decisions: [{ kind: "set_included" as const,
+    target: { part_key: "frame.stl", relative_path: "frame.stl", source_layer: "base:Voron" }, value: false }],
+};
+const saved: SavePlanChoicesResponse = {
+  receipt: { profile_id: 7, draft_id: 9, revision_id: 4, plan_version: 2,
+    draft_lifecycle_version: 1, revision_digest: "c".repeat(64), required_unit_mapping_digest: "d".repeat(64),
+    applied_at: "2026-09-06T00:00:00.000Z" },
+  review: { profile_id: 7, accepted_basis: { ...basis, plan_version: 2, plan_revision_id: 4,
+    plan_revision_digest: "c".repeat(64), required_unit_mapping_digest: "d".repeat(64) },
+    plan_name: "Voron", layers: [], issues: [], has_blockers: false, part_groups: [],
+    totals: { included_parts: 0, total_print_units: 0, by_role: {}, by_filament: {} } },
+  profile: { id: 7, name: "Voron", order_number: null, special_request: null, part_count: 0,
+    accepted_progress: { kind: "ready", total_units: 0, remaining_units: 0 }, build_stale: false,
+    freshness: { status: "current", accepted_input_set_id: 1, accepted_at: "2026-09-06T00:00:00.000Z" },
+    archived_at: null, last_used_at: null },
+  closed_draft_ids: [9],
+};
+
 describe("plan draft endpoints", () => {
+  it("sends one save command with its caller-owned retry key and accepts matching confirmed state", async () => {
+    http.respond(jsonResponse(saved)).respond(jsonResponse(saved));
+    await expect(savePlanChoices(7, saveRequest, "same-command")).resolves.toEqual(saved);
+    await expect(savePlanChoices(7, saveRequest, "same-command")).resolves.toEqual(saved);
+    expect(http.calls).toHaveLength(2);
+    expect(String(http.calls[0]?.[0])).toContain("/plans/7/save");
+    expect(http.requestJson(0)).toEqual(saveRequest);
+    expect(http.requestJson(1)).toEqual(saveRequest);
+    for (const call of http.calls) expect(new Headers(call[1]?.headers).get("Idempotency-Key")).toBe("same-command");
+  });
+
+  it.each([
+    { ...saved, profile: { ...saved.profile, id: 8 } },
+    { ...saved, review: { ...saved.review, accepted_basis: basis } },
+    { ...saved, review: { ...saved.review, part_groups: null } },
+    { ...saved, review: { ...saved.review, accepted_basis: { ...saved.review.accepted_basis, plan_revision_id: 5 } } },
+    { ...saved, closed_draft_ids: [-1] },
+  ])("rejects inconsistent or incomplete save responses before cache hydration", async (response) => {
+    http.respond(jsonResponse(response));
+    await expect(savePlanChoices(7, saveRequest, "bad-reply")).rejects.toThrow();
+  });
+
+  it("accepts a newer authoritative Review alongside a replayed historical receipt", async () => {
+    const current = { ...saved, review: { ...saved.review, accepted_basis: { ...basis, plan_version: 3, plan_revision_id: 5 } } };
+    http.respond(jsonResponse(current));
+    await expect(savePlanChoices(7, saveRequest, "historical")).resolves.toEqual(current);
+  });
   it("creates an idempotency key when randomUUID is unavailable", async () => {
     vi.stubGlobal("crypto", {});
     http.respond(jsonResponse(workspace));

@@ -89,6 +89,7 @@ describe("known accepted media production caller inventory", () => {
         "assistant/accepted-plan-reader.ts",
         "assistant/tools.ts",
         "routes/parts.ts",
+        "routes/plan-drafts.ts",
         "routes/plans.ts",
         "routes/printer-checkoff.ts",
         "services/accepted-direct-export-3mf.ts",

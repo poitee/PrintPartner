@@ -127,6 +127,7 @@ import {
   type PlanSnapshotPart,
 } from "../services/plan-drafts.js";
 import { sha256File } from "../services/artifact-digest.js";
+import { applyPlanChoiceChanges, type PlanChoiceChange } from "../services/plan-save.js";
 import {
   digestRequiredUnitMap,
   generateRequiredUnitToken,
@@ -569,6 +570,30 @@ export type RecomputePlanDraftResult =
   | { readonly kind: "no_layers" }
   | { readonly kind: "no_stls" }
   | { readonly kind: "would_wipe" };
+
+export type SavePlanChoicesCommand = Readonly<{
+  profileId: number;
+  actorId: string;
+  idempotencyKey: string;
+  expectedBase: AcceptedPlanBase;
+  expectedDraft: Pick<PlanDraftSnapshot, "id" | "snapshotDigest" | "lifecycleVersion"> | null;
+  remapCheckoffLinks: boolean;
+  changes: readonly PlanChoiceChange[];
+}>;
+
+type SavePlanChoicesFailure =
+  | Exclude<ApplyPlanChangesResult, { kind: "applied" | "existing" | "already_applied" }>
+  | { readonly kind: "no_layers" | "no_stls" | "would_wipe" | "part_not_found" | "part_ambiguous" | "required_unit_set_unavailable" };
+
+export type SavePlanChoicesResult =
+  | { readonly kind: "saved"; readonly receipt: AppliedPlanReceipt; readonly closedDraftIds: readonly number[] }
+  | SavePlanChoicesFailure;
+
+class PlanSaveAborted extends Error {
+  constructor(readonly result: SavePlanChoicesFailure) {
+    super(`Plan save aborted: ${result.kind}`);
+  }
+}
 
 export type SetAcceptedPrintedCountsResult =
   | { readonly kind: "updated"; readonly updatedParts: number }
@@ -4263,6 +4288,182 @@ export class AppRepository {
       }));
   }
 
+  private insertPlanDraftSnapshot(input: {
+    readonly profileId: number;
+    readonly actor: string;
+    readonly idempotencyKey: string;
+    readonly baseRevisionId: number | null;
+    readonly basePlanVersion: number;
+    readonly inputs: readonly PlanSnapshotInput[];
+    readonly parts: PreparedPlanDraft["parts"];
+  }): { readonly draftId: number; readonly partIds: readonly number[]; readonly snapshotDigest: string } {
+    const snapshotDigest = digestPlanDraft(input);
+    const inserted = this.db.insert(this.schema.planDrafts).values({
+      tenantId: this.tenantId,
+      profileId: input.profileId,
+      baseRevisionId: input.baseRevisionId,
+      basePlanVersion: input.basePlanVersion,
+      state: "open",
+      digestFormat: PLAN_DRAFT_DIGEST_FORMAT,
+      snapshotDigest,
+      createdBy: input.actor,
+      idempotencyKey: input.idempotencyKey,
+      createdAt: new Date().toISOString(),
+    }).returning({ id: this.schema.planDrafts.id }).get();
+    if (!inserted) throw new Error("Plan draft could not be created");
+    for (const captured of input.inputs) {
+      this.db.insert(this.schema.planDraftInputs).values({
+        tenantId: this.tenantId, draftId: inserted.id, ...captured,
+      }).run();
+    }
+    const partIds: number[] = [];
+    for (const part of input.parts) {
+      const saved = this.db.insert(this.schema.planDraftParts).values({
+        tenantId: this.tenantId, draftId: inserted.id, ...part,
+      }).returning({ id: this.schema.planDraftParts.id }).get();
+      if (!saved) throw new Error("Plan draft Part could not be created");
+      partIds.push(saved.id);
+    }
+    return { draftId: inserted.id, partIds, snapshotDigest };
+  }
+
+  savePlanChoices(command: SavePlanChoicesCommand): SavePlanChoicesResult {
+    if (!this.syncSqlite) return { kind: "transaction_unavailable" };
+    const profileId = positiveSafeId(command.profileId, "Build ID");
+    const actorId = requiredText(command.actorId, "Plan save actor");
+    const userKey = requiredText(command.idempotencyKey, "Plan save idempotency key");
+    if (actorId.length > 200 || userKey.length > 200) throw new Error("Plan save actor and key must be at most 200 characters");
+    if (command.changes.length === 0) throw new Error("Plan save requires at least one choice");
+    const key = `autosave-v1:${createHash("sha256").update(userKey).digest("hex")}`;
+    const payloadKey = `autosave-payload-v1:${createHash("sha256").update(JSON.stringify({
+      profileId, actorId, idempotencyKey: userKey,
+      expectedBase: command.expectedBase.kind === "empty"
+        ? { kind: "empty", planVersion: command.expectedBase.planVersion }
+        : { kind: "revision", revisionId: command.expectedBase.revisionId, planVersion: command.expectedBase.planVersion },
+      expectedDraft: command.expectedDraft ? {
+        id: command.expectedDraft.id,
+        snapshotDigest: command.expectedDraft.snapshotDigest,
+        lifecycleVersion: command.expectedDraft.lifecycleVersion,
+      } : null,
+      remapCheckoffLinks: command.remapCheckoffLinks,
+      changes: command.changes.map((change) => ({
+        target: { partKey: change.target.partKey, relativePath: change.target.relativePath, sourceLayer: change.target.sourceLayer },
+        kind: change.kind, value: change.value,
+      })),
+    })).digest("hex")}`;
+    const closedDraftIds = command.expectedDraft ? [command.expectedDraft.id] : [];
+    try {
+      return this.transaction((): SavePlanChoicesResult => {
+        if (!this.getOwnedProfileIdentity(profileId)) return { kind: "not_found" };
+        const prior = this.db.select().from(this.schema.planApplyRequests).where(and(
+          eq(this.schema.planApplyRequests.tenantId, this.tenantId),
+          eq(this.schema.planApplyRequests.profileId, profileId),
+          eq(this.schema.planApplyRequests.actorId, actorId),
+          eq(this.schema.planApplyRequests.idempotencyKey, key),
+        )).get();
+        if (prior) {
+          const ownedDraft = this.db.select({ key: this.schema.planDrafts.idempotencyKey }).from(this.schema.planDrafts).where(and(
+            eq(this.schema.planDrafts.tenantId, this.tenantId),
+            eq(this.schema.planDrafts.profileId, profileId),
+            eq(this.schema.planDrafts.id, prior.draftId),
+          )).get();
+          if (ownedDraft?.key !== payloadKey) return { kind: "idempotency_conflict" };
+          return { kind: "saved", receipt: this.appliedPlanReceipt(prior), closedDraftIds };
+        }
+        const profile = this.db.select({
+          baseRevisionId: this.schema.buildProfiles.acceptedPlanRevisionId,
+          basePlanVersion: this.schema.buildProfiles.acceptedPlanVersion,
+          archivedAt: this.schema.buildProfiles.archivedAt,
+        }).from(this.schema.buildProfiles).where(and(
+          eq(this.schema.buildProfiles.tenantId, this.tenantId), eq(this.schema.buildProfiles.id, profileId),
+        )).get();
+        if (!profile) return { kind: "not_found" };
+        if (profile.archivedAt != null) return { kind: "build_archived" };
+        if (this.planDraftNeedsAcceptedBaseline(profileId, profile)) return { kind: "accepted_baseline_required" };
+        const expectedRevisionId = command.expectedBase.kind === "revision" ? command.expectedBase.revisionId : null;
+        if (profile.baseRevisionId !== expectedRevisionId || profile.basePlanVersion !== command.expectedBase.planVersion) {
+          return { kind: "base_changed" };
+        }
+        const sourceDraft = command.expectedDraft ? this.getPlanDraft(profileId, command.expectedDraft.id) : null;
+        if (command.expectedDraft) {
+          if (!sourceDraft || sourceDraft.state !== "open" ||
+            sourceDraft.snapshotDigest !== command.expectedDraft.snapshotDigest ||
+            sourceDraft.lifecycleVersion !== command.expectedDraft.lifecycleVersion) return { kind: "draft_changed" };
+          if (sourceDraft.baseRevisionId !== profile.baseRevisionId || sourceDraft.basePlanVersion !== profile.basePlanVersion) {
+            return { kind: "base_changed" };
+          }
+        } else if (this.listPlanDraftIdentities(profileId).some((draft) => draft.state === "open")) {
+          return { kind: "draft_changed" };
+        }
+        let inputs: readonly PlanSnapshotInput[];
+        let parts: PreparedPlanDraft["parts"];
+        let reconciliationDecisions: readonly RequiredUnitReconciliationDecision[] = [];
+        if (sourceDraft) {
+          const currentInputs = this.capturePlanInputs(profileId).inputs.map(({ source_name: _name, ...identity }) => identity);
+          inputs = sourceDraft.inputs.map(({ id: _id, draftId: _draftId, ...input }) => input);
+          const sourceInputDigest = digestPlanInputs(canonicalPlanInputs(inputs.map((input) => ({
+            source_id: input.sourceId, source_layer: input.sourceLayer, layer_order: input.layerOrder,
+            tracking_kind: input.trackingKind, source_revision_id: input.sourceRevisionId,
+            manifest_digest: input.manifestDigest, effective_naming_digest: input.effectiveNamingDigest,
+          }))));
+          if (digestPlanInputs(currentInputs) !== sourceInputDigest) return { kind: "inputs_changed" };
+          parts = sourceDraft.parts.map(({ id: _id, draftId: _draftId, ...part }) => part);
+          if (sourceDraft.requiredUnitReconciliation) {
+            reconciliationDecisions = this.readSavedRequiredUnitReconciliation(sourceDraft.requiredUnitReconciliation.id).decisions;
+          }
+        } else {
+          const prepared = this.preparePlanDraft(profileId, profile, { applyManifest: false, preferAccepted: true });
+          if (prepared.kind !== "prepared") return prepared;
+          inputs = prepared.value.inputs;
+          parts = prepared.value.parts;
+        }
+        const choices = applyPlanChoiceChanges(parts, command.changes);
+        if (choices.kind !== "ready") return choices;
+        const inserted = this.insertPlanDraftSnapshot({
+          profileId, actor: actorId, idempotencyKey: payloadKey, ...profile, inputs, parts: choices.parts,
+        });
+        const copiedPartIds = new Map<number, number>();
+        sourceDraft?.parts.forEach((part, index) => {
+          const copiedId = inserted.partIds[index];
+          if (copiedId == null) throw new Error("Copied Plan draft Part is missing");
+          copiedPartIds.set(part.id, copiedId);
+        });
+        const decisions = reconciliationDecisions.map((decision): RequiredUnitReconciliationDecision => {
+          const targetDraftPartId = copiedPartIds.get(decision.targetDraftPartId);
+          if (targetDraftPartId == null) throw new Error("Copied Required-unit decision target is missing");
+          return { ...decision, targetDraftPartId };
+        });
+        const reconciled = this.savePlanDraftRequiredUnitReconciliation({
+          profileId, draftId: inserted.draftId, expectedSnapshotDigest: inserted.snapshotDigest,
+          decisions, actorId, idempotencyKey: key,
+        });
+        if (!("reconciliation" in reconciled)) {
+          throw new PlanSaveAborted(reconciled.kind === "conflict" || reconciled.kind === "superseded"
+            ? { kind: "draft_changed" } : reconciled);
+        }
+        const applied = this.applyPlanChanges({
+          profileId, draftId: inserted.draftId, expectedSnapshotDigest: reconciled.draft.snapshotDigest,
+          expectedLifecycleVersion: reconciled.draft.lifecycleVersion, expectedBase: command.expectedBase,
+          actorId, idempotencyKey: key, remapCheckoffLinks: command.remapCheckoffLinks,
+        });
+        if (!("receipt" in applied)) {
+          throw new PlanSaveAborted(applied);
+        }
+        if (sourceDraft) {
+          const closed = this.transitionPlanDraft({
+            profileId, draftId: sourceDraft.id,
+            transition: { kind: "abandon", expectedLifecycleVersion: sourceDraft.lifecycleVersion },
+          });
+          if (closed.kind !== "transitioned" && closed.kind !== "unchanged") throw new PlanSaveAborted({ kind: "draft_changed" });
+        }
+        return { kind: "saved", receipt: applied.receipt, closedDraftIds };
+      }, "immediate");
+    } catch (error) {
+      if (error instanceof PlanSaveAborted) return error.result;
+      throw error;
+    }
+  }
+
   recomputePlanDraft(input: {
     profileId: number;
     actor: string;
@@ -4389,40 +4590,8 @@ export class AppRepository {
             ),
           )
           .run();
-        const inserted = this.db
-          .insert(this.schema.planDrafts)
-          .values({
-            tenantId: this.tenantId,
-            profileId: input.profileId,
-            baseRevisionId: profile.baseRevisionId,
-            basePlanVersion: profile.basePlanVersion,
-            state: "open",
-            digestFormat: PLAN_DRAFT_DIGEST_FORMAT,
-            snapshotDigest: prepared.snapshotDigest,
-            createdBy: actor,
-            idempotencyKey,
-            createdAt: new Date().toISOString(),
-          })
-          .returning({ id: this.schema.planDrafts.id })
-          .get();
-        if (!inserted) throw new Error("Plan draft could not be created");
-        for (const captured of prepared.inputs) {
-          this.db
-            .insert(this.schema.planDraftInputs)
-            .values({
-              tenantId: this.tenantId,
-              draftId: inserted.id,
-              ...captured,
-            })
-            .run();
-        }
-        for (const part of prepared.parts) {
-          this.db
-            .insert(this.schema.planDraftParts)
-            .values({ tenantId: this.tenantId, draftId: inserted.id, ...part })
-            .run();
-        }
-        return { kind: "created", draftId: inserted.id };
+        const inserted = this.insertPlanDraftSnapshot({ profileId: input.profileId, actor, idempotencyKey, ...prepared });
+        return { kind: "created", draftId: inserted.draftId };
       },
       "immediate",
     );

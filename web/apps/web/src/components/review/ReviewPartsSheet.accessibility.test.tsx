@@ -4,12 +4,13 @@ import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
-import type { PlanReview } from "../../api/endpoints/planManifests";
+import type { PlanReview, ReviewPart } from "../../api/endpoints/planManifests";
+import { planFileIdentity } from "../../hooks/usePlanFileChoices";
 import { REVIEW_PARTS_UI_STORAGE_KEY } from "../../lib/persistedReviewPartsUi";
 import ReviewPartsSheet from "./ReviewPartsSheet";
 
 const queryMocks = vi.hoisted(() => ({
-  usePlanReviewQuery: vi.fn(() => ({ data: null })),
+  usePlanReviewQuery: vi.fn<() => { data: PlanReview | null }>(() => ({ data: null })),
   usePlanWorkspace: vi.fn(),
 }));
 
@@ -56,7 +57,7 @@ describe("ReviewPartsSheet accessibility", () => {
 
   beforeEach(() => {
     localStorage.clear();
-    queryMocks.usePlanReviewQuery.mockClear();
+    queryMocks.usePlanReviewQuery.mockReset().mockReturnValue({ data: null });
     queryMocks.usePlanWorkspace.mockReturnValue({
       draftWorkspace: null,
       setQuantity: vi.fn(async () => {}),
@@ -77,6 +78,25 @@ describe("ReviewPartsSheet accessibility", () => {
     expect(
       screen.getByRole("searchbox", { name: "Search review parts" }).tagName,
     ).toBe("INPUT");
+  });
+
+  it.each(["edit", "print"])("shows a pending restore in %s mode with the Included-only filter", (viewMode) => {
+    localStorage.setItem(REVIEW_PARTS_UI_STORAGE_KEY, JSON.stringify({ viewMode, layoutMode: "table", includedFilter: "included" }));
+    const part: ReviewPart = {
+      id: 42, match_key: "bracket.stl", relative_path: "frame/bracket.stl", filename: "bracket.stl",
+      source_layer: "base:Voron", status: "ok", role: "primary", requirement: null, option_group_id: null,
+      included: false, filament_color_id: null, quantity_auto: 1, quantity_override: null, quantity_effective: 1,
+      printed_count: 0, print_units: [false], missing: true, filament_display: "",
+    };
+    queryMocks.usePlanReviewQuery.mockReturnValue({ data: { ...review, part_groups: [{ folder: "frame", source_layer: part.source_layer, parts: [part] }] } });
+    queryMocks.usePlanWorkspace.mockReturnValue({
+      draftWorkspace: null,
+      pendingFileChoices: new Map([[planFileIdentity(part), { part, included: true }]]),
+      setQuantity: vi.fn(), setIncluded: vi.fn(), setSpoolmanSpool: vi.fn(), toggleUnit: vi.fn(), busyPartId: null,
+    });
+    render(<MemoryRouter><ReviewPartsSheet review={review} planName="Voron" /></MemoryRouter>);
+    expect(queryMocks.usePlanReviewQuery).toHaveBeenCalledWith(7, { includeExcluded: true, enabled: true });
+    expect(screen.getAllByText("bracket.stl").length).toBeGreaterThan(0);
   });
 
   it("requests excluded parts without changing the workspace projection", () => {

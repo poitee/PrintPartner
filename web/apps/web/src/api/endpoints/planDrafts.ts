@@ -5,14 +5,76 @@ import type {
   PlanDraftPartDecisionContract,
   PlanDraftWorkspace,
   RequiredUnitDecisionContract,
+  ProfileSummary,
+  SavePlanChoicesRequest,
 } from "@print-partner/contracts";
 import {
   parseAcceptedProgressImportResponse,
   parseApplyPlanDraftReceipt,
   parsePlanDraftIdentity,
   parsePlanDraftWorkspace,
+  parseAcceptedPlanBasis,
+  parseSavePlanChoicesRequest,
 } from "@print-partner/contracts";
 import { engineFetch, randomIdempotencyKey } from "../engineTransport";
+import type { PlanReview } from "./planManifests";
+
+export type SavePlanChoicesResponse = {
+  receipt: ApplyPlanDraftReceipt;
+  review: PlanReview;
+  profile: ProfileSummary;
+  closed_draft_ids: number[];
+};
+
+export async function savePlanChoices(
+  profileId: number,
+  request: SavePlanChoicesRequest,
+  idempotencyKey: string,
+): Promise<SavePlanChoicesResponse> {
+  const body = await engineFetch<SavePlanChoicesResponse>(`/plans/${profileId}/save`, {
+    method: "POST",
+    headers: { "Idempotency-Key": idempotencyKey },
+    body: JSON.stringify(parseSavePlanChoicesRequest(request)),
+  });
+  const receipt = parseApplyPlanDraftReceipt(body?.receipt);
+  const review = body?.review;
+  const profile = body?.profile;
+  const basis = parseAcceptedPlanBasis(review?.accepted_basis);
+  if (receipt.profile_id !== profileId || review?.profile_id !== profileId ||
+      basis.profile_id !== profileId || profile?.id !== profileId ||
+      basis.plan_version < receipt.plan_version ||
+      (basis.plan_version === receipt.plan_version &&
+        (basis.plan_revision_id !== receipt.revision_id ||
+         basis.plan_revision_digest !== receipt.revision_digest ||
+         basis.required_unit_mapping_digest !== receipt.required_unit_mapping_digest)) ||
+      typeof review.plan_name !== "string" || !Array.isArray(review.layers) ||
+      !Array.isArray(review.issues) || typeof review.has_blockers !== "boolean" ||
+      !review.totals || !Number.isSafeInteger(review.totals.included_parts) ||
+      !Number.isSafeInteger(review.totals.total_print_units) ||
+      review.totals.included_parts < 0 || review.totals.total_print_units < 0 ||
+      !review.totals.by_role || !review.totals.by_filament ||
+      !Array.isArray(review.part_groups) || review.part_groups.some((group) =>
+        !group || typeof group.folder !== "string" || !Array.isArray(group.parts) ||
+        group.parts.some((part) => !part || !Number.isSafeInteger(part.id) || part.id <= 0 ||
+          typeof part.match_key !== "string" || typeof part.relative_path !== "string" ||
+          typeof part.filename !== "string" || typeof part.included !== "boolean" ||
+          (part.source_layer !== null && typeof part.source_layer !== "string") ||
+          typeof part.missing !== "boolean" || typeof part.filament_display !== "string" ||
+          !Number.isSafeInteger(part.quantity_effective) || !Array.isArray(part.print_units) ||
+          part.print_units.some((printed) => typeof printed !== "boolean") ||
+          !Number.isSafeInteger(part.printed_count) || part.printed_count < 0)) ||
+      typeof profile.name !== "string" || !Number.isSafeInteger(profile.part_count) ||
+      !profile.accepted_progress || !["ready", "empty", "unavailable"].includes(profile.accepted_progress.kind) ||
+      (profile.accepted_progress.kind === "ready" &&
+        (!Number.isSafeInteger(profile.accepted_progress.total_units) || profile.accepted_progress.total_units < 0 ||
+         !Number.isSafeInteger(profile.accepted_progress.remaining_units) || profile.accepted_progress.remaining_units < 0)) ||
+      !profile.freshness || !["current", "stale", "untracked"].includes(profile.freshness.status) ||
+      !Array.isArray(body.closed_draft_ids) ||
+      body.closed_draft_ids.some((id) => !Number.isSafeInteger(id) || id <= 0)) {
+    throw new Error("The saved Plan response is incomplete or belongs to a different Plan revision");
+  }
+  return { ...body, receipt, review: { ...review, accepted_basis: basis } };
+}
 
 export async function listPlanDrafts(profileId: number): Promise<PlanDraftIdentity[]> {
   const body = await engineFetch<{ drafts: PlanDraftIdentity[] }>(`/plans/${profileId}/drafts`);

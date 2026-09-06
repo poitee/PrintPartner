@@ -11,12 +11,15 @@ import {
 } from "react";
 import {
   parsePlanDraftWorkspace,
+  parseSavePlanChoicesRequest,
   type ApplyPlanDraftReceipt,
   type PlanDraftPartDecisionContract,
   type PlanDraftWorkspace,
   type RequiredUnitDecisionContract,
+  type SavePlanChoicesRequest,
+  type PlanDraftIdentity,
 } from "@print-partner/contracts";
-import { EngineHttpError } from "../api/engineTransport";
+import { EngineHttpError, randomIdempotencyKey } from "../api/engineTransport";
 import { planSaveError, planSaveHasMergeConflict } from "../lib/planSaveError";
 import {
   abandonPlanDraft,
@@ -27,8 +30,10 @@ import {
   reconcilePlanDraft,
   rebasePlanDraft,
   recomputePlanDraft,
+  savePlanChoices,
 } from "../api/endpoints/planDrafts";
-import type { PlanReview } from "../api/endpoints/planManifests";
+import { fetchPlanReview, type PlanReview } from "../api/endpoints/planManifests";
+import { capturePlanSaveCache, hydratePlanSave, includedPlanReview } from "../lib/planSaveCache";
 import { formatCheckoffSummary } from "../lib/checkoffProgress";
 import { useEngineHealth } from "../hooks/useEngineHealth";
 import {
@@ -38,7 +43,7 @@ import {
   usePatchPartProgressMutation,
   usePlanReviewQuery,
 } from "../queries/planReview";
-import { invalidateProfiles } from "../queries/profiles";
+import { invalidateProfiles, refreshProfileSummary } from "../queries/profiles";
 import { queryKeys } from "../queries/keys";
 import {
   usePlanDraftListQuery,
@@ -55,6 +60,7 @@ import {
   WorkingPlanChangedError,
 } from "../lib/workingPlanChanged";
 import { useProfileSelection } from "./ProfileContext";
+import { usePlanFileChoices, type PlanFileChoice } from "../hooks/usePlanFileChoices";
 
 /** The Plan row being edited — enough identity to find it in the saved draft. */
 export type PlanEditablePart = PlanRowIdentity & {
@@ -69,6 +75,18 @@ export type QuantityUpdate =
 type DraftPartEdit =
   | { kind: "set_included"; value: boolean }
   | { kind: "set_quantity"; value: QuantityUpdate };
+
+type PlanEdits = readonly { part: PlanEditablePart; edit: DraftPartEdit }[];
+type PendingPlanSave = { edits: PlanEdits; request: SavePlanChoicesRequest; key: string };
+
+function samePlanEdits(left: PlanEdits, right: PlanEdits): boolean {
+  return left.length === right.length && left.every((item, index) => {
+    const other = right[index];
+    return other && item.part.match_key === other.part.match_key &&
+      item.part.relative_path === other.part.relative_path && item.part.source_layer === other.part.source_layer &&
+      item.edit.kind === other.edit.kind && item.edit.value === other.edit.value;
+  });
+}
 
 type BuildDraftUiState = Readonly<{
   activeDraftId: number | null;
@@ -98,6 +116,7 @@ type PlanWorkspaceValue = {
   saving: boolean;
   mergeConflict: boolean;
   discardPendingEdits: () => Promise<void>;
+  pendingFileChoices: ReadonlyMap<string, PlanFileChoice>;
   draftWorkspace: PlanDraftWorkspace | null;
   draftLoading: boolean;
   draftError: string | null;
@@ -161,6 +180,7 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
   const draftUiByBuildRef = useRef(draftUiByBuild);
   const draftEditQueueByBuild = useRef<Map<number, Promise<void>>>(new Map());
   const closedDraftIds = useRef(new Set<number>());
+  const pendingSaveByBuild = useRef(new Map<number, PendingPlanSave>());
   const selectedDraftUi =
     selectedProfileId == null
       ? EMPTY_BUILD_DRAFT_UI_STATE
@@ -258,7 +278,7 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
   }, [health?.ok, queryClient, selectedProfileId]);
 
   const storeWorkspace = useCallback(
-    (workspace: PlanDraftWorkspace) => {
+    (workspace: PlanDraftWorkspace, refreshSummaries = true) => {
       updateDraftUi(workspace.profile_id, (current) => ({
         ...current,
         activeDraftId: workspace.draft.draft_id,
@@ -267,12 +287,10 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
         queryKeys.planDraft(workspace.profile_id, workspace.draft.draft_id),
         workspace,
       );
-      void queryClient.invalidateQueries({
-        queryKey: queryKeys.planDrafts(workspace.profile_id),
-      });
-      void queryClient.invalidateQueries({
-        queryKey: queryKeys.buildWorkflow(workspace.profile_id),
-      });
+      if (refreshSummaries) {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.planDrafts(workspace.profile_id) });
+        void queryClient.invalidateQueries({ queryKey: queryKeys.buildWorkflow(workspace.profile_id) });
+      }
       return workspace;
     },
     [queryClient, updateDraftUi],
@@ -340,13 +358,13 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
   );
 
   const startPlanDraftForProfile = useCallback(
-    async (profileId: number, options?: { applyManifest?: boolean }) => {
+    async (profileId: number, options?: { applyManifest?: boolean }, refreshSummaries = true) => {
       updateDraftUi(profileId, (current) => ({
         ...current,
         draftMutationError: null,
       }));
       try {
-        return storeWorkspace(await (options ? recomputePlanDraft(profileId, options) : recomputePlanDraft(profileId)));
+        return storeWorkspace(await (options ? recomputePlanDraft(profileId, options) : recomputePlanDraft(profileId)), refreshSummaries);
       } catch (error) {
         updateDraftUi(profileId, (current) => ({
           ...current,
@@ -369,6 +387,7 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
     async (
       workspace: PlanDraftWorkspace,
       decisions: PlanDraftPartDecisionContract[],
+      refreshSummaries = true,
     ) =>
       storeWorkspace(
         await editPlanDraftParts({
@@ -377,6 +396,7 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
           expectedSnapshotDigest: workspace.draft.snapshot_digest,
           decisions,
         }),
+        refreshSummaries,
       ),
     [storeWorkspace],
   );
@@ -483,24 +503,15 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
         }
       }
       closedDraftIds.current.add(workspace.draft.draft_id);
-      updateDraftUi(workspace.profile_id, (current) => ({
-        ...current,
-        recentlyAppliedDraftId: workspace.draft.draft_id,
-        activeDraftId: null,
-      }));
-      queryClient.removeQueries({
-        queryKey: queryKeys.planDraft(
-          workspace.profile_id,
-          workspace.draft.draft_id,
-        ),
-        exact: true,
-      });
       await Promise.all([
         queryClient.invalidateQueries({
           queryKey: queryKeys.planDrafts(workspace.profile_id),
         }),
-        invalidatePlanReview(queryClient, workspace.profile_id),
-        invalidateProfiles(queryClient),
+        queryClient.invalidateQueries({
+          predicate: (query) => query.queryKey[0] === "planReview" && query.queryKey[1] === workspace.profile_id,
+          refetchType: "all",
+        }, { throwOnError: true }),
+        refreshProfileSummary(queryClient, workspace.profile_id),
         queryClient.invalidateQueries({
           queryKey: queryKeys.checkoff(workspace.profile_id),
         }),
@@ -513,7 +524,17 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
         queryClient.invalidateQueries({
           queryKey: queryKeys.buildWorkflow(workspace.profile_id),
         }),
-      ]);
+      ]).finally(() => {
+        updateDraftUi(workspace.profile_id, (current) => ({
+          ...current,
+          recentlyAppliedDraftId: workspace.draft.draft_id,
+          activeDraftId: current.activeDraftId === workspace.draft.draft_id ? null : current.activeDraftId,
+        }));
+      });
+      queryClient.removeQueries({
+        queryKey: queryKeys.planDraft(workspace.profile_id, workspace.draft.draft_id),
+        exact: true,
+      });
       return receipt;
     },
     [
@@ -581,9 +602,8 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
   );
 
   const editDraft = useCallback(
-    (parts: readonly PlanEditablePart[], edit: DraftPartEdit) => {
-      const profileId = selectedProfileId;
-      if (parts.length === 0) return Promise.resolve();
+    (edits: PlanEdits, profileId = selectedProfileId) => {
+      if (edits.length === 0) return Promise.resolve();
       if (profileId == null)
         return Promise.reject(
           new Error("Select a Build before editing its Working Plan"),
@@ -591,69 +611,108 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
       return enqueueDraftEdit(profileId, async () => {
         updateDraftUi(profileId, (current) => ({
           ...current,
-          busyPartId: parts[0]?.id ?? null,
+          busyPartId: edits[0]?.part.id ?? null,
           saving: true,
           draftMutationError: null,
           mergeConflict: false,
         }));
-        const fail: (message: string) => never = (message) => {
-          updateDraftUi(profileId, (current) => ({
-            ...current,
-            draftMutationError: message,
-          }));
-          throw new Error(message);
-        };
-        try {
-          for (let attempt = 0; attempt < 2; attempt += 1) {
-            const open = await resolveOpenDraftWorkspace(profileId);
-            let workspace =
-              open ??
-              (attempt === 0
-                ? await startPlanDraftForProfile(profileId)
-                : null);
-            if (!workspace) fail("Create a Working Plan from Sources first");
-            if (!workspace.diff.base_is_current || workspace.draft.state === "abandoned") {
-              workspace = await rebaseWorkspace(workspace);
-            }
-            const decisions = parts.map((part): PlanDraftPartDecisionContract => {
-              const match = resolveDraftPart(workspace.parts, part);
-              if (match.kind !== "resolved")
-                fail(draftPartMatchError(match, part.filename));
-              const draftPartId = match.part.draft_part_id;
-              return edit.kind === "set_included"
-                ? {
-                    kind: "set_included",
-                    draft_part_ids: [draftPartId],
-                    value: edit.value,
-                  }
-                : {
-                    kind: "set_quantity_override",
-                    draft_part_ids: [draftPartId],
-                    value: Math.max(
-                      1,
-                      Math.floor(
-                        typeof edit.value === "function"
-                          ? edit.value(match.part.quantity_effective)
-                          : edit.value,
-                      ),
-                    ),
-                  };
-            });
+        const publish = async (pending: PendingPlanSave) => {
+          for (let retry = 0; ; retry += 1) {
             try {
-              const edited = await persistDraftEdit(workspace, decisions);
-              await applyWorkspace(edited, { remapCheckoffLinks: true });
-              return;
-            } catch (error) {
-              const replaced = replaceFromConflict(profileId, error);
-              if (replaced && attempt === 0) continue;
-              const message = replaced
-                ? "The Plan changed in another window. Retry this edit."
-                : planSaveError(error);
+              const observed = capturePlanSaveCache(queryClient, profileId);
+              const saved = await savePlanChoices(profileId, pending.request, pending.key);
+              await hydratePlanSave(queryClient, saved, observed);
+              for (const id of saved.closed_draft_ids) closedDraftIds.current.add(id);
               updateDraftUi(profileId, (current) => ({
                 ...current,
-                draftMutationError: message,
+                recentlyAppliedDraftId: saved.receipt.draft_id,
+                activeDraftId: current.activeDraftId != null && saved.closed_draft_ids.includes(current.activeDraftId)
+                  ? null : current.activeDraftId,
               }));
-              throw new Error(message, { cause: error });
+              pendingSaveByBuild.current.delete(profileId);
+              return;
+            } catch (error) {
+              const definitive = error instanceof EngineHttpError && error.status < 500 && error.status !== 408;
+              if (definitive) pendingSaveByBuild.current.delete(profileId);
+              if (!definitive && retry === 0) continue;
+              throw error;
+            }
+          }
+        };
+        try {
+          for (let attempt = 0; attempt < 3; attempt += 1) {
+            try {
+              const pending = pendingSaveByBuild.current.get(profileId);
+              if (pending) {
+                await publish(pending);
+                if (samePlanEdits(pending.edits, edits)) return;
+              }
+              let workspace = currentDraftWorkspace(profileId);
+              if (workspace && (!workspace.diff.base_is_current || workspace.draft.state === "abandoned")) {
+                workspace = await rebaseWorkspace(workspace);
+              }
+              const drafts = queryClient.getQueryData<PlanDraftIdentity[]>(queryKeys.planDrafts(profileId)) ??
+                (profileId === selectedProfileId ? draftListQuery.data : undefined);
+              const draftId = latestOpenDraftId(drafts?.filter((draft) => !closedDraftIds.current.has(draft.draft_id)));
+              const draft = workspace?.draft ?? drafts?.find((item) => item.draft_id === draftId) ?? null;
+              if (!workspace && draft && edits.some(({ edit }) => edit.kind === "set_quantity" && typeof edit.value === "function")) {
+                workspace = storeWorkspace(await fetchPlanDraftWorkspace(profileId, draft.draft_id), false);
+              }
+              const currentReview = queryClient.getQueryData<PlanReview>(queryKeys.planReview(profileId, true)) ??
+                queryClient.getQueryData<PlanReview>(queryKeys.planReview(profileId, false)) ??
+                (profileId === selectedProfileId ? review : null);
+              const expectedDraft = workspace?.draft ?? draft;
+              const accepted = currentReview?.accepted_basis;
+              const request: SavePlanChoicesRequest = {
+                expected_base: expectedDraft?.base ?? {
+                  revision_id: accepted?.plan_revision_id ?? null,
+                  plan_version: accepted?.plan_version ?? 0,
+                },
+                expected_draft: expectedDraft,
+                remap_checkoff_links: true,
+                decisions: edits.map(({ part, edit }) => {
+                  const target = { part_key: part.match_key, relative_path: part.relative_path, source_layer: part.source_layer };
+                  if (edit.kind === "set_included") {
+                    if (workspace) {
+                      const match = resolveDraftPart(workspace.parts, part);
+                      if (match.kind !== "resolved") throw new Error(draftPartMatchError(match, part.filename));
+                    }
+                    return { kind: "set_included", target, value: edit.value };
+                  }
+                  const candidates: readonly { part_key: string; relative_path: string; source_layer: string | null; quantity_effective: number }[] = workspace?.parts ?? currentReview?.part_groups.flatMap((group) =>
+                    group.parts.map((row) => ({ ...row, part_key: row.match_key }))) ?? [];
+                  const match = resolveDraftPart(candidates, part);
+                  if (match.kind !== "resolved") throw new Error(draftPartMatchError(match, part.filename));
+                  return {
+                    kind: "set_quantity_override", target,
+                    value: Math.max(1, Math.floor(typeof edit.value === "function"
+                      ? edit.value(match.part.quantity_effective) : edit.value)),
+                  };
+                }),
+              };
+              const command = { edits, request: parseSavePlanChoicesRequest(request), key: randomIdempotencyKey() };
+              pendingSaveByBuild.current.set(profileId, command);
+              await publish(command);
+              return;
+            } catch (error) {
+              if (attempt < 2 && error instanceof EngineHttpError && error.status === 409) {
+                const replaced = replaceFromConflict(profileId, error);
+                if (replaced && !isWorkingPlanInputsChanged(error)) continue;
+                const body = error.body;
+                const code = body && typeof body === "object" && "code" in body ? body.code : null;
+                if (code === "inputs_changed" || code === "base_changed" || code === "draft_changed") {
+                  const open = currentDraftWorkspace(profileId) ?? await resolveOpenDraftWorkspace(profileId);
+                  if (open && (code === "inputs_changed" || !open.diff.base_is_current)) {
+                    await rebaseWorkspace(open);
+                  } else {
+                    const refreshed = await fetchPlanReview(profileId, { includeExcluded: true });
+                    queryClient.setQueryData(queryKeys.planReview(profileId, true), refreshed);
+                    if (open) storeWorkspace(await fetchPlanDraftWorkspace(profileId, open.draft.draft_id), false);
+                  }
+                  continue;
+                }
+              }
+              throw error;
             }
           }
         } catch (error) {
@@ -662,7 +721,7 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
             draftMutationError: planSaveError(error),
             mergeConflict: planSaveHasMergeConflict(error),
           }));
-          throw error;
+          throw new Error(planSaveError(error), { cause: error });
         } finally {
           updateDraftUi(profileId, (current) => ({
             ...current,
@@ -673,14 +732,16 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
       });
     },
     [
-      applyWorkspace,
+      currentDraftWorkspace,
+      draftListQuery.data,
       enqueueDraftEdit,
-      persistDraftEdit,
+      queryClient,
       rebaseWorkspace,
       replaceFromConflict,
       resolveOpenDraftWorkspace,
+      review,
       selectedProfileId,
-      startPlanDraftForProfile,
+      storeWorkspace,
       updateDraftUi,
     ],
   );
@@ -688,23 +749,27 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
   const setQuantity = useCallback(
     async (part: PlanEditablePart, update: QuantityUpdate) => {
       if (!review) return;
-      await editDraft([part], { kind: "set_quantity", value: update });
+      await editDraft([{ part, edit: { kind: "set_quantity", value: update } }]);
     },
     [review, editDraft],
   );
 
-  const setIncluded = useCallback(
-    async (part: PlanEditablePart, included: boolean) => {
-      if (!review) return;
-      await editDraft([part], { kind: "set_included", value: included });
-    },
-    [review, editDraft],
-  );
-
-  const setFilesIncluded = useCallback(
-    (parts: readonly PlanEditablePart[], included: boolean) => editDraft(parts, { kind: "set_included", value: included }),
+  const saveFileChoices = useCallback(
+    (profileId: number, choices: readonly PlanFileChoice[]) => editDraft(
+      choices.map((choice) => ({ part: choice.part, edit: { kind: "set_included", value: choice.included } })),
+      profileId,
+    ),
     [editDraft],
   );
+  const { choices: pendingFileChoices, saving: savingFiles, error: fileChoiceError, select: setFilesIncluded, flush: flushFileChoices, hasPending: hasPendingFileChoices, discard: discardFileChoices } = usePlanFileChoices(selectedProfileId, saveFileChoices);
+  const setIncluded = useCallback((part: PlanEditablePart, included: boolean) => setFilesIncluded([part], included), [setFilesIncluded]);
+  const retryOrPreparePlan = useCallback(async (options?: { applyManifest?: boolean }) => {
+    if (selectedProfileId != null && hasPendingFileChoices(selectedProfileId)) {
+      await flushFileChoices(selectedProfileId);
+      if (!options?.applyManifest) return;
+    }
+    await preparePlan(options);
+  }, [flushFileChoices, hasPendingFileChoices, preparePlan, selectedProfileId]);
 
   const reconcileActivePlanDraft = useCallback(
     async (decisions: RequiredUnitDecisionContract[]) => {
@@ -759,18 +824,27 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
     return enqueueDraftEdit(profileId, async () => {
       updateDraftUi(profileId, (current) => ({ ...current, saving: true }));
       try {
+        const ambiguousSave = pendingSaveByBuild.current.has(profileId);
         const workspace = await resolveOpenDraftWorkspace(profileId);
         if (workspace) {
           await abandonPlanDraft(profileId, workspace.draft);
           closedDraftIds.current.add(workspace.draft.draft_id);
           queryClient.removeQueries({ queryKey: queryKeys.planDraft(profileId, workspace.draft.draft_id), exact: true });
         }
-        updateDraftUi(profileId, (current) => ({ ...current, activeDraftId: null, draftMutationError: null, mergeConflict: false }));
+        if (ambiguousSave) {
+          await queryClient.cancelQueries({ queryKey: ["planReview", profileId] }, { revert: false });
+          const accepted = await fetchPlanReview(profileId, { includeExcluded: true });
+          queryClient.setQueryData(queryKeys.planReview(profileId, true), accepted);
+          queryClient.setQueryData(queryKeys.planReview(profileId, false), includedPlanReview(accepted));
+        }
         await Promise.all([
           queryClient.invalidateQueries({ queryKey: queryKeys.planDrafts(profileId) }),
-          invalidatePlanReview(queryClient, profileId),
+          ...(ambiguousSave ? [] : [invalidatePlanReview(queryClient, profileId)]),
           queryClient.invalidateQueries({ queryKey: queryKeys.buildWorkflow(profileId) }),
         ]);
+        pendingSaveByBuild.current.delete(profileId);
+        discardFileChoices(profileId);
+        updateDraftUi(profileId, (current) => ({ ...current, activeDraftId: null, draftMutationError: null, mergeConflict: false }));
       } catch (error) {
         updateDraftUi(profileId, (current) => ({ ...current, draftMutationError: planSaveError(error) }));
         throw error;
@@ -778,7 +852,7 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
         updateDraftUi(profileId, (current) => ({ ...current, saving: false }));
       }
     });
-  }, [enqueueDraftEdit, queryClient, resolveOpenDraftWorkspace, selectedProfileId, updateDraftUi]);
+  }, [discardFileChoices, enqueueDraftEdit, queryClient, resolveOpenDraftWorkspace, selectedProfileId, updateDraftUi]);
 
   const setSpoolmanSpool = useCallback(
     async (partId: number, spoolman_spool_id: string | null) => {
@@ -860,13 +934,15 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
       draftLoading: draftListQuery.isLoading || draftQuery.isLoading,
       draftError:
         draftMutationError ??
+        (fileChoiceError != null ? planSaveError(fileChoiceError) : null) ??
         (draftQuery.error instanceof Error ? draftQuery.error.message : null) ??
         (draftListQuery.error instanceof Error
           ? draftListQuery.error.message
           : null),
       startPlanDraft,
-      preparePlan,
-      saving,
+      preparePlan: retryOrPreparePlan,
+      saving: saving || savingFiles,
+      pendingFileChoices,
       mergeConflict,
       discardPendingEdits,
       applyActivePlanDraft,
@@ -898,9 +974,12 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
       draftListQuery.error,
       draftListQuery.isLoading,
       draftMutationError,
+      fileChoiceError,
       startPlanDraft,
-      preparePlan,
+      retryOrPreparePlan,
       saving,
+      savingFiles,
+      pendingFileChoices,
       mergeConflict,
       discardPendingEdits,
       applyActivePlanDraft,

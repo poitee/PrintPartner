@@ -420,27 +420,39 @@ export async function readAcceptedPlanReview(
   if (accepted.kind !== "ready") {
     return { kind: "accepted_state_unavailable", reason: accepted.kind };
   }
+  const body = await projectCapturedPlanReview({ ...input, snapshot: accepted.snapshot,
+    reportTiming: input.reportTiming ? (timing) => input.reportTiming?.({ ...timing, snapshotMs: snapshotDone - started }) : undefined,
+  });
+  return { kind: "ready", body };
+}
+
+export async function projectCapturedPlanReview(
+  input: Pick<ReadAcceptedPlanReviewInput, "includeExcluded" | "reposDir" | "thumbsDir" | "loadFilamentContext" | "reportTiming"> & {
+    readonly snapshot: AcceptedPlanOperationalSnapshot;
+  },
+): Promise<AcceptedPlanReviewBody> {
+  const snapshotDone = performance.now();
   const filamentContext = input.loadFilamentContext
-    ? await input.loadFilamentContext(accepted.snapshot.parts.map((part) => part.filamentColorId))
+    ? await input.loadFilamentContext(input.snapshot.parts.map((part) => part.filamentColorId))
     : undefined;
   const filamentDone = performance.now();
   const observations = observeAcceptedPlanReview({
-    snapshot: accepted.snapshot,
+    snapshot: input.snapshot,
     reposDir: input.reposDir,
     thumbsDir: input.thumbsDir,
   });
   const observationDone = performance.now();
   const body = projectAcceptedPlanReview({
-    snapshot: accepted.snapshot,
+    snapshot: input.snapshot,
     includeExcluded: input.includeExcluded,
     ...observations,
     filamentContext,
   });
   input.reportTiming?.({
-    snapshotMs: snapshotDone - started,
+    snapshotMs: 0,
     filamentMs: filamentDone - snapshotDone,
     observationMs: observationDone - filamentDone,
     projectionMs: performance.now() - observationDone,
   });
-  return { kind: "ready", body };
+  return body;
 }
