@@ -17,6 +17,7 @@ export type CheckoffCorrectionTarget = {
   partId: number;
   filename: string;
   printedCount: number;
+  scope?: "one" | "all";
   impact: CheckoffCorrectionImpact;
 };
 
@@ -49,7 +50,7 @@ export default function CheckoffCorrectionDialog({
     setReason(null);
     setNote("");
     setSubmitted(false);
-  }, [target?.partId, target?.printedCount]);
+  }, [target?.partId, target?.printedCount, target?.scope]);
 
   const needsReason = target ? checkoffCorrectionNeedsReason(target.impact) : false;
   const validation = validateCheckoffCorrection({ draft: { reason, note }, needsReason });
@@ -71,7 +72,10 @@ export default function CheckoffCorrectionDialog({
     >
       <DialogContent className="max-w-md" aria-describedby="checkoff-correction-impact">
         <DialogHeader>
-          <DialogTitle>Take one unit off {target?.filename ?? "this part"}</DialogTitle>
+          <DialogTitle>
+            {target?.scope === "all" ? "Clear all printed copies of" : "Take one unit off"}{" "}
+            {target?.filename ?? "this part"}
+          </DialogTitle>
           <p id="checkoff-correction-impact" className="text-sm text-muted-foreground">
             {target ? describeCheckoffCorrectionImpact(target.impact) : ""}
           </p>

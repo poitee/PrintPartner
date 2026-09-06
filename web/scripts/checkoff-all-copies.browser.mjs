@@ -1,3 +1,4 @@
+/* global console, document, fetch */
 import assert from "node:assert/strict";
 import { chromium } from "playwright-core";
 import { browserExecutable } from "../apps/web/test/browser/browserExecutable.mjs";
