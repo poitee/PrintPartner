@@ -135,6 +135,7 @@ function resolveArtifactPath(input: {
   readonly reposDir: string;
   readonly snapshotRoot: string;
   readonly relativePath: string;
+  readonly directoryEntries?: Map<string, string[]>;
 }): ResolvedArtifactPath {
   if (!isSafeRelativePath(input.relativePath)) {
     return { kind: "unusable", reason: "unsafe_path" };
@@ -145,7 +146,12 @@ function resolveArtifactPath(input: {
     let current = root.path;
     const segments = input.relativePath.split("/");
     for (const [index, segment] of segments.entries()) {
-      const matches = readdirSync(current).filter(
+      let entries = input.directoryEntries?.get(current);
+      if (!entries) {
+        entries = readdirSync(current);
+        input.directoryEntries?.set(current, entries);
+      }
+      const matches = entries.filter(
         (entry) => entry.toLowerCase() === segment.toLowerCase(),
       );
       const [match] = matches;
@@ -170,6 +176,20 @@ function resolveArtifactPath(input: {
 export function observeAcceptedArtifact(
   input: ObserveAcceptedArtifactInput,
 ): AcceptedArtifactObservation {
+  return observeArtifact(input);
+}
+
+/** One synchronous observation batch only; never used to authorize file reads. */
+export function createAcceptedArtifactObserver() {
+  const directoryEntries = new Map<string, string[]>();
+  return (input: ObserveAcceptedArtifactInput): AcceptedArtifactObservation =>
+    observeArtifact(input, directoryEntries);
+}
+
+function observeArtifact(
+  input: ObserveAcceptedArtifactInput,
+  directoryEntries?: Map<string, string[]>,
+): AcceptedArtifactObservation {
   if (input.artifact.kind === "unavailable") {
     return { kind: "unavailable", reason: input.artifact.reason };
   }
@@ -177,6 +197,7 @@ export function observeAcceptedArtifact(
     reposDir: input.reposDir,
     snapshotRoot: input.artifact.snapshotRoot,
     relativePath: input.artifact.relativePath,
+    directoryEntries,
   });
   if (resolved.kind === "unusable") return resolved;
   try {

@@ -11,6 +11,7 @@ const observationSpies = vi.hoisted(() => ({
 vi.mock("./accepted-artifacts.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./accepted-artifacts.js")>()),
   observeAcceptedArtifact: observationSpies.artifact,
+  createAcceptedArtifactObserver: () => observationSpies.artifact,
   observeAcceptedSnapshotRoot: observationSpies.root,
 }));
 
@@ -78,15 +79,23 @@ describe("accepted Review observation boundary", () => {
       readAcceptedPlanOperationalSnapshot: vi.fn(() => ({ kind: "ready" as const, snapshot })),
     } as unknown as AppRepository;
 
+    const reportTiming = vi.fn();
     const result = await readAcceptedPlanReview({
       repo,
       profileId: 7,
       includeExcluded: true,
       reposDir: "/unused/repos",
       thumbsDir: "/unused/thumbs",
+      reportTiming,
     });
 
     expect(result.kind).toBe("ready");
+    expect(reportTiming).toHaveBeenCalledExactlyOnceWith({
+      snapshotMs: expect.any(Number),
+      filamentMs: expect.any(Number),
+      observationMs: expect.any(Number),
+      projectionMs: expect.any(Number),
+    });
     expect(observationSpies.artifact).not.toHaveBeenCalled();
     expect(observationSpies.png).not.toHaveBeenCalled();
   });
