@@ -2037,6 +2037,30 @@ selections:
     database.close();
   });
 
+  it("lets the user exclude a missing file without discarding other pending choices", () => {
+    const { database, profile, repo, draft } = editableDraftFixture();
+    const gear = draft.parts.find((part) => part.partKey === "gear.stl");
+    const kept = draft.parts.find((part) => part.id !== gear?.id);
+    if (!gear || !kept) throw new Error("fixture parts unavailable");
+    const edited = repo.editPlanDraftParts({ profileId: profile.id, draftId: draft.id, expectedSnapshotDigest: draft.snapshotDigest,
+      decision: { kind: "set_quantity_override", partIds: [kept.id], value: 7 } });
+    if (edited.kind !== "updated") throw new Error("edit failed");
+    const excluded = repo.editPlanDraftParts({ profileId: profile.id, draftId: draft.id, expectedSnapshotDigest: edited.draft.snapshotDigest,
+      decision: { kind: "set_included", partIds: [gear.id], value: false } });
+    if (excluded.kind !== "updated") throw new Error("exclude failed");
+    rmSync(join(database.reposDir, "editable-source", "gear.stl"));
+    const extra = trackedSource({ repo, database, name: "Updated Source", files: { "new.stl": "solid new" } });
+    repo.addAddonLayer(profile.id, extra.source.id);
+    const result = repo.rebasePlanDraft({ profileId: profile.id, sourceDraftId: draft.id, expectedSourceState: "open",
+      expectedSourceLifecycleVersion: 0, expectedSourceSnapshotDigest: excluded.draft.snapshotDigest,
+      actor: "test:user", idempotencyKey: "exclude-missing-file" });
+    expect(result.kind).toBe("rebased");
+    if (result.kind !== "rebased") throw new Error("rebase failed");
+    expect(result.draft.parts.find((part) => part.partKey === kept.partKey)?.quantityOverride).toBe(7);
+    expect(result.draft.parts.some((part) => part.partKey === gear.partKey)).toBe(false);
+    database.close();
+  });
+
   it("keeps an open draft unchanged and editable when rebase cannot find a chosen file", () => {
     const { database, raw, profile, repo, draft } = editableDraftFixture();
     const gear = draft.parts.find((part) => part.partKey === "gear.stl");

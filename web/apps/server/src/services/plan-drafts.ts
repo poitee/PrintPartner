@@ -285,6 +285,7 @@ export function mergeRebasedPlanDraft(input: {
     (left, right) => left - right,
   );
   const targetBySource = new Map<number, PlanDraftPart>();
+  const absentExcludedParts = new Set<number>();
   const conflicts: RebaseConflict[] = [];
   for (const sourcePartId of sourcePartIds) {
     const sourcePart = sourceById.get(sourcePartId);
@@ -338,6 +339,10 @@ export function mergeRebasedPlanDraft(input: {
         ambiguousEvidence = true;
       }
     }
+    if (!ambiguousEvidence && candidates.length === 0 && !sourcePart.included) {
+      absentExcludedParts.add(sourcePartId);
+      continue;
+    }
     if (ambiguousEvidence || candidates.length !== 1) {
       conflicts.push({
         kind: candidates.length === 0 ? "target_missing" : "target_ambiguous",
@@ -370,6 +375,7 @@ export function mergeRebasedPlanDraft(input: {
   const next = structuredClone(input.fresh);
   const nextById = new Map(next.parts.map((part) => [part.id, part]));
   for (const decision of decisions) {
+    if (absentExcludedParts.has(decision.sourcePartId)) continue;
     const sourcePart = sourceById.get(decision.sourcePartId);
     if (!sourcePart) throw new Error("Plan draft rebase decision Part is missing");
     const baseline =

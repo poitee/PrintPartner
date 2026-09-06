@@ -1,12 +1,13 @@
 import { EngineHttpError } from "../api/engineTransport";
 import { WorkingPlanChangedError } from "./workingPlanChanged";
+import type { PlanDraftWorkspace } from "@print-partner/contracts";
 
 export function planSaveHasMergeConflict(error: unknown): boolean {
   const original = error instanceof Error && error.cause instanceof EngineHttpError ? error.cause : error;
   return original instanceof EngineHttpError && original.body != null && typeof original.body === "object" && "code" in original.body && original.body.code === "merge_conflicts";
 }
 
-export function planSaveError(error: unknown): string {
+export function planSaveError(error: unknown, workspace?: PlanDraftWorkspace | null): string {
   if (error instanceof WorkingPlanChangedError) {
     return "The Plan or source files changed in another window. Your edits have been combined with the latest files. Check the result and retry saving.";
   }
@@ -26,8 +27,16 @@ export function planSaveError(error: unknown): string {
         const affected = [...new Set(filenames)].join(", ");
         return `${affected ? `${affected}: this` : "This"} change affects a recorded or queued print. Your edits are kept, but could not be saved. Restore the affected file in Plan, or resolve its print in Checkoff or Production, then retry.`;
       }
-      case "merge_conflicts":
-        return "Your edits overlap with another Plan change. They have been kept. Resolve the overlapping files before retrying.";
+      case "merge_conflicts": {
+        const conflicts = "conflicts" in error.body && Array.isArray(error.body.conflicts) ? error.body.conflicts : [];
+        const details = conflicts.flatMap((conflict: unknown) => {
+          if (!conflict || typeof conflict !== "object" || !("sourcePartId" in conflict) || !("kind" in conflict)) return [];
+          const part = workspace?.parts.find((item) => item.draft_part_id === conflict.sourcePartId);
+          if (!part) return [];
+          return [`${part.filename}: ${conflict.kind === "target_missing" ? "no longer available in the current sources" : "needs review because its source or saved choices changed"}`];
+        });
+        return `Your pending choices could not be combined with the current sources. Nothing was discarded.${details.length ? ` ${[...new Set(details)].join("; ")}.` : " Review the pending files below and check their sources before retrying."}`;
+      }
       case "base_changed":
       case "inputs_changed":
       case "draft_changed":

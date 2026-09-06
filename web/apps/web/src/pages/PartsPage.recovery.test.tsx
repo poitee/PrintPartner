@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import PartsPage from "./PartsPage";
+import type { PlanDraftWorkspace } from "@print-partner/contracts";
 
 const state = vi.hoisted(() => ({
   draftError: "Could not combine these pending edits",
@@ -11,6 +12,8 @@ const state = vi.hoisted(() => ({
   saving: false,
   prepare: vi.fn(),
   discard: vi.fn(),
+  edit: vi.fn(),
+  workspace: null as PlanDraftWorkspace | null,
 }));
 vi.mock("../context/ProfileContext", () => ({ useProfileSelection: () => ({ selectedProfileId: 7 }) }));
 vi.mock("../context/PlanWorkspaceContext", () => ({
@@ -19,13 +22,14 @@ vi.mock("../context/PlanWorkspaceContext", () => ({
     loading: false,
     error: null,
     draftError: state.draftError,
-    draftWorkspace: null,
+    draftWorkspace: state.workspace,
     draftLoading: false,
     preparePlan: state.prepare,
     saving: state.saving,
     refresh: vi.fn(),
     mergeConflict: state.mergeConflict,
     discardPendingEdits: state.discard,
+    editActivePlanDraft: state.edit,
   }),
 }));
 vi.mock("../queries/planLayers", () => ({ usePlanLayersQuery: () => ({ data: [], isLoading: false }) }));
@@ -40,12 +44,32 @@ beforeEach(() => {
   state.draftError = "Could not combine these pending edits";
   state.mergeConflict = false;
   state.saving = false;
+  state.workspace = null;
   state.prepare.mockResolvedValue(undefined);
   state.discard.mockResolvedValue(undefined);
+  state.edit.mockResolvedValue(undefined);
 });
 afterEach(cleanup);
 
 describe("Plan pending-edit recovery", () => {
+  it("shows retained draft files and saves explicit choices when a first Plan save conflicts", async () => {
+    state.mergeConflict = true;
+    state.workspace = {
+      profile_id: 7,
+      draft: { draft_id: 9, state: "open", lifecycle_version: 0, snapshot_digest: "a".repeat(64), base: { revision_id: null, plan_version: 0 } },
+      parts: [{ draft_part_id: 17, base_revision_part_id: null, part_key: "bracket.stl", filename: "bracket.stl", relative_path: "bracket.stl", source_layer: "base:Source", role: "primary", quantity_inferred: 1, quantity_override: 3, quantity_effective: 3, included: true }],
+      diff: { base_is_current: false, added: [], removed: [], changed: [] },
+      reconciliation: { kind: "ready", reused_units: 0, new_units: 0, surplus_units: 0 },
+    };
+    renderPlan();
+    expect(screen.getByText("bracket.stl")).toBeTruthy();
+    expect(screen.getByDisplayValue("3")).toBeTruthy();
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(screen.getByRole("button", { name: "Save pending choices" }));
+    await waitFor(() => expect(state.edit).toHaveBeenCalledWith([{ kind: "set_included", draft_part_ids: [17], value: false }]));
+    await waitFor(() => expect(state.prepare).toHaveBeenCalledOnce());
+    expect(state.discard).not.toHaveBeenCalled();
+  });
   it("does not offer discarding for an ordinary save failure", () => {
     renderPlan();
     expect(screen.getByRole("button", { name: "Retry save" })).toBeTruthy();
