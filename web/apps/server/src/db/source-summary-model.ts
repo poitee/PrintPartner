@@ -34,7 +34,7 @@ export function readSourceUpdateFields(metadata: Record<string, unknown> | null)
     status === "up_to_date" || status === "updates_available" || status === "unknown" ? status : null;
   const checked = data[REMOTE_CHECKED_AT_KEY];
   return {
-    update_status: valid,
+    update_status: data.sync_required === true || typeof data.sync_error === "string" ? "unknown" : valid,
     update_checked_at: typeof checked === "string" ? checked : null,
   };
 }

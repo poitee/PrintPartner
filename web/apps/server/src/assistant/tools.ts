@@ -2018,7 +2018,8 @@ export async function invokeAssistantTool(
           content: JSON.stringify({
             source: ctx.repo.sourceSummaryForClient(source),
             sync: {
-              synchronized: Boolean(source.local_path && source.last_synced_at && source.last_commit_sha),
+            synchronized: Boolean(source.local_path && source.last_synced_at && source.last_commit_sha
+              && source.metadata?.sync_required !== true && typeof source.metadata?.sync_error !== "string"),
               last_synced_at: source.last_synced_at,
               last_commit_sha: source.last_commit_sha,
               update_status: source.update_status,

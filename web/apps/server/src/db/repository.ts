@@ -2879,6 +2879,8 @@ export class AppRepository {
       const metadata = parseProjectMetadata(row.metadataJson) ?? {};
       metadata[REMOTE_UPDATE_STATUS_KEY] = "up_to_date";
       metadata[REMOTE_CHECKED_AT_KEY] = checkedAt;
+      delete metadata.sync_error;
+      delete metadata.sync_required;
       const result = this.db
         .update(this.schema.projects)
         .set({ metadataJson: JSON.stringify(metadata) })
@@ -3464,6 +3466,21 @@ export class AppRepository {
     }
     if (patch.manifest_community_slug !== undefined) {
       updates.manifestCommunitySlug = patch.manifest_community_slug;
+    }
+
+    const identityChanged =
+      (updates.url !== undefined && updates.url !== row.url) ||
+      (updates.branch !== undefined && updates.branch !== row.branch) ||
+      (updates.tag !== undefined && updates.tag !== row.tag) ||
+      (updates.sourceKind !== undefined && updates.sourceKind !== row.sourceKind) ||
+      (updates.sourceType !== undefined && updates.sourceType !== row.sourceType);
+    if (identityChanged) {
+      const metadata = parseProjectMetadata(updates.metadataJson ?? row.metadataJson) ?? {};
+      metadata.sync_required = true;
+      metadata[REMOTE_UPDATE_STATUS_KEY] = "unknown";
+      delete metadata[REMOTE_CHECKED_AT_KEY];
+      delete metadata.sync_error;
+      updates.metadataJson = JSON.stringify(metadata);
     }
 
     this.db.update(this.schema.projects).set(updates).where(eq(this.schema.projects.id, id)).run();
@@ -7562,6 +7579,8 @@ export class AppRepository {
     const row = this.getProjectRow(id);
     if (!row) return;
     const metadata = parseProjectMetadata(row.metadataJson) ?? {};
+    delete metadata.sync_error;
+    delete metadata.sync_required;
     if (commitSha) {
       metadata[REMOTE_UPDATE_STATUS_KEY] = "up_to_date";
       metadata[REMOTE_CHECKED_AT_KEY] = new Date().toISOString();

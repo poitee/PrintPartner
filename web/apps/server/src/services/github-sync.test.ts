@@ -314,6 +314,8 @@ describe("atomic GitHub Source sync", () => {
     expect(activeA.lastCommitSha).toBe(COMMIT_A);
     expect(readFileSync(join(activeA.localPath!, "parts/old.stl"), "utf8")).toBe("old");
 
+    repo.updateSource(source.id, { branch: "next" });
+    expect(repo.getSource(source.id)?.metadata?.sync_required).toBe(true);
     setTree(COMMIT_B, [
       { path: "parts/new.stl", type: "blob", mode: "100644", size: 3 },
     ]);
@@ -324,6 +326,8 @@ describe("atomic GitHub Source sync", () => {
     expect(afterFailure.currentSourceRevisionId).toBe(activeA.currentSourceRevisionId);
     expect(afterFailure.localPath).toBe(activeA.localPath);
     expect(afterFailure.lastCommitSha).toBe(COMMIT_A);
+    expect(repo.getSource(source.id)?.update_status).toBe("unknown");
+    expect(repo.getSource(source.id)?.metadata?.sync_error).toContain("HTTP 503");
     expect(repo.listSourceRevisions(source.id)).toHaveLength(1);
     const revisionNames = readdirSync(join(repo.reposDir, String(source.id), "revisions"));
     expect(revisionNames).toEqual([COMMIT_A]);
@@ -334,10 +338,29 @@ describe("atomic GitHub Source sync", () => {
     const activeB = repo.getProjectRow(source.id)!;
     expect(activeB.currentSourceRevisionId).not.toBe(activeA.currentSourceRevisionId);
     expect(activeB.lastCommitSha).toBe(COMMIT_B);
+    expect(repo.getSource(source.id)?.update_status).toBe("up_to_date");
+    expect(repo.getSource(source.id)?.metadata?.sync_error).toBeUndefined();
+    expect(repo.getSource(source.id)?.metadata?.sync_required).toBeUndefined();
     expect(existsSync(join(activeB.localPath!, "parts/old.stl"))).toBe(false);
     expect(readFileSync(join(activeB.localPath!, "parts/new.stl"), "utf8")).toBe("new");
     expect(readFileSync(join(activeA.localPath!, "parts/old.stl"), "utf8")).toBe("old");
     expect(repo.listSourceRevisions(source.id)).toHaveLength(2);
+  });
+
+  it("does not attach an obsolete sync failure to a changed source", async () => {
+    const ports = createSelfHostPorts(reposRoot());
+    await ports.db.connect();
+    const repo = ports.repository!;
+    const source = repo.createSource({ name: "Kit", url: "https://github.com/example/kit", source_kind: "github" });
+    setTree(COMMIT_A, [{ path: "part.stl", type: "blob", mode: "100644", size: 3 }]);
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      repo.updateSource(source.id, { url: "https://github.com/example/replacement" });
+      return new Response("failure", { status: 503 });
+    }));
+    await expect(syncProjectById(repo, repo.reposDir, source.id)).rejects.toThrow("HTTP 503");
+    expect(repo.getSource(source.id)?.metadata?.sync_error).toBeUndefined();
+    expect(repo.getSource(source.id)?.metadata?.sync_required).toBe(true);
+    ports.db.close();
   });
 
   it("reuses a legacy same-commit snapshot when no canonical manifest exists", async () => {
