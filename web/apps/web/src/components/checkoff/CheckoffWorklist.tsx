@@ -177,12 +177,21 @@ export default function CheckoffWorklist({
               ? folderKeyFromRelativePath(item.relative_path)
               : item.source_layer || "unknown";
             const showHeading = sort !== "manual" && (!previousPart || categoryKey(previousPart) !== categoryKey(part));
+            const subcategoryKey = (item: ReviewPart) => sort === "directory"
+              ? item.source_layer || "unknown"
+              : folderKeyFromRelativePath(item.relative_path);
+            const showSubheading = sort !== "manual" && (showHeading || !previousPart || subcategoryKey(previousPart) !== subcategoryKey(part));
             return (
               <Fragment key={sortableId}>
                 {showHeading ? (
                   <h3 className="mt-4 break-words border-b border-border pb-2 text-sm font-semibold">
                     {sort === "directory" ? categoryKey(part) : sourceLabelFromLayer(part.source_layer)}
                   </h3>
+                ) : null}
+                {showSubheading ? (
+                  <h4 className="ml-3 mt-2 break-words text-sm font-medium text-muted-foreground">
+                    {sort === "directory" ? sourceLabelFromLayer(part.source_layer) : subcategoryKey(part)}
+                  </h4>
                 ) : null}
               <SortableProgressPart
                 kind="part"
