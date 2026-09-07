@@ -14,6 +14,7 @@ import {
   type CheckoffCorrectionRecord,
 } from "./checkoffConsoleCorrection";
 import { isCheckoffViewId, type CheckoffViewId } from "./checkoffConsoleModel";
+import { isCheckoffSort, type CheckoffSort } from "./checkoffGroups";
 
 export const CHECKOFF_CONSOLE_STORAGE_KEY = "print-partner.checkoff.console.v1";
 
@@ -21,6 +22,7 @@ export const CHECKOFF_CONSOLE_STORAGE_KEY = "print-partner.checkoff.console.v1";
 export const CHECKOFF_CORRECTION_LIMIT = 100;
 
 export type CheckoffConsolePreferences = {
+  sort?: CheckoffSort;
   view: CheckoffViewId | null;
   searchByPlanId: Record<string, string>;
   completedAtByPlanId: Record<string, string>;
@@ -93,6 +95,7 @@ export function parseCheckoffConsolePreferences(
     const parsed = JSON.parse(raw) as Record<string, unknown>;
     return {
       view: isCheckoffViewId(parsed.view) ? parsed.view : null,
+      ...(isCheckoffSort(parsed.sort) ? { sort: parsed.sort } : {}),
       searchByPlanId: parseStringMap(parsed.searchByPlanId),
       completedAtByPlanId: parseStringMap(parsed.completedAtByPlanId),
       correctionsByPlanId: parseCorrectionMap(parsed.correctionsByPlanId),

@@ -51,7 +51,7 @@ import {
   printersRoute,
   productionRoute,
 } from "../lib/routes";
-import { groupCheckoffParts } from "../lib/checkoffGroups";
+import { groupCheckoffParts, isCheckoffSort } from "../lib/checkoffGroups";
 import {
   checkoffUnitTotals,
   formatPrintedUnitsLine,
@@ -346,6 +346,7 @@ export default function CheckoffPage() {
     [attentionItems, includedParts],
   );
   const view = resolveCheckoffView({ requested: requestedView, counts: viewCounts });
+  const sort = consolePrefs.sort ?? "manual";
 
   const filteredParts = useMemo(
     () =>
@@ -357,10 +358,15 @@ export default function CheckoffPage() {
   );
 
   const filteredRows = useMemo(() => {
+    if (sort !== "manual") {
+      return groupCheckoffParts(filteredParts, sort).flatMap((group) =>
+        group.folders.flatMap((folder) => folder.parts.map((part): ProgressRowRef => ({ kind: "part", id: part.id }))),
+      );
+    }
     const visiblePartIds = new Set(filteredParts.map((part) => part.id));
     const rows = filterProgressRows({ rows: planProgressRows, visiblePartIds, search });
     return view === "remaining" ? rows : rows.filter((row) => row.kind === "part");
-  }, [filteredParts, planProgressRows, search, view]);
+  }, [filteredParts, planProgressRows, search, view, sort]);
 
   const sheetParts = useMemo(
     () => orderedPartsFromRows({ rows: planProgressRows, partsById }),
@@ -390,7 +396,7 @@ export default function CheckoffPage() {
     setConsolePrefs((prev) => ({ ...prev, view: next }));
   }, []);
 
-  const sheetGroups = useMemo(() => groupCheckoffParts(sheetParts), [sheetParts]);
+  const sheetGroups = useMemo(() => groupCheckoffParts(sheetParts, sort), [sheetParts, sort]);
   const phaseProgress = useMemo(() => {
     const manifest = activity.phaseManifest;
     if (!manifest?.has_phases || manifest.phases.length === 0) return null;
@@ -782,7 +788,22 @@ export default function CheckoffPage() {
         />
       ) : (
         <>
-          <div className="no-print flex items-center gap-2">
+          <div className="no-print flex flex-wrap items-center gap-2">
+            <label className="flex items-center gap-2 text-sm">
+              Sort by
+              <select
+                className="min-h-11 rounded-md border border-input bg-background px-2 text-sm"
+                value={sort}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  if (isCheckoffSort(value)) setConsolePrefs((prev) => ({ ...prev, sort: value }));
+                }}
+              >
+                <option value="manual">Manual order</option>
+                <option value="source">Source</option>
+                <option value="directory">Directory</option>
+              </select>
+            </label>
             <input
               type="search"
               aria-label="Search progress parts"
@@ -792,7 +813,7 @@ export default function CheckoffPage() {
               onChange={(e) => setSearch(e.target.value)}
               disabled={toggleBusy}
             />
-            {view === "remaining" && (
+            {view === "remaining" && sort === "manual" && (
               <Button
                 type="button"
                 variant="secondary"
@@ -805,7 +826,7 @@ export default function CheckoffPage() {
             )}
           </div>
 
-          {view === "remaining" && phaseProgress ? (
+          {view === "remaining" && sort === "manual" && phaseProgress ? (
             <PhaseProgressView
               phases={phaseProgress}
               onSetAllPrinted={onSetAllPrinted}
@@ -832,7 +853,7 @@ export default function CheckoffPage() {
               suggestedPartIds={suggestedPartIds}
               rowErrors={mutations.rowErrors}
               correctionsByPart={correctionsByPart}
-              reorderable={view === "remaining"}
+              reorderable={view === "remaining" && sort === "manual"}
               emptyState={<div className="no-print">{renderEmpty()}</div>}
               onReorder={onReorderVisibleRows}
               onMoveTo={setMoveTarget}
