@@ -76,6 +76,28 @@ function renderWorklist(overrides: Partial<React.ComponentProps<typeof CheckoffW
 describe("CheckoffWorklist ordering without a drag", () => {
   afterEach(cleanup);
 
+  it.each([false, true])("shows both heading levels in sort order, mobile=%s", (mobile) => {
+    const groupedParts = [
+      { ...part(1, "a.stl"), source_layer: "base:Alpha" },
+      { ...part(2, "b.stl"), source_layer: "addon:Beta" },
+    ];
+    const props = {
+      mobile,
+      reorderable: false,
+      rows,
+      partsById: new Map(groupedParts.map((p) => [p.id, p])),
+    };
+    renderWorklist({ ...props, sort: "source" });
+    expect(screen.getAllByRole("heading").map((h) => h.textContent)).toEqual(["Alpha", "parts", "Beta", "parts"]);
+    expect(screen.getAllByRole("heading", { level: 4 })).toHaveLength(2);
+    cleanup();
+    renderWorklist({ ...props, sort: "directory" });
+    expect(screen.getAllByRole("heading").map((h) => h.textContent)).toEqual(["parts", "Alpha", "Beta"]);
+    cleanup();
+    renderWorklist({ ...props, sort: "manual" });
+    expect(screen.queryAllByRole("heading")).toHaveLength(0);
+  });
+
   it.each([false, true])("labels missing sources Other, mobile=%s", (mobile) => {
     const unassigned = { ...part(1, "gantry.stl"), source_layer: "" };
     renderWorklist({
