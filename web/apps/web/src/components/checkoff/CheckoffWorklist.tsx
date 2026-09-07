@@ -1,4 +1,6 @@
-import { useCallback, useMemo, type ReactNode } from "react";
+import { Fragment, useCallback, useMemo, type ReactNode } from "react";
+import { folderKeyFromRelativePath, type CheckoffSort } from "../../lib/checkoffGroups";
+import { sourceLabelFromLayer } from "../../lib/reviewParts";
 import {
   DndContext,
   KeyboardSensor,
@@ -39,6 +41,7 @@ import type { CheckoffMoveTarget } from "./CheckoffMoveToDialog";
 type Props = {
   /** Rows the operator can currently see, in display order. */
   rows: ProgressRowRef[];
+  sort?: CheckoffSort;
   partsById: Map<number, ReviewPart>;
   mobile: boolean;
   busyPartId: number | null;
@@ -74,6 +77,7 @@ type Props = {
  */
 export default function CheckoffWorklist({
   rows,
+  sort = "manual",
   partsById,
   mobile,
   busyPartId,
@@ -167,9 +171,20 @@ export default function CheckoffWorklist({
             const part = partsById.get(row.id);
             if (!part) return null;
             const correction = correctionsByPart.get(part.id);
+            const previousRow = rows[index - 1];
+            const previousPart = previousRow?.kind === "part" ? partsById.get(previousRow.id) : undefined;
+            const categoryKey = (item: ReviewPart) => sort === "directory"
+              ? folderKeyFromRelativePath(item.relative_path)
+              : item.source_layer || "unknown";
+            const showHeading = sort !== "manual" && (!previousPart || categoryKey(previousPart) !== categoryKey(part));
             return (
+              <Fragment key={sortableId}>
+                {showHeading ? (
+                  <h3 className="mt-4 break-words border-b border-border pb-2 text-sm font-semibold">
+                    {sort === "directory" ? categoryKey(part) : sourceLabelFromLayer(categoryKey(part))}
+                  </h3>
+                ) : null}
               <SortableProgressPart
-                key={sortableId}
                 kind="part"
                 part={part}
                 mobile={mobile}
@@ -191,6 +206,7 @@ export default function CheckoffWorklist({
                 onToggleAssembled={onToggleAssembled}
                 onClaim={onClaim}
               />
+              </Fragment>
             );
           })}
         </div>
