@@ -181,7 +181,7 @@ export default function CheckoffWorklist({
               <Fragment key={sortableId}>
                 {showHeading ? (
                   <h3 className="mt-4 break-words border-b border-border pb-2 text-sm font-semibold">
-                    {sort === "directory" ? categoryKey(part) : sourceLabelFromLayer(categoryKey(part))}
+                    {sort === "directory" ? categoryKey(part) : sourceLabelFromLayer(part.source_layer)}
                   </h3>
                 ) : null}
               <SortableProgressPart

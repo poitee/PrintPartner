@@ -76,6 +76,19 @@ function renderWorklist(overrides: Partial<React.ComponentProps<typeof CheckoffW
 describe("CheckoffWorklist ordering without a drag", () => {
   afterEach(cleanup);
 
+  it.each([false, true])("labels missing sources Other, mobile=%s", (mobile) => {
+    const unassigned = { ...part(1, "gantry.stl"), source_layer: "" };
+    renderWorklist({
+      mobile,
+      sort: "source",
+      reorderable: false,
+      rows: [{ kind: "part", id: 1 }],
+      partsById: new Map([[1, unassigned]]),
+    });
+    expect(screen.getByRole("heading", { name: "Other", level: 3 })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "unknown" })).toBeNull();
+  });
+
   it.each([false, true])("checks all copies for only the chosen row, mobile=%s", (mobile) => {
     const onSetAllPrinted = vi.fn();
     renderWorklist({ mobile, onSetAllPrinted });
