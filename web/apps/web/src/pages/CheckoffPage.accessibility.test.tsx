@@ -213,6 +213,21 @@ describe("CheckoffPage accessibility", () => {
     ).toBe("INPUT");
   });
 
+  it("persists source/directory sorting and restores manual bag controls", () => {
+    const { unmount } = render(<MemoryRouter><CheckoffPage /></MemoryRouter>);
+    const sort = screen.getByRole("combobox", { name: "Sort by" });
+    fireEvent.change(sort, { target: { value: "directory" } });
+    expect(screen.queryByRole("button", { name: "Add bag" })).toBeNull();
+    expect(state.toggleUnit).not.toHaveBeenCalled();
+    unmount();
+    render(<MemoryRouter><CheckoffPage /></MemoryRouter>);
+    const restored = screen.getByRole("combobox", { name: "Sort by" });
+    if (!(restored instanceof HTMLSelectElement)) throw new Error("Expected a sort selector");
+    expect(restored.value).toBe("directory");
+    fireEvent.change(screen.getByRole("combobox", { name: "Sort by" }), { target: { value: "manual" } });
+    expect(screen.getByRole("button", { name: "Add bag" })).toBeTruthy();
+  });
+
   it("keeps the accepted Checkoff sheet printable when the current view filters out every row", () => {
     state.profiles[0]!.build_stale = true;
     localStorage.setItem(

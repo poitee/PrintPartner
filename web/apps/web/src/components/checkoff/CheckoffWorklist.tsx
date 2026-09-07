@@ -106,6 +106,7 @@ export default function CheckoffWorklist({
 
   const onDragEnd = useCallback(
     (event: DragEndEvent) => {
+      if (!reorderable) return;
       const { active, over } = event;
       if (!over || active.id === over.id) return;
       const ids = rows.map(progressRowSortableId);
@@ -118,7 +119,7 @@ export default function CheckoffWorklist({
           .filter((row): row is ProgressRowRef => row != null),
       );
     },
-    [onReorder, rows],
+    [onReorder, rows, reorderable],
   );
 
   const sortableIds = useMemo(() => rows.map(progressRowSortableId), [rows]);
@@ -173,7 +174,7 @@ export default function CheckoffWorklist({
                 part={part}
                 mobile={mobile}
                 busy={isProgressRowBusy(busyPartId, part.id)}
-                disabled={toggleBusy}
+                disabled={toggleBusy || !reorderable}
                 printingOn={printingPartIds.get(part.id)}
                 awaitingVerify={awaitingPartIds.get(part.id)}
                 suggestedPrinter={suggestedPartIds.get(part.id)}
