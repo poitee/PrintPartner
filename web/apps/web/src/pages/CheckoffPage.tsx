@@ -51,7 +51,7 @@ import {
   printersRoute,
   productionRoute,
 } from "../lib/routes";
-import { groupCheckoffParts } from "../lib/checkoffGroups";
+import { groupCheckoffParts, isCheckoffSort } from "../lib/checkoffGroups";
 import {
   checkoffUnitTotals,
   formatPrintedUnitsLine,
@@ -346,6 +346,7 @@ export default function CheckoffPage() {
     [attentionItems, includedParts],
   );
   const view = resolveCheckoffView({ requested: requestedView, counts: viewCounts });
+  const sort = consolePrefs.sort ?? "manual";
 
   const filteredParts = useMemo(
     () =>
@@ -357,10 +358,15 @@ export default function CheckoffPage() {
   );
 
   const filteredRows = useMemo(() => {
+    if (sort !== "manual") {
+      return groupCheckoffParts(filteredParts, sort).flatMap((group) =>
+        group.folders.flatMap((folder) => folder.parts.map((part): ProgressRowRef => ({ kind: "part", id: part.id }))),
+      );
+    }
     const visiblePartIds = new Set(filteredParts.map((part) => part.id));
     const rows = filterProgressRows({ rows: planProgressRows, visiblePartIds, search });
     return view === "remaining" ? rows : rows.filter((row) => row.kind === "part");
-  }, [filteredParts, planProgressRows, search, view]);
+  }, [filteredParts, planProgressRows, search, view, sort]);
 
   const sheetParts = useMemo(
     () => orderedPartsFromRows({ rows: planProgressRows, partsById }),
@@ -390,7 +396,7 @@ export default function CheckoffPage() {
     setConsolePrefs((prev) => ({ ...prev, view: next }));
   }, []);
 
-  const sheetGroups = useMemo(() => groupCheckoffParts(sheetParts), [sheetParts]);
+  const sheetGroups = useMemo(() => groupCheckoffParts(sheetParts, sort), [sheetParts, sort]);
   const phaseProgress = useMemo(() => {
     const manifest = activity.phaseManifest;
     if (!manifest?.has_phases || manifest.phases.length === 0) return null;
@@ -506,16 +512,16 @@ export default function CheckoffPage() {
   );
 
   const decrementPart = useCallback(
-    (part: ReviewPart) => {
-      const idx = lastCompletedUnit(part.print_units);
-      if (idx < 0) return;
+    (part: ReviewPart, scope: "one" | "all" = "one") => {
+      if (lastCompletedUnit(part.print_units) < 0) return;
+      const idx = scope === "all" ? 0 : lastCompletedUnit(part.print_units);
       runMutation({ part, action: "correction", run: () => toggleUnit(part.id, idx, false) });
     },
     [runMutation, toggleUnit],
   );
 
   const onDecrement = useCallback(
-    (part: ReviewPart) => {
+    (part: ReviewPart, scope: "one" | "all" = "one") => {
       if (lastCompletedUnit(part.print_units) < 0) return;
       const impact = checkoffCorrectionImpact({
         printingOn: printingPartIds.get(part.id),
@@ -523,17 +529,34 @@ export default function CheckoffPage() {
         filamentDisplay: part.filament_display,
       });
       if (!checkoffCorrectionNeedsReason(impact)) {
-        decrementPart(part);
+        decrementPart(part, scope);
         return;
       }
       setCorrectionTarget({
         partId: part.id,
         filename: part.filename,
         printedCount: part.printed_count,
+        scope,
         impact,
       });
     },
     [awaitingPartIds, decrementPart, printingPartIds],
+  );
+
+  const onSetAllPrinted = useCallback(
+    (part: ReviewPart, completed: boolean) => {
+      if (!part.included || part.quantity_effective <= 0) return;
+      if (!completed) {
+        onDecrement(part, "all");
+        return;
+      }
+      runMutation({
+        part,
+        action: "checkoff",
+        run: () => toggleUnit(part.id, part.quantity_effective - 1, true),
+      });
+    },
+    [onDecrement, runMutation, toggleUnit],
   );
 
   const onConfirmCorrection = useCallback(
@@ -548,14 +571,14 @@ export default function CheckoffPage() {
         setConsolePrefs((prev) =>
           withCheckoffCorrection(prev, selectedProfileId, {
             partId: part.id,
-            unitIndex: lastCompletedUnit(part.print_units),
+            unitIndex: target.scope === "all" ? 0 : lastCompletedUnit(part.print_units),
             reason,
             note: input.note,
             at: new Date().toISOString(),
           }),
         );
       }
-      decrementPart(part);
+      decrementPart(part, target.scope);
     },
     [correctionTarget, decrementPart, partsById, selectedProfileId],
   );
@@ -765,7 +788,22 @@ export default function CheckoffPage() {
         />
       ) : (
         <>
-          <div className="no-print flex items-center gap-2">
+          <div className="no-print flex flex-wrap items-center gap-2">
+            <label className="flex items-center gap-2 text-sm">
+              Sort by
+              <select
+                className="min-h-11 rounded-md border border-input bg-background px-2 text-sm"
+                value={sort}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  if (isCheckoffSort(value)) setConsolePrefs((prev) => ({ ...prev, sort: value }));
+                }}
+              >
+                <option value="manual">Manual order</option>
+                <option value="source">Source</option>
+                <option value="directory">Directory</option>
+              </select>
+            </label>
             <input
               type="search"
               aria-label="Search progress parts"
@@ -775,7 +813,7 @@ export default function CheckoffPage() {
               onChange={(e) => setSearch(e.target.value)}
               disabled={toggleBusy}
             />
-            {view === "remaining" && (
+            {view === "remaining" && sort === "manual" && (
               <Button
                 type="button"
                 variant="secondary"
@@ -788,9 +826,10 @@ export default function CheckoffPage() {
             )}
           </div>
 
-          {view === "remaining" && phaseProgress ? (
+          {view === "remaining" && sort === "manual" && phaseProgress ? (
             <PhaseProgressView
               phases={phaseProgress}
+              onSetAllPrinted={onSetAllPrinted}
               busyPartId={busyPartId}
               assemblyTrackingEnabled={assemblyTrackingEnabled}
               onIncrement={onIncrement}
@@ -803,6 +842,8 @@ export default function CheckoffPage() {
           ) : (
             <CheckoffWorklist
               rows={filteredRows}
+              sort={sort}
+              onSetAllPrinted={onSetAllPrinted}
               partsById={partsById}
               mobile={isMobileLayout}
               busyPartId={busyPartId}
@@ -813,7 +854,7 @@ export default function CheckoffPage() {
               suggestedPartIds={suggestedPartIds}
               rowErrors={mutations.rowErrors}
               correctionsByPart={correctionsByPart}
-              reorderable={view === "remaining"}
+              reorderable={view === "remaining" && sort === "manual"}
               emptyState={<div className="no-print">{renderEmpty()}</div>}
               onReorder={onReorderVisibleRows}
               onMoveTo={setMoveTarget}

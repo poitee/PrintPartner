@@ -1,4 +1,6 @@
-import { useCallback, useMemo, type ReactNode } from "react";
+import { Fragment, useCallback, useMemo, type ReactNode } from "react";
+import { folderKeyFromRelativePath, type CheckoffSort } from "../../lib/checkoffGroups";
+import { sourceLabelFromLayer } from "../../lib/reviewParts";
 import {
   DndContext,
   KeyboardSensor,
@@ -39,6 +41,7 @@ import type { CheckoffMoveTarget } from "./CheckoffMoveToDialog";
 type Props = {
   /** Rows the operator can currently see, in display order. */
   rows: ProgressRowRef[];
+  sort?: CheckoffSort;
   partsById: Map<number, ReviewPart>;
   mobile: boolean;
   busyPartId: number | null;
@@ -56,6 +59,7 @@ type Props = {
   onMoveTo: (target: CheckoffMoveTarget) => void;
   onToggleUnit: (part: ReviewPart, unitIndex: number) => void;
   onIncrement: (part: ReviewPart) => void;
+  onSetAllPrinted?: (part: ReviewPart, completed: boolean) => void;
   onDecrement: (part: ReviewPart) => void;
   onPreview: (part: ReviewPart) => void;
   onClaim: (suggestion: SuggestedPrinterClaim) => void;
@@ -73,6 +77,7 @@ type Props = {
  */
 export default function CheckoffWorklist({
   rows,
+  sort = "manual",
   partsById,
   mobile,
   busyPartId,
@@ -89,6 +94,7 @@ export default function CheckoffWorklist({
   onMoveTo,
   onToggleUnit,
   onIncrement,
+  onSetAllPrinted,
   onDecrement,
   onPreview,
   onClaim,
@@ -104,6 +110,7 @@ export default function CheckoffWorklist({
 
   const onDragEnd = useCallback(
     (event: DragEndEvent) => {
+      if (!reorderable) return;
       const { active, over } = event;
       if (!over || active.id === over.id) return;
       const ids = rows.map(progressRowSortableId);
@@ -116,7 +123,7 @@ export default function CheckoffWorklist({
           .filter((row): row is ProgressRowRef => row != null),
       );
     },
-    [onReorder, rows],
+    [onReorder, rows, reorderable],
   );
 
   const sortableIds = useMemo(() => rows.map(progressRowSortableId), [rows]);
@@ -164,14 +171,34 @@ export default function CheckoffWorklist({
             const part = partsById.get(row.id);
             if (!part) return null;
             const correction = correctionsByPart.get(part.id);
+            const previousRow = rows[index - 1];
+            const previousPart = previousRow?.kind === "part" ? partsById.get(previousRow.id) : undefined;
+            const categoryKey = (item: ReviewPart) => sort === "directory"
+              ? folderKeyFromRelativePath(item.relative_path)
+              : item.source_layer || "unknown";
+            const showHeading = sort !== "manual" && (!previousPart || categoryKey(previousPart) !== categoryKey(part));
+            const subcategoryKey = (item: ReviewPart) => sort === "directory"
+              ? item.source_layer || "unknown"
+              : folderKeyFromRelativePath(item.relative_path);
+            const showSubheading = sort !== "manual" && (showHeading || !previousPart || subcategoryKey(previousPart) !== subcategoryKey(part));
             return (
+              <Fragment key={sortableId}>
+                {showHeading ? (
+                  <h3 className="mt-4 break-words border-b border-border pb-2 text-sm font-semibold">
+                    {sort === "directory" ? categoryKey(part) : sourceLabelFromLayer(part.source_layer)}
+                  </h3>
+                ) : null}
+                {showSubheading ? (
+                  <h4 className="ml-3 mt-2 break-words text-sm font-medium text-muted-foreground">
+                    {sort === "directory" ? sourceLabelFromLayer(part.source_layer) : subcategoryKey(part)}
+                  </h4>
+                ) : null}
               <SortableProgressPart
-                key={sortableId}
                 kind="part"
                 part={part}
                 mobile={mobile}
                 busy={isProgressRowBusy(busyPartId, part.id)}
-                disabled={toggleBusy}
+                disabled={toggleBusy || !reorderable}
                 printingOn={printingPartIds.get(part.id)}
                 awaitingVerify={awaitingPartIds.get(part.id)}
                 suggestedPrinter={suggestedPartIds.get(part.id)}
@@ -182,11 +209,13 @@ export default function CheckoffWorklist({
                 correctionNote={correction ? formatCheckoffCorrection(correction) : undefined}
                 onToggleUnit={onToggleUnit}
                 onIncrement={onIncrement}
+                onSetAllPrinted={onSetAllPrinted}
                 onDecrement={onDecrement}
                 onPreview={onPreview}
                 onToggleAssembled={onToggleAssembled}
                 onClaim={onClaim}
               />
+              </Fragment>
             );
           })}
         </div>

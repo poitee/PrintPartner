@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, renderHook } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
+import { patchPartProgress } from "../api/endpoints/checkoff";
 import { describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import type { PlanReview } from "../api/endpoints/planManifests";
@@ -82,6 +83,29 @@ function wrapper(queryClient: QueryClient) {
 }
 
 describe("Plan review mutations", () => {
+  it.each([true, false])("optimistically updates every copy and rolls back failed all-copies saves (%s)", async (completed) => {
+    const multiple = structuredClone(review);
+    const part = multiple.part_groups[0]!.parts[0]!;
+    part.quantity_effective = 4;
+    part.print_units = Array<boolean>(4).fill(!completed);
+    part.printed_count = completed ? 0 : 4;
+    part.assembled_units = Array<boolean>(4).fill(!completed);
+    const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+    const key = queryKeys.planReview(1, false);
+    queryClient.setQueryData(key, multiple);
+    let rejectSave: (error: Error) => void = () => {};
+    vi.mocked(patchPartProgress).mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectSave = reject; }));
+    const { result } = renderHook(() => usePatchPartProgressMutation(1, false), { wrapper: wrapper(queryClient) });
+    act(() => result.current.mutate({ partId: 42, unitIndex: completed ? 3 : 0, completed, optimisticReview: multiple }));
+    await waitFor(() => {
+      const current = queryClient.getQueryData<PlanReview>(key)?.part_groups[0]?.parts[0];
+      expect(current?.print_units).toEqual(Array(4).fill(completed));
+      if (!completed) expect(current?.assembled_units).toEqual([false, false, false, false]);
+    });
+    act(() => rejectSave(new Error("Save failed")));
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(queryClient.getQueryData(key)).toEqual(multiple);
+  });
   it("updates the active review and invalidates sibling review and Plan summaries", async () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },

@@ -70,7 +70,7 @@ export default function CheckoffPrintSheet({
             <span className="sheet-repo-count">{repo.partCount}</span>
           </h3>
           {repo.folders.map((group) => (
-            <div key={group.folder} className="sheet-folder">
+            <div key={JSON.stringify([group.folder, group.parts[0]?.source_layer])} className="sheet-folder">
               <h4 className="sheet-folder-title">{group.folder}</h4>
               <div className="sheet-table-wrap">
                 <table className="sheet-table">

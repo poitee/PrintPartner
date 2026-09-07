@@ -93,13 +93,20 @@ export function usePatchPartProgressMutation(
       if (part) {
         const optimisticUnits = [...part.print_units];
         while (optimisticUnits.length < part.quantity_effective) optimisticUnits.push(false);
-        if (unitIndex < optimisticUnits.length) optimisticUnits[unitIndex] = completed;
+        for (let index = 0; index < optimisticUnits.length; index += 1) {
+          if (completed ? index <= unitIndex : index >= unitIndex) {
+            optimisticUnits[index] = completed;
+          }
+        }
         const optimisticPrinted = optimisticUnits.filter(Boolean).length;
         qc.setQueryData(
           key,
           mergeProgressIntoReview(optimisticReview, partId, {
             printed_count: optimisticPrinted,
             print_units: optimisticUnits,
+            assembled_units: completed ? part.assembled_units : part.assembled_units?.map(
+              (assembled, index) => index >= unitIndex ? false : assembled,
+            ),
             missing: optimisticPrinted < part.quantity_effective,
           }),
         );

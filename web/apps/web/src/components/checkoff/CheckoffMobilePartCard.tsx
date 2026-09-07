@@ -25,6 +25,7 @@ type Props = {
   onRetry?: () => void;
   correctionNote?: string;
   onToggleUnit: (part: ReviewPart, unitIndex: number) => void;
+  onSetAllPrinted?: (part: ReviewPart, completed: boolean) => void;
   onPreview: (part: ReviewPart) => void;
   onClaim?: (suggestion: SuggestedPrinterClaim) => void;
   /** Called when the user toggles the Assembled switch for a completed unit. */
@@ -52,12 +53,14 @@ export default function CheckoffMobilePartCard({
   onRetry,
   correctionNote,
   onToggleUnit,
+  onSetAllPrinted,
   onPreview,
   onClaim,
   onToggleAssembled,
 }: Props) {
   return (
     <ProgressPartRow
+      onSetAllPrinted={onSetAllPrinted}
       part={part}
       busy={busy}
       compact

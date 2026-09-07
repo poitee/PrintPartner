@@ -1,12 +1,14 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
-import type { PlanReview } from "../api/endpoints/planManifests";
+import type { PlanReview, ReviewPart } from "../api/endpoints/planManifests";
 import CheckoffPage from "./CheckoffPage";
 
 const state = vi.hoisted(() => ({
+  completed: false,
+  toggleUnit: vi.fn().mockResolvedValue(undefined),
   profiles: [
     {
       id: 7,
@@ -73,10 +75,10 @@ vi.mock("../context/PlanWorkspaceContext", () => ({
               filament_color_id: null,
               quantity_auto: 1,
               quantity_override: null,
-              quantity_effective: 1,
-              print_units: [false],
-              printed_count: 0,
-              missing: true,
+              quantity_effective: state.completed ? 4 : 1,
+              print_units: state.completed ? [true, true, true, true] : [false],
+              printed_count: state.completed ? 4 : 0,
+              missing: !state.completed,
               filament_display: "ABS",
             },
           ],
@@ -86,7 +88,7 @@ vi.mock("../context/PlanWorkspaceContext", () => ({
     loading: false,
     error: null,
     refresh: vi.fn(),
-    toggleUnit: vi.fn(),
+    toggleUnit: state.toggleUnit,
     toggleAssembled: vi.fn(),
     busyPartId: null,
   }),
@@ -138,7 +140,9 @@ vi.mock("../components/checkoff/UnattributedPrintCard", () => ({
   default: () => null,
 }));
 vi.mock("../components/checkoff/SortableProgressPart", () => ({
-  default: () => null,
+  default: ({ part, onSetAllPrinted }: { part: ReviewPart; onSetAllPrinted: (part: ReviewPart, completed: boolean) => void }) => (
+    <button onClick={() => onSetAllPrinted(part, false)}>Clear all test copies</button>
+  ),
 }));
 vi.mock("../components/checkoff/PhaseProgressView", () => ({
   default: () => null,
@@ -163,6 +167,8 @@ describe("CheckoffPage accessibility", () => {
   afterEach(cleanup);
 
   beforeEach(() => {
+    state.completed = false;
+    state.toggleUnit.mockClear();
     state.profiles = [
       {
         id: 7,
@@ -179,6 +185,22 @@ describe("CheckoffPage accessibility", () => {
     localStorage.clear();
   });
 
+  it("requires a correction reason before clearing all tracked copies", async () => {
+    state.completed = true;
+    localStorage.setItem("print-partner.checkoff.console.v1", JSON.stringify({ view: "completed" }));
+    render(<MemoryRouter><CheckoffPage /></MemoryRouter>);
+    fireEvent.click(screen.getByRole("button", { name: /^Completed/ }));
+    fireEvent.click(await screen.findByText("Clear all test copies"));
+    expect(screen.getByRole("dialog").textContent).toContain("Clear all printed copies of gantry.stl");
+    expect(state.toggleUnit).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Save correction" }));
+    expect(state.toggleUnit).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText("Reason"), { target: { value: "recount" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save correction" }));
+    await waitFor(() => expect(state.toggleUnit).toHaveBeenCalledExactlyOnceWith(11, 0, false));
+    expect(localStorage.getItem("print-partner.checkoff.console.v1")).toContain('"reason":"recount"');
+  });
+
   it("names the progress parts search", () => {
     render(
       <MemoryRouter>
@@ -189,6 +211,21 @@ describe("CheckoffPage accessibility", () => {
     expect(
       screen.getByRole("searchbox", { name: "Search progress parts" }).tagName,
     ).toBe("INPUT");
+  });
+
+  it("persists source/directory sorting and restores manual bag controls", () => {
+    const { unmount } = render(<MemoryRouter><CheckoffPage /></MemoryRouter>);
+    const sort = screen.getByRole("combobox", { name: "Sort by" });
+    fireEvent.change(sort, { target: { value: "directory" } });
+    expect(screen.queryByRole("button", { name: "Add bag" })).toBeNull();
+    expect(state.toggleUnit).not.toHaveBeenCalled();
+    unmount();
+    render(<MemoryRouter><CheckoffPage /></MemoryRouter>);
+    const restored = screen.getByRole("combobox", { name: "Sort by" });
+    if (!(restored instanceof HTMLSelectElement)) throw new Error("Expected a sort selector");
+    expect(restored.value).toBe("directory");
+    fireEvent.change(screen.getByRole("combobox", { name: "Sort by" }), { target: { value: "manual" } });
+    expect(screen.getByRole("button", { name: "Add bag" })).toBeTruthy();
   });
 
   it("keeps the accepted Checkoff sheet printable when the current view filters out every row", () => {
