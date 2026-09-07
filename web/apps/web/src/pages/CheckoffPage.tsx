@@ -842,6 +842,7 @@ export default function CheckoffPage() {
           ) : (
             <CheckoffWorklist
               rows={filteredRows}
+              sort={sort}
               onSetAllPrinted={onSetAllPrinted}
               partsById={partsById}
               mobile={isMobileLayout}
