@@ -674,7 +674,7 @@ export default function CheckoffPage() {
           <Suspense
             fallback={
               <p className="text-xs text-muted-foreground" role="status">
-                Loading print records…
+                Loading printer information…
               </p>
             }
           >

@@ -861,7 +861,7 @@ export default function PrintersSettingsCard({ engineReady }: Props) {
           })}
         </ul>
 
-        {orphanPrinters.length > 0 && (
+        {orphanPrinterList.length > 0 && (
           <div className="space-y-2">
             <p className="text-sm font-medium text-muted-foreground">
               Planning printers
@@ -1085,7 +1085,7 @@ export default function PrintersSettingsCard({ engineReady }: Props) {
           </div>
         )}
 
-        {!linkedPrinters.length && !orphanPrinters.length && engineReady && (
+        {!linkedPrinterList.length && !orphanPrinterList.length && engineReady && (
           <p className="text-sm text-muted-foreground">
             No printers yet. Add one above to plan Plates and export 3MF. A connection is
             optional until you need status or sending.

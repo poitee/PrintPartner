@@ -7,6 +7,7 @@ import { chromium } from "playwright-core";
 import { browserExecutable } from "../apps/web/test/browser/browserExecutable.mjs";
 
 const browser = await chromium.launch({ executablePath: browserExecutable(), headless: true });
+let createdPrinterId = null;
 try {
   const page = await browser.newPage();
   const name = `Manual browser test ${randomUUID().slice(0, 8)}`;
@@ -22,6 +23,7 @@ try {
   const created = await createdResponse;
   assert.equal(created.status(), 200);
   const printer = await created.json();
+  createdPrinterId = printer.id;
   assert.ok(!printer.integration_id);
   await page.getByText(`${name} added for manual use. No printer connection is enabled.`).waitFor();
   const forbidden = [];
@@ -44,5 +46,16 @@ try {
   assert.deepEqual(forbidden, [], "manual printer desk must not query connections");
   console.log(JSON.stringify({ passed: true, printerId: printer.id, integrationRequests: forbidden.length }));
 } finally {
-  await browser.close();
+  try {
+    if (createdPrinterId != null) {
+      const cleanupPage = await browser.newPage();
+      const cleanupResponse = await cleanupPage.request.delete(
+        `http://127.0.0.1:5176/printers/${encodeURIComponent(createdPrinterId)}`,
+      );
+      assert.equal(cleanupResponse.status(), 204);
+      await cleanupPage.close();
+    }
+  } finally {
+    await browser.close();
+  }
 }
