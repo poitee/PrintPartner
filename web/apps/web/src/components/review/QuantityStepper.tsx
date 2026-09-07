@@ -101,7 +101,7 @@ export default function QuantityStepper({
         </button>
       </div>
       {invalid && (
-        <span id={errorId} className="text-xs text-destructive">
+        <span id={errorId} role="alert" className="text-xs text-destructive">
           Enter a whole number from 1 to 10,000.
         </span>
       )}

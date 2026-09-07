@@ -77,7 +77,7 @@ describe("QuantityStepper", () => {
     await user.tab();
     expect(onChange).not.toHaveBeenCalled();
     expect(input.getAttribute("aria-invalid")).toBe("true");
-    expect(screen.getByText("Enter a whole number from 1 to 10,000.")).toBeTruthy();
+    expect(screen.getByRole("alert").textContent).toBe("Enter a whole number from 1 to 10,000.");
   });
 
   it("preserves unfinished typing across updates and lets Escape cancel it", async () => {
