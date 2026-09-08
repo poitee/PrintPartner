@@ -722,7 +722,7 @@ export default function BuildPage() {
                     <p className="text-xs text-muted-foreground">{row.layerType === "base" ? "Main source" : "Additional source"}</p>
                   </div>
                   <select aria-label={`Change ${row.sourceName} source`} className="max-w-full rounded-md border border-input bg-background p-2 text-sm" value={row.sourceId} disabled={!engineReady || busy} onChange={(event) => void onChangeLayerProject(row.layer, Number(event.target.value))}>
-                    {sources.map((source) => <option key={source.id} value={source.id}>{source.name}</option>)}
+                    {sources.filter((source) => source.id === row.sourceId || !attachedSourceIds.has(source.id)).map((source) => <option key={source.id} value={source.id}>{source.name}</option>)}
                   </select>
                   {row.layerType === "addon" && <Button variant="ghost" disabled={busy} onClick={() => void onRemoveLayer(row.layer)}>Remove</Button>}
                 </div>

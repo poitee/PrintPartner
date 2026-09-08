@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SourceSummary } from "@print-partner/contracts";
@@ -113,6 +113,13 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("Sources workspace", () => {
+  it("offers the current source and unattached sources for replacement", () => {
+    renderSources();
+    const options = (name: string) => within(screen.getByRole("combobox", { name })).getAllByRole("option").map((option) => option.textContent);
+    expect(options("Change Project 1 source")).toEqual(["Project 1", "Project 3"]);
+    expect(options("Change Project 2 source")).toEqual(["Project 2", "Project 3"]);
+  });
+
   it("puts Library attachments first and leaves print choices on Plan", () => {
     renderSources();
 
