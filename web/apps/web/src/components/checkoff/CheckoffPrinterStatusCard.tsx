@@ -6,6 +6,7 @@ import { Button } from "../ui/button";
 import { cn } from "@/lib/utils";
 
 type Props = {
+  connectedPrinters: number;
   printingJobs: number;
   queuedJobs: number;
   failedJobs: number;
@@ -21,6 +22,7 @@ type Props = {
  * It does not dispatch new work; Production still owns preparation and send.
  */
 export default function CheckoffPrinterStatusCard({
+  connectedPrinters,
   printingJobs,
   queuedJobs,
   failedJobs,
@@ -33,7 +35,7 @@ export default function CheckoffPrinterStatusCard({
 
   return (
     <section
-      aria-label="Printer status"
+      aria-label={connectedPrinters > 0 ? "Printer status" : "Print records"}
       className={cn(
         "overflow-hidden rounded-lg border border-primary/40 bg-card shadow-sm",
         className,
@@ -45,10 +47,13 @@ export default function CheckoffPrinterStatusCard({
             <Printer className="h-4 w-4" aria-hidden />
           </span>
           <div className="min-w-0 flex-1">
-            <h2 className="text-sm font-semibold text-foreground">Printer activity</h2>
+            <h2 className="text-sm font-semibold text-foreground">
+              {connectedPrinters > 0 ? "Printer activity" : "Print records"}
+            </h2>
             <p className="mt-0.5 text-xs text-muted-foreground">
-              Watched jobs appear in Needs attention when they finish. If a job was missed or
-              printed elsewhere, add its file here and assign the Required units it covered.
+              {connectedPrinters > 0
+                ? "Watched jobs appear in Needs attention when they finish. If a job was missed or printed elsewhere, add its file here and assign the Required units it covered."
+                : "Add a print file and record the parts you made. Printer connections are optional and can be configured in printer settings."}
             </p>
           </div>
         </div>

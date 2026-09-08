@@ -103,10 +103,9 @@ export default function PrintersPage() {
     setRosterLoading(true);
     setLoadError(null);
     try {
-      const [fleet, integrations] = await Promise.all([
-        fetchPrinters(),
-        fetchIntegrations(),
-      ]);
+      const fleet = await fetchPrinters();
+      const hasConnections = fleet.some((machine) => machine.enabled !== false && machine.integration_id?.trim());
+      const integrations = hasConnections ? await fetchIntegrations() : [];
       const byId = new Map(integrations.map((i) => [i.id, i]));
       const next: PrinterDesk[] = [];
       for (const machine of fleet) {

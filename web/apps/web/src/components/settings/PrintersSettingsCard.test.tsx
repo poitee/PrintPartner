@@ -120,7 +120,7 @@ beforeEach(() => {
 });
 
 describe("PrintersSettingsCard", () => {
-  it("creates a planning printer without host fields and attaches a host later", async () => {
+  it.each([false, true])("creates a manual printer before optionally configuring communication: %s", async (connect) => {
     let fleet: PrinterMachine[] = [];
     let hosts: IntegrationSummary[] = [];
     api.fetchPrinters.mockImplementation(async () => fleet);
@@ -168,6 +168,8 @@ describe("PrintersSettingsCard", () => {
     fireEvent.change(await screen.findByLabelText("Name"), {
       target: { value: "Shop Voron" },
     });
+    expect(screen.getByRole("checkbox", { name: "Connect to this printer" }).getAttribute("aria-checked")).toBe("false");
+    if (connect) fireEvent.click(screen.getByRole("checkbox", { name: "Connect to this printer" }));
     const add = screen.getByRole<HTMLButtonElement>("button", { name: "Add printer" });
     await waitFor(() => expect(add.disabled).toBe(false));
     fireEvent.click(add);
@@ -182,7 +184,7 @@ describe("PrintersSettingsCard", () => {
     expect(api.createIntegration).not.toHaveBeenCalled();
     expect(await screen.findByText(/planning only/)).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "Add connection" }));
+    if (!connect) fireEvent.click(screen.getByRole("button", { name: "Add connection" }));
     fireEvent.click(screen.getByRole("button", { name: "Save connection" }));
 
     await waitFor(() => {
@@ -338,7 +340,7 @@ describe("PrintersSettingsCard", () => {
     ).toBeTruthy();
   });
 
-  it("retains an unavailable preset during a linked Printer name edit", async () => {
+  it.each([true, false])("retains printer details and honors communication enabled=%s", async (enabled) => {
     const printer: PrinterMachine = {
       id: "printer-shop-voron",
       name: "Shop Voron",
@@ -361,7 +363,7 @@ describe("PrintersSettingsCard", () => {
         id: "host-shop-voron",
         type: "moonraker",
         name: "Shop Voron",
-        config: { base_url: "http://192.168.1.40:7125", enabled: true },
+        config: { base_url: "http://192.168.1.40:7125", enabled },
         created_at: "2026-08-22T00:00:00.000Z",
         updated_at: "2026-08-22T00:00:00.000Z",
       },
@@ -377,6 +379,11 @@ describe("PrintersSettingsCard", () => {
     renderWithQueryClient(<PrintersSettingsCard engineReady />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Edit printer" }));
+    expect(screen.getByRole("checkbox", { name: "Communication enabled" }).getAttribute("aria-checked")).toBe(String(enabled));
+    if (!enabled) {
+      expect(api.fetchIntegrationStatus).not.toHaveBeenCalled();
+      expect(screen.getByRole("button", { name: "Test connection" }).hasAttribute("disabled")).toBe(true);
+    }
     const preset = screen.getByLabelText<HTMLSelectElement>("Edit printer preset");
     const retiredOption = screen.getByRole<HTMLOptionElement>("option", {
       name: "Retired preset (unavailable): preset-retired",

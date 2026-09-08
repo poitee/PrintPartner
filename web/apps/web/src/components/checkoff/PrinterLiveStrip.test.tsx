@@ -47,6 +47,17 @@ function renderWithQueryClient(children: ReactNode) {
 }
 
 describe("PrinterLiveStrip", () => {
+  it("does not request connection settings or printer status for manual printers", async () => {
+    api.fetchPrinters.mockResolvedValue([{ id: "manual", name: "Manual printer", integration_id: null }]);
+    api.fetchIntegrations.mockRejectedValue(new Error("Authentication required"));
+    renderWithQueryClient(<MemoryRouter><PrinterLiveStrip engineReady /></MemoryRouter>);
+    await waitFor(() => expect(api.fetchPrinters).toHaveBeenCalledTimes(1));
+    expect(api.fetchIntegrations).not.toHaveBeenCalled();
+    expect(api.fetchIntegrationStatus).not.toHaveBeenCalled();
+    expect(api.reconcilePrinterCheckoff).not.toHaveBeenCalled();
+    expect(screen.queryByText(/Authentication required/)).toBeNull();
+  });
+
   it("does not overlap reconcile polls for one printer", async () => {
     vi.useFakeTimers();
     api.fetchPrinters.mockResolvedValue([
