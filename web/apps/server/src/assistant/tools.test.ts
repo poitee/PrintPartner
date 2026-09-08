@@ -95,6 +95,20 @@ describe("assistant tools + example builds", () => {
     expect(found.files).toEqual([{ path: "STLs/screen/screen_rail.stl", byte_size: 12 }]);
   });
 
+  it.each([{ url: "https://github.com/example/replacement" }, { branch: "next" }, { tag: "v2" }])("invalidates sync status after changing source identity: %j", async (patch) => {
+    const source = repo.createSource({ name: "Kit", url: "https://github.com/example/kit", source_kind: "github" });
+    const sourcePath = join(dataDir, "retained");
+    mkdirSync(sourcePath);
+    writeFileSync(join(sourcePath, "part.stl"), "solid part");
+    repo.updateSource(source.id, { local_path: sourcePath, last_synced_at: new Date().toISOString(), last_commit_sha: "a".repeat(40), metadata: { remote_update_status: "up_to_date" } });
+    repo.updateSource(source.id, patch);
+    const inventory = JSON.parse((await invokeAssistantTool("get_source_inventory", { source_id: source.id }, { repo })).content);
+    expect(inventory.sync.synchronized).toBe(false);
+    expect(inventory.sync.update_status).toBe("unknown");
+    expect(inventory.artifacts).toEqual(expect.arrayContaining([expect.objectContaining({ path: "part.stl" })]));
+    expect(repo.getSource(source.id)?.local_path).toBe(sourcePath);
+  });
+
   it("proposes and applies multi-value kit selections without flattening them", async () => {
     const plan = repo.createProfile("Multi-select plan");
     const tool = ASSISTANT_TOOL_SPECS.find(

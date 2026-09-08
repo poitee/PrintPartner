@@ -1,7 +1,6 @@
 import { githubRefName, parseGithubUrl } from "./github-sync.js";
 import { createGithubClient } from "./github-client.js";
 import type { AppRepository } from "../db/repository.js";
-import { parseProjectMetadata } from "@print-partner/domain";
 
 export const REMOTE_UPDATE_STATUS_KEY = "remote_update_status";
 export const REMOTE_CHECKED_AT_KEY = "remote_checked_at";
@@ -72,10 +71,8 @@ export async function checkAllSourceUpdates(repo: AppRepository): Promise<{
       row.tag,
     );
     const now = new Date().toISOString();
-    const base = parseProjectMetadata(row.metadataJson) ?? {};
     repo.updateSource(source.id, {
       metadata: {
-        ...base,
         [REMOTE_UPDATE_STATUS_KEY]: status,
         [REMOTE_CHECKED_AT_KEY]: now,
       },
