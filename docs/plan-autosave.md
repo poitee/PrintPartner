@@ -18,6 +18,24 @@ Direct accepted-row mutation was rejected because it bypasses immutable revision
 
 ## Verification
 
+### Typed quantities
+
+Grid, table, and mobile quantity controls share the same editor. Typing stays local until Enter or blur; the plus and minus buttons step from the typed value. Escape cancels unfinished typing. Empty values, fractions, and numbers outside the existing 1–10,000 limit do not save and show an inline error. An incoming save result does not replace an unfinished entry.
+
+For a browser check against an isolated database, start these in separate terminals from `web/`:
+
+```sh
+node --conditions=development --import tsx scripts/plan-save-benchmark.mts --serve
+```
+
+```sh
+VITE_DEV_API_TARGET=http://127.0.0.1:5182 npm run dev -w @print-partner/web -- --host 127.0.0.1 --port 5176
+```
+
+Then run `node scripts/check-plan-quantities.mjs`. It checks actual save responses, typing during a delayed response, both buttons, Enter and blur, invalid input, and reload persistence in grid, table, and mobile views. It restores the fixture's original quantity and writes desktop/mobile screenshots to a temporary folder. These commands do not use the live database.
+
+### Save integrity and latency
+
 Real SQLite tests cover atomic rollback, existing draft preservation, progress, source changes, committed retries, changed payloads and stale bases. Route tests require one reconciliation and confirmed state. Client tests delay responses and exercise rapid choices, retry identity, cache hydration and Build navigation.
 
 Latency is measured from the click to confirmed Saved, separately from immediate checkbox feedback. The target is at least 95 percent of repeated single-file and folder saves below two seconds, without reversals or lost persistence. Local tests and live-host measurements are reported separately; a passing local benchmark is not proof of deployed latency.
