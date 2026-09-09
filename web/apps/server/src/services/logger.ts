@@ -53,8 +53,12 @@ class WorkflowLogger {
    * This affects both in-memory logging and pino output.
    */
   setMinSeverity(severity: LogSeverity): void {
-    this.config.minSeverity = severity;
     this.pinoLogger.level = severity;
+    this.config.minSeverity = severity;
+  }
+
+  setWorkflowTracking(enabled: boolean): void {
+    this.config.enableWorkflowTracking = enabled;
   }
 
   /**
@@ -68,7 +72,7 @@ class WorkflowLogger {
    * Log a workflow event (HTTP request + processing).
    */
   logWorkflow(log: Omit<WorkflowLog, "id" | "timestamp">): void {
-    if (!this.shouldLog(log.severity)) {
+    if (!this.config.enableWorkflowTracking || !this.shouldLog(log.severity)) {
       return;
     }
 
@@ -203,9 +207,6 @@ class WorkflowLogger {
   }
 
   private shouldLog(severity: LogSeverity): boolean {
-    if (!this.config.enableWorkflowTracking && severity === "debug") {
-      return false;
-    }
     return SEVERITY_LEVELS[severity] >= SEVERITY_LEVELS[this.config.minSeverity];
   }
 

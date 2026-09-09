@@ -68,6 +68,7 @@ export async function reconcilePrinterCheckoff(options: {
   updates: PrinterCheckoffReconcileUpdate[];
   created_links: PrinterCheckoffLink[];
   applied: PrinterCheckoffApplied[];
+  unattributed: UnattributedPrint[];
 }> {
   return engineFetch(`/printer-checkoff/reconcile`, {
     method: "POST",

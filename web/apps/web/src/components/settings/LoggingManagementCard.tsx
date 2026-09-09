@@ -49,6 +49,16 @@ function isSeverity(value: unknown): value is WorkflowLog["severity"] {
   return value === "debug" || value === "info" || value === "warn" || value === "error";
 }
 
+function parseLoggerConfig(value: unknown): LoggerConfig {
+  if (
+    typeof value !== "object" || value === null ||
+    !("minSeverity" in value) || !isSeverity(value.minSeverity) ||
+    !("maxLogs" in value) || typeof value.maxLogs !== "number" ||
+    !("enableWorkflowTracking" in value) || typeof value.enableWorkflowTracking !== "boolean"
+  ) throw new Error("The server returned invalid logging settings");
+  return { minSeverity: value.minSeverity, maxLogs: value.maxLogs, enableWorkflowTracking: value.enableWorkflowTracking };
+}
+
 function isWorkflowLog(value: unknown): value is WorkflowLog {
   return (
     typeof value === "object" &&
@@ -93,7 +103,7 @@ export default function LoggingManagementCard() {
     try {
       const response = await fetch("/settings/logging/config");
       if (!response.ok) throw new Error("Failed to load logging config");
-      const data = (await response.json()) as LoggerConfig;
+      const data = parseLoggerConfig(await response.json());
       setConfig(data);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load config");
@@ -140,18 +150,18 @@ export default function LoggingManagementCard() {
     return () => clearInterval(interval);
   }, []);
 
-  const handleConfigChange = async (newConfig: Partial<LoggerConfig>) => {
-    const updated = { ...config, ...newConfig } as LoggerConfig;
+  const handleConfigChange = async (newConfig: Partial<Pick<LoggerConfig, "minSeverity" | "enableWorkflowTracking">>) => {
+    if (!config) return;
     setLoading(true);
     setError(null);
     try {
       const response = await fetch("/settings/logging/config", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(updated),
+        body: JSON.stringify(newConfig),
       });
       if (!response.ok) throw new Error("Failed to update config");
-      setConfig(updated);
+      setConfig(parseLoggerConfig(await response.json()));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to update config");
     } finally {
@@ -245,7 +255,7 @@ export default function LoggingManagementCard() {
                 Workflow Tracking
               </label>
               <p className="text-xs text-muted-foreground mt-1">
-                Track HTTP requests and integration events
+                Capture new HTTP requests and integration events. Existing logs remain available when off. Resets when the server restarts.
               </p>
             </div>
             <Switch

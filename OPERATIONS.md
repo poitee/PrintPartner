@@ -212,10 +212,17 @@ Application workflow logs:
 ```bash
 curl --fail --silent http://127.0.0.1:8080/settings/logging/stats | jq .
 curl --fail --silent 'http://127.0.0.1:8080/settings/logging/logs?limit=100' | jq .
-curl --fail --silent -X POST \
+curl --fail --silent \
   'http://127.0.0.1:8080/settings/logging/export?format=jsonl' \
   --output print-partner-logs.jsonl
 ```
+
+In Settings → Data & System, **Workflow Tracking** controls capture of new HTTP
+requests and integration events. Turning it off preserves existing logs and does
+not disable general server diagnostics. The toggle and severity setting are
+in-memory settings; they reset when the server restarts. API clients can update
+`enableWorkflowTracking` and `minSeverity` through `POST /settings/logging/config`.
+`maxLogs` is read-only.
 
 Clear in-memory workflow logs only after exporting anything you need:
 

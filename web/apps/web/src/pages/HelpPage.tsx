@@ -45,7 +45,7 @@ const WORKFLOW_GROUPS = [
   {
     id: "prepare",
     label: "Prepare",
-    description: "Establish reviewed production intent.",
+    description: "Choose the files and parts to make.",
   },
   {
     id: "make",

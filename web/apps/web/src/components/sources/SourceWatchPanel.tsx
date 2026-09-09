@@ -129,8 +129,8 @@ export default function SourceWatchPanel({
               </Badge>
             </div>
             <CardDescription className="mt-1 max-w-3xl text-sm">
-              Keep reusable projects current here. Builds keep their published Plan until you
-              review and publish a newer Library revision.
+              Keep reusable projects current here. Existing Builds keep their saved Plan.
+              Open a Build's Sources when you want to use updated files.
             </CardDescription>
           </div>
         </div>

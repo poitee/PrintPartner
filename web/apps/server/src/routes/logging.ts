@@ -1,5 +1,11 @@
 import type { FastifyInstance } from "fastify";
+import { z } from "zod";
 import { getLogger, type LogSeverity, type LoggerConfig } from "../services/logger.js";
+
+const loggingUpdateSchema = z.object({
+  minSeverity: z.enum(["debug", "info", "warn", "error"]).optional(),
+  enableWorkflowTracking: z.boolean().optional(),
+}).strict();
 
 export async function registerLoggingRoutes(app: FastifyInstance): Promise<void> {
   const logger = getLogger();
@@ -21,21 +27,20 @@ export async function registerLoggingRoutes(app: FastifyInstance): Promise<void>
    * Update logging configuration.
    */
   app.post<{
-    Body: Partial<LoggerConfig>;
+    Body: unknown;
     Reply: LoggerConfig | { detail: string };
   }>(
     "/settings/logging/config",
     async (request, reply) => {
       try {
-        const updates = request.body;
+        const updates = loggingUpdateSchema.parse(request.body);
 
         if (updates.minSeverity) {
           logger.setMinSeverity(updates.minSeverity);
         }
 
         if (updates.enableWorkflowTracking !== undefined) {
-          const config = logger.getConfig();
-          config.enableWorkflowTracking = updates.enableWorkflowTracking;
+          logger.setWorkflowTracking(updates.enableWorkflowTracking);
         }
 
         const config = logger.getConfig();
