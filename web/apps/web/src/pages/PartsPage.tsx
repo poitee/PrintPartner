@@ -4,6 +4,7 @@ import { Package, Printer } from "lucide-react";
 import type { StlNamingFolderRule } from "@print-partner/contracts";
 import PageHeader from "../components/layout/PageHeader";
 import PageShell from "../components/layout/PageShell";
+import ShareBuildExportDialog from "../components/share/ShareBuildExportDialog";
 import EmptyState from "../components/layout/EmptyState";
 import PlanRolesCard from "../components/build/PlanRolesCard";
 import KitManifestOptions from "../components/KitManifestOptions";
@@ -27,6 +28,7 @@ export default function PartsPage() {
   const sheetRef = useRef<ReviewPartsSheetHandle>(null);
   const prepared = useRef<number | null>(null);
   const [folderRules, setFolderRules] = useState<StlNamingFolderRule[]>([]);
+  const [shareOpen, setShareOpen] = useState(false);
   const hasSources = layers.data?.some((layer) => layer.project_id != null) ?? false;
   const sourceInputsCurrent = profiles.find((profile) => profile.id === selectedProfileId)?.freshness.status === "current";
 
@@ -58,9 +60,11 @@ export default function PartsPage() {
             <Button variant="ghost" disabled={!review?.accepted_basis || disabled} onClick={() => void sheetRef.current?.print()}>
               <Printer className="mr-1 h-4 w-4" /> Print
             </Button>
+            <Button variant="outline" disabled={selectedProfileId == null || disabled || Boolean(draftError)} onClick={() => setShareOpen(true)}>Share Build</Button>
           </div>
         }
       />
+      {shareOpen && selectedProfileId != null && <ShareBuildExportDialog open={shareOpen} onOpenChange={setShareOpen} profileId={selectedProfileId} />}
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
       {draftError && (
         <div role="alert" className={cn("space-y-2 rounded-lg border p-4", statusTone({ tone: "error", emphasis: "soft" }))}>

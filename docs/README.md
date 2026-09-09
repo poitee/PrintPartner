@@ -50,6 +50,8 @@ These describe how coding agents work in this repo. `AGENTS.md` points at them t
 
 ## Examples
 
+- [References-only Build and Library sharing](reference-sharing.md)
+
 - [Golden LDO Voron 2.4 with SB Tap](examples/golden-ldo-voron-2.4-sb-tap.md)
 - [Golden kit export](examples/golden-ldo-voron-2.4-export.md)
 - [Cross-source Voron stack](examples/cross-source-voron/ldo-2.4-golden-stack.md)

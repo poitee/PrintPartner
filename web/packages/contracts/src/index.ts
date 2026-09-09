@@ -7,6 +7,7 @@ export * from "./accepted-media.js";
 export * from "./plan-drafts.js";
 export * from "./production-setup.js";
 export * from "./build-workflow.js";
+export * from "./reference-sharing.js";
 
 export type DeployMode = "self-host" | "saas";
 

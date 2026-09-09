@@ -29,6 +29,7 @@ import { registerPrinterSendQueueRoutes } from "./printer-send-queue.js";
 import { registerBambuConnectRoutes } from "./bambu-connect.js";
 import { registerWebhookRoutes } from "./webhooks.js";
 import { registerShareRoutes } from "./shares.js";
+import { registerReferenceSharingRoutes } from "./reference-sharing.js";
 import { registerAssistantRoutes } from "./assistant.js";
 import type { AuthStore } from "../services/auth-store.js";
 import { createIntegrationPort } from "../integrations/store.js";
@@ -83,6 +84,7 @@ export async function registerCoreRoutes(
   });
   await registerExportRoutes(app, { dataDir: deps.dataDir });
   await registerImportRoutes(app, { repo: deps.repo });
+  registerReferenceSharingRoutes(app, deps.repo);
   await registerSettingsRoutes(app, { repo: deps.repo, dataDir: deps.dataDir, config: deps.config });
   await registerSourceNamingRoutes(app, { repo: deps.repo, dataDir: deps.dataDir });
   await registerStubRoutes(app, { repo: deps.repo, dataDir: deps.dataDir });

@@ -661,6 +661,7 @@ export default function ExportPage() {
         eyebrow={planIdentity ? `Make · ${planIdentity}` : "Make"}
         title="Production"
         description="Prepare plates or download the files you want to print."
+        actions={<Button variant="outline" disabled={selectedProfileId == null || engineState !== "ready"} onClick={() => setShareOpen(true)}>Share Build</Button>}
       />
       <BuildSummaryHeader currentStageId="production" />
 
