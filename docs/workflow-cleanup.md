@@ -101,3 +101,25 @@ check the number of requests because React development mode can repeat effects.
 
 Reference sharing remains export and validation only. Manifest import and direct
 Git publishing are not implemented. See [reference sharing](reference-sharing.md).
+
+## September 10 release verification
+
+A clean worktree at `992c3fa` passed the unmodified `npm run quality` gate:
+lint, type checks, 3,755 unit tests, workflow-smoke tests, production build,
+packaged-server tests, and all four standard browser scripts. The earlier
+untracked scratch-file lint failure does not occur in this clean checkout.
+
+Separate browser checks passed for logging capture pause/resume, JSON and JSONL
+log downloads, and combined queue requests on All Production, Production, and
+Checkoff. The local-source API workflow passed through Checkoff, STL export,
+and production static assets. All writes used disposable data directories.
+
+Nodemailer was updated to 9.1.1. `npm audit --audit-level=high` passed; moderate
+advisories remain for adm-zip and Hono, including Hono's dependants. A JSON
+transport check rendered a password-reset email without sending mail.
+Generated dependency notices were refreshed after the upgrade.
+
+All three Compose configurations validated. Local Docker runtime verification
+was unavailable because this environment cannot access the Docker socket.
+The PR's container checks remain a merge prerequisite. Physical printers,
+external accounts, Postgres, S3, and the user's production server were not tested.
