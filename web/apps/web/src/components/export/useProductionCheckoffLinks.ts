@@ -2,7 +2,6 @@ import { useQuery } from "@tanstack/react-query";
 import {
   fetchPrinterCheckoffLinks,
   type PrinterCheckoffLink,
-  type PrinterCheckoffLinkState,
 } from "../../api/endpoints/checkoff";
 
 /**
@@ -11,14 +10,6 @@ import {
  * Production reads them so a package stays visible after the send, instead of
  * disappearing until someone opens Checkoff.
  */
-const TRACKED_STATES: readonly PrinterCheckoffLinkState[] = [
-  "watching",
-  "awaiting_verify",
-  "host_failed",
-  "verified",
-  "applied",
-];
-
 export const productionCheckoffLinksKey = (profileId: number | null) =>
   ["production-checkoff-links", profileId] as const;
 
@@ -30,16 +21,9 @@ export function useProductionCheckoffLinks(profileId: number | null, enabled: bo
     // leaving the operator with a stale "Printing" line.
     refetchInterval: 15_000,
     queryFn: async (): Promise<PrinterCheckoffLink[]> => {
-      const responses = await Promise.all(
-        TRACKED_STATES.map((state) =>
-          fetchPrinterCheckoffLinks({ state, profile_id: profileId! }),
-        ),
-      );
-      const byId = new Map<string, PrinterCheckoffLink>();
-      for (const response of responses) {
-        for (const link of response.links ?? []) byId.set(link.id, link);
-      }
-      return [...byId.values()];
+      if (profileId == null) return [];
+      const response = await fetchPrinterCheckoffLinks({ profile_id: profileId });
+      return response.links.filter((link) => link.state !== "dismissed");
     },
   });
 }

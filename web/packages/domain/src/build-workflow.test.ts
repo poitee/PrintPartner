@@ -73,8 +73,8 @@ describe("resolveBuildWorkflow", () => {
       kind: "accept_working_plan",
       stage_id: "plan",
       draft_id: 41,
-      label: "Review and publish Working Plan",
-      reason: "Publishing fixes the part list and creates the required-unit identities Production and Checkoff track.",
+      label: "Review Plan changes",
+      reason: "Open Plan to review changes. Valid changes save automatically for Production and Checkoff.",
     });
     expect(workspace.stages.find((stage) => stage.id === "production")?.status.summary)
       .toBe("Publish a Plan to create Production's required units.");
@@ -90,14 +90,14 @@ describe("resolveBuildWorkflow", () => {
     });
 
     expect(workspace.stages.find((stage) => stage.id === "plan")?.status.summary)
-      .toBe("5 Plan choices to finish before publishing.");
+      .toBe("5 Plan choices to finish before saving.");
     expect(workspace.next_action).toEqual({
       kind: "resolve_plan_issues",
       stage_id: "plan",
       draft_id: 41,
       issue_count: 5,
       label: "Review 5 Plan choices",
-      reason: "Complete these choices before publishing the Plan for Production.",
+      reason: "Complete these choices so the Plan can save for Production.",
     });
   });
 
@@ -139,7 +139,7 @@ describe("resolveBuildWorkflow", () => {
       stage_id: "sources",
       issue_count: 1,
       label: "Review Source changes",
-      reason: "Sources have changed. Review them before you write a Working Plan.",
+      reason: "Sources have changed. Open Sources to review the files for this Build.",
     });
   });
 
@@ -244,7 +244,7 @@ describe("resolveBuildWorkflow", () => {
       kind: "view_completed_build",
       stage_id: "checkoff",
       label: "View completed Build",
-      reason: "Every required unit in the published Plan is checked off.",
+      reason: "Every required unit in the saved Plan is checked off.",
     });
   });
 });

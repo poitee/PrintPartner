@@ -170,16 +170,16 @@ export default function ExportActionCards({
         ))}
         <Card className="flex flex-col border-border shadow-sm">
           <CardHeader className="space-y-2 pb-2">
-            <CardTitle level={3} className="text-sm font-semibold leading-snug">Share Plan</CardTitle>
+            <CardTitle level={3} className="text-sm font-semibold leading-snug">Share Build recipe</CardTitle>
             <CardDescription className="text-xs leading-relaxed">
-              Sources, choices, roles, and quantities. STL files stay private.
+              Download a reference manifest or Git-ready bundle. Models stay with their original publishers.
             </CardDescription>
             <div className="flex flex-wrap gap-1.5 pt-0.5">
-              <Badge variant="muted" className="rounded-full px-2 py-0.5 font-mono text-micro font-normal">no STLs</Badge>
+              <Badge variant="muted" className="rounded-full px-2 py-0.5 font-mono text-micro font-normal">no model files</Badge>
             </div>
           </CardHeader>
           <CardContent className="mt-auto pt-1">
-            <Button size="sm" variant="outline" disabled={selectedProfileId == null} onClick={onShare}>Create bundle</Button>
+            <Button size="sm" variant="outline" disabled={selectedProfileId == null} onClick={onShare}>Share Build</Button>
           </CardContent>
         </Card>
       </div>

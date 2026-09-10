@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import LoggingManagementCard from "./LoggingManagementCard";
 
@@ -10,6 +10,28 @@ afterEach(() => {
 });
 
 describe("LoggingManagementCard", () => {
+  it("sends only writable settings and displays the server's saved value", async () => {
+    const config = { minSeverity: "info", maxLogs: 10000, enableWorkflowTracking: true };
+    const request = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/settings/logging/config") {
+        if (init?.method === "POST") {
+          expect(JSON.parse(String(init.body))).toEqual({ enableWorkflowTracking: false });
+          config.enableWorkflowTracking = false;
+        }
+        return Response.json(config);
+      }
+      if (url.includes("/logs")) return Response.json([]);
+      return Response.json({ totalLogs: 0, avgDuration: 0, errorCount: 0, byMethod: {}, bySeverity: { debug: 0, info: 0, warn: 0, error: 0 } });
+    });
+    vi.stubGlobal("fetch", request);
+    render(<LoggingManagementCard />);
+    const toggle = await screen.findByRole("switch", { name: "Workflow Tracking" });
+    fireEvent.click(toggle);
+    await waitFor(() => expect(toggle.getAttribute("aria-checked")).toBe("false"));
+    expect(request).toHaveBeenCalledWith("/settings/logging/config", expect.objectContaining({ method: "POST" }));
+  });
+
   it("shows recent workflow requests with their failure details", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);

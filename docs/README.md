@@ -18,7 +18,7 @@ Use this index to find the guide for your task. The in-app Help page covers the 
 | Library | `/library` | Register and sync shared source repositories. |
 | Builds | `/builds` | Create, open, copy, archive, or restore a build. |
 | Sources | `/sources?profile=<id>` | Attach sources and select STL files for the active build. |
-| Plan | `/plan?profile=<id>` | Review quantities and apply a draft. |
+| Plan | `/plan?profile=<id>` | Choose parts, quantities, and colors. Changes save automatically. |
 | Checkoff | `/progress?profile=<id>` | Track required units through printing and assembly. |
 | Production | `/export?profile=<id>` | Arrange plates, export files, and send sliced jobs. |
 | Production overview | `/production` | Review remaining work across builds. |
@@ -38,6 +38,7 @@ Use this index to find the guide for your task. The in-app Help page covers the 
 - [Manifest format](../manifests/README.md)
 - [Security](../SECURITY.md)
 - [Release history](../CHANGELOG.md)
+- [Workflow cleanup and verification](workflow-cleanup.md)
 
 ## Agent workflows
 
@@ -49,6 +50,8 @@ These describe how coding agents work in this repo. `AGENTS.md` points at them t
 - [Triage labels](agents/triage-labels.md)
 
 ## Examples
+
+- [References-only Build and Library sharing](reference-sharing.md)
 
 - [Golden LDO Voron 2.4 with SB Tap](examples/golden-ldo-voron-2.4-sb-tap.md)
 - [Golden kit export](examples/golden-ldo-voron-2.4-export.md)

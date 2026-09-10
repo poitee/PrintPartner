@@ -186,31 +186,31 @@ function planStageStatus(
     case "needs_attention":
       return {
         kind: "needs_attention",
-        summary: `${workingPlan.issueCount} Plan ${pluralized(workingPlan.issueCount, "choice")} to finish before publishing.`,
+        summary: `${workingPlan.issueCount} Plan ${pluralized(workingPlan.issueCount, "choice")} to finish before saving.`,
         task_count: workingPlan.issueCount,
       };
     case "stale":
       return {
         kind: "stale",
-        summary: "Refresh the Working Plan before publishing.",
+        summary: "Open Plan to refresh its saved changes.",
         task_count: workingPlan.issueCount,
       };
     case "none":
       if (acceptedPlan.kind === "ready") {
         return {
           kind: "complete",
-          summary: `Plan revision ${acceptedPlan.planVersion} published.`,
+          summary: `Plan revision ${acceptedPlan.planVersion} saved.`,
         };
       }
       if (sources.kind === "ready") {
         return {
           kind: "ready",
-          summary: "Ready to create a Working Plan.",
+          summary: "Ready to choose parts in Plan.",
         };
       }
       return {
         kind: "not_started",
-        summary: "Prepare Sources before creating a Working Plan.",
+        summary: "Add Sources before choosing parts in Plan.",
       };
     default:
       return assertNever(workingPlan);
@@ -224,7 +224,7 @@ function productionStageStatus(
   if (acceptedPlan.kind === "unavailable") {
     return {
       kind: "error",
-      summary: "Production cannot read the published Plan.",
+      summary: "Production cannot read the saved Plan.",
       task_count: 1,
     };
   }
@@ -269,7 +269,7 @@ function productionStageStatus(
     case "stale":
       return {
         kind: "stale",
-        summary: "Prepared plates do not match the published Plan.",
+        summary: "Prepared plates do not match the saved Plan.",
         task_count: 1,
       };
     case "preparing":
@@ -301,7 +301,7 @@ function checkoffStageStatus(
   if (acceptedPlan.kind === "unavailable") {
     return {
       kind: "error",
-      summary: "Checkoff cannot read the published Plan.",
+      summary: "Checkoff cannot read the saved Plan.",
       task_count: 1,
     };
   }
@@ -429,23 +429,23 @@ function nextAction(facts: BuildWorkflowFacts): BuildWorkflowNextAction {
         draft_id: facts.workingPlan.draftId,
         issue_count: facts.workingPlan.issueCount,
         label: `Review ${facts.workingPlan.issueCount} Plan ${pluralized(facts.workingPlan.issueCount, "choice")}`,
-        reason: "Complete these choices before publishing the Plan for Production.",
+        reason: "Complete these choices so the Plan can save for Production.",
       };
     case "stale":
       return {
         kind: "refresh_working_plan",
         stage_id: "plan",
         draft_id: facts.workingPlan.draftId,
-        label: "Refresh Working Plan",
-        reason: "Refresh the Working Plan so it compares with the current published revision.",
+        label: "Refresh Plan",
+        reason: "Open Plan to refresh changes against the current saved revision.",
       };
     case "ready":
       return {
         kind: "accept_working_plan",
         stage_id: "plan",
         draft_id: facts.workingPlan.draftId,
-        label: "Review and publish Working Plan",
-        reason: "Publishing fixes the part list and creates the required-unit identities Production and Checkoff track.",
+        label: "Review Plan changes",
+        reason: "Open Plan to review changes. Valid changes save automatically for Production and Checkoff.",
       };
     case "none":
       break;
@@ -463,7 +463,7 @@ function nextAction(facts: BuildWorkflowFacts): BuildWorkflowNextAction {
       stage_id: "sources",
       issue_count: facts.sources.issueCount,
       label: "Review Source changes",
-      reason: "Sources have changed. Review them before you write a Working Plan.",
+      reason: "Sources have changed. Open Sources to review the files for this Build.",
     };
   }
 
@@ -471,8 +471,8 @@ function nextAction(facts: BuildWorkflowFacts): BuildWorkflowNextAction {
     return {
       kind: "create_working_plan",
       stage_id: "plan",
-      label: "Create Working Plan",
-      reason: "Sources are ready. Build a Working Plan, review it, then publish it for Production.",
+      label: "Open Plan",
+      reason: "Sources are ready. Open Plan to choose files, quantities, and colors. Changes save automatically.",
     };
   }
   if (facts.acceptedPlan.remainingUnits > 0) {
@@ -489,7 +489,7 @@ function nextAction(facts: BuildWorkflowFacts): BuildWorkflowNextAction {
     kind: "view_completed_build",
     stage_id: "checkoff",
     label: "View completed Build",
-    reason: "Every required unit in the published Plan is checked off.",
+    reason: "Every required unit in the saved Plan is checked off.",
   };
 }
 

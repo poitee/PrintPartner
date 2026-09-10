@@ -125,20 +125,15 @@ export default function GlobalProductionPage() {
     }
     const requestId = ++farmRequestId.current;
     try {
-      const [watching, awaiting, failed, verified, prints] = await Promise.all([
-        fetchPrinterCheckoffLinks({ state: "watching" }),
-        fetchPrinterCheckoffLinks({ state: "awaiting_verify" }),
-        fetchPrinterCheckoffLinks({ state: "host_failed" }),
-        fetchPrinterCheckoffLinks({ state: "verified" }),
+      const [queue, prints] = await Promise.all([
+        fetchPrinterCheckoffLinks(),
         fetchUnattributedPrints(),
       ]);
       if (requestId !== farmRequestId.current) return;
-      setActiveLinks([
-        ...(watching.links ?? []),
-        ...(awaiting.links ?? []),
-        ...(failed.links ?? []),
-      ]);
-      setVerifiedLinks(verified.links ?? []);
+      setActiveLinks(queue.links.filter((link) =>
+        link.state === "watching" || link.state === "awaiting_verify" || link.state === "host_failed",
+      ));
+      setVerifiedLinks(queue.links.filter((link) => link.state === "verified" || link.state === "applied"));
       setUnattributed(prints);
       setFarmError(null);
     } catch (error) {

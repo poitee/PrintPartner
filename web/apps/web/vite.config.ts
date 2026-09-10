@@ -41,6 +41,7 @@ const API_PREFIXES = [
   "help",
   "auth",
   "shares",
+  "reference-shares",
   "kit-catalog",
   "manifest-registry",
   "manifest-templates",

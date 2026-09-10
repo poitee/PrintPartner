@@ -23,7 +23,7 @@ function activityNotice(event: SourceActivityEvent | undefined): Notice | null {
       return {
         signature: `event:${event.id}`,
         title: `${event.source_name} refreshed automatically`,
-        detail: "Its Library revision moved. Builds using the older revision stay unchanged until you review and publish their Plan.",
+        detail: "New files are available in Library. Existing Builds keep their saved Plan until you update them in Sources or Plan.",
         tone: "update",
       };
     case "source.sync_failed":
@@ -56,7 +56,7 @@ export function sourceUpdateNotice(input: {
     return {
       signature: `updates:${[...input.updateIds].sort((a, b) => a - b).join(",")}`,
       title: `${count} source update${count === 1 ? "" : "s"} ready`,
-      detail: "Review the changed Library revisions before publishing them into a Build.",
+      detail: "Review and sync updates in Library, then open a Build's Sources to use them.",
       tone: "update",
     };
   }

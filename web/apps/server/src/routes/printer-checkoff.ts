@@ -737,7 +737,8 @@ export async function registerPrinterCheckoffRoutes(
           : undefined;
 
       if (query.state === "watching") {
-        return { links: listWatchingPrinterCheckoffLinks(deps.repo, integrationId) };
+        const links = listWatchingPrinterCheckoffLinks(deps.repo, integrationId);
+        return { links: profileId == null ? links : links.filter((link) => link.profile_id === profileId) };
       }
       let links =
         query.state === "awaiting_verify"

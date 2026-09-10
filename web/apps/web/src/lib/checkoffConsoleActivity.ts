@@ -58,6 +58,7 @@ export function useCheckoffPrinterActivity(input: {
   const [phaseManifest, setPhaseManifest] = useState<PlanPhaseManifestResponse | null>(null);
   const [auxiliaryErrors, setAuxiliaryErrors] = useState<AuxiliaryErrors>({});
   const unattributedRequestId = useRef(0);
+  const linksRequestId = useRef(0);
 
   /**
    * These reads outlive the component when the operator leaves Checkoff while a
@@ -96,26 +97,21 @@ export function useCheckoffPrinterActivity(input: {
   }, [markSuccess, reportError]);
 
   const refreshLinks = useCallback(() => {
-    if (!engineReady) return;
-    const read = (
-      state: "watching" | "awaiting_verify" | "host_failed" | "verified",
-      key: string,
-      apply: (links: PrinterCheckoffLink[]) => void,
-    ) => {
-      void fetchPrinterCheckoffLinks({ state, profile_id: profileId ?? undefined })
-        .then((res) => {
-          if (!mounted.current) return;
-          apply(res.links ?? []);
-          markSuccess(key);
-        })
-        .catch((e) =>
-          reportError(key, `Could not refresh printer activity: ${describe(e)}`),
-        );
-    };
-    read("watching", "watching-links", setWatchingLinks);
-    read("awaiting_verify", "awaiting-links", setAwaitingLinks);
-    read("host_failed", "failed-links", setFailedLinks);
-    read("verified", "verified-links", setVerifiedLinks);
+    if (!engineReady || profileId == null) return;
+    const requestId = ++linksRequestId.current;
+    void fetchPrinterCheckoffLinks({ profile_id: profileId })
+      .then((res) => {
+        if (!mounted.current || requestId !== linksRequestId.current) return;
+        setWatchingLinks(res.links.filter((link) => link.state === "watching"));
+        setAwaitingLinks(res.links.filter((link) => link.state === "awaiting_verify"));
+        setFailedLinks(res.links.filter((link) => link.state === "host_failed"));
+        setVerifiedLinks(res.links.filter((link) => link.state === "verified"));
+        markSuccess("checkoff-links");
+      })
+      .catch((e) => {
+        if (!mounted.current || requestId !== linksRequestId.current) return;
+        reportError("checkoff-links", `Could not refresh printer activity: ${describe(e)}`);
+      });
   }, [engineReady, markSuccess, profileId, reportError]);
 
   useEffect(() => {
@@ -124,7 +120,12 @@ export function useCheckoffPrinterActivity(input: {
   }, [engineReady, refreshUnattributed]);
 
   useEffect(() => {
+    setWatchingLinks([]);
+    setAwaitingLinks([]);
+    setFailedLinks([]);
+    setVerifiedLinks([]);
     refreshLinks();
+    return () => { linksRequestId.current += 1; };
   }, [refreshLinks]);
 
   useEffect(() => {

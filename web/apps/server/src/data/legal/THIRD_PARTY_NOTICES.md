@@ -49,11 +49,11 @@ Transitive packages are recorded in `web/package-lock.json` and remain subject t
 | drizzle-orm | 0.45.2 | Apache-2.0 | https://orm.drizzle.team |
 | fastify | 5.12.1 | MIT | https://fastify.dev/ |
 | fflate | 0.8.3 | MIT | https://101arrowz.github.io/fflate |
-| js-yaml | 5.4.0 | MIT | https://github.com/nodeca/js-yaml |
+| js-yaml | 5.4.1 | MIT | https://github.com/nodeca/js-yaml |
 | jszip | 3.10.1 | (MIT OR GPL-3.0-or-later) | https://github.com/Stuk/jszip |
 | lucide-react | 1.34.0 | ISC | https://lucide.dev |
 | mqtt | 5.15.2 | MIT | https://github.com/mqttjs/MQTT.js |
-| nodemailer | 9.0.5 | MIT-0 | https://nodemailer.com/ |
+| nodemailer | 9.1.1 | MIT-0 | https://nodemailer.com/ |
 | pdf-parse | 2.4.5 | Apache-2.0 | https://mehmet-kozan.github.io/pdf-parse/ |
 | pg | 8.23.0 | MIT | https://github.com/brianc/node-postgres |
 | pino | 10.3.1 | MIT | https://getpino.io |
@@ -64,7 +64,7 @@ Transitive packages are recorded in `web/package-lock.json` and remain subject t
 | tailwind-merge | 3.6.0 | MIT | https://github.com/dcastil/tailwind-merge |
 | tar | 7.5.22 | BlueOak-1.0.0 | https://github.com/isaacs/node-tar |
 | three | 0.185.1 | MIT | https://threejs.org/ |
-| zod | 4.4.3 | MIT | https://zod.dev |
+| zod | 4.5.4 | MIT | https://zod.dev |
 
 Versions reflect the installed dependency tree used to generate this file.
 

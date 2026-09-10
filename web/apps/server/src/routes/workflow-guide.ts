@@ -5,7 +5,7 @@ import {
 
 const CORE_WORKFLOW_GUIDE = `# Print Partner workflow
 
-Print Partner organizes each Build as **Sources → Plan → (Production ↔ Checkoff)**. Sources and Plan prepare reviewed production intent. Production and Checkoff form a loop that repeats until every required unit is verified. Global navigation is Builds, All Production, Printers, and Settings.
+Print Partner organizes each Build as **Sources → Plan → (Production ↔ Checkoff)**. Sources and Plan define what to make. Production and Checkoff repeat until every required unit is verified. Use Library to manage reusable projects across Builds.
 
 ## Managing Builds
 
@@ -24,27 +24,27 @@ Register GitHub repositories, local folders, or zip archives. Set categories and
 
 ### Sources
 
-Attach a structural base and any optional overlays or add-ons to the active Build. Pick included STL files, confirm roles and filament colors, and review Source revisions. **Build Working Plan** creates or updates the editable proposal. It does not change the Accepted Plan or Checkoff.
+Attach projects from Library to the active Build. Choose the base project and any optional add-ons, then select the files to include. Syncing Library does not by itself change an existing Build's saved Plan.
 
 ### Plan
 
-Review the Working Plan's quantities, inclusion choices, warnings, and required-unit reconciliation. Resolve every blocking issue, then choose **Accept Working Plan**. Acceptance creates a new Accepted Plan revision. Only an Accepted Plan authorizes new Production work; existing Production and Checkoff records remain tied to the revision that created them.
+Choose quantities, included parts, roles, and filament colors. Changes save automatically. Wait for **Saved** before preparing new Production work. If the page shows **Not saved**, resolve the displayed error and retry. There is no separate acceptance or publishing step. Existing Production and Checkoff records keep the Plan revision they were created with.
 
 ## Make
 
 ### Production
 
-Choose required units from the Accepted Plan, allocate printers, prepare editable plates, export to a slicer, and send printer jobs. Production remains active while jobs are queued, sending, or printing. Having Parts in a Plan does not make Production complete.
+Choose required units from the saved Plan, assign printers, prepare plates, export to a slicer, and send printer jobs. Having parts in a Plan does not mean they have been printed.
 
 ### Checkoff
 
-Verify completed print results before they change progress. Confirm successful units, record rejected results, and keep remaining units visible. Failed or remaining units return to Production for another run. Global All Production aggregates active jobs and work awaiting verification across Builds.
+Monitor linked printers, browse their files, or upload print files from an unmonitored printer. Assign results to the correct Build, then verify successful units before they count toward progress. Record rejected units and return remaining work to Production. All Production brings together jobs and results awaiting verification across Builds.
 
 ## Tips
 
 - **⌘K / Ctrl+K.** Open the command palette for navigation, sync, and export actions.
 - **Theme.** Choose light, dark, or system. The sidebar can collapse to an icon rail.
-- **Share Build.** Export Plan configuration as a \`.print-partner-kit\` archive. STL files are not included.
+- **Share Build.** Download a reference manifest or a Git-ready bundle. These contain source references and Plan choices, not model files. Recipients obtain models from their original sources. Manifest import is not yet available.
 - **Spoolman.** Connect it in Settings → Integrations for live filament inventory and spool weights.
 `;
 

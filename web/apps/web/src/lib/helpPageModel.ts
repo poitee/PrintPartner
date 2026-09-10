@@ -22,7 +22,7 @@ export const WORKFLOW_STEPS = [
     group: "prepare",
     label: "Plan",
     path: null as string | null,
-    description: "Review the Working Plan, resolve issues, then accept it",
+    description: "Choose parts, quantities, and colors. Changes save automatically",
   },
   {
     id: "production",

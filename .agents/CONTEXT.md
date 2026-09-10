@@ -4,6 +4,10 @@ Print Partner turns design sources and customer requirements into a reviewed pri
 
 ## Language
 
+**Sharing manifest**:
+A reusable Build recipe or selected Library collection described by references to original sources and choices. It never contains model files and grants no rights over the referenced models.
+_Avoid_: Model package, backup, Source option manifest
+
 **Source role**:
 The relationship a supplied Source has to one Build, such as canonical design, vendor overlay, mod, or evidence. It does not change the Source's Library organization.
 _Avoid_: Global role, category

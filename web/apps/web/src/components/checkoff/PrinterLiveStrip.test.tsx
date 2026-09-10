@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
@@ -41,9 +41,10 @@ function renderWithQueryClient(children: ReactNode) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
-  return render(
+  const view = render(
     <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>,
   );
+  return { ...view, queryClient };
 }
 
 describe("PrinterLiveStrip", () => {
@@ -133,7 +134,7 @@ describe("PrinterLiveStrip", () => {
     );
     const onUnattributedUpdate = vi.fn();
 
-    renderWithQueryClient(
+    const view = renderWithQueryClient(
       <MemoryRouter>
         <PrinterLiveStrip
           engineReady
@@ -144,9 +145,9 @@ describe("PrinterLiveStrip", () => {
 
     expect(await screen.findByText("Printing bracket.bgcode")).toBeTruthy();
     expect(api.fetchIntegrationStatus).not.toHaveBeenCalled();
-    await waitFor(() => {
-      expect(onUnattributedUpdate).toHaveBeenCalledOnce();
-    });
+    expect(onUnattributedUpdate).not.toHaveBeenCalled();
+    await act(async () => { await view.queryClient.invalidateQueries({ predicate: (query) => query.queryKey.includes("prusa-b") }); });
+    expect(onUnattributedUpdate).not.toHaveBeenCalled();
   });
 
   it("notifies Progress when reconcile discovers a currently printing link", async () => {
@@ -207,11 +208,11 @@ describe("PrinterLiveStrip", () => {
         integration_id: "prusa-1",
       });
       expect(onCheckoffUpdate).toHaveBeenCalledWith(7);
-      expect(onUnattributedUpdate).toHaveBeenCalledOnce();
+      expect(onUnattributedUpdate).not.toHaveBeenCalled();
     });
   });
 
-  it("emits one global refresh hint after parallel per-printer reconcile results", async () => {
+  it("refreshes changed unattributed lists but not repeated identical polls", async () => {
     api.fetchPrinters.mockResolvedValue([
       {
         id: "printer-a",
@@ -249,7 +250,7 @@ describe("PrinterLiveStrip", () => {
     api.fetchIntegrationStatus.mockResolvedValue({ state: "idle" });
     const onUnattributedUpdate = vi.fn();
 
-    renderWithQueryClient(
+    const view = renderWithQueryClient(
       <MemoryRouter>
         <PrinterLiveStrip
           engineReady
@@ -263,5 +264,12 @@ describe("PrinterLiveStrip", () => {
       expect(onUnattributedUpdate).toHaveBeenCalledTimes(1);
       expect(onUnattributedUpdate).toHaveBeenCalledWith();
     });
+    await act(async () => { await view.queryClient.invalidateQueries(); });
+    expect(onUnattributedUpdate).toHaveBeenCalledTimes(1);
+    api.reconcilePrinterCheckoff.mockResolvedValue({
+      status: { state: "idle" }, updates: [], created_links: [], unattributed: [],
+    });
+    await act(async () => { await view.queryClient.invalidateQueries(); });
+    await waitFor(() => expect(onUnattributedUpdate).toHaveBeenCalledTimes(2));
   });
 });

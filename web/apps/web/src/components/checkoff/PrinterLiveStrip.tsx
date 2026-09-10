@@ -111,6 +111,7 @@ export default function PrinterLiveStrip({
   const [loadError, setLoadError] = useState<string | null>(null);
   const toastedLinks = useRef(new Set<string>());
   const handledReconciliations = useRef(new WeakSet<ReconcileOutcome>());
+  const unattributedSnapshots = useRef(new Map<string, string>());
   const onCheckoffUpdateRef = useRef(onCheckoffUpdate);
   onCheckoffUpdateRef.current = onCheckoffUpdate;
   const onLiveStateChangeRef = useRef(onLiveStateChange);
@@ -208,7 +209,7 @@ export default function PrinterLiveStrip({
   }, [refreshRoster]);
 
   useEffect(() => {
-    let receivedReconcileResult = false;
+    let unattributedChanged = false;
     for (const outcome of reconciliation.outcomes) {
       if (handledReconciliations.current.has(outcome)) continue;
       handledReconciliations.current.add(outcome);
@@ -229,11 +230,14 @@ export default function PrinterLiveStrip({
       for (const link of result.created_links ?? []) {
         onCheckoffUpdateRef.current?.(link.profile_id);
       }
-      if ("unattributed" in result && Array.isArray(result.unattributed)) {
-        receivedReconcileResult = true;
+      if (result.unattributed) {
+        const snapshot = JSON.stringify(result.unattributed);
+        const previous = unattributedSnapshots.current.get(outcome.integrationId) ?? "[]";
+        unattributedSnapshots.current.set(outcome.integrationId, snapshot);
+        if (snapshot !== previous) unattributedChanged = true;
       }
     }
-    if (receivedReconcileResult) onUnattributedUpdateRef.current?.();
+    if (unattributedChanged) onUnattributedUpdateRef.current?.();
   }, [reconciliation]);
 
   useEffect(() => {

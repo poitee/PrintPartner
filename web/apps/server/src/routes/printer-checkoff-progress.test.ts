@@ -352,6 +352,84 @@ describe("printer progress route", () => {
     expect(mutableParts).not.toHaveBeenCalled();
   });
 
+  it("scopes watching links by Build and host while preserving the global queue", async () => {
+    const { app, repo, plan } = await setup();
+    const otherPlan = repo.createProfile("Other Build");
+    const links = [
+      { profile_id: plan.id, integration_id: "prusa-1" },
+      { profile_id: otherPlan.id, integration_id: "prusa-1" },
+      { profile_id: plan.id, integration_id: "prusa-2" },
+    ].map((scope, index) => createPrinterCheckoffLink(repo, {
+      ...scope,
+      printer_id: `printer-${index}`,
+      host_name: `Printer ${index}`,
+      filename: `part-${index}.bgcode`,
+      units: [],
+    })!);
+    const base = await app.listen({ host: "127.0.0.1", port: 0 });
+    const scoped = await fetch(`${base}/printer-checkoff?state=watching&profile_id=${plan.id}&integration_id=prusa-1`);
+    expect(scoped.status).toBe(200);
+    expect(await scoped.json()).toEqual({ links: [expect.objectContaining({ id: links[0]!.id })] });
+    const global = await fetch(`${base}/printer-checkoff?state=watching`);
+    expect(await global.json()).toEqual({ links: links.map((link) => expect.objectContaining({ id: link.id })) });
+    const host = await fetch(`${base}/printer-checkoff?state=watching&integration_id=prusa-1`);
+    expect(await host.json()).toEqual({ links: [expect.objectContaining({ id: links[0]!.id }), expect.objectContaining({ id: links[1]!.id })] });
+  });
+
+  it("does not rewrite an unchanged printing snapshot", async () => {
+    const { repo, plan } = await setup();
+    createPrinterCheckoffLink(repo, { profile_id: plan.id, integration_id: "prusa-1", printer_id: "core-one", host_name: "Core One", filename: "part.gcode", units: [] });
+    const writes = vi.spyOn(repo, "setSetting");
+    reconcilePrinterCheckoff(repo, "prusa-1", { state: "printing", filename: "part.gcode", progress: 40 });
+    expect(writes).toHaveBeenCalledTimes(1);
+    writes.mockClear();
+    for (let index = 0; index < 72; index += 1) {
+      reconcilePrinterCheckoff(repo, "prusa-1", { state: "printing", filename: "part.gcode", progress: 40 });
+    }
+    expect(writes).not.toHaveBeenCalled();
+    reconcilePrinterCheckoff(repo, "prusa-1", { state: "printing", filename: "part.gcode", progress: 41 });
+    expect(writes).toHaveBeenCalledTimes(1);
+  });
+
+  it("measures consolidated queue reads against the former four-request refresh", async () => {
+    const { app, repo, plan, bracket } = await setup();
+    const states = ["watching", "awaiting_verify", "host_failed", "verified"] as const;
+    const rows = Array.from({ length: 2000 }, (_, index) => ({
+      id: `load-${index}`, profile_id: plan.id, integration_id: `host-${index % 20}`,
+      printer_id: `printer-${index % 20}`, host_name: "Load fixture", filename: `part-${index}.gcode`,
+      units: [{ part_id: bracket.id, unit_index: 0 }], state: states[index % states.length],
+      saw_active: true, created_at: new Date().toISOString(),
+    }));
+    repo.setSetting("printer.checkoff_links", JSON.stringify(rows));
+    const reads = vi.spyOn(repo, "getSetting");
+    const report = [];
+    for (const combined of [false, true]) {
+      const elapsed = [];
+      let bytes = 0;
+      let sampledHeapBytes = 0;
+      reads.mockClear();
+      for (let iteration = 0; iteration < 20; iteration += 1) {
+        const start = performance.now();
+        const responses = await Promise.all((combined ? [""] : states).map((state) =>
+          app.inject(`/printer-checkoff?profile_id=${plan.id}${state ? `&state=${state}` : ""}`),
+        ));
+        elapsed.push(performance.now() - start);
+        expect(responses.every((response) => response.statusCode === 200)).toBe(true);
+        for (const response of responses) {
+          expect(response.json()).toHaveProperty("links.length", combined ? rows.length : rows.length / states.length);
+        }
+        bytes = responses.reduce((sum, response) => sum + Buffer.byteLength(response.payload), 0);
+        sampledHeapBytes = Math.max(sampledHeapBytes, process.memoryUsage().heapUsed);
+      }
+      const queueReads = reads.mock.calls.filter(([key]) => key === "printer.checkoff_links").length;
+      expect(queueReads).toBe(combined ? 20 : 80);
+      elapsed.sort((a, b) => a - b);
+      report.push({ combined, rows: rows.length, samples: elapsed.length, queueReads, responseBytes: bytes,
+        p50Ms: elapsed[10], p95Ms: elapsed[18], sampledHeapBytes });
+    }
+    process.stdout.write(`QUEUE_REFRESH_BENCHMARK ${JSON.stringify(report)}\n`);
+  });
+
   it("durably repairs a legacy zero-unit awaiting card before returning it", async () => {
     const { app, repo, plan, bracket } = await setup();
     const link = createPrinterCheckoffLink(repo, {

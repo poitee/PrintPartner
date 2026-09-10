@@ -80,35 +80,10 @@ describe("GlobalProductionPage", () => {
     api.fetchPrinterCheckoffLinks.mockReset();
     api.fetchUnattributedPrints.mockReset();
     api.reloadProfiles.mockReset();
-    api.fetchPrinterCheckoffLinks.mockImplementation(async (options?: { state?: string }) => {
-      if (options?.state === "awaiting_verify") {
-        return {
-          links: [
-            {
-              id: "await-1",
-              state: "awaiting_verify",
-              profile_id: 7,
-              host_name: "Core One",
-              filename: "plate-01.gcode",
-            },
-          ],
-        };
-      }
-      if (options?.state === "host_failed") {
-        return {
-          links: [
-            {
-              id: "fail-1",
-              state: "host_failed",
-              profile_id: 8,
-              host_name: "X1C",
-              filename: "bad.gcode",
-            },
-          ],
-        };
-      }
-      return { links: [] };
-    });
+    api.fetchPrinterCheckoffLinks.mockResolvedValue({ links: [
+      { id: "await-1", state: "awaiting_verify", profile_id: 7, host_name: "Core One", filename: "plate-01.gcode" },
+      { id: "fail-1", state: "host_failed", profile_id: 8, host_name: "X1C", filename: "bad.gcode" },
+    ] });
     api.fetchUnattributedPrints.mockResolvedValue([
       { id: "u1", filename: "orphan.gcode", candidates: [] },
     ]);
@@ -153,10 +128,7 @@ describe("GlobalProductionPage", () => {
     await waitFor(() => {
       expect(screen.getByText("Live printers").textContent).toBe("Live printers");
     });
-    expect(api.fetchPrinterCheckoffLinks).toHaveBeenCalledWith({ state: "watching" });
-    expect(api.fetchPrinterCheckoffLinks).toHaveBeenCalledWith({ state: "awaiting_verify" });
-    expect(api.fetchPrinterCheckoffLinks).toHaveBeenCalledWith({ state: "host_failed" });
-    expect(api.fetchPrinterCheckoffLinks).toHaveBeenCalledWith({ state: "verified" });
+    expect(api.fetchPrinterCheckoffLinks).toHaveBeenCalledExactlyOnceWith();
     expect(
       api.fetchPrinterCheckoffLinks.mock.calls.every(
         (call) => (call[0] as { profile_id?: number } | undefined)?.profile_id == null,

@@ -7,6 +7,7 @@ import { useAuth } from "../../context/AuthContext";
 import { useJobRunner } from "../../hooks/useJobRunner";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
+import ReferenceSharePanel from "./ReferenceSharePanel";
 import {
   Dialog,
   DialogContent,
@@ -57,10 +58,13 @@ export default function ShareBuildExportDialog({ open, onOpenChange, profileId }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent className="min-w-0 grid-cols-[minmax(0,1fr)] overflow-x-hidden">
         <DialogHeader>
           <DialogTitle>Share build</DialogTitle>
         </DialogHeader>
+        {open && <ReferenceSharePanel key={profileId} profileId={profileId} />}
+        <details className="border-t border-border pt-3">
+          <summary className="cursor-pointer text-sm">Legacy Kit export and same-server copy</summary>
         <p className="text-sm text-muted-foreground">
           Config only — no STL files. Includes manifest selections, source refs, parts, and
           filament assignments.
@@ -129,6 +133,7 @@ export default function ShareBuildExportDialog({ open, onOpenChange, profileId }
             </Button>
           </div>
         )}
+        </details>
       </DialogContent>
     </Dialog>
   );
