@@ -64,6 +64,24 @@ describe("references-only sharing routes", () => {
     }
   });
 
+  it("rejects Git bundles when pretty JSON exceeds 4 MiB despite a smaller request", async () => {
+    const { app } = await fixture();
+    const payload = referenceShareSchema.parse({
+      format: "printpartner-reference-share", version: 1, kind: "build", title: "Large recipe",
+      sources: [{ key: "source-1", name: "Source", location: { kind: "manual" },
+        revision: { branch: null, tag: null, commit: null }, file_rules: [] }],
+      layers: [{ source: "source-1", role: "base" }], selections: {}, include: [], exclude: [], replacements: {},
+      parts: Array.from({ length: 30000 }, (_, index) => ({
+        source: "source-1", path: `part-${index}.stl`, quantity: 1, included: true, role: "primary", color: null,
+      })),
+    });
+    const limit = 4 * 1024 * 1024;
+    expect(Buffer.byteLength(JSON.stringify(payload))).toBeLessThan(limit);
+    expect(Buffer.byteLength(JSON.stringify(payload, null, 2))).toBeGreaterThan(limit);
+    const response = await app.inject({ method: "POST", url: "/reference-shares/git", payload });
+    expect(response.statusCode).toBe(413);
+  });
+
   it("rejects missing Builds and invalid ids", async () => {
     const { app } = await fixture();
     expect((await app.inject("/plans/99999/reference-share")).statusCode).toBe(404);

@@ -6,8 +6,8 @@ const publisherHosts = new Set([
 ]);
 
 export function isSharePublisherUrl(value: string): boolean {
-  const match = /^https:\/\/([^/]+)(?:\/[^?#\s]*)?$/.exec(value);
-  return match?.[1] != null && publisherHosts.has(match[1]);
+  const match = /^https:\/\/([^/]+)(?:\/[^?#\s]*)?$/i.exec(value);
+  return match?.[1] != null && publisherHosts.has(match[1].toLowerCase());
 }
 
 const text = z.string().max(2000);

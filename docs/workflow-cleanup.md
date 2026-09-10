@@ -123,3 +123,11 @@ All three Compose configurations validated. Local Docker runtime verification
 was unavailable because this environment cannot access the Docker socket.
 The PR's container checks remain a merge prerequisite. Physical printers,
 external accounts, Postgres, S3, and the user's production server were not tested.
+
+PR review added three regressions: Checkoff must not request fleet links without
+a selected Build; Git packaging must reject pretty-printed manifests over 4 MiB
+even when the compact request is smaller; publisher schemes and hosts are
+case-insensitive. All three failed before the fixes. The fixes passed 121 focused
+tests, changed-file lint, and both application type checks. Browser rechecks
+passed sharing, logging, Build-scoped queues, and an empty Checkoff page with no
+fleet-queue request. The updated commit requires a fresh CI run before merge.

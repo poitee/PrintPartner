@@ -97,9 +97,9 @@ export function useCheckoffPrinterActivity(input: {
   }, [markSuccess, reportError]);
 
   const refreshLinks = useCallback(() => {
-    if (!engineReady) return;
+    if (!engineReady || profileId == null) return;
     const requestId = ++linksRequestId.current;
-    void fetchPrinterCheckoffLinks({ profile_id: profileId ?? undefined })
+    void fetchPrinterCheckoffLinks({ profile_id: profileId })
       .then((res) => {
         if (!mounted.current || requestId !== linksRequestId.current) return;
         setWatchingLinks(res.links.filter((link) => link.state === "watching"));

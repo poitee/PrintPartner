@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import type { AppRepository } from "../db/repository.js";
 import { referenceShareSchema } from "@print-partner/contracts";
 import {
-  exportBuildReferenceShare, referenceShareGitBundle, referenceShareWarnings,
+  exportBuildReferenceShare, referenceShareGitBundle, referenceShareWarnings, serializeReferenceShare,
 } from "../services/reference-sharing.js";
 
 export function registerReferenceSharingRoutes(app: FastifyInstance, repo: AppRepository): void {
@@ -41,6 +41,9 @@ export function registerReferenceSharingRoutes(app: FastifyInstance, repo: AppRe
   app.post("/reference-shares/git", { bodyLimit: 4 * 1024 * 1024 }, async (request, reply) => {
     const parsed = referenceShareSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ detail: "Invalid references-only manifest" });
+    if (Buffer.byteLength(serializeReferenceShare(parsed.data), "utf8") > 4 * 1024 * 1024) {
+      return reply.code(413).send({ detail: "Reference manifest exceeds the 4 MiB sharing limit" });
+    }
     return reply.header("Cache-Control", "no-store").type("application/zip")
       .header("Content-Disposition", 'attachment; filename="printpartner-git-share.zip"')
       .send(Buffer.from(referenceShareGitBundle(parsed.data)));

@@ -37,4 +37,9 @@ describe("reference sharing boundary", () => {
     expect(isSharePublisherUrl("https://github.com/MillenniumMachines/Milo-V2.0")).toBe(true);
     expect(isSharePublisherUrl("https://www.printables.com/model/123-example")).toBe(true);
   });
+  it("accepts mixed-case HTTPS schemes and publisher hosts", () => {
+    expect(isSharePublisherUrl("https://GitHub.com/owner/repository")).toBe(true);
+    expect(isSharePublisherUrl("HTTPS://WWW.PRINTABLES.COM/model/123-example")).toBe(true);
+    expect(isSharePublisherUrl("HTTPS://GitHub.com.evil.test/owner/repository")).toBe(false);
+  });
 });

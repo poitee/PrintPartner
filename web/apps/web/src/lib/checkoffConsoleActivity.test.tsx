@@ -35,6 +35,14 @@ it("reads one Build queue per refresh and partitions its states", async () => {
   await waitFor(() => expect(fetchPrinterCheckoffLinks).toHaveBeenCalledTimes(2));
 });
 
+it("does not request fleet links when no Build is selected", async () => {
+  vi.mocked(fetchPrinterCheckoffLinks).mockResolvedValue({ links });
+  const { result } = renderHook(() => useCheckoffPrinterActivity({ engineReady: true, profileId: null }));
+  await act(async () => result.current.refreshLinks());
+  expect(fetchPrinterCheckoffLinks).not.toHaveBeenCalled();
+  expect(result.current.watchingLinks).toEqual([]);
+});
+
 it("ignores a previous Build's response after switching Builds", async () => {
   let resolvePrevious!: (value: { links: PrinterCheckoffLink[] }) => void;
   vi.mocked(fetchPrinterCheckoffLinks)
