@@ -17,6 +17,7 @@ type Props = {
   onRemove: (part: ReviewPart) => void;
   onRestore: (part: ReviewPart) => void;
   onPreview: (part: ReviewPart) => void;
+  onColor?: (part: ReviewPart) => void;
 };
 
 /**
@@ -31,6 +32,7 @@ export default function PartsGridCard({
   onRemove,
   onRestore,
   onPreview,
+  onColor,
 }: Props) {
   const qty = part.quantity_override ?? part.quantity_effective;
   const warn = partWarningNote(part, review);
@@ -70,6 +72,7 @@ export default function PartsGridCard({
         >
           {note}
         </p>
+        {onColor && <Button variant="outline" size="sm" disabled={busy || !part.included} aria-label={`Change color for ${part.filename}`} onClick={() => onColor(part)}>Change color</Button>}
         {part.included && (
           <QuantityStepper
             part={part}

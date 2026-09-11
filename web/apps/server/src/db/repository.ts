@@ -47,7 +47,7 @@ import {
   roleFilamentSettingKey,
   saveRoleFilamentDefault,
 } from "../services/role-filament-store.js";
-import { getColorById, resolvePartFilamentHex } from "../services/filament-catalog.js";
+import { getColorById } from "../services/filament-catalog.js";
 import type { EditableKitRecipe } from "../services/export-kit.js";
 import { REMOTE_CHECKED_AT_KEY, REMOTE_UPDATE_STATUS_KEY } from "../services/source-update-check.js";
 import {
@@ -7662,11 +7662,6 @@ export class AppRepository {
       {
         role: string;
         part_count: number;
-        filament_color_id: string | null;
-        filament_custom_hex: string | null;
-        spoolman_spool_id: string | null;
-        filament_display: string;
-        filament_hex: string | null;
         colorCounts: Map<string, number>;
         customHexCounts: Map<string, number>;
         spoolCounts: Map<string, number>;
@@ -7676,15 +7671,9 @@ export class AppRepository {
     const ensureBucket = (role: string) => {
       let row = buckets.get(role);
       if (!row) {
-        const saved = savedDefaults[role];
         row = {
           role,
           part_count: 0,
-          filament_color_id: saved?.filament_color_id ?? null,
-          filament_custom_hex: saved?.filament_custom_hex ?? null,
-          spoolman_spool_id: saved?.spoolman_spool_id ?? null,
-          filament_display: "",
-          filament_hex: null,
           colorCounts: new Map(),
           customHexCounts: new Map(),
           spoolCounts: new Map(),
@@ -7709,10 +7698,6 @@ export class AppRepository {
       if (part.spoolmanSpoolId) {
         row.spoolCounts.set(part.spoolmanSpoolId, (row.spoolCounts.get(part.spoolmanSpoolId) ?? 0) + 1);
       }
-      const color = part.filamentColorId ? getColorById(part.filamentColorId) : null;
-      if (color?.combo_label && !row.filament_display) row.filament_display = color.combo_label;
-      const hex = resolvePartFilamentHex(part);
-      if (hex && !row.filament_hex) row.filament_hex = hex;
     }
 
     const majority = (counts: Map<string, number>): string | null => {
@@ -7732,25 +7717,18 @@ export class AppRepository {
         const customHex = majority(row.customHexCounts);
         const spoolId = majority(row.spoolCounts);
         const saved = savedDefaults[row.role];
-        const filament_color_id =
-          colorId ?? (row.part_count === 0 ? (saved?.filament_color_id ?? null) : row.filament_color_id);
-        const filament_custom_hex =
-          colorId != null
-            ? null
-            : (customHex ?? (row.part_count === 0 ? (saved?.filament_custom_hex ?? null) : row.filament_custom_hex));
-        const spoolman_spool_id =
-          spoolId ?? (row.part_count === 0 ? (saved?.spoolman_spool_id ?? null) : row.spoolman_spool_id);
+        const filament_color_id = saved ? saved.filament_color_id : colorId;
+        const filament_custom_hex = saved ? saved.filament_custom_hex : colorId ? null : customHex;
+        const spoolman_spool_id = saved ? saved.spoolman_spool_id : spoolId;
+        const color = filament_color_id ? getColorById(filament_color_id) : null;
         return {
           role: row.role,
           part_count: row.part_count,
           filament_color_id,
           spoolman_spool_id,
           filament_custom_hex,
-          filament_display: row.filament_display,
-          filament_hex:
-            filament_custom_hex ??
-            row.filament_hex ??
-            (filament_color_id ? (getColorById(filament_color_id)?.hex ?? null) : null),
+          filament_display: color?.combo_label ?? "",
+          filament_hex: filament_custom_hex ?? color?.hex ?? null,
         };
       });
   }

@@ -49,6 +49,7 @@ import PartPreviewDialog from "../parts/PartPreviewDialog";
 import PartThumbExpandButton from "../parts/PartThumbExpandButton";
 import FilterSelect, { filterSelectOut, filterSelectValue } from "./FilterSelect";
 import PartSpoolPicker from "../PartSpoolPicker";
+import PartColorDialog from "./PartColorDialog";
 import SpoolRemainingBadge from "../SpoolRemainingBadge";
 import PartsGridCard from "./PartsGridCard";
 import ReviewSheetMobileCard from "./ReviewSheetMobileCard";
@@ -90,6 +91,7 @@ function ReviewSheetRow({
   onToggleUnit,
   onSetAllPrinted,
   onPreview,
+  onColor,
 }: {
   part: ReviewPart;
   viewMode: ReviewViewMode;
@@ -110,6 +112,7 @@ function ReviewSheetRow({
   onToggleUnit: (part: ReviewPart, unitIndex: number) => void;
   onSetAllPrinted: (part: ReviewPart, completed: boolean) => void;
   onPreview: (part: ReviewPart) => void;
+  onColor: (part: ReviewPart) => void;
 }) {
   const printDone =
     part.printed_count >= part.quantity_effective && part.quantity_effective > 0;
@@ -217,6 +220,7 @@ function ReviewSheetRow({
               {part.role && <span className="sheet-role">{part.role}</span>}
               {!part.included && <span className="sheet-role">excluded</span>}
             </span>
+            <Button variant="outline" size="sm" disabled={busy || !part.included} aria-label={`Change color for ${part.filename}`} onClick={() => onColor(part)}>Change color</Button>
           </div>
         </div>
       </td>
@@ -307,6 +311,7 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
   );
   const roleFilaments = roleFilamentsQuery.data ?? [];
   const [previewPart, setPreviewPart] = useState<ReviewPart | null>(null);
+  const [colorPart, setColorPart] = useState<ReviewPart | null>(null);
   const [printPrep, setPrintPrep] = useState(false);
   const sheetArticleRef = useRef<HTMLElement>(null);
   const isMobileLayout = useMediaQuery("(max-width: 767px)");
@@ -494,6 +499,7 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
               onToggleUnit={onToggleUnit}
               onSetAllPrinted={onSetAllPrinted}
               onPreview={setPreviewPart}
+              onColor={setColorPart}
             />
           ))}
         </div>
@@ -549,6 +555,7 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
                   onToggleUnit={onToggleUnit}
                   onSetAllPrinted={onSetAllPrinted}
                   onPreview={setPreviewPart}
+                  onColor={setColorPart}
                 />
               );
             })}
@@ -571,6 +578,7 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
           onRemove={onRemove}
           onRestore={onRestore}
           onPreview={setPreviewPart}
+          onColor={setColorPart}
         />
       ))}
     </div>
@@ -868,6 +876,7 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
       )}
 
       <PartPreviewDialog part={previewPart} onClose={() => setPreviewPart(null)} />
+      {colorPart && <PartColorDialog key={`${review.profile_id}:${colorPart.id}`} part={colorPart} profileId={review.profile_id} onClose={() => setColorPart(null)} />}
     </section>
   );
 });
