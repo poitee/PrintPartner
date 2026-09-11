@@ -92,8 +92,17 @@ try {
     assert.equal(part.printed_count, before.printed_count);
     assert.equal(part.filament_hex, part.id === target.id ? "#ff6600" : before.filament_hex);
   }
-  const invalid = await globalThis.fetch(`${api}/parts/${target.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ filament_custom_hex: "not-a-color" }) });
-  assert.equal(invalid.status, 400);
+  for (const body of [
+    { filament_custom_hex: "not-a-color" },
+    { quantity_override: 99 },
+    { included: false },
+    { filament_custom_hex: "#ffffff", included: false },
+    { filament_color_id: otherColor.id, filament_custom_hex: "#ffffff" },
+  ]) {
+    const invalid = await globalThis.fetch(`${api}/parts/${target.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    assert.equal(invalid.status, 400);
+  }
+  assert.deepEqual((await request(`/plans/${build.id}/parts`)).parts, saved);
   await page.getByRole("button", { name: "Table", exact: true }).click();
   dialog = await openColor();
   await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
