@@ -272,7 +272,7 @@ export default function StlRoutePanel({
       </fieldset>
 
       <label className="flex items-center gap-2"><input type="checkbox" disabled={pack.phase === "running"} checked={customEnabled} onChange={(event) => { setCustomEnabled(event.target.checked); changeFilenameGrouping(undefined); }} />Group by filename rules, such as print settings</label>
-      {customEnabled && <fieldset disabled={pack.phase === "running"}><FilenameGroupingEditor key={profileId} profileId={profileId} onChange={changeFilenameGrouping} /></fieldset>}
+      {customEnabled && <fieldset disabled={pack.phase === "running"}><FilenameGroupingEditor key={profileId} profileId={profileId} selectedTokens={selectedTokens} scope={scope} onChange={changeFilenameGrouping} /></fieldset>}
       <div className="flex flex-wrap items-center gap-3">
         <Button
           size="shop"

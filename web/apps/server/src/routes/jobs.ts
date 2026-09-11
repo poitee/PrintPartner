@@ -952,7 +952,7 @@ export async function registerJobRoutes(
     const capture = captureAcceptedOperationalExport({ repository: repo, profileId });
     const parts = capture.kind === "ready" ? capture.export.parts.filter((part) => part.included).map((part) => ({
       relativePath: part.relativePath, sourceLayer: part.sourceLayer, role: part.role,
-      units: part.units.length,
+      units: part.units.map((unit) => ({ token: unit.token, completed: unit.completed })),
     })) : [];
     return { definition, parts };
   });

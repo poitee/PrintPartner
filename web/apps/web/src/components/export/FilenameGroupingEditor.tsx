@@ -9,12 +9,14 @@ import { Button } from "../ui/button";
 
 const responseSchema = z.object({
   definition: filenameGroupingSchema,
-  parts: z.array(z.object({ relativePath: z.string(), sourceLayer: z.string(), role: z.string(), units: z.number() })),
+  parts: z.array(z.object({ relativePath: z.string(), sourceLayer: z.string(), role: z.string(), units: z.array(z.object({ token: z.string(), completed: z.boolean() })) })),
 });
 
-export default function FilenameGroupingEditor({ profileId, onChange }: {
+export default function FilenameGroupingEditor({ profileId, onChange, selectedTokens = [], scope = "all" }: {
   profileId: number;
   onChange: (value: FilenameExport | undefined) => void;
+  selectedTokens?: readonly string[];
+  scope?: "all" | "remaining";
 }) {
   const id = useId();
   const [data, setData] = useState<z.infer<typeof responseSchema> | null>(null);
@@ -35,7 +37,11 @@ export default function FilenameGroupingEditor({ profileId, onChange }: {
   const parsed = filenameGroupingSchema.safeParse(definition);
   const parts = data?.parts ?? [];
   const matches = definition ? parts.map((part) => ({ ...part, group: matchFilenameGroup(definition, part.relativePath, part.sourceLayer) })) : [];
-  const selected = matches.filter((part) => (!role || part.role === role) && (!group || part.group === group.trim()));
+  const tokenFilter = new Set(selectedTokens);
+  const selected = matches.filter((part) =>
+    (!role || part.role === role) && (!group || part.group === group.trim()) &&
+    part.units.some((unit) => (scope === "all" || !unit.completed) && (tokenFilter.size === 0 || tokenFilter.has(unit.token))),
+  );
   const conflict = selected.some((part) => part.group === "Conflict");
   const valid = parsed.success && !conflict;
   useEffect(() => {
@@ -77,7 +83,7 @@ export default function FilenameGroupingEditor({ profileId, onChange }: {
     }}><option value="color_group">Color → {data.definition.name}</option><option value="group">{data.definition.name} only</option><option value="group_color">{data.definition.name} → Color</option></select>
     <label className="block" htmlFor={`${id}-role`}>Color role</label><select id={`${id}-role`} className="border rounded p-2 bg-background" value={role} onChange={(event) => setRole(event.target.value)}><option value="">All colors</option>{[...new Set(parts.map((part) => part.role))].map((value) => <option key={value}>{value}</option>)}</select>
     <label className="block" htmlFor={`${id}-group`}>Export group</label><select id={`${id}-group`} className="border rounded p-2 bg-background" value={group} onChange={(event) => setGroup(event.target.value)}><option value="">All groups</option>{groups.map((value) => <option key={value}>{value}</option>)}</select>
-    <p>{selected.length} matching parts in the included Plan. Required-unit selection and remaining-only filtering still apply when downloading.</p>
+    <p>{selected.length} matching parts after color, group, Required-unit, and remaining-only filters.</p>
     {conflict && <p role="alert">Some filenames match different groups. Fix the rules or assign those parts below before downloading.</p>}
     <details><summary>Preview matches and assign exceptions</summary>
       <div className="max-h-80 overflow-auto"><table className="w-full text-sm"><thead><tr><th>File</th><th>Color role</th><th>Group</th><th>Override</th></tr></thead><tbody>

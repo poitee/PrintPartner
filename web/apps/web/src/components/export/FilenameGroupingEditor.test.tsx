@@ -11,8 +11,8 @@ afterEach(() => { cleanup(); vi.clearAllMocks(); });
 describe("filename grouping editor", () => {
   it("previews groups, intersects color and group, and resolves conflicts with an override", async () => {
     api.fetch.mockResolvedValue({ definition: miloFilenameGrouping, parts: [
-      { relativePath: "[a]-mount-S.stl", sourceLayer: "base", role: "accent", units: 2 },
-      { relativePath: "cover-A.stl", sourceLayer: "base", role: "primary", units: 1 },
+      { relativePath: "[a]-mount-S.stl", sourceLayer: "base", role: "accent", units: [{ token: "mount-1", completed: false }, { token: "mount-2", completed: false }] },
+      { relativePath: "cover-A.stl", sourceLayer: "base", role: "primary", units: [{ token: "cover-1", completed: false }] },
     ] });
     const onChange = vi.fn();
     render(<FilenameGroupingEditor profileId={7} onChange={onChange} />);
@@ -29,6 +29,35 @@ describe("filename grouping editor", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save groups" }));
     await waitFor(() => expect(api.fetch).toHaveBeenCalledWith("/plans/7/filename-grouping", expect.objectContaining({ method: "PUT" })));
     await screen.findByText("Filename groups saved for this Build.");
+  });
+
+  it("blocks only conflicting parts within the selected units and remaining scope", async () => {
+    const definition = {
+      ...miloFilenameGrouping,
+      rules: [...miloFilenameGrouping.rules, { suffix: "S", group: "Other" }],
+    };
+    api.fetch.mockResolvedValue({ definition, parts: [
+      { relativePath: "cover-A.stl", sourceLayer: "base", role: "primary", units: [{ token: "clean", completed: false }] },
+      { relativePath: "finished-S.stl", sourceLayer: "base", role: "primary", units: [{ token: "finished", completed: true }] },
+      { relativePath: "unselected-S.stl", sourceLayer: "base", role: "primary", units: [{ token: "unselected", completed: false }] },
+    ] });
+    const onChange = vi.fn();
+    const { rerender } = render(<FilenameGroupingEditor profileId={7} onChange={onChange} selectedTokens={["clean", "finished"]} scope="remaining" />);
+    await screen.findByLabelText("Grouping name");
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(onChange).toHaveBeenLastCalledWith({ definition, arrangement: "color_group" });
+
+    rerender(<FilenameGroupingEditor profileId={7} onChange={onChange} selectedTokens={["clean", "finished"]} scope="all" />);
+    expect(screen.getByRole("alert").textContent).toContain("different groups");
+    expect(onChange).toHaveBeenLastCalledWith(undefined);
+
+    rerender(<FilenameGroupingEditor profileId={7} onChange={onChange} selectedTokens={["clean"]} scope="all" />);
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(onChange).toHaveBeenLastCalledWith({ definition, arrangement: "color_group" });
+
+    rerender(<FilenameGroupingEditor profileId={7} onChange={onChange} selectedTokens={[]} scope="remaining" />);
+    expect(screen.getByRole("alert").textContent).toContain("different groups");
+    expect(onChange).toHaveBeenLastCalledWith(undefined);
   });
 
   it("does not enable export if loading the rules fails", async () => {
