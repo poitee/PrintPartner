@@ -6,6 +6,7 @@ import Preview3D from "./Preview3D";
 
 const previewRuntime = vi.hoisted(() => ({
   camera: null as {
+    up: { toArray: () => number[] };
     position: {
       clone: () => {
         distanceTo: (target: { x: number; y: number; z: number }) => number;
@@ -153,6 +154,8 @@ describe("Preview3D accessibility", () => {
 
     expect(dispatched).toBe(false);
     expect(after).not.toEqual(before);
+    expect(previewRuntime.camera!.up.toArray()).toEqual([0, 0, 1]);
+    expect(after[2]).toBeCloseTo(before[2]!, 5);
   });
 
   it("clamps keyboard zoom to the OrbitControls distance limits", async () => {

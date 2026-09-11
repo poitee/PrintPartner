@@ -83,3 +83,12 @@ export function createPreviewMaterial(
     roughness: theme.material.roughness,
   });
 }
+
+/** Frame STL coordinates with the same Z-up convention as the print bed. */
+export function createStlPreviewCamera(maxDim: number): THREE.PerspectiveCamera {
+  const camera = new THREE.PerspectiveCamera(45, 1, 0.1, maxDim * 20);
+  camera.up.set(0, 0, 1);
+  camera.position.set(maxDim * 1.4, -maxDim * 1.6, maxDim * 1.1);
+  camera.lookAt(0, 0, 0);
+  return camera;
+}

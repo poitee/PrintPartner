@@ -9,7 +9,7 @@ import {
   uploadPartThumbnail,
 } from "../api/endpoints/media.js";
 import { fetchWithRetry } from "./fetchWithRetry.js";
-import { addPreviewRig, createPreviewMaterial, createPreviewRig } from "./previewRig.js";
+import { addPreviewRig, createPreviewMaterial, createPreviewRig, createStlPreviewCamera } from "./previewRig.js";
 import { previewTheme } from "./previewTheme.js";
 import { getCachedMeshBuffer, cacheMeshBuffer } from "./meshCache.js";
 import { getThumbnailCacheVersion } from "./thumbnailCache.js";
@@ -156,11 +156,9 @@ function renderBufferToBlob(buffer: ArrayBuffer, hex: string): Promise<Blob | nu
 
   const scene = new THREE.Scene();
   scene.add(mesh);
-  addPreviewRig(scene, createPreviewRig(theme, { distance: maxDim * 2 }));
+  addPreviewRig(scene, createPreviewRig(theme, { up: "z", distance: maxDim * 2 }));
 
-  const camera = new THREE.PerspectiveCamera(45, 1, 0.1, maxDim * 20);
-  camera.position.set(maxDim * 1.4, maxDim * 1.1, maxDim * 1.6);
-  camera.lookAt(0, 0, 0);
+  const camera = createStlPreviewCamera(maxDim);
 
   return new Promise((resolve) => {
     let settled = false;

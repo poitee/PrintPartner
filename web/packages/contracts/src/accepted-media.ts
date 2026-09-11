@@ -1,1 +1,1 @@
-export const THUMBNAIL_RENDERER_VERSION = "2";
+export const THUMBNAIL_RENDERER_VERSION = "3";

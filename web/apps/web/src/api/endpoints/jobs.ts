@@ -1,4 +1,4 @@
-import type { JobSnapshot } from "@print-partner/contracts";
+import type { JobSnapshot, FilenameExport } from "@print-partner/contracts";
 import { engineFetch } from "../engineTransport";
 
 const JOB_TERMINAL = new Set(["done", "error", "cancelled"]);
@@ -9,6 +9,7 @@ export type ExportStlPackOptions = {
   profile_id: number;
   missing_only?: boolean;
   group_by?: StlPackGroupBy;
+  filename_grouping?: FilenameExport;
   /**
    * Required-unit tokens the pack is limited to, in the branded `ppu_` spelling
    * the Accepted Plan uses. Omitted or empty means every included part, which
@@ -42,7 +43,7 @@ export async function startExportKitBundle(
 
 export async function startExportStlPack(
   profileId: number,
-  options?: Pick<ExportStlPackOptions, "missing_only" | "group_by" | "unit_tokens">,
+  options?: Pick<ExportStlPackOptions, "missing_only" | "group_by" | "unit_tokens" | "filename_grouping">,
 ): Promise<string> {
   const body = await engineFetch<{ job_id: string }>("/jobs/export-stl-pack", {
     method: "POST",
@@ -50,6 +51,7 @@ export async function startExportStlPack(
       profile_id: profileId,
       missing_only: options?.missing_only ?? false,
       group_by: options?.group_by ?? "color_dir",
+      ...(options?.filename_grouping ? { filename_grouping: options.filename_grouping } : {}),
       ...(options?.unit_tokens?.length ? { unit_tokens: [...options.unit_tokens] } : {}),
     }),
   });

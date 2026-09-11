@@ -34,6 +34,7 @@ import {
   applyPreviewRig,
   createPreviewMaterial,
   createPreviewRig,
+  createStlPreviewCamera,
   type PreviewRig,
 } from "../lib/previewRig";
 import { usePreviewTheme, type PreviewTheme } from "../lib/previewTheme";
@@ -101,7 +102,7 @@ function buildDimensionGroup(size: THREE.Vector3, theme: PreviewTheme): THREE.Gr
     group.add(label);
   };
 
-  // X — along the bottom-front edge.
+  // X measurement.
   const xy = -half.y - off;
   const xz = half.z + off;
   addLine(v(-half.x, xy, xz), v(half.x, xy, xz));
@@ -109,7 +110,7 @@ function buildDimensionGroup(size: THREE.Vector3, theme: PreviewTheme): THREE.Gr
   addLine(v(half.x, xy, xz - tick), v(half.x, xy, xz + tick));
   addLabel(`X ${formatMm(size.x)} mm`, v(0, xy, xz));
 
-  // Y — along the front-right vertical edge.
+  // Y measurement.
   const yx = half.x + off;
   const yz = half.z + off;
   addLine(v(yx, -half.y, yz), v(yx, half.y, yz));
@@ -117,7 +118,7 @@ function buildDimensionGroup(size: THREE.Vector3, theme: PreviewTheme): THREE.Gr
   addLine(v(yx - tick, half.y, yz), v(yx + tick, half.y, yz));
   addLabel(`Y ${formatMm(size.y)} mm`, v(yx, 0, yz));
 
-  // Z — along the bottom-right edge.
+  // Z measurement.
   const zx = half.x + off;
   const zy = -half.y - off;
   addLine(v(zx, zy, -half.z), v(zx, zy, half.z));
@@ -362,7 +363,7 @@ export default function Preview3D({
         // The same rig the inline thumbnail uses (lib/previewRig.ts), so the
         // 96px picture and this one agree. Studio adds a contact shadow, not
         // a second lighting scheme.
-        const rig = createPreviewRig(activeTheme, { distance: maxDim * 2 });
+        const rig = createPreviewRig(activeTheme, { up: "z", distance: maxDim * 2 });
         rigRef.current = rig;
         addPreviewRig(scene, rig);
         if (appearance === "studio") {
@@ -379,14 +380,12 @@ export default function Preview3D({
           groundMaterial = new THREE.ShadowMaterial({ opacity: activeTheme.shadowOpacity });
           shadowMaterialRef.current = groundMaterial;
           const ground = new THREE.Mesh(groundGeometry, groundMaterial);
-          ground.rotation.x = -Math.PI / 2;
-          ground.position.y = -size.y / 2 - maxDim * 0.035;
+          ground.position.z = -size.z / 2 - maxDim * 0.035;
           ground.receiveShadow = true;
           scene.add(ground);
         }
 
-        const camera = new THREE.PerspectiveCamera(45, 1, 0.1, maxDim * 20);
-        camera.position.set(maxDim * 1.4, maxDim * 1.1, maxDim * 1.6);
+        const camera = createStlPreviewCamera(maxDim);
         cameraRef.current = camera;
 
         renderer = new THREE.WebGLRenderer({
@@ -495,7 +494,8 @@ export default function Preview3D({
     const controls = controlsRef.current;
     if (!camera || !controls) return;
 
-    const offset = camera.position.clone().sub(controls.target);
+    const toYUp = new THREE.Quaternion().setFromUnitVectors(camera.up, new THREE.Vector3(0, 1, 0));
+    const offset = camera.position.clone().sub(controls.target).applyQuaternion(toYUp);
     const spherical = new THREE.Spherical().setFromVector3(offset);
     const rotationStep = Math.PI / 18;
     let handled = true;
@@ -533,7 +533,9 @@ export default function Preview3D({
       controls.minDistance,
       controls.maxDistance,
     );
-    camera.position.copy(controls.target).add(new THREE.Vector3().setFromSpherical(spherical));
+    camera.position.copy(controls.target).add(
+      new THREE.Vector3().setFromSpherical(spherical).applyQuaternion(toYUp.invert()),
+    );
     camera.lookAt(controls.target);
     controls.update();
   };

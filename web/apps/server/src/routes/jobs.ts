@@ -2,6 +2,9 @@ import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import {
   DATE_FORMAT_DEFAULT,
+  filenameGroupingSchema,
+  filenameExportSchema,
+  miloFilenameGrouping,
   JOB_KINDS,
   parseAcceptedPlateId,
   parseDirectExportJobResult,
@@ -22,6 +25,7 @@ import {
   parseStlPackUnitTokens,
   STL_PACK_MAX_SELECTED_UNITS,
   UnknownStlPackUnitsError,
+  FilenameGroupingConflictError,
   type StlPackGroupBy,
 } from "../services/export-stl-pack.js";
 import { materializeAcceptedChecklistHtml } from "../services/export-html.js";
@@ -546,6 +550,7 @@ export class InProcessJobRunner {
         tenantExportsDir: this.getExportsDir(),
         selection: missingOnly ? "missing" : "all",
         groupBy,
+        filenameGrouping: payload.filename_grouping === undefined ? undefined : filenameExportSchema.parse(payload.filename_grouping),
         roleOrder: naming.export_role_order,
         unitTokens: Array.isArray(payload.unit_tokens)
           ? payload.unit_tokens.filter((token): token is string => typeof token === "string")
@@ -553,6 +558,9 @@ export class InProcessJobRunner {
       });
       if (materialized.kind === "unknown_unit_tokens") {
         throw new UnknownStlPackUnitsError();
+      }
+      if (materialized.kind === "grouping_conflict") {
+        throw new FilenameGroupingConflictError();
       }
       if (materialized.kind === "limit_exceeded") {
         throw new AcceptedOperationalExportPublicError("export_limit_exceeded");
@@ -585,7 +593,7 @@ export class InProcessJobRunner {
     } catch (error) {
       // The operator picked units that no longer exist. That is their answer to
       // fix, not an export fault to log as unexpected.
-      if (error instanceof UnknownStlPackUnitsError) throw error;
+      if (error instanceof UnknownStlPackUnitsError || error instanceof FilenameGroupingConflictError) throw error;
       return this.acceptedOperationalExportFailure(
         error,
         "accepted_stl_export",
@@ -935,17 +943,44 @@ export async function registerJobRoutes(
     return { job_id };
   });
 
+  app.get<{ Params: { profileId: string } }>("/plans/:profileId/filename-grouping", async (request, reply) => {
+    const profileId = Number(request.params.profileId);
+    const repo = jobs.getRepo();
+    if (!repo.getOwnedProfileIdentity(profileId)) return sendProblem(reply, 404, "Not Found", "Build not found");
+    const stored = repo.getSetting(`filename_grouping:${profileId}`);
+    const definition = stored ? filenameGroupingSchema.parse(JSON.parse(stored)) : miloFilenameGrouping;
+    const capture = captureAcceptedOperationalExport({ repository: repo, profileId });
+    const parts = capture.kind === "ready" ? capture.export.parts.filter((part) => part.included).map((part) => ({
+      relativePath: part.relativePath, sourceLayer: part.sourceLayer, role: part.role,
+      units: part.units.map((unit) => ({ token: unit.token, completed: unit.completed })),
+    })) : [];
+    return { definition, parts };
+  });
+
+  app.put<{ Params: { profileId: string } }>("/plans/:profileId/filename-grouping", async (request, reply) => {
+    const profileId = Number(request.params.profileId);
+    const repo = jobs.getRepo();
+    if (!repo.getOwnedProfileIdentity(profileId)) return sendProblem(reply, 404, "Not Found", "Build not found");
+    const parsed = filenameGroupingSchema.safeParse(request.body);
+    if (!parsed.success) return sendProblem(reply, 400, "Bad Request", parsed.error.message);
+    repo.setSetting(`filename_grouping:${profileId}`, JSON.stringify(parsed.data));
+    return { definition: parsed.data };
+  });
+
   app.post("/jobs/export-stl-pack", limited, async (request, reply) => {
     const body = request.body as {
       profile_id?: number;
       missing_only?: boolean;
       group_by?: string;
       unit_tokens?: unknown;
+      filename_grouping?: unknown;
     };
     if (!body.profile_id || !jobs.getRepo().getOwnedProfileIdentity(body.profile_id)) {
       return sendProblem(reply, 404, "Not Found", "Profile not found");
     }
     const unitTokens = parseStlPackUnitTokens(body.unit_tokens);
+    const grouping = filenameExportSchema.optional().safeParse(body.filename_grouping);
+    if (!grouping.success) return sendProblem(reply, 400, "Bad Request", grouping.error.message);
     if (unitTokens === "invalid") {
       return sendProblem(
         reply,
@@ -960,6 +995,7 @@ export async function registerJobRoutes(
         profile_id: body.profile_id,
         missing_only: body.missing_only ?? false,
         group_by: body.group_by === "color" ? "color" : "color_dir",
+        ...(grouping.data ? { filename_grouping: grouping.data } : {}),
         ...(unitTokens.length > 0 ? { unit_tokens: [...unitTokens] } : {}),
       },
       request.tenantId,

@@ -73,7 +73,8 @@ describe("acceptedMediaBasis", () => {
       variant: "thumbnail",
     });
 
-    expect(basis).toBe("8e6bd4983ef47cafe525dd19811eef8f054c00429aff409e2b8728eca47d2e93");
+    expect(basis).toBe("6ee6d6c0172a7b2f06592dc1ec39cc27a39660943bb549e240064a5ea057a9bc");
+    expect(basis).not.toBe("8e6bd4983ef47cafe525dd19811eef8f054c00429aff409e2b8728eca47d2e93");
     expect(basis).toHaveLength(64);
   });
 
