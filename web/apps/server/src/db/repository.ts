@@ -7717,8 +7717,10 @@ export class AppRepository {
         const customHex = majority(row.customHexCounts);
         const spoolId = majority(row.spoolCounts);
         const saved = savedDefaults[row.role];
-        const filament_color_id = saved ? saved.filament_color_id : colorId;
-        const filament_custom_hex = saved ? saved.filament_custom_hex : colorId ? null : customHex;
+        const catalogWins = colorId !== null &&
+          (row.colorCounts.get(colorId) ?? 0) >= (customHex === null ? 0 : row.customHexCounts.get(customHex) ?? 0);
+        const filament_color_id = saved ? saved.filament_color_id : catalogWins ? colorId : null;
+        const filament_custom_hex = saved ? saved.filament_custom_hex : catalogWins ? null : customHex;
         const spoolman_spool_id = saved ? saved.spoolman_spool_id : spoolId;
         const color = filament_color_id ? getColorById(filament_color_id) : null;
         return {
