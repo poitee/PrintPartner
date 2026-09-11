@@ -8,7 +8,9 @@ build/
 !web/apps/web/src/components/build/**
 .DS_Store
 # Local IDE / editor metadata (never ship in releases)
-.cursor/
+.cursor/*
+!.cursor/skills/
+!.cursor/skills/**
 .vscode/
 .idea/
 AGENTS.md
