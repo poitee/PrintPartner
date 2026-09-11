@@ -61,7 +61,12 @@ describe("Plan draft cutover production inventory", () => {
       routes.indexOf('app.patch("/parts/:id"'),
       routes.indexOf('app.patch("/parts/:id/progress"'),
     );
-    expect(route).toContain('key !== "filament_color_id" && key !== "spoolman_spool_id"');
+    expect(route).toContain("partFilamentPatch.safeParse(body)");
+    const schema = routes.slice(routes.indexOf("const partFilamentPatch ="), routes.indexOf("type AcceptedPartRequest ="));
+    expect(schema).toContain(".strict()");
+    expect([...schema.matchAll(/^\s+(\w+): z\./gm)].map((match) => match[1])).toEqual([
+      "filament_color_id", "filament_custom_hex", "spoolman_spool_id",
+    ]);
     expect(route).not.toMatch(/\b(included|quantity_override)\b/);
 
     const repository = readFileSync(join(webRoot, "apps/server/src/db/repository.ts"), "utf8");

@@ -43,6 +43,48 @@ describe("normalizePartRole", () => {
 });
 
 describe("assignAcceptedFilament role target", () => {
+  it.each([
+    { customCount: 2, catalogCount: 1, expectedCustom: "#ff6600", expectedCatalog: null },
+    { customCount: 1, catalogCount: 2, expectedCustom: null, expectedCatalog: "asa::black" },
+    { customCount: 1, catalogCount: 1, expectedCustom: null, expectedCatalog: "asa::black" },
+  ])("infers palette across $customCount custom and $catalogCount catalog assignments", ({ customCount, catalogCount, expectedCustom, expectedCatalog }) => {
+    const dir = mkdtempSync(join(tmpdir(), "pp-role-majority-"));
+    const sqlite = new SqliteDatabase(dir);
+    sqlite.connect();
+    try {
+      const repo = new AppRepository(getDb(sqlite), undefined, sqlite.reposDir);
+      const source = repo.createSource({ name: "Mixed colors", url: "https://github.com/a/b" });
+      const repoPath = join(dir, "repos", String(source.id));
+      mkdirSync(repoPath, { recursive: true });
+      for (let i = 0; i < customCount + catalogCount; i++) writeFileSync(join(repoPath, `part-${i}.stl`), "solid part");
+      repo.updateSource(source.id, { local_path: repoPath });
+      const plan = repo.createProfile("Mixed colors", source.id);
+      acceptPlanForTest(repo, plan.id);
+      const accepted = repo.readAcceptedPlanOperationalSnapshot(plan.id);
+      if (accepted.kind !== "ready") throw new Error("Plan is not ready");
+      expect(accepted.snapshot.parts).toHaveLength(customCount + catalogCount);
+      accepted.snapshot.parts.forEach((part, index) => {
+        expect(repo.assignAcceptedFilament({
+          expected: acceptedPlanBasis(accepted.snapshot),
+          target: { kind: "part", projectionPartId: part.projectionPartId },
+          assignment: {
+            color: index < customCount ? { kind: "custom", hex: "#ff6600" } : { kind: "catalog", colorId: "asa::black" },
+            spoolmanSpoolId: null,
+          },
+        }).kind).toBe("updated");
+      });
+      expect(repo.getRoleFilaments(plan.id).find((role) => role.role === "primary")).toMatchObject({
+        filament_custom_hex: expectedCustom,
+        filament_color_id: expectedCatalog,
+      });
+      saveRoleFilamentDefault(repo, plan.id, "primary", { filament_color_id: null, filament_custom_hex: "#112233" });
+      expect(repo.getRoleFilaments(plan.id).find((role) => role.role === "primary")?.filament_hex).toBe("#112233");
+    } finally {
+      sqlite.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("updates included parts when stored role is empty but grouped as primary", () => {
     const dir = mkdtempSync(join(tmpdir(), "pp-role-fil-"));
     const sqlite = new SqliteDatabase(dir);

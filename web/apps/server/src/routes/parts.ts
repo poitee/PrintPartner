@@ -1,4 +1,5 @@
 import { basename } from "node:path";
+import { z } from "zod";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { AppRepository } from "../db/repository.js";
 import type {
@@ -37,6 +38,13 @@ type RouteDeps = {
   reposDir: string;
   thumbsDir: string;
 };
+
+const partFilamentPatch = z.object({
+  filament_color_id: z.string().trim().min(1).nullable().optional(),
+  filament_custom_hex: z.string().trim().regex(/^#?[0-9a-fA-F]{6}$/).transform((hex) => `#${hex.replace(/^#/, "").toLowerCase()}`).nullable().optional(),
+  spoolman_spool_id: z.string().nullable().optional(),
+}).strict().refine((fields) => Object.keys(fields).length > 0)
+  .refine((fields) => !(fields.filament_color_id && fields.filament_custom_hex));
 
 type AcceptedPartRequest =
   | {
@@ -190,20 +198,11 @@ export async function registerPartRoutes(app: FastifyInstance, deps: RouteDeps):
     if (!body || typeof body !== "object" || Array.isArray(body)) {
       return reply.status(400).send({ detail: "No fields to update" });
     }
-    const fields = body as Record<string, unknown>;
-    const keys = Object.keys(fields);
-    if (
-      keys.length === 0 ||
-      keys.some((key) => key !== "filament_color_id" && key !== "spoolman_spool_id") ||
-      (fields.filament_color_id !== undefined &&
-        fields.filament_color_id !== null &&
-        typeof fields.filament_color_id !== "string") ||
-      (fields.spoolman_spool_id !== undefined &&
-        fields.spoolman_spool_id !== null &&
-        typeof fields.spoolman_spool_id !== "string")
-    ) {
+    const parsed = partFilamentPatch.safeParse(body);
+    if (!parsed.success) {
       return reply.status(400).send({ detail: "Only filament and spool assignment may be updated" });
     }
+    const fields = parsed.data;
     if (!deps.repo.canMutateAcceptedPlan()) {
       return reply.status(503).send({ detail: "Accepted Plan update is unavailable" });
     }
@@ -222,10 +221,11 @@ export async function registerPartRoutes(app: FastifyInstance, deps: RouteDeps):
         target: { kind: "part", projectionPartId: id },
         assignment: resolveFilamentAssignment(liveAssignmentFrom(accepted.part), {
           ...(fields.filament_color_id !== undefined
-            ? { colorId: fields.filament_color_id as string | null }
+            ? { colorId: fields.filament_color_id }
             : {}),
+          ...(fields.filament_custom_hex !== undefined ? { customHex: fields.filament_custom_hex } : {}),
           ...(fields.spoolman_spool_id !== undefined
-            ? { spoolmanSpoolId: fields.spoolman_spool_id as string | null }
+            ? { spoolmanSpoolId: fields.spoolman_spool_id }
             : {}),
         }),
       });

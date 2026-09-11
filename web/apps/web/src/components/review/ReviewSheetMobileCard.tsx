@@ -29,6 +29,7 @@ type Props = {
   onToggleUnit?: (part: ReviewPart, unitIndex: number) => void;
   onSetAllPrinted?: (part: ReviewPart, completed: boolean) => void;
   onPreview: (part: ReviewPart) => void;
+  onColor?: (part: ReviewPart) => void;
 };
 
 export default function ReviewSheetMobileCard({
@@ -47,6 +48,7 @@ export default function ReviewSheetMobileCard({
   onToggleUnit,
   onSetAllPrinted,
   onPreview,
+  onColor,
 }: Props) {
   const done =
     part.printed_count >= part.quantity_effective && part.quantity_effective > 0;
@@ -158,6 +160,7 @@ export default function ReviewSheetMobileCard({
         </div>
       </div>
 
+      {onColor && <Button variant="outline" size="sm" disabled={busy || !part.included} aria-label={`Change color for ${part.filename}`} onClick={() => onColor(part)}>Change color</Button>}
       <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
         {part.included ? (
           <>

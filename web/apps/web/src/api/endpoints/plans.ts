@@ -131,7 +131,8 @@ export async function addProfileAddonLayer(
 export async function patchPart(
   partId: number,
   fields: {
-    filament_color_id?: string;
+    filament_color_id?: string | null;
+    filament_custom_hex?: string | null;
     spoolman_spool_id?: string | null;
   },
 ): Promise<PartRow> {
