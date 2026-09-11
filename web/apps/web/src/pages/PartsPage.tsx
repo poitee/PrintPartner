@@ -37,12 +37,15 @@ export default function PartsPage() {
   }, []);
 
   useEffect(() => {
-    if (selectedProfileId == null || !review || loading || draftLoading || !hasSources) return;
+    if (selectedProfileId == null || !review || loading || draftLoading || saving || !hasSources) return;
+    if (review.accepted_basis && sourceInputsCurrent && !draftWorkspace && !draftError) {
+      prepared.current = null;
+      return;
+    }
     if (prepared.current === selectedProfileId) return;
     prepared.current = selectedProfileId;
-    if (review.accepted_basis && sourceInputsCurrent && !draftWorkspace && !draftError) return;
     void preparePlan().catch(() => {});
-  }, [draftError, draftLoading, draftWorkspace, hasSources, loading, preparePlan, review, selectedProfileId, sourceInputsCurrent]);
+  }, [draftError, draftLoading, draftWorkspace, hasSources, loading, preparePlan, review, saving, selectedProfileId, sourceInputsCurrent]);
 
   const disabled = saving || loading || draftLoading;
   return (

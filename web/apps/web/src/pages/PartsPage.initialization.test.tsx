@@ -54,3 +54,34 @@ it("keeps file selection available while saving but prevents printing a pending 
   expect(screen.getByRole("checkbox", { name: "File selection" })).toHaveProperty("disabled", false);
   expect(screen.getByRole("button", { name: "Print" })).toHaveProperty("disabled", true);
 });
+
+it("refreshes when changed Sources arrive after the saved Plan has loaded", async () => {
+  const view = mount();
+  expect(state.prepare).not.toHaveBeenCalled();
+  state.freshness = "stale";
+  view.rerender(<MemoryRouter><PartsPage /></MemoryRouter>);
+  await waitFor(() => expect(state.prepare).toHaveBeenCalledOnce());
+});
+
+it("refreshes a second Source change after the first refresh finishes", async () => {
+  state.freshness = "stale";
+  const view = mount();
+  await waitFor(() => expect(state.prepare).toHaveBeenCalledOnce());
+  state.freshness = "current";
+  view.rerender(<MemoryRouter><PartsPage /></MemoryRouter>);
+  state.freshness = "stale";
+  view.rerender(<MemoryRouter><PartsPage /></MemoryRouter>);
+  await waitFor(() => expect(state.prepare).toHaveBeenCalledTimes(2));
+});
+
+it("does not repeatedly prepare while a refresh is in flight or has failed", async () => {
+  state.freshness = "stale";
+  const view = mount();
+  await waitFor(() => expect(state.prepare).toHaveBeenCalledOnce());
+  state.saving = true;
+  view.rerender(<MemoryRouter><PartsPage /></MemoryRouter>);
+  state.saving = false;
+  state.error = "Save failed";
+  view.rerender(<MemoryRouter><PartsPage /></MemoryRouter>);
+  expect(state.prepare).toHaveBeenCalledOnce();
+});
