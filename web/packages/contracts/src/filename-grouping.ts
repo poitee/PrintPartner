@@ -1,6 +1,9 @@
 import { z } from "zod";
 
 const label = z.string().trim().min(1).max(80).regex(/^[\p{L}\p{N} _-]+$/u, "Use letters, numbers, spaces, underscores or hyphens");
+export function filenameGroupFolderName(group: string): string {
+  return group.replace(/[^\p{L}\p{N}_-]+/gu, "_");
+}
 export const filenameGroupingSchema = z.object({
   name: label,
   rules: z.array(z.object({
@@ -11,7 +14,7 @@ export const filenameGroupingSchema = z.object({
 }).strict().superRefine((value, ctx) => {
   const folders = new Map<string, string>([["unassigned", "Unassigned"]]);
   for (const name of [...value.rules.map((rule) => rule.group), ...Object.values(value.overrides)]) {
-    const folder = name.replace(/[^\w\-.]+/g, "_").toLowerCase();
+    const folder = filenameGroupFolderName(name).toLowerCase();
     const previous = folders.get(folder);
     if (previous && previous !== name) ctx.addIssue({ code: "custom", message: `Group names ${previous} and ${name} produce the same export folder` });
     folders.set(folder, name);

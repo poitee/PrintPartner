@@ -18,7 +18,7 @@ import {
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { Zip, ZipPassThrough } from "fflate";
 import { acceptedPlateZipEpoch, folderKeyFromRelativePath } from "@print-partner/domain";
-import { matchFilenameGroup, type FilenameExport } from "@print-partner/contracts";
+import { filenameGroupFolderName, matchFilenameGroup, type FilenameExport } from "@print-partner/contracts";
 import {
   parseRequiredUnitTokenContract,
   type RequiredUnitToken,
@@ -117,7 +117,7 @@ function safeFolderName(folderKey: string): string {
 }
 
 function customExportFolder(grouping: FilenameExport, part: AcceptedExportPart, roleFolder: string): string {
-  const group = safeFolderName(matchFilenameGroup(grouping.definition, part.relativePath, part.sourceLayer));
+  const group = filenameGroupFolderName(matchFilenameGroup(grouping.definition, part.relativePath, part.sourceLayer));
   switch (grouping.arrangement) {
     case "group": return group;
     case "color_group": return `${roleFolder}/${group}`;

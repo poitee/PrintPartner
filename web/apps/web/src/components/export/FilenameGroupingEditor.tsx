@@ -56,6 +56,7 @@ export default function FilenameGroupingEditor({ profileId, onChange, selectedTo
     setMessage("Unsaved changes. Download uses the rules shown here.");
   };
   return <section className="stack-row rounded-lg border p-3" aria-label="Custom filename grouping">
+    <fieldset disabled={saving} className="stack-row">
     <p>Group filenames independently of Primary/Accent. Suffixes match before .stl, ignoring case. This does not apply slicer settings.</p>
     <label className="block">Grouping name <input className="border rounded p-2 bg-background" value={data.definition.name} onChange={(event) => edit({ ...data.definition, name: event.target.value })} /></label>
     {data.definition.rules.map((rule, index) => <div key={index} className="flex flex-wrap gap-2">
@@ -96,5 +97,6 @@ export default function FilenameGroupingEditor({ profileId, onChange, selectedTo
         </tr>; })}
       </tbody></table></div>
     </details>
+    </fieldset>
   </section>;
 }

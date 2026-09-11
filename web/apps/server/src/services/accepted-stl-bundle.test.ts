@@ -196,6 +196,13 @@ afterEach(() => {
 });
 
 describe("materializeAcceptedStlBundle", () => {
+  it("preserves Unicode custom folder names in the ZIP", async () => {
+    const paths = fixture();
+    const result = await materializeAcceptedStlBundle({ ...paths, capture: capture([part({ snapshotRoot: paths.snapshotRoot, filename: "mount-S.stl", completed: [false] })]), selection: "all", groupBy: "color", roleOrder: ["accent"], filenameGrouping: { definition: { name: "設定", rules: [{ suffix: "-S", group: "構造" }], overrides: {} }, arrangement: "group" } });
+    expect(result.kind).toBe("materialized");
+    if (result.kind !== "materialized") return;
+    expect(new AdmZip(result.bundlePath ?? "").getEntries().map((entry) => entry.entryName)).toEqual(["構造/mount-S_01.stl"]);
+  });
   it("refuses overlapping rules instead of duplicating selected files", async () => {
     const paths = fixture();
     const result = await materializeAcceptedStlBundle({ ...paths, capture: capture([part({ snapshotRoot: paths.snapshotRoot, filename: "mount-S.stl" })]), selection: "all", groupBy: "color", roleOrder: ["accent"], filenameGrouping: { definition: { ...miloFilenameGrouping, rules: [...miloFilenameGrouping.rules, { suffix: "S", group: "Other" }] }, arrangement: "group" } });

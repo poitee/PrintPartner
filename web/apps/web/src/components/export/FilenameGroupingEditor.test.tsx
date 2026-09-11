@@ -9,6 +9,19 @@ vi.mock("../../api/engineTransport", () => ({ engineFetch: api.fetch }));
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
 
 describe("filename grouping editor", () => {
+  it("disables definition changes until a pending save completes", async () => {
+    let finish = () => {};
+    const pending = new Promise((resolve) => { finish = () => resolve({}); });
+    api.fetch.mockResolvedValueOnce({ definition: miloFilenameGrouping, parts: [] }).mockReturnValueOnce(pending);
+    render(<FilenameGroupingEditor profileId={7} onChange={() => {}} />);
+    const name = await screen.findByLabelText("Grouping name");
+    fireEvent.click(screen.getByRole("button", { name: "Save groups" }));
+    expect(name.matches(":disabled")).toBe(true);
+    expect(screen.getByRole("button", { name: "Add rule" }).matches(":disabled")).toBe(true);
+    finish();
+    await screen.findByText("Filename groups saved for this Build.");
+    expect(name.matches(":disabled")).toBe(false);
+  });
   it("previews groups, intersects color and group, and resolves conflicts with an override", async () => {
     api.fetch.mockResolvedValue({ definition: miloFilenameGrouping, parts: [
       { relativePath: "[a]-mount-S.stl", sourceLayer: "base", role: "accent", units: [{ token: "mount-1", completed: false }, { token: "mount-2", completed: false }] },
