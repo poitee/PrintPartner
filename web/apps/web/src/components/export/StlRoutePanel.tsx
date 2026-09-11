@@ -1,4 +1,6 @@
-import { useId, useState } from "react";
+import { useCallback, useId, useState } from "react";
+import type { FilenameExport } from "@print-partner/contracts";
+import FilenameGroupingEditor from "./FilenameGroupingEditor";
 import { Download } from "lucide-react";
 import { Link } from "react-router-dom";
 import { engineAssetUrl } from "../../api/endpoints/browserFiles";
@@ -96,6 +98,12 @@ export default function StlRoutePanel({
   const [scope, setScope] = useState<UnitScope>("all");
   const [grouping, setGrouping] = useState<StlPackGroupBy>("color_dir");
   const [pack, setPack] = useState<PackState>({ phase: "idle" });
+  const [customEnabled, setCustomEnabled] = useState(false);
+  const [filenameGrouping, setFilenameGrouping] = useState<FilenameExport>();
+  const changeFilenameGrouping = useCallback((value: FilenameExport | undefined) => {
+    setFilenameGrouping(value);
+    setPack({ phase: "idle" });
+  }, []);
 
   const chosenCount = selectedTokens.length;
 
@@ -108,6 +116,7 @@ export default function StlRoutePanel({
             missing_only: scope === "remaining",
             group_by: grouping,
             unit_tokens: selectedTokens,
+            ...(customEnabled && filenameGrouping ? { filename_grouping: filenameGrouping } : {}),
           });
         } catch (error) {
           // The job runner posts its own row for a start that never became a
@@ -129,7 +138,9 @@ export default function StlRoutePanel({
         }
         const artifact = readStlPackArtifact(snapshot.result);
         if (artifact.fileTotal === 0) {
-          setPack({ phase: "failed", message: artifact.warnings[0] ?? NOTHING_EXPORTED });
+          setPack({ phase: "failed", message: artifact.warnings[0] ?? (customEnabled
+            ? "No files match these color, group, and Required-unit filters. Adjust your selection and try again."
+            : NOTHING_EXPORTED) });
           return;
         }
         setPack({ phase: "ready", artifact });
@@ -213,7 +224,7 @@ export default function StlRoutePanel({
         </RadioGroup>
       </fieldset>
 
-      <fieldset className="stack-row">
+      <fieldset className="stack-row disabled:opacity-50" disabled={customEnabled}>
         <legend id={`${fieldPrefix}-grouping-legend`} className="text-body font-medium">
           How should the files be arranged?
         </legend>
@@ -260,10 +271,13 @@ export default function StlRoutePanel({
         </RadioGroup>
       </fieldset>
 
+      <label className="flex items-center gap-2"><input type="checkbox" disabled={pack.phase === "running"} checked={customEnabled} onChange={(event) => { setCustomEnabled(event.target.checked); changeFilenameGrouping(undefined); }} />Group by filename rules, such as print settings</label>
+      {customEnabled && <fieldset disabled={pack.phase === "running"}><FilenameGroupingEditor key={profileId} profileId={profileId} onChange={changeFilenameGrouping} /></fieldset>}
       <div className="flex flex-wrap items-center gap-3">
         <Button
           size="shop"
           loading={pack.phase === "running"}
+          disabled={customEnabled && !filenameGrouping}
           onClick={() => void download()}
         >
           <Download className="mr-1.5 h-4 w-4" aria-hidden />

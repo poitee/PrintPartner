@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import AdmZip from "adm-zip";
+import { miloFilenameGrouping } from "@print-partner/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   AcceptedExportPart,
@@ -195,6 +196,35 @@ afterEach(() => {
 });
 
 describe("materializeAcceptedStlBundle", () => {
+  it("refuses overlapping rules instead of duplicating selected files", async () => {
+    const paths = fixture();
+    const result = await materializeAcceptedStlBundle({ ...paths, capture: capture([part({ snapshotRoot: paths.snapshotRoot, filename: "mount-S.stl" })]), selection: "all", groupBy: "color", roleOrder: ["accent"], filenameGrouping: { definition: { ...miloFilenameGrouping, rules: [...miloFilenameGrouping.rules, { suffix: "S", group: "Other" }] }, arrangement: "group" } });
+    expect(result).toEqual({ kind: "grouping_conflict" });
+  });
+  it("intersects color and filename settings with inclusion, remaining units and selected tokens", async () => {
+    const paths = fixture();
+    const structural = part({ snapshotRoot: paths.snapshotRoot, filename: "mount-S.stl", completed: [true, false] });
+    const other = part({ snapshotRoot: paths.snapshotRoot, filename: "cover-A.stl", revisionPartId: 32 });
+    const primary = { ...part({ snapshotRoot: paths.snapshotRoot, filename: "primary-S.stl", revisionPartId: 33 }), role: "primary" };
+    const excluded = { ...part({ snapshotRoot: paths.snapshotRoot, filename: "excluded-S.stl", revisionPartId: 34 }), included: false };
+    const result = await materializeAcceptedStlBundle({
+      ...paths, capture: capture([structural, other, primary, excluded]), selection: "missing", groupBy: "color", roleOrder: ["primary", "accent"],
+      unitTokens: [unitToken(31, 0), unitToken(31, 1), unitToken(32, 1), unitToken(33, 1)],
+      filenameGrouping: { definition: miloFilenameGrouping, arrangement: "color_group", role: "accent", group: "Structural" },
+    });
+    expect(result.kind).toBe("materialized");
+    if (result.kind !== "materialized") return;
+    expect(new AdmZip(result.bundlePath ?? "").getEntries().map((entry) => entry.entryName)).toEqual(["accent/Structural/mount-S_02.stl"]);
+    expect(readFileSync(join(result.rootPath, "accent/Structural/mount-S_02.stl"))).toEqual(Buffer.from("accepted-stl"));
+  });
+
+  it.each(["group", "group_color"] as const)("keeps unmatched files with %s ordering", async (arrangement) => {
+    const paths = fixture();
+    const result = await materializeAcceptedStlBundle({ ...paths, capture: capture([part({ snapshotRoot: paths.snapshotRoot, completed: [false] })]), selection: "all", groupBy: "color", roleOrder: ["accent"], filenameGrouping: { definition: miloFilenameGrouping, arrangement } });
+    expect(result.kind).toBe("materialized");
+    if (result.kind !== "materialized") return;
+    expect(new AdmZip(result.bundlePath ?? "").getEntries().map((entry) => entry.entryName)).toEqual([arrangement === "group" ? "Unassigned/widget_01.stl" : "Unassigned/accent/widget_01.stl"]);
+  });
   it("exports one byte-identical file per selected accepted Required unit", async () => {
     const fixturePaths = fixture();
     const bytes = Buffer.from("verified descriptor bytes");

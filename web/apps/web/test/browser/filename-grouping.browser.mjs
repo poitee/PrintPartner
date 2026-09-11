@@ -1,0 +1,77 @@
+import assert from "node:assert/strict";
+import process from "node:process";
+import { randomUUID } from "node:crypto";
+import { log } from "node:console";
+import { readFile } from "node:fs/promises";
+import { chromium } from "playwright-core";
+import { zipSync, unzipSync, strToU8 } from "fflate";
+import { BoxGeometry, Mesh, MeshBasicMaterial } from "three";
+import { STLExporter } from "three/examples/jsm/exporters/STLExporter.js";
+import { browserExecutable } from "./browserExecutable.mjs";
+
+const api = process.env.FILENAME_GROUP_API ?? "http://127.0.0.1:18765";
+const ui = process.env.FILENAME_GROUP_UI ?? "http://127.0.0.1:5173";
+async function request(path, method = "GET", value) {
+  const response = await globalThis.fetch(`${api}${path}`, { method, headers: { "Content-Type": "application/json", "Idempotency-Key": randomUUID() }, ...(value === undefined ? {} : { body: JSON.stringify(value) }) });
+  const body = await response.json();
+  assert.ok(response.ok, `${path}: ${JSON.stringify(body)}`);
+  return body;
+}
+assert.ok((await request("/health")).data_dir.startsWith("/tmp/pp-filename-groups-"), "Use an isolated fixture server");
+const source = await request("/sources", "POST", { name: `Filename grouping fixture ${randomUUID()}`, source_kind: "local" });
+const geometry = new BoxGeometry(5, 6, 7);
+const material = new MeshBasicMaterial();
+const bytes = strToU8(new STLExporter().parse(new Mesh(geometry, material)));
+geometry.dispose(); material.dispose();
+const files = { "[a]-mount-S.stl": bytes, "[a]-cover-A.stl": bytes, "base-S.stl": bytes, "unknown.stl": bytes };
+const form = new globalThis.FormData();
+form.append("file", new globalThis.Blob([zipSync(files)]), "parts.zip");
+const upload = await globalThis.fetch(`${api}/sources/${source.id}/upload-zip`, { method: "POST", body: form });
+assert.ok(upload.ok, await upload.text());
+const build = await request("/plans", "POST", { name: `Filename grouping test ${randomUUID()}` });
+await request(`/plans/${build.id}/layers/base`, "PUT", { project_id: source.id });
+const { draft } = await request(`/plans/${build.id}/drafts/recompute`, "POST", { apply_manifest: true });
+await request(`/plans/${build.id}/drafts/${draft.draft_id}/apply`, "POST", { expected_snapshot_digest: draft.snapshot_digest, expected_lifecycle_version: draft.lifecycle_version, expected_base: draft.base });
+
+const browser = await chromium.launch({ executablePath: browserExecutable(), headless: true });
+try {
+  const page = await browser.newPage({ viewport: { width: 1280, height: 1000 }, acceptDownloads: true });
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto(`${ui}/export?profile=${build.id}`);
+  await page.getByRole("radio", { name: /Download sorted STL files/ }).click({ timeout: 60000 });
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await page.getByRole("button", { name: /Download.*STL|Choose and download/i }).first().click();
+  const checkbox = page.getByRole("checkbox", { name: "Group by filename rules, such as print settings" });
+  await checkbox.check();
+  const editor = page.getByRole("region", { name: "Custom filename grouping" });
+  await editor.getByLabel("Grouping name").fill("Print settings test");
+  await editor.getByRole("button", { name: "Save groups", exact: true }).click();
+  await editor.getByText("Filename groups saved for this Build.", { exact: true }).waitFor();
+  assert.equal((await request(`/plans/${build.id}/filename-grouping`)).definition.name, "Print settings test");
+  await checkbox.uncheck(); await checkbox.check();
+  await editor.getByLabel("Grouping name").waitFor();
+  assert.equal(await editor.getByLabel("Grouping name").inputValue(), "Print settings test");
+  await editor.getByLabel("Color role", { exact: true }).selectOption("accent");
+  await editor.getByLabel("Export group", { exact: true }).selectOption("Structural");
+  await page.getByRole("button", { name: "Download sorted STL files", exact: true }).click();
+  await page.getByRole("link", { name: "Save the files", exact: true }).waitFor({ timeout: 60000 });
+  const downloadPromise = page.waitForEvent("download");
+  await page.getByRole("link", { name: "Save the files", exact: true }).click();
+  const download = await downloadPromise;
+  assert.equal(await download.failure(), null);
+  const zip = unzipSync(await readFile(await download.path()));
+  assert.equal(Object.keys(zip).length, 1);
+  assert.match(Object.keys(zip)[0], /^accent\/Structural\/.*mount-S.*\.stl$/);
+  assert.deepEqual(zip[Object.keys(zip)[0]], bytes);
+  await editor.getByLabel("Export group", { exact: true }).selectOption("");
+  await editor.getByLabel("Filename suffix 1", { exact: true }).fill("S");
+  await editor.getByText(/Some filenames match different groups/).waitFor();
+  assert.equal(await page.getByRole("button", { name: "Download sorted STL files", exact: true }).isDisabled(), true);
+  await editor.getByRole("button", { name: "Use Milo rules" }).click();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.screenshot({ path: "/tmp/pp-filename-grouping-mobile.png", fullPage: true });
+  assert.equal(await page.evaluate(() => globalThis.document.documentElement.scrollWidth > globalThis.innerWidth), false);
+  assert.deepEqual(errors, []);
+  log("PASS: real upload, saved rules reload, Accent + Structural ZIP download with identical STL bytes, overlap warning, mobile layout", { build: build.id });
+} finally { await browser.close(); }

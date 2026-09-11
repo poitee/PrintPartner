@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head><meta charset="UTF-8" /><title>STL orientation regression</title></head>
+  <body style="display:flex;gap:24px;background:#25282b;color:white">
+    <figure><figcaption>STL Z axis</figcaption><img id="z" alt="Z-oriented STL" /></figure>
+    <figure><figcaption>STL Y axis</figcaption><img id="y" alt="Y-oriented STL" /></figure>
+    <script type="module">
+      import { generatePartThumbnail } from "/src/lib/stlThumbnail.ts";
+      for (const [id, axis] of [[1, "z"], [2, "y"]]) {
+        const url = await generatePartThumbnail(id);
+        if (!url) throw new Error(`No thumbnail for ${axis}`);
+        const image = document.getElementById(axis);
+        image.src = url;
+        await image.decode();
+      }
+      document.body.dataset.ready = "true";
+    </script>
+  </body>
+</html>

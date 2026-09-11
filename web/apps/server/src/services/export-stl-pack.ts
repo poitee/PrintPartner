@@ -18,6 +18,7 @@ import {
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { Zip, ZipPassThrough } from "fflate";
 import { acceptedPlateZipEpoch, folderKeyFromRelativePath } from "@print-partner/domain";
+import { matchFilenameGroup, type FilenameExport } from "@print-partner/contracts";
 import {
   parseRequiredUnitTokenContract,
   type RequiredUnitToken,
@@ -39,6 +40,11 @@ export const STL_PACK_MAX_SELECTED_UNITS = 10_000;
 const MAX_OUTPUT_BYTES = 512 * 1024 * 1024;
 
 export type StlPackGroupBy = "color" | "color_dir";
+export class FilenameGroupingConflictError extends Error {
+  constructor() {
+    super("Filename rules assign a selected part to multiple groups. Fix the rules or assign an exception before exporting.");
+  }
+}
 export type AcceptedStlBundleSelection = "all" | "missing";
 
 export const STL_EXPORT_MISSING_HINT =
@@ -72,6 +78,7 @@ export type MaterializeAcceptedStlBundleResult =
     }
   | { readonly kind: "output_failure" }
   | { readonly kind: "limit_exceeded" }
+  | { readonly kind: "grouping_conflict" }
   /** Every token the caller named is absent from the accepted revision. */
   | { readonly kind: "unknown_unit_tokens" };
 
@@ -107,6 +114,15 @@ function safeFolderName(folderKey: string): string {
   if (folderKey === "(root)") return "_root";
   const safe = folderKey.replace(/\//g, "_").replace(/[^\w\-.]+/g, "_");
   return !safe || safe === "." || safe === ".." ? "_root" : safe;
+}
+
+function customExportFolder(grouping: FilenameExport, part: AcceptedExportPart, roleFolder: string): string {
+  const group = safeFolderName(matchFilenameGroup(grouping.definition, part.relativePath, part.sourceLayer));
+  switch (grouping.arrangement) {
+    case "group": return group;
+    case "color_group": return `${roleFolder}/${group}`;
+    case "group_color": return `${group}/${roleFolder}`;
+  }
 }
 
 function entryName(part: AcceptedExportPart, unit: number, usedNames: Set<string>): string {
@@ -490,6 +506,7 @@ export async function materializeAcceptedStlBundle(input: Readonly<{
   tenantExportsDir: string;
   selection: AcceptedStlBundleSelection;
   groupBy: StlPackGroupBy;
+  filenameGrouping?: FilenameExport;
   roleOrder: readonly string[];
   /** Restrict the bundle to these Required units. Empty means every unit. */
   unitTokens?: readonly string[];
@@ -501,8 +518,16 @@ export async function materializeAcceptedStlBundle(input: Readonly<{
     capture: input.capture,
     selection: input.selection,
     unitTokens: filter.kind === "listed_units" ? filter.tokens : null,
+  }).filter(({ part }) => {
+    const grouping = input.filenameGrouping;
+    return !grouping || (
+      (!grouping.role || grouping.role === part.role) &&
+      (!grouping.group || grouping.group === matchFilenameGroup(grouping.definition, part.relativePath, part.sourceLayer))
+    );
   });
   const selectedUnitCount = selected.reduce((total, entry) => total + entry.units.length, 0);
+  const customGrouping = input.filenameGrouping;
+  if (customGrouping && selected.some(({ part }) => matchFilenameGroup(customGrouping.definition, part.relativePath, part.sourceLayer) === "Conflict")) return { kind: "grouping_conflict" };
   if (selectedUnitCount > STL_PACK_MAX_SELECTED_UNITS) return { kind: "limit_exceeded" };
 
   const profile = input.capture.kind === "ready" ? input.capture.export.profile : input.capture.profile;
@@ -573,7 +598,10 @@ export async function materializeAcceptedStlBundle(input: Readonly<{
         try {
           const role = input.roleOrder.includes(entry.part.role) ? entry.part.role : ROLE_ORDER[0];
           const roleFolder = safeFolderName(role);
-          const folder = input.groupBy === "color"
+          const custom = input.filenameGrouping;
+          const folder = custom
+            ? customExportFolder(custom, entry.part, roleFolder)
+            : input.groupBy === "color"
             ? roleFolder
             : `${roleFolder}/${safeFolderName(folderKeyFromRelativePath(entry.part.relativePath))}`;
           const names = usedNames.get(folder) ?? new Set<string>();
