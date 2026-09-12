@@ -81,5 +81,22 @@ try {
   await page.screenshot({ path: "/tmp/pp-filename-grouping-mobile.png", fullPage: true });
   assert.equal(await page.evaluate(() => globalThis.document.documentElement.scrollWidth > globalThis.innerWidth), false);
   assert.deepEqual(errors, []);
+  const recoveryPage = await browser.newPage();
+  await recoveryPage.routeWebSocket(/\/jobs\/[^/]+\/events/, (socket) => socket.close());
+  const jobStatus = /\/jobs\/[^/?]+$/;
+  await recoveryPage.route(jobStatus, (route) => route.request().method() === "GET"
+    ? route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "Test connection interrupted" }) })
+    : route.continue());
+  await recoveryPage.goto(`${ui}/export?profile=${build.id}`);
+  await recoveryPage.getByRole("button", { name: /Download.*STL|Choose and download/i }).first().click();
+  await recoveryPage.getByRole("button", { name: "Download sorted STL files", exact: true }).click();
+  await recoveryPage.getByText("Could not download the STL files", { exact: true }).waitFor();
+  await recoveryPage.getByText(/Lost contact with the job/).first().waitFor();
+  assert.equal(await recoveryPage.getByRole("button", { name: "Download sorted STL files", exact: true }).isEnabled(), true);
+  await recoveryPage.unroute(jobStatus);
+  await recoveryPage.getByRole("button", { name: "Try again", exact: true }).click();
+  await recoveryPage.getByRole("link", { name: "Save the files", exact: true }).waitFor();
+  await recoveryPage.close();
+  log("PASS: interrupted job observation stops the spinner; retry completes through HTTP polling without WebSocket");
   log("PASS: real upload, saved rules reload, Accent + Structural ZIP download with identical STL bytes, overlap warning, mobile layout", { build: build.id });
 } finally { await browser.close(); }

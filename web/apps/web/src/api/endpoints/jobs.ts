@@ -66,8 +66,8 @@ export async function startExportChecklistHtml(profileId: number): Promise<strin
   return body.job_id;
 }
 
-export async function fetchJob(jobId: string): Promise<JobSnapshot> {
-  return engineFetch<JobSnapshot>(`/jobs/${jobId}`);
+export async function fetchJob(jobId: string, signal?: AbortSignal): Promise<JobSnapshot> {
+  return engineFetch<JobSnapshot>(`/jobs/${jobId}`, { signal });
 }
 
 export async function waitForJobDone(jobId: string): Promise<JobSnapshot> {
