@@ -24,6 +24,55 @@ afterEach(() => {
 });
 
 describe("JobProvider terminal retention", () => {
+  it("keeps watching an STL export beyond a minute and delivers its download", async () => {
+    vi.useFakeTimers();
+    const running = {
+      job_id: "download", kind: "export-stl-pack", status: "running",
+      message: "Creating ZIP", progress: null, result: null, error: null,
+    };
+    vi.mocked(fetchJob).mockResolvedValue(running);
+    const queryClient = new QueryClient();
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}>
+        <JobProvider>{children}</JobProvider>
+      </QueryClientProvider>
+    );
+    const { result } = renderHook(useJobContext, { wrapper });
+    const onDone = vi.fn();
+    await act(async () => {
+      await result.current.runJob("stl-export", () => Promise.resolve("download"), onDone);
+      await vi.advanceTimersByTimeAsync(65_000);
+    });
+    expect(result.current.activeJobs).toEqual([
+      expect.objectContaining({ status: "running" }),
+    ]);
+    const completed = { ...running, status: "done", result: { download_url: "/exports/files.zip" } };
+    vi.mocked(fetchJob).mockResolvedValue(completed);
+    await act(async () => { await vi.advanceTimersByTimeAsync(400); });
+    expect(onDone).toHaveBeenCalledExactlyOnceWith(completed);
+    const calls = vi.mocked(fetchJob).mock.calls.length;
+    await act(async () => { await vi.advanceTimersByTimeAsync(800); });
+    expect(fetchJob).toHaveBeenCalledTimes(calls);
+  });
+
+  it("settles the download panel when job observation fails", async () => {
+    vi.mocked(fetchJob).mockRejectedValue(new Error("Connection lost"));
+    const queryClient = new QueryClient();
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}>
+        <JobProvider>{children}</JobProvider>
+      </QueryClientProvider>
+    );
+    const { result } = renderHook(useJobContext, { wrapper });
+    const onDone = vi.fn();
+    await act(async () => {
+      await result.current.runJob("stl-export", () => Promise.resolve("download"), onDone);
+    });
+    expect(onDone).toHaveBeenCalledWith(expect.objectContaining({
+      status: "error", error: expect.stringContaining("Connection lost"),
+    }));
+  });
+
   it("removes a job start failure after the bounded terminal display window", async () => {
     vi.useFakeTimers();
     const queryClient = new QueryClient();

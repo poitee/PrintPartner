@@ -70,14 +70,17 @@ async function pollJobUntilTerminal(
   onProgress: (snap: JobSnapshot) => void,
   intervalMs = 400,
   maxAttempts = 150,
-): Promise<JobSnapshot> {
+  isFinished = () => false,
+): Promise<void> {
   let lastSnap: JobSnapshot | null = null;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    if (isFinished()) return;
     const snap = await fetchJob(jobId);
+    if (isFinished()) return;
     lastSnap = snap;
     onProgress(snap);
     if (JOB_TERMINAL.has(snap.status)) {
-      return snap;
+      return;
     }
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
@@ -90,6 +93,8 @@ async function pollJobUntilTerminal(
 
 /** Sync (and similar long jobs) can exceed the default ~60s poll window once docs/PDFs are included. */
 function pollAttemptsForKind(kind: string): number {
+  // STL downloads have no size cap. Keep observing while the server is working.
+  if (kind === "stl-export") return Number.POSITIVE_INFINITY;
   if (kind === "sync" || kind === "extract-source-docs" || kind === "import-scan") {
     return 4500; // ~30 minutes at 400ms
   }
@@ -198,6 +203,7 @@ export function JobProvider({ children }: { children: ReactNode }) {
         };
 
         const onProgress = (ev: JobEvent | JobSnapshot) => {
+          if (finished) return;
           setActiveJobs((prev) =>
             upsertJob(prev, {
               jobId,
@@ -210,7 +216,8 @@ export function JobProvider({ children }: { children: ReactNode }) {
             }),
           );
           if (JOB_TERMINAL.has(ev.status)) {
-            void fetchJob(jobId).then(finish).catch(() => finish(ev as JobSnapshot));
+            if ("job_id" in ev) finish(ev);
+            else void fetchJob(jobId).then(finish).catch(() => finish({ ...ev, job_id: jobId, kind }));
           }
         };
 
@@ -222,23 +229,11 @@ export function JobProvider({ children }: { children: ReactNode }) {
           },
         );
 
-        void pollJobUntilTerminal(jobId, onProgress, 400, pollAttemptsForKind(kind)).catch((e) => {
+        void pollJobUntilTerminal(jobId, onProgress, 400, pollAttemptsForKind(kind), () => finished).catch((e) => {
           if (finished) return;
-          finished = true;
-          disconnect?.();
-          setActiveJobs((prev) =>
-            upsertJob(prev, {
-              jobId,
-              kind,
-              status: "error",
-              message: e instanceof Error ? e.message : String(e),
-              progress: null,
-              profileId,
-              sourceIds,
-            }),
-          );
+          const message = `Lost contact with the job. It may still be running on the server. ${e instanceof Error ? e.message : String(e)}`;
+          finish({ job_id: jobId, kind, status: "error", message, error: message, progress: null, result: null });
           refreshAcceptedExportHistory();
-          removeAfterTerminalDisplay(jobId);
         });
       } catch (e) {
         localFailureSequence += 1;
