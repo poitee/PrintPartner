@@ -56,6 +56,14 @@ try {
   await editor.getByLabel("Export group", { exact: true }).selectOption("Structural");
   await page.getByRole("button", { name: "Download sorted STL files", exact: true }).click();
   await page.getByRole("link", { name: "Save the files", exact: true }).waitFor({ timeout: 60000 });
+  const downloadHref = await page.getByRole("link", { name: "Save the files", exact: true }).getAttribute("href");
+  const downloadUrl = new globalThis.URL(downloadHref, ui);
+  assert.equal(downloadUrl.origin, new globalThis.URL(ui).origin);
+  const downloadResponse = await page.request.get(downloadUrl.href);
+  assert.equal(downloadResponse.status(), 200);
+  assert.equal(downloadResponse.headers()["content-type"], "application/zip");
+  assert.equal(downloadResponse.headers()["x-content-type-options"], "nosniff");
+  assert.match(downloadResponse.headers()["content-disposition"], /^attachment;/);
   const downloadPromise = page.waitForEvent("download");
   await page.getByRole("link", { name: "Save the files", exact: true }).click();
   const download = await downloadPromise;

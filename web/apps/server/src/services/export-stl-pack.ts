@@ -3,6 +3,7 @@ import {
   closeSync,
   constants,
   createReadStream,
+  createWriteStream,
   fsyncSync,
   lstatSync,
   mkdirSync,
@@ -16,7 +17,9 @@ import {
   writeSync,
 } from "node:fs";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { Zip, ZipPassThrough } from "fflate";
+import { pipeline } from "node:stream/promises";
+import { Readable } from "node:stream";
+import { ZipFile } from "yazl";
 import { acceptedPlateZipEpoch, folderKeyFromRelativePath } from "@print-partner/domain";
 import { filenameGroupFolderName, matchFilenameGroup, type FilenameExport } from "@print-partner/contracts";
 import {
@@ -31,13 +34,6 @@ import type {
 } from "./accepted-operational-export.js";
 
 const ROLE_ORDER = ["primary", "accent", "clear", "opaque"] as const;
-const MAX_TOTAL_SOURCE_BYTES = 256 * 1024 * 1024;
-/**
- * Upper bound on both the units one bundle may carry and the tokens a caller
- * may name. Both count the same thing, so one limit covers both.
- */
-export const STL_PACK_MAX_SELECTED_UNITS = 10_000;
-const MAX_OUTPUT_BYTES = 512 * 1024 * 1024;
 
 export type StlPackGroupBy = "color" | "color_dir";
 export class FilenameGroupingConflictError extends Error {
@@ -77,21 +73,20 @@ export type MaterializeAcceptedStlBundleResult =
       readonly warnings: readonly AcceptedStlBundleWarning[];
     }
   | { readonly kind: "output_failure" }
-  | { readonly kind: "limit_exceeded" }
   | { readonly kind: "grouping_conflict" }
   /** Every token the caller named is absent from the accepted revision. */
   | { readonly kind: "unknown_unit_tokens" };
 
 /**
  * Reads the `unit_tokens` field of an export request. Returns `"invalid"` for
- * anything that is not a bounded array of Required-unit tokens, so the caller
+ * anything that is not an array of Required-unit tokens, so the caller
  * can reject at the HTTP boundary instead of exporting a surprising bundle.
  */
 export function parseStlPackUnitTokens(
   raw: unknown,
 ): readonly RequiredUnitToken[] | "invalid" {
   if (raw === undefined || raw === null) return [];
-  if (!Array.isArray(raw) || raw.length > STL_PACK_MAX_SELECTED_UNITS) return "invalid";
+  if (!Array.isArray(raw)) return "invalid";
   try {
     return raw.map((value) => parseRequiredUnitTokenContract(value));
   } catch {
@@ -265,56 +260,42 @@ async function writeZip(
   root: string,
   files: readonly ExpectedFile[],
   target: string,
-  maxBytes: number,
-): Promise<
-  | { readonly kind: "written"; readonly file: ExpectedFile }
-  | { readonly kind: "limit_exceeded" }
-> {
-  const descriptor = openSync(
-    target,
-    constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
-    0o600,
-  );
-  let position = 0;
-  let zipError: Error | null = null;
-  let limitExceeded = false;
-  const archive = new Zip((error, chunk) => {
-    if (error) {
-      zipError = error;
-      return;
-    }
-    if (position + chunk.length > maxBytes) {
-      limitExceeded = true;
-      return;
-    }
-    position = writeChunk(descriptor, chunk, position);
+): Promise<{ readonly file: ExpectedFile }> {
+  const archive = new ZipFile();
+  const zipStream = archive.outputStream;
+  if (!(zipStream instanceof Readable)) throw new Error("ZIP writer did not provide a Node readable stream");
+  let activeSource: ReturnType<typeof createReadStream> | undefined;
+  archive.on("error", (error: Error) => zipStream.destroy(error));
+  const output = createWriteStream(target, {
+    fd: openSync(target, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600),
+    autoClose: true,
+    flush: true,
   });
+  const completion = pipeline(zipStream, output);
   try {
     for (const file of files) {
-      const entry = new ZipPassThrough(file.relativePath);
-      entry.mtime = acceptedPlateZipEpoch();
-      archive.add(entry);
-      for await (const chunk of createReadStream(join(root, ...file.relativePath.split("/")))) {
-        entry.push(chunk);
-        if (limitExceeded) return { kind: "limit_exceeded" };
-      }
-      entry.push(new Uint8Array(), true);
-      if (zipError) throw zipError;
-      if (limitExceeded) return { kind: "limit_exceeded" };
+      archive.addReadStreamLazy(file.relativePath, {
+        mtime: acceptedPlateZipEpoch(), mode: 0o100644, size: file.size,
+      }, (callback) => {
+        if (zipStream.destroyed) return callback(new Error("Export stream closed"), Readable.from([]));
+        activeSource = createReadStream(join(root, ...file.relativePath.split("/")));
+        activeSource.on("error", (error) => zipStream.destroy(error));
+        callback(null, activeSource);
+      });
     }
     archive.end();
-    if (zipError) throw zipError;
-    if (limitExceeded) return { kind: "limit_exceeded" };
-    fsyncSync(descriptor);
+    await completion;
+  } catch (error) {
+    zipStream.destroy();
+    await completion.catch(() => undefined);
+    throw error;
   } finally {
-    archive.terminate();
-    closeSync(descriptor);
+    activeSource?.destroy();
   }
   return {
-    kind: "written",
     file: {
       relativePath: "accepted-stl.zip",
-      size: position,
+      size: lstatSync(target).size,
       sha256: hashRegularFile(target) ?? "",
     },
   };
@@ -411,18 +392,6 @@ function publicationKey(input: Readonly<{
   return createHash("sha256").update(JSON.stringify(identity)).digest("hex");
 }
 
-function acceptedArtifactDescriptorKey(part: AcceptedExportPart): string {
-  const artifact = part.artifact;
-  if (artifact.kind === "unavailable") return `unavailable:${part.revisionPartId}`;
-  return JSON.stringify([
-    artifact.sourceId,
-    artifact.sourceRevisionId,
-    artifact.snapshotRoot,
-    artifact.relativePath,
-    artifact.expectedSha256,
-  ]);
-}
-
 function publish(stage: string, finalDirectory: string, expected: readonly ExpectedFile[]): boolean {
   try {
     lstatSync(finalDirectory);
@@ -510,7 +479,6 @@ export async function materializeAcceptedStlBundle(input: Readonly<{
   roleOrder: readonly string[];
   /** Restrict the bundle to these Required units. Empty means every unit. */
   unitTokens?: readonly string[];
-  publishedBytesLimit?: number;
 }>): Promise<MaterializeAcceptedStlBundleResult> {
   const filter = unitTokenFilter(input.capture, input.unitTokens ?? []);
   if (filter.kind === "no_known_units") return { kind: "unknown_unit_tokens" };
@@ -525,10 +493,8 @@ export async function materializeAcceptedStlBundle(input: Readonly<{
       (!grouping.group || grouping.group === matchFilenameGroup(grouping.definition, part.relativePath, part.sourceLayer))
     );
   });
-  const selectedUnitCount = selected.reduce((total, entry) => total + entry.units.length, 0);
   const customGrouping = input.filenameGrouping;
   if (customGrouping && selected.some(({ part }) => matchFilenameGroup(customGrouping.definition, part.relativePath, part.sourceLayer) === "Conflict")) return { kind: "grouping_conflict" };
-  if (selectedUnitCount > STL_PACK_MAX_SELECTED_UNITS) return { kind: "limit_exceeded" };
 
   const profile = input.capture.kind === "ready" ? input.capture.export.profile : input.capture.profile;
   const basis = input.capture.kind === "ready" ? input.capture.export.basis : null;
@@ -537,13 +503,6 @@ export async function materializeAcceptedStlBundle(input: Readonly<{
   const expected: ExpectedFile[] = [];
   const fileCounts: Record<string, number> = {};
   const usedNames = new Map<string, Set<string>>();
-  const countedArtifacts = new Set<string>();
-  let totalSourceBytes = 0;
-  let totalOutputBytes = 0;
-  const publishedBytesLimit = Math.min(
-    MAX_OUTPUT_BYTES,
-    Math.max(0, input.publishedBytesLimit ?? MAX_OUTPUT_BYTES),
-  );
   let stage: string | null = null;
   try {
     const tenantRoot = resolve(input.tenantExportsDir);
@@ -576,15 +535,6 @@ export async function materializeAcceptedStlBundle(input: Readonly<{
         continue;
       }
       try {
-        const artifactKey = acceptedArtifactDescriptorKey(entry.part);
-        if (!countedArtifacts.has(artifactKey)) {
-          countedArtifacts.add(artifactKey);
-          totalSourceBytes += opened.lease.size;
-        }
-        totalOutputBytes += opened.lease.size * entry.units.length;
-        if (totalSourceBytes > MAX_TOTAL_SOURCE_BYTES || totalOutputBytes > publishedBytesLimit) {
-          return { kind: "limit_exceeded" };
-        }
         const stagedSource = join(stage, `.part-${entry.part.revisionPartId}.source`);
         const sourceIsValid = await writeLease(stagedSource, opened.lease);
         if (!sourceIsValid) {
@@ -638,9 +588,7 @@ export async function materializeAcceptedStlBundle(input: Readonly<{
         stage,
         expected,
         join(stage, "accepted-stl.zip"),
-        publishedBytesLimit - totalOutputBytes,
       );
-      if (zip.kind === "limit_exceeded") return { kind: "limit_exceeded" };
       if (!zip.file.sha256) return { kind: "output_failure" };
       expected.push(zip.file);
       hasBundle = true;

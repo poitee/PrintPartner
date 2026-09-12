@@ -23,7 +23,6 @@ import {
   exportStlPackJobMessage,
   materializeAcceptedStlBundle,
   parseStlPackUnitTokens,
-  STL_PACK_MAX_SELECTED_UNITS,
   UnknownStlPackUnitsError,
   FilenameGroupingConflictError,
   type StlPackGroupBy,
@@ -562,9 +561,6 @@ export class InProcessJobRunner {
       if (materialized.kind === "grouping_conflict") {
         throw new FilenameGroupingConflictError();
       }
-      if (materialized.kind === "limit_exceeded") {
-        throw new AcceptedOperationalExportPublicError("export_limit_exceeded");
-      }
       if (materialized.kind === "output_failure") {
         throw new AcceptedOperationalExportPublicError("export_output_failure");
       }
@@ -986,7 +982,7 @@ export async function registerJobRoutes(
         reply,
         400,
         "Bad Request",
-        `unit_tokens must be a list of at most ${STL_PACK_MAX_SELECTED_UNITS} Required-unit tokens`,
+        "unit_tokens must be a list of Required-unit tokens",
       );
     }
     const job_id = await jobs.start(

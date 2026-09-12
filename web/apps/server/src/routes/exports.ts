@@ -32,9 +32,10 @@ export async function registerExportRoutes(app: FastifyInstance, deps: RouteDeps
           : "application/octet-stream";
     return reply
       .header("Content-Type", type)
+      .header("X-Content-Type-Options", "nosniff")
       .header(
         "Content-Disposition",
-        `${isPng ? "inline" : "attachment"}; filename="${name}"`,
+        `${isPng ? "inline" : "attachment"}; filename="${name.replace(/[^\x20-\x7e]|["\\]/g, "_")}"; filename*=UTF-8''${encodeURIComponent(name).replace(/['()*]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`)}`,
       )
       .send(stream);
   });

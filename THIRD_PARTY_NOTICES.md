@@ -64,6 +64,7 @@ Transitive packages are recorded in `web/package-lock.json` and remain subject t
 | tailwind-merge | 3.6.0 | MIT | https://github.com/dcastil/tailwind-merge |
 | tar | 7.5.22 | BlueOak-1.0.0 | https://github.com/isaacs/node-tar |
 | three | 0.185.1 | MIT | https://threejs.org/ |
+| yazl | 3.3.1 | MIT | https://github.com/thejoshwolfe/yazl |
 | zod | 4.5.4 | MIT | https://zod.dev |
 
 Versions reflect the installed dependency tree used to generate this file.
