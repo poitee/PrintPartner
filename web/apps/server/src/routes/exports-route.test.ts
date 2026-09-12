@@ -184,6 +184,21 @@ describe("GET /exports/*", () => {
     expect(res.rawPayload.subarray(0, 8)).toEqual(PNG.subarray(0, 8));
   });
 
+  it("serves ZIP attachments with a safe Unicode filename and explicit type", async () => {
+    const { app, dir } = await makeApp();
+    const exportDir = join(dir, "exports", "tenant-default", "bundles");
+    mkdirSync(exportDir, { recursive: true });
+    const name = 'Milo "pièce".zip';
+    const bytes = Buffer.from([0x50, 0x4b, 3, 4]);
+    writeFileSync(join(exportDir, name), bytes);
+    const response = await app.inject({ method: "GET", url: `/exports/bundles/${encodeURIComponent(name)}` });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-type"]).toBe("application/zip");
+    expect(response.headers["x-content-type-options"]).toBe("nosniff");
+    expect(response.headers["content-disposition"]).toBe(`attachment; filename="Milo _pi_ce_.zip"; filename*=UTF-8''${encodeURIComponent(name)}`);
+    expect(response.rawPayload).toEqual(bytes);
+  });
+
   it("serves accepted Plate files with the 3MF media type", async () => {
     const { app, dir } = await makeApp();
     const exportDir = join(dir, "exports", "tenant-default", "accepted-plates");

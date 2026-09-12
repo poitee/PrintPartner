@@ -14,12 +14,10 @@ import {
   materializeAcceptedStlBundle,
   type AcceptedStlBundleWarning,
   parseStlPackUnitTokens,
-  STL_PACK_MAX_SELECTED_UNITS,
 } from "./export-stl-pack.js";
 
 const acceptedArtifactTestHook = vi.hoisted(() => ({
   afterVerifiedOpen: undefined as (() => void) | undefined,
-  leaseSize: undefined as number | undefined,
 }));
 
 vi.mock("./accepted-artifacts.js", async (importOriginal) => {
@@ -33,12 +31,6 @@ vi.mock("./accepted-artifacts.js", async (importOriginal) => {
       const hook = acceptedArtifactTestHook.afterVerifiedOpen;
       acceptedArtifactTestHook.afterVerifiedOpen = undefined;
       hook?.();
-      if (result.kind === "verified" && acceptedArtifactTestHook.leaseSize != null) {
-        return {
-          ...result,
-          lease: { ...result.lease, size: acceptedArtifactTestHook.leaseSize },
-        };
-      }
       return result;
     },
   };
@@ -191,7 +183,6 @@ function capture(parts: readonly AcceptedExportPart[]): Extract<
 
 afterEach(() => {
   acceptedArtifactTestHook.afterVerifiedOpen = undefined;
-  acceptedArtifactTestHook.leaseSize = undefined;
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -403,7 +394,7 @@ describe("materializeAcceptedStlBundle", () => {
     expect(second.fileCounts).toEqual({ accent: 1 });
   });
 
-  it("rejects more than 10,000 selected accepted units before publication", async () => {
+  it("exports more than 10,000 selected accepted units", async () => {
     const fixturePaths = fixture();
     const base = part({ snapshotRoot: fixturePaths.snapshotRoot, completed: [false] });
     const units = Array.from({ length: 10_001 }, (_, unitIndex) => ({
@@ -421,12 +412,12 @@ describe("materializeAcceptedStlBundle", () => {
         groupBy: "color_dir",
         roleOrder: ["primary", "accent", "clear", "opaque"],
       }),
-    ).resolves.toEqual({ kind: "limit_exceeded" });
-  });
+    ).resolves.toMatchObject({ kind: "materialized", fileCounts: { accent: 10_001 } });
+  }, 60_000);
 
-  it("counts distinct accepted descriptors even when their digests match", async () => {
+  it("exports more than 256 MiB of source files and 512 MiB of copies", async () => {
     const fixturePaths = fixture();
-    const base = part({ snapshotRoot: fixturePaths.snapshotRoot, completed: [false] });
+    const base = part({ snapshotRoot: fixturePaths.snapshotRoot, completed: [false, false], bytes: Buffer.alloc(15 * 1024 * 1024, 65) });
     const parts = Array.from({ length: 18 }, (_, index) => ({
       ...base,
       revisionPartId: index + 1,
@@ -436,7 +427,6 @@ describe("materializeAcceptedStlBundle", () => {
         ? { ...base.artifact, sourceId: index + 1 }
         : base.artifact,
     }));
-    acceptedArtifactTestHook.leaseSize = 15 * 1024 * 1024;
 
     await expect(
       materializeAcceptedStlBundle({
@@ -446,10 +436,10 @@ describe("materializeAcceptedStlBundle", () => {
         groupBy: "color",
         roleOrder: ["primary", "accent", "clear", "opaque"],
       }),
-    ).resolves.toEqual({ kind: "limit_exceeded" });
-  });
+    ).resolves.toMatchObject({ kind: "materialized", fileCounts: { accent: 36 } });
+  }, 60_000);
 
-  it("counts the ZIP bytes in the complete published-tree limit", async () => {
+  it("publishes the ZIP alongside the exported files", async () => {
     const fixturePaths = fixture();
     const bytes = Buffer.from(Array.from({ length: 80 }, (_, index) => index));
 
@@ -462,9 +452,8 @@ describe("materializeAcceptedStlBundle", () => {
         selection: "all",
         groupBy: "color",
         roleOrder: ["primary", "accent", "clear", "opaque"],
-        publishedBytesLimit: bytes.length + 16,
       }),
-    ).resolves.toEqual({ kind: "limit_exceeded" });
+    ).resolves.toMatchObject({ kind: "materialized" });
   });
 
   it("maps publication setup failures to output_failure", async () => {
@@ -671,15 +660,15 @@ describe("parseStlPackUnitTokens", () => {
     expect(parseStlPackUnitTokens([token])).toEqual([token]);
   });
 
-  it("refuses anything that is not a bounded list of tokens", () => {
+  it("refuses invalid tokens but accepts more than 10,000 valid tokens", () => {
     expect(parseStlPackUnitTokens("ppu_" + "a".repeat(32))).toBe("invalid");
     expect(parseStlPackUnitTokens([42])).toBe("invalid");
     expect(parseStlPackUnitTokens(["31:0"])).toBe("invalid");
     expect(parseStlPackUnitTokens([`ppu_${"A".repeat(32)}`])).toBe("invalid");
     expect(
       parseStlPackUnitTokens(
-        Array.from({ length: STL_PACK_MAX_SELECTED_UNITS + 1 }, () => unitToken(31, 0)),
+        Array.from({ length: 10_001 }, () => unitToken(31, 0)),
       ),
-    ).toBe("invalid");
+    ).toHaveLength(10_001);
   });
 });

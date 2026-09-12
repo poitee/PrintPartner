@@ -40,7 +40,8 @@
     "pdf-parse": "^2.4.5",
     "pg": "^8.22.0",
     "pino": "^10.3.1",
-    "tar": "^7.1.0"
+    "tar": "^7.1.0",
+    "yazl": "^3.3.1"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
@@ -48,6 +49,7 @@
     "@types/node": "^22.20.1",
     "@types/nodemailer": "^8.0.1",
     "@types/pg": "^8.23.1",
+    "@types/yazl": "^3.3.1",
     "tsx": "^4.23.13",
     "typescript": "^6.0.3",
     "vite": "^8.2.2",

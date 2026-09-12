@@ -29,6 +29,7 @@ Use this index to find the guide for your task. The in-app Help page covers the 
 - [Spoolman](integrations/SPOOLMAN.md)
 - [3MF export validation](3MF_EXPORT_VALIDATION.md)
 - [Export STLs by color and filename group](export-by-filename.md)
+- [STL download capacity and browser warnings](stl-downloads.md)
 - [Manifest authoring](playbooks/author-manifest-on-stack.md)
 - [Stack presets and variants](playbooks/kit-studio-build.md)
 
