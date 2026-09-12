@@ -24,6 +24,39 @@ afterEach(() => {
 });
 
 describe("JobProvider terminal retention", () => {
+  it.each(["completion", "unmount"])("aborts a stalled poll on %s", async (reason) => {
+    let pollSignal: AbortSignal | undefined;
+    vi.mocked(fetchJob).mockImplementationOnce((_id, signal) => new Promise((_resolve, reject) => {
+      pollSignal = signal;
+      signal?.addEventListener("abort", () => reject(new Error("Aborted")), { once: true });
+    }));
+    const completed = {
+      job_id: "download", kind: "export-stl-pack", status: "done",
+      message: "Complete", progress: 100, result: {}, error: null,
+    };
+    vi.mocked(fetchJob).mockResolvedValue(completed);
+    const disconnect = vi.fn();
+    vi.mocked(connectJobWebSocket).mockReturnValue(disconnect);
+    const queryClient = new QueryClient();
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}>
+        <JobProvider>{children}</JobProvider>
+      </QueryClientProvider>
+    );
+    const { result, unmount } = renderHook(useJobContext, { wrapper });
+    const onDone = vi.fn();
+    await act(async () => {
+      await result.current.runJob("stl-export", () => Promise.resolve("download"), onDone);
+    });
+    await act(async () => {
+      if (reason === "unmount") unmount();
+      else vi.mocked(connectJobWebSocket).mock.calls.at(-1)?.[1](completed);
+    });
+    expect(pollSignal?.aborted).toBe(true);
+    expect(disconnect).toHaveBeenCalledOnce();
+    expect(onDone).toHaveBeenCalledTimes(reason === "completion" ? 1 : 0);
+  });
+
   it("keeps watching an STL export beyond a minute and delivers its download", async () => {
     vi.useFakeTimers();
     const running = {

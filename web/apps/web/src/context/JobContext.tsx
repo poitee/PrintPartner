@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -68,21 +69,30 @@ let localFailureSequence = 0;
 async function pollJobUntilTerminal(
   jobId: string,
   onProgress: (snap: JobSnapshot) => void,
+  signal: AbortSignal,
   intervalMs = 400,
   maxAttempts = 150,
-  isFinished = () => false,
 ): Promise<void> {
   let lastSnap: JobSnapshot | null = null;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    if (isFinished()) return;
-    const snap = await fetchJob(jobId);
-    if (isFinished()) return;
+    if (signal.aborted) return;
+    const snap = await fetchJob(jobId, signal);
+    if (signal.aborted) return;
     lastSnap = snap;
     onProgress(snap);
     if (JOB_TERMINAL.has(snap.status)) {
       return;
     }
-    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    await new Promise<void>((resolve) => {
+      const done = () => {
+        clearTimeout(timer);
+        signal.removeEventListener("abort", done);
+        resolve();
+      };
+      const timer = setTimeout(done, intervalMs);
+      signal.addEventListener("abort", done, { once: true });
+      if (signal.aborted) done();
+    });
   }
   throw new Error(
     lastSnap
@@ -114,6 +124,14 @@ function upsertJob(jobs: ActiveJob[], next: ActiveJob): ActiveJob[] {
 export function JobProvider({ children }: { children: ReactNode }) {
   const qc = useQueryClient();
   const [activeJobs, setActiveJobs] = useState<ActiveJob[]>([]);
+  const observers = useRef(new Set<AbortController>());
+  useEffect(() => {
+    const active = observers.current;
+    return () => {
+      for (const observer of active) observer.abort();
+      active.clear();
+    };
+  }, []);
 
   const clearJob = useCallback((jobId?: string) => {
     if (jobId) {
@@ -156,6 +174,13 @@ export function JobProvider({ children }: { children: ReactNode }) {
     ) => {
       let disconnect: (() => void) | null = null;
       let finished = false;
+      const observer = new AbortController();
+      observers.current.add(observer);
+      observer.signal.addEventListener("abort", () => {
+        finished = true;
+        disconnect?.();
+        observers.current.delete(observer);
+      }, { once: true });
       const sourceIds = options?.sourceIds;
       const profileId = options?.profileId ?? null;
       const removeAfterTerminalDisplay = (jobId: string) => {
@@ -170,6 +195,7 @@ export function JobProvider({ children }: { children: ReactNode }) {
       };
       try {
         const jobId = await start();
+        if (observer.signal.aborted) return;
         refreshAcceptedExportHistory();
         const initial: ActiveJob = {
           jobId,
@@ -185,7 +211,7 @@ export function JobProvider({ children }: { children: ReactNode }) {
         const finish = (snap: JobSnapshot) => {
           if (finished) return;
           finished = true;
-          disconnect?.();
+          observer.abort();
           onDone?.(snap);
           invalidateAfterJob(qc, kind, snap, options?.profileId);
           setActiveJobs((prev) =>
@@ -217,7 +243,7 @@ export function JobProvider({ children }: { children: ReactNode }) {
           );
           if (JOB_TERMINAL.has(ev.status)) {
             if ("job_id" in ev) finish(ev);
-            else void fetchJob(jobId).then(finish).catch(() => finish({ ...ev, job_id: jobId, kind }));
+            else void fetchJob(jobId, observer.signal).then(finish).catch(() => finish({ ...ev, job_id: jobId, kind }));
           }
         };
 
@@ -229,13 +255,15 @@ export function JobProvider({ children }: { children: ReactNode }) {
           },
         );
 
-        void pollJobUntilTerminal(jobId, onProgress, 400, pollAttemptsForKind(kind), () => finished).catch((e) => {
+        void pollJobUntilTerminal(jobId, onProgress, observer.signal, 400, pollAttemptsForKind(kind)).catch((e) => {
           if (finished) return;
           const message = `Lost contact with the job. It may still be running on the server. ${e instanceof Error ? e.message : String(e)}`;
           finish({ job_id: jobId, kind, status: "error", message, error: message, progress: null, result: null });
           refreshAcceptedExportHistory();
         });
       } catch (e) {
+        if (observer.signal.aborted) return;
+        observer.abort();
         localFailureSequence += 1;
         const failureJobId = `local-failure-${localFailureSequence}`;
         setActiveJobs((prev) =>
