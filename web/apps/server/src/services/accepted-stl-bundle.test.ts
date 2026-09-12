@@ -18,7 +18,24 @@ import {
 
 const acceptedArtifactTestHook = vi.hoisted(() => ({
   afterVerifiedOpen: undefined as (() => void) | undefined,
+  failZipRead: false,
+  zipReadFailures: 0,
 }));
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...actual,
+    createReadStream(...args: Parameters<typeof actual.createReadStream>) {
+      const [path, options] = args;
+      if (acceptedArtifactTestHook.failZipRead && typeof path === "string" && path.includes("/.tmp-") && path.endsWith(".stl")) {
+        acceptedArtifactTestHook.zipReadFailures++;
+        return actual.createReadStream(`${path}.missing`, options);
+      }
+      return actual.createReadStream(...args);
+    },
+  };
+});
 
 vi.mock("./accepted-artifacts.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./accepted-artifacts.js")>();
@@ -183,10 +200,25 @@ function capture(parts: readonly AcceptedExportPart[]): Extract<
 
 afterEach(() => {
   acceptedArtifactTestHook.afterVerifiedOpen = undefined;
+  acceptedArtifactTestHook.failZipRead = false;
+  acceptedArtifactTestHook.zipReadFailures = 0;
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
 describe("materializeAcceptedStlBundle", () => {
+  it("returns output_failure and removes staging when a lazy ZIP source cannot be read", async () => {
+    const paths = fixture();
+    acceptedArtifactTestHook.failZipRead = true;
+    const result = await materializeAcceptedStlBundle({
+      ...paths,
+      capture: capture([part({ snapshotRoot: paths.snapshotRoot, completed: [false] })]),
+      selection: "all", groupBy: "color", roleOrder: ["accent"],
+    });
+    expect(acceptedArtifactTestHook.zipReadFailures).toBe(1);
+    expect(result).toEqual({ kind: "output_failure" });
+    const entries = readdirSync(paths.tenantExportsDir, { recursive: true });
+    expect(entries.some((entry) => String(entry).includes(".tmp-") || String(entry).includes("content-"))).toBe(false);
+  });
   it("preserves Unicode custom folder names in the ZIP", async () => {
     const paths = fixture();
     const result = await materializeAcceptedStlBundle({ ...paths, capture: capture([part({ snapshotRoot: paths.snapshotRoot, filename: "mount-S.stl", completed: [false] })]), selection: "all", groupBy: "color", roleOrder: ["accent"], filenameGrouping: { definition: { name: "設定", rules: [{ suffix: "-S", group: "構造" }], overrides: {} }, arrangement: "group" } });

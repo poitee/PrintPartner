@@ -279,6 +279,7 @@ async function writeZip(
       }, (callback) => {
         if (zipStream.destroyed) return callback(new Error("Export stream closed"), Readable.from([]));
         activeSource = createReadStream(join(root, ...file.relativePath.split("/")));
+        activeSource.on("error", (error) => zipStream.destroy(error));
         callback(null, activeSource);
       });
     }
