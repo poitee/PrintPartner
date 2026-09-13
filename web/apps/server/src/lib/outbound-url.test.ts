@@ -5,12 +5,17 @@ import {
   classifyAddress,
   OutboundUrlError,
   safeOutboundFetch,
+  setPrivateOutboundDenied,
   type LookupFn,
 } from "./outbound-url.js";
 
 const publicLookup: LookupFn = async () => [{ address: "93.184.216.34", family: 4 }];
 const privateLookup: LookupFn = async () => [{ address: "10.0.0.8", family: 4 }];
 const loopbackLookup: LookupFn = async () => [{ address: "127.0.0.1", family: 4 }];
+
+afterEach(() => {
+  setPrivateOutboundDenied(false);
+});
 
 describe("classifyAddress", () => {
   it("classifies IPv4 ranges", () => {
@@ -82,6 +87,17 @@ describe("assertSafeOutboundUrl", () => {
     await expect(assertSafeOutboundUrl("http://[::ffff:169.254.169.254]/")).rejects.toThrow(
       /metadata/,
     );
+  });
+
+  it("ignores allowPrivate when private outbound is denied for the host", async () => {
+    setPrivateOutboundDenied(true);
+    try {
+      await expect(
+        assertSafeOutboundUrl("http://192.168.1.50:7912/api/v1/info", { allowPrivate: true }),
+      ).rejects.toThrow(/private or internal/);
+    } finally {
+      setPrivateOutboundDenied(false);
+    }
   });
 
   it("allows private IPs with allowPrivate but still blocks metadata", async () => {

@@ -80,11 +80,16 @@ import {
   MAX_CLASSIFIABLE_BYTES,
 } from "../lib/print-file-classification.js";
 import { MAX_PRINT_FILE_UPLOAD_BYTES as MAX_UPLOAD_BYTES } from "../services/upload-limits.js";
+import { HOSTED_TENANT_DISK_QUOTA_BYTES } from "@print-partner/contracts";
+import { sendIfTenantDiskQuotaExceeded } from "../lib/tenant-disk-quota.js";
 import { readPrinterFileSnapshot, consumePrinterFileSnapshot } from "../services/printer-file-snapshots.js";
 
 type RouteDeps = {
   repo: AppRepository;
   integrations: IntegrationPort;
+  dataDir?: string;
+  reposDir?: string;
+  hostedPlanning?: boolean;
 };
 
 async function getObjectListForIntegration(
@@ -1178,6 +1183,22 @@ export async function registerPrinterCheckoffRoutes(
       const classified = classifyPrintFileBytes(bytes);
       if (classified.outcome === "rejected") {
         return sendProblem(reply, 409, "Conflict", printFileRejectionMessage(classified.reason));
+      }
+
+      if (
+        deps.hostedPlanning &&
+        deps.dataDir &&
+        deps.reposDir &&
+        (await sendIfTenantDiskQuotaExceeded(reply, {
+          dataDir: deps.dataDir,
+          reposDir: deps.reposDir,
+          tenantId: request.tenantId,
+          sourceIds: deps.repo.listSources().map((source) => source.id),
+          additionalBytes: bytes.byteLength,
+          quotaBytes: HOSTED_TENANT_DISK_QUOTA_BYTES,
+        }))
+      ) {
+        return;
       }
 
       const now = Date.now();

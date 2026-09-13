@@ -223,7 +223,7 @@ describe("versioned API key authentication", () => {
         remoteAddress: "203.0.113.10",
       });
 
-      expect(response.statusCode).toBe(401);
+      expect(response.statusCode).toBe(403);
     } finally {
       await app.close();
       ports.db.close();

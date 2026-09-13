@@ -35,6 +35,7 @@ import type { AuthStore } from "../services/auth-store.js";
 import { createIntegrationPort } from "../integrations/store.js";
 import { registerDiscordDigestRoute } from "./discord-digest.js";
 import { getIntegrationAdapter } from "../integrations/registry.js";
+import { hostedPlanningPolicy } from "../lib/hosted-planning.js";
 
 export type CoreRouteDeps = {
   repo: AppRepository;
@@ -68,6 +69,8 @@ export async function registerCoreRoutes(
     thumbsDir: deps.thumbsDir,
     coversDir: deps.coversDir,
     jobs: deps.jobs,
+    dataDir: deps.dataDir,
+    hostedPlanning: hostedPlanningPolicy(deps.config.deployMode).hostedPlanning,
   };
 
   await registerSourceRoutes(app, routeDeps);
@@ -117,7 +120,13 @@ export async function registerCoreRoutes(
     repo: deps.repo,
     getAdapter: getIntegrationAdapter,
   });
-  await registerPrinterCheckoffRoutes(app, { integrations, repo: deps.repo });
+  await registerPrinterCheckoffRoutes(app, {
+    integrations,
+    repo: deps.repo,
+    dataDir: deps.dataDir,
+    reposDir: deps.reposDir,
+    hostedPlanning: hostedPlanningPolicy(deps.config.deployMode).hostedPlanning,
+  });
   await registerDiscordDigestRoute(app, { repo: deps.repo, integrations });
   await registerPrinterSendQueueRoutes(app, {
     integrations,
