@@ -1,5 +1,5 @@
 import { basename, dirname, join } from "node:path";
-import { rmSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import type { FastifyInstance } from "fastify";
 import {
   buildStlTreePayload,
@@ -199,6 +199,9 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
         requestedUrl && (kind === "github" || kind === "git")
           ? normalizeGithubSourceLocation(requestedUrl, requestedBranch)
           : null;
+      if (kind === "github" || kind === "git") {
+        if (await refuseIfHostedQuotaExceeded(reply, deps, request.tenantId)) return;
+      }
       const newSource = deps.repo.createSource({
         name: String(body.name ?? ""),
         url: githubLocation?.url ?? requestedUrl,
@@ -389,7 +392,7 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
     }
     const expandedBytes = await measureDirectoryBytes(extractDir);
     if (await refuseIfHostedQuotaExceeded(reply, deps, request.tenantId, expandedBytes)) {
-      rmSync(extractDir, { recursive: true, force: true });
+      await rm(extractDir, { recursive: true, force: true });
       return;
     }
     const { suggestedImportRules, stlCount } = finalizeUploadedSource(extractDir);
@@ -503,7 +506,7 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
     }
     const expandedBytes = await measureDirectoryBytes(result.extractDir);
     if (await refuseIfHostedQuotaExceeded(reply, deps, request.tenantId, expandedBytes)) {
-      rmSync(result.extractDir, { recursive: true, force: true });
+      await rm(result.extractDir, { recursive: true, force: true });
       return;
     }
 
