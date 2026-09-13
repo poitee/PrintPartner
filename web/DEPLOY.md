@@ -263,7 +263,9 @@ cp hosted-planning.env.example hosted-planning.env
 docker compose --env-file hosted-planning.env -f docker-compose.hosted.yml up -d
 ```
 
-Health should advertise `hosted_planning`. It omits `mcp_http` and `backups`.
+Health should advertise `hosted_planning` and `invite_board`. It omits `mcp_http`, `backups`, and `plan_sharing`. GitHub and Discord buttons appear only when health lists `github_oauth` or `discord_oauth`. Leave Discord unset.
+
+Signed-in invitees share on the Board at `/board`. A post stores a frozen `printpartner-reference-share` Build snapshot. Later edits to the author's Build do not change the post. Comments are a flat list. Add to my Builds stays disabled until Source mapping exists. Kit inbox, send-to-user copies, and `.print-partner-kit` export are 403 on this host. `GET /plans/:id/reference-share` stays available for the post preview.
 
 Volume backup from the Docker host:
 
@@ -308,10 +310,16 @@ recovery.
 | `POST /auth/logout` | Clear session |
 | `GET /auth/me` | Current user + tenant |
 | `POST /auth/dev-login` | Dev session helper |
-| `POST /plans/:id/shares` | Send build copy to another user |
-| `GET /shares/incoming` | List pending shares for current user |
-| `POST /shares/:token/accept` | Import shared build as new plan |
-| `DELETE /shares/:id` | Revoke a pending share |
+| `GET /board/posts` | Newest-first invite Board feed (session required) |
+| `GET /board/posts/:id` | Frozen recipe snapshot and flat comments |
+| `POST /board/posts` | Post a Build snapshot with a caption |
+| `POST /board/posts/:id/hide` | Admin hides a post |
+| `POST /board/posts/:id/comments` | Add a comment |
+| `DELETE /board/comments/:id` | Author or admin deletes a comment |
+| `POST /plans/:id/shares` | Send build copy to another user. 403 on the invite host. |
+| `GET /shares/incoming` | List pending shares for current user. 403 on the invite host. |
+| `POST /shares/:token/accept` | Import shared build as new plan. 403 on the invite host. |
+| `DELETE /shares/:id` | Revoke a pending share. 403 on the invite host. |
 
 ### Password reset email (multi-user)
 

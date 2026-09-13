@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Invite-only Board** — signed-in GitHub and email users post a frozen
+  references-only Build snapshot, read a newest-first feed, and leave flat
+  comments. Kit inbox, `.print-partner-kit` export, and Discord login stay off
+  the invite host. Add to my Builds waits on issue 65 mapping.
 - **Invite-host Compose** — `docker-compose.hosted.yml` and
   `hosted-planning.env.example` stand up the private planning site on SQLite.
   `docker-compose.saas.yml` stays the anonymous development stack. Production
