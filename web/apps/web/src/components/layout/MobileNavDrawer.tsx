@@ -1,6 +1,5 @@
 import { type MouseEvent, useState } from "react";
 import { NavLink } from "react-router-dom";
-import { isHostedPlanning } from "@print-partner/contracts";
 import {
   BookOpen,
   Factory,
@@ -31,7 +30,6 @@ import {
 import { statusTone } from "@/lib/statusTone";
 import { cn } from "@/lib/utils";
 import { useProfileSelection } from "../../context/ProfileContext";
-import { useEngineHealth } from "../../hooks/useEngineHealth";
 
 const UTILITY_ICONS: Record<SpineUtilityId, typeof Layers> = {
   builds: Layers,
@@ -54,6 +52,7 @@ const NAV_IDLE =
 type Props = {
   onNavigate: (to: string, e: MouseEvent<HTMLAnchorElement>) => void;
   sourceUpdateCount: number;
+  inviteBoard?: boolean;
 };
 
 function DrawerGroupLabel({ children }: { children: string }) {
@@ -65,13 +64,14 @@ function DrawerGroupLabel({ children }: { children: string }) {
 }
 
 /** Hamburger-triggered navigation drawer for viewports below lg (no SpineRail). */
-export default function MobileNavDrawer({ onNavigate, sourceUpdateCount }: Props) {
+export default function MobileNavDrawer({
+  onNavigate,
+  sourceUpdateCount,
+  inviteBoard = false,
+}: Props) {
   const [open, setOpen] = useState(false);
   const { selectedProfileId } = useProfileSelection();
-  const { health } = useEngineHealth();
-  const items = spineUtilityNavItems(selectedProfileId, {
-    inviteBoard: isHostedPlanning(health),
-  }).map((item) => ({
+  const items = spineUtilityNavItems(selectedProfileId, { inviteBoard }).map((item) => ({
     ...item,
     icon: UTILITY_ICONS[item.id],
   }));
@@ -97,7 +97,7 @@ export default function MobileNavDrawer({ onNavigate, sourceUpdateCount }: Props
         )
       }
       aria-label={item.label}
-      end
+      end={item.id !== "board"}
     >
       <item.icon className="h-4 w-4 shrink-0" />
       <span className="min-w-0 flex-1">

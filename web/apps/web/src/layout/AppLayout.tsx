@@ -117,6 +117,7 @@ export default function AppLayout() {
       isPartsPath(location.pathname) ||
       isProgressPath(location.pathname) ||
       isExportPath(location.pathname));
+  const inviteBoard = isHostedPlanning(health);
   const activeStage = stages.find((stage) => stage.id === activeId) ?? null;
 
   return (
@@ -135,6 +136,7 @@ export default function AppLayout() {
             activeId={activeId}
             onStageNavigate={onPipelineNavigate}
             sourceUpdateCount={sourceUpdateCount}
+            inviteBoard={inviteBoard}
           />
 
           <div className="flex min-w-0 flex-1 flex-col">
@@ -145,6 +147,7 @@ export default function AppLayout() {
                 <MobileNavDrawer
                   onNavigate={onPipelineNavigate}
                   sourceUpdateCount={sourceUpdateCount}
+                  inviteBoard={inviteBoard}
                 />
                 {showPlanInHeader && activePlanName ? (
                   <div className="min-w-0">

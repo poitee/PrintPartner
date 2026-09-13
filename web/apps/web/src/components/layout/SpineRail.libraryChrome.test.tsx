@@ -17,7 +17,7 @@ vi.mock("../../context/ProfileContext", () => ({
   useProfileSelection: () => ({ selectedProfileId: null }),
 }));
 
-function renderRail(path: string) {
+function renderRail(path: string, inviteBoard = false) {
   return render(
     <MemoryRouter initialEntries={[path]}>
       <SpineRail
@@ -27,6 +27,7 @@ function renderRail(path: string) {
         activeId={null}
         onStageNavigate={() => undefined}
         sourceUpdateCount={0}
+        inviteBoard={inviteBoard}
       />
     </MemoryRouter>,
   );
@@ -53,5 +54,17 @@ describe("SpineRail Source Library chrome", () => {
     expect(link.className).toContain("text-primary");
     expect(link.className).not.toContain("border-primary");
     expect(link.className).not.toContain("bg-card");
+  });
+
+  it("keeps Board selected on a post path when the invite Board is on", () => {
+    renderRail("/board/p1", true);
+    const link = screen.getByRole("link", { name: "Board" });
+    expect(link.className).toContain("bg-primary-soft");
+    expect(link.getAttribute("aria-current")).toBe("page");
+  });
+
+  it("hides Board when inviteBoard is off", () => {
+    renderRail("/plan");
+    expect(screen.queryByRole("link", { name: "Board" })).toBeNull();
   });
 });

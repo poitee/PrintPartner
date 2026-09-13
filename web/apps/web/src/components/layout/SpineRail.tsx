@@ -1,6 +1,5 @@
 import { type MouseEvent, type ReactNode } from "react";
 import { NavLink, useLocation } from "react-router-dom";
-import { isHostedPlanning } from "@print-partner/contracts";
 import {
   BookOpen,
   Factory,
@@ -33,7 +32,6 @@ import { statusTone } from "@/lib/statusTone";
 import { cn } from "@/lib/utils";
 import type { WorkflowStage, WorkflowStageId } from "../../lib/workflowStages";
 import { useProfileSelection } from "../../context/ProfileContext";
-import { useEngineHealth } from "../../hooks/useEngineHealth";
 
 type Props = {
   collapsed: boolean;
@@ -42,6 +40,7 @@ type Props = {
   activeId: WorkflowStageId | null;
   onStageNavigate: (to: string, e: MouseEvent<HTMLAnchorElement>) => void;
   sourceUpdateCount: number;
+  inviteBoard?: boolean;
 };
 
 const UTILITY_ICONS: Record<
@@ -179,11 +178,10 @@ export default function SpineRail({
   activeId,
   onStageNavigate,
   sourceUpdateCount,
+  inviteBoard = false,
 }: Props) {
   const location = useLocation();
   const { selectedProfileId } = useProfileSelection();
-  const { health } = useEngineHealth();
-  const inviteBoard = isHostedPlanning(health);
   const utilityLinks = spineUtilityNavItems(selectedProfileId, { inviteBoard }).map((item) => ({
     ...item,
     icon: UTILITY_ICONS[item.id],
