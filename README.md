@@ -186,7 +186,7 @@ The default self-host setup uses SQLite and local storage. Common variables are:
 | `GITHUB_REPO` | `poitee/PrintPartner` | Repository used for update checks |
 | `PRINT_PARTNER_UPDATE_CHECK` | enabled | Set to `0` to disable release checks |
 
-See [deployment reference](web/DEPLOY.md) for authentication, CORS, OAuth, S3, email, and experimental SaaS settings. See [operations](OPERATIONS.md) for backups, metrics, API keys, and recovery.
+See [deployment reference](web/DEPLOY.md) for authentication, CORS, OAuth, S3, email, and experimental SaaS settings. The private invite host is [Invite-beta hosted planning](web/DEPLOY.md#invite-beta-hosted-planning). See [operations](OPERATIONS.md) for backups, metrics, API keys, and recovery.
 
 ## Local development
 

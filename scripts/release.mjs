@@ -17,6 +17,7 @@ const VERSION_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const SHA_PATTERN = /^[0-9a-f]{40}$/;
 const DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
 const VERSIONED_DOCS = ["README.md", "web/DEPLOY.md", "OPERATIONS.md"];
+const COMPOSE_FILES = ["docker-compose.yml", "docker-compose.hosted.yml"];
 const VERSION_TOKEN = /(?<![\d.])\d+\.\d+\.\d+(?![\d.])/g;
 
 function fail(message) {
@@ -182,17 +183,18 @@ export function planRelease({ repoRoot, nextVersion, date }) {
     dockerContents.replace(dockerPattern, `ARG PP_APP_VERSION=${validatedNextVersion}`),
   );
 
-  const composePath = "docker-compose.yml";
-  const composeContents = read(repoRoot, composePath);
-  const composeExpression = `PRINT_PARTNER_VERSION:-${currentVersion}`;
-  if (composeContents.split(composeExpression).length !== 2) {
-    fail(`${composePath} must contain exactly one ${composeExpression} expression`);
+  for (const composePath of COMPOSE_FILES) {
+    const composeContents = read(repoRoot, composePath);
+    const composeExpression = `PRINT_PARTNER_VERSION:-${currentVersion}`;
+    if (composeContents.split(composeExpression).length !== 2) {
+      fail(`${composePath} must contain exactly one ${composeExpression} expression`);
+    }
+    add(
+      composePath,
+      composeContents,
+      composeContents.replace(composeExpression, `PRINT_PARTNER_VERSION:-${validatedNextVersion}`),
+    );
   }
-  add(
-    composePath,
-    composeContents,
-    composeContents.replace(composeExpression, `PRINT_PARTNER_VERSION:-${validatedNextVersion}`),
-  );
 
   for (const path of VERSIONED_DOCS) {
     const contents = read(repoRoot, path);
@@ -247,11 +249,13 @@ function inspectWorkspace(repoRoot) {
   if (dockerVersions.length !== 1 || dockerVersions[0] !== version) {
     fail(`Dockerfile PP_APP_VERSION does not match ${version}`);
   }
-  const composeVersions = [
-    ...read(repoRoot, "docker-compose.yml").matchAll(/PRINT_PARTNER_VERSION:-([^}]+)}/g),
-  ].map((match) => match[1]);
-  if (composeVersions.length !== 1 || composeVersions[0] !== version) {
-    fail(`docker-compose.yml default image does not match ${version}`);
+  for (const composePath of COMPOSE_FILES) {
+    const composeVersions = [
+      ...read(repoRoot, composePath).matchAll(/PRINT_PARTNER_VERSION:-([^}]+)}/g),
+    ].map((match) => match[1]);
+    if (composeVersions.length !== 1 || composeVersions[0] !== version) {
+      fail(`${composePath} default image does not match ${version}`);
+    }
   }
   for (const path of VERSIONED_DOCS) {
     assertMarkedVersions(read(repoRoot, path), version, path);

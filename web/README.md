@@ -27,6 +27,7 @@ npm run dev
 | Mode | App DB | Files | Auth |
 |------|--------|-------|------|
 | **self-host** | SQLite under `PRINT_PARTNER_DATA_DIR` | Local disk | Optional Basic |
+| **saas** hosted planning | SQLite under `SAAS_DATA_DIR` | Local disk, 2 GiB tenant quota | `MULTI_USER=1`. No anonymous in production. |
 | **saas** + `DATABASE_URL` | Experimental Postgres sync bridge (tenant-scoped) | `SAAS_DATA_DIR` or S3 | OAuth / Basic / dev anonymous |
 
 Postgres is not production-ready because the synchronous compatibility bridge

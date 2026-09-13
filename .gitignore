@@ -17,6 +17,7 @@ AGENTS.md
 *.db
 .env
 .env.*
+hosted-planning.env
 ai_secrets.json
 
 # Web platform (monorepo under web/)

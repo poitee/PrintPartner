@@ -1,3 +1,7 @@
+# Development SaaS stack. Anonymous access, Postgres, and S3 stay on.
+# Production hosted planning refuses SAAS_ALLOW_ANONYMOUS=1.
+# Private invite host: docker-compose.hosted.yml and web/DEPLOY.md.
+
 services:
   postgres:
     image: postgres:16.15-alpine

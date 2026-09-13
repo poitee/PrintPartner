@@ -8,6 +8,8 @@ Print Partner is a TypeScript web application for planning and tracking layered 
 PrintPartner/
 ├── Dockerfile
 ├── docker-compose.yml
+├── docker-compose.hosted.yml
+├── docker-compose.saas.yml
 ├── docs/
 ├── manifests/
 ├── scripts/

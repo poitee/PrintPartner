@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Invite-host Compose** — `docker-compose.hosted.yml` and
+  `hosted-planning.env.example` stand up the private planning site on SQLite.
+  `docker-compose.saas.yml` stays the anonymous development stack. Production
+  refuses `SAAS_ALLOW_ANONYMOUS=1`. See [web/DEPLOY.md](web/DEPLOY.md#invite-beta-hosted-planning).
 - **Simpler external tools settings** - Settings now lets you turn off API-key
   and MCP controls, allow API keys only, or enable both. Turning them off keeps
   Sources, Plan, Production, Checkoff, printers, backups, and logs available.

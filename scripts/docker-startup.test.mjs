@@ -17,10 +17,20 @@ test("runtime image lets the entrypoint repair data ownership before dropping pr
   assert.match(entrypoint, /exec su-exec ppuser dumb-init -- "\$@"/);
 });
 
-for (const path of ["docker-compose.yml", "docker-compose.saas.yml", "pp-compose.yml"]) {
+for (const path of ["docker-compose.yml", "docker-compose.saas.yml", "docker-compose.hosted.yml", "pp-compose.yml"]) {
   test(`${path} preserves the application entrypoint and initial user`, () => {
     const service = read(path).match(/^  print-partner:\n([\s\S]*?)(?=^  [\w-]+:|^\S|$(?![\s\S]))/m)?.[1];
     assert.ok(service, "Compose must declare the print-partner service");
     assert.doesNotMatch(service, /^    (?:user|entrypoint):/m);
   });
 }
+
+test("docker-compose.hosted.yml is the invite host, not the anonymous SaaS stack", () => {
+  const text = read("docker-compose.hosted.yml");
+  assert.match(text, /DEPLOY_MODE:\s*"saas"/);
+  assert.match(text, /MULTI_USER:\s*"1"/);
+  assert.doesNotMatch(text, /^\s+SAAS_ALLOW_ANONYMOUS:/m);
+  assert.doesNotMatch(text, /^\s+DATABASE_URL:/m);
+  assert.doesNotMatch(text, /^\s+S3_BUCKET:/m);
+  assert.doesNotMatch(text, /^\s+POSTGRES_EXPERIMENTAL:/m);
+});

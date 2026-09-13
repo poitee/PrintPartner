@@ -228,6 +228,7 @@ and authentication protect the shared interface.
 | `PP_BIND_ADDRESS` | Compose only | Host bind for app/Postgres/RustFS ports. Defaults to loopback (`127.0.0.1`). |
 | `PP_DEV_MULTI_USER` / `PP_DEV_SESSION_SECRET` | Development Compose | Override the single-user mode and development-only session secret |
 | `ALLOWED_ORIGINS` | Prod | Comma-separated CORS origins (alias: `CORS_ORIGIN`) |
+| `TRUST_PROXY` | Invite host: `1` | Trust `X-Forwarded-*` from the HTTPS reverse proxy. Required when TLS terminates in front of the container. |
 | `SAAS_BASIC_AUTH` | Optional | `user:password` for HTTP Basic dev auth |
 | `GITHUB_CLIENT_ID` / `SECRET` / `GITHUB_CALLBACK_URL` | OAuth | GitHub OAuth app |
 | `DISCORD_CLIENT_ID` / `SECRET` / `DISCORD_CALLBACK_URL` | OAuth | Discord OAuth app (`/auth/discord/callback`) |
@@ -238,21 +239,45 @@ and authentication protect the shared interface.
 
 ### Invite-beta hosted planning
 
-The public invite host is Library, Builds, Sources, Plan, Production export, and Checkoff. It does not talk to printers on a LAN.
+The public invite host is Library, Builds, Sources, Plan, Production export, and Checkoff. It does not talk to printers on a LAN. `DEPLOY_MODE=saas` denies LAN adapters even if a tenant uses curl.
 
-Set this host with:
+`docker-compose.saas.yml` stays a development stack. It turns on `SAAS_ALLOW_ANONYMOUS=1`, Postgres, and S3. Production hosted planning refuses to start with anonymous access. Do not use that file for the invite host.
 
-- `DEPLOY_MODE=saas`
-- `DATABASE_URL` unset (SQLite)
-- `MULTI_USER=1`
-- `SAAS_ALLOW_ANONYMOUS` unset
-- `POSTGRES_EXPERIMENTAL` unset
-- `S3_BUCKET` unset
-- `ALLOWED_ORIGINS` pinned to the public origin (not `true`)
-- `SESSION_SECRET` set
-- `REGISTRATION_OPEN=0` after the invite list has accounts
+#### Checklist
 
-The operator still owns DNS, HTTPS, the invite list, closing registration, and volume backup. This cut does not add a local relay, Prusa Connect, Moonraker cloud, a native app, Postgres, or S3.
+1. Copy `hosted-planning.env.example` to `hosted-planning.env`.
+2. Set `DEPLOY_MODE=saas` (already pinned in `docker-compose.hosted.yml`).
+3. Set `MULTI_USER=1` (already pinned).
+4. Leave `SAAS_ALLOW_ANONYMOUS` unset.
+5. Leave `DATABASE_URL`, `POSTGRES_EXPERIMENTAL`, and `S3_BUCKET` unset. SQLite on the volume is the database.
+6. Generate a strong `SESSION_SECRET`.
+7. Pin `ALLOWED_ORIGINS` to the public HTTPS origin. Do not use `true`.
+8. Put HTTPS in front. Terminate TLS at Caddy, nginx, or a load balancer. Proxy to `127.0.0.1:8080`.
+9. Keep `SESSION_COOKIE_SECURE=1` and `TRUST_PROXY=1` (already pinned).
+10. Leave `REGISTRATION_OPEN=1` while you create invite accounts. Set `REGISTRATION_OPEN=0` and recreate the container after the list is done. Existing accounts still log in.
+11. Back up the `print-partner-hosted-data` volume. HTTP `/backups` is off on this host. Tenants cannot restore the instance.
+
+```bash
+cp hosted-planning.env.example hosted-planning.env
+# edit SESSION_SECRET and ALLOWED_ORIGINS
+docker compose --env-file hosted-planning.env -f docker-compose.hosted.yml up -d
+```
+
+Health should advertise `hosted_planning`. It omits `mcp_http` and `backups`.
+
+Volume backup from the Docker host:
+
+```bash
+docker run --rm \
+  -v print-partner-hosted-data:/data:ro \
+  -v "$PWD":/backup \
+  alpine:3.21.3 \
+  tar czf /backup/print-partner-hosted-$(date -u +%Y%m%d).tar.gz -C /data .
+```
+
+The operator still owns DNS, the certificate, the invite list, closing registration, and storing that archive off the live volume. This cut does not add a local relay, Prusa Connect, Moonraker cloud, a native app, Postgres, or S3.
+
+The following claim-path note is for self-host `MULTI_USER` upgrades. Hosted planning starts empty and does not claim the `default` tenant.
 
 Print Partner now gives a first multi-user account direct ownership of the
 bootstrap `default` tenant. No application tables or data directories move

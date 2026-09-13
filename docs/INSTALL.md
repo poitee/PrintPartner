@@ -56,6 +56,8 @@ Find the Docker host's LAN address, then open `http://<host-address>:8080` from 
 
 Do not expose the default installation directly to the public internet. Use HTTPS, authentication, and a reverse proxy for remote access. Set `PRINT_PARTNER_API_KEY` before connecting an MCP client from another machine.
 
+The private invite host is a different Compose file. See [Invite-beta hosted planning](../web/DEPLOY.md#invite-beta-hosted-planning). That path is planning and export. Live send stays on this self-host install.
+
 ## Create the first build
 
 1. Open **Library** and add a GitHub repository, local folder, or zip file.

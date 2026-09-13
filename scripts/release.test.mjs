@@ -37,6 +37,11 @@ function fixture() {
     "docker-compose.yml",
     "image: example:${PRINT_PARTNER_VERSION:-3.1.0}\n# historical example: 3.1.0\n",
   );
+  write(
+    root,
+    "docker-compose.hosted.yml",
+    "image: example:${PRINT_PARTNER_VERSION:-3.1.0}\n",
+  );
   const versioned = (text) =>
     `<!-- release-version:start -->\n${text}\n<!-- release-version:end -->\n`;
   write(root, "README.md", versioned("Current release: 3.1.0. Runtime: 3.1.0-web."));
@@ -75,6 +80,7 @@ test("release dry-run plan updates every current sink without writing", () => {
       "web/package-lock.json",
       "Dockerfile",
       "docker-compose.yml",
+      "docker-compose.hosted.yml",
       "README.md",
       "web/DEPLOY.md",
       "OPERATIONS.md",
