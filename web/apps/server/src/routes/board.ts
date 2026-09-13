@@ -8,6 +8,7 @@ import {
 } from "../lib/board-model.js";
 import { exportBuildReferenceShare } from "../services/reference-sharing.js";
 import type { BoardStore } from "../services/board-store.js";
+import { isRecord } from "./job-route-inputs.js";
 
 const writeLimit = { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } };
 
@@ -80,12 +81,14 @@ export function registerBoardRoutes(
     if (!session) {
       return reply.status(401).send({ detail: "Authentication required" });
     }
-    const body = request.body as { plan_id?: unknown; caption?: unknown };
-    const planId = Number(body.plan_id);
+    if (!isRecord(request.body)) {
+      return reply.status(400).send({ detail: "Request body must be an object" });
+    }
+    const planId = Number(request.body.plan_id);
     if (!Number.isSafeInteger(planId) || planId <= 0) {
       return reply.status(400).send({ detail: "Invalid Build id" });
     }
-    const caption = normalizeBoardCaption(body.caption);
+    const caption = normalizeBoardCaption(request.body.caption);
     if (!caption) {
       return reply.status(400).send({ detail: "Caption must be between 1 and 500 characters" });
     }
@@ -135,7 +138,10 @@ export function registerBoardRoutes(
       return reply.status(401).send({ detail: "Authentication required" });
     }
     const id = (request.params as { id: string }).id;
-    const body = normalizeBoardComment((request.body as { body?: unknown }).body);
+    if (!isRecord(request.body)) {
+      return reply.status(400).send({ detail: "Request body must be an object" });
+    }
+    const body = normalizeBoardComment(request.body.body);
     if (!body) {
       return reply.status(400).send({ detail: "Comment must be between 1 and 2000 characters" });
     }

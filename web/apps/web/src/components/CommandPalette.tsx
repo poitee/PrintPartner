@@ -268,10 +268,12 @@ export default function CommandPalette(_props?: Props) {
           hint: "Share a references-only recipe",
           group: "Workflow",
           run: () => {
-            const path = planRoute(selectedProfileId);
-            const separator = path.includes("?") ? "&" : "?";
-            navigate(`${path}${separator}share=1`);
-            setOpen(false);
+            leaveBuildThen(() => {
+              const path = planRoute(selectedProfileId);
+              const separator = path.includes("?") ? "&" : "?";
+              navigate(`${path}${separator}share=1`);
+              setOpen(false);
+            });
           },
         });
       } else {

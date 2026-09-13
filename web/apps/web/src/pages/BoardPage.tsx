@@ -136,6 +136,7 @@ function PostDetail({ postId }: { postId: string }) {
   const onComment = (event: FormEvent) => {
     event.preventDefault();
     setBusy(true);
+    setError(null);
     void createBoardComment(postId, body)
       .then((result) => {
         setComments((current) => [...current, result.comment]);

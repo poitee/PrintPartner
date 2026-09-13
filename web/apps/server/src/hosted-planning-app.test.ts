@@ -195,6 +195,14 @@ describe("hosted planning host", () => {
       expect(kit.statusCode).toBe(403);
       expect(kit.json()).toMatchObject({ detail: HOSTED_FEATURE_DISABLED_DETAIL });
 
+      const emptyPost = await app.inject({
+        method: "POST",
+        url: "/board/posts",
+        headers: { cookie: adaCookie },
+      });
+      expect(emptyPost.statusCode).toBe(400);
+      expect(emptyPost.json()).toMatchObject({ detail: "Request body must be an object" });
+
       const posted = await app.inject({
         method: "POST",
         url: "/board/posts",
@@ -237,6 +245,14 @@ describe("hosted planning host", () => {
       expect(body.post.title).toBe("Board Build");
       expect(body.post.snapshot).toMatchObject({ kind: "build", title: "Board Build" });
       expect(body.comments).toEqual([]);
+
+      const emptyComment = await app.inject({
+        method: "POST",
+        url: `/board/posts/${created.post.id}/comments`,
+        headers: { cookie: bevCookie },
+      });
+      expect(emptyComment.statusCode).toBe(400);
+      expect(emptyComment.json()).toMatchObject({ detail: "Request body must be an object" });
 
       const comment = await app.inject({
         method: "POST",
