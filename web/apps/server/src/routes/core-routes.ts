@@ -30,6 +30,8 @@ import { registerBambuConnectRoutes } from "./bambu-connect.js";
 import { registerWebhookRoutes } from "./webhooks.js";
 import { registerShareRoutes } from "./shares.js";
 import { registerReferenceSharingRoutes } from "./reference-sharing.js";
+import { registerBoardRoutes } from "./board.js";
+import type { BoardStore } from "../services/board-store.js";
 import { registerAssistantRoutes } from "./assistant.js";
 import type { AuthStore } from "../services/auth-store.js";
 import { createIntegrationPort } from "../integrations/store.js";
@@ -47,6 +49,7 @@ export type CoreRouteDeps = {
   config: ServerConfig;
   jobs: InProcessJobRunner;
   authStore?: AuthStore | null;
+  boardStore?: BoardStore | null;
   reloadProfileSync?: () => Promise<void>;
 };
 
@@ -114,6 +117,10 @@ export async function registerCoreRoutes(
   const authStore = options.authStore ?? deps.authStore;
   if (deps.config.multiUser && authStore) {
     registerShareRoutes(app, { repo: deps.repo, authStore, config: deps.config });
+  }
+  const boardStore = deps.boardStore;
+  if (hostedPlanningPolicy(deps.config.deployMode).hostedPlanning && authStore && boardStore) {
+    registerBoardRoutes(app, { repo: deps.repo, boardStore });
   }
 
   const integrations = createIntegrationPort({

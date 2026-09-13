@@ -74,6 +74,13 @@ const RULES: readonly DenyRule[] = [
     detail: HOSTED_FEATURE_DISABLED_DETAIL,
   },
   { method: "*", pattern: /^\/mcp$/, detail: HOSTED_FEATURE_DISABLED_DETAIL },
+  { method: "POST", pattern: /^\/plans\/[^/]+\/shares$/, detail: HOSTED_FEATURE_DISABLED_DETAIL },
+  { method: "GET", pattern: /^\/shares\/incoming$/, detail: HOSTED_FEATURE_DISABLED_DETAIL },
+  { method: "POST", pattern: /^\/shares\/[^/]+\/accept$/, detail: HOSTED_FEATURE_DISABLED_DETAIL },
+  { method: "DELETE", pattern: /^\/shares\/[^/]+$/, detail: HOSTED_FEATURE_DISABLED_DETAIL },
+  { method: "POST", pattern: /^\/jobs\/export-kit-bundle$/, detail: HOSTED_FEATURE_DISABLED_DETAIL },
+  { method: "POST", pattern: /^\/imports\/kit-bundle$/, detail: HOSTED_FEATURE_DISABLED_DETAIL },
+  { method: "POST", pattern: /^\/admin\/import-kit-bundle$/, detail: HOSTED_FEATURE_DISABLED_DETAIL },
 ];
 
 export function normalizeHostedApiPath(url: string): string {

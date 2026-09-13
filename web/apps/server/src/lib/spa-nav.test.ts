@@ -18,12 +18,15 @@ describe("isSpaClientPath", () => {
     expect(isSpaClientPath("/progress")).toBe(true);
     expect(isSpaClientPath("/export")).toBe(true);
     expect(isSpaClientPath("/production")).toBe(true);
+    expect(isSpaClientPath("/board")).toBe(true);
+    expect(isSpaClientPath("/board/11111111-1111-4111-8111-111111111111")).toBe(true);
   });
 
   it("ignores API-only paths", () => {
     expect(isSpaClientPath("/health")).toBe(false);
     expect(isSpaClientPath("/sources/1/cover")).toBe(false);
     expect(isSpaClientPath("/assets/app.js")).toBe(false);
+    expect(isSpaClientPath("/board/posts")).toBe(false);
   });
 });
 

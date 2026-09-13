@@ -45,6 +45,7 @@ import type { SelfHostDbStore } from "./adapters/self-host/index.js";
 import type { AppRepository } from "./db/repository.js";
 import { getDb } from "./db/client.js";
 import { createAuthStore, type AuthStore } from "./services/auth-store.js";
+import { createBoardStore, type BoardStore } from "./services/board-store.js";
 import { validateApiKey } from "./services/api-key-manager.js";
 import { migrateLegacySelfHostExports } from "./services/legacy-export-migration.js";
 import { prepareSqliteUpgrade } from "./db/upgrade-guard.js";
@@ -132,6 +133,23 @@ function resolveAuthStore(ports: RuntimePorts, config: ServerConfig): AuthStore 
   return null;
 }
 
+function resolveBoardStore(ports: RuntimePorts, config: ServerConfig): BoardStore | null {
+  if (!hostedPlanningPolicy(config.deployMode).hostedPlanning) return null;
+  const db = ports.db;
+  if ("sqlite" in db) {
+    const sqlite = (db as SelfHostDbStore).sqlite;
+    if (sqlite?.drizzle) return createBoardStore(getDb(sqlite), "sqlite");
+  }
+  if ("bundle" in db) {
+    const bundle = (db as SaasDbStore).bundle;
+    if (bundle.postgres?.drizzle) {
+      return createBoardStore(bundle.postgres.drizzle, "postgres");
+    }
+    if (bundle.sqlite?.drizzle) return createBoardStore(getDb(bundle.sqlite), "sqlite");
+  }
+  return null;
+}
+
 function configuredTenantIds(config: ServerConfig, authStore: AuthStore | null): string[] {
   const tenantIds = config.multiUser ? (authStore?.listTenantIds() ?? []) : ["default"];
   if (config.deployMode === "saas" && config.saasBasicAuth) {
@@ -190,6 +208,7 @@ export async function buildApp(config: ServerConfig, ports: RuntimePorts) {
     return payload;
   });
   const authStore = resolveAuthStore(ports, config);
+  const boardStore = resolveBoardStore(ports, config);
   const repository = resolveRepository(ports);
   const planning = hostedPlanningPolicy(config.deployMode);
   setPrivateOutboundDenied(!planning.allowPrivateOutbound);
@@ -363,6 +382,7 @@ export async function buildApp(config: ServerConfig, ports: RuntimePorts) {
       config,
       jobs,
       authStore,
+      boardStore,
       ...(profileSyncHandle
         ? {
             reloadProfileSync: async () => {
@@ -416,6 +436,7 @@ export async function buildApp(config: ServerConfig, ports: RuntimePorts) {
               const restoredDb = getDb(sqlite);
               repository.replaceDatabase(restoredDb);
               authStore?.replaceDatabase(restoredDb);
+              boardStore?.replaceDatabase(restoredDb);
             },
             afterDatabaseRefresh: migrateLegacySourceManifests,
           }

@@ -1,5 +1,8 @@
 /** Health capability that tells the SPA this process is the invite planning host. */
 export const HOSTED_PLANNING_CAPABILITY = "hosted_planning";
+export const INVITE_BOARD_CAPABILITY = "invite_board";
+export const GITHUB_OAUTH_CAPABILITY = "github_oauth";
+export const DISCORD_OAUTH_CAPABILITY = "discord_oauth";
 
 export const HOSTED_TENANT_DISK_QUOTA_BYTES = 2 * 1024 * 1024 * 1024;
 

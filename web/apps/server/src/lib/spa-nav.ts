@@ -24,7 +24,11 @@ const SPA_PATHS = new Set([
   "/progress",
   "/export",
   "/production",
+  "/board",
 ]);
+
+const BOARD_POST_PATH =
+  /^\/board\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function requestPathname(url: string): string {
   const path = url.split("?", 1)[0] ?? url;
@@ -43,7 +47,7 @@ export function isBrowserDocumentNavigation(request: FastifyRequest): boolean {
 export function isSpaClientPath(url: string): boolean {
   const path = requestPathname(url);
   if (SPA_PATHS.has(path)) return true;
-  return /^\/plans\/\d+\/studio$/.test(path);
+  return /^\/plans\/\d+\/studio$/.test(path) || BOARD_POST_PATH.test(path);
 }
 
 /** Built SPA assets and other static files served alongside index.html. */

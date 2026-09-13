@@ -65,6 +65,27 @@ describe("hostedDeniedRouteDetail", () => {
     expect(hostedDeniedRouteDetail("GET", "/settings/api-keys")).toBe(
       HOSTED_FEATURE_DISABLED_DETAIL,
     );
+    expect(hostedDeniedRouteDetail("POST", "/plans/3/shares")).toBe(
+      HOSTED_FEATURE_DISABLED_DETAIL,
+    );
+    expect(hostedDeniedRouteDetail("GET", "/shares/incoming")).toBe(
+      HOSTED_FEATURE_DISABLED_DETAIL,
+    );
+    expect(hostedDeniedRouteDetail("POST", "/shares/tok/accept")).toBe(
+      HOSTED_FEATURE_DISABLED_DETAIL,
+    );
+    expect(hostedDeniedRouteDetail("DELETE", "/shares/abc")).toBe(
+      HOSTED_FEATURE_DISABLED_DETAIL,
+    );
+    expect(hostedDeniedRouteDetail("POST", "/jobs/export-kit-bundle")).toBe(
+      HOSTED_FEATURE_DISABLED_DETAIL,
+    );
+    expect(hostedDeniedRouteDetail("POST", "/imports/kit-bundle")).toBe(
+      HOSTED_FEATURE_DISABLED_DETAIL,
+    );
+    expect(hostedDeniedRouteDetail("POST", "/admin/import-kit-bundle")).toBe(
+      HOSTED_FEATURE_DISABLED_DETAIL,
+    );
   });
 
   it("leaves planning routes alone", () => {
@@ -74,5 +95,8 @@ describe("hostedDeniedRouteDetail", () => {
     expect(hostedDeniedRouteDetail("POST", "/sources")).toBeNull();
     expect(hostedDeniedRouteDetail("POST", "/jobs/export-accepted-plate-3mf")).toBeNull();
     expect(hostedDeniedRouteDetail("GET", "/health")).toBeNull();
+    expect(hostedDeniedRouteDetail("GET", "/plans/3/reference-share")).toBeNull();
+    expect(hostedDeniedRouteDetail("GET", "/board/posts")).toBeNull();
+    expect(hostedDeniedRouteDetail("POST", "/board/posts")).toBeNull();
   });
 });

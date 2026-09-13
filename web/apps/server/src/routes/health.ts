@@ -1,5 +1,10 @@
 import type { FastifyInstance } from "fastify";
-import { HOSTED_PLANNING_CAPABILITY } from "@print-partner/contracts";
+import {
+  DISCORD_OAUTH_CAPABILITY,
+  GITHUB_OAUTH_CAPABILITY,
+  HOSTED_PLANNING_CAPABILITY,
+  INVITE_BOARD_CAPABILITY,
+} from "@print-partner/contracts";
 import type { ServerConfig } from "../config.js";
 import type { AppPorts } from "../ports/index.js";
 import { pingBundle } from "../db/database.js";
@@ -82,12 +87,14 @@ function healthCapabilities(config: ServerConfig): string[] {
     "jobs_ws",
     "fleet_presets",
     "integrations_api",
-    ...(config.multiUser ? ["multi_user_auth", "plan_sharing"] : []),
+    ...(config.multiUser ? ["multi_user_auth", ...(hosted ? [INVITE_BOARD_CAPABILITY] : ["plan_sharing"])] : []),
     ...(config.singleUserAuth ? ["single_user_auth"] : []),
     ...(config.smtpConfigured ? ["password_reset_email"] : []),
     ...(hosted
       ? [HOSTED_PLANNING_CAPABILITY]
       : ["mcp_http", "backups", "api_key_management", "webhook_security"]),
+    ...(config.githubOAuthConfigured ? [GITHUB_OAUTH_CAPABILITY] : []),
+    ...(config.discordOAuthConfigured ? [DISCORD_OAUTH_CAPABILITY] : []),
     ...(config.googleClientId ? ["google_drive_manifest"] : []),
     "logging",
   ];
