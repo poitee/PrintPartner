@@ -2,7 +2,9 @@ import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { acceptPlanShare, fetchIncomingShares, type IncomingShare } from "@/api/endpoints/auth";
+import { isHostedPlanning } from "@print-partner/contracts";
 import { useAuth } from "@/context/AuthContext";
+import { useEngineHealth } from "@/hooks/useEngineHealth";
 import { useProfileSelection } from "@/context/ProfileContext";
 import { buildRoute } from "@/lib/routes";
 import { Button } from "@/components/ui/button";
@@ -10,6 +12,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 
 export default function IncomingSharesCard() {
   const { multiUser } = useAuth();
+  const { health } = useEngineHealth();
+  const hostedPlanning = isHostedPlanning(health);
   const { reloadProfiles, setSelectedProfileId } = useProfileSelection();
   const navigate = useNavigate();
   const [shares, setShares] = useState<IncomingShare[]>([]);
@@ -17,7 +21,7 @@ export default function IncomingSharesCard() {
   const [accepting, setAccepting] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    if (!multiUser) return;
+    if (!multiUser || hostedPlanning) return;
     setLoading(true);
     try {
       const res = await fetchIncomingShares();
@@ -27,13 +31,13 @@ export default function IncomingSharesCard() {
     } finally {
       setLoading(false);
     }
-  }, [multiUser]);
+  }, [hostedPlanning, multiUser]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  if (!multiUser) return null;
+  if (!multiUser || hostedPlanning) return null;
 
   if (!loading && shares.length === 0) return null;
 

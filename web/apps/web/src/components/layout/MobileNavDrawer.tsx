@@ -1,11 +1,13 @@
 import { type MouseEvent, useState } from "react";
 import { NavLink } from "react-router-dom";
+import { isHostedPlanning } from "@print-partner/contracts";
 import {
   BookOpen,
   Factory,
   Layers,
   Library,
   Menu,
+  Newspaper,
   Printer,
   Settings,
 } from "lucide-react";
@@ -29,9 +31,11 @@ import {
 import { statusTone } from "@/lib/statusTone";
 import { cn } from "@/lib/utils";
 import { useProfileSelection } from "../../context/ProfileContext";
+import { useEngineHealth } from "../../hooks/useEngineHealth";
 
 const UTILITY_ICONS: Record<SpineUtilityId, typeof Layers> = {
   builds: Layers,
+  board: Newspaper,
   library: Library,
   production: Factory,
   printers: Printer,
@@ -39,7 +43,7 @@ const UTILITY_ICONS: Record<SpineUtilityId, typeof Layers> = {
   help: BookOpen,
 };
 
-const WORKSHOP_IDS: SpineUtilityId[] = ["builds", "library", "production", "printers"];
+const WORKSHOP_IDS: SpineUtilityId[] = ["builds", "board", "library", "production", "printers"];
 
 const NAV_RAIL =
   "relative before:absolute before:inset-y-1.5 before:left-0 before:w-0.5 before:rounded-full before:content-['']";
@@ -64,7 +68,10 @@ function DrawerGroupLabel({ children }: { children: string }) {
 export default function MobileNavDrawer({ onNavigate, sourceUpdateCount }: Props) {
   const [open, setOpen] = useState(false);
   const { selectedProfileId } = useProfileSelection();
-  const items = spineUtilityNavItems(selectedProfileId).map((item) => ({
+  const { health } = useEngineHealth();
+  const items = spineUtilityNavItems(selectedProfileId, {
+    inviteBoard: isHostedPlanning(health),
+  }).map((item) => ({
     ...item,
     icon: UTILITY_ICONS[item.id],
   }));

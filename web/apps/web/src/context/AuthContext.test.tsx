@@ -65,6 +65,8 @@ describe("AuthProvider", () => {
     await waitFor(() => expect(hook.result.current.loading).toBe(false));
 
     expect(hook.result.current.user).toBeNull();
+    expect(hook.result.current.githubOAuth).toBe(false);
+    expect(hook.result.current.discordOAuth).toBe(false);
     expect(api.fetchAuthMe).not.toHaveBeenCalled();
   });
 

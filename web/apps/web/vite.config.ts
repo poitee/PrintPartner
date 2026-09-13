@@ -47,6 +47,7 @@ const API_PREFIXES = [
   "manifest-templates",
   "community",
   "imports",
+  "board",
   "ws",
 ];
 
@@ -69,6 +70,7 @@ const SPA_EXACT_PATHS = new Set([
   "/printers",
   "/settings",
   "/sources",
+  "/board",
 ]);
 
 function isDocumentNavigation(req: IncomingMessage): boolean {
@@ -85,7 +87,11 @@ function spaNavigationBypass(req: IncomingMessage): string | undefined {
     pathname = pathname.slice(0, -1);
   }
   const isSpaPath =
-    SPA_EXACT_PATHS.has(pathname) || /^\/plans\/\d+\/studio$/.test(pathname);
+    SPA_EXACT_PATHS.has(pathname) ||
+    /^\/plans\/\d+\/studio$/.test(pathname) ||
+    /^\/board\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      pathname,
+    );
   if (isSpaPath && isDocumentNavigation(req)) return raw;
   return undefined;
 }

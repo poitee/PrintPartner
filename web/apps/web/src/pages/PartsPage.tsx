@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { Package, Printer } from "lucide-react";
 import type { StlNamingFolderRule } from "@print-partner/contracts";
 import PageHeader from "../components/layout/PageHeader";
@@ -29,12 +29,21 @@ export default function PartsPage() {
   const prepared = useRef<number | null>(null);
   const [folderRules, setFolderRules] = useState<StlNamingFolderRule[]>([]);
   const [shareOpen, setShareOpen] = useState(false);
+  const [searchParams, setSearchParams] = useSearchParams();
   const hasSources = layers.data?.some((layer) => layer.project_id != null) ?? false;
   const sourceInputsCurrent = profiles.find((profile) => profile.id === selectedProfileId)?.freshness.status === "current";
 
   useEffect(() => {
     void fetchStlNaming().then((profile) => setFolderRules(profile.folder_rules ?? [])).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (searchParams.get("share") !== "1") return;
+    setShareOpen(true);
+    const next = new URLSearchParams(searchParams);
+    next.delete("share");
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams]);
 
   useEffect(() => {
     if (selectedProfileId == null || !review || loading || draftLoading || saving || !hasSources) return;

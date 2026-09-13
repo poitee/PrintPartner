@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import { isHostedPlanning } from "@print-partner/contracts";
 import { toast } from "sonner";
 import {
   startExportKitBundle,
@@ -20,6 +21,7 @@ import { handleStlPackExportJobDone } from "../lib/exportStlJobResult";
 import { flattenReviewParts } from "../lib/reviewParts";
 import { globalSectionPath } from "../lib/siteMap";
 import {
+  boardRoute,
   buildsRoute,
   buildSourcesRoute,
   checkoffRoute,
@@ -29,6 +31,7 @@ import {
   isLibraryPath,
   isPartsPath,
   partsRoute,
+  planRoute,
   printersRoute,
   settingsRoute,
   sourcesRoute,
@@ -59,6 +62,7 @@ export default function CommandPalette(_props?: Props) {
   const navigate = useNavigate();
   const location = useLocation();
   const { health } = useEngineHealth();
+  const hostedPlanning = isHostedPlanning(health);
   const { selectedProfileId } = useProfileSelection();
   const { review } = usePlanWorkspace();
   const { openCreatePlan } = usePlanActions();
@@ -108,6 +112,22 @@ export default function CommandPalette(_props?: Props) {
           });
         },
       },
+      ...(hostedPlanning
+        ? [
+            {
+              id: "nav-board",
+              label: "Go to Board",
+              hint: location.pathname === "/board" || location.pathname.startsWith("/board/") ? "current" : undefined,
+              group: "Navigate" as const,
+              run: () => {
+                leaveBuildThen(() => {
+                  navigate(boardRoute());
+                  setOpen(false);
+                });
+              },
+            },
+          ]
+        : []),
       {
         id: "nav-sources",
         label: "Go to Sources",
@@ -241,8 +261,21 @@ export default function CommandPalette(_props?: Props) {
     ];
 
     if (health && selectedProfileId != null) {
-      list.push(
-        {
+      if (hostedPlanning) {
+        list.push({
+          id: "post-to-board",
+          label: "Post to the board…",
+          hint: "Share a references-only recipe",
+          group: "Workflow",
+          run: () => {
+            const path = planRoute(selectedProfileId);
+            const separator = path.includes("?") ? "&" : "?";
+            navigate(`${path}${separator}share=1`);
+            setOpen(false);
+          },
+        });
+      } else {
+        list.push({
           id: "export-share",
           label: "Share build…",
           hint: "Export .print-partner-kit.zip",
@@ -262,7 +295,9 @@ export default function CommandPalette(_props?: Props) {
             if (!onBuild && !onReview) navigate(buildSourcesRoute(selectedProfileId));
             setOpen(false);
           },
-        },
+        });
+      }
+      list.push(
         ...(["color_dir", "color"] as const).flatMap((groupBy: StlPackGroupBy) => {
           const groupHint =
             groupBy === "color" ? "color only" : "color + directory";
@@ -320,18 +355,18 @@ export default function CommandPalette(_props?: Props) {
     }
 
     if (health) {
-      list.push(
-        {
-          id: "search-stl-global",
-          label: "Search all repos for part…",
-          hint: "Cross-repo STL discovery",
-          group: "Actions",
-          run: () => {
-            navigate(sourcesRoute(), { state: { stlSearch: true } });
-            setOpen(false);
-          },
+      list.push({
+        id: "search-stl-global",
+        label: "Search all repos for part…",
+        hint: "Cross-repo STL discovery",
+        group: "Actions",
+        run: () => {
+          navigate(sourcesRoute(), { state: { stlSearch: true } });
+          setOpen(false);
         },
-        {
+      });
+      if (!hostedPlanning) {
+        list.push({
           id: "import-shared-build",
           label: "Import shared build…",
           hint: ".print-partner-kit.zip",
@@ -339,24 +374,25 @@ export default function CommandPalette(_props?: Props) {
           run: () => {
             void importSharedBuild().finally(() => setOpen(false));
           },
+        });
+      }
+      list.push({
+        id: "sync-all",
+        label: "Sync all sources",
+        group: "Actions",
+        disabled: syncJob.busy,
+        run: () => {
+          navigate(sourcesRoute());
+          void syncJob.runJob(() => startSync());
+          setOpen(false);
         },
-        {
-          id: "sync-all",
-          label: "Sync all sources",
-          group: "Actions",
-          disabled: syncJob.busy,
-          run: () => {
-            navigate(sourcesRoute());
-            void syncJob.runJob(() => startSync());
-            setOpen(false);
-          },
-        },
-      );
+      });
     }
 
     return list;
   }, [
     health,
+    hostedPlanning,
     selectedProfileId,
     remainingUnits,
     navigate,

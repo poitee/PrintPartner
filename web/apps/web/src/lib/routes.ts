@@ -72,6 +72,10 @@ export function printersRoute(): string {
   return "/printers";
 }
 
+export function boardRoute(postId?: string): string {
+  return postId ? `/board/${postId}` : "/board";
+}
+
 export function helpRoute(): string {
   return "/help";
 }
@@ -155,6 +159,10 @@ export function isCheckoffPath(pathname: string): boolean {
 /** Alias for deep links — Progress is the dedicated checkoff stage. */
 export function checkoffRoute(profileId?: number | null): string {
   return progressRoute(profileId);
+}
+
+export function isBoardPath(pathname: string): boolean {
+  return pathname === "/board" || pathname.startsWith("/board/");
 }
 
 export function isPlanWorkflowPath(pathname: string): boolean {

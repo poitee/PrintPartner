@@ -36,6 +36,7 @@ import {
   workflowStepPaths,
   type LegalTab,
 } from "../lib/helpPageModel";
+import { boardRoute } from "../lib/routes";
 import { resolveEngineState } from "../lib/workflowState";
 import { useExternalAccessSettingsQuery } from "../queries/externalAccess";
 
@@ -167,7 +168,16 @@ export default function HelpPage() {
       />
 
       {hostedPlanning ? (
-        <p className="text-sm text-muted-foreground">{HOSTED_PLANNING_COMPOSE_NOTE}</p>
+        <div className="space-y-2 text-sm text-muted-foreground">
+          <p>{HOSTED_PLANNING_COMPOSE_NOTE}</p>
+          <p>
+            Sharing is the{" "}
+            <Link className="font-medium underline underline-offset-2" to={boardRoute()}>
+              Board
+            </Link>
+            . Invitees post a frozen references-only Build recipe and leave comments. Kit copies stay off this host.
+          </p>
+        </div>
       ) : null}
 
       <Card>

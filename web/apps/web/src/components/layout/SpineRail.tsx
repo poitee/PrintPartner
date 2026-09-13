@@ -1,10 +1,12 @@
 import { type MouseEvent, type ReactNode } from "react";
 import { NavLink, useLocation } from "react-router-dom";
+import { isHostedPlanning } from "@print-partner/contracts";
 import {
   BookOpen,
   Factory,
   Layers,
   Library,
+  Newspaper,
   PanelLeftClose,
   PanelLeftOpen,
   Printer,
@@ -31,6 +33,7 @@ import { statusTone } from "@/lib/statusTone";
 import { cn } from "@/lib/utils";
 import type { WorkflowStage, WorkflowStageId } from "../../lib/workflowStages";
 import { useProfileSelection } from "../../context/ProfileContext";
+import { useEngineHealth } from "../../hooks/useEngineHealth";
 
 type Props = {
   collapsed: boolean;
@@ -46,6 +49,7 @@ const UTILITY_ICONS: Record<
   typeof Layers
 > = {
   builds: Layers,
+  board: Newspaper,
   library: Library,
   production: Factory,
   printers: Printer,
@@ -53,10 +57,9 @@ const UTILITY_ICONS: Record<
   help: BookOpen,
 };
 
-/* The six utility destinations render as two sidebar groups: workshop-wide
-   pages in the body, support pages in the footer. The item list itself stays
+/* Workshop pages in the body, support pages in the footer. The item list itself stays
    flat and ordered in spineUtilityNav.ts (locked by siteChromeLabels tests). */
-const WORKSHOP_IDS: SpineUtilityId[] = ["builds", "library", "production", "printers"];
+const WORKSHOP_IDS: SpineUtilityId[] = ["builds", "board", "library", "production", "printers"];
 
 const NAV_RAIL =
   "relative before:absolute before:inset-y-1.5 before:left-0 before:w-0.5 before:rounded-full before:content-['']";
@@ -179,10 +182,12 @@ export default function SpineRail({
 }: Props) {
   const location = useLocation();
   const { selectedProfileId } = useProfileSelection();
-  const utilityLinks = spineUtilityNavItems(selectedProfileId).map((item) => ({
+  const { health } = useEngineHealth();
+  const inviteBoard = isHostedPlanning(health);
+  const utilityLinks = spineUtilityNavItems(selectedProfileId, { inviteBoard }).map((item) => ({
     ...item,
     icon: UTILITY_ICONS[item.id],
-    match: location.pathname === item.path,
+    match: item.id === "board" ? location.pathname === "/board" || location.pathname.startsWith("/board/") : location.pathname === item.path,
   }));
   const workshopLinks = utilityLinks.filter((l) => WORKSHOP_IDS.includes(l.id));
   const supportLinks = utilityLinks.filter((l) => !WORKSHOP_IDS.includes(l.id));

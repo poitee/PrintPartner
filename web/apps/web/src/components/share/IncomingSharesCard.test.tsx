@@ -6,6 +6,7 @@ import { MemoryRouter } from "react-router-dom";
 import IncomingSharesCard from "./IncomingSharesCard";
 
 const auth = vi.hoisted(() => ({ multiUser: false }));
+const health = vi.hoisted(() => ({ current: { capabilities: [] as string[] } }));
 const shares = vi.hoisted(() => ({
   items: [] as Array<{
     id: string;
@@ -19,6 +20,9 @@ const shares = vi.hoisted(() => ({
 
 vi.mock("@/context/AuthContext", () => ({
   useAuth: () => ({ multiUser: auth.multiUser }),
+}));
+vi.mock("@/hooks/useEngineHealth", () => ({
+  useEngineHealth: () => ({ health: health.current }),
 }));
 vi.mock("@/context/ProfileContext", () => ({
   useProfileSelection: () => ({
@@ -36,6 +40,7 @@ describe("IncomingSharesCard", () => {
 
   beforeEach(() => {
     auth.multiUser = false;
+    health.current = { capabilities: [] };
     shares.items = [];
   });
 
@@ -73,5 +78,27 @@ describe("IncomingSharesCard", () => {
     await waitFor(() => {
       expect(screen.queryByText("Loading…")).toBeNull();
     });
+  });
+
+  it("hides the Kit inbox on the hosted planning host", async () => {
+    auth.multiUser = true;
+    health.current = { capabilities: ["hosted_planning"] };
+    shares.items = [
+      {
+        id: "s1",
+        token: "tok",
+        plan_name: "Stealthburner",
+        from_display_name: "Ada",
+        recipient_email: null,
+        created_at: "2026-08-29T00:00:00Z",
+      },
+    ];
+    const { container } = render(
+      <MemoryRouter>
+        <IncomingSharesCard />
+      </MemoryRouter>,
+    );
+    expect(container.textContent).toBe("");
+    expect(screen.queryByText("Stealthburner")).toBeNull();
   });
 });

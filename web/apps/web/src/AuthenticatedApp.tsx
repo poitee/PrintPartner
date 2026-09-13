@@ -17,6 +17,7 @@ const CheckoffPage = lazy(() => import("./pages/CheckoffPage"));
 const ExportPage = lazy(() => import("./pages/ExportPage"));
 const GlobalProductionPage = lazy(() => import("./pages/GlobalProductionPage"));
 const HelpPage = lazy(() => import("./pages/HelpPage"));
+const BoardPage = lazy(() => import("./pages/BoardPage"));
 const NotFoundPage = lazy(() => import("./pages/NotFoundPage"));
 const PartsPage = lazy(() => import("./pages/PartsPage"));
 const PlansPage = lazy(() => import("./pages/PlansPage"));
@@ -97,6 +98,8 @@ export default function AuthenticatedApp() {
                             element={<PreserveSearchRedirect to="/plan" />}
                           />
 
+                          <Route path="board" element={<BoardPage />} />
+                          <Route path="board/:postId" element={<BoardPage />} />
                           <Route path="printers" element={<PrintersPage />} />
                           <Route path="settings" element={<SettingsPage />} />
                           <Route path="help" element={<HelpPage />} />
