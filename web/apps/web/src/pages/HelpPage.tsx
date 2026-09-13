@@ -11,7 +11,7 @@ import {
   Workflow,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { externalApiAccessEnabled } from "@print-partner/contracts";
+import { externalApiAccessEnabled, HOSTED_PLANNING_COMPOSE_NOTE, isHostedPlanning } from "@print-partner/contracts";
 import { fetchHealth, fetchLegalDocument, fetchWorkflowGuide } from "../api/endpoints/help";
 import { fetchManifestRegistry, type ManifestRegistryEntry } from "../api/endpoints/planManifests";
 import { engineBaseUrl } from "../api/endpoints/runtime";
@@ -74,6 +74,7 @@ export default function HelpPage() {
     error: engineError,
   });
   const engineReady = engineState === "ready";
+  const hostedPlanning = isHostedPlanning(health);
   const externalAccessQuery = useExternalAccessSettingsQuery(engineReady);
   const showApiDetails = externalAccessQuery.data
     ? externalApiAccessEnabled(externalAccessQuery.data.mode)
@@ -165,6 +166,10 @@ export default function HelpPage() {
         actions={<SupportCta />}
       />
 
+      {hostedPlanning ? (
+        <p className="text-sm text-muted-foreground">{HOSTED_PLANNING_COMPOSE_NOTE}</p>
+      ) : null}
+
       <Card>
         <CardHeader accent>
           <div className="flex items-start gap-3">
@@ -199,7 +204,9 @@ export default function HelpPage() {
                           <span>
                             <span className="block font-medium">{step.label}</span>
                             <span className="mt-1 block text-xs text-muted-foreground">
-                              {step.description}
+                              {hostedPlanning && step.id === "production"
+                                ? "Prepare plates and export files. Live send is Compose on the shop LAN."
+                                : step.description}
                             </span>
                           </span>
                         </Link>

@@ -14,6 +14,7 @@ import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";
 import { useProfileSelection } from "../context/ProfileContext";
 import { useEngineHealth } from "../hooks/useEngineHealth";
+import { isHostedPlanning } from "@print-partner/contracts";
 import {
   globalProductionJobLabel,
   partitionGlobalProductionJobs,
@@ -91,6 +92,7 @@ function JobList({
 
 export default function GlobalProductionPage() {
   const { health, error: engineError, loading: healthLoading } = useEngineHealth();
+  const hostedPlanning = isHostedPlanning(health);
   const { profiles, loading, error: profilesError, reloadProfiles } = useProfileSelection();
   const engineState = resolveEngineState({ health, loading: healthLoading, error: engineError });
   const profilesState = resolveResourceState({
@@ -197,6 +199,7 @@ export default function GlobalProductionPage() {
         </Card>
       ) : (
         <>
+          {hostedPlanning ? null : (
           <Suspense fallback={null}>
             <PrinterLiveStrip
               engineReady
@@ -204,6 +207,7 @@ export default function GlobalProductionPage() {
               onUnattributedUpdate={refreshAfterPrinterEvent}
             />
           </Suspense>
+          )}
 
           {unattributed.length > 0 || buckets.awaiting.length > 0 || buckets.failed.length > 0 ? (
             <section className="space-y-4 rounded-lg border border-border bg-card p-4" aria-labelledby="production-attention-heading">

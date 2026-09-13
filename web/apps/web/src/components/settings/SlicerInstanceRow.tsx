@@ -26,6 +26,7 @@ type SlicerInstanceRowProps = {
   busy: boolean;
   controlsDisabled: boolean;
   dockerEnabled: boolean;
+  hostFields?: boolean;
   logs: string[] | undefined;
   onToggle: (row: SlicerInstance, enabled: boolean) => void;
   onSaveField: (row: SlicerInstance, patch: SlicerInstancePatch) => void;
@@ -38,6 +39,7 @@ export default function SlicerInstanceRow({
   busy,
   controlsDisabled,
   dockerEnabled,
+  hostFields = true,
   logs,
   onToggle,
   onSaveField,
@@ -74,7 +76,7 @@ export default function SlicerInstanceRow({
             disabled={busy}
             onCheckedChange={(value) => onToggle(row, value)}
           />
-          {isSafeSlicerGuiUrl(row.gui_url) ? (
+          {hostFields && isSafeSlicerGuiUrl(row.gui_url) ? (
             <Button variant="outline" size="sm" asChild className="gap-1">
               <a href={row.gui_url.trim()} target="_blank" rel="noreferrer noopener">
                 Open GUI
@@ -144,6 +146,7 @@ export default function SlicerInstanceRow({
           {logs.join("\n")}
         </pre>
       ) : null}
+      {hostFields ? (
       <div className="grid gap-2 sm:grid-cols-2">
         <label className="space-y-1 text-xs">
           <span className="text-muted-foreground">GUI URL</span>
@@ -170,6 +173,7 @@ export default function SlicerInstanceRow({
           />
         </label>
       </div>
+      ) : null}
       {row.kind === "custom" ? (
         <label className="block max-w-xs space-y-1 text-xs">
           <span className="text-muted-foreground">Dialect</span>

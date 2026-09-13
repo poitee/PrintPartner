@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { ChevronDown, FolderGit2, Library, Search } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { SourceSummary } from "@print-partner/contracts";
+import { HOSTED_LIBRARY_SOURCE_KINDS, isHostedPlanning } from "@print-partner/contracts";
 import { pickLocalDirectory, pickLocalFiles, pickZipArchive } from "../api/endpoints/browserFiles";
 import { startSync, waitForJobDone } from "../api/endpoints/jobs";
 import { startCheckSourceUpdates } from "../api/endpoints/sourceContent";
@@ -165,6 +166,7 @@ export default function SourcesPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { formatDate } = useDateFormat();
   const { health, error: healthError, loading: healthLoading } = useEngineHealth();
+  const hostedPlanning = isHostedPlanning(health);
   const { busy, runJob } = useJobRunner("sync");
   const { busy: updateBusy, runJob: runUpdateJob } =
     useJobRunner("check-source-updates");
@@ -1200,15 +1202,17 @@ export default function SourcesPage() {
                 </SelectTrigger>
                 <SelectContent>
                   {(
-                    [
-                      "github",
-                      "local",
-                      "printables",
-                      "makerworld",
-                      "thangs",
-                      "self",
-                      "archive",
-                    ] as SourceKind[]
+                    hostedPlanning
+                      ? ([...HOSTED_LIBRARY_SOURCE_KINDS] as SourceKind[])
+                      : ([
+                          "github",
+                          "local",
+                          "printables",
+                          "makerworld",
+                          "thangs",
+                          "self",
+                          "archive",
+                        ] as SourceKind[])
                   ).map((k) => (
                     <SelectItem key={k} value={k}>
                       {kindLabel(k)}

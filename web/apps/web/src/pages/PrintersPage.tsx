@@ -20,6 +20,7 @@ import {
   CardHeader,
   CardTitle,
 } from "../components/ui/card";
+import { HOSTED_PLANNING_COMPOSE_NOTE, isHostedPlanning } from "@print-partner/contracts";
 import { useEngineHealth } from "../hooks/useEngineHealth";
 import { resolveEngineState } from "../lib/workflowState";
 import { useProfileSelection } from "../context/ProfileContext";
@@ -62,6 +63,7 @@ export default function PrintersPage() {
     error: engineError,
   });
   const engineReady = engineState === "ready";
+  const hostedPlanning = isHostedPlanning(health);
   const pollMs = usePrinterStatusPollMs();
   const [printers, setPrinters] = useState<PrinterDesk[]>([]);
   const [workspacePrinterId, setWorkspacePrinterId] = useState<string | null>(null);
@@ -104,7 +106,9 @@ export default function PrintersPage() {
     setLoadError(null);
     try {
       const fleet = await fetchPrinters();
-      const hasConnections = fleet.some((machine) => machine.enabled !== false && machine.integration_id?.trim());
+      const hasConnections =
+        !hostedPlanning &&
+        fleet.some((machine) => machine.enabled !== false && machine.integration_id?.trim());
       const integrations = hasConnections ? await fetchIntegrations() : [];
       const byId = new Map(integrations.map((i) => [i.id, i]));
       const next: PrinterDesk[] = [];
@@ -129,7 +133,7 @@ export default function PrintersPage() {
     } finally {
       setRosterLoading(false);
     }
-  }, [engineReady]);
+  }, [engineReady, hostedPlanning]);
 
   useEffect(() => {
     void refreshRoster();
@@ -146,7 +150,11 @@ export default function PrintersPage() {
         accent
         eyebrow="Workshop"
         title="Printers"
-        description="Live status, files, cameras, and manual tracking for every workshop printer."
+        description={
+          hostedPlanning
+            ? `Printers for packing, export, and Checkoff. ${HOSTED_PLANNING_COMPOSE_NOTE}`
+            : "Live status, files, cameras, and manual tracking for every workshop printer."
+        }
         actions={
           <PageHeaderActions>
             <Button asChild>
@@ -255,6 +263,7 @@ export default function PrintersPage() {
                         {status?.message?.trim() || (host ? "No active job" : "Provide a print file to track this printer")}
                       </p>
                     )}
+                    {hostedPlanning ? null : (
                     <dl className="grid grid-cols-2 gap-x-4 gap-y-2 rounded-md border border-border/70 bg-muted/25 p-3 text-xs">
                       <div>
                         <dt className="text-muted-foreground">Nozzle</dt>
@@ -275,7 +284,8 @@ export default function PrintersPage() {
                         <dd className="mt-0.5 font-mono">{formatUptime(status?.uptime_seconds)}</dd>
                       </div>
                     </dl>
-                    {status?.progress != null ? (
+                    )}
+                    {status?.progress != null && !hostedPlanning ? (
                       <div className="space-y-1" aria-label={`Print progress ${status.progress}%`}>
                         <div className="flex justify-between text-micro text-muted-foreground">
                           <span>Progress</span><span className="font-mono">{status.progress}%</span>
@@ -293,7 +303,7 @@ export default function PrintersPage() {
                         <Files className="mr-1.5 h-4 w-4" aria-hidden />
                         Files & tracking
                       </Button>
-                      {canSend ? (
+                      {canSend && !hostedPlanning ? (
                         <Button size="sm" variant="outline" asChild>
                           <Link to={exportRoute()}>Send from Production</Link>
                         </Button>

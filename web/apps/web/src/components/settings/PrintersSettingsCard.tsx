@@ -9,7 +9,11 @@ import {
   updateIntegration,
   type IntegrationSummary,
 } from "../../api/endpoints/integrations";
-import type { ProfileSummary } from "@print-partner/contracts";
+import {
+  HOSTED_PLANNING_COMPOSE_NOTE,
+  isHostedPlanning,
+  type ProfileSummary,
+} from "@print-partner/contracts";
 import { fetchProfiles } from "../../api/endpoints/plans";
 import {
   addPrinter,
@@ -78,6 +82,7 @@ import {
 } from "../../lib/printerSettingsModel";
 import { printerStatusTone } from "../../lib/printerLiveStrip";
 import { statusTone } from "../../lib/statusTone";
+import { useEngineHealth } from "../../hooks/useEngineHealth";
 import { usePrinterStatuses } from "../../queries/printerStatuses";
 
 type Props = {
@@ -107,6 +112,8 @@ function removePrinterConsequence(printer: PrinterMachine): ReactNode {
 }
 
 export default function PrintersSettingsCard({ engineReady }: Props) {
+  const { health } = useEngineHealth();
+  const hostedPlanning = isHostedPlanning(health);
   const [printers, setPrinters] = useState<PrinterMachine[]>([]);
   const [presets, setPresets] = useState<PrinterPreset[]>([]);
   const [hosts, setHosts] = useState<IntegrationSummary[]>([]);
@@ -160,8 +167,8 @@ export default function PrintersSettingsCard({ engineReady }: Props) {
     [printers, hostsById],
   );
   const { statusByIntegration, refresh: refreshStatus } = usePrinterStatuses(
-    statusIntegrationIds,
-    engineReady,
+    hostedPlanning ? [] : statusIntegrationIds,
+    engineReady && !hostedPlanning,
   );
 
   const refresh = useCallback(async () => {
@@ -554,8 +561,9 @@ export default function PrintersSettingsCard({ engineReady }: Props) {
           <div>
             <CardTitle level={3} className="text-base">Printers</CardTitle>
             <CardDescription>
-              Create a printer from a bed preset or custom size. Planning and local 3MF work
-              without a connection. Add a host later for status and sending.
+              {hostedPlanning
+                ? `Printers here are for packing, export, and Checkoff. ${HOSTED_PLANNING_COMPOSE_NOTE}`
+                : "Create a printer from a bed preset or custom size. Planning and local 3MF work without a connection. Add a host later for status and sending."}
             </CardDescription>
           </div>
         </div>
@@ -564,6 +572,7 @@ export default function PrintersSettingsCard({ engineReady }: Props) {
         {loadError && <p className="text-sm text-destructive">{loadError}</p>}
         {message && <p className="text-sm text-muted-foreground">{message}</p>}
 
+        {hostedPlanning ? null : (
         <label className="block max-w-md text-sm">
           <span className="mb-1 block font-medium">Printer status refresh</span>
           <span className="mb-1.5 block text-xs text-muted-foreground">
@@ -590,6 +599,7 @@ export default function PrintersSettingsCard({ engineReady }: Props) {
             </SelectContent>
           </Select>
         </label>
+        )}
 
         <div className="space-y-2 rounded-md border border-border p-3">
           <p className="text-sm font-medium">Add printer</p>
@@ -665,6 +675,7 @@ export default function PrintersSettingsCard({ engineReady }: Props) {
             </div>
           )}
 
+          {hostedPlanning ? null : (
           <label className="flex items-center gap-2 text-sm">
             <Checkbox
               checked={connectNewPrinter}
@@ -673,8 +684,11 @@ export default function PrintersSettingsCard({ engineReady }: Props) {
             />
             Connect to this printer
           </label>
+          )}
           <p className="text-xs text-muted-foreground">
-            Optional. Configure a connection after adding the printer for live status, file access, and sending.
+            {hostedPlanning
+              ? HOSTED_PLANNING_COMPOSE_NOTE
+              : "Optional. Configure a connection after adding the printer for live status, file access, and sending."}
           </p>
           <Button className="min-h-10" disabled={!canAdd} onClick={() => void onAddPrinter()}>
             Add printer
@@ -729,6 +743,8 @@ export default function PrintersSettingsCard({ engineReady }: Props) {
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2">
+                  {hostedPlanning ? null : (
+                    <>
                   <label
                     htmlFor={`printer-enabled-${printer.id}`}
                     className="flex items-center gap-2 text-sm"
@@ -749,6 +765,8 @@ export default function PrintersSettingsCard({ engineReady }: Props) {
                   >
                     {testingId === linkedId ? "Testing…" : "Test connection"}
                   </Button>
+                    </>
+                  )}
                   <Button
                     variant="outline"
                     size="sm"
@@ -897,7 +915,7 @@ export default function PrintersSettingsCard({ engineReady }: Props) {
                             Edit printer
                           </Button>
                         )}
-                        {!attaching && editingId !== printer.id && (
+                        {!attaching && editingId !== printer.id && !hostedPlanning && (
                           <Button
                             variant="secondary"
                             size="sm"
@@ -937,7 +955,7 @@ export default function PrintersSettingsCard({ engineReady }: Props) {
                       />
                     )}
 
-                    {attaching && (
+                    {attaching && !hostedPlanning && (
                       <div className="space-y-2 border-t border-border pt-2">
                         <label className="block text-sm">
                           <span className="mb-1 block text-muted-foreground">Type</span>
