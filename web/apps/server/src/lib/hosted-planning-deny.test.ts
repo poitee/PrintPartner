@@ -17,6 +17,9 @@ describe("hostedDeniedRouteDetail", () => {
     expect(hostedDeniedRouteDetail("POST", "/api/v1/integrations")).toBe(
       HOSTED_LAN_DISABLED_DETAIL,
     );
+    expect(hostedDeniedRouteDetail("DELETE", "/integrations/abc")).toBe(
+      HOSTED_LAN_DISABLED_DETAIL,
+    );
     expect(hostedDeniedRouteDetail("POST", "/integrations/abc/test")).toBe(
       HOSTED_LAN_DISABLED_DETAIL,
     );

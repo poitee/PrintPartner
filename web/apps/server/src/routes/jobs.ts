@@ -57,7 +57,10 @@ import {
   acceptedOperationalExportPublicError,
   captureAcceptedOperationalExport,
 } from "../services/accepted-operational-export.js";
-import { materializeDirectExport3mf } from "../services/accepted-direct-export-3mf.js";
+import {
+  DIRECT_EXPORT_3MF_LIMITS,
+  materializeDirectExport3mf,
+} from "../services/accepted-direct-export-3mf.js";
 import { isRecord, positiveSafeInteger } from "./job-route-inputs.js";
 import {
   ACCEPTED_PLATE_EXPORT_ERRORS,
@@ -928,6 +931,7 @@ export async function registerJobRoutes(
   async function refuseIfHostedQuotaExceeded(
     reply: import("fastify").FastifyReply,
     tenantId: string,
+    additionalBytes = 0,
   ): Promise<boolean> {
     if (hostedQuotaBytes == null) return false;
     return sendIfTenantDiskQuotaExceeded(reply, {
@@ -935,6 +939,7 @@ export async function registerJobRoutes(
       reposDir: jobs.getReposDir(),
       tenantId,
       sourceIds: jobs.getRepo().listSources().map((source) => source.id),
+      additionalBytes,
       quotaBytes: hostedQuotaBytes,
     });
   }
@@ -946,7 +951,8 @@ export async function registerJobRoutes(
     return { job_id };
   });
 
-  app.post("/jobs/import-scan", async (request) => {
+  app.post("/jobs/import-scan", async (request, reply) => {
+    if (await refuseIfHostedQuotaExceeded(reply, request.tenantId)) return;
     const body = request.body as { project_id?: number };
     const job_id = await jobs.start("import-scan", { project_id: body.project_id }, request.tenantId);
     return { job_id };
@@ -957,7 +963,8 @@ export async function registerJobRoutes(
     return { job_id };
   });
 
-  app.post("/jobs/extract-source-docs", async (request) => {
+  app.post("/jobs/extract-source-docs", async (request, reply) => {
+    if (await refuseIfHostedQuotaExceeded(reply, request.tenantId)) return;
     const body = request.body as { project_id?: number };
     const job_id = await jobs.start(
       "extract-source-docs",
@@ -1077,7 +1084,15 @@ export async function registerJobRoutes(
     if (!jobs.getRepo().getOwnedProfileIdentity(profileId)) {
       return reply.status(404).send({ detail: "Profile not found", code: "profile_not_found" });
     }
-    if (await refuseIfHostedQuotaExceeded(reply, request.tenantId)) return;
+    if (
+      await refuseIfHostedQuotaExceeded(
+        reply,
+        request.tenantId,
+        ACCEPTED_PLATE_EXPORT_LIMITS.maxOutputBytes,
+      )
+    ) {
+      return;
+    }
     const payload: StartAcceptedPlateExportRequest = {
       profile_id: profileId,
       expected_plate_revision_id: expectedPlateRevisionId,
@@ -1099,7 +1114,15 @@ export async function registerJobRoutes(
     if (!jobs.getRepo().getOwnedProfileIdentity(payload.profile_id)) {
       return reply.status(404).send({ detail: "Profile not found", code: "profile_not_found" });
     }
-    if (await refuseIfHostedQuotaExceeded(reply, request.tenantId)) return;
+    if (
+      await refuseIfHostedQuotaExceeded(
+        reply,
+        request.tenantId,
+        DIRECT_EXPORT_3MF_LIMITS.maxOutputBytes,
+      )
+    ) {
+      return;
+    }
     const job_id = await jobs.start("export-direct-3mf", payload, request.tenantId);
     return { job_id };
   });

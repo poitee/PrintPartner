@@ -1,4 +1,5 @@
 import { basename, dirname, join } from "node:path";
+import { rmSync } from "node:fs";
 import type { FastifyInstance } from "fastify";
 import {
   buildStlTreePayload,
@@ -42,7 +43,7 @@ import { PDF_BG_EXTRACT_BYTES } from "../services/pdf-text-extract.js";
 import { sourcePdfTextStorage } from "../services/source-workspace.js";
 import { publishLocalSourceWorkingTree } from "../services/local-source-revision.js";
 import { scanSourceArtifacts } from "../services/source-artifacts.js";
-import { sendIfTenantDiskQuotaExceeded } from "../lib/tenant-disk-quota.js";
+import { sendIfTenantDiskQuotaExceeded, measureDirectoryBytes } from "../lib/tenant-disk-quota.js";
 
 const GITHUB_PAT_KEY = "github_pat";
 const HOSTED_SOURCE_KIND_DETAIL =
@@ -51,6 +52,13 @@ const HOSTED_SOURCE_KIND_DETAIL =
 function hostedLibraryKindAllowed(kind: string): boolean {
   const normalized = kind === "git" ? "github" : kind;
   return isHostedLibrarySourceKind(normalized);
+}
+
+function hostedSourceKindBlocked(
+  hostedPlanning: boolean,
+  kind: string | null | undefined,
+): boolean {
+  return hostedPlanning && !hostedLibraryKindAllowed((kind ?? "github").toLowerCase());
 }
 
 async function refuseIfHostedQuotaExceeded(
@@ -350,6 +358,9 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
     const id = Number((request.params as { id: string }).id);
     const row = deps.repo.getProjectRow(id);
     if (!row) return reply.status(404).send({ detail: "Source not found" });
+    if (hostedSourceKindBlocked(deps.hostedPlanning, row.sourceKind)) {
+      return reply.status(400).send({ detail: HOSTED_SOURCE_KIND_DETAIL });
+    }
     const data = await request.file({
       limits: {
         fileSize: MAX_SOURCE_UPLOAD_BYTES,
@@ -375,6 +386,11 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
       extractDir = writeUploadedZip(buffer, deps.sourcesDir, id);
     } catch (e) {
       return reply.status(400).send({ detail: e instanceof Error ? e.message : String(e) });
+    }
+    const expandedBytes = await measureDirectoryBytes(extractDir);
+    if (await refuseIfHostedQuotaExceeded(reply, deps, request.tenantId, expandedBytes)) {
+      rmSync(extractDir, { recursive: true, force: true });
+      return;
     }
     const { suggestedImportRules, stlCount } = finalizeUploadedSource(extractDir);
     const existingRules = deps.repo.getProjectRow(id)?.importedPaths;
@@ -411,6 +427,9 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
     const id = Number((request.params as { id: string }).id);
     const row = deps.repo.getProjectRow(id);
     if (!row) return reply.status(404).send({ detail: "Source not found" });
+    if (hostedSourceKindBlocked(deps.hostedPlanning, row.sourceKind)) {
+      return reply.status(400).send({ detail: HOSTED_SOURCE_KIND_DETAIL });
+    }
 
     const uploads: Array<{ relativePath: string; buffer: Buffer }> = [];
     let relativePaths: string[] = [];
@@ -481,6 +500,11 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
       result = writeUploadedFiles(uploads, deps.sourcesDir, id);
     } catch (e) {
       return reply.status(400).send({ detail: e instanceof Error ? e.message : String(e) });
+    }
+    const expandedBytes = await measureDirectoryBytes(result.extractDir);
+    if (await refuseIfHostedQuotaExceeded(reply, deps, request.tenantId, expandedBytes)) {
+      rmSync(result.extractDir, { recursive: true, force: true });
+      return;
     }
 
     const existingRules = deps.repo.getProjectRow(id)?.importedPaths;

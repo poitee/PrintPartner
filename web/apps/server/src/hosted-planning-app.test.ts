@@ -66,6 +66,13 @@ describe("hosted planning host", () => {
       expect(denied.statusCode).toBe(403);
       expect(denied.json()).toMatchObject({ detail: HOSTED_LAN_DISABLED_DETAIL });
 
+      const deleted = await app.inject({
+        method: "DELETE",
+        url: "/api/v1/integrations/host-1",
+      });
+      expect(deleted.statusCode).toBe(403);
+      expect(deleted.json()).toMatchObject({ detail: HOSTED_LAN_DISABLED_DETAIL });
+
       const registered = await app.inject({
         method: "POST",
         url: "/auth/register",

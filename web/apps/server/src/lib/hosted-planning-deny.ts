@@ -13,6 +13,7 @@ type DenyRule = Readonly<{
 const RULES: readonly DenyRule[] = [
   { method: "POST", pattern: /^\/integrations$/, detail: HOSTED_LAN_DISABLED_DETAIL },
   { method: "PATCH", pattern: /^\/integrations\/[^/]+$/, detail: HOSTED_LAN_DISABLED_DETAIL },
+  { method: "DELETE", pattern: /^\/integrations\/[^/]+$/, detail: HOSTED_LAN_DISABLED_DETAIL },
   { method: "POST", pattern: /^\/integrations\/[^/]+\/test$/, detail: HOSTED_LAN_DISABLED_DETAIL },
   { method: "GET", pattern: /^\/integrations\/[^/]+\/status$/, detail: HOSTED_LAN_DISABLED_DETAIL },
   { method: "GET", pattern: /^\/integrations\/[^/]+\/devices$/, detail: HOSTED_LAN_DISABLED_DETAIL },
