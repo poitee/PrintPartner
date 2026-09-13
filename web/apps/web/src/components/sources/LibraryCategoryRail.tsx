@@ -46,6 +46,7 @@ type Props = {
   /** Drop a Library source (or file-from-source) onto this category. */
   onDropSourceCategory?: (sourceId: number, category: string | null) => void;
   onAddSource: (kind: LibraryAddKind) => void;
+  addActions?: readonly (typeof LIBRARY_ADD_ACTIONS)[number][];
   className?: string;
 };
 
@@ -178,6 +179,7 @@ export default function LibraryCategoryRail({
   onCategoriesReorder,
   onDropSourceCategory,
   onAddSource,
+  addActions = LIBRARY_ADD_ACTIONS,
   className,
 }: Props) {
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set<string>());
@@ -295,7 +297,7 @@ export default function LibraryCategoryRail({
           Add source
         </span>
         <div className="mt-1.5 flex flex-col gap-0.5">
-          {LIBRARY_ADD_ACTIONS.map((action) => (
+          {addActions.map((action) => (
             <button
               key={action.id}
               type="button"

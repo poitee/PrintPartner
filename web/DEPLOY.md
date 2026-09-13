@@ -222,7 +222,7 @@ and authentication protect the shared interface.
 | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | With S3 | S3 credentials (the RustFS development stack reads `PP_DEV_S3_ACCESS_KEY` / `PP_DEV_S3_SECRET_KEY`) |
 | `S3_ENDPOINT` | S3-compatible dev | Custom S3 endpoint URL (e.g. `http://rustfs:9000`) |
 | `S3_FORCE_PATH_STYLE` | S3-compatible dev | Set `1` for path-style URLs (RustFS, MinIO, Garage, etc.) |
-| `MULTI_USER` | Optional | `1` enables multiple accounts and sharing. The first registered user claims existing data. |
+| `MULTI_USER` | Invite host: `1` | `1` enables multiple accounts and sharing. Self-host: the first registered user claims existing data. Hosted planning (`DEPLOY_MODE=saas`) starts empty and does not claim the `default` tenant. |
 | `SINGLE_USER_AUTH` | Optional | `1` enables one self-host administrator account without multi-user sharing |
 | `SESSION_SECRET` | Multi-user / OAuth / prod | Not needed for `SINGLE_USER_AUTH=1`. Supply it for `MULTI_USER=1` or OAuth in production. |
 | `PP_BIND_ADDRESS` | Compose only | Host bind for app/Postgres/RustFS ports. Defaults to loopback (`127.0.0.1`). |
@@ -232,8 +232,27 @@ and authentication protect the shared interface.
 | `GITHUB_CLIENT_ID` / `SECRET` / `GITHUB_CALLBACK_URL` | OAuth | GitHub OAuth app |
 | `DISCORD_CLIENT_ID` / `SECRET` / `DISCORD_CALLBACK_URL` | OAuth | Discord OAuth app (`/auth/discord/callback`) |
 | `GOOGLE_CLIENT_ID` | Optional | Public Google OAuth **Web** client id for parts-manifest Drive open/save (SPA GIS + Drive API). It is not a secret and is exposed on `GET /health`. Enable Drive API and add your app origin to Authorized JavaScript origins. Dev SPA fallback: `VITE_GOOGLE_CLIENT_ID`. |
-| `SAAS_ALLOW_ANONYMOUS` | Optional | `1` to allow unauthenticated API (dev only) |
+| `SAAS_ALLOW_ANONYMOUS` | Optional | `1` to allow unauthenticated API (dev only). Production hosted planning refuses to start if this is set. |
+| `REGISTRATION_OPEN` | Invite host | Set `0` after invites to refuse new email and OAuth registrations. Existing accounts still log in. |
 | `REDIS_URL` | Optional | BullMQ-backed job queue for horizontal scaling |
+
+### Invite-beta hosted planning
+
+The public invite host is Library, Builds, Sources, Plan, Production export, and Checkoff. It does not talk to printers on a LAN.
+
+Set this host with:
+
+- `DEPLOY_MODE=saas`
+- `DATABASE_URL` unset (SQLite)
+- `MULTI_USER=1`
+- `SAAS_ALLOW_ANONYMOUS` unset
+- `POSTGRES_EXPERIMENTAL` unset
+- `S3_BUCKET` unset
+- `ALLOWED_ORIGINS` pinned to the public origin (not `true`)
+- `SESSION_SECRET` set
+- `REGISTRATION_OPEN=0` after the invite list has accounts
+
+The operator still owns DNS, HTTPS, the invite list, closing registration, and volume backup. This cut does not add a local relay, Prusa Connect, Moonraker cloud, a native app, Postgres, or S3.
 
 Print Partner now gives a first multi-user account direct ownership of the
 bootstrap `default` tenant. No application tables or data directories move
@@ -256,7 +275,7 @@ recovery.
 | `GET /auth/callback` | GitHub OAuth callback |
 | `GET /auth/discord` | Start Discord OAuth |
 | `GET /auth/discord/callback` | Discord OAuth callback |
-| `POST /auth/register` | Email + password registration. Single-user mode closes registration after its administrator exists. |
+| `POST /auth/register` | Email + password registration. Single-user mode closes registration after its administrator exists. `REGISTRATION_OPEN=0` closes registration for every remaining account type. |
 | `POST /auth/login` | Email + password login |
 | `POST /auth/forgot-password` | Request a password reset email |
 | `POST /auth/reset-password` | Set a new password using a reset token |

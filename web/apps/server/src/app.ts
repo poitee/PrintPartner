@@ -54,6 +54,10 @@ import {
   mcpAccessEnabled,
   type ExternalAccessMode,
 } from "@print-partner/contracts";
+import { sendProblem } from "./lib/api-error.js";
+import { hostedDeniedRouteDetail } from "./lib/hosted-planning-deny.js";
+import { hostedPlanningPolicy } from "./lib/hosted-planning.js";
+import { setPrivateOutboundDenied } from "./lib/outbound-url.js";
 import { readExternalAccessSettings } from "./services/external-access.js";
 import { listActivePrinterSendQueue } from "./services/printer-send-queue-store.js";
 import { sweepExpiredTransferArtifacts } from "./services/transfer-artifact-retention.js";
@@ -110,7 +114,9 @@ function resolveRepository(ports: RuntimePorts): AppRepository | null {
 
 function resolveAuthStore(ports: RuntimePorts, config: ServerConfig): AuthStore | null {
   if (!config.multiUser && !config.singleUserAuth) return null;
-  const options = { claimDefaultTenantForFirstUser: !config.singleUserAuth };
+  const options = {
+    claimDefaultTenantForFirstUser: !config.singleUserAuth && config.deployMode !== "saas",
+  };
   const db = ports.db;
   if ("sqlite" in db) {
     const sqlite = (db as SelfHostDbStore).sqlite;
@@ -185,6 +191,16 @@ export async function buildApp(config: ServerConfig, ports: RuntimePorts) {
   });
   const authStore = resolveAuthStore(ports, config);
   const repository = resolveRepository(ports);
+  const planning = hostedPlanningPolicy(config.deployMode);
+  setPrivateOutboundDenied(!planning.allowPrivateOutbound);
+  if (planning.hostedPlanning) {
+    app.addHook("onRequest", async (request, reply) => {
+      const detail = hostedDeniedRouteDetail(request.method, request.url);
+      if (detail) {
+        return sendProblem(reply, 403, "Forbidden", detail);
+      }
+    });
+  }
 
   // Register request logging middleware early
   await registerRequestLoggingMiddleware(app);
@@ -195,10 +211,12 @@ export async function buildApp(config: ServerConfig, ports: RuntimePorts) {
     setRequestTenantId(request.tenantId ?? "default");
   });
   registerAuthRoutes(app, config, authStore);
-  const externalAccessMode = (): ExternalAccessMode =>
-    repository === null
+  const externalAccessMode = (): ExternalAccessMode => {
+    if (planning.hostedPlanning) return "off";
+    return repository === null
       ? EXTERNAL_ACCESS_DEFAULT
       : readExternalAccessSettings(repository).mode;
+  };
   const validateRequestApiKey = registerApiKeyAuth(
     app,
     config,

@@ -36,6 +36,8 @@ import { extractPendingPdfsForSource } from "../services/source-docs-index.js";
 import { sourcePdfTextStorage } from "../services/source-workspace.js";
 import { parseCheckoffUnits, parseUnlabeledNames } from "../services/printer-checkoff.js";
 import { sendProblem } from "../lib/api-error.js";
+import { hostedPlanningPolicy } from "../lib/hosted-planning.js";
+import { sendIfTenantDiskQuotaExceeded } from "../lib/tenant-disk-quota.js";
 import { getIntegrationAdapter } from "../integrations/registry.js";
 import { getIntegrationConfig } from "../integrations/store.js";
 import { loadFleet } from "../services/printer-fleet.js";
@@ -55,7 +57,10 @@ import {
   acceptedOperationalExportPublicError,
   captureAcceptedOperationalExport,
 } from "../services/accepted-operational-export.js";
-import { materializeDirectExport3mf } from "../services/accepted-direct-export-3mf.js";
+import {
+  DIRECT_EXPORT_3MF_LIMITS,
+  materializeDirectExport3mf,
+} from "../services/accepted-direct-export-3mf.js";
 import { isRecord, positiveSafeInteger } from "./job-route-inputs.js";
 import {
   ACCEPTED_PLATE_EXPORT_ERRORS,
@@ -138,6 +143,14 @@ export class InProcessJobRunner {
 
   getRepo(): AppRepository {
     return this.deps.getRepo();
+  }
+
+  getDataDir(): string {
+    return this.deps.dataDir;
+  }
+
+  getReposDir(): string {
+    return this.deps.reposDir;
   }
 
   subscribe(
@@ -908,17 +921,38 @@ export class InProcessJobRunner {
 export async function registerJobRoutes(
   app: FastifyInstance,
   jobs: InProcessJobRunner,
-  _config?: { deployMode?: string },
+  config?: { deployMode?: string },
 ): Promise<void> {
   const limited = { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } };
+  const hostedQuotaBytes = hostedPlanningPolicy(
+    config?.deployMode === "saas" ? "saas" : "self-host",
+  ).tenantDiskQuotaBytes;
 
-  app.post("/jobs/sync", limited, async (request) => {
+  async function refuseIfHostedQuotaExceeded(
+    reply: import("fastify").FastifyReply,
+    tenantId: string,
+    additionalBytes = 0,
+  ): Promise<boolean> {
+    if (hostedQuotaBytes == null) return false;
+    return sendIfTenantDiskQuotaExceeded(reply, {
+      dataDir: jobs.getDataDir(),
+      reposDir: jobs.getReposDir(),
+      tenantId,
+      sourceIds: jobs.getRepo().listSources().map((source) => source.id),
+      additionalBytes,
+      quotaBytes: hostedQuotaBytes,
+    });
+  }
+
+  app.post("/jobs/sync", limited, async (request, reply) => {
+    if (await refuseIfHostedQuotaExceeded(reply, request.tenantId)) return;
     const body = (request.body ?? {}) as Record<string, unknown>;
     const job_id = await jobs.start("sync", body, request.tenantId);
     return { job_id };
   });
 
-  app.post("/jobs/import-scan", async (request) => {
+  app.post("/jobs/import-scan", async (request, reply) => {
+    if (await refuseIfHostedQuotaExceeded(reply, request.tenantId)) return;
     const body = request.body as { project_id?: number };
     const job_id = await jobs.start("import-scan", { project_id: body.project_id }, request.tenantId);
     return { job_id };
@@ -929,7 +963,8 @@ export async function registerJobRoutes(
     return { job_id };
   });
 
-  app.post("/jobs/extract-source-docs", async (request) => {
+  app.post("/jobs/extract-source-docs", async (request, reply) => {
+    if (await refuseIfHostedQuotaExceeded(reply, request.tenantId)) return;
     const body = request.body as { project_id?: number };
     const job_id = await jobs.start(
       "extract-source-docs",
@@ -985,6 +1020,7 @@ export async function registerJobRoutes(
         "unit_tokens must be a list of Required-unit tokens",
       );
     }
+    if (await refuseIfHostedQuotaExceeded(reply, request.tenantId)) return;
     const job_id = await jobs.start(
       "export-stl-pack",
       {
@@ -1004,6 +1040,7 @@ export async function registerJobRoutes(
     if (!body.profile_id || !jobs.getRepo().getOwnedProfileIdentity(body.profile_id)) {
       return sendProblem(reply, 404, "Not Found", "Profile not found");
     }
+    if (await refuseIfHostedQuotaExceeded(reply, request.tenantId)) return;
     const job_id = await jobs.start(
       "export-checklist-html",
       { profile_id: body.profile_id },
@@ -1017,6 +1054,7 @@ export async function registerJobRoutes(
     if (!body.profile_id || !jobs.getRepo().getOwnedProfileIdentity(body.profile_id)) {
       return sendProblem(reply, 404, "Not Found", "Profile not found");
     }
+    if (await refuseIfHostedQuotaExceeded(reply, request.tenantId)) return;
     const job_id = await jobs.start(
       "export-kit-bundle",
       {
@@ -1046,6 +1084,15 @@ export async function registerJobRoutes(
     if (!jobs.getRepo().getOwnedProfileIdentity(profileId)) {
       return reply.status(404).send({ detail: "Profile not found", code: "profile_not_found" });
     }
+    if (
+      await refuseIfHostedQuotaExceeded(
+        reply,
+        request.tenantId,
+        ACCEPTED_PLATE_EXPORT_LIMITS.maxOutputBytes,
+      )
+    ) {
+      return;
+    }
     const payload: StartAcceptedPlateExportRequest = {
       profile_id: profileId,
       expected_plate_revision_id: expectedPlateRevisionId,
@@ -1066,6 +1113,15 @@ export async function registerJobRoutes(
     }
     if (!jobs.getRepo().getOwnedProfileIdentity(payload.profile_id)) {
       return reply.status(404).send({ detail: "Profile not found", code: "profile_not_found" });
+    }
+    if (
+      await refuseIfHostedQuotaExceeded(
+        reply,
+        request.tenantId,
+        DIRECT_EXPORT_3MF_LIMITS.maxOutputBytes,
+      )
+    ) {
+      return;
     }
     const job_id = await jobs.start("export-direct-3mf", payload, request.tenantId);
     return { job_id };

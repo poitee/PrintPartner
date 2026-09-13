@@ -17,3 +17,5 @@ export const THUMBNAIL_UPLOAD_TOO_LARGE_DETAIL =
   `Thumbnail exceeds the ${MAX_THUMBNAIL_UPLOAD_BYTES / 1024 / 1024} MiB upload limit`;
 export const BACKUP_UPLOAD_TOO_LARGE_DETAIL =
   `Backup archive exceeds the ${MAX_BACKUP_UPLOAD_BYTES / 1024 / 1024 / 1024} GiB upload limit`;
+
+export { HOSTED_TENANT_DISK_QUOTA_BYTES } from "@print-partner/contracts";

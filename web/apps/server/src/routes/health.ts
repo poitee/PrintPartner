@@ -1,9 +1,11 @@
 import type { FastifyInstance } from "fastify";
+import { HOSTED_PLANNING_CAPABILITY } from "@print-partner/contracts";
 import type { ServerConfig } from "../config.js";
 import type { AppPorts } from "../ports/index.js";
 import { pingBundle } from "../db/database.js";
 import type { SaasDbStore } from "../adapters/saas/index.js";
 import { deploymentCapability } from "../lib/deployment-capability.js";
+import { hostedPlanningPolicy } from "../lib/hosted-planning.js";
 import { getVersionInfo, getBuildSemver } from "../lib/version.js";
 import type { AuthStore } from "../services/auth-store.js";
 
@@ -46,27 +48,12 @@ export async function registerHealthRoutes(
       authenticated: request.sessionUser !== null,
       authentication_required: config.authRequired,
       registration_open:
-        config.multiUser || (config.singleUserAuth && (authStore?.countUsers() ?? 0) === 0),
+        config.registrationOpen &&
+        (config.multiUser || (config.singleUserAuth && (authStore?.countUsers() ?? 0) === 0)),
       data_dir: config.dataDir,
       port: config.port,
       api_version: "v1",
-      capabilities: [
-        "kit_planning",
-        "accepted_plate_revisions",
-        "accepted_plate_export",
-        "jobs_ws",
-        "fleet_presets",
-        "integrations_api",
-        ...(config.multiUser ? ["multi_user_auth", "plan_sharing"] : []),
-        ...(config.singleUserAuth ? ["single_user_auth"] : []),
-        ...(config.smtpConfigured ? ["password_reset_email"] : []),
-        "mcp_http",
-        ...(config.googleClientId ? ["google_drive_manifest"] : []),
-        "backups",
-        "logging",
-        "api_key_management",
-        "webhook_security",
-      ],
+      capabilities: healthCapabilities(config),
       db: {
         connected: dbOk,
         driver: saasDb.bundle?.driver ?? "sqlite",
@@ -84,4 +71,24 @@ export async function registerHealthRoutes(
       },
     };
   });
+}
+
+function healthCapabilities(config: ServerConfig): string[] {
+  const hosted = hostedPlanningPolicy(config.deployMode).hostedPlanning;
+  return [
+    "kit_planning",
+    "accepted_plate_revisions",
+    "accepted_plate_export",
+    "jobs_ws",
+    "fleet_presets",
+    "integrations_api",
+    ...(config.multiUser ? ["multi_user_auth", "plan_sharing"] : []),
+    ...(config.singleUserAuth ? ["single_user_auth"] : []),
+    ...(config.smtpConfigured ? ["password_reset_email"] : []),
+    ...(hosted
+      ? [HOSTED_PLANNING_CAPABILITY]
+      : ["mcp_http", "backups", "api_key_management", "webhook_security"]),
+    ...(config.googleClientId ? ["google_drive_manifest"] : []),
+    "logging",
+  ];
 }

@@ -11,6 +11,7 @@ import {
 import {
   DATE_FORMAT_PRESETS,
   externalApiAccessEnabled,
+  isHostedPlanning,
   type DateFormatId,
 } from "@print-partner/contracts";
 import {
@@ -99,6 +100,7 @@ export default function SettingsPage() {
     error: engineError,
   });
   const engineReady = engineState === "ready";
+  const hostedPlanning = isHostedPlanning(health);
   const externalAccessQuery = useExternalAccessSettingsQuery(engineReady);
   const showApiKeys = externalAccessQuery.data
     ? externalApiAccessEnabled(externalAccessQuery.data.mode)
@@ -165,22 +167,27 @@ export default function SettingsPage() {
       loadResource("filaments", async () => {
         setFilaments(await fetchCustomFilaments());
       }),
-      loadResource("githubPat", async () => {
-        setGithubPat(await fetchGitHubPatSettings());
-      }),
+      ...(hostedPlanning
+        ? []
+        : [
+            loadResource("githubPat", async () => {
+              setGithubPat(await fetchGitHubPatSettings());
+            }),
+            loadResource("discord", async () => {
+              const settings = await fetchDiscordNotifySettings();
+              setDiscordSettings(settings);
+              setDiscordWebhookInput(settings.webhook_url ?? "");
+            }),
+          ]),
       loadResource("sourceUpdates", async () => {
         const settings = await fetchSourceUpdateCheckSettings();
         setUpdateIntervalHours(String(settings.interval_hours));
         setSourceAutoSync(settings.auto_sync_updates);
       }),
-      loadResource("discord", async () => {
-        const settings = await fetchDiscordNotifySettings();
-        setDiscordSettings(settings);
-        setDiscordWebhookInput(settings.webhook_url ?? "");
-      }),
     ]);
   }, [
     engineReady,
+    hostedPlanning,
     loadResource,
     setDiscordSettings,
     setDiscordWebhookInput,
@@ -348,7 +355,7 @@ export default function SettingsPage() {
           className="desk-nameplate mb-4 flex flex-wrap gap-1.5 p-2 lg:sticky lg:top-4 lg:mb-0 lg:flex-col lg:gap-0.5"
         >
           {[
-            { id: "features", label: "Optional Features" },
+            ...(!hostedPlanning ? [{ id: "features", label: "Optional Features" }] : []),
             { id: "printers", label: "Printers" },
             { id: "slicers", label: "Slicers" },
             { id: "library", label: "Library" },
@@ -357,7 +364,7 @@ export default function SettingsPage() {
             ...(authRequired && user?.provider === "email"
               ? [{ id: "account", label: "Account" }]
               : []),
-            ...(recoveryToolsReady ? [{ id: "data", label: "Data & System" }] : []),
+            ...(!hostedPlanning && recoveryToolsReady ? [{ id: "data", label: "Data & System" }] : []),
           ].map((item) => (
             <a
               key={item.id}
@@ -381,9 +388,11 @@ export default function SettingsPage() {
         refreshing={updateCheckRefreshing}
       />
 
+      {hostedPlanning ? null : (
       <SettingsSection id="features" title="Optional features">
         <ExternalToolsSettingsCard engineReady={engineReady} />
       </SettingsSection>
+      )}
 
       <SettingsSection id="printers" title="Printers">
         <PrintersSettingsCard engineReady={engineReady} />
@@ -559,6 +568,8 @@ export default function SettingsPage() {
           </CardContent>
         </Card>
 
+        {!hostedPlanning && (
+        <>
         <Card>
           <CardHeader accent>
             <div className="flex items-start gap-3">
@@ -770,6 +781,8 @@ export default function SettingsPage() {
         </Card>
 
         <IntegrationsSettingsCard engineReady={engineReady} />
+        </>
+        )}
       </SettingsSection>
 
       <SettingsSection id="build-tracking" title="Build Tracking">
@@ -895,7 +908,7 @@ export default function SettingsPage() {
         </SettingsSection>
       ) : null}
 
-      {recoveryToolsReady && (
+      {!hostedPlanning && recoveryToolsReady && (
         <SettingsSection id="data" title="Data & System">
           <BackupManagementCard />
           {showApiKeys ? <ApiKeyManagementCard /> : null}

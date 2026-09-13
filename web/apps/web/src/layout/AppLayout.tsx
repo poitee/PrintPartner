@@ -1,5 +1,6 @@
 import { type MouseEvent, useEffect, useState } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
+import { isHostedPlanning } from "@print-partner/contracts";
 import CommandPalette from "../components/CommandPalette";
 import ErrorBoundary from "../components/ErrorBoundary";
 import JobTray from "../components/JobTray";
@@ -194,7 +195,7 @@ export default function AppLayout() {
               className="fixed bottom-0 left-0 right-0 z-30 lg:hidden"
             />
 
-            {updateCheck && (
+            {updateCheck && !isHostedPlanning(health) && (
               <UpdateAvailableBanner
                 updateCheck={updateCheck}
                 dismissed={bannerDismissed}
