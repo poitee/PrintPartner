@@ -107,7 +107,10 @@ try {
   dialog = await openColor();
   await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.getByRole("button", { name: "Change color for base.stl", exact: true }).click();
+  const mobileColorButton = page.locator(".checkoff-mobile-card").getByRole("button", { name: "Change color for base.stl", exact: true });
+  await mobileColorButton.waitFor({ state: "visible" });
+  assert.equal(await page.getByRole("button", { name: "Change color for base.stl", exact: true }).count(), 1);
+  await mobileColorButton.click();
   await page.getByRole("dialog").waitFor();
   assert.equal(await page.evaluate(() => globalThis.document.documentElement.scrollWidth > globalThis.innerWidth), false);
   await page.screenshot({ path: "/tmp/pp-part-color-mobile.png", fullPage: true });
