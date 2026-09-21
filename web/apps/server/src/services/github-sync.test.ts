@@ -1,3 +1,5 @@
+import * as pdfText from "./pdf-text-extract.js";
+import { TenantDiskQuotaError } from "../lib/tenant-disk-quota.js";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -557,6 +559,29 @@ it("a queued hosted sync cannot activate a snapshot larger than its remaining qu
     expect(repo.listSourceRevisions(source.id)).toEqual([]);
     expect(readdirSync(join(repo.reposDir, String(source.id), "revisions"))).toEqual([]);
   } finally {
+    await ports.db.close();
+  }
+});
+
+it.each([32, pdfText.PDF_BG_EXTRACT_BYTES])("surfaces PDF quota errors instead of completing sync with a warning (PDF bytes: %i)", async (size) => {
+  const dataDir = reposRoot();
+  const ports = createSelfHostPorts(dataDir);
+  await ports.db.connect();
+  const quotaError = new TenantDiskQuotaError();
+  const extraction = vi.spyOn(pdfText, "extractPdfText").mockRejectedValueOnce(quotaError);
+  try {
+    const repo = ports.repository!;
+    const source = repo.createSource({ name: "PDF quota", url: "https://github.com/example/pdf-quota", source_kind: "github" });
+    const content = "x".repeat(size);
+    setTree(COMMIT_A, [{ path: "manual.pdf", type: "blob", mode: "100644", size }]);
+    vi.stubGlobal("fetch", rawResponse({ "manual.pdf": content }));
+    await expect(syncProjectById(repo, repo.reposDir, source.id)).rejects.toBe(quotaError);
+    expect(extraction).toHaveBeenCalledOnce();
+    // The completed source download remains usable; the failed derived cache is not reported as complete.
+    expect(repo.getSource(source.id)?.current_source_revision_id).not.toBeNull();
+    expect(repo.listSourceDocs(source.id)[0]?.extract_status).toBe("pending");
+  } finally {
+    extraction.mockRestore();
     await ports.db.close();
   }
 });

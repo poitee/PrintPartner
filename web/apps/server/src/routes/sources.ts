@@ -786,6 +786,7 @@ export async function syncProjectById(
           });
         }
       } catch (error) {
+        if (error instanceof TenantDiskQuotaError) throw error;
         postprocess_warning = error instanceof Error ? error.message : String(error);
       }
 
