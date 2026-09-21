@@ -149,6 +149,7 @@ function PostDetail({ postId }: { postId: string }) {
   };
 
   const onDeleteComment = (id: string) => {
+    setError(null);
     void deleteBoardComment(id)
       .then(() => setComments((current) => current.filter((comment) => comment.id !== id)))
       .catch((failure: unknown) => {

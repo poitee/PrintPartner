@@ -137,4 +137,27 @@ describe("BoardPage", () => {
     });
     expect(screen.getByText("I will sync this in my Library")).toBeTruthy();
   });
+  it("clears a deletion error after retrying successfully", async () => {
+    board.fetchBoardPost.mockResolvedValue({
+      ...postDetail,
+      comments: [{
+        id: "c1", author_user_id: "u1", author_display_name: "Bev",
+        body: "Remove this comment", created_at: "2026-09-13T00:01:00Z",
+      }],
+    });
+    board.deleteBoardComment
+      .mockRejectedValueOnce(new Error("Delete failed"))
+      .mockResolvedValueOnce({ ok: true });
+    render(
+      <MemoryRouter initialEntries={["/board/p1"]}>
+        <Routes><Route path="/board/:postId" element={<BoardPage />} /></Routes>
+      </MemoryRouter>,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
+    expect(await screen.findByRole("alert")).toHaveProperty("textContent", "Delete failed");
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(screen.queryByText("Remove this comment")).toBeNull());
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
 });
