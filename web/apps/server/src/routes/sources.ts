@@ -267,16 +267,26 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
 
   app.delete("/sources/:id", async (request, reply) => {
     const id = Number((request.params as { id: string }).id);
-    const result = deps.repo.deleteSource(id);
-    if (result.kind === "not_found") {
-      return reply.status(404).send({ detail: "Source not found" });
-    }
-    if (result.kind === "retained_history") {
-      return reply.status(409).send({
-        detail: "Source has immutable revision history and cannot be deleted",
-      });
-    }
-    return reply.status(204).send();
+    return runWithTenantDiskQuota({
+      dataDir: deps.dataDir, reposDir: deps.reposDir, tenantId: request.tenantId,
+      quotaBytes: deps.hostedPlanning ? HOSTED_TENANT_DISK_QUOTA_BYTES : null,
+      sourceIds: () => deps.repo.listSources().map((source) => source.id),
+    }, async () => {
+      const result = deps.repo.deleteSource(id);
+      if (result.kind === "not_found") {
+        return reply.status(404).send({ detail: "Source not found" });
+      }
+      if (result.kind === "retained_history") {
+        return reply.status(409).send({
+          detail: "Source has immutable revision history and cannot be deleted",
+        });
+      }
+      if (deps.hostedPlanning) {
+        await rm(join(deps.sourcesDir, String(id)), { recursive: true, force: true });
+        await rm(join(deps.reposDir, String(id)), { recursive: true, force: true });
+      }
+      return reply.status(204).send();
+    });
   });
 
   // Bulk category assignment — apply one category (or Uncategorised) to many
@@ -390,6 +400,7 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
         quotaBytes: deps.hostedPlanning ? HOSTED_TENANT_DISK_QUOTA_BYTES : null,
         sourceIds: () => deps.repo.listSources().map((source) => source.id),
       }, async () => {
+        if (!deps.repo.getProjectRow(id)) return reply.status(404).send({ detail: "Source not found" });
         try {
           const extractDir = writeUploadedZip(buffer, deps.sourcesDir, id);
           const { suggestedImportRules, stlCount } = finalizeUploadedSource(extractDir);
@@ -506,6 +517,7 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
         quotaBytes: deps.hostedPlanning ? HOSTED_TENANT_DISK_QUOTA_BYTES : null,
         sourceIds: () => deps.repo.listSources().map((source) => source.id),
       }, async () => {
+        if (!deps.repo.getProjectRow(id)) return reply.status(404).send({ detail: "Source not found" });
         try {
           const result = writeUploadedFiles(uploads, deps.sourcesDir, id);
 

@@ -53,8 +53,7 @@ export async function runWithTenantDiskQuota<T>(input: {
   try {
     await previous;
     const used = await measureTenantDiskUsage({ ...input, sourceIds: input.sourceIds() });
-    if (used > input.quotaBytes) throw new TenantDiskQuotaError();
-    const budget: DiskBudget = { remaining: input.quotaBytes - used, active: true };
+    const budget: DiskBudget = { remaining: Math.max(0, input.quotaBytes - used), active: true };
     try {
       return await diskBudget.run(budget, work);
     } finally {

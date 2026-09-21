@@ -125,3 +125,15 @@ it("detaches scheduled child jobs so they acquire a fresh budget after the paren
   });
   await child;
 });
+
+it("permits cleanup of existing overage while refusing every new byte", async () => {
+  const input = quotaFixture();
+  const root = tenantExportDirectory(join(input.dataDir, "exports"), input.tenantId);
+  mkdirSync(root, { recursive: true });
+  writeFileSync(join(root, "old"), "too many bytes");
+  await runWithTenantDiskQuota(input, async () => {
+    expect(() => chargeTenantDiskBytes(1)).toThrow(TenantDiskQuotaError);
+    rmSync(join(root, "old"));
+  });
+  expect(await measureTenantDiskUsage({ ...input, sourceIds: [] })).toBe(0);
+});
