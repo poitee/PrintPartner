@@ -4,12 +4,14 @@ import {
   lstatSync,
   mkdirSync,
   readFileSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { PDFParse } from "pdf-parse";
 import { resolvedFileUnderRoot } from "../lib/secure-path.js";
+import { chargeTenantDiskBytes, TenantDiskQuotaError } from "../lib/tenant-disk-quota.js";
 
 export const DOCS_TEXT_DIR = ".docs-text";
 
@@ -105,12 +107,16 @@ function writeSidecar(
   const path = writableCacheFile(cacheRoot, sidecarPathForHash(cacheRoot, hash));
   const chunksPath = writableCacheFile(cacheRoot, chunkSidecarPath(cacheRoot, hash));
   if (!path || !chunksPath) throw new Error("PDF cache path is unavailable");
-  writeFileSync(
-    chunksPath,
-    JSON.stringify({ version: 1, pageCount, chunks }),
-    "utf8",
-  );
-  writeFileSync(path, text, "utf8");
+  const chunksJson = JSON.stringify({ version: 1, pageCount, chunks });
+  chargeTenantDiskBytes(Buffer.byteLength(chunksJson) + Buffer.byteLength(text));
+  try {
+    writeFileSync(chunksPath, chunksJson, "utf8");
+    writeFileSync(path, text, "utf8");
+  } catch (error) {
+    rmSync(chunksPath, { force: true });
+    rmSync(path, { force: true });
+    throw error;
+  }
   return path;
 }
 
@@ -350,6 +356,7 @@ export async function extractPdfText(
       cachePath: written,
     };
   } catch (e) {
+    if (e instanceof TenantDiskQuotaError) throw e;
     return {
       status: "error",
       hash,

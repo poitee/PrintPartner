@@ -95,8 +95,12 @@ export async function registerCoreRoutes(
   await registerSourceNamingRoutes(app, { repo: deps.repo, dataDir: deps.dataDir });
   await registerStubRoutes(app, { repo: deps.repo, dataDir: deps.dataDir });
   await registerLegalRoutes(app);
-  await registerRepoManifestRoutes(app, { repo: deps.repo });
-  await registerSourceDocsRoutes(app, { repo: deps.repo });
+  const diskQuota = {
+    dataDir: deps.dataDir,
+    quotaBytes: hostedPlanningPolicy(deps.config.deployMode).tenantDiskQuotaBytes,
+  };
+  await registerRepoManifestRoutes(app, { repo: deps.repo, diskQuota });
+  await registerSourceDocsRoutes(app, { repo: deps.repo, diskQuota });
   await registerPrinterRoutes(app, { repo: deps.repo });
   await registerProductionSetupRoutes(app, { repo: deps.repo });
   await registerSlicerInstanceRoutes(app, {

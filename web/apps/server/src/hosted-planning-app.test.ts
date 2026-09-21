@@ -1,8 +1,8 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { HOSTED_PLANNING_CAPABILITY, INVITE_BOARD_CAPABILITY } from "@print-partner/contracts";
+import { HOSTED_PLANNING_CAPABILITY, INVITE_BOARD_CAPABILITY, HOSTED_TENANT_DISK_QUOTA_BYTES } from "@print-partner/contracts";
 import { createSaasPorts } from "./adapters/saas/index.js";
 import { buildApp } from "./app.js";
 import { loadConfig } from "./config.js";
@@ -315,4 +315,47 @@ describe("hosted planning host", () => {
       await ports.db.close();
     }
   });
+});
+
+it("cleans hosted upload staging and refuses snapshot expansion before activation", async () => {
+  const { app, ports } = await hostedApp();
+  try {
+    const registration = await app.inject({ method: "POST", url: "/auth/register", payload: {
+      email: "quota@example.com", password: "correct-horse-battery",
+    } });
+    const user = registration.json<{ user: { user_id: string } }>().user;
+    const cookie = String(registration.headers["set-cookie"]).split(";")[0]!;
+    const source = await app.inject({ method: "POST", url: "/sources", headers: { cookie },
+      payload: { name: "Quota upload", source_kind: "archive" } });
+    expect(source.statusCode).toBe(200);
+    const id = source.json<{ id: number }>().id;
+    const upload = (content: string) => app.inject({ method: "POST", url: `/sources/${id}/upload-files`,
+      headers: { cookie, "content-type": "multipart/form-data; boundary=quota-boundary" },
+      payload: Buffer.from(`--quota-boundary\r\nContent-Disposition: form-data; name="files"; filename="part.stl"\r\nContent-Type: application/octet-stream\r\n\r\n${content}\r\n--quota-boundary--\r\n`),
+    });
+    expect((await upload("solid first\nendsolid first\n")).statusCode).toBe(200);
+    const repo = ports.getRepository(user.user_id);
+    const original = repo.getSource(id)!;
+    const dataDir = ports.dataDir;
+    expect(existsSync(join(dataDir, "sources", String(id)))).toBe(false);
+    const { measureTenantDiskUsage } = await import("./lib/tenant-disk-quota.js");
+    const used = await measureTenantDiskUsage({ dataDir, reposDir: ports.reposDir, tenantId: user.user_id, sourceIds: [id] });
+    const { tenantExportDirectory } = await import("./lib/secure-path.js");
+    const exportDir = tenantExportDirectory(join(dataDir, "exports"), user.user_id);
+    mkdirSync(exportDir, { recursive: true });
+    const filler = join(exportDir, "quota-fixture");
+    writeFileSync(filler, "");
+    const replacement = "solid second\nendsolid second\n";
+    truncateSync(filler, HOSTED_TENANT_DISK_QUOTA_BYTES - used - Buffer.byteLength(replacement) - 1);
+    const refused = await upload(replacement);
+    expect(refused.statusCode).toBe(413);
+    expect(refused.json<{ detail: string }>().detail).toContain("2 GiB");
+    expect(repo.getSource(id)?.current_source_revision_id).toBe(original.current_source_revision_id);
+    expect(existsSync(join(dataDir, "sources", String(id)))).toBe(false);
+    expect(await measureTenantDiskUsage({ dataDir, reposDir: ports.reposDir, tenantId: user.user_id, sourceIds: [id] }))
+      .toBeLessThanOrEqual(HOSTED_TENANT_DISK_QUOTA_BYTES);
+  } finally {
+    await app.close();
+    await ports.db.close();
+  }
 });

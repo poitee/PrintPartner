@@ -10,6 +10,7 @@ import type {
 } from "./accepted-operational-export.js";
 import { getColorById } from "./filament-catalog.js";
 import { writeAcceptedExportFile } from "./accepted-export-publication.js";
+import { TenantDiskQuotaError } from "../lib/tenant-disk-quota.js";
 
 function escapeHtml(value: string): string {
   return value
@@ -147,7 +148,8 @@ export function materializeAcceptedChecklistHtml(input: Readonly<{
       thumbCount: rendered.thumbCount,
       basis,
     };
-  } catch {
+  } catch (error) {
+    if (error instanceof TenantDiskQuotaError) throw error;
     return { kind: "output_failure" };
   }
 }

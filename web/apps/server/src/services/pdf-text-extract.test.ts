@@ -10,6 +10,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  runWithTenantDiskQuota,
+  TenantDiskQuotaError,
+} from "../lib/tenant-disk-quota.js";
+import {
   chunkSidecarPath,
   contentHashForFile,
   docsTextDir,
@@ -103,6 +107,33 @@ describe("PDF text cache roots", () => {
     expect(existsSync(result.cachePath)).toBe(true);
     expect(existsSync(docsTextDir(contentRoot))).toBe(false);
   });
+
+  it("propagates quota errors and removes partially written sidecars", async () => {
+    const root = tempRoot();
+    const contentRoot = join(root, "revisions", "commit-a");
+    const cacheRoot = join(root, "derived", "a".repeat(64), "pdf-text");
+    mkdirSync(contentRoot, { recursive: true });
+    const pdfPath = join(contentRoot, "manual.pdf");
+    writeFileSync(pdfPath, minimalPdf("Print Partner"), "binary");
+    const hash = contentHashForFile(pdfPath);
+
+    await expect(
+      runWithTenantDiskQuota(
+        {
+          dataDir: root,
+          reposDir: join(root, "repos"),
+          tenantId: "tenant-a",
+          quotaBytes: 1,
+          sourceIds: () => [],
+        },
+        () => extractPdfText(contentRoot, "manual.pdf", { cacheRoot }),
+      ),
+    ).rejects.toBeInstanceOf(TenantDiskQuotaError);
+
+    expect(existsSync(sidecarPathForHash(cacheRoot, hash))).toBe(false);
+    expect(existsSync(chunkSidecarPath(cacheRoot, hash))).toBe(false);
+  });
+
 
   it("reads legacy sidecars while preferring the new cache root", () => {
     const root = tempRoot();

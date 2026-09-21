@@ -1,4 +1,4 @@
-import type { JobSnapshot } from "@print-partner/contracts";
+import { HOSTED_TENANT_DISK_QUOTA_BYTES, type JobSnapshot } from "@print-partner/contracts";
 import { join } from "node:path";
 import type { AuthProvider, DbStore, JobRunner, RepoSource, StoragePort } from "../../ports/index.js";
 import {
@@ -83,7 +83,7 @@ export function createSaasPorts(dataDir: string): SaasPorts {
 
   const getRepo = () => getRepository(defaultTenant);
 
-  const jobs = createJobRunner(getRepo, dataDir);
+  const jobs = createJobRunner(getRepo, dataDir, { tenantDiskQuotaBytes: HOSTED_TENANT_DISK_QUOTA_BYTES });
 
   const storage = s3Bucket
     ? new SaasS3StoragePort(

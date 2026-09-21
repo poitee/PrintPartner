@@ -346,7 +346,7 @@ export async function buildApp(config: ServerConfig, ports: RuntimePorts) {
     const thumbsDir = join(config.dataDir, "thumbs");
     const coversDir = join(config.dataDir, "covers");
     const getRepo = () => repository;
-    const jobs = (ports.jobs as InProcessJobRunner) ?? createJobRunner(getRepo, config.dataDir);
+    const jobs = (ports.jobs as InProcessJobRunner) ?? createJobRunner(getRepo, config.dataDir, { tenantDiskQuotaBytes: planning.tenantDiskQuotaBytes });
 
     // Extract SQLite instance for backup/restore
     let sqlite = null;
@@ -413,6 +413,7 @@ export async function buildApp(config: ServerConfig, ports: RuntimePorts) {
       repo: repository,
       reposDir: coreDeps.reposDir,
       listTenantIds: backgroundTenantIds,
+      tenantDiskQuotaBytes: planning.tenantDiskQuotaBytes,
       getSettings: () => {
         const webhookUrl = repository.getSetting("discord_notify_webhook_url") || null;
         const notifyOnUpdate = repository.getSetting("discord_notify_on_update", "1") !== "0";

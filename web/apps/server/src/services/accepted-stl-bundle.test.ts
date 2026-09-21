@@ -5,6 +5,10 @@ import { basename, dirname, join } from "node:path";
 import AdmZip from "adm-zip";
 import { miloFilenameGrouping } from "@print-partner/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  runWithTenantDiskQuota,
+  TenantDiskQuotaError,
+} from "../lib/tenant-disk-quota.js";
 import type {
   AcceptedExportPart,
   AcceptedOperationalExport,
@@ -206,6 +210,34 @@ afterEach(() => {
 });
 
 describe("materializeAcceptedStlBundle", () => {
+  it("propagates quota rejection and removes copied and ZIP staging", async () => {
+    const paths = fixture();
+    const dataDir = dirname(paths.tenantExportsDir);
+    const input = {
+      ...paths,
+      capture: capture([part({
+        snapshotRoot: paths.snapshotRoot,
+        bytes: Buffer.from("accepted-stl"),
+        completed: [false],
+      })]),
+      selection: "all",
+      groupBy: "color",
+      roleOrder: ["accent"],
+    } satisfies Parameters<typeof materializeAcceptedStlBundle>[0];
+
+    await expect(runWithTenantDiskQuota({
+      dataDir,
+      reposDir: paths.reposDir,
+      tenantId: "default",
+      sourceIds: () => [],
+      quotaBytes: 5,
+    }, async () => materializeAcceptedStlBundle(input)))
+      .rejects.toBeInstanceOf(TenantDiskQuotaError);
+
+    const entries = readdirSync(paths.tenantExportsDir, { recursive: true });
+    expect(entries.some((entry) => String(entry).includes(".tmp-") || String(entry).includes("content-"))).toBe(false);
+  });
+
   it("returns output_failure and removes staging when a lazy ZIP source cannot be read", async () => {
     const paths = fixture();
     acceptedArtifactTestHook.failZipRead = true;

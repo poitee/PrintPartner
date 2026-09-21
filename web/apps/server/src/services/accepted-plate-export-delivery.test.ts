@@ -13,8 +13,12 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  runWithTenantDiskQuota,
+  TenantDiskQuotaError,
+} from "../lib/tenant-disk-quota.js";
 import type { AcceptedPlateExportInput } from "../db/accepted-plates.js";
 import type { AcceptedOperationalArtifact } from "../db/accepted-plan-operational.js";
 import { parseRequiredUnitToken } from "./required-units.js";
@@ -152,6 +156,27 @@ endsolid accepted`);
 }
 
 describe("materializeAcceptedPlateExport", () => {
+  it("rejects the complete temporary tree before writing when quota is too small", async () => {
+    const { dependencies, command } = fixture();
+    const dataDir = dirname(dirname(dependencies.tenantExportsDir));
+
+    await expect(runWithTenantDiskQuota({
+      dataDir,
+      reposDir: dependencies.reposDir,
+      tenantId: "default",
+      sourceIds: () => [],
+      quotaBytes: 1,
+    }, async () => materializeAcceptedPlateExport(dependencies, command)))
+      .rejects.toBeInstanceOf(TenantDiskQuotaError);
+
+    expect(existsSync(join(
+      dependencies.tenantExportsDir,
+      "accepted-plates",
+      "profile-7",
+      "revision-19",
+    ))).toBe(false);
+  });
+
   it("publishes the fixed immutable tree with verified metadata", async () => {
     const { dependencies, command } = fixture();
     const result = await materializeAcceptedPlateExport(dependencies, command);

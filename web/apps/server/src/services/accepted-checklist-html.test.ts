@@ -7,9 +7,13 @@ import {
   symlinkSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { writeAcceptedMediaPng } from "../lib/accepted-media-cache.js";
+import {
+  runWithTenantDiskQuota,
+  TenantDiskQuotaError,
+} from "../lib/tenant-disk-quota.js";
 import { acceptedPartMediaIdentity } from "./accepted-part-media.js";
 import type {
   AcceptedExportPart,
@@ -102,6 +106,23 @@ afterEach(() => {
 });
 
 describe("materializeAcceptedChecklistHtml", () => {
+  it("preserves quota rejection from accepted export publication", async () => {
+    const paths = fixture();
+
+    await expect(runWithTenantDiskQuota({
+      dataDir: dirname(paths.tenantExportsDir),
+      reposDir: join(dirname(paths.tenantExportsDir), "repos"),
+      tenantId: "default",
+      sourceIds: () => [],
+      quotaBytes: 1,
+    }, async () => materializeAcceptedChecklistHtml({
+      capture: capture(acceptedPart()),
+      ...paths,
+      dateFormat: "ymd_24h",
+      generatedAt: "2026-08-21T15:00:00.000Z",
+    }))).rejects.toBeInstanceOf(TenantDiskQuotaError);
+  });
+
   it("renders accepted quantity, completion, escaping, and content-addressed thumbnail bytes", () => {
     const paths = fixture();
     const part = acceptedPart();

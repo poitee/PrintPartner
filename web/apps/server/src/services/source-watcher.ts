@@ -5,7 +5,8 @@ import { syncProjectById } from "../routes/sources.js";
 import { sendDiscordNotification } from "./discord-notify.js";
 import { dispatchWebhooks } from "./webhook-store.js";
 import { getLogger } from "./logger.js";
-import { tenantStorage } from "../middleware/tenant-context.js";
+import { tenantStorage, getRequestTenantId } from "../middleware/tenant-context.js";
+import { runWithTenantDiskQuota } from "../lib/tenant-disk-quota.js";
 import { readStoredSourceUpdateIntervalHours } from "./source-monitoring-settings.js";
 
 export type SourceWatcherSettings = {
@@ -172,6 +173,7 @@ async function syncUnsyncedSources(
   repo: AppRepository,
   reposDir: string,
   getSettings: () => SourceWatcherSettings,
+  quotaBytes: number | null,
 ): Promise<void> {
   const logger = getLogger();
   const sources = repo
@@ -190,7 +192,10 @@ async function syncUnsyncedSources(
   for (const source of sources) {
     try {
       logger.log("info", `[source-watcher] Auto-syncing new source: ${source.name} (id=${source.id})`);
-      const result = await syncProjectById(repo, reposDir, source.id, coversDir);
+      const result = await runWithTenantDiskQuota({
+        dataDir: dirname(reposDir), reposDir, tenantId: getRequestTenantId(),
+        quotaBytes, sourceIds: () => repo.listSources().map((item) => item.id),
+      }, () => syncProjectById(repo, reposDir, source.id, coversDir));
 
       const settings = getSettings();
       if (settings.discordWebhookUrl && settings.notifyOnSync) {
@@ -245,6 +250,7 @@ async function runPeriodicUpdateCheck(
   repo: AppRepository,
   reposDir: string,
   getSettings: () => SourceWatcherSettings,
+  quotaBytes: number | null,
 ): Promise<void> {
   const logger = getLogger();
   const settings = getSettings();
@@ -283,7 +289,10 @@ async function runPeriodicUpdateCheck(
       // Auto-sync
       try {
         logger.log("info", `[source-watcher] Auto-syncing updated source: ${source.name}`);
-        const result = await syncProjectById(repo, reposDir, source.id, coversDir);
+        const result = await runWithTenantDiskQuota({
+        dataDir: dirname(reposDir), reposDir, tenantId: getRequestTenantId(),
+        quotaBytes, sourceIds: () => repo.listSources().map((item) => item.id),
+      }, () => syncProjectById(repo, reposDir, source.id, coversDir));
         const updatedRow = repo.getProjectRow(source.id);
         repo.recordAppEvent({
           kind: "source.updated",
@@ -383,6 +392,7 @@ async function runPeriodicUpdateCheck(
 }
 
 export function startSourceWatcher(input: {
+  tenantDiskQuotaBytes?: number | null;
   repo: AppRepository;
   reposDir: string;
   getSettings: () => SourceWatcherSettings;
@@ -394,9 +404,9 @@ export function startSourceWatcher(input: {
     readIntervalHours: () =>
       readStoredSourceUpdateIntervalHours(input.repo.getSetting("source_update_check_hours")),
     runStartupForCurrentTenant: () =>
-      syncUnsyncedSources(input.repo, input.reposDir, input.getSettings),
+      syncUnsyncedSources(input.repo, input.reposDir, input.getSettings, input.tenantDiskQuotaBytes ?? null),
     runPeriodicForCurrentTenant: () =>
-      runPeriodicUpdateCheck(input.repo, input.reposDir, input.getSettings),
+      runPeriodicUpdateCheck(input.repo, input.reposDir, input.getSettings, input.tenantDiskQuotaBytes ?? null),
     now: Date.now,
   });
 

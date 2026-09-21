@@ -4,6 +4,10 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import AdmZip from "adm-zip";
 import { encodeAcceptedPlate3mf, type StlMesh } from "@print-partner/domain";
+import {
+  runWithTenantDiskQuota,
+  TenantDiskQuotaError,
+} from "../lib/tenant-disk-quota.js";
 import { extractZipBuffer, writeUploadedFiles, writeUploadedZip, discoverImportRules } from "./archive-import.js";
 
 function tempRoot(): string {
@@ -117,6 +121,55 @@ describe("archive extraction hardening", () => {
     expect(result.stlCount).toBe(2);
     expect(existsSync(join(result.extractDir, "parts/a.stl"))).toBe(true);
     expect(result.suggestedImportRules).toEqual(["parts/"]);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("cleans uploaded file staging when quota blocks a file write", async () => {
+    const root = tempRoot();
+    const sourcesDir = join(root, "sources");
+
+    await expect(
+      runWithTenantDiskQuota(
+        {
+          dataDir: root,
+          reposDir: join(root, "repos"),
+          tenantId: "tenant-a",
+          quotaBytes: 3,
+          sourceIds: () => [42],
+        },
+        async () =>
+          writeUploadedFiles(
+            [{ relativePath: "parts/a.stl", buffer: Buffer.from("solid a") }],
+            sourcesDir,
+            42,
+          ),
+      ),
+    ).rejects.toBeInstanceOf(TenantDiskQuotaError);
+
+    expect(existsSync(join(sourcesDir, "42", "files"))).toBe(false);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("leaves source upload writers unlimited when hosted quota is disabled", async () => {
+    const root = tempRoot();
+    const sourcesDir = join(root, "sources");
+    const result = await runWithTenantDiskQuota(
+      {
+        dataDir: root,
+        reposDir: join(root, "repos"),
+        tenantId: "tenant-a",
+        quotaBytes: null,
+        sourceIds: () => [42],
+      },
+      async () =>
+        writeUploadedFiles(
+          [{ relativePath: "parts/a.stl", buffer: Buffer.from("solid a") }],
+          sourcesDir,
+          42,
+        ),
+    );
+
+    expect(existsSync(join(result.extractDir, "parts/a.stl"))).toBe(true);
     rmSync(root, { recursive: true, force: true });
   });
 

@@ -12,6 +12,7 @@ import {
   writeSync,
 } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { chargeTenantDiskBytes } from "../lib/tenant-disk-quota.js";
 
 function errorCode(error: unknown): string | undefined {
   if (typeof error !== "object" || error === null || !("code" in error)) return undefined;
@@ -78,6 +79,7 @@ export function writeAcceptedExportFile(input: Readonly<{
   let descriptor: number | null = null;
   let renamed = false;
   try {
+    chargeTenantDiskBytes(input.bytes.byteLength);
     descriptor = openSync(
       temporary,
       constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,

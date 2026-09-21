@@ -43,7 +43,7 @@ import { PDF_BG_EXTRACT_BYTES } from "../services/pdf-text-extract.js";
 import { sourcePdfTextStorage } from "../services/source-workspace.js";
 import { publishLocalSourceWorkingTree } from "../services/local-source-revision.js";
 import { scanSourceArtifacts } from "../services/source-artifacts.js";
-import { sendIfTenantDiskQuotaExceeded, measureDirectoryBytes } from "../lib/tenant-disk-quota.js";
+import { sendIfTenantDiskQuotaExceeded, runWithTenantDiskQuota, TenantDiskQuotaError } from "../lib/tenant-disk-quota.js";
 
 const GITHUB_PAT_KEY = "github_pat";
 const HOSTED_SOURCE_KIND_DETAIL =
@@ -384,46 +384,48 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
     if (await refuseIfHostedQuotaExceeded(reply, deps, request.tenantId, buffer.length)) {
       return;
     }
-    let extractDir: string;
     try {
-      extractDir = writeUploadedZip(buffer, deps.sourcesDir, id);
-    } catch (e) {
-      return reply.status(400).send({ detail: e instanceof Error ? e.message : String(e) });
-    }
-    const expandedBytes = await measureDirectoryBytes(extractDir);
-    if (await refuseIfHostedQuotaExceeded(reply, deps, request.tenantId, expandedBytes)) {
-      await rm(extractDir, { recursive: true, force: true });
-      return;
-    }
-    const { suggestedImportRules, stlCount } = finalizeUploadedSource(extractDir);
-    const existingRules = deps.repo.getProjectRow(id)?.importedPaths;
-    const hasRules =
-      existingRules != null &&
-      existingRules.trim() !== "" &&
-      existingRules.trim() !== "[]";
-    if (!hasRules && suggestedImportRules.length > 0) {
-      deps.repo.updateImportRules(id, suggestedImportRules);
-    }
-    let updated;
-    try {
-      updated = await publishLocalSourceWorkingTree({
-        repo: deps.repo,
-        reposDir: deps.reposDir,
-        sourceId: id,
-        workingTree: extractDir,
+      return await runWithTenantDiskQuota({
+        dataDir: deps.dataDir, reposDir: deps.reposDir, tenantId: request.tenantId,
+        quotaBytes: deps.hostedPlanning ? HOSTED_TENANT_DISK_QUOTA_BYTES : null,
+        sourceIds: () => deps.repo.listSources().map((source) => source.id),
+      }, async () => {
+        try {
+          const extractDir = writeUploadedZip(buffer, deps.sourcesDir, id);
+          const { suggestedImportRules, stlCount } = finalizeUploadedSource(extractDir);
+          const existingRules = deps.repo.getProjectRow(id)?.importedPaths;
+          const hasRules =
+            existingRules != null &&
+            existingRules.trim() !== "" &&
+            existingRules.trim() !== "[]";
+          if (!hasRules && suggestedImportRules.length > 0) {
+            deps.repo.updateImportRules(id, suggestedImportRules);
+          }
+          const updated = await publishLocalSourceWorkingTree({
+            repo: deps.repo,
+            reposDir: deps.reposDir,
+            sourceId: id,
+            workingTree: extractDir,
+          });
+          indexSourceDocsFromDisk(deps.repo, id, updated.local_path ?? extractDir);
+          void prefetchSourceCover(deps, id);
+          return {
+            ...deps.repo.sourceSummaryForClient(updated),
+            imported_files: buffer.length,
+            stl_count: stlCount,
+            artifacts: scanSourceArtifacts(updated.local_path ?? extractDir),
+            suggested_import_rules: suggestedImportRules,
+          };
+        } finally {
+          if (deps.hostedPlanning) {
+            await rm(join(deps.sourcesDir, String(id)), { recursive: true, force: true });
+          }
+        }
       });
-    } catch (e) {
-      return reply.status(400).send({ detail: e instanceof Error ? e.message : String(e) });
+    } catch (error) {
+      return reply.status(error instanceof TenantDiskQuotaError ? 413 : 400)
+        .send({ detail: error instanceof Error ? error.message : String(error) });
     }
-    indexSourceDocsFromDisk(deps.repo, id, updated.local_path ?? extractDir);
-    void prefetchSourceCover(deps, id);
-    return {
-      ...deps.repo.sourceSummaryForClient(updated),
-      imported_files: buffer.length,
-      stl_count: stlCount,
-      artifacts: scanSourceArtifacts(updated.local_path ?? extractDir),
-      suggested_import_rules: suggestedImportRules,
-    };
   });
 
   app.post("/sources/:id/upload-files", async (request, reply) => {
@@ -498,47 +500,49 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
       return;
     }
 
-    let result;
     try {
-      result = writeUploadedFiles(uploads, deps.sourcesDir, id);
-    } catch (e) {
-      return reply.status(400).send({ detail: e instanceof Error ? e.message : String(e) });
-    }
-    const expandedBytes = await measureDirectoryBytes(result.extractDir);
-    if (await refuseIfHostedQuotaExceeded(reply, deps, request.tenantId, expandedBytes)) {
-      await rm(result.extractDir, { recursive: true, force: true });
-      return;
-    }
+      return await runWithTenantDiskQuota({
+        dataDir: deps.dataDir, reposDir: deps.reposDir, tenantId: request.tenantId,
+        quotaBytes: deps.hostedPlanning ? HOSTED_TENANT_DISK_QUOTA_BYTES : null,
+        sourceIds: () => deps.repo.listSources().map((source) => source.id),
+      }, async () => {
+        try {
+          const result = writeUploadedFiles(uploads, deps.sourcesDir, id);
 
-    const existingRules = deps.repo.getProjectRow(id)?.importedPaths;
-    const hasRules =
-      existingRules != null &&
-      existingRules.trim() !== "" &&
-      existingRules.trim() !== "[]";
-    if (!hasRules && result.suggestedImportRules.length > 0) {
-      deps.repo.updateImportRules(id, result.suggestedImportRules);
-    }
+          const existingRules = deps.repo.getProjectRow(id)?.importedPaths;
+          const hasRules =
+            existingRules != null &&
+            existingRules.trim() !== "" &&
+            existingRules.trim() !== "[]";
+          if (!hasRules && result.suggestedImportRules.length > 0) {
+            deps.repo.updateImportRules(id, result.suggestedImportRules);
+          }
 
-    let updated;
-    try {
-      updated = await publishLocalSourceWorkingTree({
-        repo: deps.repo,
-        reposDir: deps.reposDir,
-        sourceId: id,
-        workingTree: result.extractDir,
+          const updated = await publishLocalSourceWorkingTree({
+            repo: deps.repo,
+            reposDir: deps.reposDir,
+            sourceId: id,
+            workingTree: result.extractDir,
+          });
+          indexSourceDocsFromDisk(deps.repo, id, updated.local_path ?? result.extractDir);
+          void prefetchSourceCover(deps, id);
+          return {
+            ...deps.repo.sourceSummaryForClient(updated),
+            imported_files: result.fileCount,
+            stl_count: result.stlCount,
+            artifacts: scanSourceArtifacts(updated.local_path ?? result.extractDir),
+            suggested_import_rules: result.suggestedImportRules,
+          };
+        } finally {
+          if (deps.hostedPlanning) {
+            await rm(join(deps.sourcesDir, String(id)), { recursive: true, force: true });
+          }
+        }
       });
-    } catch (e) {
-      return reply.status(400).send({ detail: e instanceof Error ? e.message : String(e) });
+    } catch (error) {
+      return reply.status(error instanceof TenantDiskQuotaError ? 413 : 400)
+        .send({ detail: error instanceof Error ? error.message : String(error) });
     }
-    indexSourceDocsFromDisk(deps.repo, id, updated.local_path ?? result.extractDir);
-    void prefetchSourceCover(deps, id);
-    return {
-      ...deps.repo.sourceSummaryForClient(updated),
-      imported_files: result.fileCount,
-      stl_count: result.stlCount,
-      artifacts: scanSourceArtifacts(updated.local_path ?? result.extractDir),
-      suggested_import_rules: result.suggestedImportRules,
-    };
   });
 
   app.get("/sources/:id/has-manifest", async () => ({

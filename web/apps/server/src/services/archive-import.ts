@@ -1,6 +1,7 @@
 import { Unzip, UnzipInflate } from "fflate";
 import { appendFileSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
+import { chargeTenantDiskBytes } from "../lib/tenant-disk-quota.js";
 import { extractThreeMfMeshes } from "./three-mf-import.js";
 import { MAX_SOURCE_UPLOAD_BYTES } from "./upload-limits.js";
 
@@ -69,9 +70,11 @@ function extractEntries(bytes: Buffer, destDir: string, limits: ExtractLimits = 
         return;
       }
       if (!started) {
+        chargeTenantDiskBytes(chunk.length);
         writeFileSync(target, chunk);
         started = true;
       } else if (chunk.length > 0) {
+        chargeTenantDiskBytes(chunk.length);
         appendFileSync(target, chunk);
       }
       if (final && !started) writeFileSync(target, Buffer.alloc(0));
@@ -200,13 +203,19 @@ export function writeUploadedFiles(
   mkdirSync(extractDir, { recursive: true });
   const base = resolve(extractDir);
   let stlCount = 0;
-  for (const file of files) {
-    const target = resolveSafeTarget(base, file.relativePath);
-    mkdirSync(dirname(target), { recursive: true });
-    writeFileSync(target, file.buffer);
-    if (file.relativePath.toLowerCase().endsWith(".stl")) stlCount += 1;
+  try {
+    for (const file of files) {
+      const target = resolveSafeTarget(base, file.relativePath);
+      mkdirSync(dirname(target), { recursive: true });
+      chargeTenantDiskBytes(file.buffer.byteLength);
+      writeFileSync(target, file.buffer);
+      if (file.relativePath.toLowerCase().endsWith(".stl")) stlCount += 1;
+    }
+    stlCount += expandThreeMfFiles(extractDir);
+  } catch (error) {
+    rmSync(extractDir, { recursive: true, force: true });
+    throw error;
   }
-  stlCount += expandThreeMfFiles(extractDir);
   return {
     extractDir,
     fileCount: files.length,
@@ -219,15 +228,22 @@ export function writeUploadedZip(buffer: Buffer, sourcesDir: string, sourceId: n
   const dir = join(sourcesDir, String(sourceId));
   mkdirSync(dir, { recursive: true });
   const zipPath = join(dir, "upload.zip");
-  writeFileSync(zipPath, buffer);
   const extractDir = join(dir, "files");
   try {
     rmSync(extractDir, { recursive: true, force: true });
   } catch {
     /* ignore */
   }
-  extractZipBuffer(buffer, extractDir);
-  expandThreeMfFiles(extractDir);
+  try {
+    chargeTenantDiskBytes(buffer.byteLength);
+    writeFileSync(zipPath, buffer);
+    extractZipBuffer(buffer, extractDir);
+    expandThreeMfFiles(extractDir);
+  } catch (error) {
+    rmSync(zipPath, { force: true });
+    rmSync(extractDir, { recursive: true, force: true });
+    throw error;
+  }
   return extractDir;
 }
 

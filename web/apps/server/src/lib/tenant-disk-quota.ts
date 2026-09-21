@@ -1,5 +1,6 @@
 import { readdir, lstat } from "node:fs/promises";
-import { join } from "node:path";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { join, resolve } from "node:path";
 import type { FastifyReply } from "fastify";
 import { HOSTED_TENANT_DISK_QUOTA_BYTES } from "@print-partner/contracts";
 import { sendProblem } from "./api-error.js";
@@ -13,6 +14,55 @@ export class TenantDiskQuotaError extends Error {
   constructor() {
     super(TENANT_DISK_QUOTA_DETAIL);
     this.name = "TenantDiskQuotaError";
+  }
+}
+
+type DiskBudget = { remaining: number; active: boolean };
+const diskBudget = new AsyncLocalStorage<DiskBudget | undefined>();
+const tenantWrites = new Map<string, Promise<void>>();
+
+/** Count new bytes before writing, including temporary copies. Renames cost no bytes. */
+export function chargeTenantDiskBytes(bytes: number): void {
+  const budget = diskBudget.getStore();
+  if (!budget) return;
+  if (!budget.active) throw new Error("Tenant disk write outlived its quota operation");
+  if (!Number.isSafeInteger(bytes) || bytes < 0) throw new Error("Invalid disk write size");
+  if (bytes > budget.remaining) throw new TenantDiskQuotaError();
+  budget.remaining -= bytes;
+}
+
+export function withoutTenantDiskQuota<T>(work: () => T): T {
+  return diskBudget.run(undefined, work);
+}
+
+/** One writer per tenant. Rescan after each operation, counting abandoned staging too. */
+export async function runWithTenantDiskQuota<T>(input: {
+  dataDir: string;
+  reposDir: string;
+  tenantId: string;
+  sourceIds: () => readonly number[];
+  quotaBytes: number | null;
+}, work: () => Promise<T>): Promise<T> {
+  if (input.quotaBytes == null) return withoutTenantDiskQuota(work);
+  if (diskBudget.getStore()) throw new Error("Nested tenant disk quota operation");
+  const key = JSON.stringify([resolve(input.dataDir), input.tenantId]);
+  const previous = tenantWrites.get(key);
+  let release!: () => void;
+  const current = new Promise<void>((done) => { release = done; });
+  tenantWrites.set(key, current);
+  try {
+    await previous;
+    const used = await measureTenantDiskUsage({ ...input, sourceIds: input.sourceIds() });
+    if (used > input.quotaBytes) throw new TenantDiskQuotaError();
+    const budget: DiskBudget = { remaining: input.quotaBytes - used, active: true };
+    try {
+      return await diskBudget.run(budget, work);
+    } finally {
+      budget.active = false;
+    }
+  } finally {
+    release();
+    if (tenantWrites.get(key) === current) tenantWrites.delete(key);
   }
 }
 
@@ -65,6 +115,7 @@ export async function measureTenantDiskUsage(input: {
   let sourceBytes = 0;
   for (const sourceId of input.sourceIds) {
     sourceBytes += await measureDirectoryBytes(sourceWorkspaceRoot(input.reposDir, sourceId));
+    sourceBytes += await measureDirectoryBytes(join(input.dataDir, "sources", String(sourceId)));
   }
   const total = exportBytes + sourceBytes;
   if (!Number.isSafeInteger(total)) {

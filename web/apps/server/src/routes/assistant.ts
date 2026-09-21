@@ -1,3 +1,5 @@
+import { hostedPlanningPolicy } from "../lib/hosted-planning.js";
+import { runWithTenantDiskQuota, TenantDiskQuotaError } from "../lib/tenant-disk-quota.js";
 import type { FastifyInstance } from "fastify";
 import type {
   AssistantActionApplyRequest,
@@ -196,13 +198,20 @@ export async function registerAssistantRoutes(
       }
       let result: Awaited<ReturnType<typeof applyAssistantAction>>;
       try {
-        result = await applyAssistantAction(action, {
+        result = await runWithTenantDiskQuota({
+          dataDir: deps.config.dataDir, reposDir: deps.repo.reposDir,
+          tenantId: request.tenantId,
+          quotaBytes: hostedPlanningPolicy(deps.config.deployMode).tenantDiskQuotaBytes,
+          sourceIds: () => deps.repo.listSources().map((source) => source.id),
+        }, () => applyAssistantAction(action, {
           repo: deps.repo,
           jobs: deps.jobs,
           tenantId: request.tenantId,
           dataDir: deps.config.dataDir,
-        });
-      } catch {
+          hostedPlanning: hostedPlanningPolicy(deps.config.deployMode).hostedPlanning,
+        }));
+      } catch (error) {
+        if (error instanceof TenantDiskQuotaError) return sendProblem(reply, 413, "Payload Too Large", error.message);
         request.log.error(
           { failure: "unexpected", actionType: action.type, planId: action.plan_id },
           "Assistant action apply failed",

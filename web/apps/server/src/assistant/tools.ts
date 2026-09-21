@@ -1,3 +1,4 @@
+import { TenantDiskQuotaError } from "../lib/tenant-disk-quota.js";
 import { createHash, randomUUID } from "node:crypto";
 import { closeSync, existsSync, openSync, readFileSync, readSync, statSync, readdirSync, lstatSync, mkdtempSync, rmSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
@@ -4313,6 +4314,7 @@ export async function invokeAssistantTool(
 }
 
 export type ApplyActionDeps = {
+  hostedPlanning?: boolean;
   repo: AppRepository;
   jobs: InProcessJobRunner;
   tenantId?: string;
@@ -4635,7 +4637,10 @@ export async function applyAssistantAction(
             },
           };
         } catch (error) {
+          if (error instanceof TenantDiskQuotaError) throw error;
           return { ok: false, detail: error instanceof Error ? error.message : String(error) };
+        } finally {
+          if (deps.hostedPlanning) rmSync(join(sourcesDir, String(sourceId)), { recursive: true, force: true });
         }
         break;
       }
@@ -5837,6 +5842,7 @@ export async function applyAssistantAction(
     }
     return outcome;
   } catch (error) {
+    if (error instanceof TenantDiskQuotaError) throw error;
     if (action.type !== "archive_plan") {
       return {
         ok: false,

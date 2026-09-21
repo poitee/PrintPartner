@@ -25,6 +25,7 @@ vi.mock("@octokit/rest", () => ({
 }));
 
 import { createSelfHostPorts } from "../adapters/self-host/index.js";
+import { createJobRunner } from "../routes/jobs.js";
 import { syncProjectById } from "../routes/sources.js";
 import {
   listGithubBranches,
@@ -534,4 +535,28 @@ describe("atomic GitHub Source sync", () => {
     ]);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+});
+
+it("a queued hosted sync cannot activate a snapshot larger than its remaining quota", async () => {
+  const dataDir = reposRoot();
+  const ports = createSelfHostPorts(dataDir);
+  await ports.db.connect();
+  try {
+    const repo = ports.repository!;
+    const source = repo.createSource({ name: "Quota sync", url: "https://github.com/example/quota", source_kind: "github" });
+    setTree(COMMIT_A, [{ path: "part.stl", type: "blob", mode: "100644", size: 20 }]);
+    vi.stubGlobal("fetch", rawResponse({ "part.stl": "solid quota contents" }));
+    const jobs = createJobRunner(() => repo, dataDir, { tenantDiskQuotaBytes: 10 });
+    const id = await jobs.start("import-scan", { project_id: source.id }, "default");
+    await vi.waitFor(async () => {
+      const job = await jobs.get(id, "default");
+      expect(job?.status).toBe("error");
+      expect(job?.error).toContain("2 GiB");
+    });
+    expect(repo.getSource(source.id)?.current_source_revision_id).toBeNull();
+    expect(repo.listSourceRevisions(source.id)).toEqual([]);
+    expect(readdirSync(join(repo.reposDir, String(source.id), "revisions"))).toEqual([]);
+  } finally {
+    await ports.db.close();
+  }
 });
