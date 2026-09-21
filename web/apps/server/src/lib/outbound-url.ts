@@ -15,6 +15,16 @@ import { cancelResponseBody } from "./bounded-response.js";
 
 const MAX_REDIRECTS = 5;
 
+let privateOutboundDenied = false;
+
+export function setPrivateOutboundDenied(denied: boolean): void {
+  privateOutboundDenied = denied;
+}
+
+function privateTargetsAllowed(options: OutboundUrlOptions): boolean {
+  return Boolean(options.allowPrivate) && !privateOutboundDenied;
+}
+
 export type LookupFn = (
   hostname: string,
 ) => Promise<Array<{ address: string; family: number }>>;
@@ -145,7 +155,7 @@ async function assertResolvedHostSafe(
     if (cls === "metadata") {
       throw new OutboundUrlError(`URL resolves to a cloud metadata address: ${hostname}`);
     }
-    if (cls === "private" && !options.allowPrivate) {
+    if (cls === "private" && !privateTargetsAllowed(options)) {
       throw new OutboundUrlError(`URL resolves to a private or internal address: ${hostname}`);
     }
   }

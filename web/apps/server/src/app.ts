@@ -45,6 +45,7 @@ import type { SelfHostDbStore } from "./adapters/self-host/index.js";
 import type { AppRepository } from "./db/repository.js";
 import { getDb } from "./db/client.js";
 import { createAuthStore, type AuthStore } from "./services/auth-store.js";
+import { createBoardStore, type BoardStore } from "./services/board-store.js";
 import { validateApiKey } from "./services/api-key-manager.js";
 import { migrateLegacySelfHostExports } from "./services/legacy-export-migration.js";
 import { prepareSqliteUpgrade } from "./db/upgrade-guard.js";
@@ -54,6 +55,10 @@ import {
   mcpAccessEnabled,
   type ExternalAccessMode,
 } from "@print-partner/contracts";
+import { sendProblem } from "./lib/api-error.js";
+import { hostedDeniedRouteDetail } from "./lib/hosted-planning-deny.js";
+import { hostedPlanningPolicy } from "./lib/hosted-planning.js";
+import { setPrivateOutboundDenied } from "./lib/outbound-url.js";
 import { readExternalAccessSettings } from "./services/external-access.js";
 import { listActivePrinterSendQueue } from "./services/printer-send-queue-store.js";
 import { sweepExpiredTransferArtifacts } from "./services/transfer-artifact-retention.js";
@@ -110,7 +115,9 @@ function resolveRepository(ports: RuntimePorts): AppRepository | null {
 
 function resolveAuthStore(ports: RuntimePorts, config: ServerConfig): AuthStore | null {
   if (!config.multiUser && !config.singleUserAuth) return null;
-  const options = { claimDefaultTenantForFirstUser: !config.singleUserAuth };
+  const options = {
+    claimDefaultTenantForFirstUser: !config.singleUserAuth && config.deployMode !== "saas",
+  };
   const db = ports.db;
   if ("sqlite" in db) {
     const sqlite = (db as SelfHostDbStore).sqlite;
@@ -122,6 +129,23 @@ function resolveAuthStore(ports: RuntimePorts, config: ServerConfig): AuthStore 
       return createAuthStore(bundle.postgres.drizzle, "postgres", options);
     }
     if (bundle.sqlite?.drizzle) return createAuthStore(getDb(bundle.sqlite), "sqlite", options);
+  }
+  return null;
+}
+
+function resolveBoardStore(ports: RuntimePorts, config: ServerConfig): BoardStore | null {
+  if (!hostedPlanningPolicy(config.deployMode).hostedPlanning) return null;
+  const db = ports.db;
+  if ("sqlite" in db) {
+    const sqlite = (db as SelfHostDbStore).sqlite;
+    if (sqlite?.drizzle) return createBoardStore(getDb(sqlite), "sqlite");
+  }
+  if ("bundle" in db) {
+    const bundle = (db as SaasDbStore).bundle;
+    if (bundle.postgres?.drizzle) {
+      return createBoardStore(bundle.postgres.drizzle, "postgres");
+    }
+    if (bundle.sqlite?.drizzle) return createBoardStore(getDb(bundle.sqlite), "sqlite");
   }
   return null;
 }
@@ -184,7 +208,18 @@ export async function buildApp(config: ServerConfig, ports: RuntimePorts) {
     return payload;
   });
   const authStore = resolveAuthStore(ports, config);
+  const boardStore = resolveBoardStore(ports, config);
   const repository = resolveRepository(ports);
+  const planning = hostedPlanningPolicy(config.deployMode);
+  setPrivateOutboundDenied(!planning.allowPrivateOutbound);
+  if (planning.hostedPlanning) {
+    app.addHook("onRequest", async (request, reply) => {
+      const detail = hostedDeniedRouteDetail(request.method, request.url);
+      if (detail) {
+        return sendProblem(reply, 403, "Forbidden", detail);
+      }
+    });
+  }
 
   // Register request logging middleware early
   await registerRequestLoggingMiddleware(app);
@@ -195,10 +230,12 @@ export async function buildApp(config: ServerConfig, ports: RuntimePorts) {
     setRequestTenantId(request.tenantId ?? "default");
   });
   registerAuthRoutes(app, config, authStore);
-  const externalAccessMode = (): ExternalAccessMode =>
-    repository === null
+  const externalAccessMode = (): ExternalAccessMode => {
+    if (planning.hostedPlanning) return "off";
+    return repository === null
       ? EXTERNAL_ACCESS_DEFAULT
       : readExternalAccessSettings(repository).mode;
+  };
   const validateRequestApiKey = registerApiKeyAuth(
     app,
     config,
@@ -309,7 +346,7 @@ export async function buildApp(config: ServerConfig, ports: RuntimePorts) {
     const thumbsDir = join(config.dataDir, "thumbs");
     const coversDir = join(config.dataDir, "covers");
     const getRepo = () => repository;
-    const jobs = (ports.jobs as InProcessJobRunner) ?? createJobRunner(getRepo, config.dataDir);
+    const jobs = (ports.jobs as InProcessJobRunner) ?? createJobRunner(getRepo, config.dataDir, { tenantDiskQuotaBytes: planning.tenantDiskQuotaBytes });
 
     // Extract SQLite instance for backup/restore
     let sqlite = null;
@@ -345,6 +382,7 @@ export async function buildApp(config: ServerConfig, ports: RuntimePorts) {
       config,
       jobs,
       authStore,
+      boardStore,
       ...(profileSyncHandle
         ? {
             reloadProfileSync: async () => {
@@ -375,6 +413,7 @@ export async function buildApp(config: ServerConfig, ports: RuntimePorts) {
       repo: repository,
       reposDir: coreDeps.reposDir,
       listTenantIds: backgroundTenantIds,
+      tenantDiskQuotaBytes: planning.tenantDiskQuotaBytes,
       getSettings: () => {
         const webhookUrl = repository.getSetting("discord_notify_webhook_url") || null;
         const notifyOnUpdate = repository.getSetting("discord_notify_on_update", "1") !== "0";
@@ -398,6 +437,7 @@ export async function buildApp(config: ServerConfig, ports: RuntimePorts) {
               const restoredDb = getDb(sqlite);
               repository.replaceDatabase(restoredDb);
               authStore?.replaceDatabase(restoredDb);
+              boardStore?.replaceDatabase(restoredDb);
             },
             afterDatabaseRefresh: migrateLegacySourceManifests,
           }

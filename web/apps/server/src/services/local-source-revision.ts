@@ -3,6 +3,7 @@ import { createReadStream } from "node:fs";
 import { copyFile, lstat, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve, sep } from "node:path";
 import type { SourceSummary } from "@print-partner/contracts";
+import { chargeTenantDiskBytes } from "../lib/tenant-disk-quota.js";
 import type {
   AppRepository,
   SourceActivationObservation,
@@ -207,8 +208,8 @@ async function materializeLocalSourceWorkingTree(input: {
     maxDocumentationBytes: input.maxDocumentationBytes,
     maxTotalBytes: input.maxTotalBytes,
   });
-  await mkdir(input.reposDir, { recursive: true });
-  const stagingRoot = await mkdtemp(join(input.reposDir, ".local-source-"));
+  await mkdir(sourceWorkspace, { recursive: true });
+  const stagingRoot = await mkdtemp(join(sourceWorkspace, ".local-source-"));
   try {
     for (const file of liveFiles) {
       if (
@@ -220,9 +221,11 @@ async function materializeLocalSourceWorkingTree(input: {
       const stagedPath = resolveUnderRoot(stagingRoot, file.relativePath);
       if (!stagedPath) throw new Error(`Unsafe Source snapshot path: ${file.relativePath}`);
       await mkdir(dirname(stagedPath), { recursive: true });
+      chargeTenantDiskBytes(file.sizeHintBytes);
       await copyFile(file.absolutePath, stagedPath);
     }
     if (input.manifestYaml !== undefined) {
+      chargeTenantDiskBytes(Buffer.byteLength(input.manifestYaml));
       await writeFile(
         join(stagingRoot, SOURCE_MANIFEST_FILENAME),
         input.manifestYaml,

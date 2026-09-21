@@ -1,6 +1,6 @@
 import { lazy, Suspense, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import type { ProductionRoute } from "@print-partner/contracts";
+import { HOSTED_PLANNING_COMPOSE_NOTE, isHostedPlanning, type ProductionRoute } from "@print-partner/contracts";
 import { FileArchive } from "lucide-react";
 import BuildSummaryHeader from "../components/build/BuildSummaryHeader";
 import PageHeader from "../components/layout/PageHeader";
@@ -115,6 +115,7 @@ const TASK_LIST_TITLE: Readonly<Record<ProductionRoute, string>> = {
 export default function ExportPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { health, error: engineError, loading: healthLoading } = useEngineHealth();
+  const hostedPlanning = isHostedPlanning(health);
   const {
     selectedProfileId,
     profiles,
@@ -602,7 +603,9 @@ export default function ExportPage() {
     </>
   );
 
-  const sendPanel = (
+  const sendPanel = hostedPlanning ? (
+    <p className="text-sm text-muted-foreground">{HOSTED_PLANNING_COMPOSE_NOTE}</p>
+  ) : (
     <Suspense fallback={<div className="h-32 animate-pulse rounded-lg bg-muted" />}>
       <div className="space-y-3">
         <PrinterSendPanel

@@ -1,5 +1,6 @@
 import { type MouseEvent, useEffect, useState } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
+import { isHostedPlanning } from "@print-partner/contracts";
 import CommandPalette from "../components/CommandPalette";
 import ErrorBoundary from "../components/ErrorBoundary";
 import JobTray from "../components/JobTray";
@@ -116,6 +117,7 @@ export default function AppLayout() {
       isPartsPath(location.pathname) ||
       isProgressPath(location.pathname) ||
       isExportPath(location.pathname));
+  const inviteBoard = isHostedPlanning(health);
   const activeStage = stages.find((stage) => stage.id === activeId) ?? null;
 
   return (
@@ -134,6 +136,7 @@ export default function AppLayout() {
             activeId={activeId}
             onStageNavigate={onPipelineNavigate}
             sourceUpdateCount={sourceUpdateCount}
+            inviteBoard={inviteBoard}
           />
 
           <div className="flex min-w-0 flex-1 flex-col">
@@ -144,6 +147,7 @@ export default function AppLayout() {
                 <MobileNavDrawer
                   onNavigate={onPipelineNavigate}
                   sourceUpdateCount={sourceUpdateCount}
+                  inviteBoard={inviteBoard}
                 />
                 {showPlanInHeader && activePlanName ? (
                   <div className="min-w-0">
@@ -194,7 +198,7 @@ export default function AppLayout() {
               className="fixed bottom-0 left-0 right-0 z-30 lg:hidden"
             />
 
-            {updateCheck && (
+            {updateCheck && !isHostedPlanning(health) && (
               <UpdateAvailableBanner
                 updateCheck={updateCheck}
                 dismissed={bannerDismissed}

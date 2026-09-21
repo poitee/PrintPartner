@@ -77,12 +77,16 @@ describe("loadConfig", () => {
       POSTGRES_EXPERIMENTAL: process.env.POSTGRES_EXPERIMENTAL,
       MULTI_USER: process.env.MULTI_USER,
       SAAS_ALLOW_ANONYMOUS: process.env.SAAS_ALLOW_ANONYMOUS,
+      SESSION_SECRET: process.env.SESSION_SECRET,
+      ALLOWED_ORIGINS: process.env.ALLOWED_ORIGINS,
     };
     process.env.NODE_ENV = "production";
     process.env.DEPLOY_MODE = "saas";
     process.env.DATABASE_URL = "postgresql://printpartner:printpartner@postgres/printpartner";
-    process.env.MULTI_USER = "0";
-    process.env.SAAS_ALLOW_ANONYMOUS = "1";
+    process.env.MULTI_USER = "1";
+    process.env.SESSION_SECRET = "production-session-secret";
+    process.env.ALLOWED_ORIGINS = "https://plan.example.com";
+    delete process.env.SAAS_ALLOW_ANONYMOUS;
     delete process.env.POSTGRES_EXPERIMENTAL;
 
     const blocked = loadConfig();
@@ -93,6 +97,42 @@ describe("loadConfig", () => {
     const optedIn = loadConfig();
     expect(optedIn.postgresExperimental).toBe(true);
     expect(() => validateProductionConfig(optedIn)).not.toThrow();
+
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+
+  it("fails closed for production hosted planning without a pinned origin or MULTI_USER", () => {
+    const previous = {
+      NODE_ENV: process.env.NODE_ENV,
+      DEPLOY_MODE: process.env.DEPLOY_MODE,
+      MULTI_USER: process.env.MULTI_USER,
+      SESSION_SECRET: process.env.SESSION_SECRET,
+      ALLOWED_ORIGINS: process.env.ALLOWED_ORIGINS,
+      CORS_ORIGIN: process.env.CORS_ORIGIN,
+      SAAS_ALLOW_ANONYMOUS: process.env.SAAS_ALLOW_ANONYMOUS,
+    };
+    process.env.NODE_ENV = "production";
+    process.env.DEPLOY_MODE = "saas";
+    process.env.MULTI_USER = "1";
+    process.env.SESSION_SECRET = "production-session-secret";
+    delete process.env.ALLOWED_ORIGINS;
+    delete process.env.CORS_ORIGIN;
+    delete process.env.SAAS_ALLOW_ANONYMOUS;
+
+    expect(() => validateProductionConfig(loadConfig())).toThrow(/ALLOWED_ORIGINS/);
+
+    process.env.ALLOWED_ORIGINS = "https://plan.example.com";
+    expect(() => validateProductionConfig(loadConfig())).not.toThrow();
+
+    process.env.SAAS_ALLOW_ANONYMOUS = "1";
+    expect(() => validateProductionConfig(loadConfig())).toThrow(/SAAS_ALLOW_ANONYMOUS/);
+    delete process.env.SAAS_ALLOW_ANONYMOUS;
+
+    process.env.MULTI_USER = "0";
+    expect(() => validateProductionConfig(loadConfig())).toThrow(/MULTI_USER/);
 
     for (const [key, value] of Object.entries(previous)) {
       if (value === undefined) delete process.env[key];
@@ -123,6 +163,16 @@ describe("loadConfig", () => {
         else process.env[key] = value;
       }
     }
+  });
+
+  it("reads REGISTRATION_OPEN=0 as closed", () => {
+    const previous = process.env.REGISTRATION_OPEN;
+    process.env.REGISTRATION_OPEN = "0";
+    expect(loadConfig().registrationOpen).toBe(false);
+    delete process.env.REGISTRATION_OPEN;
+    expect(loadConfig().registrationOpen).toBe(true);
+    if (previous === undefined) delete process.env.REGISTRATION_OPEN;
+    else process.env.REGISTRATION_OPEN = previous;
   });
 
   it("keeps AI disabled unless AI_ENABLED=1 with credentials", () => {

@@ -11,7 +11,7 @@ import {
   Workflow,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { externalApiAccessEnabled } from "@print-partner/contracts";
+import { externalApiAccessEnabled, HOSTED_PLANNING_COMPOSE_NOTE, isHostedPlanning } from "@print-partner/contracts";
 import { fetchHealth, fetchLegalDocument, fetchWorkflowGuide } from "../api/endpoints/help";
 import { fetchManifestRegistry, type ManifestRegistryEntry } from "../api/endpoints/planManifests";
 import { engineBaseUrl } from "../api/endpoints/runtime";
@@ -36,6 +36,7 @@ import {
   workflowStepPaths,
   type LegalTab,
 } from "../lib/helpPageModel";
+import { boardRoute } from "../lib/routes";
 import { resolveEngineState } from "../lib/workflowState";
 import { useExternalAccessSettingsQuery } from "../queries/externalAccess";
 
@@ -74,6 +75,7 @@ export default function HelpPage() {
     error: engineError,
   });
   const engineReady = engineState === "ready";
+  const hostedPlanning = isHostedPlanning(health);
   const externalAccessQuery = useExternalAccessSettingsQuery(engineReady);
   const showApiDetails = externalAccessQuery.data
     ? externalApiAccessEnabled(externalAccessQuery.data.mode)
@@ -165,6 +167,19 @@ export default function HelpPage() {
         actions={<SupportCta />}
       />
 
+      {hostedPlanning ? (
+        <div className="space-y-2 text-sm text-muted-foreground">
+          <p>{HOSTED_PLANNING_COMPOSE_NOTE}</p>
+          <p>
+            Sharing is the{" "}
+            <Link className="font-medium underline underline-offset-2" to={boardRoute()}>
+              Board
+            </Link>
+            . Invitees post a frozen references-only Build recipe and leave comments. Kit copies stay off this host.
+          </p>
+        </div>
+      ) : null}
+
       <Card>
         <CardHeader accent>
           <div className="flex items-start gap-3">
@@ -199,7 +214,9 @@ export default function HelpPage() {
                           <span>
                             <span className="block font-medium">{step.label}</span>
                             <span className="mt-1 block text-xs text-muted-foreground">
-                              {step.description}
+                              {hostedPlanning && step.id === "production"
+                                ? "Prepare plates and export files. Live send is Compose on the shop LAN."
+                                : step.description}
                             </span>
                           </span>
                         </Link>

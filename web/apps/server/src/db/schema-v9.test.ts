@@ -1807,8 +1807,8 @@ function pgAddedColumns(table: string): string[] {
 
 describe("database schema migrations (Postgres DDL parity)", () => {
   it("keeps SQLite and Postgres schema_version constants in lockstep", () => {
-    expect(sqliteSchema.currentSchemaVersion).toBe(33);
-    expect(pgSchema.currentSchemaVersion).toBe(33);
+    expect(sqliteSchema.currentSchemaVersion).toBe(34);
+    expect(pgSchema.currentSchemaVersion).toBe(34);
   });
 
   it("repairs PostgreSQL Source ownership in one transaction", async () => {

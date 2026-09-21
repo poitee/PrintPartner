@@ -9,6 +9,7 @@ import {
 
 export type SpineUtilityId =
   | "builds"
+  | "board"
   | "library"
   | "production"
   | "printers"
@@ -24,9 +25,13 @@ export type SpineUtilityNavItem = {
 
 export function spineUtilityNavItems(
   profileId?: number | null,
+  options: { inviteBoard?: boolean } = {},
 ): SpineUtilityNavItem[] {
   return [
     { id: "builds", to: buildsRoute(profileId), label: "Builds", path: "/builds" },
+    ...(options.inviteBoard
+      ? [{ id: "board" as const, to: "/board", label: "Board", path: "/board" }]
+      : []),
     {
       id: "library",
       to: libraryRoute(),

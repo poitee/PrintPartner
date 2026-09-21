@@ -6,6 +6,7 @@ import {
   Layers,
   Library,
   Menu,
+  Newspaper,
   Printer,
   Settings,
 } from "lucide-react";
@@ -32,6 +33,7 @@ import { useProfileSelection } from "../../context/ProfileContext";
 
 const UTILITY_ICONS: Record<SpineUtilityId, typeof Layers> = {
   builds: Layers,
+  board: Newspaper,
   library: Library,
   production: Factory,
   printers: Printer,
@@ -39,7 +41,7 @@ const UTILITY_ICONS: Record<SpineUtilityId, typeof Layers> = {
   help: BookOpen,
 };
 
-const WORKSHOP_IDS: SpineUtilityId[] = ["builds", "library", "production", "printers"];
+const WORKSHOP_IDS: SpineUtilityId[] = ["builds", "board", "library", "production", "printers"];
 
 const NAV_RAIL =
   "relative before:absolute before:inset-y-1.5 before:left-0 before:w-0.5 before:rounded-full before:content-['']";
@@ -50,6 +52,7 @@ const NAV_IDLE =
 type Props = {
   onNavigate: (to: string, e: MouseEvent<HTMLAnchorElement>) => void;
   sourceUpdateCount: number;
+  inviteBoard?: boolean;
 };
 
 function DrawerGroupLabel({ children }: { children: string }) {
@@ -61,10 +64,14 @@ function DrawerGroupLabel({ children }: { children: string }) {
 }
 
 /** Hamburger-triggered navigation drawer for viewports below lg (no SpineRail). */
-export default function MobileNavDrawer({ onNavigate, sourceUpdateCount }: Props) {
+export default function MobileNavDrawer({
+  onNavigate,
+  sourceUpdateCount,
+  inviteBoard = false,
+}: Props) {
   const [open, setOpen] = useState(false);
   const { selectedProfileId } = useProfileSelection();
-  const items = spineUtilityNavItems(selectedProfileId).map((item) => ({
+  const items = spineUtilityNavItems(selectedProfileId, { inviteBoard }).map((item) => ({
     ...item,
     icon: UTILITY_ICONS[item.id],
   }));
@@ -90,7 +97,7 @@ export default function MobileNavDrawer({ onNavigate, sourceUpdateCount }: Props
         )
       }
       aria-label={item.label}
-      end
+      end={item.id !== "board"}
     >
       <item.icon className="h-4 w-4 shrink-0" />
       <span className="min-w-0 flex-1">

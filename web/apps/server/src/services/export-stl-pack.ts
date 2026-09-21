@@ -18,7 +18,7 @@ import {
 } from "node:fs";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pipeline } from "node:stream/promises";
-import { Readable } from "node:stream";
+import { Readable, Transform, type TransformCallback } from "node:stream";
 import { ZipFile } from "yazl";
 import { acceptedPlateZipEpoch, folderKeyFromRelativePath } from "@print-partner/domain";
 import { filenameGroupFolderName, matchFilenameGroup, type FilenameExport } from "@print-partner/contracts";
@@ -32,6 +32,10 @@ import type {
   AcceptedExportPart,
   CaptureAcceptedOperationalExportResult,
 } from "./accepted-operational-export.js";
+import {
+  chargeTenantDiskBytes,
+  TenantDiskQuotaError,
+} from "../lib/tenant-disk-quota.js";
 
 const ROLE_ORDER = ["primary", "accent", "clear", "opaque"] as const;
 
@@ -152,6 +156,17 @@ function errorCode(error: unknown): string | undefined {
   return typeof error.code === "string" ? error.code : undefined;
 }
 
+function tenantDiskQuotaError(error: unknown): TenantDiskQuotaError | null {
+  let current = error;
+  const seen = new Set<unknown>();
+  while (current instanceof Error && !seen.has(current)) {
+    if (current instanceof TenantDiskQuotaError) return current;
+    seen.add(current);
+    current = current.cause;
+  }
+  return null;
+}
+
 function ensureDirectoryPath(root: string, segments: readonly string[]): string | null {
   let current = root;
   for (const segment of segments) {
@@ -195,6 +210,7 @@ async function writeVerifiedStream(
   createStream: () => ReturnType<typeof createReadStream>,
   expected: Readonly<{ size: number; sha256: string }>,
 ): Promise<boolean> {
+  chargeTenantDiskBytes(expected.size);
   const descriptor = openSync(
     path,
     constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
@@ -205,6 +221,7 @@ async function writeVerifiedStream(
   try {
     const hash = createHash("sha256");
     for await (const chunk of createStream()) {
+      if (chunk.byteLength > expected.size - position) return false;
       hash.update(chunk);
       position = writeChunk(descriptor, chunk, position);
     }
@@ -271,7 +288,32 @@ async function writeZip(
     autoClose: true,
     flush: true,
   });
-  const completion = pipeline(zipStream, output);
+  const quota = new Transform({
+    transform(
+      chunk: unknown,
+      encoding: BufferEncoding,
+      callback: TransformCallback,
+    ): void {
+      try {
+        const bytes = Buffer.isBuffer(chunk)
+          ? chunk
+          : chunk instanceof Uint8Array
+            ? Buffer.from(chunk)
+            : typeof chunk === "string"
+              ? Buffer.from(chunk, encoding)
+              : null;
+        if (!bytes) {
+          callback(new TypeError("ZIP writer emitted a non-byte chunk"));
+          return;
+        }
+        chargeTenantDiskBytes(bytes.byteLength);
+        callback(null, bytes);
+      } catch (error) {
+        callback(error instanceof Error ? error : new Error("ZIP quota charge failed"));
+      }
+    },
+  });
+  const completion = pipeline(zipStream, quota, output);
   try {
     for (const file of files) {
       archive.addReadStreamLazy(file.relativePath, {
@@ -609,7 +651,9 @@ export async function materializeAcceptedStlBundle(input: Readonly<{
       fileCounts,
       warnings,
     };
-  } catch {
+  } catch (error) {
+    const quotaError = tenantDiskQuotaError(error);
+    if (quotaError) throw quotaError;
     return { kind: "output_failure" };
   } finally {
     if (stage) rmSync(stage, { recursive: true, force: true });

@@ -3,11 +3,13 @@ import { createHash } from "node:crypto";
 import {
   existsSync,
   fstatSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -30,6 +32,7 @@ vi.mock("node:fs", async (importOriginal) => {
   return {
     ...actual,
     fstatSync: vi.fn(actual.fstatSync),
+    lstatSync: vi.fn(actual.lstatSync),
     readSync: vi.fn(actual.readSync),
   };
 });
@@ -155,7 +158,7 @@ describe("accepted media PNG cache", () => {
     const source = readFileSync(new URL("./accepted-media-cache.ts", import.meta.url), "utf8");
 
     expect(source.match(/lstatSync\(resolve\(input\.thumbsDir\)\)/g)).toHaveLength(2);
-    expect(source.match(/opened\.dev !== beforeOpen\.dev/g)).toHaveLength(1);
+    expect(source).not.toContain("opened.dev !== beforeOpen.dev");
   });
 
   it("observes a valid signature without reading the PNG body", () => {
@@ -185,7 +188,7 @@ describe("accepted media PNG cache", () => {
     expect(read).toHaveBeenCalledTimes(1);
   });
 
-  it("bounds observation retries when descriptor identity keeps racing", () => {
+  it("observes a stable descriptor opened after target replacement", () => {
     const thumbsDir = cacheFixture();
     mkdirSync(thumbsDir);
     writeFileSync(acceptedMediaCachePath({ thumbsDir, basis }), png);
@@ -194,13 +197,12 @@ describe("accepted media PNG cache", () => {
     const otherStats = statSync(otherPath);
     const descriptorStats = vi.mocked(fstatSync);
     descriptorStats.mockClear();
-    for (let attempt = 0; attempt < 8; attempt += 1) {
-      descriptorStats.mockImplementationOnce(() => otherStats);
-    }
+    descriptorStats.mockImplementationOnce(() => otherStats);
+    descriptorStats.mockImplementationOnce(() => otherStats);
 
-    expect(observeAcceptedMediaPng({ thumbsDir, basis })).toEqual({ kind: "missing" });
+    expect(observeAcceptedMediaPng({ thumbsDir, basis })).toEqual({ kind: "present" });
 
-    expect(descriptorStats).toHaveBeenCalledTimes(8);
+    expect(descriptorStats).toHaveBeenCalledTimes(2);
   });
 
   it("writes and reads a mode-0600 PNG without leaving temporary files", () => {
@@ -288,7 +290,7 @@ describe("accepted media PNG cache", () => {
     expect(read).toHaveBeenCalledTimes(1);
   });
 
-  it("bounds retries when the opened descriptor identity keeps racing", () => {
+  it("reads a stable descriptor opened after target replacement", () => {
     const thumbsDir = cacheFixture();
     mkdirSync(thumbsDir);
     writeFileSync(acceptedMediaCachePath({ thumbsDir, basis }), png);
@@ -297,13 +299,34 @@ describe("accepted media PNG cache", () => {
     const otherStats = statSync(otherPath);
     const descriptorStats = vi.mocked(fstatSync);
     descriptorStats.mockClear();
-    for (let attempt = 0; attempt < 8; attempt += 1) {
-      descriptorStats.mockImplementationOnce(() => otherStats);
-    }
+    descriptorStats.mockImplementationOnce(() => otherStats);
+    descriptorStats.mockImplementationOnce(() => otherStats);
 
-    expect(readAcceptedMediaPng({ thumbsDir, basis })).toBeNull();
+    expect(readAcceptedMediaPng({ thumbsDir, basis })).toEqual(png);
 
-    expect(descriptorStats).toHaveBeenCalledTimes(8);
+    expect(descriptorStats).toHaveBeenCalledTimes(2);
+  });
+
+  it("reads the complete replacement when publication swaps the target between stat and open", () => {
+    const thumbsDir = cacheFixture();
+    mkdirSync(thumbsDir);
+    const target = acceptedMediaCachePath({ thumbsDir, basis });
+    const nextPng = Buffer.concat([png.subarray(0, 8), Buffer.from("replacement after stale stat")]);
+    const replacement = join(thumbsDir, "replacement.png");
+    writeFileSync(target, png);
+    writeFileSync(replacement, nextPng);
+    const rootStats = statSync(thumbsDir);
+    const staleTargetStats = statSync(target);
+    const pathStats = vi.mocked(lstatSync);
+    pathStats.mockClear();
+    pathStats.mockImplementationOnce(() => rootStats);
+    pathStats.mockImplementationOnce(() => {
+      renameSync(replacement, target);
+      return staleTargetStats;
+    });
+
+    expect(readAcceptedMediaPng({ thumbsDir, basis })).toEqual(nextPng);
+    expect(existsSync(replacement)).toBe(false);
   });
 
   it("exposes only complete old or new bytes while another process publishes", async () => {

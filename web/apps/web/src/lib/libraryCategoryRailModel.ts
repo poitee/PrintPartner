@@ -3,6 +3,7 @@ import {
   categoryParentPath,
   flattenSourceCategoryTree,
   isCategoryPathWithin,
+  isHostedLibrarySourceKind,
   type SourceCategoryNode,
 } from "@print-partner/contracts";
 import { moveItemById } from "./reorderList";
@@ -41,6 +42,18 @@ export const LIBRARY_ADD_ACTIONS: readonly {
   { id: "plan-bundle", kind: "plan_bundle", label: "Plan bundle" },
   { id: "self", kind: "self", label: "Another instance" },
 ];
+
+export function libraryAddActionsForHost(
+  hostedPlanning: boolean,
+): readonly (typeof LIBRARY_ADD_ACTIONS)[number][] {
+  if (!hostedPlanning) return LIBRARY_ADD_ACTIONS;
+  return LIBRARY_ADD_ACTIONS.filter(
+    (action) =>
+      action.kind === "plan_bundle" ||
+      action.kind === "repos_txt" ||
+      isHostedLibrarySourceKind(action.kind),
+  );
+}
 
 /**
  * Rail rows for the category tree, skipping anything inside a collapsed parent.

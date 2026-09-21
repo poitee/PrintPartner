@@ -1,11 +1,12 @@
 import { basename, dirname, join } from "node:path";
+import { rm } from "node:fs/promises";
 import type { FastifyInstance } from "fastify";
 import {
   buildStlTreePayload,
   DEFAULT_STL_SEARCH_LIMIT,
   searchSourceStls,
 } from "@print-partner/domain";
-import { normalizeCategoryPath } from "@print-partner/contracts";
+import { HOSTED_TENANT_DISK_QUOTA_BYTES, isHostedLibrarySourceKind, normalizeCategoryPath } from "@print-partner/contracts";
 import type { JobSnapshot } from "@print-partner/contracts";
 import type { AppRepository } from "../db/repository.js";
 import {
@@ -42,8 +43,40 @@ import { PDF_BG_EXTRACT_BYTES } from "../services/pdf-text-extract.js";
 import { sourcePdfTextStorage } from "../services/source-workspace.js";
 import { publishLocalSourceWorkingTree } from "../services/local-source-revision.js";
 import { scanSourceArtifacts } from "../services/source-artifacts.js";
+import { sendIfTenantDiskQuotaExceeded, runWithTenantDiskQuota, TenantDiskQuotaError } from "../lib/tenant-disk-quota.js";
 
 const GITHUB_PAT_KEY = "github_pat";
+const HOSTED_SOURCE_KIND_DETAIL =
+  "The hosted planning site accepts GitHub and zip sources only.";
+
+function hostedLibraryKindAllowed(kind: string): boolean {
+  const normalized = kind === "git" ? "github" : kind;
+  return isHostedLibrarySourceKind(normalized);
+}
+
+function hostedSourceKindBlocked(
+  hostedPlanning: boolean,
+  kind: string | null | undefined,
+): boolean {
+  return hostedPlanning && !hostedLibraryKindAllowed((kind ?? "github").toLowerCase());
+}
+
+async function refuseIfHostedQuotaExceeded(
+  reply: import("fastify").FastifyReply,
+  deps: RouteDeps,
+  tenantId: string,
+  additionalBytes = 0,
+): Promise<boolean> {
+  const quota = deps.hostedPlanning ? HOSTED_TENANT_DISK_QUOTA_BYTES : null;
+  return sendIfTenantDiskQuotaExceeded(reply, {
+    dataDir: deps.dataDir,
+    reposDir: deps.reposDir,
+    tenantId,
+    sourceIds: deps.repo.listSources().map((source) => source.id),
+    additionalBytes,
+    quotaBytes: quota,
+  });
+}
 
 const MESH_MAX_BYTES = 15 * 1024 * 1024;
 const DEFAULT_SOURCE_DOCS_MAX_BYTES = 1024 * 1024 * 1024;
@@ -54,6 +87,8 @@ type RouteDeps = {
   sourcesDir: string;
   thumbsDir: string;
   coversDir: string;
+  dataDir: string;
+  hostedPlanning: boolean;
   jobs?: import("./jobs.js").InProcessJobRunner;
 };
 
@@ -143,6 +178,9 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
       const body = request.body as Record<string, unknown>;
       const sourceKind = body.source_kind != null ? String(body.source_kind) : undefined;
       const kind = (sourceKind ?? "github").toLowerCase();
+      if (deps.hostedPlanning && !hostedLibraryKindAllowed(kind)) {
+        return reply.status(400).send({ detail: HOSTED_SOURCE_KIND_DETAIL });
+      }
       if (
         sourceKind === "printables" ||
         sourceKind === "makerworld" ||
@@ -161,6 +199,9 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
         requestedUrl && (kind === "github" || kind === "git")
           ? normalizeGithubSourceLocation(requestedUrl, requestedBranch)
           : null;
+      if (kind === "github" || kind === "git") {
+        if (await refuseIfHostedQuotaExceeded(reply, deps, request.tenantId)) return;
+      }
       const newSource = deps.repo.createSource({
         name: String(body.name ?? ""),
         url: githubLocation?.url ?? requestedUrl,
@@ -197,6 +238,9 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
       const requestedKind = body.source_kind != null ? String(body.source_kind) : undefined;
       const existing = deps.repo.getSource(id);
       const effectiveKind = (requestedKind ?? existing?.source_kind ?? "github").toLowerCase();
+      if (deps.hostedPlanning && requestedKind && !hostedLibraryKindAllowed(requestedKind.toLowerCase())) {
+        return reply.status(400).send({ detail: HOSTED_SOURCE_KIND_DETAIL });
+      }
       const githubLocation =
         requestedUrl && (effectiveKind === "github" || effectiveKind === "git")
           ? normalizeGithubSourceLocation(requestedUrl, requestedBranch ?? existing?.branch)
@@ -223,16 +267,26 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
 
   app.delete("/sources/:id", async (request, reply) => {
     const id = Number((request.params as { id: string }).id);
-    const result = deps.repo.deleteSource(id);
-    if (result.kind === "not_found") {
-      return reply.status(404).send({ detail: "Source not found" });
-    }
-    if (result.kind === "retained_history") {
-      return reply.status(409).send({
-        detail: "Source has immutable revision history and cannot be deleted",
-      });
-    }
-    return reply.status(204).send();
+    return runWithTenantDiskQuota({
+      dataDir: deps.dataDir, reposDir: deps.reposDir, tenantId: request.tenantId,
+      quotaBytes: deps.hostedPlanning ? HOSTED_TENANT_DISK_QUOTA_BYTES : null,
+      sourceIds: () => deps.repo.listSources().map((source) => source.id),
+    }, async () => {
+      const result = deps.repo.deleteSource(id);
+      if (result.kind === "not_found") {
+        return reply.status(404).send({ detail: "Source not found" });
+      }
+      if (result.kind === "retained_history") {
+        return reply.status(409).send({
+          detail: "Source has immutable revision history and cannot be deleted",
+        });
+      }
+      if (deps.hostedPlanning) {
+        await rm(join(deps.sourcesDir, String(id)), { recursive: true, force: true });
+        await rm(join(deps.reposDir, String(id)), { recursive: true, force: true });
+      }
+      return reply.status(204).send();
+    });
   });
 
   // Bulk category assignment — apply one category (or Uncategorised) to many
@@ -317,6 +371,9 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
     const id = Number((request.params as { id: string }).id);
     const row = deps.repo.getProjectRow(id);
     if (!row) return reply.status(404).send({ detail: "Source not found" });
+    if (hostedSourceKindBlocked(deps.hostedPlanning, row.sourceKind)) {
+      return reply.status(400).send({ detail: HOSTED_SOURCE_KIND_DETAIL });
+    }
     const data = await request.file({
       limits: {
         fileSize: MAX_SOURCE_UPLOAD_BYTES,
@@ -334,47 +391,61 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
       return reply.status(413).send({ detail: SOURCE_UPLOAD_TOO_LARGE_DETAIL });
     }
     const buffer = Buffer.concat(chunks);
-    let extractDir: string;
-    try {
-      extractDir = writeUploadedZip(buffer, deps.sourcesDir, id);
-    } catch (e) {
-      return reply.status(400).send({ detail: e instanceof Error ? e.message : String(e) });
+    if (await refuseIfHostedQuotaExceeded(reply, deps, request.tenantId, buffer.length)) {
+      return;
     }
-    const { suggestedImportRules, stlCount } = finalizeUploadedSource(extractDir);
-    const existingRules = deps.repo.getProjectRow(id)?.importedPaths;
-    const hasRules =
-      existingRules != null &&
-      existingRules.trim() !== "" &&
-      existingRules.trim() !== "[]";
-    if (!hasRules && suggestedImportRules.length > 0) {
-      deps.repo.updateImportRules(id, suggestedImportRules);
-    }
-    let updated;
     try {
-      updated = await publishLocalSourceWorkingTree({
-        repo: deps.repo,
-        reposDir: deps.reposDir,
-        sourceId: id,
-        workingTree: extractDir,
+      return await runWithTenantDiskQuota({
+        dataDir: deps.dataDir, reposDir: deps.reposDir, tenantId: request.tenantId,
+        quotaBytes: deps.hostedPlanning ? HOSTED_TENANT_DISK_QUOTA_BYTES : null,
+        sourceIds: () => deps.repo.listSources().map((source) => source.id),
+      }, async () => {
+        if (!deps.repo.getProjectRow(id)) return reply.status(404).send({ detail: "Source not found" });
+        try {
+          const extractDir = writeUploadedZip(buffer, deps.sourcesDir, id);
+          const { suggestedImportRules, stlCount } = finalizeUploadedSource(extractDir);
+          const existingRules = deps.repo.getProjectRow(id)?.importedPaths;
+          const hasRules =
+            existingRules != null &&
+            existingRules.trim() !== "" &&
+            existingRules.trim() !== "[]";
+          if (!hasRules && suggestedImportRules.length > 0) {
+            deps.repo.updateImportRules(id, suggestedImportRules);
+          }
+          const updated = await publishLocalSourceWorkingTree({
+            repo: deps.repo,
+            reposDir: deps.reposDir,
+            sourceId: id,
+            workingTree: extractDir,
+          });
+          indexSourceDocsFromDisk(deps.repo, id, updated.local_path ?? extractDir);
+          void prefetchSourceCover(deps, id);
+          return {
+            ...deps.repo.sourceSummaryForClient(updated),
+            imported_files: buffer.length,
+            stl_count: stlCount,
+            artifacts: scanSourceArtifacts(updated.local_path ?? extractDir),
+            suggested_import_rules: suggestedImportRules,
+          };
+        } finally {
+          if (deps.hostedPlanning) {
+            await rm(join(deps.sourcesDir, String(id)), { recursive: true, force: true });
+          }
+        }
       });
-    } catch (e) {
-      return reply.status(400).send({ detail: e instanceof Error ? e.message : String(e) });
+    } catch (error) {
+      return reply.status(error instanceof TenantDiskQuotaError ? 413 : 400)
+        .send({ detail: error instanceof Error ? error.message : String(error) });
     }
-    indexSourceDocsFromDisk(deps.repo, id, updated.local_path ?? extractDir);
-    void prefetchSourceCover(deps, id);
-    return {
-      ...deps.repo.sourceSummaryForClient(updated),
-      imported_files: buffer.length,
-      stl_count: stlCount,
-      artifacts: scanSourceArtifacts(updated.local_path ?? extractDir),
-      suggested_import_rules: suggestedImportRules,
-    };
   });
 
   app.post("/sources/:id/upload-files", async (request, reply) => {
     const id = Number((request.params as { id: string }).id);
     const row = deps.repo.getProjectRow(id);
     if (!row) return reply.status(404).send({ detail: "Source not found" });
+    if (hostedSourceKindBlocked(deps.hostedPlanning, row.sourceKind)) {
+      return reply.status(400).send({ detail: HOSTED_SOURCE_KIND_DETAIL });
+    }
 
     const uploads: Array<{ relativePath: string; buffer: Buffer }> = [];
     let relativePaths: string[] = [];
@@ -436,43 +507,54 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
     if (!uploads.length) {
       return reply.status(400).send({ detail: "At least one file is required" });
     }
-
-    let result;
-    try {
-      result = writeUploadedFiles(uploads, deps.sourcesDir, id);
-    } catch (e) {
-      return reply.status(400).send({ detail: e instanceof Error ? e.message : String(e) });
+    if (await refuseIfHostedQuotaExceeded(reply, deps, request.tenantId, uploadedBytes)) {
+      return;
     }
 
-    const existingRules = deps.repo.getProjectRow(id)?.importedPaths;
-    const hasRules =
-      existingRules != null &&
-      existingRules.trim() !== "" &&
-      existingRules.trim() !== "[]";
-    if (!hasRules && result.suggestedImportRules.length > 0) {
-      deps.repo.updateImportRules(id, result.suggestedImportRules);
-    }
-
-    let updated;
     try {
-      updated = await publishLocalSourceWorkingTree({
-        repo: deps.repo,
-        reposDir: deps.reposDir,
-        sourceId: id,
-        workingTree: result.extractDir,
+      return await runWithTenantDiskQuota({
+        dataDir: deps.dataDir, reposDir: deps.reposDir, tenantId: request.tenantId,
+        quotaBytes: deps.hostedPlanning ? HOSTED_TENANT_DISK_QUOTA_BYTES : null,
+        sourceIds: () => deps.repo.listSources().map((source) => source.id),
+      }, async () => {
+        if (!deps.repo.getProjectRow(id)) return reply.status(404).send({ detail: "Source not found" });
+        try {
+          const result = writeUploadedFiles(uploads, deps.sourcesDir, id);
+
+          const existingRules = deps.repo.getProjectRow(id)?.importedPaths;
+          const hasRules =
+            existingRules != null &&
+            existingRules.trim() !== "" &&
+            existingRules.trim() !== "[]";
+          if (!hasRules && result.suggestedImportRules.length > 0) {
+            deps.repo.updateImportRules(id, result.suggestedImportRules);
+          }
+
+          const updated = await publishLocalSourceWorkingTree({
+            repo: deps.repo,
+            reposDir: deps.reposDir,
+            sourceId: id,
+            workingTree: result.extractDir,
+          });
+          indexSourceDocsFromDisk(deps.repo, id, updated.local_path ?? result.extractDir);
+          void prefetchSourceCover(deps, id);
+          return {
+            ...deps.repo.sourceSummaryForClient(updated),
+            imported_files: result.fileCount,
+            stl_count: result.stlCount,
+            artifacts: scanSourceArtifacts(updated.local_path ?? result.extractDir),
+            suggested_import_rules: result.suggestedImportRules,
+          };
+        } finally {
+          if (deps.hostedPlanning) {
+            await rm(join(deps.sourcesDir, String(id)), { recursive: true, force: true });
+          }
+        }
       });
-    } catch (e) {
-      return reply.status(400).send({ detail: e instanceof Error ? e.message : String(e) });
+    } catch (error) {
+      return reply.status(error instanceof TenantDiskQuotaError ? 413 : 400)
+        .send({ detail: error instanceof Error ? error.message : String(error) });
     }
-    indexSourceDocsFromDisk(deps.repo, id, updated.local_path ?? result.extractDir);
-    void prefetchSourceCover(deps, id);
-    return {
-      ...deps.repo.sourceSummaryForClient(updated),
-      imported_files: result.fileCount,
-      stl_count: result.stlCount,
-      artifacts: scanSourceArtifacts(updated.local_path ?? result.extractDir),
-      suggested_import_rules: result.suggestedImportRules,
-    };
   });
 
   app.get("/sources/:id/has-manifest", async () => ({
@@ -704,6 +786,7 @@ export async function syncProjectById(
           });
         }
       } catch (error) {
+        if (error instanceof TenantDiskQuotaError) throw error;
         postprocess_warning = error instanceof Error ? error.message : String(error);
       }
 

@@ -8,7 +8,17 @@ import { useAuth } from "../context/AuthContext";
 import { authOAuthUrl } from "../api/endpoints/auth";
 
 export default function LoginPage() {
-  const { user, multiUser, authRequired, registrationOpen, loading, loginEmail, registerEmail } = useAuth();
+  const {
+    user,
+    multiUser,
+    authRequired,
+    registrationOpen,
+    githubOAuth,
+    discordOAuth,
+    loading,
+    loginEmail,
+    registerEmail,
+  } = useAuth();
   const location = useLocation();
   const isFirstRunSetup = !multiUser && registrationOpen;
   const [mode, setMode] = useState<"login" | "register">(() =>
@@ -91,17 +101,21 @@ export default function LoginPage() {
         aria-label={mode === "login" ? "Email sign in" : "Email registration"}
         onSubmit={onSubmit}
       >
-        {!isFirstRunSetup && (
+        {!isFirstRunSetup && (githubOAuth || discordOAuth) && (
           <div className="flex flex-col gap-2">
-            <Button variant="secondary" asChild>
-              <a href={authOAuthUrl("github")}>Continue with GitHub</a>
-            </Button>
-            <Button variant="secondary" asChild>
-              <a href={authOAuthUrl("discord")}>Continue with Discord</a>
-            </Button>
+            {githubOAuth ? (
+              <Button variant="secondary" asChild>
+                <a href={authOAuthUrl("github")}>Continue with GitHub</a>
+              </Button>
+            ) : null}
+            {discordOAuth ? (
+              <Button variant="secondary" asChild>
+                <a href={authOAuthUrl("discord")}>Continue with Discord</a>
+              </Button>
+            ) : null}
           </div>
         )}
-        {!isFirstRunSetup && (
+        {!isFirstRunSetup && (githubOAuth || discordOAuth) && (
           <div className="relative text-center text-xs text-muted-foreground">
             <span className="bg-card px-2">or email</span>
             <div className="absolute inset-x-0 top-1/2 -z-10 border-t border-border" />

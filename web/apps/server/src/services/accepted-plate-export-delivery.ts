@@ -22,6 +22,7 @@ import {
   type AcceptedPlate3mfLimits,
 } from "./accepted-plate-3mf.js";
 import { MAX_ACCEPTED_PLATES } from "@print-partner/domain";
+import { chargeTenantDiskBytes } from "../lib/tenant-disk-quota.js";
 
 export const ACCEPTED_PLATE_EXPORT_LIMITS: AcceptedPlate3mfLimits = {
   maxTotalSourceBytes: 256 * 1024 * 1024,
@@ -256,6 +257,14 @@ async function publishTree(
   if (await exists(finalDirectory)) {
     return publishedTreeMatches(allowedRoot, finalDirectory, expectedFiles);
   }
+  let stagedBytes = 0;
+  for (const file of expectedFiles) {
+    stagedBytes += file.byteLength;
+    if (!Number.isSafeInteger(stagedBytes)) {
+      throw new Error("Accepted Plate export exceeds the supported numeric range");
+    }
+  }
+  chargeTenantDiskBytes(stagedBytes);
   const parent = dirname(finalDirectory);
   const tempDirectory = await mkdtemp(join(parent, `.${finalDirectory.split(sep).at(-1) ?? "publication"}.tmp-`));
   let published = false;

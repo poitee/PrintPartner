@@ -75,6 +75,7 @@ jobs:
         run: |
           docker compose config
           docker compose -f docker-compose.saas.yml config
+          SESSION_SECRET=ci ALLOWED_ORIGINS=https://plan.example.com docker compose -f docker-compose.hosted.yml config
           docker compose -f docker-compose.yml -f pp-compose.yml config
       - name: Build production image
         run: docker build --tag print-partner:ci .

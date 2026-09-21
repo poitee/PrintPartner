@@ -67,6 +67,14 @@ vi.mock("../../api/endpoints/slicers", () => ({
   fetchSlicerProfileOptions: api.fetchSlicerProfileOptions,
 }));
 
+const healthState = vi.hoisted(() => ({
+  health: { ok: true, capabilities: [] as string[] },
+}));
+
+vi.mock("../../hooks/useEngineHealth", () => ({
+  useEngineHealth: () => ({ health: healthState.health, error: null, loading: false }),
+}));
+
 function renderWithQueryClient(children: ReactNode) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -80,6 +88,7 @@ afterEach(cleanup);
 
 beforeEach(() => {
   vi.clearAllMocks();
+  healthState.health = { ok: true, capabilities: [] };
   api.fetchPrinterPresets.mockResolvedValue([
     {
       id: "preset-voron-250",
@@ -408,5 +417,16 @@ describe("PrintersSettingsCard", () => {
       });
     });
     expect(await screen.findByText("Main Shop Voron")).toBeTruthy();
+  });
+
+  it("hides printer connection controls on the hosted planning host", async () => {
+    healthState.health = { ok: true, capabilities: ["hosted_planning"] };
+    api.fetchPrinters.mockResolvedValue([]);
+    api.fetchIntegrations.mockResolvedValue([]);
+    renderWithQueryClient(<PrintersSettingsCard engineReady />);
+    await screen.findByLabelText("Name");
+    expect(screen.queryByRole("checkbox", { name: "Connect to this printer" })).toBeNull();
+    expect(screen.queryByText("Printer status refresh")).toBeNull();
+    expect(screen.getAllByText(/Live status and send run on a Compose install/).length).toBeGreaterThan(0);
   });
 });

@@ -7,6 +7,7 @@ Use this index to find the guide for your task. The in-app Help page covers the 
 | Guide | Use it when |
 |-------|-------------|
 | [Install](INSTALL.md) | You are setting up the Docker container or opening Print Partner on a LAN. |
+| [Invite-beta hosted planning](../web/DEPLOY.md#invite-beta-hosted-planning) | You are standing up the private planning host. |
 | [Operations](../OPERATIONS.md) | You need backups, recovery, API keys, metrics, logs, or update steps. |
 | [MCP setup](assistant-mcp.md) | You want to connect Cursor, Claude, or another MCP client. |
 | [Deployment reference](../web/DEPLOY.md) | You need environment variables, authentication, OAuth, S3, or SaaS settings. |

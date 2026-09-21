@@ -16,6 +16,7 @@ import {
 } from "./accepted-artifact-geometry.js";
 import { parseRequiredUnitToken, type RequiredUnitToken } from "./required-units.js";
 import type { AcceptedOperationalArtifact } from "../db/accepted-plan-operational.js";
+import { TenantDiskQuotaError } from "../lib/tenant-disk-quota.js";
 
 export const DIRECT_EXPORT_3MF_LIMITS = {
   maxTotalSourceBytes: 256 * 1024 * 1024,
@@ -214,7 +215,8 @@ export async function materializeDirectExport3mf(
       absolutePath,
       tokens: selected.map((unit) => unit.token),
     };
-  } catch {
+  } catch (error) {
+    if (error instanceof TenantDiskQuotaError) throw error;
     return { kind: "output_failure" };
   }
 }

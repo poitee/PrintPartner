@@ -15,6 +15,10 @@ import * as fsPromises from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getDb, SqliteDatabase } from "../db/client.js";
 import { AppRepository } from "../db/repository.js";
+import {
+  runWithTenantDiskQuota,
+  TenantDiskQuotaError,
+} from "../lib/tenant-disk-quota.js";
 import { SOURCE_SNAPSHOT_MANIFEST_FILE } from "./local-source-snapshot.js";
 import {
   publishLocalSourceWorkingTree,
@@ -98,6 +102,35 @@ describe("publishLocalSourceWorkingTree", () => {
       }),
     ).rejects.toThrow("Local Source contains 1 STL files, exceeding the limit of 0");
     expect(readFileSync(blockedReposDir, "utf8")).toBe("staging must not begin");
+    sqlite.close();
+  });
+
+  it("blocks quota exhaustion before source revision activation", async () => {
+    const { dir, sqlite, repo, source, workingTree } = fixture();
+    const quotaBytes = Buffer.byteLength("solid cube\nendsolid cube\n") - 1;
+
+    await expect(
+      runWithTenantDiskQuota(
+        {
+          dataDir: dir,
+          reposDir: sqlite.reposDir,
+          tenantId: "tenant-a",
+          quotaBytes,
+          sourceIds: () => [source.id],
+        },
+        () =>
+          publishLocalSourceWorkingTree({
+            repo,
+            reposDir: sqlite.reposDir,
+            sourceId: source.id,
+            workingTree,
+          }),
+      ),
+    ).rejects.toBeInstanceOf(TenantDiskQuotaError);
+
+    expect(repo.listSourceRevisions(source.id)).toEqual([]);
+    expect(repo.getSource(source.id)?.current_source_revision_id).toBeNull();
+    expect(existsSync(join(sqlite.reposDir, String(source.id), "revisions"))).toBe(false);
     sqlite.close();
   });
 

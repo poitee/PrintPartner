@@ -2,6 +2,8 @@
 
 This guide covers the supported self-host Docker deployment. See [Install](docs/INSTALL.md) for first-time setup and [Deployment reference](web/DEPLOY.md) for all environment variables.
 
+The private invite host uses `docker-compose.hosted.yml`. HTTP `/backups` is off there. Back up the `print-partner-hosted-data` volume instead. See [Invite-beta hosted planning](web/DEPLOY.md#invite-beta-hosted-planning).
+
 ## Check the service
 
 ```bash

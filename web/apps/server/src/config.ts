@@ -48,6 +48,8 @@ export type ServerConfig = {
   discordOAuthConfigured: boolean;
   saasBasicAuth: string | null;
   saasAllowAnonymous: boolean;
+  /** When false, POST /auth/register and new OAuth identities are refused. */
+  registrationOpen: boolean;
   authRequired: boolean;
   sessionSecret: string | null;
   sessionCookieSecure: boolean;
@@ -179,6 +181,17 @@ export function validateProductionConfig(config: ServerConfig): void {
     throw new Error(
       "Postgres support is experimental; set POSTGRES_EXPERIMENTAL=1 to acknowledge the sync-bridge limitations",
     );
+  }
+  if (config.deployMode === "saas") {
+    if (config.saasAllowAnonymous) {
+      throw new Error("SAAS_ALLOW_ANONYMOUS is not allowed in production hosted planning");
+    }
+    if (config.corsOrigin === true) {
+      throw new Error("ALLOWED_ORIGINS must be a public origin in production hosted planning");
+    }
+    if (!config.multiUser) {
+      throw new Error("MULTI_USER=1 is required in production hosted planning");
+    }
   }
 }
 
@@ -320,6 +333,7 @@ export function loadConfig(): ServerConfig {
     discordOAuthConfigured: Boolean(discordClientId && discordClientSecret && discordCallbackUrl),
     saasBasicAuth,
     saasAllowAnonymous,
+    registrationOpen: process.env.REGISTRATION_OPEN !== "0",
     authRequired,
     sessionSecret: process.env.SESSION_SECRET?.trim() || null,
     sessionCookieSecure:

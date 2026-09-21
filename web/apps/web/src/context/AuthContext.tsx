@@ -17,12 +17,18 @@ import {
   type AuthUser,
 } from "../api/endpoints/auth";
 import { fetchHealth } from "../api/endpoints/help";
+import {
+  DISCORD_OAUTH_CAPABILITY,
+  GITHUB_OAUTH_CAPABILITY,
+} from "@print-partner/contracts";
 
 type AuthContextValue = {
   user: AuthUser | null;
   multiUser: boolean;
   authRequired: boolean;
   registrationOpen: boolean;
+  githubOAuth: boolean;
+  discordOAuth: boolean;
   loading: boolean;
   loginEmail: (email: string, password: string) => Promise<void>;
   registerEmail: (email: string, password: string, displayName: string) => Promise<void>;
@@ -38,6 +44,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [multiUser, setMultiUser] = useState(false);
   const [authRequired, setAuthRequired] = useState(false);
   const [registrationOpen, setRegistrationOpen] = useState(false);
+  const [githubOAuth, setGithubOAuth] = useState(false);
+  const [discordOAuth, setDiscordOAuth] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const replaceUser = useCallback((nextUser: AuthUser | null) => {
@@ -54,6 +62,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       );
       setAuthRequired(requiresAuthentication);
       setRegistrationOpen(Boolean(health.registration_open ?? health.multi_user));
+      setGithubOAuth(health.capabilities?.includes(GITHUB_OAUTH_CAPABILITY) === true);
+      setDiscordOAuth(health.capabilities?.includes(DISCORD_OAUTH_CAPABILITY) === true);
       if (!requiresAuthentication) {
         replaceUser(null);
         return;
@@ -110,13 +120,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       multiUser,
       authRequired,
       registrationOpen,
+      githubOAuth,
+      discordOAuth,
       loading,
       loginEmail,
       registerEmail,
       logout,
       refresh,
     }),
-    [user, multiUser, authRequired, registrationOpen, loading, loginEmail, registerEmail, logout, refresh],
+    [user, multiUser, authRequired, registrationOpen, githubOAuth, discordOAuth, loading, loginEmail, registerEmail, logout, refresh],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

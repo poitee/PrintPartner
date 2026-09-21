@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { ChevronDown, FolderGit2, Library, Search } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { SourceSummary } from "@print-partner/contracts";
+import { HOSTED_LIBRARY_SOURCE_KINDS, isHostedLibrarySourceKind, isHostedPlanning } from "@print-partner/contracts";
 import { pickLocalDirectory, pickLocalFiles, pickZipArchive } from "../api/endpoints/browserFiles";
 import { startSync, waitForJobDone } from "../api/endpoints/jobs";
 import { startCheckSourceUpdates } from "../api/endpoints/sourceContent";
@@ -26,6 +27,7 @@ import GlobalStlSearch from "../components/sources/GlobalStlSearch";
 import LibraryCategoryRail, {
   type LibraryAddKind,
 } from "../components/sources/LibraryCategoryRail";
+import { libraryAddActionsForHost } from "../lib/libraryCategoryRailModel";
 import LibrarySourceCard from "../components/sources/LibrarySourceCard";
 import LibrarySourceRow from "../components/sources/LibrarySourceRow";
 import BulkCategoryBar from "../components/sources/BulkCategoryBar";
@@ -165,6 +167,8 @@ export default function SourcesPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { formatDate } = useDateFormat();
   const { health, error: healthError, loading: healthLoading } = useEngineHealth();
+  const hostedPlanning = isHostedPlanning(health);
+  const addActions = libraryAddActionsForHost(hostedPlanning);
   const { busy, runJob } = useJobRunner("sync");
   const { busy: updateBusy, runJob: runUpdateJob } =
     useJobRunner("check-source-updates");
@@ -481,6 +485,7 @@ export default function SourcesPage() {
   };
 
   const openAddWizard = (kind?: SourceKind) => {
+    if (hostedPlanning && kind && !isHostedLibrarySourceKind(kind)) return;
     setForm(newSourceWizardDraft(categories, kind));
     setEditId(null);
     setWizardError(null);
@@ -743,7 +748,11 @@ export default function SourcesPage() {
             ? () => syncSources([s.id])
             : undefined
         }
-        onUpload={sourceCanUpload(s) ? () => runUpload(s) : undefined}
+        onUpload={
+          (hostedPlanning ? s.source_kind === "archive" : sourceCanUpload(s))
+            ? () => runUpload(s)
+            : undefined
+        }
         onDelete={() => setDeleteTarget(s)}
         onAssignCategory={(category) => void assignSourceCategory(s, category)}
         selected={selectedSourceIds.has(s.id)}
@@ -778,7 +787,11 @@ export default function SourcesPage() {
             ? () => syncSources([s.id])
             : undefined
         }
-        onUpload={sourceCanUpload(s) ? () => runUpload(s) : undefined}
+        onUpload={
+          (hostedPlanning ? s.source_kind === "archive" : sourceCanUpload(s))
+            ? () => runUpload(s)
+            : undefined
+        }
         onDelete={() => setDeleteTarget(s)}
         onAssignCategory={(category) => void assignSourceCategory(s, category)}
         onSelectClick={(mods) => onSourceSelectClick(s.id, mods)}
@@ -831,27 +844,16 @@ export default function SourcesPage() {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              <DropdownMenuItem onClick={() => openAddWizard("github")}>
-                GitHub repo
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => openAddWizard("local")}>
-                Local folder
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => openAddWizard("archive")}>
-                Zip upload
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => openAddWizard("printables")}>
-                Printables
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => openAddWizard("makerworld")}>
-                MakerWorld
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => openAddWizard("thangs")}>
-                Thangs
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => openAddWizard("self")}>
-                Another instance / URL
-              </DropdownMenuItem>
+              {addActions
+                .filter((action) => action.kind !== "plan_bundle")
+                .map((action) => (
+                  <DropdownMenuItem
+                    key={action.id}
+                    onClick={() => openAddWizard(action.kind as SourceKind)}
+                  >
+                    {action.label}
+                  </DropdownMenuItem>
+                ))}
               <DropdownMenuSeparator />
               <DropdownMenuItem onClick={() => void importSharedBuild()}>
                 Plan bundle…
@@ -941,6 +943,7 @@ export default function SourcesPage() {
             if (source) void assignSourceCategory(source, category);
           }}
           onAddSource={onLibraryAdd}
+          addActions={addActions}
         />
 
         <div className="flex min-w-0 flex-col">
@@ -1200,15 +1203,17 @@ export default function SourcesPage() {
                 </SelectTrigger>
                 <SelectContent>
                   {(
-                    [
-                      "github",
-                      "local",
-                      "printables",
-                      "makerworld",
-                      "thangs",
-                      "self",
-                      "archive",
-                    ] as SourceKind[]
+                    hostedPlanning
+                      ? ([...HOSTED_LIBRARY_SOURCE_KINDS] as SourceKind[])
+                      : ([
+                          "github",
+                          "local",
+                          "printables",
+                          "makerworld",
+                          "thangs",
+                          "self",
+                          "archive",
+                        ] as SourceKind[])
                   ).map((k) => (
                     <SelectItem key={k} value={k}>
                       {kindLabel(k)}

@@ -111,6 +111,7 @@ import { flattenReviewParts } from "../lib/reviewParts";
 import { useProfileSelection } from "../context/ProfileContext";
 import { usePlanWorkspace } from "../context/PlanWorkspaceContext";
 import { useEngineHealth } from "../hooks/useEngineHealth";
+import { isHostedPlanning } from "@print-partner/contracts";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { waitForSheetThumbnails } from "../lib/waitForSheetThumbnails";
 import {
@@ -138,6 +139,7 @@ export default function CheckoffPage() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const { health, error: engineError, loading: healthLoading } = useEngineHealth();
+  const hostedPlanning = isHostedPlanning(health);
   const engineReady = Boolean(health?.ok);
   const {
     selectedProfileId,
@@ -701,6 +703,7 @@ export default function CheckoffPage() {
               </p>
             }
           >
+            {hostedPlanning ? null : (
             <PrinterLiveStrip
               engineReady={engineReady}
               onLiveStateChange={updateLiveStrip}
@@ -712,6 +715,7 @@ export default function CheckoffPage() {
                 void activity.refreshUnattributed();
               }}
             />
+            )}
           </Suspense>
         </CheckoffPrinterStatusCard>
 

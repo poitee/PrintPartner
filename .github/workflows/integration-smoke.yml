@@ -59,25 +59,32 @@ jobs:
           DATABASE_URL: postgresql://printpartner:postgres-smoke-only@127.0.0.1:5432/printpartner
           DEPLOY_MODE: saas
           POSTGRES_EXPERIMENTAL: "1"
-          SAAS_ALLOW_ANONYMOUS: "1"
-          MULTI_USER: "0"
+          MULTI_USER: "1"
           SESSION_SECRET: postgres-smoke-session-secret-not-for-production
+          ALLOWED_ORIGINS: http://127.0.0.1:18765
+          SESSION_COOKIE_SECURE: "0"
           NODE_ENV: production
           HOST: 127.0.0.1
           PORT: "18765"
           STATIC_DIR: ${{ github.workspace }}/web/apps/web/dist
         run: |
           node apps/server/dist/current/index.js >"${RUNNER_TEMP}/postgres-server.log" 2>&1 &
+          COOKIE_JAR="${RUNNER_TEMP}/postgres-smoke.cookies"
           for ((attempt = 1; attempt <= 60; attempt++)); do
             if curl --fail --silent http://127.0.0.1:18765/health \
               | python3 -c 'import json,sys; data=json.load(sys.stdin); assert data["db"]["driver"] == "postgres"; assert data["db"]["connected"] is True'
             then
-              if curl --fail --silent --show-error \
+              if curl --fail --silent --show-error -c "${COOKIE_JAR}" \
+                -H "Content-Type: application/json" \
+                -d '{"email":"postgres-smoke@example.com","password":"correct-horse-battery"}' \
+                http://127.0.0.1:18765/auth/register \
+                | python3 -c 'import json,sys; data=json.load(sys.stdin); user=data.get("user") or {}; assert user.get("user_id"); assert user.get("user_id") != "default"' \
+                && curl --fail --silent --show-error -b "${COOKIE_JAR}" \
                 -H "Content-Type: application/json" \
                 -d '{"name":"Postgres CI smoke"}' \
                 http://127.0.0.1:18765/plans \
                 | python3 -c 'import json,sys; data=json.load(sys.stdin); assert isinstance(data.get("id"), int); assert data.get("name") == "Postgres CI smoke"' \
-                && curl --fail --silent --show-error http://127.0.0.1:18765/plans \
+                && curl --fail --silent --show-error -b "${COOKIE_JAR}" http://127.0.0.1:18765/plans \
                 | python3 -c 'import json,sys; data=json.load(sys.stdin); profiles=data.get("profiles"); assert isinstance(profiles, list) and len(profiles) == 1; profile=profiles[0]; assert isinstance(profile.get("id"), int); assert profile.get("name") == "Postgres CI smoke"; assert isinstance(profile.get("part_count"), int); assert isinstance(profile.get("build_stale"), bool); progress=profile.get("accepted_progress"); assert isinstance(progress, dict) and progress.get("kind") == "empty"'
               then
                 exit 0

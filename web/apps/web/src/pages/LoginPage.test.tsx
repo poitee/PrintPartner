@@ -11,6 +11,8 @@ const auth = vi.hoisted(() => ({
   multiUser: true,
   authRequired: true,
   registrationOpen: true,
+  githubOAuth: false,
+  discordOAuth: false,
   loading: false,
   loginEmail: vi.fn(),
   registerEmail: vi.fn(),
@@ -32,6 +34,8 @@ describe("LoginPage", () => {
   beforeEach(() => {
     auth.multiUser = true;
     auth.registrationOpen = true;
+    auth.githubOAuth = false;
+    auth.discordOAuth = false;
     auth.loginEmail.mockReset().mockResolvedValue(undefined);
     auth.registerEmail.mockReset().mockResolvedValue(undefined);
   });
@@ -110,5 +114,26 @@ describe("LoginPage", () => {
         "shop-floor-password",
       );
     });
+  });
+
+  it("hides Discord unless that provider is configured", () => {
+    render(
+      <MemoryRouter>
+        <LoginPage />
+      </MemoryRouter>,
+    );
+    expect(screen.queryByRole("link", { name: "Continue with Discord" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Continue with GitHub" })).toBeNull();
+  });
+
+  it("shows GitHub when health advertises github_oauth", () => {
+    auth.githubOAuth = true;
+    render(
+      <MemoryRouter>
+        <LoginPage />
+      </MemoryRouter>,
+    );
+    expect(screen.getByRole("link", { name: "Continue with GitHub" })).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "Continue with Discord" })).toBeNull();
   });
 });

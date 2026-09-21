@@ -19,6 +19,7 @@ import {
   SLICER_PRESET_KINDS,
   slicerCreatePayloadFromDraft,
 } from "../../lib/slicerSettingsModel";
+import { HOSTED_PLANNING_COMPOSE_NOTE, isHostedPlanning } from "@print-partner/contracts";
 import { useEngineHealth } from "../../hooks/useEngineHealth";
 import { Button } from "../ui/button";
 import ConfirmDialog from "../ConfirmDialog";
@@ -48,7 +49,8 @@ type SlicersSettingsCardProps = {
 
 export default function SlicersSettingsCard({ engineReady }: SlicersSettingsCardProps) {
   const { health } = useEngineHealth();
-  const dockerEnabled = health?.deploy_mode !== "saas";
+  const hostedPlanning = isHostedPlanning(health);
+  const dockerEnabled = !hostedPlanning && health?.deploy_mode !== "saas";
   const [instances, setInstances] = useState<SlicerInstance[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<SlicerInstance | null>(null);
@@ -198,8 +200,7 @@ export default function SlicersSettingsCard({ engineReady }: SlicersSettingsCard
       <CardHeader>
         <CardTitle level={3} className="text-base">Slicers</CardTitle>
         <CardDescription>
-          Register slicer GUIs and profile watch paths. Profile sync and Export links use enabled
-          instances. Changing watch paths or enablement reloads sync watchers automatically.
+            Register slicer names for export. {hostedPlanning ? HOSTED_PLANNING_COMPOSE_NOTE : "Profile sync and Export links use enabled instances. Changing watch paths or enablement reloads sync watchers automatically."}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -241,6 +242,7 @@ export default function SlicersSettingsCard({ engineReady }: SlicersSettingsCard
                 busy={busy}
                 controlsDisabled={controlsDisabled}
                 dockerEnabled={dockerEnabled}
+                hostFields={!hostedPlanning}
                 logs={logsById[row.id]}
                 onToggle={(slicer, enabled) => void onToggle(slicer, enabled)}
                 onSaveField={(slicer, patch) => void onSaveField(slicer, patch)}
@@ -281,6 +283,8 @@ export default function SlicersSettingsCard({ engineReady }: SlicersSettingsCard
               value={draftName}
               onChange={(e) => setDraftName(e.target.value)}
             />
+            {hostedPlanning ? null : (
+              <>
             <Input
               className="h-8 max-w-[14rem]"
               aria-label="Slicer GUI URL"
@@ -295,6 +299,8 @@ export default function SlicersSettingsCard({ engineReady }: SlicersSettingsCard
               value={draftWatchPath}
               onChange={(e) => setDraftWatchPath(e.target.value)}
             />
+              </>
+            )}
             {draftKind === "custom" ? (
               <Select
                 value={draftDialect}

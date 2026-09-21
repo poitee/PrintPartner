@@ -190,6 +190,14 @@ describe("SourceCategoryManager", () => {
       expect(edited.value).toBe("Saved external");
       expect((screen.getByRole("button", { name: "Save categories" }) as HTMLButtonElement).disabled).toBe(false);
     });
+    await act(async () => {});
+    act(() => queryClient.setQueryData(queryKeys.sourceCategories, ["Server update"]));
+    await waitFor(() =>
+      expect(screen.getByTestId("saved-categories").textContent).toBe("Server update"),
+    );
+    expect((screen.getByRole("textbox", { name: "Category 1" }) as HTMLInputElement).value).toBe("Saved external");
+    expect((screen.getByRole("button", { name: "Save categories" }) as HTMLButtonElement).disabled).toBe(false);
+
     fireEvent.click(screen.getByRole("button", { name: "Save categories" }));
 
     await waitFor(() =>

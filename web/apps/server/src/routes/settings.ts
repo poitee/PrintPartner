@@ -47,6 +47,7 @@ import {
   parseSourceMonitoringUpdate,
   readStoredSourceUpdateIntervalHours,
 } from "../services/source-monitoring-settings.js";
+import { hostedPlanningPolicy } from "../lib/hosted-planning.js";
 
 type RouteDeps = { repo: AppRepository; dataDir: string; config?: ServerConfig };
 
@@ -171,9 +172,12 @@ export async function registerSettingsRoutes(app: FastifyInstance, deps: RouteDe
     return { assembly_tracking: body.assembly_tracking === true };
   });
 
-  app.get("/settings/external-access", async () =>
-    readExternalAccessSettings(deps.repo),
-  );
+  app.get("/settings/external-access", async () => {
+    if (deps.config && hostedPlanningPolicy(deps.config.deployMode).hostedPlanning) {
+      return { mode: "off" as const };
+    }
+    return readExternalAccessSettings(deps.repo);
+  });
 
   app.put("/settings/external-access", async (request, reply) => {
     const body: unknown = request.body;

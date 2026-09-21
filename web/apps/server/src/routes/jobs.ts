@@ -36,6 +36,8 @@ import { extractPendingPdfsForSource } from "../services/source-docs-index.js";
 import { sourcePdfTextStorage } from "../services/source-workspace.js";
 import { parseCheckoffUnits, parseUnlabeledNames } from "../services/printer-checkoff.js";
 import { sendProblem } from "../lib/api-error.js";
+import { hostedPlanningPolicy } from "../lib/hosted-planning.js";
+import { sendIfTenantDiskQuotaExceeded, runWithTenantDiskQuota, withoutTenantDiskQuota, TenantDiskQuotaError } from "../lib/tenant-disk-quota.js";
 import { getIntegrationAdapter } from "../integrations/registry.js";
 import { getIntegrationConfig } from "../integrations/store.js";
 import { loadFleet } from "../services/printer-fleet.js";
@@ -55,7 +57,10 @@ import {
   acceptedOperationalExportPublicError,
   captureAcceptedOperationalExport,
 } from "../services/accepted-operational-export.js";
-import { materializeDirectExport3mf } from "../services/accepted-direct-export-3mf.js";
+import {
+  DIRECT_EXPORT_3MF_LIMITS,
+  materializeDirectExport3mf,
+} from "../services/accepted-direct-export-3mf.js";
 import { isRecord, positiveSafeInteger } from "./job-route-inputs.js";
 import {
   ACCEPTED_PLATE_EXPORT_ERRORS,
@@ -75,6 +80,7 @@ export type JobRunnerDeps = {
   exportsDir: string;
   dataDir: string;
   sourceDocsMaxBytes?: number;
+  tenantDiskQuotaBytes?: number | null;
 };
 
 export type JobListFilters = {
@@ -138,6 +144,14 @@ export class InProcessJobRunner {
 
   getRepo(): AppRepository {
     return this.deps.getRepo();
+  }
+
+  getDataDir(): string {
+    return this.deps.dataDir;
+  }
+
+  getReposDir(): string {
+    return this.deps.reposDir;
   }
 
   subscribe(
@@ -282,9 +296,9 @@ export class InProcessJobRunner {
       updatedAt: Date.now(),
     });
     // Defer so the HTTP response for job_id can flush before CPU-heavy sync work runs.
-    setImmediate(() => {
+    withoutTenantDiskQuota(() => setImmediate(() => {
       void this.runJob(jobId, kind, { ...payload, _tenant_id: tenantId });
-    });
+    }));
     return jobId;
   }
 
@@ -349,37 +363,47 @@ export class InProcessJobRunner {
     await tenantStorage.run(tenantId, async () => {
       this.emit(jobId, { status: "running", message: "Running…", progress: 10 });
       try {
-        let result: Record<string, unknown>;
-        if (kind === "sync") {
-          result = await this.runSync(jobId, payload);
-        } else if (kind === "import-scan") {
-          const projectId = Number(payload.project_id);
-          result = await syncProjectById(this.repo, this.deps.reposDir, projectId, undefined, {
-            maxDocsBytes: this.deps.sourceDocsMaxBytes,
-            onProgress: (patch) => this.emit(jobId, patch),
-            enqueuePdfExtract: (pid) =>
-              this.start("extract-source-docs", { project_id: pid }, tenantId),
-          });
-        } else if (kind === "extract-source-docs") {
-          result = await this.runExtractSourceDocs(jobId, payload);
-        } else if (kind === "check-source-updates") {
-          result = await checkAllSourceUpdates(this.repo);
-        } else if (kind === "export-stl-pack") {
-          result = await this.runExportStlPack(payload);
-        } else if (kind === "export-checklist-html") {
-          result = await this.runExportChecklistHtml(payload);
-        } else if (kind === "export-kit-bundle") {
-          result = await this.runExportKitBundle(payload);
-        } else if (kind === "export-accepted-plate-3mf") {
-          result = await this.runAcceptedPlateExport(payload);
-        } else if (kind === "export-direct-3mf") {
-          result = await this.runDirectExport3mf(payload);
-        } else if (kind === "printer-upload") {
-          result = await this.runPrinterUpload(jobId, payload);
-        } else {
-          const unsupported: never = kind;
-          throw new Error(`Unsupported job kind: ${unsupported}`);
-        }
+        const result = await runWithTenantDiskQuota({
+          dataDir: this.deps.dataDir,
+          reposDir: this.deps.reposDir,
+          tenantId,
+          sourceIds: () => this.repo.listSources().map((source) => source.id),
+          quotaBytes: kind === "check-source-updates" || kind === "printer-upload"
+            ? null : this.deps.tenantDiskQuotaBytes ?? null,
+        }, async () => {
+          let result: Record<string, unknown>;
+          if (kind === "sync") {
+            result = await this.runSync(jobId, payload);
+          } else if (kind === "import-scan") {
+            const projectId = Number(payload.project_id);
+            result = await syncProjectById(this.repo, this.deps.reposDir, projectId, undefined, {
+              maxDocsBytes: this.deps.sourceDocsMaxBytes,
+              onProgress: (patch) => this.emit(jobId, patch),
+              enqueuePdfExtract: (pid) =>
+                this.start("extract-source-docs", { project_id: pid }, tenantId),
+            });
+          } else if (kind === "extract-source-docs") {
+            result = await this.runExtractSourceDocs(jobId, payload);
+          } else if (kind === "check-source-updates") {
+            result = await checkAllSourceUpdates(this.repo);
+          } else if (kind === "export-stl-pack") {
+            result = await this.runExportStlPack(payload);
+          } else if (kind === "export-checklist-html") {
+            result = await this.runExportChecklistHtml(payload);
+          } else if (kind === "export-kit-bundle") {
+            result = await this.runExportKitBundle(payload);
+          } else if (kind === "export-accepted-plate-3mf") {
+            result = await this.runAcceptedPlateExport(payload);
+          } else if (kind === "export-direct-3mf") {
+            result = await this.runDirectExport3mf(payload);
+          } else if (kind === "printer-upload") {
+            result = await this.runPrinterUpload(jobId, payload);
+          } else {
+            const unsupported: never = kind;
+            throw new Error(`Unsupported job kind: ${unsupported}`);
+          }
+          return result;
+        });
         const doneMessage =
           kind === "export-stl-pack"
             ? exportStlPackJobMessage(result)
@@ -471,6 +495,7 @@ export class InProcessJobRunner {
           })),
         });
       } catch (e) {
+        if (e instanceof TenantDiskQuotaError) throw e;
         const errMsg = e instanceof Error ? e.message : String(e);
         const isRateLimit = /rate limit exceeded/i.test(errMsg);
         const friendly = isRateLimit
@@ -521,7 +546,7 @@ export class InProcessJobRunner {
     profileId: number,
     revisionId?: number,
   ): never {
-    if (error instanceof AcceptedOperationalExportPublicError) throw error;
+    if (error instanceof TenantDiskQuotaError || error instanceof AcceptedOperationalExportPublicError) throw error;
     getLogger().log("error", "Accepted operational export failed unexpectedly", {
       operation,
       failure: "unexpected",
@@ -759,7 +784,7 @@ export class InProcessJobRunner {
       };
       return result;
     } catch (error) {
-      if (error instanceof AcceptedPlateExportPublicError) {
+      if (error instanceof TenantDiskQuotaError || error instanceof AcceptedPlateExportPublicError) {
         throw error;
       }
       return unexpectedFailure();
@@ -810,7 +835,7 @@ export class InProcessJobRunner {
         tokens: materialized.tokens,
       });
     } catch (error) {
-      if (error instanceof AcceptedPlateExportPublicError) throw error;
+      if (error instanceof TenantDiskQuotaError || error instanceof AcceptedPlateExportPublicError) throw error;
       return unexpectedFailure();
     }
   }
@@ -908,17 +933,38 @@ export class InProcessJobRunner {
 export async function registerJobRoutes(
   app: FastifyInstance,
   jobs: InProcessJobRunner,
-  _config?: { deployMode?: string },
+  config?: { deployMode?: string },
 ): Promise<void> {
   const limited = { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } };
+  const hostedQuotaBytes = hostedPlanningPolicy(
+    config?.deployMode === "saas" ? "saas" : "self-host",
+  ).tenantDiskQuotaBytes;
 
-  app.post("/jobs/sync", limited, async (request) => {
+  async function refuseIfHostedQuotaExceeded(
+    reply: import("fastify").FastifyReply,
+    tenantId: string,
+    additionalBytes = 0,
+  ): Promise<boolean> {
+    if (hostedQuotaBytes == null) return false;
+    return sendIfTenantDiskQuotaExceeded(reply, {
+      dataDir: jobs.getDataDir(),
+      reposDir: jobs.getReposDir(),
+      tenantId,
+      sourceIds: jobs.getRepo().listSources().map((source) => source.id),
+      additionalBytes,
+      quotaBytes: hostedQuotaBytes,
+    });
+  }
+
+  app.post("/jobs/sync", limited, async (request, reply) => {
+    if (await refuseIfHostedQuotaExceeded(reply, request.tenantId)) return;
     const body = (request.body ?? {}) as Record<string, unknown>;
     const job_id = await jobs.start("sync", body, request.tenantId);
     return { job_id };
   });
 
-  app.post("/jobs/import-scan", async (request) => {
+  app.post("/jobs/import-scan", async (request, reply) => {
+    if (await refuseIfHostedQuotaExceeded(reply, request.tenantId)) return;
     const body = request.body as { project_id?: number };
     const job_id = await jobs.start("import-scan", { project_id: body.project_id }, request.tenantId);
     return { job_id };
@@ -929,7 +975,8 @@ export async function registerJobRoutes(
     return { job_id };
   });
 
-  app.post("/jobs/extract-source-docs", async (request) => {
+  app.post("/jobs/extract-source-docs", async (request, reply) => {
+    if (await refuseIfHostedQuotaExceeded(reply, request.tenantId)) return;
     const body = request.body as { project_id?: number };
     const job_id = await jobs.start(
       "extract-source-docs",
@@ -985,6 +1032,7 @@ export async function registerJobRoutes(
         "unit_tokens must be a list of Required-unit tokens",
       );
     }
+    if (await refuseIfHostedQuotaExceeded(reply, request.tenantId)) return;
     const job_id = await jobs.start(
       "export-stl-pack",
       {
@@ -1004,6 +1052,7 @@ export async function registerJobRoutes(
     if (!body.profile_id || !jobs.getRepo().getOwnedProfileIdentity(body.profile_id)) {
       return sendProblem(reply, 404, "Not Found", "Profile not found");
     }
+    if (await refuseIfHostedQuotaExceeded(reply, request.tenantId)) return;
     const job_id = await jobs.start(
       "export-checklist-html",
       { profile_id: body.profile_id },
@@ -1017,6 +1066,7 @@ export async function registerJobRoutes(
     if (!body.profile_id || !jobs.getRepo().getOwnedProfileIdentity(body.profile_id)) {
       return sendProblem(reply, 404, "Not Found", "Profile not found");
     }
+    if (await refuseIfHostedQuotaExceeded(reply, request.tenantId)) return;
     const job_id = await jobs.start(
       "export-kit-bundle",
       {
@@ -1046,6 +1096,15 @@ export async function registerJobRoutes(
     if (!jobs.getRepo().getOwnedProfileIdentity(profileId)) {
       return reply.status(404).send({ detail: "Profile not found", code: "profile_not_found" });
     }
+    if (
+      await refuseIfHostedQuotaExceeded(
+        reply,
+        request.tenantId,
+        ACCEPTED_PLATE_EXPORT_LIMITS.maxOutputBytes,
+      )
+    ) {
+      return;
+    }
     const payload: StartAcceptedPlateExportRequest = {
       profile_id: profileId,
       expected_plate_revision_id: expectedPlateRevisionId,
@@ -1066,6 +1125,15 @@ export async function registerJobRoutes(
     }
     if (!jobs.getRepo().getOwnedProfileIdentity(payload.profile_id)) {
       return reply.status(404).send({ detail: "Profile not found", code: "profile_not_found" });
+    }
+    if (
+      await refuseIfHostedQuotaExceeded(
+        reply,
+        request.tenantId,
+        DIRECT_EXPORT_3MF_LIMITS.maxOutputBytes,
+      )
+    ) {
+      return;
     }
     const job_id = await jobs.start("export-direct-3mf", payload, request.tenantId);
     return { job_id };
@@ -1226,7 +1294,7 @@ export function registerJobWebSocket(
 export function createJobRunner(
   getRepo: () => AppRepository,
   dataDir: string,
-  options?: { sourceDocsMaxBytes?: number },
+  options?: { sourceDocsMaxBytes?: number; tenantDiskQuotaBytes?: number | null },
 ): InProcessJobRunner {
   const maxDocs =
     options?.sourceDocsMaxBytes ??
@@ -1240,5 +1308,6 @@ export function createJobRunner(
     exportsDir: join(dataDir, "exports"),
     dataDir,
     sourceDocsMaxBytes: maxDocs,
+    tenantDiskQuotaBytes: options?.tenantDiskQuotaBytes,
   });
 }

@@ -1,0 +1,50 @@
+# Private invite host for hosted planning.
+#
+# This is not docker-compose.saas.yml. That file is a development stack with
+# anonymous access, Postgres, and S3. Production refuses SAAS_ALLOW_ANONYMOUS=1.
+#
+# Copy hosted-planning.env.example to hosted-planning.env, pin the public
+# origin, set SESSION_SECRET, then:
+#   docker compose --env-file hosted-planning.env -f docker-compose.hosted.yml up -d
+#
+# Put HTTPS in front. This process binds loopback by default. LAN printer
+# adapters stay denied.
+
+name: print-partner-hosted
+
+services:
+  print-partner:
+    image: ghcr.io/poitee/print-partner:${PRINT_PARTNER_VERSION:-3.3.0}
+    # Fallback for building from source: docker compose --env-file hosted-planning.env -f docker-compose.hosted.yml up --build
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "${PP_BIND_ADDRESS:-127.0.0.1}:8080:8080"
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "8080"
+      DEPLOY_MODE: "saas"
+      SAAS_DATA_DIR: "/data"
+      STATIC_DIR: "/app/web/apps/web/dist"
+      MULTI_USER: "1"
+      SESSION_SECRET: "${SESSION_SECRET:?set SESSION_SECRET in hosted-planning.env}"
+      SESSION_COOKIE_SECURE: "1"
+      TRUST_PROXY: "1"
+      ALLOWED_ORIGINS: "${ALLOWED_ORIGINS:?pin ALLOWED_ORIGINS to the public https origin}"
+      REGISTRATION_OPEN: "${REGISTRATION_OPEN:-1}"
+      PRINT_PARTNER_UPDATE_CHECK: "0"
+    volumes:
+      - hosted-data:/data
+    healthcheck:
+      # node:22-bookworm-slim has no curl/wget; use node's built-in fetch.
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/health').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+volumes:
+  hosted-data:
+    name: print-partner-hosted-data

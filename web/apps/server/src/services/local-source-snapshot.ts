@@ -22,6 +22,7 @@ import {
   type TransformCallback,
 } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import { chargeTenantDiskBytes } from "../lib/tenant-disk-quota.js";
 
 export const SOURCE_SNAPSHOT_MANIFEST_FILE = ".printpartner-source-snapshot.json";
 export const MAX_SOURCE_SNAPSHOT_BYTES = 1024 * 1024 * 1024;
@@ -286,7 +287,10 @@ function sameContentFiles(
   return canonicalContent(left) === canonicalContent(right);
 }
 
-function byteMeter(maxBytes = Number.POSITIVE_INFINITY): {
+function byteMeter(
+  maxBytes = Number.POSITIVE_INFINITY,
+  options: { chargeBytes?: boolean } = {},
+): {
   stream: Transform;
   result(): { sizeBytes: number; sha256: string };
 } {
@@ -306,6 +310,14 @@ function byteMeter(maxBytes = Number.POSITIVE_INFINITY): {
       if (sizeBytes > maxBytes) {
         callback(new Error(`Source snapshot exceeds the ${MAX_SOURCE_SNAPSHOT_BYTES} byte stored-content limit`));
         return;
+      }
+      if (options.chargeBytes && buffer.byteLength > 0) {
+        try {
+          chargeTenantDiskBytes(buffer.byteLength);
+        } catch (error) {
+          callback(error instanceof Error ? error : new Error(String(error)));
+          return;
+        }
       }
       hash.update(buffer);
       callback(null, buffer);
@@ -339,7 +351,7 @@ async function writeSnapshotFile(args: {
     response.stream.destroy();
     throw error;
   }
-  const meter = byteMeter(args.maxBytes);
+  const meter = byteMeter(args.maxBytes, { chargeBytes: true });
   await pipeline(
     response.stream,
     meter.stream,
@@ -738,9 +750,11 @@ export class LocalSourceSnapshotStore {
         selection,
         files: content,
       };
+      const manifestBytes = `${JSON.stringify(manifest, null, 2)}\n`;
+      chargeTenantDiskBytes(Buffer.byteLength(manifestBytes));
       await writeFile(
         join(candidateDir, SOURCE_SNAPSHOT_MANIFEST_FILE),
-        `${JSON.stringify(manifest, null, 2)}\n`,
+        manifestBytes,
         { encoding: "utf8", flag: "wx" },
       );
 

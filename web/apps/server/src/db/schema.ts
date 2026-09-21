@@ -1,6 +1,7 @@
 import {
   type AnySQLiteColumn,
   check,
+  index,
   integer,
   primaryKey,
   sqliteTable,
@@ -864,6 +865,40 @@ export const planShares = sqliteTable("plan_shares", {
   createdAt: text("created_at").notNull(),
 });
 
+export const boardPosts = sqliteTable(
+  "board_posts",
+  {
+    id: text("id").primaryKey(),
+    authorUserId: text("author_user_id")
+      .notNull()
+      .references(() => users.id),
+    caption: text("caption").notNull(),
+    title: text("title").notNull(),
+    coverUrl: text("cover_url"),
+    snapshotJson: text("snapshot_json").notNull(),
+    createdAt: text("created_at").notNull(),
+    hiddenAt: text("hidden_at"),
+    hiddenByUserId: text("hidden_by_user_id").references(() => users.id),
+  },
+  (t) => [index("idx_board_posts_created").on(t.createdAt)],
+);
+
+export const boardComments = sqliteTable(
+  "board_comments",
+  {
+    id: text("id").primaryKey(),
+    postId: text("post_id")
+      .notNull()
+      .references(() => boardPosts.id, { onDelete: "cascade" }),
+    authorUserId: text("author_user_id")
+      .notNull()
+      .references(() => users.id),
+    body: text("body").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (t) => [index("idx_board_comments_post_created").on(t.postId, t.createdAt)],
+);
+
 export const passwordResetTokens = sqliteTable("password_reset_tokens", {
   id: text("id").primaryKey(),
   userId: text("user_id")
@@ -1151,7 +1186,7 @@ export const appEvents = sqliteTable("app_events", {
 });
 
 export const schemaVersionKey = "schema_version";
-export const currentSchemaVersion = 33;
+export const currentSchemaVersion = 34;
 
 export const SQLITE_PARTS_INVALIDATE_ACCEPTED_REVISION_UPDATE = `CREATE TRIGGER IF NOT EXISTS trg_parts_invalidate_accepted_revision_update
     AFTER UPDATE ON parts
@@ -2800,4 +2835,25 @@ export const schemaMigrations: string[] = [
     END`,
   // v32 - durable cutover from mutable workspace manifests to Source revisions.
   `ALTER TABLE projects ADD COLUMN legacy_manifest_cutover INTEGER NOT NULL DEFAULT 0`,
+  // v34 — host-wide invite board. Not tenant-scoped.
+  `CREATE TABLE IF NOT EXISTS board_posts (
+    id TEXT PRIMARY KEY,
+    author_user_id TEXT NOT NULL REFERENCES users(id),
+    caption TEXT NOT NULL,
+    title TEXT NOT NULL,
+    cover_url TEXT,
+    snapshot_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    hidden_at TEXT,
+    hidden_by_user_id TEXT REFERENCES users(id)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_board_posts_created ON board_posts (created_at)`,
+  `CREATE TABLE IF NOT EXISTS board_comments (
+    id TEXT PRIMARY KEY,
+    post_id TEXT NOT NULL REFERENCES board_posts(id) ON DELETE CASCADE,
+    author_user_id TEXT NOT NULL REFERENCES users(id),
+    body TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_board_comments_post_created ON board_comments (post_id, created_at)`,
 ];

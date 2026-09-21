@@ -1918,6 +1918,27 @@ export const postgresPostInitMigrations: string[] = [
   "ALTER TABLE accepted_plate_revisions ADD COLUMN IF NOT EXISTS undo_from_revision_id INTEGER REFERENCES accepted_plate_revisions(id) ON DELETE SET NULL",
   "ALTER TABLE accepted_plate_units ADD COLUMN IF NOT EXISTS placement TEXT NOT NULL DEFAULT 'auto' CHECK (placement IN ('auto', 'manual', 'unplaced'))",
   "ALTER TABLE accepted_plate_units ADD COLUMN IF NOT EXISTS pinned BOOLEAN NOT NULL DEFAULT FALSE",
+  // v34 — host-wide invite board. Not tenant-scoped.
+  `CREATE TABLE IF NOT EXISTS board_posts (
+    id TEXT PRIMARY KEY,
+    author_user_id TEXT NOT NULL REFERENCES users(id),
+    caption TEXT NOT NULL,
+    title TEXT NOT NULL,
+    cover_url TEXT,
+    snapshot_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    hidden_at TEXT,
+    hidden_by_user_id TEXT REFERENCES users(id)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_board_posts_created ON board_posts (created_at)`,
+  `CREATE TABLE IF NOT EXISTS board_comments (
+    id TEXT PRIMARY KEY,
+    post_id TEXT NOT NULL REFERENCES board_posts(id) ON DELETE CASCADE,
+    author_user_id TEXT NOT NULL REFERENCES users(id),
+    body TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_board_comments_post_created ON board_comments (post_id, created_at)`,
 ];
 
 export class PostgresDatabase {

@@ -1,6 +1,7 @@
 import { Unzip, UnzipInflate } from "fflate";
 import { closeSync, mkdirSync, openSync, unlinkSync, writeSync } from "node:fs";
 import { basename, join } from "node:path";
+import { chargeTenantDiskBytes } from "../lib/tenant-disk-quota.js";
 
 export const DEFAULT_THREE_MF_LIMITS = {
   maxModelBytes: 64 * 1024 * 1024,
@@ -136,6 +137,7 @@ function writeAsciiStl(path: string, name: string, vertices: Array<[number, numb
     const output = `${lines.join("\n")}\n`;
     bytes += Buffer.byteLength(output);
     if (bytes > maxBytes) throw new Error("3MF derived STL output exceeds the size limit");
+    chargeTenantDiskBytes(Buffer.byteLength(output));
     writeSync(descriptor, output);
   };
   try {

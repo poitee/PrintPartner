@@ -2,6 +2,7 @@ import {
   type AnyPgColumn,
   boolean,
   check,
+  index,
   integer,
   pgTable,
   primaryKey,
@@ -849,6 +850,40 @@ export const planShares = pgTable("plan_shares", {
   createdAt: text("created_at").notNull(),
 });
 
+export const boardPosts = pgTable(
+  "board_posts",
+  {
+    id: text("id").primaryKey(),
+    authorUserId: text("author_user_id")
+      .notNull()
+      .references(() => users.id),
+    caption: text("caption").notNull(),
+    title: text("title").notNull(),
+    coverUrl: text("cover_url"),
+    snapshotJson: text("snapshot_json").notNull(),
+    createdAt: text("created_at").notNull(),
+    hiddenAt: text("hidden_at"),
+    hiddenByUserId: text("hidden_by_user_id").references(() => users.id),
+  },
+  (t) => [index("idx_board_posts_created").on(t.createdAt)],
+);
+
+export const boardComments = pgTable(
+  "board_comments",
+  {
+    id: text("id").primaryKey(),
+    postId: text("post_id")
+      .notNull()
+      .references(() => boardPosts.id, { onDelete: "cascade" }),
+    authorUserId: text("author_user_id")
+      .notNull()
+      .references(() => users.id),
+    body: text("body").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (t) => [index("idx_board_comments_post_created").on(t.postId, t.createdAt)],
+);
+
 export const passwordResetTokens = pgTable("password_reset_tokens", {
   id: text("id").primaryKey(),
   userId: text("user_id")
@@ -1136,4 +1171,4 @@ export const appEvents = pgTable("app_events", {
 });
 
 export const schemaVersionKey = "schema_version";
-export const currentSchemaVersion = 33;
+export const currentSchemaVersion = 34;

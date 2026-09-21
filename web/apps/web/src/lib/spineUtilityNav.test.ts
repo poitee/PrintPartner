@@ -20,6 +20,19 @@ describe("spineUtilityNavItems", () => {
     expect(spineUtilityNavItems(7).map((item) => item.path)).not.toContain("/plan");
   });
 
+  it("inserts Board after Builds only when asked", () => {
+    expect(spineUtilityNavItems(7, { inviteBoard: true }).map((item) => item.id)).toEqual([
+      "builds",
+      "board",
+      "library",
+      "production",
+      "printers",
+      "settings",
+      "help",
+    ]);
+    expect(spineUtilityNavItems(7).map((item) => item.id)).not.toContain("board");
+  });
+
   it("labels Builds and Production in the global sections", () => {
     const labels = spineUtilityNavItems(null).map((item) => item.label);
     expect(labels).toEqual([

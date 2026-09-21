@@ -1,3 +1,4 @@
+import { runWithTenantDiskQuota, TenantDiskQuotaError } from "../lib/tenant-disk-quota.js";
 import { readFileSync } from "node:fs";
 import type { FastifyInstance } from "fastify";
 import { importRulesForProject, scanRepo } from "@print-partner/domain";
@@ -17,7 +18,7 @@ import { findSourceManifestPath } from "../services/source-workspace.js";
 
 const MANIFEST_FILE = "print-partner.manifest.yaml";
 
-type RouteDeps = { repo: AppRepository };
+type RouteDeps = { repo: AppRepository; diskQuota?: { dataDir: string; quotaBytes: number | null } };
 
 function requireLocalPath(repo: AppRepository, sourceId: number) {
   const row = repo.getProjectRow(sourceId);
@@ -63,62 +64,74 @@ export async function registerRepoManifestRoutes(
     const body = request.body as { yaml?: string };
     const yaml = String(body.yaml ?? "");
     if (!yaml.trim()) return reply.status(400).send({ detail: "yaml is required" });
-    let legacy: Awaited<ReturnType<typeof inspectLegacySourceManifest>>;
     try {
-      legacy = await inspectLegacySourceManifest({
-        reposDir: deps.repo.reposDir,
-        sourceId: id,
-      });
-      await publishSourceManifestRevision({
-        repo: deps.repo,
-        sourceId: id,
-        manifestYaml: yaml,
-      });
-    } catch (error) {
-      if (error instanceof InvalidSourceManifestError) {
-        return reply.status(400).send({ detail: error.message });
-      }
-      if (error instanceof SourceActivationConflictError) {
-        return reply.status(409).send({ detail: error.message });
-      }
-      throw error;
-    }
-    if (legacy.kind === "file") {
-      try {
-        const archived = await archiveLegacySourceManifest(
-          legacy,
-          deps.repo.reposDir,
-          id,
-        );
-        if (archived && !archived.matchesObservedContent) {
+      return await runWithTenantDiskQuota({
+        dataDir: deps.diskQuota?.dataDir ?? "", reposDir: deps.repo.reposDir,
+        tenantId: request.tenantId, quotaBytes: deps.diskQuota?.quotaBytes ?? null,
+        sourceIds: () => deps.repo.listSources().map((source) => source.id),
+      }, async () => {
+        let legacy: Awaited<ReturnType<typeof inspectLegacySourceManifest>>;
+        try {
+          legacy = await inspectLegacySourceManifest({
+            reposDir: deps.repo.reposDir,
+            sourceId: id,
+          });
+          await publishSourceManifestRevision({
+            repo: deps.repo,
+            sourceId: id,
+            manifestYaml: yaml,
+          });
+        } catch (error) {
+          if (error instanceof TenantDiskQuotaError) return reply.status(413).send({ detail: error.message });
+          if (error instanceof InvalidSourceManifestError) {
+            return reply.status(400).send({ detail: error.message });
+          }
+          if (error instanceof SourceActivationConflictError) {
+            return reply.status(409).send({ detail: error.message });
+          }
+          throw error;
+        }
+        if (legacy.kind === "file") {
+          try {
+            const archived = await archiveLegacySourceManifest(
+              legacy,
+              deps.repo.reposDir,
+              id,
+            );
+            if (archived && !archived.matchesObservedContent) {
+              request.log.warn(
+                { sourceId: id, backupPath: archived.backupPath },
+                "Source manifest was saved; a concurrently changed legacy override was archived",
+              );
+            }
+          } catch (error) {
+            request.log.warn(
+              {
+                sourceId: id,
+                legacyPath: legacy.legacyPath,
+                reason: error instanceof Error ? error.message : String(error),
+              },
+              "Source manifest was saved, but its legacy override was retained",
+            );
+          }
+        } else if (legacy.kind === "unsafe") {
           request.log.warn(
-            { sourceId: id, backupPath: archived.backupPath },
-            "Source manifest was saved; a concurrently changed legacy override was archived",
+            { sourceId: id, legacyPath: legacy.legacyPath, reason: legacy.reason },
+            "Source manifest was saved, but its unsafe legacy override was retained",
           );
         }
-      } catch (error) {
-        request.log.warn(
-          {
-            sourceId: id,
-            legacyPath: legacy.legacyPath,
-            reason: error instanceof Error ? error.message : String(error),
-          },
-          "Source manifest was saved, but its legacy override was retained",
-        );
-      }
-    } else if (legacy.kind === "unsafe") {
-      request.log.warn(
-        { sourceId: id, legacyPath: legacy.legacyPath, reason: legacy.reason },
-        "Source manifest was saved, but its unsafe legacy override was retained",
-      );
+        return {
+          source_id: id,
+          path: MANIFEST_FILE,
+          saved: true,
+          yaml,
+          document: { format: "print-partner-manifest-v2", version: 2, raw: yaml },
+        };
+      });
+    } catch (error) {
+      if (error instanceof TenantDiskQuotaError) return reply.status(413).send({ detail: error.message });
+      throw error;
     }
-    return {
-      source_id: id,
-      path: MANIFEST_FILE,
-      saved: true,
-      yaml,
-      document: { format: "print-partner-manifest-v2", version: 2, raw: yaml },
-    };
   });
 
   app.get("/sources/:id/manifest-builder", async (request) => {

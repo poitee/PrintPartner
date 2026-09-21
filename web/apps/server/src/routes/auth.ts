@@ -110,6 +110,16 @@ function finishOAuthLogin(
   reply.redirect(redirectUrl);
 }
 
+function oauthRegistrationAllowed(
+  config: ServerConfig,
+  authStore: AuthStore,
+  provider: AuthIdentityProvider,
+  providerUserId: string,
+): boolean {
+  if (authStore.findIdentity(provider, providerUserId)) return true;
+  return config.registrationOpen;
+}
+
 function singleUserOAuthCanContinue(
   config: ServerConfig,
   authStore: AuthStore,
@@ -163,6 +173,9 @@ export function registerAuthRoutes(
 
   if ((config.multiUser || config.singleUserAuth) && authStore) {
     app.post("/auth/register", authRateLimit, async (request, reply) => {
+      if (!config.registrationOpen) {
+        return reply.status(403).send({ detail: "Registration is closed" });
+      }
       if (config.singleUserAuth && authStore.countUsers() > 0) {
         return reply.status(403).send({ detail: "The single-user administrator already exists" });
       }
@@ -386,6 +399,9 @@ export function registerAuthRoutes(
         if (!singleUserOAuthCanContinue(config, authStore, "github", ghUser.providerUserId)) {
           return reply.status(403).send({ detail: "The single-user administrator already exists" });
         }
+        if (!oauthRegistrationAllowed(config, authStore, "github", ghUser.providerUserId)) {
+          return reply.status(403).send({ detail: "Registration is closed" });
+        }
         const user = authStore.upsertOAuthUser({
           provider: "github",
           providerUserId: ghUser.providerUserId,
@@ -467,6 +483,9 @@ export function registerAuthRoutes(
           )
         ) {
           return reply.status(403).send({ detail: "The single-user administrator already exists" });
+        }
+        if (!oauthRegistrationAllowed(config, authStore, "discord", dcUser.providerUserId)) {
+          return reply.status(403).send({ detail: "Registration is closed" });
         }
         const user = authStore.upsertOAuthUser({
           provider: "discord",

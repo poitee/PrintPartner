@@ -1,12 +1,18 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { isHostedPlanning } from "@print-partner/contracts";
 import { toast } from "sonner";
 import { completeExportDownload } from "../../lib/exportActions";
+import { createBoardPost } from "../../api/endpoints/board";
 import { createPlanShare } from "../../api/endpoints/auth";
 import { startExportKitBundle } from "../../api/endpoints/jobs";
 import { useAuth } from "../../context/AuthContext";
+import { useEngineHealth } from "../../hooks/useEngineHealth";
 import { useJobRunner } from "../../hooks/useJobRunner";
+import { boardRoute } from "../../lib/routes";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
+import { Textarea } from "../ui/textarea";
 import ReferenceSharePanel from "./ReferenceSharePanel";
 import {
   Dialog,
@@ -23,10 +29,14 @@ type Props = {
 
 export default function ShareBuildExportDialog({ open, onOpenChange, profileId }: Props) {
   const { multiUser } = useAuth();
+  const { health } = useEngineHealth();
+  const hostedPlanning = isHostedPlanning(health);
+  const navigate = useNavigate();
   const exportJob = useJobRunner("kit-export");
   const [tab, setTab] = useState<"file" | "user">("file");
   const [includeProgress, setIncludeProgress] = useState(false);
   const [recipientEmail, setRecipientEmail] = useState("");
+  const [caption, setCaption] = useState("");
   const [sending, setSending] = useState(false);
 
   const onExport = () => {
@@ -56,13 +66,46 @@ export default function ShareBuildExportDialog({ open, onOpenChange, profileId }
       .finally(() => setSending(false));
   };
 
+  const onPostToBoard = () => {
+    setSending(true);
+    void createBoardPost({ plan_id: profileId, caption })
+      .then((res) => {
+        toast.success("Posted to the board");
+        onOpenChange(false);
+        navigate(boardRoute(res.post.id));
+      })
+      .catch((e) => toast.error(e instanceof Error ? e.message : String(e)))
+      .finally(() => setSending(false));
+  };
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="min-w-0 grid-cols-[minmax(0,1fr)] overflow-x-hidden">
         <DialogHeader>
-          <DialogTitle>Share build</DialogTitle>
+          <DialogTitle>{hostedPlanning ? "Post to the board" : "Share build"}</DialogTitle>
         </DialogHeader>
         {open && <ReferenceSharePanel key={profileId} profileId={profileId} />}
+        {hostedPlanning ? (
+          <div className="space-y-3 border-t border-border pt-3">
+            <label className="block text-sm">
+              <span className="mb-1 block text-muted-foreground">Caption</span>
+              <Textarea
+                value={caption}
+                onChange={(event) => setCaption(event.target.value)}
+                maxLength={500}
+                required
+              />
+            </label>
+            <div className="flex justify-end gap-2">
+              <Button variant="ghost" onClick={() => onOpenChange(false)}>
+                Close
+              </Button>
+              <Button onClick={onPostToBoard} disabled={sending || caption.trim().length === 0}>
+                {sending ? "Posting…" : "Post to the board"}
+              </Button>
+            </div>
+          </div>
+        ) : (
         <details className="border-t border-border pt-3">
           <summary className="cursor-pointer text-sm">Legacy Kit export and same-server copy</summary>
         <p className="text-sm text-muted-foreground">
@@ -134,6 +177,7 @@ export default function ShareBuildExportDialog({ open, onOpenChange, profileId }
           </div>
         )}
         </details>
+        )}
       </DialogContent>
     </Dialog>
   );

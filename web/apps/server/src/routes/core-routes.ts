@@ -30,11 +30,14 @@ import { registerBambuConnectRoutes } from "./bambu-connect.js";
 import { registerWebhookRoutes } from "./webhooks.js";
 import { registerShareRoutes } from "./shares.js";
 import { registerReferenceSharingRoutes } from "./reference-sharing.js";
+import { registerBoardRoutes } from "./board.js";
+import type { BoardStore } from "../services/board-store.js";
 import { registerAssistantRoutes } from "./assistant.js";
 import type { AuthStore } from "../services/auth-store.js";
 import { createIntegrationPort } from "../integrations/store.js";
 import { registerDiscordDigestRoute } from "./discord-digest.js";
 import { getIntegrationAdapter } from "../integrations/registry.js";
+import { hostedPlanningPolicy } from "../lib/hosted-planning.js";
 
 export type CoreRouteDeps = {
   repo: AppRepository;
@@ -46,6 +49,7 @@ export type CoreRouteDeps = {
   config: ServerConfig;
   jobs: InProcessJobRunner;
   authStore?: AuthStore | null;
+  boardStore?: BoardStore | null;
   reloadProfileSync?: () => Promise<void>;
 };
 
@@ -68,6 +72,8 @@ export async function registerCoreRoutes(
     thumbsDir: deps.thumbsDir,
     coversDir: deps.coversDir,
     jobs: deps.jobs,
+    dataDir: deps.dataDir,
+    hostedPlanning: hostedPlanningPolicy(deps.config.deployMode).hostedPlanning,
   };
 
   await registerSourceRoutes(app, routeDeps);
@@ -89,8 +95,12 @@ export async function registerCoreRoutes(
   await registerSourceNamingRoutes(app, { repo: deps.repo, dataDir: deps.dataDir });
   await registerStubRoutes(app, { repo: deps.repo, dataDir: deps.dataDir });
   await registerLegalRoutes(app);
-  await registerRepoManifestRoutes(app, { repo: deps.repo });
-  await registerSourceDocsRoutes(app, { repo: deps.repo });
+  const diskQuota = {
+    dataDir: deps.dataDir,
+    quotaBytes: hostedPlanningPolicy(deps.config.deployMode).tenantDiskQuotaBytes,
+  };
+  await registerRepoManifestRoutes(app, { repo: deps.repo, diskQuota });
+  await registerSourceDocsRoutes(app, { repo: deps.repo, diskQuota });
   await registerPrinterRoutes(app, { repo: deps.repo });
   await registerProductionSetupRoutes(app, { repo: deps.repo });
   await registerSlicerInstanceRoutes(app, {
@@ -112,12 +122,22 @@ export async function registerCoreRoutes(
   if (deps.config.multiUser && authStore) {
     registerShareRoutes(app, { repo: deps.repo, authStore, config: deps.config });
   }
+  const boardStore = deps.boardStore;
+  if (hostedPlanningPolicy(deps.config.deployMode).hostedPlanning && authStore && boardStore) {
+    registerBoardRoutes(app, { repo: deps.repo, boardStore });
+  }
 
   const integrations = createIntegrationPort({
     repo: deps.repo,
     getAdapter: getIntegrationAdapter,
   });
-  await registerPrinterCheckoffRoutes(app, { integrations, repo: deps.repo });
+  await registerPrinterCheckoffRoutes(app, {
+    integrations,
+    repo: deps.repo,
+    dataDir: deps.dataDir,
+    reposDir: deps.reposDir,
+    hostedPlanning: hostedPlanningPolicy(deps.config.deployMode).hostedPlanning,
+  });
   await registerDiscordDigestRoute(app, { repo: deps.repo, integrations });
   await registerPrinterSendQueueRoutes(app, {
     integrations,

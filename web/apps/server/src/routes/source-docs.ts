@@ -1,3 +1,4 @@
+import { runWithTenantDiskQuota, TenantDiskQuotaError } from "../lib/tenant-disk-quota.js";
 import {
   createReadStream,
   existsSync,
@@ -22,7 +23,7 @@ import { resolvedFileUnderRoot } from "../lib/secure-path.js";
 
 const GITHUB_PAT_KEY = "github_pat";
 
-type RouteDeps = { repo: AppRepository };
+type RouteDeps = { repo: AppRepository; diskQuota?: { dataDir: string; quotaBytes: number | null } };
 
 function resolvedDocumentPath(root: string, relativePath: string): string | null {
   const normalized = relativePath.replace(/\\/g, "/").replace(/^\/+/, "");
@@ -105,7 +106,18 @@ export async function registerSourceDocsRoutes(
       const pdfTextStorage = sourcePdfTextStorage(deps.repo, id, row.localPath);
       let cached = readCachedPdfText(row.localPath, docPath, pdfTextStorage);
       if (!cached) {
-        const extracted = await extractPdfText(row.localPath, docPath, pdfTextStorage);
+        const extracted = await runWithTenantDiskQuota({
+          dataDir: deps.diskQuota?.dataDir ?? "", reposDir: deps.repo.reposDir,
+          tenantId: request.tenantId, quotaBytes: deps.diskQuota?.quotaBytes ?? null,
+          sourceIds: () => deps.repo.listSources().map((source) => source.id),
+        }, () => extractPdfText(row.localPath!, docPath, pdfTextStorage)).catch((error: unknown) => {
+          if (error instanceof TenantDiskQuotaError) {
+            reply.status(413).send({ detail: error.message });
+            return null;
+          }
+          throw error;
+        });
+        if (!extracted) return;
         if (extracted.status === "ready") {
           cached = { text: extracted.text, chunks: extracted.chunks, hash: extracted.hash };
           deps.repo.updateSourceDocExtract(id, docPath, {

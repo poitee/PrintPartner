@@ -4,6 +4,7 @@ import {
   LIBRARY_ADD_ACTIONS,
   buildLibraryCategoryRows,
   categoryRailIndentStyle,
+  libraryAddActionsForHost,
   reorderCategoriesWithinSiblings,
 } from "./libraryCategoryRailModel";
 
@@ -53,6 +54,12 @@ describe("libraryCategoryRailModel", () => {
 
   it("exports add actions and indent style", () => {
     expect(LIBRARY_ADD_ACTIONS.map((action) => action.id)).toContain("plan-bundle");
+    expect(libraryAddActionsForHost(true).map((action) => action.kind)).toEqual([
+      "github",
+      "archive",
+      "plan_bundle",
+    ]);
+    expect(libraryAddActionsForHost(false)).toBe(LIBRARY_ADD_ACTIONS);
     expect(categoryRailIndentStyle(0)).toBeUndefined();
     expect(categoryRailIndentStyle(2)).toEqual({ paddingLeft: "1.5rem" });
   });

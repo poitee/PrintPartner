@@ -4,6 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { strFromU8, unzipSync } from "fflate";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  runWithTenantDiskQuota,
+  TenantDiskQuotaError,
+} from "../lib/tenant-disk-quota.js";
 import type {
   AcceptedOperationalArtifact,
   AcceptedPlanOperationalSnapshot,
@@ -174,6 +178,22 @@ const readyWorkspace = (plates: readonly AcceptedPlate[]): ReadAcceptedPlateWork
 });
 
 describe("materializeDirectExport3mf", () => {
+  it("preserves quota rejection from accepted export publication", async () => {
+    const dependencies = fixture(readyWorkspace([]));
+    const dataDir = join(dependencies.tenantExportsDir, "..");
+
+    await expect(runWithTenantDiskQuota({
+      dataDir,
+      reposDir: dependencies.reposDir,
+      tenantId: "default",
+      sourceIds: () => [],
+      quotaBytes: 1,
+    }, async () => materializeDirectExport3mf(dependencies, {
+      profileId: 7,
+      tokens: [tokens[0]!],
+    }))).rejects.toBeInstanceOf(TenantDiskQuotaError);
+  });
+
   it("keeps the arrangement the Plates step showed, one Plate beside the next", async () => {
     const dependencies = fixture(readyWorkspace([
       plate(1, "plate-one", tokens[0]!, 12_000, 34_000),

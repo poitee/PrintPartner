@@ -6,6 +6,10 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  runWithTenantDiskQuota,
+  TenantDiskQuotaError,
+} from "../lib/tenant-disk-quota.js";
+import {
   LocalSourceSnapshotStore,
   MAX_SOURCE_SNAPSHOT_BYTES,
   SOURCE_SNAPSHOT_MANIFEST_FILE,
@@ -308,6 +312,35 @@ describe("LocalSourceSnapshotStore", () => {
 
     expect(existsSync(join(reposDir, "10", "revisions", "short-download"))).toBe(false);
     expect(await candidateNames(reposDir, 10)).toEqual([]);
+  });
+
+  it("blocks quota exhaustion before publishing a source snapshot", async () => {
+    const reposDir = tempReposDir();
+    const store = new LocalSourceSnapshotStore({ reposDir });
+    const part = file("part.stl", "stl", "solid quota");
+
+    await expect(
+      runWithTenantDiskQuota(
+        {
+          dataDir: reposDir,
+          reposDir,
+          tenantId: "tenant-a",
+          quotaBytes: part.content.byteLength - 1,
+          sourceIds: () => [16],
+        },
+        () =>
+          store.materialize({
+            sourceId: 16,
+            upstreamRevisionKey: "quota-blocked",
+            files: [part.descriptor],
+            selection: selection(),
+            openFile: async () => response(part.content),
+          }),
+      ),
+    ).rejects.toBeInstanceOf(TenantDiskQuotaError);
+
+    expect(existsSync(join(reposDir, "16", "revisions", "quota-blocked"))).toBe(false);
+    expect(await candidateNames(reposDir, 16)).toEqual([]);
   });
 
   it.each([

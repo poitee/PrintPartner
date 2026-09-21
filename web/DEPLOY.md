@@ -222,18 +222,64 @@ and authentication protect the shared interface.
 | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | With S3 | S3 credentials (the RustFS development stack reads `PP_DEV_S3_ACCESS_KEY` / `PP_DEV_S3_SECRET_KEY`) |
 | `S3_ENDPOINT` | S3-compatible dev | Custom S3 endpoint URL (e.g. `http://rustfs:9000`) |
 | `S3_FORCE_PATH_STYLE` | S3-compatible dev | Set `1` for path-style URLs (RustFS, MinIO, Garage, etc.) |
-| `MULTI_USER` | Optional | `1` enables multiple accounts and sharing. The first registered user claims existing data. |
+| `MULTI_USER` | Invite host: `1` | `1` enables multiple accounts and sharing. Self-host: the first registered user claims existing data. Hosted planning (`DEPLOY_MODE=saas`) starts empty and does not claim the `default` tenant. |
 | `SINGLE_USER_AUTH` | Optional | `1` enables one self-host administrator account without multi-user sharing |
 | `SESSION_SECRET` | Multi-user / OAuth / prod | Not needed for `SINGLE_USER_AUTH=1`. Supply it for `MULTI_USER=1` or OAuth in production. |
 | `PP_BIND_ADDRESS` | Compose only | Host bind for app/Postgres/RustFS ports. Defaults to loopback (`127.0.0.1`). |
 | `PP_DEV_MULTI_USER` / `PP_DEV_SESSION_SECRET` | Development Compose | Override the single-user mode and development-only session secret |
 | `ALLOWED_ORIGINS` | Prod | Comma-separated CORS origins (alias: `CORS_ORIGIN`) |
+| `TRUST_PROXY` | Invite host: `1` | Trust `X-Forwarded-*` from the HTTPS reverse proxy. Required when TLS terminates in front of the container. |
 | `SAAS_BASIC_AUTH` | Optional | `user:password` for HTTP Basic dev auth |
 | `GITHUB_CLIENT_ID` / `SECRET` / `GITHUB_CALLBACK_URL` | OAuth | GitHub OAuth app |
 | `DISCORD_CLIENT_ID` / `SECRET` / `DISCORD_CALLBACK_URL` | OAuth | Discord OAuth app (`/auth/discord/callback`) |
 | `GOOGLE_CLIENT_ID` | Optional | Public Google OAuth **Web** client id for parts-manifest Drive open/save (SPA GIS + Drive API). It is not a secret and is exposed on `GET /health`. Enable Drive API and add your app origin to Authorized JavaScript origins. Dev SPA fallback: `VITE_GOOGLE_CLIENT_ID`. |
-| `SAAS_ALLOW_ANONYMOUS` | Optional | `1` to allow unauthenticated API (dev only) |
+| `SAAS_ALLOW_ANONYMOUS` | Optional | `1` to allow unauthenticated API (dev only). Production hosted planning refuses to start if this is set. |
+| `REGISTRATION_OPEN` | Invite host | Set `0` after invites to refuse new email and OAuth registrations. Existing accounts still log in. |
 | `REDIS_URL` | Optional | BullMQ-backed job queue for horizontal scaling |
+
+### Invite-beta hosted planning
+
+The public invite host is Library, Builds, Sources, Plan, Production export, and Checkoff. It does not talk to printers on a LAN. `DEPLOY_MODE=saas` denies LAN adapters even if a tenant uses curl.
+
+`docker-compose.saas.yml` stays a development stack. It turns on `SAAS_ALLOW_ANONYMOUS=1`, Postgres, and S3. Production hosted planning refuses to start with anonymous access. Do not use that file for the invite host.
+
+#### Checklist
+
+1. Copy `hosted-planning.env.example` to `hosted-planning.env`.
+2. Set `DEPLOY_MODE=saas` (already pinned in `docker-compose.hosted.yml`).
+3. Set `MULTI_USER=1` (already pinned).
+4. Leave `SAAS_ALLOW_ANONYMOUS` unset.
+5. Leave `DATABASE_URL`, `POSTGRES_EXPERIMENTAL`, and `S3_BUCKET` unset. SQLite on the volume is the database.
+6. Generate a strong `SESSION_SECRET`.
+7. Pin `ALLOWED_ORIGINS` to the public HTTPS origin. Do not use `true`.
+8. Put HTTPS in front. Terminate TLS at Caddy, nginx, or a load balancer. Proxy to `127.0.0.1:8080`.
+9. Keep `SESSION_COOKIE_SECURE=1` and `TRUST_PROXY=1` (already pinned).
+10. Leave `REGISTRATION_OPEN=1` while you create invite accounts. Set `REGISTRATION_OPEN=0` and recreate the container after the list is done. Existing accounts still log in.
+11. Back up the `print-partner-hosted-data` volume. HTTP `/backups` is off on this host. Tenants cannot restore the instance.
+
+```bash
+cp hosted-planning.env.example hosted-planning.env
+# edit SESSION_SECRET and ALLOWED_ORIGINS
+docker compose --env-file hosted-planning.env -f docker-compose.hosted.yml up -d
+```
+
+Health should advertise `hosted_planning` and `invite_board`. It omits `mcp_http`, `backups`, and `plan_sharing`. GitHub and Discord buttons appear only when health lists `github_oauth` or `discord_oauth`. Leave Discord unset.
+
+Signed-in invitees share on the Board at `/board`. A post stores a frozen `printpartner-reference-share` Build snapshot. Later edits to the author's Build do not change the post. Comments are a flat list. Add to my Builds stays disabled until Source mapping exists. Kit inbox, send-to-user copies, and `.print-partner-kit` export are 403 on this host. `GET /plans/:id/reference-share` stays available for the post preview.
+
+Volume backup from the Docker host:
+
+```bash
+docker run --rm \
+  -v print-partner-hosted-data:/data:ro \
+  -v "$PWD":/backup \
+  alpine:3.21.3 \
+  tar czf /backup/print-partner-hosted-$(date -u +%Y%m%d).tar.gz -C /data .
+```
+
+The operator still owns DNS, the certificate, the invite list, closing registration, and storing that archive off the live volume. This cut does not add a local relay, Prusa Connect, Moonraker cloud, a native app, Postgres, or S3.
+
+The following claim-path note is for self-host `MULTI_USER` upgrades. Hosted planning starts empty and does not claim the `default` tenant.
 
 Print Partner now gives a first multi-user account direct ownership of the
 bootstrap `default` tenant. No application tables or data directories move
@@ -256,7 +302,7 @@ recovery.
 | `GET /auth/callback` | GitHub OAuth callback |
 | `GET /auth/discord` | Start Discord OAuth |
 | `GET /auth/discord/callback` | Discord OAuth callback |
-| `POST /auth/register` | Email + password registration. Single-user mode closes registration after its administrator exists. |
+| `POST /auth/register` | Email + password registration. Single-user mode closes registration after its administrator exists. `REGISTRATION_OPEN=0` closes registration for every remaining account type. |
 | `POST /auth/login` | Email + password login |
 | `POST /auth/forgot-password` | Request a password reset email |
 | `POST /auth/reset-password` | Set a new password using a reset token |
@@ -264,10 +310,16 @@ recovery.
 | `POST /auth/logout` | Clear session |
 | `GET /auth/me` | Current user + tenant |
 | `POST /auth/dev-login` | Dev session helper |
-| `POST /plans/:id/shares` | Send build copy to another user |
-| `GET /shares/incoming` | List pending shares for current user |
-| `POST /shares/:token/accept` | Import shared build as new plan |
-| `DELETE /shares/:id` | Revoke a pending share |
+| `GET /board/posts` | Newest-first invite Board feed (session required) |
+| `GET /board/posts/:id` | Frozen recipe snapshot and flat comments |
+| `POST /board/posts` | Post a Build snapshot with a caption |
+| `POST /board/posts/:id/hide` | Admin hides a post |
+| `POST /board/posts/:id/comments` | Add a comment |
+| `DELETE /board/comments/:id` | Author or admin deletes a comment |
+| `POST /plans/:id/shares` | Send build copy to another user. 403 on the invite host. |
+| `GET /shares/incoming` | List pending shares for current user. 403 on the invite host. |
+| `POST /shares/:token/accept` | Import shared build as new plan. 403 on the invite host. |
+| `DELETE /shares/:id` | Revoke a pending share. 403 on the invite host. |
 
 ### Password reset email (multi-user)
 
