@@ -122,14 +122,7 @@ function openAcceptedMediaPngDescriptor(input: {
       return { status: isRenameWindowError(error) ? "retryable_race" : "miss" };
     }
     const opened = fstatSync(descriptor);
-    if (
-      !opened.isFile() ||
-      opened.dev !== beforeOpen.dev ||
-      opened.ino !== beforeOpen.ino ||
-      opened.size !== beforeOpen.size
-    ) {
-      return { status: "retryable_race" };
-    }
+    if (!opened.isFile() || opened.size < PNG_SIGNATURE.length) return { status: "miss" };
 
     const openedDescriptor = descriptor;
     descriptor = null;
