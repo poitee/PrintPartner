@@ -135,6 +135,7 @@ export default function SourceCategoryManager({ engineReady }: Props) {
   const baselineRef = useRef<string[]>(categories);
   const nextRowIdRef = useRef(0);
   const draftDirtyRef = useRef(false);
+  const draftRevisionRef = useRef(0);
   const [newName, setNewName] = useState("");
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saveNote, setSaveNote] = useState<string | null>(null);
@@ -145,17 +146,22 @@ export default function SourceCategoryManager({ engineReady }: Props) {
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
 
+  const draftRevision = draftRevisionRef.current;
+
   useEffect(() => {
-    if (sameCategories(draftPaths(draft), categories)) {
+    if (draftRevision !== draftRevisionRef.current) return;
+    const paths = draftPaths(draft);
+    if (sameCategories(paths, categories)) {
       draftDirtyRef.current = false;
       baselineRef.current = categories;
       return;
     }
-    if (!draftDirtyRef.current) {
+    if (sameCategories(paths, baselineRef.current) || !draftDirtyRef.current) {
+      draftDirtyRef.current = false;
       baselineRef.current = categories;
       setDraft(categoryRows(categories));
     }
-  }, [categories, draft]);
+  }, [categories, draft, draftRevision]);
 
   const queryError =
     categoriesQuery.error instanceof Error
@@ -168,6 +174,7 @@ export default function SourceCategoryManager({ engineReady }: Props) {
   const dirty = !sameCategories(draftPaths(draft), categories);
 
   const addRow = (parentId: string | null, name: string) => {
+    draftRevisionRef.current += 1;
     draftDirtyRef.current = true;
     setDraft((prev) => [
       ...prev,
@@ -199,6 +206,7 @@ export default function SourceCategoryManager({ engineReady }: Props) {
   };
 
   const onRename = (id: string, value: string) => {
+    draftRevisionRef.current += 1;
     draftDirtyRef.current = true;
     setDraft((prev) => prev.map((row) => (row.id === id ? { ...row, name: value } : row)));
   };
@@ -209,6 +217,7 @@ export default function SourceCategoryManager({ engineReady }: Props) {
       setLoadError("Keep at least one category.");
       return;
     }
+    draftRevisionRef.current += 1;
     draftDirtyRef.current = true;
     setDraft((prev) => prev.filter((row) => !doomed.has(row.id)));
     setLoadError(null);
@@ -224,6 +233,7 @@ export default function SourceCategoryManager({ engineReady }: Props) {
     const oldIndex = draft.findIndex((row) => row.id === active.id);
     const newIndex = draft.findIndex((row) => row.id === over.id);
     if (oldIndex < 0 || newIndex < 0) return;
+    draftRevisionRef.current += 1;
     draftDirtyRef.current = true;
     setDraft((prev) => moveItem(prev, oldIndex, newIndex));
     setSaveNote(null);
