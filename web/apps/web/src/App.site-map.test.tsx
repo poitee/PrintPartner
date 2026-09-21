@@ -2,7 +2,7 @@
 
 import { cleanup, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, Outlet } from "react-router-dom";
 import App from "./App";
 
@@ -73,6 +73,10 @@ vi.mock("./pages/ForgotPasswordPage", () => ({ default: () => <h1>Forgot</h1> })
 vi.mock("./pages/ResetPasswordPage", () => ({ default: () => <h1>Reset</h1> }));
 
 describe("accepted site map routes", () => {
+  beforeAll(async () => {
+    await import("./AuthenticatedApp");
+  });
+
   afterEach(cleanup);
 
   it("opens Builds from /", async () => {
