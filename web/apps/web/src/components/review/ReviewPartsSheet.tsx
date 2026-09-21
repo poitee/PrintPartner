@@ -509,7 +509,6 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
           "sheet-table-wrap",
           isMobileLayout && "checkoff-print-table hidden print:block",
         )}
-        aria-hidden={isMobileLayout ? true : undefined}
       >
         <table className="sheet-table">
           <thead>

@@ -110,6 +110,15 @@ try {
   const mobileColorButton = page.locator(".checkoff-mobile-card").getByRole("button", { name: "Change color for base.stl", exact: true });
   await mobileColorButton.waitFor({ state: "visible" });
   assert.equal(await page.getByRole("button", { name: "Change color for base.stl", exact: true }).count(), 1);
+  await page.evaluate(() => globalThis.dispatchEvent(new globalThis.Event("beforeprint")));
+  await page.emulateMedia({ media: "print" });
+  const printTableColorButton = page.locator(".checkoff-print-table").getByRole("button", { name: "Change color for base.stl", exact: true });
+  await printTableColorButton.waitFor({ state: "visible" });
+  assert.equal(await page.getByRole("button", { name: "Change color for base.stl", exact: true }).count(), 1);
+  await page.emulateMedia({ media: "screen" });
+  await page.evaluate(() => globalThis.dispatchEvent(new globalThis.Event("afterprint")));
+  await mobileColorButton.waitFor({ state: "visible" });
+  assert.equal(await page.getByRole("button", { name: "Change color for base.stl", exact: true }).count(), 1);
   await mobileColorButton.click();
   await page.getByRole("dialog").waitFor();
   assert.equal(await page.evaluate(() => globalThis.document.documentElement.scrollWidth > globalThis.innerWidth), false);
