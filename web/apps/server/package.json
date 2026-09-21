@@ -27,7 +27,7 @@
     "@octokit/rest": "^22.0.1",
     "@print-partner/contracts": "*",
     "@print-partner/domain": "*",
-    "adm-zip": "^0.6.0",
+    "adm-zip": "^0.6.1",
     "better-sqlite3": "^12.11.1",
     "chokidar": "^4.0.3",
     "dockerode": "^5.0.1",
