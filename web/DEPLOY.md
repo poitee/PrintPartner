@@ -70,6 +70,18 @@ The app service has a healthcheck that polls `GET /health` every 30s using Node'
 | `SLICER_ORCA_DIR` / `SLICER_PRUSA_DIR` / `SLICER_BAMBU_DIR` | `/slicer-profiles/<slicer>` | Profile directory for the corresponding stock slicer instance. Used only in single-tenant self-host mode. |
 <!-- release-version:end -->
 
+### Browser error reporting (optional)
+
+The React app initializes `@sentry/react` for errors and tracing when
+`VITE_SENTRY_DSN` is present at **build** time. Vite inlines that value, so a
+runtime environment variable on the container does not reach the browser. Pass
+it as a Docker build arg (`docker build --build-arg VITE_SENTRY_DSN=...`) or
+put it in `web/apps/web/.env` for local `npm run dev`. Leave it empty to keep
+the SDK disabled. `release` is the web package version and `environment` is the
+Vite mode. Production source maps are not uploaded until a Sentry organization,
+project, and auth token are available, so minified stack traces stay unreadable
+until that upload is configured.
+
 Filesystem profile sync is available only in single-tenant self-host mode. It
 is disabled in SaaS and when `MULTI_USER=1` because a process-wide mounted
 directory cannot establish tenant ownership. Slicer instance configuration and
