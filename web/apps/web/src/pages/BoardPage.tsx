@@ -12,6 +12,7 @@ import {
   type BoardPostDetail,
   type BoardPostSummary,
 } from "../api/endpoints/board";
+import ReferenceShareImport from "../components/share/ReferenceShareImport";
 import PageHeader from "../components/layout/PageHeader";
 import PageShell from "../components/layout/PageShell";
 import EmptyState from "../components/layout/EmptyState";
@@ -181,19 +182,20 @@ function PostDetail({ postId }: { postId: string }) {
         <CardContent className="space-y-4">
           <Cover url={post.cover_url} title={post.title} />
           <RecipePreview snapshot={post.snapshot} />
-          <p className="text-sm text-muted-foreground">
-            Add to my Builds is waiting on Source mapping. Sync the publisher URLs in your own Library.
-          </p>
-          <div className="flex flex-wrap gap-2">
-            <Button type="button" disabled>
-              Add to my Builds
-            </Button>
-            {user?.is_admin ? (
+          {post.snapshot.kind === "build" ? (
+            <ReferenceShareImport manifest={post.snapshot} />
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              This collection lists sources. It does not create a Build.
+            </p>
+          )}
+          {user?.is_admin ? (
+            <div className="flex flex-wrap gap-2">
               <Button type="button" variant="secondary" onClick={onHide}>
                 Hide post
               </Button>
-            ) : null}
-          </div>
+            </div>
+          ) : null}
         </CardContent>
       </Card>
       <Card>

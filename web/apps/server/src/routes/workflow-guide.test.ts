@@ -6,7 +6,7 @@ describe("workflow help", () => {
     const guide = workflowGuideForExternalAccess("off");
     expect(guide).toContain("Changes save automatically");
     expect(guide).toContain("not model files");
-    expect(guide).toContain("Manifest import is not yet available");
+    expect(guide).toContain("every included file is Ready");
     expect(guide).not.toContain("Accept Working Plan");
     expect(guide).not.toContain("Build Working Plan");
     expect(guide).not.toContain("openapi.json");

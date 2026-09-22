@@ -265,7 +265,7 @@ docker compose --env-file hosted-planning.env -f docker-compose.hosted.yml up -d
 
 Health should advertise `hosted_planning` and `invite_board`. It omits `mcp_http`, `backups`, and `plan_sharing`. GitHub and Discord buttons appear only when health lists `github_oauth` or `discord_oauth`. Leave Discord unset.
 
-Signed-in invitees share on the Board at `/board`. A post stores a frozen `printpartner-reference-share` Build snapshot. Later edits to the author's Build do not change the post. Comments are a flat list. Add to my Builds stays disabled until Source mapping exists. Kit inbox, send-to-user copies, and `.print-partner-kit` export are 403 on this host. `GET /plans/:id/reference-share` stays available for the post preview.
+Signed-in invitees share on the Board at `/board`. A post stores a frozen `printpartner-reference-share` Build snapshot. Later edits to the author's Build do not change the post. Comments are a flat list. Add to my Builds maps each reference to a Library Source the invitee already has and creates a Build only when every included file is Ready. Kit inbox, send-to-user copies, and `.print-partner-kit` export are 403 on this host. `GET /plans/:id/reference-share` stays available for the post preview.
 
 Volume backup from the Docker host:
 

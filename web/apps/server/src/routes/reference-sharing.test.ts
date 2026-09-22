@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Fastify from "fastify";
@@ -96,5 +96,50 @@ describe("references-only sharing routes", () => {
     });
     expect(response.statusCode).toBe(404);
     expect(response.body).not.toContain("Reference Build");
+  });
+
+  it("imports a mapped Build once and leaves an unmapped Library unchanged", async () => {
+    const root = mkdtempSync(join(tmpdir(), "pp-share-route-"));
+    cleanups.push(async () => { rmSync(root, { recursive: true, force: true }); });
+    mkdirSync(join(root, "parts"), { recursive: true });
+    writeFileSync(join(root, "parts", "bracket.stl"), "solid bracket\nendsolid bracket\n");
+    const { app, repo, source } = await fixture();
+    const commit = "b".repeat(40);
+    const acquired = repo.createSource({ name: "Acquired", url: "https://github.com/acme/widget", source_kind: "github", local_path: root });
+    repo.updateSource(acquired.id, { last_commit_sha: commit });
+    const manifest = {
+      format: "printpartner-reference-share", version: 1, kind: "build", title: "Imported recipe",
+      sources: [{ key: "source-1", name: source.name, location: { kind: "publisher", url: "https://github.com/acme/widget" },
+        revision: { branch: "main", tag: null, commit }, file_rules: ["parts/bracket.stl"] }],
+      layers: [{ source: "source-1", role: "base" }], selections: {}, include: ["parts/bracket.stl"], exclude: [], replacements: {},
+      parts: [{ source: "source-1", path: "parts/bracket.stl", quantity: 1, included: true, role: "primary", color: null }],
+    };
+    const refused = await app.inject({ method: "POST", url: "/reference-shares/imports", payload: { manifest, mapping: {} } });
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json().dependencies[0].status).toBe("File required");
+    expect(repo.listProfileHeaders().some((header) => header.name === "Imported recipe")).toBe(false);
+    const payload = { manifest, mapping: { "source-1": acquired.id } };
+    const created = await app.inject({ method: "POST", url: "/reference-shares/imports", payload });
+    const repeated = await app.inject({ method: "POST", url: "/reference-shares/imports", payload });
+    expect(created.statusCode).toBe(200);
+    expect(repeated.json()).toMatchObject({ profile_id: created.json().profile_id, created: false });
+    expect(repo.getProfileLayers(created.json().profile_id).map((layer) => layer.project_id)).toEqual([acquired.id]);
+  });
+
+  it("exports a collection for the selected Sources only", async () => {
+    const { app, repo, source } = await fixture();
+    const other = repo.createSource({ name: "Not selected", url: "https://github.com/acme/other", source_kind: "github" });
+    const response = await app.inject({
+      method: "POST", url: "/reference-shares/collections",
+      payload: { title: "Bench", source_ids: [source.id] },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().manifest.sources.map((entry: { name: string }) => entry.name)).toEqual(["Local design"]);
+    expect(response.body).not.toContain(other.name);
+    const missing = await app.inject({
+      method: "POST", url: "/reference-shares/collections",
+      payload: { title: "Bench", source_ids: [99999] },
+    });
+    expect(missing.statusCode).toBe(404);
   });
 });

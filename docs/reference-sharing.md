@@ -1,6 +1,6 @@
 # References-only sharing
 
-Status: first increment implemented and locally verified. It provides Build manifest and Git bundle export, a strict format, and read-only manifest validation. Creating a Build from this format and Library collection UI are subsequent increments, not completed features.
+Status: Build and collection export, read-only validation, explicit dependency mapping, and printable Build creation are implemented. Direct Git publishing is still a later increment.
 
 Tracking: [GitHub issue 65](https://github.com/poitee/PrintPartner/issues/65).
 
@@ -32,22 +32,22 @@ The initial format does not assert licenses or authorship absent reliable metada
 
 ## Receiving a manifest
 
-The first increment validates and previews JSON without creating or changing data. The format is deliberately not passed to the legacy Kit importer, which matches Sources by name and can change shared import rules.
+Validation previews JSON without creating or changing data. The format is deliberately not passed to the legacy Kit importer, which matches Sources by name and can change shared import rules.
 
-The next increment must let the recipient map each reference to independently acquired local files. Show `File required`, `Revision unverified`, or `Ready` per dependency. Missing models never count as a successful, printable import. Verify relative path and available content identity; do not silently match a same-name Source or replace its rules.
+A recipient maps each reference to a Library Source they already have. The check shows `File required`, `Revision unverified`, or `Ready` per included part. A printable Build is created only when every included part is Ready. Relative path and recorded commit are checked. A same-name Source is not selected automatically, and import rules are left unchanged.
 
 Creating a Build must be atomic or recoverably idempotent. It creates recipient-owned state, resets Checkoff, and leaves printers unassigned. A retry must not create duplicate Builds. Do not download models through the sender, mirror them in Git, bypass paid/private access, or execute imported G-code.
 
 ## Collections and updates
 
-A collection is an explicit selection of Source references, not the entire Library by default. Export a snapshot; future additions require a separate opt-in subscription. Collection export UI follows the Build export increment and reuses the source contract.
+A collection is an explicit selection of Source references, not the entire Library by default. The Library selection bar exports that selection. Future additions require a separate opt-in subscription.
 
 Updates create new manifest revisions. Recipients see a diff and choose whether to adopt them. Source changes, revoked links, or an unreachable Git server must not invalidate already acquired local models or block existing printing and Checkoff.
 
 ## Delivery and acceptance
 
-- First increment: strict contract, deterministic Build JSON/Git export, preview, and read-only JSON validation. Tests inspect ZIP entries and reject embedded content. Export works without multi-user mode and without network access.
-- Next: Library selection UI and safe dependency mapping/import. Test an empty recipient Library, missing/local-only models, duplicate names, failure rollback, and repeat import.
+- Export and validation: strict contract, deterministic Build JSON/Git export, preview, and read-only JSON validation. Tests inspect ZIP entries and reject embedded content. Export works without multi-user mode and without network access.
+- Mapping and import: Library selection exports a collection manifest for the chosen Sources only. Build import maps each reference explicitly, refuses missing or unverified files, rolls back a failed write, and repeats the same mapping without a second Build.
 - Later: Git URL import with redirect/SSRF controls, then optional commit/PR publishing. Neither integration may acquire model bytes through sharing. Test authentication boundaries and private repository handling.
 
 User-visible proof must download both formats from an isolated running app, inspect the ZIP contents, and confirm a local-only source stays a manual reference. No production data or physical printers are used for verification.
@@ -60,6 +60,9 @@ User-visible proof must download both formats from an isolated running app, insp
 | `GET /plans/:id/reference-share?format=git` | Git bundle from the current Build. |
 | `POST /reference-shares/validate` | Validate a JSON manifest and report dependency warnings without mutations or downloads. |
 | `POST /reference-shares/git` | Package the exact validated manifest supplied in the request. The UI uses this so the download matches the preview. |
+| `POST /reference-shares/dependencies` | Report `File required`, `Revision unverified`, or `Ready` for an explicit source mapping. Does not mutate or download. |
+| `POST /reference-shares/imports` | Create one recipient-owned Build when every included part is Ready. A repeated mapping returns the same Build. |
+| `POST /reference-shares/collections` | Export a collection manifest for the listed Library Source ids only. |
 
 These routes inherit the installation's existing authentication and API middleware. They are not public sharing links. JSON requests and generated manifests are limited to 4 MiB. Errors do not echo the rejected payload.
 
@@ -72,7 +75,7 @@ REFERENCE_SHARE_API=http://127.0.0.1:18877 \
 REFERENCE_SHARE_BUILD=1 node test/browser/reference-sharing.browser.mjs
 ```
 
-The harness refuses API data directories outside its `/tmp/pp-reference-share-` fixture prefix. It checks real downloads, ZIP contents, read-only validation, and narrow-screen overflow. It does not exercise automatic import or remote Git publishing, which are not implemented yet.
+The harness refuses API data directories outside its `/tmp/pp-reference-share-` fixture prefix. It checks real downloads, ZIP contents, read-only validation, and narrow-screen overflow. Remote Git publishing is not implemented yet.
 
 ## Verification record
 
