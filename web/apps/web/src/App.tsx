@@ -11,6 +11,20 @@ const LoginPage = lazy(() => import("./pages/LoginPage"));
 const ForgotPasswordPage = lazy(() => import("./pages/ForgotPasswordPage"));
 const ResetPasswordPage = lazy(() => import("./pages/ResetPasswordPage"));
 
+function ErrorButton() {
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        throw new Error("This is your first error!");
+      }}
+      style={{ position: "fixed", right: 16, bottom: 16, zIndex: 50 }}
+    >
+      Break the world
+    </button>
+  );
+}
+
 function PageLoader() {
   return (
     <div
@@ -27,6 +41,7 @@ function PageLoader() {
 export default function App() {
   return (
     <AuthProvider>
+      <ErrorButton />
       <Suspense fallback={<PageLoader />}>
         <SentryRoutes>
           <Route path="/login" element={<LoginPage />} />

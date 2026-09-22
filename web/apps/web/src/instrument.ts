@@ -18,7 +18,9 @@ if (typeof window !== "undefined" && window.location.origin) {
 }
 
 Sentry.init({
-  dsn: import.meta.env.VITE_SENTRY_DSN,
+  dsn:
+    import.meta.env.VITE_SENTRY_DSN ||
+    "https://6b704bda9a88cc08af2197c87b7e95c0@o4510184122351616.ingest.us.sentry.io/4512127197380608",
   environment: import.meta.env.MODE,
   release: import.meta.env.VITE_APP_VERSION,
 
