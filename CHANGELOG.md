@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Optional browser error reporting** — the React app initializes Sentry for
+  errors and tracing when `VITE_SENTRY_DSN` is set at build time. An empty
+  value leaves the SDK off. See [web/DEPLOY.md](web/DEPLOY.md).
 - **Invite-only Board** — signed-in GitHub and email users post a frozen
   references-only Build snapshot, read a newest-first feed, and leave flat
   comments. Kit inbox, `.print-partner-kit` export, and Discord login stay off
