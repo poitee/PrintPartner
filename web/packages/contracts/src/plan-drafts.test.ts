@@ -48,6 +48,30 @@ describe("Plan draft contracts", () => {
     })).toMatchObject({ profile_id: 7, draft: { draft_id: 11 } });
   });
 
+  it("accepts an ambiguous predecessor conflict with one candidate", () => {
+    const workspace = parsePlanDraftWorkspace({
+      profile_id: 7,
+      draft: {
+        draft_id: 11,
+        state: "open",
+        lifecycle_version: 0,
+        snapshot_digest: digest,
+        base: { revision_id: 3, plan_version: 2 },
+      },
+      parts: [],
+      diff: { base_is_current: true, added: [], removed: [], changed: [] },
+      reconciliation: {
+        kind: "unresolved",
+        conflicts: [{
+          kind: "ambiguous_exact_match",
+          target_draft_part_id: 4,
+          candidate_revision_part_ids: [2],
+        }],
+      },
+    });
+    expect(workspace.reconciliation).toMatchObject({ kind: "unresolved" });
+  });
+
   it("rejects unsafe decisions and mismatched empty accepted bases", () => {
     expect(() => parseEditPlanDraftPartsRequest({
       expected_snapshot_digest: digest,
