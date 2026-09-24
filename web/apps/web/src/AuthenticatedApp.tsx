@@ -10,6 +10,7 @@ import { ProfileProvider } from "./context/ProfileContext";
 import { SaveStatusProvider } from "./context/SaveStatusContext";
 import { StlAutoSyncProvider } from "./context/StlAutoSyncContext";
 import AppLayout from "./layout/AppLayout";
+import BuildSaveNavigationGuard from "./components/BuildSaveNavigationGuard";
 import { buildSourcesRoute } from "./lib/routes";
 
 const BuildPage = lazy(() => import("./pages/BuildPage"));
@@ -53,6 +54,7 @@ export default function AuthenticatedApp() {
                 <SaveStatusProvider>
                   <ImportRulesSaveProvider>
                     <KitManifestSaveProvider>
+                      <BuildSaveNavigationGuard />
                       <Routes>
                         <Route element={<AppLayout />}>
                           <Route index element={<IndexRedirect />} />
