@@ -920,7 +920,7 @@ option_groups:
     const custom = await applyAssistantAction({
       id: "custom-choice", type: "propose_resolve_build_differences", plan_id: plan.id,
       label: "Custom", summary: "test",
-      params: { group_id: groupId, resolution: "custom", rationale: "Use a manually modified bracket" },
+      params: { group_id: groupId, resolution: "custom", rationale: "Use a manually modified bracket", custom_resolution: "Use the base bracket with a 2 mm spacer" },
     }, { repo, jobs: { start: async () => "unused" } as never });
     expect(custom.ok).toBe(true);
     const blocked = await applyAssistantAction({
