@@ -375,14 +375,24 @@ export function hydrateBuildPlanningBrief(
   const resolutions = Object.fromEntries(
     Object.entries(brief.resolutions).filter(([groupId]) => currentGroups.has(groupId) && currentGroups.get(groupId) === previousGroups.get(groupId)),
   );
-  const sameDifferences = JSON.stringify(brief.differences.map((difference) => difference.id).sort()) ===
-    JSON.stringify(differences.map((difference) => difference.id).sort());
+  const differenceIdentity = (entries: BuildDifference[]): string => JSON.stringify(
+    entries.map((difference) => [difference.group_id, difference.id]).sort(([leftGroup, leftId], [rightGroup, rightId]) =>
+      leftGroup!.localeCompare(rightGroup!) || leftId!.localeCompare(rightId!),
+    ),
+  );
+  const sameDifferences = differenceIdentity(brief.differences) === differenceIdentity(differences);
+  const currentSourceRevisions = Object.fromEntries(evidence.flatMap((item) =>
+    item.source_id != null && item.pinned_revision ? [[String(item.source_id), item.pinned_revision]] : [],
+  ));
+  const sameSources = brief.draft_source_revisions == null ||
+    JSON.stringify(Object.entries(brief.draft_source_revisions).sort()) ===
+    JSON.stringify(Object.entries(currentSourceRevisions).sort());
   return {
     ...brief,
     evidence,
     differences,
     resolutions,
-    draft_id: sameDifferences && Object.keys(resolutions).length === Object.keys(brief.resolutions).length
+    draft_id: sameDifferences && sameSources && Object.keys(resolutions).length === Object.keys(brief.resolutions).length
       ? brief.draft_id
       : undefined,
   };

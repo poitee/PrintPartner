@@ -316,6 +316,7 @@ describe("Build planning", () => {
     ];
     const reviewed = hydrateBuildPlanningBrief(store, brief);
     reviewed.draft_id = 12;
+    reviewed.draft_source_revisions = { "1": "a", "2": "b" };
     expect(hydrateBuildPlanningBrief(store, reviewed).draft_id).toBe(12);
 
     writeFileSync(join(overlay, "parts/b.stl"), "new part");
@@ -323,6 +324,44 @@ describe("Build planning", () => {
     expect(refreshed.differences).toHaveLength(reviewed.differences.length + 1);
     expect(refreshed.resolutions).toEqual({});
     expect(refreshed.draft_id).toBeUndefined();
+  });
+
+  it("invalidates a draft when an overlay is replaced by an identical source", () => {
+    const root = mkdtempSync(join(tmpdir(), "planning-overlay-replacement-"));
+    const base = join(root, "base");
+    const overlay = join(root, "overlay");
+    mkdirSync(base);
+    mkdirSync(overlay);
+    writeFileSync(join(base, "part.stl"), "base");
+    writeFileSync(join(overlay, "part.stl"), "overlay");
+    const sources = [
+      { id: 1, name: "Base", local_path: base, last_synced_at: "now", last_commit_sha: "a" },
+      { id: 2, name: "Overlay", local_path: overlay, last_synced_at: "now", last_commit_sha: "b" },
+      { id: 3, name: "Overlay", local_path: overlay, last_synced_at: "now", last_commit_sha: "b" },
+    ];
+    const store = { listSources: () => sources };
+    const brief = newBuildPlanningBrief(5, "request", []);
+    brief.evidence = [
+      { id: "base", url: "https://example.com/base", normalized_url: "https://example.com/base", kind: "canonical_design", source_id: 1, source_role: "structural_base" },
+      { id: "overlay-a", url: "https://example.com/overlay", normalized_url: "https://example.com/overlay", kind: "vendor_overlay", source_id: 2, source_role: "overlay" },
+    ];
+    const reviewed = hydrateBuildPlanningBrief(store, brief);
+    reviewed.draft_id = 12;
+    reviewed.draft_source_revisions = { "1": "a", "2": "b" };
+    expect(hydrateBuildPlanningBrief(store, reviewed).draft_id).toBe(12);
+
+    const replacement = { ...reviewed, evidence: reviewed.evidence.map((item) =>
+      item.id === "overlay-a" ? { ...item, id: "overlay-b", source_id: 3 } : item,
+    ) };
+    const refreshed = hydrateBuildPlanningBrief(store, replacement);
+    expect(refreshed.differences[0]!.id).toBe(reviewed.differences[0]!.id);
+    expect(refreshed.differences[0]!.group_id).not.toBe(reviewed.differences[0]!.group_id);
+    expect(refreshed.draft_id).toBeUndefined();
+
+    const reassigned = { ...reviewed, evidence: reviewed.evidence.map((item) =>
+      item.id === "overlay-a" ? { ...item, source_id: 3 } : item,
+    ) };
+    expect(hydrateBuildPlanningBrief(store, reassigned).draft_id).toBeUndefined();
   });
 
   it("compares the structural base with every vendor overlay", () => {
