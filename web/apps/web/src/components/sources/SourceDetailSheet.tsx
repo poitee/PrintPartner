@@ -49,6 +49,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
 import { UNCATEGORISED_FILTER } from "./sourceLabels";
 import { invalidateProfiles } from "../../queries/profiles";
 import { queryClient } from "../../queries/queryClient";
+import { confirmDiscardSourceChanges, useLibraryDraft } from "../../context/LibraryDraftContext";
 
 type DetailTab = "docs" | "rules" | "naming";
 type DocsSubTab = "synced" | "notes";
@@ -111,6 +112,7 @@ export default function SourceDetailSheet({
   onSaveRules,
   runImportScan,
 }: Props) {
+  const { setDirty } = useLibraryDraft();
   const [docsSubTab, setDocsSubTab] = useState<DocsSubTab>("synced");
   const content = useSourceContent(source?.id ?? 0, { enabled: open && source != null });
   const [activeNoteId, setActiveNoteId] = useState<number | null>(null);
@@ -305,6 +307,11 @@ export default function SourceDetailSheet({
   const hasUnsavedChanges = rulesDirty || (namingReady && namingDirty);
 
   useEffect(() => {
+    setDirty(open && hasUnsavedChanges);
+    return () => setDirty(false);
+  }, [hasUnsavedChanges, open, setDirty]);
+
+  useEffect(() => {
     if (!hasUnsavedChanges) return;
     const warnOnUnload = (event: BeforeUnloadEvent) => {
       event.preventDefault();
@@ -320,7 +327,7 @@ export default function SourceDetailSheet({
 
   return (
     <Sheet open={open} onOpenChange={(nextOpen) => {
-      if (!nextOpen && hasUnsavedChanges && !window.confirm("Discard unsaved Source changes?")) return;
+      if (!nextOpen && hasUnsavedChanges && !confirmDiscardSourceChanges()) return;
       onOpenChange(nextOpen);
     }} modal={false}>
       <SheetContent
