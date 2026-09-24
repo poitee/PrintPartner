@@ -372,13 +372,15 @@ export function hydrateBuildPlanningBrief(
   };
   const previousGroups = groupSignatures(brief.differences);
   const currentGroups = groupSignatures(differences);
+  const resolutions = Object.fromEntries(
+    Object.entries(brief.resolutions).filter(([groupId]) => currentGroups.has(groupId) && currentGroups.get(groupId) === previousGroups.get(groupId)),
+  );
   return {
     ...brief,
     evidence,
     differences,
-    resolutions: Object.fromEntries(
-      Object.entries(brief.resolutions).filter(([groupId]) => currentGroups.has(groupId) && currentGroups.get(groupId) === previousGroups.get(groupId)),
-    ),
+    resolutions,
+    draft_id: Object.keys(resolutions).length === Object.keys(brief.resolutions).length ? brief.draft_id : undefined,
   };
 }
 

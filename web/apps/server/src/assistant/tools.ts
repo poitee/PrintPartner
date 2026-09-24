@@ -5114,6 +5114,7 @@ export async function applyAssistantAction(
                 })),
                 contributions: brief.contributions,
                 resolutions: brief.resolutions,
+                difference_ids: brief.differences.map((difference) => difference.id).sort(),
                 exclusions: decisions.exclusions,
                 managed_source_ids: [...targetSourceIds].sort((left, right) => left - right),
               }))
