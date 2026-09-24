@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createServer, type Server } from "node:http";
+import { safeConnectorFetch } from "../lib/outbound-url.js";
+
+vi.mock("../lib/outbound-url.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/outbound-url.js")>();
+  return { ...actual, safeConnectorFetch: vi.fn(actual.safeConnectorFetch) };
+});
 import {
   buildSpoolmanFilamentId,
   buildSpoolmanSpoolId,
@@ -37,6 +43,7 @@ describe("spoolman-client", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+    vi.clearAllMocks();
   });
 
   it("parses and builds spoolman filament ids", () => {
@@ -102,13 +109,18 @@ describe("spoolman-client", () => {
   });
 
   it("testSpoolmanConnection succeeds on /info", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response(JSON.stringify({ version: "0.22.0" }))),
-    );
-    const result = await testSpoolmanConnection({ base_url: "http://127.0.0.1:7912" });
-    expect(result.ok).toBe(true);
-    if (result.ok) expect(result.message).toContain("Connected");
+    const server = createServer((_req, res) => {
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ version: "0.22.0" }));
+    });
+    const baseUrl = await listen(server);
+    try {
+      const result = await testSpoolmanConnection({ base_url: baseUrl });
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.message).toContain("Connected");
+    } finally {
+      await close(server);
+    }
   });
 
   it("testSpoolmanConnection requires base_url", async () => {
@@ -117,15 +129,14 @@ describe("spoolman-client", () => {
   });
 
   it("rejects a Spoolman redirect to cloud metadata before following it", async () => {
-    const request = vi.fn(async () => new Response(null, {
+    vi.mocked(safeConnectorFetch).mockResolvedValueOnce(new Response(null, {
       status: 302,
       headers: { location: "http://169.254.169.254/latest/meta-data/" },
     }));
-    vi.stubGlobal("fetch", request);
 
     await expect(listSpoolmanFilaments({ base_url: "http://127.0.0.1:7912" }))
       .rejects.toThrow(/metadata/);
-    expect(request).toHaveBeenCalledTimes(1);
+    expect(safeConnectorFetch).toHaveBeenCalledTimes(2);
   });
 
   it("follows a safe read redirect without sending credentials to another origin", async () => {
@@ -148,6 +159,44 @@ describe("spoolman-client", () => {
     } finally {
       await close(source);
       await close(destination);
+    }
+  });
+
+  it("keeps the Spoolman API key on a same-origin read redirect", async () => {
+    let forwardedAuthorization: string | null = null;
+    const server = createServer((req, res) => {
+      if (req.url === "/api/v1/filament") {
+        res.writeHead(307, { location: "/api/v1/filament-page" });
+        res.end();
+        return;
+      }
+      forwardedAuthorization = req.headers.authorization ?? null;
+      res.setHeader("content-type", "application/json");
+      res.end("[]");
+    });
+    const baseUrl = await listen(server);
+    try {
+      await listSpoolmanFilaments({ base_url: baseUrl, api_key: "test-token" });
+      expect(forwardedAuthorization).toBe("Bearer test-token");
+    } finally {
+      await close(server);
+    }
+  });
+
+  it("stops a Spoolman read redirect loop", async () => {
+    let requests = 0;
+    const server = createServer((_req, res) => {
+      requests++;
+      res.writeHead(302, { location: "/api/v1/filament" });
+      res.end();
+    });
+    const baseUrl = await listen(server);
+    try {
+      await expect(listSpoolmanFilaments({ base_url: baseUrl }))
+        .rejects.toThrow(/Too many Spoolman redirects/);
+      expect(requests).toBe(6);
+    } finally {
+      await close(server);
     }
   });
 
@@ -201,9 +250,9 @@ describe("spoolman-client", () => {
   });
 
   it("listSpoolmanFilaments parses array response with vendor objects", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response(JSON.stringify([
+    const server = createServer((_req, res) => {
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify([
           {
             id: 1,
             name: "A",
@@ -211,12 +260,17 @@ describe("spoolman-client", () => {
             material: "PLA",
             color_hex: "#111111",
           },
-        ]))),
-    );
-    const rows = await listSpoolmanFilaments({ base_url: "http://127.0.0.1:7912" });
-    expect(rows).toHaveLength(1);
-    expect(rows[0]?.id).toBe(1);
-    expect(rows[0]?.vendor).toBe("VendorCo");
+        ]));
+    });
+    const baseUrl = await listen(server);
+    try {
+      const rows = await listSpoolmanFilaments({ base_url: baseUrl });
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.id).toBe(1);
+      expect(rows[0]?.vendor).toBe("VendorCo");
+    } finally {
+      await close(server);
+    }
   });
 
   it("listSpoolmanFilaments throws when base_url missing", async () => {

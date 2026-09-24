@@ -1,6 +1,6 @@
 import type { IntegrationConfig } from "@print-partner/contracts";
 import type { CatalogColor } from "../services/filament-catalog.js";
-import { assertSafeOutboundUrl } from "../lib/outbound-url.js";
+import { safeConnectorFetch } from "../lib/outbound-url.js";
 import {
   cancelResponseBody,
   isJsonObject as isRecord,
@@ -12,6 +12,8 @@ const REQUEST_TIMEOUT_MS = 8000;
 const MAX_METADATA_RESPONSE_BYTES = 256 * 1024;
 const MAX_INVENTORY_RESPONSE_BYTES = 16 * 1024 * 1024;
 const MAX_ERROR_RESPONSE_BYTES = 64 * 1024;
+const MAX_REDIRECTS = 5;
+const FOLLOWABLE_REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 const SPOOLMAN_FILAMENT_ID_RE = /^spoolman:([^:]+):filament:(\d+)$/;
 const SPOOLMAN_SPOOL_ID_RE = /^spoolman:([^:]+):spool:(\d+)$/;
 
@@ -210,13 +212,21 @@ async function spoolmanFetch(
   config: IntegrationConfig,
   path: string,
 ): Promise<Response> {
-  const url = `${apiRoot(baseUrl)}${path.startsWith("/") ? path : `/${path}`}`;
-  // Self-host users point Spoolman at LAN/private IPs; only metadata endpoints stay blocked.
-  await assertSafeOutboundUrl(url, { allowPrivate: true });
-  return fetch(url, {
-    headers: authHeaders(config),
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-  });
+  const initial = new URL(`${apiRoot(baseUrl)}${path.startsWith("/") ? path : `/${path}`}`);
+  let current = initial;
+  const signal = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+  for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+    const response = await safeConnectorFetch(current.toString(), {
+      headers: current.origin === initial.origin ? authHeaders(config) : {},
+      signal,
+    }, { allowPrivate: true });
+    if (!FOLLOWABLE_REDIRECT_STATUSES.has(response.status)) return response;
+    const location = response.headers.get("location");
+    if (!location) return response;
+    await cancelResponseBody(response);
+    current = new URL(location, current);
+  }
+  throw new Error("Too many Spoolman redirects");
 }
 
 export async function testSpoolmanConnection(
@@ -346,8 +356,7 @@ export async function useSpoolFilament(
 ): Promise<void> {
   const baseUrl = normalizeSpoolmanBaseUrl(config.base_url ?? config.baseUrl);
   if (!baseUrl) throw new Error("Spoolman base_url is required");
-  await assertSafeOutboundUrl(`${apiRoot(baseUrl)}/spool/${spoolId}/use`, { allowPrivate: true });
-  const res = await fetch(`${apiRoot(baseUrl)}/spool/${spoolId}/use`, {
+  const res = await safeConnectorFetch(`${apiRoot(baseUrl)}/spool/${spoolId}/use`, {
     method: "PUT",
     headers: {
       "Content-Type": "application/json",
@@ -355,7 +364,11 @@ export async function useSpoolFilament(
     },
     body: JSON.stringify({ use_length: useLengthMm }),
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-  });
+  }, { allowPrivate: true });
+  if (res.status >= 300 && res.status < 400) {
+    await cancelResponseBody(res);
+    throw new Error("Spoolman use spool failed: redirect not allowed");
+  }
   if (!res.ok) {
     const text = await readBoundedResponseText(res, MAX_ERROR_RESPONSE_BYTES).catch(() => "");
     throw new Error(`Spoolman use spool failed: HTTP ${res.status}${text ? `: ${text.slice(0, 200)}` : ""}`);
