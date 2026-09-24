@@ -5,6 +5,7 @@ import {
   assertSafeOutboundUrl,
   classifyAddress,
   OutboundUrlError,
+  safeConnectorFetch,
   safeOutboundFetch,
   setPrivateOutboundDenied,
   type LookupFn,
@@ -16,6 +17,63 @@ const loopbackLookup: LookupFn = async () => [{ address: "127.0.0.1", family: 4 
 
 afterEach(() => {
   setPrivateOutboundDenied(false);
+});
+
+describe("safeConnectorFetch", () => {
+  it("rejects a DNS answer that changes to metadata at socket connection", async () => {
+    let lookups = 0;
+    const rebindingLookup: LookupFn = async () => {
+      lookups++;
+      return [{ address: lookups === 1 ? "93.184.216.34" : "169.254.169.254", family: 4 }];
+    };
+    let requests = 0;
+    const server = createServer((_request, response) => {
+      requests++;
+      response.end("unexpected");
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP server");
+
+    try {
+      await expect(safeConnectorFetch(`http://connector.test:${address.port}/`, {
+        signal: AbortSignal.timeout(500),
+      }, { allowPrivate: true, lookupFn: rebindingLookup })).rejects.toMatchObject({
+        cause: { message: expect.stringMatching(/metadata/) },
+      });
+      expect(lookups).toBe(2);
+      expect(requests).toBe(0);
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => error ? reject(error) : resolve()),
+      );
+    }
+  });
+
+  it("keeps the configured hostname while connecting to its checked address", async () => {
+    let host = "";
+    const server = createServer((request, response) => {
+      host = request.headers.host ?? "";
+      response.writeHead(302, { location: "/elsewhere" }).end("redirect");
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP server");
+
+    try {
+      const response = await safeConnectorFetch(`http://connector.test:${address.port}/`, {}, {
+        allowPrivate: true,
+        lookupFn: loopbackLookup,
+      });
+      expect(response.status).toBe(302);
+      expect(await response.text()).toBe("redirect");
+      expect(host).toBe(`connector.test:${address.port}`);
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => error ? reject(error) : resolve()),
+      );
+    }
+  });
 });
 
 describe("classifyAddress", () => {

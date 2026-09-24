@@ -1,5 +1,5 @@
 import { lookup } from "node:dns/promises";
-import { isIP } from "node:net";
+import { isIP, type LookupFunction } from "node:net";
 import { Agent, fetch as undiciFetch } from "undici";
 
 /**
@@ -131,6 +131,20 @@ export function classifyAddress(address: string): AddressClass {
 
 const defaultLookup: LookupFn = (hostname) => lookup(hostname, { all: true, verbatim: true });
 
+export function createCheckedLookup(options: OutboundUrlOptions): LookupFunction {
+  return (hostname, lookupOptions, callback) => {
+    void assertResolvedHostSafe(hostname, options).then(
+      (addresses) => {
+        const first = addresses[0];
+        if (!first) return callback(new OutboundUrlError(`Could not resolve host: ${hostname}`), "", 4);
+        if (lookupOptions.all) callback(null, addresses);
+        else callback(null, first.address, first.family);
+      },
+      (error: unknown) => callback(error instanceof Error ? error : new Error(String(error)), "", 4),
+    );
+  };
+}
+
 async function assertResolvedHostSafe(
   hostname: string,
   options: OutboundUrlOptions,
@@ -235,17 +249,7 @@ export async function safeOutboundFetch(
     const dispatcher = new Agent({
       connect: {
         autoSelectFamily: true,
-        lookup: (hostname, lookupOptions, callback) => {
-          void assertResolvedHostSafe(hostname, options).then(
-            (addresses) => {
-              const first = addresses[0];
-              if (!first) return callback(new OutboundUrlError(`Could not resolve host: ${hostname}`), "", 4);
-              if (lookupOptions.all) callback(null, addresses);
-              else callback(null, first.address, first.family);
-            },
-            (error: unknown) => callback(error instanceof Error ? error : new Error(String(error)), "", 4),
-          );
-        },
+        lookup: createCheckedLookup(options),
       },
     });
     let response: Awaited<ReturnType<typeof undiciFetch>>;
@@ -275,8 +279,35 @@ export async function safeOutboundFetch(
   throw new OutboundUrlError(`Too many redirects fetching ${rawUrl}`);
 }
 
+export async function safeConnectorFetch(
+  rawUrl: string,
+  init: RequestInit = {},
+  options: OutboundUrlOptions = { allowPrivate: true },
+): Promise<Response> {
+  const url = await assertSafeOutboundUrl(rawUrl, options);
+  const dispatcher = new Agent({
+    connect: {
+      autoSelectFamily: true,
+      lookup: createCheckedLookup(options),
+    },
+  });
+  const requestInit: RequestInit = { ...init, redirect: "manual" };
+  Object.defineProperty(requestInit, "dispatcher", { value: dispatcher });
+  try {
+    const response = await fetch(url, requestInit);
+    if (!(response instanceof Response)) {
+      dispatcher.destroy();
+      return response;
+    }
+    return responseWithDispatcher(response, dispatcher, false);
+  } catch (error) {
+    dispatcher.destroy();
+    throw error;
+  }
+}
+
 function responseWithDispatcher(
-  response: Awaited<ReturnType<typeof undiciFetch>>,
+  response: Response,
   dispatcher: Agent,
   redirected: boolean,
 ): Response {
