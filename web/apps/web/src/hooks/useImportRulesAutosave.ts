@@ -157,8 +157,9 @@ export function useImportRulesAutosave({
   }, [flushSave, onRegisterFlush, onUnregisterFlush, sourceId]);
 
   useEffect(() => {
+    const flushForSource = flushSaveRef.current;
     return () => {
-      void flushSaveRef.current().catch(() => {});
+      void flushForSource().catch(() => {});
     };
   }, [sourceId]);
 
