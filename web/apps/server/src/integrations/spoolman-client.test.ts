@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createServer, type Server } from "node:http";
 import {
   buildSpoolmanFilamentId,
   buildSpoolmanSpoolId,
@@ -18,11 +19,24 @@ import {
   spoolSummariesForPart,
   spoolmanFilamentToCatalogColor,
   testSpoolmanConnection,
+  useSpoolFilament,
 } from "./spoolman-client.js";
+
+async function listen(server: Server): Promise<string> {
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("HTTP server has no TCP address");
+  return `http://127.0.0.1:${address.port}`;
+}
+
+async function close(server: Server): Promise<void> {
+  await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+}
 
 describe("spoolman-client", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it("parses and builds spoolman filament ids", () => {
@@ -100,6 +114,64 @@ describe("spoolman-client", () => {
   it("testSpoolmanConnection requires base_url", async () => {
     const result = await testSpoolmanConnection({});
     expect(result).toEqual({ ok: false, message: "base_url is required" });
+  });
+
+  it("rejects a Spoolman redirect to cloud metadata before following it", async () => {
+    const request = vi.fn(async () => new Response(null, {
+      status: 302,
+      headers: { location: "http://169.254.169.254/latest/meta-data/" },
+    }));
+    vi.stubGlobal("fetch", request);
+
+    await expect(listSpoolmanFilaments({ base_url: "http://127.0.0.1:7912" }))
+      .rejects.toThrow(/metadata/);
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("follows a safe read redirect without sending credentials to another origin", async () => {
+    let forwardedAuthorization: string | null = null;
+    const destination = createServer((req, res) => {
+      forwardedAuthorization = req.headers.authorization ?? null;
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify([{ id: 1, name: "PLA" }]));
+    });
+    const destinationUrl = await listen(destination);
+    const source = createServer((_req, res) => {
+      res.writeHead(302, { location: `${destinationUrl}/api/v1/filament` });
+      res.end();
+    });
+    const sourceUrl = await listen(source);
+    try {
+      const rows = await listSpoolmanFilaments({ base_url: sourceUrl, api_key: "test-token" });
+      expect(rows).toHaveLength(1);
+      expect(forwardedAuthorization).toBeNull();
+    } finally {
+      await close(source);
+      await close(destination);
+    }
+  });
+
+  it("does not follow redirects for filament deduction", async () => {
+    let destinationRequests = 0;
+    const destination = createServer((_req, res) => {
+      destinationRequests++;
+      res.writeHead(200);
+      res.end();
+    });
+    const destinationUrl = await listen(destination);
+    const source = createServer((_req, res) => {
+      res.writeHead(307, { location: `${destinationUrl}/deduct` });
+      res.end();
+    });
+    const sourceUrl = await listen(source);
+    try {
+      await expect(useSpoolFilament({ base_url: sourceUrl }, 7, 100))
+        .rejects.toThrow(/redirect/i);
+      expect(destinationRequests).toBe(0);
+    } finally {
+      await close(source);
+      await close(destination);
+    }
   });
 
   it("normalizeSpoolmanVendor accepts nested vendor object", () => {
