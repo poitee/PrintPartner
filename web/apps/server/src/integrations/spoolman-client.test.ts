@@ -135,8 +135,8 @@ describe("spoolman-client", () => {
     }));
 
     await expect(listSpoolmanFilaments({ base_url: "http://127.0.0.1:7912" }))
-      .rejects.toThrow(/metadata/);
-    expect(safeConnectorFetch).toHaveBeenCalledTimes(2);
+      .rejects.toThrow(/redirect changed origin/);
+    expect(safeConnectorFetch).toHaveBeenCalledTimes(1);
   });
 
   it("rejects a Spoolman read redirect to another LAN origin", async () => {

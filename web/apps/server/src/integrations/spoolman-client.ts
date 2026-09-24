@@ -217,14 +217,18 @@ async function spoolmanFetch(
   const signal = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
     const response = await safeConnectorFetch(current.toString(), {
-      headers: current.origin === initial.origin ? authHeaders(config) : {},
+      headers: authHeaders(config),
       signal,
     }, { allowPrivate: true });
     if (!FOLLOWABLE_REDIRECT_STATUSES.has(response.status)) return response;
     const location = response.headers.get("location");
     if (!location) return response;
     await cancelResponseBody(response);
-    current = new URL(location, current);
+    const next = new URL(location, current);
+    if (next.origin !== initial.origin) {
+      throw new Error("Spoolman redirect changed origin");
+    }
+    current = next;
   }
   throw new Error("Too many Spoolman redirects");
 }
