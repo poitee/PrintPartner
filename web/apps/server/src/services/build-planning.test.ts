@@ -297,6 +297,34 @@ describe("Build planning", () => {
     expect(resolvedSourcePathExclusions({ brief: refreshed, sourceIdsByName: new Map([["Base", 1], ["Overlay", 2]]) }).exclusions).toEqual([]);
   });
 
+  it("invalidates a draft when a new unresolved source difference appears", () => {
+    const root = mkdtempSync(join(tmpdir(), "planning-draft-refresh-"));
+    const base = join(root, "base");
+    const overlay = join(root, "overlay");
+    mkdirSync(join(base, "parts"), { recursive: true });
+    mkdirSync(join(overlay, "parts"), { recursive: true });
+    writeFileSync(join(base, "parts/a.stl"), "base");
+    writeFileSync(join(overlay, "parts/a.stl"), "overlay");
+    const store = { listSources: () => [
+      { id: 1, name: "Base", local_path: base, last_synced_at: "now", last_commit_sha: "a" },
+      { id: 2, name: "Overlay", local_path: overlay, last_synced_at: "now", last_commit_sha: "b" },
+    ] };
+    const brief = newBuildPlanningBrief(5, "request", []);
+    brief.evidence = [
+      { id: "base", url: "https://example.com/base", normalized_url: "https://example.com/base", kind: "canonical_design", source_id: 1, source_role: "structural_base" },
+      { id: "overlay", url: "https://example.com/overlay", normalized_url: "https://example.com/overlay", kind: "vendor_overlay", source_id: 2, source_role: "overlay" },
+    ];
+    const reviewed = hydrateBuildPlanningBrief(store, brief);
+    reviewed.draft_id = 12;
+    expect(hydrateBuildPlanningBrief(store, reviewed).draft_id).toBe(12);
+
+    writeFileSync(join(overlay, "parts/b.stl"), "new part");
+    const refreshed = hydrateBuildPlanningBrief(store, reviewed);
+    expect(refreshed.differences).toHaveLength(reviewed.differences.length + 1);
+    expect(refreshed.resolutions).toEqual({});
+    expect(refreshed.draft_id).toBeUndefined();
+  });
+
   it("compares the structural base with every vendor overlay", () => {
     const root = mkdtempSync(join(tmpdir(), "build-planning-overlays-"));
     const paths = ["base", "overlay-a", "overlay-b"].map((name) => join(root, name));
