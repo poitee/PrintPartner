@@ -183,6 +183,48 @@ describe("application shell accessibility", () => {
     expect(link.className).toContain("bg-card");
   });
 
+  it("closes the mobile drawer after a flushed navigation from Sources", async () => {
+    render(
+      <MemoryRouter initialEntries={["/sources"]}>
+        <Routes>
+          <Route element={<AppLayout />}>
+            <Route path="sources" element={<h1>Sources</h1>} />
+            <Route path="builds" element={<h1>Builds</h1>} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Menu" }));
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    fireEvent.click(screen.getByRole("link", { name: "Builds" }));
+
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Builds" })).toBeTruthy());
+    expect(saveRegistry.flush).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("keeps Sources open when a mobile drawer save fails", async () => {
+    saveRegistry.flush.mockRejectedValueOnce(new Error("offline"));
+    render(
+      <MemoryRouter initialEntries={["/sources"]}>
+        <Routes>
+          <Route element={<AppLayout />}>
+            <Route path="sources" element={<h1>Sources</h1>} />
+            <Route path="builds" element={<h1>Builds</h1>} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Menu" }));
+    fireEvent.click(screen.getByRole("link", { name: "Builds" }));
+
+    await waitFor(() => expect(saveRegistry.flush).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.getByRole("heading", { name: "Sources" })).toBeTruthy();
+  });
+
   it("names the current stage and Build in the instrument header", () => {
     workflowState.stages = [{ id: "plan", label: "Plan" }];
     workflowState.activeId = "plan";

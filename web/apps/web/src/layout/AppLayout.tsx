@@ -136,7 +136,7 @@ export default function AppLayout() {
 
   return (
     <TooltipProvider delayDuration={300}>
-        <div className="flex min-h-screen min-w-0 bg-background" onClickCapture={onRouteLinkClick}>
+        <div className="flex min-h-screen min-w-0 bg-background">
           <a
             href="#main-content"
             className="skip-link"
@@ -185,6 +185,7 @@ export default function AppLayout() {
             <main
               id="main-content"
               tabIndex={-1}
+              onClickCapture={onRouteLinkClick}
               className={cn(
                 "desk-canvas flex-1 overflow-x-hidden overflow-y-auto p-3 sm:p-5 print:overflow-visible print:p-0",
                 // Reserve the fixed chrome so a running job or the mobile nav row
