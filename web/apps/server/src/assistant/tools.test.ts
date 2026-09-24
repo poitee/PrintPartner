@@ -923,6 +923,14 @@ option_groups:
       params: { group_id: groupId, resolution: "custom", rationale: "Use a manually modified bracket", custom_resolution: "Use the base bracket with a 2 mm spacer" },
     }, { repo, jobs: { start: async () => "unused" } as never });
     expect(custom.ok).toBe(true);
+    const legacyBrief = readBuildPlanningBrief(repo, plan.id)!;
+    saveBuildPlanningBrief(repo, { ...legacyBrief, draft_id: draft.id });
+    const blockedApply = await applyAssistantAction({
+      id: "apply-legacy-custom", type: "propose_apply_plan_draft", plan_id: plan.id,
+      label: "Apply", summary: "test", params: { draft_id: draft.id },
+    }, { repo, jobs: { start: async () => "unused" } as never });
+    expect(blockedApply).toMatchObject({ ok: false, detail: expect.stringContaining("custom resolution") });
+    saveBuildPlanningBrief(repo, legacyBrief);
     const blocked = await applyAssistantAction({
       id: "rebuild-custom", type: "propose_rebuild_plan", plan_id: plan.id,
       label: "Rebuild", summary: "test", params: {},

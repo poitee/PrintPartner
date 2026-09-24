@@ -332,6 +332,11 @@ describe("Build planning", () => {
       expect.objectContaining({ kind: "contradictory", family: "documentation_claims" }),
     ]);
     expect(hydrateBuildPlanningBrief({ listSources: () => [] }, hydrated).differences).toHaveLength(1);
+    const groupId = hydrated.differences[0]!.group_id;
+    hydrated.resolutions[groupId] = { resolution: "choose_source_a", rationale: "Reviewed guide", resolved_at: new Date().toISOString() };
+    expect(hydrateBuildPlanningBrief({ listSources: () => [] }, hydrated).resolutions).toEqual(hydrated.resolutions);
+    hydrated.evidence[1]!.extract = "Uses M5 screws";
+    expect(hydrateBuildPlanningBrief({ listSources: () => [] }, hydrated).resolutions).toEqual({});
   });
 
   it("extracts a complete vendor-overlay request without a built-in machine list", () => {
