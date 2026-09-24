@@ -139,10 +139,10 @@ describe("spoolman-client", () => {
     expect(safeConnectorFetch).toHaveBeenCalledTimes(2);
   });
 
-  it("follows a safe read redirect without sending credentials to another origin", async () => {
-    let forwardedAuthorization: string | null = null;
-    const destination = createServer((req, res) => {
-      forwardedAuthorization = req.headers.authorization ?? null;
+  it("rejects a Spoolman read redirect to another LAN origin", async () => {
+    let destinationRequests = 0;
+    const destination = createServer((_req, res) => {
+      destinationRequests++;
       res.setHeader("content-type", "application/json");
       res.end(JSON.stringify([{ id: 1, name: "PLA" }]));
     });
@@ -153,9 +153,9 @@ describe("spoolman-client", () => {
     });
     const sourceUrl = await listen(source);
     try {
-      const rows = await listSpoolmanFilaments({ base_url: sourceUrl, api_key: "test-token" });
-      expect(rows).toHaveLength(1);
-      expect(forwardedAuthorization).toBeNull();
+      await expect(listSpoolmanFilaments({ base_url: sourceUrl, api_key: "test-token" }))
+        .rejects.toThrow(/redirect changed origin/);
+      expect(destinationRequests).toBe(0);
     } finally {
       await close(source);
       await close(destination);
