@@ -917,6 +917,19 @@ option_groups:
     expect(draft.parts.some((part) => part.sourceLayer === "addon:Vendor")).toBe(false);
     expect(draft.parts.some((part) => part.relativePath === "unrelated/bonus.stl")).toBe(false);
 
+    const custom = await applyAssistantAction({
+      id: "custom-choice", type: "propose_resolve_build_differences", plan_id: plan.id,
+      label: "Custom", summary: "test",
+      params: { group_id: groupId, resolution: "custom", rationale: "Use a manually modified bracket" },
+    }, { repo, jobs: { start: async () => "unused" } as never });
+    expect(custom.ok).toBe(true);
+    const blocked = await applyAssistantAction({
+      id: "rebuild-custom", type: "propose_rebuild_plan", plan_id: plan.id,
+      label: "Rebuild", summary: "test", params: {},
+    }, { repo, jobs: { start: async () => "unused" } as never });
+    expect(blocked).toMatchObject({ ok: false, detail: expect.stringContaining("custom resolution") });
+    expect(readBuildPlanningBrief(repo, plan.id)?.draft_id).toBeUndefined();
+
     const changedRoles = readBuildPlanningBrief(repo, plan.id)!;
     changedRoles.evidence = changedRoles.evidence.map((evidence) =>
       evidence.id === "vendor" ? { ...evidence, source_role: "evidence" } : evidence,

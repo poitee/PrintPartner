@@ -267,6 +267,36 @@ describe("Build planning", () => {
     ]);
   });
 
+  it.each(["revision", "content", "new difference"])("invalidates source choices after a %s change", (change) => {
+    const root = mkdtempSync(join(tmpdir(), "planning-choice-refresh-"));
+    const base = join(root, "base");
+    const overlay = join(root, "overlay");
+    mkdirSync(join(base, "parts"), { recursive: true });
+    mkdirSync(join(overlay, "parts"), { recursive: true });
+    writeFileSync(join(base, "parts/a.stl"), "base");
+    writeFileSync(join(overlay, "parts/a.stl"), "overlay");
+    const sources = [
+      { id: 1, name: "Base", local_path: base, last_synced_at: "now", last_commit_sha: "a" },
+      { id: 2, name: "Overlay", local_path: overlay, last_synced_at: "now", last_commit_sha: "b" },
+    ];
+    const store = { listSources: () => sources };
+    const brief = newBuildPlanningBrief(5, "request", []);
+    brief.evidence = [
+      { id: "base", url: "https://example.com/base", normalized_url: "https://example.com/base", kind: "canonical_design", source_id: 1, source_role: "structural_base" },
+      { id: "overlay", url: "https://example.com/overlay", normalized_url: "https://example.com/overlay", kind: "vendor_overlay", source_id: 2, source_role: "overlay" },
+    ];
+    const reviewed = hydrateBuildPlanningBrief(store, brief);
+    const group = reviewed.differences[0]!.group_id;
+    reviewed.resolutions[group] = { resolution: "choose_source_a", rationale: "Reviewed geometry", resolved_at: new Date().toISOString() };
+    expect(hydrateBuildPlanningBrief(store, reviewed).resolutions).toEqual(reviewed.resolutions);
+    if (change === "revision") sources[1]!.last_commit_sha = "c";
+    if (change === "content") writeFileSync(join(overlay, "parts/a.stl"), "new geometry");
+    if (change === "new difference") writeFileSync(join(overlay, "parts/b.stl"), "new part");
+    const refreshed = hydrateBuildPlanningBrief(store, reviewed);
+    expect(refreshed.resolutions).toEqual({});
+    expect(resolvedSourcePathExclusions({ brief: refreshed, sourceIdsByName: new Map([["Base", 1], ["Overlay", 2]]) }).exclusions).toEqual([]);
+  });
+
   it("compares the structural base with every vendor overlay", () => {
     const root = mkdtempSync(join(tmpdir(), "build-planning-overlays-"));
     const paths = ["base", "overlay-a", "overlay-b"].map((name) => join(root, name));
