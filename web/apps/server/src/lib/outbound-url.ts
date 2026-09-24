@@ -1,6 +1,7 @@
 import { lookup } from "node:dns/promises";
 import { isIP, type LookupFunction } from "node:net";
 import { Agent, fetch as undiciFetch } from "undici";
+import { cancelResponseBody } from "./bounded-response.js";
 
 /**
  * SSRF guard for outbound HTTP fetches of user-controlled URLs.
@@ -267,7 +268,7 @@ export async function safeOutboundFetch(
       const location = response.headers.get("location");
       if (!location) return responseWithDispatcher(response, dispatcher, hop > 0);
       try {
-        await response.body?.cancel();
+        await cancelResponseBody(response);
       } finally {
         dispatcher.destroy();
       }
