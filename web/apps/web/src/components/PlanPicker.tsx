@@ -4,6 +4,7 @@ import { Check, ChevronsUpDown, Layers, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { buildRoute, isPlanPath, isPlansPath, isSourcesPath } from "../lib/routes";
 import { useFlushBuildPageSaves } from "../hooks/useFlushBuildPageSaves";
+import { shouldSyncProfileToPath } from "../hooks/profileUrlSync";
 import {
   duplicatePlanName,
   partitionPlanPickerGroups,
@@ -178,19 +179,29 @@ export default function PlanPicker({
         return false;
       }
     }
-    setSelectedProfileId(id);
-    touchMutation.mutate(id);
     return true;
   };
 
   const activatePlan = async (id: number): Promise<boolean> => {
     if (!(await selectAfterSaving(id))) return false;
     navigate(buildRoute(id), { replace: true });
+    touchMutation.mutate(id);
     return true;
   };
 
   const selectPlan = async (id: number) => {
     if (!(await selectAfterSaving(id))) return;
+    if (shouldSyncProfileToPath(location.pathname)) {
+      const params = new URLSearchParams(location.search);
+      params.set("profile", String(id));
+      navigate(
+        { pathname: location.pathname, search: `?${params}`, hash: location.hash },
+        { replace: true },
+      );
+    } else {
+      setSelectedProfileId(id);
+    }
+    touchMutation.mutate(id);
     setOpen(false);
     setSearch("");
   };
