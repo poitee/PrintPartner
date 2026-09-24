@@ -142,6 +142,13 @@ export function useImportRulesAutosave({
 
   const flushSaveRef = useRef(flushSave);
   flushSaveRef.current = flushSave;
+  const registeredFlushRef = useRef({ sourceId, flush: flushSave });
+  if (registeredFlushRef.current.sourceId !== sourceId) {
+    registeredFlushRef.current = { sourceId, flush: flushSave };
+  } else {
+    registeredFlushRef.current.flush = flushSave;
+  }
+  const registeredFlush = registeredFlushRef.current;
 
   const saveUserEdit = useCallback((rules: string[]) => {
     saveState.pendingRules = rules;
@@ -152,9 +159,9 @@ export function useImportRulesAutosave({
 
   useEffect(() => {
     if (!onRegisterFlush) return;
-    onRegisterFlush(sourceId, flushSave);
+    onRegisterFlush(sourceId, () => registeredFlush.flush());
     return () => onUnregisterFlush?.(sourceId);
-  }, [flushSave, onRegisterFlush, onUnregisterFlush, sourceId]);
+  }, [onRegisterFlush, onUnregisterFlush, sourceId, registeredFlush]);
 
   useEffect(() => {
     const flushForSource = flushSaveRef.current;
