@@ -335,7 +335,7 @@ function responseWithDispatcher(
         dispatcher.destroy();
       }
     },
-  }) : null;
+  }, { highWaterMark: 0 }) : null;
   if (!body) dispatcher.destroy();
   const wrapped = new Response(body, {
     status: response.status,
