@@ -1,7 +1,6 @@
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
-import { Agent } from "undici";
-import { cancelResponseBody } from "./bounded-response.js";
+import { Agent, fetch as undiciFetch } from "undici";
 
 /**
  * SSRF guard for outbound HTTP fetches of user-controlled URLs.
@@ -222,62 +221,67 @@ export async function assertSafeOutboundUrl(
  */
 export async function safeOutboundFetch(
   rawUrl: string,
-  init: RequestInit = {},
+  init: {
+    method?: string;
+    headers?: Record<string, string> | [string, string][];
+    body?: string | null;
+    signal?: AbortSignal | null;
+    redirect?: RequestInit["redirect"];
+  } = {},
   options: OutboundUrlOptions = {},
 ): Promise<Response> {
   let url = await assertSafeOutboundUrl(rawUrl, options);
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
     const dispatcher = new Agent({
       connect: {
-        autoSelectFamily: false,
-        lookup: (hostname, _lookupOptions, callback) => {
+        autoSelectFamily: true,
+        lookup: (hostname, lookupOptions, callback) => {
           void assertResolvedHostSafe(hostname, options).then(
-            ([address]) => {
-              if (!address) return callback(new OutboundUrlError(`Could not resolve host: ${hostname}`), "", 4);
-              callback(null, address.address, address.family);
+            (addresses) => {
+              const first = addresses[0];
+              if (!first) return callback(new OutboundUrlError(`Could not resolve host: ${hostname}`), "", 4);
+              if (lookupOptions.all) callback(null, addresses);
+              else callback(null, first.address, first.family);
             },
             (error: unknown) => callback(error instanceof Error ? error : new Error(String(error)), "", 4),
           );
         },
       },
     });
-    let response: Response;
+    let response: Awaited<ReturnType<typeof undiciFetch>>;
     try {
-      const requestInit: RequestInit = {
+      response = await undiciFetch(url, {
         ...init,
         redirect: "manual",
-      };
-      // Node fetch accepts an Undici dispatcher, but its bundled Dispatcher type
-      // differs from the installed Undici package's type.
-      Object.defineProperty(requestInit, "dispatcher", { value: dispatcher });
-      response = await fetch(url, requestInit);
+        dispatcher,
+      });
     } catch (error) {
       dispatcher.destroy();
       throw error;
     }
     if (response.status >= 300 && response.status < 400) {
       const location = response.headers.get("location");
-      if (!location) return responseWithDispatcher(response, dispatcher);
+      if (!location) return responseWithDispatcher(response, dispatcher, hop > 0);
       try {
-        await cancelResponseBody(response);
+        await response.body?.cancel();
       } finally {
         dispatcher.destroy();
       }
       url = await assertSafeOutboundUrl(new URL(location, url).toString(), options);
       continue;
     }
-    return responseWithDispatcher(response, dispatcher);
+    return responseWithDispatcher(response, dispatcher, hop > 0);
   }
   throw new OutboundUrlError(`Too many redirects fetching ${rawUrl}`);
 }
 
-function responseWithDispatcher(response: Response, dispatcher: Agent): Response {
-  if (!response.body) {
-    dispatcher.destroy();
-    return response;
-  }
-  const reader = response.body.getReader();
-  const body = new ReadableStream<Uint8Array>({
+function responseWithDispatcher(
+  response: Awaited<ReturnType<typeof undiciFetch>>,
+  dispatcher: Agent,
+  redirected: boolean,
+): Response {
+  const reader = response.body?.getReader();
+  const body = reader ? new ReadableStream<Uint8Array>({
     async pull(controller) {
       try {
         const result = await reader.read();
@@ -299,10 +303,17 @@ function responseWithDispatcher(response: Response, dispatcher: Agent): Response
         dispatcher.destroy();
       }
     },
-  });
-  return new Response(body, {
+  }) : null;
+  if (!body) dispatcher.destroy();
+  const wrapped = new Response(body, {
     status: response.status,
     statusText: response.statusText,
-    headers: response.headers,
+    headers: Object.fromEntries(response.headers),
   });
+  Object.defineProperties(wrapped, {
+    url: { value: response.url },
+    redirected: { value: redirected },
+    type: { value: response.type },
+  });
+  return wrapped;
 }
