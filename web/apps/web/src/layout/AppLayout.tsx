@@ -1,5 +1,6 @@
 import { type MouseEvent, useEffect, useState } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
+import { toast } from "sonner";
 import { isHostedPlanning } from "@print-partner/contracts";
 import CommandPalette from "../components/CommandPalette";
 import ErrorBoundary from "../components/ErrorBoundary";
@@ -29,8 +30,7 @@ import {
 import { cn } from "@/lib/utils";
 import { useProfileSelection } from "../context/ProfileContext";
 import { useStlAutoSync } from "../context/StlAutoSyncContext";
-import { useImportRulesSaveRegistry } from "../context/ImportRulesSaveContext";
-import { useKitManifestSaveRegistry } from "../context/KitManifestSaveContext";
+import { useFlushBuildPageSaves } from "../hooks/useFlushBuildPageSaves";
 import ThemePreferenceControl from "../components/ThemePreferenceControl";
 import { useEngineHealth } from "../hooks/useEngineHealth";
 import { readSidebarCollapsed, writeSidebarCollapsed } from "../lib/persistedSidebarUi";
@@ -92,8 +92,7 @@ export default function AppLayout() {
   useProfileUrlSync();
   const { selectedProfileId, profiles } = useProfileSelection();
   const { banner, runSync, busy } = useStlAutoSync();
-  const { flushAll: flushImportRules } = useImportRulesSaveRegistry();
-  const { flushAll: flushKitManifest } = useKitManifestSaveRegistry();
+  const flushBuildSaves = useFlushBuildPageSaves();
   const { stages, activeId } = useWorkflowStages();
 
   const onPipelineNavigate = (to: string, e: MouseEvent<HTMLAnchorElement>) => {
@@ -101,9 +100,24 @@ export default function AppLayout() {
     const leavingSources = isSourcesPath(location.pathname) && !isSourcesPath(destPath);
     if (!leavingSources) return;
     e.preventDefault();
-    void Promise.all([flushImportRules(), flushKitManifest()]).then(() => {
-      navigate(to);
-    });
+    void flushBuildSaves()
+      .then(() => navigate(to))
+      .catch(() => toast.error("Save failed. Retry before leaving Sources."));
+  };
+
+  const onRouteLinkClick = (e: MouseEvent<HTMLDivElement>) => {
+    if (!isSourcesPath(location.pathname) || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    const anchor = e.target instanceof Element ? e.target.closest<HTMLAnchorElement>("a[href]") : null;
+    if (!anchor || anchor.hasAttribute("download") || anchor.getAttribute("target") === "_blank") return;
+    const href = anchor.getAttribute("href");
+    if (!href || href.startsWith("#")) return;
+    const destination = new URL(href, window.location.href);
+    if (destination.origin !== window.location.origin || isSourcesPath(destination.pathname)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    void flushBuildSaves()
+      .then(() => navigate(`${destination.pathname}${destination.search}${destination.hash}`))
+      .catch(() => toast.error("Save failed. Retry before leaving Sources."));
   };
 
   const activePlanName =
@@ -122,7 +136,7 @@ export default function AppLayout() {
 
   return (
     <TooltipProvider delayDuration={300}>
-        <div className="flex min-h-screen min-w-0 bg-background">
+        <div className="flex min-h-screen min-w-0 bg-background" onClickCapture={onRouteLinkClick}>
           <a
             href="#main-content"
             className="skip-link"

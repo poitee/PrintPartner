@@ -173,7 +173,7 @@ describe("useKitManifestAutosave", () => {
     });
 
     expect(mocks.savePlanKitManifest).toHaveBeenCalledTimes(2);
-    expect(onSaved).toHaveBeenCalledTimes(2);
+    expect(onSaved).toHaveBeenCalledTimes(1);
     expect(onSaved).toHaveBeenLastCalledWith(
       kit({ extras: ["skirts", "panels", "screen"] }),
     );

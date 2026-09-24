@@ -145,20 +145,23 @@ export function useKitManifestAutosave({
         }
         if (saveState.pendingConfirmation) await onPersisted?.(saveState.pendingConfirmation);
         if (saveStateRef.current === saveState) {
-          if (saveState.pendingConfirmation) await onSaved(saveState.pendingConfirmation);
+          const latestSaved = selectionsEqual(saveState.pendingSelections, saveState.savedSelections);
+          if (saveState.pendingConfirmation && latestSaved) await onSaved(saveState.pendingConfirmation);
           saveState.pendingConfirmation = null;
-          setStatus("saved");
-          savedClearTimerRef.current = setTimeout(() => {
-            setStatus((current) => (current === "saved" ? "idle" : current));
-            savedClearTimerRef.current = null;
-          }, KIT_MANIFEST_SAVED_CLEAR_MS);
+          if (latestSaved) {
+            setStatus("saved");
+            savedClearTimerRef.current = setTimeout(() => {
+              setStatus((current) => (current === "saved" ? "idle" : current));
+              savedClearTimerRef.current = null;
+            }, KIT_MANIFEST_SAVED_CLEAR_MS);
+          }
         } else {
           saveState.pendingConfirmation = null;
         }
-      } catch {
+      } catch (error) {
         saveState.queuedSelections = null;
         if (saveStateRef.current === saveState) setStatus("error");
-        return;
+        throw error;
       }
     }
   }, [clearSavedTimer, onPersisted, onSaved, profileId, saveState]);
@@ -198,6 +201,7 @@ export function useKitManifestAutosave({
       await saveState.inFlight;
     }
     if (saveState.pendingConfirmation || !selectionsEqual(saveState.pendingSelections, saveState.savedSelections)) {
+      if (!saveState.loaded || saveState.disabled) throw new Error("Kit selections cannot be saved yet");
       await saveSelections(saveState.pendingSelections);
     }
   }, [saveSelections, saveState]);
@@ -207,7 +211,7 @@ export function useKitManifestAutosave({
       saveState.pendingSelections = selections;
       clearSavedTimer();
       setStatus("pending");
-      void saveSelections(selections);
+      void saveSelections(selections).catch(() => {});
     },
     [clearSavedTimer, saveSelections, saveState],
   );
@@ -221,13 +225,13 @@ export function useKitManifestAutosave({
   useEffect(() => {
     const flushOnHidden = () => {
       if (document.visibilityState === "hidden") {
-        void flushSave();
+        void flushSave().catch(() => {});
       }
     };
     document.addEventListener("visibilitychange", flushOnHidden);
     return () => {
       document.removeEventListener("visibilitychange", flushOnHidden);
-      void flushSave();
+      void flushSave().catch(() => {});
     };
   }, [flushSave]);
 

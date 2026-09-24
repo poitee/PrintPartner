@@ -70,8 +70,7 @@ import { cn } from "@/lib/utils";
 import { useProfileSelection } from "../context/ProfileContext";
 import { usePlanActions } from "../context/PlanActionsContext";
 import { usePlanWorkspace } from "../context/PlanWorkspaceContext";
-import { useImportRulesSaveRegistry } from "../context/ImportRulesSaveContext";
-import { useKitManifestSaveRegistry } from "../context/KitManifestSaveContext";
+import { useFlushBuildPageSaves } from "../hooks/useFlushBuildPageSaves";
 import { useEngineHealth } from "../hooks/useEngineHealth";
 import { useExternalAccessSettingsQuery } from "../queries/externalAccess";
 import { useJobRunner } from "../hooks/useJobRunner";
@@ -257,16 +256,11 @@ export default function BuildPage() {
 
   const needsBaseSource = baseLayer?.project_id == null;
 
-  const { flushAll: flushImportRules } = useImportRulesSaveRegistry();
-  const { flushAll: flushKitManifest } = useKitManifestSaveRegistry();
-
-  const flushPendingSaves = useCallback(async () => {
-    await Promise.all([flushImportRules(), flushKitManifest()]);
-  }, [flushImportRules, flushKitManifest]);
+  const flushPendingSaves = useFlushBuildPageSaves();
 
   useEffect(() => {
     return () => {
-      void flushPendingSaves();
+      void flushPendingSaves().catch(() => {});
     };
   }, [flushPendingSaves]);
 

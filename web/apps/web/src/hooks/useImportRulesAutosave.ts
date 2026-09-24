@@ -18,6 +18,18 @@ type Options = {
   onUnregisterFlush?: (sourceId: number) => void;
 };
 
+type SourceSaveState = {
+  sourceId: number;
+  inFlight: Promise<void> | null;
+  queuedRules: string[] | null;
+  pendingRules: string[];
+  savedRules: string[];
+  lastPendingRulesProp: string[];
+  lastSavedRulesProp: string[];
+  rulesLoaded: boolean;
+  disabled: boolean;
+};
+
 export function useImportRulesAutosave({
   sourceId,
   pendingRules,
@@ -30,23 +42,44 @@ export function useImportRulesAutosave({
   onUnregisterFlush,
 }: Options) {
   const [status, setStatus] = useState<ImportRulesSaveStatus>("idle");
-  const saveInFlightRef = useRef<Promise<void> | null>(null);
   const savedClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const saveStateRef = useRef<SourceSaveState>({
+    sourceId,
+    inFlight: null,
+    queuedRules: null,
+    pendingRules,
+    savedRules,
+    lastPendingRulesProp: pendingRules,
+    lastSavedRulesProp: savedRules,
+    rulesLoaded,
+    disabled,
+  });
+  if (saveStateRef.current.sourceId !== sourceId) {
+    saveStateRef.current = {
+      sourceId,
+      inFlight: null,
+      queuedRules: null,
+      pendingRules,
+      savedRules,
+      lastPendingRulesProp: pendingRules,
+      lastSavedRulesProp: savedRules,
+      rulesLoaded,
+      disabled,
+    };
+  }
+  const saveState = saveStateRef.current;
+  saveState.rulesLoaded = rulesLoaded;
+  saveState.disabled = disabled;
+  if (saveState.lastPendingRulesProp !== pendingRules) {
+    saveState.lastPendingRulesProp = pendingRules;
+    saveState.pendingRules = pendingRules;
+  }
+  if (saveState.lastSavedRulesProp !== savedRules) {
+    saveState.lastSavedRulesProp = savedRules;
+    saveState.savedRules = savedRules;
+  }
 
-  const pendingRulesRef = useRef(pendingRules);
-  const savedRulesRef = useRef(savedRules);
-  const userEditedRef = useRef(userEdited);
-  const rulesLoadedRef = useRef(rulesLoaded);
-  const disabledRef = useRef(disabled);
-
-  pendingRulesRef.current = pendingRules;
-  savedRulesRef.current = savedRules;
-  userEditedRef.current = userEdited;
-  rulesLoadedRef.current = rulesLoaded;
-  disabledRef.current = disabled;
-
-  const dirty =
-    rulesLoaded && userEdited && !rulesEqual(pendingRules, savedRules);
+  const dirty = rulesLoaded && userEdited && !rulesEqual(pendingRules, savedRules);
 
   const clearSavedTimer = useCallback(() => {
     if (savedClearTimerRef.current) {
@@ -55,66 +88,67 @@ export function useImportRulesAutosave({
     }
   }, []);
 
-  const saveRules = useCallback(
-    async (rulesOverride?: string[]) => {
-      if (disabledRef.current) return;
-      const rulesToSave = rulesOverride ?? pendingRulesRef.current;
-      if (rulesEqual(rulesToSave, savedRulesRef.current)) return;
-
-      if (saveInFlightRef.current) {
-        await saveInFlightRef.current;
-        if (rulesEqual(rulesToSave, savedRulesRef.current)) return;
+  const drainQueuedRules = useCallback(async () => {
+    while (saveState.queuedRules) {
+      const rulesToSave = saveState.queuedRules;
+      saveState.queuedRules = null;
+      if (rulesEqual(rulesToSave, saveState.savedRules)) continue;
+      if (saveStateRef.current === saveState) {
+        clearSavedTimer();
+        setStatus("saving");
       }
-
-      clearSavedTimer();
-      setStatus("saving");
-
-      const run = (async () => {
-        try {
-          const result = await saveImportRules(sourceId, rulesToSave);
-          savedRulesRef.current = result.rules;
+      try {
+        const result = await saveImportRules(sourceId, rulesToSave);
+        saveState.savedRules = result.rules;
+        if (saveStateRef.current === saveState && rulesEqual(saveState.pendingRules, result.rules)) {
           onSaved(result.rules);
           setStatus("saved");
           savedClearTimerRef.current = setTimeout(() => {
             setStatus((current) => (current === "saved" ? "idle" : current));
             savedClearTimerRef.current = null;
           }, IMPORT_RULES_SAVED_CLEAR_MS);
-        } catch {
-          setStatus("error");
-        } finally {
-          saveInFlightRef.current = null;
         }
-      })();
+      } catch (error) {
+        saveState.queuedRules = null;
+        if (saveStateRef.current === saveState) setStatus("error");
+        throw error;
+      }
+    }
+  }, [clearSavedTimer, onSaved, saveState, sourceId]);
 
-      saveInFlightRef.current = run;
+  const saveRules = useCallback(async (rulesOverride?: string[]) => {
+    if (!saveState.rulesLoaded || saveState.disabled) return;
+    const rulesToSave = rulesOverride ?? saveState.pendingRules;
+    if (!saveState.inFlight && rulesEqual(rulesToSave, saveState.savedRules)) return;
+    saveState.queuedRules = rulesToSave;
+    if (saveState.inFlight) return saveState.inFlight;
+
+    const run = drainQueuedRules();
+    saveState.inFlight = run;
+    try {
       await run;
-    },
-    [clearSavedTimer, onSaved, sourceId],
-  );
+    } finally {
+      if (saveState.inFlight === run) saveState.inFlight = null;
+    }
+  }, [drainQueuedRules, saveState]);
 
   const flushSave = useCallback(async () => {
-    if (saveInFlightRef.current) {
-      await saveInFlightRef.current;
+    if (saveState.inFlight) await saveState.inFlight;
+    if (!rulesEqual(saveState.pendingRules, saveState.savedRules)) {
+      if (!saveState.rulesLoaded || saveState.disabled) throw new Error("Source rules cannot be saved yet");
+      await saveRules(saveState.pendingRules);
     }
-    if (!rulesEqual(pendingRulesRef.current, savedRulesRef.current)) {
-      await saveRules(pendingRulesRef.current);
-    }
-  }, [saveRules]);
+  }, [saveRules, saveState]);
 
   const flushSaveRef = useRef(flushSave);
   flushSaveRef.current = flushSave;
 
-  /** PUT immediately on toggle — rules arg avoids stale React state if user navigates away. */
-  const saveUserEdit = useCallback(
-    (rules: string[]) => {
-      pendingRulesRef.current = rules;
-      userEditedRef.current = true;
-      clearSavedTimer();
-      setStatus("pending");
-      void saveRules(rules);
-    },
-    [clearSavedTimer, saveRules],
-  );
+  const saveUserEdit = useCallback((rules: string[]) => {
+    saveState.pendingRules = rules;
+    clearSavedTimer();
+    setStatus("pending");
+    void saveRules(rules).catch(() => {});
+  }, [clearSavedTimer, saveRules, saveState]);
 
   useEffect(() => {
     if (!onRegisterFlush) return;
@@ -124,7 +158,7 @@ export function useImportRulesAutosave({
 
   useEffect(() => {
     return () => {
-      void flushSaveRef.current();
+      void flushSaveRef.current().catch(() => {});
     };
   }, [sourceId]);
 

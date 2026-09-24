@@ -24,6 +24,7 @@ describe("useImportRulesAutosave", () => {
     const second = deferred<{ rules: string[] }>();
     saveImportRules.mockImplementationOnce(() => first.promise).mockImplementationOnce(() => second.promise);
     const onSaved = vi.fn();
+    const initialProps: { pendingRules: string[]; savedRules: string[] } = { pendingRules: [], savedRules: [] };
     const hook = renderHook(({ pendingRules, savedRules }) => useImportRulesAutosave({
       sourceId: 5,
       pendingRules,
@@ -32,7 +33,7 @@ describe("useImportRulesAutosave", () => {
       userEdited: true,
       disabled: false,
       onSaved,
-    }), { initialProps: { pendingRules: [], savedRules: [] } });
+    }), { initialProps });
 
     act(() => {
       hook.result.current.saveUserEdit(["first.stl"]);
@@ -53,10 +54,11 @@ describe("useImportRulesAutosave", () => {
 
   it("rejects a failed flush so navigation can keep the editor open", async () => {
     saveImportRules.mockRejectedValue(new Error("offline"));
+    const unchangedRules: string[] = [];
     const hook = renderHook(() => useImportRulesAutosave({
       sourceId: 5,
-      pendingRules: [],
-      savedRules: [],
+      pendingRules: unchangedRules,
+      savedRules: unchangedRules,
       rulesLoaded: true,
       userEdited: true,
       disabled: false,
