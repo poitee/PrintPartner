@@ -3,8 +3,9 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { Link, MemoryRouter, Route, Routes } from "react-router-dom";
+import { createMemoryRouter, Link, MemoryRouter, Route, RouterProvider, Routes } from "react-router-dom";
 import AppLayout from "./AppLayout";
+import BuildSaveNavigationGuard from "../components/BuildSaveNavigationGuard";
 import { useImportRulesAutosave } from "../hooks/useImportRulesAutosave";
 
 vi.mock("../components/CommandPalette", () => ({ default: () => null }));
@@ -310,5 +311,49 @@ describe("application shell accessibility", () => {
     fireEvent.click(screen.getByRole("link", { name: "Open Plan" }));
     await waitFor(() => expect(screen.getByRole("heading", { name: "Plan" })).toBeTruthy());
     expect(saveRegistry.saveImportRules).toHaveBeenCalledTimes(3);
+  });
+
+  it("uses one API write when the link handler and router blocker both flush", async () => {
+    let resolveSave!: (value: { rules: string[] }) => void;
+    saveRegistry.saveImportRules.mockReturnValue(new Promise((resolve) => {
+      resolveSave = resolve;
+    }));
+    function SourcesEditor() {
+      const [pendingRules, setPendingRules] = useState<string[]>([]);
+      const [savedRules, setSavedRules] = useState<string[]>([]);
+      const { saveUserEdit } = useImportRulesAutosave({
+        sourceId: 5,
+        pendingRules,
+        savedRules,
+        rulesLoaded: true,
+        userEdited: true,
+        disabled: false,
+        onSaved: setSavedRules,
+        onRegisterFlush: (id, flush) => saveRegistry.registered.set(id, flush),
+        onUnregisterFlush: (id) => saveRegistry.registered.delete(id),
+      });
+      return <><h1>Sources</h1><button onClick={() => {
+        setPendingRules(["latest.stl"]);
+        saveUserEdit(["latest.stl"]);
+      }}>Choose file</button><Link to="/plan">Open Plan</Link></>;
+    }
+    const router = createMemoryRouter([{
+      path: "/",
+      element: <><BuildSaveNavigationGuard /><AppLayout /></>,
+      children: [
+        { path: "sources", element: <SourcesEditor /> },
+        { path: "plan", element: <h1>Plan</h1> },
+      ],
+    }], { initialEntries: ["/sources"] });
+    render(<RouterProvider router={router} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Choose file" }));
+    expect(saveRegistry.saveImportRules).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("link", { name: "Open Plan" }));
+    expect(router.state.location.pathname).toBe("/sources");
+    resolveSave({ rules: ["latest.stl"] });
+    await waitFor(() => expect(router.state.location.pathname).toBe("/plan"));
+    expect(saveRegistry.flush).toHaveBeenCalledTimes(2);
+    expect(saveRegistry.saveImportRules).toHaveBeenCalledTimes(1);
   });
 });
