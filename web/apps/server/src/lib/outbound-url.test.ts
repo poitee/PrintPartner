@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createServer } from "node:http";
 import {
   assertSafeOutboundHost,
   assertSafeOutboundUrl,
@@ -160,6 +161,30 @@ describe("assertSafeOutboundHost", () => {
 describe("safeOutboundFetch", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it("does not connect to a different DNS address after validation", async () => {
+    let requests = 0;
+    const server = createServer((_request, response) => {
+      requests++;
+      response.end("private response");
+    });
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP server");
+
+    try {
+      await expect(
+        safeOutboundFetch(`http://localhost:${address.port}/secret`, {
+          signal: AbortSignal.timeout(300),
+        }, { lookupFn: publicLookup }),
+      ).rejects.toThrow();
+      expect(requests).toBe(0);
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => error ? reject(error) : resolve()),
+      );
+    }
   });
 
   it("blocks redirects to private addresses", async () => {
