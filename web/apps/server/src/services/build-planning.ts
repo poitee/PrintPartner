@@ -375,12 +375,16 @@ export function hydrateBuildPlanningBrief(
   const resolutions = Object.fromEntries(
     Object.entries(brief.resolutions).filter(([groupId]) => currentGroups.has(groupId) && currentGroups.get(groupId) === previousGroups.get(groupId)),
   );
+  const sameDifferences = JSON.stringify(brief.differences.map((difference) => difference.id).sort()) ===
+    JSON.stringify(differences.map((difference) => difference.id).sort());
   return {
     ...brief,
     evidence,
     differences,
     resolutions,
-    draft_id: Object.keys(resolutions).length === Object.keys(brief.resolutions).length ? brief.draft_id : undefined,
+    draft_id: sameDifferences && Object.keys(resolutions).length === Object.keys(brief.resolutions).length
+      ? brief.draft_id
+      : undefined,
   };
 }
 
