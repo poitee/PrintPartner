@@ -91,6 +91,16 @@ describe("useKitManifestAutosave", () => {
     await expect(result.current.saveNow()).rejects.toThrow("offline");
   });
 
+  it("warns before a page unload while kit selections are unsaved", async () => {
+    mocks.savePlanKitManifest.mockRejectedValue(new Error("offline"));
+    const { result } = renderAutosave();
+    expect(window.dispatchEvent(new Event("beforeunload", { cancelable: true }))).toBe(true);
+
+    act(() => result.current.saveUserEdit({ extras: ["skirts"] }));
+    await waitFor(() => expect(result.current.status).toBe("error"));
+    expect(window.dispatchEvent(new Event("beforeunload", { cancelable: true }))).toBe(false);
+  });
+
   it("retries a failed Plan refresh after the variant itself was saved", async () => {
     const savedKit = kit({ extras: ["skirts"] });
     mocks.savePlanKitManifest.mockResolvedValueOnce(savedKit);
@@ -108,6 +118,7 @@ describe("useKitManifestAutosave", () => {
     expect(onPersisted).toHaveBeenLastCalledWith(savedKit);
     expect(mocks.savePlanKitManifest).toHaveBeenCalledTimes(1);
     expect(result.current.status).toBe("saved");
+    expect(window.dispatchEvent(new Event("beforeunload", { cancelable: true }))).toBe(true);
   });
 
   it("applies a saved variant to its original Build after switching Builds", async () => {

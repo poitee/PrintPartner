@@ -50,6 +50,7 @@ describe("useImportRulesAutosave", () => {
 
     await act(async () => { second.resolve({ rules: ["latest.stl"] }); await second.promise; });
     expect(onSaved).toHaveBeenCalledExactlyOnceWith(["latest.stl"]);
+    expect(window.dispatchEvent(new Event("beforeunload", { cancelable: true }))).toBe(true);
   });
 
   it("rejects a failed flush so navigation can keep the editor open", async () => {
@@ -67,5 +68,24 @@ describe("useImportRulesAutosave", () => {
     act(() => hook.result.current.saveUserEdit(["latest.stl"]));
     await waitFor(() => expect(hook.result.current.status).toBe("error"));
     await expect(hook.result.current.saveNow()).rejects.toThrow("offline");
+  });
+
+  it("warns before a page unload while rules are unsaved", async () => {
+    saveImportRules.mockRejectedValue(new Error("offline"));
+    const unchangedRules: string[] = [];
+    const hook = renderHook(() => useImportRulesAutosave({
+      sourceId: 5,
+      pendingRules: unchangedRules,
+      savedRules: unchangedRules,
+      rulesLoaded: true,
+      userEdited: true,
+      disabled: false,
+      onSaved: vi.fn(),
+    }));
+    expect(window.dispatchEvent(new Event("beforeunload", { cancelable: true }))).toBe(true);
+
+    act(() => hook.result.current.saveUserEdit(["latest.stl"]));
+    await waitFor(() => expect(hook.result.current.status).toBe("error"));
+    expect(window.dispatchEvent(new Event("beforeunload", { cancelable: true }))).toBe(false);
   });
 });
