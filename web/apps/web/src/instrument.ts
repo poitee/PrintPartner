@@ -7,6 +7,8 @@ import {
 } from "react-router";
 import * as Sentry from "@sentry/react";
 
+const sentryDsn = import.meta.env.VITE_SENTRY_DSN?.trim();
+export const sentryEnabled = Boolean(sentryDsn);
 const apiUrl = import.meta.env.VITE_API_URL?.replace(/\/$/, "");
 
 // Setting this list replaces the SDK default. Include same-origin absolute URLs
@@ -17,10 +19,8 @@ if (typeof window !== "undefined" && window.location.origin) {
   tracePropagationTargets.push(window.location.origin);
 }
 
-Sentry.init({
-  dsn:
-    import.meta.env.VITE_SENTRY_DSN ||
-    "https://6b704bda9a88cc08af2197c87b7e95c0@o4510184122351616.ingest.us.sentry.io/4512127197380608",
+if (sentryDsn) Sentry.init({
+  dsn: sentryDsn,
   environment: import.meta.env.MODE,
   release: import.meta.env.VITE_APP_VERSION,
 

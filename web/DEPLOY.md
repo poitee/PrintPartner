@@ -72,9 +72,8 @@ The app service has a healthcheck that polls `GET /health` every 30s using Node'
 
 ### Browser error reporting (optional)
 
-The React app initializes `@sentry/react` for errors and tracing with the
-project DSN. `VITE_SENTRY_DSN`, when set to a non-empty value at **build**
-time, replaces that DSN. Vite inlines it, so a runtime environment variable on
+The React app initializes `@sentry/react` for errors and tracing only when
+`VITE_SENTRY_DSN` has a non-empty value at **build** time. Vite inlines it, so a runtime environment variable on
 the container does not reach the browser. Pass a replacement as a Docker build
 arg (`docker build --build-arg VITE_SENTRY_DSN=...`) or put it in
 `web/apps/web/.env` for local `npm run dev`. `release` is the web package
