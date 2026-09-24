@@ -286,6 +286,9 @@ function fetchBambuStatus(conn: BambuConnection): Promise<PrinterHostStatus> {
     }, STATUS_TIMEOUT_MS);
 
     try {
+      if (process.env.MQTTJS_SOCKS_PROXY) {
+        throw new OutboundUrlError("Bambu MQTT proxy routing bypasses checked DNS");
+      }
       const options = {
         username: MQTT_USERNAME,
         password: conn.accessCode,

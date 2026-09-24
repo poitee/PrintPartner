@@ -187,6 +187,27 @@ describe("bambuAdapter", () => {
     );
   });
 
+  it("refuses MQTT proxy routing that would skip the checked DNS lookup", async () => {
+    const previous = process.env.MQTTJS_SOCKS_PROXY;
+    process.env.MQTTJS_SOCKS_PROXY = "socks5://127.0.0.1:1080";
+    const connect = vi.fn(mockMqttThatReports({ gcode_state: "IDLE" }));
+    setBambuMqttConnectForTests(connect);
+
+    try {
+      const result = await bambuAdapter.testConnection({
+        host: "192.168.1.80",
+        access_code: "lan-code",
+        serial: "01P00A000000001",
+      });
+      expect(result.ok).toBe(false);
+      expect(result.message).toMatch(/proxy routing/);
+      expect(connect).not.toHaveBeenCalled();
+    } finally {
+      if (previous === undefined) delete process.env.MQTTJS_SOCKS_PROXY;
+      else process.env.MQTTJS_SOCKS_PROXY = previous;
+    }
+  });
+
   it("getStatus maps RUNNING progress from MQTT report", async () => {
     setBambuMqttConnectForTests(
       mockMqttThatReports({
