@@ -19,6 +19,26 @@ describe("useImportRulesAutosave", () => {
     saveImportRules.mockReset();
   });
 
+  it("keeps its registered flush available when the save callback changes", () => {
+    const register = vi.fn();
+    const unregister = vi.fn();
+    const hook = renderHook(({ onSaved }) => useImportRulesAutosave({
+      sourceId: 5,
+      pendingRules: [],
+      savedRules: [],
+      rulesLoaded: true,
+      userEdited: false,
+      disabled: false,
+      onSaved,
+      onRegisterFlush: register,
+      onUnregisterFlush: unregister,
+    }), { initialProps: { onSaved: vi.fn() } });
+    expect(register).toHaveBeenCalledTimes(1);
+    hook.rerender({ onSaved: vi.fn() });
+    expect(unregister).not.toHaveBeenCalled();
+    expect(register).toHaveBeenCalledTimes(1);
+  });
+
   it("serializes writes and keeps the newest edit visible while an old write completes", async () => {
     const first = deferred<{ rules: string[] }>();
     const second = deferred<{ rules: string[] }>();

@@ -206,6 +206,14 @@ export function useKitManifestAutosave({
     }
   }, [saveSelections, saveState]);
 
+  const registeredFlushRef = useRef({ profileId, flush: flushSave });
+  if (registeredFlushRef.current.profileId !== profileId) {
+    registeredFlushRef.current = { profileId, flush: flushSave };
+  } else {
+    registeredFlushRef.current.flush = flushSave;
+  }
+  const registeredFlush = registeredFlushRef.current;
+
   const saveUserEdit = useCallback(
     (selections: ManifestSelections) => {
       saveState.pendingSelections = selections;
@@ -218,22 +226,23 @@ export function useKitManifestAutosave({
 
   useEffect(() => {
     if (!onRegisterFlush) return;
-    onRegisterFlush(profileId, flushSave);
+    onRegisterFlush(profileId, () => registeredFlush.flush());
     return () => onUnregisterFlush?.(profileId);
-  }, [flushSave, onRegisterFlush, onUnregisterFlush, profileId]);
+  }, [onRegisterFlush, onUnregisterFlush, profileId, registeredFlush]);
 
   useEffect(() => {
+    const flushForProfile = () => registeredFlush.flush();
     const flushOnHidden = () => {
       if (document.visibilityState === "hidden") {
-        void flushSave().catch(() => {});
+        void flushForProfile().catch(() => {});
       }
     };
     document.addEventListener("visibilitychange", flushOnHidden);
     return () => {
       document.removeEventListener("visibilitychange", flushOnHidden);
-      void flushSave().catch(() => {});
+      void flushForProfile().catch(() => {});
     };
-  }, [flushSave]);
+  }, [registeredFlush]);
 
   useEffect(() => {
     return () => clearSavedTimer();
