@@ -83,6 +83,14 @@ describe("useKitManifestAutosave", () => {
     vi.clearAllMocks();
   });
 
+  it("rejects a failed flush so navigation can keep the editor open", async () => {
+    mocks.savePlanKitManifest.mockRejectedValue(new Error("offline"));
+    const { result } = renderAutosave();
+    act(() => result.current.saveUserEdit({ extras: ["skirts"] }));
+    await waitFor(() => expect(result.current.status).toBe("error"));
+    await expect(result.current.saveNow()).rejects.toThrow("offline");
+  });
+
   it("retries a failed Plan refresh after the variant itself was saved", async () => {
     const savedKit = kit({ extras: ["skirts"] });
     mocks.savePlanKitManifest.mockResolvedValueOnce(savedKit);
