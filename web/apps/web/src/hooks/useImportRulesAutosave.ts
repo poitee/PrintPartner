@@ -171,5 +171,16 @@ export function useImportRulesAutosave({
     clearSavedTimer();
   }, [sourceId, clearSavedTimer]);
 
+  useEffect(() => {
+    const warnIfUnsaved = (event: BeforeUnloadEvent) => {
+      if (saveStateRef.current !== saveState) return;
+      if (!saveState.inFlight && status !== "error" && rulesEqual(saveState.pendingRules, saveState.savedRules)) return;
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warnIfUnsaved);
+    return () => window.removeEventListener("beforeunload", warnIfUnsaved);
+  }, [saveState, status]);
+
   return { dirty, status, saveNow: flushSave, saveUserEdit };
 }

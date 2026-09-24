@@ -244,6 +244,22 @@ export function useKitManifestAutosave({
     clearSavedTimer();
   }, [profileId, clearSavedTimer]);
 
+  useEffect(() => {
+    const warnIfUnsaved = (event: BeforeUnloadEvent) => {
+      if (saveStateRef.current !== saveState) return;
+      if (
+        !saveState.inFlight &&
+        !saveState.pendingConfirmation &&
+        status !== "error" &&
+        selectionsEqual(saveState.pendingSelections, saveState.savedSelections)
+      ) return;
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warnIfUnsaved);
+    return () => window.removeEventListener("beforeunload", warnIfUnsaved);
+  }, [saveState, status]);
+
   return { dirty, status, saveNow: flushSave, saveUserEdit };
 }
 
