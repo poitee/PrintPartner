@@ -1,5 +1,8 @@
 import { EventEmitter } from "node:events";
+import { createServer, type LookupFunction } from "node:net";
+import mqtt, { type IClientOptions } from "mqtt";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createCheckedLookup } from "../../lib/outbound-url.js";
 import {
   bambuAdapter,
   mapBambuGcodeState,
@@ -115,6 +118,46 @@ describe("bambuAdapter", () => {
   afterEach(() => {
     setBambuMqttConnectForTests(null);
     vi.restoreAllMocks();
+  });
+
+  it("passes the checked lookup through MQTT.js to a TLS socket", async () => {
+    const previous = process.env.MQTTJS_SOCKS_PROXY;
+    delete process.env.MQTTJS_SOCKS_PROXY;
+    const server = createServer((socket) => socket.destroy());
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP server");
+    let lookups = 0;
+    const options = {
+      protocol: "mqtts",
+      reconnectPeriod: 0,
+      connectTimeout: 1_000,
+      lookup: createCheckedLookup({
+        allowPrivate: true,
+        lookupFn: async () => {
+          lookups++;
+          return [{ address: "127.0.0.1", family: 4 }];
+        },
+      }),
+    } satisfies IClientOptions & { lookup: LookupFunction };
+    const connectedSocket = new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error("MQTT did not use checked DNS")), 1_500);
+      server.once("connection", () => {
+        clearTimeout(timeout);
+        resolve();
+      });
+    });
+    const client = mqtt.connect(`mqtts://checked.invalid:${address.port}`, options);
+    client.on("error", () => {});
+
+    try {
+      await connectedSocket;
+      expect(lookups).toBeGreaterThan(0);
+    } finally {
+      client.end(true);
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      if (previous !== undefined) process.env.MQTTJS_SOCKS_PROXY = previous;
+    }
   });
 
   it("requires host, access_code, and serial", async () => {
