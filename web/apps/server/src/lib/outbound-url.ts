@@ -1,5 +1,6 @@
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
+import { Agent } from "undici";
 import { cancelResponseBody } from "./bounded-response.js";
 
 /**
@@ -134,7 +135,7 @@ const defaultLookup: LookupFn = (hostname) => lookup(hostname, { all: true, verb
 async function assertResolvedHostSafe(
   hostname: string,
   options: OutboundUrlOptions,
-): Promise<void> {
+): Promise<Array<{ address: string; family: 4 | 6 }>> {
   let addresses: string[];
   if (isIP(hostname)) {
     addresses = [hostname];
@@ -150,6 +151,7 @@ async function assertResolvedHostSafe(
     }
   }
 
+  const checked: Array<{ address: string; family: 4 | 6 }> = [];
   for (const address of addresses) {
     const cls = classifyAddress(address);
     if (cls === "metadata") {
@@ -158,7 +160,13 @@ async function assertResolvedHostSafe(
     if (cls === "private" && !privateTargetsAllowed(options)) {
       throw new OutboundUrlError(`URL resolves to a private or internal address: ${hostname}`);
     }
+    const family = isIP(address);
+    if (family !== 4 && family !== 6) {
+      throw new OutboundUrlError(`Invalid address for host: ${hostname}`);
+    }
+    checked.push({ address, family });
   }
+  return checked;
 }
 
 /**
@@ -219,15 +227,82 @@ export async function safeOutboundFetch(
 ): Promise<Response> {
   let url = await assertSafeOutboundUrl(rawUrl, options);
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-    const response = await fetch(url, { ...init, redirect: "manual" });
+    const dispatcher = new Agent({
+      connect: {
+        autoSelectFamily: false,
+        lookup: (hostname, _lookupOptions, callback) => {
+          void assertResolvedHostSafe(hostname, options).then(
+            ([address]) => {
+              if (!address) return callback(new OutboundUrlError(`Could not resolve host: ${hostname}`), "", 4);
+              callback(null, address.address, address.family);
+            },
+            (error: unknown) => callback(error instanceof Error ? error : new Error(String(error)), "", 4),
+          );
+        },
+      },
+    });
+    let response: Response;
+    try {
+      const requestInit: RequestInit = {
+        ...init,
+        redirect: "manual",
+      };
+      // Node fetch accepts an Undici dispatcher, but its bundled Dispatcher type
+      // differs from the installed Undici package's type.
+      Object.defineProperty(requestInit, "dispatcher", { value: dispatcher });
+      response = await fetch(url, requestInit);
+    } catch (error) {
+      dispatcher.destroy();
+      throw error;
+    }
     if (response.status >= 300 && response.status < 400) {
       const location = response.headers.get("location");
-      if (!location) return response;
-      await cancelResponseBody(response);
+      if (!location) return responseWithDispatcher(response, dispatcher);
+      try {
+        await cancelResponseBody(response);
+      } finally {
+        dispatcher.destroy();
+      }
       url = await assertSafeOutboundUrl(new URL(location, url).toString(), options);
       continue;
     }
-    return response;
+    return responseWithDispatcher(response, dispatcher);
   }
   throw new OutboundUrlError(`Too many redirects fetching ${rawUrl}`);
+}
+
+function responseWithDispatcher(response: Response, dispatcher: Agent): Response {
+  if (!response.body) {
+    dispatcher.destroy();
+    return response;
+  }
+  const reader = response.body.getReader();
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const result = await reader.read();
+        if (result.done) {
+          controller.close();
+          dispatcher.destroy();
+        } else {
+          controller.enqueue(result.value);
+        }
+      } catch (error) {
+        controller.error(error);
+        dispatcher.destroy();
+      }
+    },
+    async cancel(reason) {
+      try {
+        await reader.cancel(reason);
+      } finally {
+        dispatcher.destroy();
+      }
+    },
+  });
+  return new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
 }

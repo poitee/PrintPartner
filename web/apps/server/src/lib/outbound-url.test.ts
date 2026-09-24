@@ -129,6 +129,14 @@ describe("assertSafeOutboundUrl", () => {
         allowPrivate: true,
       }),
     ).resolves.toBeInstanceOf(URL);
+    await expect(
+      assertSafeOutboundUrl("https://mixed.example/x", {
+        lookupFn: async () => [
+          { address: "93.184.216.34", family: 4 },
+          { address: "10.0.0.8", family: 4 },
+        ],
+      }),
+    ).rejects.toThrow(/private or internal/);
   });
 
   it("rejects hostnames that fail to resolve", async () => {
@@ -165,6 +173,13 @@ describe("safeOutboundFetch", () => {
 
   it("does not connect to a different DNS address after validation", async () => {
     let requests = 0;
+    let lookups = 0;
+    const rebindingLookup: LookupFn = async () => {
+      lookups++;
+      return lookups === 1
+        ? [{ address: "93.184.216.34", family: 4 }]
+        : [{ address: "127.0.0.1", family: 4 }];
+    };
     const server = createServer((_request, response) => {
       requests++;
       response.end("private response");
@@ -174,12 +189,60 @@ describe("safeOutboundFetch", () => {
     if (!address || typeof address === "string") throw new Error("Expected TCP server");
 
     try {
-      await expect(
-        safeOutboundFetch(`http://localhost:${address.port}/secret`, {
+      let failure: unknown;
+      try {
+        await safeOutboundFetch(`http://localhost:${address.port}/secret`, {
           signal: AbortSignal.timeout(300),
-        }, { lookupFn: publicLookup }),
-      ).rejects.toThrow();
+        }, { lookupFn: rebindingLookup });
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toMatchObject({ cause: { message: expect.stringMatching(/private or internal/) } });
+      expect(lookups).toBe(2);
       expect(requests).toBe(0);
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => error ? reject(error) : resolve()),
+      );
+    }
+  });
+
+  it("keeps the checked connection alive while the caller reads its body", async () => {
+    const server = createServer((_request, response) => {
+      response.write("first");
+      setTimeout(() => response.end(" second"), 10);
+    });
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP server");
+
+    try {
+      const response = await safeOutboundFetch(`http://localhost:${address.port}/body`, {}, {
+        allowPrivate: true,
+        lookupFn: loopbackLookup,
+      });
+      expect(await response.text()).toBe("first second");
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => error ? reject(error) : resolve()),
+      );
+    }
+  });
+
+  it("closes the checked connection when the caller cancels its body", async () => {
+    const server = createServer((_request, response) => {
+      response.write("partial");
+    });
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP server");
+
+    try {
+      const response = await safeOutboundFetch(`http://localhost:${address.port}/stream`, {}, {
+        allowPrivate: true,
+        lookupFn: loopbackLookup,
+      });
+      await response.body?.cancel();
     } finally {
       await new Promise<void>((resolve, reject) =>
         server.close((error) => error ? reject(error) : resolve()),
@@ -198,6 +261,23 @@ describe("safeOutboundFetch", () => {
     await expect(
       safeOutboundFetch("https://example.com/img.png", {}, { lookupFn: publicLookup }),
     ).rejects.toThrow(/private or internal/);
+  });
+
+  it("blocks metadata redirects even when private hosts are allowed", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        status: 302,
+        headers: { get: (key: string) => key === "location" ? "http://169.254.169.254/latest/meta-data/" : null },
+      })),
+    );
+    await expect(
+      safeOutboundFetch("https://example.com/start", {}, {
+        allowPrivate: true,
+        lookupFn: publicLookup,
+      }),
+    ).rejects.toThrow(/metadata/);
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 
   it("follows safe redirects and returns the final response", async () => {
