@@ -325,4 +325,31 @@ describe("useKitManifestAutosave", () => {
       expect.objectContaining({ selections: { extras: ["skirts"] } }),
     );
   });
+
+  it("flushes the previous Build when profileId changes with pending selections", async () => {
+    const oldSelections = { extras: ["skirts"] };
+    mocks.savePlanKitManifest.mockResolvedValue(kit(oldSelections));
+    const initialProps: HookProps = {
+      profileId: 7,
+      pendingSelections: oldSelections,
+      savedSelections: {},
+    };
+    const hook = renderHook(({ profileId, pendingSelections, savedSelections }: HookProps) => useKitManifestAutosave({
+      profileId,
+      pendingSelections,
+      savedSelections,
+      loaded: true,
+      userEdited: true,
+      disabled: false,
+      baseKit: kit({}),
+      onSaved: vi.fn(),
+    }), { initialProps });
+
+    act(() => hook.rerender({ profileId: 8, pendingSelections: {}, savedSelections: {} }));
+    await waitFor(() => expect(mocks.savePlanKitManifest).toHaveBeenCalledWith(
+      7,
+      expect.objectContaining({ selections: oldSelections }),
+    ));
+    expect(mocks.savePlanKitManifest).toHaveBeenCalledTimes(1);
+  });
 });

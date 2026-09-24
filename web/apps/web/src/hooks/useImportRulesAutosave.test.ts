@@ -88,4 +88,27 @@ describe("useImportRulesAutosave", () => {
     await waitFor(() => expect(hook.result.current.status).toBe("error"));
     expect(window.dispatchEvent(new Event("beforeunload", { cancelable: true }))).toBe(false);
   });
+
+  it("flushes the previous source when sourceId changes before a pending edit saves", async () => {
+    saveImportRules.mockResolvedValue({ rules: ["old.stl"] });
+    const onSaved = vi.fn();
+    const initialProps: { sourceId: number; pendingRules: string[]; savedRules: string[] } = {
+      sourceId: 5,
+      pendingRules: ["old.stl"],
+      savedRules: [],
+    };
+    const hook = renderHook(({ sourceId, pendingRules, savedRules }) => useImportRulesAutosave({
+      sourceId,
+      pendingRules,
+      savedRules,
+      rulesLoaded: true,
+      userEdited: true,
+      disabled: false,
+      onSaved,
+    }), { initialProps });
+
+    act(() => hook.rerender({ sourceId: 6, pendingRules: [], savedRules: [] }));
+    await waitFor(() => expect(saveImportRules).toHaveBeenCalledWith(5, ["old.stl"]));
+    expect(saveImportRules).toHaveBeenCalledTimes(1);
+  });
 });
