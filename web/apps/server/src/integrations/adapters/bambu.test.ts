@@ -169,6 +169,11 @@ describe("bambuAdapter", () => {
       "mqtts://192.168.1.80:8883",
       expect.objectContaining({ password: "lan-code" }),
     );
+    const mqttOptions = connect.mock.calls[0]?.[1];
+    if (!mqttOptions || !("lookup" in mqttOptions) || typeof mqttOptions.lookup !== "function") {
+      throw new Error("Bambu MQTT must validate DNS at socket connection");
+    }
+    expect(Object.keys(mqttOptions)).toContain("lookup");
     const client = connect.mock.results[0]!.value as FakeMqttClient;
     expect(client.subscribe).toHaveBeenCalledWith(
       "device/01P00A000000001/report",

@@ -1,5 +1,5 @@
 import mqtt, { type IClientOptions, type MqttClient, type OnMessageCallback } from "mqtt";
-import { isIP } from "node:net";
+import { isIP, type LookupFunction } from "node:net";
 import type {
   DeviceSummary,
   IntegrationConfig,
@@ -10,6 +10,7 @@ import type { IntegrationAdapter } from "../store.js";
 import {
   assertSafeOutboundHost,
   classifyAddress,
+  createCheckedLookup,
   OutboundUrlError,
 } from "../../lib/outbound-url.js";
 
@@ -285,7 +286,7 @@ function fetchBambuStatus(conn: BambuConnection): Promise<PrinterHostStatus> {
     }, STATUS_TIMEOUT_MS);
 
     try {
-      client = mqttConnect(brokerUrl(conn), {
+      const options = {
         username: MQTT_USERNAME,
         password: conn.accessCode,
         protocol: "mqtts",
@@ -295,7 +296,9 @@ function fetchBambuStatus(conn: BambuConnection): Promise<PrinterHostStatus> {
         // LAN printers use self-signed v1 certs; public targets keep verification on.
         rejectUnauthorized: conn.rejectUnauthorized,
         clean: true,
-      });
+        lookup: createCheckedLookup({ allowPrivate: true }),
+      } satisfies IClientOptions & { lookup: LookupFunction };
+      client = mqttConnect(brokerUrl(conn), options);
     } catch (e) {
       finish({
         state: "offline",
