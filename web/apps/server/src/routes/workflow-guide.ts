@@ -44,7 +44,7 @@ Monitor linked printers, browse their files, or upload print files from an unmon
 
 - **⌘K / Ctrl+K.** Open the command palette for navigation, sync, and export actions.
 - **Theme.** Choose light, dark, or system. The sidebar can collapse to an icon rail.
-- **Share Build.** Download a reference manifest or a Git-ready bundle. These contain source references and Plan choices, not model files. Recipients obtain models from their original sources. Manifest import is not yet available.
+- **Share Build.** Download a reference manifest or a Git-ready bundle. These contain source references and Plan choices, not model files. Recipients map each reference to files they already have. A Build is created only when every included file is Ready.
 - **Spoolman.** Connect it in Settings → Integrations for live filament inventory and spool weights.
 `;
 

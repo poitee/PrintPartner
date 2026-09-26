@@ -14,6 +14,9 @@ const board = vi.hoisted(() => ({
 }));
 
 vi.mock("../api/endpoints/board", () => board);
+vi.mock("../api/endpoints/sources", () => ({
+  fetchSources: vi.fn().mockResolvedValue([{ id: 4, name: "Voron" }]),
+}));
 vi.mock("../context/AuthContext", () => ({
   useAuth: () => ({
     user: { user_id: "u1", is_admin: false, display_name: "Bev" },
@@ -99,7 +102,8 @@ describe("BoardPage", () => {
     );
     expect(await screen.findByText("First recipe")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Add to my Builds" })).toHaveProperty("disabled", true);
-    expect(screen.getByText(/waiting on Source mapping/i)).toBeTruthy();
+    expect(screen.getByLabelText("Map Voron")).toHaveProperty("value", "");
+    expect(screen.getByText(/does not download models or match a source by name/i)).toBeTruthy();
     await waitFor(() => {
       expect(board.fetchBoardPost).toHaveBeenCalledWith("p1");
     });

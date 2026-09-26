@@ -18,6 +18,7 @@ type Props = {
   onSelectAll: () => void;
   allSelected: boolean;
   onClear: () => void;
+  onShareReferences?: () => void;
 };
 
 /**
@@ -33,6 +34,7 @@ export default function BulkCategoryBar({
   onSelectAll,
   allSelected,
   onClear,
+  onShareReferences,
 }: Props) {
   if (count === 0) return null;
 
@@ -74,6 +76,11 @@ export default function BulkCategoryBar({
           ))}
         </DropdownMenuContent>
       </DropdownMenu>
+      {onShareReferences ? (
+        <Button type="button" size="sm" variant="secondary" className="h-7" disabled={busy} onClick={onShareReferences}>
+          Share references
+        </Button>
+      ) : null}
       <Button
         type="button"
         size="sm"
