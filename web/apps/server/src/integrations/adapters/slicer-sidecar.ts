@@ -30,7 +30,7 @@
 import type { IntegrationConfig, IntegrationTestResult } from "@print-partner/contracts";
 import { Unzip, UnzipInflate } from "fflate";
 import type { IntegrationAdapter } from "../store.js";
-import { assertSafeOutboundUrl } from "../../lib/outbound-url.js";
+import { safeConnectorFetch } from "../../lib/outbound-url.js";
 import {
   cancelResponseBody,
   isJsonObject,
@@ -74,7 +74,7 @@ async function fetchSidecar(url: string, init: RequestInit): Promise<Response> {
   const method = (init.method ?? "GET").toUpperCase();
   const canRetry = method === "GET" || method === "HEAD";
   try {
-    return await fetch(url, next);
+    return await safeConnectorFetch(url, next);
   } catch (err) {
     if (!canRetry) throw err;
     const msg = err instanceof Error ? err.message : String(err);
@@ -82,7 +82,7 @@ async function fetchSidecar(url: string, init: RequestInit): Promise<Response> {
       /ECONNRESET|ECONNREFUSED|socket hang up|fetch failed|network/i.test(msg) ||
       (err instanceof TypeError && /fetch/i.test(msg));
     if (!transient) throw err;
-    return await fetch(url, next);
+    return await safeConnectorFetch(url, next);
   }
 }
 
@@ -343,7 +343,6 @@ async function sidecarErrorFromResponse(res: Response): Promise<SlicerSidecarErr
 /** POST the v1 multipart contract (`/v1/slice`). */
 async function sliceV1(base: string, req: SliceRequest): Promise<SliceResult> {
   const endpoint = `${base}/v1/slice`;
-  await assertSafeOutboundUrl(endpoint, { allowPrivate: true });
 
   const timeoutS = req.timeout_s ?? 300;
   const form = new FormData();
@@ -386,7 +385,6 @@ async function sliceV1(base: string, req: SliceRequest): Promise<SliceResult> {
 /** POST the legacy multipart contract (`/slice`). */
 async function sliceLegacy(base: string, req: SliceRequest): Promise<SliceResult> {
   const endpoint = `${base}/slice`;
-  await assertSafeOutboundUrl(endpoint, { allowPrivate: true });
 
   // Map the v1-shaped settings onto the legacy machine/process/filament split
   // so a caller only has to build resolved_flat_configs once.
@@ -737,7 +735,6 @@ export const slicerSidecarAdapter: IntegrationAdapter = {
     for (const attempt of attempts) {
       const healthUrl = `${base}${attempt.path}`;
       try {
-        await assertSafeOutboundUrl(healthUrl, { allowPrivate: true });
         const res = await fetchSidecar(healthUrl, {
           method: "GET",
           signal: AbortSignal.timeout(10_000),

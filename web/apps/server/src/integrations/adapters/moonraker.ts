@@ -8,7 +8,7 @@ import type {
   PrinterUploadResult,
 } from "@print-partner/contracts";
 import type { IntegrationAdapter, PrinterUploadSource } from "../store.js";
-import { assertSafeOutboundUrl } from "../../lib/outbound-url.js";
+import { safeConnectorFetch } from "../../lib/outbound-url.js";
 import {
   cancelResponseBody,
   isJsonObject as isRecord,
@@ -66,9 +66,9 @@ async function moonrakerFetch(
   const auth = authHeaders(config);
   let current = url;
   const signal = init.signal ?? AbortSignal.timeout(30_000);
+  const method = (init.method ?? "GET").toUpperCase();
 
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-    await assertSafeOutboundUrl(current, { allowPrivate: true });
     const headers = new Headers(init.headers);
     headers.delete("Authorization");
     headers.delete("X-Api-Key");
@@ -77,7 +77,7 @@ async function moonrakerFetch(
         if (!headers.has(k)) headers.set(k, v);
       }
     }
-    const response = await fetch(current, {
+    const response = await safeConnectorFetch(current, {
       ...init,
       headers,
       signal,
@@ -86,6 +86,7 @@ async function moonrakerFetch(
     if (response.status >= 300 && response.status < 400) {
       const location = response.headers.get("location");
       if (!location) return response;
+      if (method !== "GET" && method !== "HEAD") return response;
       await drainResponseBody(response);
       current = new URL(location, current).toString();
       continue;
