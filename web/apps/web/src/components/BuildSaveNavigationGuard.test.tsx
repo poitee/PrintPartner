@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMemoryRouter, Link, RouterProvider, useLocation, useNavigate } from "react-router-dom";
 import BuildSaveNavigationGuard from "./BuildSaveNavigationGuard";
+import { LibraryDraftProvider, useLibraryDraft } from "../context/LibraryDraftContext";
 
 const saves = vi.hoisted(() => ({ flush: vi.fn<() => Promise<void>>() }));
 vi.mock("../hooks/useFlushBuildPageSaves", () => ({
@@ -25,18 +26,21 @@ function renderRoutes(initialEntries = ["/builds", "/sources"], initialIndex = 1
     ],
     { initialEntries, initialIndex },
   );
-  render(<RouterProvider router={router} />);
+  render(<LibraryDraftProvider><RouterProvider router={router} /></LibraryDraftProvider>);
   return router;
 }
 
 function LocationProbe() {
   const location = useLocation();
   const navigate = useNavigate();
+  const { setDirty } = useLibraryDraft();
   return (
     <>
       <h1>{location.pathname}</h1>
       <Link to="/builds">Builds link</Link>
       <button onClick={() => navigate("/builds")}>Builds button</button>
+      <button onClick={() => setDirty(true)}>Edit Library draft</button>
+      <button onClick={() => navigate("/library?source=2&tab=rules")}>Switch Source</button>
     </>
   );
 }
@@ -132,5 +136,27 @@ describe("BuildSaveNavigationGuard", () => {
     });
     await waitFor(() => expect(router.state.location.search).toBe("?profile=2"));
     expect(saves.flush).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps a dirty Library Source open when route and Source switches are cancelled", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValueOnce(false).mockReturnValueOnce(true);
+    try {
+      const router = renderRoutes(["/library?source=1&tab=rules"], 0);
+      fireEvent.click(screen.getByRole("button", { name: "Edit Library draft" }));
+      fireEvent.click(screen.getByRole("button", { name: "Builds button" }));
+      await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1));
+      expect(router.state.location.pathname).toBe("/library");
+
+      fireEvent.click(screen.getByRole("button", { name: "Switch Source" }));
+      await waitFor(() => expect(confirm).toHaveBeenCalledTimes(2));
+      expect(router.state.location.search).toBe("?source=1&tab=rules");
+
+      fireEvent.click(screen.getByRole("button", { name: "Switch Source" }));
+      await waitFor(() => expect(router.state.location.search).toBe("?source=2&tab=rules"));
+      expect(confirm).toHaveBeenCalledTimes(3);
+      expect(saves.flush).not.toHaveBeenCalled();
+    } finally {
+      confirm.mockRestore();
+    }
   });
 });

@@ -6,6 +6,7 @@ import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_STL_NAMING_PROFILE, type SourceSummary } from "@print-partner/contracts";
 import SourceDetailSheet from "./SourceDetailSheet";
+import { LibraryDraftProvider } from "../../context/LibraryDraftContext";
 
 const { api } = vi.hoisted(() => ({
   api: {
@@ -87,7 +88,7 @@ function createQueryWrapper() {
     defaultOptions: { queries: { retry: false } },
   });
   return function QueryWrapper({ children }: { children: ReactNode }) {
-    return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+    return <QueryClientProvider client={queryClient}><LibraryDraftProvider>{children}</LibraryDraftProvider></QueryClientProvider>;
   };
 }
 
@@ -248,6 +249,70 @@ describe("SourceDetailSheet loading", () => {
     await waitFor(() =>
       expect((screen.getByRole("button", { name: "Save rules" }) as HTMLButtonElement).disabled).toBe(false),
     );
+  });
+
+  it("keeps an unsaved import-rule draft when switching tabs", async () => {
+    api.fetchSourceDocs.mockResolvedValue([]);
+    api.fetchImportRules.mockResolvedValue({ rules: ["original/**"] });
+    api.saveImportRules.mockResolvedValue({ rules: ["first-source/**"] });
+    const { rerender } = render(
+      <SourceDetailSheet {...baseProps} tab="rules" source={source(1, "Source")} />,
+      { wrapper: createQueryWrapper() },
+    );
+    await waitFor(() => expect(api.fetchImportRules).toHaveBeenCalledTimes(1));
+    await screen.findByRole("button", { name: "Change rule draft" });
+    fireEvent.click(screen.getByRole("button", { name: "Change rule draft" }));
+
+    rerender(<SourceDetailSheet {...baseProps} tab="docs" source={source(1, "Source")} />);
+    rerender(<SourceDetailSheet {...baseProps} tab="rules" source={source(1, "Source")} />);
+
+    expect(api.fetchImportRules).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "Save rules" }));
+    await waitFor(() => expect(api.saveImportRules).toHaveBeenCalledWith(1, ["first-source/**"]));
+  });
+
+  it("keeps the Source sheet open when the user cancels discarding unsaved rules", async () => {
+    api.fetchSourceDocs.mockResolvedValue([]);
+    api.fetchImportRules.mockResolvedValue({ rules: ["original/**"] });
+    const onOpenChange = vi.fn();
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    try {
+      render(
+        <SourceDetailSheet {...baseProps} onOpenChange={onOpenChange} tab="rules" source={source(1, "Source")} />,
+        { wrapper: createQueryWrapper() },
+      );
+      await screen.findByRole("button", { name: "Change rule draft" });
+      fireEvent.click(screen.getByRole("button", { name: "Change rule draft" }));
+      fireEvent.click(screen.getByRole("button", { name: "Close source details" }));
+      expect(confirm).toHaveBeenCalledOnce();
+      expect(onOpenChange).not.toHaveBeenCalled();
+    } finally {
+      confirm.mockRestore();
+    }
+  });
+
+  it("keeps an unsaved naming override when switching tabs", async () => {
+    api.fetchSourceDocs.mockResolvedValue([]);
+    api.fetchStlNaming.mockResolvedValue(DEFAULT_STL_NAMING_PROFILE);
+    api.fetchSourceNaming.mockResolvedValue({
+      use_defaults: true,
+      override: {},
+      effective: DEFAULT_STL_NAMING_PROFILE,
+      effective_digest: "0".repeat(64),
+    });
+    const { rerender } = render(
+      <SourceDetailSheet {...baseProps} tab="naming" source={source(1, "Source")} />,
+      { wrapper: createQueryWrapper() },
+    );
+    const useDefaults = await screen.findByRole("checkbox", { name: "Use app default naming rules" });
+    await waitFor(() => expect((useDefaults as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(useDefaults);
+
+    rerender(<SourceDetailSheet {...baseProps} tab="docs" source={source(1, "Source")} />);
+    rerender(<SourceDetailSheet {...baseProps} tab="naming" source={source(1, "Source")} />);
+
+    expect(api.fetchSourceNaming).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("checkbox", { name: "Use app default naming rules" }).getAttribute("data-state")).toBe("unchecked");
   });
 
   it("cannot save the previous Source naming draft while the next Source is loading", async () => {

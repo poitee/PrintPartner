@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMemoryRouter, RouterProvider, useLocation } from "react-router-dom";
 import { useImportSharedBuild } from "./useImportSharedBuild";
 import BuildSaveNavigationGuard from "../components/BuildSaveNavigationGuard";
+import { LibraryDraftProvider } from "../context/LibraryDraftContext";
 
 const deps = vi.hoisted(() => ({
   pick: vi.fn(),
@@ -38,7 +39,7 @@ function renderImport() {
   const router = createMemoryRouter([{ path: "*", element: <Probe /> }], {
     initialEntries: ["/sources?profile=1"],
   });
-  render(<RouterProvider router={router} />);
+  render(<LibraryDraftProvider><RouterProvider router={router} /></LibraryDraftProvider>);
 }
 
 describe("useImportSharedBuild", () => {

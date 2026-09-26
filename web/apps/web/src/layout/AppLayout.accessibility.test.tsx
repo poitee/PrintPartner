@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMemoryRouter, Link, MemoryRouter, Route, RouterProvider, Routes } from "react-router-dom";
 import AppLayout from "./AppLayout";
 import BuildSaveNavigationGuard from "../components/BuildSaveNavigationGuard";
+import { LibraryDraftProvider } from "../context/LibraryDraftContext";
 import { useImportRulesAutosave } from "../hooks/useImportRulesAutosave";
 
 vi.mock("../components/CommandPalette", () => ({ default: () => null }));
@@ -345,7 +346,7 @@ describe("application shell accessibility", () => {
         { path: "plan", element: <h1>Plan</h1> },
       ],
     }], { initialEntries: ["/sources"] });
-    render(<RouterProvider router={router} />);
+    render(<LibraryDraftProvider><RouterProvider router={router} /></LibraryDraftProvider>);
 
     fireEvent.click(screen.getByRole("button", { name: "Choose file" }));
     expect(saveRegistry.saveImportRules).toHaveBeenCalledTimes(1);

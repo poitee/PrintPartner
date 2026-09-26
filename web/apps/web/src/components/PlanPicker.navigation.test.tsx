@@ -9,6 +9,7 @@ import { PlanActionsProvider } from "../context/PlanActionsContext";
 import { ProfileProvider, useProfileSelection } from "../context/ProfileContext";
 import { useProfileUrlSync } from "../hooks/useProfileUrlSync";
 import BuildSaveNavigationGuard from "./BuildSaveNavigationGuard";
+import { LibraryDraftProvider } from "../context/LibraryDraftContext";
 import PlanPicker from "./PlanPicker";
 
 const saves = vi.hoisted(() => ({ flush: vi.fn<() => Promise<void>>() }));
@@ -87,7 +88,7 @@ describe("PlanPicker guarded navigation", () => {
     const router = createMemoryRouter([
       { path: "*", element: <ProfileProvider><PlanActionsProvider><Probe /></PlanActionsProvider></ProfileProvider> },
     ], { initialEntries: ["/plan?profile=1"] });
-    render(<QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider>);
+    render(<QueryClientProvider client={queryClient}><LibraryDraftProvider><RouterProvider router={router} /></LibraryDraftProvider></QueryClientProvider>);
     await waitFor(() => expect(screen.getByTestId("route").textContent).toBe("1|/plan?profile=1"));
 
     fireEvent.click(screen.getByRole("combobox", { name: "Select Build" }));

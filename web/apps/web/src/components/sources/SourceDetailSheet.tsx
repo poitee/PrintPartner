@@ -20,6 +20,7 @@ import {
 import { fetchStlNaming, mergeStlNamingProfiles } from "../../api/endpoints/stlNaming";
 import { useSourceContent } from "../../queries/sourceContent";
 import { sourceNamingDirty } from "../../lib/sourceDetailModel";
+import { rulesEqual } from "../../lib/importRulesSave";
 import { statusTone } from "../../lib/statusTone";
 import { cn } from "@/lib/utils";
 import { StlNamingEditorEmbedded } from "../settings/StlNamingEditor";
@@ -48,6 +49,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
 import { UNCATEGORISED_FILTER } from "./sourceLabels";
 import { invalidateProfiles } from "../../queries/profiles";
 import { queryClient } from "../../queries/queryClient";
+import { confirmDiscardSourceChanges, useLibraryDraft } from "../../context/LibraryDraftContext";
 
 type DetailTab = "docs" | "rules" | "naming";
 type DocsSubTab = "synced" | "notes";
@@ -110,10 +112,12 @@ export default function SourceDetailSheet({
   onSaveRules,
   runImportScan,
 }: Props) {
+  const { setDirty } = useLibraryDraft();
   const [docsSubTab, setDocsSubTab] = useState<DocsSubTab>("synced");
   const content = useSourceContent(source?.id ?? 0, { enabled: open && source != null });
   const [activeNoteId, setActiveNoteId] = useState<number | null>(null);
   const [pendingRules, setPendingRules] = useState<string[]>([]);
+  const [savedRules, setSavedRules] = useState<string[]>([]);
   const [rulesOwnerId, setRulesOwnerId] = useState<number | null>(null);
   const [rulesLoading, setRulesLoading] = useState(false);
   const [rulesLoadError, setRulesLoadError] = useState<string | null>(null);
@@ -131,7 +135,9 @@ export default function SourceDetailSheet({
   const [namingSaving, setNamingSaving] = useState(false);
   const [namingNote, setNamingNote] = useState<string | null>(null);
   const rulesGenerationRef = useRef(0);
+  const requestedRulesSourceRef = useRef<number | null>(null);
   const namingGenerationRef = useRef(0);
+  const requestedNamingSourceRef = useRef<number | null>(null);
 
   const previewProfile = useMemo(
     () => (useDefaults ? globalNaming : overrideDraft),
@@ -190,6 +196,7 @@ export default function SourceDetailSheet({
       const data = await fetchImportRules(sourceId);
       if (rulesGenerationRef.current === generation) {
         setPendingRules(data.rules);
+        setSavedRules(data.rules);
         setRulesOwnerId(sourceId);
       }
     } catch (error) {
@@ -206,7 +213,9 @@ export default function SourceDetailSheet({
 
   useEffect(() => {
     rulesGenerationRef.current += 1;
+    requestedRulesSourceRef.current = null;
     namingGenerationRef.current += 1;
+    requestedNamingSourceRef.current = null;
     if (sourceId == null) return;
     setDocsSubTab("synced");
     setScanResult(null);
@@ -214,6 +223,7 @@ export default function SourceDetailSheet({
     setActiveNoteId(null);
     setRulesOwnerId(null);
     setPendingRules([]);
+    setSavedRules([]);
     setRulesLoadError(null);
     setNamingOwnerId(null);
     return () => {
@@ -224,8 +234,14 @@ export default function SourceDetailSheet({
 
   useEffect(() => {
     if (sourceId == null) return;
-    if (tab === "rules") void loadRules(sourceId);
-    if (tab === "naming") void loadNaming(sourceId);
+    if (tab === "rules" && requestedRulesSourceRef.current !== sourceId) {
+      requestedRulesSourceRef.current = sourceId;
+      void loadRules(sourceId);
+    }
+    if (tab === "naming" && requestedNamingSourceRef.current !== sourceId) {
+      requestedNamingSourceRef.current = sourceId;
+      void loadNaming(sourceId);
+    }
   }, [loadNaming, loadRules, sourceId, tab]);
 
   useEffect(() => {
@@ -241,8 +257,10 @@ export default function SourceDetailSheet({
     const generation = rulesGenerationRef.current + 1;
     rulesGenerationRef.current = generation;
     try {
-      await saveImportRules(source.id, pendingRules);
+      const saved = await saveImportRules(source.id, pendingRules);
       if (rulesGenerationRef.current !== generation) return;
+      setSavedRules(saved.rules);
+      setPendingRules(saved.rules);
       runImportScan(source.id);
       onSaveRules();
       setScanResult("Rules saved — import scan started.");
@@ -283,14 +301,35 @@ export default function SourceDetailSheet({
     }
   };
 
+  const rulesReady = source != null && rulesOwnerId === source.id && !rulesLoading;
+  const namingReady = source != null && namingOwnerId === source.id && !namingLoading;
+  const rulesDirty = rulesReady && !rulesEqual(pendingRules, savedRules);
+  const hasUnsavedChanges = rulesDirty || (namingReady && namingDirty);
+
+  useEffect(() => {
+    setDirty(open && hasUnsavedChanges);
+    return () => setDirty(false);
+  }, [hasUnsavedChanges, open, setDirty]);
+
+  useEffect(() => {
+    if (!hasUnsavedChanges) return;
+    const warnOnUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warnOnUnload);
+    return () => window.removeEventListener("beforeunload", warnOnUnload);
+  }, [hasUnsavedChanges]);
+
   if (!source) return null;
 
   const activeNote = content.notes.find((note) => note.id === activeNoteId) ?? null;
-  const rulesReady = rulesOwnerId === source.id && !rulesLoading;
-  const namingReady = namingOwnerId === source.id && !namingLoading;
 
   return (
-    <Sheet open={open} onOpenChange={onOpenChange} modal={false}>
+    <Sheet open={open} onOpenChange={(nextOpen) => {
+      if (!nextOpen && hasUnsavedChanges && !confirmDiscardSourceChanges()) return;
+      onOpenChange(nextOpen);
+    }} modal={false}>
       <SheetContent
         side="left"
         showOverlay={false}
@@ -521,7 +560,8 @@ export default function SourceDetailSheet({
 
           <TabsContent
             value="rules"
-            className="mt-0 flex min-h-0 flex-1 flex-col gap-3 overflow-hidden px-4 pb-4"
+            forceMount
+            className="mt-0 flex min-h-0 flex-1 flex-col gap-3 overflow-hidden px-4 pb-4 data-[state=inactive]:hidden"
           >
             {rulesLoadError ? (
               <div className="flex items-center gap-2 text-sm text-destructive" role="alert">
