@@ -158,6 +158,29 @@ describe("reference share import", () => {
     expect(repo.listProfileHeaders()).toEqual([]);
   });
 
+  it("does not scan unselected parts from another attached Source", async () => {
+    const root = mkdtempSync(join(tmpdir(), "pp-share-scoped-"));
+    writeStl(root);
+    const repo = await portsFor(mkdtempSync(join(tmpdir(), "pp-share-scoped-db-")));
+    const selected = repo.createSource({ name: "Selected", source_kind: "github", local_path: root });
+    const unselected = repo.createSource({ name: "Unselected", source_kind: "github", local_path: root });
+    repo.updateSource(selected.id, { last_commit_sha: COMMIT });
+    const share = manifest();
+    share.sources.push({ ...share.sources[0]!, key: "source-2", name: "Unselected" });
+    share.layers.push({ source: "source-2", role: "addon" });
+    share.parts.push({ ...share.parts[0]!, source: "source-2", included: false });
+    const imported = importReferenceShareBuild(repo, share, {
+      "source-1": selected.id,
+      "source-2": unselected.id,
+    });
+    const draft = repo.listPlanDraftIdentities(imported.profile_id).find((entry) => entry.state === "open");
+    expect(draft).toBeDefined();
+    const parts = draft ? repo.getPlanDraft(imported.profile_id, draft.id)?.parts : null;
+    expect(parts?.map((part) => ({ path: part.relativePath, sourceLayer: part.sourceLayer }))).toEqual([
+      { path: "parts/bracket.stl", sourceLayer: "base:Selected" },
+    ]);
+  });
+
   it("exports only the Library Sources the operator selected", async () => {
     const repo = await portsFor(mkdtempSync(join(tmpdir(), "pp-share-collection-")));
     const chosen = repo.createSource({

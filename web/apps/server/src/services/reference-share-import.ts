@@ -173,7 +173,7 @@ export function importReferenceShareBuild(
       exclude: [...manifest.exclude],
       replacements: { ...manifest.replacements },
     });
-    const included = new Map<number, Set<string>>();
+    const included = new Map<number, Set<string>>(ids.map((id) => [id, new Set<string>()]));
     const partChoices = new Map<number, Map<string, PlanDraftPartChoice>>();
     for (const part of manifest.parts) {
       if (!part.included) continue;

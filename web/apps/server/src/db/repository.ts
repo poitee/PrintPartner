@@ -4105,7 +4105,7 @@ export class AppRepository {
     }));
     if (
       options.preferAccepted && options.applyManifest === false && accepted &&
-      !options.excludedPathsBySourceId && !options.includedPathsBySourceId &&
+      !options.excludedPathsBySourceId && !options.includedPathsBySourceId && !options.partChoicesBySourceId &&
       capture.inputs.length > 0 && capture.inputs.every((input) => input.tracking_kind === "revision") &&
       this.getProfileHeader(profileId)?.freshness.status === "current"
     ) {
