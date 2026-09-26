@@ -136,7 +136,7 @@ export default function SourceDetailSheet({
   const [namingSaving, setNamingSaving] = useState(false);
   const [namingNote, setNamingNote] = useState<string | null>(null);
   const rulesGenerationRef = useRef(0);
-  const rulesSavePendingRef = useRef(new Map<number, number>());
+  const rulesSavePendingRef = useRef(new Map<number, { generation: number; promise: Promise<unknown> }>());
   const requestedRulesSourceRef = useRef<number | null>(null);
   const namingGenerationRef = useRef(0);
   const requestedNamingSourceRef = useRef<number | null>(null);
@@ -195,6 +195,15 @@ export default function SourceDetailSheet({
     setPendingRules([]);
     setRulesLoadError(null);
     try {
+      const pendingSave = rulesSavePendingRef.current.get(sourceId)?.promise;
+      if (pendingSave) {
+        try {
+          await pendingSave;
+        } catch {
+          // Reload from the server whether the earlier save succeeded or failed.
+        }
+        if (rulesGenerationRef.current !== generation) return;
+      }
       const data = await fetchImportRules(sourceId);
       if (rulesGenerationRef.current === generation) {
         setPendingRules(data.rules);
@@ -260,10 +269,11 @@ export default function SourceDetailSheet({
     const submittedRules = [...pendingRules];
     const generation = rulesGenerationRef.current + 1;
     rulesGenerationRef.current = generation;
-    rulesSavePendingRef.current.set(source.id, generation);
+    const savePromise = saveImportRules(source.id, submittedRules);
+    rulesSavePendingRef.current.set(source.id, { generation, promise: savePromise });
     setSavingRuleSourceIds((current) => new Set(current).add(source.id));
     try {
-      const saved = await saveImportRules(source.id, submittedRules);
+      const saved = await savePromise;
       runImportScan(source.id);
       onSaveRules();
       if (rulesGenerationRef.current !== generation) return;
@@ -274,7 +284,7 @@ export default function SourceDetailSheet({
       if (rulesGenerationRef.current !== generation) return;
       setScanResult(e instanceof Error ? e.message : String(e));
     } finally {
-      if (rulesSavePendingRef.current.get(source.id) === generation) {
+      if (rulesSavePendingRef.current.get(source.id)?.generation === generation) {
         rulesSavePendingRef.current.delete(source.id);
         setSavingRuleSourceIds((current) => {
           const next = new Set(current);
