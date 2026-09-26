@@ -1,0 +1,134 @@
+// @vitest-environment jsdom
+
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useImportRulesAutosave } from "./useImportRulesAutosave";
+
+const { saveImportRules } = vi.hoisted(() => ({ saveImportRules: vi.fn() }));
+vi.mock("../api/endpoints/sources", () => ({ saveImportRules }));
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+describe("useImportRulesAutosave", () => {
+  afterEach(() => {
+    cleanup();
+    saveImportRules.mockReset();
+  });
+
+  it("keeps its registered flush available when the save callback changes", () => {
+    const register = vi.fn();
+    const unregister = vi.fn();
+    const hook = renderHook(({ onSaved }) => useImportRulesAutosave({
+      sourceId: 5,
+      pendingRules: [],
+      savedRules: [],
+      rulesLoaded: true,
+      userEdited: false,
+      disabled: false,
+      onSaved,
+      onRegisterFlush: register,
+      onUnregisterFlush: unregister,
+    }), { initialProps: { onSaved: vi.fn() } });
+    expect(register).toHaveBeenCalledTimes(1);
+    hook.rerender({ onSaved: vi.fn() });
+    expect(unregister).not.toHaveBeenCalled();
+    expect(register).toHaveBeenCalledTimes(1);
+  });
+
+  it("serializes writes and keeps the newest edit visible while an old write completes", async () => {
+    const first = deferred<{ rules: string[] }>();
+    const second = deferred<{ rules: string[] }>();
+    saveImportRules.mockImplementationOnce(() => first.promise).mockImplementationOnce(() => second.promise);
+    const onSaved = vi.fn();
+    const initialProps: { pendingRules: string[]; savedRules: string[] } = { pendingRules: [], savedRules: [] };
+    const hook = renderHook(({ pendingRules, savedRules }) => useImportRulesAutosave({
+      sourceId: 5,
+      pendingRules,
+      savedRules,
+      rulesLoaded: true,
+      userEdited: true,
+      disabled: false,
+      onSaved,
+    }), { initialProps });
+
+    act(() => {
+      hook.result.current.saveUserEdit(["first.stl"]);
+      hook.result.current.saveUserEdit(["second.stl"]);
+      hook.result.current.saveUserEdit(["latest.stl"]);
+      hook.rerender({ pendingRules: ["latest.stl"], savedRules: [] });
+    });
+    expect(saveImportRules).toHaveBeenCalledTimes(1);
+
+    await act(async () => { first.resolve({ rules: ["first.stl"] }); await first.promise; });
+    await waitFor(() => expect(saveImportRules).toHaveBeenCalledTimes(2));
+    expect(saveImportRules.mock.calls[1]).toEqual([5, ["latest.stl"]]);
+    expect(onSaved).not.toHaveBeenCalled();
+
+    await act(async () => { second.resolve({ rules: ["latest.stl"] }); await second.promise; });
+    expect(onSaved).toHaveBeenCalledExactlyOnceWith(["latest.stl"]);
+    expect(window.dispatchEvent(new Event("beforeunload", { cancelable: true }))).toBe(true);
+  });
+
+  it("rejects a failed flush so navigation can keep the editor open", async () => {
+    saveImportRules.mockRejectedValue(new Error("offline"));
+    const unchangedRules: string[] = [];
+    const hook = renderHook(() => useImportRulesAutosave({
+      sourceId: 5,
+      pendingRules: unchangedRules,
+      savedRules: unchangedRules,
+      rulesLoaded: true,
+      userEdited: true,
+      disabled: false,
+      onSaved: vi.fn(),
+    }));
+    act(() => hook.result.current.saveUserEdit(["latest.stl"]));
+    await waitFor(() => expect(hook.result.current.status).toBe("error"));
+    await expect(hook.result.current.saveNow()).rejects.toThrow("offline");
+  });
+
+  it("warns before a page unload while rules are unsaved", async () => {
+    saveImportRules.mockRejectedValue(new Error("offline"));
+    const unchangedRules: string[] = [];
+    const hook = renderHook(() => useImportRulesAutosave({
+      sourceId: 5,
+      pendingRules: unchangedRules,
+      savedRules: unchangedRules,
+      rulesLoaded: true,
+      userEdited: true,
+      disabled: false,
+      onSaved: vi.fn(),
+    }));
+    expect(window.dispatchEvent(new Event("beforeunload", { cancelable: true }))).toBe(true);
+
+    act(() => hook.result.current.saveUserEdit(["latest.stl"]));
+    await waitFor(() => expect(hook.result.current.status).toBe("error"));
+    expect(window.dispatchEvent(new Event("beforeunload", { cancelable: true }))).toBe(false);
+  });
+
+  it("flushes the previous source when sourceId changes before a pending edit saves", async () => {
+    saveImportRules.mockResolvedValue({ rules: ["old.stl"] });
+    const onSaved = vi.fn();
+    const initialProps: { sourceId: number; pendingRules: string[]; savedRules: string[] } = {
+      sourceId: 5,
+      pendingRules: ["old.stl"],
+      savedRules: [],
+    };
+    const hook = renderHook(({ sourceId, pendingRules, savedRules }) => useImportRulesAutosave({
+      sourceId,
+      pendingRules,
+      savedRules,
+      rulesLoaded: true,
+      userEdited: true,
+      disabled: false,
+      onSaved,
+    }), { initialProps });
+
+    act(() => hook.rerender({ sourceId: 6, pendingRules: [], savedRules: [] }));
+    await waitFor(() => expect(saveImportRules).toHaveBeenCalledWith(5, ["old.stl"]));
+    expect(saveImportRules).toHaveBeenCalledTimes(1);
+  });
+});

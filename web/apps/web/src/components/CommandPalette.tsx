@@ -95,7 +95,7 @@ export default function CommandPalette(_props?: Props) {
 
   const actions: Action[] = useMemo(() => {
     const leaveBuildThen = (go: () => void) => {
-      if (onBuild) void flushBuildSaves().then(go);
+      if (onBuild) void flushBuildSaves().then(go).catch(() => toast.error("Save failed. Retry before leaving Sources."));
       else go();
     };
 

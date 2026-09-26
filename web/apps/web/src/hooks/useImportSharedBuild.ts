@@ -1,16 +1,19 @@
 import { useCallback } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { pickKitBundle } from "../api/endpoints/browserFiles";
 import { uploadKitBundle } from "../api/endpoints/imports";
 import { useProfileSelection } from "../context/ProfileContext";
-import { buildRoute } from "../lib/routes";
+import { buildRoute, isPlanPath, isSourcesPath } from "../lib/routes";
 import { stashKitImportResult } from "../lib/kitImportStash";
+import { useFlushBuildPageSaves } from "./useFlushBuildPageSaves";
 
 /** Pick a .print-partner-kit.zip and import it as a new plan. */
 export function useImportSharedBuild() {
   const navigate = useNavigate();
-  const { setSelectedProfileId, reloadProfiles } = useProfileSelection();
+  const location = useLocation();
+  const flushSaves = useFlushBuildPageSaves();
+  const { reloadProfiles } = useProfileSelection();
 
   return useCallback(async () => {
     const picked = await pickKitBundle();
@@ -19,21 +22,28 @@ export function useImportSharedBuild() {
       return;
     }
     try {
+      if (isSourcesPath(location.pathname) || isPlanPath(location.pathname)) {
+        await flushSaves();
+      }
       const result = await uploadKitBundle(picked);
       if (!result.profile_id) {
         toast.error("Import did not create a plan");
         return;
       }
       stashKitImportResult(result);
-      setSelectedProfileId(result.profile_id);
+      try {
+        await reloadProfiles();
+      } catch {
+        toast.error(`Imported “${result.profile_name}”, but could not load the new Build. Refresh to open it.`);
+        return;
+      }
       navigate(buildRoute(result.profile_id), {
         replace: true,
         state: { kitImport: result },
       });
-      void reloadProfiles();
       toast.success(`Imported “${result.profile_name}”`);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
     }
-  }, [navigate, reloadProfiles, setSelectedProfileId]);
+  }, [flushSaves, location.pathname, navigate, reloadProfiles]);
 }

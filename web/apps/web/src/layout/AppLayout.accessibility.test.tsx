@@ -1,9 +1,12 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { createMemoryRouter, Link, MemoryRouter, Route, RouterProvider, Routes } from "react-router-dom";
 import AppLayout from "./AppLayout";
+import BuildSaveNavigationGuard from "../components/BuildSaveNavigationGuard";
+import { useImportRulesAutosave } from "../hooks/useImportRulesAutosave";
 
 vi.mock("../components/CommandPalette", () => ({ default: () => null }));
 vi.mock("../components/JobTray", () => ({ default: () => null }));
@@ -40,8 +43,21 @@ vi.mock("../hooks/useEngineHealth", () => ({ useEngineHealth: () => ({ health: {
 vi.mock("../context/ProfileContext", () => ({
   useProfileSelection: () => profileState,
 }));
+const saveRegistry = vi.hoisted(() => ({
+  flush: vi.fn(),
+  registered: new Map<number, () => Promise<void>>(),
+  saveImportRules: vi.fn(),
+}));
+vi.mock("../api/endpoints/sources", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../api/endpoints/sources")>(),
+  saveImportRules: saveRegistry.saveImportRules,
+}));
 vi.mock("../context/ImportRulesSaveContext", () => ({
-  useImportRulesSaveRegistry: () => ({ flushAll: vi.fn().mockResolvedValue(undefined) }),
+  useImportRulesSaveRegistry: () => ({
+    flushAll: saveRegistry.flush,
+    registerFlush: (id: number, flush: () => Promise<void>) => saveRegistry.registered.set(id, flush),
+    unregisterFlush: (id: number) => saveRegistry.registered.delete(id),
+  }),
 }));
 vi.mock("../context/KitManifestSaveContext", () => ({
   useKitManifestSaveRegistry: () => ({ flushAll: vi.fn().mockResolvedValue(undefined) }),
@@ -74,6 +90,11 @@ vi.mock("../context/StlAutoSyncContext", () => ({
 
 describe("application shell accessibility", () => {
   beforeEach(() => {
+    saveRegistry.registered.clear();
+    saveRegistry.saveImportRules.mockReset();
+    saveRegistry.flush.mockReset().mockImplementation(async () => {
+      await Promise.all([...saveRegistry.registered.values()].map((flush) => flush()));
+    });
     workflowState.stages = [];
     workflowState.activeId = null;
     profileState.selectedProfileId = null;
@@ -163,6 +184,48 @@ describe("application shell accessibility", () => {
     expect(link.className).toContain("bg-card");
   });
 
+  it("closes the mobile drawer after a flushed navigation from Sources", async () => {
+    render(
+      <MemoryRouter initialEntries={["/sources"]}>
+        <Routes>
+          <Route element={<AppLayout />}>
+            <Route path="sources" element={<h1>Sources</h1>} />
+            <Route path="builds" element={<h1>Builds</h1>} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Menu" }));
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    fireEvent.click(screen.getByRole("link", { name: "Builds" }));
+
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Builds" })).toBeTruthy());
+    expect(saveRegistry.flush).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("keeps Sources open when a mobile drawer save fails", async () => {
+    saveRegistry.flush.mockRejectedValueOnce(new Error("offline"));
+    render(
+      <MemoryRouter initialEntries={["/sources"]}>
+        <Routes>
+          <Route element={<AppLayout />}>
+            <Route path="sources" element={<h1>Sources</h1>} />
+            <Route path="builds" element={<h1>Builds</h1>} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Menu" }));
+    fireEvent.click(screen.getByRole("link", { name: "Builds" }));
+
+    await waitFor(() => expect(saveRegistry.flush).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.getByRole("heading", { name: "Sources" })).toBeTruthy();
+  });
+
   it("names the current stage and Build in the instrument header", () => {
     workflowState.stages = [{ id: "plan", label: "Plan" }];
     workflowState.activeId = "plan";
@@ -201,5 +264,96 @@ describe("application shell accessibility", () => {
     expect(screen.getByRole("alert").textContent).toContain("3 STL missing");
     fireEvent.click(screen.getByRole("button", { name: "Sync" }));
     expect(stlSync.runSync).toHaveBeenCalledTimes(1);
+  });
+
+  it("holds a direct Sources link when saving fails and allows it after retry", async () => {
+    saveRegistry.saveImportRules
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce({ rules: ["latest.stl"] });
+    function SourcesEditor() {
+      const [pendingRules, setPendingRules] = useState<string[]>([]);
+      const [savedRules, setSavedRules] = useState<string[]>([]);
+      const { saveUserEdit } = useImportRulesAutosave({
+        sourceId: 5,
+        pendingRules,
+        savedRules,
+        rulesLoaded: true,
+        userEdited: true,
+        disabled: false,
+        onSaved: (rules) => setSavedRules(rules),
+        onRegisterFlush: (id, flush) => saveRegistry.registered.set(id, flush),
+        onUnregisterFlush: (id) => saveRegistry.registered.delete(id),
+      });
+      return <><h1>Sources</h1><button onClick={() => {
+        setPendingRules(["latest.stl"]);
+        saveUserEdit(["latest.stl"]);
+      }}>Choose file</button><Link to="/plan">Open Plan</Link></>;
+    }
+    render(
+      <MemoryRouter initialEntries={["/sources"]}>
+        <Routes>
+          <Route element={<AppLayout />}>
+            <Route path="sources" element={<SourcesEditor />} />
+            <Route path="plan" element={<h1>Plan</h1>} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Choose file" }));
+    await waitFor(() => expect(saveRegistry.saveImportRules).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole("link", { name: "Open Plan" }));
+    await waitFor(() => expect(saveRegistry.flush).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole("heading", { name: "Sources" })).toBeTruthy();
+    expect(saveRegistry.saveImportRules).toHaveBeenCalledTimes(2);
+
+    fireEvent.click(screen.getByRole("link", { name: "Open Plan" }));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Plan" })).toBeTruthy());
+    expect(saveRegistry.saveImportRules).toHaveBeenCalledTimes(3);
+  });
+
+  it("uses one API write when the link handler and router blocker both flush", async () => {
+    let resolveSave!: (value: { rules: string[] }) => void;
+    saveRegistry.saveImportRules.mockReturnValue(new Promise((resolve) => {
+      resolveSave = resolve;
+    }));
+    function SourcesEditor() {
+      const [pendingRules, setPendingRules] = useState<string[]>([]);
+      const [savedRules, setSavedRules] = useState<string[]>([]);
+      const { saveUserEdit } = useImportRulesAutosave({
+        sourceId: 5,
+        pendingRules,
+        savedRules,
+        rulesLoaded: true,
+        userEdited: true,
+        disabled: false,
+        onSaved: setSavedRules,
+        onRegisterFlush: (id, flush) => saveRegistry.registered.set(id, flush),
+        onUnregisterFlush: (id) => saveRegistry.registered.delete(id),
+      });
+      return <><h1>Sources</h1><button onClick={() => {
+        setPendingRules(["latest.stl"]);
+        saveUserEdit(["latest.stl"]);
+      }}>Choose file</button><Link to="/plan">Open Plan</Link></>;
+    }
+    const router = createMemoryRouter([{
+      path: "/",
+      element: <><BuildSaveNavigationGuard /><AppLayout /></>,
+      children: [
+        { path: "sources", element: <SourcesEditor /> },
+        { path: "plan", element: <h1>Plan</h1> },
+      ],
+    }], { initialEntries: ["/sources"] });
+    render(<RouterProvider router={router} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Choose file" }));
+    expect(saveRegistry.saveImportRules).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("link", { name: "Open Plan" }));
+    expect(router.state.location.pathname).toBe("/sources");
+    resolveSave({ rules: ["latest.stl"] });
+    await waitFor(() => expect(router.state.location.pathname).toBe("/plan"));
+    expect(saveRegistry.flush).toHaveBeenCalledTimes(2);
+    expect(saveRegistry.saveImportRules).toHaveBeenCalledTimes(1);
   });
 });
