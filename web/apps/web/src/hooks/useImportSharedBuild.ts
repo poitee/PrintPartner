@@ -13,7 +13,7 @@ export function useImportSharedBuild() {
   const navigate = useNavigate();
   const location = useLocation();
   const flushSaves = useFlushBuildPageSaves();
-  const { reloadProfiles, setSelectedProfileId } = useProfileSelection();
+  const { reloadProfiles } = useProfileSelection();
 
   return useCallback(async () => {
     const picked = await pickKitBundle();
@@ -36,7 +36,6 @@ export function useImportSharedBuild() {
         await reloadProfiles({ throwOnError: true });
       } catch {
         profilesReloaded = false;
-        setSelectedProfileId(result.profile_id);
         toast.error(`Imported “${result.profile_name}”, but the Build list could not refresh. Refresh if it does not appear.`);
       }
       navigate(buildRoute(result.profile_id), {
@@ -47,5 +46,5 @@ export function useImportSharedBuild() {
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
     }
-  }, [flushSaves, location.pathname, navigate, reloadProfiles, setSelectedProfileId]);
+  }, [flushSaves, location.pathname, navigate, reloadProfiles]);
 }

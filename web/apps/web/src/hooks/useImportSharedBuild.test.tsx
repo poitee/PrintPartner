@@ -91,7 +91,7 @@ describe("useImportSharedBuild", () => {
 
     await waitFor(() => expect(screen.getByTestId("route").textContent).toBe("/sources?profile=2"));
     expect(screen.getByTestId("import-state").textContent).toBe("2");
-    expect(deps.select).toHaveBeenCalledWith(2);
+    expect(deps.select).not.toHaveBeenCalled();
     expect(deps.upload).toHaveBeenCalledTimes(1);
   });
 });

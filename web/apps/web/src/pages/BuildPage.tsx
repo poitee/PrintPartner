@@ -107,6 +107,7 @@ export default function BuildPage() {
   const { health, error: engineError, loading: healthLoading } = useEngineHealth();
   const {
     selectedProfileId,
+    setSelectedProfileId,
     reloadProfiles,
     profiles,
     loading: profilesLoading,
@@ -193,6 +194,9 @@ export default function BuildPage() {
   useEffect(() => {
     const state = location.state as BuildLocationState | null;
     if (state?.kitImport) {
+      if (selectedProfileId !== state.kitImport.profile_id) {
+        setSelectedProfileId(state.kitImport.profile_id);
+      }
       setKitImportSetup(state.kitImport);
       window.history.replaceState({}, document.title);
       return;
@@ -203,7 +207,7 @@ export default function BuildPage() {
       const stashed = takeKitImportResult(selectedProfileId);
       if (stashed) setKitImportSetup(stashed);
     }
-  }, [location.state, selectedProfileId]);
+  }, [location.state, selectedProfileId, setSelectedProfileId]);
 
   useEffect(() => {
     const previousId = previousSelectedProfileIdRef.current;
