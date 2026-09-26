@@ -83,6 +83,34 @@ export function exportBuildReferenceShare(repo: AppRepository, profileId: number
   return { manifest, warnings: referenceShareWarnings(manifest) };
 }
 
+export function exportCollectionReferenceShare(
+  repo: AppRepository,
+  title: string,
+  sourceIds: readonly number[],
+): ReferenceShareExport {
+  const trimmed = title.trim();
+  if (!trimmed) throw new Error("Collection title is required");
+  if (sourceIds.length === 0) throw new Error("Choose at least one Library Source");
+  if (new Set(sourceIds).size !== sourceIds.length) throw new Error("Each Library Source can be selected once");
+  const sources: ReferenceShare["sources"] = [];
+  for (const id of sourceIds) {
+    const row = repo.getProjectRow(id);
+    if (!row) throw new Error("A selected Library Source is not available");
+    sources.push(sourceReference(row, `source-${sources.length + 1}`));
+  }
+  const manifest = referenceShareSchema.parse({
+    format: "printpartner-reference-share",
+    version: 1,
+    kind: "collection",
+    title: trimmed,
+    sources,
+  });
+  if (Buffer.byteLength(serializeReferenceShare(manifest), "utf8") > 4 * 1024 * 1024) {
+    throw new Error("Reference manifest exceeds the 4 MiB sharing limit");
+  }
+  return { manifest, warnings: referenceShareWarnings(manifest) };
+}
+
 export function serializeReferenceShare(manifest: ReferenceShare): string {
   return `${JSON.stringify(manifest, null, 2)}\n`;
 }
@@ -98,7 +126,7 @@ This repository contains a ${manifest.kind} recipe, not model files.
 
 Local-only sources require the recipient to locate files independently. A branch or tag may change; verify revisions before building.
 
-Current PrintPartner supports exporting and validating this format. Automatic Build creation from it is not yet available.
+Current PrintPartner can validate this format and create a Build after each reference is mapped to files you already have. It does not download models.
 
 ## Share through Git
 

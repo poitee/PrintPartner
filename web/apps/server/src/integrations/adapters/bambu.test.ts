@@ -1,5 +1,8 @@
 import { EventEmitter } from "node:events";
+import { createServer, type LookupFunction } from "node:net";
+import mqtt, { type IClientOptions } from "mqtt";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createCheckedLookup } from "../../lib/outbound-url.js";
 import {
   bambuAdapter,
   mapBambuGcodeState,
@@ -117,6 +120,46 @@ describe("bambuAdapter", () => {
     vi.restoreAllMocks();
   });
 
+  it("passes the checked lookup through MQTT.js to a TLS socket", async () => {
+    const previous = process.env.MQTTJS_SOCKS_PROXY;
+    delete process.env.MQTTJS_SOCKS_PROXY;
+    const server = createServer((socket) => socket.destroy());
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP server");
+    let lookups = 0;
+    const options = {
+      protocol: "mqtts",
+      reconnectPeriod: 0,
+      connectTimeout: 1_000,
+      lookup: createCheckedLookup({
+        allowPrivate: true,
+        lookupFn: async () => {
+          lookups++;
+          return [{ address: "127.0.0.1", family: 4 }];
+        },
+      }),
+    } satisfies IClientOptions & { lookup: LookupFunction };
+    const connectedSocket = new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error("MQTT did not use checked DNS")), 1_500);
+      server.once("connection", () => {
+        clearTimeout(timeout);
+        resolve();
+      });
+    });
+    const client = mqtt.connect(`mqtts://checked.invalid:${address.port}`, options);
+    client.on("error", () => {});
+
+    try {
+      await connectedSocket;
+      expect(lookups).toBeGreaterThan(0);
+    } finally {
+      client.end(true);
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      if (previous !== undefined) process.env.MQTTJS_SOCKS_PROXY = previous;
+    }
+  });
+
   it("requires host, access_code, and serial", async () => {
     expect((await bambuAdapter.testConnection({})).ok).toBe(false);
     expect(
@@ -169,6 +212,11 @@ describe("bambuAdapter", () => {
       "mqtts://192.168.1.80:8883",
       expect.objectContaining({ password: "lan-code" }),
     );
+    const mqttOptions = connect.mock.calls[0]?.[1];
+    if (!mqttOptions || !("lookup" in mqttOptions) || typeof mqttOptions.lookup !== "function") {
+      throw new Error("Bambu MQTT must validate DNS at socket connection");
+    }
+    expect(Object.keys(mqttOptions)).toContain("lookup");
     const client = connect.mock.results[0]!.value as FakeMqttClient;
     expect(client.subscribe).toHaveBeenCalledWith(
       "device/01P00A000000001/report",
@@ -180,6 +228,27 @@ describe("bambuAdapter", () => {
       expect.any(Object),
       expect.any(Function),
     );
+  });
+
+  it("refuses MQTT proxy routing that would skip the checked DNS lookup", async () => {
+    const previous = process.env.MQTTJS_SOCKS_PROXY;
+    process.env.MQTTJS_SOCKS_PROXY = "socks5://127.0.0.1:1080";
+    const connect = vi.fn(mockMqttThatReports({ gcode_state: "IDLE" }));
+    setBambuMqttConnectForTests(connect);
+
+    try {
+      const result = await bambuAdapter.testConnection({
+        host: "192.168.1.80",
+        access_code: "lan-code",
+        serial: "01P00A000000001",
+      });
+      expect(result.ok).toBe(false);
+      expect(result.message).toMatch(/proxy routing/);
+      expect(connect).not.toHaveBeenCalled();
+    } finally {
+      if (previous === undefined) delete process.env.MQTTJS_SOCKS_PROXY;
+      else process.env.MQTTJS_SOCKS_PROXY = previous;
+    }
   });
 
   it("getStatus maps RUNNING progress from MQTT report", async () => {

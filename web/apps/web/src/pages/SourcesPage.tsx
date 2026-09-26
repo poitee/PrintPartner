@@ -3,7 +3,7 @@ import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { ChevronDown, FolderGit2, Library, Search } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
-import type { SourceSummary } from "@print-partner/contracts";
+import type { ReferenceShareExport, SourceSummary } from "@print-partner/contracts";
 import { HOSTED_LIBRARY_SOURCE_KINDS, isHostedLibrarySourceKind, isHostedPlanning } from "@print-partner/contracts";
 import { pickLocalDirectory, pickLocalFiles, pickZipArchive } from "../api/endpoints/browserFiles";
 import { startSync, waitForJobDone } from "../api/endpoints/jobs";
@@ -14,6 +14,7 @@ import {
   importSourceFiles,
 } from "../api/endpoints/sourceArtifacts";
 import { startImportScan, type StlSearchHit } from "../api/endpoints/sources";
+import { engineFetch } from "../api/engineTransport";
 import GitHubRefField from "../components/GitHubRefField";
 import { useDateFormat } from "../context/DateFormatContext";
 import { useJobContext } from "../context/JobContext";
@@ -378,6 +379,32 @@ export default function SourcesPage() {
         toast.success(`Moved ${result.succeeded} source(s) to ${label}`);
       }
       clearSelection();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBulkAssigning(false);
+    }
+  };
+
+  const shareSelectedReferences = async () => {
+    const ids = Array.from(selectedSourceIds);
+    if (ids.length === 0) return;
+    setBulkAssigning(true);
+    try {
+      const exported = await engineFetch<ReferenceShareExport>("/reference-shares/collections", {
+        method: "POST",
+        body: JSON.stringify({ title: "Library selection", source_ids: ids }),
+      });
+      const blob = new Blob([`${JSON.stringify(exported.manifest, null, 2)}\n`], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = "printpartner.share.json";
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      toast.success(`Shared ${exported.manifest.sources.length} source reference${exported.manifest.sources.length === 1 ? "" : "s"}`);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
     } finally {
@@ -1007,6 +1034,7 @@ export default function SourcesPage() {
               onSelectAll={selectAllFiltered}
               allSelected={isAllVisibleSelected(selectedSourceIds, visibleIds)}
               onClear={clearSelection}
+              onShareReferences={() => void shareSelectedReferences()}
             />
 
             <SourcesToolbar

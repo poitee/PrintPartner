@@ -57,6 +57,7 @@ describe("Profile summary caller inventory", () => {
       { file: "assistant/tools.ts", count: 1 },
       { file: "routes/printer-checkoff.ts", count: 1 },
       { file: "services/knowledge-bundle.ts", count: 1 },
+      { file: "services/reference-share-import.ts", count: 1 },
     ]);
     const digestCapture = readFileSync(
       join(sourceRoot, "../capture-digest-fixtures.ts"),
