@@ -48,9 +48,14 @@ vi.mock("../../api/endpoints/sourceNaming", async (importOriginal) => {
 vi.mock("../SourceCardCover", () => ({ default: () => null }));
 vi.mock("../ImportRulesTree", () => ({
   default: ({ onRulesChange }: { onRulesChange: (rules: string[]) => void }) => (
-    <button type="button" onClick={() => onRulesChange(["first-source/**"])}>
-      Change rule draft
-    </button>
+    <>
+      <button type="button" onClick={() => onRulesChange(["first-source/**"])}>
+        Change rule draft
+      </button>
+      <button type="button" onClick={() => onRulesChange(["second-source/**"])}>
+        Change rule draft again
+      </button>
+    </>
   ),
 }));
 
@@ -269,6 +274,37 @@ describe("SourceDetailSheet loading", () => {
     expect(api.fetchImportRules).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole("button", { name: "Save rules" }));
     await waitFor(() => expect(api.saveImportRules).toHaveBeenCalledWith(1, ["first-source/**"]));
+  });
+
+  it("preserves edits made during a rule save and sends them in a later save", async () => {
+    const firstSave = deferred<{ rules: string[] }>();
+    api.fetchSourceDocs.mockResolvedValue([]);
+    api.fetchImportRules.mockResolvedValue({ rules: ["original/**"] });
+    api.saveImportRules
+      .mockReturnValueOnce(firstSave.promise)
+      .mockResolvedValueOnce({ rules: ["second-source/**"] });
+    render(
+      <SourceDetailSheet {...baseProps} tab="rules" source={source(1, "Source")} />,
+      { wrapper: createQueryWrapper() },
+    );
+    await screen.findByRole("button", { name: "Change rule draft" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Change rule draft" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save rules" }));
+    expect(api.saveImportRules).toHaveBeenCalledWith(1, ["first-source/**"]);
+    fireEvent.click(screen.getByRole("button", { name: "Change rule draft again" }));
+    fireEvent.click(screen.getByRole("button", { name: "Saving…" }));
+    expect(api.saveImportRules).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      firstSave.resolve({ rules: ["first-source/**"] });
+      await firstSave.promise;
+    });
+    await waitFor(() =>
+      expect((screen.getByRole("button", { name: "Save rules" }) as HTMLButtonElement).disabled).toBe(false),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Save rules" }));
+    await waitFor(() => expect(api.saveImportRules).toHaveBeenLastCalledWith(1, ["second-source/**"]));
   });
 
   it("keeps the Source sheet open when the user cancels discarding unsaved rules", async () => {

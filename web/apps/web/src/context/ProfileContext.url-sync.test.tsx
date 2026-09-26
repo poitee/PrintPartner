@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import type { ProfileSummary } from "@print-partner/contracts";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -12,6 +12,7 @@ import { ProfileProvider, useProfileSelection } from "./ProfileContext";
 const queryRuntime = vi.hoisted(() => ({
   healthReady: true,
   profilesReady: true,
+  refetch: vi.fn(),
 }));
 
 const profiles: ProfileSummary[] = [1, 2].map((id) => ({
@@ -49,7 +50,7 @@ vi.mock("../queries/profiles", () => ({
     isLoading: false,
     isSuccess: enabled && queryRuntime.profilesReady,
     error: null,
-    refetch: vi.fn(),
+    refetch: queryRuntime.refetch,
   }),
 }));
 
@@ -87,8 +88,19 @@ describe("ProfileProvider URL ownership", () => {
     sessionStorage.clear();
     queryRuntime.healthReady = true;
     queryRuntime.profilesReady = true;
+    queryRuntime.refetch.mockReset().mockResolvedValue({ error: null });
   });
   afterEach(cleanup);
+
+  it("reports a failed explicit Build-list reload to import callers", async () => {
+    queryRuntime.refetch.mockResolvedValue({ error: new Error("list unavailable") });
+    const { result } = renderHook(() => useProfileSelection(), {
+      wrapper: ({ children }) => wrapper(children, "/builds"),
+    });
+
+    await expect(result.current.reloadProfiles({ throwOnError: true })).rejects.toThrow("list unavailable");
+    await expect(result.current.reloadProfiles()).resolves.toBeUndefined();
+  });
 
   it("lets an explicit URL Build win over first-Build hydration", async () => {
     render(wrapper(<ProfileUrlProbe />, "/sources?profile=2"));

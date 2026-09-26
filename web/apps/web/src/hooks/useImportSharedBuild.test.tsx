@@ -79,4 +79,19 @@ describe("useImportSharedBuild", () => {
     expect(deps.upload).not.toHaveBeenCalled();
     expect(screen.getByTestId("route").textContent).toBe("/sources?profile=1");
   });
+
+  it("opens the created Build when reloading the Build list fails", async () => {
+    deps.pick.mockResolvedValue(new File(["kit"], "shared.zip"));
+    deps.flush.mockResolvedValue(undefined);
+    deps.upload.mockResolvedValue({ profile_id: 2, profile_name: "Imported", parts_imported: 1, layers_imported: 0 });
+    deps.reload.mockRejectedValue(new Error("list unavailable"));
+    renderImport();
+
+    fireEvent.click(screen.getByRole("button", { name: "Import Build" }));
+
+    await waitFor(() => expect(screen.getByTestId("route").textContent).toBe("/sources?profile=2"));
+    expect(screen.getByTestId("import-state").textContent).toBe("2");
+    expect(deps.select).toHaveBeenCalledWith(2);
+    expect(deps.upload).toHaveBeenCalledTimes(1);
+  });
 });

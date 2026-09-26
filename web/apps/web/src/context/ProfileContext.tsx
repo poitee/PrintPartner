@@ -27,7 +27,7 @@ type ProfileContextValue = {
   /** Local selection not yet reflected in `?profile=`. */
   pendingSelectionId: number | null;
   clearPendingSelection: (matchedUrlId?: number | null) => void;
-  reloadProfiles: () => Promise<void>;
+  reloadProfiles: (options?: { throwOnError?: boolean }) => Promise<void>;
   profilesLoaded: boolean;
   loading: boolean;
   error: string | null;
@@ -118,10 +118,11 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
     commitSelectedProfileId,
   ]);
 
-  const reloadProfiles = useCallback(async () => {
+  const reloadProfiles = useCallback(async (options?: { throwOnError?: boolean }) => {
     if (!canLoadProfiles) return;
     await qc.invalidateQueries({ queryKey: queryKeys.profiles });
-    await refetch();
+    const result = await refetch();
+    if (options?.throwOnError && result.error) throw result.error;
   }, [canLoadProfiles, qc, refetch]);
 
   const value = useMemo(

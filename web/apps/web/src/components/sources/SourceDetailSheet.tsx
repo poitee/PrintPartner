@@ -120,6 +120,7 @@ export default function SourceDetailSheet({
   const [savedRules, setSavedRules] = useState<string[]>([]);
   const [rulesOwnerId, setRulesOwnerId] = useState<number | null>(null);
   const [rulesLoading, setRulesLoading] = useState(false);
+  const [rulesSaving, setRulesSaving] = useState(false);
   const [rulesLoadError, setRulesLoadError] = useState<string | null>(null);
   const [scanResult, setScanResult] = useState<string | null>(null);
 
@@ -135,6 +136,7 @@ export default function SourceDetailSheet({
   const [namingSaving, setNamingSaving] = useState(false);
   const [namingNote, setNamingNote] = useState<string | null>(null);
   const rulesGenerationRef = useRef(0);
+  const rulesSavePendingRef = useRef<number | null>(null);
   const requestedRulesSourceRef = useRef<number | null>(null);
   const namingGenerationRef = useRef(0);
   const requestedNamingSourceRef = useRef<number | null>(null);
@@ -253,20 +255,28 @@ export default function SourceDetailSheet({
   }, [content.docs.length, content.loadError, content.loading, content.notes, open, source]);
 
   const saveRules = async () => {
-    if (!source || rulesOwnerId !== source.id || rulesLoading) return;
+    if (!source || rulesOwnerId !== source.id || rulesLoading || rulesSavePendingRef.current !== null) return;
+    const submittedRules = [...pendingRules];
     const generation = rulesGenerationRef.current + 1;
     rulesGenerationRef.current = generation;
+    rulesSavePendingRef.current = generation;
+    setRulesSaving(true);
     try {
-      const saved = await saveImportRules(source.id, pendingRules);
+      const saved = await saveImportRules(source.id, submittedRules);
       if (rulesGenerationRef.current !== generation) return;
       setSavedRules(saved.rules);
-      setPendingRules(saved.rules);
+      setPendingRules((current) => rulesEqual(current, submittedRules) ? saved.rules : current);
       runImportScan(source.id);
       onSaveRules();
       setScanResult("Rules saved — import scan started.");
     } catch (e) {
       if (rulesGenerationRef.current !== generation) return;
       setScanResult(e instanceof Error ? e.message : String(e));
+    } finally {
+      if (rulesSavePendingRef.current === generation) {
+        rulesSavePendingRef.current = null;
+        setRulesSaving(false);
+      }
     }
   };
 
@@ -610,8 +620,8 @@ export default function SourceDetailSheet({
               </div>
             </ScrollArea>
             {scanResult && <p className="text-sm text-muted-foreground">{scanResult}</p>}
-            <Button onClick={() => void saveRules()} disabled={busy || !rulesReady}>
-              Save rules
+            <Button onClick={() => void saveRules()} disabled={busy || !rulesReady || rulesSaving}>
+              {rulesSaving ? "Saving…" : "Save rules"}
             </Button>
           </TabsContent>
 
