@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMemoryRouter, RouterProvider, useLocation } from "react-router-dom";
 import BuildSaveNavigationGuard from "./BuildSaveNavigationGuard";
+import { LibraryDraftProvider } from "../context/LibraryDraftContext";
 import KitManifestOptions from "./KitManifestOptions";
 import { ImportRulesSaveProvider } from "../context/ImportRulesSaveContext";
 import { KitManifestSaveProvider } from "../context/KitManifestSaveContext";
@@ -67,7 +68,7 @@ describe("KitManifestOptions guarded navigation", () => {
         </ImportRulesSaveProvider>
       ),
     }], { initialEntries: ["/sources?profile=2", "/plan?profile=2"], initialIndex: 1 });
-    render(<RouterProvider router={router} />);
+    render(<LibraryDraftProvider><RouterProvider router={router} /></LibraryDraftProvider>);
 
     fireEvent.click(await screen.findByRole("button", { name: "Custom" }));
     await screen.findByText("Save failed — retry");

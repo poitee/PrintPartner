@@ -31,17 +31,18 @@ export function useImportSharedBuild() {
         return;
       }
       stashKitImportResult(result);
+      let profilesReloaded = true;
       try {
-        await reloadProfiles();
+        await reloadProfiles({ throwOnError: true });
       } catch {
-        toast.error(`Imported “${result.profile_name}”, but could not load the new Build. Refresh to open it.`);
-        return;
+        profilesReloaded = false;
+        toast.error(`Imported “${result.profile_name}”, but the Build list could not refresh. Refresh if it does not appear.`);
       }
       navigate(buildRoute(result.profile_id), {
         replace: true,
         state: { kitImport: result },
       });
-      toast.success(`Imported “${result.profile_name}”`);
+      if (profilesReloaded) toast.success(`Imported “${result.profile_name}”`);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
     }

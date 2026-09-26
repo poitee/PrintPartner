@@ -4,6 +4,7 @@ import { DateFormatProvider } from "./context/DateFormatContext";
 import { ImportRulesSaveProvider } from "./context/ImportRulesSaveContext";
 import { JobProvider } from "./context/JobContext";
 import { KitManifestSaveProvider } from "./context/KitManifestSaveContext";
+import { LibraryDraftProvider } from "./context/LibraryDraftContext";
 import { PlanActionsProvider } from "./context/PlanActionsContext";
 import { PlanWorkspaceProvider } from "./context/PlanWorkspaceContext";
 import { ProfileProvider } from "./context/ProfileContext";
@@ -54,6 +55,7 @@ export default function AuthenticatedApp() {
                 <SaveStatusProvider>
                   <ImportRulesSaveProvider>
                     <KitManifestSaveProvider>
+                      <LibraryDraftProvider>
                       <BuildSaveNavigationGuard />
                       <Routes>
                         <Route element={<AppLayout />}>
@@ -108,6 +110,7 @@ export default function AuthenticatedApp() {
                           <Route path="*" element={<NotFoundPage />} />
                         </Route>
                       </Routes>
+                      </LibraryDraftProvider>
                     </KitManifestSaveProvider>
                   </ImportRulesSaveProvider>
                 </SaveStatusProvider>

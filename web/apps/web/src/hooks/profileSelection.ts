@@ -21,6 +21,9 @@ export function reconcileSelectedProfileId(
   ) {
     return selectedProfileId === urlProfileId ? undefined : urlProfileId;
   }
+  if (selectedProfileId != null && pendingSelectionId === selectedProfileId) {
+    return undefined;
+  }
   if (profileIds.length === 0) {
     return selectedProfileId == null ? undefined : null;
   }

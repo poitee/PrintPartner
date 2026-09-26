@@ -30,6 +30,8 @@ export function useProfileUrlSync() {
     if (!shouldSyncProfileToPath(location.pathname)) return;
     const currentParams = searchParamsRef.current;
     const urlId = parseProfileParam(currentParams.get("profile"));
+    const importedId = (location.state as { kitImport?: { profile_id?: number } } | null)?.kitImport?.profile_id;
+    if (importedId === urlId && selectedProfileId !== importedId) return;
     const urlSelectsKnownProfile =
       urlId != null &&
       (!profilesLoaded || profiles.some((profile) => profile.id === urlId));
@@ -46,12 +48,14 @@ export function useProfileUrlSync() {
     }
     if (
       selectedProfileId != null &&
-      searchParamsRef.current.get("profile") === String(selectedProfileId)
+      searchParamsRef.current.get("profile") === String(selectedProfileId) &&
+      profiles.some((profile) => profile.id === selectedProfileId)
     ) {
       clearPendingSelection(selectedProfileId);
     }
   }, [
     location.pathname,
+    location.state,
     selectedProfileId,
     pendingSelectionId,
     profilesLoaded,
