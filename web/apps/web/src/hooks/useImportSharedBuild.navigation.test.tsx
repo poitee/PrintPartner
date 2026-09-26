@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useEffect } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMemoryRouter, Outlet, RouterProvider, useLocation } from "react-router-dom";
@@ -111,6 +111,9 @@ describe("first Build import after a failed list reload", () => {
     expect(paths).toContain("/sources?profile=1");
     expect(paths).not.toContain("/library?profile=1");
     await waitFor(() => expect(sessionStorage.getItem("pp-selected-profile-id")).toBe("1"));
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
+    expect(screen.getByTestId("build-selection").textContent).toBe("1");
+    expect(sessionStorage.getItem("pp-selected-profile-id")).toBe("1");
     expect(deps.upload).toHaveBeenCalledTimes(1);
     unsubscribe();
   });
