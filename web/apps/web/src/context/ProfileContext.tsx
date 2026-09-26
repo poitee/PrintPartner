@@ -19,6 +19,7 @@ import { useProfilesQuery } from "../queries/profiles";
 import { useAuth } from "./AuthContext";
 
 const STORAGE_KEY = "pp-selected-profile-id";
+const EMPTY_PROFILES: ProfileSummary[] = [];
 
 type ProfileContextValue = {
   profiles: ProfileSummary[];
@@ -54,16 +55,19 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
   const qc = useQueryClient();
   const [searchParams] = useSearchParams();
   const {
-    data: profiles = [],
+    data: profilesData,
     isLoading,
     isSuccess,
     error: queryError,
     refetch,
   } = useProfilesQuery(canLoadProfiles);
+  const profiles = profilesData ?? EMPTY_PROFILES;
+  const profilesLoaded = profilesData !== undefined;
 
   const [selectedProfileId, setSelectedProfileIdState] = useState<number | null>(readStoredId);
   const [pendingSelectionId, setPendingSelectionId] = useState<number | null>(null);
   const previousProfileIdsRef = useRef<number[]>([]);
+  const publishedPendingIdRef = useRef<number | null>(null);
   const urlProfileId = parseProfileParam(searchParams.get("profile"));
 
   const commitSelectedProfileId = useCallback(
@@ -93,11 +97,25 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    if (!isSuccess) return;
+    if (!isSuccess && !profilesLoaded) return;
+
+    if (pendingSelectionId == null) publishedPendingIdRef.current = null;
+    else if (urlProfileId === pendingSelectionId) publishedPendingIdRef.current = pendingSelectionId;
 
     const previousIds = previousProfileIdsRef.current;
     const nextIds = profiles.map((p) => p.id);
     previousProfileIdsRef.current = nextIds;
+
+    if (
+      pendingSelectionId != null &&
+      publishedPendingIdRef.current === pendingSelectionId &&
+      urlProfileId != null &&
+      urlProfileId !== pendingSelectionId &&
+      nextIds.includes(urlProfileId)
+    ) {
+      commitSelectedProfileId(urlProfileId, false);
+      return;
+    }
 
     const next = reconcileSelectedProfileId(
       nextIds,
@@ -111,6 +129,7 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
     }
   }, [
     isSuccess,
+    profilesLoaded,
     profiles,
     selectedProfileId,
     urlProfileId,
@@ -133,7 +152,7 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
       pendingSelectionId,
       clearPendingSelection,
       reloadProfiles,
-      profilesLoaded: isSuccess,
+      profilesLoaded,
       loading: isLoading,
       error:
         queryError instanceof Error
@@ -149,7 +168,7 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
       pendingSelectionId,
       clearPendingSelection,
       reloadProfiles,
-      isSuccess,
+      profilesLoaded,
       isLoading,
       queryError,
     ],
