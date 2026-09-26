@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import type { ReferenceShareExport } from "@print-partner/contracts";
+import type { ReferenceShare, ReferenceShareExport } from "@print-partner/contracts";
 import { engineFetch, engineFetchStream } from "../../api/engineTransport";
 import { Button } from "../ui/button";
+import ReferenceShareImport from "./ReferenceShareImport";
 
 function downloadBlob(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
@@ -19,6 +20,7 @@ export default function ReferenceSharePanel({ profileId }: { profileId: number }
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [received, setReceived] = useState<string | null>(null);
+  const [receivedManifest, setReceivedManifest] = useState<ReferenceShare | null>(null);
   useEffect(() => {
     let active = true;
     setExported(null);
@@ -54,13 +56,15 @@ export default function ReferenceSharePanel({ profileId }: { profileId: number }
   async function validate(file: File) {
     setBusy(true);
     setReceived(null);
+    setReceivedManifest(null);
     setError(null);
     try {
       if (file.size > 4 * 1024 * 1024) throw new Error("Manifest must be smaller than 4 MiB");
       const result = await engineFetch<ReferenceShareExport>("/reference-shares/validate", {
         method: "POST", body: await file.text(),
       });
-      setReceived(`Valid ${result.manifest.kind}: ${result.manifest.title}. ${result.manifest.sources.length} source references. No files were downloaded or data changed. Build creation from this format is not available yet.`);
+      setReceivedManifest(result.manifest);
+      setReceived(`Valid ${result.manifest.kind}: ${result.manifest.title}. ${result.manifest.sources.length} source references. No files were downloaded or data changed.`);
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : "Invalid manifest");
     } finally {
@@ -99,6 +103,7 @@ export default function ReferenceSharePanel({ profileId }: { profileId: number }
             onChange={(event) => { const file = event.target.files?.[0]; if (file) void validate(file); event.target.value = ""; }} />
         </label>
         {received && <p role="status" className="mt-2 text-sm">{received}</p>}
+        {receivedManifest?.kind === "build" ? <ReferenceShareImport manifest={receivedManifest} /> : null}
       </details>
     </section>
   );

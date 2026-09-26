@@ -1,6 +1,6 @@
 import type { AiProviderId, IntegrationConfig, IntegrationTestResult } from "@print-partner/contracts";
 import type { IntegrationAdapter } from "../store.js";
-import { assertSafeOutboundUrl } from "../../lib/outbound-url.js";
+import { safeConnectorFetch } from "../../lib/outbound-url.js";
 import {
   cancelResponseBody,
   isJsonObject as isRecord,
@@ -87,8 +87,7 @@ async function safeGet(
   init: RequestInit,
   allowPrivate: boolean,
 ): Promise<Response> {
-  await assertSafeOutboundUrl(url, { allowPrivate });
-  return fetch(url, { ...init, signal: AbortSignal.timeout(8000) });
+  return safeConnectorFetch(url, { ...init, signal: AbortSignal.timeout(8000) }, { allowPrivate });
 }
 
 export const aiAssistantAdapter: IntegrationAdapter = {

@@ -267,6 +267,103 @@ describe("Build planning", () => {
     ]);
   });
 
+  it.each(["revision", "content", "new difference"])("invalidates source choices after a %s change", (change) => {
+    const root = mkdtempSync(join(tmpdir(), "planning-choice-refresh-"));
+    const base = join(root, "base");
+    const overlay = join(root, "overlay");
+    mkdirSync(join(base, "parts"), { recursive: true });
+    mkdirSync(join(overlay, "parts"), { recursive: true });
+    writeFileSync(join(base, "parts/a.stl"), "base");
+    writeFileSync(join(overlay, "parts/a.stl"), "overlay");
+    const sources = [
+      { id: 1, name: "Base", local_path: base, last_synced_at: "now", last_commit_sha: "a" },
+      { id: 2, name: "Overlay", local_path: overlay, last_synced_at: "now", last_commit_sha: "b" },
+    ];
+    const store = { listSources: () => sources };
+    const brief = newBuildPlanningBrief(5, "request", []);
+    brief.evidence = [
+      { id: "base", url: "https://example.com/base", normalized_url: "https://example.com/base", kind: "canonical_design", source_id: 1, source_role: "structural_base" },
+      { id: "overlay", url: "https://example.com/overlay", normalized_url: "https://example.com/overlay", kind: "vendor_overlay", source_id: 2, source_role: "overlay" },
+    ];
+    const reviewed = hydrateBuildPlanningBrief(store, brief);
+    const group = reviewed.differences[0]!.group_id;
+    reviewed.resolutions[group] = { resolution: "choose_source_a", rationale: "Reviewed geometry", resolved_at: new Date().toISOString() };
+    expect(hydrateBuildPlanningBrief(store, reviewed).resolutions).toEqual(reviewed.resolutions);
+    if (change === "revision") sources[1]!.last_commit_sha = "c";
+    if (change === "content") writeFileSync(join(overlay, "parts/a.stl"), "new geometry");
+    if (change === "new difference") writeFileSync(join(overlay, "parts/b.stl"), "new part");
+    const refreshed = hydrateBuildPlanningBrief(store, reviewed);
+    expect(refreshed.resolutions).toEqual({});
+    expect(resolvedSourcePathExclusions({ brief: refreshed, sourceIdsByName: new Map([["Base", 1], ["Overlay", 2]]) }).exclusions).toEqual([]);
+  });
+
+  it("invalidates a draft when a new unresolved source difference appears", () => {
+    const root = mkdtempSync(join(tmpdir(), "planning-draft-refresh-"));
+    const base = join(root, "base");
+    const overlay = join(root, "overlay");
+    mkdirSync(join(base, "parts"), { recursive: true });
+    mkdirSync(join(overlay, "parts"), { recursive: true });
+    writeFileSync(join(base, "parts/a.stl"), "base");
+    writeFileSync(join(overlay, "parts/a.stl"), "overlay");
+    const store = { listSources: () => [
+      { id: 1, name: "Base", local_path: base, last_synced_at: "now", last_commit_sha: "a" },
+      { id: 2, name: "Overlay", local_path: overlay, last_synced_at: "now", last_commit_sha: "b" },
+    ] };
+    const brief = newBuildPlanningBrief(5, "request", []);
+    brief.evidence = [
+      { id: "base", url: "https://example.com/base", normalized_url: "https://example.com/base", kind: "canonical_design", source_id: 1, source_role: "structural_base" },
+      { id: "overlay", url: "https://example.com/overlay", normalized_url: "https://example.com/overlay", kind: "vendor_overlay", source_id: 2, source_role: "overlay" },
+    ];
+    const reviewed = hydrateBuildPlanningBrief(store, brief);
+    reviewed.draft_id = 12;
+    reviewed.draft_source_revisions = { "1": "a", "2": "b" };
+    expect(hydrateBuildPlanningBrief(store, reviewed).draft_id).toBe(12);
+
+    writeFileSync(join(overlay, "parts/b.stl"), "new part");
+    const refreshed = hydrateBuildPlanningBrief(store, reviewed);
+    expect(refreshed.differences).toHaveLength(reviewed.differences.length + 1);
+    expect(refreshed.resolutions).toEqual({});
+    expect(refreshed.draft_id).toBeUndefined();
+  });
+
+  it("invalidates a draft when an overlay is replaced by an identical source", () => {
+    const root = mkdtempSync(join(tmpdir(), "planning-overlay-replacement-"));
+    const base = join(root, "base");
+    const overlay = join(root, "overlay");
+    mkdirSync(base);
+    mkdirSync(overlay);
+    writeFileSync(join(base, "part.stl"), "base");
+    writeFileSync(join(overlay, "part.stl"), "overlay");
+    const sources = [
+      { id: 1, name: "Base", local_path: base, last_synced_at: "now", last_commit_sha: "a" },
+      { id: 2, name: "Overlay", local_path: overlay, last_synced_at: "now", last_commit_sha: "b" },
+      { id: 3, name: "Overlay", local_path: overlay, last_synced_at: "now", last_commit_sha: "b" },
+    ];
+    const store = { listSources: () => sources };
+    const brief = newBuildPlanningBrief(5, "request", []);
+    brief.evidence = [
+      { id: "base", url: "https://example.com/base", normalized_url: "https://example.com/base", kind: "canonical_design", source_id: 1, source_role: "structural_base" },
+      { id: "overlay-a", url: "https://example.com/overlay", normalized_url: "https://example.com/overlay", kind: "vendor_overlay", source_id: 2, source_role: "overlay" },
+    ];
+    const reviewed = hydrateBuildPlanningBrief(store, brief);
+    reviewed.draft_id = 12;
+    reviewed.draft_source_revisions = { "1": "a", "2": "b" };
+    expect(hydrateBuildPlanningBrief(store, reviewed).draft_id).toBe(12);
+
+    const replacement = { ...reviewed, evidence: reviewed.evidence.map((item) =>
+      item.id === "overlay-a" ? { ...item, id: "overlay-b", source_id: 3 } : item,
+    ) };
+    const refreshed = hydrateBuildPlanningBrief(store, replacement);
+    expect(refreshed.differences[0]!.id).toBe(reviewed.differences[0]!.id);
+    expect(refreshed.differences[0]!.group_id).not.toBe(reviewed.differences[0]!.group_id);
+    expect(refreshed.draft_id).toBeUndefined();
+
+    const reassigned = { ...reviewed, evidence: reviewed.evidence.map((item) =>
+      item.id === "overlay-a" ? { ...item, source_id: 3 } : item,
+    ) };
+    expect(hydrateBuildPlanningBrief(store, reassigned).draft_id).toBeUndefined();
+  });
+
   it("compares the structural base with every vendor overlay", () => {
     const root = mkdtempSync(join(tmpdir(), "build-planning-overlays-"));
     const paths = ["base", "overlay-a", "overlay-b"].map((name) => join(root, name));
@@ -302,6 +399,11 @@ describe("Build planning", () => {
       expect.objectContaining({ kind: "contradictory", family: "documentation_claims" }),
     ]);
     expect(hydrateBuildPlanningBrief({ listSources: () => [] }, hydrated).differences).toHaveLength(1);
+    const groupId = hydrated.differences[0]!.group_id;
+    hydrated.resolutions[groupId] = { resolution: "choose_source_a", rationale: "Reviewed guide", resolved_at: new Date().toISOString() };
+    expect(hydrateBuildPlanningBrief({ listSources: () => [] }, hydrated).resolutions).toEqual(hydrated.resolutions);
+    hydrated.evidence[1]!.extract = "Uses M5 screws";
+    expect(hydrateBuildPlanningBrief({ listSources: () => [] }, hydrated).resolutions).toEqual({});
   });
 
   it("extracts a complete vendor-overlay request without a built-in machine list", () => {

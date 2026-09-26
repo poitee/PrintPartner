@@ -9,7 +9,7 @@ import type {
 } from "@print-partner/contracts";
 import { createReadStream, statSync } from "node:fs";
 import type { IntegrationAdapter, PrinterUploadSource } from "../store.js";
-import { assertSafeOutboundUrl } from "../../lib/outbound-url.js";
+import { safeConnectorFetch } from "../../lib/outbound-url.js";
 import {
   cancelResponseBody,
   isJsonObject as isRecord,
@@ -63,8 +63,7 @@ async function obtainDigestChallenge(
 ): Promise<Record<string, string> | null> {
   const origin = new URL(requestUrl).origin;
   const probeUrl = `${origin}/api/v1/status`;
-  await assertSafeOutboundUrl(probeUrl, { allowPrivate: true });
-  const probe = await fetch(probeUrl, {
+  const probe = await safeConnectorFetch(probeUrl, {
     method: "GET",
     signal,
     redirect: "manual",
@@ -80,13 +79,12 @@ async function prusalinkFetch(
   config: IntegrationConfig,
   init: RequestInit = {},
 ): Promise<Response> {
-  await assertSafeOutboundUrl(url, { allowPrivate: true });
   const creds = credentials(config);
   const method = (init.method ?? "GET").toUpperCase();
   const signal = init.signal ?? AbortSignal.timeout(30_000);
 
   if (!creds) {
-    return fetch(url, { ...init, method, signal, redirect: "manual" });
+    return safeConnectorFetch(url, { ...init, method, signal, redirect: "manual" });
   }
 
   const challenge = await obtainDigestChallenge(url, signal);
@@ -104,8 +102,7 @@ async function prusalinkFetch(
 
   const headers = new Headers(init.headers);
   if (authorization) headers.set("Authorization", authorization);
-  await assertSafeOutboundUrl(url, { allowPrivate: true });
-  let res = await fetch(url, { ...init, method, headers, signal, redirect: "manual" });
+  let res = await safeConnectorFetch(url, { ...init, method, headers, signal, redirect: "manual" });
 
   // Stale/missing challenge: retry once from the real response's WWW-Authenticate.
   if (res.status === 401) {
@@ -122,8 +119,7 @@ async function prusalinkFetch(
       });
       const retryHeaders = new Headers(init.headers);
       retryHeaders.set("Authorization", retryAuth);
-      await assertSafeOutboundUrl(url, { allowPrivate: true });
-      res = await fetch(url, {
+      res = await safeConnectorFetch(url, {
         ...init,
         method,
         headers: retryHeaders,

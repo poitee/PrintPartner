@@ -1,9 +1,11 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { createServer } from "node:http";
 import {
   assertSafeOutboundHost,
   assertSafeOutboundUrl,
   classifyAddress,
   OutboundUrlError,
+  safeConnectorFetch,
   safeOutboundFetch,
   setPrivateOutboundDenied,
   type LookupFn,
@@ -15,6 +17,63 @@ const loopbackLookup: LookupFn = async () => [{ address: "127.0.0.1", family: 4 
 
 afterEach(() => {
   setPrivateOutboundDenied(false);
+});
+
+describe("safeConnectorFetch", () => {
+  it("rejects a DNS answer that changes to metadata at socket connection", async () => {
+    let lookups = 0;
+    const rebindingLookup: LookupFn = async () => {
+      lookups++;
+      return [{ address: lookups === 1 ? "93.184.216.34" : "169.254.169.254", family: 4 }];
+    };
+    let requests = 0;
+    const server = createServer((_request, response) => {
+      requests++;
+      response.end("unexpected");
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP server");
+
+    try {
+      await expect(safeConnectorFetch(`http://connector.test:${address.port}/`, {
+        signal: AbortSignal.timeout(500),
+      }, { allowPrivate: true, lookupFn: rebindingLookup })).rejects.toMatchObject({
+        cause: { message: expect.stringMatching(/metadata/) },
+      });
+      expect(lookups).toBe(2);
+      expect(requests).toBe(0);
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => error ? reject(error) : resolve()),
+      );
+    }
+  });
+
+  it("keeps the configured hostname while connecting to its checked address", async () => {
+    let host = "";
+    const server = createServer((request, response) => {
+      host = request.headers.host ?? "";
+      response.writeHead(302, { location: "/elsewhere" }).end("redirect");
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP server");
+
+    try {
+      const response = await safeConnectorFetch(`http://connector.test:${address.port}/`, {}, {
+        allowPrivate: true,
+        lookupFn: loopbackLookup,
+      });
+      expect(response.status).toBe(302);
+      expect(await response.text()).toBe("redirect");
+      expect(host).toBe(`connector.test:${address.port}`);
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => error ? reject(error) : resolve()),
+      );
+    }
+  });
 });
 
 describe("classifyAddress", () => {
@@ -128,6 +187,14 @@ describe("assertSafeOutboundUrl", () => {
         allowPrivate: true,
       }),
     ).resolves.toBeInstanceOf(URL);
+    await expect(
+      assertSafeOutboundUrl("https://mixed.example/x", {
+        lookupFn: async () => [
+          { address: "93.184.216.34", family: 4 },
+          { address: "10.0.0.8", family: 4 },
+        ],
+      }),
+    ).rejects.toThrow(/private or internal/);
   });
 
   it("rejects hostnames that fail to resolve", async () => {
@@ -158,46 +225,190 @@ describe("assertSafeOutboundHost", () => {
 });
 
 describe("safeOutboundFetch", () => {
-  afterEach(() => {
-    vi.unstubAllGlobals();
+  it("tries every validated address when the first address cannot connect", async () => {
+    const server = createServer((_request, response) => response.end("ipv4 fallback"));
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP server");
+    const dualStackLookup: LookupFn = async () => [
+      { address: "::1", family: 6 },
+      { address: "127.0.0.1", family: 4 },
+    ];
+
+    try {
+      const response = await safeOutboundFetch(`http://dualstack.test:${address.port}/`, {
+        signal: AbortSignal.timeout(2_000),
+      }, { allowPrivate: true, lookupFn: dualStackLookup });
+      expect(await response.text()).toBe("ipv4 fallback");
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => error ? reject(error) : resolve()),
+      );
+    }
+  });
+
+  it("does not connect to a different DNS address after validation", async () => {
+    let requests = 0;
+    let lookups = 0;
+    const rebindingLookup: LookupFn = async () => {
+      lookups++;
+      return lookups === 1
+        ? [{ address: "93.184.216.34", family: 4 }]
+        : [
+          { address: "93.184.216.34", family: 4 },
+          { address: "127.0.0.1", family: 4 },
+        ];
+    };
+    const server = createServer((_request, response) => {
+      requests++;
+      response.end("private response");
+    });
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP server");
+
+    try {
+      let failure: unknown;
+      try {
+        await safeOutboundFetch(`http://localhost:${address.port}/secret`, {
+          signal: AbortSignal.timeout(300),
+        }, { lookupFn: rebindingLookup });
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toMatchObject({ cause: { message: expect.stringMatching(/private or internal/) } });
+      expect(lookups).toBe(2);
+      expect(requests).toBe(0);
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => error ? reject(error) : resolve()),
+      );
+    }
+  });
+
+  it("keeps the checked connection alive while the caller reads its body", async () => {
+    const server = createServer((_request, response) => {
+      response.write("first");
+      setTimeout(() => response.end(" second"), 10);
+    });
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP server");
+
+    try {
+      const response = await safeOutboundFetch(`http://localhost:${address.port}/body`, {}, {
+        allowPrivate: true,
+        lookupFn: loopbackLookup,
+      });
+      expect(await response.text()).toBe("first second");
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => error ? reject(error) : resolve()),
+      );
+    }
+  });
+
+  it("closes the checked connection when the caller cancels its body", async () => {
+    const server = createServer((_request, response) => {
+      response.write("partial");
+    });
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP server");
+
+    try {
+      const response = await safeOutboundFetch(`http://localhost:${address.port}/stream`, {}, {
+        allowPrivate: true,
+        lookupFn: loopbackLookup,
+      });
+      await response.body?.cancel();
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => error ? reject(error) : resolve()),
+      );
+    }
   });
 
   it("blocks redirects to private addresses", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => ({
-        status: 302,
-        headers: { get: (k: string) => (k === "location" ? "http://127.0.0.1/secret" : null) },
-      })),
-    );
-    await expect(
-      safeOutboundFetch("https://example.com/img.png", {}, { lookupFn: publicLookup }),
-    ).rejects.toThrow(/private or internal/);
+    let requests = 0;
+    const server = createServer((_request, response) => {
+      requests++;
+      setPrivateOutboundDenied(true);
+      response.writeHead(302, { Location: "http://127.0.0.1/secret" }).end();
+    });
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP server");
+
+    try {
+      await expect(
+        safeOutboundFetch(`http://localhost:${address.port}/start`, {}, {
+          allowPrivate: true,
+          lookupFn: loopbackLookup,
+        }),
+      ).rejects.toThrow(/private or internal/);
+      expect(requests).toBe(1);
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => error ? reject(error) : resolve()),
+      );
+    }
+  });
+
+  it("blocks metadata redirects even when private hosts are allowed", async () => {
+    let requests = 0;
+    const server = createServer((_request, response) => {
+      requests++;
+      response.writeHead(302, { Location: "http://169.254.169.254/latest/meta-data/" }).end();
+    });
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP server");
+
+    try {
+      await expect(
+        safeOutboundFetch(`http://localhost:${address.port}/start`, {}, {
+          allowPrivate: true,
+          lookupFn: loopbackLookup,
+        }),
+      ).rejects.toThrow(/metadata/);
+      expect(requests).toBe(1);
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => error ? reject(error) : resolve()),
+      );
+    }
   });
 
   it("follows safe redirects and returns the final response", async () => {
-    let calls = 0;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => {
-        calls++;
-        if (calls === 1) {
-          return {
-            status: 301,
-            headers: {
-              get: (k: string) => (k === "location" ? "https://cdn.example.com/img.png" : null),
-            },
-          };
-        }
-        return { status: 200, ok: true, headers: { get: () => null } };
-      }),
-    );
-    const res = await safeOutboundFetch(
-      "https://example.com/img.png",
-      {},
-      { lookupFn: publicLookup },
-    );
-    expect(res.status).toBe(200);
-    expect(calls).toBe(2);
+    let requests = 0;
+    const server = createServer((request, response) => {
+      requests++;
+      if (request.url === "/start") {
+        response.writeHead(301, { Location: "/final" }).end();
+      } else {
+        response.end("final body");
+      }
+    });
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP server");
+
+    try {
+      const response = await safeOutboundFetch(`http://localhost:${address.port}/start`, {}, {
+        allowPrivate: true,
+        lookupFn: loopbackLookup,
+      });
+      expect(response.status).toBe(200);
+      expect(response.url).toBe(`http://localhost:${address.port}/final`);
+      expect(response.redirected).toBe(true);
+      expect(response.headers.get("content-length")).toBe("10");
+      expect(await response.text()).toBe("final body");
+      expect(requests).toBe(2);
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => error ? reject(error) : resolve()),
+      );
+    }
   });
 });

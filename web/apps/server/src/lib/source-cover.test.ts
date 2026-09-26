@@ -1,7 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { fetch as undiciFetch, Response as UndiciResponse } from "undici";
 import {
   coverCacheIsFresh,
   downloadRemoteImage,
@@ -17,6 +18,15 @@ import {
 vi.mock("node:dns/promises", () => ({
   lookup: vi.fn(async () => [{ address: "140.82.112.3", family: 4 }]),
 }));
+
+vi.mock("undici", async (importOriginal) => ({
+  ...await importOriginal<typeof import("undici")>(),
+  fetch: vi.fn(),
+}));
+
+afterEach(() => {
+  vi.mocked(undiciFetch).mockReset();
+});
 
 describe("source cover resolution", () => {
   it("parses GitHub repo slugs", () => {
@@ -81,53 +91,33 @@ describe("source cover resolution", () => {
     };
 
     const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () =>
-        new Response(png, {
-          headers: { "content-type": "image/png" },
-        }),
-      ),
-    );
+    vi.mocked(undiciFetch).mockResolvedValue(new UndiciResponse(png, {
+      headers: { "content-type": "image/png" },
+    }));
 
     const path = await ensureSourceCover(coversRoot, project);
     expect(path).toBe(join(coversRoot, "source_42.img"));
     expect(coverCacheIsFresh(coversRoot, project)).toBe(true);
 
-    vi.unstubAllGlobals();
     rmSync(dataDir, { recursive: true, force: true });
   });
 
   it("refuses to download covers from private or metadata addresses", async () => {
-    const fetchSpy = vi.fn();
-    vi.stubGlobal("fetch", fetchSpy);
-
     expect(await downloadRemoteImage("http://127.0.0.1:8080/cover.png")).toBeNull();
     expect(await downloadRemoteImage("http://169.254.169.254/latest/meta-data/")).toBeNull();
     expect(await downloadRemoteImage("http://192.168.1.10/cover.png")).toBeNull();
-    expect(fetchSpy).not.toHaveBeenCalled();
-
-    vi.unstubAllGlobals();
+    expect(undiciFetch).not.toHaveBeenCalled();
   });
 
   it("rejects a cover whose declared size exceeds the download budget", async () => {
     const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () =>
-        new Response(png, {
-          headers: {
-            "content-type": "image/png",
-            "content-length": "3000001",
-          },
-        }),
-      ),
-    );
+    vi.mocked(undiciFetch).mockResolvedValue(new UndiciResponse(png, {
+      headers: {
+        "content-type": "image/png",
+        "content-length": "3000001",
+      },
+    }));
 
-    try {
-      await expect(downloadRemoteImage("https://cdn.example.com/cover.png")).resolves.toBeNull();
-    } finally {
-      vi.unstubAllGlobals();
-    }
+    await expect(downloadRemoteImage("https://cdn.example.com/cover.png")).resolves.toBeNull();
   });
 });

@@ -62,7 +62,7 @@ const reconciliationConflictSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("ambiguous_exact_match"),
     target_draft_part_id: positiveId,
-    candidate_revision_part_ids: z.array(positiveId).min(2),
+    candidate_revision_part_ids: z.array(positiveId).min(1),
   }),
   z.strictObject({
     kind: z.enum(["unsafe_predecessor", "predecessor_claimed"]),
