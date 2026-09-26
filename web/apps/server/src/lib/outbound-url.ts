@@ -1,5 +1,6 @@
 import { lookup } from "node:dns/promises";
-import { isIP } from "node:net";
+import { isIP, type LookupFunction } from "node:net";
+import { Agent, fetch as undiciFetch } from "undici";
 import { cancelResponseBody } from "./bounded-response.js";
 
 /**
@@ -131,10 +132,24 @@ export function classifyAddress(address: string): AddressClass {
 
 const defaultLookup: LookupFn = (hostname) => lookup(hostname, { all: true, verbatim: true });
 
+export function createCheckedLookup(options: OutboundUrlOptions): LookupFunction {
+  return (hostname, lookupOptions, callback) => {
+    void assertResolvedHostSafe(hostname, options).then(
+      (addresses) => {
+        const first = addresses[0];
+        if (!first) return callback(new OutboundUrlError(`Could not resolve host: ${hostname}`), "", 4);
+        if (lookupOptions.all) callback(null, addresses);
+        else callback(null, first.address, first.family);
+      },
+      (error: unknown) => callback(error instanceof Error ? error : new Error(String(error)), "", 4),
+    );
+  };
+}
+
 async function assertResolvedHostSafe(
   hostname: string,
   options: OutboundUrlOptions,
-): Promise<void> {
+): Promise<Array<{ address: string; family: 4 | 6 }>> {
   let addresses: string[];
   if (isIP(hostname)) {
     addresses = [hostname];
@@ -150,6 +165,7 @@ async function assertResolvedHostSafe(
     }
   }
 
+  const checked: Array<{ address: string; family: 4 | 6 }> = [];
   for (const address of addresses) {
     const cls = classifyAddress(address);
     if (cls === "metadata") {
@@ -158,7 +174,13 @@ async function assertResolvedHostSafe(
     if (cls === "private" && !privateTargetsAllowed(options)) {
       throw new OutboundUrlError(`URL resolves to a private or internal address: ${hostname}`);
     }
+    const family = isIP(address);
+    if (family !== 4 && family !== 6) {
+      throw new OutboundUrlError(`Invalid address for host: ${hostname}`);
+    }
+    checked.push({ address, family });
   }
+  return checked;
 }
 
 /**
@@ -214,20 +236,116 @@ export async function assertSafeOutboundUrl(
  */
 export async function safeOutboundFetch(
   rawUrl: string,
-  init: RequestInit = {},
+  init: {
+    method?: string;
+    headers?: Record<string, string> | [string, string][];
+    body?: string | null;
+    signal?: AbortSignal | null;
+    redirect?: RequestInit["redirect"];
+  } = {},
   options: OutboundUrlOptions = {},
 ): Promise<Response> {
   let url = await assertSafeOutboundUrl(rawUrl, options);
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-    const response = await fetch(url, { ...init, redirect: "manual" });
+    const dispatcher = new Agent({
+      connect: {
+        autoSelectFamily: true,
+        lookup: createCheckedLookup(options),
+      },
+    });
+    let response: Awaited<ReturnType<typeof undiciFetch>>;
+    try {
+      response = await undiciFetch(url, {
+        ...init,
+        redirect: "manual",
+        dispatcher,
+      });
+    } catch (error) {
+      dispatcher.destroy();
+      throw error;
+    }
     if (response.status >= 300 && response.status < 400) {
       const location = response.headers.get("location");
-      if (!location) return response;
-      await cancelResponseBody(response);
+      if (!location) return responseWithDispatcher(response, dispatcher, hop > 0);
+      try {
+        await cancelResponseBody(response);
+      } finally {
+        dispatcher.destroy();
+      }
       url = await assertSafeOutboundUrl(new URL(location, url).toString(), options);
       continue;
     }
-    return response;
+    return responseWithDispatcher(response, dispatcher, hop > 0);
   }
   throw new OutboundUrlError(`Too many redirects fetching ${rawUrl}`);
+}
+
+export async function safeConnectorFetch(
+  rawUrl: string,
+  init: RequestInit = {},
+  options: OutboundUrlOptions = { allowPrivate: true },
+): Promise<Response> {
+  const url = await assertSafeOutboundUrl(rawUrl, options);
+  const dispatcher = new Agent({
+    connect: {
+      autoSelectFamily: true,
+      lookup: createCheckedLookup(options),
+    },
+  });
+  const requestInit: RequestInit = { ...init, redirect: "manual" };
+  Object.defineProperty(requestInit, "dispatcher", { value: dispatcher });
+  try {
+    const response = await fetch(url, requestInit);
+    if (!(response instanceof Response)) {
+      dispatcher.destroy();
+      return response;
+    }
+    return responseWithDispatcher(response, dispatcher, false);
+  } catch (error) {
+    dispatcher.destroy();
+    throw error;
+  }
+}
+
+function responseWithDispatcher(
+  response: Response,
+  dispatcher: Agent,
+  redirected: boolean,
+): Response {
+  const reader = response.body?.getReader();
+  const body = reader ? new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const result = await reader.read();
+        if (result.done) {
+          controller.close();
+          dispatcher.destroy();
+        } else {
+          controller.enqueue(result.value);
+        }
+      } catch (error) {
+        controller.error(error);
+        dispatcher.destroy();
+      }
+    },
+    async cancel(reason) {
+      try {
+        await reader.cancel(reason);
+      } finally {
+        dispatcher.destroy();
+      }
+    },
+  }, { highWaterMark: 0 }) : null;
+  if (!body) dispatcher.destroy();
+  const wrapped = new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: Object.fromEntries(response.headers),
+  });
+  Object.defineProperties(wrapped, {
+    url: { value: response.url },
+    redirected: { value: redirected },
+    type: { value: response.type },
+  });
+  return wrapped;
 }
