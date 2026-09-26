@@ -3,27 +3,14 @@ import { Route, Routes } from "react-router-dom";
 import * as Sentry from "@sentry/react";
 import AuthGate from "./components/AuthGate";
 import { AuthProvider } from "./context/AuthContext";
+import { sentryEnabled } from "./instrument";
 
-const SentryRoutes = Sentry.withSentryReactRouterV7Routing(Routes);
+const AppRoutes = sentryEnabled ? Sentry.withSentryReactRouterV7Routing(Routes) : Routes;
 
 const AuthenticatedApp = lazy(() => import("./AuthenticatedApp"));
 const LoginPage = lazy(() => import("./pages/LoginPage"));
 const ForgotPasswordPage = lazy(() => import("./pages/ForgotPasswordPage"));
 const ResetPasswordPage = lazy(() => import("./pages/ResetPasswordPage"));
-
-function ErrorButton() {
-  return (
-    <button
-      type="button"
-      onClick={() => {
-        throw new Error("This is your first error!");
-      }}
-      style={{ position: "fixed", right: 16, bottom: 16, zIndex: 50 }}
-    >
-      Break the world
-    </button>
-  );
-}
 
 function PageLoader() {
   return (
@@ -41,9 +28,8 @@ function PageLoader() {
 export default function App() {
   return (
     <AuthProvider>
-      <ErrorButton />
       <Suspense fallback={<PageLoader />}>
-        <SentryRoutes>
+        <AppRoutes>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/setup" element={<LoginPage />} />
           <Route path="/forgot-password" element={<ForgotPasswordPage />} />
@@ -51,7 +37,7 @@ export default function App() {
           <Route element={<AuthGate />}>
             <Route path="*" element={<AuthenticatedApp />} />
           </Route>
-        </SentryRoutes>
+        </AppRoutes>
       </Suspense>
     </AuthProvider>
   );

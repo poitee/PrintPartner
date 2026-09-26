@@ -1,4 +1,4 @@
-import "./instrument";
+import { sentryEnabled } from "./instrument";
 
 import React from "react";
 import ReactDOM from "react-dom/client";
@@ -13,11 +13,11 @@ import { registerServiceWorker } from "./lib/registerServiceWorker";
 
 registerServiceWorker();
 
-ReactDOM.createRoot(document.getElementById("root")!, {
+ReactDOM.createRoot(document.getElementById("root")!, sentryEnabled ? {
   onUncaughtError: Sentry.reactErrorHandler(),
   onCaughtError: Sentry.reactErrorHandler(),
   onRecoverableError: Sentry.reactErrorHandler(),
-}).render(
+} : undefined).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
       <ThemeProvider>
