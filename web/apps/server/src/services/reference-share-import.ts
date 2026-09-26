@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
 import { scanRepo } from "@print-partner/domain";
 import type { ReferenceShare } from "@print-partner/contracts";
-import type { AppRepository } from "../db/repository.js";
+import type { AppRepository, PlanDraftPartChoice } from "../db/repository.js";
 import { saveKitManifest } from "./kit-manifest-store.js";
+import { MAX_PLAN_DRAFT_PART_QUANTITY } from "./plan-drafts.js";
 
 export type ReferenceDependencyStatus = "File required" | "Revision unverified" | "Ready";
 
@@ -173,13 +174,22 @@ export function importReferenceShareBuild(
       replacements: { ...manifest.replacements },
     });
     const included = new Map<number, Set<string>>();
+    const partChoices = new Map<number, Map<string, PlanDraftPartChoice>>();
     for (const part of manifest.parts) {
       if (!part.included) continue;
       const projectId = mapping[part.source];
       if (projectId == null) continue;
+      if (part.quantity < 1 || part.quantity > MAX_PLAN_DRAFT_PART_QUANTITY ||
+          !part.role.trim() || part.role.length > 200) {
+        throw new Error("Reference part quantity or role cannot be used in a Plan");
+      }
       const paths = included.get(projectId) ?? new Set<string>();
+      if (paths.has(part.path)) throw new Error("Reference part is duplicated");
       paths.add(part.path);
       included.set(projectId, paths);
+      const choices = partChoices.get(projectId) ?? new Map<string, PlanDraftPartChoice>();
+      choices.set(part.path, { quantity: part.quantity, role: part.role, color: part.color });
+      partChoices.set(projectId, choices);
     }
     const draft = repo.recomputePlanDraft({
       profileId: profile.id,
@@ -187,6 +197,7 @@ export function importReferenceShareBuild(
       idempotencyKey: key,
       includedPathsBySourceId: included,
       applyManifest: false,
+      partChoicesBySourceId: partChoices,
     });
     if (draft.kind !== "created" && draft.kind !== "existing") {
       throw new Error(`Reference import could not prepare a Working Plan (${draft.kind})`);

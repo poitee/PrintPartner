@@ -716,6 +716,12 @@ type PreparePlanDraftResult =
   | { readonly kind: "prepared"; readonly value: PreparedPlanDraft }
   | { readonly kind: "no_layers" | "no_stls" | "would_wipe" };
 
+export type PlanDraftPartChoice = Readonly<{
+  quantity: number;
+  role: string;
+  color: string | null;
+}>;
+
 type PlanFreshnessContext = {
   readonly globalNaming: StlNamingProfileDict;
   readonly layersByProfile: ReadonlyMap<number, readonly LayerRow[]>;
@@ -4080,6 +4086,7 @@ export class AppRepository {
       readonly includedPathsBySourceId?: ReadonlyMap<number, ReadonlySet<string>>;
       readonly applyManifest?: boolean;
       readonly preferAccepted?: boolean;
+      readonly partChoicesBySourceId?: ReadonlyMap<number, ReadonlyMap<string, PlanDraftPartChoice>>;
     } = {},
   ): PreparePlanDraftResult {
     const accepted =
@@ -4228,13 +4235,40 @@ export class AppRepository {
       scannedDraftParts,
       buildPlanOptionGroups(this, profileId, dirname(this.reposDir)),
     );
-    const draftParts = options.applyManifest === false
+    let draftParts = options.applyManifest === false
       ? manifestParts.map((part) => {
           const prior = acceptedByKey.get(part.partKey);
           const included = prior?.included ?? (defaultIncludedKeys.has(part.partKey) && part.included);
           return included === part.included ? part : { ...part, included };
         })
       : manifestParts;
+    if (options.partChoicesBySourceId) {
+      const sourceIdByLayer = new Map(capture.layers.map((layer) => [layer.sourceLayer, layer.projectId]));
+      const matched = new Set<string>();
+      draftParts = draftParts.map((part) => {
+        const sourceId = sourceIdByLayer.get(part.sourceLayer);
+        const choice = sourceId == null
+          ? undefined
+          : options.partChoicesBySourceId?.get(sourceId)?.get(part.relativePath);
+        if (!choice) return part;
+        const key = `${sourceId}\0${part.relativePath}`;
+        if (matched.has(key)) throw new Error("Reference part maps to more than one Plan Part");
+        matched.add(key);
+        return {
+          ...part,
+          roleOverride: choice.role,
+          filamentColorId: null,
+          filamentCustomHex: choice.color,
+          spoolmanSpoolId: null,
+          quantityOverride: choice.quantity,
+          quantityEffective: choice.quantity,
+          included: true,
+        };
+      });
+      const expected = Array.from(options.partChoicesBySourceId.values())
+        .reduce((count, choices) => count + choices.size, 0);
+      if (matched.size !== expected) throw new Error("Reference part is missing from the Plan draft");
+    }
     return {
       kind: "prepared",
       value: {
@@ -4503,6 +4537,7 @@ export class AppRepository {
     includedPathsBySourceId?: ReadonlyMap<number, ReadonlySet<string>>;
     applyManifest?: boolean;
     preferAccepted?: boolean;
+    partChoicesBySourceId?: ReadonlyMap<number, ReadonlyMap<string, PlanDraftPartChoice>>;
   }): RecomputePlanDraftResult {
     const actor = requiredText(input.actor, "Plan draft actor");
     const idempotencyKey = requiredText(input.idempotencyKey, "Plan draft idempotency key");
