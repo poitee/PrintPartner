@@ -64,6 +64,7 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
   const [selectedProfileId, setSelectedProfileIdState] = useState<number | null>(readStoredId);
   const [pendingSelectionId, setPendingSelectionId] = useState<number | null>(null);
   const previousProfileIdsRef = useRef<number[]>([]);
+  const publishedPendingIdRef = useRef<number | null>(null);
   const urlProfileId = parseProfileParam(searchParams.get("profile"));
 
   const commitSelectedProfileId = useCallback(
@@ -95,9 +96,23 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!isSuccess) return;
 
+    if (pendingSelectionId == null) publishedPendingIdRef.current = null;
+    else if (urlProfileId === pendingSelectionId) publishedPendingIdRef.current = pendingSelectionId;
+
     const previousIds = previousProfileIdsRef.current;
     const nextIds = profiles.map((p) => p.id);
     previousProfileIdsRef.current = nextIds;
+
+    if (
+      pendingSelectionId != null &&
+      publishedPendingIdRef.current === pendingSelectionId &&
+      urlProfileId != null &&
+      urlProfileId !== pendingSelectionId &&
+      nextIds.includes(urlProfileId)
+    ) {
+      commitSelectedProfileId(urlProfileId, false);
+      return;
+    }
 
     const next = reconcileSelectedProfileId(
       nextIds,
