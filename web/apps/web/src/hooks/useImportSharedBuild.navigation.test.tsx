@@ -16,6 +16,7 @@ const deps = vi.hoisted(() => ({
   upload: vi.fn(),
   refetch: vi.fn(),
   profiles: [] as Array<{ id: number; name: string }>,
+  profilesSuccess: true,
 }));
 
 vi.mock("../api/endpoints/browserFiles", () => ({ pickKitBundle: deps.pick }));
@@ -33,7 +34,7 @@ vi.mock("../queries/profiles", () => ({
   useProfilesQuery: () => ({
     data: deps.profiles,
     isLoading: false,
-    isSuccess: true,
+    isSuccess: deps.profilesSuccess,
     error: null,
     refetch: deps.refetch,
   }),
@@ -80,13 +81,17 @@ describe("first Build import after a failed list reload", () => {
     sessionStorage.clear();
     [deps.pick, deps.upload, deps.refetch].forEach((mock) => mock.mockReset());
     deps.profiles = [];
+    deps.profilesSuccess = true;
   });
 
   it("allows switching to a known Build while the imported Build is absent from the list", async () => {
     deps.profiles = [{ id: 1, name: "Old" }];
     deps.pick.mockResolvedValue(new File(["kit"], "shared.zip"));
     deps.upload.mockResolvedValue({ profile_id: 2, profile_name: "Imported", parts_imported: 0, layers_imported: 0 });
-    deps.refetch.mockResolvedValue({ error: new Error("list unavailable") });
+    deps.refetch.mockImplementation(async () => {
+      deps.profilesSuccess = false;
+      return { error: new Error("list unavailable") };
+    });
     const router = createMemoryRouter([{ element: <RouteShell />, children: [
       { path: "/library", element: <Library /> },
       { path: "/sources", element: <Build /> },
