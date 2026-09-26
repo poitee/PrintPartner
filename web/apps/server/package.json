@@ -13,7 +13,7 @@
     "db:migrate": "tsx src/db/migrate.ts"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.1114.0",
+    "@aws-sdk/client-s3": "^3.1138.0",
     "@fastify/compress": "^8.3.1",
     "@fastify/cookie": "^11.0.2",
     "@fastify/cors": "^11.2.0",
