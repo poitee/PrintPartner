@@ -1,7 +1,11 @@
 import { lazy, Suspense } from "react";
 import { Route, Routes } from "react-router-dom";
+import * as Sentry from "@sentry/react";
 import AuthGate from "./components/AuthGate";
 import { AuthProvider } from "./context/AuthContext";
+import { sentryEnabled } from "./instrument";
+
+const AppRoutes = sentryEnabled ? Sentry.withSentryReactRouterV7Routing(Routes) : Routes;
 
 const AuthenticatedApp = lazy(() => import("./AuthenticatedApp"));
 const LoginPage = lazy(() => import("./pages/LoginPage"));
@@ -25,7 +29,7 @@ export default function App() {
   return (
     <AuthProvider>
       <Suspense fallback={<PageLoader />}>
-        <Routes>
+        <AppRoutes>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/setup" element={<LoginPage />} />
           <Route path="/forgot-password" element={<ForgotPasswordPage />} />
@@ -33,7 +37,7 @@ export default function App() {
           <Route element={<AuthGate />}>
             <Route path="*" element={<AuthenticatedApp />} />
           </Route>
-        </Routes>
+        </AppRoutes>
       </Suspense>
     </AuthProvider>
   );

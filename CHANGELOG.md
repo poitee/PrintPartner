@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Browser error reporting** — set `VITE_SENTRY_DSN` at build time to enable
+  Sentry errors and tracing. See [web/DEPLOY.md](web/DEPLOY.md).
 - **Invite-only Board** — signed-in GitHub and email users post a frozen
   references-only Build snapshot, read a newest-first feed, and leave flat
   comments. Kit inbox, `.print-partner-kit` export, and Discord login stay off

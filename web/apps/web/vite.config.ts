@@ -2,9 +2,16 @@ import type { ProxyOptions } from "vite";
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+import { readFileSync } from "node:fs";
 import type { IncomingMessage } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+
+const appVersion = (
+  JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")) as {
+    version: string;
+  }
+).version;
 
 const API_TARGET = process.env.VITE_DEV_API_TARGET ?? "http://127.0.0.1:18765";
 const SOURCE_DIR = fileURLToPath(new URL("./src", import.meta.url));
@@ -112,6 +119,9 @@ const proxy: Record<string, ProxyOptions> = Object.fromEntries(
 );
 
 export default defineConfig({
+  define: {
+    "import.meta.env.VITE_APP_VERSION": JSON.stringify(appVersion),
+  },
   test: {
     include: ["src/**/*.test.{ts,tsx}"],
   },

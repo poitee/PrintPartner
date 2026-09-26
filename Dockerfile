@@ -10,6 +10,9 @@ COPY web/packages/contracts/package.json ./packages/contracts/
 COPY web/packages/domain/package.json ./packages/domain/
 RUN npm ci
 COPY web/ ./
+# Vite inlines VITE_* at build time. An empty DSN leaves the browser SDK off.
+ARG VITE_SENTRY_DSN=
+ENV VITE_SENTRY_DSN=$VITE_SENTRY_DSN
 RUN npm run build && \
     # Remove dev dependencies to reduce final image size
     npm ci --omit=dev
