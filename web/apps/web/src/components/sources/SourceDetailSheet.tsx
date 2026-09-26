@@ -120,7 +120,7 @@ export default function SourceDetailSheet({
   const [savedRules, setSavedRules] = useState<string[]>([]);
   const [rulesOwnerId, setRulesOwnerId] = useState<number | null>(null);
   const [rulesLoading, setRulesLoading] = useState(false);
-  const [rulesSaving, setRulesSaving] = useState(false);
+  const [savingRuleSourceIds, setSavingRuleSourceIds] = useState<Set<number>>(() => new Set());
   const [rulesLoadError, setRulesLoadError] = useState<string | null>(null);
   const [scanResult, setScanResult] = useState<string | null>(null);
 
@@ -136,7 +136,7 @@ export default function SourceDetailSheet({
   const [namingSaving, setNamingSaving] = useState(false);
   const [namingNote, setNamingNote] = useState<string | null>(null);
   const rulesGenerationRef = useRef(0);
-  const rulesSavePendingRef = useRef<number | null>(null);
+  const rulesSavePendingRef = useRef(new Map<number, number>());
   const requestedRulesSourceRef = useRef<number | null>(null);
   const namingGenerationRef = useRef(0);
   const requestedNamingSourceRef = useRef<number | null>(null);
@@ -212,6 +212,7 @@ export default function SourceDetailSheet({
   }, []);
 
   const sourceId = open ? source?.id ?? null : null;
+  const rulesSaving = sourceId != null && savingRuleSourceIds.has(sourceId);
 
   useEffect(() => {
     rulesGenerationRef.current += 1;
@@ -255,12 +256,12 @@ export default function SourceDetailSheet({
   }, [content.docs.length, content.loadError, content.loading, content.notes, open, source]);
 
   const saveRules = async () => {
-    if (!source || rulesOwnerId !== source.id || rulesLoading || rulesSavePendingRef.current !== null) return;
+    if (!source || rulesOwnerId !== source.id || rulesLoading || rulesSavePendingRef.current.has(source.id)) return;
     const submittedRules = [...pendingRules];
     const generation = rulesGenerationRef.current + 1;
     rulesGenerationRef.current = generation;
-    rulesSavePendingRef.current = generation;
-    setRulesSaving(true);
+    rulesSavePendingRef.current.set(source.id, generation);
+    setSavingRuleSourceIds((current) => new Set(current).add(source.id));
     try {
       const saved = await saveImportRules(source.id, submittedRules);
       if (rulesGenerationRef.current !== generation) return;
@@ -273,9 +274,13 @@ export default function SourceDetailSheet({
       if (rulesGenerationRef.current !== generation) return;
       setScanResult(e instanceof Error ? e.message : String(e));
     } finally {
-      if (rulesSavePendingRef.current === generation) {
-        rulesSavePendingRef.current = null;
-        setRulesSaving(false);
+      if (rulesSavePendingRef.current.get(source.id) === generation) {
+        rulesSavePendingRef.current.delete(source.id);
+        setSavingRuleSourceIds((current) => {
+          const next = new Set(current);
+          next.delete(source.id);
+          return next;
+        });
       }
     }
   };
