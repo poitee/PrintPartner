@@ -107,7 +107,7 @@ Copy these text files into a repository you own, inspect the diff, and commit th
 Do not add models, previews, sliced files, backups, or printer settings. The ignore rules are a reminder, not an enforcement mechanism. Review every commit.
 `;
   const ignore = "*.stl\n*.STL\n*.3mf\n*.3MF\n*.obj\n*.step\n*.stp\n*.gcode\n*.bgcode\n*.zip\n*.tar.gz\n.env*\n";
-  const mtime = new Date("1980-01-01T00:00:00Z");
+  const mtime = new Date(1980, 0, 1);
   return zipSync({
     "printpartner.share.json": [strToU8(serializeReferenceShare(manifest)), { mtime }],
     "README.md": [strToU8(readme), { mtime }],
