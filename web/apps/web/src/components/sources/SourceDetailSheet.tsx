@@ -264,11 +264,11 @@ export default function SourceDetailSheet({
     setSavingRuleSourceIds((current) => new Set(current).add(source.id));
     try {
       const saved = await saveImportRules(source.id, submittedRules);
+      runImportScan(source.id);
+      onSaveRules();
       if (rulesGenerationRef.current !== generation) return;
       setSavedRules(saved.rules);
       setPendingRules((current) => rulesEqual(current, submittedRules) ? saved.rules : current);
-      runImportScan(source.id);
-      onSaveRules();
       setScanResult("Rules saved — import scan started.");
     } catch (e) {
       if (rulesGenerationRef.current !== generation) return;

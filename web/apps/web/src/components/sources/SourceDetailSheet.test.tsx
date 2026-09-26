@@ -349,7 +349,7 @@ describe("SourceDetailSheet loading", () => {
     });
     await waitFor(() => expect(screen.getByRole("button", { name: "Save rules" })).toBeTruthy());
     expect(baseProps.runImportScan).toHaveBeenCalledWith(2);
-    expect(baseProps.runImportScan).not.toHaveBeenCalledWith(1);
+    expect(baseProps.runImportScan).toHaveBeenCalledWith(1);
   });
 
   it("keeps the Source sheet open when the user cancels discarding unsaved rules", async () => {
