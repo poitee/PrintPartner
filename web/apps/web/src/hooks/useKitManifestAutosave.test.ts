@@ -83,6 +83,48 @@ describe("useKitManifestAutosave", () => {
     vi.clearAllMocks();
   });
 
+  it("keeps its registered flush available when the Plan refresh callback changes", () => {
+    const register = vi.fn();
+    const unregister = vi.fn();
+    const onSaved = vi.fn();
+    const props = { onPersisted: vi.fn().mockResolvedValue(undefined) };
+    const hook = renderHook(({ onPersisted }) => useKitManifestAutosave({
+      profileId: 7,
+      pendingSelections: {},
+      savedSelections: {},
+      loaded: true,
+      userEdited: false,
+      disabled: false,
+      baseKit: kit({}),
+      onPersisted,
+      onSaved,
+      onRegisterFlush: register,
+      onUnregisterFlush: unregister,
+    }), { initialProps: props });
+    expect(register).toHaveBeenCalledTimes(1);
+    hook.rerender({ onPersisted: vi.fn().mockResolvedValue(undefined) });
+    expect(unregister).not.toHaveBeenCalled();
+    expect(register).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a failed flush so navigation can keep the editor open", async () => {
+    mocks.savePlanKitManifest.mockRejectedValue(new Error("offline"));
+    const { result } = renderAutosave();
+    act(() => result.current.saveUserEdit({ extras: ["skirts"] }));
+    await waitFor(() => expect(result.current.status).toBe("error"));
+    await expect(result.current.saveNow()).rejects.toThrow("offline");
+  });
+
+  it("warns before a page unload while kit selections are unsaved", async () => {
+    mocks.savePlanKitManifest.mockRejectedValue(new Error("offline"));
+    const { result } = renderAutosave();
+    expect(window.dispatchEvent(new Event("beforeunload", { cancelable: true }))).toBe(true);
+
+    act(() => result.current.saveUserEdit({ extras: ["skirts"] }));
+    await waitFor(() => expect(result.current.status).toBe("error"));
+    expect(window.dispatchEvent(new Event("beforeunload", { cancelable: true }))).toBe(false);
+  });
+
   it("retries a failed Plan refresh after the variant itself was saved", async () => {
     const savedKit = kit({ extras: ["skirts"] });
     mocks.savePlanKitManifest.mockResolvedValueOnce(savedKit);
@@ -100,6 +142,7 @@ describe("useKitManifestAutosave", () => {
     expect(onPersisted).toHaveBeenLastCalledWith(savedKit);
     expect(mocks.savePlanKitManifest).toHaveBeenCalledTimes(1);
     expect(result.current.status).toBe("saved");
+    expect(window.dispatchEvent(new Event("beforeunload", { cancelable: true }))).toBe(true);
   });
 
   it("applies a saved variant to its original Build after switching Builds", async () => {
@@ -165,7 +208,7 @@ describe("useKitManifestAutosave", () => {
     });
 
     expect(mocks.savePlanKitManifest).toHaveBeenCalledTimes(2);
-    expect(onSaved).toHaveBeenCalledTimes(2);
+    expect(onSaved).toHaveBeenCalledTimes(1);
     expect(onSaved).toHaveBeenLastCalledWith(
       kit({ extras: ["skirts", "panels", "screen"] }),
     );
@@ -305,5 +348,32 @@ describe("useKitManifestAutosave", () => {
       7,
       expect.objectContaining({ selections: { extras: ["skirts"] } }),
     );
+  });
+
+  it("flushes the previous Build when profileId changes with pending selections", async () => {
+    const oldSelections = { extras: ["skirts"] };
+    mocks.savePlanKitManifest.mockResolvedValue(kit(oldSelections));
+    const initialProps: HookProps = {
+      profileId: 7,
+      pendingSelections: oldSelections,
+      savedSelections: {},
+    };
+    const hook = renderHook(({ profileId, pendingSelections, savedSelections }: HookProps) => useKitManifestAutosave({
+      profileId,
+      pendingSelections,
+      savedSelections,
+      loaded: true,
+      userEdited: true,
+      disabled: false,
+      baseKit: kit({}),
+      onSaved: vi.fn(),
+    }), { initialProps });
+
+    act(() => hook.rerender({ profileId: 8, pendingSelections: {}, savedSelections: {} }));
+    await waitFor(() => expect(mocks.savePlanKitManifest).toHaveBeenCalledWith(
+      7,
+      expect.objectContaining({ selections: oldSelections }),
+    ));
+    expect(mocks.savePlanKitManifest).toHaveBeenCalledTimes(1);
   });
 });

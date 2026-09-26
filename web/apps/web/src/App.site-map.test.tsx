@@ -42,6 +42,7 @@ vi.mock("./context/KitManifestSaveContext", () => ({
 vi.mock("./context/SaveStatusContext", () => ({
   SaveStatusProvider: ({ children }: { children: ReactNode }) => children,
 }));
+vi.mock("./components/BuildSaveNavigationGuard", () => ({ default: () => null }));
 vi.mock("./components/AuthGate", () => ({
   default: function AuthGate() {
     return <Outlet />;

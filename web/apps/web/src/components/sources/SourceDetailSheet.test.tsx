@@ -6,6 +6,7 @@ import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_STL_NAMING_PROFILE, type SourceSummary } from "@print-partner/contracts";
 import SourceDetailSheet from "./SourceDetailSheet";
+import { LibraryDraftProvider } from "../../context/LibraryDraftContext";
 
 const { api } = vi.hoisted(() => ({
   api: {
@@ -47,9 +48,14 @@ vi.mock("../../api/endpoints/sourceNaming", async (importOriginal) => {
 vi.mock("../SourceCardCover", () => ({ default: () => null }));
 vi.mock("../ImportRulesTree", () => ({
   default: ({ onRulesChange }: { onRulesChange: (rules: string[]) => void }) => (
-    <button type="button" onClick={() => onRulesChange(["first-source/**"])}>
-      Change rule draft
-    </button>
+    <>
+      <button type="button" onClick={() => onRulesChange(["first-source/**"])}>
+        Change rule draft
+      </button>
+      <button type="button" onClick={() => onRulesChange(["second-source/**"])}>
+        Change rule draft again
+      </button>
+    </>
   ),
 }));
 
@@ -87,7 +93,7 @@ function createQueryWrapper() {
     defaultOptions: { queries: { retry: false } },
   });
   return function QueryWrapper({ children }: { children: ReactNode }) {
-    return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+    return <QueryClientProvider client={queryClient}><LibraryDraftProvider>{children}</LibraryDraftProvider></QueryClientProvider>;
   };
 }
 
@@ -248,6 +254,193 @@ describe("SourceDetailSheet loading", () => {
     await waitFor(() =>
       expect((screen.getByRole("button", { name: "Save rules" }) as HTMLButtonElement).disabled).toBe(false),
     );
+  });
+
+  it("keeps an unsaved import-rule draft when switching tabs", async () => {
+    api.fetchSourceDocs.mockResolvedValue([]);
+    api.fetchImportRules.mockResolvedValue({ rules: ["original/**"] });
+    api.saveImportRules.mockResolvedValue({ rules: ["first-source/**"] });
+    const { rerender } = render(
+      <SourceDetailSheet {...baseProps} tab="rules" source={source(1, "Source")} />,
+      { wrapper: createQueryWrapper() },
+    );
+    await waitFor(() => expect(api.fetchImportRules).toHaveBeenCalledTimes(1));
+    await screen.findByRole("button", { name: "Change rule draft" });
+    fireEvent.click(screen.getByRole("button", { name: "Change rule draft" }));
+
+    rerender(<SourceDetailSheet {...baseProps} tab="docs" source={source(1, "Source")} />);
+    rerender(<SourceDetailSheet {...baseProps} tab="rules" source={source(1, "Source")} />);
+
+    expect(api.fetchImportRules).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "Save rules" }));
+    await waitFor(() => expect(api.saveImportRules).toHaveBeenCalledWith(1, ["first-source/**"]));
+  });
+
+  it("preserves edits made during a rule save and sends them in a later save", async () => {
+    const firstSave = deferred<{ rules: string[] }>();
+    api.fetchSourceDocs.mockResolvedValue([]);
+    api.fetchImportRules.mockResolvedValue({ rules: ["original/**"] });
+    api.saveImportRules
+      .mockReturnValueOnce(firstSave.promise)
+      .mockResolvedValueOnce({ rules: ["second-source/**"] });
+    render(
+      <SourceDetailSheet {...baseProps} tab="rules" source={source(1, "Source")} />,
+      { wrapper: createQueryWrapper() },
+    );
+    await screen.findByRole("button", { name: "Change rule draft" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Change rule draft" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save rules" }));
+    expect(api.saveImportRules).toHaveBeenCalledWith(1, ["first-source/**"]);
+    fireEvent.click(screen.getByRole("button", { name: "Change rule draft again" }));
+    fireEvent.click(screen.getByRole("button", { name: "Saving…" }));
+    expect(api.saveImportRules).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      firstSave.resolve({ rules: ["first-source/**"] });
+      await firstSave.promise;
+    });
+    await waitFor(() =>
+      expect((screen.getByRole("button", { name: "Save rules" }) as HTMLButtonElement).disabled).toBe(false),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Save rules" }));
+    await waitFor(() => expect(api.saveImportRules).toHaveBeenLastCalledWith(1, ["second-source/**"]));
+  });
+
+  it("lets another Source save while the previous Source save is pending", async () => {
+    baseProps.runImportScan.mockClear();
+    const firstSave = deferred<{ rules: string[] }>();
+    const secondSave = deferred<{ rules: string[] }>();
+    api.fetchSourceDocs.mockResolvedValue([]);
+    api.fetchImportRules.mockImplementation((sourceId: number) =>
+      Promise.resolve({ rules: sourceId === 1 ? ["first-original/**"] : ["second-original/**"] }),
+    );
+    api.saveImportRules.mockImplementation((sourceId: number) =>
+      sourceId === 1 ? firstSave.promise : secondSave.promise,
+    );
+    const { rerender } = render(
+      <SourceDetailSheet {...baseProps} tab="rules" source={source(1, "First Source")} />,
+      { wrapper: createQueryWrapper() },
+    );
+    await waitFor(() =>
+      expect((screen.getByRole("button", { name: "Save rules" }) as HTMLButtonElement).disabled).toBe(false),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Change rule draft" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save rules" }));
+    expect(api.saveImportRules).toHaveBeenCalledWith(1, ["first-source/**"]);
+
+    rerender(<SourceDetailSheet {...baseProps} tab="rules" source={source(2, "Second Source")} />);
+    await waitFor(() =>
+      expect((screen.getByRole("button", { name: "Save rules" }) as HTMLButtonElement).disabled).toBe(false),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Change rule draft again" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save rules" }));
+    expect(api.saveImportRules).toHaveBeenCalledWith(2, ["second-source/**"]);
+
+    await act(async () => {
+      firstSave.resolve({ rules: ["first-source/**"] });
+      await firstSave.promise;
+    });
+    expect((screen.getByRole("button", { name: "Saving…" }) as HTMLButtonElement).disabled).toBe(true);
+
+    await act(async () => {
+      secondSave.resolve({ rules: ["second-source/**"] });
+      await secondSave.promise;
+    });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Save rules" })).toBeTruthy());
+    expect(baseProps.runImportScan).toHaveBeenCalledWith(2);
+    expect(baseProps.runImportScan).toHaveBeenCalledWith(1);
+  });
+
+  it("reloads the saved rules after returning to a Source whose save is pending", async () => {
+    const firstSave = deferred<{ rules: string[] }>();
+    let storedRules = ["first-original/**"];
+    api.fetchSourceDocs.mockResolvedValue([]);
+    api.fetchImportRules.mockImplementation((sourceId: number) =>
+      Promise.resolve({ rules: sourceId === 1 ? [...storedRules] : ["second-original/**"] }),
+    );
+    api.saveImportRules.mockImplementation((sourceId: number, rules: string[]) =>
+      sourceId === 1 && api.saveImportRules.mock.calls.length === 1
+        ? firstSave.promise
+        : Promise.resolve({ rules }),
+    );
+    const { rerender } = render(
+      <SourceDetailSheet {...baseProps} tab="rules" source={source(1, "First Source")} />,
+      { wrapper: createQueryWrapper() },
+    );
+    await waitFor(() =>
+      expect((screen.getByRole("button", { name: "Save rules" }) as HTMLButtonElement).disabled).toBe(false),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Change rule draft" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save rules" }));
+
+    rerender(<SourceDetailSheet {...baseProps} tab="rules" source={source(2, "Second Source")} />);
+    await waitFor(() =>
+      expect((screen.getByRole("button", { name: "Save rules" }) as HTMLButtonElement).disabled).toBe(false),
+    );
+    rerender(<SourceDetailSheet {...baseProps} tab="rules" source={source(1, "First Source")} />);
+    await waitFor(() =>
+      expect((screen.getByRole("button", { name: "Saving…" }) as HTMLButtonElement).disabled).toBe(true),
+    );
+    expect(api.fetchImportRules.mock.calls.filter(([sourceId]) => sourceId === 1)).toHaveLength(1);
+
+    await act(async () => {
+      storedRules = ["first-source/**"];
+      firstSave.resolve({ rules: storedRules });
+      await firstSave.promise;
+    });
+    await waitFor(() =>
+      expect(api.fetchImportRules.mock.calls.filter(([sourceId]) => sourceId === 1)).toHaveLength(2),
+    );
+    await waitFor(() =>
+      expect((screen.getByRole("button", { name: "Save rules" }) as HTMLButtonElement).disabled).toBe(false),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Save rules" }));
+    expect(api.saveImportRules).toHaveBeenLastCalledWith(1, ["first-source/**"]);
+  });
+
+  it("keeps the Source sheet open when the user cancels discarding unsaved rules", async () => {
+    api.fetchSourceDocs.mockResolvedValue([]);
+    api.fetchImportRules.mockResolvedValue({ rules: ["original/**"] });
+    const onOpenChange = vi.fn();
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    try {
+      render(
+        <SourceDetailSheet {...baseProps} onOpenChange={onOpenChange} tab="rules" source={source(1, "Source")} />,
+        { wrapper: createQueryWrapper() },
+      );
+      await screen.findByRole("button", { name: "Change rule draft" });
+      fireEvent.click(screen.getByRole("button", { name: "Change rule draft" }));
+      fireEvent.click(screen.getByRole("button", { name: "Close source details" }));
+      expect(confirm).toHaveBeenCalledOnce();
+      expect(onOpenChange).not.toHaveBeenCalled();
+    } finally {
+      confirm.mockRestore();
+    }
+  });
+
+  it("keeps an unsaved naming override when switching tabs", async () => {
+    api.fetchSourceDocs.mockResolvedValue([]);
+    api.fetchStlNaming.mockResolvedValue(DEFAULT_STL_NAMING_PROFILE);
+    api.fetchSourceNaming.mockResolvedValue({
+      use_defaults: true,
+      override: {},
+      effective: DEFAULT_STL_NAMING_PROFILE,
+      effective_digest: "0".repeat(64),
+    });
+    const { rerender } = render(
+      <SourceDetailSheet {...baseProps} tab="naming" source={source(1, "Source")} />,
+      { wrapper: createQueryWrapper() },
+    );
+    const useDefaults = await screen.findByRole("checkbox", { name: "Use app default naming rules" });
+    await waitFor(() => expect((useDefaults as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(useDefaults);
+
+    rerender(<SourceDetailSheet {...baseProps} tab="docs" source={source(1, "Source")} />);
+    rerender(<SourceDetailSheet {...baseProps} tab="naming" source={source(1, "Source")} />);
+
+    expect(api.fetchSourceNaming).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("checkbox", { name: "Use app default naming rules" }).getAttribute("data-state")).toBe("unchecked");
   });
 
   it("cannot save the previous Source naming draft while the next Source is loading", async () => {

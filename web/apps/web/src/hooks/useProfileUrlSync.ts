@@ -23,6 +23,7 @@ export function useProfileUrlSync() {
   // (which would fight the URL -> state sync).
   const searchParamsRef = useRef(searchParams);
   searchParamsRef.current = searchParams;
+  const publishedPendingIdRef = useRef<number | null>(null);
 
   // ProfileProvider owns URL -> state so initial hydration and profile-list
   // reconciliation are one transition. This effect only publishes local choices.
@@ -30,6 +31,17 @@ export function useProfileUrlSync() {
     if (!shouldSyncProfileToPath(location.pathname)) return;
     const currentParams = searchParamsRef.current;
     const urlId = parseProfileParam(currentParams.get("profile"));
+    if (pendingSelectionId == null) publishedPendingIdRef.current = null;
+    else if (urlId === pendingSelectionId) publishedPendingIdRef.current = pendingSelectionId;
+    if (
+      pendingSelectionId != null &&
+      publishedPendingIdRef.current === pendingSelectionId &&
+      urlId != null &&
+      urlId !== pendingSelectionId &&
+      profiles.some((profile) => profile.id === urlId)
+    ) return;
+    const importedId = (location.state as { kitImport?: { profile_id?: number } } | null)?.kitImport?.profile_id;
+    if (importedId === urlId && selectedProfileId !== importedId) return;
     const urlSelectsKnownProfile =
       urlId != null &&
       (!profilesLoaded || profiles.some((profile) => profile.id === urlId));
@@ -46,12 +58,14 @@ export function useProfileUrlSync() {
     }
     if (
       selectedProfileId != null &&
-      searchParamsRef.current.get("profile") === String(selectedProfileId)
+      searchParamsRef.current.get("profile") === String(selectedProfileId) &&
+      profiles.some((profile) => profile.id === selectedProfileId)
     ) {
       clearPendingSelection(selectedProfileId);
     }
   }, [
     location.pathname,
+    location.state,
     selectedProfileId,
     pendingSelectionId,
     profilesLoaded,
