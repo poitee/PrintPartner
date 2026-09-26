@@ -112,7 +112,7 @@ describe("references-only sharing routes", () => {
       sources: [{ key: "source-1", name: source.name, location: { kind: "publisher", url: "https://github.com/acme/widget" },
         revision: { branch: "main", tag: null, commit }, file_rules: ["parts/bracket.stl"] }],
       layers: [{ source: "source-1", role: "base" }], selections: {}, include: ["parts/bracket.stl"], exclude: [], replacements: {},
-      parts: [{ source: "source-1", path: "parts/bracket.stl", quantity: 1, included: true, role: "primary", color: null }],
+      parts: [{ source: "source-1", path: "parts/bracket.stl", quantity: 2, included: true, role: "accent", color: "#112233" }],
     };
     const refused = await app.inject({ method: "POST", url: "/reference-shares/imports", payload: { manifest, mapping: {} } });
     expect(refused.statusCode).toBe(409);
@@ -124,6 +124,14 @@ describe("references-only sharing routes", () => {
     expect(created.statusCode).toBe(200);
     expect(repeated.json()).toMatchObject({ profile_id: created.json().profile_id, created: false });
     expect(repo.getProfileLayers(created.json().profile_id).map((layer) => layer.project_id)).toEqual([acquired.id]);
+    const draft = repo.listPlanDraftIdentities(created.json().profile_id).find((entry) => entry.state === "open");
+    expect(draft).toBeDefined();
+    const importedPart = draft ? repo.getPlanDraft(created.json().profile_id, draft.id)?.parts[0] : null;
+    expect(importedPart).toMatchObject({
+      quantityEffective: 2,
+      roleOverride: "accent",
+      filamentCustomHex: "#112233",
+    });
   });
 
   it("exports a collection for the selected Sources only", async () => {

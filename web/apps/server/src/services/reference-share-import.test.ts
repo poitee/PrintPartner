@@ -16,7 +16,7 @@ const COMMIT = "a".repeat(40);
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(); });
 
-function manifest(name = "Shared Build"): ReferenceShare {
+function manifest(name = "Shared Build"): Extract<ReferenceShare, { kind: "build" }> {
   return {
     format: "printpartner-reference-share",
     version: 1,
@@ -39,7 +39,7 @@ function manifest(name = "Shared Build"): ReferenceShare {
       path: "parts/bracket.stl",
       quantity: 2,
       included: true,
-      role: "primary",
+      role: "accent",
       color: "#112233",
     }],
   };
@@ -115,6 +115,15 @@ describe("reference share import", () => {
     expect(repo.getSetting("printer.plan_bindings")).toBe(beforePrinters);
     expect(loadKitManifest(repo, first.profile_id).selections).toEqual({ size: "65mm" });
     expect(loadKitManifest(repo, first.profile_id).include).toEqual(["parts/bracket.stl"]);
+    const draft = repo.listPlanDraftIdentities(first.profile_id).find((entry) => entry.state === "open");
+    expect(draft).toBeDefined();
+    const importedPart = draft ? repo.getPlanDraft(first.profile_id, draft.id)?.parts[0] : null;
+    expect(importedPart).toMatchObject({
+      relativePath: "parts/bracket.stl",
+      quantityEffective: 2,
+      roleOverride: "accent",
+      filamentCustomHex: "#112233",
+    });
   });
 
   it("rolls back a Build when publication of the import receipt fails", async () => {
@@ -130,6 +139,46 @@ describe("reference share import", () => {
     };
     expect(() => importReferenceShareBuild(repo, manifest(), { "source-1": source.id })).toThrow(/injected receipt failure/);
     expect(repo.listProfileHeaders()).toEqual([]);
+  });
+
+  it("refuses part choices that a Working Plan cannot represent", async () => {
+    const root = mkdtempSync(join(tmpdir(), "pp-share-invalid-"));
+    writeStl(root);
+    const repo = await portsFor(mkdtempSync(join(tmpdir(), "pp-share-invalid-db-")));
+    const source = repo.createSource({ name: "Acquired widget", source_kind: "github", local_path: root });
+    repo.updateSource(source.id, { last_commit_sha: COMMIT });
+    const share = manifest();
+    share.parts[0] = { ...share.parts[0]!, quantity: 10_001 };
+    expect(() => importReferenceShareBuild(repo, share, { "source-1": source.id })).toThrow(/quantity or role/);
+    expect(repo.listProfileHeaders()).toEqual([]);
+
+    share.parts[0] = { ...share.parts[0]!, quantity: 2 };
+    share.parts.push({ ...share.parts[0]!, color: "#aabbcc" });
+    expect(() => importReferenceShareBuild(repo, share, { "source-1": source.id })).toThrow(/duplicated/);
+    expect(repo.listProfileHeaders()).toEqual([]);
+  });
+
+  it("does not scan unselected parts from another attached Source", async () => {
+    const root = mkdtempSync(join(tmpdir(), "pp-share-scoped-"));
+    writeStl(root);
+    const repo = await portsFor(mkdtempSync(join(tmpdir(), "pp-share-scoped-db-")));
+    const selected = repo.createSource({ name: "Selected", source_kind: "github", local_path: root });
+    const unselected = repo.createSource({ name: "Unselected", source_kind: "github", local_path: root });
+    repo.updateSource(selected.id, { last_commit_sha: COMMIT });
+    const share = manifest();
+    share.sources.push({ ...share.sources[0]!, key: "source-2", name: "Unselected" });
+    share.layers.push({ source: "source-2", role: "addon" });
+    share.parts.push({ ...share.parts[0]!, source: "source-2", included: false });
+    const imported = importReferenceShareBuild(repo, share, {
+      "source-1": selected.id,
+      "source-2": unselected.id,
+    });
+    const draft = repo.listPlanDraftIdentities(imported.profile_id).find((entry) => entry.state === "open");
+    expect(draft).toBeDefined();
+    const parts = draft ? repo.getPlanDraft(imported.profile_id, draft.id)?.parts : null;
+    expect(parts?.map((part) => ({ path: part.relativePath, sourceLayer: part.sourceLayer }))).toEqual([
+      { path: "parts/bracket.stl", sourceLayer: "base:Selected" },
+    ]);
   });
 
   it("exports only the Library Sources the operator selected", async () => {
