@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import SourcesPage from "./SourcesPage";
+import { LibraryDraftProvider } from "../context/LibraryDraftContext";
 
 vi.mock("../api/endpoints/sources", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api/endpoints/sources")>();
@@ -51,6 +52,7 @@ describe("SourcesPage route state", () => {
     });
     render(
       <QueryClientProvider client={queryClient}>
+        <LibraryDraftProvider>
         <MemoryRouter initialEntries={[{ pathname: "/library", state: { stlSearch: true } }]}>
           <Routes>
             <Route
@@ -64,6 +66,7 @@ describe("SourcesPage route state", () => {
             />
           </Routes>
         </MemoryRouter>
+        </LibraryDraftProvider>
       </QueryClientProvider>,
     );
 

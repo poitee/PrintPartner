@@ -6,6 +6,7 @@ import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_STL_NAMING_PROFILE, type SourceSummary } from "@print-partner/contracts";
 import SourceDetailSheet from "./SourceDetailSheet";
+import { LibraryDraftProvider } from "../../context/LibraryDraftContext";
 
 const { api } = vi.hoisted(() => ({
   api: {
@@ -87,7 +88,7 @@ function createQueryWrapper() {
     defaultOptions: { queries: { retry: false } },
   });
   return function QueryWrapper({ children }: { children: ReactNode }) {
-    return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+    return <QueryClientProvider client={queryClient}><LibraryDraftProvider>{children}</LibraryDraftProvider></QueryClientProvider>;
   };
 }
 
