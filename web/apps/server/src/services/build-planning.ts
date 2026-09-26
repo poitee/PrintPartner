@@ -207,7 +207,7 @@ export function compareSourceTrees(input: {
     if (hashB === undefined) removed.set(path, hashA);
     else if (hashA !== hashB) {
       differences.push({
-        id: differenceId(["changed", input.sourceA.name, input.sourceB.name, path]),
+        id: differenceId(["changed", input.sourceA.name, input.sourceB.name, path, hashA, hashB]),
         group_id: differenceFamily(path),
         family: differenceFamily(path),
         kind: "changed",
@@ -231,7 +231,7 @@ export function compareSourceTrees(input: {
     added.delete(pathB);
     const family = differenceFamily(pathA);
     differences.push({
-      id: differenceId(["renamed", input.sourceA.name, input.sourceB.name, pathA, pathB]),
+      id: differenceId(["renamed", input.sourceA.name, input.sourceB.name, pathA, pathB, hashA]),
       group_id: family,
       family,
       kind: "renamed",
@@ -242,13 +242,13 @@ export function compareSourceTrees(input: {
       detail: `${pathA} was renamed to ${pathB}`,
     });
   }
-  for (const path of removed.keys()) {
+  for (const [path, hash] of removed) {
     const family = differenceFamily(path);
-    differences.push({ id: differenceId(["removed", input.sourceA.name, input.sourceB.name, path]), group_id: family, family, kind: "removed", source_a: input.sourceA.name, source_b: input.sourceB.name, path_a: path, detail: `${path} is absent from ${input.sourceB.name}` });
+    differences.push({ id: differenceId(["removed", input.sourceA.name, input.sourceB.name, path, hash]), group_id: family, family, kind: "removed", source_a: input.sourceA.name, source_b: input.sourceB.name, path_a: path, detail: `${path} is absent from ${input.sourceB.name}` });
   }
-  for (const path of added.keys()) {
+  for (const [path, hash] of added) {
     const family = differenceFamily(path);
-    differences.push({ id: differenceId(["added", input.sourceA.name, input.sourceB.name, path]), group_id: family, family, kind: "added", source_a: input.sourceA.name, source_b: input.sourceB.name, path_b: path, detail: `${path} exists only in ${input.sourceB.name}` });
+    differences.push({ id: differenceId(["added", input.sourceA.name, input.sourceB.name, path, hash]), group_id: family, family, kind: "added", source_a: input.sourceA.name, source_b: input.sourceB.name, path_b: path, detail: `${path} exists only in ${input.sourceB.name}` });
   }
   return differences.sort((left, right) => left.group_id.localeCompare(right.group_id) || left.id.localeCompare(right.id));
 }
@@ -326,6 +326,7 @@ export function hydrateBuildPlanningBrief(
           sourceB: { name: sourceB.name, root: sourceB.local_path },
         }).map((difference) => ({
           ...difference,
+          id: differenceId([difference.id, structural.pinned_revision ?? "", overlay.pinned_revision ?? ""]),
           group_id: `${structural.id}:${overlay.id}:${difference.group_id}`,
         }));
       });
@@ -349,7 +350,7 @@ export function hydrateBuildPlanningBrief(
         if (left.extract!.trim() === right.extract!.trim()) continue;
         const groupId = `claims:${createHash("sha256").update(subject).digest("hex").slice(0, 12)}`;
         differences.push({
-          id: differenceId(["contradictory", left.id, right.id, subject]),
+          id: differenceId(["contradictory", left.id, right.id, subject, left.extract!.trim(), right.extract!.trim()]),
           group_id: groupId,
           family: "documentation_claims",
           kind: "contradictory",
@@ -360,14 +361,40 @@ export function hydrateBuildPlanningBrief(
       }
     }
   }
-  const currentIds = new Set(differences.map((difference) => difference.group_id));
+  const groupSignatures = (entries: BuildDifference[]): Map<string, string> => {
+    const groups = new Map<string, string[]>();
+    for (const entry of entries) {
+      const ids = groups.get(entry.group_id) ?? [];
+      ids.push(entry.id);
+      groups.set(entry.group_id, ids);
+    }
+    return new Map([...groups].map(([groupId, ids]) => [groupId, JSON.stringify(ids.sort())]));
+  };
+  const previousGroups = groupSignatures(brief.differences);
+  const currentGroups = groupSignatures(differences);
+  const resolutions = Object.fromEntries(
+    Object.entries(brief.resolutions).filter(([groupId]) => currentGroups.has(groupId) && currentGroups.get(groupId) === previousGroups.get(groupId)),
+  );
+  const differenceIdentity = (entries: BuildDifference[]): string => JSON.stringify(
+    entries.map((difference) => [difference.group_id, difference.id]).sort(([leftGroup, leftId], [rightGroup, rightId]) =>
+      leftGroup!.localeCompare(rightGroup!) || leftId!.localeCompare(rightId!),
+    ),
+  );
+  const sameDifferences = differenceIdentity(brief.differences) === differenceIdentity(differences);
+  const currentSourceRevisions = Object.fromEntries(evidence.flatMap((item) =>
+    item.source_id != null && item.pinned_revision ? [[String(item.source_id), item.pinned_revision]] : [],
+  ));
+  const sameSources = brief.draft_source_revisions == null ||
+    JSON.stringify(Object.entries(brief.draft_source_revisions).sort()) ===
+    JSON.stringify(Object.entries(currentSourceRevisions).sort());
   return {
     ...brief,
     evidence,
     differences,
-    resolutions: Object.fromEntries(
-      Object.entries(brief.resolutions).filter(([groupId]) => currentIds.has(groupId)),
-    ),
+    resolutions,
+    draft_id: sameDifferences && sameSources && Object.keys(resolutions).length === Object.keys(brief.resolutions).length
+      ? brief.draft_id
+      : undefined,
   };
 }
 

@@ -862,6 +862,52 @@ option_groups:
       .toBe(original.id);
   });
 
+  it.each(["rebuild", "apply"])("rejects stale planning state during %s after local content changes", async (operation) => {
+    const base = repo.createSource({ name: "Base", source_kind: "local" });
+    const overlay = repo.createSource({ name: "Overlay", source_kind: "local" });
+    for (const source of [base, overlay]) {
+      const localPath = join(dataDir, source.name);
+      mkdirSync(join(localPath, "parts"), { recursive: true });
+      writeFileSync(join(localPath, "parts/part.stl"), `solid ${source.name}\nendsolid ${source.name}\n`);
+      repo.updateSource(source.id, { local_path: localPath, last_synced_at: new Date().toISOString(), last_commit_sha: "same-revision" });
+    }
+    const plan = repo.createProfile("Local changes", base.id);
+    const brief = newBuildPlanningBrief(plan.id, "Build", []);
+    brief.evidence = [
+      { id: "base", url: "https://example.test/base", normalized_url: "https://example.test/base", kind: "canonical_design", source_id: base.id, source_role: "structural_base" },
+      { id: "overlay", url: "https://example.test/overlay", normalized_url: "https://example.test/overlay", kind: "vendor_overlay", source_id: overlay.id, source_role: "overlay" },
+    ];
+    const hydrated = hydrateBuildPlanningBrief(repo, brief);
+    if (operation === "apply") {
+      hydrated.resolutions[hydrated.differences[0]!.group_id] = {
+        resolution: "choose_source_a", rationale: "Reviewed the base", resolved_at: new Date().toISOString(),
+      };
+    }
+    saveBuildPlanningBrief(repo, hydrated);
+    const rebuild = () => applyAssistantAction({
+      id: "repeated-rebuild", type: "propose_rebuild_plan", plan_id: plan.id,
+      label: "Rebuild", summary: "test", params: { idempotency_key: "same-key" },
+    }, { repo, jobs: { start: async () => "unused" } as never });
+    expect((await rebuild()).ok).toBe(true);
+    const draftId = readBuildPlanningBrief(repo, plan.id)!.draft_id!;
+    expect((await rebuild()).ok).toBe(true);
+    expect(readBuildPlanningBrief(repo, plan.id)!.draft_id).toBe(draftId);
+    writeFileSync(join(dataDir, overlay.name, "parts/new.stl"), "solid new\nendsolid new\n");
+    if (operation === "rebuild") {
+      expect((await rebuild()).ok).toBe(true);
+      const currentDraftId = readBuildPlanningBrief(repo, plan.id)!.draft_id!;
+      expect(currentDraftId).not.toBe(draftId);
+      expect(repo.getPlanDraft(plan.id, currentDraftId)?.parts.some((part) => part.relativePath === "parts/new.stl")).toBe(true);
+    } else {
+      const applied = await applyAssistantAction({
+        id: "apply-stale-choice", type: "propose_apply_plan_draft", plan_id: plan.id,
+        label: "Apply", summary: "test", params: { draft_id: draftId },
+      }, { repo, jobs: { start: async () => "unused" } as never });
+      expect(applied).toMatchObject({ ok: false, detail: "Selected Working Plan not found" });
+      expect(repo.getPlanDraft(plan.id, draftId)?.state).not.toBe("consumed");
+    }
+  });
+
   it("applies a reviewed source choice to the recomputed draft", async () => {
     const stl = (x: number) => [
       "solid bracket", "facet normal 0 0 1 outer loop",
@@ -916,6 +962,27 @@ option_groups:
       .toEqual(["base:Official"]);
     expect(draft.parts.some((part) => part.sourceLayer === "addon:Vendor")).toBe(false);
     expect(draft.parts.some((part) => part.relativePath === "unrelated/bonus.stl")).toBe(false);
+
+    const custom = await applyAssistantAction({
+      id: "custom-choice", type: "propose_resolve_build_differences", plan_id: plan.id,
+      label: "Custom", summary: "test",
+      params: { group_id: groupId, resolution: "custom", rationale: "Use a manually modified bracket", custom_resolution: "Use the base bracket with a 2 mm spacer" },
+    }, { repo, jobs: { start: async () => "unused" } as never });
+    expect(custom.ok).toBe(true);
+    const legacyBrief = readBuildPlanningBrief(repo, plan.id)!;
+    saveBuildPlanningBrief(repo, { ...legacyBrief, draft_id: draft.id });
+    const blockedApply = await applyAssistantAction({
+      id: "apply-legacy-custom", type: "propose_apply_plan_draft", plan_id: plan.id,
+      label: "Apply", summary: "test", params: { draft_id: draft.id },
+    }, { repo, jobs: { start: async () => "unused" } as never });
+    expect(blockedApply).toMatchObject({ ok: false, detail: expect.stringContaining("custom resolution") });
+    saveBuildPlanningBrief(repo, legacyBrief);
+    const blocked = await applyAssistantAction({
+      id: "rebuild-custom", type: "propose_rebuild_plan", plan_id: plan.id,
+      label: "Rebuild", summary: "test", params: {},
+    }, { repo, jobs: { start: async () => "unused" } as never });
+    expect(blocked).toMatchObject({ ok: false, detail: expect.stringContaining("custom resolution") });
+    expect(readBuildPlanningBrief(repo, plan.id)?.draft_id).toBeUndefined();
 
     const changedRoles = readBuildPlanningBrief(repo, plan.id)!;
     changedRoles.evidence = changedRoles.evidence.map((evidence) =>
