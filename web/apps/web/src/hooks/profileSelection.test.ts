@@ -30,6 +30,11 @@ describe("reconcileSelectedProfileId", () => {
     expect(reconcileSelectedProfileId([1], 42, [1])).toBeUndefined();
   });
 
+  it("keeps a pending first Build selection while an empty list has not refreshed", () => {
+    expect(reconcileSelectedProfileId([], 42, [], 42, 42)).toBeUndefined();
+    expect(reconcileSelectedProfileId([1], 42, [], 42, 42)).toBeUndefined();
+  });
+
   it("prefers an explicit URL Build during first hydration", () => {
     expect(reconcileSelectedProfileId([1, 2], null, [], 2, null)).toBe(2);
   });
