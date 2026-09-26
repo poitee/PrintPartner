@@ -52,6 +52,21 @@ describe("references-only sharing routes", () => {
     expect(strFromU8(entries["README.md"]!)).toContain("not model files");
   });
 
+  it("creates a Git ZIP in time zones west of UTC", async () => {
+    const { app, profile } = await fixture();
+    const payload = (await app.inject(`/plans/${profile.id}/reference-share`)).json().manifest;
+    const previousTimeZone = process.env.TZ;
+    process.env.TZ = "America/New_York";
+    try {
+      const response = await app.inject({ method: "POST", url: "/reference-shares/git", payload });
+      expect(response.statusCode).toBe(200);
+      expect(unzipSync(response.rawPayload)["printpartner.share.json"]).toBeDefined();
+    } finally {
+      if (previousTimeZone === undefined) delete process.env.TZ;
+      else process.env.TZ = previousTimeZone;
+    }
+  });
+
   it("validates without mutating Sources and rejects embedded files", async () => {
     const { app, repo, source, profile } = await fixture();
     const before = repo.getProjectRow(source.id);

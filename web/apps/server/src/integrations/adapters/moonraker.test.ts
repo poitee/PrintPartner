@@ -170,6 +170,23 @@ describe("moonrakerAdapter", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("does not replay an upload across a redirect", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, {
+      status: 307,
+      headers: { location: "http://127.0.0.2:7125/server/files/upload" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await moonrakerAdapter.uploadFile!(
+      { base_url: "http://127.0.0.1:7125" },
+      new TextEncoder().encode("; gcode"),
+      "frame_x.gcode",
+      { start: false },
+    );
+    expect(result.ok).toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("uploadFile accepts { path } via openAsBlob", async () => {
     const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
     const { join } = await import("node:path");

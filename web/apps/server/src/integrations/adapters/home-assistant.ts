@@ -5,7 +5,7 @@ import type {
   PrinterUploadResult,
 } from "@print-partner/contracts";
 import type { IntegrationAdapter, PrinterUploadSource } from "../store.js";
-import { assertSafeOutboundUrl } from "../../lib/outbound-url.js";
+import { safeConnectorFetch } from "../../lib/outbound-url.js";
 import {
   cancelResponseBody,
   isJsonObject as isRecord,
@@ -77,13 +77,12 @@ async function haFetch(
   const signal = init.signal ?? AbortSignal.timeout(30_000);
 
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-    await assertSafeOutboundUrl(current, { allowPrivate: true });
     const headers = new Headers(init.headers);
     headers.delete("Authorization");
     if (token && new URL(current).origin === originalOrigin) {
       headers.set("Authorization", `Bearer ${token}`);
     }
-    const response = await fetch(current, {
+    const response = await safeConnectorFetch(current, {
       ...init,
       headers,
       signal,
@@ -341,9 +340,7 @@ export const homeAssistantAdapter: IntegrationAdapter = {
 
       // HA webhooks do not require auth headers (webhook URL is the secret)
       const webhookUrl = `${baseUrl}/api/webhook/${encodeURIComponent(webhookId)}`;
-      await assertSafeOutboundUrl(webhookUrl, { allowPrivate: true });
-
-      const res = await fetch(webhookUrl, {
+      const res = await safeConnectorFetch(webhookUrl, {
         method: "POST",
         body: form,
         signal: AbortSignal.timeout(60_000),

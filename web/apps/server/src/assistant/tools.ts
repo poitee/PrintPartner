@@ -5101,6 +5101,9 @@ export async function applyAssistantAction(
               if (source) sourceIdsByName.set(source.name, source.id);
             }
             const decisions = resolvedSourcePathExclusions({ brief, sourceIdsByName });
+            if (decisions.blockers.length > 0) {
+              throw new Error(`Planning rebuild cannot apply source choices: ${decisions.blockers.join("; ")}`);
+            }
             const planningInputDigest = createHash("sha256")
               .update(JSON.stringify({
                 evidence: brief.evidence.map((item) => ({
@@ -5111,6 +5114,7 @@ export async function applyAssistantAction(
                 })),
                 contributions: brief.contributions,
                 resolutions: brief.resolutions,
+                difference_ids: brief.differences.map((difference) => difference.id).sort(),
                 exclusions: decisions.exclusions,
                 managed_source_ids: [...targetSourceIds].sort((left, right) => left - right),
               }))
@@ -5181,6 +5185,16 @@ export async function applyAssistantAction(
           return { ok: false, detail: "Selected Working Plan not found" };
         const draft = deps.repo.getPlanDraft(planId, draftId);
         if (!draft) return { ok: false, detail: "Selected Working Plan not found" };
+        const sourceIdsByName = new Map<string, number>();
+        for (const evidence of brief.evidence) {
+          if (evidence.source_id == null) continue;
+          const source = deps.repo.getSource(evidence.source_id);
+          if (source) sourceIdsByName.set(source.name, source.id);
+        }
+        const decisions = resolvedSourcePathExclusions({ brief, sourceIdsByName });
+        if (decisions.blockers.length > 0) {
+          return { ok: false, detail: `Working Plan cannot apply source choices: ${decisions.blockers.join("; ")}` };
+        }
         const workspaceService = new PlanDraftWorkspaceService(deps.repo);
         const prepared = workspaceService.prepareForApply({
           profileId: planId,
