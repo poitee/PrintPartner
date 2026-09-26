@@ -83,6 +83,30 @@ describe("useKitManifestAutosave", () => {
     vi.clearAllMocks();
   });
 
+  it("keeps its registered flush available when the Plan refresh callback changes", () => {
+    const register = vi.fn();
+    const unregister = vi.fn();
+    const onSaved = vi.fn();
+    const props = { onPersisted: vi.fn().mockResolvedValue(undefined) };
+    const hook = renderHook(({ onPersisted }) => useKitManifestAutosave({
+      profileId: 7,
+      pendingSelections: {},
+      savedSelections: {},
+      loaded: true,
+      userEdited: false,
+      disabled: false,
+      baseKit: kit({}),
+      onPersisted,
+      onSaved,
+      onRegisterFlush: register,
+      onUnregisterFlush: unregister,
+    }), { initialProps: props });
+    expect(register).toHaveBeenCalledTimes(1);
+    hook.rerender({ onPersisted: vi.fn().mockResolvedValue(undefined) });
+    expect(unregister).not.toHaveBeenCalled();
+    expect(register).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects a failed flush so navigation can keep the editor open", async () => {
     mocks.savePlanKitManifest.mockRejectedValue(new Error("offline"));
     const { result } = renderAutosave();

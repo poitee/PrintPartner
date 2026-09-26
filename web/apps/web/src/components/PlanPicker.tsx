@@ -2,7 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Check, ChevronsUpDown, Layers, Plus } from "lucide-react";
 import { toast } from "sonner";
-import { buildRoute, isPlansPath } from "../lib/routes";
+import { buildRoute, isPlanPath, isPlansPath, isSourcesPath } from "../lib/routes";
+import { useFlushBuildPageSaves } from "../hooks/useFlushBuildPageSaves";
+import { shouldSyncProfileToPath } from "../hooks/profileUrlSync";
 import {
   duplicatePlanName,
   partitionPlanPickerGroups,
@@ -56,6 +58,7 @@ export default function PlanPicker({
 }: Props) {
   const navigate = useNavigate();
   const location = useLocation();
+  const flushSaves = useFlushBuildPageSaves();
   const { profiles, selectedProfileId, setSelectedProfileId, loading } =
     useProfileSelection();
   const createMutation = useCreateProfileMutation();
@@ -164,14 +167,40 @@ export default function PlanPicker({
     setActionTargetId(null);
   };
 
-  const activatePlan = (id: number) => {
-    setSelectedProfileId(id);
-    touchMutation.mutate(id);
-    navigate(buildRoute(id), { replace: true });
+  const selectAfterSaving = async (id: number): Promise<boolean> => {
+    if (
+      id !== selectedProfileId &&
+      (isSourcesPath(location.pathname) || isPlanPath(location.pathname))
+    ) {
+      try {
+        await flushSaves();
+      } catch {
+        toast.error("Save failed. Retry before switching Builds.");
+        return false;
+      }
+    }
+    return true;
   };
 
-  const selectPlan = (id: number) => {
-    setSelectedProfileId(id);
+  const activatePlan = async (id: number): Promise<boolean> => {
+    if (!(await selectAfterSaving(id))) return false;
+    navigate(buildRoute(id), { replace: true });
+    touchMutation.mutate(id);
+    return true;
+  };
+
+  const selectPlan = async (id: number) => {
+    if (!(await selectAfterSaving(id))) return;
+    if (shouldSyncProfileToPath(location.pathname)) {
+      const params = new URLSearchParams(location.search);
+      params.set("profile", String(id));
+      navigate(
+        { pathname: location.pathname, search: `?${params}`, hash: location.hash },
+        { replace: true },
+      );
+    } else {
+      setSelectedProfileId(id);
+    }
     touchMutation.mutate(id);
     setOpen(false);
     setSearch("");
@@ -188,8 +217,9 @@ export default function PlanPicker({
       setSwitchPrompt({ targetId, targetName });
       return;
     }
-    activatePlan(targetId);
-    toast.success(`Created Build “${targetName}”`);
+    void activatePlan(targetId).then((activated) => {
+      if (activated) toast.success(`Created Build “${targetName}”`);
+    });
   };
 
   const onCreate = async () => {
@@ -251,7 +281,7 @@ export default function PlanPicker({
           setSelectedProfileId(copy.id);
           touchMutation.mutate(copy.id);
         } else {
-          activatePlan(copy.id);
+          void activatePlan(copy.id);
         }
       }
       toast.success(`Duplicated Build “${name}”`);
@@ -300,7 +330,7 @@ export default function PlanPicker({
     <CommandItem
       key={p.id}
       value={`${p.name} ${p.id}`}
-      onSelect={() => selectPlan(p.id)}
+      onSelect={() => void selectPlan(p.id)}
     >
       <Check
         className={cn(
@@ -617,7 +647,7 @@ export default function PlanPicker({
             </Button>
             <Button
               onClick={() => {
-                if (switchPrompt) activatePlan(switchPrompt.targetId);
+                if (switchPrompt) void activatePlan(switchPrompt.targetId);
                 setSwitchPrompt(null);
               }}
             >
