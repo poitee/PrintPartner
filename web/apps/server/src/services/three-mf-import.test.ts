@@ -2,7 +2,9 @@ import { encodeAcceptedPlate3mf, parseStlMesh, type StlMesh } from "@print-partn
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { unzipSync, zipSync } from "fflate";
 import { describe, expect, it } from "vitest";
+import { bufferChunks, type ByteChunk } from "../lib/byte-chunks.js";
 import { extractThreeMfMeshes } from "./three-mf-import.js";
 
 const triangle: StlMesh = {
@@ -15,6 +17,17 @@ const triangle: StlMesh = {
   },
 };
 
+function countingChunks(bytes: Uint8Array): { chunks: Iterable<ByteChunk>; consumed: () => number } {
+  let consumed = 0;
+  function* chunks(): Generator<ByteChunk> {
+    for (const chunk of bufferChunks(bytes)) {
+      consumed += chunk[0].length;
+      yield chunk;
+    }
+  }
+  return { chunks: chunks(), consumed: () => consumed };
+}
+
 describe("extractThreeMfMeshes", () => {
   it("preserves each mesh object as a stable, parseable STL", () => {
     const root = mkdtempSync(join(tmpdir(), "pp-3mf-"));
@@ -23,7 +36,7 @@ describe("extractThreeMfMeshes", () => {
       { token: "two", objectName: "Front Bracket", xUm: 20_000, yUm: 0, mesh: triangle },
     ]);
 
-    const result = extractThreeMfMeshes(Buffer.from(bytes), root, "My Project.3mf");
+    const result = extractThreeMfMeshes(bufferChunks(Buffer.from(bytes)), root, "My Project.3mf");
 
     expect(result.files.map((file) => file.relativePath)).toEqual([
       "_3mf/my-project/front-bracket.stl",
@@ -36,7 +49,7 @@ describe("extractThreeMfMeshes", () => {
 
   it("rejects malformed 3MF packages", () => {
     const root = mkdtempSync(join(tmpdir(), "pp-3mf-"));
-    expect(() => extractThreeMfMeshes(Buffer.from("not a zip"), root, "bad.3mf"))
+    expect(() => extractThreeMfMeshes(bufferChunks(Buffer.from("not a zip")), root, "bad.3mf"))
       .toThrow(/valid 3MF/i);
     rmSync(root, { recursive: true, force: true });
   });
@@ -47,7 +60,7 @@ describe("extractThreeMfMeshes", () => {
       { token: "one", objectName: "one", xUm: 0, yUm: 0, mesh: triangle },
       { token: "two", objectName: "two", xUm: 0, yUm: 0, mesh: triangle },
     ]);
-    expect(() => extractThreeMfMeshes(Buffer.from(bytes), root, "many.3mf", { maxObjects: 1 }))
+    expect(() => extractThreeMfMeshes(bufferChunks(Buffer.from(bytes)), root, "many.3mf", { maxObjects: 1 }))
       .toThrow(/too many mesh objects/i);
     rmSync(root, { recursive: true, force: true });
   });
@@ -57,7 +70,7 @@ describe("extractThreeMfMeshes", () => {
     const bytes = encodeAcceptedPlate3mf([
       { token: "one", objectName: "one", xUm: 0, yUm: 0, mesh: triangle },
     ]);
-    expect(() => extractThreeMfMeshes(Buffer.from(bytes), root, "part.3mf", { maxOutputBytes: 32 }))
+    expect(() => extractThreeMfMeshes(bufferChunks(Buffer.from(bytes)), root, "part.3mf", { maxOutputBytes: 32 }))
       .toThrow(/derived STL output exceeds/i);
     expect(() => readFileSync(join(root, "_3mf/part/one.stl"))).toThrow();
     rmSync(root, { recursive: true, force: true });
@@ -68,8 +81,41 @@ describe("extractThreeMfMeshes", () => {
     const bytes = encodeAcceptedPlate3mf([
       { token: "one", objectName: "one", xUm: 0, yUm: 0, mesh: triangle },
     ]);
-    expect(() => extractThreeMfMeshes(Buffer.from(bytes), root, "part.3mf", { maxModelBytes: -1 }))
+    expect(() => extractThreeMfMeshes(bufferChunks(Buffer.from(bytes)), root, "part.3mf", { maxModelBytes: -1 }))
       .toThrow(/positive integers/i);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("stops reading the package once the model document is complete", () => {
+    const root = mkdtempSync(join(tmpdir(), "pp-3mf-"));
+    const entries = unzipSync(encodeAcceptedPlate3mf([
+      { token: "one", objectName: "one", xUm: 0, yUm: 0, mesh: triangle },
+    ]));
+    const modelName = Object.keys(entries).find((name) => name.endsWith(".model"))!;
+    const trailingBytes = 1024 * 1024;
+    const pkg = zipSync({
+      [modelName]: entries[modelName]!,
+      "Metadata/trailing.bin": [new Uint8Array(trailingBytes), { level: 0 }],
+    });
+    const source = countingChunks(pkg);
+
+    const result = extractThreeMfMeshes(source.chunks, root, "part.3mf");
+
+    expect(result.objectCount).toBe(1);
+    expect(source.consumed()).toBeLessThan(pkg.length - trailingBytes / 2);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("refuses a model document by its declared size before reading its data", () => {
+    const root = mkdtempSync(join(tmpdir(), "pp-3mf-"));
+    const pkg = zipSync({
+      "3D/3dmodel.model": [new Uint8Array(1024 * 1024).fill(0x20), { level: 0 }],
+    });
+    const source = countingChunks(pkg);
+
+    expect(() => extractThreeMfMeshes(source.chunks, root, "part.3mf", { maxModelBytes: 1024 }))
+      .toThrow(/model document exceeds the size limit/);
+    expect(source.consumed()).toBeLessThanOrEqual(64 * 1024);
     rmSync(root, { recursive: true, force: true });
   });
 });

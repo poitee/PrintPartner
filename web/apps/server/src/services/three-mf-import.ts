@@ -1,6 +1,7 @@
 import { Unzip, UnzipInflate } from "fflate";
 import { closeSync, mkdirSync, openSync, unlinkSync, writeSync } from "node:fs";
 import { basename, join } from "node:path";
+import type { ByteChunk } from "../lib/byte-chunks.js";
 import { chargeTenantDiskBytes } from "../lib/tenant-disk-quota.js";
 
 const DEFAULT_THREE_MF_LIMITS = {
@@ -32,7 +33,8 @@ type ThreeMfImportResult = Readonly<{
   files: ThreeMfImportedFile[];
 }>;
 
-function readBoundedModelDocument(bytes: Buffer, maxBytes: number): Buffer {
+/** Stops reading the package once the model document is complete or refused. */
+function readBoundedModelDocument(packageChunks: Iterable<ByteChunk>, maxBytes: number): Buffer {
   let found = false;
   let complete = false;
   let failure: Error | null = null;
@@ -67,9 +69,9 @@ function readBoundedModelDocument(bytes: Buffer, maxBytes: number): Buffer {
   });
   unzip.register(UnzipInflate);
   try {
-    for (let offset = 0; offset < bytes.length && !failure; offset += 4_096) {
-      const end = Math.min(bytes.length, offset + 4_096);
-      unzip.push(bytes.subarray(offset, end), end === bytes.length);
+    for (const [chunk, final] of packageChunks) {
+      unzip.push(chunk, final);
+      if (failure || complete) break;
     }
   } catch {
     throw new Error("File is not a valid 3MF package");
@@ -164,7 +166,7 @@ function writeAsciiStl(path: string, name: string, vertices: Array<[number, numb
 }
 
 export function extractThreeMfMeshes(
-  bytes: Buffer,
+  packageChunks: Iterable<ByteChunk>,
   outputDir: string,
   sourceName: string,
   limits: ThreeMfImportLimits = {},
@@ -173,7 +175,7 @@ export function extractThreeMfMeshes(
   if (!Object.values(bounds).every((value) => Number.isSafeInteger(value) && value > 0)) {
     throw new Error("3MF import limits must be positive integers");
   }
-  const modelBytes = readBoundedModelDocument(bytes, bounds.maxModelBytes);
+  const modelBytes = readBoundedModelDocument(packageChunks, bounds.maxModelBytes);
   const xml = modelBytes.toString("utf8");
   const modelTag = /<model\b([^>]*)>/i.exec(xml)?.[1] ?? "";
   const unit = attributes(modelTag).get("unit")?.toLowerCase() ?? "millimeter";

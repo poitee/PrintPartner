@@ -100,6 +100,7 @@ import { resolvedFileUnderRoot } from "../lib/secure-path.js";
 import { publishLocalSourceWorkingTree } from "../services/local-source-revision.js";
 import { addCustomFilament, listCustomFilaments } from "../services/custom-filaments.js";
 import { extractThreeMfMeshes } from "../services/three-mf-import.js";
+import { bufferChunks } from "../lib/byte-chunks.js";
 import {
   getPrinterCheckoffLink,
   loadPrinterCheckoffLinks,
@@ -201,7 +202,7 @@ function inspectThreeMfCheckoff(
 ): { readonly files: ReturnType<typeof extractThreeMfMeshes>["files"] } | { readonly error: string } {
   const tempRoot = mkdtempSync(join(tmpdir(), "pp-mcp-3mf-"));
   try {
-    return { files: extractThreeMfMeshes(bytes, tempRoot, filename).files };
+    return { files: extractThreeMfMeshes(bufferChunks(bytes), tempRoot, filename).files };
   } catch (error) {
     return { error: error instanceof Error ? error.message : "Unable to parse 3MF" };
   } finally {

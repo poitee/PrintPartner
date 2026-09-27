@@ -4,7 +4,6 @@ import {
   createWriteStream,
   mkdirSync,
   mkdtempSync,
-  readFileSync,
   readdirSync,
   renameSync,
   rmSync,
@@ -213,7 +212,7 @@ function expandThreeMfFiles(extractDir: string, maxTotalBytes = MAX_ZIP_UNCOMPRE
   let remainingBytes = maxTotalBytes - storedBytes(extractDir);
   if (remainingBytes < 0) throw new Error("Uploaded source exceeds the total size limit");
   for (const path of paths) {
-    const result = extractThreeMfMeshes(readFileSync(path), extractDir, path, { maxOutputBytes: remainingBytes });
+    const result = extractThreeMfMeshes(fileChunks(path), extractDir, path, { maxOutputBytes: remainingBytes });
     derivedStlCount += result.files.length;
     remainingBytes -= result.files.reduce((total, file) => total + file.byteSize, 0);
   }
