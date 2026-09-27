@@ -55,28 +55,25 @@ describe("known accepted Part browser media caller inventory", () => {
       sourceStlPreviewUrl: productionCallers("sourceStlPreviewUrl", "api/endpoints/media.ts"),
     }).toEqual({
       partMeshUrl: [
-        "api/engine.ts",
         "components/Preview3D.tsx",
         "components/export/accepted-plates/AcceptedPlate3DPreview.tsx",
         "lib/stlThumbnail.ts",
       ],
-      partThumbnailUrl: ["api/engine.ts", "components/parts/PartThumb.tsx"],
-      partPreviewUrl: ["api/engine.ts", "components/Preview3D.tsx"],
-      uploadPartThumbnail: ["api/engine.ts", "lib/stlThumbnail.ts"],
+      partThumbnailUrl: ["components/parts/PartThumb.tsx"],
+      partPreviewUrl: ["components/Preview3D.tsx"],
+      uploadPartThumbnail: ["lib/stlThumbnail.ts"],
       acceptedPartMediaMetadata: [
-        "api/engine.ts",
         "components/parts/PartThumb.tsx",
         "lib/stlThumbnail.ts",
       ],
       acceptedPartMediaRevalidationHeaders: [
-        "api/engine.ts",
         "components/parts/PartThumb.tsx",
         "lib/stlThumbnail.ts",
       ],
       getCachedMeshBuffer: ["lib/stlThumbnail.ts"],
       cacheMeshBuffer: ["lib/stlThumbnail.ts"],
-      sourceStlMeshUrl: ["api/engine.ts", "components/Preview3D.tsx"],
-      sourceStlPreviewUrl: ["api/engine.ts", "components/Preview3D.tsx"],
+      sourceStlMeshUrl: ["components/Preview3D.tsx"],
+      sourceStlPreviewUrl: ["components/Preview3D.tsx"],
     });
   });
 });

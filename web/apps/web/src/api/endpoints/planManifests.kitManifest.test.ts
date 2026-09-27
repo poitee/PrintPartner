@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { savePlanKitManifest, type KitManifest } from "./engine";
+import { savePlanKitManifest, type KitManifest } from "./planManifests";
 
 const kit: KitManifest = {
   name: "test-kit",

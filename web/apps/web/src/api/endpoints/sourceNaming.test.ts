@@ -1,12 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { SourceNamingPutInput } from "@print-partner/contracts";
 import {
   DEFAULT_STL_NAMING_PROFILE,
+  type SourceNamingPutInput,
+} from "@print-partner/contracts";
+import {
   fetchSourceNaming,
   isSourceNamingNotFoundError,
   saveSourceNaming,
   SourceNamingRequestError,
-} from "./engine";
+} from "./sourceNaming";
 
 const responseBody = {
   use_defaults: true,

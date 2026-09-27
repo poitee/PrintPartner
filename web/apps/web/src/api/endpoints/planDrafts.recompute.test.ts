@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { recomputePlanDraft, type PlanDraftWorkspace } from "./engine";
+import type { PlanDraftWorkspace } from "@print-partner/contracts";
+import { recomputePlanDraft } from "./planDrafts";
 
 const workspace: PlanDraftWorkspace = {
   profile_id: 7,

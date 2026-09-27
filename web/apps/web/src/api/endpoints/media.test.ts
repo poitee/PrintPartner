@@ -4,7 +4,7 @@ import {
   acceptedPartMediaMetadata,
   acceptedPartMediaRevalidationHeaders,
   uploadPartThumbnail,
-} from "./engine";
+} from "./media";
 
 const basis = "a".repeat(64);
 

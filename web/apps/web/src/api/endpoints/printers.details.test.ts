@@ -5,7 +5,7 @@ import {
   type AddPrinterInput,
   type PrinterDetailsInput,
   type PrinterMachine,
-} from "./engine";
+} from "./printers";
 
 const created: PrinterMachine = {
   id: "printer-shop-voron",

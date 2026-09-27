@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchPlanPhaseManifest } from "./engine";
+import { fetchPlanPhaseManifest } from "./planVariants";
 
 describe("fetchPlanPhaseManifest", () => {
   afterEach(() => {
