@@ -1,6 +1,6 @@
 import { HOSTED_TENANT_DISK_QUOTA_BYTES } from "@print-partner/contracts";
 import { join } from "node:path";
-import type { DbStore, JobRunner, StoragePort } from "../../ports/index.js";
+import type { DbStore, JobRunner } from "../../ports/index.js";
 import {
   closeBundle,
   connectBundle,
@@ -11,7 +11,6 @@ import {
 } from "../../db/database.js";
 import { createJobRunner } from "../../services/job-runner.js";
 import type { AppRepository } from "../../db/repository.js";
-import { SaasS3StoragePort, TenantLocalStoragePort } from "./storage-s3.js";
 
 export class SaasDbStore implements DbStore {
   readonly bundle: DatabaseBundle;
@@ -48,7 +47,6 @@ export class SaasDbStore implements DbStore {
 
 type SaasPorts = {
   db: SaasDbStore;
-  storage: StoragePort;
   jobs: JobRunner;
   getRepository: (tenantId: string) => AppRepository;
   reposDir: string;
@@ -58,7 +56,6 @@ type SaasPorts = {
 
 export function createSaasPorts(dataDir: string): SaasPorts {
   const databaseUrl = process.env.DATABASE_URL ?? null;
-  const s3Bucket = process.env.S3_BUCKET ?? null;
   const dbStore = new SaasDbStore(dataDir, databaseUrl);
   const defaultTenant = "default";
 
@@ -68,18 +65,8 @@ export function createSaasPorts(dataDir: string): SaasPorts {
 
   const jobs = createJobRunner(getRepo, dataDir, { tenantDiskQuotaBytes: HOSTED_TENANT_DISK_QUOTA_BYTES });
 
-  const storage = s3Bucket
-    ? new SaasS3StoragePort(
-        s3Bucket,
-        defaultTenant,
-        dataDir,
-        process.env.S3_REGION ?? process.env.AWS_REGION,
-      )
-    : new TenantLocalStoragePort(dataDir, defaultTenant);
-
   return {
     db: dbStore,
-    storage,
     jobs,
     getRepository,
     reposDir: join(dataDir, "repos"),

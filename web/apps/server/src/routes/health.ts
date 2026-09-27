@@ -68,7 +68,6 @@ export async function registerHealthRoutes(
       },
       deployment: deploymentCapability({
         databaseDriver: saasDb.bundle?.driver === "postgres" ? "postgres" : "sqlite",
-        s3Bucket: config.s3Bucket,
         multiUser: config.multiUser,
       }),
       google_drive: {

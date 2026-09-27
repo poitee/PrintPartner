@@ -7,14 +7,6 @@ export interface DbStore {
   ping(): Promise<boolean>;
 }
 
-/** Blob / file storage (local FS in self-host, object store in SaaS). */
-export interface StoragePort {
-  resolvePath(relativePath: string): string;
-  exists(relativePath: string): Promise<boolean>;
-  readText(relativePath: string): Promise<string>;
-  writeText(relativePath: string, contents: string): Promise<void>;
-}
-
 export type JobKind = string;
 
 export interface JobRunner {
@@ -27,6 +19,5 @@ export interface JobRunner {
 
 export interface AppPorts {
   db: DbStore;
-  storage: StoragePort;
   jobs: JobRunner;
 }

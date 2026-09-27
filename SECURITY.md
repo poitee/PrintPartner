@@ -28,7 +28,6 @@ Sensitive values include:
 - session and Basic authentication secrets
 - OAuth client secrets
 - SMTP credentials
-- S3 credentials
 - GitHub personal access tokens
 - printer and Spoolman credentials
 

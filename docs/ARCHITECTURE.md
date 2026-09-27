@@ -105,7 +105,7 @@ Changing source inputs invalidates dependent draft or accepted state through exp
 
 Self-host mode uses SQLite and local files under `PRINT_PARTNER_DATA_DIR`. The Docker image maps this directory to `/data`.
 
-Postgres and S3 adapters exist for multi-user deployment. The Postgres path uses a synchronous compatibility bridge and does not provide the same transaction model as SQLite. Production startup requires `POSTGRES_EXPERIMENTAL=1`. SQLite remains the supported database.
+A Postgres adapter exists for multi-user deployment. It uses a synchronous compatibility bridge and does not provide the same transaction model as SQLite. Production startup requires `POSTGRES_EXPERIMENTAL=1`. SQLite remains the supported database.
 
 Both database dialects maintain a `schema_version`. Migrations run during startup before the server accepts traffic.
 

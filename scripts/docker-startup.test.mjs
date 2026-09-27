@@ -31,6 +31,5 @@ test("docker-compose.hosted.yml is the invite host, not the anonymous SaaS stack
   assert.match(text, /MULTI_USER:\s*"1"/);
   assert.doesNotMatch(text, /^\s+SAAS_ALLOW_ANONYMOUS:/m);
   assert.doesNotMatch(text, /^\s+DATABASE_URL:/m);
-  assert.doesNotMatch(text, /^\s+S3_BUCKET:/m);
   assert.doesNotMatch(text, /^\s+POSTGRES_EXPERIMENTAL:/m);
 });

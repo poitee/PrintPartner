@@ -37,6 +37,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Large local folders** - Browser folder imports now accept up to 10,000 files,
   matching the existing archive-entry limit instead of failing after 100 files.
 
+### Removed
+
+- **S3 storage** - `S3_BUCKET`, `S3_REGION`, `S3_ENDPOINT`, and
+  `S3_FORCE_PATH_STYLE` are no longer read. Blobs were always written to local
+  disk, so `GET /health` no longer reports `deployment.artifact_store`. The
+  development `docker-compose.saas.yml` stack drops its RustFS service.
+
 ## [3.3.0] - 2026-09-01
 
 ### Added

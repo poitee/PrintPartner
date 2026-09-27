@@ -201,7 +201,7 @@ result. Callers must paginate larger reads. These ceilings keep the
 child-process protocol bounded and produce an explicit error instead of an
 implicit stdout-buffer failure.
 
-File blobs (repos, exports, thumbs) stay on disk under `SAAS_DATA_DIR` unless `S3_BUCKET` is configured.
+File blobs (repos, exports, thumbs) stay on disk under `SAAS_DATA_DIR`.
 
 ### Quick local SaaS stack
 
@@ -209,16 +209,13 @@ File blobs (repos, exports, thumbs) stay on disk under `SAAS_DATA_DIR` unless `S
 docker compose -f docker-compose.saas.yml up --build
 ```
 
-Includes Postgres 16, [RustFS](https://rustfs.com) (S3-compatible), and the app with `SAAS_ALLOW_ANONYMOUS=1` and `MULTI_USER=0` for easy dev. The compose file creates the `print-partner` bucket on first start.
+Includes Postgres 16 and the app with `SAAS_ALLOW_ANONYMOUS=1` and `MULTI_USER=0` for easy dev.
 
 The Compose credentials are explicitly development-only defaults. Before using
 the stack on any shared network, set strong values for
-`PP_DEV_POSTGRES_PASSWORD`, `PP_DEV_S3_ACCESS_KEY`, and
-`PP_DEV_S3_SECRET_KEY`, and `PP_DEV_SESSION_SECRET`. Ports bind to
+`PP_DEV_POSTGRES_PASSWORD` and `PP_DEV_SESSION_SECRET`. Ports bind to
 `127.0.0.1` by default. Set `PP_BIND_ADDRESS` explicitly only when a firewall
 and authentication protect the shared interface.
-
-**Migrating from MinIO:** remove the old `pp-minio` volume (`docker volume rm <project>_pp-minio`). RustFS uses a different on-disk format. Blob data in the old volume is not portable, so re-upload or re-sync sources after switching.
 
 ### SaaS environment variables
 
@@ -228,15 +225,10 @@ and authentication protect the shared interface.
 | `SAAS_DATA_DIR` | Recommended | Repos, exports, thumbs scratch dir (default `./data`) |
 | `DATABASE_URL` | Experimental | Postgres connection string. Runs migrations on startup and requires explicit experimental opt-in in production. |
 | `POSTGRES_EXPERIMENTAL` | With production Postgres | Set `1` to acknowledge that the sync bridge is experimental and lacks native repository transactions |
-| `S3_BUCKET` | Optional | Tenant-prefixed S3 blobs |
-| `S3_REGION` / `AWS_REGION` | With S3 | AWS region |
-| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | With S3 | S3 credentials (the RustFS development stack reads `PP_DEV_S3_ACCESS_KEY` / `PP_DEV_S3_SECRET_KEY`) |
-| `S3_ENDPOINT` | S3-compatible dev | Custom S3 endpoint URL (e.g. `http://rustfs:9000`) |
-| `S3_FORCE_PATH_STYLE` | S3-compatible dev | Set `1` for path-style URLs (RustFS, MinIO, Garage, etc.) |
 | `MULTI_USER` | Invite host: `1` | `1` enables multiple accounts and sharing. Self-host: the first registered user claims existing data. Hosted planning (`DEPLOY_MODE=saas`) starts empty and does not claim the `default` tenant. |
 | `SINGLE_USER_AUTH` | Optional | `1` enables one self-host administrator account without multi-user sharing |
 | `SESSION_SECRET` | Multi-user / OAuth / prod | Not needed for `SINGLE_USER_AUTH=1`. Supply it for `MULTI_USER=1` or OAuth in production. |
-| `PP_BIND_ADDRESS` | Compose only | Host bind for app/Postgres/RustFS ports. Defaults to loopback (`127.0.0.1`). |
+| `PP_BIND_ADDRESS` | Compose only | Host bind for app and Postgres ports. Defaults to loopback (`127.0.0.1`). |
 | `PP_DEV_MULTI_USER` / `PP_DEV_SESSION_SECRET` | Development Compose | Override the single-user mode and development-only session secret |
 | `ALLOWED_ORIGINS` | Prod | Comma-separated CORS origins (alias: `CORS_ORIGIN`) |
 | `TRUST_PROXY` | Invite host: `1` | Trust `X-Forwarded-*` from the HTTPS reverse proxy. Required when TLS terminates in front of the container. |
@@ -252,7 +244,7 @@ and authentication protect the shared interface.
 
 The public invite host is Library, Builds, Sources, Plan, Production export, and Checkoff. It does not talk to printers on a LAN. `DEPLOY_MODE=saas` denies LAN adapters even if a tenant uses curl.
 
-`docker-compose.saas.yml` stays a development stack. It turns on `SAAS_ALLOW_ANONYMOUS=1`, Postgres, and S3. Production hosted planning refuses to start with anonymous access. Do not use that file for the invite host.
+`docker-compose.saas.yml` stays a development stack. It turns on `SAAS_ALLOW_ANONYMOUS=1` and Postgres. Production hosted planning refuses to start with anonymous access. Do not use that file for the invite host.
 
 #### Checklist
 
@@ -260,7 +252,7 @@ The public invite host is Library, Builds, Sources, Plan, Production export, and
 2. Set `DEPLOY_MODE=saas` (already pinned in `docker-compose.hosted.yml`).
 3. Set `MULTI_USER=1` (already pinned).
 4. Leave `SAAS_ALLOW_ANONYMOUS` unset.
-5. Leave `DATABASE_URL`, `POSTGRES_EXPERIMENTAL`, and `S3_BUCKET` unset. SQLite on the volume is the database.
+5. Leave `DATABASE_URL` and `POSTGRES_EXPERIMENTAL` unset. SQLite on the volume is the database.
 6. Generate a strong `SESSION_SECRET`.
 7. Pin `ALLOWED_ORIGINS` to the public HTTPS origin. Do not use `true`.
 8. Put HTTPS in front. Terminate TLS at Caddy, nginx, or a load balancer. Proxy to `127.0.0.1:8080`.
@@ -288,7 +280,7 @@ docker run --rm \
   tar czf /backup/print-partner-hosted-$(date -u +%Y%m%d).tar.gz -C /data .
 ```
 
-The operator still owns DNS, the certificate, the invite list, closing registration, and storing that archive off the live volume. This cut does not add a local relay, Prusa Connect, Moonraker cloud, a native app, Postgres, or S3.
+The operator still owns DNS, the certificate, the invite list, closing registration, and storing that archive off the live volume. This cut does not add a local relay, Prusa Connect, Moonraker cloud, a native app, or Postgres.
 
 The following claim-path note is for self-host `MULTI_USER` upgrades. Hosted planning starts empty and does not claim the `default` tenant.
 

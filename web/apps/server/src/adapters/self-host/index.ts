@@ -1,6 +1,5 @@
-import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { DbStore, JobRunner, StoragePort } from "../../ports/index.js";
+import type { DbStore, JobRunner } from "../../ports/index.js";
 import { getDb, SqliteDatabase } from "../../db/client.js";
 import { AppRepository } from "../../db/repository.js";
 import { createJobRunner } from "../../services/job-runner.js";
@@ -37,36 +36,8 @@ export class SelfHostDbStore implements DbStore {
   }
 }
 
-class SelfHostStoragePort implements StoragePort {
-  constructor(private readonly rootDir: string) {}
-
-  resolvePath(relativePath: string): string {
-    return join(this.rootDir, relativePath.replace(/^\/+/, ""));
-  }
-
-  async exists(relativePath: string): Promise<boolean> {
-    try {
-      await access(this.resolvePath(relativePath));
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  async readText(relativePath: string): Promise<string> {
-    return readFile(this.resolvePath(relativePath), "utf8");
-  }
-
-  async writeText(relativePath: string, contents: string): Promise<void> {
-    const full = this.resolvePath(relativePath);
-    await mkdir(join(full, ".."), { recursive: true });
-    await writeFile(full, contents, "utf8");
-  }
-}
-
 type SelfHostPorts = {
   db: SelfHostDbStore;
-  storage: SelfHostStoragePort;
   jobs: JobRunner;
   repository: AppRepository;
   reposDir: string;
@@ -87,7 +58,6 @@ export function createSelfHostPorts(
 
   return {
     db: dbStore,
-    storage: new SelfHostStoragePort(dataDir),
     jobs,
     get repository() {
       return getRepo();
