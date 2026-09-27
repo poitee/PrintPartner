@@ -1,7 +1,7 @@
 import { githubRefName, parseGithubUrl } from "./github-sync.js";
 import { createGithubClient } from "./github-client.js";
 import { readReadmeText } from "../lib/repo-readme.js";
-import { isJsonObject } from "../lib/bounded-response.js";
+import { isRecord } from "../lib/guards.js";
 
 type CacheEntry = { markdown: string; fetchedAt: number; source: "live" | "disk" };
 
@@ -72,7 +72,7 @@ export async function fetchGithubReadme(options: {
       const data: unknown = res.data;
       const markdown = typeof data === "string"
         ? data
-        : isJsonObject(data) && typeof data.content === "string"
+        : isRecord(data) && typeof data.content === "string"
           ? Buffer.from(data.content, "base64").toString("utf8")
           : "";
       cache.set(key, { markdown, fetchedAt: Date.now(), source: "live" });

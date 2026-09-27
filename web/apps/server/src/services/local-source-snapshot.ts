@@ -23,6 +23,7 @@ import {
 } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { chargeTenantDiskBytes } from "../lib/tenant-disk-quota.js";
+import { isRecord } from "../lib/guards.js";
 
 export const SOURCE_SNAPSHOT_MANIFEST_FILE = ".printpartner-source-snapshot.json";
 export const MAX_SOURCE_SNAPSHOT_BYTES = 1024 * 1024 * 1024;
@@ -137,10 +138,6 @@ export function sourceRelativePath(value: string): SourceRelativePath {
     throw new Error(`Source content cannot use reserved path: ${value}`);
   }
   return value as SourceRelativePath;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function hasErrorCode(value: unknown, codes: ReadonlySet<string>): boolean {

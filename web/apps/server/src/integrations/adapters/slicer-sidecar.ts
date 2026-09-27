@@ -33,10 +33,10 @@ import type { IntegrationAdapter } from "../store.js";
 import { safeConnectorFetch } from "../../lib/outbound-url.js";
 import {
   cancelResponseBody,
-  isJsonObject,
   readBoundedResponseBody,
   ResponseBodyTooLargeError,
 } from "../../lib/bounded-response.js";
+import { isRecord } from "../../lib/guards.js";
 
 type SlicerKind = "orca" | "prusa" | "bambu";
 
@@ -215,7 +215,7 @@ function parseV1SliceResponse(value: unknown, status: number): {
   thumbnailFilename?: string;
   warnings: string[];
 } {
-  if (!isJsonObject(value)) throw invalidJsonResponse("v1", status);
+  if (!isRecord(value)) throw invalidJsonResponse("v1", status);
   if (value.ok !== undefined && typeof value.ok !== "boolean") {
     throw invalidJsonResponse("v1", status, "ok");
   }
@@ -228,7 +228,7 @@ function parseV1SliceResponse(value: unknown, status: number): {
 
   let warnings: string[] = [];
   if (value.meta !== undefined) {
-    if (!isJsonObject(value.meta)) throw invalidJsonResponse("v1", status, "meta");
+    if (!isRecord(value.meta)) throw invalidJsonResponse("v1", status, "meta");
     if (value.meta.warnings !== undefined) {
       if (
         !Array.isArray(value.meta.warnings) ||
@@ -254,7 +254,7 @@ function parseLegacySliceResponse(value: unknown, status: number): {
   thumbnail?: string;
   filename?: string;
 } {
-  if (!isJsonObject(value)) throw invalidJsonResponse("legacy", status);
+  if (!isRecord(value)) throw invalidJsonResponse("legacy", status);
   return {
     gcode: optionalStringField(value, "gcode", "legacy", status),
     thumbnail: optionalStringField(value, "thumbnail", "legacy", status),
@@ -280,12 +280,12 @@ async function sidecarErrorFromResponse(res: Response): Promise<SlicerSidecarErr
   }
   try {
     const body: unknown = JSON.parse(text);
-    const error = isJsonObject(body) && isJsonObject(body.error) ? body.error : null;
+    const error = isRecord(body) && isRecord(body.error) ? body.error : null;
     if (error && typeof error.message === "string" && error.message) {
       return new SlicerSidecarError(error.message, {
         code: typeof error.code === "string" ? error.code : "sidecar_error",
         status: res.status,
-        details: isJsonObject(error.details) ? error.details : {},
+        details: isRecord(error.details) ? error.details : {},
       });
     }
   } catch {

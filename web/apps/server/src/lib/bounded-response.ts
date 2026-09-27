@@ -5,10 +5,6 @@ export class ResponseBodyTooLargeError extends Error {
   }
 }
 
-export function isJsonObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function declaredContentLength(response: Response): number | null {
   const raw = response.headers.get("content-length");
   if (raw === null || raw.trim() === "") return null;

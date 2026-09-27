@@ -13,10 +13,7 @@ import {
   type ManifestSelections,
 } from "./manifest-selections.js";
 import { findSourceManifestPath } from "./source-workspace.js";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value != null && typeof value === "object" && !Array.isArray(value);
-}
+import { isRecord } from "../lib/guards.js";
 
 export function matchKeyMatches(pattern: string, matchKey: string): boolean {
   const pat = pattern.replace(/\\/g, "/").toLowerCase().trim();

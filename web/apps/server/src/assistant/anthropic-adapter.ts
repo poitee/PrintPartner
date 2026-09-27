@@ -1,6 +1,5 @@
 import type { AssistantChatMessage } from "@print-partner/contracts";
 import {
-  isJsonObject as isRecord,
   readBoundedJsonResponse,
   readBoundedResponseChunks,
 } from "../lib/bounded-response.js";
@@ -15,6 +14,7 @@ import type {
   AssistantToolMessage,
   AssistantToolsParams,
 } from "./types.js";
+import { isRecord } from "../lib/guards.js";
 
 const MAX_COMPLETION_RESPONSE_BYTES = 32 * 1024 * 1024;
 

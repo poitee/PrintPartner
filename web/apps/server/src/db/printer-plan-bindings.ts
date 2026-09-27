@@ -1,3 +1,5 @@
+import { isRecord } from "../lib/guards.js";
+
 export type PrinterPlanBinding = Readonly<{
   integration_id: string;
   profile_id: number | null;
@@ -6,12 +8,8 @@ export type PrinterPlanBinding = Readonly<{
 
 const CORRUPT_BINDINGS_MESSAGE = "Printer Plan bindings are corrupt";
 
-function isJsonRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function parsePrinterPlanBinding(value: unknown): PrinterPlanBinding {
-  if (!isJsonRecord(value)) throw new Error(CORRUPT_BINDINGS_MESSAGE);
+  if (!isRecord(value)) throw new Error(CORRUPT_BINDINGS_MESSAGE);
   const integrationId = value.integration_id;
   const profileId = value.profile_id;
   const updatedAt = value.updated_at;

@@ -11,7 +11,6 @@ import type { IntegrationAdapter, PrinterUploadSource } from "../store.js";
 import { safeConnectorFetch } from "../../lib/outbound-url.js";
 import {
   cancelResponseBody,
-  isJsonObject as isRecord,
   readBoundedJsonResponse,
   readBoundedResponseText,
 } from "../../lib/bounded-response.js";
@@ -20,6 +19,7 @@ import {
   joinStoragePath,
   safeStoragePath,
 } from "./storage-path.js";
+import { isRecord } from "../../lib/guards.js";
 
 const MAX_METADATA_RESPONSE_BYTES = 2 * 1024 * 1024;
 const MAX_DIRECTORY_RESPONSE_BYTES = 8 * 1024 * 1024;

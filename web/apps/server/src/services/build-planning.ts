@@ -3,6 +3,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
 import type { AppRepository } from "../db/repository.js";
 import type { SourceArtifact } from "./source-artifacts.js";
+import { isRecord } from "../lib/guards.js";
 
 const BUILD_PLANNING_VERSION = 1;
 const SETTING_PREFIX = "build_planning.v1.";
@@ -400,10 +401,6 @@ export function hydrateBuildPlanningBrief(
 
 function settingKey(buildId: number): string {
   return `${SETTING_PREFIX}${buildId}`;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function isStringArray(value: unknown): value is string[] {

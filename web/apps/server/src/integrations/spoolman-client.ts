@@ -3,10 +3,10 @@ import type { CatalogColor } from "../services/filament-catalog.js";
 import { safeConnectorFetch } from "../lib/outbound-url.js";
 import {
   cancelResponseBody,
-  isJsonObject as isRecord,
   readBoundedJsonResponse,
   readBoundedResponseText,
 } from "../lib/bounded-response.js";
+import { isRecord } from "../lib/guards.js";
 
 const REQUEST_TIMEOUT_MS = 8000;
 const MAX_METADATA_RESPONSE_BYTES = 256 * 1024;

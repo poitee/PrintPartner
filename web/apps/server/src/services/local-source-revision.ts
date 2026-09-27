@@ -18,6 +18,7 @@ import {
 } from "./local-source-snapshot.js";
 import { loadManifestYaml } from "./manifest-apply.js";
 import { SOURCE_MANIFEST_FILENAME } from "./source-workspace.js";
+import { isRecord } from "../lib/guards.js";
 
 const DEFAULT_LOCAL_SNAPSHOT_STL_LIMIT = 500;
 const DEFAULT_LOCAL_SNAPSHOT_DOCS_BYTES = 1024 * 1024 * 1024;
@@ -47,10 +48,6 @@ export class SourceManifestContentUnavailableError extends Error {
     super("Source has no local content available under the active filesystem policy");
     this.name = "SourceManifestContentUnavailableError";
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function classifySnapshotPath(path: string): SnapshotFileKind | null {

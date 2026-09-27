@@ -1,5 +1,6 @@
 import type { AcceptedProfileProgress } from "../db/repository.js";
 import type { AcceptedPlanBasis } from "../db/accepted-plan-progress.js";
+import { isRecord } from "../lib/guards.js";
 
 const SHA256_DIGEST_PATTERN = /^[0-9a-f]{64}$/;
 
@@ -14,10 +15,6 @@ export type PrintStatsAcceptedProgress =
       readonly kind: "unavailable";
       readonly reason: "compatibility_dirty" | "uninitialized" | "integrity" | "concurrent_update";
     };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 export function printStatsAcceptedProgress(progress: AcceptedProfileProgress): PrintStatsAcceptedProgress {
   switch (progress.kind) {

@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as yaml from "js-yaml";
 import { matchKeyMatches, mergeOptionGroups, type ManifestOptionGroup } from "./manifest-apply.js";
+import { isRecord } from "../lib/guards.js";
 
 type PathHintRule = {
   path: string;
@@ -13,10 +14,6 @@ type PathHintRule = {
 
 const PATH_HINT_DOCUMENT_FIELDS = new Set(["version", "rules"]);
 const PATH_HINT_RULE_FIELDS = new Set(["path", "option_group", "variant_id", "label"]);
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function optionalString(
   value: unknown,

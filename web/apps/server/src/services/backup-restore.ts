@@ -22,6 +22,7 @@ import {
   type FullBackupRoot,
 } from "./backup-scope.js";
 import { readFreeDiskBytes } from "./storage-inventory.js";
+import { isRecord } from "../lib/guards.js";
 
 export type BackupDatabase = {
   readonly dbPath: string;
@@ -288,10 +289,6 @@ export async function inspectRestore(
     freeBytes,
     sufficient: freeBytes >= requiredBytes,
   };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function sameRoots(left: readonly FullBackupRoot[], right: readonly FullBackupRoot[]): boolean {
