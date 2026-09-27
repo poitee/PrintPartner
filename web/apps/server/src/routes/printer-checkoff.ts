@@ -29,7 +29,7 @@ import { getIntegrationAdapter } from "../integrations/registry.js";
 import { sendProblem } from "../lib/api-error.js";
 import {
   cancelResponseBody,
-  readBoundedResponseChunks,
+  readBoundedResponseBody,
   ResponseBodyTooLargeError,
 } from "../lib/bounded-response.js";
 import {
@@ -260,27 +260,12 @@ function materializeProblem(
  * Bound the bytes buffered for classification. The adapter owns download timeouts.
  */
 async function readBoundedBody(response: Response): Promise<Uint8Array | null> {
-  const chunks: Uint8Array[] = [];
-  let total = 0;
   try {
-    for await (const chunk of readBoundedResponseChunks(
-      response,
-      MAX_CLASSIFIABLE_BYTES,
-    )) {
-      total += chunk.byteLength;
-      chunks.push(chunk);
-    }
+    return await readBoundedResponseBody(response, MAX_CLASSIFIABLE_BYTES);
   } catch (error) {
     if (error instanceof ResponseBodyTooLargeError) return null;
     throw error;
   }
-  const body = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    body.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return body;
 }
 
 /** A host that can actually serve print files, with the config to reach it. */
