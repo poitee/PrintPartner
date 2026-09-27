@@ -323,19 +323,6 @@ export function aggregateFeedbackScores(
   return { byPlanId, byToken };
 }
 
-export function scorePlanFeedback(repo: AppRepository, planId: number): number {
-  return aggregateFeedbackScores(repo).byPlanId.get(planId) ?? 0;
-}
-
-export function scoreStackPreset(
-  repo: AppRepository,
-  presetId: string,
-  knownPresetIds?: Iterable<string>,
-): number {
-  const known = knownPresetIds ?? [presetId];
-  return aggregateFeedbackScores(repo, known).byToken.get(presetId.toLowerCase()) ?? 0;
-}
-
 /**
  * High-confidence thumbs summary for the system prompt (scores only — no free text).
  * Example: `Preferred stacks (thumbs): ldo_trident_r2 (+4)`

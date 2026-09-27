@@ -173,12 +173,6 @@ function resolveArtifactPath(input: {
   }
 }
 
-export function observeAcceptedArtifact(
-  input: ObserveAcceptedArtifactInput,
-): AcceptedArtifactObservation {
-  return observeArtifact(input);
-}
-
 /** One synchronous observation batch only; never used to authorize file reads. */
 export function createAcceptedArtifactObserver() {
   const directoryEntries = new Map<string, string[]>();

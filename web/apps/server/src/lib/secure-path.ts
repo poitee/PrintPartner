@@ -1,6 +1,5 @@
 import {
   createReadStream,
-  existsSync,
   readdirSync,
   readFileSync,
   realpathSync,
@@ -184,19 +183,6 @@ export function trimmedString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
-export function assertFileUnderRoot(root: string, relativePath: string, maxBytes?: number): string {
-  const file = resolveFileByWalk(root, relativePath);
-  if (!file || !existsSync(file)) {
-    throw new Error("File not found");
-  }
-  const st = statSync(file);
-  if (!st.isFile()) throw new Error("Not a file");
-  if (maxBytes != null && st.size > maxBytes) {
-    throw new Error(`File exceeds ${Math.floor(maxBytes / (1024 * 1024))}MB limit`);
-  }
-  return file;
-}
-
 /** Map an absolute path to a URL-safe export key under the current tenant's export directory. */
 export function exportDownloadKey(
   dataDir: string,
@@ -207,9 +193,4 @@ export function exportDownloadKey(
   const file = resolvedFileUnderRoot(exportsRoot, absolutePath);
   if (!file) return null;
   return relative(realpathSync(exportsRoot), file).split(sep).join("/");
-}
-
-/** Resolve kit import path: must exist under dataDir (self-host local paths only). */
-export function safeDataDirPath(dataDir: string, userPath: string): string | null {
-  return resolvedExistingPathUnderRoot(dataDir, userPath);
 }

@@ -53,27 +53,12 @@ export function parseSpoolmanFilamentId(
   return { integrationId: m[1]!, filamentId: Number(m[2]) };
 }
 
-export function buildSpoolmanSpoolId(
-  integrationId: string,
-  spoolId: number | string,
-): string {
-  return `spoolman:${integrationId}:spool:${spoolId}`;
-}
-
 export function parseSpoolmanSpoolId(
   spoolRef: string,
 ): { integrationId: string; spoolId: number } | null {
   const m = SPOOLMAN_SPOOL_ID_RE.exec(spoolRef.trim());
   if (!m) return null;
   return { integrationId: m[1]!, spoolId: Number(m[2]) };
-}
-
-export function formatSpoolOptionLabel(spool: SpoolmanSpool): string {
-  const grams = Math.round(spool.remaining_weight ?? 0);
-  const location = (spool.location ?? "").trim();
-  return location
-    ? `#${spool.id} · ~${grams} g · ${location}`
-    : `#${spool.id} · ~${grams} g`;
 }
 
 export function normalizeSpoolmanHex(raw: string | null | undefined): string {

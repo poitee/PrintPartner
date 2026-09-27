@@ -321,51 +321,6 @@ function loadAliasEntries(dataDir?: string | null): AliasEntry[] {
     .filter((a): a is AliasEntry => a != null);
 }
 
-/**
- * Find identity.yaml for a source_name. Dir names may be sanitized
- * (e.g. `DW-Tas-emu` for `DW-Tas/emu`); also matches identity.source_name.
- */
-export function findIdentityForSource(
-  sourceName: string,
-  dataDir?: string | null,
-): SourceIdentity | null {
-  const name = sourceName.trim();
-  if (!name) return null;
-  const sanitized = name.replace(/\//g, "-");
-  for (const root of domainPackRoots(dataDir)) {
-    const sourcesRoot = join(root, "sources");
-    if (!existsSync(sourcesRoot)) continue;
-    const direct = [name, sanitized]
-      .map((d) => join(sourcesRoot, d, "identity.yaml"))
-      .find((p) => existsSync(p));
-    if (direct) {
-      const id = loadYamlFile(direct) as SourceIdentity | null;
-      if (id) return id;
-    }
-    let dirs: string[];
-    try {
-      dirs = readdirSync(sourcesRoot, { withFileTypes: true })
-        .filter((d) => d.isDirectory())
-        .map((d) => d.name);
-    } catch {
-      continue;
-    }
-    for (const dir of dirs) {
-      const identity = loadYamlFile(join(sourcesRoot, dir, "identity.yaml")) as SourceIdentity | null;
-      if (!identity) continue;
-      if (
-        identity.source_name === name ||
-        dir === name ||
-        dir === sanitized ||
-        dir.replace(/-/g, "/") === name
-      ) {
-        return identity;
-      }
-    }
-  }
-  return null;
-}
-
 /** Load optional per-source decisions.yaml candidates from the domain pack. */
 export function loadSourceDecisionsYaml(
   sourceName: string,

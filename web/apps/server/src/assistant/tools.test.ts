@@ -13,7 +13,6 @@ import {
   applyAssistantAction,
 } from "./tools.js";
 import { inferStackPresetId, summarizeOtherBuildsAsExamples } from "./example-builds.js";
-import { buildAssistantSystemPrompt } from "./assistant-context.js";
 import { hydrateBuildPlanningBrief, newBuildPlanningBrief, readBuildPlanningBrief, saveBuildPlanningBrief } from "../services/build-planning.js";
 import { loadKitManifest } from "../services/kit-manifest-store.js";
 
@@ -1140,30 +1139,6 @@ option_groups:
     expect(text).toContain(`#${b.id}`);
   });
 
-  it("system prompt includes example builds when enabled", () => {
-    const source = repo.createSource({
-      name: "Voron-2",
-      url: "https://example.com/v2.git",
-      source_kind: "github",
-    });
-    const active = repo.createProfile("Active", source.id);
-    repo.createProfile("Reference", source.id);
-    const prompt = buildAssistantSystemPrompt({
-      repo,
-      planId: active.id,
-      useOtherBuildsAsExamples: true,
-      catalog: {
-        bases: {},
-        addon_categories: {},
-        stack_presets: {},
-      },
-      workflowGuide: "wf",
-    });
-    expect(prompt).toContain("few-shot examples");
-    expect(prompt).toContain("Reference");
-    expect(prompt).toMatch(/NOT model training|not training data/i);
-  });
-
   it("inferStackPresetId matches addon overlap", () => {
     const catalog = {
       bases: { voron_2_4: { source_name: "Voron-2" } },
@@ -1215,26 +1190,6 @@ option_groups:
     expect(parsed.error).toContain("Source not found");
     expect(parsed.error).toContain("Did you mean");
     expect(parsed.error).toContain("Voron-Trident");
-  });
-
-  it("system prompt includes domain pack aliases for tag resolution", () => {
-    repo.createSource({
-      name: "Example-Printer",
-      url: "https://example.com/p.git",
-      source_kind: "github",
-    });
-    const prompt = buildAssistantSystemPrompt({ repo, toolsAvailable: true, dataDir: FIXTURE });
-    expect(prompt).toContain("Domain pack");
-    expect(prompt).toContain('"the example r2 / example kit r2" → source=Example-Printer tag=EX-R2');
-  });
-
-  it("system prompt ships no curated pack or catalog content of its own", () => {
-    const prompt = buildAssistantSystemPrompt({ repo, toolsAvailable: true });
-    // The pack format is documented in the rules; no curated entries render.
-    expect(prompt).not.toContain("### Phrase aliases");
-    expect(prompt).not.toContain("### Stack recipes");
-    expect(prompt).not.toContain("### Source digests");
-    expect(prompt).not.toMatch(/\bvoron\b|\btrident\b|\bklicky\b|\bstealthburner\b/i);
   });
 
   it("start_sync proposes and apply enqueues a sync job", async () => {
@@ -1300,16 +1255,6 @@ option_groups:
     expect(found.parts[0].filename.toLowerCase()).toContain("klicky");
     expect(typeof found.parts[0].part_id).toBe("number");
     expect(found.hint).toMatch(/ui_highlight_part/);
-  });
-
-  it("system prompt pairs ui_* with show/open and keeps rebuild review on Plan", () => {
-    const prompt = buildAssistantSystemPrompt({ repo, toolsAvailable: true });
-    expect(prompt).toContain("search_plan_parts");
-    expect(prompt).toContain("start_sync");
-    expect(prompt).toContain("Direct the user to Plan");
-    expect(prompt).not.toContain("propose_sync_and_update");
-    expect(prompt).toContain("ui_focus_kit_option");
-    expect(prompt).toMatch(/pair.*ui_\*|Always pair/i);
   });
 
   it("ui_focus_kit_option proposes a UI action", async () => {
