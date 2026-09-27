@@ -4,7 +4,7 @@ import { sourceLabelFromLayer } from "./reviewParts";
 
 const ROLE_ORDER = ["primary", "accent", "clear", "opaque"] as const;
 
-export type PartsRoleGroup = {
+type PartsRoleGroup = {
   roleKey: string;
   title: string;
   meta: string;

@@ -1,4 +1,4 @@
-export type PlanLookupContext = {
+type PlanLookupContext = {
   readonly activePlanId?: number | null;
   readonly repo: {
     getOwnedProfileIdentity(planId: number): unknown;

@@ -14,7 +14,7 @@ const PRESETS_CANDIDATES = [
   join(MODULE_DIR, "../../src/data/printer_presets.json"),
 ];
 
-export type PrinterPreset = {
+type PrinterPreset = {
   id: string;
   name: string;
   model_slug?: string;

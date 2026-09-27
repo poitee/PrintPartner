@@ -1,4 +1,4 @@
-import { createWriteStream, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { createWriteStream, mkdirSync, rmSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { pipeline } from "node:stream/promises";
 import type { Readable } from "node:stream";
@@ -25,7 +25,7 @@ export function cleanupPrinterUploadArtifactDir(artifactPath: string): void {
   }
 }
 
-export function sanitizePrinterUploadFilename(filename: string): string {
+function sanitizePrinterUploadFilename(filename: string): string {
   const base = basename(filename.replace(/\\/g, "/")).trim() || "print.gcode";
   const cleaned = base.replace(/[/\\]/g, "_");
   if (!cleaned || cleaned === "." || cleaned === ".." || /^\.+$/.test(cleaned)) {
@@ -42,7 +42,7 @@ export function isAllowedPrinterUploadFilename(filename: string): boolean {
   return false;
 }
 
-export type PrinterUploadJobInput = {
+type PrinterUploadJobInput = {
   printer_id: string;
   artifact_path: string;
   filename: string;
@@ -57,7 +57,7 @@ export type PrinterUploadJobInput = {
   upload_job_id?: string;
 };
 
-export type PrinterUploadJobEmit = (patch: {
+type PrinterUploadJobEmit = (patch: {
   message?: string;
   progress?: number;
 }) => void;
@@ -180,21 +180,6 @@ async function runPrinterUploadJobInner(
     checkoff_link_id: checkoffLinkId,
     checkoff_units: checkoffLinkId ? checkoffUnits.length : 0,
   };
-}
-
-/** Persist an uploaded gcode artifact under exportsDir for the job runner. */
-export function persistPrinterUploadArtifact(
-  exportsDir: string,
-  jobId: string,
-  filename: string,
-  bytes: Buffer,
-): string {
-  const safeName = sanitizePrinterUploadFilename(filename);
-  const dir = join(exportsDir, "printer-uploads", jobId);
-  mkdirSync(dir, { recursive: true });
-  const path = join(dir, safeName);
-  writeFileSync(path, bytes);
-  return path;
 }
 
 /** Stream a multipart file to disk; reject when the multipart limit truncates the body. */

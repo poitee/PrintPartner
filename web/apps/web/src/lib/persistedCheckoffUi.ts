@@ -1,8 +1,8 @@
 export const CHECKOFF_UI_STORAGE_KEY = "print-partner.checkoff.ui.v1";
 
-export type CheckoffFilterMode = "all" | "missing" | "done";
+type CheckoffFilterMode = "all" | "missing" | "done";
 
-export type PersistedBagBar = {
+type PersistedBagBar = {
   id: string;
   label: string;
 };
@@ -11,7 +11,7 @@ export type PersistedProgressRow =
   | { kind: "part"; id: number }
   | { kind: "bag"; id: string; label: string };
 
-export type PersistedCheckoffUi = {
+type PersistedCheckoffUi = {
   filter: CheckoffFilterMode;
   compactMode: boolean;
   /** When true, print uses continuous layout (fewer forced page breaks). */

@@ -12,7 +12,7 @@
 import { moveItem } from "./reorderList";
 import { progressRowSortableId, type ProgressRowRef } from "./progressListOrder";
 
-export type CheckoffMoveDirection = "up" | "down";
+type CheckoffMoveDirection = "up" | "down";
 
 export function checkoffRowIndex(
   rows: readonly ProgressRowRef[],

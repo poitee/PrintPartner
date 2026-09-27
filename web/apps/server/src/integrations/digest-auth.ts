@@ -22,7 +22,7 @@ function md5(value: string): string {
 }
 
 /** Quote a Digest auth parameter; reject CR/LF that would break the header. */
-export function quoteDigestParam(value: string): string {
+function quoteDigestParam(value: string): string {
   if (/[\r\n\0]/.test(value)) {
     throw new Error("Invalid digest parameter");
   }
@@ -30,7 +30,7 @@ export function quoteDigestParam(value: string): string {
 }
 
 /** Prefer qop=auth when offered; never select auth-int (we don't hash the entity body). */
-export function pickDigestQop(qopRaw: string): string | undefined {
+function pickDigestQop(qopRaw: string): string | undefined {
   const options = qopRaw
     .split(",")
     .map((s) => s.trim().toLowerCase())

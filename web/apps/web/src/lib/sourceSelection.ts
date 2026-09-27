@@ -31,7 +31,7 @@ export function toggleSelected(
   return next;
 }
 
-export type SelectionClickResult = {
+type SelectionClickResult = {
   selection: Set<number>;
   anchorId: number;
 };

@@ -19,9 +19,9 @@ import {
 import { loadManifestYaml } from "./manifest-apply.js";
 import { SOURCE_MANIFEST_FILENAME } from "./source-workspace.js";
 
-export const DEFAULT_LOCAL_SNAPSHOT_STL_LIMIT = 500;
-export const DEFAULT_LOCAL_SNAPSHOT_DOCS_BYTES = 1024 * 1024 * 1024;
-export const DEFAULT_LOCAL_SNAPSHOT_TOTAL_BYTES = 1024 * 1024 * 1024;
+const DEFAULT_LOCAL_SNAPSHOT_STL_LIMIT = 500;
+const DEFAULT_LOCAL_SNAPSHOT_DOCS_BYTES = 1024 * 1024 * 1024;
+const DEFAULT_LOCAL_SNAPSHOT_TOTAL_BYTES = 1024 * 1024 * 1024;
 
 type CollectedSnapshotFile = {
   relativePath: string;

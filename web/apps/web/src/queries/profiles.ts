@@ -147,4 +147,3 @@ export async function refreshProfileSummary(qc: ReturnType<typeof useQueryClient
   );
 }
 
-export type { ProfileSummary };

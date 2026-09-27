@@ -1,5 +1,4 @@
 import type { PartRow } from "@print-partner/contracts";
-import type { ProfileLayer } from "../api/endpoints/plans";
 
 /** Shallow compare fields that affect Kit Studio UI. */
 export function partRowsEqual(a: PartRow[], b: PartRow[]): boolean {
@@ -23,18 +22,6 @@ export function partRowsEqual(a: PartRow[], b: PartRow[]): boolean {
       x.filament_hex !== y.filament_hex ||
       x.quantity_effective !== y.quantity_effective
     ) {
-      return false;
-    }
-  }
-  return true;
-}
-
-export function layersEqual(a: ProfileLayer[], b: ProfileLayer[]): boolean {
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) {
-    const x = a[i]!;
-    const y = b[i]!;
-    if (x.id !== y.id || x.layer_type !== y.layer_type || x.project_id !== y.project_id) {
       return false;
     }
   }

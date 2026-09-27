@@ -28,7 +28,7 @@ export type PostgresSyncResult = {
   rowCount: number;
 };
 
-export type PostgresSyncQueryFn = (query: PostgresSyncQuery) => PostgresSyncResult;
+type PostgresSyncQueryFn = (query: PostgresSyncQuery) => PostgresSyncResult;
 
 export type PostgresSettingCompareAndSet = Readonly<SettingCompareAndSetInput & {
   tenantId: string;

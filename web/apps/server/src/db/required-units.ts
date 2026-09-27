@@ -30,7 +30,7 @@ export type RequiredUnitBackfillCommandResult =
   | { readonly kind: "completed"; readonly summary: RequiredUnitBackfillResult }
   | { readonly kind: "transaction_unavailable" };
 
-export type StoredRequiredUnitRow = RequiredUnitDigestRow & {
+type StoredRequiredUnitRow = RequiredUnitDigestRow & {
   readonly tenantId: string;
   readonly profileId: number;
   readonly required: boolean;

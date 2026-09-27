@@ -1,6 +1,5 @@
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { JobSnapshot } from "@print-partner/contracts";
 import type { AuthProvider, DbStore, JobRunner, RepoSource, StoragePort } from "../../ports/index.js";
 import { getDb, SqliteDatabase } from "../../db/client.js";
 import { AppRepository } from "../../db/repository.js";
@@ -38,7 +37,7 @@ export class SelfHostDbStore implements DbStore {
   }
 }
 
-export class SelfHostStoragePort implements StoragePort {
+class SelfHostStoragePort implements StoragePort {
   constructor(private readonly rootDir: string) {}
 
   resolvePath(relativePath: string): string {
@@ -79,13 +78,13 @@ export class SelfHostRepoSource implements RepoSource {
   }
 }
 
-export class SelfHostAuthProvider implements AuthProvider {
+class SelfHostAuthProvider implements AuthProvider {
   async resolveTenant(): Promise<string | null> {
     return "default";
   }
 }
 
-export type SelfHostPorts = {
+type SelfHostPorts = {
   db: SelfHostDbStore;
   storage: SelfHostStoragePort;
   repoSource: RepoSource;
@@ -123,4 +122,3 @@ export function createSelfHostPorts(
 }
 
 /** Satisfies JobRunner via InProcessJobRunner */
-export type { JobSnapshot };

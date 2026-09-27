@@ -20,7 +20,7 @@ export function filterFilamentSpools(
     .sort((a, b) => a.id - b.id);
 }
 
-export type PartSpoolPickerVisibility =
+type PartSpoolPickerVisibility =
   | { show: false; reason: "not_spoolman_filament" }
   | { show: true; kind: "loading"; reason: "spools_loading" }
   | { show: true; kind: "empty"; reason: "no_matching_spools" }

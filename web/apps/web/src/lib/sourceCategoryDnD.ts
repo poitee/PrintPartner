@@ -4,7 +4,7 @@
  * file assigns that file's parent source.
  */
 
-export const UNCATEGORISED_DROP_ID = "__uncategorised__";
+const UNCATEGORISED_DROP_ID = "__uncategorised__";
 
 export function categoryDropTargetId(category: string | null): string {
   return category == null

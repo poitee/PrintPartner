@@ -2,7 +2,7 @@ import { Octokit } from "@octokit/rest";
 import { readBoundedResponseBody } from "../lib/bounded-response.js";
 
 const MAX_GITHUB_API_RESPONSE_BYTES = 16 * 1024 * 1024;
-export const GITHUB_API_REQUEST_TIMEOUT_MS = 120_000;
+const GITHUB_API_REQUEST_TIMEOUT_MS = 120_000;
 
 function boundedGithubFetch(
   fetchImpl: typeof fetch,

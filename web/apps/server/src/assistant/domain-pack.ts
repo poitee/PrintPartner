@@ -19,7 +19,7 @@ import {
 const MODULE_DATA = join(dirname(fileURLToPath(import.meta.url)), "../data/assistant-domain");
 const SRC_DATA = join(dirname(fileURLToPath(import.meta.url)), "../../src/data/assistant-domain");
 
-export const MAX_DOMAIN_PACK_CHARS = 5200;
+const MAX_DOMAIN_PACK_CHARS = 5200;
 
 /** Stable titles for curated research notes upserted into source_notes. */
 export const ADVISOR_NOTE_TITLES = {
@@ -32,7 +32,7 @@ const MAX_WORKFLOW_EXCERPT = 120;
 const MAX_PITFALLS_EXCERPT = 100;
 const MAX_SOURCES_WITH_MD_EXCERPTS = 5;
 
-export type AliasResolve = {
+type AliasResolve = {
   catalog_base_id?: string | null;
   source_name?: string | null;
   tag?: string | null;
@@ -42,26 +42,26 @@ export type AliasResolve = {
   selection?: ManifestSelections;
 };
 
-export type SourceIdentity = {
+type SourceIdentity = {
   source_name?: string;
   role?: string;
   summary?: string;
   important_tags?: Array<{ id?: string }>;
 };
 
-export type SourceDecisionYaml = {
+type SourceDecisionYaml = {
   id: string;
   kind?: string;
   label?: string;
   options?: Array<{ id: string; label?: string; selection?: ManifestSelections }>;
 };
 
-export type AliasEntry = {
+type AliasEntry = {
   phrases: string[];
   resolve: AliasResolve;
 };
 
-export type StackEntry = {
+type StackEntry = {
   label?: string;
   base_source?: string;
   base_tag?: string | null;
@@ -118,13 +118,6 @@ function loadYamlFile(path: string): unknown | null {
   }
 }
 
-function firstExisting(...paths: string[]): string | null {
-  for (const p of paths) {
-    if (existsSync(p)) return p;
-  }
-  return null;
-}
-
 function findFile(dataDir: string | null | undefined, ...rel: string[]): string | null {
   for (const root of candidateRoots(dataDir)) {
     const p = join(root, ...rel);
@@ -170,7 +163,7 @@ export function upsertAdvisorSourceNote(
 }
 
 /** Upsert Advisor: Workflow / Pitfalls / Quotes from markdown bodies. */
-export function upsertAdvisorNotesFromMarkdown(
+function upsertAdvisorNotesFromMarkdown(
   repo: AppRepository,
   projectId: number,
   files: { workflow?: string | null; pitfalls?: string | null; quotes?: string | null },
@@ -498,7 +491,7 @@ export function normalizeStacks(raw: unknown): Array<{ id: string; stack: StackE
   return [];
 }
 
-export function normalizeConflict(raw: unknown): {
+function normalizeConflict(raw: unknown): {
   slug_or_path: string;
   sources: string[];
   resolution: string;
@@ -531,12 +524,12 @@ export function normalizeConflict(raw: unknown): {
  * regardless of what the user is building. `matchAll` preserves the old
  * behaviour for callers that have no repository to ask.
  */
-export type LiveSourceFilter = { has: (name: string | null | undefined) => boolean };
+type LiveSourceFilter = { has: (name: string | null | undefined) => boolean };
 
-export const MATCH_ALL_SOURCES: LiveSourceFilter = { has: () => true };
+const MATCH_ALL_SOURCES: LiveSourceFilter = { has: () => true };
 
 /** Case- and separator-insensitive so `DW-Tas-emu` matches `DW-Tas/emu`. */
-export function liveSourceFilter(sourceNames?: readonly string[] | null): LiveSourceFilter {
+function liveSourceFilter(sourceNames?: readonly string[] | null): LiveSourceFilter {
   if (!sourceNames) return MATCH_ALL_SOURCES;
   const compact = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
   const live = new Set(sourceNames.map(compact).filter(Boolean));
@@ -743,7 +736,7 @@ function writeText(path: string, contents: string): void {
   writeFileSync(path, contents, "utf8");
 }
 
-export type DomainImportResult = {
+type DomainImportResult = {
   wrote_files: boolean;
   root: string | null;
   notes_created: number;
@@ -885,8 +878,4 @@ function findSourcePackDir(dataDir: string | null | undefined, sourceName: strin
     }
   }
   return null;
-}
-
-export function resolveDomainPackDir(dataDir?: string | null): string | null {
-  return firstExisting(...candidateRoots(dataDir));
 }

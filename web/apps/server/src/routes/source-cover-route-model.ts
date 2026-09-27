@@ -1,6 +1,6 @@
 import type { SourceCoverProject } from "../lib/source-cover.js";
 
-export type SourceCoverProjectRow = {
+type SourceCoverProjectRow = {
   id: number;
   url: string;
   sourceKind: string | null;

@@ -9,7 +9,7 @@ export type ProfileLayer = {
   project_name: string | null;
 };
 
-export type PartsGroup = {
+type PartsGroup = {
   folder: string;
   parts: PartRow[];
 };

@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+
 import type {
   PlanDecision,
   PlanDecisionActor,
@@ -7,7 +7,7 @@ import type {
 } from "@print-partner/contracts";
 import type { AppRepository } from "../db/repository.js";
 
-export type AppendDecisionInput = {
+type AppendDecisionInput = {
   planId: number;
   actor: PlanDecisionActor;
   kind: PlanDecisionKind;
@@ -68,9 +68,4 @@ export function logDismissedAction(
     label: action.label,
     summary: action.summary,
   });
-}
-
-/** Stable id helper when constructing synthetic actions for recipe replay. */
-export function newActionId(): string {
-  return randomUUID();
 }

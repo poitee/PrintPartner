@@ -154,7 +154,7 @@ function resolvePresetBaseSourceName(
   }
 }
 
-export function userAskedToSwitchBase(userText: string): boolean {
+function userAskedToSwitchBase(userText: string): boolean {
   return /switch\s+base|change\s+base|different\s+base|set\s+base\s+to|use\s+.+\s+as\s+base/i.test(
     userText,
   );
@@ -215,7 +215,7 @@ function optionIdMentioned(optionId: string, text: string): boolean {
  * Soft-propose set_base / add_addon / update_kit_selections from domain-pack aliases
  * when the user clearly names a known phrase.
  */
-export function appendAliasDrivenHints(
+function appendAliasDrivenHints(
   toolCtx: ToolContext,
   proposedActions: AssistantProposedAction[],
   userText: string,
@@ -412,7 +412,7 @@ export function stripWrongBaseProposalsForAttachedKit(
 }
 
 /** HTTP(S) URLs in user text (best-effort). */
-export function extractUserHttpUrls(text: string): string[] {
+function extractUserHttpUrls(text: string): string[] {
   const out: string[] = [];
   const re = /https?:\/\/[^\s<>"')\]]+/gi;
   let m: RegExpExecArray | null;
@@ -422,7 +422,7 @@ export function extractUserHttpUrls(text: string): string[] {
   return [...new Set(out)];
 }
 
-export function isStlRepoUrl(url: string): boolean {
+function isStlRepoUrl(url: string): boolean {
   try {
     const host = new URL(url).hostname.toLowerCase();
     return (
@@ -436,7 +436,7 @@ export function isStlRepoUrl(url: string): boolean {
 }
 
 /** Build constraint text from a kit-page GuideExtract (notes + open questions). */
-export function kitConstraintsFromGuideExtract(extract: {
+function kitConstraintsFromGuideExtract(extract: {
   notes?: string[];
   open_questions?: string[];
   links?: Array<{ url: string; kind: string }>;
@@ -543,7 +543,7 @@ export function appendBuildDecisionHints(
  * Soft path for kit storefront URLs: ingest as BOM evidence, and if decisions
  * were never captured, re-run detect on the attached plan base.
  */
-export async function ensureKitProductEvidence(params: {
+async function ensureKitProductEvidence(params: {
   toolCtx: ToolContext;
   userText: string;
   lastDecisions: BuildDecision[] | null;
@@ -654,7 +654,7 @@ function finalizeProposedActions(
 
 const MAX_TOOL_ROUNDS = 4;
 
-export type RunAssistantTurnOptions = {
+type RunAssistantTurnOptions = {
   assistant: AssistantPort;
   system: string;
   messages: AssistantChatMessage[];

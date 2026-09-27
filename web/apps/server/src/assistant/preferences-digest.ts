@@ -197,7 +197,7 @@ function collectGlobalPreferAvoid(
   return { preferLines, avoidLines };
 }
 
-export type BuildPreferencesDigestOptions = {
+type BuildPreferencesDigestOptions = {
   /** Preloaded plan decisions (tests). */
   decisions?: PlanDecision[];
   /** Preloaded other-plan decisions (tests). */

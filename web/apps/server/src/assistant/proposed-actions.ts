@@ -9,7 +9,7 @@ export type ToolInvokeResult = {
   proposedAction?: AssistantProposedAction;
 };
 
-export type ProposeAssistantActionInput = Readonly<{
+type ProposeAssistantActionInput = Readonly<{
   type: AssistantActionType;
   planId: number;
   label: string;

@@ -5,7 +5,7 @@ import { canArchivePlan } from "./planPickerGroups";
 import { planHeaderSubtitle } from "./planWarnings";
 import { checkoffUnitTotals } from "./checkoffProgress";
 
-export type BuildPageDerivedInput = {
+type BuildPageDerivedInput = {
   selectedProfile: ProfileSummary | undefined;
   review: PlanReview | null | undefined;
   attachedSources: SourceSummary[];
@@ -14,7 +14,7 @@ export type BuildPageDerivedInput = {
   buildStale: boolean;
 };
 
-export type BuildPageDerivedState = {
+type BuildPageDerivedState = {
   partCount: number;
   archiveAllowed: boolean;
   headerSubtitle: string;

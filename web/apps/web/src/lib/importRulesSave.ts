@@ -1,6 +1,4 @@
 export type ImportRulesSaveStatus = "idle" | "pending" | "saving" | "saved" | "error";
-
-export const IMPORT_RULES_AUTOSAVE_MS = 200;
 export const IMPORT_RULES_SAVED_CLEAR_MS = 3000;
 
 function normalizeRuleForCompare(rule: string): string {

@@ -3,7 +3,7 @@ import type { DeployMode, RuntimeReleaseIdentity } from "@print-partner/contract
 const VERSION_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const COMMIT_PATTERN = /^[0-9a-f]{40}$/;
 
-export interface VersionInfo {
+interface VersionInfo {
   version: string;
   commit: string;
   branch: string;

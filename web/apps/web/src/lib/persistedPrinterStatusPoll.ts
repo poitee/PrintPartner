@@ -1,6 +1,6 @@
 /** Persisted printer status poll interval (UI preference, localStorage). */
 
-export const PRINTER_STATUS_POLL_STORAGE_KEY = "print-partner.printer-status-poll.v1";
+const PRINTER_STATUS_POLL_STORAGE_KEY = "print-partner.printer-status-poll.v1";
 
 export const PRINTER_STATUS_POLL_SECONDS_OPTIONS = [5, 10, 15, 30] as const;
 

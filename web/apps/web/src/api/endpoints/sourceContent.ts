@@ -15,7 +15,7 @@ export type SourceActivityEvent = {
   detail: string | null;
 };
 
-export type GithubBranchesResponse = {
+type GithubBranchesResponse = {
   owner: string;
   repo: string;
   default_branch: string;
@@ -23,7 +23,7 @@ export type GithubBranchesResponse = {
   branches: string[];
 };
 
-export type GithubTagsResponse = {
+type GithubTagsResponse = {
   owner: string;
   repo: string;
   tags: string[];

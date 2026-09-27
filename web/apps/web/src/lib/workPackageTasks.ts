@@ -31,7 +31,7 @@ export type ProductionTaskId = (typeof PRODUCTION_TASK_IDS)[ProductionRoute][num
  * because it is phrased differently from the other two. GOV.UK cautions that
  * frequency ordering can reinforce bias, so retuning this order needs evidence.
  */
-export const PRODUCTION_ROUTE_ORDER = [
+const PRODUCTION_ROUTE_ORDER = [
   "plates",
   "stl",
   "external",
@@ -176,7 +176,7 @@ export type ExternalTaskInput = TaskInputBase &
     recordedPrintCount: number;
   }>;
 
-export type ProductionTaskInput = PlatesTaskInput | StlTaskInput | ExternalTaskInput;
+type ProductionTaskInput = PlatesTaskInput | StlTaskInput | ExternalTaskInput;
 
 function plural(count: number, one: string, many: string): string {
   return `${count} ${count === 1 ? one : many}`;

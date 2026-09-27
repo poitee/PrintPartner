@@ -11,7 +11,7 @@ import type { PrinterMachine } from "@print-partner/domain";
 import type { AppRepository } from "../db/repository.js";
 import { wantedFilamentIdsForQueueItem } from "./printer-farm-match.js";
 
-export type PrinterQueueSuggestion = {
+type PrinterQueueSuggestion = {
   /** The idle printer being suggested. */
   printer_id: string;
   printer_name: string;

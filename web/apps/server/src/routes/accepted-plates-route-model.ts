@@ -3,30 +3,30 @@ import type { AcceptedPlanBasis } from "../db/accepted-plan-progress.js";
 import { MAX_ACCEPTED_PLATE_UM } from "../db/accepted-plates.js";
 import { parseRequiredUnitToken, type RequiredUnitToken } from "../services/required-units.js";
 
-export type AcceptedPlateInitializeRequest = Readonly<{
+type AcceptedPlateInitializeRequest = Readonly<{
   expected: AcceptedPlanBasis;
   expectedPlateRevisionId: number | null;
   assignments: readonly Readonly<{ token: RequiredUnitToken; printerId: string | null }>[];
 }>;
 
-export type AcceptedPlateRevisionRequest = Readonly<{
+type AcceptedPlateRevisionRequest = Readonly<{
   expected: AcceptedPlanBasis;
   expectedPlateRevisionId: number;
 }>;
 
-export type AcceptedPlateMoveRequest = AcceptedPlateRevisionRequest &
+type AcceptedPlateMoveRequest = AcceptedPlateRevisionRequest &
   Readonly<{ xUm: number; yUm: number }>;
 
-export type AcceptedPlatePinRequest = AcceptedPlateRevisionRequest &
+type AcceptedPlatePinRequest = AcceptedPlateRevisionRequest &
   Readonly<{ pinned: boolean }>;
 
-export type AcceptedPlateTransferRequest = AcceptedPlateRevisionRequest &
+type AcceptedPlateTransferRequest = AcceptedPlateRevisionRequest &
   (Readonly<{ targetPlateId: string }> | Readonly<{ targetPrinterId: string }>);
 
-export type AcceptedPlateArrangeRequest = AcceptedPlateRevisionRequest &
+type AcceptedPlateArrangeRequest = AcceptedPlateRevisionRequest &
   Readonly<{ mode: "unplaced" | "all" }>;
 
-export type AcceptedPlateRestoreRequest = AcceptedPlateRevisionRequest &
+type AcceptedPlateRestoreRequest = AcceptedPlateRevisionRequest &
   Readonly<{ restorePlateRevisionId: number }>;
 
 export function isRecord(value: unknown): value is Record<string, unknown> {

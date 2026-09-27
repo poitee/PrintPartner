@@ -12,7 +12,7 @@ function normalizeMeshHex(hex: string | null | undefined): string {
   return h.length === 6 ? h.toLowerCase() : "";
 }
 
-export function thumbnailCacheDigest(stlPath: string, role: string, meshHex?: string | null): string {
+function thumbnailCacheDigest(stlPath: string, role: string, meshHex?: string | null): string {
   const mtime = (() => {
     try {
       return statSync(stlPath).mtimeMs;
@@ -34,7 +34,7 @@ export function globalThumbnailPath(
   return join(thumbsDir, `${thumbnailCacheDigest(stlPath, role, meshHex)}.png`);
 }
 
-export function previewCacheDigest(stlPath: string, role: string, meshHex?: string | null): string {
+function previewCacheDigest(stlPath: string, role: string, meshHex?: string | null): string {
   const mtime = (() => {
     try {
       return statSync(stlPath).mtimeMs;

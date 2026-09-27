@@ -5,12 +5,12 @@ import { chargeTenantDiskBytes } from "../lib/tenant-disk-quota.js";
 import { extractThreeMfMeshes } from "./three-mf-import.js";
 import { MAX_SOURCE_UPLOAD_BYTES } from "./upload-limits.js";
 
-export const MAX_ZIP_ENTRIES = 10_000;
-export const MAX_ZIP_UNCOMPRESSED_BYTES = 1024 * 1024 * 1024;
+const MAX_ZIP_ENTRIES = 10_000;
+const MAX_ZIP_UNCOMPRESSED_BYTES = 1024 * 1024 * 1024;
 export const MAX_SOURCE_UPLOAD_FILES = MAX_ZIP_ENTRIES;
 export const MAX_SOURCE_UPLOAD_PARTS = MAX_SOURCE_UPLOAD_FILES + 1;
 
-export type ExtractLimits = {
+type ExtractLimits = {
   maxEntries?: number;
   maxUncompressedBytes?: number;
 };
@@ -95,10 +95,6 @@ function extractEntries(bytes: Buffer, destDir: string, limits: ExtractLimits = 
   return stlCount;
 }
 
-export function extractZipToDir(zipPath: string, destDir: string, limits?: ExtractLimits): number {
-  return extractEntries(readFileSync(zipPath), destDir, limits);
-}
-
 export function extractZipBuffer(buffer: Buffer, destDir: string, limits?: ExtractLimits): number {
   return extractEntries(buffer, destDir, limits);
 }
@@ -140,7 +136,7 @@ export function discoverImportRules(extractDir: string): string[] {
   return rules;
 }
 
-export type UploadedFilesResult = {
+type UploadedFilesResult = {
   extractDir: string;
   fileCount: number;
   stlCount: number;

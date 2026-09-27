@@ -7,7 +7,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
  * holding stale rows, and also failed" is not a state this workspace has, and
  * a union makes it unrepresentable instead of merely unlikely.
  */
-export type AsyncView<T> =
+type AsyncView<T> =
   | { status: "loading" }
   | { status: "ready"; data: T }
   | { status: "failed"; message: string };

@@ -2,7 +2,7 @@ import type { AppRepository } from "../db/repository.js";
 
 const USAGE_KEY = "assistant_daily_usage";
 
-export type DailyUsageSnapshot = {
+type DailyUsageSnapshot = {
   /** UTC calendar day `YYYY-MM-DD`. */
   date: string;
   requests: number;
@@ -10,14 +10,14 @@ export type DailyUsageSnapshot = {
   tokens: number;
 };
 
-export type BudgetLimits = {
+type BudgetLimits = {
   /** Max chat requests per tenant per UTC day. `0` = unlimited. */
   requestBudget: number;
   /** Max estimated tokens per tenant per UTC day. `0` = unlimited. */
   tokenBudget: number;
 };
 
-export type BudgetCheckResult =
+type BudgetCheckResult =
   | { ok: true; usage: DailyUsageSnapshot }
   | { ok: false; usage: DailyUsageSnapshot; detail: string };
 

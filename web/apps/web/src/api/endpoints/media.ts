@@ -5,7 +5,7 @@ import { engineFetch, engineSendMultipart } from "../engineTransport";
 const ACCEPTED_MEDIA_BASIS_PATTERN = /^[0-9a-f]{64}$/;
 const ACCEPTED_RENDER_HEX_PATTERN = /^#[0-9a-f]{6}$/i;
 
-export type AcceptedPartMediaMetadata = {
+type AcceptedPartMediaMetadata = {
   readonly basis: string;
   readonly renderHex: string | null;
 };

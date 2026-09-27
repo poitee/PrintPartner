@@ -7,10 +7,10 @@ import { parseRequiredUnitToken } from "../services/required-units.js";
 import type { AcceptedPlateInput, AcceptedPlateUnitInput } from "./accepted-plates.js";
 
 export const MAX_ACCEPTED_PLATE_UM = 2_147_483_647;
-export const ACCEPTED_PLATE_LAYOUT_FORMAT = 2;
+const ACCEPTED_PLATE_LAYOUT_FORMAT = 2;
 export const LEGACY_ACCEPTED_PLATE_LAYOUT_FORMAT = 1;
 
-export type AcceptedPlateLayoutFailure =
+type AcceptedPlateLayoutFailure =
   | { readonly kind: "stale_accepted_plan" }
   | {
       readonly kind: "accepted_state_unavailable";

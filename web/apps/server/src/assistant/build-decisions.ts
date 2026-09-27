@@ -37,7 +37,7 @@ export type BuildDecision = {
   suggested_selection?: string;
 };
 
-export type DetectBuildDecisionsResult = {
+type DetectBuildDecisionsResult = {
   decisions: BuildDecision[];
   notes: string[];
   method: "heuristic" | "llm";
@@ -185,7 +185,7 @@ export function configDecisionsFromGuideText(guideText: string): BuildDecision[]
 }
 
 /** Convert domain-pack decisions.yaml rows into BuildDecision candidates. */
-export function decisionsFromDomainYaml(
+function decisionsFromDomainYaml(
   sourceName: string,
   dataDir?: string | null,
 ): BuildDecision[] {
@@ -218,7 +218,7 @@ export function decisionsFromDomainYaml(
  * Merge YAML curated candidates with heuristic ones.
  * Heuristic wins on id collision (richer evidence); YAML fills gaps.
  */
-export function mergeDecisionCandidates(
+function mergeDecisionCandidates(
   heuristic: BuildDecision[],
   fromYaml: BuildDecision[],
 ): BuildDecision[] {

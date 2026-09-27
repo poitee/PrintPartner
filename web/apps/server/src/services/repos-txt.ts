@@ -4,18 +4,18 @@ import { loadKitCatalog } from "./kit-catalog.js";
 const GITHUB_URL_RE =
   /^https?:\/\/(?:www\.)?github\.com\/([^/]+)\/([^/]+?)(?:\.git)?\/?$/i;
 
-export type ReposTxtLine = {
+type ReposTxtLine = {
   name: string;
   url: string;
   branch: string;
 };
 
-export type CatalogSuggestion = {
+type CatalogSuggestion = {
   role: string;
   metadata: Record<string, unknown>;
 };
 
-export type ImportReposTxtResult = {
+type ImportReposTxtResult = {
   created: number;
   updated: number;
   skipped: number;

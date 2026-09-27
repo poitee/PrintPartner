@@ -11,7 +11,7 @@ import {
   updatePrinterSendQueueItem,
 } from "./printer-send-queue-store.js";
 
-export type StartPrinterUploadJob = (payload: {
+type StartPrinterUploadJob = (payload: {
   printer_id: string;
   artifact_path: string;
   filename: string;
@@ -21,7 +21,7 @@ export type StartPrinterUploadJob = (payload: {
   checkoff_units?: PrinterSendQueueItem["checkoff_units"];
 }) => Promise<string>;
 
-export type GetHostStatus = (integrationId: string) => Promise<PrinterHostStatus>;
+type GetHostStatus = (integrationId: string) => Promise<PrinterHostStatus>;
 
 function isIdleish(state: PrinterHostStatus["state"]): boolean {
   return state === "idle" || state === "complete";

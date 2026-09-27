@@ -3,7 +3,7 @@ import { closeSync, mkdirSync, openSync, unlinkSync, writeSync } from "node:fs";
 import { basename, join } from "node:path";
 import { chargeTenantDiskBytes } from "../lib/tenant-disk-quota.js";
 
-export const DEFAULT_THREE_MF_LIMITS = {
+const DEFAULT_THREE_MF_LIMITS = {
   maxModelBytes: 64 * 1024 * 1024,
   maxObjects: 2_000,
   maxVertices: 5_000_000,
@@ -11,14 +11,14 @@ export const DEFAULT_THREE_MF_LIMITS = {
   maxOutputBytes: 256 * 1024 * 1024,
 } as const;
 
-export type ThreeMfImportLimits = Readonly<{
+type ThreeMfImportLimits = Readonly<{
   maxModelBytes?: number;
   maxObjects?: number;
   maxVertices?: number;
   maxTriangles?: number;
   maxOutputBytes?: number;
 }>;
-export type ThreeMfImportedFile = Readonly<{
+type ThreeMfImportedFile = Readonly<{
   relativePath: string;
   objectId: string;
   objectName: string;
@@ -27,7 +27,7 @@ export type ThreeMfImportedFile = Readonly<{
   triangleCount: number;
   byteSize: number;
 }>;
-export type ThreeMfImportResult = Readonly<{
+type ThreeMfImportResult = Readonly<{
   objectCount: number;
   files: ThreeMfImportedFile[];
 }>;

@@ -45,7 +45,7 @@ export class FilenameGroupingConflictError extends Error {
     super("Filename rules assign a selected part to multiple groups. Fix the rules or assign an exception before exporting.");
   }
 }
-export type AcceptedStlBundleSelection = "all" | "missing";
+type AcceptedStlBundleSelection = "all" | "missing";
 
 export const STL_EXPORT_MISSING_HINT =
   "Sync Sources and fix Review blockers, then export again.";
@@ -67,7 +67,7 @@ export type AcceptedStlBundleWarning = Readonly<{
   sourceLayer: string;
 }>;
 
-export type MaterializeAcceptedStlBundleResult =
+type MaterializeAcceptedStlBundleResult =
   | {
       readonly kind: "materialized";
       readonly basis: AcceptedPlanBasis | null;

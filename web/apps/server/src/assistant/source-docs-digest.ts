@@ -74,7 +74,7 @@ export function summarizePlanSourceDocs(
   return truncate(blocks.join("\n\n"), MAX_DIGEST_CHARS);
 }
 
-export type SourceDocsToolResult = {
+type SourceDocsToolResult = {
   source_id: number;
   source_name: string;
   untrusted: true;

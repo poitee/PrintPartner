@@ -9,7 +9,7 @@ import type { WorkflowStatusKind } from "@/lib/statusTone";
  * carries no tone, so the words and the icon come from here and the colour
  * comes from `lib/statusTone` through `StatusBadge`.
  */
-export type TrackedPrintPresentation = Readonly<{
+type TrackedPrintPresentation = Readonly<{
   status: WorkflowStatusKind;
   label: string;
   /** True when only the operator can move this print forward. */

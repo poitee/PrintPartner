@@ -159,15 +159,6 @@ function rowToEvent(row: {
   return e;
 }
 
-export function loadPrintOutcomes(repo: AppRepository, profileId?: number): PrintOutcomeEvent[] {
-  if (profileId != null) {
-    return repo.listPrintJobParts(profileId).map(rowToEvent);
-  }
-  // Fallback: load all via profile 0 sentinel won't work; caller should pass profileId.
-  // This overload exists for legacy callers only.
-  return [];
-}
-
 export function appendPrintOutcomes(
   repo: AppRepository,
   events: Omit<PrintOutcomeEvent, "id" | "at">[],

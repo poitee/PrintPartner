@@ -1,7 +1,7 @@
 import type { SourceSummary } from "@print-partner/contracts";
 import type { ProfileLayer } from "../api/endpoints/plans";
 
-export type BuildSourceLayerRow = {
+type BuildSourceLayerRow = {
   key: string;
   layer: ProfileLayer;
   sourceId: number;

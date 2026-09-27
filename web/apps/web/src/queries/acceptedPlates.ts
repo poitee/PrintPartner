@@ -33,7 +33,7 @@ import {
 } from "../api/endpoints/acceptedPlates";
 import { queryKeys } from "./keys";
 
-export type AcceptedPlateCapability =
+type AcceptedPlateCapability =
   | {
       readonly kind: "blocked";
       readonly reason:
@@ -62,7 +62,7 @@ type CapabilityInput = Readonly<{
   revisionWritePending: boolean;
 }>;
 
-export type AcceptedPlateMoveVariables = Readonly<{
+type AcceptedPlateMoveVariables = Readonly<{
   plateId: string;
   token: string;
   input: MoveAcceptedPlateUnitRequest;
@@ -94,11 +94,11 @@ type AcceptedPlateActionResult =
   | Readonly<{ kind: "receipt"; receipt: AcceptedPlateMoveReceipt }>
   | Readonly<{ kind: "workspace"; workspace: AcceptedPlateWorkspace }>;
 
-export function acceptedPlateMutationKey(profileId: number) {
+function acceptedPlateMutationKey(profileId: number) {
   return ["acceptedPlateRevision", profileId] as const;
 }
 
-export function acceptedPlateMutationScope(profileId: number) {
+function acceptedPlateMutationScope(profileId: number) {
   return { id: `accepted-plate-revision:${profileId}` };
 }
 

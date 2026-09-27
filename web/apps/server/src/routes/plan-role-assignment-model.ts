@@ -3,7 +3,7 @@ import {
   type FilamentAssignment,
 } from "../db/accepted-part-filament.js";
 
-export type CompleteRoleAssignmentInput = {
+type CompleteRoleAssignmentInput = {
   filament_color_id?: string | null;
   filament_custom_hex?: string | null;
   spoolman_spool_id?: string | null;

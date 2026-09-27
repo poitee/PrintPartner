@@ -38,9 +38,7 @@ import {
   ResponseBodyTooLargeError,
 } from "../../lib/bounded-response.js";
 
-export type SlicerKind = "orca" | "prusa" | "bambu";
-
-export const SLICER_KINDS: readonly SlicerKind[] = ["orca", "prusa", "bambu"] as const;
+type SlicerKind = "orca" | "prusa" | "bambu";
 
 const MAX_CONTROL_RESPONSE_BYTES = 64 * 1024;
 const MAX_SLICE_RESPONSE_BYTES = 512 * 1024 * 1024;
@@ -55,10 +53,6 @@ const ZIP_LOCAL_FILE_HEADER_BYTES = 30;
 const ZIP_CENTRAL_DIRECTORY_HEADER_BYTES = 46;
 const ZIP_END_OF_CENTRAL_DIRECTORY_BYTES = 22;
 const ZIP_MAX_COMMENT_BYTES = 0xffff;
-
-export function isSlicerKind(value: unknown): value is SlicerKind {
-  return typeof value === "string" && (SLICER_KINDS as readonly string[]).includes(value);
-}
 
 /**
  * Fetch the sidecar with Connection: close.
@@ -86,7 +80,7 @@ async function fetchSidecar(url: string, init: RequestInit): Promise<Response> {
   }
 }
 
-export type SliceRequest = {
+type SliceRequest = {
   /** Raw bytes of the plate 3MF file. */
   model: Uint8Array;
   /** Filename to advertise for the uploaded plate (defaults to plate.3mf). */
@@ -108,7 +102,7 @@ export type SliceRequest = {
   filament_configs?: Array<Record<string, unknown>>;
 };
 
-export type SliceResult = {
+type SliceResult = {
   /** Gcode file bytes. */
   gcode: Uint8Array;
   /** Plate thumbnail PNG bytes (may be empty if sidecar did not produce one). */
@@ -139,43 +133,6 @@ export class SlicerSidecarError extends Error {
     this.status = options.status ?? null;
     this.details = options.details ?? {};
   }
-}
-
-/**
- * Flatten a sidecar failure into the pieces a caller wants to log and show.
- *
- * The sidecar reports a CLI failure as `slicer_execution_failed` with the
- * process's `exit_code` and captured `stderr` in `error.details` — that stderr
- * is the only place the actual reason ("unknown config option", "invalid
- * printable_area", …) appears, so it has to reach the user rather than being
- * swallowed behind a generic "orca-slicer exited with code 1".
- */
-export function describeSidecarError(e: unknown): {
-  message: string;
-  code: string;
-  exitCode: number | null;
-  stderr: string | null;
-} {
-  const message = e instanceof Error ? e.message : String(e);
-  if (!(e instanceof SlicerSidecarError)) {
-    return { message, code: "slice_failed", exitCode: null, stderr: null };
-  }
-  const rawStderr = e.details.stderr;
-  const stderr = typeof rawStderr === "string" && rawStderr.trim() ? rawStderr.trim() : null;
-  const rawExit = e.details.exit_code;
-  const exitCode = typeof rawExit === "number" && Number.isFinite(rawExit) ? rawExit : null;
-  return { message, code: e.code, exitCode, stderr };
-}
-
-/** Last `maxLines` non-blank lines of a CLI stderr blob, for a one-glance summary. */
-export function stderrTail(stderr: string | null | undefined, maxLines = 6): string | null {
-  if (!stderr) return null;
-  const lines = stderr
-    .split(/\r?\n/)
-    .map((l) => l.trimEnd())
-    .filter((l) => l.trim().length > 0);
-  if (!lines.length) return null;
-  return lines.slice(-maxLines).join("\n");
 }
 
 function normUrl(raw: unknown): string | null {

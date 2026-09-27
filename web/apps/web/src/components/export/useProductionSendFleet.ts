@@ -10,7 +10,7 @@ import { partitionPrinterSendFleet } from "../../lib/printerSendModel";
  * Those are different lists, so the "Send or start" task asks this one rather
  * than counting the Plate printers.
  */
-export const productionSendFleetKey = ["production-send-fleet"] as const;
+const productionSendFleetKey = ["production-send-fleet"] as const;
 
 export function useProductionSendFleet(enabled: boolean) {
   return useQuery({

@@ -7,20 +7,6 @@ import {
   useAcceptedPlateWorkspaceQuery,
 } from "../../queries/acceptedPlates";
 
-export const EXPORT_JOB_KINDS = new Set([
-  "stl-export",
-  "export",
-  "export-accepted-plate-3mf",
-  "kit-export",
-  "export-checklist-html",
-  "export-kit-bundle",
-  "printer-upload",
-]);
-
-export function hasExportJobs(jobs: readonly Pick<ActiveJob, "kind">[]): boolean {
-  return jobs.some((job) => EXPORT_JOB_KINDS.has(job.kind));
-}
-
 export function acceptedPlateRecentJobs(
   activeJobs: readonly ActiveJob[],
   history: readonly AcceptedPlateExportRecord[],

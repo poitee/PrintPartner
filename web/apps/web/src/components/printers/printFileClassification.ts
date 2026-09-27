@@ -38,7 +38,7 @@ export type PrintFileCheckSummary = PrintFileClassificationSummary &
  * Required at both call sites rather than defaulted, so neither can drift into
  * the other's rules by saying nothing.
  */
-export type PrintFileIntent = "print" | "record";
+type PrintFileIntent = "print" | "record";
 
 /** A name that says its own format, unlike a 3MF, which says nothing. */
 const GCODE_EXTENSION = /\.(?:gcode|gco|bgcode)$/i;

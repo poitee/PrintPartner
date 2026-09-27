@@ -10,17 +10,17 @@ export type StlSearchHit = {
   filename: string;
 };
 
-export type StlSearchResponse = {
+type StlSearchResponse = {
   query: string;
   results: StlSearchHit[];
 };
 
-export type SaveSourceCategoriesInput = {
+type SaveSourceCategoriesInput = {
   categories: string[];
   replacements?: Record<string, string | null>;
 };
 
-export type CreateSourceInput = {
+type CreateSourceInput = {
   name: string;
   url?: string;
   branch?: string;
@@ -32,7 +32,7 @@ export type CreateSourceInput = {
   metadata?: Record<string, unknown>;
 };
 
-export type UpdateSourceInput = Partial<{
+type UpdateSourceInput = Partial<{
   name: string;
   url: string;
   branch: string;
@@ -44,7 +44,7 @@ export type UpdateSourceInput = Partial<{
   metadata: Record<string, unknown>;
 }>;
 
-export type BulkCategoryAssignResult = {
+type BulkCategoryAssignResult = {
   updated: SourceSummary[];
   results: Array<{ source_id: number; ok: boolean; detail?: string }>;
   succeeded: number;
@@ -68,7 +68,7 @@ export type StlTreeFolderNode = {
 
 export type StlTreeNode = StlTreeFileNode | StlTreeFolderNode;
 
-export type StlTreeResponse = {
+type StlTreeResponse = {
   project_id: number;
   legacy_import_all: boolean;
   total: number;

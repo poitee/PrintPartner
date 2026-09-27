@@ -2,12 +2,12 @@ import type { PrinterHostStatus } from "@print-partner/contracts";
 import type { IntegrationSummary } from "../api/endpoints/integrations";
 import type { PrinterMachine } from "../api/endpoints/printers";
 
-export type PrinterSendStatusVariant = "success" | "muted" | "default" | "warning" | "error";
-export type SendHostType = "moonraker" | "prusalink";
+type PrinterSendStatusVariant = "success" | "muted" | "default" | "warning" | "error";
+type SendHostType = "moonraker" | "prusalink";
 
 const SEND_HOST_TYPES = new Set<SendHostType>(["moonraker", "prusalink"]);
 
-export type PrinterSendFleet = {
+type PrinterSendFleet = {
   sendPrinters: PrinterMachine[];
   bambuPrinters: PrinterMachine[];
   hostTypeByPrinterId: Record<string, SendHostType | "bambu">;

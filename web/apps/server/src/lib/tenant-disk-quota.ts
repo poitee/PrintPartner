@@ -2,12 +2,11 @@ import { readdir, lstat } from "node:fs/promises";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { join, resolve } from "node:path";
 import type { FastifyReply } from "fastify";
-import { HOSTED_TENANT_DISK_QUOTA_BYTES } from "@print-partner/contracts";
 import { sendProblem } from "./api-error.js";
 import { tenantExportDirectory } from "./secure-path.js";
 import { sourceWorkspaceRoot } from "../services/source-filesystem-policy.js";
 
-export const TENANT_DISK_QUOTA_DETAIL =
+const TENANT_DISK_QUOTA_DETAIL =
   "This tenant is at the 2 GiB disk quota on the hosted planning site.";
 
 export class TenantDiskQuotaError extends Error {
@@ -71,7 +70,7 @@ function isMissing(error: unknown): boolean {
   return error instanceof Error && "code" in error && error.code === "ENOENT";
 }
 
-export async function measureDirectoryBytes(path: string): Promise<number> {
+async function measureDirectoryBytes(path: string): Promise<number> {
   let stats;
   try {
     stats = await lstat(path);
@@ -169,4 +168,3 @@ export async function sendIfTenantDiskQuotaExceeded(
   }
 }
 
-export { HOSTED_TENANT_DISK_QUOTA_BYTES };

@@ -1,8 +1,6 @@
 import type { ManifestSelection, ManifestSelections } from "@print-partner/contracts";
 
 export type KitManifestSaveStatus = "idle" | "pending" | "saving" | "saved" | "error";
-
-export const KIT_MANIFEST_AUTOSAVE_MS = 700;
 export const KIT_MANIFEST_SAVED_CLEAR_MS = 3000;
 
 export function selectionsEqual(

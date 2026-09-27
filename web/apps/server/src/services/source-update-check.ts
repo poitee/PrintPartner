@@ -5,9 +5,9 @@ import type { AppRepository } from "../db/repository.js";
 export const REMOTE_UPDATE_STATUS_KEY = "remote_update_status";
 export const REMOTE_CHECKED_AT_KEY = "remote_checked_at";
 
-export type RemoteUpdateStatus = "up_to_date" | "updates_available" | "unknown";
+type RemoteUpdateStatus = "up_to_date" | "updates_available" | "unknown";
 
-export async function remoteUpdateStatusOctokit(
+async function remoteUpdateStatusOctokit(
   url: string,
   branch: string,
   lastSha: string | null,

@@ -4,7 +4,7 @@ import type { SourceKind } from "../components/sources/sourceLabels";
 const AUTOMATIC_KINDS = new Set(["github", "git"]);
 const TRACKED_MODEL_KINDS = new Set(["printables", "makerworld", "thangs"]);
 
-export type SourceMonitoringCapability = "automatic" | "manual_model" | "local";
+type SourceMonitoringCapability = "automatic" | "manual_model" | "local";
 
 export function sourceMonitoringCapability(kind: string): SourceMonitoringCapability {
   if (AUTOMATIC_KINDS.has(kind)) return "automatic";

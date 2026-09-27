@@ -3,7 +3,7 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { safeRepoPath } from "@print-partner/domain";
 import type { AppRepository, PartDbRow } from "../db/repository.js";
 
-export type ProfileStlIndex = {
+type ProfileStlIndex = {
   byLayer: Map<string, string>;
   fallbackRoots: string[];
 };
@@ -49,14 +49,14 @@ export function resolveCaseInsensitiveRepoPath(
   return resolvedRepoFile(repoRoot, current);
 }
 
-export function resolveRepoStlPath(repoRoot: string, relativePath: string): string | null {
+function resolveRepoStlPath(repoRoot: string, relativePath: string): string | null {
   const exact = safeRepoPath(repoRoot, relativePath);
   const resolvedExact = exact ? resolvedRepoFile(repoRoot, exact) : null;
   if (resolvedExact) return resolvedExact;
   return resolveCaseInsensitiveRepoPath(repoRoot, relativePath);
 }
 
-export function buildProfileStlIndex(repo: AppRepository, profileId: number): ProfileStlIndex {
+function buildProfileStlIndex(repo: AppRepository, profileId: number): ProfileStlIndex {
   const byLayer = new Map<string, string>();
   const fallbackRoots: string[] = [];
   const seen = new Set<string>();
@@ -87,7 +87,7 @@ export function buildProfileStlIndex(repo: AppRepository, profileId: number): Pr
   return { byLayer, fallbackRoots };
 }
 
-export function resolvePartStlPath(part: PartDbRow, index: ProfileStlIndex): string | null {
+function resolvePartStlPath(part: PartDbRow, index: ProfileStlIndex): string | null {
   if (part.sourceLayer && index.byLayer.has(part.sourceLayer)) {
     const safe = resolveRepoStlPath(index.byLayer.get(part.sourceLayer)!, part.relativePath);
     if (safe) return safe;

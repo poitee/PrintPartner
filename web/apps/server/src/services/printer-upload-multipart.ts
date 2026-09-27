@@ -12,13 +12,13 @@ import {
   PRINT_FILE_UPLOAD_TOO_LARGE_DETAIL,
 } from "./upload-limits.js";
 
-export type PrinterUploadMultipartError = {
+type PrinterUploadMultipartError = {
   status: number;
   title: string;
   detail: string;
 };
 
-export type PrinterUploadMultipartResult = {
+type PrinterUploadMultipartResult = {
   printer_id: string;
   start: boolean;
   filename: string;
@@ -30,7 +30,7 @@ export type PrinterUploadMultipartResult = {
   match?: "pinned" | "compatible";
 };
 
-export type ParsePrinterUploadMultipartOptions = {
+type ParsePrinterUploadMultipartOptions = {
   exportsDir: string;
   /** When true, also parse wait_for_idle and match (send-queue route). */
   allowQueueFields?: boolean;

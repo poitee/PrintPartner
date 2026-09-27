@@ -137,4 +137,3 @@ export async function pingBundle(bundle: DatabaseBundle): Promise<{
   return { app, postgres };
 }
 
-export { pgSchema, sqliteSchema };

@@ -4,35 +4,35 @@ import { dirname, join, relative, sep } from "node:path";
 import type { AppRepository } from "../db/repository.js";
 import type { SourceArtifact } from "./source-artifacts.js";
 
-export const BUILD_PLANNING_VERSION = 1;
+const BUILD_PLANNING_VERSION = 1;
 const SETTING_PREFIX = "build_planning.v1.";
 
 export type RequirementStatus =
   "unverified" | "satisfied" | "incompatible" | "user_waived";
-export type EvidenceKind =
+type EvidenceKind =
   | "canonical_design"
   | "vendor_overlay"
   | "mod"
   | "component"
   | "model_source"
   | "informational_evidence";
-export type DifferenceKind =
+type DifferenceKind =
   "added" | "removed" | "changed" | "renamed" | "contradictory";
-export type DifferenceResolution =
+type DifferenceResolution =
   | "choose_source_a"
   | "choose_source_b"
   | "include_both"
   | "not_applicable"
   | "custom";
 
-export type BuildRequirement = {
+type BuildRequirement = {
   key: string;
   value: string;
   status: RequirementStatus;
   detail?: string;
 };
 
-export type BuildEvidence = {
+type BuildEvidence = {
   id: string;
   url: string;
   normalized_url: string;
@@ -52,7 +52,7 @@ export type BuildEvidence = {
   pinned_revision?: string;
 };
 
-export type BuildDifference = {
+type BuildDifference = {
   id: string;
   group_id: string;
   family: string;
@@ -64,14 +64,14 @@ export type BuildDifference = {
   detail: string;
 };
 
-export type DifferenceGroupResolution = {
+type DifferenceGroupResolution = {
   resolution: DifferenceResolution;
   rationale: string;
   custom_resolution?: string;
   resolved_at: string;
 };
 
-export type RoleFilamentAssignment = {
+type RoleFilamentAssignment = {
   role: string;
   requested_brand?: string;
   requested_name?: string;
@@ -100,7 +100,7 @@ export type CompatibilityFinding = {
   evidence_ids: string[];
 };
 
-export type BuildChecklistItem = {
+type BuildChecklistItem = {
   id: string;
   title: string;
   detail?: string;
@@ -109,7 +109,7 @@ export type BuildChecklistItem = {
   completed: boolean;
 };
 
-export type BuildPlanningBrief = {
+type BuildPlanningBrief = {
   version: typeof BUILD_PLANNING_VERSION;
   build_id: number;
   special_request: string;
@@ -137,12 +137,12 @@ export function mcpBuildPlanningBrief(
   return planningBrief;
 }
 
-export type BuildPlanningReadiness = {
+type BuildPlanningReadiness = {
   ready: boolean;
   blockers: Array<{ code: string; detail: string }>;
 };
 
-export type BuildPlanningPhase =
+type BuildPlanningPhase =
   | { readonly kind: "preparing" }
   | { readonly kind: "draft"; readonly draft_id: number }
   | {
@@ -529,7 +529,7 @@ export function normalizedUrl(raw: string): string {
   return parsed.toString();
 }
 
-export function classifyBuildUrl(raw: string): BuildEvidence {
+function classifyBuildUrl(raw: string): BuildEvidence {
   const url = normalizedUrl(raw);
   const parsed = new URL(url);
   const path = parsed.pathname.toLowerCase();

@@ -4,9 +4,6 @@ import type { StatusTone } from "./statusTone";
 
 export type LiveStripHostType = "moonraker" | "prusalink" | "bambu";
 
-/** Poll linked hosts for Progress — avoid hammering LAN printers. */
-export const PRINTER_LIVE_STRIP_POLL_MS = 5_000;
-
 /** Format optional ETA for the Progress live strip. */
 export function formatEtaSeconds(etaSeconds: number | undefined | null): string | null {
   if (etaSeconds == null || !Number.isFinite(etaSeconds) || etaSeconds < 0) return null;

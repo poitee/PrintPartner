@@ -4,7 +4,7 @@ import type {
 } from "@print-partner/contracts";
 import { EngineHttpError } from "../api/engineTransport";
 
-export type ProductionBlock = {
+type ProductionBlock = {
   readonly checkoffLinkCount: number;
   readonly sendQueueItemCount: number;
 };

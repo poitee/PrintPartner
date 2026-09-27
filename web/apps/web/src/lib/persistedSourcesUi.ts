@@ -2,7 +2,7 @@ import type { SourceViewMode, SyncFilter } from "../components/sources/SourcesTo
 
 export const SOURCES_UI_STORAGE_KEY = "print-partner.sources.ui.v1";
 
-export type PersistedSourcesUi = {
+type PersistedSourcesUi = {
   viewMode: SourceViewMode;
   categoryFilter: string;
   syncFilter: SyncFilter;

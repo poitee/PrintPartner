@@ -41,7 +41,7 @@ export type KitManifest = {
   }>;
 };
 
-export type ManifestV2 = {
+type ManifestV2 = {
   profile_id: number;
   version: number;
   yaml: string;
@@ -79,7 +79,7 @@ export type ManifestV2 = {
   addon_count: number;
 };
 
-export type PlanManifestBuilderSource = {
+type PlanManifestBuilderSource = {
   source_id: number;
   layer_type: string;
   name: string;
@@ -92,21 +92,21 @@ export type PlanManifestBuilderSource = {
   scanned_parts: ScannedManifestPart[];
 };
 
-export type PlanManifestBuilderBootstrap = {
+type PlanManifestBuilderBootstrap = {
   profile_id: number;
   sources: PlanManifestBuilderSource[];
   resolved_selections?: ManifestSelections;
   merged_option_groups: Record<string, RepoManifestOptionGroup>;
 };
 
-export type ManifestWarning = {
+type ManifestWarning = {
   code: string;
   message: string;
   severity: string;
   match_key: string | null;
 };
 
-export type ManifestSummary = {
+type ManifestSummary = {
   profile_id: number;
   required: { total: number; included: number };
   optional: { total: number; included: number };
@@ -121,14 +121,14 @@ export type ManifestSummary = {
   }>;
 };
 
-export type ManifestTemplateSummary = {
+type ManifestTemplateSummary = {
   id: string;
   label: string;
   category: string;
   available: string;
 };
 
-export type ManifestTemplatePayload = {
+type ManifestTemplatePayload = {
   id: string;
   label: string;
   category: string;
@@ -143,7 +143,7 @@ export type ManifestRegistryEntry = {
   manifest_file: string;
 };
 
-export type KitCatalogBase = {
+type KitCatalogBase = {
   label: string;
   source_name: string;
   compatible_addons: string[];
@@ -151,41 +151,41 @@ export type KitCatalogBase = {
   default_addons?: string[];
 };
 
-export type KitCatalogSourceEntry = {
+type KitCatalogSourceEntry = {
   name: string;
   variant_id?: string;
   compatible_bases?: string[];
 };
 
-export type KitCatalogCategory = {
+type KitCatalogCategory = {
   label: string;
   rule: string;
   replaces_slot?: string;
   sources: KitCatalogSourceEntry[];
 };
 
-export type KitCatalogStackPreset = {
+type KitCatalogStackPreset = {
   label: string;
   base: string;
   addon_sources: string[];
   default_selections?: ManifestSelections;
 };
 
-export type KitCatalog = {
+type KitCatalog = {
   version: number;
   bases: Record<string, KitCatalogBase>;
   addon_categories: Record<string, KitCatalogCategory>;
   stack_presets?: Record<string, KitCatalogStackPreset>;
 };
 
-export type PlanMaintenanceEntry = {
+type PlanMaintenanceEntry = {
   profile_id: number;
   name: string;
   warning_count: number;
   warnings: ManifestWarning[];
 };
 
-export type PlansMaintenanceReport = {
+type PlansMaintenanceReport = {
   plans_with_warnings: PlanMaintenanceEntry[];
 };
 
@@ -248,7 +248,7 @@ export type PlanReview = {
   part_groups: PlanReviewPartGroup[];
 };
 
-export type BuildPlanningEvidence = {
+type BuildPlanningEvidence = {
   id: string;
   normalized_url: string;
   kind: string;
@@ -330,28 +330,6 @@ export async function fetchCommunityManifest(slug: string): Promise<{
   document: RepoManifestDocument;
 }> {
   return engineFetch(`/manifest-registry/${encodeURIComponent(slug)}`);
-}
-
-export async function fetchProfileParts(profileId: number): Promise<PartRow[]> {
-  const body = await engineFetch<{ parts: PartRow[] }>(
-    `/plans/${profileId}/parts?limit=10000`,
-  );
-  return body.parts;
-}
-
-export async function fetchManifestSummary(
-  profileId: number,
-): Promise<ManifestSummary> {
-  return engineFetch<ManifestSummary>(`/plans/${profileId}/manifest-summary`);
-}
-
-export async function fetchManifestWarnings(
-  profileId: number,
-): Promise<ManifestWarning[]> {
-  const body = await engineFetch<{ warnings: ManifestWarning[] }>(
-    `/plans/${profileId}/manifest-warnings`,
-  );
-  return body.warnings;
 }
 
 export async function fetchPlanReview(

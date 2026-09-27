@@ -4313,7 +4313,7 @@ export async function invokeAssistantTool(
   }
 }
 
-export type ApplyActionDeps = {
+type ApplyActionDeps = {
   hostedPlanning?: boolean;
   repo: AppRepository;
   jobs: InProcessJobRunner;

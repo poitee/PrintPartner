@@ -1,13 +1,13 @@
 export const DEFAULT_SOURCE_UPDATE_INTERVAL_HOURS = 24;
-export const MIN_SOURCE_UPDATE_INTERVAL_HOURS = 1;
-export const MAX_SOURCE_UPDATE_INTERVAL_HOURS = 168;
+const MIN_SOURCE_UPDATE_INTERVAL_HOURS = 1;
+const MAX_SOURCE_UPDATE_INTERVAL_HOURS = 168;
 
-export type SourceMonitoringUpdate = {
+type SourceMonitoringUpdate = {
   intervalHours?: number;
   autoSyncUpdates?: boolean;
 };
 
-export type SourceMonitoringUpdateParseResult =
+type SourceMonitoringUpdateParseResult =
   | { kind: "valid"; update: SourceMonitoringUpdate }
   | { kind: "invalid"; detail: string };
 

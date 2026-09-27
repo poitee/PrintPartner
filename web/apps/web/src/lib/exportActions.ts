@@ -1,7 +1,7 @@
 import { toast } from "sonner";
 import { downloadExport } from "../api/endpoints/browserFiles";
 
-export type ExportJobResult = Record<string, unknown> | null | undefined;
+type ExportJobResult = Record<string, unknown> | null | undefined;
 
 type CompleteExportOptions = {
   pathField?: "path" | "root_path" | "primary_path";
@@ -39,23 +39,4 @@ export function completeExportDownload(
   }
 
   toast.success(title);
-}
-
-/** Download multiple files when the job result includes per-file download_url entries. */
-export function completeMultiFileExportDownload(title: string, result: ExportJobResult): void {
-  const paths = result?.paths as Array<{ download_url?: string }> | undefined;
-  if (Array.isArray(paths)) {
-    let count = 0;
-    for (const entry of paths) {
-      if (typeof entry.download_url === "string") {
-        downloadExport(entry.download_url);
-        count++;
-      }
-    }
-    if (count > 0) {
-      toast.success(`${title}: ${count} file(s) downloaded`);
-      return;
-    }
-  }
-  completeExportDownload(title, result, { pathField: "primary_path" });
 }

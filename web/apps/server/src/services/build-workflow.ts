@@ -14,7 +14,7 @@ import { PlanDraftWorkspaceService } from "./plan-draft-workspace.js";
 import { loadPrinterCheckoffLinks } from "./printer-checkoff-store.js";
 import { loadPrinterSendQueue } from "./printer-send-queue-store.js";
 
-export type ReadBuildWorkflowWorkspaceResult =
+type ReadBuildWorkflowWorkspaceResult =
   | Readonly<{ kind: "missing" }>
   | Readonly<{
       kind: "ready";

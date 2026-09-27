@@ -69,12 +69,7 @@ import {
   directExportError,
 } from "./accepted-export-job-errors.js";
 
-export type JobHandler = (
-  jobId: string,
-  emit: (event: Partial<JobSnapshot>) => void,
-) => Promise<Record<string, unknown>>;
-
-export type JobRunnerDeps = {
+type JobRunnerDeps = {
   getRepo: () => AppRepository;
   reposDir: string;
   exportsDir: string;
@@ -83,7 +78,7 @@ export type JobRunnerDeps = {
   tenantDiskQuotaBytes?: number | null;
 };
 
-export type JobListFilters = {
+type JobListFilters = {
   status?: string;
   since?: string;
   profile_id?: number;
@@ -95,13 +90,13 @@ type JobMeta = {
   updatedAt: number;
 };
 
-export const COMPLETED_JOB_MAX = 1_000;
-export const COMPLETED_JOB_GLOBAL_MAX = 10_000;
-export const COMPLETED_JOB_RETENTION_MS = 24 * 60 * 60 * 1_000;
+const COMPLETED_JOB_MAX = 1_000;
+const COMPLETED_JOB_GLOBAL_MAX = 10_000;
+const COMPLETED_JOB_RETENTION_MS = 24 * 60 * 60 * 1_000;
 const EMPTY_TENANT_JOB_BUCKET = Symbol("empty-tenant-job-bucket");
 const STARTABLE_JOB_KINDS = new Set<string>(JOB_KINDS);
 
-export type JobRunnerOptions = {
+type JobRunnerOptions = {
   completedJobMax?: number;
   completedJobGlobalMax?: number;
   completedJobRetentionMs?: number;

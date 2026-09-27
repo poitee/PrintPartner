@@ -128,7 +128,7 @@ function firstNumber(flat: Record<string, string>, ...keys: string[]): number | 
   return null;
 }
 
-export type ParsedProfileFile = {
+type ParsedProfileFile = {
   kind: ProfileKind;
   name: string;
   version: string | null;

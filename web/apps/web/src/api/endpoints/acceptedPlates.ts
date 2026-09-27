@@ -197,8 +197,6 @@ const slicerExchangeStatusEndpoint = defineJsonReadEndpoint({
   parseFailure: parseSafeError,
 });
 
-export { ContractRequestError as AcceptedPlateRequestError };
-
 export function acceptedPlateErrorCode(error: unknown): AcceptedPlateEndpointError["code"] | undefined {
   if (!(error instanceof ContractRequestError) || error.failure.kind !== "endpoint") return undefined;
   try {

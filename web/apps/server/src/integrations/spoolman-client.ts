@@ -89,7 +89,7 @@ export function normalizeSpoolmanVendor(vendor: unknown): string {
   return "";
 }
 
-export function normalizeSpoolmanFilament(raw: Record<string, unknown>): SpoolmanFilament | null {
+function normalizeSpoolmanFilament(raw: Record<string, unknown>): SpoolmanFilament | null {
   const id = Number(raw.id);
   if (!Number.isFinite(id)) return null;
   return {

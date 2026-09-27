@@ -49,11 +49,11 @@ export type CustomFilament = {
   created_at: string;
 };
 
-export type SpoolmanDefaultSettings = {
+type SpoolmanDefaultSettings = {
   integration_id: string | null;
 };
 
-export type SaveRoleFilamentPayload = {
+type SaveRoleFilamentPayload = {
   role: string;
   filament_color_id?: string | null;
   filament_custom_hex?: string | null;
@@ -62,7 +62,7 @@ export type SaveRoleFilamentPayload = {
   refresh_thumbnails?: boolean;
 };
 
-export type RoleFilamentMutationResult = {
+type RoleFilamentMutationResult = {
   updated: number;
   thumbnails_cleared: number;
   roles: RoleFilamentRow[];

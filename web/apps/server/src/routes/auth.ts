@@ -31,9 +31,6 @@ declare module "fastify" {
   }
 }
 
-export type { SessionUser } from "./auth-types.js";
-export { toPublicUser } from "./auth-types.js";
-
 const authRateLimit = { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } };
 const MAX_OAUTH_RESPONSE_BYTES = 256 * 1024;
 const OAUTH_PROVIDER_TIMEOUT_MS = 15_000;
@@ -532,7 +529,7 @@ export function registerAuthRoutes(
   }
 }
 
-export function resolveRequestAuth(
+function resolveRequestAuth(
   request: FastifyRequest,
   config: ServerConfig,
   authStore: AuthStore | null,

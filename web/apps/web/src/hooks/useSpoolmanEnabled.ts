@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { fetchFilamentCatalog, type FilamentCatalog } from "../api/endpoints/filaments";
 
-export type SpoolmanCatalogState = {
+type SpoolmanCatalogState = {
   catalog: FilamentCatalog | null;
   integrationId: string | null;
   /** Filament catalog from Spoolman loaded successfully (Build color picker). */

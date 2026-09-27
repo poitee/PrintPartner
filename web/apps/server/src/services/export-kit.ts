@@ -49,7 +49,7 @@ export type EditableKitRecipe = Readonly<{
   workingParts: readonly KitBundlePartWithoutProgress[];
 }>;
 
-export type KitBundleMode =
+type KitBundleMode =
   | { readonly kind: "editable"; readonly recipe: EditableKitRecipe }
   | {
       readonly kind: "accepted_progress";
@@ -179,4 +179,4 @@ export function loadKitBundleBytes(path: string): Record<string, unknown> {
   return parseKitBundleBuffer(buf, path);
 }
 
-export { KIT_FORMAT, KIT_VERSION };
+export { KIT_FORMAT };

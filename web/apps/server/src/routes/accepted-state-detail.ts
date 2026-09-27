@@ -1,4 +1,4 @@
-export type AcceptedStateUnavailableReason = "compatibility_dirty" | "uninitialized";
+type AcceptedStateUnavailableReason = "compatibility_dirty" | "uninitialized";
 
 export function acceptedStateDetail(reason: AcceptedStateUnavailableReason): string {
   return reason === "compatibility_dirty"

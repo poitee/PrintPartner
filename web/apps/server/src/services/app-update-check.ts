@@ -101,7 +101,7 @@ async function fetchLatestFromGitHub(
   return { version: tag, releaseUrl };
 }
 
-export type CheckAppUpdateOptions = {
+type CheckAppUpdateOptions = {
   fetchImpl?: typeof fetch;
   now?: () => number;
 };

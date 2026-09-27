@@ -7,7 +7,7 @@
  * remain the authoritative checks — nothing here grants access.
  */
 
-export const MCP_HTTP_PATH = "/api/v1/mcp";
+const MCP_HTTP_PATH = "/api/v1/mcp";
 
 /** Methods the transport actually serves; anything else stays session-gated. */
 const MCP_HTTP_METHODS = new Set(["GET", "POST", "DELETE"]);

@@ -10,7 +10,7 @@ export type SessionUser = {
   is_admin: boolean;
 };
 
-export type PublicUser = {
+type PublicUser = {
   user_id: string;
   login: string;
   display_name: string;

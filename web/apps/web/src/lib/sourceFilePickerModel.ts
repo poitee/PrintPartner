@@ -1,6 +1,6 @@
 import type { SourceSummary } from "@print-partner/contracts";
 
-export type AttachedSourceStateLabel = {
+type AttachedSourceStateLabel = {
   text: string;
   tone: "muted" | "warn" | "sync";
 };

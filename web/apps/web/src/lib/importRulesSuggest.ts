@@ -1,7 +1,7 @@
 import type { StlTreeNode } from "../api/importRulesTree";
 
 /** Top-level folder names excluded from import-rule suggestions. */
-export const IMPORT_RULE_JUNK_FOLDERS = new Set([
+const IMPORT_RULE_JUNK_FOLDERS = new Set([
   "library",
   "manual",
   ".github",

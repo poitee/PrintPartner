@@ -1,9 +1,9 @@
 import type { AppRepository } from "../db/repository.js";
 
-export const KNOWLEDGE_BUNDLE_FORMAT = "print-partner-knowledge";
-export const KNOWLEDGE_BUNDLE_VERSION = 1;
+const KNOWLEDGE_BUNDLE_FORMAT = "print-partner-knowledge";
+const KNOWLEDGE_BUNDLE_VERSION = 1;
 
-export type KnowledgeBundleNote = {
+type KnowledgeBundleNote = {
   title: string;
   body_markdown: string;
   profile_name?: string | null;
@@ -11,14 +11,14 @@ export type KnowledgeBundleNote = {
   updated_at?: string | null;
 };
 
-export type KnowledgeBundleDocRef = {
+type KnowledgeBundleDocRef = {
   path: string;
   kind: string;
   title?: string;
   annotation?: string | null;
 };
 
-export type KnowledgeBundle = {
+type KnowledgeBundle = {
   format: typeof KNOWLEDGE_BUNDLE_FORMAT;
   version: number;
   source: {

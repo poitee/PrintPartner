@@ -4,7 +4,7 @@ import {
   type DeployMode,
 } from "@print-partner/contracts";
 
-export type HostedPlanningPolicy = Readonly<{
+type HostedPlanningPolicy = Readonly<{
   hostedPlanning: boolean;
   allowPrivateOutbound: boolean;
   lanAdapters: boolean;

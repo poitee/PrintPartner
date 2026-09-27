@@ -8,7 +8,7 @@ import type { AppRepository } from "../db/repository.js";
 import { loadKitManifest, saveKitManifest } from "./kit-manifest-store.js";
 import { deriveBuildRecipe } from "./build-recipe.js";
 
-export type PlanSnapshotPayload = {
+type PlanSnapshotPayload = {
   layers: Array<{
     layer_type: string;
     project_id: number | null;
@@ -30,7 +30,7 @@ export type PlanSnapshotPayload = {
   captured_at: string;
 };
 
-export function capturePlanSnapshotPayload(repo: AppRepository, planId: number): PlanSnapshotPayload {
+function capturePlanSnapshotPayload(repo: AppRepository, planId: number): PlanSnapshotPayload {
   const layers = repo.getProfileLayers(planId);
   const kit = loadKitManifest(repo, planId);
   const recipe = deriveBuildRecipe(repo, planId);

@@ -23,14 +23,14 @@ export type PrinterSendQueueItem = {
   host_name?: string;
 };
 
-export type PrinterQueueSuggestionItem = {
+type PrinterQueueSuggestionItem = {
   item_id: string;
   filename: string;
   filament_color_ids: string[];
   overlap: number;
 };
 
-export type PrinterQueueSuggestion = {
+type PrinterQueueSuggestion = {
   printer_id: string;
   printer_name: string;
   integration_id: string;
@@ -38,7 +38,7 @@ export type PrinterQueueSuggestion = {
   item_count: number;
 };
 
-export type BambuConnectHandoffResult = {
+type BambuConnectHandoffResult = {
   handoff_id: string;
   filename: string;
   absolute_path: string;

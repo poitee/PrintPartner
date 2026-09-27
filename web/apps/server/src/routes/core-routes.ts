@@ -53,7 +53,7 @@ export type CoreRouteDeps = {
   reloadProfileSync?: () => Promise<void>;
 };
 
-export type CoreRouteOptions = {
+type CoreRouteOptions = {
   /** v1-only routes: integrations, webhooks, artifacts, job list */
   apiV1Extensions?: boolean;
   authStore?: AuthStore | null;

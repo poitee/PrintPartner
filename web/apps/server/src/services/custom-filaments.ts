@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 
-export type CustomFilament = {
+type CustomFilament = {
   id: string;
   display_name: string;
   product_line: string;

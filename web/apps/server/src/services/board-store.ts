@@ -5,9 +5,9 @@ import { asSyncDb, type AppDrizzleDb } from "../db/sync-db-bridge.js";
 import * as sqliteSchema from "../db/schema.js";
 import * as pgSchema from "../db/schema-pg.js";
 
-export type BoardSchemaBundle = typeof sqliteSchema | typeof pgSchema;
+type BoardSchemaBundle = typeof sqliteSchema | typeof pgSchema;
 
-export type BoardPostSummary = {
+type BoardPostSummary = {
   id: string;
   authorUserId: string;
   authorDisplayName: string;
@@ -17,7 +17,7 @@ export type BoardPostSummary = {
   createdAt: string;
 };
 
-export type BoardCommentRow = {
+type BoardCommentRow = {
   id: string;
   postId: string;
   authorUserId: string;
@@ -26,7 +26,7 @@ export type BoardCommentRow = {
   createdAt: string;
 };
 
-export type BoardPostRecord = BoardPostSummary & {
+type BoardPostRecord = BoardPostSummary & {
   snapshotJson: string;
   comments: BoardCommentRow[];
 };

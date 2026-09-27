@@ -1,6 +1,6 @@
 /** Client-side checkoff summary (matches backend progress_summary on included parts). */
 
-export type CheckoffSummaryPart = {
+type CheckoffSummaryPart = {
   quantity_effective: number;
   printed_count: number;
   missing: boolean;
@@ -14,9 +14,9 @@ export type CheckoffUnitTotals = {
   percent: number;
 };
 
-export type PartProgressTone = "empty" | "partial" | "done";
+type PartProgressTone = "empty" | "partial" | "done";
 
-export function isPartFullyPrinted(part: CheckoffSummaryPart): boolean {
+function isPartFullyPrinted(part: CheckoffSummaryPart): boolean {
   const qty = Math.max(1, part.quantity_effective);
   return part.printed_count >= qty;
 }

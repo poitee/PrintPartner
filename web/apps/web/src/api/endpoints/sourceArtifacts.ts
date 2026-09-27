@@ -81,7 +81,7 @@ export type ScannedManifestPart = {
   relative_path: string;
 };
 
-export type ManifestBuilderBootstrap = {
+type ManifestBuilderBootstrap = {
   source_id: number;
   source: {
     id: number;
@@ -100,14 +100,14 @@ export type ManifestBuilderBootstrap = {
   path: string;
 };
 
-export type CommunityExportDraft = {
+type CommunityExportDraft = {
   slug: string;
   manifest_yaml: string;
   meta_yaml: string;
   issue_body: string;
 };
 
-export type SourcesMaintenanceReport = {
+type SourcesMaintenanceReport = {
   no_manifest: Array<{ id: number; name: string }>;
   catalog_orphans: string[];
   empty_categories: Array<{ id: string; label: string }>;
@@ -119,7 +119,7 @@ export type SourcesMaintenanceReport = {
   }>;
 };
 
-export type ImportReposTxtResult = {
+type ImportReposTxtResult = {
   created: number;
   updated: number;
   skipped: number;
@@ -132,7 +132,7 @@ export type ImportReposTxtResult = {
   }>;
 };
 
-export type SourceUploadResult = SourceSummary & {
+type SourceUploadResult = SourceSummary & {
   imported_files?: number;
   stl_count?: number;
   suggested_import_rules?: string[];

@@ -7,7 +7,7 @@ export type SourceKind =
   | "self"
   | "archive";
 
-export const KIND_LABELS: Record<SourceKind, string> = {
+const KIND_LABELS: Record<SourceKind, string> = {
   github: "GitHub",
   local: "Local folder",
   printables: "Printables",

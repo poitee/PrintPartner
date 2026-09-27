@@ -8,9 +8,7 @@ import type {
   PrintFileMatchReview,
   PrinterObjectMapping,
   PrintOutcomeEvent,
-  PrintOutcomesSummary,
   PrintVerifyDecision,
-  ReviewPart,
   UnattributedPrint,
 } from "@print-partner/contracts";
 import { engineFetch, engineFetchMultipart } from "../engineTransport";
@@ -24,42 +22,19 @@ import { engineFetch, engineFetchMultipart } from "../engineTransport";
 export type {
   PrinterCheckoffLink,
   PrinterCheckoffLinkState,
-  PrinterCheckoffReconcileUpdate,
   PrinterCheckoffUnit,
-  PrinterHostOutcome,
   PrintFileClassification,
-  PrintOutcomeEvent,
-  PrintOutcomeResult,
-  PrintOutcomesSummary,
   PrintRejectReason,
-  PrintVerifyDecision,
 } from "@print-partner/contracts";
 
 /** @deprecated Prefer PrinterCheckoffReconcileUpdate */
-export type PrinterCheckoffApplied = {
+type PrinterCheckoffApplied = {
   link_id: string;
   host_name: string;
   profile_id: number;
   units_marked: number;
   filename: string;
 };
-
-/** @deprecated Use ReviewPart — checkoff data is merged into plan review. */
-export type CheckoffPart = Pick<
-  ReviewPart,
-  | "id"
-  | "filename"
-  | "match_key"
-  | "relative_path"
-  | "source_layer"
-  | "role"
-  | "quantity_effective"
-  | "printed_count"
-  | "print_units"
-  | "missing"
-  | "filament_display"
-  | "filament_hex"
->;
 
 export async function reconcilePrinterCheckoff(options: {
   integration_id: string;
@@ -116,17 +91,6 @@ export async function dismissPrinterCheckoff(options: {
   });
 }
 
-export async function fetchPrintOutcomesSummary(profileId: number): Promise<PrintOutcomesSummary> {
-  return engineFetch(`/printer-outcomes/summary?profile_id=${encodeURIComponent(String(profileId))}`);
-}
-
-export async function fetchCheckoff(profileId: number): Promise<{
-  summary: string;
-  parts: CheckoffPart[];
-}> {
-  return engineFetch(`/plans/${profileId}/checkoff`);
-}
-
 export async function patchPartProgress(
   partId: number,
   unitIndex: number,
@@ -156,15 +120,6 @@ export async function patchPartAssembled(
     method: "PATCH",
     body: JSON.stringify({ unit_index: unitIndex, assembled }),
   });
-}
-
-/** Read the per-unit assembled state of a single part. */
-export async function fetchPartAssembled(partId: number): Promise<{
-  part_id: number;
-  assembled_count: number;
-  assembled_units: boolean[];
-}> {
-  return engineFetch(`/parts/${partId}/assembled`);
 }
 
 export async function fetchUnattributedPrints(): Promise<UnattributedPrint[]> {
@@ -391,7 +346,7 @@ export async function previewPrinterFileAssignment(options: {
  * machine PrintPartner does not manage, so the two routes differ on exactly
  * that one field.
  */
-export type PrintFileAssignmentBase = {
+type PrintFileAssignmentBase = {
   object_mappings?: PrinterObjectMapping[];
   retain_unmatched?: boolean;
   profile_id: number;
@@ -438,7 +393,7 @@ export type UploadedPrintFileCheck = PrintFileAssignmentPreview &
  * usable token is a failure rather than a check the operator could act on,
  * because nothing would identify the bytes at assignment time.
  */
-export function parseUploadedPrintFileCheck(value: unknown): UploadedPrintFileCheck {
+function parseUploadedPrintFileCheck(value: unknown): UploadedPrintFileCheck {
   const preview = parsePrintFileAssignmentPreview(value);
   const token =
     typeof value === "object" && value !== null && "upload_token" in value

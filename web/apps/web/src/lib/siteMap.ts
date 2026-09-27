@@ -8,10 +8,10 @@ import {
 } from "./routes";
 
 export const GLOBAL_SECTIONS = ["builds", "production", "printers", "settings"] as const;
-export type GlobalSection = (typeof GLOBAL_SECTIONS)[number];
+type GlobalSection = (typeof GLOBAL_SECTIONS)[number];
 
 export const BUILD_SECTIONS = ["sources", "plan", "production", "checkoff"] as const;
-export type BuildSection = (typeof BUILD_SECTIONS)[number];
+type BuildSection = (typeof BUILD_SECTIONS)[number];
 
 export function globalSectionPath(section: GlobalSection): string {
   switch (section) {

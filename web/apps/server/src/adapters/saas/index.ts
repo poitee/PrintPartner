@@ -1,4 +1,4 @@
-import { HOSTED_TENANT_DISK_QUOTA_BYTES, type JobSnapshot } from "@print-partner/contracts";
+import { HOSTED_TENANT_DISK_QUOTA_BYTES, } from "@print-partner/contracts";
 import { join } from "node:path";
 import type { AuthProvider, DbStore, JobRunner, RepoSource, StoragePort } from "../../ports/index.js";
 import {
@@ -47,7 +47,7 @@ export class SaasDbStore implements DbStore {
   }
 }
 
-export class SaasAuthProvider implements AuthProvider {
+class SaasAuthProvider implements AuthProvider {
   async resolveTenant(
     request: { headers: Record<string, string | string[] | undefined> },
   ): Promise<string | null> {
@@ -61,7 +61,7 @@ export class SaasAuthProvider implements AuthProvider {
   }
 }
 
-export type SaasPorts = {
+type SaasPorts = {
   db: SaasDbStore;
   storage: StoragePort;
   repoSource: RepoSource;
@@ -107,4 +107,3 @@ export function createSaasPorts(dataDir: string): SaasPorts {
   };
 }
 
-export type { JobSnapshot };

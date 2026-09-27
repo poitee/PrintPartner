@@ -3,12 +3,12 @@ import type {
 } from "@print-partner/contracts";
 
 /** The one-line print progress summary shown on every stage page. */
-export type BuildSummaryLine = Readonly<{
+type BuildSummaryLine = Readonly<{
   /** Ordered fragments, joined by a separator in the view. */
   facts: readonly string[];
 }>;
 
-export type BuildActiveWorkChip = Readonly<{
+type BuildActiveWorkChip = Readonly<{
   id: string;
   label: string;
   tone: "info" | "warning" | "error" | "neutral";

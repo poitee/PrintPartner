@@ -23,18 +23,18 @@ export type SourcesSetupTaskId =
  * Work the page performs in place. The page maps each id to a real function,
  * so a task never names a state it cannot advance.
  */
-export type SourcesSetupHandlerId =
+type SourcesSetupHandlerId =
   | "confirm_request"
   | "attach_source"
   | "sync_sources"
   | "resolve_differences"
   | "assign_colors";
 
-export type SourcesSetupAction =
+type SourcesSetupAction =
   | { readonly kind: "route"; readonly label: string; readonly to: string }
   | { readonly kind: "handler"; readonly label: string; readonly handler: SourcesSetupHandlerId };
 
-export type SourcesSetupTask = {
+type SourcesSetupTask = {
   readonly id: SourcesSetupTaskId;
   readonly label: string;
   readonly hint?: string;
@@ -46,13 +46,13 @@ export type SourcesSetupTask = {
   readonly needsAttention: boolean;
 };
 
-export type SourcesSetupPrimaryAction = {
+type SourcesSetupPrimaryAction = {
   readonly label: string;
   readonly reason: string;
   readonly action: SourcesSetupAction;
 };
 
-export type SourcesSetup = {
+type SourcesSetup = {
   readonly tasks: readonly SourcesSetupTask[];
   readonly primary: SourcesSetupPrimaryAction;
   /** True when no task needs attention, so Plan review is the next step. */
@@ -74,7 +74,7 @@ export type SourcesSetupRoleFilament = {
   readonly filament_custom_hex?: string | null;
 };
 
-export type SourcesSetupPlanning = {
+type SourcesSetupPlanning = {
   readonly planning_phase:
     | { readonly kind: "preparing" }
     | { readonly kind: "draft"; readonly draft_id: number }

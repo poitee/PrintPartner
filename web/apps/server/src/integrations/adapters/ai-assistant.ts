@@ -54,7 +54,7 @@ function configModel(config: IntegrationConfig): string | null {
 }
 
 /** True if `wanted` matches an installed Ollama model name (exact or tag-prefix). */
-export function ollamaModelInstalled(
+function ollamaModelInstalled(
   models: Array<{ name?: unknown; model?: unknown }>,
   wanted: string,
 ): boolean {

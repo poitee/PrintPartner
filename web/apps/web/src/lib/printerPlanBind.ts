@@ -22,7 +22,7 @@ function normalizeFilename(name: string | undefined | null): string {
   return (slash >= 0 ? base.slice(slash + 1) : base).toLowerCase();
 }
 
-export type LiveJobCheckoffLink = {
+type LiveJobCheckoffLink = {
   printer_id: string;
   filename: string;
   remote_path?: string;

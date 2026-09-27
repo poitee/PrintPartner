@@ -33,7 +33,7 @@ export const THREE_MF_ARCHIVE_LIMITS = {
  */
 export const MAX_CLASSIFIABLE_BYTES = 256 * 1024 * 1024;
 
-export type PrintFileRejectionReason =
+type PrintFileRejectionReason =
   | "empty_file"
   | "file_too_large"
   | "unrecognized_signature"
@@ -45,7 +45,7 @@ export type PrintFileRejectionReason =
   | "archive_nesting_limit"
   | "archive_unsafe_entry";
 
-export type PrintFileClassificationResult =
+type PrintFileClassificationResult =
   | {
       outcome: "classified";
       classification: PrintFileClassification;

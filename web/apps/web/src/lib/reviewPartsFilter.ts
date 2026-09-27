@@ -1,7 +1,6 @@
 import type { StlNamingFolderRule } from "@print-partner/contracts";
 import type { PlanReview, ReviewPart } from "../api/endpoints/planManifests";
 import { folderKeyFromRelativePath } from "./checkoffGroups";
-import { isPartFullyPrinted } from "./checkoffProgress";
 import { hasPartWarning } from "./partWarnings";
 import type {
   ReviewIncludedFilter,
@@ -11,7 +10,7 @@ import type {
 import type { ReviewFunctionalFilter } from "./persistedReviewPartsUi";
 import { sourceLabelFromLayer } from "./reviewParts";
 
-export type ReviewPartsFilterState = {
+type ReviewPartsFilterState = {
   search: string;
   printFilter: ReviewPrintFilter;
   includedFilter: ReviewIncludedFilter;
@@ -114,7 +113,7 @@ export function filterReviewParts(
   return sortReviewParts(rows, state.sort);
 }
 
-export function sortReviewParts(parts: ReviewPart[], sort: ReviewSortKey): ReviewPart[] {
+function sortReviewParts(parts: ReviewPart[], sort: ReviewSortKey): ReviewPart[] {
   const byFilename = (a: ReviewPart, b: ReviewPart) =>
     a.filename.localeCompare(b.filename, undefined, { sensitivity: "base", numeric: true });
 
@@ -154,8 +153,4 @@ export function collectReviewFacets(parts: ReviewPart[]) {
     filaments: [...filaments].sort(),
     sourceLayers: [...sourceLayers].sort(),
   };
-}
-
-export function isReviewPartComplete(part: ReviewPart): boolean {
-  return isPartFullyPrinted(part);
 }

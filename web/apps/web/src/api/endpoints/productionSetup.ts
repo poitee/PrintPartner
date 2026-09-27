@@ -2,7 +2,7 @@ import type { ProductionSetup, ProductionSetupCommand } from "@print-partner/con
 import { engineFetch } from "../engineTransport";
 
 /** Row shape from GET /profile-library — mirrors AppRepository.ProfileLibraryRow on the server. */
-export type ProfileLibraryRow = {
+type ProfileLibraryRow = {
   id: number;
   kind: "printer" | "process" | "filament";
   name: string;

@@ -36,7 +36,7 @@ export function readOAuthError(value: unknown): string | null {
   return record ? trimmedString(record.error) : null;
 }
 
-export type OAuthProfile = {
+type OAuthProfile = {
   providerUserId: string;
   login: string;
   displayName: string;
@@ -55,7 +55,7 @@ export function parseGitHubOAuthProfile(value: unknown): OAuthProfile | null {
   };
 }
 
-export type DiscordOAuthProfile = OAuthProfile & {
+type DiscordOAuthProfile = OAuthProfile & {
   email: string | null;
 };
 

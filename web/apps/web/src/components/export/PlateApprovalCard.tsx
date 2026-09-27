@@ -17,7 +17,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "../ui/card";
 import { statusTone } from "@/lib/statusTone";
 import { cn } from "@/lib/utils";
 
-export type PlateApprovalInfo = {
+type PlateApprovalInfo = {
   /** PNG data-URL from the slicer 3MF thumbnail, if available. */
   thumbnailUrl?: string;
   /** Human-readable printer name. */

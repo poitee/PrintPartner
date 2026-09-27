@@ -17,18 +17,18 @@ type LegacySourceManifestUnsafe = Readonly<{
   reason: string;
 }>;
 
-export type LegacySourceManifestFile = Readonly<{
+type LegacySourceManifestFile = Readonly<{
   kind: "file";
   legacyPath: string;
   content: Buffer;
 }>;
 
-export type LegacySourceManifestObservation =
+type LegacySourceManifestObservation =
   | LegacySourceManifestAbsent
   | LegacySourceManifestUnsafe
   | LegacySourceManifestFile;
 
-export type ArchivedLegacySourceManifest = Readonly<{
+type ArchivedLegacySourceManifest = Readonly<{
   backupPath: string;
   matchesObservedContent: boolean;
 }>;

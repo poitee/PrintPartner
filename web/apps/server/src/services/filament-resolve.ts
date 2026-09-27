@@ -108,7 +108,7 @@ export async function resolveFilamentDisplay(
   }
 }
 
-export async function buildFilamentResolveContext(deps: ResolveDeps): Promise<FilamentResolveContext> {
+async function buildFilamentResolveContext(deps: ResolveDeps): Promise<FilamentResolveContext> {
   const spoolmanFilamentByKey = new Map<string, SpoolmanFilament>();
   const spoolsByIntegration = new Map<string, SpoolmanSpool[]>();
 

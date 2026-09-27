@@ -132,7 +132,7 @@ function summarizePlan(repo: AppRepository, planId: number): string | null {
 }
 
 /** Dynamic framing for the active plan base/layers/selections (role from domain identity). */
-export function buildPlanContextBlock(
+function buildPlanContextBlock(
   repo: AppRepository,
   planId: number,
   catalog: Record<string, unknown>,
@@ -186,7 +186,7 @@ export function buildPlanContextBlock(
   return lines.join("\n");
 }
 
-export type BuildAssistantContextOptions = {
+type BuildAssistantContextOptions = {
   repo?: AppRepository | null;
   planId?: number | null;
   catalog?: Record<string, unknown>;
@@ -348,4 +348,4 @@ export function buildAssistantSystemPrompt(options: BuildAssistantContextOptions
     .join("\n");
 }
 
-export { EFFECTS_CHEAT_SHEET, DOMAIN_CHEAT_SHEET, summarizeKitCatalog };
+export {   summarizeKitCatalog };

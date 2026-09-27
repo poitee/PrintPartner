@@ -2,13 +2,10 @@ import type { PrinterCheckoffLink, PrinterCheckoffLinkState } from "../api/endpo
 import { productionRoute, progressRoute } from "./routes";
 import { WORK_PACKAGE_STATUS_LABEL } from "./workPackageProjection";
 
-export const GLOBAL_PRODUCTION_ACTIVE_STATES = [
-  "watching",
-  "awaiting_verify",
-  "host_failed",
-] as const satisfies readonly PrinterCheckoffLinkState[];
-
-export type GlobalProductionJobState = (typeof GLOBAL_PRODUCTION_ACTIVE_STATES)[number];
+export type GlobalProductionJobState = Extract<
+  PrinterCheckoffLinkState,
+  "watching" | "awaiting_verify" | "host_failed"
+>;
 
 export type GlobalProductionJob = {
   id: string;
@@ -21,7 +18,7 @@ export type GlobalProductionJob = {
   productionHref: string;
 };
 
-export type GlobalProductionRecentJob = {
+type GlobalProductionRecentJob = {
   id: string;
   planName: string;
   filename: string;

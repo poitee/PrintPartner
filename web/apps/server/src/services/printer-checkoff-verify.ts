@@ -20,7 +20,7 @@ import { acceptedPlanBasis, type AcceptedUnitDecision } from "../db/accepted-pla
 import { parseRequiredUnitToken } from "./required-units.js";
 import { readAdditionalDecisions } from "./imported-print-inventory.js";
 
-export type VerifyPrinterCheckoffResult = {
+type VerifyPrinterCheckoffResult = {
   link: PrinterCheckoffLink;
   units_confirmed: number;
   units_rejected: number;

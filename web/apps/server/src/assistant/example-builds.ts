@@ -96,7 +96,7 @@ function summarizeOnePlan(
   );
 }
 
-export type ExampleBuildsOptions = {
+type ExampleBuildsOptions = {
   repo: AppRepository;
   /** Active plan to exclude from the example list. */
   excludePlanId?: number | null;

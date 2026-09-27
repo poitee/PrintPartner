@@ -108,7 +108,7 @@ export const WORKFLOW_STATUS_KINDS = [
 
 export type WorkflowStatusKind = (typeof WORKFLOW_STATUS_KINDS)[number];
 
-export type WorkflowStatusPresentation = Readonly<{
+type WorkflowStatusPresentation = Readonly<{
   kind: WorkflowStatusKind;
   tone: StatusTone;
   /** Default words for the state. Pass a more specific label when you have one. */

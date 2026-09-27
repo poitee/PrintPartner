@@ -18,7 +18,7 @@ import type {
 } from "./accepted-plan-operational.js";
 import type { UnattributedPrint } from "../services/unattributed-print-store.js";
 
-export type AcceptedPrinterObservation = Readonly<{
+type AcceptedPrinterObservation = Readonly<{
   objectNames: readonly string[];
   fallbackFilename?: string;
   positiveOnly?: boolean;
@@ -41,7 +41,7 @@ type AcceptedPrinterUnmatchedOutcome = Readonly<{
     | "unmatched";
 }>;
 
-export type AcceptedPrinterNameOutcome =
+type AcceptedPrinterNameOutcome =
   | AcceptedPrinterMatchedOutcome
   | AcceptedPrinterUnmatchedOutcome;
 
@@ -120,7 +120,7 @@ export function detectPrinterFileDrift(input: {
   return null;
 }
 
-export type ConfirmedPrinterUnitsResult =
+type ConfirmedPrinterUnitsResult =
   | Readonly<{ kind: "confirmed"; units: readonly Readonly<PrinterCheckoffUnit>[] }>
   | Readonly<{
       kind: "rejected";

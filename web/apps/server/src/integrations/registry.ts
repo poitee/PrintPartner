@@ -20,7 +20,3 @@ const adapters: IntegrationAdapter[] = [
 export function getIntegrationAdapter(type: string): IntegrationAdapter | undefined {
   return adapters.find((a) => a.type === type);
 }
-
-export function listIntegrationTypes(): string[] {
-  return adapters.map((a) => a.type);
-}

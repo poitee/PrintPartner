@@ -3,7 +3,7 @@
  * Local-only order (no server field). Bag bars are this-plan labels, not shop stock.
  */
 
-export type ProgressBagBar = {
+type ProgressBagBar = {
   id: string;
   label: string;
 };

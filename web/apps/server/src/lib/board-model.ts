@@ -3,7 +3,7 @@ import { githubOpengraphImageUrl } from "./source-cover.js";
 
 export const BOARD_CAPTION_MAX = 500;
 export const BOARD_COMMENT_MAX = 2000;
-export const BOARD_SNAPSHOT_MAX_BYTES = 4 * 1024 * 1024;
+const BOARD_SNAPSHOT_MAX_BYTES = 4 * 1024 * 1024;
 
 export function normalizeBoardCaption(raw: unknown): string | null {
   if (typeof raw !== "string") return null;

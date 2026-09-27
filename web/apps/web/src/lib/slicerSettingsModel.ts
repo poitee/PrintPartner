@@ -1,6 +1,6 @@
 import type { SlicerDialect, SlicerInstanceKind } from "../api/endpoints/slicers";
 
-export type SlicerAddDraft = {
+type SlicerAddDraft = {
   name: string;
   kind: SlicerInstanceKind;
   dialect: SlicerDialect;
@@ -8,9 +8,9 @@ export type SlicerAddDraft = {
   watchPath: string;
 };
 
-export type SlicerPresetKind = Exclude<SlicerInstanceKind, "custom">;
+type SlicerPresetKind = Exclude<SlicerInstanceKind, "custom">;
 
-export type SlicerPresetOption = {
+type SlicerPresetOption = {
   kind: SlicerPresetKind;
   label: string;
 };

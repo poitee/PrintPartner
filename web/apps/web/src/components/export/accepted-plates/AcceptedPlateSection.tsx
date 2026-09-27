@@ -35,7 +35,7 @@ import AcceptedPlateAssignmentForm, { type PrinterAssignmentDraft } from "./Acce
 import AcceptedPlateGallery from "./AcceptedPlateGallery";
 
 /** A recoverable Plate operation that failed. Retry reruns only that operation. */
-export type PlateOperationFailure = Readonly<{ message: string; retry: () => void }>;
+type PlateOperationFailure = Readonly<{ message: string; retry: () => void }>;
 
 /**
  * Plain words for the Plate errors an operator can actually act on. WCAG asks

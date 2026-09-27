@@ -1,4 +1,4 @@
-export type AffineMatrix = Readonly<{
+type AffineMatrix = Readonly<{
   a: number;
   b: number;
   c: number;

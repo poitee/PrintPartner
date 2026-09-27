@@ -17,7 +17,7 @@ import {
 
 type SourceNamingParams = Readonly<{ sourceId: number }>;
 
-export type SourceNamingSafeError = Readonly<{
+type SourceNamingSafeError = Readonly<{
   code: SourceNamingEndpointError["code"];
 }>;
 
@@ -49,8 +49,6 @@ const putSourceNamingEndpoint = defineJsonWriteEndpoint({
   parseSuccess: parseSourceNamingResponse,
   parseFailure: parseSafeSourceNamingError,
 });
-
-export type SourceNamingSettings = SourceNamingResponse;
 export { ContractRequestError as SourceNamingRequestError };
 
 function sourceNamingErrorCode(

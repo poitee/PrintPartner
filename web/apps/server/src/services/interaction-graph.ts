@@ -8,7 +8,6 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as yaml from "js-yaml";
 import {
-  formatCompatibilityDigestLine,
   normalizeCompatibility,
   type NormalizedCompatibility,
   type PartReplacement,
@@ -43,7 +42,7 @@ function normalizeMergeConflict(raw: unknown): {
 const MODULE_DATA = join(dirname(fileURLToPath(import.meta.url)), "../data/assistant-domain");
 const SRC_DATA = join(dirname(fileURLToPath(import.meta.url)), "../../src/data/assistant-domain");
 
-export type InteractionWarning = {
+type InteractionWarning = {
   severity: "warning" | "info";
   code: string;
   message: string;
@@ -52,7 +51,7 @@ export type InteractionWarning = {
   slot?: string;
 };
 
-export type StackCompatibilityResult = {
+type StackCompatibilityResult = {
   layers: string[];
   warnings: InteractionWarning[];
   suggested_excludes: string[];
@@ -60,7 +59,7 @@ export type StackCompatibilityResult = {
   slots_occupied: Record<string, string[]>;
 };
 
-export type SourceExplanation = {
+type SourceExplanation = {
   source_name: string;
   kind: string | null;
   attaches_to_bases: string[];
@@ -74,7 +73,7 @@ export type SourceExplanation = {
   merge_conflict_ids: string[];
 };
 
-export type InteractionGraph = {
+type InteractionGraph = {
   bySource: Map<string, NormalizedCompatibility>;
   catalogSlots: Map<string, { category: string; peers: string[] }>;
   mergeConflicts: Array<{
@@ -171,7 +170,7 @@ function buildCatalogSlots(dataDir?: string | null): Map<string, { category: str
   return map;
 }
 
-export function loadInteractionGraph(options?: { dataDir?: string | null }): InteractionGraph {
+function loadInteractionGraph(options?: { dataDir?: string | null }): InteractionGraph {
   return {
     bySource: loadAllCompatibility(options?.dataDir),
     catalogSlots: buildCatalogSlots(options?.dataDir),
@@ -258,7 +257,7 @@ export function explainSource(
   };
 }
 
-export function slotsOccupied(
+function slotsOccupied(
   layerSourceNames: string[],
   options?: { dataDir?: string | null; graph?: InteractionGraph },
 ): Record<string, string[]> {
@@ -497,45 +496,6 @@ export function conflictsForStack(
     conflicts,
     slots_occupied: occupied,
   };
-}
-
-/** Compact interaction digest for the system prompt. */
-export function buildInteractionDigest(options?: {
-  dataDir?: string | null;
-  maxLines?: number;
-}): string {
-  const graph = loadInteractionGraph({ dataDir: options?.dataDir });
-  const maxLines = options?.maxLines ?? 24;
-  const sections: string[] = ["### Interaction graph (compatibility)"];
-  let lines = 0;
-
-  const interesting = [...graph.bySource.values()]
-    .filter(
-      (c) =>
-        c.conflicts_with.length ||
-        c.replaces_slots.length ||
-        c.replaces_parts.length ||
-        c.not_for.length,
-    )
-    .slice(0, 18);
-
-  for (const c of interesting) {
-    if (lines >= maxLines) break;
-    const line = formatCompatibilityDigestLine(c);
-    if (!line) continue;
-    sections.push(`- ${c.source_name}${c.kind ? ` [${c.kind}]` : ""}`);
-    sections.push(line);
-    lines += 2;
-  }
-
-  for (const mc of graph.mergeConflicts.slice(0, 6)) {
-    if (lines >= maxLines) break;
-    sections.push(`- conflict ${mc.id}: ${mc.resolution.slice(0, 100)}`);
-    lines += 1;
-  }
-
-  if (sections.length <= 1) return "";
-  return sections.join("\n");
 }
 
 /** Maintainer check: catalog pick_one peers missing domain conflicts_with. */

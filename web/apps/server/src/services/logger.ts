@@ -3,7 +3,7 @@ import type { Logger } from "pino";
 
 export type LogSeverity = "debug" | "info" | "warn" | "error";
 
-export interface WorkflowLog {
+interface WorkflowLog {
   id: string;
   timestamp: string;
   method: string;
@@ -220,13 +220,6 @@ class WorkflowLogger {
 
 // Global singleton instance
 let globalLogger: WorkflowLogger | null = null;
-
-export function createLogger(config: LoggerConfig): WorkflowLogger {
-  if (!globalLogger) {
-    globalLogger = new WorkflowLogger(config);
-  }
-  return globalLogger;
-}
 
 export function getLogger(): WorkflowLogger {
   if (!globalLogger) {

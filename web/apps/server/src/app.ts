@@ -80,7 +80,7 @@ import {
   TRUSTED_SINGLE_USER_SOURCE_FILESYSTEM,
 } from "./services/source-filesystem-policy.js";
 
-export type RuntimePorts = AppPorts & {
+type RuntimePorts = AppPorts & {
   repository?: AppRepository;
   reposDir?: string;
   sourcesDir?: string;

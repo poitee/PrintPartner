@@ -9,7 +9,7 @@ import type { SyncDocKind } from "./github-sync.js";
 import { DOCS_TEXT_DIR, docTitleFromPath } from "./pdf-text-extract.js";
 import { resolvedFileUnderRoot } from "../lib/secure-path.js";
 
-export type DiscoveredDoc = {
+type DiscoveredDoc = {
   path: string;
   kind: SyncDocKind;
   sizeBytes: number;

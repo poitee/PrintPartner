@@ -54,11 +54,11 @@ type McpSession = {
 /** Max concurrent HTTP MCP sessions per process. */
 export const MCP_HTTP_SESSION_MAX = 64;
 /** Evict after this much idle time (ms). Streams held open do not count as idle. */
-export const MCP_HTTP_SESSION_IDLE_MS = 30 * 60 * 1000;
+const MCP_HTTP_SESSION_IDLE_MS = 30 * 60 * 1000;
 /** Evict after this absolute age (ms), even if active. */
-export const MCP_HTTP_SESSION_ABSOLUTE_MS = 8 * 60 * 60 * 1000;
+const MCP_HTTP_SESSION_ABSOLUTE_MS = 8 * 60 * 60 * 1000;
 /** Background sweep cadence, so abandoned sessions are reclaimed without traffic. */
-export const MCP_HTTP_SWEEP_MS = 60 * 1000;
+const MCP_HTTP_SWEEP_MS = 60 * 1000;
 
 export { createMcpSessionCapacity } from "./http-session-capacity.js";
 
@@ -73,7 +73,7 @@ function extractApiKey(request: FastifyRequest): string | null {
 }
 
 /** MCP auth: always require API key when configured; when unset, only loopback binds may expose MCP. */
-export function assertMcpHttpAllowed(
+function assertMcpHttpAllowed(
   config: ServerConfig,
   request: FastifyRequest,
   reply: FastifyReply,
@@ -101,7 +101,7 @@ export function assertMcpHttpAllowed(
 }
 
 /** Read `mcp-session-id` whether Fastify hands it back as a string or a repeated header. */
-export function readMcpSessionId(
+function readMcpSessionId(
   header: string | string[] | undefined,
 ): string {
   if (typeof header === "string") return header.trim();

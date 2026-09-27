@@ -1,6 +1,6 @@
 import { EngineHttpError } from "../api/engineTransport";
 
-export type WorkingPlanRecovery = "refreshed" | "rebuilt_from_sources";
+type WorkingPlanRecovery = "refreshed" | "rebuilt_from_sources";
 
 const WORKING_PLAN_CHANGED_MESSAGES: Readonly<Record<WorkingPlanRecovery, string>> = {
   refreshed:
@@ -11,7 +11,7 @@ const WORKING_PLAN_CHANGED_MESSAGES: Readonly<Record<WorkingPlanRecovery, string
 
 export const WORKING_PLAN_CHANGED_MESSAGE = WORKING_PLAN_CHANGED_MESSAGES.refreshed;
 
-export function workingPlanChangedMessage(recovery: WorkingPlanRecovery): string {
+function workingPlanChangedMessage(recovery: WorkingPlanRecovery): string {
   return WORKING_PLAN_CHANGED_MESSAGES[recovery];
 }
 

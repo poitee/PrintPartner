@@ -12,7 +12,7 @@ function cacheKey(owner: string, repo: string, ref?: string | null): string {
   return `${owner}/${repo}@${ref ?? "default"}`;
 }
 
-export type GithubReadmeResult = {
+type GithubReadmeResult = {
   markdown: string;
   source: "live" | "disk" | "empty";
   cached: boolean;
@@ -83,9 +83,4 @@ export async function fetchGithubReadme(options: {
   }
 
   return diskFallback();
-}
-
-/** Test helper: clear the in-memory README cache. */
-export function clearGithubReadmeCache(): void {
-  cache.clear();
 }

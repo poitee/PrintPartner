@@ -1,6 +1,6 @@
 /** Pure enablement rules for Export slicer-input actions (STLs / remaining / 3MF). */
 
-export type SlicerExportGateInput = {
+type SlicerExportGateInput = {
   profileSelected: boolean;
   engineOk: boolean;
   hasReview: boolean;
@@ -8,7 +8,7 @@ export type SlicerExportGateInput = {
   remainingUnits: number;
 };
 
-export type SlicerExportGates = {
+type SlicerExportGates = {
   canRun: boolean;
   canExportParts: boolean;
   canExportRemaining: boolean;

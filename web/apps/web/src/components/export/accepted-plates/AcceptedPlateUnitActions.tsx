@@ -46,7 +46,7 @@ function dimensionsFit(
   );
 }
 
-export function acceptedPlateTransferOptions(
+function acceptedPlateTransferOptions(
   workspace: ReadyWorkspace,
   sourcePlateId: AcceptedPlateId,
   unit: AcceptedPlatePlacedUnit | AcceptedPlateUnplacedUnit,

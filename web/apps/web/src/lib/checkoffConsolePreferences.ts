@@ -21,19 +21,12 @@ export const CHECKOFF_CONSOLE_STORAGE_KEY = "print-partner.checkoff.console.v1";
 /** Keeps one plan's history readable without letting storage grow forever. */
 export const CHECKOFF_CORRECTION_LIMIT = 100;
 
-export type CheckoffConsolePreferences = {
+type CheckoffConsolePreferences = {
   sort?: CheckoffSort;
   view: CheckoffViewId | null;
   searchByPlanId: Record<string, string>;
   completedAtByPlanId: Record<string, string>;
   correctionsByPlanId: Record<string, CheckoffCorrectionRecord[]>;
-};
-
-export const EMPTY_CHECKOFF_CONSOLE_PREFERENCES: CheckoffConsolePreferences = {
-  view: null,
-  searchByPlanId: {},
-  completedAtByPlanId: {},
-  correctionsByPlanId: {},
 };
 
 function emptyPreferences(): CheckoffConsolePreferences {

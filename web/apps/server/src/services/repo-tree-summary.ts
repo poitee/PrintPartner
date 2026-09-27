@@ -9,7 +9,7 @@
 
 import type { ManifestOptionGroup, ManifestVariant } from "./manifest-apply.js";
 
-export type RepoTreeSubdirSummary = {
+type RepoTreeSubdirSummary = {
   name: string;
   path: string;
   /** Recursive counts. */

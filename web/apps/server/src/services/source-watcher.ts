@@ -9,7 +9,7 @@ import { tenantStorage, getRequestTenantId } from "../middleware/tenant-context.
 import { runWithTenantDiskQuota } from "../lib/tenant-disk-quota.js";
 import { readStoredSourceUpdateIntervalHours } from "./source-monitoring-settings.js";
 
-export type SourceWatcherSettings = {
+type SourceWatcherSettings = {
   discordWebhookUrl: string | null;
   notifyOnUpdate: boolean;
   notifyOnSync: boolean;
@@ -21,7 +21,7 @@ const STARTUP_SYNC_WAIT_MS = 5_000;
 const SCHEDULE_POLL_MS = 60_000;
 const HOUR_MS = 60 * 60 * 1_000;
 
-export type SourceWatcherCoordinatorDependencies = {
+type SourceWatcherCoordinatorDependencies = {
   listTenantIds: () => readonly string[];
   readIntervalHours: () => number;
   runStartupForCurrentTenant: () => Promise<void>;
@@ -29,7 +29,7 @@ export type SourceWatcherCoordinatorDependencies = {
   now: () => number;
 };
 
-export type SourceWatcherCoordinator = {
+type SourceWatcherCoordinator = {
   runStartup: () => Promise<void>;
   runScheduledChecks: () => Promise<void>;
 };

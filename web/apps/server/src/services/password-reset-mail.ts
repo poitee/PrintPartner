@@ -2,7 +2,7 @@ import type { FastifyBaseLogger, FastifyRequest } from "fastify";
 import nodemailer from "nodemailer";
 import type { ServerConfig } from "../config.js";
 
-export type PasswordResetDelivery = {
+type PasswordResetDelivery = {
   sent: boolean;
   devResetUrl?: string;
 };

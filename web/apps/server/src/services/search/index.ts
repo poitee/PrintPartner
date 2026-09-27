@@ -33,20 +33,11 @@ import {
   type WebSearchResult,
 } from "./types.js";
 
-export const WEB_SEARCH_REQUEST_TIMEOUT_MS = 30_000;
+const WEB_SEARCH_REQUEST_TIMEOUT_MS = 30_000;
 
 export type {
-  SearchHit,
   SearchProviderId,
-  SearchResult,
-  SearchSetupOption,
-  SearchStatus,
-  WebSearchOptions,
-  WebSearchResult,
 } from "./types.js";
-export { SEARCH_UNTRUSTED_BANNER, isSearchProviderId } from "./types.js";
-export { parseDuckDuckGoHtml } from "./duckduckgo.js";
-export { nativeSearchNote, nativeSearchProviderForAi } from "./provider-native.js";
 
 export function getSearchSetupGuidance(): SearchSetupOption[] {
   return [
@@ -100,7 +91,7 @@ export type ResolveSearchInput = {
 };
 
 /** Optional Settings / runtime overrides on top of env `ServerConfig`. */
-export type SearchResolveOverrides = {
+type SearchResolveOverrides = {
   /** When set (including `null` meaning Auto), overrides env SEARCH_PROVIDER. Pass `undefined` to keep env. */
   searchProvider?: SearchProviderId | null;
   searchApiKey?: string | null;

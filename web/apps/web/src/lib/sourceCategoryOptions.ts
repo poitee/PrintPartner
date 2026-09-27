@@ -8,7 +8,7 @@ import { categoryDepth, categoryLeafName, normalizeCategoryPath } from "@print-p
 import type { CSSProperties } from "react";
 import { UNCATEGORISED_FILTER } from "../components/sources/sourceLabels";
 
-export type CategoryMenuOption = {
+type CategoryMenuOption = {
   /** Full path — the stored value, e.g. `"Printers/Frame"`. */
   path: string;
   /** Leaf name shown to the user, e.g. `"Frame"`. */

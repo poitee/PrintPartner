@@ -49,7 +49,7 @@ export const WORK_PACKAGE_STATUS_LABEL: Record<WorkPackageStatus, string> = {
   complete: "Complete",
 };
 
-export type WorkPackageTone = "neutral" | "info" | "warning" | "success" | "error";
+type WorkPackageTone = "neutral" | "info" | "warning" | "success" | "error";
 
 const STATUS_TONE: Record<WorkPackageStatus, WorkPackageTone> = {
   preparing: "neutral",
@@ -145,7 +145,7 @@ export type WorkPackageProjectionInput = Readonly<{
   exportFailed?: boolean;
 }>;
 
-export type WorkPackageProjection = Readonly<{
+type WorkPackageProjection = Readonly<{
   /** The package being prepared. Null when there is no accepted Plan to make. */
   bench: WorkPackage | null;
   /** Packages already at a printer or waiting for verification. */

@@ -88,19 +88,14 @@ export function describeCheckoffCorrectionImpact(
   return "Nothing else depends on this unit.";
 }
 
-export type CheckoffCorrectionDraft = {
+type CheckoffCorrectionDraft = {
   reason: CheckoffCorrectionReason | null;
   note: string;
 };
 
-export const EMPTY_CHECKOFF_CORRECTION: CheckoffCorrectionDraft = {
-  reason: null,
-  note: "",
-};
-
 export const CHECKOFF_CORRECTION_NOTE_MAX = 500;
 
-export type CheckoffCorrectionValidation = {
+type CheckoffCorrectionValidation = {
   ok: boolean;
   /** Field id -> message, for an error summary plus inline messages. */
   errors: { field: "reason" | "note"; message: string }[];

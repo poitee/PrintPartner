@@ -1,6 +1,6 @@
 import type { CatalogColor } from "./filament-catalog.js";
 
-export type RankedFilamentMatch = CatalogColor & Readonly<{
+type RankedFilamentMatch = CatalogColor & Readonly<{
   exact_name: boolean;
   name_match: boolean;
   brand_match: boolean;

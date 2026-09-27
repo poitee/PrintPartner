@@ -8,7 +8,7 @@ import { fetchPlanDecisions } from "../api/endpoints/assistant";
 import { fetchPlanRecipe, fetchPlanSnapshots } from "../api/endpoints/planSnapshots";
 import { queryKeys } from "./keys";
 
-export type PlanRecipeBundle = {
+type PlanRecipeBundle = {
   recipe: BuildRecipe;
   decisions: PlanDecision[];
   snapshots: PlanSnapshotSummary[];

@@ -17,7 +17,7 @@ export type AcceptedPlanBasis = Readonly<{
   requiredUnitMappingDigest: string;
 }>;
 
-export type AcceptedProgressSummary = Readonly<{
+type AcceptedProgressSummary = Readonly<{
   totalUnits: number;
   remainingUnits: number;
 }>;
@@ -75,7 +75,7 @@ export type AcceptedUnitDecision =
       readonly note?: string;
     };
 
-export type ResolvedAcceptedUnitDecision = AcceptedUnitDecision &
+type ResolvedAcceptedUnitDecision = AcceptedUnitDecision &
   Readonly<{
     partId: number;
     unitIndex: number;
@@ -83,7 +83,7 @@ export type ResolvedAcceptedUnitDecision = AcceptedUnitDecision &
     role: string;
   }>;
 
-export type ApplyAcceptedUnitDecisionsResult =
+type ApplyAcceptedUnitDecisionsResult =
   | {
       readonly kind: "applied";
       readonly unitsConfirmed: number;

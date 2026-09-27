@@ -8,7 +8,7 @@ import { engineFetch } from "../engineTransport";
 // Wire types belong to the contract. A hand-copied duplicate here drifts the
 // moment the server adds a field, which is how the capability matrix ended up
 // restated in the client in the first place.
-export type { IntegrationSummary, IntegrationTestResult };
+export type { IntegrationSummary };
 
 function v1Path(path: string): string {
   const normalized = path.startsWith("/") ? path : `/${path}`;

@@ -33,7 +33,7 @@ export type SlicerInstance = {
   updated_at: string;
 };
 
-export type SlicerInstanceWrite = {
+type SlicerInstanceWrite = {
   name: string;
   kind: SlicerInstanceKind;
   dialect?: SlicerDialect;
@@ -42,7 +42,7 @@ export type SlicerInstanceWrite = {
   enabled?: boolean;
 };
 
-export type SlicerDockerStatusResponse = {
+type SlicerDockerStatusResponse = {
   instance: SlicerInstance;
   status: {
     state: string;

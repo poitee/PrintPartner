@@ -2008,8 +2008,3 @@ export class PostgresDatabase {
     this.drizzle = null;
   }
 }
-
-export function getPgDb(db: PostgresDatabase): PostgresDrizzleDb {
-  if (!db.drizzle) throw new Error("Database not connected");
-  return db.drizzle;
-}

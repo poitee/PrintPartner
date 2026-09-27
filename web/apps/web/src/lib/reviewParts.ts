@@ -104,7 +104,7 @@ export function workingPlanReviewParts(
 }
 
 /** Merge a partial patch into a review part row (keeps print progress fields). */
-export function mergeReviewPartPatch(
+function mergeReviewPartPatch(
   part: ReviewPart,
   patch: Partial<ReviewPart> & Partial<PartRow>,
 ): ReviewPart {

@@ -5,7 +5,7 @@ const JOB_TERMINAL = new Set(["done", "error", "cancelled"]);
 
 export type StlPackGroupBy = "color" | "color_dir";
 
-export type ExportStlPackOptions = {
+type ExportStlPackOptions = {
   profile_id: number;
   missing_only?: boolean;
   group_by?: StlPackGroupBy;

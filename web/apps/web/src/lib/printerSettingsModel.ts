@@ -20,7 +20,7 @@ export const PRINTER_HOST_TYPE_LABELS: Record<HostType, string> = {
   bambu: "Bambu",
 };
 
-export const PRINTER_HOST_TYPES: readonly HostType[] = ["moonraker", "prusalink", "bambu"];
+const PRINTER_HOST_TYPES: readonly HostType[] = ["moonraker", "prusalink", "bambu"];
 
 export const SLICER_OVERRIDES: readonly SlicerOverride[] = ["orca", "prusa", "bambu"];
 

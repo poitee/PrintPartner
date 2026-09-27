@@ -29,4 +29,3 @@ export function useHealthQuery() {
   });
 }
 
-export type { HealthResponse };

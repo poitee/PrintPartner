@@ -31,4 +31,3 @@ export function useSaveBuildTrackingSettingsMutation() {
   });
 }
 
-export type { BuildTrackingSettings };

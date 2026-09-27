@@ -7,7 +7,7 @@ import {
   type ReactNode,
 } from "react";
 
-export type SaveStatus = "idle" | "saving" | "saved" | "error";
+type SaveStatus = "idle" | "saving" | "saved" | "error";
 
 type SaveStatusEntry = {
   label: string;
@@ -71,14 +71,4 @@ export function useSaveStatusRegistry() {
     throw new Error("useSaveStatusRegistry must be used within SaveStatusProvider");
   }
   return ctx;
-}
-
-export function useSaveStatusReporter(key: string, label: string) {
-  const { reportStatus } = useSaveStatusRegistry();
-  return useCallback(
-    (status: SaveStatus, error?: string | null) => {
-      reportStatus(key, label, status, error);
-    },
-    [key, label, reportStatus],
-  );
 }

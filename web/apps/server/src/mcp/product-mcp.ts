@@ -40,7 +40,7 @@ import {
 } from "../services/build-planning.js";
 import { readBuildWorkflowWorkspace } from "../services/build-workflow.js";
 
-export const META_TOOLS = [
+const META_TOOLS = [
   {
     name: "list_pending_actions",
     description:
@@ -81,11 +81,11 @@ export const META_TOOLS = [
 ] as const;
 
 /** Product verbs exposed over MCP (skip SPA-only ui_* tools). */
-export function productToolSpecs() {
+function productToolSpecs() {
   return ASSISTANT_TOOL_SPECS.filter((t) => !t.name.startsWith("ui_"));
 }
 
-export function jsonSchemaToMcp(spec: (typeof ASSISTANT_TOOL_SPECS)[number]) {
+function jsonSchemaToMcp(spec: (typeof ASSISTANT_TOOL_SPECS)[number]) {
   return {
     name: spec.name,
     description:
@@ -101,7 +101,7 @@ export function jsonSchemaToMcp(spec: (typeof ASSISTANT_TOOL_SPECS)[number]) {
 /** Static resource: the library category tree. */
 const SOURCE_CATEGORIES_URI = "print-partner://source-categories";
 
-export type ProductMcpDeps = {
+type ProductMcpDeps = {
   getRepo: () => AppRepository;
   jobs: InProcessJobRunner;
   config: ServerConfig;

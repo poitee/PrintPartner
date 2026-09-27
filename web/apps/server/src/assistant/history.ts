@@ -176,7 +176,7 @@ export function clearAssistantFeedback(repo: AppRepository): number {
   return n;
 }
 
-export type StoredFeedback = {
+type StoredFeedback = {
   id: string;
   rating: AssistantFeedbackRating;
   message_excerpt: string | null;
@@ -221,7 +221,7 @@ export function appendAssistantFeedback(
 }
 
 /** Tiny ranking scores from thumbs — never dump raw feedback into the prompt. */
-export type FeedbackScores = {
+type FeedbackScores = {
   /** plan_id → net score (up=+2, down=-2 with comment boost) */
   byPlanId: Map<number, number>;
   /** stack preset id / source-like token → net score (from excerpts) */

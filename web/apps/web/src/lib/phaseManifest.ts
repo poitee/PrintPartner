@@ -27,7 +27,7 @@ export type PhaseDefinition = {
   color?: string;
 };
 
-export type PlanPhaseManifest = {
+type PlanPhaseManifest = {
   profile_id: number;
   /** True when a pp-phases.json was found for at least one source in the plan. */
   has_phases: boolean;
@@ -73,7 +73,7 @@ function normPath(p: string): string {
  * Return the phase that owns a given part, or null.
  * First matching phase wins (phases should be sorted by order before calling).
  */
-export function phaseForPart(
+function phaseForPart(
   part: ReviewPart,
   phases: PhaseDefinition[],
 ): PhaseDefinition | null {

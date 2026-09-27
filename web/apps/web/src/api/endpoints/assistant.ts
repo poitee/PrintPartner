@@ -10,7 +10,7 @@ import type {
 } from "@print-partner/contracts";
 import { EngineHttpError, engineFetch, engineFetchStream } from "../engineTransport";
 
-export type AssistantFeedbackResponse = {
+type AssistantFeedbackResponse = {
   entries: Array<{
     id: string;
     rating: "up" | "down";
@@ -21,7 +21,7 @@ export type AssistantFeedbackResponse = {
   }>;
 };
 
-export type AssistantStreamHandlers = {
+type AssistantStreamHandlers = {
   onToken: (text: string) => void;
   onDone: (data?: {
     final_content?: string;

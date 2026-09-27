@@ -66,7 +66,7 @@ export type AcceptedPlateWorkspaceDependencies = Readonly<{
   loadGeometry?: typeof loadAcceptedArtifactGeometry;
 }>;
 
-export type AcceptedPlateWorkspaceReadResult =
+type AcceptedPlateWorkspaceReadResult =
   | { readonly kind: "workspace"; readonly workspace: AcceptedPlateWorkspace }
   | { readonly kind: "profile_not_found" }
   | {
@@ -75,7 +75,7 @@ export type AcceptedPlateWorkspaceReadResult =
     }
   | { readonly kind: "transaction_unavailable" };
 
-export type InitializeAcceptedPlatesCommand = Readonly<{
+type InitializeAcceptedPlatesCommand = Readonly<{
   profileId: number;
   expected: AcceptedPlanBasis;
   expectedPlateRevisionId: number | null;
@@ -712,7 +712,7 @@ export async function initializeAcceptedPlates(
   };
 }
 
-export type ArrangeAcceptedPlatesServiceCommand = Readonly<{
+type ArrangeAcceptedPlatesServiceCommand = Readonly<{
   profileId: number;
   expected: AcceptedPlanBasis;
   expectedPlateRevisionId: number;

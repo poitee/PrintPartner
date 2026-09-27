@@ -11,9 +11,9 @@
  * there is no server endpoint for these — if the deployment's hostnames or
  * scheme ever change, update this list.
  */
-export type SlicerKind = "orca" | "prusa" | "bambu";
+type SlicerKind = "orca" | "prusa" | "bambu";
 
-export type SlicerLink = {
+type SlicerLink = {
   slicer: SlicerKind;
   label: string;
   url: string;

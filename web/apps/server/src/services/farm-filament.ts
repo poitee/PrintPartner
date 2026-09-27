@@ -41,7 +41,7 @@ export const LOW_FILAMENT_THRESHOLD_G = 150;
 /** Host status strings that mean "the machine is waiting on a human + filament". */
 const RUNOUT_PATTERN = /\b(runout|run out|run-out|filament\s*(out|empty|error|jam)|out of filament|load filament|insert filament|filament\s*sensor)\b/i;
 
-export type SlotFilamentStatus = {
+type SlotFilamentStatus = {
   slot: number;
   label: string;
   filament_color_id: string | null;
@@ -59,7 +59,7 @@ export type SlotFilamentStatus = {
   low: boolean;
 };
 
-export type PrinterFilamentStatus = {
+type PrinterFilamentStatus = {
   slots: SlotFilamentStatus[];
   needs_filament_swap: boolean;
   filament_swap_reason: string | null;
@@ -237,7 +237,7 @@ export async function buildSpoolLookup(
   };
 }
 
-export type PrintJobLike = {
+type PrintJobLike = {
   printerId?: string | null;
   status?: string | null;
   filamentConsumedG?: number | null;
@@ -278,7 +278,7 @@ export function idleSinceFor(
   return lastActivity.get(printerId) ?? null;
 }
 
-export type PrinterPrintStats = {
+type PrinterPrintStats = {
   printer_id: string;
   plates_sent: number;
   plates_completed: number;

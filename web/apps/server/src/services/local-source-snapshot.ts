@@ -81,7 +81,7 @@ export type SnapshotFileResponse = {
   contentLengthBytes: number | null;
 };
 
-export type MaterializeSourceSnapshotInput = {
+type MaterializeSourceSnapshotInput = {
   sourceId: number;
   upstreamRevisionKey: string;
   files: readonly SnapshotFile[];
@@ -89,7 +89,7 @@ export type MaterializeSourceSnapshotInput = {
   openFile(file: SnapshotFile): Promise<SnapshotFileResponse>;
 };
 
-export type DeriveFileReplacementInput = {
+type DeriveFileReplacementInput = {
   sourceId: number;
   baseRevisionKey: string;
   sourceVersion: string;

@@ -64,36 +64,3 @@ export async function pickKitBundleFileWeb(): Promise<File | null> {
 export async function pickZipArchiveFileWeb(): Promise<File | null> {
   return pickFileObject(".zip,application/zip");
 }
-
-export async function saveTextFileWeb(
-  defaultName: string,
-  contents: string,
-): Promise<string | null> {
-  if ("showSaveFilePicker" in window) {
-    try {
-      const handle = await (
-        window as Window & {
-          showSaveFilePicker?: (opts: {
-            suggestedName: string;
-          }) => Promise<{ name: string; createWritable: () => Promise<{ write: (b: Blob) => Promise<void>; close: () => Promise<void> }> }>;
-        }
-      ).showSaveFilePicker?.({ suggestedName: defaultName });
-      if (!handle) return null;
-      const writable = await handle.createWritable();
-      await writable.write(new Blob([contents], { type: "text/plain" }));
-      await writable.close();
-      return handle.name;
-    } catch {
-      return null;
-    }
-  }
-
-  const blob = new Blob([contents], { type: "text/plain" });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = defaultName;
-  anchor.click();
-  URL.revokeObjectURL(url);
-  return defaultName;
-}

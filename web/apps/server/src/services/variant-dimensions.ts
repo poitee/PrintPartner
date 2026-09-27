@@ -3,10 +3,10 @@ import type { AppRepository } from "../db/repository.js";
 import { loadManifestYaml } from "./manifest-apply.js";
 import { findSourceManifestPath } from "./source-workspace.js";
 
-export type VariantDimensionMap = Record<string, Array<string | number>>;
+type VariantDimensionMap = Record<string, Array<string | number>>;
 
 /** Setting key template for plan-level variant selections. */
-export function planVariantSelectionKey(planId: number): string {
+function planVariantSelectionKey(planId: number): string {
   return `plan_variant_selection_${planId}`;
 }
 

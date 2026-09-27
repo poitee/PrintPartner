@@ -1,13 +1,13 @@
 /** Wait until sheet thumbnails finish loading a real picture (or timeout). */
 
-export const SHEET_THUMBNAIL_WAIT_MS = 120_000;
+const SHEET_THUMBNAIL_WAIT_MS = 120_000;
 
-export type SheetThumbnailWaitResult = {
+type SheetThumbnailWaitResult = {
   readonly ready: boolean;
   readonly pending: number;
 };
 
-export function sheetThumbnailIsReady(thumb: HTMLElement): boolean {
+function sheetThumbnailIsReady(thumb: HTMLElement): boolean {
   const img = thumb.querySelector<HTMLImageElement>(".sheet-thumb-img");
   return Boolean(img && img.complete && img.naturalWidth > 1 && img.naturalHeight > 1);
 }

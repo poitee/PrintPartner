@@ -4,7 +4,7 @@ import {
   type ReadAcceptedPlanOperationalSnapshotResult,
 } from "../db/accepted-plan-operational.js";
 
-export type AssistantAcceptedPlanReadResult =
+type AssistantAcceptedPlanReadResult =
   | {
       readonly kind: "read";
       readonly identity: {

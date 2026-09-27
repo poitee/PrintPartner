@@ -120,7 +120,7 @@ export function parseSearchProviderOverride(raw: unknown): SearchProviderId | nu
 const DEFAULT_OLLAMA_NUM_CTX = 16384;
 
 /** Env `OLLAMA_NUM_CTX` (≥ 2048) or default 16384. */
-export function resolveOllamaNumCtx(raw?: unknown): number {
+function resolveOllamaNumCtx(raw?: unknown): number {
   if (typeof raw === "number" && Number.isFinite(raw) && raw >= 2048) {
     return Math.floor(raw);
   }

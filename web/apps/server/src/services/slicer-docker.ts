@@ -288,9 +288,9 @@ type DockerodeLike = {
 
 export type { DockerodeLike };
 
-export type EngineDockerFactory = (dockerHost?: string | null) => DockerodeLike;
+type EngineDockerFactory = (dockerHost?: string | null) => DockerodeLike;
 
-export type DockerHostOptions = {
+type DockerHostOptions = {
   socketPath?: string;
   host?: string;
   port?: number;
@@ -380,7 +380,7 @@ function canAdoptUnlabeled(
   return label == null || label === "";
 }
 
-export function resolveComposeFile(
+function resolveComposeFile(
   env: NodeJS.ProcessEnv = process.env,
   cwd: string = process.cwd(),
 ): string {
@@ -403,7 +403,7 @@ export function resolveComposeFile(
   return candidates[0]!;
 }
 
-export type ComposeExec = (args: string[]) => Promise<{ stdout: string; stderr: string }>;
+type ComposeExec = (args: string[]) => Promise<{ stdout: string; stderr: string }>;
 
 async function defaultComposeExec(args: string[]): Promise<{ stdout: string; stderr: string }> {
   const file = resolveComposeFile();
@@ -574,7 +574,7 @@ export function createEngineDockerAdapter(
   };
 }
 
-export type DockerAdapterDeps = {
+type DockerAdapterDeps = {
   engineFactory?: EngineDockerFactory;
   composeExec?: ComposeExec;
 };

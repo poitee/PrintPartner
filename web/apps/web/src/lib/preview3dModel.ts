@@ -1,4 +1,4 @@
-export type PreviewTarget =
+type PreviewTarget =
   | { kind: "part"; partId: number }
   | { kind: "source"; sourceId: number; relativePath: string };
 
@@ -17,7 +17,7 @@ export function perceivedLuminance(hex: string): number {
  * Backdrops the viewer can put behind a mesh. Supplied by the theme
  * (lib/previewTheme.ts) so this module stays a pure model.
  */
-export type PreviewBackdrops = Readonly<{
+type PreviewBackdrops = Readonly<{
   /** --media-bg: the backdrop every preview uses by default. */
   background: string;
   /** Mid-tone stand-in for meshes that would vanish into `background`. */

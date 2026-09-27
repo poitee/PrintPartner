@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ManifestSelections } from "@print-partner/contracts";
 import {
-  fetchPlanKitManifest,
   savePlanKitManifest,
   type KitManifest,
 } from "../api/endpoints/planManifests";
@@ -270,8 +269,4 @@ export function useKitManifestAutosave({
   }, [saveState, status]);
 
   return { dirty, status, saveNow: flushSave, saveUserEdit };
-}
-
-export async function loadKitManifestState(profileId: number): Promise<KitManifest> {
-  return fetchPlanKitManifest(profileId);
 }

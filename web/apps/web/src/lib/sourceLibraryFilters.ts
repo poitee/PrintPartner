@@ -1,9 +1,9 @@
 import type { SourceSummary } from "@print-partner/contracts";
 import { matchesSourceCategoryFilter } from "./sourceCategoryAssignment";
 
-export type SourceLibrarySyncFilter = "all" | "synced" | "unsynced" | "updates";
+type SourceLibrarySyncFilter = "all" | "synced" | "unsynced" | "updates";
 
-export type SourceLibraryFilters = {
+type SourceLibraryFilters = {
   search: string;
   categoryFilter: string;
   syncFilter: SourceLibrarySyncFilter;

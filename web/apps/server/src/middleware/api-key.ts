@@ -27,7 +27,7 @@ function isExempt(url: string): boolean {
 }
 
 export type ApiKeyValidator = (rawKey: string) => boolean;
-export type AdminPreHandler = (
+type AdminPreHandler = (
   request: FastifyRequest,
   reply: FastifyReply,
 ) => Promise<unknown>;

@@ -4,7 +4,7 @@
  * initializes cannot overshoot before onsessioninitialized runs.
  */
 
-export type McpSessionCapacity = {
+type McpSessionCapacity = {
   /** sessions.size + held reservations */
   occupied: () => number;
   pendingReservations: () => number;
