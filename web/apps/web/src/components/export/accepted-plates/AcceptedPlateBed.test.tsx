@@ -75,7 +75,7 @@ describe("AcceptedPlateBed rejected drag", () => {
         onTransfer={() => Promise.resolve()}
       />,
     );
-    const unit = screen.getByRole("button", { name: `bracket__${token}` });
+    const unit = await screen.findByRole("button", { name: `bracket__${token}` });
     Object.defineProperties(unit, {
       setPointerCapture: { value: vi.fn() },
       releasePointerCapture: { value: vi.fn() },

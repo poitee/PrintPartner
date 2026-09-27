@@ -169,7 +169,7 @@ describe("AcceptedPlateGallery successor revisions", () => {
       );
     }
     render(<Harness />);
-    fireEvent.focus(screen.getByRole("button", { name: `clip__${secondToken}` }));
+    fireEvent.focus(await screen.findByRole("button", { name: `clip__${secondToken}` }));
     const x = screen.getByLabelText("X position (mm)");
     fireEvent.change(x, { target: { value: "45" } });
     x.focus();

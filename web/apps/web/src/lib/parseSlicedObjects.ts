@@ -4,7 +4,6 @@
  * .3mf / .gcode.3mf object@name attributes. Never talks to a print host.
  */
 
-import JSZip from "jszip";
 
 type SlicedObjectSource =
   | "exclude_object_define"
@@ -339,6 +338,7 @@ async function parse3mfArchive(
   printTime?: string;
   filamentWeightG?: number;
 }> {
+  const { default: JSZip } = await import("jszip");
   const zip = await JSZip.loadAsync(bytes);
   const out: ParsedSlicedObject[] = [];
   const seen = new Set<string>();
