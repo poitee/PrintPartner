@@ -2,6 +2,7 @@
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { setEngineUnauthorizedHandler } from "../../api/contractRequest";
 import BackupManagementCard from "./BackupManagementCard";
 
 describe("BackupManagementCard", () => {
@@ -25,7 +26,7 @@ describe("BackupManagementCard", () => {
         Promise.resolve(
           new Response(
             JSON.stringify(
-              String(input) === "/backups/storage"
+              String(input) === `${window.location.origin}/backups/storage`
                 ? inventory
                 : [
                     {
@@ -108,7 +109,7 @@ describe("BackupManagementCard", () => {
 
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith(
-        "/backups/validate",
+        `${window.location.origin}/backups/validate`,
         expect.objectContaining({
           method: "POST",
           body: expect.any(FormData),
@@ -122,7 +123,7 @@ describe("BackupManagementCard", () => {
     fireEvent.click(screen.getByRole("button", { name: "Restore this backup" }));
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith(
-        "/backups/restore",
+        `${window.location.origin}/backups/restore`,
         expect.objectContaining({
           method: "POST",
           body: expect.any(FormData),
@@ -138,7 +139,7 @@ describe("BackupManagementCard", () => {
       createdAt: "2026-08-18T09:00:00.000Z",
     };
     const fetchMock = vi.fn().mockImplementation((input: string | URL | Request) => {
-      const url = String(input);
+      const url = String(input).replace(window.location.origin, "");
       if (url === "/backups") {
         return Promise.resolve(new Response(JSON.stringify([backup])));
       }
@@ -188,7 +189,8 @@ describe("BackupManagementCard", () => {
       true,
     );
     expect(fetchMock).toHaveBeenCalledWith(
-      `/backups/${backup.name}/preflight`,
+      `${window.location.origin}/backups/${backup.name}/preflight`,
+      expect.anything(),
     );
   });
 
@@ -229,8 +231,28 @@ describe("BackupManagementCard", () => {
     if (!(link instanceof HTMLAnchorElement)) {
       throw new Error("Download did not use a native link");
     }
-    expect(link.getAttribute("href")).toBe(`/backups/${backup.name}`);
+    expect(link.getAttribute("href")).toBe(`${window.location.origin}/backups/${backup.name}`);
     expect(link.getAttribute("download")).toBe(backup.name);
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("hands an expired session to the app-wide unauthorized handler", async () => {
+    const onUnauthorized = vi.fn();
+    setEngineUnauthorizedHandler(onUnauthorized);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(() =>
+        Promise.resolve(Response.json({ detail: "Sign in again" }, { status: 401 })),
+      ),
+    );
+
+    try {
+      render(<BackupManagementCard />);
+
+      expect(await screen.findByText("Sign in again")).toBeTruthy();
+      expect(onUnauthorized).toHaveBeenCalled();
+    } finally {
+      setEngineUnauthorizedHandler(null);
+    }
   });
 });

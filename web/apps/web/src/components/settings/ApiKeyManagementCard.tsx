@@ -9,6 +9,7 @@ import {
 } from "../ui/card";
 import { Button } from "../ui/button";
 import ConfirmDialog from "../ConfirmDialog";
+import { engineFetchStream } from "../../api/engineTransport";
 import {
   Dialog,
   DialogContent,
@@ -41,8 +42,10 @@ export default function ApiKeyManagementCard() {
     setLoading(true);
     setError(null);
     try {
-      const response = await fetch("/settings/api-keys");
-      if (!response.ok) throw new Error("Failed to load API keys");
+      const response = await engineFetchStream({
+        path: "/settings/api-keys",
+        failureMessage: "Failed to load API keys",
+      });
       const data = (await response.json()) as { keys: ApiKey[] };
       setKeys(data.keys || []);
     } catch (err) {
@@ -63,8 +66,11 @@ export default function ApiKeyManagementCard() {
     setLoading(true);
     setError(null);
     try {
-      const response = await fetch("/settings/api-keys", { method: "POST" });
-      if (!response.ok) throw new Error("Failed to create API key");
+      const response = await engineFetchStream({
+        path: "/settings/api-keys",
+        method: "POST",
+        failureMessage: "Failed to create API key",
+      });
       const data = (await response.json()) as NewApiKey;
       setNewKey(data);
       await loadKeys();
@@ -79,10 +85,11 @@ export default function ApiKeyManagementCard() {
     setLoading(true);
     setError(null);
     try {
-      const response = await fetch(`/settings/api-keys/${keyId}/regenerate`, {
+      const response = await engineFetchStream({
+        path: `/settings/api-keys/${keyId}/regenerate`,
         method: "POST",
+        failureMessage: "Failed to rotate API key",
       });
-      if (!response.ok) throw new Error("Failed to rotate API key");
       const data = (await response.json()) as NewApiKey;
       setNewKey(data);
       await loadKeys();
@@ -95,10 +102,11 @@ export default function ApiKeyManagementCard() {
 
   const handleRevokeKey = async (keyId: string) => {
     try {
-      const response = await fetch(`/settings/api-keys/${keyId}`, {
+      await engineFetchStream({
+        path: `/settings/api-keys/${keyId}`,
         method: "DELETE",
+        failureMessage: "Failed to revoke API key",
       });
-      if (!response.ok) throw new Error("Failed to revoke API key");
       await loadKeys();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to revoke API key");

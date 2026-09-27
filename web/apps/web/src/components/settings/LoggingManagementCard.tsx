@@ -9,6 +9,7 @@ import {
 } from "../ui/card";
 import { Button } from "../ui/button";
 import ConfirmDialog from "../ConfirmDialog";
+import { engineFetchStream } from "../../api/engineTransport";
 import {
   Select,
   SelectContent,
@@ -101,8 +102,10 @@ export default function LoggingManagementCard() {
     setLoading(true);
     setError(null);
     try {
-      const response = await fetch("/settings/logging/config");
-      if (!response.ok) throw new Error("Failed to load logging config");
+      const response = await engineFetchStream({
+        path: "/settings/logging/config",
+        failureMessage: "Failed to load logging config",
+      });
       const data = parseLoggerConfig(await response.json());
       setConfig(data);
     } catch (err) {
@@ -114,8 +117,10 @@ export default function LoggingManagementCard() {
 
   const loadStats = async () => {
     try {
-      const response = await fetch("/settings/logging/stats");
-      if (!response.ok) throw new Error("Failed to load stats");
+      const response = await engineFetchStream({
+        path: "/settings/logging/stats",
+        failureMessage: "Failed to load stats",
+      });
       const data = (await response.json()) as LogStats;
       setStats(data);
     } catch (err) {
@@ -128,8 +133,10 @@ export default function LoggingManagementCard() {
     setLogsLoading(true);
     setError(null);
     try {
-      const response = await fetch("/settings/logging/logs?limit=100");
-      if (!response.ok) throw new Error("Failed to load recent logs");
+      const response = await engineFetchStream({
+        path: "/settings/logging/logs?limit=100",
+        failureMessage: "Failed to load recent logs",
+      });
       const value: unknown = await response.json();
       setLogs(parseWorkflowLogs(value).slice().reverse());
     } catch (err) {
@@ -155,12 +162,13 @@ export default function LoggingManagementCard() {
     setLoading(true);
     setError(null);
     try {
-      const response = await fetch("/settings/logging/config", {
+      const response = await engineFetchStream({
+        path: "/settings/logging/config",
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(newConfig),
+        failureMessage: "Failed to update config",
       });
-      if (!response.ok) throw new Error("Failed to update config");
       setConfig(parseLoggerConfig(await response.json()));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to update config");
@@ -171,10 +179,10 @@ export default function LoggingManagementCard() {
 
   const handleExport = async (format: "json" | "jsonl") => {
     try {
-      const response = await fetch(
-        `/settings/logging/export?format=${format}`
-      );
-      if (!response.ok) throw new Error("Export failed");
+      const response = await engineFetchStream({
+        path: `/settings/logging/export?format=${format}`,
+        failureMessage: "Export failed",
+      });
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -191,10 +199,11 @@ export default function LoggingManagementCard() {
 
   const handleClearLogs = async () => {
     try {
-      const response = await fetch("/settings/logging/logs", {
+      await engineFetchStream({
+        path: "/settings/logging/logs",
         method: "DELETE",
+        failureMessage: "Clear failed",
       });
-      if (!response.ok) throw new Error("Clear failed");
       setLogs([]);
       await loadStats();
     } catch (err) {
