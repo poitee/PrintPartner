@@ -203,6 +203,7 @@ export default function PrinterLiveStrip({
 
   useEffect(() => {
     let unattributedChanged = false;
+    const updatedProfileIds = new Set<number>();
     for (const outcome of reconciliation.outcomes) {
       if (handledReconciliations.current.has(outcome)) continue;
       handledReconciliations.current.add(outcome);
@@ -218,10 +219,10 @@ export default function PrinterLiveStrip({
             `${row.host_name} ${row.host_outcome === "cancelled" ? "cancelled" : "failed"} ${row.filename}. Review the send.`,
           );
         }
-        onCheckoffUpdateRef.current?.(row.profile_id);
+        updatedProfileIds.add(row.profile_id);
       }
       for (const link of result.created_links ?? []) {
-        onCheckoffUpdateRef.current?.(link.profile_id);
+        updatedProfileIds.add(link.profile_id);
       }
       if (result.unattributed) {
         const snapshot = JSON.stringify(result.unattributed);
@@ -230,6 +231,7 @@ export default function PrinterLiveStrip({
         if (snapshot !== previous) unattributedChanged = true;
       }
     }
+    for (const profileId of updatedProfileIds) onCheckoffUpdateRef.current?.(profileId);
     if (unattributedChanged) onUnattributedUpdateRef.current?.();
   }, [reconciliation]);
 

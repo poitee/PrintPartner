@@ -26,6 +26,7 @@ import {
   usePrinterCheckoffLinksQuery,
   useUnattributedPrintsQuery,
 } from "../queries/printerCheckoff";
+import { refreshProfileSummary } from "../queries/profiles";
 import {
   getBackgroundError,
   resolveEngineState,
@@ -132,9 +133,13 @@ export default function GlobalProductionPage() {
     ? farmFailure instanceof Error ? farmFailure.message : String(farmFailure)
     : null;
 
-  const refreshAfterPrinterEvent = useCallback(() => {
+  const refreshFarm = useCallback(() => {
     void invalidatePrinterFarm(queryClient);
-    void reloadProfiles();
+  }, [queryClient]);
+
+  const refreshAfterBuildEvent = useCallback((profileId: number) => {
+    void invalidatePrinterFarm(queryClient);
+    void refreshProfileSummary(queryClient, profileId).catch(() => reloadProfiles());
   }, [queryClient, reloadProfiles]);
 
   const jobs = useMemo(
@@ -187,8 +192,8 @@ export default function GlobalProductionPage() {
           <Suspense fallback={null}>
             <PrinterLiveStrip
               engineReady
-              onCheckoffUpdate={refreshAfterPrinterEvent}
-              onUnattributedUpdate={refreshAfterPrinterEvent}
+              onCheckoffUpdate={refreshAfterBuildEvent}
+              onUnattributedUpdate={refreshFarm}
             />
           </Suspense>
           )}
@@ -212,8 +217,8 @@ export default function GlobalProductionPage() {
                         key={print.id}
                         print={print}
                         profiles={profiles}
-                        onClaimed={refreshAfterPrinterEvent}
-                        onDismissed={refreshAfterPrinterEvent}
+                        onClaimed={refreshAfterBuildEvent}
+                        onDismissed={refreshFarm}
                       />
                     ))}
                   </div>

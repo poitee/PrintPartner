@@ -25,7 +25,7 @@ type ProfileOption = {
 type Props = {
   print: UnattributedPrint;
   profiles: readonly ProfileOption[];
-  onClaimed?: () => void;
+  onClaimed?: (profileId: number) => void;
   onDismissed?: () => void;
 };
 
@@ -59,7 +59,7 @@ export default function UnattributedPrintCard({
         profileId,
         scope === "selected_files" ? { selected_stl_basenames: selected } : undefined,
       );
-      onClaimed?.();
+      onClaimed?.(profileId);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to claim");
     } finally {

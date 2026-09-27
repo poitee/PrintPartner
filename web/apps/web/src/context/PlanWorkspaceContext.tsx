@@ -43,7 +43,7 @@ import {
   usePatchPartProgressMutation,
   usePlanReviewQuery,
 } from "../queries/planReview";
-import { invalidateProfiles, refreshProfileSummary } from "../queries/profiles";
+import { refreshProfileSummary } from "../queries/profiles";
 import { queryKeys } from "../queries/keys";
 import {
   usePlanDraftListQuery,
@@ -273,7 +273,7 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
     if (!health?.ok || selectedProfileId == null) return;
     await Promise.all([
       invalidatePlanReview(queryClient, selectedProfileId),
-      invalidateProfiles(queryClient),
+      refreshProfileSummary(queryClient, selectedProfileId),
     ]);
   }, [health?.ok, queryClient, selectedProfileId]);
 

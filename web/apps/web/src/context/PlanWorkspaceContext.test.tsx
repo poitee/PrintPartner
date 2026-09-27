@@ -188,11 +188,20 @@ vi.mock("../queries/planReview", () => ({
     }),
 }));
 
+const profileQueries = vi.hoisted(() => ({
+  refreshProfileSummary: vi.fn(),
+  invalidateProfiles: vi.fn(),
+}));
+
 vi.mock("../queries/profiles", () => ({
-  refreshProfileSummary: (client: QueryClient) =>
-    client.invalidateQueries({ queryKey: queryKeys.profiles }),
-  invalidateProfiles: (client: QueryClient) =>
-    client.invalidateQueries({ queryKey: queryKeys.profiles }),
+  refreshProfileSummary: (client: QueryClient, profileId: number) => {
+    profileQueries.refreshProfileSummary(profileId);
+    return client.invalidateQueries({ queryKey: queryKeys.profiles });
+  },
+  invalidateProfiles: (client: QueryClient) => {
+    profileQueries.invalidateProfiles();
+    return client.invalidateQueries({ queryKey: queryKeys.profiles });
+  },
 }));
 
 vi.mock("../queries/planDraft", () => ({
@@ -1047,5 +1056,15 @@ describe("PlanWorkspaceProvider saved draft lifecycle", () => {
     expect(applyPlanDraft).not.toHaveBeenCalled();
     expect(hook.result.current.mergeConflict).toBe(false);
     expect(hook.result.current.draftError).toBeNull();
+  });
+
+  it("refreshes only the selected Build summary", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { result } = renderHook(() => usePlanWorkspace(), { wrapper: wrapper(client) });
+
+    await act(() => result.current.refresh());
+
+    expect(profileQueries.refreshProfileSummary).toHaveBeenCalledExactlyOnceWith(7);
+    expect(profileQueries.invalidateProfiles).not.toHaveBeenCalled();
   });
 });

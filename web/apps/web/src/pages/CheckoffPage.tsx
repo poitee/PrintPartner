@@ -968,7 +968,6 @@ export default function CheckoffPage() {
               activity.refreshLinks();
               setVerifyRefreshKey((key) => key + 1);
               void refresh();
-              void reloadProfiles();
             }}
           />
         </DialogContent>
