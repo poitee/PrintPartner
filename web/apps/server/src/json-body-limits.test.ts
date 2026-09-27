@@ -6,6 +6,7 @@ import { buildApp } from "./app.js";
 import { loadConfig } from "./config.js";
 import { createSelfHostPorts } from "./adapters/self-host/index.js";
 import {
+  MAX_ASSISTANT_ACTION_BODY_BYTES,
   MAX_BULK_JSON_BODY_BYTES,
   MAX_JSON_BODY_BYTES,
 } from "./services/upload-limits.js";
@@ -84,6 +85,26 @@ describe("JSON body limits", () => {
     });
 
     expect(atLimit.statusCode).not.toBe(413);
+    expect(overLimit.statusCode).toBe(413);
+  });
+
+  it("limits assistant action bodies to 96 MiB", async () => {
+    expect(MAX_ASSISTANT_ACTION_BODY_BYTES).toBe(96 * MiB);
+    const atLimit = await app.inject({
+      method: "POST",
+      url: "/assistant/actions/apply",
+      headers: { "content-type": "application/json" },
+      payload: jsonOfSize(MAX_ASSISTANT_ACTION_BODY_BYTES, {}),
+    });
+    const overLimit = await app.inject({
+      method: "POST",
+      url: "/assistant/actions/dismiss",
+      headers: { "content-type": "application/json" },
+      payload: jsonOfSize(MAX_ASSISTANT_ACTION_BODY_BYTES + 1, {}),
+    });
+
+    expect(atLimit.statusCode).toBe(400);
+    expect(atLimit.json()).toEqual(expect.objectContaining({ detail: "action is required" }));
     expect(overLimit.statusCode).toBe(413);
   });
 });

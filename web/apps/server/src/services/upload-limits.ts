@@ -1,7 +1,8 @@
 export const MAX_SOURCE_UPLOAD_BYTES = 256 * 1024 * 1024;
 export const MAX_JSON_BODY_BYTES = 1024 * 1024;
 export const MAX_BULK_JSON_BODY_BYTES = 8 * 1024 * 1024;
-export const MAX_ASSISTANT_ACTION_BODY_BYTES = 384 * 1024 * 1024;
+export const MAX_MCP_INLINE_FILE_BYTES = 64 * 1024 * 1024;
+export const MAX_ASSISTANT_ACTION_BODY_BYTES = 96 * 1024 * 1024;
 export const MAX_KIT_BUNDLE_UPLOAD_BYTES = 64 * 1024 * 1024;
 export const MAX_PRINT_FILE_UPLOAD_BYTES = 64 * 1024 * 1024;
 export const MAX_THUMBNAIL_UPLOAD_BYTES = 64 * 1024 * 1024;
@@ -16,6 +17,8 @@ export const PRINT_FILE_UPLOAD_TOO_LARGE_DETAIL =
   `Print file exceeds the ${MAX_PRINT_FILE_UPLOAD_BYTES / 1024 / 1024} MiB upload limit`;
 export const THUMBNAIL_UPLOAD_TOO_LARGE_DETAIL =
   `Thumbnail exceeds the ${MAX_THUMBNAIL_UPLOAD_BYTES / 1024 / 1024} MiB upload limit`;
+export const MCP_INLINE_UPLOAD_TOO_LARGE_DETAIL =
+  `upload exceeds the ${MAX_MCP_INLINE_FILE_BYTES / 1024 / 1024} MiB MCP limit`;
 export const BACKUP_UPLOAD_TOO_LARGE_DETAIL =
   `Backup archive exceeds the ${MAX_BACKUP_UPLOAD_BYTES / 1024 / 1024 / 1024} GiB upload limit`;
 

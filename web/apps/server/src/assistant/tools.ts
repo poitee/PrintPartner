@@ -94,6 +94,7 @@ import {
 } from "../services/plan-manifest-builder.js";
 import { PlanDraftWorkspaceService } from "../services/plan-draft-workspace.js";
 import { finalizeUploadedSource, writeUploadedFiles, writeUploadedZip } from "../services/archive-import.js";
+import { MAX_MCP_INLINE_FILE_BYTES, MCP_INLINE_UPLOAD_TOO_LARGE_DETAIL } from "../services/upload-limits.js";
 import { indexSourceDocsFromDisk } from "../services/source-docs-index.js";
 import { resolvedFileUnderRoot } from "../lib/secure-path.js";
 import { publishLocalSourceWorkingTree } from "../services/local-source-revision.js";
@@ -144,7 +145,6 @@ export type ToolContext = {
   integrations?: IntegrationPort | null;
 };
 
-const MCP_THREE_MF_MAX_BYTES = 64 * 1024 * 1024;
 
 type ThreeMfCheckoffInput = Readonly<{
   content_base64?: unknown;
@@ -183,7 +183,7 @@ function readThreeMfCheckoffBytes(
     try {
       const stat = statSync(absolute);
       if (!stat.isFile()) return { error: "3MF path is not a file" };
-      if (stat.size > MCP_THREE_MF_MAX_BYTES) return { error: "3MF exceeds the 64 MiB MCP limit" };
+      if (stat.size > MAX_MCP_INLINE_FILE_BYTES) return { error: "3MF exceeds the 64 MiB MCP limit" };
       bytes = readFileSync(absolute);
     } catch (error) {
       return { error: error instanceof Error ? error.message : "Unable to read 3MF" };
@@ -191,7 +191,7 @@ function readThreeMfCheckoffBytes(
   }
   if (!filename.toLowerCase().endsWith(".3mf")) filename = `${filename}.3mf`;
   if (bytes.length === 0) return { error: "3MF is empty" };
-  if (bytes.length > MCP_THREE_MF_MAX_BYTES) return { error: "3MF exceeds the 64 MiB MCP limit" };
+  if (bytes.length > MAX_MCP_INLINE_FILE_BYTES) return { error: "3MF exceeds the 64 MiB MCP limit" };
   return { bytes, filename };
 }
 
@@ -973,7 +973,7 @@ export async function invokeAssistantTool(
         }).join("");
         if (!/^[A-Za-z0-9+/=\r\n]+$/.test(encoded)) return { content: JSON.stringify({ error: "content must be base64" }) };
         const approxBytes = Math.floor((encoded.replace(/\s/g, "").length * 3) / 4);
-        if (approxBytes > 256 * 1024 * 1024) return { content: JSON.stringify({ error: "upload exceeds the 256 MiB MCP limit" }) };
+        if (approxBytes > MAX_MCP_INLINE_FILE_BYTES) return { content: JSON.stringify({ error: MCP_INLINE_UPLOAD_TOO_LARGE_DETAIL }) };
         return proposeAssistantAction({
           type: "propose_import_source_files",
           planId: 0,
@@ -3309,7 +3309,7 @@ export async function applyAssistantAction(
         try {
           if (archive) {
             const buffer = Buffer.from(archive, "base64");
-            if (buffer.length > 256 * 1024 * 1024) return { ok: false, detail: "upload exceeds the 256 MiB MCP limit" };
+            if (buffer.length > MAX_MCP_INLINE_FILE_BYTES) return { ok: false, detail: MCP_INLINE_UPLOAD_TOO_LARGE_DETAIL };
             workingTree = writeUploadedZip(buffer, sourcesDir, sourceId);
             const finalized = finalizeUploadedSource(workingTree);
             importedFiles = 1;
@@ -3326,7 +3326,7 @@ export async function applyAssistantAction(
               return { relativePath, buffer: Buffer.from(encoded, "base64") };
             });
             const totalBytes = files.reduce((total, file) => total + file.buffer.length, 0);
-            if (totalBytes > 256 * 1024 * 1024) return { ok: false, detail: "upload exceeds the 256 MiB MCP limit" };
+            if (totalBytes > MAX_MCP_INLINE_FILE_BYTES) return { ok: false, detail: MCP_INLINE_UPLOAD_TOO_LARGE_DETAIL };
             const written = writeUploadedFiles(files, sourcesDir, sourceId);
             workingTree = written.extractDir;
             importedFiles = written.fileCount;

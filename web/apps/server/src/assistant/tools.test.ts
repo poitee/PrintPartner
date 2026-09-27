@@ -426,6 +426,17 @@ option_groups:
     expect(applied.result?.artifacts).toEqual(expect.arrayContaining([expect.objectContaining({ path: "parts/uploaded.stl" })]));
   });
 
+  it("refuses MCP file imports above the 64 MiB inline limit", async () => {
+    const source = repo.createSource({ name: "Oversized uploads", source_kind: "local" });
+    const encodedBytesOverLimit = Math.ceil((64 * 1024 * 1024 + 1) / 3) * 4;
+    const proposal = await invokeAssistantTool("propose_import_source_files", {
+      source_id: source.id,
+      files: [{ path: "parts/large.stl", content_base64: "A".repeat(encodedBytesOverLimit) }],
+    }, { repo });
+    expect(JSON.parse(proposal.content)).toEqual({ error: "upload exceeds the 64 MiB MCP limit" });
+    expect(proposal.proposedAction).toBeUndefined();
+  });
+
   it("imports an incompatible-slicer 3MF into verify-first checkoff and exposes progress", async () => {
     const source = repo.createSource({ name: "Checkoff parts", source_kind: "local" });
     const sourcePath = join(dataDir, "checkoff-source");
