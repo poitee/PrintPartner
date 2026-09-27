@@ -15,18 +15,6 @@ export interface StoragePort {
   writeText(relativePath: string, contents: string): Promise<void>;
 }
 
-/** GitHub / local folder source sync. */
-export interface RepoSource {
-  listSources(): Promise<Array<{ id: number; name: string }>>;
-  syncSource(sourceId: number): Promise<void>;
-}
-
-/** Authentication and tenant resolution. */
-export interface AuthProvider {
-  /** Returns tenant id for the current request, or null when unauthenticated. */
-  resolveTenant(request: { headers: Record<string, string | string[] | undefined> }): Promise<string | null>;
-}
-
 export type JobKind = string;
 
 export interface JobRunner {
@@ -40,7 +28,5 @@ export interface JobRunner {
 export interface AppPorts {
   db: DbStore;
   storage: StoragePort;
-  repoSource: RepoSource;
-  auth: AuthProvider;
   jobs: JobRunner;
 }
