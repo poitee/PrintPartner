@@ -7,8 +7,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createSelfHostPorts } from "../adapters/self-host/index.js";
 import { InProcessJobRunner } from "../services/job-runner.js";
 import { encodeAcceptedPlate3mf, type StlMesh } from "@print-partner/domain";
+import { ASSISTANT_TOOL_SPECS } from "./tool-specs.js";
 import {
-  ASSISTANT_TOOL_SPECS,
   invokeAssistantTool,
   applyAssistantAction,
 } from "./tools.js";

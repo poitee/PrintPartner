@@ -9,8 +9,8 @@ import { loadConfig } from "../config.js";
 import { getDb } from "../db/client.js";
 import { projects } from "../db/schema.js";
 import type { SelfHostDbStore } from "../adapters/self-host/index.js";
+import { ASSISTANT_TOOL_SPECS } from "../assistant/tool-specs.js";
 import {
-  ASSISTANT_TOOL_SPECS,
   applyAssistantAction,
   invokeAssistantTool,
 } from "../assistant/tools.js";

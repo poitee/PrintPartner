@@ -4,7 +4,8 @@ import type {
   ManifestSelections,
 } from "@print-partner/contracts";
 import { randomUUID } from "node:crypto";
-import { ASSISTANT_TOOL_SPECS, invokeAssistantTool, type ToolContext } from "./tools.js";
+import { ASSISTANT_TOOL_SPECS } from "./tool-specs.js";
+import { invokeAssistantTool, type ToolContext } from "./tools.js";
 import {
   parseTextEmbeddedToolCalls,
   stripEmbeddedToolCallJson,

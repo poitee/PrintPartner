@@ -22,8 +22,8 @@ import { join } from "node:path";
 import type { ServerConfig } from "../config.js";
 import { createAssistantPort } from "../assistant/create-assistant.js";
 import { resolveAssistantRuntime } from "../assistant/resolve-assistant.js";
+import { ASSISTANT_TOOL_SPECS } from "../assistant/tool-specs.js";
 import {
-  ASSISTANT_TOOL_SPECS,
   applyAssistantAction,
   invokeAssistantTool,
   type ToolContext,

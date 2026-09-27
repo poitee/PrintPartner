@@ -1,5 +1,5 @@
 import type { AiProviderId, AssistantChatMessage, AssistantProposedAction } from "@print-partner/contracts";
-import type { AssistantToolSpec } from "./tools.js";
+import type { AssistantToolSpec } from "./tool-specs.js";
 
 export type AssistantChatParams = {
   system: string;

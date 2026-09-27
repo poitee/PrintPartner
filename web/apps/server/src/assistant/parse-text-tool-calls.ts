@@ -1,4 +1,4 @@
-import { ASSISTANT_TOOL_SPECS } from "./tools.js";
+import { ASSISTANT_TOOL_SPECS } from "./tool-specs.js";
 import type { AssistantToolCallRequest } from "./types.js";
 
 /** Keep in sync with ASSISTANT_TOOL_SPECS — local models often invent JSON/prose instead of tool_calls. */
