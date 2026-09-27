@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import type { ReferenceShare } from "@print-partner/contracts";
-import { fetchSources } from "../../api/endpoints/sources";
 import { engineFetch } from "../../api/engineTransport";
+import { useSourcesQuery } from "../../queries/sources";
 import { planRoute } from "../../lib/routes";
 import { Button } from "../ui/button";
 
@@ -24,26 +24,17 @@ export default function ReferenceShareImport({
   manifest: Extract<ReferenceShare, { kind: "build" }>;
 }) {
   const navigate = useNavigate();
-  const [sources, setSources] = useState<Array<{ id: number; name: string }>>([]);
+  const sourcesQuery = useSourcesQuery();
+  const sources = sourcesQuery.data ?? [];
   const [mapping, setMapping] = useState<Record<string, string>>({});
   const [inspection, setInspection] = useState<Inspection | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const included = manifest.parts.filter((part) => part.included);
-
-  useEffect(() => {
-    let active = true;
-    void fetchSources()
-      .then((rows) => {
-        if (active) setSources(rows.map((row) => ({ id: row.id, name: row.name })));
-      })
-      .catch((failure: unknown) => {
-        if (active) setError(failure instanceof Error ? failure.message : "Library could not be loaded");
-      });
-    return () => {
-      active = false;
-    };
-  }, []);
+  const sourcesError = sourcesQuery.error
+    ? sourcesQuery.error instanceof Error ? sourcesQuery.error.message : "Library could not be loaded"
+    : null;
+  const shownError = error ?? sourcesError;
 
   useEffect(() => {
     const selected = numericMapping(mapping);
@@ -117,7 +108,7 @@ export default function ReferenceShareImport({
           ))}
         </ul>
       ) : null}
-      {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
+      {shownError ? <p role="alert" className="text-sm text-destructive">{shownError}</p> : null}
       <Button type="button" disabled={inspection?.printable !== true || busy} onClick={() => void onImport()}>
         Add to my Builds
       </Button>
