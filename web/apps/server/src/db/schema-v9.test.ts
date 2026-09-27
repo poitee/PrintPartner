@@ -6,14 +6,15 @@ import { fileURLToPath } from "node:url";
 import { getTableConfig as getPgTableConfig, PgTable } from "drizzle-orm/pg-core";
 import Database from "better-sqlite3";
 import { getDb, SqliteDatabase } from "./client.js";
-import { postgresPostInitMigrations } from "./client-postgres.js";
+import { postgresPostInitMigrations } from "./migrations-pg.js";
+import { schemaMigrations } from "./migrations-sqlite.js";
 import { AppRepository } from "./repository.js";
 import { acceptedPlanBasis } from "./accepted-plan-progress.js";
 import { backfillAcceptedPlanRevisions } from "./accepted-plan-revisions.js";
 import { backfillCurrentRequiredUnitSets } from "./required-units.js";
 import * as pgSchema from "./schema-pg.js";
 import * as sqliteSchema from "./schema.js";
-import { currentSchemaVersion, schemaMigrations } from "./schema.js";
+import { currentSchemaVersion } from "./schema.js";
 import {
   POSTGRES_LEGACY_PRINT_PLAN_REMOVAL,
   SQLITE_LEGACY_PRINT_PLAN_REMOVAL,
@@ -1770,8 +1771,8 @@ const POSTGRES_DDL = (() => {
 })();
 
 function pgTables(): { name: string; columns: string[] }[] {
-  // schema-pg.ts also exports plain constants (DEFAULT_TENANT_ID, schemaVersionKey,
-  // currentSchemaVersion) alongside the tables, hence the unknown[] widening.
+  // schema-pg.ts also exports plain constants (DEFAULT_TENANT_ID, schemaVersionKey)
+  // alongside the tables, hence the unknown[] widening.
   return (Object.values(pgSchema) as unknown[])
     .filter((v): v is PgTable => v instanceof PgTable)
     .map((t) => {
@@ -1806,11 +1807,6 @@ function pgAddedColumns(table: string): string[] {
 }
 
 describe("database schema migrations (Postgres DDL parity)", () => {
-  it("keeps SQLite and Postgres schema_version constants in lockstep", () => {
-    expect(sqliteSchema.currentSchemaVersion).toBe(34);
-    expect(pgSchema.currentSchemaVersion).toBe(34);
-  });
-
   it("repairs PostgreSQL Source ownership in one transaction", async () => {
     const queries: string[] = [];
     await repairSourceRevisionTenantOwnershipPostgres({
