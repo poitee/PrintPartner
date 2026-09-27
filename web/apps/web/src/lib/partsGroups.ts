@@ -1,5 +1,5 @@
+import { folderKeyFromRelativePath } from "@print-partner/domain/parts-grouping";
 import type { ReviewPart } from "../api/endpoints/planManifests";
-import { folderKeyFromRelativePath } from "./checkoffGroups";
 import { sourceLabelFromLayer } from "./reviewParts";
 
 const ROLE_ORDER = ["primary", "accent", "clear", "opaque"] as const;

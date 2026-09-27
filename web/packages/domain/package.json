@@ -11,6 +11,16 @@
       "development": "./src/index.ts",
       "import": "./dist/current/index.js"
     },
+    "./import-rules": {
+      "types": "./dist/current/import-rules.d.ts",
+      "development": "./src/import-rules.ts",
+      "import": "./dist/current/import-rules.js"
+    },
+    "./parts-grouping": {
+      "types": "./dist/current/parts-grouping.d.ts",
+      "development": "./src/parts-grouping.ts",
+      "import": "./dist/current/parts-grouping.js"
+    },
     "./sliced-object-matching": {
       "types": "./dist/current/sliced-object-matching.d.ts",
       "development": "./src/sliced-object-matching.ts",

@@ -1,5 +1,6 @@
 import { Fragment, useCallback, useMemo, type ReactNode } from "react";
-import { folderKeyFromRelativePath, type CheckoffSort } from "../../lib/checkoffGroups";
+import { folderKeyFromRelativePath } from "@print-partner/domain/parts-grouping";
+import type { CheckoffSort } from "../../lib/checkoffGroups";
 import { sourceLabelFromLayer } from "../../lib/reviewParts";
 import {
   DndContext,

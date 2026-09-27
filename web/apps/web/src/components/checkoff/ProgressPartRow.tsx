@@ -1,6 +1,7 @@
 import { memo } from "react";
 import type { DraggableAttributes, DraggableSyntheticListeners } from "@dnd-kit/core";
 import { Minus, Plus, Undo2 } from "lucide-react";
+import { folderKeyFromRelativePath } from "@print-partner/domain/parts-grouping";
 import type { ReviewPart } from "../../api/endpoints/planManifests";
 import type { SuggestedPrinterClaim } from "../../lib/checkoffPrinterActivity";
 import type { CheckoffRowError } from "../../lib/checkoffConsoleRowErrors";
@@ -10,7 +11,6 @@ import {
   partProgressPercent,
   partProgressTone,
 } from "../../lib/checkoffProgress";
-import { folderKeyFromRelativePath } from "../../lib/checkoffGroups";
 import { sourceLabelFromLayer } from "../../lib/reviewParts";
 import { statusTone, type StatusTone } from "../../lib/statusTone";
 import { cn } from "@/lib/utils";

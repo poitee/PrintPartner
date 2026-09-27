@@ -1,6 +1,6 @@
 import type { StlNamingFolderRule } from "@print-partner/contracts";
+import { folderKeyFromRelativePath } from "@print-partner/domain/parts-grouping";
 import type { PlanReview, ReviewPart } from "../api/endpoints/planManifests";
-import { folderKeyFromRelativePath } from "./checkoffGroups";
 import { hasPartWarning } from "./partWarnings";
 import type {
   ReviewIncludedFilter,

@@ -21,18 +21,6 @@ function isPartFullyPrinted(part: CheckoffSummaryPart): boolean {
   return part.printed_count >= qty;
 }
 
-/** Mirror backend stack toggle: first N units printed (checkoff UX). */
-export function applyStackToggle(
-  units: boolean[],
-  unitIndex: number,
-  completed: boolean,
-): boolean[] {
-  const qty = Math.max(1, units.length);
-  const count = completed ? unitIndex + 1 : unitIndex;
-  const clamped = Math.max(0, Math.min(count, qty));
-  return Array.from({ length: qty }, (_, i) => i < clamped);
-}
-
 export function printedCountFromUnits(units: boolean[]): number {
   return units.filter(Boolean).length;
 }
