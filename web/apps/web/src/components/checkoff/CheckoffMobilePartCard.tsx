@@ -25,6 +25,7 @@ type Props = {
   onRetry?: () => void;
   correctionNote?: string;
   onToggleUnit: (part: ReviewPart, unitIndex: number) => void;
+  onDecrement?: (part: ReviewPart) => void;
   onSetAllPrinted?: (part: ReviewPart, completed: boolean) => void;
   onPreview: (part: ReviewPart) => void;
   onClaim?: (suggestion: SuggestedPrinterClaim) => void;
@@ -53,6 +54,7 @@ export default function CheckoffMobilePartCard({
   onRetry,
   correctionNote,
   onToggleUnit,
+  onDecrement,
   onSetAllPrinted,
   onPreview,
   onClaim,
@@ -79,6 +81,10 @@ export default function CheckoffMobilePartCard({
         if (idx >= 0) onToggleUnit(p, idx);
       }}
       onDecrement={(p) => {
+        if (onDecrement) {
+          onDecrement(p);
+          return;
+        }
         const idx = lastCompletedUnit(p.print_units);
         if (idx >= 0) onToggleUnit(p, idx);
       }}

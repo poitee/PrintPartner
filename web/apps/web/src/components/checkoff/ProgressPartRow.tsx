@@ -1,6 +1,6 @@
 import { memo } from "react";
 import type { DraggableAttributes, DraggableSyntheticListeners } from "@dnd-kit/core";
-import { Minus, Plus } from "lucide-react";
+import { Minus, Plus, Undo2 } from "lucide-react";
 import type { ReviewPart } from "../../api/endpoints/planManifests";
 import type { SuggestedPrinterClaim } from "../../lib/checkoffPrinterActivity";
 import type { CheckoffRowError } from "../../lib/checkoffConsoleRowErrors";
@@ -89,9 +89,8 @@ function unitStateLabel(printed: number, quantity: number): string {
  * One Required part on the Checkoff worklist.
  *
  * The phone layout leads with what the operator holds: the part image, the
- * filename, the current state in words, and one large primary action. Rare
- * actions (take a unit back off, reorder, preview) move into a menu, so the
- * row stays usable one-handed beside a running printer.
+ * filename, the current state in words, and one large primary action.
+ * Undo stays visible once a unit is checked off.
  *
  * Memoised so checking off one unit only re-renders the affected row.
  */
@@ -131,6 +130,19 @@ const ProgressPartRow = memo(function ProgressPartRow({
     />
   ) : null;
   const stateLabel = unitStateLabel(part.printed_count, qty);
+  const undoCheckoff = canDec ? (
+    <Button
+      type="button"
+      variant="outline"
+      className="min-h-11 self-start"
+      disabled={busy}
+      aria-label={`Undo last checkoff for ${part.filename}`}
+      onClick={() => onDecrement(part)}
+    >
+      <Undo2 className="mr-2 size-4" aria-hidden />
+      Undo last checkoff
+    </Button>
+  ) : null;
 
   const menuActions: CheckoffRowAction[] = [
     {
@@ -226,6 +238,7 @@ const ProgressPartRow = memo(function ProgressPartRow({
           />
         </div>
         {allCopies}
+        {undoCheckoff}
         {correctionNote ? (
           <p className="text-micro text-muted-foreground">{correctionNote}</p>
         ) : null}
@@ -334,6 +347,7 @@ const ProgressPartRow = memo(function ProgressPartRow({
           />
         </div>
       </div>
+      {undoCheckoff}
       {errorNotice}
     </article>
   );

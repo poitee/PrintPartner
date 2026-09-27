@@ -753,6 +753,22 @@ export default function CheckoffPage() {
         </div>
 
         <CheckoffViewTabs value={view} counts={viewCounts} onValueChange={onSelectView} />
+        {viewCounts.completed > 0 ? (
+          <p className="text-sm text-muted-foreground">
+            Checked something off by mistake?{" "}
+            <button
+              type="button"
+              className="min-h-11 underline underline-offset-4"
+              onClick={() => {
+                setSearch("");
+                onSelectView("completed");
+              }}
+            >
+              Open Completed to undo a checkoff
+            </button>
+            .
+          </p>
+        ) : null}
 
         <CheckoffConsoleErrors
           profilesError={getBackgroundError(profilesError, profiles.length > 0)}

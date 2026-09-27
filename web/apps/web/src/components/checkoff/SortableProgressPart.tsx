@@ -91,6 +91,7 @@ export default memo(function SortableProgressPart(props: Props) {
             part={props.part}
             busy={props.busy}
             onToggleUnit={props.onToggleUnit}
+            onDecrement={props.onDecrement}
             onSetAllPrinted={props.onSetAllPrinted}
             onPreview={props.onPreview}
             printingOn={props.printingOn}

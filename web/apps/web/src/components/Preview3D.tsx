@@ -11,6 +11,7 @@ import { DEFAULT_FILAMENT_HEX } from "@/lib/colorPresets";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
+import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 import {
   CSS2DObject,
   CSS2DRenderer,
@@ -241,6 +242,7 @@ export default function Preview3D({
     let geometry: THREE.BufferGeometry | null = null;
     let groundGeometry: THREE.PlaneGeometry | null = null;
     let groundMaterial: THREE.ShadowMaterial | null = null;
+    let environment: THREE.WebGLRenderTarget | null = null;
 
     const cleanupThree = () => {
       if (frameId) cancelAnimationFrame(frameId);
@@ -253,6 +255,8 @@ export default function Preview3D({
       groundGeometry = null;
       groundMaterial?.dispose();
       groundMaterial = null;
+      environment?.dispose();
+      environment = null;
       materialRef.current?.dispose();
       materialRef.current = null;
       rigRef.current = null;
@@ -360,9 +364,8 @@ export default function Preview3D({
         dimsGroupRef.current = dimsGroup;
         setDims({ x: size.x, y: size.y, z: size.z });
 
-        // The same rig the inline thumbnail uses (lib/previewRig.ts), so the
-        // 96px picture and this one agree. Studio adds a contact shadow, not
-        // a second lighting scheme.
+        // Keep the thumbnail's base lighting; reflections below reveal the
+        // surface of dark filament as the live preview rotates.
         const rig = createPreviewRig(activeTheme, { up: "z", distance: maxDim * 2 });
         rigRef.current = rig;
         addPreviewRig(scene, rig);
@@ -393,6 +396,16 @@ export default function Preview3D({
           alpha: appearance === "studio",
         });
         renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        const room = new RoomEnvironment();
+        const pmrem = new THREE.PMREMGenerator(renderer);
+        try {
+          environment = pmrem.fromScene(room, 0.04);
+          scene.environment = environment.texture;
+          scene.environmentIntensity = 0.7;
+        } finally {
+          room.dispose();
+          pmrem.dispose();
+        }
         if (appearance === "studio") {
           renderer.shadowMap.enabled = true;
           renderer.shadowMap.type = THREE.PCFSoftShadowMap;
