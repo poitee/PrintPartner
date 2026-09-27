@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
+import type { PrinterSendQueueItem } from "@print-partner/contracts";
 import {
   cancelPrinterSendQueueItem,
   dispatchPrinterSendQueueItem,
   drainPrinterSendQueue,
   fetchPrinterSendQueue,
-  type PrinterSendQueueItem,
 } from "../../api/endpoints/productionSend";
 import { Button } from "../ui/button";
 import { cn } from "@/lib/utils";

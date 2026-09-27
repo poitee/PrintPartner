@@ -1,27 +1,10 @@
-import type { PrinterCheckoffUnit } from "@print-partner/contracts";
+import type {
+  PrinterCheckoffUnit,
+  PrinterSendQueueItem,
+  PrinterSendQueueMatch,
+} from "@print-partner/contracts";
 import { resolveEngineUrl } from "../contractRequest";
 import { engineFetch, engineFetchMultipart } from "../engineTransport";
-
-export type PrinterSendQueueState = "queued" | "sending" | "done" | "error" | "cancelled";
-export type PrinterSendQueueMatch = "pinned" | "compatible";
-
-export type PrinterSendQueueItem = {
-  id: string;
-  filename: string;
-  artifact_path: string;
-  printer_id: string;
-  match?: PrinterSendQueueMatch;
-  wait_for_idle: boolean;
-  start: boolean;
-  profile_id?: number;
-  checkoff_units?: PrinterCheckoffUnit[];
-  state: PrinterSendQueueState;
-  created_at: string;
-  updated_at: string;
-  upload_job_id?: string;
-  error?: string;
-  host_name?: string;
-};
 
 type PrinterQueueSuggestionItem = {
   item_id: string;

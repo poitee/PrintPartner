@@ -834,6 +834,8 @@ export type PartRow = {
 export type ReviewPart = PartRow & {
   print_units: boolean[];
   printed_count: number;
+  /** Assembly tracking: which completed units have been physically installed. */
+  assembled_units?: boolean[];
   /** Checkoff: not fully printed yet. */
   missing: boolean;
   /** On-disk STL absent for an included part. */
@@ -841,6 +843,8 @@ export type ReviewPart = PartRow & {
   /** Included part has STL but no cached thumbnail PNG. */
   thumb_empty?: boolean;
   filament_display: string;
+  spool_summary?: Array<{ remaining_g: number; spool_id: number }>;
+  spool_badge?: string | null;
 };
 
 export type JobStatus = "pending" | "running" | "done" | "error" | "cancelled";

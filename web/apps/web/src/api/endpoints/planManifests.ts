@@ -2,6 +2,7 @@ import type {
   AcceptedPlanBasisContract,
   ManifestSelections,
   PartRow,
+  ReviewPart,
 } from "@print-partner/contracts";
 import { parseAcceptedPlanBasis } from "@print-partner/contracts";
 import { engineFetch } from "../engineTransport";
@@ -12,6 +13,8 @@ import type {
   ScannedManifestPart,
 } from "./sourceArtifacts";
 import type { ProfileLayer } from "./plans";
+
+export type { ReviewPart } from "@print-partner/contracts";
 
 export type ChoiceTreeNode = {
   id: string;
@@ -211,24 +214,6 @@ export type PlanReviewTotals = {
   total_print_units: number;
   by_role: Record<string, number>;
   by_filament: Record<string, number>;
-};
-
-/** Plan part row with print progress (unified Review API). */
-export type ReviewPart = PartRow & {
-  printed_count: number;
-  print_units: boolean[];
-  /** Assembly tracking: which completed units have been physically installed. */
-  assembled_units?: boolean[];
-  /** Checkoff: not fully printed yet (printed_count < qty). */
-  missing: boolean;
-  /** On-disk STL absent for an included part. */
-  stl_missing?: boolean;
-  /** Included part has STL but no cached thumbnail PNG. */
-  thumb_empty?: boolean;
-  filament_display: string;
-  filament_hex?: string | null;
-  spool_summary?: Array<{ remaining_g: number; spool_id: number }>;
-  spool_badge?: string | null;
 };
 
 export type PlanReviewPartGroup = {
