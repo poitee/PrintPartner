@@ -18,9 +18,9 @@ import {
 } from "../services/repo-tree-summary.js";
 import { loadSourceDecisionsYaml } from "./domain-pack.js";
 
-export type BuildDecisionKind = "variant" | "optional_mod" | "config";
+type BuildDecisionKind = "variant" | "optional_mod" | "config";
 
-export type BuildDecisionOption = {
+type BuildDecisionOption = {
   id: string;
   label: string;
   evidence?: string;
@@ -28,7 +28,7 @@ export type BuildDecisionOption = {
   selection?: ManifestSelections;
 };
 
-export type BuildDecision = {
+type BuildDecision = {
   id: string;
   label: string;
   kind: BuildDecisionKind;
@@ -237,7 +237,7 @@ function mergeDecisionCandidates(
 }
 
 /** Apply user free-text constraints onto decision suggested_selection when they match an option. */
-export function applyUserConstraintsToDecisions(
+function applyUserConstraintsToDecisions(
   decisions: BuildDecision[],
   userConstraints: string,
 ): BuildDecision[] {

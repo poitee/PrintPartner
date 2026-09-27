@@ -312,7 +312,7 @@ export function normalizeAliasEntry(raw: unknown): AliasEntry | null {
 }
 
 /** Load phrase aliases from domain pack alias_map.yaml. */
-export function loadAliasEntries(dataDir?: string | null): AliasEntry[] {
+function loadAliasEntries(dataDir?: string | null): AliasEntry[] {
   const aliasPath = findFile(dataDir, "_global", "alias_map.yaml");
   if (!aliasPath) return [];
   const raw = loadYamlFile(aliasPath) as { aliases?: unknown[] } | null;
