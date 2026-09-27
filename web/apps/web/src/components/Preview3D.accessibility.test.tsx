@@ -39,9 +39,18 @@ vi.mock("three", async (importOriginal) => {
     }
   }
 
+  class TestPMREMGenerator {
+    fromScene() {
+      return new actual.WebGLRenderTarget(1, 1);
+    }
+
+    dispose() {}
+  }
+
   return {
     ...actual,
     WebGLRenderer: TestWebGLRenderer,
+    PMREMGenerator: TestPMREMGenerator,
   };
 });
 
