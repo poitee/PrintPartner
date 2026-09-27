@@ -67,7 +67,6 @@ type Props = {
   onEdit: (source: SourceSummary) => void;
   onDelete: (source: SourceSummary) => void;
   onAssignCategory?: (source: SourceSummary, category: string | null) => void;
-  onSaveRules: () => void;
   runImportScan: (sourceId: number) => void;
 };
 
@@ -109,7 +108,6 @@ export default function SourceDetailSheet({
   onEdit,
   onDelete,
   onAssignCategory,
-  onSaveRules,
   runImportScan,
 }: Props) {
   const { setDirty } = useLibraryDraft();
@@ -275,7 +273,6 @@ export default function SourceDetailSheet({
     try {
       const saved = await savePromise;
       runImportScan(source.id);
-      onSaveRules();
       if (rulesGenerationRef.current !== generation) return;
       setSavedRules(saved.rules);
       setPendingRules((current) => rulesEqual(current, submittedRules) ? saved.rules : current);

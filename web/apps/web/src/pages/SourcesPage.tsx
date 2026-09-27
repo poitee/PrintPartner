@@ -1502,7 +1502,6 @@ export default function SourcesPage() {
         onAssignCategory={(source, category) =>
           void assignSourceCategory(source, category)
         }
-        onSaveRules={() => {}}
         runImportScan={(sourceId) => {
           void runJob(
             () => startImportScan(sourceId),
