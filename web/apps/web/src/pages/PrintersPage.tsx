@@ -1,13 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { Files, Printer } from "lucide-react";
-import {
-  fetchIntegrations,
-  type IntegrationSummary,
-} from "../api/endpoints/integrations";
+import type { IntegrationSummary } from "../api/endpoints/integrations";
 import { fetchPrinterCheckoffLinks } from "../api/endpoints/checkoff";
-import { fetchPrinters, type PrinterMachine } from "../api/endpoints/printers";
+import type { PrinterMachine } from "../api/endpoints/printers";
 import PageHeader from "../components/layout/PageHeader";
 import PageHeaderActions from "../components/layout/PageHeaderActions";
 import PageShell from "../components/layout/PageShell";
@@ -45,8 +42,10 @@ import {
 import { cn } from "@/lib/utils";
 import PrinterWorkspaceSheet from "../components/printers/PrinterWorkspaceSheet";
 import { usePrinterStatuses } from "../queries/printerStatuses";
+import { useIntegrationsQuery, usePrintersQuery } from "../queries/printerFleet";
 
 const HOST_TYPES = new Set<LiveStripHostType>(["moonraker", "prusalink", "bambu"]);
+const NO_INTEGRATIONS: IntegrationSummary[] = [];
 
 type PrinterDesk = {
   printer: PrinterMachine;
@@ -65,10 +64,39 @@ export default function PrintersPage() {
   const engineReady = engineState === "ready";
   const hostedPlanning = isHostedPlanning(health);
   const pollMs = usePrinterStatusPollMs();
-  const [printers, setPrinters] = useState<PrinterDesk[]>([]);
   const [workspacePrinterId, setWorkspacePrinterId] = useState<string | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [rosterLoading, setRosterLoading] = useState(true);
+  const printersQuery = usePrintersQuery(engineReady);
+  const fleet = printersQuery.data;
+  const hasConnections =
+    !hostedPlanning &&
+    (fleet ?? []).some((machine) => machine.enabled !== false && machine.integration_id?.trim());
+  const integrationsQuery = useIntegrationsQuery(engineReady && hasConnections);
+  const integrations = hasConnections ? integrationsQuery.data : NO_INTEGRATIONS;
+  const printers = useMemo(() => {
+    if (!engineReady || !fleet || !integrations) return [];
+    const byId = new Map(integrations.map((i) => [i.id, i]));
+    const next: PrinterDesk[] = [];
+    for (const machine of fleet) {
+      if (machine.enabled === false) continue;
+      const id = machine.integration_id?.trim();
+      const candidate = id ? byId.get(id) : undefined;
+      const host = candidate?.config.enabled !== false &&
+        HOST_TYPES.has(candidate?.type as LiveStripHostType)
+        ? candidate ?? null
+        : null;
+      next.push({
+        printer: machine,
+        host,
+        hostType: host ? host.type as LiveStripHostType : null,
+      });
+    }
+    return next;
+  }, [engineReady, fleet, integrations]);
+  const rosterError = printersQuery.error ?? (hasConnections ? integrationsQuery.error : null);
+  const loadError = rosterError
+    ? rosterError instanceof Error ? rosterError.message : String(rosterError)
+    : null;
+  const rosterLoading = printersQuery.isPending || (hasConnections && integrationsQuery.isPending);
 
   const statusIntegrationIds = useMemo(
     () => printers.flatMap((row) => row.host ? [row.host.id] : []),
@@ -95,49 +123,10 @@ export default function PrintersPage() {
     return map;
   }, [profiles]);
 
-  const refreshRoster = useCallback(async () => {
-    if (!engineReady) {
-      setPrinters([]);
-      setLoadError(null);
-      setRosterLoading(false);
-      return;
-    }
-    setRosterLoading(true);
-    setLoadError(null);
-    try {
-      const fleet = await fetchPrinters();
-      const hasConnections =
-        !hostedPlanning &&
-        fleet.some((machine) => machine.enabled !== false && machine.integration_id?.trim());
-      const integrations = hasConnections ? await fetchIntegrations() : [];
-      const byId = new Map(integrations.map((i) => [i.id, i]));
-      const next: PrinterDesk[] = [];
-      for (const machine of fleet) {
-        if (machine.enabled === false) continue;
-        const id = machine.integration_id?.trim();
-        const candidate = id ? byId.get(id) : undefined;
-        const host = candidate?.config.enabled !== false &&
-          HOST_TYPES.has(candidate?.type as LiveStripHostType)
-          ? candidate ?? null
-          : null;
-        next.push({
-          printer: machine,
-          host,
-          hostType: host ? host.type as LiveStripHostType : null,
-        });
-      }
-      setPrinters(next);
-      setLoadError(null);
-    } catch (e) {
-      setLoadError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setRosterLoading(false);
-    }
-  }, [engineReady, hostedPlanning]);
-
-  useEffect(() => {
-    void refreshRoster();
-  }, [refreshRoster]);
+  const refreshRoster = () => {
+    void printersQuery.refetch();
+    if (hasConnections) void integrationsQuery.refetch();
+  };
 
   const workspacePrinter = printers.find(
     (row) => row.printer.id === workspacePrinterId,
@@ -167,7 +156,7 @@ export default function PrintersPage() {
       {loadError && (
         <div className="flex flex-wrap items-center gap-3 text-sm text-destructive" role="alert">
           <p>Could not load printers: {loadError}</p>
-          <Button size="sm" variant="secondary" onClick={() => void refreshRoster()}>
+          <Button size="sm" variant="secondary" onClick={refreshRoster}>
             Retry
           </Button>
         </div>

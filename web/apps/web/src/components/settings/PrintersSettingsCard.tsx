@@ -1,10 +1,10 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Printer } from "lucide-react";
 import { fetchFilamentCatalog, type FilamentCatalog } from "../../api/endpoints/filaments";
 import {
   createIntegration,
   deleteIntegration,
-  fetchIntegrations,
   testIntegration,
   updateIntegration,
   type IntegrationSummary,
@@ -19,7 +19,6 @@ import {
   addPrinter,
   deletePrinter,
   fetchPrinterPresets,
-  fetchPrinters,
   savePrinterFleet,
   updatePrinterDetails,
   updatePrinterSlicer,
@@ -84,12 +83,19 @@ import { printerStatusTone } from "../../lib/printerLiveStrip";
 import { statusTone } from "../../lib/statusTone";
 import { useEngineHealth } from "../../hooks/useEngineHealth";
 import { usePrinterStatuses } from "../../queries/printerStatuses";
+import {
+  invalidatePrinterFleet,
+  useIntegrationsQuery,
+  usePrintersQuery,
+} from "../../queries/printerFleet";
+import { queryKeys } from "../../queries/keys";
 
 type Props = {
   engineReady: boolean;
 };
 
 const DEFAULT_PRESET_ID = "preset-prusa-mk4";
+const NO_PRINTERS: PrinterMachine[] = [];
 
 const INPUT_CLASS =
   "rounded-md border border-input bg-background px-2 py-1.5 text-sm w-full";
@@ -114,10 +120,29 @@ function removePrinterConsequence(printer: PrinterMachine): ReactNode {
 export default function PrintersSettingsCard({ engineReady }: Props) {
   const { health } = useEngineHealth();
   const hostedPlanning = isHostedPlanning(health);
-  const [printers, setPrinters] = useState<PrinterMachine[]>([]);
+  const queryClient = useQueryClient();
+  const printersQuery = usePrintersQuery(engineReady);
+  const integrationsQuery = useIntegrationsQuery(engineReady);
+  const printers = printersQuery.data ?? NO_PRINTERS;
+  const hosts = useMemo(
+    () => (integrationsQuery.data ?? []).filter((i) => isPrinterHostType(i.type)),
+    [integrationsQuery.data],
+  );
+  const setPrinters = (next: PrinterMachine[] | ((prev: PrinterMachine[]) => PrinterMachine[])) => {
+    queryClient.setQueryData<PrinterMachine[]>(queryKeys.printers, (prev) =>
+      typeof next === "function" ? next(prev ?? []) : next,
+    );
+  };
+  const setIntegrations = (update: (prev: IntegrationSummary[]) => IntegrationSummary[]) => {
+    queryClient.setQueryData<IntegrationSummary[]>(queryKeys.integrations, (prev) =>
+      update(prev ?? []),
+    );
+  };
   const [presets, setPresets] = useState<PrinterPreset[]>([]);
-  const [hosts, setHosts] = useState<IntegrationSummary[]>([]);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const [actionError, setLoadError] = useState<string | null>(null);
+  const fleetError = printersQuery.error ?? integrationsQuery.error;
+  const loadError = actionError ??
+    (fleetError ? fleetError instanceof Error ? fleetError.message : String(fleetError) : null);
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [testingId, setTestingId] = useState<string | null>(null);
@@ -171,22 +196,18 @@ export default function PrintersSettingsCard({ engineReady }: Props) {
     engineReady && !hostedPlanning,
   );
 
-  const refresh = useCallback(async () => {
+  const loadSettings = useCallback(async () => {
     if (!engineReady) return;
     setLoadError(null);
     try {
-      const [fleet, presetRows, integrations, bindings, profileList, filamentCatalog] =
+      const [presetRows, bindings, profileList, filamentCatalog] =
         await Promise.all([
-          fetchPrinters(),
           fetchPrinterPresets(),
-          fetchIntegrations(),
           fetchPrinterPlanBindings(),
           fetchProfiles(),
           fetchFilamentCatalog().catch(() => null),
         ]);
-      setPrinters(fleet);
       setPresets(presetRows);
-      setHosts(integrations.filter((i) => isPrinterHostType(i.type)));
       setPresetId((prev) => prev || pickDefaultPresetId(presetRows, DEFAULT_PRESET_ID));
       setPlanBindings(bindings);
       setProfiles(profileList);
@@ -197,8 +218,17 @@ export default function PrintersSettingsCard({ engineReady }: Props) {
   }, [engineReady]);
 
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
+    void loadSettings();
+  }, [loadSettings]);
+
+  const refresh = async () => {
+    await Promise.all([
+      invalidatePrinterFleet(queryClient),
+      fetchPrinterPlanBindings().then(setPlanBindings, (e: unknown) => {
+        setLoadError(e instanceof Error ? e.message : String(e));
+      }),
+    ]);
+  };
 
   // URL defaults follow host type only.
   useEffect(() => {
@@ -326,7 +356,7 @@ export default function PrintersSettingsCard({ engineReady }: Props) {
       );
       const saved = await savePrinterFleet(next);
       setPrinters(saved);
-      setHosts((prev) => [...prev, created]);
+      setIntegrations((prev) => [...prev, created]);
       setConnectingId(null);
       setMessage(
         hostType === "bambu"
@@ -452,7 +482,7 @@ export default function PrintersSettingsCard({ engineReady }: Props) {
       if (integrationId && updated.name !== printer.name) {
         try {
           await updateIntegration(integrationId, { name: updated.name });
-          setHosts((prev) =>
+          setIntegrations((prev) =>
             prev.map((host) =>
               host.id === integrationId ? { ...host, name: updated.name } : host,
             ),

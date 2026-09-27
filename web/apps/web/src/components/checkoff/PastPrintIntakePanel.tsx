@@ -1,4 +1,4 @@
-import { useCallback, useId, useRef, useState } from "react";
+import { useCallback, useId, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { Upload } from "lucide-react";
 import {
@@ -15,10 +15,9 @@ import {
   verifyPrinterCheckoff,
   type UploadedPrintFileCheck,
 } from "../../api/endpoints/checkoff";
-import { fetchIntegrations, type IntegrationSummary } from "../../api/endpoints/integrations";
+import type { IntegrationSummary } from "../../api/endpoints/integrations";
 import {
   fetchPrinterCapabilities,
-  fetchPrinters,
   type PrinterCapabilities,
   type PrinterMachine,
 } from "../../api/endpoints/printers";
@@ -38,6 +37,7 @@ import { allocateObjectChoices, type ObjectMatchChoices } from "../printers/obje
 import { failureMessage, useAsyncView } from "../printers/asyncView";
 import { printFileCheckSummary } from "../printers/printFileClassification";
 import { requiredUnitToken } from "../printers/printFileAssignment";
+import { useIntegrationsQuery, usePrintersQuery } from "../../queries/printerFleet";
 
 type Props = Readonly<{
   profileId: number;
@@ -143,10 +143,18 @@ export default function PastPrintIntakePanel({
   const [printerId, setPrinterId] = useState("");
   const [recorded, setRecorded] = useState<RecordedPrint[]>([]);
 
-  const fleetRequest = useCallback(async (): Promise<PrinterDesk[]> => {
-    const [fleet, integrations] = await Promise.all([fetchPrinters(), fetchIntegrations()]);
-    const byId = new Map(integrations.map((integration) => [integration.id, integration]));
-    return fleet
+  const printersQuery = usePrintersQuery();
+  const integrationsQuery = useIntegrationsQuery();
+  const fleetError = printersQuery.error ?? integrationsQuery.error;
+  const fleetStatus = fleetError
+    ? "failed"
+    : printersQuery.data && integrationsQuery.data
+      ? "ready"
+      : "loading";
+  const desks = useMemo((): PrinterDesk[] => {
+    if (!printersQuery.data || !integrationsQuery.data) return [];
+    const byId = new Map(integrationsQuery.data.map((integration) => [integration.id, integration]));
+    return printersQuery.data
       .filter((printer) => printer.enabled !== false)
       .map((printer) => {
         const linkedId = printer.integration_id?.trim();
@@ -156,11 +164,11 @@ export default function PastPrintIntakePanel({
           host: candidate && candidate.config.enabled !== false ? candidate : null,
         };
       });
-  }, []);
-  const fleet = useAsyncView({
-    request: fleetRequest,
-    fallbackMessage: "The server did not answer the printer request.",
-  });
+  }, [printersQuery.data, integrationsQuery.data]);
+  const reloadFleet = () => {
+    if (printersQuery.error) void printersQuery.refetch();
+    if (integrationsQuery.error) void integrationsQuery.refetch();
+  };
 
   // Only asked for once the operator is actually browsing a printer, because the
   // answer decides whether that printer has storage to browse at all.
@@ -174,7 +182,6 @@ export default function PastPrintIntakePanel({
     fallbackMessage: "The server did not answer the capability request.",
   });
 
-  const desks = fleet.view.status === "ready" ? fleet.view.data : [];
   const watched = desks.filter((desk) => desk.host !== null);
   const chosen = desks.find((desk) => desk.printer.id === printerId) ?? null;
   const builds = profiles.filter((profile) => profile.id === profileId);
@@ -272,22 +279,22 @@ export default function PastPrintIntakePanel({
         </RadioGroup>
       </fieldset>
 
-      {fleet.view.status === "loading" ? (
+      {fleetStatus === "loading" ? (
         <p className="text-body text-muted-foreground" role="status">
           Loading your printers…
         </p>
       ) : null}
 
-      {fleet.view.status === "failed" ? (
+      {fleetStatus === "failed" ? (
         <InlineOperationError
           title="Could not load your printers"
-          message={fleet.view.message}
-          onRetry={fleet.reload}
+          message={failureMessage(fleetError, "The server did not answer the printer request.")}
+          onRetry={reloadFleet}
           retryLabel="Try again"
         />
       ) : null}
 
-      {source === "printer" && fleet.view.status === "ready" ? (
+      {source === "printer" && fleetStatus === "ready" ? (
         <div className="stack-section">
           {watched.length === 0 ? (
             <p className="rounded-md border border-dashed border-border-strong p-4 text-body text-muted-foreground">
@@ -373,7 +380,7 @@ export default function PastPrintIntakePanel({
         </div>
       ) : null}
 
-      {source === "computer" && fleet.view.status === "ready" ? (
+      {source === "computer" && fleetStatus === "ready" ? (
         <UploadedPrintRecord
           key={recorded.length}
           profileId={profileId}

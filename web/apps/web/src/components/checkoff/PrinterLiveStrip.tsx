@@ -1,11 +1,9 @@
 import { useQueries } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { Printer } from "lucide-react";
 import type { PrinterHostStatus } from "@print-partner/contracts";
-import { fetchIntegrations } from "../../api/endpoints/integrations";
-import { fetchPrinters } from "../../api/endpoints/printers";
 import { reconcilePrinterCheckoff } from "../../api/endpoints/checkoff";
 import { settingsPrintersRoute } from "../../lib/routes";
 import {
@@ -21,6 +19,7 @@ import { quietPrinterLoadError, quietPrinterStatusMessage } from "../../lib/prin
 import { usePrinterStatusPollMs } from "../../hooks/usePrinterStatusPollMs";
 import { cn } from "@/lib/utils";
 import { usePrinterStatuses } from "../../queries/printerStatuses";
+import { useIntegrationsQuery, usePrintersQuery } from "../../queries/printerFleet";
 
 const LIVE_STRIP_HOST_TYPES = new Set<LiveStripHostType>([
   "moonraker",
@@ -107,8 +106,42 @@ export default function PrinterLiveStrip({
   onUnattributedUpdate,
   className,
 }: Props) {
-  const [hosts, setHosts] = useState<LinkedHost[]>([]);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const printersQuery = usePrintersQuery(engineReady);
+  const linkedMachines = useMemo(
+    () => (printersQuery.data ?? []).filter(
+      (machine) => machine.enabled !== false && machine.integration_id?.trim(),
+    ),
+    [printersQuery.data],
+  );
+  const integrationsQuery = useIntegrationsQuery(engineReady && linkedMachines.length > 0);
+  const integrations = integrationsQuery.data;
+  const hosts = useMemo(() => {
+    if (!engineReady || !integrations) return [];
+    const byId = new Map(integrations.map((i) => [i.id, i]));
+    const seen = new Set<string>();
+    const next: LinkedHost[] = [];
+    for (const machine of linkedMachines) {
+      const id = machine.integration_id?.trim();
+      if (!id || seen.has(id)) continue;
+      const host = byId.get(id);
+      if (!host || host.config.enabled === false) continue;
+      if (!LIVE_STRIP_HOST_TYPES.has(host.type as LiveStripHostType)) continue;
+      const hostType = host.type as LiveStripHostType;
+      seen.add(id);
+      next.push({
+        integrationId: id,
+        name: host.name.trim() || machine.name.trim() || "Printer",
+        hostType,
+        reconcileCheckoff: hostType === "moonraker" || hostType === "prusalink",
+      });
+    }
+    return next;
+  }, [engineReady, integrations, linkedMachines]);
+  const rosterError = printersQuery.error ??
+    (linkedMachines.length > 0 ? integrationsQuery.error : null);
+  const loadError = rosterError
+    ? rosterError instanceof Error ? rosterError.message : String(rosterError)
+    : null;
   const toastedLinks = useRef(new Set<string>());
   const handledReconciliations = useRef(new WeakSet<ReconcileOutcome>());
   const unattributedSnapshots = useRef(new Map<string, string>());
@@ -167,46 +200,6 @@ export default function PrinterLiveStrip({
     () => ({ ...directStatuses, ...reconciliation.statuses }),
     [directStatuses, reconciliation.statuses],
   );
-
-  const refreshRoster = useCallback(async () => {
-    if (!engineReady) {
-      setHosts([]);
-      setLoadError(null);
-      return;
-    }
-    try {
-      const fleet = await fetchPrinters();
-      const linkedMachines = fleet.filter((machine) => machine.enabled !== false && machine.integration_id?.trim());
-      const integrations = linkedMachines.length > 0 ? await fetchIntegrations() : [];
-      const byId = new Map(integrations.map((i) => [i.id, i]));
-      const seen = new Set<string>();
-      const next: LinkedHost[] = [];
-      for (const machine of linkedMachines) {
-        const id = machine.integration_id?.trim();
-        if (!id || seen.has(id)) continue;
-        const host = byId.get(id);
-        if (!host || host.config.enabled === false) continue;
-        if (!LIVE_STRIP_HOST_TYPES.has(host.type as LiveStripHostType)) continue;
-        const hostType = host.type as LiveStripHostType;
-        seen.add(id);
-        next.push({
-          integrationId: id,
-          name: host.name.trim() || machine.name.trim() || "Printer",
-          hostType,
-          reconcileCheckoff: hostType === "moonraker" || hostType === "prusalink",
-        });
-      }
-      setHosts(next);
-      setLoadError(null);
-    } catch (e) {
-      setLoadError(e instanceof Error ? e.message : String(e));
-      setHosts([]);
-    }
-  }, [engineReady]);
-
-  useEffect(() => {
-    void refreshRoster();
-  }, [refreshRoster]);
 
   useEffect(() => {
     let unattributedChanged = false;

@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -86,14 +87,17 @@ const CHECK = {
 function renderPanel() {
   const onRecorded = vi.fn();
   const onProgressChanged = vi.fn();
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
-    <MemoryRouter>
-      <PastPrintIntakePanel
-        profileId={build.id}
-        onRecorded={onRecorded}
-        onProgressChanged={onProgressChanged}
-      />
-    </MemoryRouter>,
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter>
+        <PastPrintIntakePanel
+          profileId={build.id}
+          onRecorded={onRecorded}
+          onProgressChanged={onProgressChanged}
+        />
+      </MemoryRouter>
+    </QueryClientProvider>,
   );
   return { onProgressChanged, onRecorded };
 }

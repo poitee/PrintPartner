@@ -1,8 +1,7 @@
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { fetchIntegrations } from "../../api/endpoints/integrations";
-import { fetchPrinters, type PrinterMachine } from "../../api/endpoints/printers";
+import type { PrinterMachine } from "../../api/endpoints/printers";
 import {
   bambuConnectDownloadUrl,
   startBambuConnectHandoff,
@@ -47,8 +46,10 @@ import {
 } from "../../lib/printerPlanBind";
 import { readStickyId, writeStickyId } from "../../lib/stickyIdStorage";
 import { usePrinterStatuses } from "../../queries/printerStatuses";
+import { useIntegrationsQuery, usePrintersQuery } from "../../queries/printerFleet";
 
 const PRINTER_ID_STORAGE_KEY = "pp-export-printer-id";
+const NO_PRINTERS: PrinterMachine[] = [];
 const BAMBU_PRINTER_ID_STORAGE_KEY = "pp-export-bambu-printer-id";
 
 /** A recoverable send failure. Retry reruns the send with the same file. */
@@ -78,11 +79,18 @@ export default function PrinterSendPanel({
   const printerUploadJob = useJobRunner("printer-upload");
   const planBind = sendPlanBindCopy(planName ?? null);
 
-  const [linkedPrinters, setLinkedPrinters] = useState<PrinterMachine[]>([]);
-  const [bambuPrinters, setBambuPrinters] = useState<PrinterMachine[]>([]);
-  const [hostTypeByPrinterId, setHostTypeByPrinterId] = useState<
-    Record<string, LiveStripHostType>
-  >({});
+  const printersQuery = usePrintersQuery(engineReady);
+  const integrationsQuery = useIntegrationsQuery(engineReady);
+  const fleet = useMemo(
+    () => printersQuery.data && integrationsQuery.data
+      ? partitionPrinterSendFleet(printersQuery.data, integrationsQuery.data)
+      : null,
+    [printersQuery.data, integrationsQuery.data],
+  );
+  const linkedPrinters = fleet?.sendPrinters ?? NO_PRINTERS;
+  const bambuPrinters = fleet?.bambuPrinters ?? NO_PRINTERS;
+  const hostTypeByPrinterId: Record<string, LiveStripHostType> = fleet?.hostTypeByPrinterId ?? {};
+  const printersLoading = printersQuery.isPending || integrationsQuery.isPending;
   const [selectedPrinterId, setSelectedPrinterId] = useState(
     () => readStickyId(PRINTER_ID_STORAGE_KEY),
   );
@@ -95,7 +103,6 @@ export default function PrinterSendPanel({
   const [objectPropose, setObjectPropose] = useState<ProposeCheckoffResult | null>(null);
   const [parseBusy, setParseBusy] = useState(false);
   const [bambuBusy, setBambuBusy] = useState(false);
-  const [printersLoading, setPrintersLoading] = useState(true);
 
   /**
    * The sliced file is the work package's handoff back from the slicer, so the
@@ -136,40 +143,16 @@ export default function PrinterSendPanel({
   );
 
   useEffect(() => {
-    if (!engineReady) return;
-    let cancelled = false;
-    setPrintersLoading(true);
-    void (async () => {
-      try {
-        const [printers, integrations] = await Promise.all([
-          fetchPrinters(),
-          fetchIntegrations(),
-        ]);
-        if (cancelled) return;
-        const fleet = partitionPrinterSendFleet(printers, integrations);
-        setLinkedPrinters(fleet.sendPrinters);
-        setBambuPrinters(fleet.bambuPrinters);
-        setHostTypeByPrinterId(fleet.hostTypeByPrinterId);
-        const stickySend = readStickyId(PRINTER_ID_STORAGE_KEY);
-        const stickyBambu = readStickyId(BAMBU_PRINTER_ID_STORAGE_KEY);
-        setSelectedPrinterId((prev) =>
-          resolveStickyPrinterId(fleet.sendPrinters, stickySend, prev),
-        );
-        setSelectedBambuPrinterId((prev) =>
-          resolveStickyPrinterId(fleet.bambuPrinters, stickyBambu, prev),
-        );
-      } catch {
-        if (cancelled) return;
-        setLinkedPrinters([]);
-        setBambuPrinters([]);
-      } finally {
-        if (!cancelled) setPrintersLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [engineReady]);
+    if (!fleet) return;
+    const stickySend = readStickyId(PRINTER_ID_STORAGE_KEY);
+    const stickyBambu = readStickyId(BAMBU_PRINTER_ID_STORAGE_KEY);
+    setSelectedPrinterId((prev) =>
+      resolveStickyPrinterId(fleet.sendPrinters, stickySend, prev),
+    );
+    setSelectedBambuPrinterId((prev) =>
+      resolveStickyPrinterId(fleet.bambuPrinters, stickyBambu, prev),
+    );
+  }, [fleet]);
 
   // Re-propose when remaining parts change after a successful local parse.
   useEffect(() => {

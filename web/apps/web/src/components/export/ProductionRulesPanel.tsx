@@ -1,11 +1,10 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { ArrowDown, ArrowUp, Pencil, Plus, Trash2 } from "lucide-react";
 import type {
   ProductionGroupingField,
   ProductionGroupingRule,
 } from "@print-partner/contracts";
 import { toast } from "sonner";
-import { fetchPrinters, type PrinterMachine } from "../../api/endpoints/printers";
 import { isAcceptedPlateStaleError } from "../../api/endpoints/acceptedPlates";
 import {
   useAcceptedPlateRevisionPending,
@@ -13,6 +12,7 @@ import {
   useInitializeAcceptedPlatesMutation,
 } from "../../queries/acceptedPlates";
 import { useProductionSetup } from "../../queries/productionSetup";
+import { usePrintersQuery } from "../../queries/printerFleet";
 import { Button } from "../ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui/card";
 import { Input } from "../ui/input";
@@ -45,7 +45,7 @@ export default function ProductionRulesPanel({ profileId }: { profileId: number 
   const [printerId, setPrinterId] = useState("");
   const [materialType, setMaterialType] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [printers, setPrinters] = useState<PrinterMachine[]>([]);
+  const printers = usePrintersQuery().data ?? [];
 
   const regeneratePlates = async () => {
     const workspace = workspaceQuery.data;
@@ -80,10 +80,6 @@ export default function ProductionRulesPanel({ profileId }: { profileId: number 
       toast.error(error instanceof Error ? error.message : "Could not regenerate Plates.");
     }
   };
-
-  useEffect(() => {
-    void fetchPrinters().then(setPrinters).catch(() => setPrinters([]));
-  }, []);
 
   const saveRules = async (rules: ProductionGroupingRule[]) => {
     const current = setup.data;

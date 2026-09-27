@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { defaultProductionSetup, parseAcceptedPlateWorkspace } from "@print-partner/contracts";
@@ -77,7 +78,11 @@ afterEach(() => {
 
 describe("ProductionRulesPanel", () => {
   it("offers to regenerate assigned Plates after rules change", async () => {
-    render(<ProductionRulesPanel profileId={7} />);
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <ProductionRulesPanel profileId={7} />
+      </QueryClientProvider>,
+    );
 
     const button = await screen.findByRole("button", { name: "Regenerate plates" });
     fireEvent.click(button);

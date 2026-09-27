@@ -1,5 +1,7 @@
 export const queryKeys = {
   health: ["health"] as const,
+  printers: ["printers"] as const,
+  integrations: ["integrations"] as const,
   profiles: ["profiles"] as const,
   profile: (id: number) => ["profiles", id] as const,
   sources: ["sources"] as const,
