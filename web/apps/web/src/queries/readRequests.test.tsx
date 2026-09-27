@@ -123,5 +123,6 @@ describe("shared reads", () => {
 
     expect(count("/api/v1/integrations")).toBe(1);
     expect(count("/plans")).toBe(1);
+    expect(count("/slicer-profile-options")).toBe(1);
   });
 });
