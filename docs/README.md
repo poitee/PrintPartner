@@ -33,6 +33,8 @@ Use this index to find the guide for your task. The in-app Help page covers the 
 - [STL download capacity and browser warnings](stl-downloads.md)
 - [Manifest authoring](playbooks/author-manifest-on-stack.md)
 - [Stack presets and variants](playbooks/kit-studio-build.md)
+- [Change one part's color](part-colors.md)
+- [Optional printer connections](printer-connections.md)
 
 ## Reference
 
@@ -41,6 +43,14 @@ Use this index to find the guide for your task. The in-app Help page covers the 
 - [Manifest format](../manifests/README.md)
 - [Security](../SECURITY.md)
 - [Release history](../CHANGELOG.md)
+- [Plan autosave](plan-autosave.md)
+- [Hosted tenant storage](hosted-storage.md)
+
+## Decisions
+
+- [ADR 0001: Model the Build workflow as preparation and making](adr/0001-model-build-workflow-as-preparation-and-making.md)
+- [ADR 0002: Keep Sources and Plan state contextual](adr/0002-keep-sources-and-plan-state-contextual.md)
+- [ADR 0004: Share references without redistributing models](adr/0004-share-references-without-redistributing-models.md)
 
 ## Agent workflows
 
@@ -54,7 +64,6 @@ These describe how coding agents work in this repo. `AGENTS.md` points at them t
 ## Examples
 
 - [References-only Build and Library sharing](reference-sharing.md)
-
 - [Golden LDO Voron 2.4 with SB Tap](examples/golden-ldo-voron-2.4-sb-tap.md)
 - [Golden kit export](examples/golden-ldo-voron-2.4-export.md)
 - [Cross-source Voron stack](examples/cross-source-voron/ldo-2.4-golden-stack.md)
