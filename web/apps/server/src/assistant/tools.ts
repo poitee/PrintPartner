@@ -1,6 +1,6 @@
 import { TenantDiskQuotaError } from "../lib/tenant-disk-quota.js";
 import { createHash, randomUUID } from "node:crypto";
-import { closeSync, existsSync, openSync, readFileSync, readSync, statSync, readdirSync, lstatSync, mkdtempSync, rmSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, readSync, statSync, readdirSync, lstatSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
 import type { AssistantActionType, AssistantProposedAction, PrinterHostStatus } from "@print-partner/contracts";
@@ -93,7 +93,7 @@ import {
   buildPlanOptionGroups,
 } from "../services/plan-manifest-builder.js";
 import { PlanDraftWorkspaceService } from "../services/plan-draft-workspace.js";
-import { finalizeUploadedSource, writeUploadedFiles, writeUploadedZip } from "../services/archive-import.js";
+import { createSourceUploadStaging, finalizeUploadedSource, writeUploadedFiles, writeUploadedZip } from "../services/archive-import.js";
 import { MAX_MCP_INLINE_FILE_BYTES, MCP_INLINE_UPLOAD_TOO_LARGE_DETAIL } from "../services/upload-limits.js";
 import { indexSourceDocsFromDisk } from "../services/source-docs-index.js";
 import { resolvedFileUnderRoot } from "../lib/secure-path.js";
@@ -3306,27 +3306,35 @@ export async function applyAssistantAction(
         let importedFiles = 0;
         let stlCount = 0;
         let suggestedRules: string[] = [];
+        const staging = createSourceUploadStaging(sourcesDir);
         try {
           if (archive) {
             const buffer = Buffer.from(archive, "base64");
             if (buffer.length > MAX_MCP_INLINE_FILE_BYTES) return { ok: false, detail: MCP_INLINE_UPLOAD_TOO_LARGE_DETAIL };
-            workingTree = writeUploadedZip(buffer, sourcesDir, sourceId);
+            const stagedZip = join(staging, "upload.zip");
+            writeFileSync(stagedZip, buffer);
+            workingTree = writeUploadedZip(stagedZip, sourcesDir, sourceId);
             const finalized = finalizeUploadedSource(workingTree);
             importedFiles = 1;
             stlCount = finalized.stlCount;
             suggestedRules = finalized.suggestedImportRules;
           } else {
-            const files = rawFiles.map((value, index) => {
+            const files: Array<{ relativePath: string; path: string }> = [];
+            let totalBytes = 0;
+            for (const [index, value] of rawFiles.entries()) {
               if (!value || typeof value !== "object") throw new Error("Invalid file");
               const row = value as Record<string, unknown>;
               const relativePath = String(row.path ?? "").trim().replace(/\\/g, "/");
               const encoded = String(row.content_base64 ?? "").trim();
               if (!relativePath || relativePath.startsWith("/") || relativePath.split("/").includes("..")) throw new Error(`Unsafe file path at index ${index}`);
               if (!encoded || !/^[A-Za-z0-9+/=\r\n]+$/.test(encoded)) throw new Error(`Invalid base64 content at index ${index}`);
-              return { relativePath, buffer: Buffer.from(encoded, "base64") };
-            });
-            const totalBytes = files.reduce((total, file) => total + file.buffer.length, 0);
-            if (totalBytes > MAX_MCP_INLINE_FILE_BYTES) return { ok: false, detail: MCP_INLINE_UPLOAD_TOO_LARGE_DETAIL };
+              const buffer = Buffer.from(encoded, "base64");
+              totalBytes += buffer.length;
+              if (totalBytes > MAX_MCP_INLINE_FILE_BYTES) return { ok: false, detail: MCP_INLINE_UPLOAD_TOO_LARGE_DETAIL };
+              const path = join(staging, String(index));
+              writeFileSync(path, buffer);
+              files.push({ relativePath, path });
+            }
             const written = writeUploadedFiles(files, sourcesDir, sourceId);
             workingTree = written.extractDir;
             importedFiles = written.fileCount;
@@ -3351,6 +3359,7 @@ export async function applyAssistantAction(
           if (error instanceof TenantDiskQuotaError) throw error;
           return { ok: false, detail: error instanceof Error ? error.message : String(error) };
         } finally {
+          rmSync(staging, { recursive: true, force: true });
           if (deps.hostedPlanning) rmSync(join(sourcesDir, String(sourceId)), { recursive: true, force: true });
         }
         break;
