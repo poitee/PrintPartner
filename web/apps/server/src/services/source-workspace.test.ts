@@ -6,6 +6,7 @@ import {
   rmSync,
   symlinkSync,
   writeFileSync,
+  realpathSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -31,7 +32,7 @@ import {
 const cleanupDirs: string[] = [];
 
 function createRepo() {
-  const dataDir = mkdtempSync(join(tmpdir(), "pp-source-workspace-"));
+  const dataDir = realpathSync(mkdtempSync(join(tmpdir(), "pp-source-workspace-")));
   cleanupDirs.push(dataDir);
   const sqlite = new SqliteDatabase(dataDir);
   sqlite.connect();

@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
@@ -18,7 +18,7 @@ import {
 const cleanups: Array<() => Promise<void>> = [];
 
 async function sourceApp(multiUser: boolean) {
-  const dataDir = mkdtempSync(join(tmpdir(), "pp-source-isolation-"));
+  const dataDir = realpathSync(mkdtempSync(join(tmpdir(), "pp-source-isolation-")));
   const config: ServerConfig = {
     ...loadConfig(),
     dataDir,

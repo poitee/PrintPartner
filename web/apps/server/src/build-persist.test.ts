@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 import { acceptPlanForTest, editAcceptedPartsForTest } from "./test/accept-plan.js";
 import { acceptedPlanBasis } from "./db/accepted-plan-progress.js";
 import { describe, expect, it } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { buildApp } from "./app.js";
@@ -15,7 +15,7 @@ import {
 
 describe("Build persistence and STL preview", () => {
   it("resolves STL paths case-insensitively on disk", () => {
-    const dir = mkdtempSync(join(tmpdir(), "pp-case-"));
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "pp-case-")));
     mkdirSync(join(dir, "Probes", "KlickyProbe", "STL"), { recursive: true });
     const stlPath = join(dir, "Probes", "KlickyProbe", "STL", "1mm_Spacer.stl");
     writeFileSync(stlPath, "solid test");
@@ -28,7 +28,7 @@ describe("Build persistence and STL preview", () => {
   });
 
   it("persists import rules and Part patches without serving an unaccepted mesh", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "pp-build-"));
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "pp-build-")));
     process.env.PRINT_PARTNER_DATA_DIR = dir;
     const config = loadConfig();
     const ports = createSelfHostPorts(dir);

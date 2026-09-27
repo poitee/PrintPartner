@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fetch as undiciFetch, Response as UndiciResponse } from "undici";
@@ -50,7 +50,7 @@ describe("source cover resolution", () => {
   });
 
   it("finds cover image from README", () => {
-    const dir = mkdtempSync(join(tmpdir(), "pp-cover-"));
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "pp-cover-")));
     writeFileSync(join(dir, "README.md"), "# Kit\n\n![hero](./images/preview.png)\n", "utf8");
     const imgDir = join(dir, "images");
     mkdirSync(imgDir);
@@ -60,7 +60,7 @@ describe("source cover resolution", () => {
   });
 
   it("orders candidates: metadata, github og, repo file", () => {
-    const dir = mkdtempSync(join(tmpdir(), "pp-cover-cand-"));
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "pp-cover-cand-")));
     writeFileSync(join(dir, "cover.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
     const project = {
       id: 1,
@@ -78,7 +78,7 @@ describe("source cover resolution", () => {
   });
 
   it("caches downloaded cover and reuses fresh cache", async () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "pp-cover-cache-"));
+    const dataDir = realpathSync(mkdtempSync(join(tmpdir(), "pp-cover-cache-")));
     const coversRoot = join(dataDir, "covers");
     mkdirSync(coversRoot, { recursive: true });
     const project = {
