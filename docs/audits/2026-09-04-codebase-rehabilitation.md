@@ -4,7 +4,7 @@
 
 PrintPartner is materially safer, more coherent, and easier to operate than the audited 2026-08-31 state. This pass fixed confirmed defects across storage, concurrency, authentication, remote I/O, Source handling, manifests, printer integrations, UI recovery, and build tooling.
 
-Of the 16 findings in the [full site audit](./2026-08-31-full-site-audit.md), 11 are closed and 5 are mitigated. No prior finding was left untouched. The remaining limits are listed explicitly below.
+Of the 16 findings in the 2026-08-31 full site audit (removed from the tree; see git history), 11 are closed and 5 are mitigated. No prior finding was left untouched. The remaining limits are listed explicitly below.
 
 This is a verified rehabilitation, not a claim that any codebase can be permanently perfect. For current supported paths, the completion standard was no known critical or high-impact defect, clean project gates from a fresh install, user-level runtime proof, and a durable record of residual limits. The historically affected v3.3 multi-user tenant cohort is bounded separately under Known limits.
 

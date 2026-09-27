@@ -41,7 +41,6 @@ Use this index to find the guide for your task. The in-app Help page covers the 
 - [Manifest format](../manifests/README.md)
 - [Security](../SECURITY.md)
 - [Release history](../CHANGELOG.md)
-- [Workflow cleanup and verification](workflow-cleanup.md)
 
 ## Agent workflows
 
