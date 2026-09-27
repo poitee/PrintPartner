@@ -9,12 +9,7 @@ import {
   updateIntegration,
   type IntegrationSummary,
 } from "../../api/endpoints/integrations";
-import {
-  HOSTED_PLANNING_COMPOSE_NOTE,
-  isHostedPlanning,
-  type ProfileSummary,
-} from "@print-partner/contracts";
-import { fetchProfiles } from "../../api/endpoints/plans";
+import { HOSTED_PLANNING_COMPOSE_NOTE, isHostedPlanning } from "@print-partner/contracts";
 import {
   addPrinter,
   deletePrinter,
@@ -89,6 +84,7 @@ import {
   usePrintersQuery,
 } from "../../queries/printerFleet";
 import { queryKeys } from "../../queries/keys";
+import { useProfilesQuery } from "../../queries/profiles";
 
 type Props = {
   engineReady: boolean;
@@ -158,7 +154,7 @@ export default function PrintersSettingsCard({ engineReady }: Props) {
     presetId: null,
   });
   const [planBindings, setPlanBindings] = useState<PrinterPlanBinding[]>([]);
-  const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
+  const profiles = useProfilesQuery(engineReady).data ?? [];
   const [catalog, setCatalog] = useState<FilamentCatalog | null>(null);
 
   const [hostType, setHostType] = useState<HostType>("moonraker");
@@ -200,17 +196,15 @@ export default function PrintersSettingsCard({ engineReady }: Props) {
     if (!engineReady) return;
     setLoadError(null);
     try {
-      const [presetRows, bindings, profileList, filamentCatalog] =
+      const [presetRows, bindings, filamentCatalog] =
         await Promise.all([
           fetchPrinterPresets(),
           fetchPrinterPlanBindings(),
-          fetchProfiles(),
           fetchFilamentCatalog().catch(() => null),
         ]);
       setPresets(presetRows);
       setPresetId((prev) => prev || pickDefaultPresetId(presetRows, DEFAULT_PRESET_ID));
       setPlanBindings(bindings);
-      setProfiles(profileList);
       setCatalog(filamentCatalog);
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : String(e));

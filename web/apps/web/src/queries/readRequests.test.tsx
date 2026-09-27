@@ -122,5 +122,6 @@ describe("shared reads", () => {
     await settle();
 
     expect(count("/api/v1/integrations")).toBe(1);
+    expect(count("/plans")).toBe(1);
   });
 });
