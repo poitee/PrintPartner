@@ -94,7 +94,6 @@ function loadShippedPathHintRules(): PathHintRule[] {
   const candidates = [
     join(serviceDir, "../data/path-hints.yaml"),
     join(serviceDir, "../../src/data/path-hints.yaml"),
-    join(serviceDir, "../../../docs/path-hints.yaml"),
   ];
   for (const file of candidates) {
     const rules = tryReadShippedPathHintRules(file);

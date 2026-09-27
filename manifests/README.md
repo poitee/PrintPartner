@@ -105,4 +105,4 @@ Community and registry manifests must express rules as **relative path globs** f
 
 **Do not** use absolute paths or plan-private ids in `parts[].match` or `variants[].parts`.
 
-Align folder names with [docs/path-hints.yaml](../docs/path-hints.yaml) where possible so import-rule suggestions and CI review scoring stay consistent. Shared category ids (e.g. `toolhead`, `probe`) merge across repos; variants are distinguished by path globs per repo.
+Align folder names with [the shipped path hints](../web/apps/server/src/data/path-hints.yaml) where possible so import-rule suggestions and CI review scoring stay consistent. Shared category ids (e.g. `toolhead`, `probe`) merge across repos; variants are distinguished by path globs per repo.
