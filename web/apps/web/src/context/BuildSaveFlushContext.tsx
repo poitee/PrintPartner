@@ -9,29 +9,27 @@ import {
 
 type FlushFn = () => Promise<void>;
 
-type BuildSaveKind = "importRules" | "kitManifest";
-
 type BuildSaveFlushContextValue = {
-  registerFlush: (key: string, flush: FlushFn) => void;
-  unregisterFlush: (key: string) => void;
+  registerFlush: (profileId: number, flush: FlushFn) => void;
+  unregisterFlush: (profileId: number) => void;
   flushAll: () => Promise<void>;
 };
 
 const BuildSaveFlushContext = createContext<BuildSaveFlushContextValue | null>(null);
 
 export function BuildSaveFlushProvider({ children }: { children: ReactNode }) {
-  const flushByKey = useRef(new Map<string, FlushFn>());
+  const flushByProfile = useRef(new Map<number, FlushFn>());
 
-  const registerFlush = useCallback((key: string, flush: FlushFn) => {
-    flushByKey.current.set(key, flush);
+  const registerFlush = useCallback((profileId: number, flush: FlushFn) => {
+    flushByProfile.current.set(profileId, flush);
   }, []);
 
-  const unregisterFlush = useCallback((key: string) => {
-    flushByKey.current.delete(key);
+  const unregisterFlush = useCallback((profileId: number) => {
+    flushByProfile.current.delete(profileId);
   }, []);
 
   const flushAll = useCallback(async () => {
-    const flushes = [...flushByKey.current.values()];
+    const flushes = [...flushByProfile.current.values()];
     await Promise.all(flushes.map((fn) => fn()));
   }, []);
 
@@ -53,19 +51,13 @@ function useBuildSaveFlushContext(): BuildSaveFlushContextValue {
   return ctx;
 }
 
-/** Registers autosave flushes by Source id (import rules) or Profile id (kit manifest). */
-export function useBuildSaveFlushRegistry(kind: BuildSaveKind) {
+/** Registers kit-manifest autosave flushes by Profile id. */
+export function useBuildSaveFlushRegistry() {
   const { registerFlush, unregisterFlush } = useBuildSaveFlushContext();
-  return useMemo(
-    () => ({
-      registerFlush: (id: number, flush: FlushFn) => registerFlush(`${kind}:${id}`, flush),
-      unregisterFlush: (id: number) => unregisterFlush(`${kind}:${id}`),
-    }),
-    [kind, registerFlush, unregisterFlush],
-  );
+  return useMemo(() => ({ registerFlush, unregisterFlush }), [registerFlush, unregisterFlush]);
 }
 
-/** Await pending import-rule and kit-manifest writes before leaving Build. */
+/** Await pending kit-manifest writes before leaving Build. */
 export function useFlushBuildPageSaves(): () => Promise<void> {
   return useBuildSaveFlushContext().flushAll;
 }

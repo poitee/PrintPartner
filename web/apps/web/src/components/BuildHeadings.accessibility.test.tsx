@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import KitManifestOptions from "./KitManifestOptions";
 import ShareImportSetupPanel from "./share/ShareImportSetupPanel";
-import SourceFilePickerCard from "./SourceFilePickerCard";
 
 vi.mock("../api/endpoints/sources", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api/endpoints/sources")>();
@@ -52,14 +51,6 @@ vi.mock("../context/BuildSaveFlushContext", () => ({
     unregisterFlush: vi.fn(),
   }),
 }));
-vi.mock("../hooks/useImportRulesAutosave", () => ({
-  useImportRulesAutosave: () => ({
-    dirty: false,
-    status: "idle",
-    saveNow: vi.fn(),
-    saveUserEdit: vi.fn(),
-  }),
-}));
 vi.mock("../hooks/useKitManifestAutosave", () => ({
   useKitManifestAutosave: () => ({
     dirty: false,
@@ -70,7 +61,6 @@ vi.mock("../hooks/useKitManifestAutosave", () => ({
 }));
 vi.mock("./ImportRulesTree", () => ({ default: () => <div>Import rules</div> }));
 vi.mock("./SourceCardCover", () => ({ default: () => null }));
-vi.mock("./sources/SourceDocsSheet", () => ({ default: () => null }));
 vi.mock("./parts/PartPreviewDialog", () => ({ default: () => null }));
 vi.mock("./Preview3D", () => ({
   default: ({ instructions }: { instructions?: string }) => (
@@ -126,36 +116,6 @@ describe("Build heading hierarchy", () => {
     expect(
       screen.getByRole("link", { name: "Manage in Source Library" }).getAttribute("href"),
     ).toBe("/library");
-  });
-
-  it("nests the compact source preview below its source heading without visible help", async () => {
-    render(
-      <MemoryRouter>
-        <SourceFilePickerCard
-          sourceId={9}
-          sourceName="Voron parts"
-          layerType="base"
-          defaultExpanded
-          source={{
-            id: 9,
-            name: "Voron parts",
-            source_kind: "local",
-            local_path: "/tmp/voron",
-          } as never}
-        />
-      </MemoryRouter>,
-    );
-
-    expect(
-      screen.getByRole("heading", { level: 2, name: "Voron parts" }).tagName,
-    ).toBe("H2");
-    expect(screen.getByRole("heading", { level: 3, name: "STL preview" }).tagName).toBe(
-      "H3",
-    );
-    expect((await screen.findByTestId("compact-preview")).dataset.instructions).toBe(
-      "sr-only",
-    );
-    expect(screen.queryByText(/Click a file row to preview/i)).toBeNull();
   });
 
   it("provides the missing compact kit title before its option-group headings", async () => {

@@ -11,27 +11,23 @@ import {
 afterEach(cleanup);
 
 describe("BuildSaveFlushProvider", () => {
-  it("keeps import-rule and kit-manifest flushes with the same id apart", async () => {
+  it("flushes every registered Profile until it unregisters", async () => {
     const { result } = renderHook(
-      () => ({
-        rules: useBuildSaveFlushRegistry("importRules"),
-        manifest: useBuildSaveFlushRegistry("kitManifest"),
-        flushAll: useFlushBuildPageSaves(),
-      }),
+      () => ({ registry: useBuildSaveFlushRegistry(), flushAll: useFlushBuildPageSaves() }),
       { wrapper: BuildSaveFlushProvider },
     );
-    const flushRules = vi.fn(async () => {});
-    const flushManifest = vi.fn(async () => {});
+    const flushFirst = vi.fn(async () => {});
+    const flushSecond = vi.fn(async () => {});
 
-    result.current.rules.registerFlush(1, flushRules);
-    result.current.manifest.registerFlush(1, flushManifest);
+    result.current.registry.registerFlush(1, flushFirst);
+    result.current.registry.registerFlush(2, flushSecond);
     await act(() => result.current.flushAll());
-    expect(flushRules).toHaveBeenCalledTimes(1);
-    expect(flushManifest).toHaveBeenCalledTimes(1);
+    expect(flushFirst).toHaveBeenCalledTimes(1);
+    expect(flushSecond).toHaveBeenCalledTimes(1);
 
-    result.current.rules.unregisterFlush(1);
+    result.current.registry.unregisterFlush(1);
     await act(() => result.current.flushAll());
-    expect(flushRules).toHaveBeenCalledTimes(1);
-    expect(flushManifest).toHaveBeenCalledTimes(2);
+    expect(flushFirst).toHaveBeenCalledTimes(1);
+    expect(flushSecond).toHaveBeenCalledTimes(2);
   });
 });
