@@ -3,7 +3,7 @@ import { join } from "node:path";
 import type { AuthProvider, DbStore, JobRunner, RepoSource, StoragePort } from "../../ports/index.js";
 import { getDb, SqliteDatabase } from "../../db/client.js";
 import { AppRepository } from "../../db/repository.js";
-import { createJobRunner } from "../../routes/jobs.js";
+import { createJobRunner } from "../../services/job-runner.js";
 import {
   TRUSTED_SINGLE_USER_SOURCE_FILESYSTEM,
   type SourceFilesystemPolicy,

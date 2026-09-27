@@ -21,7 +21,8 @@ import {
   registerStubRoutes,
 } from "./settings.js";
 import { registerSourceRoutes } from "./sources.js";
-import { registerJobRoutes, type InProcessJobRunner } from "./jobs.js";
+import { registerJobRoutes } from "./jobs.js";
+import type { InProcessJobRunner } from "../services/job-runner.js";
 import { registerApiV1ExtensionRoutes } from "./api-v1-extensions.js";
 import { registerIntegrationRoutes } from "./integrations.js";
 import { registerPrinterCheckoffRoutes } from "./printer-checkoff.js";

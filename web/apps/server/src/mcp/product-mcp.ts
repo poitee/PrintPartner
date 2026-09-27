@@ -28,7 +28,7 @@ import {
   invokeAssistantTool,
   type ToolContext,
 } from "../assistant/tools.js";
-import type { InProcessJobRunner } from "../routes/jobs.js";
+import type { InProcessJobRunner } from "../services/job-runner.js";
 import type { AppRepository } from "../db/repository.js";
 import { createIntegrationPort, type IntegrationPort } from "../integrations/store.js";
 import { getIntegrationAdapter } from "../integrations/registry.js";

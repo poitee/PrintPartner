@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createSelfHostPorts } from "../adapters/self-host/index.js";
-import { InProcessJobRunner } from "../routes/jobs.js";
+import { InProcessJobRunner } from "../services/job-runner.js";
 import { encodeAcceptedPlate3mf, type StlMesh } from "@print-partner/domain";
 import {
   ASSISTANT_TOOL_SPECS,

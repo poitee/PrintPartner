@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { AppRepository } from "../db/repository.js";
-import { InProcessJobRunner } from "./jobs.js";
+import { InProcessJobRunner } from "../services/job-runner.js";
 
 const dirs: string[] = [];
 

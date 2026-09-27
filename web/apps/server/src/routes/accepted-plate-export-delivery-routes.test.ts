@@ -11,7 +11,7 @@ import { createSelfHostPorts } from "../adapters/self-host/index.js";
 import { buildApp } from "../app.js";
 import { loadConfig } from "../config.js";
 import { acceptedPlanBasis } from "../db/accepted-plan-progress.js";
-import { InProcessJobRunner } from "./jobs.js";
+import { InProcessJobRunner } from "../services/job-runner.js";
 
 vi.mock("../services/webhook-store.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../services/webhook-store.js")>()),

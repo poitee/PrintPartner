@@ -9,7 +9,7 @@ import rateLimit from "@fastify/rate-limit";
 import { createSelfHostPorts } from "../adapters/self-host/index.js";
 import { AcceptedPlanOperationalIntegrityError } from "../db/accepted-plan-operational.js";
 import { applyAssistantAction, invokeAssistantTool } from "./tools.js";
-import { InProcessJobRunner } from "../routes/jobs.js";
+import { InProcessJobRunner } from "../services/job-runner.js";
 import { parseRequiredUnitToken } from "../services/required-units.js";
 import { registerAssistantRoutes } from "../routes/assistant.js";
 import { loadConfig } from "../config.js";

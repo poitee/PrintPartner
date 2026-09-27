@@ -25,7 +25,7 @@ import type { AssistantProposedAction } from "@print-partner/contracts";
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import type { ServerConfig } from "../config.js";
 import type { AppRepository } from "../db/repository.js";
-import type { InProcessJobRunner } from "../routes/jobs.js";
+import type { InProcessJobRunner } from "../services/job-runner.js";
 import { sendProblem } from "../lib/api-error.js";
 import { MAX_ASSISTANT_ACTION_BODY_BYTES } from "../services/upload-limits.js";
 import {

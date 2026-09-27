@@ -19,7 +19,7 @@ import {
 import { loadConfig } from "../config.js";
 import { AuthStore } from "../services/auth-store.js";
 import { getLogger } from "../services/logger.js";
-import { InProcessJobRunner } from "./jobs.js";
+import { InProcessJobRunner } from "../services/job-runner.js";
 import { registerShareRoutes } from "./shares.js";
 
 const webhookCapture = vi.hoisted(() => ({

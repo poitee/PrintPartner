@@ -19,7 +19,7 @@ import {
 import { computePrinterQueueSuggestions } from "../services/printer-queue-suggestions.js";
 import { parsePrinterUploadMultipart } from "../services/printer-upload-multipart.js";
 import { cleanupPrinterUploadArtifactDir } from "../services/printer-upload-job.js";
-import type { InProcessJobRunner } from "./jobs.js";
+import type { InProcessJobRunner } from "../services/job-runner.js";
 
 type RouteDeps = {
   repo: AppRepository;

@@ -9,7 +9,7 @@ import {
   repositoryForTenant,
   type DatabaseBundle,
 } from "../../db/database.js";
-import { createJobRunner } from "../../routes/jobs.js";
+import { createJobRunner } from "../../services/job-runner.js";
 import type { AppRepository } from "../../db/repository.js";
 import { SaasS3StoragePort, TenantLocalStoragePort } from "./storage-s3.js";
 import { SelfHostRepoSource } from "../self-host/index.js";

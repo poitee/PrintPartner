@@ -52,7 +52,7 @@ import { inferStackPresetId, summarizeOtherBuildsAsExamples } from "./example-bu
 import { gatherSourceDocsForAssistant } from "./source-docs-digest.js";
 import type { AssistantPort } from "./types.js";
 import type { AssistantRuntimeConfig } from "./resolve-assistant.js";
-import type { InProcessJobRunner } from "../routes/jobs.js";
+import type { InProcessJobRunner } from "../services/job-runner.js";
 import { deriveBuildRecipe, recipeToReplaySteps } from "../services/build-recipe.js";
 import { parseRequiredUnitToken } from "../services/required-units.js";
 import {

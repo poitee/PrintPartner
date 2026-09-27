@@ -10,7 +10,7 @@ import type {
 import { isAssistantUiAction } from "@print-partner/contracts";
 import type { ServerConfig } from "../config.js";
 import type { AppRepository } from "../db/repository.js";
-import type { InProcessJobRunner } from "./jobs.js";
+import type { InProcessJobRunner } from "../services/job-runner.js";
 import { createAssistantPort } from "../assistant/create-assistant.js";
 import { resolveAssistantRuntime } from "../assistant/resolve-assistant.js";
 import { applyAssistantAction } from "../assistant/tools.js";

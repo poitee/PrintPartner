@@ -10,11 +10,8 @@ import { createSelfHostPorts } from "./adapters/self-host/index.js";
 import { createSaasPorts } from "./adapters/saas/index.js";
 import type { AppPorts } from "./ports/index.js";
 import { registerHealthRoutes } from "./routes/health.js";
-import {
-  registerJobWebSocket,
-  createJobRunner,
-  type InProcessJobRunner,
-} from "./routes/jobs.js";
+import { registerJobWebSocket } from "./routes/jobs.js";
+import { createJobRunner, type InProcessJobRunner } from "./services/job-runner.js";
 import { registerCoreRoutes } from "./routes/core-routes.js";
 import { registerBackupRoutes } from "./routes/backups.js";
 import { registerLoggingRoutes } from "./routes/logging.js";
