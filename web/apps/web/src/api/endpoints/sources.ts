@@ -81,12 +81,6 @@ export async function fetchSources(): Promise<SourceSummary[]> {
   return body.sources;
 }
 
-export async function fetchSourceHasManifest(
-  sourceId: number,
-): Promise<{ has_manifest: boolean; manifest_kind: string | null }> {
-  return engineFetch(`/sources/${sourceId}/has-manifest`);
-}
-
 export async function fetchSourceCategories(): Promise<string[]> {
   const body = await engineFetch<{ categories: string[] }>("/settings/source-categories");
   return body.categories;

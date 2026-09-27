@@ -8,8 +8,3 @@ export function formatSyncTime(iso: string): string {
 export async function engineBaseUrl(): Promise<string> {
   return getEngineBaseUrl();
 }
-
-export function shortSha(sha: string | null): string {
-  if (!sha) return "—";
-  return sha.slice(0, 7);
-}

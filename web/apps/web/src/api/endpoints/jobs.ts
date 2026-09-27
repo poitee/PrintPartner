@@ -58,14 +58,6 @@ export async function startExportStlPack(
   return body.job_id;
 }
 
-export async function startExportChecklistHtml(profileId: number): Promise<string> {
-  const body = await engineFetch<{ job_id: string }>("/jobs/export-checklist-html", {
-    method: "POST",
-    body: JSON.stringify({ profile_id: profileId }),
-  });
-  return body.job_id;
-}
-
 export async function fetchJob(jobId: string, signal?: AbortSignal): Promise<JobSnapshot> {
   return engineFetch<JobSnapshot>(`/jobs/${jobId}`, { signal });
 }

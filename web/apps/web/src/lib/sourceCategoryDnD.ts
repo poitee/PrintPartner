@@ -12,17 +12,6 @@ export function categoryDropTargetId(category: string | null): string {
     : `cat-drop:${category}`;
 }
 
-export function parseCategoryDropTargetId(
-  raw: string | number,
-): { category: string | null } | null {
-  const s = String(raw);
-  if (!s.startsWith("cat-drop:")) return null;
-  const name = s.slice("cat-drop:".length);
-  if (!name || name === "all") return null;
-  if (name === UNCATEGORISED_DROP_ID) return { category: null };
-  return { category: name };
-}
-
 export function librarySourceDragId(sourceId: number): string {
   return `lib-source:${sourceId}`;
 }

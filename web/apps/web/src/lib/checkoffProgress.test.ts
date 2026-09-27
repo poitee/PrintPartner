@@ -9,14 +9,7 @@ import {
   nextUnitToComplete,
   partProgressPercent,
   partProgressTone,
-  printedCountFromUnits,
 } from "./checkoffProgress";
-
-describe("printedCountFromUnits", () => {
-  it("counts completed slots", () => {
-    expect(printedCountFromUnits([true, false, true])).toBe(2);
-  });
-});
 
 describe("checkoffUnitTotals", () => {
   it("sums units and percent", () => {

@@ -140,20 +140,3 @@ export function formatPrinterStatusPill(
   if (status.state === "error") return "Error";
   return status.state;
 }
-
-/**
- * One-line summary for a linked host on Progress (legacy / tests).
- * Example: `Shop Printer · Printing frame_x.gcode · 34% · ETA ~12m`
- */
-export function formatPrinterLiveLine(opts: {
-  name: string;
-  status: PrinterHostStatus | null | undefined;
-}): string {
-  const { name, status } = opts;
-  if (!status) return `${name} · …`;
-  const job = formatPrinterJobLine(status);
-  if (status.state === "printing" || status.state === "paused") {
-    return `${name} · ${job}`;
-  }
-  return `${name} · ${job}`;
-}

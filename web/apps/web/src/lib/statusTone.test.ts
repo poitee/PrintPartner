@@ -3,7 +3,6 @@ import {
   statusTone,
   WORKFLOW_STATUS_KINDS,
   workflowStatusPresentation,
-  workflowStatusToneOf,
   type StatusEmphasis,
   type StatusTone,
 } from "./statusTone";
@@ -61,16 +60,6 @@ describe("workflowStatusPresentation", () => {
       icons.add(presentation.icon);
     }
     expect(icons.size).toBe(WORKFLOW_STATUS_KINDS.length);
-  });
-
-  it("maps states onto the tone the palette expects", () => {
-    expect(workflowStatusToneOf("complete")).toBe("success");
-    expect(workflowStatusToneOf("needs_attention")).toBe("warning");
-    expect(workflowStatusToneOf("stale")).toBe("warning");
-    expect(workflowStatusToneOf("error")).toBe("error");
-    expect(workflowStatusToneOf("in_progress")).toBe("info");
-    expect(workflowStatusToneOf("ready")).toBe("info");
-    expect(workflowStatusToneOf("not_started")).toBe("neutral");
   });
 
   it("reserves the alert role for errors and stays quiet before work starts", () => {

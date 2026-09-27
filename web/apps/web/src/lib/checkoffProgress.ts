@@ -21,10 +21,6 @@ function isPartFullyPrinted(part: CheckoffSummaryPart): boolean {
   return part.printed_count >= qty;
 }
 
-export function printedCountFromUnits(units: boolean[]): number {
-  return units.filter(Boolean).length;
-}
-
 export function checkoffUnitTotals(parts: CheckoffSummaryPart[]): CheckoffUnitTotals {
   const totalUnits = parts.reduce(
     (sum, p) => sum + Math.max(1, p.quantity_effective),

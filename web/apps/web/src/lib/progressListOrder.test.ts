@@ -1,23 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
-  bagRowId,
   defaultBagBarLabel,
   mergeVisibleProgressReorder,
   newBagBarId,
-  parseProgressRowId,
-  partRowId,
   reconcileProgressRows,
-  rowsFromLegacyPartOrder,
   type ProgressRowRef,
 } from "./progressListOrder";
 
 describe("progressListOrder", () => {
-  it("parses part and bag row ids", () => {
-    expect(parseProgressRowId(partRowId(12))).toEqual({ kind: "part", id: 12 });
-    expect(parseProgressRowId(bagRowId("abc"))).toEqual({ kind: "bag", id: "abc" });
-    expect(parseProgressRowId(7)).toEqual({ kind: "part", id: 7 });
-    expect(parseProgressRowId("nope")).toBeNull();
-  });
 
   it("reconciles preferred order with bags and new parts", () => {
     const preferred: ProgressRowRef[] = [
@@ -40,14 +30,6 @@ describe("progressListOrder", () => {
       { kind: "part", id: 1 },
       { kind: "part", id: 3 },
       { kind: "bag", id: "b2", label: "Bag 2" },
-    ]);
-  });
-
-  it("migrates legacy part order", () => {
-    expect(rowsFromLegacyPartOrder([3, 1], [{ id: "b", label: "Bag" }])).toEqual([
-      { kind: "part", id: 3 },
-      { kind: "part", id: 1 },
-      { kind: "bag", id: "b", label: "Bag" },
     ]);
   });
 

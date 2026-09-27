@@ -78,8 +78,3 @@ export function previewUrlWithColor(url: string, meshColor: string): string {
   const separator = url.includes("?") ? "&" : "?";
   return `${url}${separator}hex=${encodeURIComponent(hex)}`;
 }
-
-export function normalizedRenderHex(value: string): string | null {
-  const hex = value.trim().toLowerCase();
-  return /^#[0-9a-f]{6}$/.test(hex) ? hex : null;
-}

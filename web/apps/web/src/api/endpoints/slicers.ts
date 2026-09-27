@@ -88,10 +88,6 @@ export async function seedDefaultSlicerInstances(): Promise<{
   return engineFetch("/slicer-instances/seed-defaults", { method: "POST" });
 }
 
-export async function fetchSlicerDockerStatus(id: string): Promise<SlicerDockerStatusResponse> {
-  return engineFetch(`/slicer-instances/${encodeURIComponent(id)}/docker-status`);
-}
-
 export async function pullSlicerDocker(id: string): Promise<SlicerDockerStatusResponse> {
   return engineFetch(`/slicer-instances/${encodeURIComponent(id)}/docker-pull`, {
     method: "POST",

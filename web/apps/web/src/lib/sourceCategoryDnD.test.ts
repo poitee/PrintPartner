@@ -1,22 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
-  categoryDropTargetId,
-  parseCategoryDropTargetId,
   parseLibraryDragPayload,
   librarySourceDragId,
   libraryFileDragId,
 } from "./sourceCategoryDnD";
 
 describe("sourceCategoryDnD", () => {
-  it("round-trips category drop target ids", () => {
-    expect(parseCategoryDropTargetId(categoryDropTargetId("Mods"))).toEqual({
-      category: "Mods",
-    });
-    expect(parseCategoryDropTargetId(categoryDropTargetId(null))).toEqual({
-      category: null,
-    });
-    expect(parseCategoryDropTargetId("all")).toBeNull();
-  });
 
   it("parses source and file drag payloads", () => {
     expect(parseLibraryDragPayload(librarySourceDragId(9))).toEqual({

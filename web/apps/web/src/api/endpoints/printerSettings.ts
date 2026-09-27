@@ -37,12 +37,6 @@ export async function savePrinterPlanBinding(
   return body.bindings;
 }
 
-export async function deletePrinterPlanBinding(integration_id: string): Promise<void> {
-  await engineFetch<{ ok: boolean }>(`/settings/printer-plan-bindings/${encodeURIComponent(integration_id)}`, {
-    method: "DELETE",
-  });
-}
-
 export async function fetchPrinterProfileAssignment(
   printerId: string,
 ): Promise<PrinterProfileAssignment> {

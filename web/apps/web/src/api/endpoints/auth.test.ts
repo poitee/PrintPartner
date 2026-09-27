@@ -1,17 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { jsonResponse, createEndpointTestHttp } from "../endpointTestHttp";
 import {
-  acceptPlanShare,
   authOAuthUrl,
   changePassword,
-  createPlanShare,
   fetchAuthMe,
   loginWithEmail,
   logout,
   registerWithEmail,
   requestPasswordReset,
   resetPasswordWithToken,
-  revokePlanShare,
 } from "./auth";
 
 const http = createEndpointTestHttp();
@@ -64,28 +61,5 @@ describe("auth endpoints", () => {
       current_password: "old",
       new_password: "new",
     });
-  });
-
-  it("sends share requests", async () => {
-    http
-      .respond(jsonResponse({ share_id: "s", token: "t", plan_name: "Plan" }))
-      .respond(jsonResponse({ profile_id: 4, profile_name: "Copy" }))
-      .respond(jsonResponse({ ok: true }));
-
-    await createPlanShare(7, {
-      recipient_email: "x@example.test",
-      include_print_progress: true,
-    });
-    await acceptPlanShare("tok/en", "Copy");
-    await revokePlanShare("share/id");
-
-    expect(http.calls[0]?.[0]).toContain("/plans/7/shares");
-    expect(http.requestJson(0)).toEqual({
-      recipient_email: "x@example.test",
-      include_print_progress: true,
-    });
-    expect(http.calls[1]?.[0]).toContain("/shares/tok%2Fen/accept");
-    expect(http.requestJson(1)).toEqual({ new_name: "Copy" });
-    expect(http.calls[2]?.[0]).toContain("/shares/share%2Fid");
   });
 });

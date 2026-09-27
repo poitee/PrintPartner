@@ -116,11 +116,6 @@ function normalizeObjectKey(name: string): string {
   return interpretSlicedObjectName(name).basenameKey;
 }
 
-/** Base stem with trailing `_01` / `_1` unit suffix removed. */
-export function objectStem(name: string): string {
-  return interpretSlicedObjectName(name).unitStemKey;
-}
-
 /** Export-remaining style unit filename key: `stem_01` (0-based unit_index → 1-based). */
 export function exportUnitKey(filename: string, unitIndex: number): string {
   const stem = normalizeObjectKey(filename);

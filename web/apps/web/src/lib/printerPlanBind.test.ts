@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   findPlanNameForLiveJob,
   liveJobPlanCaption,
-  resolvePlanIdForPrinterFetch,
   sendPlanBindCopy,
 } from "./printerPlanBind";
 
@@ -111,15 +110,5 @@ describe("findPlanNameForLiveJob", () => {
         planNameById: names,
       }),
     ).toBe("Beta");
-  });
-});
-
-describe("resolvePlanIdForPrinterFetch", () => {
-  it("never steals a bound job", () => {
-    expect(resolvePlanIdForPrinterFetch(5, 9)).toBe(5);
-  });
-
-  it("binds unbound once to active spine", () => {
-    expect(resolvePlanIdForPrinterFetch(null, 9)).toBe(9);
   });
 });

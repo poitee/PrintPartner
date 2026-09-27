@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   contrastBackground,
   formatMm,
-  normalizedRenderHex,
   perceivedLuminance,
   previewErrorMessage,
   previewTarget,
@@ -56,10 +55,5 @@ describe("preview3dModel", () => {
       "/mesh?part=1&hex=%23abcdef",
     );
     expect(previewUrlWithColor("/mesh", " ")).toBe("/mesh");
-  });
-
-  it("normalizes render hex values", () => {
-    expect(normalizedRenderHex(" #ABCDEF ")).toBe("#abcdef");
-    expect(normalizedRenderHex("abcdef")).toBeNull();
   });
 });

@@ -1,7 +1,6 @@
 import type {
   AcceptedPlanBasisContract,
   ManifestSelections,
-  PartRow,
   ReviewPart,
 } from "@print-partner/contracts";
 import { parseAcceptedPlanBasis } from "@print-partner/contracts";
@@ -9,7 +8,6 @@ import { engineFetch } from "../engineTransport";
 import type {
   RepoManifestDocument,
   RepoManifestOptionGroup,
-  RepoManifestVariant,
   ScannedManifestPart,
 } from "./sourceArtifacts";
 import type { ProfileLayer } from "./plans";
@@ -44,44 +42,6 @@ export type KitManifest = {
   }>;
 };
 
-type ManifestV2 = {
-  profile_id: number;
-  version: number;
-  yaml: string;
-  plan: {
-    name: string | null;
-    base_source_id: string | null;
-    addon_source_ids: string[];
-  };
-  sources: Array<{
-    id: string;
-    kind: string;
-    url: string | null;
-    branch: string | null;
-    role: string | null;
-  }>;
-  selections: ManifestSelections;
-  option_groups: Record<
-    string,
-    {
-      rule: string;
-      label: string | null;
-      parts: string[];
-      variants: RepoManifestVariant[];
-    }
-  >;
-  slots?: Record<
-    string,
-    {
-      label: string | null;
-      default_group: string | null;
-    }
-  >;
-  choice_tree?: ChoiceTreeNode[];
-  option_group_count: number;
-  addon_count: number;
-};
-
 type PlanManifestBuilderSource = {
   source_id: number;
   layer_type: string;
@@ -102,94 +62,11 @@ type PlanManifestBuilderBootstrap = {
   merged_option_groups: Record<string, RepoManifestOptionGroup>;
 };
 
-type ManifestWarning = {
-  code: string;
-  message: string;
-  severity: string;
-  match_key: string | null;
-};
-
-type ManifestSummary = {
-  profile_id: number;
-  required: { total: number; included: number };
-  optional: { total: number; included: number };
-  recommended: { total: number; included: number };
-  option_groups: Array<{
-    id: string;
-    rule: string;
-    members: number;
-    selected: number;
-    min: number | null;
-    max: number | null;
-  }>;
-};
-
-type ManifestTemplateSummary = {
-  id: string;
-  label: string;
-  category: string;
-  available: string;
-};
-
-type ManifestTemplatePayload = {
-  id: string;
-  label: string;
-  category: string;
-  yaml: string;
-  document: RepoManifestDocument;
-};
-
 export type ManifestRegistryEntry = {
   slug: string;
   target_repo: string;
   title: string | null;
   manifest_file: string;
-};
-
-type KitCatalogBase = {
-  label: string;
-  source_name: string;
-  compatible_addons: string[];
-  printer_family?: string;
-  default_addons?: string[];
-};
-
-type KitCatalogSourceEntry = {
-  name: string;
-  variant_id?: string;
-  compatible_bases?: string[];
-};
-
-type KitCatalogCategory = {
-  label: string;
-  rule: string;
-  replaces_slot?: string;
-  sources: KitCatalogSourceEntry[];
-};
-
-type KitCatalogStackPreset = {
-  label: string;
-  base: string;
-  addon_sources: string[];
-  default_selections?: ManifestSelections;
-};
-
-type KitCatalog = {
-  version: number;
-  bases: Record<string, KitCatalogBase>;
-  addon_categories: Record<string, KitCatalogCategory>;
-  stack_presets?: Record<string, KitCatalogStackPreset>;
-};
-
-type PlanMaintenanceEntry = {
-  profile_id: number;
-  name: string;
-  warning_count: number;
-  warnings: ManifestWarning[];
-};
-
-type PlansMaintenanceReport = {
-  plans_with_warnings: PlanMaintenanceEntry[];
 };
 
 export type PlanReviewIssue = {
@@ -281,40 +158,11 @@ export async function fetchPlanManifestBuilder(
   return engineFetch(`/plans/${profileId}/plan-manifest-builder`);
 }
 
-export async function fetchKitCatalog(): Promise<KitCatalog> {
-  return engineFetch<KitCatalog>("/kit-catalog");
-}
-
-export async function fetchPlansMaintenance(): Promise<PlansMaintenanceReport> {
-  return engineFetch<PlansMaintenanceReport>("/plans/maintenance");
-}
-
-export async function fetchManifestTemplates(): Promise<ManifestTemplateSummary[]> {
-  const body = await engineFetch<{ templates: ManifestTemplateSummary[] }>(
-    "/manifest-templates",
-  );
-  return body.templates;
-}
-
-export async function fetchManifestTemplate(
-  templateId: string,
-): Promise<ManifestTemplatePayload> {
-  return engineFetch<ManifestTemplatePayload>(`/manifest-templates/${templateId}`);
-}
-
 export async function fetchManifestRegistry(): Promise<ManifestRegistryEntry[]> {
   const body = await engineFetch<{ entries: ManifestRegistryEntry[] }>(
     "/manifest-registry",
   );
   return body.entries;
-}
-
-export async function fetchCommunityManifest(slug: string): Promise<{
-  slug: string;
-  yaml: string;
-  document: RepoManifestDocument;
-}> {
-  return engineFetch(`/manifest-registry/${encodeURIComponent(slug)}`);
 }
 
 export async function fetchPlanReview(
@@ -328,16 +176,6 @@ export async function fetchPlanReview(
     accepted_basis:
       review.accepted_basis == null ? null : parseAcceptedPlanBasis(review.accepted_basis),
   };
-}
-
-export async function fetchManifestV2(profileId: number): Promise<ManifestV2> {
-  return engineFetch<ManifestV2>(`/plans/${profileId}/manifest-v2`);
-}
-
-export async function fetchPlanManifestSummary(
-  profileId: number,
-): Promise<ManifestSummary> {
-  return engineFetch<ManifestSummary>(`/plans/${profileId}/manifest-summary`);
 }
 
 export async function fetchPlanKitManifest(profileId: number): Promise<KitManifest> {
@@ -370,20 +208,4 @@ export async function fetchBuildPlanningState(
     `/plans/${profileId}/build-planning${draftQuery}`,
   );
   return result.planning;
-}
-
-export async function fetchPlanParts(profileId: number): Promise<PartRow[]> {
-  const body = await engineFetch<{ parts: PartRow[] }>(
-    `/plans/${profileId}/parts?limit=10000`,
-  );
-  return body.parts;
-}
-
-export async function fetchPlanManifestWarnings(
-  profileId: number,
-): Promise<ManifestWarning[]> {
-  const body = await engineFetch<{ warnings: ManifestWarning[] }>(
-    `/plans/${profileId}/manifest-warnings`,
-  );
-  return body.warnings;
 }

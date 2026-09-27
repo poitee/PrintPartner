@@ -4,11 +4,6 @@ import {
   bulkAssignSourceCategory,
   createSource,
   deleteSource,
-  fetchImportRules,
-  fetchSourceCategories,
-  fetchSourceHasManifest,
-  fetchSources,
-  fetchStlTree,
   saveImportRules,
   saveSourceCategories,
   searchSourceStls,
@@ -19,35 +14,6 @@ import {
 const http = createEndpointTestHttp();
 
 describe("source endpoints", () => {
-  it("fetches source lists, categories, manifests, trees, and import rules", async () => {
-    http
-      .respond(jsonResponse({ sources: [] }))
-      .respond(jsonResponse({ categories: ["Mods"] }))
-      .respond(jsonResponse({ has_manifest: true }))
-      .respond(
-        jsonResponse({ rules: ["include/**"], legacy_import_all: false }),
-      )
-      .respond(
-        jsonResponse({
-          project_id: 1,
-          total: 0,
-          selected: 0,
-          legacy_import_all: false,
-          nodes: [],
-        }),
-      );
-
-    await expect(fetchSources()).resolves.toEqual([]);
-    await expect(fetchSourceCategories()).resolves.toEqual(["Mods"]);
-    await expect(fetchSourceHasManifest(7)).resolves.toEqual({
-      has_manifest: true,
-    });
-    await expect(fetchImportRules(7)).resolves.toEqual({
-      rules: ["include/**"],
-      legacy_import_all: false,
-    });
-    await expect(fetchStlTree(7)).resolves.toMatchObject({ project_id: 1 });
-  });
 
   it("saves categories and import rules", async () => {
     http

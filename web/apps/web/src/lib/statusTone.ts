@@ -189,8 +189,3 @@ export function workflowStatusPresentation(
 ): WorkflowStatusPresentation {
   return PRESENTATION[kind];
 }
-
-/** Just the tone, for call sites that only need a color. */
-export function workflowStatusToneOf(kind: WorkflowStatusKind): StatusTone {
-  return PRESENTATION[kind].tone;
-}

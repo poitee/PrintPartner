@@ -182,36 +182,6 @@ export function savePersistedCheckoffUi(state: PersistedCheckoffUi): void {
   localStorage.setItem(CHECKOFF_UI_STORAGE_KEY, serializePersistedCheckoffUi(state));
 }
 
-export function getPartOrderForPlan(
-  state: PersistedCheckoffUi,
-  planId: number | null | undefined,
-): number[] {
-  if (planId == null) return [];
-  return state.partOrderByPlanId[String(planId)] ?? [];
-}
-
-export function withPartOrderForPlan(
-  state: PersistedCheckoffUi,
-  planId: number,
-  order: number[],
-): PersistedCheckoffUi {
-  return {
-    ...state,
-    partOrderByPlanId: {
-      ...state.partOrderByPlanId,
-      [String(planId)]: order,
-    },
-  };
-}
-
-export function getBagBarsForPlan(
-  state: PersistedCheckoffUi,
-  planId: number | null | undefined,
-): PersistedBagBar[] {
-  if (planId == null) return [];
-  return state.bagBarsByPlanId[String(planId)] ?? [];
-}
-
 export function getProgressRowsForPlan(
   state: PersistedCheckoffUi,
   planId: number | null | undefined,

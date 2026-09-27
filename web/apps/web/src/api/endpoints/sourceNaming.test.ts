@@ -5,9 +5,7 @@ import {
 } from "@print-partner/contracts";
 import {
   fetchSourceNaming,
-  isSourceNamingNotFoundError,
   saveSourceNaming,
-  SourceNamingRequestError,
 } from "./sourceNaming";
 
 const responseBody = {
@@ -87,24 +85,6 @@ describe("Source naming API boundary", () => {
 
     await saveSourceNaming(7, input);
     expect(fetchMock).toHaveBeenCalledOnce();
-  });
-
-  it("exposes a coded missing-Source error", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(
-        new Response(JSON.stringify({ code: "source_not_found", detail: "Source not found" }), {
-          status: 404,
-          headers: { "Content-Type": "application/json" },
-        }),
-      ),
-    );
-
-    const request = fetchSourceNaming(7);
-    await expect(request).rejects.toBeInstanceOf(SourceNamingRequestError);
-    await expect(request).rejects.toSatisfy(isSourceNamingNotFoundError);
-    const error = await request.catch((value: unknown) => value);
-    expect(JSON.stringify(error)).not.toContain("Source not found");
   });
 
   it("rejects an endpoint error whose code does not match its HTTP status", async () => {

@@ -52,10 +52,6 @@ export function getCheckoffRowError(
   return errors[key] ?? null;
 }
 
-export function hasCheckoffRowErrors(errors: CheckoffRowErrors): boolean {
-  return Object.keys(errors).length > 0;
-}
-
 /** Newest first, so the error summary reads like the operator's last action. */
 export function checkoffRowErrorSummary(
   errors: CheckoffRowErrors,

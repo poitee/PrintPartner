@@ -49,7 +49,6 @@ const putSourceNamingEndpoint = defineJsonWriteEndpoint({
   parseSuccess: parseSourceNamingResponse,
   parseFailure: parseSafeSourceNamingError,
 });
-export { ContractRequestError as SourceNamingRequestError };
 
 function sourceNamingErrorCode(
   error: unknown,

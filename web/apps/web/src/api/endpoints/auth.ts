@@ -107,7 +107,3 @@ export async function acceptPlanShare(
     body: JSON.stringify({ new_name: newName ?? null }),
   });
 }
-
-export async function revokePlanShare(shareId: string): Promise<void> {
-  await engineFetch(`/shares/${encodeURIComponent(shareId)}`, { method: "DELETE" });
-}
