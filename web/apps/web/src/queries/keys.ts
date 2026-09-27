@@ -21,6 +21,7 @@ export const queryKeys = {
   filamentCatalog: ["filamentCatalog"] as const,
   spoolmanSpools: (integrationId: string) => ["spoolmanSpools", integrationId] as const,
   workflowGuide: ["workflowGuide"] as const,
+  dateFormatSetting: ["dateFormatSetting"] as const,
   buildTrackingSettings: ["buildTrackingSettings"] as const,
   externalAccessSettings: ["externalAccessSettings"] as const,
   acceptedPlateWorkspace: (profileId: number) => ["acceptedPlateWorkspace", profileId] as const,
