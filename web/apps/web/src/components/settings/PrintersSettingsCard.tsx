@@ -1,7 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Printer } from "lucide-react";
-import { fetchFilamentCatalog, type FilamentCatalog } from "../../api/endpoints/filaments";
 import {
   createIntegration,
   deleteIntegration,
@@ -85,6 +84,7 @@ import {
 } from "../../queries/printerFleet";
 import { queryKeys } from "../../queries/keys";
 import { useProfilesQuery } from "../../queries/profiles";
+import { useFilamentCatalogQuery } from "../../queries/filaments";
 
 type Props = {
   engineReady: boolean;
@@ -155,7 +155,7 @@ export default function PrintersSettingsCard({ engineReady }: Props) {
   });
   const [planBindings, setPlanBindings] = useState<PrinterPlanBinding[]>([]);
   const profiles = useProfilesQuery(engineReady).data ?? [];
-  const [catalog, setCatalog] = useState<FilamentCatalog | null>(null);
+  const catalog = useFilamentCatalogQuery(engineReady).data ?? null;
 
   const [hostType, setHostType] = useState<HostType>("moonraker");
   const [newName, setNewName] = useState("");
@@ -196,16 +196,13 @@ export default function PrintersSettingsCard({ engineReady }: Props) {
     if (!engineReady) return;
     setLoadError(null);
     try {
-      const [presetRows, bindings, filamentCatalog] =
-        await Promise.all([
-          fetchPrinterPresets(),
-          fetchPrinterPlanBindings(),
-          fetchFilamentCatalog().catch(() => null),
-        ]);
+      const [presetRows, bindings] = await Promise.all([
+        fetchPrinterPresets(),
+        fetchPrinterPlanBindings(),
+      ]);
       setPresets(presetRows);
       setPresetId((prev) => prev || pickDefaultPresetId(presetRows, DEFAULT_PRESET_ID));
       setPlanBindings(bindings);
-      setCatalog(filamentCatalog);
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : String(e));
     }

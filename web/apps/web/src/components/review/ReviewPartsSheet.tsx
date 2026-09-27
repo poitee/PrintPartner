@@ -11,11 +11,7 @@ import {
 import type { StlNamingFolderRule } from "@print-partner/contracts";
 import { toast } from "sonner";
 import type { PlanReview, ReviewPart } from "../../api/endpoints/planManifests";
-import {
-  fetchSpoolmanSpools,
-  type RoleFilamentRow,
-  type SpoolmanSpoolRow,
-} from "../../api/endpoints/filaments";
+import type { RoleFilamentRow, SpoolmanSpoolRow } from "../../api/endpoints/filaments";
 import {
   usePlanWorkspace,
   type QuantityUpdate,
@@ -44,6 +40,7 @@ import { useProfileSelection } from "../../context/ProfileContext";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { usePlanReviewQuery } from "../../queries/planReview";
 import { useRoleFilamentsQuery } from "../../queries/roleFilaments";
+import { useSpoolmanSpoolsQuery } from "../../queries/filaments";
 import { waitForSheetThumbnails } from "../../lib/waitForSheetThumbnails";
 import PartPreviewDialog from "../parts/PartPreviewDialog";
 import PartThumbExpandButton from "../parts/PartThumbExpandButton";
@@ -278,6 +275,8 @@ function ReviewSheetRow({
   );
 }
 
+const NO_SPOOLS: SpoolmanSpoolRow[] = [];
+
 const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function ReviewPartsSheet(
   { review: includedReview, planName, disabled, folderRules },
   ref,
@@ -293,8 +292,9 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
     busyPartId,
   } = usePlanWorkspace();
   const { configured: spoolmanConfigured, integrationId } = useSpoolmanEnabled();
-  const [spools, setSpools] = useState<SpoolmanSpoolRow[]>([]);
-  const [spoolsLoading, setSpoolsLoading] = useState(false);
+  const spoolsQuery = useSpoolmanSpoolsQuery(spoolmanConfigured ? integrationId : null);
+  const spools = spoolsQuery.data ?? NO_SPOOLS;
+  const spoolsLoading = spoolsQuery.isLoading;
   const persisted = useMemo(() => loadPersistedReviewPartsUi(), []);
   const [ui, setUi] = useState<PersistedReviewPartsUi>(persisted);
   const needsExcluded = ui.includedFilter !== "included" || Boolean(pendingFileChoices?.size);
@@ -356,29 +356,6 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
   useEffect(() => {
     savePersistedReviewPartsUi(ui);
   }, [ui]);
-
-  useEffect(() => {
-    if (!spoolmanConfigured || !integrationId) {
-      setSpools([]);
-      setSpoolsLoading(false);
-      return;
-    }
-    let cancelled = false;
-    setSpoolsLoading(true);
-    void fetchSpoolmanSpools(integrationId)
-      .then((spoolRows) => {
-        if (!cancelled) setSpools(spoolRows);
-      })
-      .catch(() => {
-        if (!cancelled) setSpools([]);
-      })
-      .finally(() => {
-        if (!cancelled) setSpoolsLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [spoolmanConfigured, integrationId]);
 
   const acceptedParts = useMemo(() => flattenReviewParts(review.part_groups), [review.part_groups]);
   const acceptedPartById = useMemo(

@@ -1,3 +1,4 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useState } from "react";
 import { DEFAULT_FILAMENT_HEX } from "@/lib/colorPresets";
 import { useLocation } from "react-router-dom";
@@ -90,6 +91,7 @@ import {
   type SettingsResource,
 } from "../lib/settingsPageModel";
 import { useExternalAccessSettingsQuery } from "../queries/externalAccess";
+import { invalidateFilamentCatalog } from "../queries/filaments";
 
 export default function SettingsPage() {
   const location = useLocation();
@@ -101,6 +103,7 @@ export default function SettingsPage() {
   });
   const engineReady = engineState === "ready";
   const hostedPlanning = isHostedPlanning(health);
+  const queryClient = useQueryClient();
   const externalAccessQuery = useExternalAccessSettingsQuery(engineReady);
   const showApiKeys = externalAccessQuery.data
     ? externalApiAccessEnabled(externalAccessQuery.data.mode)
@@ -231,7 +234,7 @@ export default function SettingsPage() {
         hex: newFilamentHex,
       });
       setNewFilamentName("");
-      await refresh();
+      await Promise.all([refresh(), invalidateFilamentCatalog(queryClient)]);
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : String(e));
     }
@@ -243,7 +246,7 @@ export default function SettingsPage() {
     try {
       await deleteCustomFilament(id);
       setDeleteFilamentId(null);
-      await refresh();
+      await Promise.all([refresh(), invalidateFilamentCatalog(queryClient)]);
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : String(e));
     } finally {

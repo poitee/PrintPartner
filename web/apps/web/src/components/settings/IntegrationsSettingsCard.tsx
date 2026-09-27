@@ -13,6 +13,7 @@ import {
   saveSpoolmanDefaultIntegration,
 } from "../../api/endpoints/filaments";
 import { invalidateIntegrations, useIntegrationsQuery } from "../../queries/printerFleet";
+import { invalidateFilamentCatalog } from "../../queries/filaments";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import {
@@ -69,6 +70,7 @@ export default function IntegrationsSettingsCard({ engineReady }: Props) {
   const refresh = async () => {
     await Promise.all([
       invalidateIntegrations(queryClient),
+      invalidateFilamentCatalog(queryClient),
       loadDefault(),
     ]);
   };
@@ -145,6 +147,7 @@ export default function IntegrationsSettingsCard({ engineReady }: Props) {
     try {
       const saved = await saveSpoolmanDefaultIntegration(next);
       setDefaultId(saved.integration_id);
+      void invalidateFilamentCatalog(queryClient);
       setMessage(
         next
           ? "Spoolman integration enabled for the Build filament picker."

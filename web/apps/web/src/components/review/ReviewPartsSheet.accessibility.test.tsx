@@ -26,6 +26,9 @@ vi.mock("../../queries/planReview", () => ({
 vi.mock("../../queries/roleFilaments", () => ({
   useRoleFilamentsQuery: () => ({ data: [] }),
 }));
+vi.mock("../../queries/filaments", () => ({
+  useSpoolmanSpoolsQuery: () => ({ data: undefined, isLoading: false }),
+}));
 vi.mock("../../hooks/useSpoolmanEnabled", () => ({
   useSpoolmanEnabled: () => ({ configured: false, integrationId: null }),
 }));

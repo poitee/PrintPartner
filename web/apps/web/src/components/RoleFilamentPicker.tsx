@@ -5,12 +5,8 @@ import { toast } from "sonner";
 import { Check, ChevronDown, Download, Search, Upload } from "lucide-react";
 import {
   applyRoleColorsToParts,
-  fetchFilamentCatalog,
-  fetchRoleFilaments,
-  fetchSpoolmanSpools,
   saveRoleFilament,
   type CatalogColor,
-  type FilamentCatalog,
   type RoleFilamentRow,
   type SpoolmanSpoolRow,
 } from "../api/endpoints/filaments";
@@ -36,7 +32,12 @@ import { Input } from "./ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { Spinner } from "./ui/spinner";
 import { cn } from "@/lib/utils";
-import { publishRoleFilaments } from "../queries/roleFilaments";
+import {
+  invalidateRoleFilaments,
+  publishRoleFilaments,
+  useRoleFilamentsQuery,
+} from "../queries/roleFilaments";
+import { useFilamentCatalogQuery, useSpoolmanSpoolsQuery } from "../queries/filaments";
 import { filterFilamentSpools, formatSpoolOptionLabel } from "../lib/spoolPickerUtils";
 import {
   ROLE_COLOR_SAVED_CLEAR_MS,
@@ -45,6 +46,8 @@ import {
 } from "../lib/roleColorSave";
 
 const DEFAULT_HEX = DEFAULT_FILAMENT_HEX;
+const NO_ROWS: RoleFilamentRow[] = [];
+const NO_SPOOLS: SpoolmanSpoolRow[] = [];
 const CHECKER_BG =
   "repeating-conic-gradient(rgba(120,120,120,0.25) 0% 25%, transparent 0% 50%)";
 
@@ -392,11 +395,21 @@ export default function RoleFilamentPicker({
   density = "default",
 }: Props) {
   const queryClient = useQueryClient();
-  const [rows, setRows] = useState<RoleFilamentRow[]>([]);
-  const [catalog, setCatalog] = useState<FilamentCatalog | null>(null);
-  const [spools, setSpools] = useState<SpoolmanSpoolRow[]>([]);
-  const [loaded, setLoaded] = useState(false);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const rolesQuery = useRoleFilamentsQuery(profileId);
+  const catalogQuery = useFilamentCatalogQuery();
+  const rows = rolesQuery.data ?? NO_ROWS;
+  const catalog = catalogQuery.data ?? null;
+  const spoolmanIntegrationId = catalog?.default_spoolman_integration_id?.trim() || null;
+  const spoolsQuery = useSpoolmanSpoolsQuery(
+    spoolmanIntegrationId && isSpoolmanIntegrationConfigured(catalog) ? spoolmanIntegrationId : null,
+  );
+  const spools = spoolsQuery.data ?? NO_SPOOLS;
+  const loaded = !rolesQuery.isPending && !catalogQuery.isPending;
+  const [actionError, setLoadError] = useState<string | null>(null);
+  const queryError = rolesQuery.error ?? catalogQuery.error;
+  const loadError = actionError ??
+    (queryError ? queryError instanceof Error ? queryError.message : String(queryError) : null);
+  const lastRefreshKey = useRef(refreshKey);
   const [savingRole, setSavingRole] = useState<string | null>(null);
   const [roleSaveStatus, setRoleSaveStatus] = useState<Record<string, RoleColorSaveStatus>>({});
   const [busyAction, setBusyAction] = useState<"import" | "regenerate" | "apply" | null>(null);
@@ -404,7 +417,6 @@ export default function RoleFilamentPicker({
 
   const publishRows = useCallback(
     (nextRows: RoleFilamentRow[]) => {
-      setRows(nextRows);
       publishRoleFilaments(queryClient, profileId, nextRows);
     },
     [profileId, queryClient],
@@ -449,47 +461,11 @@ export default function RoleFilamentPicker({
     [markRoleSaved, onUpdated, publishRows],
   );
 
-  const load = useCallback(async (signal?: { cancelled: () => boolean }) => {
-    setLoadError(null);
-    try {
-      const [roleRows, cat] = await Promise.all([
-        fetchRoleFilaments(profileId),
-        fetchFilamentCatalog(),
-      ]);
-      if (signal?.cancelled()) return;
-      publishRows(roleRows);
-      setCatalog(cat);
-      const integrationId = cat.default_spoolman_integration_id?.trim();
-      if (integrationId && isSpoolmanIntegrationConfigured(cat)) {
-        try {
-          const nextSpools = await fetchSpoolmanSpools(integrationId);
-          if (signal?.cancelled()) return;
-          setSpools(nextSpools);
-        } catch {
-          if (!signal?.cancelled()) setSpools([]);
-        }
-      } else {
-        setSpools([]);
-      }
-    } catch (e) {
-      if (!signal?.cancelled()) {
-        setLoadError(e instanceof Error ? e.message : String(e));
-      }
-    } finally {
-      if (!signal?.cancelled()) setLoaded(true);
-    }
-  }, [profileId, publishRows]);
-
   useEffect(() => {
-    setRows([]);
-    setLoaded(false);
-    setLoadError(null);
-    let cancelled = false;
-    void load({ cancelled: () => cancelled });
-    return () => {
-      cancelled = true;
-    };
-  }, [load, refreshKey]);
+    if (lastRefreshKey.current === refreshKey) return;
+    lastRefreshKey.current = refreshKey;
+    void invalidateRoleFilaments(queryClient, profileId);
+  }, [profileId, queryClient, refreshKey]);
 
   useEffect(() => {
     if (loaded) onRolesChange?.(rows);

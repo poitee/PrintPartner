@@ -18,6 +18,8 @@ export const queryKeys = {
   buildWorkflow: (profileId: number) => ["buildWorkflow", profileId] as const,
   checkoff: (profileId: number) => ["checkoff", profileId] as const,
   roleFilaments: (profileId: number) => ["roleFilaments", profileId] as const,
+  filamentCatalog: ["filamentCatalog"] as const,
+  spoolmanSpools: (integrationId: string) => ["spoolmanSpools", integrationId] as const,
   workflowGuide: ["workflowGuide"] as const,
   buildTrackingSettings: ["buildTrackingSettings"] as const,
   externalAccessSettings: ["externalAccessSettings"] as const,
