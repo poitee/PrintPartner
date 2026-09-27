@@ -2,9 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { buildApp } from "../app.js";
-import { loadConfig } from "../config.js";
-import { createSelfHostPorts } from "../adapters/self-host/index.js";
+import { makeApp } from "../test/make-app.js";
 
 /**
  * Regression coverage for the Build Tracking (assembly tracking) global setting.
@@ -15,16 +13,6 @@ import { createSelfHostPorts } from "../adapters/self-host/index.js";
  *  - the value survives a full app/process restart (re-opened from the on-disk DB),
  *  - other modules can read it through the settings accessor (repo.getSetting).
  */
-async function makeApp(dir: string) {
-  process.env.PRINT_PARTNER_DATA_DIR = dir;
-  delete process.env.PRINT_PARTNER_API_KEY;
-  const config = loadConfig();
-  const ports = createSelfHostPorts(dir);
-  await ports.db.connect();
-  const app = await buildApp(config, ports);
-  return { app, ports };
-}
-
 describe("/settings/build-tracking", () => {
   afterEach(() => {
     delete process.env.PRINT_PARTNER_DATA_DIR;

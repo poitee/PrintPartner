@@ -3,21 +3,9 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
-import { buildApp } from "../app.js";
-import { loadConfig } from "../config.js";
-import { createSelfHostPorts } from "../adapters/self-host/index.js";
 import * as discordNotify from "../services/discord-notify.js";
 import { getLogger } from "../services/logger.js";
-
-async function makeApp(dir: string) {
-  process.env.PRINT_PARTNER_DATA_DIR = dir;
-  delete process.env.PRINT_PARTNER_API_KEY;
-  const config = loadConfig();
-  const ports = createSelfHostPorts(dir);
-  await ports.db.connect();
-  const app = await buildApp(config, ports);
-  return { app, ports };
-}
+import { makeApp } from "../test/make-app.js";
 
 describe("POST /api/discord-digest", () => {
   afterEach(() => {

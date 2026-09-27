@@ -2,17 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { buildApp } from "../app.js";
-import { loadConfig } from "../config.js";
-import { createSelfHostPorts } from "../adapters/self-host/index.js";
-
-async function makeApp(dir: string) {
-  process.env.PRINT_PARTNER_DATA_DIR = dir;
-  delete process.env.PRINT_PARTNER_API_KEY;
-  const ports = createSelfHostPorts(dir);
-  await ports.db.connect();
-  return { app: await buildApp(loadConfig(), ports), ports };
-}
+import { makeApp } from "../test/make-app.js";
 
 afterEach(() => {
   delete process.env.PRINT_PARTNER_DATA_DIR;
