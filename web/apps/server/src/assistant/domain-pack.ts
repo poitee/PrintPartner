@@ -93,7 +93,7 @@ export type DomainImportPayload = {
   backfill_notes?: boolean;
 };
 
-function candidateRoots(dataDir?: string | null): string[] {
+export function domainPackRoots(dataDir?: string | null): string[] {
   const roots: string[] = [];
   if (dataDir) roots.push(join(dataDir, "assistant-domain"));
   roots.push(MODULE_DATA, SRC_DATA);
@@ -108,7 +108,7 @@ function readText(path: string): string | null {
   }
 }
 
-function loadYamlFile(path: string): unknown | null {
+export function loadYamlFile(path: string): unknown | null {
   const text = readText(path);
   if (text == null) return null;
   try {
@@ -119,7 +119,7 @@ function loadYamlFile(path: string): unknown | null {
 }
 
 function findFile(dataDir: string | null | undefined, ...rel: string[]): string | null {
-  for (const root of candidateRoots(dataDir)) {
+  for (const root of domainPackRoots(dataDir)) {
     const p = join(root, ...rel);
     if (existsSync(p)) return p;
   }
@@ -206,7 +206,7 @@ export function backfillAdvisorNotesFromDomainPack(
   const seen = new Set<string>();
   const liveByName = new Map(repo.listSources().map((s) => [s.name, s]));
 
-  for (const root of candidateRoots(dataDir)) {
+  for (const root of domainPackRoots(dataDir)) {
     const sourcesRoot = join(root, "sources");
     if (!existsSync(sourcesRoot)) continue;
     let dirs: string[];
@@ -332,7 +332,7 @@ export function findIdentityForSource(
   const name = sourceName.trim();
   if (!name) return null;
   const sanitized = name.replace(/\//g, "-");
-  for (const root of candidateRoots(dataDir)) {
+  for (const root of domainPackRoots(dataDir)) {
     const sourcesRoot = join(root, "sources");
     if (!existsSync(sourcesRoot)) continue;
     const direct = [name, sanitized]
@@ -374,7 +374,7 @@ export function loadSourceDecisionsYaml(
   const name = sourceName.trim();
   if (!name) return [];
   const sanitized = name.replace(/\//g, "-");
-  for (const root of candidateRoots(dataDir)) {
+  for (const root of domainPackRoots(dataDir)) {
     const sourcesRoot = join(root, "sources");
     if (!existsSync(sourcesRoot)) continue;
     const candidates = [name, sanitized];
@@ -603,7 +603,7 @@ function formatConflictsSection(dataDir: string | null): string[] {
 }
 
 function formatSourceDigestsSection(dataDir: string | null, live: LiveSourceFilter): string[] {
-  for (const root of candidateRoots(dataDir)) {
+  for (const root of domainPackRoots(dataDir)) {
     const sourcesRoot = join(root, "sources");
     if (!existsSync(sourcesRoot)) continue;
     let dirs: string[];
@@ -857,7 +857,7 @@ export function importAssistantDomainPack(
 function findSourcePackDir(dataDir: string | null | undefined, sourceName: string): string | null {
   const name = sourceName.trim();
   const sanitized = name.replace(/\//g, "-");
-  for (const root of candidateRoots(dataDir)) {
+  for (const root of domainPackRoots(dataDir)) {
     for (const dirName of [name, sanitized]) {
       const dir = join(root, "sources", dirName);
       if (existsSync(dir)) return dir;

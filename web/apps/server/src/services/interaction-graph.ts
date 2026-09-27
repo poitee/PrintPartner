@@ -3,15 +3,14 @@
  * Combines domain-pack compatibility + kit-catalog pick_one + global merge_conflicts.
  */
 
-import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-import * as yaml from "js-yaml";
+import { existsSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 import {
   normalizeCompatibility,
   type NormalizedCompatibility,
   type PartReplacement,
 } from "../assistant/compatibility.js";
+import { domainPackRoots, loadYamlFile } from "../assistant/domain-pack.js";
 import { loadKitCatalog } from "./kit-catalog.js";
 
 function normalizeMergeConflict(raw: unknown): {
@@ -38,9 +37,6 @@ function normalizeMergeConflict(raw: unknown): {
     resolution: o.resolution != null ? String(o.resolution) : "",
   };
 }
-
-const MODULE_DATA = join(dirname(fileURLToPath(import.meta.url)), "../data/assistant-domain");
-const SRC_DATA = join(dirname(fileURLToPath(import.meta.url)), "../../src/data/assistant-domain");
 
 type InteractionWarning = {
   severity: "warning" | "info";
@@ -84,25 +80,10 @@ type InteractionGraph = {
   }>;
 };
 
-function candidateRoots(dataDir?: string | null): string[] {
-  const roots: string[] = [];
-  if (dataDir) roots.push(join(dataDir, "assistant-domain"));
-  roots.push(MODULE_DATA, SRC_DATA);
-  return roots;
-}
-
-function loadYaml(path: string): unknown | null {
-  try {
-    return yaml.load(readFileSync(path, "utf8"));
-  } catch {
-    return null;
-  }
-}
-
 function loadAllCompatibility(dataDir?: string | null): Map<string, NormalizedCompatibility> {
   const bySource = new Map<string, NormalizedCompatibility>();
   const seen = new Set<string>();
-  for (const root of candidateRoots(dataDir)) {
+  for (const root of domainPackRoots(dataDir)) {
     const sourcesRoot = join(root, "sources");
     if (!existsSync(sourcesRoot)) continue;
     let dirs: string[];
@@ -116,7 +97,7 @@ function loadAllCompatibility(dataDir?: string | null): Map<string, NormalizedCo
     for (const name of dirs) {
       if (seen.has(name)) continue;
       seen.add(name);
-      const raw = loadYaml(join(sourcesRoot, name, "compatibility.yaml"));
+      const raw = loadYamlFile(join(sourcesRoot, name, "compatibility.yaml"));
       const norm = normalizeCompatibility(raw);
       if (norm) bySource.set(norm.source_name, norm);
     }
@@ -125,10 +106,10 @@ function loadAllCompatibility(dataDir?: string | null): Map<string, NormalizedCo
 }
 
 function loadMergeConflicts(dataDir?: string | null): InteractionGraph["mergeConflicts"] {
-  for (const root of candidateRoots(dataDir)) {
+  for (const root of domainPackRoots(dataDir)) {
     const path = join(root, "_global", "merge_conflicts.yaml");
     if (!existsSync(path)) continue;
-    const raw = loadYaml(path) as { conflicts?: unknown[] } | null;
+    const raw = loadYamlFile(path) as { conflicts?: unknown[] } | null;
     const out: InteractionGraph["mergeConflicts"] = [];
     for (const item of raw?.conflicts ?? []) {
       if (!item || typeof item !== "object") continue;
@@ -526,10 +507,10 @@ export function findCatalogDomainMismatches(options?: {
   }
 
   // stacks.yaml vs stack_presets divergence (ids / base source)
-  for (const root of candidateRoots(options?.dataDir)) {
+  for (const root of domainPackRoots(options?.dataDir)) {
     const stacksPath = join(root, "_global", "stacks.yaml");
     if (!existsSync(stacksPath)) continue;
-    const raw = loadYaml(stacksPath) as { stacks?: unknown } | null;
+    const raw = loadYamlFile(stacksPath) as { stacks?: unknown } | null;
     const catalog = loadKitCatalog(options?.dataDir);
     const presets = (catalog.stack_presets ?? {}) as Record<
       string,
