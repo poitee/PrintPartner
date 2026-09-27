@@ -20,11 +20,8 @@ import { fetchStlTree } from "../api/endpoints/sources";
 import { useDateFormat } from "../context/DateFormatContext";
 import { useJobContext } from "../context/JobContext";
 import { useImportRulesAutosave } from "../hooks/useImportRulesAutosave";
-import { useImportRulesSaveRegistry } from "../context/ImportRulesSaveContext";
-import {
-  importRulesSaveStatusLabel,
-  shouldShowImportRulesRetry,
-} from "../lib/importRulesSave";
+import { useBuildSaveFlushRegistry } from "../context/BuildSaveFlushContext";
+import { autosaveStatusLabel, shouldShowAutosaveRetry } from "../lib/autosaveStatus";
 import { librarySourceDragId } from "../lib/sourceCategoryDnD";
 import { statusTone } from "../lib/statusTone";
 import { cn } from "@/lib/utils";
@@ -130,7 +127,7 @@ export default function SourceFilePickerCard({
     [loadSelectionSummary, onSaved],
   );
 
-  const { registerFlush, unregisterFlush } = useImportRulesSaveRegistry();
+  const { registerFlush, unregisterFlush } = useBuildSaveFlushRegistry("importRules");
 
   const { dirty, status, saveNow, saveUserEdit } = useImportRulesAutosave({
     sourceId,
@@ -162,8 +159,8 @@ export default function SourceFilePickerCard({
     [saveUserEdit],
   );
 
-  const saveStatusLabel = importRulesSaveStatusLabel(status);
-  const showRetry = shouldShowImportRulesRetry(status);
+  const saveStatusLabel = autosaveStatusLabel(status);
+  const showRetry = shouldShowAutosaveRetry(status);
 
   useEffect(() => {
     userEditedRulesRef.current = false;

@@ -6,8 +6,7 @@ import { createMemoryRouter, RouterProvider, useLocation } from "react-router-do
 import BuildSaveNavigationGuard from "./BuildSaveNavigationGuard";
 import { LibraryDraftProvider } from "../context/LibraryDraftContext";
 import KitManifestOptions from "./KitManifestOptions";
-import { ImportRulesSaveProvider } from "../context/ImportRulesSaveContext";
-import { KitManifestSaveProvider } from "../context/KitManifestSaveContext";
+import { BuildSaveFlushProvider } from "../context/BuildSaveFlushContext";
 
 const mocks = vi.hoisted(() => ({ save: vi.fn() }));
 
@@ -60,12 +59,10 @@ describe("KitManifestOptions guarded navigation", () => {
     const router = createMemoryRouter([{
       path: "*",
       element: (
-        <ImportRulesSaveProvider>
-          <KitManifestSaveProvider>
-            <BuildSaveNavigationGuard />
-            <Page />
-          </KitManifestSaveProvider>
-        </ImportRulesSaveProvider>
+        <BuildSaveFlushProvider>
+          <BuildSaveNavigationGuard />
+          <Page />
+        </BuildSaveFlushProvider>
       ),
     }], { initialEntries: ["/sources?profile=2", "/plan?profile=2"], initialIndex: 1 });
     render(<LibraryDraftProvider><RouterProvider router={router} /></LibraryDraftProvider>);

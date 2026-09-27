@@ -1,10 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { saveImportRules } from "../api/endpoints/sources";
-import {
-  IMPORT_RULES_SAVED_CLEAR_MS,
-  rulesEqual,
-  type ImportRulesSaveStatus,
-} from "../lib/importRulesSave";
+import type { AutosaveStatus } from "../lib/autosaveStatus";
+import { IMPORT_RULES_SAVED_CLEAR_MS, rulesEqual } from "../lib/importRulesSave";
 
 type Options = {
   sourceId: number;
@@ -41,7 +38,7 @@ export function useImportRulesAutosave({
   onRegisterFlush,
   onUnregisterFlush,
 }: Options) {
-  const [status, setStatus] = useState<ImportRulesSaveStatus>("idle");
+  const [status, setStatus] = useState<AutosaveStatus>("idle");
   const savedClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const saveStateRef = useRef<SourceSaveState>({
     sourceId,

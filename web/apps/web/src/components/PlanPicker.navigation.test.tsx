@@ -37,7 +37,7 @@ vi.mock("../context/AuthContext", () => ({
 vi.mock("../hooks/useEngineHealth", () => ({
   useEngineHealth: () => ({ health: { ok: true } }),
 }));
-vi.mock("../hooks/useFlushBuildPageSaves", () => ({
+vi.mock("../context/BuildSaveFlushContext", () => ({
   useFlushBuildPageSaves: () => saves.flush,
 }));
 vi.mock("../queries/profiles", () => {

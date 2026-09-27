@@ -1,9 +1,8 @@
 import { lazy } from "react";
 import { Navigate, Route, Routes, useLocation, useParams } from "react-router-dom";
 import { DateFormatProvider } from "./context/DateFormatContext";
-import { ImportRulesSaveProvider } from "./context/ImportRulesSaveContext";
+import { BuildSaveFlushProvider } from "./context/BuildSaveFlushContext";
 import { JobProvider } from "./context/JobContext";
-import { KitManifestSaveProvider } from "./context/KitManifestSaveContext";
 import { LibraryDraftProvider } from "./context/LibraryDraftContext";
 import { PlanActionsProvider } from "./context/PlanActionsContext";
 import { PlanWorkspaceProvider } from "./context/PlanWorkspaceContext";
@@ -53,66 +52,64 @@ export default function AuthenticatedApp() {
             <PlanWorkspaceProvider>
               <StlAutoSyncProvider>
                 <SaveStatusProvider>
-                  <ImportRulesSaveProvider>
-                    <KitManifestSaveProvider>
-                      <LibraryDraftProvider>
-                      <BuildSaveNavigationGuard />
-                      <Routes>
-                        <Route element={<AppLayout />}>
-                          <Route index element={<IndexRedirect />} />
+                  <BuildSaveFlushProvider>
+                    <LibraryDraftProvider>
+                    <BuildSaveNavigationGuard />
+                    <Routes>
+                      <Route element={<AppLayout />}>
+                        <Route index element={<IndexRedirect />} />
 
-                          <Route path="library" element={<SourcesPage />} />
-                          <Route path="sources" element={<BuildPage />} />
-                          <Route
-                            path="build"
-                            element={<PreserveSearchRedirect to="/sources" />}
-                          />
+                        <Route path="library" element={<SourcesPage />} />
+                        <Route path="sources" element={<BuildPage />} />
+                        <Route
+                          path="build"
+                          element={<PreserveSearchRedirect to="/sources" />}
+                        />
 
-                          <Route path="builds" element={<PlansPage />} />
-                          <Route
-                            path="plans"
-                            element={<PreserveSearchRedirect to="/builds" />}
-                          />
-                          <Route path="plan" element={<PartsPage />} />
-                          <Route
-                            path="parts"
-                            element={<PreserveSearchRedirect to="/plan" />}
-                          />
-                          <Route
-                            path="review"
-                            element={<PreserveSearchRedirect to="/plan" />}
-                          />
+                        <Route path="builds" element={<PlansPage />} />
+                        <Route
+                          path="plans"
+                          element={<PreserveSearchRedirect to="/builds" />}
+                        />
+                        <Route path="plan" element={<PartsPage />} />
+                        <Route
+                          path="parts"
+                          element={<PreserveSearchRedirect to="/plan" />}
+                        />
+                        <Route
+                          path="review"
+                          element={<PreserveSearchRedirect to="/plan" />}
+                        />
 
-                          <Route path="progress" element={<CheckoffPage />} />
-                          <Route
-                            path="checkoff"
-                            element={<PreserveSearchRedirect to="/progress" />}
-                          />
+                        <Route path="progress" element={<CheckoffPage />} />
+                        <Route
+                          path="checkoff"
+                          element={<PreserveSearchRedirect to="/progress" />}
+                        />
 
-                          <Route path="production" element={<GlobalProductionPage />} />
-                          <Route path="export" element={<ExportPage />} />
+                        <Route path="production" element={<GlobalProductionPage />} />
+                        <Route path="export" element={<ExportPage />} />
 
-                          <Route path="plans/:planId/studio" element={<LegacyStudioRedirect />} />
-                          <Route
-                            path="plate"
-                            element={<PreserveSearchRedirect to="/plan" />}
-                          />
-                          <Route
-                            path="print"
-                            element={<PreserveSearchRedirect to="/plan" />}
-                          />
+                        <Route path="plans/:planId/studio" element={<LegacyStudioRedirect />} />
+                        <Route
+                          path="plate"
+                          element={<PreserveSearchRedirect to="/plan" />}
+                        />
+                        <Route
+                          path="print"
+                          element={<PreserveSearchRedirect to="/plan" />}
+                        />
 
-                          <Route path="board" element={<BoardPage />} />
-                          <Route path="board/:postId" element={<BoardPage />} />
-                          <Route path="printers" element={<PrintersPage />} />
-                          <Route path="settings" element={<SettingsPage />} />
-                          <Route path="help" element={<HelpPage />} />
-                          <Route path="*" element={<NotFoundPage />} />
-                        </Route>
-                      </Routes>
-                      </LibraryDraftProvider>
-                    </KitManifestSaveProvider>
-                  </ImportRulesSaveProvider>
+                        <Route path="board" element={<BoardPage />} />
+                        <Route path="board/:postId" element={<BoardPage />} />
+                        <Route path="printers" element={<PrintersPage />} />
+                        <Route path="settings" element={<SettingsPage />} />
+                        <Route path="help" element={<HelpPage />} />
+                        <Route path="*" element={<NotFoundPage />} />
+                      </Route>
+                    </Routes>
+                    </LibraryDraftProvider>
+                  </BuildSaveFlushProvider>
                 </SaveStatusProvider>
               </StlAutoSyncProvider>
             </PlanWorkspaceProvider>

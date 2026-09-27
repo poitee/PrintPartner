@@ -46,14 +46,8 @@ vi.mock("../context/DateFormatContext", () => ({
 vi.mock("../context/JobContext", () => ({
   useJobContext: () => ({ activeJobs: [] }),
 }));
-vi.mock("../context/ImportRulesSaveContext", () => ({
-  useImportRulesSaveRegistry: () => ({
-    registerFlush: vi.fn(),
-    unregisterFlush: vi.fn(),
-  }),
-}));
-vi.mock("../context/KitManifestSaveContext", () => ({
-  useKitManifestSaveRegistry: () => ({
+vi.mock("../context/BuildSaveFlushContext", () => ({
+  useBuildSaveFlushRegistry: () => ({
     registerFlush: vi.fn(),
     unregisterFlush: vi.fn(),
   }),

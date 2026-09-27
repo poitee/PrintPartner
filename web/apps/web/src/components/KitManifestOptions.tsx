@@ -7,12 +7,9 @@ import {
   type KitManifest,
 } from "../api/endpoints/planManifests";
 import type { RepoManifestOptionGroup } from "../api/endpoints/sourceArtifacts";
-import { useKitManifestSaveRegistry } from "../context/KitManifestSaveContext";
+import { useBuildSaveFlushRegistry } from "../context/BuildSaveFlushContext";
 import { useKitManifestAutosave } from "../hooks/useKitManifestAutosave";
-import {
-  kitManifestSaveStatusLabel,
-  shouldShowKitManifestRetry,
-} from "../lib/kitManifestSave";
+import { autosaveStatusLabel, shouldShowAutosaveRetry } from "../lib/autosaveStatus";
 import { ChevronDown } from "lucide-react";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
@@ -72,7 +69,7 @@ export default function KitManifestOptions({
   const [optionGroups, setOptionGroups] = useState<Record<string, RepoManifestOptionGroup>>({});
   const [detailsOpen, setDetailsOpen] = useState(false);
 
-  const { registerFlush, unregisterFlush } = useKitManifestSaveRegistry();
+  const { registerFlush, unregisterFlush } = useBuildSaveFlushRegistry("kitManifest");
 
   const onSaved = useCallback((kit: KitManifest) => {
     setSavedKit(kit);
@@ -94,8 +91,8 @@ export default function KitManifestOptions({
     onUnregisterFlush: unregisterFlush,
   });
 
-  const saveStatusLabel = kitManifestSaveStatusLabel(status);
-  const showRetry = shouldShowKitManifestRetry(status);
+  const saveStatusLabel = autosaveStatusLabel(status);
+  const showRetry = shouldShowAutosaveRetry(status);
   const displayedSelections = useMemo(
     () => ({ ...inheritedSelections, ...pendingSelections }),
     [inheritedSelections, pendingSelections],

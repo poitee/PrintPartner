@@ -21,7 +21,7 @@ const deps = vi.hoisted(() => ({
 
 vi.mock("../api/endpoints/browserFiles", () => ({ pickKitBundle: deps.pick }));
 vi.mock("../api/endpoints/imports", () => ({ uploadKitBundle: deps.upload }));
-vi.mock("./useFlushBuildPageSaves", () => ({
+vi.mock("../context/BuildSaveFlushContext", () => ({
   useFlushBuildPageSaves: () => async () => {},
 }));
 vi.mock("../hooks/useEngineHealth", () => ({

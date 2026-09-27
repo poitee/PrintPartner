@@ -33,11 +33,8 @@ vi.mock("./context/StlAutoSyncContext", () => ({
     runSync: () => undefined,
   }),
 }));
-vi.mock("./context/ImportRulesSaveContext", () => ({
-  ImportRulesSaveProvider: ({ children }: { children: ReactNode }) => children,
-}));
-vi.mock("./context/KitManifestSaveContext", () => ({
-  KitManifestSaveProvider: ({ children }: { children: ReactNode }) => children,
+vi.mock("./context/BuildSaveFlushContext", () => ({
+  BuildSaveFlushProvider: ({ children }: { children: ReactNode }) => children,
 }));
 vi.mock("./context/SaveStatusContext", () => ({
   SaveStatusProvider: ({ children }: { children: ReactNode }) => children,

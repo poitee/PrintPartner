@@ -4,11 +4,8 @@ import {
   savePlanKitManifest,
   type KitManifest,
 } from "../api/endpoints/planManifests";
-import {
-  KIT_MANIFEST_SAVED_CLEAR_MS,
-  selectionsEqual,
-  type KitManifestSaveStatus,
-} from "../lib/kitManifestSave";
+import type { AutosaveStatus } from "../lib/autosaveStatus";
+import { KIT_MANIFEST_SAVED_CLEAR_MS, selectionsEqual } from "../lib/kitManifestSave";
 
 type Options = {
   profileId: number;
@@ -52,7 +49,7 @@ export function useKitManifestAutosave({
   onRegisterFlush,
   onUnregisterFlush,
 }: Options) {
-  const [status, setStatus] = useState<KitManifestSaveStatus>("idle");
+  const [status, setStatus] = useState<AutosaveStatus>("idle");
   const savedClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const saveStateRef = useRef<ProfileSaveState>({

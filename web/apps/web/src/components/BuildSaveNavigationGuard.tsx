@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { useBlocker, useLocation } from "react-router-dom";
 import { toast } from "sonner";
 import { confirmDiscardSourceChanges, useLibraryDraft } from "../context/LibraryDraftContext";
-import { useFlushBuildPageSaves } from "../hooks/useFlushBuildPageSaves";
+import { useFlushBuildPageSaves } from "../context/BuildSaveFlushContext";
 import { isLibraryPath, isPlanPath, isSourcesPath } from "../lib/routes";
 
 export default function BuildSaveNavigationGuard() {
