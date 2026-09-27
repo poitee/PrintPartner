@@ -1,9 +1,7 @@
-import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { Files, Printer } from "lucide-react";
 import type { IntegrationSummary } from "../api/endpoints/integrations";
-import { fetchPrinterCheckoffLinks } from "../api/endpoints/checkoff";
 import type { PrinterMachine } from "../api/endpoints/printers";
 import PageHeader from "../components/layout/PageHeader";
 import PageHeaderActions from "../components/layout/PageHeaderActions";
@@ -43,6 +41,7 @@ import { cn } from "@/lib/utils";
 import PrinterWorkspaceSheet from "../components/printers/PrinterWorkspaceSheet";
 import { usePrinterStatuses } from "../queries/printerStatuses";
 import { useIntegrationsQuery, usePrintersQuery } from "../queries/printerFleet";
+import { usePrinterCheckoffLinksQuery } from "../queries/printerCheckoff";
 
 const HOST_TYPES = new Set<LiveStripHostType>(["moonraker", "prusalink", "bambu"]);
 const NO_INTEGRATIONS: IntegrationSummary[] = [];
@@ -106,15 +105,7 @@ export default function PrintersPage() {
     statusIntegrationIds,
     engineReady,
   );
-  const checkoffLinksQuery = useQuery({
-    queryKey: ["printer-checkoff-links"],
-    queryFn: () => fetchPrinterCheckoffLinks(),
-    enabled: engineReady,
-    staleTime: pollMs,
-    refetchInterval: pollMs,
-    refetchIntervalInBackground: false,
-    retry: false,
-  });
+  const checkoffLinksQuery = usePrinterCheckoffLinksQuery(engineReady, pollMs);
   const checkoffLinks = checkoffLinksQuery.data?.links ?? [];
 
   const planNameById = useMemo(() => {

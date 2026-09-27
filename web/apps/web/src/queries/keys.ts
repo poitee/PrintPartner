@@ -18,6 +18,8 @@ export const queryKeys = {
   planDraft: (profileId: number, draftId: number) => ["planDraft", profileId, draftId] as const,
   buildWorkflow: (profileId: number) => ["buildWorkflow", profileId] as const,
   checkoff: (profileId: number) => ["checkoff", profileId] as const,
+  printerCheckoffLinks: ["printerCheckoffLinks"] as const,
+  unattributedPrints: ["unattributedPrints"] as const,
   roleFilaments: (profileId: number) => ["roleFilaments", profileId] as const,
   filamentCatalog: ["filamentCatalog"] as const,
   spoolmanSpools: (integrationId: string) => ["spoolmanSpools", integrationId] as const,

@@ -1,9 +1,16 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { cleanup, fireEvent, render as renderView, screen, waitFor } from "@testing-library/react";
+import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import GlobalProductionPage from "./GlobalProductionPage";
+
+function render(children: ReactNode) {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return renderView(<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>);
+}
 
 const state = vi.hoisted(() => ({
   profiles: [
@@ -125,16 +132,13 @@ describe("GlobalProductionPage", () => {
       </MemoryRouter>,
     );
 
-    await waitFor(() => {
-      expect(screen.getByText("Live printers").textContent).toBe("Live printers");
-    });
+    expect((await screen.findByText("orphan.gcode")).textContent).toBe("orphan.gcode");
     expect(api.fetchPrinterCheckoffLinks).toHaveBeenCalledExactlyOnceWith();
     expect(
       api.fetchPrinterCheckoffLinks.mock.calls.every(
         (call) => (call[0] as { profile_id?: number } | undefined)?.profile_id == null,
       ),
     ).toBe(true);
-    expect(screen.getByText("orphan.gcode").textContent).toBe("orphan.gcode");
     expect(screen.getByRole("link", { name: "Failed for Done Build" }).getAttribute("href")).toBe(
       "/progress?profile=8",
     );

@@ -1,12 +1,7 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { lazy, Suspense, useCallback, useMemo } from "react";
 import { Link } from "react-router-dom";
 import { Factory } from "lucide-react";
-import type { UnattributedPrint } from "@print-partner/contracts";
-import {
-  fetchPrinterCheckoffLinks,
-  fetchUnattributedPrints,
-  type PrinterCheckoffLink,
-} from "../api/endpoints/checkoff";
 import UnattributedPrintCard from "../components/checkoff/UnattributedPrintCard";
 import PageHeader from "../components/layout/PageHeader";
 import PageShell from "../components/layout/PageShell";
@@ -26,6 +21,11 @@ import { filterPlansList, planProgressLabel } from "../lib/plansList";
 import { buildsRoute, productionRoute, progressRoute } from "../lib/routes";
 import { statusTone } from "../lib/statusTone";
 import { cn } from "@/lib/utils";
+import {
+  invalidatePrinterFarm,
+  usePrinterCheckoffLinksQuery,
+  useUnattributedPrintsQuery,
+} from "../queries/printerCheckoff";
 import {
   getBackgroundError,
   resolveEngineState,
@@ -111,47 +111,31 @@ export default function GlobalProductionPage() {
     return names;
   }, [profiles]);
 
-  const [activeLinks, setActiveLinks] = useState<PrinterCheckoffLink[]>([]);
-  const [verifiedLinks, setVerifiedLinks] = useState<PrinterCheckoffLink[]>([]);
-  const [unattributed, setUnattributed] = useState<UnattributedPrint[]>([]);
-  const [farmError, setFarmError] = useState<string | null>(null);
-  const farmRequestId = useRef(0);
-
-  const refreshFarm = useCallback(async () => {
-    if (engineState !== "ready") {
-      setActiveLinks([]);
-      setVerifiedLinks([]);
-      setUnattributed([]);
-      setFarmError(null);
-      return;
-    }
-    const requestId = ++farmRequestId.current;
-    try {
-      const [queue, prints] = await Promise.all([
-        fetchPrinterCheckoffLinks(),
-        fetchUnattributedPrints(),
-      ]);
-      if (requestId !== farmRequestId.current) return;
-      setActiveLinks(queue.links.filter((link) =>
-        link.state === "watching" || link.state === "awaiting_verify" || link.state === "host_failed",
-      ));
-      setVerifiedLinks(queue.links.filter((link) => link.state === "verified" || link.state === "applied"));
-      setUnattributed(prints);
-      setFarmError(null);
-    } catch (error) {
-      if (requestId !== farmRequestId.current) return;
-      setFarmError(error instanceof Error ? error.message : String(error));
-    }
-  }, [engineState]);
-
-  useEffect(() => {
-    void refreshFarm();
-  }, [refreshFarm]);
+  const queryClient = useQueryClient();
+  const engineReady = engineState === "ready";
+  const linksQuery = usePrinterCheckoffLinksQuery(engineReady);
+  const unattributedQuery = useUnattributedPrintsQuery(engineReady);
+  const links = engineReady ? linksQuery.data?.links : undefined;
+  const activeLinks = useMemo(
+    () => (links ?? []).filter((link) =>
+      link.state === "watching" || link.state === "awaiting_verify" || link.state === "host_failed",
+    ),
+    [links],
+  );
+  const verifiedLinks = useMemo(
+    () => (links ?? []).filter((link) => link.state === "verified" || link.state === "applied"),
+    [links],
+  );
+  const unattributed = (engineReady ? unattributedQuery.data : undefined) ?? [];
+  const farmFailure = engineReady ? linksQuery.error ?? unattributedQuery.error : null;
+  const farmError = farmFailure
+    ? farmFailure instanceof Error ? farmFailure.message : String(farmFailure)
+    : null;
 
   const refreshAfterPrinterEvent = useCallback(() => {
-    void refreshFarm();
+    void invalidatePrinterFarm(queryClient);
     void reloadProfiles();
-  }, [refreshFarm, reloadProfiles]);
+  }, [queryClient, reloadProfiles]);
 
   const jobs = useMemo(
     () =>
