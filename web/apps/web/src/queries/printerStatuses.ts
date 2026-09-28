@@ -8,7 +8,7 @@ import type { PrinterHostStatus } from "@print-partner/contracts";
 import { fetchIntegrationStatus } from "../api/endpoints/integrations";
 import { usePrinterStatusPollMs } from "../hooks/usePrinterStatusPollMs";
 
-const MAX_OFFLINE_POLL_MS = 5 * 60_000;
+const MAX_OFFLINE_POLL_MS = 60_000;
 
 type PrinterStatusPoll = Readonly<{
   status: PrinterHostStatus;

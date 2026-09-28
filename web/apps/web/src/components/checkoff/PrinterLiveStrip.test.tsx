@@ -24,14 +24,17 @@ vi.mock("../../api/endpoints/integrations", () => ({
 vi.mock("../../api/endpoints/checkoff", () => ({
   reconcilePrinterCheckoff: api.reconcilePrinterCheckoff,
 }));
+const statusPoll = vi.hoisted(() => ({ ms: 60_000 }));
+
 vi.mock("../../hooks/usePrinterStatusPollMs", () => ({
-  usePrinterStatusPollMs: () => 60_000,
+  usePrinterStatusPollMs: () => statusPoll.ms,
 }));
 vi.mock("sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn() },
 }));
 
 afterEach(() => {
+  statusPoll.ms = 60_000;
   vi.useRealTimers();
   cleanup();
   vi.clearAllMocks();
@@ -212,38 +215,41 @@ describe("PrinterLiveStrip", () => {
     });
   });
 
-  it("backs off reconcile polls for an unreachable host and resumes after it answers", async () => {
+  it("backs off reconcile polls for an unreachable host up to a minute and resumes after it answers", async () => {
     vi.useFakeTimers();
+    statusPoll.ms = 5_000;
     api.fetchPrinters.mockResolvedValue([
       { id: "core-one", name: "Core One", integration_id: "prusa-1" },
     ]);
     api.fetchIntegrations.mockResolvedValue([
       { id: "prusa-1", name: "Core One", type: "prusalink", config: { enabled: true } },
     ]);
+    const refused = new Error("connect ECONNREFUSED");
     api.reconcilePrinterCheckoff
-      .mockRejectedValueOnce(new Error("connect ECONNREFUSED"))
-      .mockRejectedValueOnce(new Error("connect ECONNREFUSED"))
+      .mockRejectedValueOnce(refused)
+      .mockRejectedValueOnce(refused)
+      .mockRejectedValueOnce(refused)
+      .mockRejectedValueOnce(refused)
       .mockResolvedValue({ status: { state: "idle" }, updates: [], created_links: [], unattributed: [] });
+    const reconciles = () => api.reconcilePrinterCheckoff.mock.calls.length;
 
     renderWithQueryClient(
       <MemoryRouter>
         <PrinterLiveStrip engineReady />
       </MemoryRouter>,
     );
-    await vi.waitFor(() => expect(api.reconcilePrinterCheckoff).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(reconciles()).toBe(1));
 
-    await act(() => vi.advanceTimersByTimeAsync(61_000));
-    expect(api.reconcilePrinterCheckoff).toHaveBeenCalledTimes(1);
-    await act(() => vi.advanceTimersByTimeAsync(60_000));
-    expect(api.reconcilePrinterCheckoff).toHaveBeenCalledTimes(2);
-
-    await act(() => vi.advanceTimersByTimeAsync(238_000));
-    expect(api.reconcilePrinterCheckoff).toHaveBeenCalledTimes(2);
-    await act(() => vi.advanceTimersByTimeAsync(2_000));
-    expect(api.reconcilePrinterCheckoff).toHaveBeenCalledTimes(3);
-
-    await act(() => vi.advanceTimersByTimeAsync(61_000));
-    expect(api.reconcilePrinterCheckoff).toHaveBeenCalledTimes(4);
+    for (const [waitMs, expected] of [
+      [9_000, 1], [1_000, 2],
+      [19_000, 2], [1_000, 3],
+      [39_000, 3], [1_000, 4],
+      [59_000, 4], [1_000, 5],
+      [5_000, 6],
+    ] as const) {
+      await act(() => vi.advanceTimersByTimeAsync(waitMs));
+      expect(reconciles()).toBe(expected);
+    }
   });
 
   it("notifies each affected Build once per reconcile", async () => {
