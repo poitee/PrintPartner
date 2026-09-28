@@ -16,7 +16,7 @@
 
 import type { AppRepository } from "../db/repository.js";
 import { getIntegrationAdapter } from "../integrations/registry.js";
-import { getIntegrationConfig, listIntegrationsByType } from "../integrations/store.js";
+import { getIntegrationConfig } from "../integrations/store.js";
 import { parseSpoolmanSpoolId, useSpoolFilament as deductSpoolFilament } from "../integrations/spoolman-client.js";
 import { getLogger } from "./logger.js";
 import type { PrintVerifyDecision } from "@print-partner/contracts";
@@ -63,13 +63,7 @@ export async function deductSpoolmanFilamentAfterVerify(
     return;
   }
 
-  // --- Step 2: Find Spoolman integration ---
-  const spoolmanIntegrations = listIntegrationsByType(repo, "spoolman");
-  if (!spoolmanIntegrations.length) return;
-  // Use the most-recently-updated Spoolman integration.
-  const spoolmanIntegration = spoolmanIntegrations[0]!;
-
-  // --- Step 3: Resolve spool assignments for confirmed parts ---
+  // --- Step 2: Resolve spool assignments for confirmed parts ---
   const partRows = repo.getProfilePartRows(profileId);
   const partById = new Map(partRows.map((p) => [p.id, p]));
 
@@ -86,7 +80,7 @@ export async function deductSpoolmanFilamentAfterVerify(
     return;
   }
 
-  // --- Step 4: Distribute filament proportionally ---
+  // --- Step 3: Distribute filament proportionally ---
   // Scale by (confirmed units / total link units) so we don't over-deduct
   // when only some units in a multi-part print are confirmed.
   const confirmedCount = confirmedDecisions.length;
@@ -101,6 +95,12 @@ export async function deductSpoolmanFilamentAfterVerify(
   for (const [spoolRef, unitCount] of spoolUnitCounts) {
     const parsed = parseSpoolmanSpoolId(spoolRef);
     if (!parsed) continue;
+    const spoolmanIntegration = getIntegrationConfig(repo, parsed.integrationId);
+    if (
+      !spoolmanIntegration ||
+      spoolmanIntegration.type !== "spoolman" ||
+      spoolmanIntegration.config.enabled === false
+    ) continue;
 
     const fraction = unitCount / totalConfirmedWithSpool;
     const deductMm = scaledMm * fraction;
