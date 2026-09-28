@@ -59,7 +59,7 @@ type PreparedPlanPublication = {
   readonly revisionDigest: string;
 };
 
-export type PlanRevisionDigestPart = {
+type PlanRevisionDigestPart = {
   readonly partKey: string;
   readonly relativePath: string;
   readonly filename: string;

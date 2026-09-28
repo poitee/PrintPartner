@@ -19,7 +19,18 @@ type PrepareSqliteUpgradeOptions = Readonly<{
   targetVersion?: number;
 }>;
 
-function readSchemaVersion(sqlite: Database.Database): number {
+/** Schema shipped by Print Partner v3.3.0, the oldest release this one upgrades in place. */
+export const minimumUpgradeSchemaVersion = 31;
+
+export function assertUpgradableSchemaVersion(version: number): void {
+  if (version === 0 || version >= minimumUpgradeSchemaVersion) return;
+  throw new Error(
+    `Cannot upgrade database schema version ${version}. This release upgrades schema ${minimumUpgradeSchemaVersion} (Print Partner v3.3.0) or newer. ` +
+      "Install Print Partner v3.3.0, start it once so it migrates the database, then install this release.",
+  );
+}
+
+export function readSchemaVersion(sqlite: Database.Database): number {
   const hasSettings = sqlite
     .prepare("SELECT 1 AS found FROM sqlite_master WHERE type = 'table' AND name = 'app_settings'")
     .get();
@@ -61,6 +72,7 @@ export async function prepareSqliteUpgrade(
           "Deploy the same or a newer application version, or restore a compatible backup.",
       );
     }
+    assertUpgradableSchemaVersion(fromVersion);
     const backupsDir = join(options.dataDir, "backups");
     mkdirSync(backupsDir, { recursive: true });
     const backupPath = join(

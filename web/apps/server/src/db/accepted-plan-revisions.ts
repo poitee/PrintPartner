@@ -4,8 +4,6 @@ import {
   PLAN_REVISION_DIGEST_FORMAT,
 } from "../services/plan-publication.js";
 
-export const ACCEPTED_PLAN_REVISION_SCHEMA_VERSION = 19;
-
 type LegacyProfile = {
   id: number;
   tenant_id: string;

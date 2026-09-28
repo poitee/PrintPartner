@@ -13,7 +13,6 @@
  */
 export const postgresPostInitMigrations: string[] = [
   "ALTER TABLE parts ADD COLUMN IF NOT EXISTS spoolman_spool_id TEXT",
-  "ALTER TABLE projects ADD COLUMN IF NOT EXISTS tag TEXT",
   "ALTER TABLE projects ADD COLUMN IF NOT EXISTS legacy_manifest_cutover BOOLEAN NOT NULL DEFAULT FALSE",
   "ALTER TABLE build_profiles ADD COLUMN IF NOT EXISTS config_modified_at TEXT",
   "ALTER TABLE build_profiles ADD COLUMN IF NOT EXISTS last_recomputed_at TEXT",
@@ -62,59 +61,6 @@ export const postgresPostInitMigrations: string[] = [
     expires_at TEXT NOT NULL,
     created_at TEXT NOT NULL
   )`,
-  `CREATE TABLE IF NOT EXISTS source_docs (
-    id SERIAL PRIMARY KEY,
-    tenant_id TEXT NOT NULL DEFAULT 'default',
-    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-    path TEXT NOT NULL,
-    kind TEXT NOT NULL,
-    size_bytes INTEGER NOT NULL DEFAULT 0,
-    content_hash TEXT,
-    extract_status TEXT NOT NULL DEFAULT 'pending',
-    extract_error TEXT,
-    page_count INTEGER,
-    updated_at TEXT NOT NULL
-  )`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS uq_source_docs_project_path
-    ON source_docs (project_id, path)`,
-  `CREATE TABLE IF NOT EXISTS source_notes (
-    id SERIAL PRIMARY KEY,
-    tenant_id TEXT NOT NULL DEFAULT 'default',
-    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-    profile_id INTEGER REFERENCES build_profiles(id) ON DELETE SET NULL,
-    title TEXT NOT NULL DEFAULT '',
-    body_markdown TEXT NOT NULL DEFAULT '',
-    author_user_id TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-  )`,
-  `CREATE TABLE IF NOT EXISTS plan_decisions (
-    id SERIAL PRIMARY KEY,
-    tenant_id TEXT NOT NULL DEFAULT 'default',
-    profile_id INTEGER NOT NULL REFERENCES build_profiles(id) ON DELETE CASCADE,
-    created_at TEXT NOT NULL,
-    actor TEXT NOT NULL DEFAULT 'assistant',
-    kind TEXT NOT NULL,
-    action_type TEXT,
-    params_json TEXT NOT NULL DEFAULT '{}',
-    label TEXT NOT NULL DEFAULT '',
-    summary TEXT NOT NULL DEFAULT '',
-    rationale TEXT,
-    result_json TEXT
-  )`,
-  `CREATE INDEX IF NOT EXISTS idx_plan_decisions_profile
-    ON plan_decisions (profile_id, created_at)`,
-  `CREATE TABLE IF NOT EXISTS plan_snapshots (
-    id SERIAL PRIMARY KEY,
-    tenant_id TEXT NOT NULL DEFAULT 'default',
-    profile_id INTEGER NOT NULL REFERENCES build_profiles(id) ON DELETE CASCADE,
-    name TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL,
-    source TEXT NOT NULL DEFAULT 'user',
-    payload_json TEXT NOT NULL DEFAULT '{}'
-  )`,
-  `CREATE INDEX IF NOT EXISTS idx_plan_snapshots_profile
-    ON plan_snapshots (profile_id, created_at)`,
   // v9 — slicer profile tables. Mirrors the v9 block of schemaMigrations in schema.ts.
   `CREATE TABLE IF NOT EXISTS printer_profiles (
     id SERIAL PRIMARY KEY,
@@ -334,38 +280,25 @@ export const postgresPostInitMigrations: string[] = [
     id SERIAL PRIMARY KEY,
     tenant_id TEXT NOT NULL DEFAULT 'default',
     input_set_id INTEGER NOT NULL REFERENCES plan_revision_input_sets(id) ON DELETE CASCADE,
-    source_revision_id INTEGER NOT NULL REFERENCES source_revisions(id) ON DELETE RESTRICT,
-    manifest_digest TEXT NOT NULL
+    source_revision_id INTEGER REFERENCES source_revisions(id) ON DELETE RESTRICT,
+    manifest_digest TEXT,
+    source_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE RESTRICT,
+    source_layer TEXT NOT NULL,
+    layer_order INTEGER NOT NULL DEFAULT 0,
+    tracking_kind TEXT NOT NULL DEFAULT 'revision',
+    effective_naming_digest TEXT,
+    CONSTRAINT chk_plan_revision_inputs_tracking_kind
+      CHECK (tracking_kind IN ('revision', 'untracked')),
+    CONSTRAINT chk_plan_revision_inputs_revision_identity CHECK (
+      (tracking_kind = 'revision' AND source_revision_id IS NOT NULL AND manifest_digest IS NOT NULL)
+      OR
+      (tracking_kind = 'untracked' AND source_revision_id IS NULL AND manifest_digest IS NULL)
+    )
   )`,
   `CREATE INDEX IF NOT EXISTS idx_plan_revision_inputs_tenant_set
     ON plan_revision_inputs (tenant_id, input_set_id)`,
   // v18 — explicit accepted Plan input identity and effective naming inputs.
   `ALTER TABLE plan_revision_input_sets ADD COLUMN IF NOT EXISTS format_version INTEGER NOT NULL DEFAULT 1`,
-  `ALTER TABLE plan_revision_inputs ADD COLUMN IF NOT EXISTS source_id INTEGER REFERENCES projects(id) ON DELETE RESTRICT`,
-  `ALTER TABLE plan_revision_inputs ADD COLUMN IF NOT EXISTS source_layer TEXT`,
-  `ALTER TABLE plan_revision_inputs ADD COLUMN IF NOT EXISTS layer_order INTEGER NOT NULL DEFAULT 0`,
-  `ALTER TABLE plan_revision_inputs ADD COLUMN IF NOT EXISTS tracking_kind TEXT NOT NULL DEFAULT 'revision'`,
-  `ALTER TABLE plan_revision_inputs ADD COLUMN IF NOT EXISTS effective_naming_digest TEXT`,
-  `ALTER TABLE plan_revision_inputs ALTER COLUMN source_revision_id DROP NOT NULL`,
-  `ALTER TABLE plan_revision_inputs ALTER COLUMN manifest_digest DROP NOT NULL`,
-  `UPDATE plan_revision_inputs
-     SET source_id = source_revisions.project_id,
-         source_layer = 'legacy:' || source_revisions.project_id
-    FROM source_revisions
-   WHERE plan_revision_inputs.source_revision_id = source_revisions.id
-     AND (plan_revision_inputs.source_id IS NULL OR plan_revision_inputs.source_layer IS NULL)`,
-  `ALTER TABLE plan_revision_inputs ALTER COLUMN source_id SET NOT NULL`,
-  `ALTER TABLE plan_revision_inputs ALTER COLUMN source_layer SET NOT NULL`,
-  `ALTER TABLE plan_revision_inputs DROP CONSTRAINT IF EXISTS chk_plan_revision_inputs_tracking_kind`,
-  `ALTER TABLE plan_revision_inputs ADD CONSTRAINT chk_plan_revision_inputs_tracking_kind
-    CHECK (tracking_kind IN ('revision', 'untracked'))`,
-  `ALTER TABLE plan_revision_inputs DROP CONSTRAINT IF EXISTS chk_plan_revision_inputs_revision_identity`,
-  `ALTER TABLE plan_revision_inputs ADD CONSTRAINT chk_plan_revision_inputs_revision_identity
-    CHECK (
-      (tracking_kind = 'revision' AND source_revision_id IS NOT NULL AND manifest_digest IS NOT NULL)
-      OR
-      (tracking_kind = 'untracked' AND source_revision_id IS NULL AND manifest_digest IS NULL)
-    )`,
   `CREATE UNIQUE INDEX IF NOT EXISTS uq_plan_revision_inputs_v2_set_source
     ON plan_revision_inputs (input_set_id, source_id)
     WHERE effective_naming_digest IS NOT NULL`,
@@ -579,7 +512,6 @@ export const postgresPostInitMigrations: string[] = [
           AFTER INSERT OR UPDATE OR DELETE ON parts
           FOR EACH ROW EXECUTE FUNCTION invalidate_accepted_plan_revision();
       END IF;
-      DROP TRIGGER IF EXISTS trg_profile_layers_invalidate_accepted_revision ON profile_layers;
     END
   $block$`,
   `CREATE TABLE IF NOT EXISTS plan_drafts (
@@ -620,43 +552,10 @@ export const postgresPostInitMigrations: string[] = [
     ON plan_drafts (tenant_id, created_by, profile_id, idempotency_key)`,
   `CREATE INDEX IF NOT EXISTS idx_plan_drafts_tenant_profile_created
     ON plan_drafts (tenant_id, profile_id, created_at, id)`,
-  `ALTER TABLE plan_drafts ADD COLUMN IF NOT EXISTS lifecycle_version INTEGER NOT NULL DEFAULT 0`,
-  `ALTER TABLE plan_drafts ADD COLUMN IF NOT EXISTS rebased_from_draft_id INTEGER
-    REFERENCES plan_drafts(id) ON DELETE CASCADE`,
-  `ALTER TABLE plan_drafts ADD COLUMN IF NOT EXISTS rebased_from_lifecycle_version INTEGER`,
-  `ALTER TABLE plan_drafts ADD COLUMN IF NOT EXISTS rebased_from_snapshot_digest TEXT`,
   `CREATE UNIQUE INDEX IF NOT EXISTS uq_plan_drafts_tenant_profile_rebase_source_generation
     ON plan_drafts (
       tenant_id, profile_id, rebased_from_draft_id, rebased_from_lifecycle_version
     ) WHERE rebased_from_draft_id IS NOT NULL`,
-  `DO $block$
-    BEGIN
-      IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint WHERE conname = 'chk_plan_drafts_lifecycle_version'
-      ) THEN
-        ALTER TABLE plan_drafts ADD CONSTRAINT chk_plan_drafts_lifecycle_version
-          CHECK (lifecycle_version >= 0 AND lifecycle_version <= 2147483647);
-      END IF;
-    END
-  $block$`,
-  `DO $block$
-    BEGIN
-      IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint WHERE conname = 'chk_plan_drafts_rebase_origin'
-      ) THEN
-        ALTER TABLE plan_drafts ADD CONSTRAINT chk_plan_drafts_rebase_origin CHECK (
-          (rebased_from_draft_id IS NULL
-            AND rebased_from_lifecycle_version IS NULL
-            AND rebased_from_snapshot_digest IS NULL)
-          OR (rebased_from_draft_id IS NOT NULL
-            AND rebased_from_lifecycle_version IS NOT NULL
-            AND rebased_from_snapshot_digest IS NOT NULL
-            AND rebased_from_lifecycle_version >= 0
-            AND rebased_from_lifecycle_version <= 2147483647)
-        );
-      END IF;
-    END
-  $block$`,
   `CREATE TABLE IF NOT EXISTS plan_draft_inputs (
     id SERIAL PRIMARY KEY,
     tenant_id TEXT NOT NULL DEFAULT 'default',
@@ -743,7 +642,6 @@ export const postgresPostInitMigrations: string[] = [
   $function$ LANGUAGE plpgsql`,
   `DO $block$
     BEGIN
-      DROP TRIGGER IF EXISTS trg_plan_drafts_ownership_insert ON plan_drafts;
       IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_plan_drafts_ownership_write') THEN
         CREATE TRIGGER trg_plan_drafts_ownership_write
           BEFORE INSERT OR UPDATE ON plan_drafts
@@ -827,7 +725,6 @@ export const postgresPostInitMigrations: string[] = [
   $function$ LANGUAGE plpgsql`,
   `DO $block$
     BEGIN
-      DROP TRIGGER IF EXISTS trg_plan_draft_inputs_ownership_insert ON plan_draft_inputs;
       IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_plan_draft_inputs_ownership_write') THEN
         CREATE TRIGGER trg_plan_draft_inputs_ownership_write
           BEFORE INSERT OR UPDATE ON plan_draft_inputs
@@ -860,7 +757,6 @@ export const postgresPostInitMigrations: string[] = [
   $function$ LANGUAGE plpgsql`,
   `DO $block$
     BEGIN
-      DROP TRIGGER IF EXISTS trg_plan_draft_parts_ownership_insert ON plan_draft_parts;
       IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_plan_draft_parts_ownership_write') THEN
         CREATE TRIGGER trg_plan_draft_parts_ownership_write
           BEFORE INSERT OR UPDATE ON plan_draft_parts

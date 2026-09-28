@@ -1,31 +1,3 @@
-export const SQLITE_PARTS_INVALIDATE_ACCEPTED_REVISION_UPDATE = `CREATE TRIGGER IF NOT EXISTS trg_parts_invalidate_accepted_revision_update
-    AFTER UPDATE ON parts
-    WHEN OLD.id IS NOT NEW.id
-      OR OLD.tenant_id IS NOT NEW.tenant_id
-      OR OLD.profile_id IS NOT NEW.profile_id
-      OR OLD.match_key IS NOT NEW.match_key
-      OR OLD.relative_path IS NOT NEW.relative_path
-      OR OLD.filename IS NOT NEW.filename
-      OR OLD.source_layer IS NOT NEW.source_layer
-      OR OLD.status IS NOT NEW.status
-      OR OLD.role IS NOT NEW.role
-      OR OLD.quantity_auto IS NOT NEW.quantity_auto
-      OR OLD.quantity_override IS NOT NEW.quantity_override
-      OR OLD.quantity_effective IS NOT NEW.quantity_effective
-      OR OLD.included IS NOT NEW.included
-      OR OLD.notes IS NOT NEW.notes
-      OR OLD.github_blob_url IS NOT NEW.github_blob_url
-      OR OLD.geometry_same IS NOT NEW.geometry_same
-      OR OLD.requirement IS NOT NEW.requirement
-      OR OLD.option_group_id IS NOT NEW.option_group_id
-      OR OLD.manifest_source IS NOT NEW.manifest_source
-    BEGIN
-      UPDATE build_profiles
-         SET accepted_plan_revision_id = NULL
-       WHERE (id = OLD.profile_id AND tenant_id = OLD.tenant_id)
-          OR (id = NEW.profile_id AND tenant_id = NEW.tenant_id);
-    END`;
-
 export const schemaMigrations: string[] = [
   `CREATE TABLE IF NOT EXISTS projects (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -398,28 +370,30 @@ export const schemaMigrations: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_plan_revision_input_sets_tenant_plan_published
     ON plan_revision_input_sets (tenant_id, profile_id, published_at)`,
   `CREATE TABLE IF NOT EXISTS plan_revision_inputs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    tenant_id TEXT NOT NULL DEFAULT 'default',
-    input_set_id INTEGER NOT NULL REFERENCES plan_revision_input_sets(id) ON DELETE CASCADE,
-    source_revision_id INTEGER NOT NULL REFERENCES source_revisions(id) ON DELETE RESTRICT,
-    manifest_digest TEXT NOT NULL
-  )`,
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          tenant_id TEXT NOT NULL DEFAULT 'default',
+          input_set_id INTEGER NOT NULL REFERENCES plan_revision_input_sets(id) ON DELETE CASCADE,
+          source_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE RESTRICT,
+          source_layer TEXT NOT NULL,
+          layer_order INTEGER NOT NULL DEFAULT 0,
+          tracking_kind TEXT NOT NULL DEFAULT 'revision'
+            CHECK (tracking_kind IN ('revision', 'untracked')),
+          source_revision_id INTEGER REFERENCES source_revisions(id) ON DELETE RESTRICT,
+          manifest_digest TEXT,
+          effective_naming_digest TEXT,
+          CHECK (
+            (tracking_kind = 'revision' AND source_revision_id IS NOT NULL AND manifest_digest IS NOT NULL)
+            OR
+            (tracking_kind = 'untracked' AND source_revision_id IS NULL AND manifest_digest IS NULL)
+          )
+        )`,
   `CREATE INDEX IF NOT EXISTS idx_plan_revision_inputs_tenant_set
-    ON plan_revision_inputs (tenant_id, input_set_id)`,
+          ON plan_revision_inputs (tenant_id, input_set_id)`,
   // v18 — explicit accepted Plan input identity and effective naming inputs.
   `ALTER TABLE plan_revision_input_sets ADD COLUMN format_version INTEGER NOT NULL DEFAULT 1`,
-  `ALTER TABLE plan_revision_inputs ADD COLUMN source_id INTEGER REFERENCES projects(id) ON DELETE RESTRICT`,
-  `ALTER TABLE plan_revision_inputs ADD COLUMN source_layer TEXT`,
-  `ALTER TABLE plan_revision_inputs ADD COLUMN layer_order INTEGER NOT NULL DEFAULT 0`,
-  `ALTER TABLE plan_revision_inputs ADD COLUMN tracking_kind TEXT NOT NULL DEFAULT 'revision'`,
-  `ALTER TABLE plan_revision_inputs ADD COLUMN effective_naming_digest TEXT`,
-  `UPDATE plan_revision_inputs
-     SET source_id = (SELECT project_id FROM source_revisions WHERE source_revisions.id = plan_revision_inputs.source_revision_id),
-         source_layer = 'legacy:' || COALESCE((SELECT project_id FROM source_revisions WHERE source_revisions.id = plan_revision_inputs.source_revision_id), 0)
-   WHERE source_id IS NULL OR source_layer IS NULL`,
   `CREATE UNIQUE INDEX IF NOT EXISTS uq_plan_revision_inputs_v2_set_source
-    ON plan_revision_inputs (input_set_id, source_id)
-    WHERE effective_naming_digest IS NOT NULL`,
+          ON plan_revision_inputs (input_set_id, source_id)
+          WHERE effective_naming_digest IS NOT NULL`,
   `CREATE TABLE IF NOT EXISTS plan_accepted_input_sets (
     tenant_id TEXT NOT NULL DEFAULT 'default',
     profile_id INTEGER PRIMARY KEY REFERENCES build_profiles(id) ON DELETE CASCADE,
@@ -560,7 +534,33 @@ export const schemaMigrations: string[] = [
          SET accepted_plan_revision_id = NULL
        WHERE id = NEW.profile_id AND tenant_id = NEW.tenant_id;
     END`,
-  SQLITE_PARTS_INVALIDATE_ACCEPTED_REVISION_UPDATE,
+  `CREATE TRIGGER IF NOT EXISTS trg_parts_invalidate_accepted_revision_update
+    AFTER UPDATE ON parts
+    WHEN OLD.id IS NOT NEW.id
+      OR OLD.tenant_id IS NOT NEW.tenant_id
+      OR OLD.profile_id IS NOT NEW.profile_id
+      OR OLD.match_key IS NOT NEW.match_key
+      OR OLD.relative_path IS NOT NEW.relative_path
+      OR OLD.filename IS NOT NEW.filename
+      OR OLD.source_layer IS NOT NEW.source_layer
+      OR OLD.status IS NOT NEW.status
+      OR OLD.role IS NOT NEW.role
+      OR OLD.quantity_auto IS NOT NEW.quantity_auto
+      OR OLD.quantity_override IS NOT NEW.quantity_override
+      OR OLD.quantity_effective IS NOT NEW.quantity_effective
+      OR OLD.included IS NOT NEW.included
+      OR OLD.notes IS NOT NEW.notes
+      OR OLD.github_blob_url IS NOT NEW.github_blob_url
+      OR OLD.geometry_same IS NOT NEW.geometry_same
+      OR OLD.requirement IS NOT NEW.requirement
+      OR OLD.option_group_id IS NOT NEW.option_group_id
+      OR OLD.manifest_source IS NOT NEW.manifest_source
+    BEGIN
+      UPDATE build_profiles
+         SET accepted_plan_revision_id = NULL
+       WHERE (id = OLD.profile_id AND tenant_id = OLD.tenant_id)
+          OR (id = NEW.profile_id AND tenant_id = NEW.tenant_id);
+    END`,
   `CREATE TRIGGER IF NOT EXISTS trg_parts_invalidate_accepted_revision_delete
     AFTER DELETE ON parts
     BEGIN
@@ -604,12 +604,6 @@ export const schemaMigrations: string[] = [
     ON plan_drafts (tenant_id, created_by, profile_id, idempotency_key)`,
   `CREATE INDEX IF NOT EXISTS idx_plan_drafts_tenant_profile_created
     ON plan_drafts (tenant_id, profile_id, created_at, id)`,
-  `ALTER TABLE plan_drafts ADD COLUMN lifecycle_version INTEGER NOT NULL DEFAULT 0
-    CHECK (lifecycle_version >= 0 AND lifecycle_version <= 2147483647)`,
-  `ALTER TABLE plan_drafts ADD COLUMN rebased_from_draft_id INTEGER
-    REFERENCES plan_drafts(id) ON DELETE CASCADE`,
-  `ALTER TABLE plan_drafts ADD COLUMN rebased_from_lifecycle_version INTEGER`,
-  `ALTER TABLE plan_drafts ADD COLUMN rebased_from_snapshot_digest TEXT`,
   `CREATE UNIQUE INDEX IF NOT EXISTS uq_plan_drafts_tenant_profile_rebase_source_generation
     ON plan_drafts (
       tenant_id, profile_id, rebased_from_draft_id, rebased_from_lifecycle_version
@@ -764,8 +758,7 @@ export const schemaMigrations: string[] = [
     BEGIN
       SELECT RAISE(ABORT, 'Plan draft identity is immutable');
     END`,
-  `DROP TRIGGER IF EXISTS trg_plan_drafts_state_transition`,
-  `CREATE TRIGGER trg_plan_drafts_state_transition
+  `CREATE TRIGGER IF NOT EXISTS trg_plan_drafts_state_transition
     BEFORE UPDATE OF state, lifecycle_version ON plan_drafts
     WHEN NOT (
       (NEW.state = OLD.state AND NEW.lifecycle_version = OLD.lifecycle_version)
@@ -1576,30 +1569,30 @@ export const schemaMigrations: string[] = [
       SELECT RAISE(ABORT, 'Accepted Plate unit ownership violation');
     END`,
   `CREATE TRIGGER IF NOT EXISTS trg_accepted_plate_revisions_immutable_update
-    BEFORE UPDATE ON accepted_plate_revisions
-    WHEN NOT (
-      OLD.undo_from_revision_id IS NOT NULL
-      AND NEW.undo_from_revision_id IS NULL
-      AND NOT EXISTS (
-        SELECT 1 FROM accepted_plate_revisions predecessor
-         WHERE predecessor.id = OLD.undo_from_revision_id
+      BEFORE UPDATE ON accepted_plate_revisions
+      WHEN NOT (
+        OLD.undo_from_revision_id IS NOT NULL
+        AND NEW.undo_from_revision_id IS NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM accepted_plate_revisions predecessor
+           WHERE predecessor.id = OLD.undo_from_revision_id
+        )
+        AND NEW.id IS OLD.id
+        AND NEW.tenant_id IS OLD.tenant_id
+        AND NEW.profile_id IS OLD.profile_id
+        AND NEW.plan_revision_id IS OLD.plan_revision_id
+        AND NEW.plan_version IS OLD.plan_version
+        AND NEW.plan_revision_digest IS OLD.plan_revision_digest
+        AND NEW.required_unit_mapping_digest IS OLD.required_unit_mapping_digest
+        AND NEW.layout_digest IS OLD.layout_digest
+        AND NEW.expected_plate_count IS OLD.expected_plate_count
+        AND NEW.expected_unit_count IS OLD.expected_unit_count
+        AND NEW.revision_number IS OLD.revision_number
+        AND NEW.created_at IS OLD.created_at
       )
-      AND NEW.id IS OLD.id
-      AND NEW.tenant_id IS OLD.tenant_id
-      AND NEW.profile_id IS OLD.profile_id
-      AND NEW.plan_revision_id IS OLD.plan_revision_id
-      AND NEW.plan_version IS OLD.plan_version
-      AND NEW.plan_revision_digest IS OLD.plan_revision_digest
-      AND NEW.required_unit_mapping_digest IS OLD.required_unit_mapping_digest
-      AND NEW.layout_digest IS OLD.layout_digest
-      AND NEW.expected_plate_count IS OLD.expected_plate_count
-      AND NEW.expected_unit_count IS OLD.expected_unit_count
-      AND NEW.revision_number IS OLD.revision_number
-      AND NEW.created_at IS OLD.created_at
-    )
-    BEGIN
-      SELECT RAISE(ABORT, 'Accepted Plate revision is immutable');
-    END`,
+      BEGIN
+        SELECT RAISE(ABORT, 'Accepted Plate revision is immutable');
+      END`,
   `CREATE TRIGGER IF NOT EXISTS trg_accepted_plates_immutable_update
     BEFORE UPDATE ON accepted_plates
     BEGIN
