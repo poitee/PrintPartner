@@ -31,6 +31,7 @@ import {
   writeUploadedZip,
 } from "../services/archive-import.js";
 import {
+  MAX_BULK_JSON_BODY_BYTES,
   MAX_SOURCE_UPLOAD_BYTES,
   SOURCE_UPLOAD_TOO_LARGE_DETAIL,
 } from "../services/upload-limits.js";
@@ -355,7 +356,7 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
     };
   });
 
-  app.put("/sources/:id/import-rules", async (request, reply) => {
+  app.put("/sources/:id/import-rules", { bodyLimit: MAX_BULK_JSON_BODY_BYTES }, async (request, reply) => {
     const id = Number((request.params as { id: string }).id);
     const body = request.body as { rules?: string[] };
     try {

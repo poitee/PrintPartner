@@ -69,6 +69,7 @@ describe("JSON body limits", () => {
     ["PATCH", "/plans/999999/production-setup"],
     ["PUT", "/plans/999999/kit-manifest"],
     ["PUT", "/sources/999999/repo-manifest"],
+    ["PUT", "/sources/999999/import-rules"],
   ] as const)("lets %s %s carry up to 8 MiB of bulk JSON", async (method, url) => {
     expect(MAX_BULK_JSON_BODY_BYTES).toBe(8 * MiB);
     const atLimit = await app.inject({
