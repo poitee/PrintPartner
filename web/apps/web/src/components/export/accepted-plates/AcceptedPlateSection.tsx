@@ -23,6 +23,7 @@ import {
 } from "../../../queries/acceptedPlates";
 import { useProductionSetup } from "../../../queries/productionSetup";
 import { settingsPrintersRoute } from "../../../lib/routes";
+import { productionPlateReadiness, productionSelectableUnits } from "../../../lib/productionSelection";
 import { Button } from "../../ui/button";
 import {
   Card,
@@ -130,6 +131,11 @@ export default function AcceptedPlateSection({
   const [reassigning, setReassigning] = useState(false);
   const [failure, setFailureState] = useState<PlateOperationFailure | null>(null);
   const workspace = query.data;
+  const readiness = productionPlateReadiness(
+    workspace,
+    selectedTokens ?? new Set(workspace ? productionSelectableUnits(workspace).map((unit) => unit.token) : []),
+  );
+  const needsPreparation = readiness.unassigned > 0 || readiness.hasUnselectedPlateUnits;
   const showAssign = view !== "arrange";
   const showArrange = view !== "assign";
 
@@ -420,31 +426,28 @@ export default function AcceptedPlateSection({
           <AcceptedPlateAssignmentForm
             rules={productionSetup.data?.rules}
             savedAssignments={productionSetup.data?.printer_assignments}
-            key={assignmentIdentity(workspace)}
+            key={`${assignmentIdentity(workspace)}:${selectionIdentity(selectedTokens)}`}
             workspace={workspace}
             submitting={initialize.isPending}
+            selectedTokens={selectedTokens}
             onSubmit={submitAssignments}
             onAssignmentsChange={saveAssignmentDraft}
             onCancel={() => setReassigning(false)}
           />
         ) : null}
-        {showAssign && workspace?.kind === "ready" && !reassigning && workspace.unassigned.length > 0 ? (
+        {showAssign && workspace?.kind === "ready" && !reassigning && needsPreparation ? (
           <AcceptedPlateAssignmentForm
             rules={productionSetup.data?.rules}
             savedAssignments={productionSetup.data?.printer_assignments}
             key={`${assignmentIdentity(workspace)}:unassigned:${selectionIdentity(selectedTokens)}`}
             workspace={workspace}
             submitting={initialize.isPending}
-            selectedTokens={new Set(
-              workspace.unassigned
-                .filter((unit) => selectedTokens == null || selectedTokens.has(unit.token))
-                .map((unit) => unit.token),
-            )}
+            selectedTokens={selectedTokens}
             onSubmit={submitAssignments}
             onAssignmentsChange={saveAssignmentDraft}
           />
         ) : null}
-        {view === "assign" && workspace?.kind === "ready" && !reassigning && workspace.unassigned.length === 0 ? (
+        {view === "assign" && workspace?.kind === "ready" && !reassigning && !needsPreparation ? (
           <ul className="space-y-1 text-sm text-muted-foreground">
             {workspace.plates.map((plate) => (
               <li key={plate.plate_id}>

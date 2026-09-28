@@ -5,6 +5,7 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   defaultProductionSetup,
+  parseRequiredUnitTokenContract,
   type AcceptedPlateExportRecord,
   type AcceptedPlateWorkspace,
   type ProductionPrinterAssignment,
@@ -94,6 +95,7 @@ const state = {
   checkoffLinks: [] as PrinterCheckoffLink[],
   route: "plates" as ProductionRoute | null,
   printerAssignments: [] as ProductionPrinterAssignment[],
+  selectedTokens: null as ReadonlySet<RequiredUnitToken> | null,
   save: vi.fn<(patch: unknown) => Promise<unknown>>(),
 };
 
@@ -171,7 +173,7 @@ vi.mock("../components/export/useProductionSendFleet", () => ({
 }));
 vi.mock("../hooks/useProductionSelection", () => ({
   useProductionSelection: (units: readonly { token: RequiredUnitToken }[]) => ({
-    selection: new Set(units.map((entry) => entry.token)),
+    selection: state.selectedTokens ?? new Set(units.map((entry) => entry.token)),
     setSelection: vi.fn(),
     setupLoading: false,
     setupSaving: false,
@@ -248,12 +250,32 @@ beforeEach(() => {
   state.checkoffLinks = [];
   state.route = "plates";
   state.printerAssignments = [];
+  state.selectedTokens = null;
   state.save = vi.fn(() => Promise.resolve(undefined));
 });
 
 afterEach(cleanup);
 
 describe("ExportPage work packages", () => {
+  it("requires preparing Plates again when the previous batch contains an unselected unit", () => {
+    state.selectedTokens = new Set([TOKEN_A]);
+    renderAt("/export?profile=1");
+    expect(screen.queryByTestId("panel-export-cards")).toBeNull();
+    expect(screen.getByText("The selection changed. Prepare Plates again to export only the chosen units.")).toBeTruthy();
+    expect(screen.getByRole("region", { name: /Next work package/ }).textContent).toContain("Preparing");
+  });
+
+  it("opens export for two selected copies while a completed third copy stays unassigned", () => {
+    if (readyWorkspace.kind !== "ready") throw new Error("Expected prepared Plates");
+    const completed = { ...unit(parseRequiredUnitTokenContract(`ppu_${"c".repeat(32)}`)), completed: true };
+    state.workspace = { ...readyWorkspace, unassigned: [completed] };
+    state.selectedTokens = new Set([TOKEN_A, TOKEN_B]);
+    renderAt("/export?profile=1");
+    expect(screen.getByTestId("panel-export-cards")).toBeTruthy();
+    expect(screen.queryByText(/1 unit needs a printer/)).toBeNull();
+    expect(screen.getByRole("region", { name: /Next work package/ }).textContent).toContain("Ready to slice");
+  });
+
   it("shows the shared Build header and no numbered stage or step label", () => {
     renderAt("/export");
     expect(screen.getByTestId("build-summary-header")).toBeTruthy();

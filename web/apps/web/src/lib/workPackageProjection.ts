@@ -7,7 +7,7 @@ import type {
   RequiredUnitToken,
 } from "@print-partner/contracts";
 import type { PrinterCheckoffLink } from "../api/endpoints/checkoff";
-import type { ProductionSelectableUnit } from "./productionSelection";
+import { productionPlateReadiness, type ProductionSelectableUnit } from "./productionSelection";
 import { progressRoute } from "./routes";
 
 /**
@@ -529,8 +529,9 @@ export function projectWorkPackages(input: WorkPackageProjectionInput): WorkPack
     ? { id: ready.plate_revision_id, number: ready.plate_revision_number }
     : null;
   const exportArtifact = currentExportArtifact(input.exportRecords, plateRevision?.id ?? null);
-  const needsAssignment = setup != null || (ready?.unassigned.length ?? 0) > 0;
-  const needsArrangement = (ready?.unplaced.length ?? 0) > 0;
+  const readiness = productionPlateReadiness(workspace, selected);
+  const needsAssignment = setup != null || readiness.unassigned > 0 || readiness.hasUnselectedPlateUnits;
+  const needsArrangement = readiness.unplaced > 0;
   const status = benchStatus({
     route,
     hasPlan: true,

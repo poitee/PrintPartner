@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import {
@@ -102,6 +102,7 @@ function readyWorkspace(): AcceptedPlateWorkspace {
 }
 
 let mockWorkspace = setupWorkspace();
+const initialize = vi.fn(() => Promise.resolve());
 
 vi.mock("../../../queries/acceptedPlates", () => ({
   invalidateAcceptedPlateWorkspace: vi.fn(() => Promise.resolve()),
@@ -115,7 +116,7 @@ vi.mock("../../../queries/acceptedPlates", () => ({
   }),
   useInitializeAcceptedPlatesMutation: () => ({
     isPending: false,
-    mutateAsync: vi.fn(() => Promise.resolve()),
+    mutateAsync: initialize,
   }),
   useAcceptedPlateActionMutation: () => ({ mutateAsync: vi.fn() }),
   useMoveAcceptedPlateUnitMutation: () => ({ mutateAsync: vi.fn() }),
@@ -124,9 +125,42 @@ vi.mock("../../../queries/acceptedPlates", () => ({
 afterEach(() => {
   cleanup();
   mockWorkspace = setupWorkspace();
+  initialize.mockClear();
 });
 
 describe("AcceptedPlateSection assignment draft identity", () => {
+  it("prepares the whole selected batch when adding an unassigned unit to an existing Plate", async () => {
+    mockWorkspace = readyWorkspace();
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <AcceptedPlateSection profileId={7} enabled view="assign" selectedTokens={new Set([placedToken, otherToken])} />
+      </QueryClientProvider>,
+    );
+    expect(screen.getByText("1 of 2 selected units assigned")).toBeTruthy();
+    fireEvent.change(screen.getByRole("combobox", { name: "Assign all selected units" }), { target: { value: printer.id } });
+    fireEvent.click(screen.getByRole("button", { name: "Prepare Plates again for 2 selected units" }));
+    await waitFor(() => expect(initialize).toHaveBeenCalledWith({
+      expected: basis,
+      expected_plate_revision_id: 19,
+      assignments: [
+        { token: placedToken, printer_id: printer.id },
+        { token: otherToken, printer_id: printer.id },
+      ],
+    }));
+  });
+
+  it("does not offer an empty assignment form for units outside the selection", () => {
+    mockWorkspace = readyWorkspace();
+    const queryClient = new QueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <AcceptedPlateSection profileId={7} enabled view="assign" selectedTokens={new Set([placedToken])} />
+      </QueryClientProvider>,
+    );
+    expect(screen.queryByText("0 of 0 selected units assigned")).toBeNull();
+    expect(screen.getByText("Plate 1 · Printer One · 1 unit")).toBeTruthy();
+  });
+
   it("limits an existing workspace to the selected unassigned units", () => {
     mockWorkspace = readyWorkspace();
     const queryClient = new QueryClient();
