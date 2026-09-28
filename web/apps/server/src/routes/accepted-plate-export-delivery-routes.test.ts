@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { strFromU8, unzipSync } from "fflate";
 import {
   parseAcceptedPlateExportJobResult,
+  parseAcceptedPlateWorkspace,
   type JobSnapshot,
 } from "@print-partner/contracts";
 import { createSelfHostPorts } from "../adapters/self-host/index.js";
@@ -12,6 +13,7 @@ import { buildApp } from "../app.js";
 import { loadConfig } from "../config.js";
 import { acceptedPlanBasis } from "../db/accepted-plan-progress.js";
 import { InProcessJobRunner } from "../services/job-runner.js";
+import { saveFleet } from "../services/printer-fleet.js";
 
 vi.mock("../services/webhook-store.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../services/webhook-store.js")>()),
@@ -47,7 +49,7 @@ function modelXml(bytes: Uint8Array): string {
 
 async function fixture(
   jobOptions?: ConstructorParameters<typeof InProcessJobRunner>[1],
-  options: Readonly<{ publishPlates?: boolean }> = {},
+  options: Readonly<{ publishPlates?: boolean; filename?: string }> = {},
 ) {
   const root = mkdtempSync(join(tmpdir(), "pp-accepted-export-routes-"));
   const exchangeDir = join(root, "exchange");
@@ -65,7 +67,7 @@ async function fixture(
   const locator = `${source.id}/revisions/accepted`;
   const snapshotRoot = join(root, "repos", locator);
   mkdirSync(snapshotRoot, { recursive: true });
-  writeFileSync(join(snapshotRoot, "part.stl"), `solid accepted
+  writeFileSync(join(snapshotRoot, options.filename ?? "part.stl"), `solid accepted
 facet normal 0 0 1
 outer loop
 vertex 0 0 0
@@ -154,7 +156,7 @@ endsolid accepted`);
     kind: "orca",
     dialect: "orca_json",
     guiUrl: "http://127.0.0.1:18888",
-    watchPath: "/profiles/orca",
+    watchPath: "",
     enabled: true,
   });
   if (jobOptions) {
@@ -175,6 +177,65 @@ endsolid accepted`);
 }
 
 describe("accepted Plate export delivery routes", () => {
+  it.each(["completed", "selected"])("prepares and exports only two chosen copies after a %s copy had its own Plate", async (priorBatch) => {
+    const { app, repo, profile } = await fixture(undefined, { publishPlates: false, filename: "part_x3.stl" });
+    saveFleet(repo, [{
+      id: "printer-one", name: "Printer One", model: "Model One",
+      bed_width_mm: 250, bed_depth_mm: 210, bed_height_mm: 200, margin_mm: 4,
+      max_filament_slots: 1, loaded_filaments: [],
+    }]);
+    const read = repo.readAcceptedPlanOperationalSnapshot(profile.id);
+    if (read.kind !== "ready") throw new Error("Expected accepted Plan");
+    const part = read.snapshot.parts[0];
+    if (!part) throw new Error("Expected accepted part");
+    const marked = await app.inject({ method: "PATCH", url: `/parts/${part.projectionPartId}/progress`, payload: { unit_index: 0, completed: true } });
+    expect(marked.statusCode).toBe(200);
+    const setup = parseAcceptedPlateWorkspace((await app.inject({ method: "GET", url: `/plans/${profile.id}/plates` })).json());
+    if (setup.kind !== "setup") throw new Error("Expected initial Plate setup");
+    expect(setup.units).toHaveLength(3);
+    const completed = setup.units.filter((unit) => unit.completed);
+    const selected = setup.units.filter((unit) => !unit.completed);
+    expect(completed).toHaveLength(1);
+    expect(selected).toHaveLength(2);
+    const previousUnits = priorBatch === "completed" ? completed : selected.slice(0, 1);
+    const first = await app.inject({
+      method: "POST", url: `/plans/${profile.id}/plates/initialize`,
+      payload: { expected: setup.basis, expected_plate_revision_id: null,
+        assignments: previousUnits.map((unit) => ({ token: unit.token, printer_id: "printer-one" })) },
+    });
+    expect(first.statusCode).toBe(200);
+    const previous = parseAcceptedPlateWorkspace(first.json());
+    if (previous.kind !== "ready") throw new Error("Expected prior Plate");
+    const prepared = await app.inject({
+      method: "POST", url: `/plans/${profile.id}/plates/initialize`,
+      payload: { expected: setup.basis, expected_plate_revision_id: previous.plate_revision_id,
+        assignments: selected.map((unit) => ({ token: unit.token, printer_id: "printer-one" })) },
+    });
+    expect(prepared.statusCode).toBe(200);
+    const workspace = parseAcceptedPlateWorkspace(prepared.json());
+    if (workspace.kind !== "ready") throw new Error("Expected selected Plate");
+    expect(workspace.plate_revision_id).not.toBe(previous.plate_revision_id);
+    expect(workspace.plate_revision_number).toBe(previous.plate_revision_number + 1);
+    expect(workspace.plates.flatMap((plate) => plate.units.map((unit) => unit.token)).sort())
+      .toEqual(selected.map((unit) => unit.token).sort());
+    expect(workspace.unassigned.map((unit) => unit.token)).toEqual(completed.map((unit) => unit.token));
+    const started = await app.inject({ method: "POST", url: "/jobs/export-accepted-plate-3mf", payload: {
+      profile_id: profile.id, expected_plate_revision_id: workspace.plate_revision_id,
+    } });
+    expect(started.statusCode).toBe(200);
+    const job = await waitForJob(app, started.json().job_id);
+    expect(job.status).toBe("done");
+    const exported = parseAcceptedPlateExportJobResult(job.result);
+    const objects: string[] = [];
+    for (const plate of exported.plates) {
+      const downloaded = await app.inject({ method: "GET", url: plate.download_url });
+      expect(downloaded.statusCode).toBe(200);
+      const xml = modelXml(downloaded.rawPayload);
+      objects.push(...[...xml.matchAll(/<object\b[^>]*partnumber="([^"]+)"/g)].map((match) => match[1]));
+    }
+    expect(objects.sort()).toEqual(selected.map((unit) => unit.token).sort());
+  });
+
   it("exports one unarranged named-object 3MF without published Plates", async () => {
     const { app, profile, token } = await fixture(undefined, { publishPlates: false });
     const started = await app.inject({

@@ -46,6 +46,7 @@ import {
 } from "../lib/routes";
 import {
   clearProductionSelectionGroup,
+  productionPlateReadiness,
   productionSelectableUnits,
   selectedProductionTokens,
   toggleProductionUnit,
@@ -237,9 +238,10 @@ export default function ExportPage() {
   const workspace = workspaceQuery.data;
   const printerCount =
     workspace && workspace.kind !== "empty_plan" ? workspace.printers.length : 0;
+  const plateReadiness = productionPlateReadiness(workspace, new Set(selectedTokens));
   const printerAssignmentStatus = printerCount === 0
     ? "Printer required"
-    : workspace?.kind === "ready" && workspace.unassigned.length === 0
+    : workspace?.kind === "ready" && plateReadiness.unassigned === 0 && !plateReadiness.hasUnselectedPlateUnits
       ? "Assigned"
       : "Choose printers";
   const plateLayoutStatus = workspace?.kind === "ready"

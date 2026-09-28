@@ -542,24 +542,6 @@ function isPackedPlateInputs(
   return Array.isArray(value);
 }
 
-function mergeExistingPlates(
-  input: Extract<
-    ReadAcceptedPlateWorkspaceInputResult,
-    { kind: "setup" | "ready" }
-  >,
-  packed: readonly AcceptedPlateInput[],
-  assignments: InitializeAcceptedPlatesCommand["assignments"],
-): readonly AcceptedPlateInput[] {
-  if (input.kind !== "ready") return packed;
-  const existingTokens = new Set(
-    input.plates.flatMap((plate) => plate.units.map((unit) => unit.token)),
-  );
-  if (assignments.some((assignment) => existingTokens.has(assignment.token))) {
-    return packed;
-  }
-  return [...currentPlateInputs(input.plates), ...packed];
-}
-
 export async function initializeAcceptedPlates(
   dependencies: AcceptedPlateWorkspaceDependencies,
   command: InitializeAcceptedPlatesCommand,
@@ -689,7 +671,7 @@ export async function initializeAcceptedPlates(
     rules: packingRules,
   });
   if (!isPackedPlateInputs(packed)) return packed;
-  const plates = mergeExistingPlates(input, packed, command.assignments);
+  const plates = packed;
 
   const published = dependencies.repository.publishAcceptedPlates({
     profileId: command.profileId,

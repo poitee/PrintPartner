@@ -1,6 +1,7 @@
 import type { AcceptedPlateWorkspace, ProductionRoute } from "@print-partner/contracts";
 import type { WorkflowTaskState } from "../components/layout/TaskList";
 import type { WorkPackage } from "./workPackageProjection";
+import { productionPlateReadiness } from "./productionSelection";
 
 /**
  * Production work is a list of resumable tasks, not a numbered pass. The user
@@ -187,12 +188,14 @@ function platesTasks(input: PlatesTaskInput): ProductionTask[] {
   const ready = workspace?.kind === "ready" ? workspace : null;
   const isSetup = workspace?.kind === "setup";
   const noPlan = workspace == null || workspace.kind === "empty_plan";
-  const unassigned = ready?.unassigned.length ?? 0;
-  const unplaced = ready?.unplaced.length ?? 0;
   const links = input.pkg.links;
+  const { unassigned, unplaced, hasUnselectedPlateUnits } = productionPlateReadiness(
+    workspace,
+    new Set(links.unitTokens),
+  );
 
   const selected = input.selectedCount > 0;
-  const assigned = ready != null && unassigned === 0;
+  const assigned = ready != null && unassigned === 0 && !hasUnselectedPlateUnits;
   const arranged = assigned && unplaced === 0;
   const prepared = selected && input.printerCount > 0 && arranged && !isSetup;
   const exported = links.exportArtifact != null;
@@ -214,7 +217,9 @@ function platesTasks(input: PlatesTaskInput): ProductionTask[] {
           : !assigned
             ? unassigned > 0
               ? `${plural(unassigned, "unit needs", "units need")} a printer. Assign by Source layer, directory, color, role, or part.`
-              : "Assign by Source layer, directory, color, role, or part, then prepare the Plates."
+              : hasUnselectedPlateUnits
+                ? "The selection changed. Prepare Plates again to export only the chosen units."
+                : "Assign by Source layer, directory, color, role, or part, then prepare the Plates."
             : unplaced > 0
               ? `${plural(unplaced, "unit does", "units do")} not fit where they are. Review the Plate layout.`
               : ready

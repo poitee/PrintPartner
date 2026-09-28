@@ -25,6 +25,23 @@ export function productionSelectableUnits(
   return [];
 }
 
+export function productionPlateReadiness(
+  workspace: AcceptedPlateWorkspace | undefined,
+  selectedTokens: ReadonlySet<string>,
+) {
+  if (workspace?.kind !== "ready") {
+    return { unassigned: 0, unplaced: 0, hasUnselectedPlateUnits: false };
+  }
+  return {
+    unassigned: workspace.unassigned.filter((unit) => selectedTokens.has(unit.token)).length,
+    unplaced: workspace.unplaced.filter((unit) => selectedTokens.has(unit.token)).length,
+    hasUnselectedPlateUnits: [
+      ...workspace.plates.flatMap((plate) => plate.units),
+      ...workspace.unplaced,
+    ].some((unit) => !selectedTokens.has(unit.token)),
+  };
+}
+
 export function initialMissingSelection(
   units: readonly ProductionSelectableUnit[],
 ): Set<RequiredUnitToken> {
