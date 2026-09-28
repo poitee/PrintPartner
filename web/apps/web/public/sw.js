@@ -6,7 +6,7 @@
  * The worker provides only an offline fallback for top-level navigation.
  */
 
-const SW_VERSION = "v3";
+const SW_VERSION = "v4";
 const OFFLINE_CACHE = `pp-offline-${SW_VERSION}`;
 const OFFLINE_URL = "/offline.html";
 

@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { toast } from "sonner";
 import type { ReferenceShare } from "@print-partner/contracts";
 import { engineFetch } from "../../api/engineTransport";
+import { useProfileSelection } from "../../context/ProfileContext";
 import { useSourcesQuery } from "../../queries/sources";
 import { planRoute } from "../../lib/routes";
 import { Button } from "../ui/button";
@@ -20,10 +22,13 @@ function numericMapping(mapping: Record<string, string>): Record<string, number>
 
 export default function ReferenceShareImport({
   manifest,
+  onImported,
 }: {
   manifest: Extract<ReferenceShare, { kind: "build" }>;
+  onImported?: () => void;
 }) {
   const navigate = useNavigate();
+  const { reloadProfiles, setSelectedProfileId } = useProfileSelection();
   const sourcesQuery = useSourcesQuery();
   const sources = sourcesQuery.data ?? [];
   const [mapping, setMapping] = useState<Record<string, string>>({});
@@ -66,6 +71,13 @@ export default function ReferenceShareImport({
         method: "POST",
         body: JSON.stringify({ manifest, mapping: numericMapping(mapping) }),
       });
+      try {
+        await reloadProfiles({ throwOnError: true });
+      } catch {
+        toast.error("Build imported, but the Build list could not refresh. Refresh if it does not appear.");
+      }
+      setSelectedProfileId(result.profile_id);
+      onImported?.();
       navigate(planRoute(result.profile_id));
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : "Build was not created");

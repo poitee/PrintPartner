@@ -12,6 +12,9 @@ import ReferenceShareImport from "./ReferenceShareImport";
 
 vi.mock("../../api/endpoints/sources", () => ({ fetchSources: vi.fn() }));
 vi.mock("../../api/engineTransport", () => ({ engineFetch: vi.fn() }));
+vi.mock("../../context/ProfileContext", () => ({
+  useProfileSelection: () => ({ reloadProfiles: vi.fn().mockResolvedValue(undefined), setSelectedProfileId: vi.fn() }),
+}));
 
 const manifest = {
   format: "printpartner-reference-share",

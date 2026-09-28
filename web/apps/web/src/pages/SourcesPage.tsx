@@ -589,11 +589,10 @@ export default function SourcesPage() {
 
     if (!sourceKindNeedsArchiveUpload(kind)) return false;
 
-    const zip = pendingZip ?? (await pickZipArchive());
-    if (!zip) {
+    if (!pendingZip) {
       throw new Error(missingSourceUploadMessage(kind));
     }
-    const result = await importSourceArchive(sourceId, zip);
+    const result = await importSourceArchive(sourceId, pendingZip);
     toast.success(
       `Uploaded archive` +
         (result.stl_count != null ? ` (${result.stl_count} STL files)` : ""),
@@ -609,6 +608,12 @@ export default function SourcesPage() {
     try {
       const payload = sourceSavePayloadFromDraft(form);
       if (editId == null) {
+        let pendingZip = form.pendingZip;
+        if (sourceKindNeedsArchiveUpload(form.source_kind) && !pendingZip) {
+          pendingZip = await pickZipArchive();
+          if (!pendingZip) throw new Error(missingSourceUploadMessage(form.source_kind));
+          setForm((draft) => ({ ...draft, pendingZip, pendingFiles: [] }));
+        }
         const created = await createSourceMutation.mutateAsync(payload);
         setEditId(created.id);
         let uploaded: boolean;
@@ -617,7 +622,7 @@ export default function SourcesPage() {
             created.id,
             form.source_kind,
             form.pendingFiles,
-            form.pendingZip,
+            pendingZip,
           );
         } catch (error) {
           const detail = error instanceof Error ? error.message : String(error);
@@ -637,7 +642,7 @@ export default function SourcesPage() {
         const uploaded =
           form.pendingFiles.length > 0 || form.pendingZip
             ? await uploadPendingContent(
-            editId,
+              editId,
               form.source_kind,
               form.pendingFiles,
               form.pendingZip,

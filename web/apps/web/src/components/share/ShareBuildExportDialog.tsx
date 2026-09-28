@@ -84,7 +84,7 @@ export default function ShareBuildExportDialog({ open, onOpenChange, profileId }
         <DialogHeader>
           <DialogTitle>{hostedPlanning ? "Post to the board" : "Share build"}</DialogTitle>
         </DialogHeader>
-        {open && <ReferenceSharePanel key={profileId} profileId={profileId} />}
+        {open && <ReferenceSharePanel key={profileId} profileId={profileId} onImported={() => onOpenChange(false)} />}
         {hostedPlanning ? (
           <div className="space-y-3 border-t border-border pt-3">
             <label className="block text-sm">

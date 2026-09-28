@@ -26,7 +26,7 @@ export default function PwaInstallBanner() {
     <Alert tone="info" role="status" className="items-center shadow-sm">
       <Download aria-hidden />
       <AlertTitle className="font-normal">
-        Install <strong className="font-medium">Print Partner</strong> for offline floor use
+        Install <strong className="font-medium">Print Partner</strong> for quick access on this device
       </AlertTitle>
       <AlertActions>
         <Button

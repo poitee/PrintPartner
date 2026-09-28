@@ -6,6 +6,7 @@ import { sendProblem } from "../lib/api-error.js";
 import { parseCheckoffUnits } from "../services/printer-checkoff.js";
 import { loadFleet } from "../services/printer-fleet.js";
 import {
+  assertPrinterUploadArtifactPath,
   cancelPrinterSendQueueItem,
   enqueuePrinterSend,
   getPrinterSendQueueItem,
@@ -265,6 +266,15 @@ export async function registerPrinterSendQueueRoutes(
     const item = cancelPrinterSendQueueItem(deps.repo, id);
     if (!item) {
       return sendProblem(reply, 409, "Conflict", "Item not cancellable");
+    }
+    try {
+      const artifactPath = assertPrinterUploadArtifactPath(
+        deps.jobs.getExportsDir(request.tenantId),
+        item.artifact_path,
+      );
+      cleanupPrinterUploadArtifactDir(artifactPath);
+    } catch {
+      request.log.warn({ queueItemId: item.id }, "Skipped cleanup of invalid cancelled upload path");
     }
     return { item };
   });

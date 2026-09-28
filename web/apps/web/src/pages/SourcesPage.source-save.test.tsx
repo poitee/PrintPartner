@@ -95,10 +95,7 @@ describe("SourcesPage source creation", () => {
 
   afterEach(cleanup);
 
-  it("retries a failed upload against the Source that was already created", async () => {
-    artifacts.importSourceArchive
-      .mockRejectedValueOnce(new Error("upload interrupted"))
-      .mockResolvedValueOnce({ imported_files: 2, stl_count: 2 });
+  async function openArchiveWizard() {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
@@ -116,24 +113,72 @@ describe("SourcesPage source creation", () => {
     fireEvent.change(screen.getByRole("textbox", { name: "Name" }), {
       target: { value: "Archive Source" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Choose ZIP…" }));
-    expect(await screen.findByText("models.zip")).toBeTruthy();
+  }
+
+  it.each(["before Save", "during Save"])(
+    "retries a failed upload against the same Source when the archive is chosen %s",
+    async (selectionTime) => {
+      const archive = new File(["archive"], "models.zip", { type: "application/zip" });
+      browserFiles.pickZipArchive.mockResolvedValue(archive);
+      artifacts.importSourceArchive
+        .mockRejectedValueOnce(new Error("upload interrupted"))
+        .mockResolvedValueOnce({ imported_files: 2, stl_count: 2 });
+      await openArchiveWizard();
+      if (selectionTime === "before Save") {
+        fireEvent.click(screen.getByRole("button", { name: "Choose ZIP…" }));
+        expect(await screen.findByText("models.zip")).toBeTruthy();
+      }
+
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+      expect((await screen.findByRole("alert")).textContent).toContain(
+        "The Source was created, but its files were not uploaded. upload interrupted Select Save to retry.",
+      );
+      expect(screen.getByRole("heading", { name: "Edit source" })).toBeTruthy();
+      expect(screen.getByText("models.zip")).toBeTruthy();
+      expect(api.createSource).toHaveBeenCalledTimes(1);
+      expect(artifacts.importSourceArchive).toHaveBeenCalledTimes(1);
+
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+      await waitFor(() => {
+        expect(artifacts.importSourceArchive).toHaveBeenCalledTimes(2);
+      });
+      expect(api.createSource).toHaveBeenCalledTimes(1);
+      expect(api.updateSource).toHaveBeenCalledWith(12, expect.any(Object));
+      expect(browserFiles.pickZipArchive).toHaveBeenCalledTimes(1);
+      expect(artifacts.importSourceArchive).toHaveBeenNthCalledWith(1, 12, archive);
+      expect(artifacts.importSourceArchive).toHaveBeenNthCalledWith(2, 12, archive);
+      await waitFor(() => {
+        expect(screen.queryByRole("heading", { name: "Edit source" })).toBeNull();
+      });
+    },
+  );
+
+  it("keeps the draft open when the Save-time archive picker is cancelled", async () => {
+    const archive = new File(["archive"], "models.zip", { type: "application/zip" });
+    browserFiles.pickZipArchive.mockResolvedValueOnce(null).mockResolvedValueOnce(archive);
+    artifacts.importSourceArchive.mockResolvedValue({ imported_files: 2, stl_count: 2 });
+    await openArchiveWizard();
 
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
-    expect((await screen.findByRole("alert")).textContent).toContain(
-      "The Source was created, but its files were not uploaded. upload interrupted Select Save to retry.",
-    );
-    expect(screen.getByRole("heading", { name: "Edit source" })).toBeTruthy();
-    expect(api.createSource).toHaveBeenCalledTimes(1);
-    expect(artifacts.importSourceArchive).toHaveBeenCalledTimes(1);
+    expect((await screen.findByRole("alert")).textContent).toContain("A ZIP archive is required");
+    expect(api.createSource).not.toHaveBeenCalled();
+    expect(screen.getByRole("heading", { name: "Add source" })).toBeTruthy();
+    expect(api.updateSource).not.toHaveBeenCalled();
+    expect(artifacts.importSourceArchive).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => {
-      expect(artifacts.importSourceArchive).toHaveBeenCalledTimes(2);
+      expect(artifacts.importSourceArchive).toHaveBeenCalledWith(12, archive);
     });
+    expect(browserFiles.pickZipArchive).toHaveBeenCalledTimes(2);
     expect(api.createSource).toHaveBeenCalledTimes(1);
-    expect(api.updateSource).toHaveBeenCalledWith(12, expect.any(Object));
+    expect(api.updateSource).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(screen.queryByRole("heading", { name: "Add source" })).toBeNull();
+    });
   });
 });

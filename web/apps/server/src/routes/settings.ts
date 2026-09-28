@@ -48,6 +48,7 @@ import {
   readStoredSourceUpdateIntervalHours,
 } from "../services/source-monitoring-settings.js";
 import { hostedPlanningPolicy } from "../lib/hosted-planning.js";
+import { isRecord } from "../lib/guards.js";
 
 type RouteDeps = { repo: AppRepository; dataDir: string; config?: ServerConfig };
 
@@ -145,12 +146,16 @@ export async function registerSettingsRoutes(app: FastifyInstance, deps: RouteDe
     masked: null,
   }));
 
-  app.put("/settings/github-pat", async (request) => {
-    const body = request.body as { token?: string };
-    if (body.token) deps.repo.setSetting("github_pat", body.token);
+  app.put("/settings/github-pat", async (request, reply) => {
+    const body = request.body;
+    if (!isRecord(body) || typeof body.token !== "string") {
+      return reply.status(400).send({ detail: "Token must be a string" });
+    }
+    const token = body.token.trim();
+    deps.repo.setSetting("github_pat", token);
     return {
-      configured: Boolean(deps.repo.getSetting("github_pat")),
-      masked: body.token ? "****" : null,
+      configured: Boolean(token),
+      masked: token ? "****" : null,
     };
   });
 
