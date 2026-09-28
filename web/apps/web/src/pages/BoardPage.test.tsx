@@ -32,6 +32,9 @@ vi.mock("../context/AuthContext", () => ({
 vi.mock("../context/DateFormatContext", () => ({
   useDateFormat: () => ({ formatDate: (value: string) => value }),
 }));
+vi.mock("../context/ProfileContext", () => ({
+  useProfileSelection: () => ({ reloadProfiles: vi.fn().mockResolvedValue(undefined), setSelectedProfileId: vi.fn() }),
+}));
 
 const postDetail = {
   post: {

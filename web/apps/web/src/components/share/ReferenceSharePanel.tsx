@@ -15,7 +15,7 @@ function downloadBlob(blob: Blob, filename: string): void {
   window.setTimeout(URL.revokeObjectURL.bind(URL, url), 1000);
 }
 
-export default function ReferenceSharePanel({ profileId }: { profileId: number }) {
+export default function ReferenceSharePanel({ profileId, onImported }: { profileId: number; onImported?: () => void }) {
   const [exported, setExported] = useState<ReferenceShareExport | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -103,7 +103,7 @@ export default function ReferenceSharePanel({ profileId }: { profileId: number }
             onChange={(event) => { const file = event.target.files?.[0]; if (file) void validate(file); event.target.value = ""; }} />
         </label>
         {received && <p role="status" className="mt-2 text-sm">{received}</p>}
-        {receivedManifest?.kind === "build" ? <ReferenceShareImport manifest={receivedManifest} /> : null}
+        {receivedManifest?.kind === "build" ? <ReferenceShareImport manifest={receivedManifest} onImported={onImported} /> : null}
       </details>
     </section>
   );
