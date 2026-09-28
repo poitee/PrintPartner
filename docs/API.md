@@ -234,10 +234,16 @@ Typical status codes:
 | `403` | Authenticated but not allowed |
 | `404` | Resource not found |
 | `409` | Revision or state conflict |
-| `413` | Upload exceeds the configured limit |
+| `413` | Request body or upload exceeds the configured limit |
 | `507` | Data filesystem has insufficient space for restore |
 | `429` | Rate limit exceeded |
 | `500` | Unexpected server error |
+
+## Request size limits
+
+JSON request bodies are limited to 1 MiB. Routes that take bulk Plan edits or manifests accept up to 8 MiB: `POST /plans/{id}/save`, `PATCH /plans/{id}/drafts/{draftId}/parts`, `PUT /plans/{id}/drafts/{draftId}/reconciliation`, `POST /plans/{id}/progress/import`, `POST /plans/{id}/plates/initialize`, `PATCH /plans/{id}/production-setup`, `PUT /plans/{id}/kit-manifest`, and `PUT /sources/{id}/repo-manifest`. Reference-sharing routes accept 4 MiB. Assistant action apply and dismiss, and HTTP MCP, accept 96 MiB so a 64 MiB inline base64 file fits.
+
+Multipart uploads have their own limits: Source uploads 256 MiB, kit bundles and print files 64 MiB, rendered Part thumbnails 1 MiB, and backups 20 GiB. Source uploads stream to disk while the limit is enforced.
 
 ## MCP
 
@@ -248,6 +254,8 @@ Use streamable HTTP MCP on the running server:
 ```text
 http://127.0.0.1:8080/api/v1/mcp
 ```
+
+Inline file content in MCP tools, such as `propose_import_source_files` and `propose_import_3mf_checkoff`, is limited to 64 MiB of decoded bytes. Upload larger Sources through `POST /sources/{id}/upload-zip` or `POST /sources/{id}/upload-files`.
 
 See [MCP setup](assistant-mcp.md) for client configuration and the confirmation flow.
 
