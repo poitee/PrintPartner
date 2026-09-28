@@ -1,4 +1,4 @@
-import { useQueries } from "@tanstack/react-query";
+import { queryOptions, useQueries } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef } from "react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
@@ -18,7 +18,11 @@ import { statusTone } from "../../lib/statusTone";
 import { quietPrinterLoadError, quietPrinterStatusMessage } from "../../lib/printerErrorCopy";
 import { usePrinterStatusPollMs } from "../../hooks/usePrinterStatusPollMs";
 import { cn } from "@/lib/utils";
-import { usePrinterStatuses } from "../../queries/printerStatuses";
+import {
+  nextOfflineStreak,
+  printerPollDelay,
+  usePrinterStatuses,
+} from "../../queries/printerStatuses";
 import { useIntegrationsQuery, usePrintersQuery } from "../../queries/printerFleet";
 
 const LIVE_STRIP_HOST_TYPES = new Set<LiveStripHostType>([
@@ -86,10 +90,42 @@ async function reconcileHost(integrationId: string): Promise<ReconcileOutcome> {
   }
 }
 
+type ReconcilePoll = Readonly<{
+  outcome: ReconcileOutcome;
+  offlineStreak: number;
+}>;
+
+function outcomeStatus(outcome: ReconcileOutcome): PrinterHostStatus {
+  return outcome.kind === "success" ? outcome.result.status : outcome.status;
+}
+
 function printerCheckoffReconciliationKey(
   integrationId: string,
 ): readonly ["printer-checkoff-reconcile", string] {
   return ["printer-checkoff-reconcile", integrationId];
+}
+
+function reconcileQuery(integrationId: string, pollMs: number, enabled: boolean) {
+  return queryOptions({
+    queryKey: printerCheckoffReconciliationKey(integrationId),
+    queryFn: async ({ client, queryKey }): Promise<ReconcilePoll> => {
+      const outcome = await reconcileHost(integrationId);
+      const previous = client.getQueryData<ReconcilePoll>(queryKey);
+      return {
+        outcome,
+        offlineStreak: nextOfflineStreak(previous?.offlineStreak, outcomeStatus(outcome)),
+      };
+    },
+    enabled,
+    staleTime: (query) => printerPollDelay(pollMs, query.state.data?.offlineStreak ?? 0),
+    refetchInterval: (query) =>
+      query.state.fetchStatus !== "idle"
+        ? false
+        : printerPollDelay(pollMs, query.state.data?.offlineStreak ?? 0),
+    refetchIntervalInBackground: false,
+    retry: false,
+    gcTime: 0,
+  });
 }
 
 /**
@@ -170,25 +206,17 @@ export default function PrinterLiveStrip({
     [hosts],
   );
   const reconciliation = useQueries({
-    queries: reconcileIntegrationIds.map((integrationId) => ({
-      queryKey: printerCheckoffReconciliationKey(integrationId),
-      queryFn: () => reconcileHost(integrationId),
-      enabled: engineReady,
-      staleTime: pollMs,
-      refetchInterval: pollMs,
-      refetchIntervalInBackground: false,
-      retry: false,
-      gcTime: 0,
-    })),
+    queries: reconcileIntegrationIds.map((integrationId) =>
+      reconcileQuery(integrationId, pollMs, engineReady),
+    ),
     combine: (results) => {
       const outcomes: ReconcileOutcome[] = [];
       const statuses: Record<string, PrinterHostStatus> = {};
       for (const result of results) {
         if (!result.data) continue;
-        outcomes.push(result.data);
-        statuses[result.data.integrationId] = result.data.kind === "success"
-          ? result.data.result.status
-          : result.data.status;
+        const { outcome } = result.data;
+        outcomes.push(outcome);
+        statuses[outcome.integrationId] = outcomeStatus(outcome);
       }
       return {
         outcomes,

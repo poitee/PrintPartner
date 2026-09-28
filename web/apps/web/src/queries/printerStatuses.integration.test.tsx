@@ -212,6 +212,53 @@ describe("shared printer status polling", () => {
     });
   });
 
+  it("backs off an unreachable host and restores its cadence once it answers", async () => {
+    vi.useFakeTimers();
+    let offlinePolls = 3;
+    api.fetchIntegrationStatus.mockImplementation(async (integrationId: string) => {
+      if (integrationId === "healthy-1") return { state: "idle" };
+      if (offlinePolls-- > 1) throw new Error("connection refused");
+      if (offlinePolls === 0) return { state: "offline", message: "host unreachable" };
+      return { state: "idle" };
+    });
+    const calls = (integrationId: string) =>
+      api.fetchIntegrationStatus.mock.calls.filter(([id]) => id === integrationId).length;
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <StatusConsumer integrationIds={["healthy-1", "offline-1"]} label="fleet" />
+      </QueryClientProvider>,
+    );
+    await vi.waitFor(() => {
+      expect(screen.getByTestId("fleet").textContent).toBe("idle,offline");
+    });
+    expect(calls("offline-1")).toBe(1);
+
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+    expect(calls("healthy-1")).toBe(2);
+    expect(calls("offline-1")).toBe(1);
+
+    await act(() => vi.advanceTimersByTimeAsync(61_000));
+    expect(calls("offline-1")).toBe(2);
+
+    await act(() => vi.advanceTimersByTimeAsync(238_000));
+    expect(calls("offline-1")).toBe(2);
+    await act(() => vi.advanceTimersByTimeAsync(2_000));
+    expect(calls("offline-1")).toBe(3);
+
+    await act(() => vi.advanceTimersByTimeAsync(298_000));
+    expect(calls("offline-1")).toBe(3);
+    await act(() => vi.advanceTimersByTimeAsync(2_000));
+    expect(calls("offline-1")).toBe(4);
+    expect(screen.getByTestId("fleet").textContent).toBe("idle,idle");
+
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+    expect(calls("offline-1")).toBe(5);
+  });
+
   it("pauses status polling while the document is in the background", async () => {
     vi.useFakeTimers();
     api.fetchIntegrationStatus.mockResolvedValue({ state: "idle" });

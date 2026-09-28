@@ -212,6 +212,40 @@ describe("PrinterLiveStrip", () => {
     });
   });
 
+  it("backs off reconcile polls for an unreachable host and resumes after it answers", async () => {
+    vi.useFakeTimers();
+    api.fetchPrinters.mockResolvedValue([
+      { id: "core-one", name: "Core One", integration_id: "prusa-1" },
+    ]);
+    api.fetchIntegrations.mockResolvedValue([
+      { id: "prusa-1", name: "Core One", type: "prusalink", config: { enabled: true } },
+    ]);
+    api.reconcilePrinterCheckoff
+      .mockRejectedValueOnce(new Error("connect ECONNREFUSED"))
+      .mockRejectedValueOnce(new Error("connect ECONNREFUSED"))
+      .mockResolvedValue({ status: { state: "idle" }, updates: [], created_links: [], unattributed: [] });
+
+    renderWithQueryClient(
+      <MemoryRouter>
+        <PrinterLiveStrip engineReady />
+      </MemoryRouter>,
+    );
+    await vi.waitFor(() => expect(api.reconcilePrinterCheckoff).toHaveBeenCalledTimes(1));
+
+    await act(() => vi.advanceTimersByTimeAsync(61_000));
+    expect(api.reconcilePrinterCheckoff).toHaveBeenCalledTimes(1);
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+    expect(api.reconcilePrinterCheckoff).toHaveBeenCalledTimes(2);
+
+    await act(() => vi.advanceTimersByTimeAsync(238_000));
+    expect(api.reconcilePrinterCheckoff).toHaveBeenCalledTimes(2);
+    await act(() => vi.advanceTimersByTimeAsync(2_000));
+    expect(api.reconcilePrinterCheckoff).toHaveBeenCalledTimes(3);
+
+    await act(() => vi.advanceTimersByTimeAsync(61_000));
+    expect(api.reconcilePrinterCheckoff).toHaveBeenCalledTimes(4);
+  });
+
   it("notifies each affected Build once per reconcile", async () => {
     api.fetchPrinters.mockResolvedValue([
       { id: "core-one", name: "Core One", integration_id: "prusa-1" },
