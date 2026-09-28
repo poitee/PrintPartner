@@ -603,9 +603,9 @@ export default function SettingsPage() {
                   ? `Could not load token status: ${resourceLoads.githubPat.error}`
                   : "Loading token status…"}
               </p>
-            ) : githubPat?.configured && githubPat.masked ? (
+            ) : githubPat?.configured ? (
               <p className="text-sm text-muted-foreground">
-                Configured: <code className="font-mono text-xs">{githubPat.masked}</code>
+                Configured: <code className="font-mono text-xs">{githubPat.masked ?? "****"}</code>
               </p>
             ) : (
               <p className="text-sm text-muted-foreground">No GitHub PAT configured.</p>
