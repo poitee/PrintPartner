@@ -9,6 +9,7 @@ import { getIntegrationConfig } from "../integrations/store.js";
 import { createPrinterCheckoffLink } from "./printer-checkoff-store.js";
 import { resolvePlanIdForPrinterFetch } from "./printer-plan-bind.js";
 import { loadFleet } from "./printer-fleet.js";
+import { listActivePrinterSendQueue } from "./printer-send-queue-store.js";
 
 const ALLOWED_EXTENSIONS = new Set([".gcode", ".bgcode", ".gco"]);
 
@@ -67,10 +68,18 @@ export async function runPrinterUploadJob(
   input: PrinterUploadJobInput,
   emit: PrinterUploadJobEmit,
 ): Promise<Record<string, unknown>> {
+  const queuedArtifact = input.upload_job_id !== undefined &&
+    listActivePrinterSendQueue(repo).some((item) =>
+      item.state === "sending" &&
+      item.upload_job_id === input.upload_job_id &&
+      item.artifact_path === input.artifact_path);
+  let succeeded = false;
   try {
-    return await runPrinterUploadJobInner(repo, input, emit);
+    const result = await runPrinterUploadJobInner(repo, input, emit);
+    succeeded = true;
+    return result;
   } finally {
-    cleanupPrinterUploadArtifactDir(input.artifact_path);
+    if (succeeded || !queuedArtifact) cleanupPrinterUploadArtifactDir(input.artifact_path);
   }
 }
 
