@@ -8,13 +8,11 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { useQueryClient } from "@tanstack/react-query";
 import type { ProfileSummary } from "@print-partner/contracts";
 import { useSearchParams } from "react-router-dom";
 import { useEngineHealth } from "../hooks/useEngineHealth";
 import { reconcileSelectedProfileId } from "../hooks/profileSelection";
 import { parseProfileParam } from "../hooks/profileUrlSync";
-import { queryKeys } from "../queries/keys";
 import { useProfilesQuery } from "../queries/profiles";
 import { useAuth } from "./AuthContext";
 
@@ -52,7 +50,6 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
   const { health } = useEngineHealth();
   const canLoadProfiles =
     !authLoading && Boolean(health?.ok) && (!multiUser || user !== null);
-  const qc = useQueryClient();
   const [searchParams] = useSearchParams();
   const {
     data: profilesData,
@@ -139,10 +136,9 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
 
   const reloadProfiles = useCallback(async (options?: { throwOnError?: boolean }) => {
     if (!canLoadProfiles) return;
-    await qc.invalidateQueries({ queryKey: queryKeys.profiles });
     const result = await refetch();
     if (options?.throwOnError && result.error) throw result.error;
-  }, [canLoadProfiles, qc, refetch]);
+  }, [canLoadProfiles, refetch]);
 
   const value = useMemo(
     (): ProfileContextValue => ({
