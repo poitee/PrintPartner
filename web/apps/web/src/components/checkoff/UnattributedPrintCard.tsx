@@ -1,11 +1,10 @@
-import { useCallback, useEffect, useId, useState } from "react";
+import { useCallback, useId, useState } from "react";
 import { AlertTriangle, ChevronDown } from "lucide-react";
 import type { UnattributedPrint } from "@print-partner/contracts";
 import {
   claimUnattributedPrint,
   dismissUnattributedPrint,
 } from "../../api/endpoints/checkoff";
-import { fetchProfiles } from "../../api/endpoints/plans";
 import { statusTone } from "../../lib/statusTone";
 import { cn } from "@/lib/utils";
 import { Button } from "../ui/button";
@@ -25,20 +24,19 @@ type ProfileOption = {
 
 type Props = {
   print: UnattributedPrint;
-  profiles?: readonly ProfileOption[];
-  onClaimed?: () => void;
+  profiles: readonly ProfileOption[];
+  onClaimed?: (profileId: number) => void;
   onDismissed?: () => void;
 };
 
 export default function UnattributedPrintCard({
   print,
-  profiles: profilesProp,
+  profiles,
   onClaimed,
   onDismissed,
 }: Props) {
   const detailsId = useId();
   const [expanded, setExpanded] = useState(false);
-  const [fetchedProfiles, setFetchedProfiles] = useState<ProfileOption[]>([]);
   const [selectedProfileId, setSelectedProfileId] = useState<string>("");
   const [selectedStlBasenames, setSelectedStlBasenames] = useState<Set<string>>(
     () => new Set(print.candidates.map((candidate) => candidate.stl_basename)),
@@ -46,16 +44,6 @@ export default function UnattributedPrintCard({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (profilesProp) return;
-    fetchProfiles()
-      .then(setFetchedProfiles)
-      .catch((e) => {
-        setError(e instanceof Error ? e.message : "Could not load plans");
-      });
-  }, [profilesProp]);
-
-  const profiles = profilesProp ?? fetchedProfiles;
   const hasMatches = print.candidates.some((c) => c.matching_filenames.length > 0);
 
   const handleClaim = useCallback(async (scope: "whole_plate" | "selected_files") => {
@@ -71,7 +59,7 @@ export default function UnattributedPrintCard({
         profileId,
         scope === "selected_files" ? { selected_stl_basenames: selected } : undefined,
       );
-      onClaimed?.();
+      onClaimed?.(profileId);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to claim");
     } finally {

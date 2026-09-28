@@ -1,7 +1,7 @@
 # Private invite host for hosted planning.
 #
 # This is not docker-compose.saas.yml. That file is a development stack with
-# anonymous access, Postgres, and S3. Production refuses SAAS_ALLOW_ANONYMOUS=1.
+# anonymous access and Postgres. Production refuses SAAS_ALLOW_ANONYMOUS=1.
 #
 # Copy hosted-planning.env.example to hosted-planning.env, pin the public
 # origin, set SESSION_SECRET, then:

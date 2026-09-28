@@ -24,14 +24,17 @@ vi.mock("../../api/endpoints/integrations", () => ({
 vi.mock("../../api/endpoints/checkoff", () => ({
   reconcilePrinterCheckoff: api.reconcilePrinterCheckoff,
 }));
+const statusPoll = vi.hoisted(() => ({ ms: 60_000 }));
+
 vi.mock("../../hooks/usePrinterStatusPollMs", () => ({
-  usePrinterStatusPollMs: () => 60_000,
+  usePrinterStatusPollMs: () => statusPoll.ms,
 }));
 vi.mock("sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn() },
 }));
 
 afterEach(() => {
+  statusPoll.ms = 60_000;
   vi.useRealTimers();
   cleanup();
   vi.clearAllMocks();
@@ -210,6 +213,89 @@ describe("PrinterLiveStrip", () => {
       expect(onCheckoffUpdate).toHaveBeenCalledWith(7);
       expect(onUnattributedUpdate).not.toHaveBeenCalled();
     });
+  });
+
+  it("backs off reconcile polls for an unreachable host up to a minute and resumes after it answers", async () => {
+    vi.useFakeTimers();
+    statusPoll.ms = 5_000;
+    api.fetchPrinters.mockResolvedValue([
+      { id: "core-one", name: "Core One", integration_id: "prusa-1" },
+    ]);
+    api.fetchIntegrations.mockResolvedValue([
+      { id: "prusa-1", name: "Core One", type: "prusalink", config: { enabled: true } },
+    ]);
+    const refused = new Error("connect ECONNREFUSED");
+    api.reconcilePrinterCheckoff
+      .mockRejectedValueOnce(refused)
+      .mockRejectedValueOnce(refused)
+      .mockRejectedValueOnce(refused)
+      .mockRejectedValueOnce(refused)
+      .mockResolvedValue({ status: { state: "idle" }, updates: [], created_links: [], unattributed: [] });
+    const reconciles = () => api.reconcilePrinterCheckoff.mock.calls.length;
+
+    renderWithQueryClient(
+      <MemoryRouter>
+        <PrinterLiveStrip engineReady />
+      </MemoryRouter>,
+    );
+    await vi.waitFor(() => expect(reconciles()).toBe(1));
+
+    for (const [waitMs, expected] of [
+      [9_000, 1], [1_000, 2],
+      [19_000, 2], [1_000, 3],
+      [39_000, 3], [1_000, 4],
+      [59_000, 4], [1_000, 5],
+      [5_000, 6],
+    ] as const) {
+      await act(() => vi.advanceTimersByTimeAsync(waitMs));
+      expect(reconciles()).toBe(expected);
+    }
+  });
+
+  it("notifies each affected Build once per reconcile", async () => {
+    api.fetchPrinters.mockResolvedValue([
+      { id: "core-one", name: "Core One", integration_id: "prusa-1" },
+    ]);
+    api.fetchIntegrations.mockResolvedValue([
+      { id: "prusa-1", name: "Core One", type: "prusalink", config: { enabled: true } },
+    ]);
+    const update = (linkId: string, profileId: number) => ({
+      link_id: linkId,
+      profile_id: profileId,
+      event: "awaiting_verify",
+      host_name: "Core One",
+      host_outcome: "complete",
+      filename: `${linkId}.bgcode`,
+    });
+    const created = (linkId: string, profileId: number) => ({
+      id: linkId,
+      profile_id: profileId,
+      integration_id: "prusa-1",
+      printer_id: "core-one",
+      host_name: "Core One",
+      filename: `${linkId}.bgcode`,
+      units: [{ part_id: 9, unit_index: 0 }],
+      state: "watching",
+      saw_active: true,
+      created_at: new Date().toISOString(),
+    });
+    api.reconcilePrinterCheckoff.mockResolvedValue({
+      status: { state: "idle" },
+      updates: [update("link-1", 7), update("link-2", 7), update("link-3", 8)],
+      created_links: [created("link-4", 7), created("link-5", 8)],
+      unattributed: [],
+    });
+    const onCheckoffUpdate = vi.fn();
+
+    renderWithQueryClient(
+      <MemoryRouter>
+        <PrinterLiveStrip engineReady onCheckoffUpdate={onCheckoffUpdate} />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(onCheckoffUpdate).toHaveBeenCalledTimes(2));
+    expect(onCheckoffUpdate).toHaveBeenNthCalledWith(1, 7);
+    expect(onCheckoffUpdate).toHaveBeenNthCalledWith(2, 8);
   });
 
   it("refreshes changed unattributed lists but not repeated identical polls", async () => {

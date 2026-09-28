@@ -1,7 +1,8 @@
-import { useEffect, useId, useState } from "react";
+import { useId, useState } from "react";
 import type { ReviewPart } from "../../api/endpoints/planManifests";
-import { fetchFilamentCatalog, fetchRoleFilaments, type FilamentCatalog, type RoleFilamentRow } from "../../api/endpoints/filaments";
+import { useFilamentCatalogQuery } from "../../queries/filaments";
 import { usePatchPartMutation } from "../../queries/planReview";
+import { useRoleFilamentsQuery } from "../../queries/roleFilaments";
 import { catalogColorGroups } from "../FilamentSwatch";
 import { Button } from "../ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../ui/dialog";
@@ -15,19 +16,18 @@ export default function PartColorDialog({ part, profileId, onClose }: {
 }) {
   const id = useId();
   const mutation = usePatchPartMutation(profileId);
-  const [options, setOptions] = useState<{ roles: RoleFilamentRow[]; catalog: FilamentCatalog } | null>(null);
-  const [loadError, setLoadError] = useState(false);
-  const [attempt, setAttempt] = useState(0);
+  const rolesQuery = useRoleFilamentsQuery(profileId);
+  const catalogQuery = useFilamentCatalogQuery();
+  const options = rolesQuery.data && catalogQuery.data
+    ? { roles: rolesQuery.data, catalog: catalogQuery.data }
+    : null;
+  const loadError = rolesQuery.isError || catalogQuery.isError;
+  const retryLoad = () => {
+    if (rolesQuery.isError) void rolesQuery.refetch();
+    if (catalogQuery.isError) void catalogQuery.refetch();
+  };
   const [selection, setSelection] = useState("current");
   const [hex, setHex] = useState(part.filament_hex ?? "#808080");
-  useEffect(() => {
-    let active = true;
-    setLoadError(false);
-    void Promise.all([fetchRoleFilaments(profileId), fetchFilamentCatalog()]).then(([roles, catalog]) => {
-      if (active) setOptions({ roles, catalog });
-    }).catch(() => { if (active) setLoadError(true); });
-    return () => { active = false; };
-  }, [profileId, attempt]);
 
   const choices = new Map<string, ColorChoice>();
   options?.roles.forEach((role, index) => choices.set(`build:${index}`, { colorId: role.filament_color_id, hex: role.filament_custom_hex ?? role.filament_hex }));
@@ -55,7 +55,7 @@ export default function PartColorDialog({ part, profileId, onClose }: {
         <DialogDescription className="break-all">{part.filename}. This changes only this part, not its {part.role || "primary"} role or the other parts.</DialogDescription>
       </DialogHeader>
       <p className="text-sm">Current color: {part.filament_display || part.filament_hex || "Unassigned"}</p>
-      {loadError ? <div role="alert">Could not load colors. <Button variant="outline" onClick={() => setAttempt(attempt + 1)}>Retry</Button></div> : !options ? <p role="status">Loading colors…</p> : null}
+      {loadError ? <div role="alert">Could not load colors. <Button variant="outline" onClick={retryLoad}>Retry</Button></div> : !options ? <p role="status">Loading colors…</p> : null}
       <fieldset disabled={mutation.isPending} className="space-y-3 min-w-0">
         <label htmlFor={`${id}-choice`} className="block text-sm font-medium">Part color</label>
         <select id={`${id}-choice`} className="w-full min-w-0 rounded border bg-background p-2" value={selection} onChange={(event) => setSelection(event.target.value)}>

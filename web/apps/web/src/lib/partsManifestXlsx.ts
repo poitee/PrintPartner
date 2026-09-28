@@ -4,7 +4,6 @@
  * + numeric cells so Excel / Google Sheets exports round-trip.
  */
 
-import JSZip from "jszip";
 import {
   PARTS_MANIFEST_HEADERS,
   neutralizeFormulaPrefix,
@@ -75,6 +74,7 @@ function sheetXml(rows: PartsManifestRow[]): string {
 }
 
 export async function partsManifestToXlsxBlob(rows: PartsManifestRow[]): Promise<Blob> {
+  const { default: JSZip } = await import("jszip");
   const zip = new JSZip();
   zip.file(
     "[Content_Types].xml",
@@ -219,6 +219,7 @@ export async function parsePartsManifestXlsx(data: ArrayBuffer): Promise<{
   rows: PartsManifestRow[];
   errors: ManifestParseIssue[];
 }> {
+  const { default: JSZip } = await import("jszip");
   const zip = await JSZip.loadAsync(data);
   const sheetEntry =
     zip.file("xl/worksheets/sheet1.xml") ??

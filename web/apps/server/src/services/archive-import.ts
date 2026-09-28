@@ -1,9 +1,22 @@
 import { Unzip, UnzipInflate } from "fflate";
-import { appendFileSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  createWriteStream,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
+import { Transform, type Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import { fileChunks } from "../lib/byte-chunks.js";
 import { chargeTenantDiskBytes } from "../lib/tenant-disk-quota.js";
 import { extractThreeMfMeshes } from "./three-mf-import.js";
-import { MAX_SOURCE_UPLOAD_BYTES } from "./upload-limits.js";
+import { MAX_SOURCE_UPLOAD_BYTES, SOURCE_UPLOAD_TOO_LARGE_DETAIL } from "./upload-limits.js";
 
 const MAX_ZIP_ENTRIES = 10_000;
 const MAX_ZIP_UNCOMPRESSED_BYTES = 1024 * 1024 * 1024;
@@ -20,7 +33,7 @@ type ExtractLimits = {
  * validated against zip-slip, and total uncompressed size / entry count are
  * bounded against zip bombs.
  */
-function extractEntries(bytes: Buffer, destDir: string, limits: ExtractLimits = {}): number {
+export function extractZipFile(zipPath: string, destDir: string, limits: ExtractLimits = {}): number {
   const maxEntries = limits.maxEntries ?? MAX_ZIP_ENTRIES;
   const maxBytes = limits.maxUncompressedBytes ?? MAX_ZIP_UNCOMPRESSED_BYTES;
   const base = resolve(destDir);
@@ -84,9 +97,9 @@ function extractEntries(bytes: Buffer, destDir: string, limits: ExtractLimits = 
   });
   unzip.register(UnzipInflate);
   try {
-    for (let offset = 0; offset < bytes.length && !failure; offset += 4_096) {
-      const end = Math.min(bytes.length, offset + 4_096);
-      unzip.push(bytes.subarray(offset, end), end === bytes.length);
+    for (const [chunk, final] of fileChunks(zipPath)) {
+      unzip.push(chunk, final);
+      if (failure) break;
     }
   } catch (error) {
     if (!failure) throw error;
@@ -95,8 +108,36 @@ function extractEntries(bytes: Buffer, destDir: string, limits: ExtractLimits = 
   return stlCount;
 }
 
-export function extractZipBuffer(buffer: Buffer, destDir: string, limits?: ExtractLimits): number {
-  return extractEntries(buffer, destDir, limits);
+export class SourceUploadTooLargeError extends Error {
+  constructor() {
+    super(SOURCE_UPLOAD_TOO_LARGE_DETAIL);
+    this.name = "SourceUploadTooLargeError";
+  }
+}
+
+/** Staging sits beside the Source directories so publishing is a rename, outside the per-Source quota scan. */
+export function createSourceUploadStaging(sourcesDir: string): string {
+  mkdirSync(sourcesDir, { recursive: true });
+  return mkdtempSync(join(sourcesDir, ".upload-"));
+}
+
+/** Write one uploaded file to disk, failing as soon as it passes the byte budget. */
+export async function streamSourceUpload(
+  file: Readable & { truncated?: boolean },
+  path: string,
+  maxBytes: number,
+): Promise<number> {
+  let written = 0;
+  const budget = new Transform({
+    transform(chunk: Buffer, _encoding, done) {
+      written += chunk.length;
+      if (written > maxBytes) done(new SourceUploadTooLargeError());
+      else done(null, chunk);
+    },
+  });
+  await pipeline(file, budget, createWriteStream(path, { flags: "wx" }));
+  if (file.truncated) throw new SourceUploadTooLargeError();
+  return written;
 }
 
 function sanitizeRelativeEntryPath(relativePath: string): string {
@@ -171,22 +212,24 @@ function expandThreeMfFiles(extractDir: string, maxTotalBytes = MAX_ZIP_UNCOMPRE
   let remainingBytes = maxTotalBytes - storedBytes(extractDir);
   if (remainingBytes < 0) throw new Error("Uploaded source exceeds the total size limit");
   for (const path of paths) {
-    const result = extractThreeMfMeshes(readFileSync(path), extractDir, path, { maxOutputBytes: remainingBytes });
+    const result = extractThreeMfMeshes(fileChunks(path), extractDir, path, { maxOutputBytes: remainingBytes });
     derivedStlCount += result.files.length;
     remainingBytes -= result.files.reduce((total, file) => total + file.byteSize, 0);
   }
   return derivedStlCount;
 }
 
+/** Move staged uploads into the Source's file tree. */
 export function writeUploadedFiles(
-  files: Array<{ relativePath: string; buffer: Buffer }>,
+  files: Array<{ relativePath: string; path: string }>,
   sourcesDir: string,
   sourceId: number,
 ): UploadedFilesResult {
   if (!files.length) throw new Error("At least one file is required");
-  const uploadedBytes = files.reduce((total, file) => total + file.buffer.length, 0);
+  const staged = files.map((file) => ({ ...file, bytes: statSync(file.path).size }));
+  const uploadedBytes = staged.reduce((total, file) => total + file.bytes, 0);
   if (uploadedBytes > MAX_SOURCE_UPLOAD_BYTES) {
-    throw new Error("Uploaded source exceeds the 256 MiB upload limit");
+    throw new SourceUploadTooLargeError();
   }
   const dir = join(sourcesDir, String(sourceId));
   mkdirSync(dir, { recursive: true });
@@ -200,11 +243,11 @@ export function writeUploadedFiles(
   const base = resolve(extractDir);
   let stlCount = 0;
   try {
-    for (const file of files) {
+    for (const file of staged) {
       const target = resolveSafeTarget(base, file.relativePath);
       mkdirSync(dirname(target), { recursive: true });
-      chargeTenantDiskBytes(file.buffer.byteLength);
-      writeFileSync(target, file.buffer);
+      chargeTenantDiskBytes(file.bytes);
+      renameSync(file.path, target);
       if (file.relativePath.toLowerCase().endsWith(".stl")) stlCount += 1;
     }
     stlCount += expandThreeMfFiles(extractDir);
@@ -220,7 +263,8 @@ export function writeUploadedFiles(
   };
 }
 
-export function writeUploadedZip(buffer: Buffer, sourcesDir: string, sourceId: number): string {
+/** Move a staged ZIP into the Source directory and extract it. */
+export function writeUploadedZip(stagedZip: string, sourcesDir: string, sourceId: number): string {
   const dir = join(sourcesDir, String(sourceId));
   mkdirSync(dir, { recursive: true });
   const zipPath = join(dir, "upload.zip");
@@ -231,9 +275,9 @@ export function writeUploadedZip(buffer: Buffer, sourcesDir: string, sourceId: n
     /* ignore */
   }
   try {
-    chargeTenantDiskBytes(buffer.byteLength);
-    writeFileSync(zipPath, buffer);
-    extractZipBuffer(buffer, extractDir);
+    chargeTenantDiskBytes(statSync(stagedZip).size);
+    renameSync(stagedZip, zipPath);
+    extractZipFile(zipPath, extractDir);
     expandThreeMfFiles(extractDir);
   } catch (error) {
     rmSync(zipPath, { force: true });

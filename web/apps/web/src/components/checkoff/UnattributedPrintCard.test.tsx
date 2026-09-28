@@ -7,14 +7,8 @@ import type { UnattributedPrint } from "@print-partner/contracts";
 import UnattributedPrintCard from "./UnattributedPrintCard";
 
 const api = vi.hoisted(() => ({
-  fetchProfiles: vi.fn(),
   claimUnattributedPrint: vi.fn(),
   dismissUnattributedPrint: vi.fn(),
-}));
-
-vi.mock("../../api/endpoints/plans", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../api/endpoints/plans")>()),
-  fetchProfiles: api.fetchProfiles,
 }));
 
 vi.mock("../../api/endpoints/checkoff", async (importOriginal) => ({
@@ -49,7 +43,6 @@ vi.mock("../ui/select", () => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
-  api.fetchProfiles.mockResolvedValue([]);
   api.claimUnattributedPrint.mockResolvedValue({
     ok: true,
     link: { id: "link-one", units: [{ part_id: 9, unit_index: 0 }] },
@@ -81,9 +74,11 @@ const print = {
   ],
 } satisfies UnattributedPrint;
 
+const profiles = [{ id: 4, name: "Voron Build" }];
+
 describe("UnattributedPrintCard", () => {
   it("starts as a compact flair and opens to show detected files", () => {
-    render(<UnattributedPrintCard print={print} />);
+    render(<UnattributedPrintCard print={print} profiles={[]} />);
 
     const flair = screen.getByRole("button", { name: /Unmatched printer file/ });
     expect(flair.getAttribute("aria-expanded")).toBe("false");
@@ -99,8 +94,7 @@ describe("UnattributedPrintCard", () => {
   });
 
   it("claims a whole plate for manual verification without confirming quantities", async () => {
-    api.fetchProfiles.mockResolvedValue([{ id: 4, name: "Voron Build" }]);
-    render(<UnattributedPrintCard print={print} />);
+    render(<UnattributedPrintCard print={print} profiles={profiles} />);
 
     fireEvent.click(screen.getByRole("button", { name: /Unmatched printer file/ }));
     fireEvent.change(await screen.findByRole("combobox", { name: "Select a plan" }), {
@@ -113,24 +107,8 @@ describe("UnattributedPrintCard", () => {
     });
   });
 
-  it("still offers a plan picker when the parent already has profiles and fetch fails", async () => {
-    api.fetchProfiles.mockRejectedValue(new Error("profiles unavailable"));
-    render(
-      <UnattributedPrintCard
-        print={print}
-        profiles={[{ id: 4, name: "Voron Build" }]}
-      />,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: /Unmatched printer file/ }));
-
-    expect(await screen.findByRole("combobox", { name: "Select a plan" })).toBeTruthy();
-    expect(screen.queryByText("profiles unavailable")).toBeNull();
-  });
-
   it("clears busy after a successful claim that stays mounted", async () => {
-    api.fetchProfiles.mockResolvedValue([{ id: 4, name: "Voron Build" }]);
-    render(<UnattributedPrintCard print={print} />);
+    render(<UnattributedPrintCard print={print} profiles={profiles} />);
 
     fireEvent.click(screen.getByRole("button", { name: /Unmatched printer file/ }));
     fireEvent.change(await screen.findByRole("combobox", { name: "Select a plan" }), {
@@ -145,8 +123,7 @@ describe("UnattributedPrintCard", () => {
   });
 
   it("claims only selected files for a partial plate", async () => {
-    api.fetchProfiles.mockResolvedValue([{ id: 4, name: "Voron Build" }]);
-    render(<UnattributedPrintCard print={print} />);
+    render(<UnattributedPrintCard print={print} profiles={profiles} />);
 
     fireEvent.click(screen.getByRole("button", { name: /Unmatched printer file/ }));
     fireEvent.change(await screen.findByRole("combobox", { name: "Select a plan" }), {

@@ -15,7 +15,6 @@ import { AppRepository } from "./repository.js";
 import { MAX_PLAN_DRAFT_LIFECYCLE_VERSION } from "../services/plan-drafts.js";
 import { acceptedPlanBasis } from "./accepted-plan-progress.js";
 import { parseRequiredUnitToken } from "../services/required-units.js";
-import { currentSchemaVersion } from "./schema.js";
 import { acceptPlanForTest, editAcceptedPartsForTest } from "../test/accept-plan.js";
 import { saveKitManifest } from "../services/kit-manifest-store.js";
 
@@ -2868,130 +2867,6 @@ selections:
       expect(raw.prepare(`SELECT count(*) AS count FROM ${table}`).get()).toEqual({ count: 0 });
     }
     database.close();
-  });
-
-  it("upgrades a v23 draft without rewriting its v1 snapshot", () => {
-    const { database, raw, profile, draft, root } = editableDraftFixture();
-    raw.exec(`
-      DROP TRIGGER IF EXISTS trg_plan_apply_requests_immutable_delete;
-      DROP TRIGGER IF EXISTS trg_plan_apply_requests_immutable_update;
-      DROP TRIGGER IF EXISTS trg_plan_apply_requests_ownership_insert;
-      DROP TRIGGER IF EXISTS trg_plan_drafts_consumption_update;
-      DROP TRIGGER IF EXISTS trg_plan_drafts_consumption_insert;
-      DROP TABLE plan_apply_requests;
-      ALTER TABLE plan_drafts DROP COLUMN consumed_at;
-      ALTER TABLE plan_drafts DROP COLUMN consumed_revision_id;
-      DROP TRIGGER IF EXISTS trg_plan_drafts_required_unit_selection_update;
-      DROP TRIGGER IF EXISTS trg_plan_draft_required_unit_assignments_immutable_delete;
-      DROP TRIGGER IF EXISTS trg_plan_draft_required_unit_assignments_immutable_update;
-      DROP TRIGGER IF EXISTS trg_plan_draft_required_unit_assignments_ownership_insert;
-      DROP TRIGGER IF EXISTS trg_plan_draft_required_unit_decisions_immutable_delete;
-      DROP TRIGGER IF EXISTS trg_plan_draft_required_unit_decisions_immutable_update;
-      DROP TRIGGER IF EXISTS trg_plan_draft_required_unit_decisions_ownership_insert;
-      DROP TRIGGER IF EXISTS trg_plan_draft_required_unit_reconciliations_immutable_delete;
-      DROP TRIGGER IF EXISTS trg_plan_draft_required_unit_reconciliations_finalize;
-      DROP TRIGGER IF EXISTS trg_plan_draft_required_unit_reconciliations_ownership_insert;
-      DROP TABLE plan_draft_required_unit_assignments;
-      DROP TABLE plan_draft_required_unit_decisions;
-      DROP TABLE plan_draft_required_unit_reconciliations;
-      ALTER TABLE plan_drafts DROP COLUMN current_required_unit_reconciliation_id;
-      UPDATE app_settings SET value = '23'
-       WHERE tenant_id = 'default' AND key = 'schema_version';
-    `);
-    database.close();
-
-    const migrated = new SqliteDatabase(root);
-    migrated.connect();
-    const migratedRepo = new AppRepository(getDb(migrated), "default", migrated.reposDir);
-    expect(migratedRepo.getPlanDraft(profile.id, draft.id)).toEqual(draft);
-    expect(
-      (migrated as unknown as { sqlite: Database.Database }).sqlite
-        .prepare(
-          `SELECT value FROM app_settings
-            WHERE tenant_id = 'default' AND key = 'schema_version'`,
-        )
-        .get(),
-    ).toEqual({ value: String(currentSchemaVersion) });
-    migrated.close();
-  });
-
-  it("upgrades v24 drafts with legacy consumption and no invented receipt", () => {
-    const { database, raw, profile, draft, root } = editableDraftFixture();
-    raw.exec("DROP TRIGGER trg_plan_drafts_consumption_update");
-    raw
-      .prepare(
-        "UPDATE plan_drafts SET state = 'consumed', lifecycle_version = 1 WHERE id = ?",
-      )
-      .run(draft.id);
-    raw.prepare(
-      `INSERT INTO plan_drafts (
-        tenant_id, profile_id, base_revision_id, base_plan_version, state,
-        lifecycle_version, rebased_from_draft_id, rebased_from_lifecycle_version,
-        rebased_from_snapshot_digest, current_required_unit_reconciliation_id,
-        digest_format, snapshot_digest, created_by, idempotency_key, created_at
-      ) SELECT tenant_id, profile_id, base_revision_id, base_plan_version, 'open', 0,
-        NULL, NULL, NULL, NULL, digest_format, snapshot_digest, created_by, 'v24-open',
-        created_at FROM plan_drafts WHERE id = ?`,
-    ).run(draft.id);
-    raw.prepare(
-      `INSERT INTO plan_drafts (
-        tenant_id, profile_id, base_revision_id, base_plan_version, state,
-        lifecycle_version, rebased_from_draft_id, rebased_from_lifecycle_version,
-        rebased_from_snapshot_digest, current_required_unit_reconciliation_id,
-        digest_format, snapshot_digest, created_by, idempotency_key, created_at
-      ) SELECT tenant_id, profile_id, base_revision_id, base_plan_version, 'abandoned', 1,
-        NULL, NULL, NULL, NULL, digest_format, snapshot_digest, created_by, 'v24-abandoned',
-        created_at FROM plan_drafts WHERE id = ?`,
-    ).run(draft.id);
-    raw.exec(`
-      DROP TRIGGER IF EXISTS trg_plan_apply_requests_immutable_delete;
-      DROP TRIGGER IF EXISTS trg_plan_apply_requests_immutable_update;
-      DROP TRIGGER IF EXISTS trg_plan_apply_requests_ownership_insert;
-      DROP TRIGGER IF EXISTS trg_plan_drafts_consumption_insert;
-      DROP TABLE plan_apply_requests;
-      ALTER TABLE plan_drafts DROP COLUMN consumed_at;
-      ALTER TABLE plan_drafts DROP COLUMN consumed_revision_id;
-      UPDATE app_settings SET value = '24'
-       WHERE tenant_id = 'default' AND key = 'schema_version';
-    `);
-    database.close();
-
-    const migrated = new SqliteDatabase(root);
-    migrated.connect();
-    const migratedRaw = (migrated as unknown as { sqlite: Database.Database }).sqlite;
-    const migratedRepo = new AppRepository(getDb(migrated), "default", migrated.reposDir);
-    expect(migratedRepo.getPlanDraft(profile.id, draft.id)).toMatchObject({
-      state: "consumed",
-      consumedRevisionId: null,
-      consumedAt: null,
-    });
-    expect(
-      migratedRaw.prepare("SELECT state FROM plan_drafts ORDER BY id").all(),
-    ).toEqual([{ state: "consumed" }, { state: "open" }, { state: "abandoned" }]);
-    expect(migratedRaw.prepare("SELECT count(*) AS count FROM plan_apply_requests").get()).toEqual({
-      count: 0,
-    });
-    expect(() =>
-      migratedRaw.prepare(
-        `INSERT INTO plan_drafts (
-          tenant_id, profile_id, base_revision_id, base_plan_version, state,
-          lifecycle_version, digest_format, snapshot_digest, created_by,
-          idempotency_key, created_at
-        ) SELECT tenant_id, profile_id, base_revision_id, base_plan_version, 'consumed',
-          1, digest_format, snapshot_digest, created_by, 'new-legacy-consumed', created_at
-          FROM plan_drafts WHERE id = ?`,
-      ).run(draft.id),
-    ).toThrow(/consumption/i);
-    migrated.close();
-
-    const reopened = new SqliteDatabase(root);
-    reopened.connect();
-    expect(
-      (reopened as unknown as { sqlite: Database.Database }).sqlite
-        .prepare("SELECT value FROM app_settings WHERE key = 'schema_version'")
-        .get(),
-    ).toEqual({ value: String(currentSchemaVersion) });
-    reopened.close();
   });
 
   it("appends an unresolved reconciliation before a complete ready replacement", () => {

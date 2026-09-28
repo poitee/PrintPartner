@@ -28,7 +28,6 @@ Sensitive values include:
 - session and Basic authentication secrets
 - OAuth client secrets
 - SMTP credentials
-- S3 credentials
 - GitHub personal access tokens
 - printer and Spoolman credentials
 
@@ -52,9 +51,9 @@ Review every integration URL before saving it. Keep printer firmware and unauthe
 
 ## Uploads and archives
 
-Zip files, Source archives, backups, and print artifacts are untrusted input. The server applies route-specific upload, field, file-count, and expansion limits. Ordinary JSON requests are limited to 16 MiB. Source uploads are limited to 256 MiB, kit and print-file uploads to 64 MiB, and backup uploads to 20 GiB. Source archives can expand to at most 1 GiB of stored content. The server also normalizes filenames and resolves extracted files under controlled directories.
+Zip files, Source archives, backups, and print artifacts are untrusted input. The server applies route-specific upload, field, file-count, and expansion limits. Ordinary JSON requests are limited to 1 MiB, bulk Plan and manifest edits to 8 MiB, and assistant or MCP action bodies to 96 MiB. MCP inline files are limited to 64 MiB. Source uploads are limited to 256 MiB, kit and print-file uploads to 64 MiB, rendered thumbnails to 1 MiB, and backup uploads to 20 GiB. Source archives can expand to at most 1 GiB of stored content. The server also normalizes filenames and resolves extracted files under controlled directories.
 
-These limits reduce resource-exhaustion risk, but they are not storage quotas or reservations. Buffered chunks and archive processing can temporarily require additional memory or disk space.
+These limits reduce resource-exhaustion risk, but they are not storage quotas or reservations. Source and backup uploads stream to disk; kit bundles, print files, thumbnails, and JSON bodies are held in memory up to their limits. Archive processing can temporarily require additional disk space.
 
 Operators should also:
 

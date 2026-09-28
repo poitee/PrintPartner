@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { cleanup, fireEvent, render as renderView, screen } from "@testing-library/react";
+import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import type { ReferenceShare } from "@print-partner/contracts";
@@ -30,6 +32,11 @@ const manifest = {
   replacements: {},
   parts: [{ source: "source-1", path: "parts/a.stl", quantity: 1, included: true, role: "primary", color: null }],
 } as Extract<ReferenceShare, { kind: "build" }>;
+
+function render(children: ReactNode) {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return renderView(<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>);
+}
 
 describe("ReferenceShareImport", () => {
   afterEach(() => {
@@ -70,7 +77,8 @@ describe("ReferenceShareImport", () => {
         </Routes>
       </MemoryRouter>,
     );
-    fireEvent.change(await screen.findByLabelText("Map Voron"), { target: { value: "9" } });
+    await screen.findByRole("option", { name: "Acquired Voron" });
+    fireEvent.change(screen.getByLabelText("Map Voron"), { target: { value: "9" } });
     expect(await screen.findByText("parts/a.stl: Ready")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Add to my Builds" }));
     expect(await screen.findByText("Plan opened")).toBeTruthy();

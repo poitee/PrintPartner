@@ -25,13 +25,14 @@ test("published server accepts the application's Docker release identity", () =>
 test("published server reads its PostgreSQL migration before opening a database connection", async (t) => {
   const reachedDatabase = new Error("migration reached database boundary");
   const query = t.mock.method(pg.Pool.prototype, "query", async (sql) => {
+    if (sql === "SELECT to_regclass('app_settings') AS name") return { rows: [{ name: null }] };
     assert.match(sql, /^CREATE TABLE IF NOT EXISTS projects\s*\(/);
     throw reachedDatabase;
   });
   const database = new PostgresDatabase("postgresql://unused", tmpdir());
   try {
     await assert.rejects(database.connect(), (error) => error === reachedDatabase);
-    assert.equal(query.mock.callCount(), 1);
+    assert.equal(query.mock.callCount(), 2);
   } finally {
     await database.close();
   }

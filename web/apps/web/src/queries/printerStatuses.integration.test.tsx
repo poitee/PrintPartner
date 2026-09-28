@@ -24,8 +24,10 @@ vi.mock("../hooks/useEngineHealth", () => ({
   useEngineHealth: () => ({ health: { ok: true }, error: null, loading: false }),
 }));
 
+const statusPoll = vi.hoisted(() => ({ ms: 60_000 }));
+
 vi.mock("../hooks/usePrinterStatusPollMs", () => ({
-  usePrinterStatusPollMs: () => 60_000,
+  usePrinterStatusPollMs: () => statusPoll.ms,
 }));
 
 vi.mock("../context/ProfileContext", () => ({
@@ -51,6 +53,7 @@ vi.mock("sonner", () => ({
 }));
 
 afterEach(() => {
+  statusPoll.ms = 60_000;
   cleanup();
   focusManager.setFocused(undefined);
   vi.useRealTimers();
@@ -210,6 +213,56 @@ describe("shared printer status polling", () => {
     await waitFor(() => {
       expect(screen.getByTestId("fleet").textContent).toBe("printing,offline");
     });
+  });
+
+  it("backs off an unreachable host up to a minute and restores its cadence once it answers", async () => {
+    vi.useFakeTimers();
+    statusPoll.ms = 5_000;
+    let failures = 4;
+    api.fetchIntegrationStatus.mockImplementation(async (integrationId: string) => {
+      if (integrationId === "healthy-1") return { state: "idle" };
+      failures -= 1;
+      if (failures > 0) throw new Error("connection refused");
+      if (failures === 0) return { state: "offline", message: "host unreachable" };
+      return { state: "idle" };
+    });
+    const calls = (integrationId: string) =>
+      api.fetchIntegrationStatus.mock.calls.filter(([id]) => id === integrationId).length;
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <StatusConsumer integrationIds={["healthy-1", "offline-1"]} label="fleet" />
+      </QueryClientProvider>,
+    );
+    await vi.waitFor(() => expect(calls("offline-1")).toBe(1));
+
+    await act(() => vi.advanceTimersByTimeAsync(5_000));
+    expect(calls("healthy-1")).toBe(2);
+    expect(calls("offline-1")).toBe(1);
+
+    await act(() => vi.advanceTimersByTimeAsync(5_000));
+    expect(calls("offline-1")).toBe(2);
+    await act(() => vi.advanceTimersByTimeAsync(19_000));
+    expect(calls("offline-1")).toBe(2);
+    await act(() => vi.advanceTimersByTimeAsync(1_000));
+    expect(calls("offline-1")).toBe(3);
+    await act(() => vi.advanceTimersByTimeAsync(39_000));
+    expect(calls("offline-1")).toBe(3);
+    await act(() => vi.advanceTimersByTimeAsync(1_000));
+    expect(calls("offline-1")).toBe(4);
+    expect(screen.getByTestId("fleet").textContent).toBe("idle,offline");
+
+    await act(() => vi.advanceTimersByTimeAsync(59_000));
+    expect(calls("offline-1")).toBe(4);
+    await act(() => vi.advanceTimersByTimeAsync(1_000));
+    expect(calls("offline-1")).toBe(5);
+    await vi.waitFor(() => expect(screen.getByTestId("fleet").textContent).toBe("idle,idle"));
+
+    await act(() => vi.advanceTimersByTimeAsync(5_000));
+    expect(calls("offline-1")).toBe(6);
   });
 
   it("pauses status polling while the document is in the background", async () => {

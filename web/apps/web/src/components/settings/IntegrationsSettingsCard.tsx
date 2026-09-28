@@ -1,9 +1,9 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ChevronDown } from "lucide-react";
 import {
   createIntegration,
   deleteIntegration,
-  fetchIntegrations,
   testIntegration,
   updateIntegration,
   type IntegrationSummary,
@@ -12,6 +12,8 @@ import {
   fetchSpoolmanDefaultSettings,
   saveSpoolmanDefaultIntegration,
 } from "../../api/endpoints/filaments";
+import { invalidateIntegrations, useIntegrationsQuery } from "../../queries/printerFleet";
+import { invalidateFilamentCatalog } from "../../queries/filaments";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import {
@@ -29,9 +31,15 @@ type Props = {
 const NONE = "__none__";
 
 export default function IntegrationsSettingsCard({ engineReady }: Props) {
-  const [items, setItems] = useState<IntegrationSummary[]>([]);
+  const queryClient = useQueryClient();
+  const integrationsQuery = useIntegrationsQuery(engineReady);
+  const items = integrationsQuery.data;
   const [defaultId, setDefaultId] = useState<string | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const [actionError, setLoadError] = useState<string | null>(null);
+  const integrationsError = integrationsQuery.error;
+  const loadError = actionError ?? (integrationsError
+    ? integrationsError instanceof Error ? integrationsError.message : String(integrationsError)
+    : null);
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [testingId, setTestingId] = useState<string | null>(null);
@@ -40,19 +48,15 @@ export default function IntegrationsSettingsCard({ engineReady }: Props) {
   const [newUrl, setNewUrl] = useState("http://192.168.1.50:7912");
 
   const spoolmanItems = useMemo(
-    () => items.filter((i) => i.type === "spoolman"),
+    () => (items ?? []).filter((i) => i.type === "spoolman"),
     [items],
   );
 
-  const refresh = useCallback(async () => {
+  const loadDefault = useCallback(async () => {
     if (!engineReady) return;
     setLoadError(null);
     try {
-      const [integrations, defaults] = await Promise.all([
-        fetchIntegrations(),
-        fetchSpoolmanDefaultSettings(),
-      ]);
-      setItems(integrations);
+      const defaults = await fetchSpoolmanDefaultSettings();
       setDefaultId(defaults.integration_id);
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : String(e));
@@ -60,8 +64,16 @@ export default function IntegrationsSettingsCard({ engineReady }: Props) {
   }, [engineReady]);
 
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
+    void loadDefault();
+  }, [loadDefault]);
+
+  const refresh = async () => {
+    await Promise.all([
+      invalidateIntegrations(queryClient),
+      invalidateFilamentCatalog(queryClient),
+      loadDefault(),
+    ]);
+  };
 
   const onAddSpoolman = async () => {
     const name = newName.trim();
@@ -135,6 +147,7 @@ export default function IntegrationsSettingsCard({ engineReady }: Props) {
     try {
       const saved = await saveSpoolmanDefaultIntegration(next);
       setDefaultId(saved.integration_id);
+      void invalidateFilamentCatalog(queryClient);
       setMessage(
         next
           ? "Spoolman integration enabled for the Build filament picker."

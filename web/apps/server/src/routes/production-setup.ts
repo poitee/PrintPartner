@@ -8,6 +8,7 @@ import {
   ProductionSetupWriteConflictError,
   updateProductionSetup,
 } from "../services/production-setup-store.js";
+import { MAX_BULK_JSON_BODY_BYTES } from "../services/upload-limits.js";
 
 type RouteDeps = { repo: AppRepository };
 
@@ -29,7 +30,7 @@ export async function registerProductionSetupRoutes(
     return loadProductionSetup(deps.repo, profileId);
   });
 
-  app.patch("/plans/:id/production-setup", async (request, reply) => {
+  app.patch("/plans/:id/production-setup", { bodyLimit: MAX_BULK_JSON_BODY_BYTES }, async (request, reply) => {
     const profileId = parseProfileId((request.params as { id: string }).id);
     if (!profileId) return reply.status(400).send({ detail: "invalid Build id" });
     if (!deps.repo.getProfileHeader(profileId)) {

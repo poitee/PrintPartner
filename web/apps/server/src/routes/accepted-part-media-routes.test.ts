@@ -343,7 +343,7 @@ describe("accepted Part media routes", () => {
       });
       expect(oversized.statusCode).toBe(413);
       expect(oversized.json()).toEqual({
-        detail: "Thumbnail exceeds the 64 MiB upload limit",
+        detail: "Thumbnail exceeds the 1 MiB upload limit",
       });
       expect(acceptedReads).toBe(5);
 

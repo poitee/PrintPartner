@@ -21,13 +21,17 @@ import {
   syncGithubSource,
 } from "../services/github-sync.js";
 import {
+  createSourceUploadStaging,
   finalizeUploadedSource,
   MAX_SOURCE_UPLOAD_FILES,
   MAX_SOURCE_UPLOAD_PARTS,
+  SourceUploadTooLargeError,
+  streamSourceUpload,
   writeUploadedFiles,
   writeUploadedZip,
 } from "../services/archive-import.js";
 import {
+  MAX_BULK_JSON_BODY_BYTES,
   MAX_SOURCE_UPLOAD_BYTES,
   SOURCE_UPLOAD_TOO_LARGE_DETAIL,
 } from "../services/upload-limits.js";
@@ -352,7 +356,7 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
     };
   });
 
-  app.put("/sources/:id/import-rules", async (request, reply) => {
+  app.put("/sources/:id/import-rules", { bodyLimit: MAX_BULK_JSON_BODY_BYTES }, async (request, reply) => {
     const id = Number((request.params as { id: string }).id);
     const body = request.body as { rules?: string[] };
     try {
@@ -383,59 +387,66 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
       },
     });
     if (!data) return reply.status(400).send({ detail: "ZIP file required" });
-    const chunks: Buffer[] = [];
-    for await (const chunk of data.file) {
-      chunks.push(Buffer.from(chunk));
-    }
-    if (data.file.truncated) {
-      return reply.status(413).send({ detail: SOURCE_UPLOAD_TOO_LARGE_DETAIL });
-    }
-    const buffer = Buffer.concat(chunks);
-    if (await refuseIfHostedQuotaExceeded(reply, deps, request.tenantId, buffer.length)) {
-      return;
-    }
+    const staging = createSourceUploadStaging(deps.sourcesDir);
     try {
-      return await runWithTenantDiskQuota({
-        dataDir: deps.dataDir, reposDir: deps.reposDir, tenantId: request.tenantId,
-        quotaBytes: deps.hostedPlanning ? HOSTED_TENANT_DISK_QUOTA_BYTES : null,
-        sourceIds: () => deps.repo.listSources().map((source) => source.id),
-      }, async () => {
-        if (!deps.repo.getProjectRow(id)) return reply.status(404).send({ detail: "Source not found" });
-        try {
-          const extractDir = writeUploadedZip(buffer, deps.sourcesDir, id);
-          const { suggestedImportRules, stlCount } = finalizeUploadedSource(extractDir);
-          const existingRules = deps.repo.getProjectRow(id)?.importedPaths;
-          const hasRules =
-            existingRules != null &&
-            existingRules.trim() !== "" &&
-            existingRules.trim() !== "[]";
-          if (!hasRules && suggestedImportRules.length > 0) {
-            deps.repo.updateImportRules(id, suggestedImportRules);
-          }
-          const updated = await publishLocalSourceWorkingTree({
-            repo: deps.repo,
-            reposDir: deps.reposDir,
-            sourceId: id,
-            workingTree: extractDir,
-          });
-          indexSourceDocsFromDisk(deps.repo, id, updated.local_path ?? extractDir);
-          void prefetchSourceCover(deps, id);
-          return {
-            ...deps.repo.sourceSummaryForClient(updated),
-            imported_files: buffer.length,
-            stl_count: stlCount,
-            artifacts: scanSourceArtifacts(updated.local_path ?? extractDir),
-            suggested_import_rules: suggestedImportRules,
-          };
-        } finally {
-          if (deps.hostedPlanning) {
-            await rm(join(deps.sourcesDir, String(id)), { recursive: true, force: true });
-          }
+      const stagedZip = join(staging, "upload.zip");
+      let uploadedBytes: number;
+      try {
+        uploadedBytes = await streamSourceUpload(data.file, stagedZip, MAX_SOURCE_UPLOAD_BYTES);
+      } catch (error) {
+        if (error instanceof SourceUploadTooLargeError) {
+          return reply.status(413).send({ detail: SOURCE_UPLOAD_TOO_LARGE_DETAIL });
         }
-      });
-    } catch (error) {
-      return reply.status(error instanceof TenantDiskQuotaError ? 413 : 400)
-        .send({ detail: error instanceof Error ? error.message : String(error) });
+        throw error;
+      }
+      if (await refuseIfHostedQuotaExceeded(reply, deps, request.tenantId, uploadedBytes)) {
+        return;
+      }
+      try {
+        return await runWithTenantDiskQuota({
+          dataDir: deps.dataDir, reposDir: deps.reposDir, tenantId: request.tenantId,
+          quotaBytes: deps.hostedPlanning ? HOSTED_TENANT_DISK_QUOTA_BYTES : null,
+          sourceIds: () => deps.repo.listSources().map((source) => source.id),
+        }, async () => {
+          if (!deps.repo.getProjectRow(id)) return reply.status(404).send({ detail: "Source not found" });
+          try {
+            const extractDir = writeUploadedZip(stagedZip, deps.sourcesDir, id);
+            const { suggestedImportRules, stlCount } = finalizeUploadedSource(extractDir);
+            const existingRules = deps.repo.getProjectRow(id)?.importedPaths;
+            const hasRules =
+              existingRules != null &&
+              existingRules.trim() !== "" &&
+              existingRules.trim() !== "[]";
+            if (!hasRules && suggestedImportRules.length > 0) {
+              deps.repo.updateImportRules(id, suggestedImportRules);
+            }
+            const updated = await publishLocalSourceWorkingTree({
+              repo: deps.repo,
+              reposDir: deps.reposDir,
+              sourceId: id,
+              workingTree: extractDir,
+            });
+            indexSourceDocsFromDisk(deps.repo, id, updated.local_path ?? extractDir);
+            void prefetchSourceCover(deps, id);
+            return {
+              ...deps.repo.sourceSummaryForClient(updated),
+              imported_files: uploadedBytes,
+              stl_count: stlCount,
+              artifacts: scanSourceArtifacts(updated.local_path ?? extractDir),
+              suggested_import_rules: suggestedImportRules,
+            };
+          } finally {
+            if (deps.hostedPlanning) {
+              await rm(join(deps.sourcesDir, String(id)), { recursive: true, force: true });
+            }
+          }
+        });
+      } catch (error) {
+        return reply.status(error instanceof TenantDiskQuotaError ? 413 : 400)
+          .send({ detail: error instanceof Error ? error.message : String(error) });
+      }
+    } finally {
+      await rm(staging, { recursive: true, force: true });
     }
   });
 
@@ -447,113 +458,116 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
       return reply.status(400).send({ detail: HOSTED_SOURCE_KIND_DETAIL });
     }
 
-    const uploads: Array<{ relativePath: string; buffer: Buffer }> = [];
-    let relativePaths: string[] = [];
-    let uploadedBytes = 0;
-    for await (const part of request.parts({
-      limits: {
-        fileSize: MAX_SOURCE_UPLOAD_BYTES,
-        files: MAX_SOURCE_UPLOAD_FILES,
-        parts: MAX_SOURCE_UPLOAD_PARTS,
-      },
-    })) {
-      if (part.type === "field" && part.fieldname === "relative_paths") {
-        const value = await part.value;
-        try {
-          const parsed = JSON.parse(String(value)) as unknown;
-          if (Array.isArray(parsed)) {
-            relativePaths = parsed.map((entry) => String(entry)).filter(Boolean);
+    const staging = createSourceUploadStaging(deps.sourcesDir);
+    try {
+      const uploads: Array<{ relativePath: string; path: string }> = [];
+      let relativePaths: string[] = [];
+      let uploadedBytes = 0;
+      for await (const part of request.parts({
+        limits: {
+          fileSize: MAX_SOURCE_UPLOAD_BYTES,
+          files: MAX_SOURCE_UPLOAD_FILES,
+          parts: MAX_SOURCE_UPLOAD_PARTS,
+        },
+      })) {
+        if (part.type === "field" && part.fieldname === "relative_paths") {
+          const value = await part.value;
+          try {
+            const parsed = JSON.parse(String(value)) as unknown;
+            if (Array.isArray(parsed)) {
+              relativePaths = parsed.map((entry) => String(entry)).filter(Boolean);
+            }
+          } catch {
+            relativePaths = [];
           }
-        } catch {
-          relativePaths = [];
+          continue;
         }
-        continue;
-      }
-      if (part.type !== "file") continue;
-      if (part.fieldname !== "files") {
-        part.file.resume();
-        continue;
-      }
-      const chunks: Buffer[] = [];
-      for await (const chunk of part.file) {
-        const buffer = Buffer.from(chunk);
-        uploadedBytes += buffer.length;
-        if (uploadedBytes > MAX_SOURCE_UPLOAD_BYTES) {
-          return reply.status(413).send({
-            detail: SOURCE_UPLOAD_TOO_LARGE_DETAIL,
-          });
+        if (part.type !== "file") continue;
+        if (part.fieldname !== "files") {
+          part.file.resume();
+          continue;
         }
-        chunks.push(buffer);
-      }
-      if (part.file.truncated) {
-        return reply.status(413).send({
-          detail: SOURCE_UPLOAD_TOO_LARGE_DETAIL,
+        const path = join(staging, String(uploads.length));
+        try {
+          uploadedBytes += await streamSourceUpload(
+            part.file,
+            path,
+            MAX_SOURCE_UPLOAD_BYTES - uploadedBytes,
+          );
+        } catch (error) {
+          if (error instanceof SourceUploadTooLargeError) {
+            return reply.status(413).send({
+              detail: SOURCE_UPLOAD_TOO_LARGE_DETAIL,
+            });
+          }
+          throw error;
+        }
+        uploads.push({
+          relativePath: (part.filename || "").replace(/\\/g, "/"),
+          path,
         });
       }
-      const buffer = Buffer.concat(chunks);
-      uploads.push({
-        relativePath: (part.filename || "").replace(/\\/g, "/"),
-        buffer,
-      });
-    }
-    for (let i = 0; i < uploads.length; i += 1) {
-      const fromClient = relativePaths[i]?.trim();
-      const fromFilename = uploads[i]!.relativePath.trim();
-      uploads[i]!.relativePath =
-        fromClient ||
-        fromFilename ||
-        `upload-${i + 1}.stl`;
-    }
-    if (!uploads.length) {
-      return reply.status(400).send({ detail: "At least one file is required" });
-    }
-    if (await refuseIfHostedQuotaExceeded(reply, deps, request.tenantId, uploadedBytes)) {
-      return;
-    }
+      for (let i = 0; i < uploads.length; i += 1) {
+        const fromClient = relativePaths[i]?.trim();
+        const fromFilename = uploads[i]!.relativePath.trim();
+        uploads[i]!.relativePath =
+          fromClient ||
+          fromFilename ||
+          `upload-${i + 1}.stl`;
+      }
+      if (!uploads.length) {
+        return reply.status(400).send({ detail: "At least one file is required" });
+      }
+      if (await refuseIfHostedQuotaExceeded(reply, deps, request.tenantId, uploadedBytes)) {
+        return;
+      }
 
-    try {
-      return await runWithTenantDiskQuota({
-        dataDir: deps.dataDir, reposDir: deps.reposDir, tenantId: request.tenantId,
-        quotaBytes: deps.hostedPlanning ? HOSTED_TENANT_DISK_QUOTA_BYTES : null,
-        sourceIds: () => deps.repo.listSources().map((source) => source.id),
-      }, async () => {
-        if (!deps.repo.getProjectRow(id)) return reply.status(404).send({ detail: "Source not found" });
-        try {
-          const result = writeUploadedFiles(uploads, deps.sourcesDir, id);
+      try {
+        return await runWithTenantDiskQuota({
+          dataDir: deps.dataDir, reposDir: deps.reposDir, tenantId: request.tenantId,
+          quotaBytes: deps.hostedPlanning ? HOSTED_TENANT_DISK_QUOTA_BYTES : null,
+          sourceIds: () => deps.repo.listSources().map((source) => source.id),
+        }, async () => {
+          if (!deps.repo.getProjectRow(id)) return reply.status(404).send({ detail: "Source not found" });
+          try {
+            const result = writeUploadedFiles(uploads, deps.sourcesDir, id);
 
-          const existingRules = deps.repo.getProjectRow(id)?.importedPaths;
-          const hasRules =
-            existingRules != null &&
-            existingRules.trim() !== "" &&
-            existingRules.trim() !== "[]";
-          if (!hasRules && result.suggestedImportRules.length > 0) {
-            deps.repo.updateImportRules(id, result.suggestedImportRules);
+            const existingRules = deps.repo.getProjectRow(id)?.importedPaths;
+            const hasRules =
+              existingRules != null &&
+              existingRules.trim() !== "" &&
+              existingRules.trim() !== "[]";
+            if (!hasRules && result.suggestedImportRules.length > 0) {
+              deps.repo.updateImportRules(id, result.suggestedImportRules);
+            }
+
+            const updated = await publishLocalSourceWorkingTree({
+              repo: deps.repo,
+              reposDir: deps.reposDir,
+              sourceId: id,
+              workingTree: result.extractDir,
+            });
+            indexSourceDocsFromDisk(deps.repo, id, updated.local_path ?? result.extractDir);
+            void prefetchSourceCover(deps, id);
+            return {
+              ...deps.repo.sourceSummaryForClient(updated),
+              imported_files: result.fileCount,
+              stl_count: result.stlCount,
+              artifacts: scanSourceArtifacts(updated.local_path ?? result.extractDir),
+              suggested_import_rules: result.suggestedImportRules,
+            };
+          } finally {
+            if (deps.hostedPlanning) {
+              await rm(join(deps.sourcesDir, String(id)), { recursive: true, force: true });
+            }
           }
-
-          const updated = await publishLocalSourceWorkingTree({
-            repo: deps.repo,
-            reposDir: deps.reposDir,
-            sourceId: id,
-            workingTree: result.extractDir,
-          });
-          indexSourceDocsFromDisk(deps.repo, id, updated.local_path ?? result.extractDir);
-          void prefetchSourceCover(deps, id);
-          return {
-            ...deps.repo.sourceSummaryForClient(updated),
-            imported_files: result.fileCount,
-            stl_count: result.stlCount,
-            artifacts: scanSourceArtifacts(updated.local_path ?? result.extractDir),
-            suggested_import_rules: result.suggestedImportRules,
-          };
-        } finally {
-          if (deps.hostedPlanning) {
-            await rm(join(deps.sourcesDir, String(id)), { recursive: true, force: true });
-          }
-        }
-      });
-    } catch (error) {
-      return reply.status(error instanceof TenantDiskQuotaError ? 413 : 400)
-        .send({ detail: error instanceof Error ? error.message : String(error) });
+        });
+      } catch (error) {
+        return reply.status(error instanceof TenantDiskQuotaError ? 413 : 400)
+          .send({ detail: error instanceof Error ? error.message : String(error) });
+      }
+    } finally {
+      await rm(staging, { recursive: true, force: true });
     }
   });
 

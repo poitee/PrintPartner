@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import AdmZip from "adm-zip";
@@ -8,10 +8,20 @@ import {
   runWithTenantDiskQuota,
   TenantDiskQuotaError,
 } from "../lib/tenant-disk-quota.js";
-import { extractZipBuffer, writeUploadedFiles, writeUploadedZip, discoverImportRules } from "./archive-import.js";
+import { extractZipFile, writeUploadedFiles, writeUploadedZip, discoverImportRules } from "./archive-import.js";
 
 function tempRoot(): string {
   return mkdtempSync(join(tmpdir(), "pp-archive-"));
+}
+
+function stagedFile(content: Buffer | Uint8Array): string {
+  const path = join(mkdtempSync(join(tmpdir(), "pp-archive-staged-")), "upload");
+  writeFileSync(path, content);
+  return path;
+}
+
+function staged(relativePath: string, content: Buffer | Uint8Array): { relativePath: string; path: string } {
+  return { relativePath, path: stagedFile(content) };
 }
 
 const triangle: StlMesh = {
@@ -36,7 +46,7 @@ describe("archive extraction hardening", () => {
     zip.addFile("parts/nested/clip.STL", Buffer.from("solid clip"));
 
     const dest = join(root, "files");
-    const count = extractZipBuffer(zip.toBuffer(), dest);
+    const count = extractZipFile(stagedFile(zip.toBuffer()), dest);
 
     expect(count).toBe(2);
     expect(existsSync(join(dest, "parts/bracket.stl"))).toBe(true);
@@ -51,7 +61,7 @@ describe("archive extraction hardening", () => {
     addMaliciousEntry(zip, "../evil.txt", Buffer.from("pwned"));
 
     const dest = join(root, "files");
-    expect(() => extractZipBuffer(zip.toBuffer(), dest)).toThrow(
+    expect(() => extractZipFile(stagedFile(zip.toBuffer()), dest)).toThrow(
       /escapes extraction directory/,
     );
     expect(existsSync(join(root, "evil.txt"))).toBe(false);
@@ -63,7 +73,7 @@ describe("archive extraction hardening", () => {
     const zip = new AdmZip();
     addMaliciousEntry(zip, "a/b/../../../../tmp/evil.stl", Buffer.from("solid evil"));
 
-    expect(() => extractZipBuffer(zip.toBuffer(), join(root, "files"))).toThrow(
+    expect(() => extractZipFile(stagedFile(zip.toBuffer()), join(root, "files"))).toThrow(
       /escapes extraction directory/,
     );
     rmSync(root, { recursive: true, force: true });
@@ -75,7 +85,7 @@ describe("archive extraction hardening", () => {
     addMaliciousEntry(zip, "/abs/part.stl", Buffer.from("solid abs"));
 
     const dest = join(root, "files");
-    const count = extractZipBuffer(zip.toBuffer(), dest);
+    const count = extractZipFile(stagedFile(zip.toBuffer()), dest);
     expect(count).toBe(1);
     expect(existsSync(join(dest, "abs/part.stl"))).toBe(true);
     rmSync(root, { recursive: true, force: true });
@@ -89,7 +99,7 @@ describe("archive extraction hardening", () => {
     zip.addFile("c.txt", Buffer.from("c"));
 
     expect(() =>
-      extractZipBuffer(zip.toBuffer(), join(root, "files"), { maxEntries: 2 }),
+      extractZipFile(stagedFile(zip.toBuffer()), join(root, "files"), { maxEntries: 2 }),
     ).toThrow(/too many entries/);
     rmSync(root, { recursive: true, force: true });
   });
@@ -100,7 +110,7 @@ describe("archive extraction hardening", () => {
     zip.addFile("big.bin", Buffer.alloc(64 * 1024, 0));
 
     expect(() =>
-      extractZipBuffer(zip.toBuffer(), join(root, "files"), {
+      extractZipFile(stagedFile(zip.toBuffer()), join(root, "files"), {
         maxUncompressedBytes: 1024,
       }),
     ).toThrow(/uncompressed size exceeds limit/);
@@ -111,8 +121,8 @@ describe("archive extraction hardening", () => {
     const root = tempRoot();
     const result = writeUploadedFiles(
       [
-        { relativePath: "parts/a.stl", buffer: Buffer.from("solid a") },
-        { relativePath: "parts/b.stl", buffer: Buffer.from("solid b") },
+        staged("parts/a.stl", Buffer.from("solid a")),
+        staged("parts/b.stl", Buffer.from("solid b")),
       ],
       root,
       42,
@@ -139,7 +149,7 @@ describe("archive extraction hardening", () => {
         },
         async () =>
           writeUploadedFiles(
-            [{ relativePath: "parts/a.stl", buffer: Buffer.from("solid a") }],
+            [staged("parts/a.stl", Buffer.from("solid a"))],
             sourcesDir,
             42,
           ),
@@ -163,7 +173,7 @@ describe("archive extraction hardening", () => {
       },
       async () =>
         writeUploadedFiles(
-          [{ relativePath: "parts/a.stl", buffer: Buffer.from("solid a") }],
+          [staged("parts/a.stl", Buffer.from("solid a"))],
           sourcesDir,
           42,
         ),
@@ -179,7 +189,7 @@ describe("archive extraction hardening", () => {
       { token: "bracket", objectName: "Bracket", xUm: 0, yUm: 0, mesh: triangle },
     ]);
     const result = writeUploadedFiles(
-      [{ relativePath: "project.3mf", buffer: Buffer.from(threeMf) }],
+      [staged("project.3mf", Buffer.from(threeMf))],
       root,
       43,
     );
@@ -197,7 +207,7 @@ describe("archive extraction hardening", () => {
     const zip = new AdmZip();
     zip.addFile("models/assembly.3mf", Buffer.from(threeMf));
 
-    const extractDir = writeUploadedZip(zip.toBuffer(), root, 44);
+    const extractDir = writeUploadedZip(stagedFile(zip.toBuffer()), root, 44);
 
     expect(existsSync(join(extractDir, "models/assembly.3mf"))).toBe(true);
     expect(existsSync(join(extractDir, "_3mf/assembly/clip.stl"))).toBe(true);
@@ -208,7 +218,7 @@ describe("archive extraction hardening", () => {
     const root = tempRoot();
     expect(() =>
       writeUploadedFiles(
-        [{ relativePath: "../evil.stl", buffer: Buffer.from("solid") }],
+        [staged("../evil.stl", Buffer.from("solid"))],
         root,
         1,
       ),

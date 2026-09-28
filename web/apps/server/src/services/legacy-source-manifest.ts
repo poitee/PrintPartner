@@ -4,7 +4,7 @@ import {
   legacySourceManifestOverridePath,
   sourceWorkspaceRoot,
 } from "./source-workspace.js";
-import { MAX_JSON_BODY_BYTES } from "./upload-limits.js";
+import { MAX_BULK_JSON_BODY_BYTES } from "./upload-limits.js";
 import { isRecord } from "../lib/guards.js";
 
 type LegacySourceManifestAbsent = Readonly<{
@@ -84,11 +84,11 @@ export async function inspectLegacySourceManifest(input: {
       reason: "Legacy Source manifest is not a regular file",
     };
   }
-  if (fileStat.size > MAX_JSON_BODY_BYTES) {
+  if (fileStat.size > MAX_BULK_JSON_BODY_BYTES) {
     return {
       kind: "unsafe",
       legacyPath,
-      reason: `Legacy Source manifest exceeds the ${MAX_JSON_BODY_BYTES} byte request limit`,
+      reason: `Legacy Source manifest exceeds the ${MAX_BULK_JSON_BODY_BYTES} byte request limit`,
     };
   }
   return { kind: "file", legacyPath, content: await readFile(legacyPath) };

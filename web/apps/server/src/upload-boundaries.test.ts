@@ -140,6 +140,41 @@ describe("multipart upload boundaries", () => {
 
     expect(response.statusCode).toBe(413);
     expect(responseDetail(response.json())).toContain("256 MiB");
+    await vi.waitFor(() =>
+      expect(
+        directoryEntries(join(dataDir, "sources")).filter((name) => name.startsWith(".upload-")),
+      ).toEqual([]),
+    );
+  });
+
+  it("rejects Source files whose combined size passes the upload budget", async () => {
+    const boundary = "----pp-upload-files-budget";
+    const filePart = (name: string) =>
+      Buffer.concat([
+        Buffer.from(
+          `--${boundary}\r\n` +
+            `Content-Disposition: form-data; name="files"; filename="${name}"\r\n` +
+            "Content-Type: application/octet-stream\r\n\r\n",
+        ),
+        Buffer.alloc(40, 0x61),
+        Buffer.from("\r\n"),
+      ]);
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/sources/${sourceId}/upload-files`,
+      payload: Buffer.concat([filePart("a.stl"), filePart("b.stl"), Buffer.from(`--${boundary}--\r\n`)]),
+      headers: { "content-type": `multipart/form-data; boundary=${boundary}` },
+    });
+
+    expect(response.statusCode).toBe(413);
+    expect(responseDetail(response.json())).toContain("256 MiB");
+    expect(directoryEntries(join(dataDir, "sources", String(sourceId), "files"))).toEqual([]);
+    await vi.waitFor(() =>
+      expect(
+        directoryEntries(join(dataDir, "sources")).filter((name) => name.startsWith(".upload-")),
+      ).toEqual([]),
+    );
   });
 
   it("rejects an oversized kit bundle before bundle parsing", async () => {

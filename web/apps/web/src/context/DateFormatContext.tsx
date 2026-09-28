@@ -1,10 +1,9 @@
+import { useQueryClient } from "@tanstack/react-query";
 import {
   createContext,
   useCallback,
   useContext,
-  useEffect,
   useMemo,
-  useState,
   type ReactNode,
 } from "react";
 import {
@@ -12,10 +11,8 @@ import {
   formatTimestamp,
   type DateFormatId,
 } from "@print-partner/contracts";
-import {
-  fetchDateFormatSetting,
-  saveDateFormatSetting,
-} from "../api/endpoints/settings";
+import { saveDateFormatSetting } from "../api/endpoints/settings";
+import { publishDateFormatSetting, useDateFormatSettingQuery } from "../queries/dateFormat";
 import { useAuth } from "./AuthContext";
 
 type DateFormatContextValue = {
@@ -28,31 +25,16 @@ const DateFormatContext = createContext<DateFormatContextValue | null>(null);
 
 export function DateFormatProvider({ children }: { children: ReactNode }) {
   const { user, multiUser, loading: authLoading } = useAuth();
-  const [format, setFormatState] = useState<DateFormatId>(DATE_FORMAT_DEFAULT);
+  const queryClient = useQueryClient();
   const canLoadSetting = !authLoading && (!multiUser || user !== null);
-
-  useEffect(() => {
-    if (!canLoadSetting) return;
-
-    let cancelled = false;
-    void fetchDateFormatSetting()
-      .then((res) => {
-        if (!cancelled) setFormatState(res.format);
-      })
-      .catch(() => {
-        /* keep default on failure */
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [canLoadSetting]);
+  const format = useDateFormatSettingQuery(canLoadSetting).data?.format ?? DATE_FORMAT_DEFAULT;
 
   const setFormat = useCallback((next: DateFormatId) => {
-    setFormatState(next);
+    publishDateFormatSetting(queryClient, next);
     void saveDateFormatSetting(next).catch(() => {
       /* best-effort persist */
     });
-  }, []);
+  }, [queryClient]);
 
   const formatDate = useCallback(
     (iso: string | null | undefined) => formatTimestamp(iso, format),

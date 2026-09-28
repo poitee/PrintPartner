@@ -23,6 +23,7 @@ import {
   profileId,
 } from "./accepted-plates-route-model.js";
 import { isRecord } from "../lib/guards.js";
+import { MAX_BULK_JSON_BODY_BYTES } from "../services/upload-limits.js";
 
 type RouteDependencies = Readonly<{
   repo: AppRepository;
@@ -175,7 +176,7 @@ export async function registerAcceptedPlateRoutes(
     }
   });
 
-  app.post("/plans/:id/plates/initialize", async (request, reply) => {
+  app.post("/plans/:id/plates/initialize", { bodyLimit: MAX_BULK_JSON_BODY_BYTES }, async (request, reply) => {
     const id = profileId(request);
     const body = parseInitializeRequest(request.body);
     if (id == null || !body || body.expected.profileId !== id) {

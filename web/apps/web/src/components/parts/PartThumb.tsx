@@ -4,7 +4,6 @@ import {
   acceptedPartMediaRevalidationHeaders,
   partThumbnailUrl,
 } from "../../api/endpoints/media";
-import { generatePartThumbnail } from "../../lib/stlThumbnail";
 import { fetchWithRetry } from "../../lib/fetchWithRetry";
 import { acceptedThumbnailBlobCache } from "../../lib/acceptedThumbnailBlobCache";
 import {
@@ -98,7 +97,11 @@ export default memo(function PartThumb({
           setThumbnail({ kind: "failed" });
         }
       };
-      void generatePartThumbnail(partId, { priority, cacheVersion }).then(
+      void import("../../lib/stlThumbnail")
+        .then(({ generatePartThumbnail }) =>
+          generatePartThumbnail(partId, { priority, cacheVersion }),
+        )
+        .then(
         (url) => {
           if (cancelled) {
             if (url) URL.revokeObjectURL(url);

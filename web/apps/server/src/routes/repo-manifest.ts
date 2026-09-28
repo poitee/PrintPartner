@@ -15,6 +15,7 @@ import {
   inspectLegacySourceManifest,
 } from "../services/legacy-source-manifest.js";
 import { findSourceManifestPath } from "../services/source-workspace.js";
+import { MAX_BULK_JSON_BODY_BYTES } from "../services/upload-limits.js";
 
 const MANIFEST_FILE = "print-partner.manifest.yaml";
 
@@ -58,7 +59,7 @@ export async function registerRepoManifestRoutes(
     };
   });
 
-  app.put("/sources/:id/repo-manifest", async (request, reply) => {
+  app.put("/sources/:id/repo-manifest", { bodyLimit: MAX_BULK_JSON_BODY_BYTES }, async (request, reply) => {
     const id = Number((request.params as { id: string }).id);
     requireLocalPath(deps.repo, id);
     const body = request.body as { yaml?: string };

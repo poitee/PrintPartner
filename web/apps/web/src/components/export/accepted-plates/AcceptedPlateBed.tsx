@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type PointerEvent } from "react";
+import { lazy, Suspense, useCallback, useEffect, useState, type PointerEvent } from "react";
 import type {
   AcceptedPlateId,
   AcceptedPlatePlacedUnit,
@@ -13,7 +13,6 @@ import {
 } from "../../../lib/acceptedPlateCoordinates";
 import AcceptedPlatePositionEditor from "./AcceptedPlatePositionEditor";
 import AcceptedPlateUnitActions from "./AcceptedPlateUnitActions";
-import AcceptedPlate3DPreview from "./AcceptedPlate3DPreview";
 import { acceptedPlateUnitColor } from "../../../lib/acceptedPlateColor";
 import {
   blendColor,
@@ -22,6 +21,8 @@ import {
   usePreviewTheme,
   type PreviewTheme,
 } from "../../../lib/previewTheme";
+
+const AcceptedPlate3DPreview = lazy(() => import("./AcceptedPlate3DPreview"));
 
 type ReadyWorkspace = Extract<AcceptedPlateWorkspace, { kind: "ready" }>;
 
@@ -288,7 +289,11 @@ export default function AcceptedPlateBed({
           );
         })}
       </svg>
-      ) : <AcceptedPlate3DPreview plate={plate} onUnavailable={showEditor} />}
+      ) : (
+        <Suspense fallback={<AcceptedPlate3DPreviewFallback />}>
+          <AcceptedPlate3DPreview plate={plate} onUnavailable={showEditor} />
+        </Suspense>
+      )}
       {viewMode === "edit" && selected ? (
         <div className="space-y-3">
           <AcceptedPlatePositionEditor
@@ -310,6 +315,15 @@ export default function AcceptedPlateBed({
           />
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function AcceptedPlate3DPreviewFallback() {
+  return (
+    <div className="space-y-2">
+      <div className="h-[26rem] overflow-hidden rounded-xl border border-border bg-media shadow-lg" />
+      <p className="text-xs text-muted-foreground">Loading Plate meshes…</p>
     </div>
   );
 }

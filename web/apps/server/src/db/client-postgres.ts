@@ -8,11 +8,6 @@ import pg from "pg";
 import * as schema from "./schema-pg.js";
 import { currentSchemaVersion } from "./schema.js";
 import { postgresPostInitMigrations } from "./migrations-pg.js";
-import type {
-  RequiredUnitBackfillCommandResult,
-  RequiredUnitBackfillDependencies,
-} from "./required-units.js";
-import { removeLegacyPrintPlansAndStampPostgres } from "./legacy-print-plan-removal.js";
 import {
   POSTGRES_SYNC_MAX_RESULT_BYTES,
   POSTGRES_SYNC_MAX_RESULT_ROWS,
@@ -24,6 +19,7 @@ import {
 import {
   repairSourceRevisionTenantOwnershipPostgres,
 } from "./source-revision-tenant-repair.js";
+import { assertUpgradableSchemaVersion } from "./upgrade-guard.js";
 
 export type PostgresDrizzleDb = NodePgDatabase<typeof schema>;
 
@@ -152,6 +148,7 @@ export class PostgresDatabase {
 
   private async runMigrations(): Promise<void> {
     if (!this.pool) throw new Error("Database not connected");
+    assertUpgradableSchemaVersion(await this.readSchemaVersion());
     const sql = readFileSync(MIGRATION_SQL, "utf8");
     for (const stmt of sql.split(";").map((s) => s.trim()).filter(Boolean)) {
       await this.pool.query(stmt);
@@ -162,7 +159,6 @@ export class PostgresDatabase {
     const client = await this.pool.connect();
     try {
       await repairSourceRevisionTenantOwnershipPostgres(client);
-      await removeLegacyPrintPlansAndStampPostgres(client);
       await client.query(
         `INSERT INTO app_settings (tenant_id, key, value) VALUES ($1, $2, $3)
          ON CONFLICT (tenant_id, key) DO UPDATE SET value = EXCLUDED.value`,
@@ -173,16 +169,26 @@ export class PostgresDatabase {
     }
   }
 
+  private async readSchemaVersion(): Promise<number> {
+    if (!this.pool) throw new Error("Database not connected");
+    const table = await this.pool.query("SELECT to_regclass('app_settings') AS name");
+    if (table.rows[0]?.name == null) return 0;
+    const row = await this.pool.query(
+      "SELECT value FROM app_settings WHERE tenant_id = $1 AND key = $2",
+      ["default", schema.schemaVersionKey],
+    );
+    const value: unknown = row.rows[0]?.value;
+    if (value == null) return 0;
+    if (typeof value !== "string" || !/^\d+$/.test(value)) {
+      throw new Error(`Invalid database schema version: ${String(value)}`);
+    }
+    return Number(value);
+  }
+
   async ping(): Promise<boolean> {
     if (!this.pool) return false;
     await this.pool.query("SELECT 1");
     return true;
-  }
-
-  backfillCurrentRequiredUnitSets(
-    _dependencies: RequiredUnitBackfillDependencies = {},
-  ): RequiredUnitBackfillCommandResult {
-    return { kind: "transaction_unavailable" };
   }
 
   async close(): Promise<void> {

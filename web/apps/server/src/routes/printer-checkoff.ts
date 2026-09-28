@@ -1119,7 +1119,7 @@ export async function registerPrinterCheckoffRoutes(
             part.file.resume();
             continue;
           }
-          bytes = new Uint8Array(await part.toBuffer());
+          bytes = await part.toBuffer();
           uploadedName = part.filename ?? "";
         }
       } catch (error) {

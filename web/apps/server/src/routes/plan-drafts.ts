@@ -18,6 +18,7 @@ import {
   type ApplyDraftWorkspaceResult,
   type PlanDraftWorkspaceResult,
 } from "../services/plan-draft-workspace.js";
+import { MAX_BULK_JSON_BODY_BYTES } from "../services/upload-limits.js";
 
 type RouteDeps = { readonly repo: AppRepository; readonly reposDir: string; readonly thumbsDir: string; readonly dataDir: string };
 
@@ -96,7 +97,7 @@ export async function registerPlanDraftRoutes(
     app.log.info(timing, "Plan phase timing");
   });
 
-  app.post("/plans/:id/save", async (request, reply) => {
+  app.post("/plans/:id/save", { bodyLimit: MAX_BULK_JSON_BODY_BYTES }, async (request, reply) => {
     const profileId = positiveId((request.params as { id: string }).id);
     const key = idempotencyKey(request);
     if (profileId == null || key == null) return invalidRequest(reply);
@@ -213,7 +214,7 @@ export async function registerPlanDraftRoutes(
     }
   });
 
-  app.patch("/plans/:id/drafts/:draftId/parts", async (request, reply) => {
+  app.patch("/plans/:id/drafts/:draftId/parts", { bodyLimit: MAX_BULK_JSON_BODY_BYTES }, async (request, reply) => {
     const params = request.params as { id: string; draftId: string };
     const profileId = positiveId(params.id);
     const draftId = positiveId(params.draftId);
@@ -233,7 +234,7 @@ export async function registerPlanDraftRoutes(
     }
   });
 
-  app.put("/plans/:id/drafts/:draftId/reconciliation", async (request, reply) => {
+  app.put("/plans/:id/drafts/:draftId/reconciliation", { bodyLimit: MAX_BULK_JSON_BODY_BYTES }, async (request, reply) => {
     const params = request.params as { id: string; draftId: string };
     const profileId = positiveId(params.id);
     const draftId = positiveId(params.draftId);
@@ -358,7 +359,7 @@ export async function registerPlanDraftRoutes(
     }
   });
 
-  app.post("/plans/:id/progress/import", async (request, reply) => {
+  app.post("/plans/:id/progress/import", { bodyLimit: MAX_BULK_JSON_BODY_BYTES }, async (request, reply) => {
     const profileId = positiveId((request.params as { id: string }).id);
     if (profileId == null) return invalidRequest(reply);
     try {

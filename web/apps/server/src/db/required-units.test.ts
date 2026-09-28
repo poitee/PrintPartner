@@ -5,7 +5,6 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { backfillAcceptedPlanRevisions } from "./accepted-plan-revisions.js";
 import { getDb, SqliteDatabase } from "./client.js";
-import { PostgresDatabase } from "./client-postgres.js";
 import {
   backfillCurrentRequiredUnitSets,
   MAX_REQUIRED_UNIT_QUANTITY,
@@ -88,60 +87,11 @@ function addLivePart(input: {
   return Number(inserted.lastInsertRowid);
 }
 
-function removeRequiredUnitSchema(raw: Database.Database): void {
-  raw.exec(`
-    DROP TRIGGER IF EXISTS trg_plan_apply_requests_immutable_delete;
-    DROP TRIGGER IF EXISTS trg_plan_apply_requests_immutable_update;
-    DROP TRIGGER IF EXISTS trg_plan_apply_requests_ownership_insert;
-    DROP TRIGGER IF EXISTS trg_plan_drafts_consumption_update;
-    DROP TRIGGER IF EXISTS trg_plan_drafts_consumption_insert;
-    DROP TABLE plan_apply_requests;
-    ALTER TABLE plan_drafts DROP COLUMN consumed_at;
-    ALTER TABLE plan_drafts DROP COLUMN consumed_revision_id;
-    DROP TRIGGER IF EXISTS trg_plan_drafts_required_unit_selection_update;
-    DROP TRIGGER IF EXISTS trg_plan_draft_required_unit_assignments_immutable_delete;
-    DROP TRIGGER IF EXISTS trg_plan_draft_required_unit_assignments_immutable_update;
-    DROP TRIGGER IF EXISTS trg_plan_draft_required_unit_assignments_ownership_insert;
-    DROP TRIGGER IF EXISTS trg_plan_draft_required_unit_decisions_immutable_delete;
-    DROP TRIGGER IF EXISTS trg_plan_draft_required_unit_decisions_immutable_update;
-    DROP TRIGGER IF EXISTS trg_plan_draft_required_unit_decisions_ownership_insert;
-    DROP TRIGGER IF EXISTS trg_plan_draft_required_unit_reconciliations_immutable_delete;
-    DROP TRIGGER IF EXISTS trg_plan_draft_required_unit_reconciliations_finalize;
-    DROP TRIGGER IF EXISTS trg_plan_draft_required_unit_reconciliations_ownership_insert;
-    DROP TABLE plan_draft_required_unit_assignments;
-    DROP TABLE plan_draft_required_unit_decisions;
-    DROP TABLE plan_draft_required_unit_reconciliations;
-    ALTER TABLE plan_drafts DROP COLUMN current_required_unit_reconciliation_id;
-    DROP TRIGGER IF EXISTS trg_plan_revision_required_unit_sets_immutable_delete;
-    DROP TRIGGER IF EXISTS trg_plan_revision_required_unit_sets_immutable_update;
-    DROP TRIGGER IF EXISTS trg_plan_revision_required_unit_sets_ownership_insert;
-    DROP TRIGGER IF EXISTS trg_plan_revision_required_units_immutable_delete;
-    DROP TRIGGER IF EXISTS trg_plan_revision_required_units_immutable_update;
-    DROP TRIGGER IF EXISTS trg_plan_revision_required_units_ownership_insert;
-    DROP TRIGGER IF EXISTS trg_required_units_immutable_delete;
-    DROP TRIGGER IF EXISTS trg_required_units_immutable_update;
-    DROP TRIGGER IF EXISTS trg_required_units_ownership_insert;
-    DROP TABLE plan_revision_required_unit_sets;
-    DROP TABLE plan_revision_required_units;
-    DROP TABLE required_units;
-  `);
-}
-
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
 describe("Required-unit accepted-revision foundation", () => {
-  it("fails closed before PostgreSQL Required-unit mutation", () => {
-    const postgres = new PostgresDatabase(
-      "postgres://unused.invalid/printpartner",
-      "/tmp/unused-required-unit-postgres",
-    );
-    expect(postgres.backfillCurrentRequiredUnitSets()).toEqual({
-      kind: "transaction_unavailable",
-    });
-  });
-
   it("maps included and excluded copies and reads live Checkoff without mutating accepted state", () => {
     const { database, raw, repo, root } = fixture();
     const profile = repo.createProfile("Required units");
@@ -384,95 +334,6 @@ describe("Required-unit accepted-revision foundation", () => {
     expect(raw.prepare("SELECT count(*) AS count FROM required_units").get()).toEqual({
       count: MAX_REQUIRED_UNIT_QUANTITY,
     });
-  });
-
-  it("upgrades v22 before stamping v23 and leaves no rows or stamp on failure", () => {
-    const { database, raw, repo, root } = fixture();
-    const profile = repo.createProfile("v22 invalid");
-    addLivePart({
-      raw,
-      profileId: profile.id,
-      key: "invalid",
-      filename: "invalid.stl",
-      quantity: 10_001,
-      included: true,
-    });
-    backfillAcceptedPlanRevisions(raw);
-    removeRequiredUnitSchema(raw);
-    raw.prepare(
-      `UPDATE app_settings SET value = '22'
-        WHERE tenant_id = 'default' AND key = 'schema_version'`,
-    ).run();
-    database.close();
-
-    const reopened = new SqliteDatabase(root, { tokenFactory: tokenFactory() });
-    expect(() => reopened.connect()).toThrow(/invalid quantity/i);
-    const failedRaw = (reopened as unknown as { sqlite: Database.Database }).sqlite;
-    expect(
-      failedRaw
-        .prepare(
-          `SELECT value FROM app_settings
-            WHERE tenant_id = 'default' AND key = 'schema_version'`,
-        )
-        .get(),
-    ).toEqual({ value: "22" });
-    for (const table of [
-      "required_units",
-      "plan_revision_required_units",
-      "plan_revision_required_unit_sets",
-    ]) {
-      expect(failedRaw.prepare(`SELECT count(*) AS count FROM ${table}`).get()).toEqual({
-        count: 0,
-      });
-    }
-    reopened.close();
-  });
-
-  it("upgrades v22 once and reopens without consuming another token", () => {
-    const { database, raw, repo, root } = fixture();
-    const profile = repo.createProfile("v22 accepted");
-    addLivePart({
-      raw,
-      profileId: profile.id,
-      key: "part",
-      filename: "part.stl",
-      quantity: 2,
-      included: true,
-    });
-    backfillAcceptedPlanRevisions(raw);
-    removeRequiredUnitSchema(raw);
-    raw.prepare(
-      `UPDATE app_settings SET value = '22'
-        WHERE tenant_id = 'default' AND key = 'schema_version'`,
-    ).run();
-    database.close();
-
-    let generated = 0;
-    const migrated = new SqliteDatabase(root, {
-      now: () => "2026-08-20T14:00:00.000Z",
-      tokenFactory: () => {
-        generated += 1;
-        return `ppu_${generated.toString(16).padStart(32, "0")}`;
-      },
-    });
-    migrated.connect();
-    expect(generated).toBe(2);
-    expect(
-      new AppRepository(getDb(migrated), "default", migrated.reposDir).readCurrentRequiredUnitSet(
-        profile.id,
-      ),
-    ).toMatchObject({ kind: "ready", units: expect.any(Array) });
-    migrated.close();
-
-    const reopened = new SqliteDatabase(root, {
-      tokenFactory: () => {
-        generated += 1;
-        return `ppu_${generated.toString(16).padStart(32, "0")}`;
-      },
-    });
-    reopened.connect();
-    expect(generated).toBe(2);
-    reopened.close();
   });
 
   it("enforces immutable ownership and preserves Build cascade cleanup", () => {

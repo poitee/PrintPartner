@@ -8,7 +8,6 @@ Transitive packages are recorded in `web/package-lock.json` and remain subject t
 
 | Package | Version | License | URL |
 |---------|---------|---------|-----|
-| @aws-sdk/client-s3 | 3.1114.0 | Apache-2.0 | https://github.com/aws/aws-sdk-js-v3/tree/main/clients/client-s3 |
 | @dnd-kit/core | 6.3.1 | MIT | https://github.com/clauderic/dnd-kit |
 | @dnd-kit/sortable | 10.0.0 | MIT | https://github.com/clauderic/dnd-kit |
 | @dnd-kit/utilities | 3.2.2 | MIT | https://github.com/clauderic/dnd-kit |
@@ -65,6 +64,7 @@ Transitive packages are recorded in `web/package-lock.json` and remain subject t
 | tailwind-merge | 3.6.0 | MIT | https://github.com/dcastil/tailwind-merge |
 | tar | 7.5.22 | BlueOak-1.0.0 | https://github.com/isaacs/node-tar |
 | three | 0.185.1 | MIT | https://threejs.org/ |
+| undici | 7.29.1 | MIT | https://undici.nodejs.org |
 | yazl | 3.3.1 | MIT | https://github.com/thejoshwolfe/yazl |
 | zod | 4.5.4 | MIT | https://zod.dev |
 

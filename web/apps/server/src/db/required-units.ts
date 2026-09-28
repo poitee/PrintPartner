@@ -10,25 +10,20 @@ import {
   type RequiredUnitDigestRow,
 } from "../services/required-units.js";
 
-export const REQUIRED_UNIT_SCHEMA_VERSION = 23;
 export const MAX_REQUIRED_UNIT_QUANTITY = MAX_REQUIRED_UNIT_INDEX + 1;
 
-export type RequiredUnitBackfillDependencies = {
+type RequiredUnitBackfillDependencies = {
   readonly now?: () => string;
   readonly tokenFactory?: () => string;
   readonly maxCollisionAttempts?: number;
 };
 
-export type RequiredUnitBackfillResult = {
+type RequiredUnitBackfillResult = {
   readonly setsCreated: number;
   readonly setsReused: number;
   readonly unitsCreated: number;
   readonly buildsSkipped: number;
 };
-
-export type RequiredUnitBackfillCommandResult =
-  | { readonly kind: "completed"; readonly summary: RequiredUnitBackfillResult }
-  | { readonly kind: "transaction_unavailable" };
 
 type StoredRequiredUnitRow = RequiredUnitDigestRow & {
   readonly tenantId: string;

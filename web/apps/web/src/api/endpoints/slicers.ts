@@ -1,6 +1,6 @@
 import { engineFetch } from "../engineTransport";
 
-export type SlicerProfileOptions = {
+type SlicerProfileOptions = {
   printers: Array<{ id: number; name: string; last_synced_at: string | null }>;
   filaments: Array<{
     id: number;

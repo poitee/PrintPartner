@@ -1,6 +1,6 @@
 import { TenantDiskQuotaError } from "../lib/tenant-disk-quota.js";
 import { createHash, randomUUID } from "node:crypto";
-import { closeSync, existsSync, openSync, readFileSync, readSync, statSync, readdirSync, lstatSync, mkdtempSync, rmSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, readSync, statSync, readdirSync, lstatSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
 import type { AssistantActionType, AssistantProposedAction, PrinterHostStatus } from "@print-partner/contracts";
@@ -93,12 +93,14 @@ import {
   buildPlanOptionGroups,
 } from "../services/plan-manifest-builder.js";
 import { PlanDraftWorkspaceService } from "../services/plan-draft-workspace.js";
-import { finalizeUploadedSource, writeUploadedFiles, writeUploadedZip } from "../services/archive-import.js";
+import { createSourceUploadStaging, finalizeUploadedSource, writeUploadedFiles, writeUploadedZip } from "../services/archive-import.js";
+import { MAX_MCP_INLINE_FILE_BYTES, MCP_INLINE_UPLOAD_TOO_LARGE_DETAIL } from "../services/upload-limits.js";
 import { indexSourceDocsFromDisk } from "../services/source-docs-index.js";
 import { resolvedFileUnderRoot } from "../lib/secure-path.js";
 import { publishLocalSourceWorkingTree } from "../services/local-source-revision.js";
 import { addCustomFilament, listCustomFilaments } from "../services/custom-filaments.js";
 import { extractThreeMfMeshes } from "../services/three-mf-import.js";
+import { bufferChunks } from "../lib/byte-chunks.js";
 import {
   getPrinterCheckoffLink,
   loadPrinterCheckoffLinks,
@@ -144,7 +146,6 @@ export type ToolContext = {
   integrations?: IntegrationPort | null;
 };
 
-const MCP_THREE_MF_MAX_BYTES = 64 * 1024 * 1024;
 
 type ThreeMfCheckoffInput = Readonly<{
   content_base64?: unknown;
@@ -183,7 +184,7 @@ function readThreeMfCheckoffBytes(
     try {
       const stat = statSync(absolute);
       if (!stat.isFile()) return { error: "3MF path is not a file" };
-      if (stat.size > MCP_THREE_MF_MAX_BYTES) return { error: "3MF exceeds the 64 MiB MCP limit" };
+      if (stat.size > MAX_MCP_INLINE_FILE_BYTES) return { error: "3MF exceeds the 64 MiB MCP limit" };
       bytes = readFileSync(absolute);
     } catch (error) {
       return { error: error instanceof Error ? error.message : "Unable to read 3MF" };
@@ -191,7 +192,7 @@ function readThreeMfCheckoffBytes(
   }
   if (!filename.toLowerCase().endsWith(".3mf")) filename = `${filename}.3mf`;
   if (bytes.length === 0) return { error: "3MF is empty" };
-  if (bytes.length > MCP_THREE_MF_MAX_BYTES) return { error: "3MF exceeds the 64 MiB MCP limit" };
+  if (bytes.length > MAX_MCP_INLINE_FILE_BYTES) return { error: "3MF exceeds the 64 MiB MCP limit" };
   return { bytes, filename };
 }
 
@@ -201,7 +202,7 @@ function inspectThreeMfCheckoff(
 ): { readonly files: ReturnType<typeof extractThreeMfMeshes>["files"] } | { readonly error: string } {
   const tempRoot = mkdtempSync(join(tmpdir(), "pp-mcp-3mf-"));
   try {
-    return { files: extractThreeMfMeshes(bytes, tempRoot, filename).files };
+    return { files: extractThreeMfMeshes(bufferChunks(bytes), tempRoot, filename).files };
   } catch (error) {
     return { error: error instanceof Error ? error.message : "Unable to parse 3MF" };
   } finally {
@@ -973,7 +974,7 @@ export async function invokeAssistantTool(
         }).join("");
         if (!/^[A-Za-z0-9+/=\r\n]+$/.test(encoded)) return { content: JSON.stringify({ error: "content must be base64" }) };
         const approxBytes = Math.floor((encoded.replace(/\s/g, "").length * 3) / 4);
-        if (approxBytes > 256 * 1024 * 1024) return { content: JSON.stringify({ error: "upload exceeds the 256 MiB MCP limit" }) };
+        if (approxBytes > MAX_MCP_INLINE_FILE_BYTES) return { content: JSON.stringify({ error: MCP_INLINE_UPLOAD_TOO_LARGE_DETAIL }) };
         return proposeAssistantAction({
           type: "propose_import_source_files",
           planId: 0,
@@ -3306,27 +3307,35 @@ export async function applyAssistantAction(
         let importedFiles = 0;
         let stlCount = 0;
         let suggestedRules: string[] = [];
+        const staging = createSourceUploadStaging(sourcesDir);
         try {
           if (archive) {
             const buffer = Buffer.from(archive, "base64");
-            if (buffer.length > 256 * 1024 * 1024) return { ok: false, detail: "upload exceeds the 256 MiB MCP limit" };
-            workingTree = writeUploadedZip(buffer, sourcesDir, sourceId);
+            if (buffer.length > MAX_MCP_INLINE_FILE_BYTES) return { ok: false, detail: MCP_INLINE_UPLOAD_TOO_LARGE_DETAIL };
+            const stagedZip = join(staging, "upload.zip");
+            writeFileSync(stagedZip, buffer);
+            workingTree = writeUploadedZip(stagedZip, sourcesDir, sourceId);
             const finalized = finalizeUploadedSource(workingTree);
             importedFiles = 1;
             stlCount = finalized.stlCount;
             suggestedRules = finalized.suggestedImportRules;
           } else {
-            const files = rawFiles.map((value, index) => {
+            const files: Array<{ relativePath: string; path: string }> = [];
+            let totalBytes = 0;
+            for (const [index, value] of rawFiles.entries()) {
               if (!value || typeof value !== "object") throw new Error("Invalid file");
               const row = value as Record<string, unknown>;
               const relativePath = String(row.path ?? "").trim().replace(/\\/g, "/");
               const encoded = String(row.content_base64 ?? "").trim();
               if (!relativePath || relativePath.startsWith("/") || relativePath.split("/").includes("..")) throw new Error(`Unsafe file path at index ${index}`);
               if (!encoded || !/^[A-Za-z0-9+/=\r\n]+$/.test(encoded)) throw new Error(`Invalid base64 content at index ${index}`);
-              return { relativePath, buffer: Buffer.from(encoded, "base64") };
-            });
-            const totalBytes = files.reduce((total, file) => total + file.buffer.length, 0);
-            if (totalBytes > 256 * 1024 * 1024) return { ok: false, detail: "upload exceeds the 256 MiB MCP limit" };
+              const buffer = Buffer.from(encoded, "base64");
+              totalBytes += buffer.length;
+              if (totalBytes > MAX_MCP_INLINE_FILE_BYTES) return { ok: false, detail: MCP_INLINE_UPLOAD_TOO_LARGE_DETAIL };
+              const path = join(staging, String(index));
+              writeFileSync(path, buffer);
+              files.push({ relativePath, path });
+            }
             const written = writeUploadedFiles(files, sourcesDir, sourceId);
             workingTree = written.extractDir;
             importedFiles = written.fileCount;
@@ -3351,6 +3360,7 @@ export async function applyAssistantAction(
           if (error instanceof TenantDiskQuotaError) throw error;
           return { ok: false, detail: error instanceof Error ? error.message : String(error) };
         } finally {
+          rmSync(staging, { recursive: true, force: true });
           if (deps.hostedPlanning) rmSync(join(sourcesDir, String(sourceId)), { recursive: true, force: true });
         }
         break;

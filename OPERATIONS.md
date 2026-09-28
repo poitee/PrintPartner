@@ -143,6 +143,8 @@ inspection because restore has no durable crash journal.
 
 Read [CHANGELOG.md](CHANGELOG.md), then update:
 
+This release upgrades databases from Print Partner v3.3.0 (schema 31) or newer. An installation on an older release must step through v3.3.0 first: install v3.3.0, start it once so it migrates the database, confirm it opens an existing Build, then install this release. Startup refuses an older SQLite or Postgres database before it creates a backup or changes any data, and the error names v3.3.0.
+
 Run only one Print Partner version against a self-host data directory during an upgrade. Do not use a rolling deployment that shares the SQLite database or `/data` between old and new application instances. The startup migration preserves a concurrently changed legacy Source manifest as a recoverable backup, but it cannot make an uncoordinated old writer part of the new revision transaction.
 
 If the installation first enabled `MULTI_USER` on v3.3.0 after it already held

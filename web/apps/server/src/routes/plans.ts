@@ -50,6 +50,7 @@ import { parsePhaseManifestText } from "./phase-manifest-route-model.js";
 import { completeRoleAssignment } from "./plan-role-assignment-model.js";
 import { sendAcceptedFilamentFailure } from "./accepted-filament-failure.js";
 import { readBuildWorkflowWorkspace } from "../services/build-workflow.js";
+import { MAX_BULK_JSON_BODY_BYTES } from "../services/upload-limits.js";
 
 type RouteDeps = { repo: AppRepository; dataDir: string; reposDir: string; thumbsDir: string };
 export type PlanSummaryContract = "accepted" | "legacy-v1";
@@ -776,7 +777,7 @@ export async function registerPlanRoutes(
     return { profile_id: id, kit: loadKitManifest(deps.repo, id) };
   });
 
-  app.put("/plans/:id/kit-manifest", async (request, reply) => {
+  app.put("/plans/:id/kit-manifest", { bodyLimit: MAX_BULK_JSON_BODY_BYTES }, async (request, reply) => {
     const id = Number((request.params as { id: string }).id);
     if (!deps.repo.getOwnedProfileIdentity(id)) return reply.status(404).send({ detail: "Profile not found" });
     const body: unknown = request.body;

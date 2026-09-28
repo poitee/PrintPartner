@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useState } from "react";
-import { fetchSlicerProfileOptions, type SlicerProfileOptions } from "../../api/endpoints/slicers";
 import { formatSyncTime } from "../../api/endpoints/runtime";
 import type { PrinterMachine } from "../../api/endpoints/printers";
 import {
@@ -16,6 +15,7 @@ import {
   SelectValue,
 } from "../ui/select";
 import { cn } from "@/lib/utils";
+import { useSlicerProfileOptionsQuery } from "../../queries/slicerProfileOptions";
 
 type Props = {
   printer: PrinterMachine;
@@ -31,8 +31,12 @@ export default function PrinterProfileAssignmentSection({
   disabled = false,
 }: Props) {
   const [assignment, setAssignment] = useState<PrinterProfileAssignment | null>(null);
-  const [options, setOptions] = useState<SlicerProfileOptions | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const optionsQuery = useSlicerProfileOptionsQuery(engineReady);
+  const options = optionsQuery.data ?? null;
+  const [assignmentError, setLoadError] = useState<string | null>(null);
+  const optionsError = optionsQuery.error;
+  const loadError = assignmentError ??
+    (optionsError ? optionsError instanceof Error ? optionsError.message : String(optionsError) : null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
@@ -54,19 +58,13 @@ export default function PrinterProfileAssignmentSection({
   useEffect(() => {
     if (!engineReady) {
       setAssignment(null);
-      setOptions(null);
       return;
     }
     let cancelled = false;
     setLoadError(null);
-    void Promise.all([
-      fetchPrinterProfileAssignment(printer.id),
-      fetchSlicerProfileOptions(),
-    ])
-      .then(([row, opts]) => {
-        if (cancelled) return;
-        applyAssignment(row);
-        setOptions(opts);
+    void fetchPrinterProfileAssignment(printer.id)
+      .then((row) => {
+        if (!cancelled) applyAssignment(row);
       })
       .catch((e) => {
         if (!cancelled) {

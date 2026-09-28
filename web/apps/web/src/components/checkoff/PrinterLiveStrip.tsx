@@ -1,11 +1,9 @@
-import { useQueries } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { queryOptions, useQueries } from "@tanstack/react-query";
+import { useEffect, useMemo, useRef } from "react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { Printer } from "lucide-react";
 import type { PrinterHostStatus } from "@print-partner/contracts";
-import { fetchIntegrations } from "../../api/endpoints/integrations";
-import { fetchPrinters } from "../../api/endpoints/printers";
 import { reconcilePrinterCheckoff } from "../../api/endpoints/checkoff";
 import { settingsPrintersRoute } from "../../lib/routes";
 import {
@@ -20,7 +18,12 @@ import { statusTone } from "../../lib/statusTone";
 import { quietPrinterLoadError, quietPrinterStatusMessage } from "../../lib/printerErrorCopy";
 import { usePrinterStatusPollMs } from "../../hooks/usePrinterStatusPollMs";
 import { cn } from "@/lib/utils";
-import { usePrinterStatuses } from "../../queries/printerStatuses";
+import {
+  nextOfflineStreak,
+  printerPollDelay,
+  usePrinterStatuses,
+} from "../../queries/printerStatuses";
+import { useIntegrationsQuery, usePrintersQuery } from "../../queries/printerFleet";
 
 const LIVE_STRIP_HOST_TYPES = new Set<LiveStripHostType>([
   "moonraker",
@@ -87,10 +90,42 @@ async function reconcileHost(integrationId: string): Promise<ReconcileOutcome> {
   }
 }
 
+type ReconcilePoll = Readonly<{
+  outcome: ReconcileOutcome;
+  offlineStreak: number;
+}>;
+
+function outcomeStatus(outcome: ReconcileOutcome): PrinterHostStatus {
+  return outcome.kind === "success" ? outcome.result.status : outcome.status;
+}
+
 function printerCheckoffReconciliationKey(
   integrationId: string,
 ): readonly ["printer-checkoff-reconcile", string] {
   return ["printer-checkoff-reconcile", integrationId];
+}
+
+function reconcileQuery(integrationId: string, pollMs: number, enabled: boolean) {
+  return queryOptions({
+    queryKey: printerCheckoffReconciliationKey(integrationId),
+    queryFn: async ({ client, queryKey }): Promise<ReconcilePoll> => {
+      const outcome = await reconcileHost(integrationId);
+      const previous = client.getQueryData<ReconcilePoll>(queryKey);
+      return {
+        outcome,
+        offlineStreak: nextOfflineStreak(previous?.offlineStreak, outcomeStatus(outcome)),
+      };
+    },
+    enabled,
+    staleTime: (query) => printerPollDelay(pollMs, query.state.data?.offlineStreak ?? 0),
+    refetchInterval: (query) =>
+      query.state.fetchStatus !== "idle"
+        ? false
+        : printerPollDelay(pollMs, query.state.data?.offlineStreak ?? 0),
+    refetchIntervalInBackground: false,
+    retry: false,
+    gcTime: 0,
+  });
 }
 
 /**
@@ -107,8 +142,42 @@ export default function PrinterLiveStrip({
   onUnattributedUpdate,
   className,
 }: Props) {
-  const [hosts, setHosts] = useState<LinkedHost[]>([]);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const printersQuery = usePrintersQuery(engineReady);
+  const linkedMachines = useMemo(
+    () => (printersQuery.data ?? []).filter(
+      (machine) => machine.enabled !== false && machine.integration_id?.trim(),
+    ),
+    [printersQuery.data],
+  );
+  const integrationsQuery = useIntegrationsQuery(engineReady && linkedMachines.length > 0);
+  const integrations = integrationsQuery.data;
+  const hosts = useMemo(() => {
+    if (!engineReady || !integrations) return [];
+    const byId = new Map(integrations.map((i) => [i.id, i]));
+    const seen = new Set<string>();
+    const next: LinkedHost[] = [];
+    for (const machine of linkedMachines) {
+      const id = machine.integration_id?.trim();
+      if (!id || seen.has(id)) continue;
+      const host = byId.get(id);
+      if (!host || host.config.enabled === false) continue;
+      if (!LIVE_STRIP_HOST_TYPES.has(host.type as LiveStripHostType)) continue;
+      const hostType = host.type as LiveStripHostType;
+      seen.add(id);
+      next.push({
+        integrationId: id,
+        name: host.name.trim() || machine.name.trim() || "Printer",
+        hostType,
+        reconcileCheckoff: hostType === "moonraker" || hostType === "prusalink",
+      });
+    }
+    return next;
+  }, [engineReady, integrations, linkedMachines]);
+  const rosterError = printersQuery.error ??
+    (linkedMachines.length > 0 ? integrationsQuery.error : null);
+  const loadError = rosterError
+    ? rosterError instanceof Error ? rosterError.message : String(rosterError)
+    : null;
   const toastedLinks = useRef(new Set<string>());
   const handledReconciliations = useRef(new WeakSet<ReconcileOutcome>());
   const unattributedSnapshots = useRef(new Map<string, string>());
@@ -137,25 +206,17 @@ export default function PrinterLiveStrip({
     [hosts],
   );
   const reconciliation = useQueries({
-    queries: reconcileIntegrationIds.map((integrationId) => ({
-      queryKey: printerCheckoffReconciliationKey(integrationId),
-      queryFn: () => reconcileHost(integrationId),
-      enabled: engineReady,
-      staleTime: pollMs,
-      refetchInterval: pollMs,
-      refetchIntervalInBackground: false,
-      retry: false,
-      gcTime: 0,
-    })),
+    queries: reconcileIntegrationIds.map((integrationId) =>
+      reconcileQuery(integrationId, pollMs, engineReady),
+    ),
     combine: (results) => {
       const outcomes: ReconcileOutcome[] = [];
       const statuses: Record<string, PrinterHostStatus> = {};
       for (const result of results) {
         if (!result.data) continue;
-        outcomes.push(result.data);
-        statuses[result.data.integrationId] = result.data.kind === "success"
-          ? result.data.result.status
-          : result.data.status;
+        const { outcome } = result.data;
+        outcomes.push(outcome);
+        statuses[outcome.integrationId] = outcomeStatus(outcome);
       }
       return {
         outcomes,
@@ -168,48 +229,9 @@ export default function PrinterLiveStrip({
     [directStatuses, reconciliation.statuses],
   );
 
-  const refreshRoster = useCallback(async () => {
-    if (!engineReady) {
-      setHosts([]);
-      setLoadError(null);
-      return;
-    }
-    try {
-      const fleet = await fetchPrinters();
-      const linkedMachines = fleet.filter((machine) => machine.enabled !== false && machine.integration_id?.trim());
-      const integrations = linkedMachines.length > 0 ? await fetchIntegrations() : [];
-      const byId = new Map(integrations.map((i) => [i.id, i]));
-      const seen = new Set<string>();
-      const next: LinkedHost[] = [];
-      for (const machine of linkedMachines) {
-        const id = machine.integration_id?.trim();
-        if (!id || seen.has(id)) continue;
-        const host = byId.get(id);
-        if (!host || host.config.enabled === false) continue;
-        if (!LIVE_STRIP_HOST_TYPES.has(host.type as LiveStripHostType)) continue;
-        const hostType = host.type as LiveStripHostType;
-        seen.add(id);
-        next.push({
-          integrationId: id,
-          name: host.name.trim() || machine.name.trim() || "Printer",
-          hostType,
-          reconcileCheckoff: hostType === "moonraker" || hostType === "prusalink",
-        });
-      }
-      setHosts(next);
-      setLoadError(null);
-    } catch (e) {
-      setLoadError(e instanceof Error ? e.message : String(e));
-      setHosts([]);
-    }
-  }, [engineReady]);
-
-  useEffect(() => {
-    void refreshRoster();
-  }, [refreshRoster]);
-
   useEffect(() => {
     let unattributedChanged = false;
+    const updatedProfileIds = new Set<number>();
     for (const outcome of reconciliation.outcomes) {
       if (handledReconciliations.current.has(outcome)) continue;
       handledReconciliations.current.add(outcome);
@@ -225,10 +247,10 @@ export default function PrinterLiveStrip({
             `${row.host_name} ${row.host_outcome === "cancelled" ? "cancelled" : "failed"} ${row.filename}. Review the send.`,
           );
         }
-        onCheckoffUpdateRef.current?.(row.profile_id);
+        updatedProfileIds.add(row.profile_id);
       }
       for (const link of result.created_links ?? []) {
-        onCheckoffUpdateRef.current?.(link.profile_id);
+        updatedProfileIds.add(link.profile_id);
       }
       if (result.unattributed) {
         const snapshot = JSON.stringify(result.unattributed);
@@ -237,6 +259,7 @@ export default function PrinterLiveStrip({
         if (snapshot !== previous) unattributedChanged = true;
       }
     }
+    for (const profileId of updatedProfileIds) onCheckoffUpdateRef.current?.(profileId);
     if (unattributedChanged) onUnattributedUpdateRef.current?.();
   }, [reconciliation]);
 

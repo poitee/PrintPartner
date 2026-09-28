@@ -17,7 +17,6 @@ import {
 } from "./services/export-kit.js";
 import { loadKitManifest, saveKitManifest } from "./services/kit-manifest-store.js";
 import { setRequestTenantId } from "./middleware/tenant-context.js";
-import { SaasS3StoragePort } from "./adapters/saas/storage-s3.js";
 
 function exportEditableKitBundle(repo: AppRepository, profileId: number, exportsDir: string): string {
   const recipe = repo.readEditableKitRecipe(profileId);
@@ -188,13 +187,6 @@ describe("Phase 5", () => {
     const data = parseKitBundleBuffer(readFileSync(bundlePath), bundlePath);
     expect(data.format).toBe(KIT_FORMAT);
     sqlite.close();
-    rmSync(dir, { recursive: true, force: true });
-  });
-
-  it("S3 storage resolvePath uses tenant prefix", () => {
-    const dir = mkdtempSync(join(tmpdir(), "pp-s3-"));
-    const storage = new SaasS3StoragePort("test-bucket", "tenant-a", dir);
-    expect(storage.resolvePath("exports/foo.zip")).toBe("s3://test-bucket/tenant-a/exports/foo.zip");
     rmSync(dir, { recursive: true, force: true });
   });
 

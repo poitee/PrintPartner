@@ -42,7 +42,6 @@ describe("accepted Plate server cutover inventory", () => {
       join(webRoot, "packages/domain/src"),
     ];
     const source = roots.flatMap(productionTypeScriptFiles)
-      .filter((path) => !path.endsWith("db/legacy-print-plan-removal.ts"))
       .map((path) => readFileSync(path, "utf8"))
       .join("\n");
     for (const legacy of [
