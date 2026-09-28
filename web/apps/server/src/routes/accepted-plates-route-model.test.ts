@@ -9,7 +9,6 @@ import {
   parseToken,
   parseTransferRequest,
   plateCoordinate,
-  positiveInteger,
 } from "./accepted-plates-route-model.js";
 
 const digest = "a".repeat(64);
@@ -30,9 +29,7 @@ const revisionBody = {
 };
 
 describe("accepted plates route model", () => {
-  it("parses positive integers and plate coordinates", () => {
-    expect(positiveInteger(1)).toBe(1);
-    expect(positiveInteger(0)).toBeNull();
+  it("parses plate coordinates", () => {
     expect(plateCoordinate(0)).toBe(0);
     expect(plateCoordinate(-1)).toBeNull();
   });

@@ -55,10 +55,6 @@ export function buildsRoute(profileId?: number | null): string {
   return withProfile("/builds", profileId ?? null);
 }
 
-export function plansRoute(profileId?: number | null): string {
-  return buildsRoute(profileId);
-}
-
 export function settingsRoute(): string {
   return "/settings";
 }
@@ -80,10 +76,6 @@ export function helpRoute(): string {
   return "/help";
 }
 
-export function isPrintersPath(pathname: string): boolean {
-  return pathname === "/printers";
-}
-
 export function sourcesRoute(): string {
   return libraryRoute();
 }
@@ -91,15 +83,6 @@ export function sourcesRoute(): string {
 /** @deprecated Prefer `buildSourcesRoute`. */
 export function buildRoute(profileId?: number | null): string {
   return buildSourcesRoute(profileId);
-}
-
-/** @deprecated Prefer `planRoute`. */
-export function reviewRoute(profileId?: number | null): string {
-  return planRoute(profileId);
-}
-
-export function planStudioRoute(planId: number): string {
-  return buildSourcesRoute(planId);
 }
 
 export function isKitStudioPath(pathname: string): boolean {
@@ -123,7 +106,7 @@ export function isPlanPath(pathname: string): boolean {
   return pathname === "/plan" || pathname === "/parts" || pathname === "/review";
 }
 
-export function isBuildsPath(pathname: string): boolean {
+function isBuildsPath(pathname: string): boolean {
   return pathname === "/builds" || pathname === "/plans";
 }
 
@@ -143,38 +126,7 @@ export function isExportPath(pathname: string): boolean {
   return pathname === "/export";
 }
 
-/**
- * Parts or Progress (and legacy `/review` / `/checkoff`).
- * Used by surfaces that treat both as post-plan workflow.
- */
-export function isReviewPath(pathname: string): boolean {
-  return isPartsPath(pathname) || isProgressPath(pathname);
-}
-
-/** @deprecated Prefer `isProgressPath`. */
-export function isCheckoffPath(pathname: string): boolean {
-  return isProgressPath(pathname);
-}
-
 /** Alias for deep links — Progress is the dedicated checkoff stage. */
 export function checkoffRoute(profileId?: number | null): string {
   return progressRoute(profileId);
-}
-
-export function isBoardPath(pathname: string): boolean {
-  return pathname === "/board" || pathname.startsWith("/board/");
-}
-
-export function isPlanWorkflowPath(pathname: string): boolean {
-  return (
-    isLibraryPath(pathname) ||
-    isSourcesPath(pathname) ||
-    isPlanPath(pathname) ||
-    isBuildsPath(pathname) ||
-    isPlansPath(pathname) ||
-    isPartsPath(pathname) ||
-    isProgressPath(pathname) ||
-    isExportPath(pathname) ||
-    isKitStudioPath(pathname)
-  );
 }

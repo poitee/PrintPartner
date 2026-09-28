@@ -10,11 +10,8 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  assertFileUnderRoot,
-  createReadStreamUnderRoot,
   readBufferUnderDataDir,
   resolvedFileUnderRoot,
-  safeDataDirPath,
   safePathUnderRoot,
   tenantExportDirectory,
   trimmedString,
@@ -66,15 +63,6 @@ describe("secure-path", () => {
     expect(resolvedFileUnderRoot(root, link)).toBeNull();
   });
 
-  it("createReadStreamUnderRoot only opens files under root", () => {
-    const root = tempDir();
-    mkdirSync(join(root, "exports"), { recursive: true });
-    writeFileSync(join(root, "exports", "pack.zip"), "zip");
-    expect(createReadStreamUnderRoot(root, "../secret")).toBeNull();
-    const file = assertFileUnderRoot(join(root, "exports"), "pack.zip");
-    expect(file.endsWith("pack.zip")).toBe(true);
-  });
-
   it("readBufferUnderDataDir rejects paths outside data dir", () => {
     const dataDir = tempDir();
     writeFileSync(join(dataDir, "kit.print-partner-kit"), "{}");
@@ -88,24 +76,6 @@ describe("secure-path", () => {
     expect(trimmedString("  x  ")).toBe("x");
     expect(trimmedString(null)).toBe("");
     expect(trimmedString(42)).toBe("");
-  });
-
-  it("safeDataDirPath confines absolute paths", () => {
-    const dataDir = tempDir();
-    const inside = join(dataDir, "nested", "file.bin");
-    mkdirSync(join(dataDir, "nested"), { recursive: true });
-    writeFileSync(inside, "x");
-    expect(safeDataDirPath(dataDir, inside)).toBe(realpathSync(inside));
-    expect(safeDataDirPath(dataDir, "/tmp/outside")).toBeNull();
-  });
-
-  it("safeDataDirPath rejects existing paths reached through an escaping symlink", () => {
-    const dataDir = tempDir();
-    const outside = tempDir();
-    const link = join(dataDir, "linked");
-    symlinkSync(outside, link);
-
-    expect(safeDataDirPath(dataDir, join(link, "kit.print-partner-kit"))).toBeNull();
   });
 
   it("uses lowercase collision-safe export directories for mixed-case tenant ids", () => {

@@ -40,7 +40,7 @@ export type PartsManifestColumn = (typeof PARTS_MANIFEST_HEADERS)[number];
 
 export type PartsManifestRow = Record<PartsManifestColumn, string>;
 
-export type PartsManifestBuildInput = {
+type PartsManifestBuildInput = {
   review: PlanReview;
   sources: SourceSummary[];
   /** When true, include excluded parts (default: included only). */
@@ -52,7 +52,7 @@ export type ManifestParseIssue = {
   message: string;
 };
 
-export type ManifestApplyOptions = {
+type ManifestApplyOptions = {
   applyQuantity?: boolean;
   applyIncluded?: boolean;
   applyPrintedProgress?: boolean;
@@ -66,7 +66,7 @@ export type ManifestApplyOptions = {
   ) => Promise<void>;
 };
 
-export type ManifestApplyResult = {
+type ManifestApplyResult = {
   updated: number;
   skipped: number;
   errors: ManifestParseIssue[];
@@ -86,7 +86,7 @@ function escapeCsvCell(value: string): string {
 }
 
 /** RFC-style CSV split that respects quoted fields. */
-export function parseCsv(text: string): string[][] {
+function parseCsv(text: string): string[][] {
   const rows: string[][] = [];
   let row: string[] = [];
   let cell = "";

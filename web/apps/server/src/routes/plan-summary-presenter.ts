@@ -17,7 +17,7 @@ export type LegacyProgressFailure =
   | { readonly kind: "integrity_failure"; readonly code: AcceptedPlanCorruptionCode }
   | { readonly kind: "concurrent_update" };
 
-export type LegacyProfileSummaryResult =
+type LegacyProfileSummaryResult =
   | { readonly kind: "ready"; readonly profile: LegacyProfileSummaryV1 }
   | { readonly kind: "unavailable"; readonly failure: LegacyProgressFailure };
 

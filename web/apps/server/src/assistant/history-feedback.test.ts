@@ -5,9 +5,6 @@ import {
   buildThumbsPreferDigestLine,
   collectCatalogFeedbackTokens,
   feedbackExcerptKey,
-  loadAssistantFeedback,
-  scorePlanFeedback,
-  scoreStackPreset,
 } from "./history.js";
 import type { AppRepository } from "../db/repository.js";
 
@@ -23,32 +20,6 @@ function memoryRepo(): AppRepository & { _store: Map<string, string> } {
 }
 
 describe("aggregateFeedbackScores", () => {
-  it("scores plans and known stack tokens without dumping raw feedback", () => {
-    const repo = memoryRepo();
-    appendAssistantFeedback(repo, {
-      rating: "up",
-      plan_id: 7,
-      message_excerpt: "Applied voron_2.4_stock_sb_tap successfully",
-    });
-    appendAssistantFeedback(repo, {
-      rating: "up",
-      plan_id: 7,
-      message_excerpt: "Still good",
-    });
-    appendAssistantFeedback(repo, {
-      rating: "down",
-      plan_id: 3,
-      message_excerpt: "Bad suggestion for voron_2.4_stock_sb_tap",
-    });
-
-    const scores = aggregateFeedbackScores(repo, ["voron_2.4_stock_sb_tap", "ldo_2.4_sb_tap"]);
-    expect(scores.byPlanId.get(7)).toBe(4); // 2× up at +2
-    expect(scores.byPlanId.get(3)).toBe(-2);
-    expect(scores.byToken.get("voron_2.4_stock_sb_tap")).toBe(0); // +2 and -2
-    expect(scorePlanFeedback(repo, 7)).toBe(4);
-    expect(scoreStackPreset(repo, "ldo_2.4_sb_tap", ["ldo_2.4_sb_tap"])).toBe(0);
-    expect(loadAssistantFeedback(repo)).toHaveLength(3);
-  });
 
   it("boosts known tokens from comments and builds high-confidence prefer line", () => {
     const repo = memoryRepo();

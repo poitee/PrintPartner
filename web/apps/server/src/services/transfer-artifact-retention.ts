@@ -5,7 +5,7 @@ export const TRANSFER_ARTIFACT_TTL_MS = 24 * 60 * 60 * 1_000;
 
 const TRANSFER_DIRECTORIES = ["bambu-connect", "printer-uploads"] as const;
 
-export type TransferArtifactSweepOptions = Readonly<{
+type TransferArtifactSweepOptions = Readonly<{
   now?: number;
   ttlMs?: number;
   protectedDirectories?: ReadonlySet<string>;

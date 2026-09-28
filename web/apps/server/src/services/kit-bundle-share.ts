@@ -1,6 +1,6 @@
 import { importRulesForProject, resolveSourceCategory } from "@print-partner/domain";
 
-export type KitBundleProjectRow = {
+type KitBundleProjectRow = {
   name: string;
   url: string;
   branch: string | null;
@@ -13,7 +13,7 @@ export type KitBundleProjectRow = {
   manifestCommunitySlug: string | null;
 };
 
-export type KitBundleSourceRef = {
+type KitBundleSourceRef = {
   name: string;
   url: string;
   branch: string;

@@ -36,5 +36,3 @@ export function createAssistantPort(runtime: AssistantRuntimeConfig): AssistantP
   return createNoneAssistant();
 }
 
-export type { AssistantPort } from "./types.js";
-export type { AssistantRuntimeConfig } from "./resolve-assistant.js";

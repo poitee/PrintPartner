@@ -25,7 +25,7 @@ import {
   type AuxiliaryErrors,
 } from "./auxiliaryErrors";
 
-export type CheckoffPrinterActivity = {
+type CheckoffPrinterActivity = {
   unattributedPrints: UnattributedPrint[];
   watchingLinks: PrinterCheckoffLink[];
   awaitingLinks: PrinterCheckoffLink[];

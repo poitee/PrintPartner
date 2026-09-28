@@ -4,7 +4,7 @@ import {
 } from "@print-partner/contracts";
 import { parseStoredProductionSetup } from "./production-setup-store.js";
 
-export type ProductionPackingUnit = Readonly<{
+type ProductionPackingUnit = Readonly<{
   token: string;
   objectName: string;
   filename: string;

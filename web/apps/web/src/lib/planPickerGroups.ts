@@ -7,7 +7,7 @@ export type PlanPickerRow = {
   last_used_at: string | null;
 };
 
-export type PlanPickerGroups = {
+type PlanPickerGroups = {
   active: PlanPickerRow[];
   recent: PlanPickerRow[];
   archived: PlanPickerRow[];

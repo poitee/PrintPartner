@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  applyStackToggle,
   assembledEligibleUnitIndices,
   checkoffUnitTotals,
   formatCheckoffSummary,
@@ -10,25 +9,7 @@ import {
   nextUnitToComplete,
   partProgressPercent,
   partProgressTone,
-  printedCountFromUnits,
 } from "./checkoffProgress";
-
-describe("applyStackToggle", () => {
-  it("marks prefix through unit index when completing", () => {
-    expect(applyStackToggle([false, false], 1, true)).toEqual([true, true]);
-  });
-
-  it("clears from unit index when uncompleting", () => {
-    expect(applyStackToggle([true, true], 1, false)).toEqual([true, false]);
-    expect(applyStackToggle([true, false], 0, false)).toEqual([false, false]);
-  });
-});
-
-describe("printedCountFromUnits", () => {
-  it("counts completed slots", () => {
-    expect(printedCountFromUnits([true, false, true])).toBe(2);
-  });
-});
 
 describe("checkoffUnitTotals", () => {
   it("sums units and percent", () => {

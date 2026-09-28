@@ -22,7 +22,7 @@ export type KitVocabulary = {
 };
 
 /** Branch names every git host uses — safe to recognise without catalog data. */
-export const UNIVERSAL_GIT_REFS = ["main", "master"] as const;
+const UNIVERSAL_GIT_REFS = ["main", "master"] as const;
 
 export const EMPTY_KIT_VOCABULARY: KitVocabulary = {
   bases: [],

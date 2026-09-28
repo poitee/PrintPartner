@@ -18,7 +18,6 @@ import {
 import { loadKitManifest, saveKitManifest } from "./services/kit-manifest-store.js";
 import { setRequestTenantId } from "./middleware/tenant-context.js";
 import { SaasS3StoragePort } from "./adapters/saas/storage-s3.js";
-import { fetchPrintablesMetadata } from "./services/source-adapters.js";
 
 function exportEditableKitBundle(repo: AppRepository, profileId: number, exportsDir: string): string {
   const recipe = repo.readEditableKitRecipe(profileId);
@@ -190,12 +189,6 @@ describe("Phase 5", () => {
     expect(data.format).toBe(KIT_FORMAT);
     sqlite.close();
     rmSync(dir, { recursive: true, force: true });
-  });
-
-  it("printables adapter returns not supported", () => {
-    const meta = fetchPrintablesMetadata("https://www.printables.com/model/123");
-    expect(meta.supported).toBe(false);
-    expect(meta.message).toContain("Printables");
   });
 
   it("S3 storage resolvePath uses tenant prefix", () => {

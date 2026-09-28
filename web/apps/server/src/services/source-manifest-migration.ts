@@ -10,7 +10,7 @@ import {
   publishSourceManifestRevision,
 } from "./local-source-revision.js";
 
-export type LegacySourceManifestMigration = Readonly<{
+type LegacySourceManifestMigration = Readonly<{
   sourceId: number;
   legacyPath: string;
   backupPath: string | null;
@@ -18,13 +18,13 @@ export type LegacySourceManifestMigration = Readonly<{
   changedDuringMigration: boolean;
 }>;
 
-export type RetainedLegacySourceManifest = Readonly<{
+type RetainedLegacySourceManifest = Readonly<{
   sourceId: number;
   legacyPath: string;
   reason: string;
 }>;
 
-export type LegacySourceManifestMigrationReport = Readonly<{
+type LegacySourceManifestMigrationReport = Readonly<{
   migrated: readonly LegacySourceManifestMigration[];
   retained: readonly RetainedLegacySourceManifest[];
 }>;

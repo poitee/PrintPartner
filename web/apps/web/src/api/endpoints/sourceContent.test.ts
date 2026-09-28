@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { jsonResponse, createEndpointTestHttp } from "../endpointTestHttp";
 import {
-  createSourceNote,
-  deleteSourceNote,
   fetchGitHubPatSettings,
   fetchGithubBranches,
   fetchGithubTags,
@@ -16,7 +14,6 @@ import {
   saveSourceMonitoringSettings,
   saveSourceUpdateCheckInterval,
   startCheckSourceUpdates,
-  updateSourceNote,
 } from "./sourceContent";
 
 const http = createEndpointTestHttp();
@@ -101,28 +98,5 @@ describe("source content endpoints", () => {
     expect(http.calls[1]?.[0]).toContain("/sources/7/docs/docs/Guide.md");
     expect(http.calls[2]?.[0]).toContain("/sources/7/readme?live=1");
     expect(http.calls[3]?.[0]).toContain("/sources/7/notes?profile_id=3");
-  });
-
-  it("creates, updates, and deletes source notes", async () => {
-    http
-      .respond(jsonResponse({ id: 1 }))
-      .respond(jsonResponse({ id: 1 }))
-      .respond(jsonResponse({ ok: true }));
-
-    await createSourceNote(7, {
-      title: "Guide",
-      body_markdown: "body",
-      profile_id: 3,
-    });
-    await updateSourceNote(7, 1, { body_markdown: "new" });
-    await deleteSourceNote(7, 1);
-
-    expect(http.requestJson(0)).toEqual({
-      title: "Guide",
-      body_markdown: "body",
-      profile_id: 3,
-    });
-    expect(http.requestJson(1)).toEqual({ body_markdown: "new" });
-    expect(http.calls[2]?.[0]).toContain("/sources/7/notes/1");
   });
 });

@@ -7,7 +7,6 @@ import type {
   PrinterFileIdentity,
   PrinterHostStatus,
   PrinterStoredFile,
-  PrintVerifyDecision,
 } from "@print-partner/contracts";
 import type { AppRepository } from "../db/repository.js";
 import type { PrinterFileAccess } from "../integrations/store.js";
@@ -82,7 +81,7 @@ export function unitKey(partId: number, unitIndex: number): string {
   return `${partId}:${unitIndex}`;
 }
 
-export function resolvedUnitKeys(link: PrinterCheckoffLink): Set<string> {
+function resolvedUnitKeys(link: PrinterCheckoffLink): Set<string> {
   const keys = new Set<string>();
   for (const u of link.resolved_units ?? []) {
     keys.add(unitKey(u.part_id, u.unit_index));
@@ -95,7 +94,7 @@ export function pendingCheckoffUnits(link: PrinterCheckoffLink): PrinterCheckoff
   return link.units.filter((u) => !done.has(unitKey(u.part_id, u.unit_index)));
 }
 
-export type CheckoffReconcileDecision =
+type CheckoffReconcileDecision =
   | { action: "noop" }
   | { action: "mark_active"; progress?: number }
   | { action: "await_verify" }
@@ -310,18 +309,4 @@ export async function observePrinterCheckoffFileDrift(input: {
       });
     }
   }
-}
-
-export function mergeResolvedUnits(
-  existing: PrintVerifyDecision[] | undefined,
-  next: PrintVerifyDecision[],
-): PrintVerifyDecision[] {
-  const map = new Map<string, PrintVerifyDecision>();
-  for (const d of existing ?? []) {
-    map.set(unitKey(d.part_id, d.unit_index), d);
-  }
-  for (const d of next) {
-    map.set(unitKey(d.part_id, d.unit_index), d);
-  }
-  return [...map.values()];
 }

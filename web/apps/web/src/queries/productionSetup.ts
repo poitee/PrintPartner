@@ -13,10 +13,10 @@ import {
 export const productionSetupKey = (profileId: number | null) =>
   ["production-setup", profileId] as const;
 
-export const productionSetupMutationKey = (profileId: number | null) =>
+const productionSetupMutationKey = (profileId: number | null) =>
   ["production-setup-command", profileId] as const;
 
-export const productionSetupMutationScope = (profileId: number | null) => ({
+const productionSetupMutationScope = (profileId: number | null) => ({
   id: `production-setup:${profileId ?? "none"}`,
 });
 

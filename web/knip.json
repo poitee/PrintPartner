@@ -1,0 +1,62 @@
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  "ignoreBinaries": [
+    "python3"
+  ],
+  "workspaces": {
+    ".": {
+      "entry": [
+        "scripts/*.{mjs,mts,ts}"
+      ],
+      "project": [
+        "scripts/**"
+      ]
+    },
+    "apps/server": {
+      "entry": [
+        "capture-digest-fixtures.ts",
+        "src/**/*.test.ts"
+      ],
+      "project": [
+        "src/**/*.ts",
+        "*.ts"
+      ],
+      "ignore": [
+        "src/db/schema.ts",
+        "src/db/schema-pg.ts"
+      ]
+    },
+    "apps/web": {
+      "entry": [
+        "src/**/*.test.{ts,tsx}",
+        "test/**/*.{mjs,ts,tsx}"
+      ],
+      "project": [
+        "src/**/*.{ts,tsx}",
+        "test/**"
+      ],
+      "ignore": [
+        "src/components/ui/**"
+      ]
+    },
+    "packages/contracts": {
+      "entry": [
+        "src/**/*.test.ts"
+      ],
+      "project": [
+        "src/**/*.ts"
+      ]
+    },
+    "packages/domain": {
+      "entry": [
+        "src/**/*.test.ts"
+      ],
+      "project": [
+        "src/**/*.ts"
+      ]
+    }
+  },
+  "ignoreUnresolved": [
+    "../apps/server/dist/current/db/client-postgres.js"
+  ]
+}

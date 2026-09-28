@@ -98,7 +98,7 @@ function handoffFailureMessage(error: unknown): string {
 }
 
 /** A recoverable export or handoff failure. Retry reruns only that operation. */
-export type SlicerHandoffFailure = Readonly<{ message: string; retry: () => void }>;
+type SlicerHandoffFailure = Readonly<{ message: string; retry: () => void }>;
 
 type Props = Readonly<{
   /**

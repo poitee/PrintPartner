@@ -1,20 +1,11 @@
+import { folderKeyFromRelativePath } from "@print-partner/domain/parts-grouping";
 import type { ReviewPart } from "../api/endpoints/planManifests";
 import { sourceLabelFromLayer } from "./reviewParts";
 
-const ROOT_FOLDER = "(root)";
 export type CheckoffSort = "manual" | "source" | "directory";
 
 export function isCheckoffSort(value: unknown): value is CheckoffSort {
   return value === "manual" || value === "source" || value === "directory";
-}
-
-/** Mirror of domain folderKeyFromRelativePath (web app does not depend on domain). */
-export function folderKeyFromRelativePath(relativePath: string): string {
-  const parts = relativePath.replace(/\\/g, "/").split("/");
-  parts.pop();
-  const parent = parts.join("/");
-  if (!parent || parent === ".") return ROOT_FOLDER;
-  return parent;
 }
 
 export type CheckoffFolderGroup = {

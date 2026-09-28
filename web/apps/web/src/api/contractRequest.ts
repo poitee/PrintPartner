@@ -1,7 +1,7 @@
 const API_BASE = (import.meta.env.VITE_API_URL ?? "").replace(/\/$/, "");
 const API_PREFIX = (import.meta.env.VITE_API_PREFIX ?? "").replace(/\/$/, "");
 
-export type EngineMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+type EngineMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
 type RequestContext = Readonly<{
   method: EngineMethod;
@@ -15,7 +15,7 @@ type ResponseContext = RequestContext &
     correlationId?: string;
   }>;
 
-export type ContractRequestFailure<EndpointError> =
+type ContractRequestFailure<EndpointError> =
   | ({ readonly kind: "invalid_request" } & RequestContext)
   | ({ readonly kind: "transport" } & RequestContext)
   | ({ readonly kind: "unauthorized"; readonly status: 401 } & ResponseContext)
@@ -67,7 +67,7 @@ type ResponseEndpoint<Success, EndpointError> = Readonly<{
   parseFailure: (value: unknown, status: number) => EndpointError;
 }>;
 
-export type JsonReadEndpoint<Params, Success, EndpointError> = EndpointBase<
+type JsonReadEndpoint<Params, Success, EndpointError> = EndpointBase<
   Params,
   Success,
   EndpointError
@@ -76,7 +76,7 @@ export type JsonReadEndpoint<Params, Success, EndpointError> = EndpointBase<
     method: "GET" | "DELETE";
   }>;
 
-export type JsonWriteEndpoint<Params, Input, Success, EndpointError> = EndpointBase<
+type JsonWriteEndpoint<Params, Input, Success, EndpointError> = EndpointBase<
   Params,
   Success,
   EndpointError

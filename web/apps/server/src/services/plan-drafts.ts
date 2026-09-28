@@ -91,7 +91,7 @@ export type PlanDraftPartDecision =
       readonly value: number | null;
     };
 
-export type RebasePartDecision =
+type RebasePartDecision =
   | {
       readonly kind: "set_included";
       readonly sourcePartId: number;
@@ -131,7 +131,7 @@ export type RebaseConflict =
       readonly field: "included" | "quantityOverride";
     };
 
-export type RebasePlanDraftMergeResult =
+type RebasePlanDraftMergeResult =
   | { readonly kind: "merged"; readonly draft: PlanDraftSnapshot }
   | { readonly kind: "conflicts"; readonly conflicts: readonly RebaseConflict[] };
 

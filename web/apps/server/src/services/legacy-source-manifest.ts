@@ -5,6 +5,7 @@ import {
   sourceWorkspaceRoot,
 } from "./source-workspace.js";
 import { MAX_JSON_BODY_BYTES } from "./upload-limits.js";
+import { isRecord } from "../lib/guards.js";
 
 type LegacySourceManifestAbsent = Readonly<{
   kind: "absent";
@@ -17,25 +18,21 @@ type LegacySourceManifestUnsafe = Readonly<{
   reason: string;
 }>;
 
-export type LegacySourceManifestFile = Readonly<{
+type LegacySourceManifestFile = Readonly<{
   kind: "file";
   legacyPath: string;
   content: Buffer;
 }>;
 
-export type LegacySourceManifestObservation =
+type LegacySourceManifestObservation =
   | LegacySourceManifestAbsent
   | LegacySourceManifestUnsafe
   | LegacySourceManifestFile;
 
-export type ArchivedLegacySourceManifest = Readonly<{
+type ArchivedLegacySourceManifest = Readonly<{
   backupPath: string;
   matchesObservedContent: boolean;
 }>;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function isMissingFile(error: unknown): boolean {
   return isRecord(error) && error.code === "ENOENT";

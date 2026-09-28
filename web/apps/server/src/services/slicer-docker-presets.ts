@@ -1,7 +1,7 @@
 import type { SlicerInstanceKind } from "./slicer-instances.js";
 
 /** Docker defaults aligned with pp-compose.yml stock services. */
-export type SlicerDockerPreset = {
+type SlicerDockerPreset = {
   kind: Exclude<SlicerInstanceKind, "custom">;
   image: string;
   container_name: string;

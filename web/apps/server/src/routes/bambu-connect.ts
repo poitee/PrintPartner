@@ -26,7 +26,7 @@ import {
 import { parseCheckoffUnits } from "../services/printer-checkoff.js";
 import { createPrinterCheckoffLink } from "../services/printer-checkoff-store.js";
 import { loadFleet } from "../services/printer-fleet.js";
-import type { InProcessJobRunner } from "./jobs.js";
+import type { InProcessJobRunner } from "../services/job-runner.js";
 import {
   MAX_MULTIPART_FIELD_BYTES,
   MAX_PRINT_FILE_UPLOAD_BYTES,

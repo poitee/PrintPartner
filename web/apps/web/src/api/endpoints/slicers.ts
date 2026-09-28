@@ -33,7 +33,7 @@ export type SlicerInstance = {
   updated_at: string;
 };
 
-export type SlicerInstanceWrite = {
+type SlicerInstanceWrite = {
   name: string;
   kind: SlicerInstanceKind;
   dialect?: SlicerDialect;
@@ -42,7 +42,7 @@ export type SlicerInstanceWrite = {
   enabled?: boolean;
 };
 
-export type SlicerDockerStatusResponse = {
+type SlicerDockerStatusResponse = {
   instance: SlicerInstance;
   status: {
     state: string;
@@ -86,10 +86,6 @@ export async function seedDefaultSlicerInstances(): Promise<{
   instances: SlicerInstance[];
 }> {
   return engineFetch("/slicer-instances/seed-defaults", { method: "POST" });
-}
-
-export async function fetchSlicerDockerStatus(id: string): Promise<SlicerDockerStatusResponse> {
-  return engineFetch(`/slicer-instances/${encodeURIComponent(id)}/docker-status`);
 }
 
 export async function pullSlicerDocker(id: string): Promise<SlicerDockerStatusResponse> {

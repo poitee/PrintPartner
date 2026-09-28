@@ -1,12 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   checkoffLinkErrorKey,
-  checkoffRowErrorKey,
   checkoffRowErrorSummary,
-  clearCheckoffRowError,
   describeCheckoffMutationFailure,
-  getCheckoffRowError,
-  hasCheckoffRowErrors,
   NO_CHECKOFF_ROW_ERRORS,
   setCheckoffRowError,
 } from "./checkoffConsoleRowErrors";
@@ -18,18 +14,6 @@ const error = {
 };
 
 describe("row error store", () => {
-  it("keeps one persistent error per row", () => {
-    const withError = setCheckoffRowError(NO_CHECKOFF_ROW_ERRORS, checkoffRowErrorKey(11), error);
-    expect(getCheckoffRowError(withError, "part:11")).toEqual(error);
-    expect(hasCheckoffRowErrors(withError)).toBe(true);
-    expect(hasCheckoffRowErrors(NO_CHECKOFF_ROW_ERRORS)).toBe(false);
-  });
-
-  it("clears on a successful retry", () => {
-    const withError = setCheckoffRowError(NO_CHECKOFF_ROW_ERRORS, "part:11", error);
-    expect(hasCheckoffRowErrors(clearCheckoffRowError(withError, "part:11"))).toBe(false);
-    expect(clearCheckoffRowError(withError, "part:99")).toBe(withError);
-  });
 
   it("summarises newest first", () => {
     let errors = setCheckoffRowError(NO_CHECKOFF_ROW_ERRORS, "part:11", error);

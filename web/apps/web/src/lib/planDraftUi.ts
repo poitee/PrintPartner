@@ -2,34 +2,6 @@ import type {
   PlanDraftIdentity,
   PlanDraftWorkspace,
 } from "@print-partner/contracts";
-import { EngineHttpError } from "../api/engineTransport";
-
-export type ProductionBlock = {
-  readonly checkoffLinkCount: number;
-  readonly sendQueueItemCount: number;
-};
-
-export function planDraftProductionBlockFromError(
-  caught: unknown,
-): ProductionBlock | null {
-  if (!(caught instanceof EngineHttpError) || caught.status !== 423)
-    return null;
-  if (!caught.body || typeof caught.body !== "object") return null;
-  const body = caught.body;
-  if (!("code" in body) || body.code !== "production_active") return null;
-  return {
-    checkoffLinkCount:
-      "checkoff_link_count" in body &&
-      typeof body.checkoff_link_count === "number"
-        ? body.checkoff_link_count
-        : 0,
-    sendQueueItemCount:
-      "send_queue_item_count" in body &&
-      typeof body.send_queue_item_count === "number"
-        ? body.send_queue_item_count
-        : 0,
-  };
-}
 
 /**
  * The draft a Plan-sheet edit should land on: the newest one still open.

@@ -1,13 +1,13 @@
 import type { PlanReview, ReviewPart } from "../api/endpoints/planManifests";
 import { isStlMissing } from "./stlAutoSync";
 
-export type PartWarningKind =
+type PartWarningKind =
   | "missing"
   | "no_role"
   | "qty_unparsed"
   | "merge_conflict";
 
-export type PartWarning = {
+type PartWarning = {
   kind: PartWarningKind;
   label: string;
 };
@@ -83,7 +83,6 @@ export function partWarningNote(
 }
 
 /** Included parts with missing STL files (desk-loop aggregate). */
-export { countMissingStls } from "./stlAutoSync";
 
 export function countPartWarnings(
   parts: ReviewPart[],

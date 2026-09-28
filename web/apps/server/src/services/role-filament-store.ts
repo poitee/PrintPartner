@@ -1,13 +1,13 @@
 import type { AppRepository } from "../db/repository.js";
 import { DEFAULT_NAMING_PROFILE } from "@print-partner/domain";
 
-export type RoleFilamentDefault = {
+type RoleFilamentDefault = {
   filament_color_id: string | null;
   filament_custom_hex: string | null;
   spoolman_spool_id: string | null;
 };
 
-export type RoleFilamentDefaults = Record<string, RoleFilamentDefault>;
+type RoleFilamentDefaults = Record<string, RoleFilamentDefault>;
 
 const EMPTY_DEFAULT: RoleFilamentDefault = {
   filament_color_id: null,

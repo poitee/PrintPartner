@@ -70,7 +70,7 @@ export interface IntegrationPort {
   getStatus(id: string): Promise<PrinterHostStatus>;
 }
 
-export type IntegrationStoreDeps = {
+type IntegrationStoreDeps = {
   repo: AppRepository;
   getAdapter(type: IntegrationType): IntegrationAdapter | undefined;
 };

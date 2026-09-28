@@ -1,10 +1,7 @@
 import type { ManifestSelection, ManifestSelections } from "@print-partner/contracts";
+import { isRecord } from "../lib/guards.js";
 
 export type { ManifestSelection, ManifestSelections } from "@print-partner/contracts";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value != null && typeof value === "object" && !Array.isArray(value);
-}
 
 function parseVariantId(value: unknown, path: string): string {
   if (typeof value !== "string" || !value.trim()) {

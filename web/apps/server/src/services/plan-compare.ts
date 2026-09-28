@@ -7,7 +7,7 @@ import {
   manifestSelectionEqual,
 } from "./manifest-selections.js";
 
-export type PlanCompareDiff = {
+type PlanCompareDiff = {
   plan_a: { id: number; name: string };
   plan_b: { id: number; name: string };
   base: { a: string | null; b: string | null; same: boolean };

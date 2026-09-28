@@ -58,7 +58,7 @@ export type CaptureAcceptedOperationalExportResult =
     }
   | { readonly kind: "integrity" };
 
-export type CaptureAcceptedOperationalExportDependencies = Readonly<{
+type CaptureAcceptedOperationalExportDependencies = Readonly<{
   repository: Pick<
     AppRepository,
     "getOwnedProfileIdentity" | "readAcceptedPlanOperationalSnapshot"
@@ -66,7 +66,7 @@ export type CaptureAcceptedOperationalExportDependencies = Readonly<{
   profileId: number;
 }>;
 
-export type AcceptedOperationalExportFailureCode =
+type AcceptedOperationalExportFailureCode =
   | "profile_not_found"
   | "accepted_state_unavailable"
   | "accepted_integrity"

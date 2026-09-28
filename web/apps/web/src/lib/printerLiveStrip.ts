@@ -4,9 +4,6 @@ import type { StatusTone } from "./statusTone";
 
 export type LiveStripHostType = "moonraker" | "prusalink" | "bambu";
 
-/** Poll linked hosts for Progress — avoid hammering LAN printers. */
-export const PRINTER_LIVE_STRIP_POLL_MS = 5_000;
-
 /** Format optional ETA for the Progress live strip. */
 export function formatEtaSeconds(etaSeconds: number | undefined | null): string | null {
   if (etaSeconds == null || !Number.isFinite(etaSeconds) || etaSeconds < 0) return null;
@@ -142,21 +139,4 @@ export function formatPrinterStatusPill(
   if (status.state === "offline") return "Offline";
   if (status.state === "error") return "Error";
   return status.state;
-}
-
-/**
- * One-line summary for a linked host on Progress (legacy / tests).
- * Example: `Shop Printer · Printing frame_x.gcode · 34% · ETA ~12m`
- */
-export function formatPrinterLiveLine(opts: {
-  name: string;
-  status: PrinterHostStatus | null | undefined;
-}): string {
-  const { name, status } = opts;
-  if (!status) return `${name} · …`;
-  const job = formatPrinterJobLine(status);
-  if (status.state === "printing" || status.state === "paused") {
-    return `${name} · ${job}`;
-  }
-  return `${name} · ${job}`;
 }

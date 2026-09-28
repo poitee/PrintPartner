@@ -13,7 +13,7 @@ describe("LoggingManagementCard", () => {
   it("sends only writable settings and displays the server's saved value", async () => {
     const config = { minSeverity: "info", maxLogs: 10000, enableWorkflowTracking: true };
     const request = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
+      const url = String(input).replace(window.location.origin, "");
       if (url === "/settings/logging/config") {
         if (init?.method === "POST") {
           expect(JSON.parse(String(init.body))).toEqual({ enableWorkflowTracking: false });
@@ -29,12 +29,12 @@ describe("LoggingManagementCard", () => {
     const toggle = await screen.findByRole("switch", { name: "Workflow Tracking" });
     fireEvent.click(toggle);
     await waitFor(() => expect(toggle.getAttribute("aria-checked")).toBe("false"));
-    expect(request).toHaveBeenCalledWith("/settings/logging/config", expect.objectContaining({ method: "POST" }));
+    expect(request).toHaveBeenCalledWith(`${window.location.origin}/settings/logging/config`, expect.objectContaining({ method: "POST" }));
   });
 
   it("shows recent workflow requests with their failure details", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
+      const url = String(input).replace(window.location.origin, "");
       if (url === "/settings/logging/config") {
         return new Response(JSON.stringify({
           minSeverity: "info",
@@ -79,7 +79,7 @@ describe("LoggingManagementCard", () => {
   it("clears a transient viewer error after a successful refresh", async () => {
     let logRequests = 0;
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
+      const url = String(input).replace(window.location.origin, "");
       if (url === "/settings/logging/config") {
         return new Response(JSON.stringify({
           minSeverity: "info",

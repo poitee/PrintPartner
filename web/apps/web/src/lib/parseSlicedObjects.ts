@@ -6,7 +6,7 @@
 
 import JSZip from "jszip";
 
-export type SlicedObjectSource =
+type SlicedObjectSource =
   | "exclude_object_define"
   | "m486"
   | "prusa_objects_info"
@@ -161,7 +161,7 @@ function parsePrusaObjectsInfo(text: string): ParsedSlicedObject[] {
 }
 
 /** Extract estimated print time and filament weight from gcode header comments. */
-export function parseGcodeStats(
+function parseGcodeStats(
   text: string,
 ): { printTime?: string; filamentWeightG?: number } {
   // Estimated print time — OrcaSlicer / PrusaSlicer / BambuStudio emit variants:
@@ -213,7 +213,6 @@ function pngToDataUrl(bytes: Uint8Array): string {
   }
   return `data:image/png;base64,${btoa(binary)}`;
 }
-
 
 /** Pull object@name from 3MF model XML. */
 export function parse3mfObjectNamesFromXml(xml: string): ParsedSlicedObject[] {

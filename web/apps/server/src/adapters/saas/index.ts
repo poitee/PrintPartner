@@ -1,6 +1,6 @@
-import { HOSTED_TENANT_DISK_QUOTA_BYTES, type JobSnapshot } from "@print-partner/contracts";
+import { HOSTED_TENANT_DISK_QUOTA_BYTES } from "@print-partner/contracts";
 import { join } from "node:path";
-import type { AuthProvider, DbStore, JobRunner, RepoSource, StoragePort } from "../../ports/index.js";
+import type { DbStore, JobRunner, StoragePort } from "../../ports/index.js";
 import {
   closeBundle,
   connectBundle,
@@ -9,10 +9,9 @@ import {
   repositoryForTenant,
   type DatabaseBundle,
 } from "../../db/database.js";
-import { createJobRunner } from "../../routes/jobs.js";
+import { createJobRunner } from "../../services/job-runner.js";
 import type { AppRepository } from "../../db/repository.js";
 import { SaasS3StoragePort, TenantLocalStoragePort } from "./storage-s3.js";
-import { SelfHostRepoSource } from "../self-host/index.js";
 
 export class SaasDbStore implements DbStore {
   readonly bundle: DatabaseBundle;
@@ -47,25 +46,9 @@ export class SaasDbStore implements DbStore {
   }
 }
 
-export class SaasAuthProvider implements AuthProvider {
-  async resolveTenant(
-    request: { headers: Record<string, string | string[] | undefined> },
-  ): Promise<string | null> {
-    const auth = request.headers["x-tenant-id"];
-    if (typeof auth === "string" && auth.trim()) return auth.trim();
-    if (typeof request.headers.authorization === "string") {
-      if (request.headers.authorization.startsWith("Bearer ")) return "saas-dev";
-      if (request.headers.authorization.startsWith("Basic ")) return "saas-basic";
-    }
-    return process.env.SAAS_ALLOW_ANONYMOUS === "1" ? "anonymous" : null;
-  }
-}
-
-export type SaasPorts = {
+type SaasPorts = {
   db: SaasDbStore;
   storage: StoragePort;
-  repoSource: RepoSource;
-  auth: AuthProvider;
   jobs: JobRunner;
   getRepository: (tenantId: string) => AppRepository;
   reposDir: string;
@@ -97,8 +80,6 @@ export function createSaasPorts(dataDir: string): SaasPorts {
   return {
     db: dbStore,
     storage,
-    repoSource: new SelfHostRepoSource(getRepo),
-    auth: new SaasAuthProvider(),
     jobs,
     getRepository,
     reposDir: join(dataDir, "repos"),
@@ -106,5 +87,3 @@ export function createSaasPorts(dataDir: string): SaasPorts {
     dataDir,
   };
 }
-
-export type { JobSnapshot };

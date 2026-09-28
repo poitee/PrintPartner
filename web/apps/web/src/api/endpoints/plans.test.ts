@@ -1,18 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { jsonResponse, createEndpointTestHttp } from "../endpointTestHttp";
 import {
-  addProfileAddonLayer,
   archiveProfile,
   createProfile,
   deleteProfile,
-  deleteProfileLayer,
   duplicateProfile,
-  fetchProfileLayers,
-  fetchProfilePartsGrouped,
   fetchProfiles,
   patchPart,
-  replaceProfileLayer,
-  setProfileBaseLayer,
   touchProfileLastUsed,
   updateProfile,
 } from "./plans";
@@ -44,28 +38,6 @@ describe("plan endpoints", () => {
       special_request: null,
     });
     expect(http.requestJson(6)).toEqual({ name: "Copy", clear_checkoff: true });
-  });
-
-  it("handles plan layers and grouped parts", async () => {
-    http
-      .respond(jsonResponse({ layers: [] }))
-      .respond(jsonResponse({ ok: true }))
-      .respond(jsonResponse({ groups: [], total: 0 }))
-      .respond(jsonResponse({ layers: [] }))
-      .respond(jsonResponse({ layers: [] }))
-      .respond(jsonResponse({ layers: [] }));
-
-    await setProfileBaseLayer(7, 3);
-    await deleteProfileLayer(7, 4);
-    await fetchProfilePartsGrouped(7, " gear ");
-    await replaceProfileLayer(7, 5, 6);
-    await fetchProfileLayers(7);
-    await addProfileAddonLayer(7, 8);
-
-    expect(http.requestJson(0)).toEqual({ project_id: 3 });
-    expect(http.calls[2]?.[0]).toContain("/plans/7/parts-grouped?query=gear");
-    expect(http.requestJson(3)).toEqual({ project_id: 6 });
-    expect(http.requestJson(5)).toEqual({ project_id: 8 });
   });
 
   it("patches part filament assignment", async () => {

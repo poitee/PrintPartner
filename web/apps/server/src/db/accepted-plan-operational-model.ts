@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 export const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 export const ACCEPTED_READ_PAGE_SIZE = 256;
 export const ACCEPTED_TEXT_PAGE_SIZE = 16;
-export const ACCEPTED_IN_LIST_SIZE = 64;
+const ACCEPTED_IN_LIST_SIZE = 64;
 
 export function chunks<T>(items: readonly T[], size = ACCEPTED_IN_LIST_SIZE): T[][] {
   const result: T[][] = [];

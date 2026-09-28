@@ -20,7 +20,7 @@ import type { PrinterHostStatus } from "@print-partner/contracts";
 import { loadConfig } from "../config.js";
 import { getDb, SqliteDatabase } from "../db/client.js";
 import { AppRepository } from "../db/repository.js";
-import { InProcessJobRunner } from "../routes/jobs.js";
+import { InProcessJobRunner } from "../services/job-runner.js";
 import { saveFleet } from "../services/printer-fleet.js";
 import { getLogger } from "../services/logger.js";
 import type { IntegrationPort } from "../integrations/store.js";

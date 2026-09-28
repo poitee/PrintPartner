@@ -23,7 +23,7 @@ export type CompatibilityDirtyRepairDependencies = {
   readonly beforeBuildRepair?: (profileId: number) => void;
 };
 
-export type CompatibilityDirtyRepairResult = {
+type CompatibilityDirtyRepairResult = {
   readonly buildsRepaired: number;
   readonly revisionsCreated: number;
   readonly partsCaptured: number;

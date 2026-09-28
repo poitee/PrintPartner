@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppRepository } from "../db/repository.js";
-import { InProcessJobRunner } from "../routes/jobs.js";
+import { InProcessJobRunner } from "../services/job-runner.js";
 import {
   enqueuePrinterSend,
   loadPrinterSendQueue,

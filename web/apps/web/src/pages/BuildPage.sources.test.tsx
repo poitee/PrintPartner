@@ -58,11 +58,8 @@ vi.mock("../context/PlanActionsContext", () => ({
 vi.mock("../context/PlanWorkspaceContext", () => ({
   usePlanWorkspace: () => ({ review: null, refresh: mocks.refresh }),
 }));
-vi.mock("../context/ImportRulesSaveContext", () => ({
-  useImportRulesSaveRegistry: () => ({ flushAll: mocks.flush }),
-}));
-vi.mock("../context/KitManifestSaveContext", () => ({
-  useKitManifestSaveRegistry: () => ({ flushAll: mocks.flush }),
+vi.mock("../context/BuildSaveFlushContext", () => ({
+  useFlushBuildPageSaves: () => async () => mocks.flush(),
 }));
 vi.mock("../hooks/useEngineHealth", () => ({
   useEngineHealth: () => ({ health: { ok: true }, error: null, loading: false }),

@@ -4,7 +4,7 @@ import {
   matchRoutes,
   useLocation,
   useNavigationType,
-} from "react-router";
+} from "react-router-dom";
 import * as Sentry from "@sentry/react";
 
 const sentryDsn = import.meta.env.VITE_SENTRY_DSN?.trim();

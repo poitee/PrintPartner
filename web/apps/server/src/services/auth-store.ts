@@ -6,9 +6,9 @@ import type { AuthIdentityProvider, SessionUser } from "../routes/auth-types.js"
 import * as sqliteSchema from "../db/schema.js";
 import * as pgSchema from "../db/schema-pg.js";
 
-export type AuthSchemaBundle = typeof sqliteSchema | typeof pgSchema;
+type AuthSchemaBundle = typeof sqliteSchema | typeof pgSchema;
 
-export type DbUser = {
+type DbUser = {
   id: string;
   email: string | null;
   displayName: string;
@@ -17,7 +17,7 @@ export type DbUser = {
   createdAt: string;
 };
 
-export type PlanShareRow = {
+type PlanShareRow = {
   id: string;
   token: string;
   fromUserId: string;

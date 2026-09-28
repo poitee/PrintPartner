@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { externalApiAccessEnabled, HOSTED_PLANNING_COMPOSE_NOTE, isHostedPlanning } from "@print-partner/contracts";
-import { fetchHealth, fetchLegalDocument, fetchWorkflowGuide } from "../api/endpoints/help";
+import { fetchLegalDocument, fetchWorkflowGuide } from "../api/endpoints/help";
 import { fetchManifestRegistry, type ManifestRegistryEntry } from "../api/endpoints/planManifests";
 import { engineBaseUrl } from "../api/endpoints/runtime";
 import SupportCta from "../components/SupportCta";
@@ -88,21 +88,16 @@ export default function HelpPage() {
   const [registryLoading, setRegistryLoading] = useState(false);
   const [workflowError, setWorkflowError] = useState<string | null>(null);
   const [legalError, setLegalError] = useState<string | null>(null);
-  const [dataDir, setDataDir] = useState<string | null>(null);
   const [engineUrl, setEngineUrl] = useState<string | null>(null);
   const [registryEntries, setRegistryEntries] = useState<ManifestRegistryEntry[]>([]);
   const [registryError, setRegistryError] = useState<string | null>(null);
 
   const stepPaths = workflowStepPaths(selectedProfileId);
 
+  const dataDir = engineReady ? health?.data_dir : null;
+
   useEffect(() => {
-    if (!engineReady) {
-      setDataDir(null);
-      return;
-    }
-    void fetchHealth()
-      .then((h) => setDataDir(h.data_dir))
-      .catch(() => setDataDir(null));
+    if (!engineReady) return;
     void engineBaseUrl().then(setEngineUrl);
   }, [engineReady]);
 

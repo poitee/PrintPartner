@@ -21,7 +21,7 @@ export type FilamentAssignment = Readonly<{
   spoolmanSpoolId: string | null;
 }>;
 
-export type FilamentPatch = Readonly<{
+type FilamentPatch = Readonly<{
   colorId?: string | null;
   customHex?: string | null;
   spoolmanSpoolId?: string | null;
@@ -86,7 +86,7 @@ function colorIdentity(color: FilamentColor): string {
   return "unset";
 }
 
-export function sameFilamentAssignment(
+function sameFilamentAssignment(
   left: FilamentAssignment,
   right: FilamentAssignment,
 ): boolean {

@@ -353,19 +353,11 @@ export type SchemaTables = Pick<
 >;
 
 export type ProjectRow = typeof defaultSchema.projects.$inferSelect;
-export type AppRepositoryOptions = {
+type AppRepositoryOptions = {
   readonly clock?: () => Date;
   readonly tokenFactory?: () => string;
   readonly sourceFilesystemPolicy?: SourceFilesystemPolicy;
 };
-export class PlanTransactionUnavailableError extends Error {
-  readonly code = "transaction_unavailable" as const;
-
-  constructor() {
-    super("This operation requires a native database transaction");
-    this.name = "PlanTransactionUnavailableError";
-  }
-}
 
 export class SourceActivationConflictError extends Error {
   readonly code = "source_activation_conflict" as const;
@@ -390,7 +382,7 @@ export type SourceActivationObservation = Readonly<
     | "legacyManifestCutover"
   >
 >;
-export type ProfileRow = typeof defaultSchema.buildProfiles.$inferSelect;
+type ProfileRow = typeof defaultSchema.buildProfiles.$inferSelect;
 
 export type ProfileHeader = {
   readonly id: number;
@@ -411,7 +403,7 @@ export type AcceptedProfileSummary = Readonly<{
   progress: AcceptedProfileProgress;
 }>;
 
-export type ReadAcceptedProfileSummary =
+type ReadAcceptedProfileSummary =
   { readonly kind: "found"; readonly summary: AcceptedProfileSummary } | { readonly kind: "missing" };
 
 export type OwnedProfileIdentity = {
@@ -420,28 +412,21 @@ export type OwnedProfileIdentity = {
   readonly orderNumber: string | null;
   readonly archivedAt: string | null;
 };
-export type LayerRow = typeof defaultSchema.profileLayers.$inferSelect;
+type LayerRow = typeof defaultSchema.profileLayers.$inferSelect;
 export type PartDbRow = typeof defaultSchema.parts.$inferSelect;
-export type SourceDocRow = typeof defaultSchema.sourceDocs.$inferSelect;
-export type SourceNoteRow = typeof defaultSchema.sourceNotes.$inferSelect;
-export type PlanDecisionRow = typeof defaultSchema.planDecisions.$inferSelect;
-export type PlanSnapshotRow = typeof defaultSchema.planSnapshots.$inferSelect;
-export type PrintJobRow = typeof defaultSchema.printJobs.$inferSelect;
-export type PrintJobPartRow = typeof defaultSchema.printJobParts.$inferSelect;
-export type AppEventRow = typeof defaultSchema.appEvents.$inferSelect;
-export type SourceRevisionRow = typeof defaultSchema.sourceRevisions.$inferSelect;
-export type PlanRevisionInputSetRow = typeof defaultSchema.planRevisionInputSets.$inferSelect;
-export type PlanRevisionInputRow = typeof defaultSchema.planRevisionInputs.$inferSelect;
-export type PlanRevisionRow = typeof defaultSchema.planRevisions.$inferSelect;
-export type PlanRevisionPartRow = typeof defaultSchema.planRevisionParts.$inferSelect;
-export type PlanDraftRow = typeof defaultSchema.planDrafts.$inferSelect;
-export type PlanDraftInputRow = typeof defaultSchema.planDraftInputs.$inferSelect;
-export type PlanDraftPartRow = typeof defaultSchema.planDraftParts.$inferSelect;
-export type PlanDraftRequiredUnitReconciliationRow =
-  typeof defaultSchema.planDraftRequiredUnitReconciliations.$inferSelect;
-export type PlanApplyRequestRow = typeof defaultSchema.planApplyRequests.$inferSelect;
+type PlanDecisionRow = typeof defaultSchema.planDecisions.$inferSelect;
+type PlanSnapshotRow = typeof defaultSchema.planSnapshots.$inferSelect;
+type PrintJobRow = typeof defaultSchema.printJobs.$inferSelect;
+type PrintJobPartRow = typeof defaultSchema.printJobParts.$inferSelect;
+type AppEventRow = typeof defaultSchema.appEvents.$inferSelect;
+type SourceRevisionRow = typeof defaultSchema.sourceRevisions.$inferSelect;
+type PlanRevisionInputSetRow = typeof defaultSchema.planRevisionInputSets.$inferSelect;
+type PlanRevisionRow = typeof defaultSchema.planRevisions.$inferSelect;
+type PlanRevisionPartRow = typeof defaultSchema.planRevisionParts.$inferSelect;
+type PlanDraftRow = typeof defaultSchema.planDrafts.$inferSelect;
+type PlanApplyRequestRow = typeof defaultSchema.planApplyRequests.$inferSelect;
 
-export type RequiredUnitView = {
+type RequiredUnitView = {
   readonly token: string;
   readonly objectName: string;
   readonly revisionPartId: number;
@@ -451,7 +436,7 @@ export type RequiredUnitView = {
   readonly assembled: boolean;
 };
 
-export type ReadCurrentRequiredUnitSetResult =
+type ReadCurrentRequiredUnitSetResult =
   | {
       readonly kind: "unavailable";
       readonly reason: "no_accepted_revision" | "compatibility_dirty" | "uninitialized";
@@ -506,7 +491,7 @@ export type AcceptedPlanBase =
       readonly planVersion: number;
     };
 
-export type ApplyPlanChangesCommand = {
+type ApplyPlanChangesCommand = {
   readonly profileId: number;
   readonly draftId: number;
   readonly expectedSnapshotDigest: string;
@@ -585,7 +570,7 @@ type SavePlanChoicesFailure =
   | Exclude<ApplyPlanChangesResult, { kind: "applied" | "existing" | "already_applied" }>
   | { readonly kind: "no_layers" | "no_stls" | "would_wipe" | "part_not_found" | "part_ambiguous" | "required_unit_set_unavailable" };
 
-export type SavePlanChoicesResult =
+type SavePlanChoicesResult =
   | { readonly kind: "saved"; readonly receipt: AppliedPlanReceipt; readonly closedDraftIds: readonly number[] }
   | SavePlanChoicesFailure;
 
@@ -595,7 +580,7 @@ class PlanSaveAborted extends Error {
   }
 }
 
-export type SetAcceptedPrintedCountsResult =
+type SetAcceptedPrintedCountsResult =
   | { readonly kind: "updated"; readonly updatedParts: number }
   | { readonly kind: "part_not_found" | "invalid_rows" }
   | AcceptedProgressFailure;
@@ -610,7 +595,7 @@ export type EditPlanDraftPartsResult =
   | { readonly kind: "not_found" }
   | { readonly kind: "transaction_unavailable" };
 
-export type PlanDraftLifecycleTransition =
+type PlanDraftLifecycleTransition =
   | { readonly kind: "abandon"; readonly expectedLifecycleVersion: number }
   | { readonly kind: "resume"; readonly expectedLifecycleVersion: number };
 
@@ -642,7 +627,7 @@ export type RebasePlanDraftResult =
   | { readonly kind: "no_layers" | "no_stls" | "would_wipe" }
   | { readonly kind: "transaction_unavailable" };
 
-export type ReplaceWorkingPlanSourcesResult =
+type ReplaceWorkingPlanSourcesResult =
   | {
       readonly kind: "updated" | "unchanged";
       readonly selection: WorkingSourceSelection;
@@ -659,25 +644,25 @@ type StoredRebasePlanDraftResult = Extract<
   }
 >;
 
-export type AcceptedPlanRevisionPart = PlanRevisionPartRow & {
+type AcceptedPlanRevisionPart = PlanRevisionPartRow & {
   effectiveRole: string;
   effectiveQuantity: number;
 };
 
-export type AcceptedPlanRevision = AcceptedPlanRevisionIdentity<PlanRevisionRow> & {
+type AcceptedPlanRevision = AcceptedPlanRevisionIdentity<PlanRevisionRow> & {
   planVersion: number;
   parts: AcceptedPlanRevisionPart[];
 };
 
-export type SourceNamingCommand =
+type SourceNamingCommand =
   { readonly kind: "use_defaults" } | { readonly kind: "override"; readonly profile: StlNamingProfileDict };
 
-export type SourceNamingReadResult =
+type SourceNamingReadResult =
   | { readonly kind: "found"; readonly settings: SourceNamingResponse }
   | { readonly kind: "source_not_found" }
   | { readonly kind: "invalid_state" };
 
-export type SourceNamingSaveResult =
+type SourceNamingSaveResult =
   | { readonly kind: "saved"; readonly settings: SourceNamingResponse }
   | { readonly kind: "source_not_found" }
   | { readonly kind: "conflict" };
@@ -731,7 +716,7 @@ type PlanFreshnessContext = {
   readonly invalidProfiles: ReadonlySet<number>;
 };
 
-export type SlicerProfileRow = {
+type SlicerProfileRow = {
   id: number;
   name: string;
   /** Slicer dialect tag; null for filament rows, which carry no such column. */
@@ -777,7 +762,7 @@ export type SlicerInstanceRow = {
   updatedAt: string;
 };
 
-export type SyncedPrinterProfileInput = {
+type SyncedPrinterProfileInput = {
   name: string;
   slicerFormat: string;
   slicerVersion?: string | null;
@@ -789,7 +774,7 @@ export type SyncedPrinterProfileInput = {
 };
 
 /** Input for a process profile upserted by the profile-sync watcher. */
-export type SyncedProcessProfileInput = {
+type SyncedProcessProfileInput = {
   name: string;
   slicerFormat: string;
   slicerVersion?: string | null;
@@ -799,7 +784,7 @@ export type SyncedProcessProfileInput = {
 };
 
 /** Input for a filament profile upserted by the profile-sync watcher. */
-export type SyncedFilamentProfileInput = {
+type SyncedFilamentProfileInput = {
   name: string;
   materialType: string;
   slicerVersion?: string | null;
@@ -816,7 +801,7 @@ export type SyncedFilamentProfileInput = {
   sourcePath: string;
 };
 
-export type SourceDocSummary = {
+type SourceDocSummary = {
   id: number;
   path: string;
   kind: string;
@@ -826,7 +811,7 @@ export type SourceDocSummary = {
   page_count: number | null;
 };
 
-export type SourceNoteSummary = {
+type SourceNoteSummary = {
   id: number;
   project_id: number;
   profile_id: number | null;

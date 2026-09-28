@@ -10,11 +10,8 @@ import { createSelfHostPorts } from "./adapters/self-host/index.js";
 import { createSaasPorts } from "./adapters/saas/index.js";
 import type { AppPorts } from "./ports/index.js";
 import { registerHealthRoutes } from "./routes/health.js";
-import {
-  registerJobWebSocket,
-  createJobRunner,
-  type InProcessJobRunner,
-} from "./routes/jobs.js";
+import { registerJobWebSocket } from "./routes/jobs.js";
+import { createJobRunner, type InProcessJobRunner } from "./services/job-runner.js";
 import { registerCoreRoutes } from "./routes/core-routes.js";
 import { registerBackupRoutes } from "./routes/backups.js";
 import { registerLoggingRoutes } from "./routes/logging.js";
@@ -44,6 +41,7 @@ import type { SaasDbStore } from "./adapters/saas/index.js";
 import type { SelfHostDbStore } from "./adapters/self-host/index.js";
 import type { AppRepository } from "./db/repository.js";
 import { getDb } from "./db/client.js";
+import type { AppDrizzleDb } from "./db/sync-db-bridge.js";
 import { createAuthStore, type AuthStore } from "./services/auth-store.js";
 import { createBoardStore, type BoardStore } from "./services/board-store.js";
 import { validateApiKey } from "./services/api-key-manager.js";
@@ -80,7 +78,7 @@ import {
   TRUSTED_SINGLE_USER_SOURCE_FILESYSTEM,
 } from "./services/source-filesystem-policy.js";
 
-export type RuntimePorts = AppPorts & {
+type RuntimePorts = AppPorts & {
   repository?: AppRepository;
   reposDir?: string;
   sourcesDir?: string;
@@ -113,41 +111,35 @@ function resolveRepository(ports: RuntimePorts): AppRepository | null {
   return null;
 }
 
-function resolveAuthStore(ports: RuntimePorts, config: ServerConfig): AuthStore | null {
-  if (!config.multiUser && !config.singleUserAuth) return null;
-  const options = {
-    claimDefaultTenantForFirstUser: !config.singleUserAuth && config.deployMode !== "saas",
-  };
+type StoreDb = Readonly<{ db: AppDrizzleDb; driver: "sqlite" | "postgres" }>;
+
+function resolveStoreDb(ports: RuntimePorts): StoreDb | null {
   const db = ports.db;
   if ("sqlite" in db) {
     const sqlite = (db as SelfHostDbStore).sqlite;
-    if (sqlite?.drizzle) return createAuthStore(getDb(sqlite), "sqlite", options);
+    if (sqlite?.drizzle) return { db: getDb(sqlite), driver: "sqlite" };
   }
   if ("bundle" in db) {
     const bundle = (db as SaasDbStore).bundle;
-    if (bundle.postgres?.drizzle) {
-      return createAuthStore(bundle.postgres.drizzle, "postgres", options);
-    }
-    if (bundle.sqlite?.drizzle) return createAuthStore(getDb(bundle.sqlite), "sqlite", options);
+    if (bundle.postgres?.drizzle) return { db: bundle.postgres.drizzle, driver: "postgres" };
+    if (bundle.sqlite?.drizzle) return { db: getDb(bundle.sqlite), driver: "sqlite" };
   }
   return null;
 }
 
+function resolveAuthStore(ports: RuntimePorts, config: ServerConfig): AuthStore | null {
+  if (!config.multiUser && !config.singleUserAuth) return null;
+  const store = resolveStoreDb(ports);
+  if (!store) return null;
+  return createAuthStore(store.db, store.driver, {
+    claimDefaultTenantForFirstUser: !config.singleUserAuth && config.deployMode !== "saas",
+  });
+}
+
 function resolveBoardStore(ports: RuntimePorts, config: ServerConfig): BoardStore | null {
   if (!hostedPlanningPolicy(config.deployMode).hostedPlanning) return null;
-  const db = ports.db;
-  if ("sqlite" in db) {
-    const sqlite = (db as SelfHostDbStore).sqlite;
-    if (sqlite?.drizzle) return createBoardStore(getDb(sqlite), "sqlite");
-  }
-  if ("bundle" in db) {
-    const bundle = (db as SaasDbStore).bundle;
-    if (bundle.postgres?.drizzle) {
-      return createBoardStore(bundle.postgres.drizzle, "postgres");
-    }
-    if (bundle.sqlite?.drizzle) return createBoardStore(getDb(bundle.sqlite), "sqlite");
-  }
-  return null;
+  const store = resolveStoreDb(ports);
+  return store ? createBoardStore(store.db, store.driver) : null;
 }
 
 function configuredTenantIds(config: ServerConfig, authStore: AuthStore | null): string[] {

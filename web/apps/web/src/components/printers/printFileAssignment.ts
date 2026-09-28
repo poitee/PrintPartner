@@ -42,7 +42,7 @@ export function chosenBuildId(value: string): number | null {
   return Number.isInteger(id) && id > 0 ? id : null;
 }
 
-export type StorageCrumb = Readonly<{ label: string; path: string }>;
+type StorageCrumb = Readonly<{ label: string; path: string }>;
 
 /**
  * The trail from the storage root down to `path`.

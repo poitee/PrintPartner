@@ -12,7 +12,6 @@ import {
 } from "../services/accepted-plate-workspace.js";
 import { loadFleet } from "../services/printer-fleet.js";
 import {
-  isRecord,
   parseArrangeRequest,
   parseInitializeRequest,
   parseMoveRequest,
@@ -23,6 +22,7 @@ import {
   parseTransferRequest,
   profileId,
 } from "./accepted-plates-route-model.js";
+import { isRecord } from "../lib/guards.js";
 
 type RouteDependencies = Readonly<{
   repo: AppRepository;

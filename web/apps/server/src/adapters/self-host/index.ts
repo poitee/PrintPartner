@@ -1,10 +1,9 @@
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { JobSnapshot } from "@print-partner/contracts";
-import type { AuthProvider, DbStore, JobRunner, RepoSource, StoragePort } from "../../ports/index.js";
+import type { DbStore, JobRunner, StoragePort } from "../../ports/index.js";
 import { getDb, SqliteDatabase } from "../../db/client.js";
 import { AppRepository } from "../../db/repository.js";
-import { createJobRunner } from "../../routes/jobs.js";
+import { createJobRunner } from "../../services/job-runner.js";
 import {
   TRUSTED_SINGLE_USER_SOURCE_FILESYSTEM,
   type SourceFilesystemPolicy,
@@ -38,7 +37,7 @@ export class SelfHostDbStore implements DbStore {
   }
 }
 
-export class SelfHostStoragePort implements StoragePort {
+class SelfHostStoragePort implements StoragePort {
   constructor(private readonly rootDir: string) {}
 
   resolvePath(relativePath: string): string {
@@ -65,31 +64,9 @@ export class SelfHostStoragePort implements StoragePort {
   }
 }
 
-export class SelfHostRepoSource implements RepoSource {
-  constructor(private readonly getRepo: () => AppRepository) {}
-
-  async listSources(): Promise<Array<{ id: number; name: string }>> {
-    return this.getRepo().listSources().map((s) => ({ id: s.id, name: s.name }));
-  }
-
-  async syncSource(sourceId: number): Promise<void> {
-    const { syncProjectById } = await import("../../routes/sources.js");
-    const repo = this.getRepo();
-    await syncProjectById(repo, repo.reposDir, sourceId);
-  }
-}
-
-export class SelfHostAuthProvider implements AuthProvider {
-  async resolveTenant(): Promise<string | null> {
-    return "default";
-  }
-}
-
-export type SelfHostPorts = {
+type SelfHostPorts = {
   db: SelfHostDbStore;
   storage: SelfHostStoragePort;
-  repoSource: RepoSource;
-  auth: AuthProvider;
   jobs: JobRunner;
   repository: AppRepository;
   reposDir: string;
@@ -111,8 +88,6 @@ export function createSelfHostPorts(
   return {
     db: dbStore,
     storage: new SelfHostStoragePort(dataDir),
-    repoSource: new SelfHostRepoSource(getRepo),
-    auth: new SelfHostAuthProvider(),
     jobs,
     get repository() {
       return getRepo();
@@ -121,6 +96,3 @@ export function createSelfHostPorts(
     sourcesDir: join(dataDir, "sources"),
   };
 }
-
-/** Satisfies JobRunner via InProcessJobRunner */
-export type { JobSnapshot };

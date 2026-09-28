@@ -2,9 +2,9 @@ import type { AppUpdateCheckResponse } from "@print-partner/contracts";
 import type { ServerConfig } from "../config.js";
 import {
   cancelResponseBody,
-  isJsonObject,
   readBoundedJsonResponse,
 } from "../lib/bounded-response.js";
+import { isRecord } from "../lib/guards.js";
 
 const MAX_GITHUB_RELEASE_RESPONSE_BYTES = 1024 * 1024;
 
@@ -90,7 +90,7 @@ async function fetchLatestFromGitHub(
     return null;
   }
   const body = await readBoundedJsonResponse(res, MAX_GITHUB_RELEASE_RESPONSE_BYTES);
-  if (!isJsonObject(body)) return null;
+  if (!isRecord(body)) return null;
   const tag = "tag_name" in body && typeof body.tag_name === "string"
     ? body.tag_name.trim()
     : "";
@@ -101,7 +101,7 @@ async function fetchLatestFromGitHub(
   return { version: tag, releaseUrl };
 }
 
-export type CheckAppUpdateOptions = {
+type CheckAppUpdateOptions = {
   fetchImpl?: typeof fetch;
   now?: () => number;
 };

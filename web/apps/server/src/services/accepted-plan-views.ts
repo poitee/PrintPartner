@@ -5,16 +5,16 @@ import type { ReadAcceptedPlanOperationalSnapshotResult } from "../db/accepted-p
 import { getColorById, resolvePartFilamentHex } from "./filament-catalog.js";
 import type { FilamentResolveContext } from "./filament-resolve.js";
 
-export type AcceptedUnavailableReason = "compatibility_dirty" | "uninitialized";
+type AcceptedUnavailableReason = "compatibility_dirty" | "uninitialized";
 
-export type AcceptedCollectionViewResult<T> =
+type AcceptedCollectionViewResult<T> =
   | { readonly kind: "ready" | "empty"; readonly body: T }
   | {
       readonly kind: "accepted_state_unavailable";
       readonly reason: AcceptedUnavailableReason;
     };
 
-export type AcceptedCheckoffPart = {
+type AcceptedCheckoffPart = {
   readonly id: number;
   readonly filename: string;
   readonly match_key: string;
@@ -31,19 +31,19 @@ export type AcceptedCheckoffPart = {
   readonly spool_badge?: string;
 };
 
-export type AcceptedCheckoffBody = {
+type AcceptedCheckoffBody = {
   readonly profile_id: number;
   readonly summary: string;
   readonly parts: readonly AcceptedCheckoffPart[];
 };
 
-export type AcceptedPartAssembledBody = {
+type AcceptedPartAssembledBody = {
   readonly part_id: number;
   readonly assembled_count: number;
   readonly assembled_units: readonly boolean[];
 };
 
-export type AcceptedPartAssembledViewResult =
+type AcceptedPartAssembledViewResult =
   | { readonly kind: "ready"; readonly body: AcceptedPartAssembledBody }
   | { readonly kind: "part_not_found" }
   | {

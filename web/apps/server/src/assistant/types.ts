@@ -1,5 +1,5 @@
-import type { AiProviderId, AssistantChatMessage, AssistantProposedAction } from "@print-partner/contracts";
-import type { AssistantToolSpec } from "./tools.js";
+import type { AiProviderId, AssistantChatMessage, } from "@print-partner/contracts";
+import type { AssistantToolSpec } from "./tool-specs.js";
 
 export type AssistantChatParams = {
   system: string;
@@ -45,12 +45,6 @@ export type AssistantCompletionResult = {
   content: string;
   toolCalls: AssistantToolCallRequest[];
   stopReason: "end_turn" | "tool_use";
-};
-
-export type AssistantTurnResult = {
-  content: string;
-  proposedActions: AssistantProposedAction[];
-  toolsDegraded: boolean;
 };
 
 /** LLM chat adapter — keys stay on the server; never log secrets. */

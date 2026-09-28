@@ -80,7 +80,7 @@ export type RequiredUnitSelectionBasisRow = {
   readonly assembled: boolean;
 };
 
-export type RequiredUnitReconciliationResult =
+type RequiredUnitReconciliationResult =
   | {
       readonly kind: "unresolved";
       readonly conflicts: readonly RequiredUnitReconciliationConflict[];

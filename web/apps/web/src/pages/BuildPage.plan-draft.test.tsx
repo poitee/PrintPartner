@@ -2,9 +2,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { PlanDraftWorkspace } from "@print-partner/contracts";
-import { EngineHttpError } from "../api/engineTransport";
 import {
-  planDraftProductionBlockFromError,
   planDraftRevisionPartLabels,
 } from "../lib/planDraftUi";
 
@@ -27,18 +25,6 @@ const readyWorkspace: PlanDraftWorkspace = {
  * are the pure helpers that read a Working Plan for either workspace.
  */
 describe("Working Plan helpers", () => {
-  it("recognizes a production block that can be retried with remapping", () => {
-    expect(planDraftProductionBlockFromError(new EngineHttpError(
-      "Production is active",
-      423,
-      { code: "production_active", checkoff_link_count: 2, send_queue_item_count: 1 },
-    ))).toEqual({ checkoffLinkCount: 2, sendQueueItemCount: 1 });
-    expect(planDraftProductionBlockFromError(new EngineHttpError(
-      "Draft changed",
-      409,
-      { code: "stale_draft" },
-    ))).toBeNull();
-  });
 
   it("labels reconciliation candidates by accepted revision Part identity", () => {
     const changedAfter = {

@@ -145,7 +145,7 @@ export function buildCheckoffAttentionItems(input: {
   return items;
 }
 
-export type CheckoffConsolePart = {
+type CheckoffConsolePart = {
   id: number;
   missing: boolean;
 };
@@ -167,13 +167,6 @@ export function checkoffViewCounts(input: {
     else completed += 1;
   }
   return { attention: input.attentionItems.length, remaining, completed };
-}
-
-export function checkoffViewCount(
-  counts: CheckoffViewCounts,
-  view: CheckoffViewId,
-): number {
-  return counts[view];
 }
 
 /** Parts belonging to a view. The attention view is job-led, not part-led. */
@@ -218,7 +211,7 @@ export function checkoffConsoleHeadline(input: {
   return "Every Required unit is verified.";
 }
 
-export type CheckoffCompletion =
+type CheckoffCompletion =
   | { kind: "in_progress"; remainingUnits: number }
   | {
       kind: "complete";
@@ -272,7 +265,7 @@ export function formatCompletedAt(value: string | null): string {
 }
 
 /** Read-only printer status summary. Dispatch controls live in Production. */
-export type CheckoffPrinterSummary = {
+type CheckoffPrinterSummary = {
   printingLabel: string;
   queuedLabel: string;
   failedLabel: string | null;

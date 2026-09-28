@@ -49,7 +49,7 @@ export function sourceByName(repo: AppRepository, name: string) {
 }
 
 /** Closest source names for "did you mean" hints in tool errors (bigram Dice similarity). */
-export function similarSourceNames(repo: AppRepository, name: string, limit = 5): string[] {
+function similarSourceNames(repo: AppRepository, name: string, limit = 5): string[] {
   const compact = (value: string) => value.toLowerCase().replace(/[\s_-]+/g, "");
   const bigrams = (value: string) => {
     const out = new Set<string>();

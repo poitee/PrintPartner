@@ -28,7 +28,7 @@ export type RepoManifestSlot = {
   default_group?: string;
 };
 
-export type RepoManifestVariantSource = {
+type RepoManifestVariantSource = {
   source_id: number;
   source_name: string;
 };
@@ -81,45 +81,7 @@ export type ScannedManifestPart = {
   relative_path: string;
 };
 
-export type ManifestBuilderBootstrap = {
-  source_id: number;
-  source: {
-    id: number;
-    name: string;
-    url: string;
-    source_kind: string | null;
-    role: string;
-    local_path: string | null;
-    content_available?: boolean;
-  };
-  exists: boolean;
-  manifest_kind: string | null;
-  yaml: string;
-  document: RepoManifestDocument;
-  scanned_parts: ScannedManifestPart[];
-  path: string;
-};
-
-export type CommunityExportDraft = {
-  slug: string;
-  manifest_yaml: string;
-  meta_yaml: string;
-  issue_body: string;
-};
-
-export type SourcesMaintenanceReport = {
-  no_manifest: Array<{ id: number; name: string }>;
-  catalog_orphans: string[];
-  empty_categories: Array<{ id: string; label: string }>;
-  drift: Array<{
-    source_id: number;
-    name: string;
-    unmatched: number;
-    missing: number;
-  }>;
-};
-
-export type ImportReposTxtResult = {
+type ImportReposTxtResult = {
   created: number;
   updated: number;
   skipped: number;
@@ -132,64 +94,11 @@ export type ImportReposTxtResult = {
   }>;
 };
 
-export type SourceUploadResult = SourceSummary & {
+type SourceUploadResult = SourceSummary & {
   imported_files?: number;
   stl_count?: number;
   suggested_import_rules?: string[];
 };
-
-export async function exportCommunityManifestDraft(
-  projectId: number,
-  slug: string,
-): Promise<CommunityExportDraft> {
-  return engineFetch("/manifest-registry/export-draft", {
-    method: "POST",
-    body: JSON.stringify({ project_id: projectId, slug }),
-  });
-}
-
-export async function fetchRepoManifest(sourceId: number): Promise<{
-  source_id: number;
-  path: string;
-  exists: boolean;
-  manifest_kind: string | null;
-  yaml: string;
-  document: RepoManifestDocument;
-}> {
-  return engineFetch(`/sources/${sourceId}/repo-manifest`);
-}
-
-export async function putRepoManifest(
-  sourceId: number,
-  body: { yaml: string },
-): Promise<{
-  source_id: number;
-  path: string;
-  saved: boolean;
-  yaml: string;
-  document: RepoManifestDocument;
-}> {
-  return engineFetch(`/sources/${sourceId}/repo-manifest`, {
-    method: "PUT",
-    body: JSON.stringify(body),
-  });
-}
-
-export async function fetchManifestBuilder(sourceId: number): Promise<ManifestBuilderBootstrap> {
-  return engineFetch(`/sources/${sourceId}/manifest-builder`);
-}
-
-export async function generateManifestDraft(sourceId: number): Promise<{
-  project_id: number;
-  part_count: number;
-  yaml: string;
-}> {
-  return engineFetch(`/sources/${sourceId}/manifest-draft`, { method: "POST" });
-}
-
-export async function fetchSourcesMaintenance(): Promise<SourcesMaintenanceReport> {
-  return engineFetch<SourcesMaintenanceReport>("/sources/maintenance");
-}
 
 export async function importReposTxt(body: { text?: string }): Promise<ImportReposTxtResult> {
   return engineFetch<ImportReposTxtResult>("/sources/import-repos-txt", {

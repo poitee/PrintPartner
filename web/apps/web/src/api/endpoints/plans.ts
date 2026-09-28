@@ -9,11 +9,6 @@ export type ProfileLayer = {
   project_name: string | null;
 };
 
-export type PartsGroup = {
-  folder: string;
-  parts: PartRow[];
-};
-
 export async function fetchProfiles(): Promise<ProfileSummary[]> {
   const body = await engineFetch<{ profiles: ProfileSummary[] }>("/plans");
   return body.profiles;
@@ -92,14 +87,6 @@ export async function deleteProfileLayer(profileId: number, layerId: number): Pr
   });
 }
 
-export async function fetchProfilePartsGrouped(
-  profileId: number,
-  query = "",
-): Promise<{ groups: PartsGroup[]; total: number }> {
-  const q = query.trim() ? `?query=${encodeURIComponent(query.trim())}` : "";
-  return engineFetch<{ groups: PartsGroup[]; total: number }>(`/plans/${profileId}/parts-grouped${q}`);
-}
-
 export async function replaceProfileLayer(
   profileId: number,
   layerId: number,
@@ -109,11 +96,6 @@ export async function replaceProfileLayer(
     method: "PUT",
     body: JSON.stringify({ project_id: projectId }),
   });
-  return body.layers;
-}
-
-export async function fetchProfileLayers(profileId: number): Promise<ProfileLayer[]> {
-  const body = await engineFetch<{ layers: ProfileLayer[] }>(`/plans/${profileId}/layers`);
   return body.layers;
 }
 

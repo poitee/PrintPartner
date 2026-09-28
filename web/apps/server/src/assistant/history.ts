@@ -176,7 +176,7 @@ export function clearAssistantFeedback(repo: AppRepository): number {
   return n;
 }
 
-export type StoredFeedback = {
+type StoredFeedback = {
   id: string;
   rating: AssistantFeedbackRating;
   message_excerpt: string | null;
@@ -221,7 +221,7 @@ export function appendAssistantFeedback(
 }
 
 /** Tiny ranking scores from thumbs — never dump raw feedback into the prompt. */
-export type FeedbackScores = {
+type FeedbackScores = {
   /** plan_id → net score (up=+2, down=-2 with comment boost) */
   byPlanId: Map<number, number>;
   /** stack preset id / source-like token → net score (from excerpts) */
@@ -321,19 +321,6 @@ export function aggregateFeedbackScores(
     }
   }
   return { byPlanId, byToken };
-}
-
-export function scorePlanFeedback(repo: AppRepository, planId: number): number {
-  return aggregateFeedbackScores(repo).byPlanId.get(planId) ?? 0;
-}
-
-export function scoreStackPreset(
-  repo: AppRepository,
-  presetId: string,
-  knownPresetIds?: Iterable<string>,
-): number {
-  const known = knownPresetIds ?? [presetId];
-  return aggregateFeedbackScores(repo, known).byToken.get(presetId.toLowerCase()) ?? 0;
 }
 
 /**

@@ -17,7 +17,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import type { AssistantProposedAction } from "@print-partner/contracts";
 import { loadConfig } from "../config.js";
 import { createPorts } from "../app.js";
-import { createJobRunner, type InProcessJobRunner } from "../routes/jobs.js";
+import { createJobRunner, type InProcessJobRunner } from "../services/job-runner.js";
 import type { AppRepository } from "../db/repository.js";
 import { createProductMcpServer } from "./product-mcp.js";
 import { mcpAccessEnabled } from "@print-partner/contracts";

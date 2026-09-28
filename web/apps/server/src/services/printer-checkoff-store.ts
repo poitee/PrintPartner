@@ -48,7 +48,7 @@ const THREE_MF_KINDS: Record<ThreeMfKind, true> = {
   unsupported: true,
 };
 
-export type CreatePrinterCheckoffLinkInput = {
+type CreatePrinterCheckoffLinkInput = {
   profile_id: number;
   integration_id: string;
   printer_id: string;

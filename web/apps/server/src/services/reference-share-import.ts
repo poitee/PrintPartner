@@ -5,9 +5,9 @@ import type { AppRepository, PlanDraftPartChoice } from "../db/repository.js";
 import { saveKitManifest } from "./kit-manifest-store.js";
 import { MAX_PLAN_DRAFT_PART_QUANTITY } from "./plan-drafts.js";
 
-export type ReferenceDependencyStatus = "File required" | "Revision unverified" | "Ready";
+type ReferenceDependencyStatus = "File required" | "Revision unverified" | "Ready";
 
-export type ReferenceDependency = {
+type ReferenceDependency = {
   source_key: string;
   path: string;
   status: ReferenceDependencyStatus;
@@ -15,12 +15,12 @@ export type ReferenceDependency = {
 
 export type ReferenceShareMapping = Record<string, number>;
 
-export type ReferenceShareInspection = {
+type ReferenceShareInspection = {
   dependencies: ReferenceDependency[];
   printable: boolean;
 };
 
-export type ReferenceShareImportResult = ReferenceShareInspection & {
+type ReferenceShareImportResult = ReferenceShareInspection & {
   profile_id: number;
   profile_name: string;
   created: boolean;

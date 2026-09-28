@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { kitManifestSaveStatusLabel, selectionsEqual } from "./kitManifestSave";
+import { selectionsEqual } from "./kitManifestSave";
 
 describe("selectionsEqual", () => {
   it("compares selection maps regardless of key order", () => {
@@ -14,16 +14,5 @@ describe("selectionsEqual", () => {
       ),
     ).toBe(true);
     expect(selectionsEqual({ extras: "skirts" }, { extras: ["skirts"] })).toBe(true);
-  });
-});
-
-describe("kitManifestSaveStatusLabel", () => {
-  it("shows pending debounce as saving", () => {
-    expect(kitManifestSaveStatusLabel("pending")).toBe("Saving…");
-  });
-
-  it("shows saving and saved states", () => {
-    expect(kitManifestSaveStatusLabel("saving")).toBe("Saving…");
-    expect(kitManifestSaveStatusLabel("saved")).toBe("Saved");
   });
 });

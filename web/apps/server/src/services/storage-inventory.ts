@@ -22,7 +22,7 @@ const SCOPED_CATEGORY_KEYS = [
 
 type ScopedStorageCategoryKey = (typeof FULL_BACKUP_ROOTS)[number]["category"];
 
-export type StorageCategoryKey =
+type StorageCategoryKey =
   | "database"
   | ScopedStorageCategoryKey
   | "backups"

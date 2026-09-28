@@ -28,7 +28,7 @@ This review answers six questions with primary sources only: the GOV.UK Design S
 
 It also reads the current code so the recommendation is concrete: `web/apps/web/src/lib/workPackageTasks.ts`, `web/apps/web/src/components/layout/TaskList.tsx`, and the Checkoff unattributed-print path in `web/apps/web/src/components/checkoff/UnattributedPrintCard.tsx`.
 
-It builds on the [cohesive workflow UX research](./2026-08-27-workflow-ux-research.md) and the [printer files research](./2026-08-27-printer-files-offline-artifacts-webcams-research.md). The second of those already proposed three entry points for a Production artifact, so this document is largely about how to present that choice rather than whether to have one.
+It builds on the 2026-08-27 workflow UX and printer files research (both in git history). The second of those already proposed three entry points for a Production artifact, so this document is largely about how to present that choice rather than whether to have one.
 
 ## 1. Presenting a branch in a task-based flow
 
@@ -114,7 +114,7 @@ Adjacent guidance that does apply:
 
 Author's judgement: the escape hatch belongs on the route question, third, after the "or" divider, and nowhere else in Production. The duplication warning in heuristic 7 is the reason. Checkoff already has a claim path for prints the system noticed by itself, the unattributed print card at `web/apps/web/src/components/checkoff/UnattributedPrintCard.tsx`, which starts as a compact "Unclaimed print detected" flair and expands. If Production grows a second attribution entry point in a menu or a secondary panel, there are then three places to attribute a print and the operator has to learn which one applies. One deliberate route in Production for prints PrintPartner never saw, and one recovery path in Checkoff for prints it did see, is the smallest set that covers both cases.
 
-This also matches the earlier decision that attribution should be possible before a print starts, with completed unattributed activity as a recovery path rather than the normal path. See [printer files research](./2026-08-27-printer-files-offline-artifacts-webcams-research.md).
+This also matches the earlier decision that attribution should be possible before a print starts, with completed unattributed activity as a recovery path rather than the normal path. That decision came from the 2026-08-27 printer files research, now in git history.
 
 ## 6. Accessibility requirements, checked against WCAG
 

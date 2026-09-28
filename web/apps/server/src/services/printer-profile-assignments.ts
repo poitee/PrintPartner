@@ -40,7 +40,7 @@ export function processCompatibleWithMachine(
   return names.some((n) => namesLooselyMatch(n, machineProfileName));
 }
 
-export type PrinterProfileAssignmentView = {
+type PrinterProfileAssignmentView = {
   printer_id: string;
   profile_source: ProfileSourceMode;
   machine_profile_id: number | null;

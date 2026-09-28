@@ -6,7 +6,7 @@ import {
 } from "@print-partner/contracts";
 import { engineFetch } from "../engineTransport";
 
-export type StlNamingPreviewResult = {
+type StlNamingPreviewResult = {
   role: StlNamingRoleId;
   quantity: number;
   part_slug: string;

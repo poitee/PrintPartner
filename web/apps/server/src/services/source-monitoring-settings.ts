@@ -1,19 +1,17 @@
-export const DEFAULT_SOURCE_UPDATE_INTERVAL_HOURS = 24;
-export const MIN_SOURCE_UPDATE_INTERVAL_HOURS = 1;
-export const MAX_SOURCE_UPDATE_INTERVAL_HOURS = 168;
+import { isRecord } from "../lib/guards.js";
 
-export type SourceMonitoringUpdate = {
+export const DEFAULT_SOURCE_UPDATE_INTERVAL_HOURS = 24;
+const MIN_SOURCE_UPDATE_INTERVAL_HOURS = 1;
+const MAX_SOURCE_UPDATE_INTERVAL_HOURS = 168;
+
+type SourceMonitoringUpdate = {
   intervalHours?: number;
   autoSyncUpdates?: boolean;
 };
 
-export type SourceMonitoringUpdateParseResult =
+type SourceMonitoringUpdateParseResult =
   | { kind: "valid"; update: SourceMonitoringUpdate }
   | { kind: "invalid"; detail: string };
-
-function isObject(value: unknown): value is object {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function isSourceUpdateIntervalHours(value: unknown): value is number {
   return (
@@ -26,7 +24,7 @@ function isSourceUpdateIntervalHours(value: unknown): value is number {
 }
 
 export function parseSourceMonitoringUpdate(body: unknown): SourceMonitoringUpdateParseResult {
-  if (!isObject(body)) {
+  if (!isRecord(body)) {
     return { kind: "invalid", detail: "request body must be an object" };
   }
 

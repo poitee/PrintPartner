@@ -1,6 +1,6 @@
 /** Client-side checkoff summary (matches backend progress_summary on included parts). */
 
-export type CheckoffSummaryPart = {
+type CheckoffSummaryPart = {
   quantity_effective: number;
   printed_count: number;
   missing: boolean;
@@ -14,27 +14,11 @@ export type CheckoffUnitTotals = {
   percent: number;
 };
 
-export type PartProgressTone = "empty" | "partial" | "done";
+type PartProgressTone = "empty" | "partial" | "done";
 
-export function isPartFullyPrinted(part: CheckoffSummaryPart): boolean {
+function isPartFullyPrinted(part: CheckoffSummaryPart): boolean {
   const qty = Math.max(1, part.quantity_effective);
   return part.printed_count >= qty;
-}
-
-/** Mirror backend stack toggle: first N units printed (checkoff UX). */
-export function applyStackToggle(
-  units: boolean[],
-  unitIndex: number,
-  completed: boolean,
-): boolean[] {
-  const qty = Math.max(1, units.length);
-  const count = completed ? unitIndex + 1 : unitIndex;
-  const clamped = Math.max(0, Math.min(count, qty));
-  return Array.from({ length: qty }, (_, i) => i < clamped);
-}
-
-export function printedCountFromUnits(units: boolean[]): number {
-  return units.filter(Boolean).length;
 }
 
 export function checkoffUnitTotals(parts: CheckoffSummaryPart[]): CheckoffUnitTotals {

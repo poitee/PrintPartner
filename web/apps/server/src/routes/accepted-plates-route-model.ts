@@ -2,40 +2,33 @@ import type { FastifyRequest } from "fastify";
 import type { AcceptedPlanBasis } from "../db/accepted-plan-progress.js";
 import { MAX_ACCEPTED_PLATE_UM } from "../db/accepted-plates.js";
 import { parseRequiredUnitToken, type RequiredUnitToken } from "../services/required-units.js";
+import { isRecord, positiveSafeInteger } from "../lib/guards.js";
 
-export type AcceptedPlateInitializeRequest = Readonly<{
+type AcceptedPlateInitializeRequest = Readonly<{
   expected: AcceptedPlanBasis;
   expectedPlateRevisionId: number | null;
   assignments: readonly Readonly<{ token: RequiredUnitToken; printerId: string | null }>[];
 }>;
 
-export type AcceptedPlateRevisionRequest = Readonly<{
+type AcceptedPlateRevisionRequest = Readonly<{
   expected: AcceptedPlanBasis;
   expectedPlateRevisionId: number;
 }>;
 
-export type AcceptedPlateMoveRequest = AcceptedPlateRevisionRequest &
+type AcceptedPlateMoveRequest = AcceptedPlateRevisionRequest &
   Readonly<{ xUm: number; yUm: number }>;
 
-export type AcceptedPlatePinRequest = AcceptedPlateRevisionRequest &
+type AcceptedPlatePinRequest = AcceptedPlateRevisionRequest &
   Readonly<{ pinned: boolean }>;
 
-export type AcceptedPlateTransferRequest = AcceptedPlateRevisionRequest &
+type AcceptedPlateTransferRequest = AcceptedPlateRevisionRequest &
   (Readonly<{ targetPlateId: string }> | Readonly<{ targetPrinterId: string }>);
 
-export type AcceptedPlateArrangeRequest = AcceptedPlateRevisionRequest &
+type AcceptedPlateArrangeRequest = AcceptedPlateRevisionRequest &
   Readonly<{ mode: "unplaced" | "all" }>;
 
-export type AcceptedPlateRestoreRequest = AcceptedPlateRevisionRequest &
+type AcceptedPlateRestoreRequest = AcceptedPlateRevisionRequest &
   Readonly<{ restorePlateRevisionId: number }>;
-
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-export function positiveInteger(value: unknown): number | null {
-  return Number.isSafeInteger(value) && Number(value) > 0 ? Number(value) : null;
-}
 
 export function plateCoordinate(value: unknown): number | null {
   return Number.isSafeInteger(value) && Number(value) >= 0 && Number(value) <= MAX_ACCEPTED_PLATE_UM
@@ -47,14 +40,14 @@ export function profileId(request: FastifyRequest): number | null {
   if (!isRecord(request.params)) return null;
   const value = request.params.id;
   if (typeof value !== "string" || !/^\d+$/.test(value)) return null;
-  return positiveInteger(Number(value));
+  return positiveSafeInteger(Number(value));
 }
 
 export function parseBasis(value: unknown): AcceptedPlanBasis | null {
   if (!isRecord(value)) return null;
-  const profileId = positiveInteger(value.profile_id);
-  const planVersion = positiveInteger(value.plan_version);
-  const revisionId = positiveInteger(value.plan_revision_id);
+  const profileId = positiveSafeInteger(value.profile_id);
+  const planVersion = positiveSafeInteger(value.plan_version);
+  const revisionId = positiveSafeInteger(value.plan_revision_id);
   const revisionDigest = value.plan_revision_digest;
   const mappingDigest = value.required_unit_mapping_digest;
   if (
@@ -92,7 +85,7 @@ export function parseInitializeRequest(value: unknown): AcceptedPlateInitializeR
   const expectedPlateRevisionId =
     value.expected_plate_revision_id === null
       ? null
-      : positiveInteger(value.expected_plate_revision_id);
+      : positiveSafeInteger(value.expected_plate_revision_id);
   if (!expected || (expectedPlateRevisionId === null && value.expected_plate_revision_id !== null)) {
     return null;
   }
@@ -127,7 +120,7 @@ export function parseMoveRequest(value: unknown): AcceptedPlateMoveRequest | nul
 export function parseRevisionRequest(value: unknown): AcceptedPlateRevisionRequest | null {
   if (!isRecord(value)) return null;
   const expected = parseBasis(value.expected);
-  const expectedPlateRevisionId = positiveInteger(value.expected_plate_revision_id);
+  const expectedPlateRevisionId = positiveSafeInteger(value.expected_plate_revision_id);
   return expected && expectedPlateRevisionId != null ? { expected, expectedPlateRevisionId } : null;
 }
 
@@ -163,6 +156,6 @@ export function parseArrangeRequest(value: unknown): AcceptedPlateArrangeRequest
 export function parseRestoreRequest(value: unknown): AcceptedPlateRestoreRequest | null {
   const revision = parseRevisionRequest(value);
   if (!revision || !isRecord(value)) return null;
-  const restorePlateRevisionId = positiveInteger(value.restore_plate_revision_id);
+  const restorePlateRevisionId = positiveSafeInteger(value.restore_plate_revision_id);
   return restorePlateRevisionId == null ? null : { ...revision, restorePlateRevisionId };
 }

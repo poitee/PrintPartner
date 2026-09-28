@@ -1,4 +1,4 @@
-export type FetchWithRetryOptions = {
+type FetchWithRetryOptions = {
   retries?: number;
   backoffMs?: number;
   init?: RequestInit;

@@ -9,9 +9,9 @@ export const DESK_NEXT_STEP = {
   export: "Send remaining STLs to the slicer, then choose the .gcode here.",
 } as const;
 
-export type DeskNextStepPage = keyof typeof DESK_NEXT_STEP;
+type DeskNextStepPage = keyof typeof DESK_NEXT_STEP;
 
-export type DeskNextStepState = {
+type DeskNextStepState = {
   sourceCount?: number;
   attachedSourceCount?: number;
   partCount?: number;

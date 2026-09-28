@@ -1,7 +1,6 @@
 import { OutboundUrlError } from "../../lib/outbound-url.js";
 import {
   cancelResponseBody,
-  isJsonObject as isRecord,
   readBoundedJsonResponse,
 } from "../../lib/bounded-response.js";
 import type {
@@ -9,6 +8,7 @@ import type {
   SearchHit,
   WebSearchOptions,
 } from "./types.js";
+import { isRecord } from "../../lib/guards.js";
 
 const EXA_ENDPOINT = "https://api.exa.ai/search";
 const MAX_SEARCH_RESPONSE_BYTES = 2 * 1024 * 1024;

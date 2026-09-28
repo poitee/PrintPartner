@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import {
   existsSync,
-  mkdirSync,
   readdirSync,
   readFileSync,
   writeFileSync,
@@ -32,12 +31,6 @@ export type SourceCoverProject = {
   lastSyncedAt?: string | null;
   metadataJson?: string | null;
 };
-
-export function coversDir(dataDir: string): string {
-  const path = join(dataDir, "covers");
-  mkdirSync(path, { recursive: true });
-  return path;
-}
 
 function coverImagePath(coversRoot: string, sourceId: number): string {
   return join(coversRoot, `source_${sourceId}.img`);
@@ -139,7 +132,7 @@ export function findRepoCoverPath(repoRoot: string): string | null {
   return null;
 }
 
-export function metadataImageUrl(project: SourceCoverProject): string | null {
+function metadataImageUrl(project: SourceCoverProject): string | null {
   const raw = project.metadataJson;
   if (!raw) return null;
   try {
@@ -241,7 +234,7 @@ async function downloadToCache(
   return writeCache(coversRoot, project, data, resolvedFrom);
 }
 
-export type CoverCandidate = { resolvedFrom: string; target: string };
+type CoverCandidate = { resolvedFrom: string; target: string };
 
 export function resolveCoverCandidates(project: SourceCoverProject): CoverCandidate[] {
   const candidates: CoverCandidate[] = [];

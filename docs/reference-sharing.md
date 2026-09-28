@@ -76,18 +76,3 @@ REFERENCE_SHARE_BUILD=1 node test/browser/reference-sharing.browser.mjs
 ```
 
 The harness refuses API data directories outside its `/tmp/pp-reference-share-` fixture prefix. It checks real downloads, ZIP contents, read-only validation, and narrow-screen overflow. Remote Git publishing is not implemented yet.
-
-## Verification record
-
-On September 9, 2026, the isolated browser journey passed from both Plan and Production. JSON matched the preview, the Git ZIP contained exactly the three documented text files, received JSON validated without importing, and the dialog fit a 390px viewport. A local-source Build with a real test STL exported a manual reference, with no model or progress data.
-
-Focused checks passed: 23 contract tests, 5 new route tests including tenant isolation, 16 existing Kit-export tests, and 36 Plan/Production/share UI tests. Server and frontend type checks and changed-file lint passed. Repository-wide lint also examines the user's pre-existing untracked `web/_pm_smoke.mjs`, which has unrelated undefined-global errors; that file was not changed.
-
-The existing workflow smoke script passed its API stages through STL export, but its final static-root check returned 404 against the API-only dev server. Static assets were served separately by Vite during the successful browser proof. This was not a full production deployment test.
-
-On September 10, the browser proof passed again for Plan and Production, including
-exact JSON/Git downloads, received-manifest validation, and the 390px layout.
-The local-source workflow also passed its static-asset checks with `STATIC_DIR`
-configured. The clean release gate passed with 3,755 unit tests. See the
-[release verification record](workflow-cleanup.md#september-10-release-verification)
-for coverage and remaining limits.

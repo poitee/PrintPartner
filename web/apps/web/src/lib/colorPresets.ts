@@ -1,16 +1,16 @@
 import { saveRoleFilament, type RoleFilamentRow } from "../api/endpoints/filaments";
 
-export const COLOR_PRESET_TYPE = "print-partner-colors";
-export const COLOR_PRESET_VERSION = 1;
+const COLOR_PRESET_TYPE = "print-partner-colors";
+const COLOR_PRESET_VERSION = 1;
 
-export type ColorPresetRole = {
+type ColorPresetRole = {
   role: string;
   filament_color_id: string | null;
   filament_custom_hex: string | null;
   spoolman_spool_id: string | null;
 };
 
-export type ColorPreset = {
+type ColorPreset = {
   type: typeof COLOR_PRESET_TYPE;
   version: number;
   exported_at: string;
@@ -18,7 +18,7 @@ export type ColorPreset = {
 };
 
 /** Build a portable color preset from the current role filament rows. */
-export function buildColorPreset(rows: RoleFilamentRow[]): ColorPreset {
+function buildColorPreset(rows: RoleFilamentRow[]): ColorPreset {
   return {
     type: COLOR_PRESET_TYPE,
     version: COLOR_PRESET_VERSION,

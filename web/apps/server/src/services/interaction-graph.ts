@@ -3,16 +3,14 @@
  * Combines domain-pack compatibility + kit-catalog pick_one + global merge_conflicts.
  */
 
-import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-import * as yaml from "js-yaml";
+import { existsSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 import {
-  formatCompatibilityDigestLine,
   normalizeCompatibility,
   type NormalizedCompatibility,
   type PartReplacement,
 } from "../assistant/compatibility.js";
+import { domainPackRoots, loadYamlFile } from "../assistant/domain-pack.js";
 import { loadKitCatalog } from "./kit-catalog.js";
 
 function normalizeMergeConflict(raw: unknown): {
@@ -40,10 +38,7 @@ function normalizeMergeConflict(raw: unknown): {
   };
 }
 
-const MODULE_DATA = join(dirname(fileURLToPath(import.meta.url)), "../data/assistant-domain");
-const SRC_DATA = join(dirname(fileURLToPath(import.meta.url)), "../../src/data/assistant-domain");
-
-export type InteractionWarning = {
+type InteractionWarning = {
   severity: "warning" | "info";
   code: string;
   message: string;
@@ -52,7 +47,7 @@ export type InteractionWarning = {
   slot?: string;
 };
 
-export type StackCompatibilityResult = {
+type StackCompatibilityResult = {
   layers: string[];
   warnings: InteractionWarning[];
   suggested_excludes: string[];
@@ -60,7 +55,7 @@ export type StackCompatibilityResult = {
   slots_occupied: Record<string, string[]>;
 };
 
-export type SourceExplanation = {
+type SourceExplanation = {
   source_name: string;
   kind: string | null;
   attaches_to_bases: string[];
@@ -74,7 +69,7 @@ export type SourceExplanation = {
   merge_conflict_ids: string[];
 };
 
-export type InteractionGraph = {
+type InteractionGraph = {
   bySource: Map<string, NormalizedCompatibility>;
   catalogSlots: Map<string, { category: string; peers: string[] }>;
   mergeConflicts: Array<{
@@ -85,25 +80,10 @@ export type InteractionGraph = {
   }>;
 };
 
-function candidateRoots(dataDir?: string | null): string[] {
-  const roots: string[] = [];
-  if (dataDir) roots.push(join(dataDir, "assistant-domain"));
-  roots.push(MODULE_DATA, SRC_DATA);
-  return roots;
-}
-
-function loadYaml(path: string): unknown | null {
-  try {
-    return yaml.load(readFileSync(path, "utf8"));
-  } catch {
-    return null;
-  }
-}
-
 function loadAllCompatibility(dataDir?: string | null): Map<string, NormalizedCompatibility> {
   const bySource = new Map<string, NormalizedCompatibility>();
   const seen = new Set<string>();
-  for (const root of candidateRoots(dataDir)) {
+  for (const root of domainPackRoots(dataDir)) {
     const sourcesRoot = join(root, "sources");
     if (!existsSync(sourcesRoot)) continue;
     let dirs: string[];
@@ -117,7 +97,7 @@ function loadAllCompatibility(dataDir?: string | null): Map<string, NormalizedCo
     for (const name of dirs) {
       if (seen.has(name)) continue;
       seen.add(name);
-      const raw = loadYaml(join(sourcesRoot, name, "compatibility.yaml"));
+      const raw = loadYamlFile(join(sourcesRoot, name, "compatibility.yaml"));
       const norm = normalizeCompatibility(raw);
       if (norm) bySource.set(norm.source_name, norm);
     }
@@ -126,10 +106,10 @@ function loadAllCompatibility(dataDir?: string | null): Map<string, NormalizedCo
 }
 
 function loadMergeConflicts(dataDir?: string | null): InteractionGraph["mergeConflicts"] {
-  for (const root of candidateRoots(dataDir)) {
+  for (const root of domainPackRoots(dataDir)) {
     const path = join(root, "_global", "merge_conflicts.yaml");
     if (!existsSync(path)) continue;
-    const raw = loadYaml(path) as { conflicts?: unknown[] } | null;
+    const raw = loadYamlFile(path) as { conflicts?: unknown[] } | null;
     const out: InteractionGraph["mergeConflicts"] = [];
     for (const item of raw?.conflicts ?? []) {
       if (!item || typeof item !== "object") continue;
@@ -171,7 +151,7 @@ function buildCatalogSlots(dataDir?: string | null): Map<string, { category: str
   return map;
 }
 
-export function loadInteractionGraph(options?: { dataDir?: string | null }): InteractionGraph {
+function loadInteractionGraph(options?: { dataDir?: string | null }): InteractionGraph {
   return {
     bySource: loadAllCompatibility(options?.dataDir),
     catalogSlots: buildCatalogSlots(options?.dataDir),
@@ -258,7 +238,7 @@ export function explainSource(
   };
 }
 
-export function slotsOccupied(
+function slotsOccupied(
   layerSourceNames: string[],
   options?: { dataDir?: string | null; graph?: InteractionGraph },
 ): Record<string, string[]> {
@@ -497,111 +477,4 @@ export function conflictsForStack(
     conflicts,
     slots_occupied: occupied,
   };
-}
-
-/** Compact interaction digest for the system prompt. */
-export function buildInteractionDigest(options?: {
-  dataDir?: string | null;
-  maxLines?: number;
-}): string {
-  const graph = loadInteractionGraph({ dataDir: options?.dataDir });
-  const maxLines = options?.maxLines ?? 24;
-  const sections: string[] = ["### Interaction graph (compatibility)"];
-  let lines = 0;
-
-  const interesting = [...graph.bySource.values()]
-    .filter(
-      (c) =>
-        c.conflicts_with.length ||
-        c.replaces_slots.length ||
-        c.replaces_parts.length ||
-        c.not_for.length,
-    )
-    .slice(0, 18);
-
-  for (const c of interesting) {
-    if (lines >= maxLines) break;
-    const line = formatCompatibilityDigestLine(c);
-    if (!line) continue;
-    sections.push(`- ${c.source_name}${c.kind ? ` [${c.kind}]` : ""}`);
-    sections.push(line);
-    lines += 2;
-  }
-
-  for (const mc of graph.mergeConflicts.slice(0, 6)) {
-    if (lines >= maxLines) break;
-    sections.push(`- conflict ${mc.id}: ${mc.resolution.slice(0, 100)}`);
-    lines += 1;
-  }
-
-  if (sections.length <= 1) return "";
-  return sections.join("\n");
-}
-
-/** Maintainer check: catalog pick_one peers missing domain conflicts_with. */
-export function findCatalogDomainMismatches(options?: {
-  dataDir?: string | null;
-}): Array<{ category: string; a: string; b: string; issue: string }> {
-  const graph = loadInteractionGraph({ dataDir: options?.dataDir });
-  const issues: Array<{ category: string; a: string; b: string; issue: string }> = [];
-  for (const [name, { category, peers }] of graph.catalogSlots) {
-    const compat = graph.bySource.get(name);
-    if (!compat) continue;
-    for (const peer of peers) {
-      const has =
-        compat.conflicts_with.some((c) => c.toLowerCase() === peer.toLowerCase()) ||
-        (graph.bySource.get(peer)?.conflicts_with.some(
-          (c) => c.toLowerCase() === name.toLowerCase(),
-        ) ??
-          false);
-      if (!has) {
-        issues.push({
-          category,
-          a: name,
-          b: peer,
-          issue: "pick_one peers missing conflicts_with in domain compatibility",
-        });
-      }
-    }
-  }
-
-  // stacks.yaml vs stack_presets divergence (ids / base source)
-  for (const root of candidateRoots(options?.dataDir)) {
-    const stacksPath = join(root, "_global", "stacks.yaml");
-    if (!existsSync(stacksPath)) continue;
-    const raw = loadYaml(stacksPath) as { stacks?: unknown } | null;
-    const catalog = loadKitCatalog(options?.dataDir);
-    const presets = (catalog.stack_presets ?? {}) as Record<
-      string,
-      { base?: string; addon_sources?: string[] }
-    >;
-    const stacksObj =
-      raw?.stacks && typeof raw.stacks === "object" && !Array.isArray(raw.stacks)
-        ? (raw.stacks as Record<string, { catalog_base_id?: string; base_source?: string }>)
-        : {};
-    for (const [id, stack] of Object.entries(stacksObj)) {
-      if (!presets[id]) {
-        issues.push({
-          category: "stacks",
-          a: id,
-          b: "(catalog)",
-          issue: "domain stacks.yaml id missing from kit-catalog stack_presets",
-        });
-      } else if (
-        stack.catalog_base_id &&
-        presets[id]?.base &&
-        stack.catalog_base_id !== presets[id]!.base
-      ) {
-        issues.push({
-          category: "stacks",
-          a: id,
-          b: String(presets[id]!.base),
-          issue: `catalog_base_id ${stack.catalog_base_id} diverges from preset base`,
-        });
-      }
-    }
-    break;
-  }
-
-  return issues;
 }

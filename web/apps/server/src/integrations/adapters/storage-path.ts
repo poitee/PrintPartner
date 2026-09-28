@@ -11,7 +11,7 @@
  * backslashes, and anything that escapes the selected provider root.
  */
 
-export type StoragePathOptions = {
+type StoragePathOptions = {
   /** Trim trailing slashes as well as leading ones. Directory paths need this. */
   readonly trimTrailing?: boolean;
 };

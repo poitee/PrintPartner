@@ -3,7 +3,7 @@
  * Local-only order (no server field). Bag bars are this-plan labels, not shop stock.
  */
 
-export type ProgressBagBar = {
+type ProgressBagBar = {
   id: string;
   label: string;
 };
@@ -19,29 +19,6 @@ export function partRowId(partId: number): string {
 
 export function bagRowId(bagId: string): string {
   return `bag:${bagId}`;
-}
-
-export function parseProgressRowId(
-  raw: string | number,
-): { kind: "part"; id: number } | { kind: "bag"; id: string } | null {
-  const s = String(raw);
-  if (s.startsWith("part:")) {
-    const id = Number(s.slice(5));
-    return Number.isFinite(id) ? { kind: "part", id } : null;
-  }
-  if (s.startsWith("bag:")) {
-    const id = s.slice(4);
-    return id ? { kind: "bag", id } : null;
-  }
-  // Legacy bare part id from older DnD.
-  if (typeof raw === "number" && Number.isFinite(raw)) {
-    return { kind: "part", id: raw };
-  }
-  const asNum = Number(s);
-  if (Number.isFinite(asNum) && String(asNum) === s) {
-    return { kind: "part", id: asNum };
-  }
-  return null;
 }
 
 export function progressRowSortableId(row: ProgressRowRef): string {
@@ -89,18 +66,6 @@ export function reconcileProgressRows(
   }
 
   return out;
-}
-
-/** Migrate legacy part-id order into ProgressRowRef[]. */
-export function rowsFromLegacyPartOrder(
-  partIds: ReadonlyArray<number>,
-  bags: ReadonlyArray<ProgressBagBar> = [],
-): ProgressRowRef[] {
-  const rows: ProgressRowRef[] = partIds.map((id) => ({ kind: "part" as const, id }));
-  for (const bag of bags) {
-    rows.push({ kind: "bag", id: bag.id, label: bag.label });
-  }
-  return rows;
 }
 
 /**

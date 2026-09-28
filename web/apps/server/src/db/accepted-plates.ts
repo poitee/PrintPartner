@@ -21,7 +21,7 @@ import {
   type ValidatedPlate,
 } from "./accepted-plate-layout-model.js";
 
-export { ACCEPTED_PLATE_LAYOUT_FORMAT, MAX_ACCEPTED_PLATE_UM } from "./accepted-plate-layout-model.js";
+export {  MAX_ACCEPTED_PLATE_UM } from "./accepted-plate-layout-model.js";
 
 export class AcceptedPlateIntegrityError extends Error {
   readonly name = "AcceptedPlateIntegrityError";
@@ -239,7 +239,7 @@ export type ReadAcceptedPlateWorkspaceInputResult =
   | { readonly kind: "accepted_state_unavailable"; readonly reason: "compatibility_dirty" | "uninitialized" }
   | { readonly kind: "transaction_unavailable" };
 
-export type AcceptedPlateSchema = Pick<
+type AcceptedPlateSchema = Pick<
   typeof defaultSchema,
   | "acceptedPlateHeads"
   | "acceptedPlateRevisions"
@@ -260,7 +260,7 @@ export type AcceptedPlateSchema = Pick<
   | "printProgress"
 >;
 
-export type AcceptedPlateDependencies = Readonly<{
+type AcceptedPlateDependencies = Readonly<{
   db: DrizzleDb;
   schema: AcceptedPlateSchema;
   tenantId: string;

@@ -28,7 +28,7 @@ export function validateAcceptedOperationalTextRow(
   }
 }
 
-export type PlanPublicationPart = Omit<PlanDraftPart, "id" | "draftId" | "baseRevisionPartId"> & {
+type PlanPublicationPart = Omit<PlanDraftPart, "id" | "draftId" | "baseRevisionPartId"> & {
   readonly draftPartId: number;
   readonly effectiveRole: string;
 };
@@ -40,9 +40,9 @@ export type PlanPublicationBaseUnit = {
   readonly assembled: boolean;
 };
 
-export type PlanPublicationMappingIntent = RequiredUnitAssignment;
+type PlanPublicationMappingIntent = RequiredUnitAssignment;
 
-export type PlanPublicationProgressIntent = {
+type PlanPublicationProgressIntent = {
   readonly draftPartId: number;
   readonly unitIndex: number;
   readonly assignment: "reuse" | "create";
@@ -51,7 +51,7 @@ export type PlanPublicationProgressIntent = {
   readonly assembled: boolean;
 };
 
-export type PreparedPlanPublication = {
+type PreparedPlanPublication = {
   readonly parts: readonly PlanPublicationPart[];
   readonly mappings: readonly PlanPublicationMappingIntent[];
   readonly progress: readonly PlanPublicationProgressIntent[];
@@ -83,12 +83,12 @@ export type PlanRevisionDigestPart = {
   readonly artifactDigest: string | null;
 };
 
-export type PublishedPlanRevisionPart = PlanRevisionDigestPart & {
+type PublishedPlanRevisionPart = PlanRevisionDigestPart & {
   readonly id: number;
   readonly projectionPartId: number | null;
 };
 
-export type PublishedPlanProjectionPart = {
+type PublishedPlanProjectionPart = {
   readonly id: number;
   readonly matchKey: string;
   readonly relativePath: string;
@@ -181,7 +181,7 @@ export function publishedPlanPartsMatch(input: {
   });
 }
 
-export function canonicalPlanRevisionSnapshot(
+function canonicalPlanRevisionSnapshot(
   parts: readonly PlanRevisionDigestPart[],
 ): string {
   const canonicalParts = parts

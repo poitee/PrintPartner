@@ -14,7 +14,7 @@ export type SettingsResourceLoad = {
   error: string | null;
 };
 
-export type SettingsResourceSummary = {
+type SettingsResourceSummary = {
   ready: Record<SettingsResource, boolean>;
   display: Record<SettingsResource, SettingsResourceDisplay>;
   recoveryToolsReady: boolean;
@@ -28,7 +28,7 @@ export const SOURCE_UPDATE_INTERVAL_OPTIONS = [
   { value: "168", label: "Weekly" },
 ] as const;
 
-export const INITIAL_RESOURCE_LOAD: SettingsResourceLoad = {
+const INITIAL_RESOURCE_LOAD: SettingsResourceLoad = {
   loading: false,
   loaded: false,
   error: null,

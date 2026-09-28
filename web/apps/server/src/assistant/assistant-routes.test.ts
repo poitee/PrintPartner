@@ -8,7 +8,7 @@ import { createSelfHostPorts } from "../adapters/self-host/index.js";
 import { loadConfig } from "../config.js";
 import { registerAssistantRoutes } from "../routes/assistant.js";
 import type { AssistantPort } from "./types.js";
-import type { InProcessJobRunner } from "../routes/jobs.js";
+import type { InProcessJobRunner } from "../services/job-runner.js";
 
 vi.mock("./create-assistant.js", () => ({
   createAssistantPort: vi.fn(),

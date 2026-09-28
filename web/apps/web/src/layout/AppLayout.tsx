@@ -30,7 +30,7 @@ import {
 import { cn } from "@/lib/utils";
 import { useProfileSelection } from "../context/ProfileContext";
 import { useStlAutoSync } from "../context/StlAutoSyncContext";
-import { useFlushBuildPageSaves } from "../hooks/useFlushBuildPageSaves";
+import { useFlushBuildPageSaves } from "../context/BuildSaveFlushContext";
 import ThemePreferenceControl from "../components/ThemePreferenceControl";
 import { useEngineHealth } from "../hooks/useEngineHealth";
 import { readSidebarCollapsed, writeSidebarCollapsed } from "../lib/persistedSidebarUi";

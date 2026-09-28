@@ -17,7 +17,7 @@ const deps = vi.hoisted(() => ({
 
 vi.mock("../api/endpoints/browserFiles", () => ({ pickKitBundle: deps.pick }));
 vi.mock("../api/endpoints/imports", () => ({ uploadKitBundle: deps.upload }));
-vi.mock("../hooks/useFlushBuildPageSaves", () => ({ useFlushBuildPageSaves: () => deps.flush }));
+vi.mock("../context/BuildSaveFlushContext", () => ({ useFlushBuildPageSaves: () => deps.flush }));
 vi.mock("../context/ProfileContext", () => ({
   useProfileSelection: () => ({ reloadProfiles: deps.reload, setSelectedProfileId: deps.select }),
 }));

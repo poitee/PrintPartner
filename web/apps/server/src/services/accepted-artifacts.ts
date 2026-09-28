@@ -28,7 +28,7 @@ export type AcceptedArtifactVerificationFailure =
   | AcceptedArtifactObservationFailure
   | "digest_mismatch";
 
-export type AcceptedArtifactObservation =
+type AcceptedArtifactObservation =
   | { readonly kind: "available" }
   | {
       readonly kind: "unavailable";
@@ -36,20 +36,20 @@ export type AcceptedArtifactObservation =
     }
   | { readonly kind: "unusable"; readonly reason: AcceptedArtifactObservationFailure };
 
-export type ObserveAcceptedArtifactInput = {
+type ObserveAcceptedArtifactInput = {
   readonly reposDir: string;
   readonly artifact: AcceptedOperationalArtifact;
   readonly maxBytes?: number;
 };
 
-export type VerifiedAcceptedArtifactLease = {
+type VerifiedAcceptedArtifactLease = {
   readonly expectedSha256: string;
   readonly size: number;
   createReadStream(): ReadStream;
   close(): void;
 };
 
-export type OpenVerifiedAcceptedArtifactResult =
+type OpenVerifiedAcceptedArtifactResult =
   | { readonly kind: "verified"; readonly lease: VerifiedAcceptedArtifactLease }
   | Extract<AcceptedArtifactObservation, { readonly kind: "unavailable" }>
   | { readonly kind: "unusable"; readonly reason: AcceptedArtifactVerificationFailure };
@@ -171,12 +171,6 @@ function resolveArtifactPath(input: {
   } catch (error) {
     return { kind: "unusable", reason: fileErrorReason(error) };
   }
-}
-
-export function observeAcceptedArtifact(
-  input: ObserveAcceptedArtifactInput,
-): AcceptedArtifactObservation {
-  return observeArtifact(input);
 }
 
 /** One synchronous observation batch only; never used to authorize file reads. */

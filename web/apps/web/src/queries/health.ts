@@ -1,14 +1,16 @@
 import { useQuery } from "@tanstack/react-query";
 import type { HealthResponse } from "@print-partner/contracts";
 import { fetchHealth } from "../api/endpoints/help";
-import { ensureEngineRunning } from "../api/endpoints/runtime";
 import { queryKeys } from "./keys";
 
 const HEALTH_POLL_MS = 8000;
 
 async function loadHealth(): Promise<HealthResponse> {
-  await ensureEngineRunning();
-  return fetchHealth();
+  try {
+    return await fetchHealth();
+  } catch {
+    throw new Error("API server is not reachable. Start the server with `npm run dev` from web/.");
+  }
 }
 
 export function useHealthQuery() {
@@ -29,4 +31,3 @@ export function useHealthQuery() {
   });
 }
 
-export type { HealthResponse };

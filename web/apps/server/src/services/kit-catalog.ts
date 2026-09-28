@@ -15,7 +15,7 @@ function srcDataPath(...parts: string[]): string {
 }
 
 /** Empty catalog: valid shape, no opinions about what anyone is building. */
-export function emptyKitCatalog(): Record<string, unknown> {
+function emptyKitCatalog(): Record<string, unknown> {
   return { version: 1, bases: {}, addon_categories: {}, stack_presets: {} };
 }
 

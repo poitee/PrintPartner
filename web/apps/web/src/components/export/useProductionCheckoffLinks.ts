@@ -10,7 +10,7 @@ import {
  * Production reads them so a package stays visible after the send, instead of
  * disappearing until someone opens Checkoff.
  */
-export const productionCheckoffLinksKey = (profileId: number | null) =>
+const productionCheckoffLinksKey = (profileId: number | null) =>
   ["production-checkoff-links", profileId] as const;
 
 export function useProductionCheckoffLinks(profileId: number | null, enabled: boolean) {

@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import type { ExportArtifact } from "@print-partner/contracts";
 import type { AppRepository } from "../db/repository.js";
 import { sendProblem } from "../lib/api-error.js";
-import type { InProcessJobRunner } from "./jobs.js";
+import type { InProcessJobRunner } from "../services/job-runner.js";
 
 type RouteDeps = { repo: AppRepository; jobs: InProcessJobRunner };
 

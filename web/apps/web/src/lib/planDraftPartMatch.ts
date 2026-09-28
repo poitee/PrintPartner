@@ -17,19 +17,19 @@ export type PlanRowIdentity = {
   readonly source_layer: string | null;
 };
 
-export type DraftPartCandidate = {
+type DraftPartCandidate = {
   readonly part_key: string;
   readonly relative_path: string;
   readonly source_layer: string | null;
 };
 
-export type DraftPartMatch<T extends DraftPartCandidate> =
+type DraftPartMatch<T extends DraftPartCandidate> =
   | { readonly kind: "resolved"; readonly part: T }
   | { readonly kind: "missing" }
   | { readonly kind: "ambiguous"; readonly count: number };
 
 /** Match keys are normalized relative paths; row paths keep their original case. */
-export function normalizePartPath(value: string): string {
+function normalizePartPath(value: string): string {
   return value.replace(/\\/g, "/").toLowerCase().replace(/^\/+|\/+$/g, "");
 }
 

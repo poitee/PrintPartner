@@ -4,6 +4,7 @@ import {
   parseManifestSelections,
   type ManifestSelections,
 } from "./manifest-selections.js";
+import { isRecord } from "../lib/guards.js";
 
 export type KitManifestRecord = {
   name: string | null;
@@ -30,10 +31,6 @@ export const EMPTY_KIT_MANIFEST: KitManifestRecord = {
   choice_tree: [],
   category_links: [],
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value != null && typeof value === "object" && !Array.isArray(value);
-}
 
 function parseNullableString(value: unknown, path: string): string | null {
   if (value == null) return null;

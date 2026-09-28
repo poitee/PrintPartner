@@ -42,4 +42,3 @@ export async function uploadKitBundle(
   });
 }
 
-export { uploadKitBundle as importKitBundle };

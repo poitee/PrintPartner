@@ -27,7 +27,7 @@ vi.mock("@octokit/rest", () => ({
 }));
 
 import { createSelfHostPorts } from "../adapters/self-host/index.js";
-import { createJobRunner } from "../routes/jobs.js";
+import { createJobRunner } from "./job-runner.js";
 import { syncProjectById } from "../routes/sources.js";
 import {
   listGithubBranches,

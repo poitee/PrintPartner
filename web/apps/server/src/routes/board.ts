@@ -8,7 +8,7 @@ import {
 } from "../lib/board-model.js";
 import { exportBuildReferenceShare } from "../services/reference-sharing.js";
 import type { BoardStore } from "../services/board-store.js";
-import { isRecord } from "./job-route-inputs.js";
+import { isRecord } from "../lib/guards.js";
 
 const writeLimit = { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } };
 

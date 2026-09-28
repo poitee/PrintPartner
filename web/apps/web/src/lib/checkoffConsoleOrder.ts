@@ -21,7 +21,7 @@ import {
   type ProgressRowRef,
 } from "./progressListOrder";
 
-export type CheckoffWorklistOrder = {
+type CheckoffWorklistOrder = {
   /** Full reconciled order for the Build: every known part, plus bag bars. */
   rows: ProgressRowRef[];
   setRows: (rows: ProgressRowRef[]) => void;

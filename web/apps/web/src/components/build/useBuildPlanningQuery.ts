@@ -12,7 +12,7 @@ import { useBuildWorkflowQuery } from "../../queries/buildWorkflow";
  * moves the Build shows up here, so the planning read below refetches with it
  * instead of going stale until the Build id changes.
  */
-export function buildWorkflowSignature(
+function buildWorkflowSignature(
   workspace: BuildWorkflowWorkspace | undefined,
 ): string {
   if (!workspace) return "unknown";

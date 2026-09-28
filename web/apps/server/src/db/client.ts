@@ -3,7 +3,8 @@ import { drizzle, type BetterSQLite3Database } from "drizzle-orm/better-sqlite3"
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import * as schema from "./schema.js";
-import { currentSchemaVersion, schemaMigrations, schemaVersionKey } from "./schema.js";
+import { currentSchemaVersion, schemaVersionKey } from "./schema.js";
+import { schemaMigrations } from "./migrations-sqlite.js";
 import { seedStarterProfiles } from "./seed-starter-profiles.js";
 import {
   ACCEPTED_PLAN_REVISION_SCHEMA_VERSION,

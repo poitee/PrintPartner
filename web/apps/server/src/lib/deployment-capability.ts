@@ -1,4 +1,4 @@
-export type DeploymentCapability = {
+type DeploymentCapability = {
   database: "sqlite" | "postgres";
   artifact_store: "local_disk" | "s3";
   job_runner: "in_process";

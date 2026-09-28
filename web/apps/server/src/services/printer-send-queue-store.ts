@@ -151,7 +151,7 @@ export function migratePrinterSendQueueArtifactPaths(
   return migrated;
 }
 
-export type EnqueuePrinterSendInput = {
+type EnqueuePrinterSendInput = {
   filename: string;
   artifact_path: string;
   printer_id: string;

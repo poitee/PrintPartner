@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   cancelResponseBody,
-  isJsonObject,
   readBoundedJsonResponse,
   readBoundedResponseBody,
   readBoundedResponseChunks,
@@ -108,14 +107,6 @@ describe("readResponsePrefix", () => {
       new TextEncoder().encode("metadata"),
     );
     expect(cancel).toHaveBeenCalledOnce();
-  });
-});
-
-describe("isJsonObject", () => {
-  it("accepts JSON objects but not arrays or null", () => {
-    expect(isJsonObject({ value: 1 })).toBe(true);
-    expect(isJsonObject([])).toBe(false);
-    expect(isJsonObject(null)).toBe(false);
   });
 });
 

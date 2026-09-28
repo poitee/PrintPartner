@@ -1,44 +1,11 @@
-import type { PrinterCheckoffUnit } from "@print-partner/contracts";
+import type {
+  PrinterCheckoffUnit,
+  PrinterSendQueueItem,
+} from "@print-partner/contracts";
 import { resolveEngineUrl } from "../contractRequest";
 import { engineFetch, engineFetchMultipart } from "../engineTransport";
 
-export type PrinterSendQueueState = "queued" | "sending" | "done" | "error" | "cancelled";
-export type PrinterSendQueueMatch = "pinned" | "compatible";
-
-export type PrinterSendQueueItem = {
-  id: string;
-  filename: string;
-  artifact_path: string;
-  printer_id: string;
-  match?: PrinterSendQueueMatch;
-  wait_for_idle: boolean;
-  start: boolean;
-  profile_id?: number;
-  checkoff_units?: PrinterCheckoffUnit[];
-  state: PrinterSendQueueState;
-  created_at: string;
-  updated_at: string;
-  upload_job_id?: string;
-  error?: string;
-  host_name?: string;
-};
-
-export type PrinterQueueSuggestionItem = {
-  item_id: string;
-  filename: string;
-  filament_color_ids: string[];
-  overlap: number;
-};
-
-export type PrinterQueueSuggestion = {
-  printer_id: string;
-  printer_name: string;
-  integration_id: string;
-  items: PrinterQueueSuggestionItem[];
-  item_count: number;
-};
-
-export type BambuConnectHandoffResult = {
+type BambuConnectHandoffResult = {
   handoff_id: string;
   filename: string;
   absolute_path: string;
@@ -71,31 +38,6 @@ export async function fetchPrinterSendQueue(options?: {
   return engineFetch(`/printer-send-queue${qs}`);
 }
 
-export async function enqueuePrinterSend(options: {
-  file: File;
-  printer_id: string;
-  start?: boolean;
-  wait_for_idle?: boolean;
-  match?: PrinterSendQueueMatch;
-  profile_id?: number;
-  checkoff_units?: PrinterCheckoffUnit[];
-}): Promise<{ item: PrinterSendQueueItem }> {
-  const form = new FormData();
-  form.append("file", options.file);
-  form.append("printer_id", options.printer_id);
-  form.append("start", options.start ? "1" : "0");
-  form.append("wait_for_idle", options.wait_for_idle === false ? "0" : "1");
-  if (options.match === "compatible" || options.match === "pinned") {
-    form.append("match", options.match);
-  }
-  appendCheckoffFields(form, options);
-  return engineFetchMultipart<{ item: PrinterSendQueueItem }>({
-    path: "/printer-send-queue",
-    form,
-    failureMessage: "Queue failed",
-  });
-}
-
 export async function dispatchPrinterSendQueueItem(options: {
   id: string;
   force?: boolean;
@@ -119,14 +61,6 @@ export async function drainPrinterSendQueue(options?: {
 
 export async function cancelPrinterSendQueueItem(id: string): Promise<{ item: PrinterSendQueueItem }> {
   return engineFetch(`/printer-send-queue/${encodeURIComponent(id)}`, { method: "DELETE" });
-}
-
-export async function fetchPrinterQueueSuggestions(options: {
-  idle_integration_ids: string[];
-}): Promise<{ suggestions: PrinterQueueSuggestion[] }> {
-  const ids = options.idle_integration_ids.join(",");
-  if (!ids) return { suggestions: [] };
-  return engineFetch(`/printer-send-queue/suggestions?idle_integration_ids=${encodeURIComponent(ids)}`);
 }
 
 /** Stage a sliced 3MF/G-code and hand off via official bambu-connect:// URL scheme. */

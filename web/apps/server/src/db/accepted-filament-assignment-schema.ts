@@ -1,9 +1,7 @@
 import type Database from "better-sqlite3";
 import { projectionPlanningFieldsMatch } from "./accepted-plan-operational.js";
-import {
-  schemaVersionKey,
-  SQLITE_PARTS_INVALIDATE_ACCEPTED_REVISION_UPDATE,
-} from "./schema.js";
+import { schemaVersionKey } from "./schema.js";
+import { SQLITE_PARTS_INVALIDATE_ACCEPTED_REVISION_UPDATE } from "./migrations-sqlite.js";
 
 export const ACCEPTED_FILAMENT_ASSIGNMENT_SCHEMA_VERSION = 29;
 

@@ -9,6 +9,8 @@ import {
 } from "../ui/card";
 import { Button } from "../ui/button";
 import ConfirmDialog from "../ConfirmDialog";
+import { resolveEngineUrl } from "../../api/contractRequest";
+import { engineFetchStream } from "../../api/engineTransport";
 import {
   Dialog,
   DialogContent,
@@ -274,23 +276,6 @@ function formatSize(bytes: number): string {
   return `${value} ${units[unitIndex]}`;
 }
 
-async function responseError(response: Response, fallback: string): Promise<Error> {
-  try {
-    const value: unknown = await response.json();
-    if (
-      typeof value === "object" &&
-      value !== null &&
-      "detail" in value &&
-      typeof value.detail === "string"
-    ) {
-      return new Error(value.detail);
-    }
-  } catch {
-    // The fallback still tells the operator which action failed.
-  }
-  return new Error(fallback);
-}
-
 export default function BackupManagementCard() {
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const restoreDescriptionId = useId();
@@ -306,13 +291,14 @@ export default function BackupManagementCard() {
     setError(null);
     try {
       const [backupsResponse, storageResponse] = await Promise.all([
-        fetch("/backups"),
-        fetch("/backups/storage"),
+        engineFetchStream({ path: "/backups", failureMessage: "Failed to load backups" }),
+        engineFetchStream({
+          path: "/backups/storage",
+          failureMessage: "Failed to inspect server storage",
+        }),
       ]);
-      if (!backupsResponse.ok) throw new Error("Failed to load backups");
       const backupData: unknown = await backupsResponse.json();
       setBackups(parseBackupList(backupData));
-      if (!storageResponse.ok) throw new Error("Failed to inspect server storage");
       const storageData: unknown = await storageResponse.json();
       setStorage(parseStorageInventory(storageData));
     } catch (err) {
@@ -335,8 +321,11 @@ export default function BackupManagementCard() {
   const handleCreateBackup = async () => {
     setCreating(true);
     try {
-      const response = await fetch("/backups", { method: "POST" });
-      if (!response.ok) throw new Error("Backup creation failed");
+      await engineFetchStream({
+        path: "/backups",
+        method: "POST",
+        failureMessage: "Backup creation failed",
+      });
       await loadBackups();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create backup");
@@ -347,7 +336,7 @@ export default function BackupManagementCard() {
 
   const handleDownload = (id: string) => {
     const link = document.createElement("a");
-    link.href = `/backups/${encodeURIComponent(id)}`;
+    link.href = resolveEngineUrl(`/backups/${encodeURIComponent(id)}`);
     link.download = id;
     document.body.appendChild(link);
     link.click();
@@ -366,11 +355,12 @@ export default function BackupManagementCard() {
     try {
       const form = new FormData();
       form.append("file", file, file.name);
-      const response = await fetch("/backups/validate", {
+      const response = await engineFetchStream({
+        path: "/backups/validate",
         method: "POST",
         body: form,
+        failureMessage: "Backup validation failed",
       });
-      if (!response.ok) throw await responseError(response, "Backup validation failed");
       const value: unknown = await response.json();
       const { metadata, preflight } = parseValidation(value);
       setRestoreFlow({
@@ -387,10 +377,10 @@ export default function BackupManagementCard() {
     setError(null);
     setRestoreFlow({ phase: "checking", backup });
     try {
-      const response = await fetch(
-        `/backups/${encodeURIComponent(backup.name)}/preflight`,
-      );
-      if (!response.ok) throw await responseError(response, "Backup preflight failed");
+      const response = await engineFetchStream({
+        path: `/backups/${encodeURIComponent(backup.name)}/preflight`,
+        failureMessage: "Backup preflight failed",
+      });
       const value: unknown = await response.json();
       const { metadata, preflight } = parseInspection(value);
       setRestoreFlow({
@@ -408,19 +398,24 @@ export default function BackupManagementCard() {
     const target = restoreFlow.target;
     setRestoreFlow({ phase: "restoring", target });
     try {
-      let response: Response;
       if (target.kind === "upload") {
         const form = new FormData();
         form.append("file", target.file, target.file.name);
-        response = await fetch("/backups/restore", { method: "POST", body: form });
+        await engineFetchStream({
+          path: "/backups/restore",
+          method: "POST",
+          body: form,
+          failureMessage: "Restore failed",
+        });
       } else {
-        response = await fetch("/backups/restore", {
+        await engineFetchStream({
+          path: "/backups/restore",
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ backupName: target.backup.name }),
+          failureMessage: "Restore failed",
         });
       }
-      if (!response.ok) throw await responseError(response, "Restore failed");
       setRestoreFlow({ phase: "idle" });
       setError(null);
       setTimeout(() => window.location.reload(), 2000);
@@ -432,10 +427,11 @@ export default function BackupManagementCard() {
 
   const handleDelete = async (id: string) => {
     try {
-      const response = await fetch(`/backups/${encodeURIComponent(id)}`, {
+      await engineFetchStream({
+        path: `/backups/${encodeURIComponent(id)}`,
         method: "DELETE",
+        failureMessage: "Delete failed",
       });
-      if (!response.ok) throw new Error("Delete failed");
       await loadBackups();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Delete failed");

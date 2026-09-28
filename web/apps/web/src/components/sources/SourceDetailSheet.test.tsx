@@ -106,7 +106,6 @@ const baseProps = {
   onHighlightPathChange: vi.fn(),
   onEdit: vi.fn(),
   onDelete: vi.fn(),
-  onSaveRules: vi.fn(),
   runImportScan: vi.fn(),
 };
 

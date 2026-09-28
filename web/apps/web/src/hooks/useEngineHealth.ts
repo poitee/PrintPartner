@@ -1,10 +1,9 @@
 import { useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import type { HealthResponse } from "@print-partner/contracts";
 import { useHealthQuery } from "../queries/health";
 import { queryKeys } from "../queries/keys";
 
-export function useEngineHealth(_pollMs = 8000) {
+export function useEngineHealth() {
   const qc = useQueryClient();
   const { data: health, error, isLoading, isFetching } = useHealthQuery();
 
@@ -21,4 +20,3 @@ export function useEngineHealth(_pollMs = 8000) {
   };
 }
 
-export type { HealthResponse };

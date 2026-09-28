@@ -69,7 +69,7 @@ type AcceptedFilamentContext = Pick<
   "resolve" | "spoolSummariesForPart"
 >;
 
-export type ReadAcceptedPlanReviewInput = {
+type ReadAcceptedPlanReviewInput = {
   readonly repo: AppRepository;
   readonly profileId: number;
   readonly includeExcluded: boolean;
@@ -81,7 +81,7 @@ export type ReadAcceptedPlanReviewInput = {
   ) => Promise<AcceptedFilamentContext>;
 };
 
-export type ReadAcceptedPlanReviewResult =
+type ReadAcceptedPlanReviewResult =
   | { readonly kind: "not_found" }
   | { readonly kind: "empty"; readonly body: AcceptedPlanReviewBody }
   | { readonly kind: "ready"; readonly body: AcceptedPlanReviewBody }

@@ -1,15 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ManifestSelections } from "@print-partner/contracts";
 import {
-  fetchPlanKitManifest,
   savePlanKitManifest,
   type KitManifest,
 } from "../api/endpoints/planManifests";
-import {
-  KIT_MANIFEST_SAVED_CLEAR_MS,
-  selectionsEqual,
-  type KitManifestSaveStatus,
-} from "../lib/kitManifestSave";
+import type { AutosaveStatus } from "../lib/autosaveStatus";
+import { KIT_MANIFEST_SAVED_CLEAR_MS, selectionsEqual } from "../lib/kitManifestSave";
 
 type Options = {
   profileId: number;
@@ -53,7 +49,7 @@ export function useKitManifestAutosave({
   onRegisterFlush,
   onUnregisterFlush,
 }: Options) {
-  const [status, setStatus] = useState<KitManifestSaveStatus>("idle");
+  const [status, setStatus] = useState<AutosaveStatus>("idle");
   const savedClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const saveStateRef = useRef<ProfileSaveState>({
@@ -270,8 +266,4 @@ export function useKitManifestAutosave({
   }, [saveState, status]);
 
   return { dirty, status, saveNow: flushSave, saveUserEdit };
-}
-
-export async function loadKitManifestState(profileId: number): Promise<KitManifest> {
-  return fetchPlanKitManifest(profileId);
 }

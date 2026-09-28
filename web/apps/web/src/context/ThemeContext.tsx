@@ -9,7 +9,7 @@ import {
 } from "react";
 
 export type ThemePreference = "system" | "light" | "dark";
-export type ResolvedTheme = "light" | "dark";
+type ResolvedTheme = "light" | "dark";
 
 const STORAGE_KEY = "print-partner.theme";
 
@@ -27,7 +27,7 @@ function systemPrefersDark(): boolean {
   return window.matchMedia("(prefers-color-scheme: dark)").matches;
 }
 
-export function resolveTheme(preference: ThemePreference): ResolvedTheme {
+function resolveTheme(preference: ThemePreference): ResolvedTheme {
   if (preference === "system") return systemPrefersDark() ? "dark" : "light";
   return preference;
 }

@@ -10,7 +10,7 @@ export interface ApiKeyInfo {
   isActive: boolean;
 }
 
-export interface StoredApiKey {
+interface StoredApiKey {
   id: string;
   keyHash: string;
   createdAt: string;
@@ -188,7 +188,7 @@ export function validateApiKey(repo: AppRepository, rawKey: string): string | nu
 /**
  * Check if a key has expired.
  */
-export function isKeyExpired(key: StoredApiKey): boolean {
+function isKeyExpired(key: StoredApiKey): boolean {
   if (!key.expiresAt) return false;
   const expiresAt = Date.parse(key.expiresAt);
   return !Number.isFinite(expiresAt) || expiresAt <= Date.now();

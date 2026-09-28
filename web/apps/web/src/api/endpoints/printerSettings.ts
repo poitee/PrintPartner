@@ -15,7 +15,7 @@ export type PrinterProfileAssignment = {
   compatible_processes: Array<{ id: number; name: string }>;
 };
 
-export type PrinterProfileAssignmentInput = {
+type PrinterProfileAssignmentInput = {
   profile_source: "assigned" | "auto_match";
   machine_profile_id: number | null;
   filament_slots: Array<{ slot_index: number; filament_profile_id: number | null }>;
@@ -35,12 +35,6 @@ export async function savePrinterPlanBinding(
     body: JSON.stringify({ integration_id, profile_id }),
   });
   return body.bindings;
-}
-
-export async function deletePrinterPlanBinding(integration_id: string): Promise<void> {
-  await engineFetch<{ ok: boolean }>(`/settings/printer-plan-bindings/${encodeURIComponent(integration_id)}`, {
-    method: "DELETE",
-  });
 }
 
 export async function fetchPrinterProfileAssignment(

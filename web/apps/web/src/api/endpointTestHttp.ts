@@ -1,7 +1,7 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import { afterEach, beforeEach, vi } from "vitest";
 
-export type EndpointTestRequest = Readonly<{
+type EndpointTestRequest = Readonly<{
   url: string;
   method: string;
   headers: Headers;

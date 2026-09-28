@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ASSISTANT_TOOL_SPECS } from "../assistant/tools.js";
+import { ASSISTANT_TOOL_SPECS } from "../assistant/tool-specs.js";
 
 describe("mcp product tools", () => {
   it("exposes non-ui assistant verbs for MCP listing", () => {

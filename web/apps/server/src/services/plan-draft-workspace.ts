@@ -53,7 +53,7 @@ export type ApplyDraftWorkspaceResult =
   | { readonly kind: "applied"; readonly receipt: AppliedPlanReceipt }
   | PlanDraftWorkspaceFailure;
 
-export type PlanDraftIdentityResult =
+type PlanDraftIdentityResult =
   | { readonly kind: "ready"; readonly draft: PlanDraftIdentity }
   | PlanDraftWorkspaceFailure;
 

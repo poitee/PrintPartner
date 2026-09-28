@@ -108,35 +108,12 @@ export function buildPreviewRowsFromUnits(
   return rows;
 }
 
-/** Basename without directory. */
-function basename(path: string): string {
-  const norm = path.replace(/\\/g, "/");
-  const i = norm.lastIndexOf("/");
-  return i >= 0 ? norm.slice(i + 1) : norm;
-}
-
-/** Strip common mesh/slicer extensions repeatedly. */
-export function stripMeshExtensions(name: string): string {
-  let s = basename(name).trim();
-  for (let i = 0; i < 4; i++) {
-    const next = s.replace(/\.(stl|gcode|gco|bgcode|3mf)$/i, "");
-    if (next === s) break;
-    s = next;
-  }
-  return s;
-}
-
 /**
  * Normalize for comparison: lowercase, strip extensions, drop trailing
  * ` (N)` 3MF copy tags, keep optional `_NN` unit suffix as part of the key.
  */
-export function normalizeObjectKey(name: string): string {
+function normalizeObjectKey(name: string): string {
   return interpretSlicedObjectName(name).basenameKey;
-}
-
-/** Base stem with trailing `_01` / `_1` unit suffix removed. */
-export function objectStem(name: string): string {
-  return interpretSlicedObjectName(name).unitStemKey;
 }
 
 /** Export-remaining style unit filename key: `stem_01` (0-based unit_index → 1-based). */

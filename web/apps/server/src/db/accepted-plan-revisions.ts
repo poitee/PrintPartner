@@ -4,7 +4,6 @@ import {
   PLAN_REVISION_DIGEST_FORMAT,
 } from "../services/plan-publication.js";
 
-export { PLAN_REVISION_DIGEST_FORMAT };
 export const ACCEPTED_PLAN_REVISION_SCHEMA_VERSION = 19;
 
 type LegacyProfile = {

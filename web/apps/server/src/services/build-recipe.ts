@@ -103,7 +103,7 @@ export function deriveBuildRecipe(repo: AppRepository, planId: number): BuildRec
   };
 }
 
-export type RecipeReplayStep = {
+type RecipeReplayStep = {
   type: "set_base" | "add_addon" | "update_kit_selections" | "apply_stack_preset";
   params: Record<string, unknown>;
   label: string;

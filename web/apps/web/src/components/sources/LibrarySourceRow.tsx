@@ -19,7 +19,7 @@ import {
 import SourceCategoryAssignSubmenu from "./SourceCategoryAssignSubmenu";
 import { kindLabel } from "./sourceLabels";
 
-export type SourceSelectModifiers = {
+type SourceSelectModifiers = {
   shiftKey: boolean;
   metaKey: boolean;
   ctrlKey: boolean;

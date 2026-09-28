@@ -1,5 +1,6 @@
 import type { PrinterMachine } from "@print-partner/domain";
 import { newMachineFromPreset } from "../services/printer-fleet.js";
+import { isRecord } from "../lib/guards.js";
 
 export type PrinterDetailsInput = Pick<
   PrinterMachine,
@@ -11,10 +12,6 @@ export type PrinterDetailsInput = Pick<
   | "margin_mm"
   | "max_filament_slots"
 > & { preset_id: string | null };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function requiredText(value: unknown, field: "name" | "model"): string {
   if (typeof value !== "string" || !value.trim()) {

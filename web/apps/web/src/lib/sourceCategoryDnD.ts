@@ -4,23 +4,12 @@
  * file assigns that file's parent source.
  */
 
-export const UNCATEGORISED_DROP_ID = "__uncategorised__";
+const UNCATEGORISED_DROP_ID = "__uncategorised__";
 
 export function categoryDropTargetId(category: string | null): string {
   return category == null
     ? `cat-drop:${UNCATEGORISED_DROP_ID}`
     : `cat-drop:${category}`;
-}
-
-export function parseCategoryDropTargetId(
-  raw: string | number,
-): { category: string | null } | null {
-  const s = String(raw);
-  if (!s.startsWith("cat-drop:")) return null;
-  const name = s.slice("cat-drop:".length);
-  if (!name || name === "all") return null;
-  if (name === UNCATEGORISED_DROP_ID) return { category: null };
-  return { category: name };
 }
 
 export function librarySourceDragId(sourceId: number): string {

@@ -7,7 +7,7 @@ import BuildSaveNavigationGuard from "./BuildSaveNavigationGuard";
 import { LibraryDraftProvider, useLibraryDraft } from "../context/LibraryDraftContext";
 
 const saves = vi.hoisted(() => ({ flush: vi.fn<() => Promise<void>>() }));
-vi.mock("../hooks/useFlushBuildPageSaves", () => ({
+vi.mock("../context/BuildSaveFlushContext", () => ({
   useFlushBuildPageSaves: () => saves.flush,
 }));
 

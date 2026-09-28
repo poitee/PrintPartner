@@ -5,7 +5,6 @@ import { normalizeCompatibility } from "../assistant/compatibility.js";
 import {
   conflictsForStack,
   explainSource,
-  findCatalogDomainMismatches,
   replacementsWhenAdding,
 } from "./interaction-graph.js";
 import { resolveStackPresetId } from "./stack-preset.js";
@@ -90,23 +89,5 @@ describe("interaction graph", () => {
       (loadKitCatalog(FIXTURE) as { stack_presets?: Record<string, { label?: string }> })
         .stack_presets ?? {};
     expect(resolveStackPresetId("some_other_kit_r2", presets)).toBeNull();
-  });
-
-  it("maintainer check runs without throwing", () => {
-    const issues = findCatalogDomainMismatches(opts);
-    expect(Array.isArray(issues)).toBe(true);
-    // pick_one probe peers declare conflicts in the fixture pack, so no gap.
-    const probeGap = issues.find(
-      (i) =>
-        i.category === "probe" &&
-        ((i.a === "Example-Probe" && i.b === "Example-Alt-Probe") ||
-          (i.a === "Example-Alt-Probe" && i.b === "Example-Probe")),
-    );
-    expect(probeGap).toBeUndefined();
-  });
-
-  it("is empty against the shipped data, which carries no sources", () => {
-    expect(explainSource("Example-Probe", { dataDir: null })).toBeNull();
-    expect(findCatalogDomainMismatches({ dataDir: null })).toEqual([]);
   });
 });

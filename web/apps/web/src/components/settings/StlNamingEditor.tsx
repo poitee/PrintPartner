@@ -490,4 +490,3 @@ export function StlNamingEditorEmbedded({
   );
 }
 
-export default StlNamingSettingsCard;

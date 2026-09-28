@@ -14,6 +14,7 @@ import {
   stageAcceptedPlateExport,
   type MaterializeAcceptedPlateExportResult,
 } from "../services/accepted-plate-export-delivery.js";
+import { isRecord, positiveSafeInteger } from "../lib/guards.js";
 
 type RouteDeps = {
   repo: AppRepository;
@@ -22,14 +23,6 @@ type RouteDeps = {
   dataDir: string;
   reposDir: string;
 };
-
-function positiveSafeInteger(value: unknown): number | null {
-  return Number.isSafeInteger(value) && Number(value) > 0 ? Number(value) : null;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function acceptedHandoffFailure(
   result: Exclude<MaterializeAcceptedPlateExportResult, { readonly kind: "materialized" }>,

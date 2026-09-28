@@ -27,7 +27,7 @@ export function isStlMissing(part: ReviewPart): boolean {
   return Boolean(part.stl_missing);
 }
 
-export function isThumbEmpty(part: ReviewPart): boolean {
+function isThumbEmpty(part: ReviewPart): boolean {
   return Boolean(part.included && part.thumb_empty && !part.stl_missing);
 }
 
@@ -52,12 +52,6 @@ export function stlAutoSyncWorkKey(
   const m = [...missingIds].sort((a, b) => a - b).join(",");
   const t = [...emptyThumbIds].sort((a, b) => a - b).join(",");
   return `${profileId}|m:${m}|t:${t}`;
-}
-
-export function reviewNeedsStlAutoSync(review: PlanReview | null | undefined): boolean {
-  if (!review) return false;
-  const parts = review.part_groups.flatMap((g) => g.parts);
-  return countMissingStls(parts) > 0 || countEmptyThumbs(parts) > 0;
 }
 
 export function projectIdsForStlSync(review: PlanReview): number[] {

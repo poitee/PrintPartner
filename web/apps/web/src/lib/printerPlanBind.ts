@@ -22,7 +22,7 @@ function normalizeFilename(name: string | undefined | null): string {
   return (slash >= 0 ? base.slice(slash + 1) : base).toLowerCase();
 }
 
-export type LiveJobCheckoffLink = {
+type LiveJobCheckoffLink = {
   printer_id: string;
   filename: string;
   remote_path?: string;
@@ -67,28 +67,4 @@ export function findPlanNameForLiveJob(opts: {
     if (fallbackName == null) fallbackName = name;
   }
   return fallbackName;
-}
-
-/**
- * Prefer stored plan_id; unbound binds once to active spine; never steal a bound job.
- */
-export function resolvePlanIdForPrinterFetch(
-  storedPlanId: number | null | undefined,
-  activeSpinePlanId: number | null | undefined,
-): number | null {
-  if (
-    typeof storedPlanId === "number" &&
-    Number.isInteger(storedPlanId) &&
-    storedPlanId > 0
-  ) {
-    return storedPlanId;
-  }
-  if (
-    typeof activeSpinePlanId === "number" &&
-    Number.isInteger(activeSpinePlanId) &&
-    activeSpinePlanId > 0
-  ) {
-    return activeSpinePlanId;
-  }
-  return null;
 }

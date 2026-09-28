@@ -2,10 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { patchPart } from "../api/endpoints/plans";
 import { fetchPlanReview, type PlanReview } from "../api/endpoints/planManifests";
 import { patchPartAssembled, patchPartProgress } from "../api/endpoints/checkoff";
-import {
-  optimisticReviewCacheKey,
-  rollbackOptimisticCache,
-} from "../lib/reviewCache";
+import { rollbackOptimisticCache } from "../lib/reviewCache";
 import { mergeAssembledIntoReview, mergeProgressIntoReview } from "../lib/reviewParts";
 import { queryKeys } from "./keys";
 import { invalidateProfiles } from "./profiles";
@@ -84,7 +81,7 @@ export function usePatchPartProgressMutation(
     }) => patchPartProgress(partId, unitIndex, completed),
     onMutate: async ({ partId, unitIndex, completed, optimisticReview }) => {
       if (profileId == null || !optimisticReview) return undefined;
-      const key = optimisticReviewCacheKey(profileId, includeExcluded);
+      const key = queryKeys.planReview(profileId, includeExcluded);
       await qc.cancelQueries({ queryKey: key });
       const previous = qc.getQueryData<PlanReview>(key);
       const part = optimisticReview.part_groups
@@ -141,7 +138,7 @@ export function usePatchPartProgressMutation(
         }
       } else {
         void qc.invalidateQueries({
-          queryKey: optimisticReviewCacheKey(profileId, includeExcluded),
+          queryKey: queryKeys.planReview(profileId, includeExcluded),
         });
       }
       void invalidateOtherPlanReviewVariants(qc, profileId, includeExcluded);
@@ -168,7 +165,7 @@ export function usePatchPartAssembledMutation(
     }) => patchPartAssembled(partId, unitIndex, assembled),
     onMutate: async ({ partId, unitIndex, assembled, optimisticReview }) => {
       if (profileId == null || !optimisticReview) return undefined;
-      const key = optimisticReviewCacheKey(profileId, includeExcluded);
+      const key = queryKeys.planReview(profileId, includeExcluded);
       await qc.cancelQueries({ queryKey: key });
       const previous = qc.getQueryData<PlanReview>(key);
       const part = optimisticReview.part_groups
@@ -211,7 +208,7 @@ export function usePatchPartAssembledMutation(
         }
       } else {
         void qc.invalidateQueries({
-          queryKey: optimisticReviewCacheKey(profileId, includeExcluded),
+          queryKey: queryKeys.planReview(profileId, includeExcluded),
         });
       }
       void invalidateOtherPlanReviewVariants(qc, profileId, includeExcluded);

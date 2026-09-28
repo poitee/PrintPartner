@@ -13,12 +13,3 @@ export function incompleteUnitsForParts(parts: ReviewPart[]): PrinterCheckoffUni
   }
   return out;
 }
-
-/** Units for a subset of part ids (still only incomplete slots). */
-export function incompleteUnitsForSelectedParts(
-  parts: ReviewPart[],
-  selectedPartIds: Iterable<number>,
-): PrinterCheckoffUnit[] {
-  const selected = new Set(selectedPartIds);
-  return incompleteUnitsForParts(parts.filter((p) => selected.has(p.id)));
-}

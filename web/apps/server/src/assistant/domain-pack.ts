@@ -19,7 +19,7 @@ import {
 const MODULE_DATA = join(dirname(fileURLToPath(import.meta.url)), "../data/assistant-domain");
 const SRC_DATA = join(dirname(fileURLToPath(import.meta.url)), "../../src/data/assistant-domain");
 
-export const MAX_DOMAIN_PACK_CHARS = 5200;
+const MAX_DOMAIN_PACK_CHARS = 5200;
 
 /** Stable titles for curated research notes upserted into source_notes. */
 export const ADVISOR_NOTE_TITLES = {
@@ -32,7 +32,7 @@ const MAX_WORKFLOW_EXCERPT = 120;
 const MAX_PITFALLS_EXCERPT = 100;
 const MAX_SOURCES_WITH_MD_EXCERPTS = 5;
 
-export type AliasResolve = {
+type AliasResolve = {
   catalog_base_id?: string | null;
   source_name?: string | null;
   tag?: string | null;
@@ -42,26 +42,26 @@ export type AliasResolve = {
   selection?: ManifestSelections;
 };
 
-export type SourceIdentity = {
+type SourceIdentity = {
   source_name?: string;
   role?: string;
   summary?: string;
   important_tags?: Array<{ id?: string }>;
 };
 
-export type SourceDecisionYaml = {
+type SourceDecisionYaml = {
   id: string;
   kind?: string;
   label?: string;
   options?: Array<{ id: string; label?: string; selection?: ManifestSelections }>;
 };
 
-export type AliasEntry = {
+type AliasEntry = {
   phrases: string[];
   resolve: AliasResolve;
 };
 
-export type StackEntry = {
+type StackEntry = {
   label?: string;
   base_source?: string;
   base_tag?: string | null;
@@ -93,7 +93,7 @@ export type DomainImportPayload = {
   backfill_notes?: boolean;
 };
 
-function candidateRoots(dataDir?: string | null): string[] {
+export function domainPackRoots(dataDir?: string | null): string[] {
   const roots: string[] = [];
   if (dataDir) roots.push(join(dataDir, "assistant-domain"));
   roots.push(MODULE_DATA, SRC_DATA);
@@ -108,7 +108,7 @@ function readText(path: string): string | null {
   }
 }
 
-function loadYamlFile(path: string): unknown | null {
+export function loadYamlFile(path: string): unknown | null {
   const text = readText(path);
   if (text == null) return null;
   try {
@@ -118,15 +118,8 @@ function loadYamlFile(path: string): unknown | null {
   }
 }
 
-function firstExisting(...paths: string[]): string | null {
-  for (const p of paths) {
-    if (existsSync(p)) return p;
-  }
-  return null;
-}
-
 function findFile(dataDir: string | null | undefined, ...rel: string[]): string | null {
-  for (const root of candidateRoots(dataDir)) {
+  for (const root of domainPackRoots(dataDir)) {
     const p = join(root, ...rel);
     if (existsSync(p)) return p;
   }
@@ -170,7 +163,7 @@ export function upsertAdvisorSourceNote(
 }
 
 /** Upsert Advisor: Workflow / Pitfalls / Quotes from markdown bodies. */
-export function upsertAdvisorNotesFromMarkdown(
+function upsertAdvisorNotesFromMarkdown(
   repo: AppRepository,
   projectId: number,
   files: { workflow?: string | null; pitfalls?: string | null; quotes?: string | null },
@@ -213,7 +206,7 @@ export function backfillAdvisorNotesFromDomainPack(
   const seen = new Set<string>();
   const liveByName = new Map(repo.listSources().map((s) => [s.name, s]));
 
-  for (const root of candidateRoots(dataDir)) {
+  for (const root of domainPackRoots(dataDir)) {
     const sourcesRoot = join(root, "sources");
     if (!existsSync(sourcesRoot)) continue;
     let dirs: string[];
@@ -319,58 +312,13 @@ export function normalizeAliasEntry(raw: unknown): AliasEntry | null {
 }
 
 /** Load phrase aliases from domain pack alias_map.yaml. */
-export function loadAliasEntries(dataDir?: string | null): AliasEntry[] {
+function loadAliasEntries(dataDir?: string | null): AliasEntry[] {
   const aliasPath = findFile(dataDir, "_global", "alias_map.yaml");
   if (!aliasPath) return [];
   const raw = loadYamlFile(aliasPath) as { aliases?: unknown[] } | null;
   return (raw?.aliases ?? [])
     .map(normalizeAliasEntry)
     .filter((a): a is AliasEntry => a != null);
-}
-
-/**
- * Find identity.yaml for a source_name. Dir names may be sanitized
- * (e.g. `DW-Tas-emu` for `DW-Tas/emu`); also matches identity.source_name.
- */
-export function findIdentityForSource(
-  sourceName: string,
-  dataDir?: string | null,
-): SourceIdentity | null {
-  const name = sourceName.trim();
-  if (!name) return null;
-  const sanitized = name.replace(/\//g, "-");
-  for (const root of candidateRoots(dataDir)) {
-    const sourcesRoot = join(root, "sources");
-    if (!existsSync(sourcesRoot)) continue;
-    const direct = [name, sanitized]
-      .map((d) => join(sourcesRoot, d, "identity.yaml"))
-      .find((p) => existsSync(p));
-    if (direct) {
-      const id = loadYamlFile(direct) as SourceIdentity | null;
-      if (id) return id;
-    }
-    let dirs: string[];
-    try {
-      dirs = readdirSync(sourcesRoot, { withFileTypes: true })
-        .filter((d) => d.isDirectory())
-        .map((d) => d.name);
-    } catch {
-      continue;
-    }
-    for (const dir of dirs) {
-      const identity = loadYamlFile(join(sourcesRoot, dir, "identity.yaml")) as SourceIdentity | null;
-      if (!identity) continue;
-      if (
-        identity.source_name === name ||
-        dir === name ||
-        dir === sanitized ||
-        dir.replace(/-/g, "/") === name
-      ) {
-        return identity;
-      }
-    }
-  }
-  return null;
 }
 
 /** Load optional per-source decisions.yaml candidates from the domain pack. */
@@ -381,7 +329,7 @@ export function loadSourceDecisionsYaml(
   const name = sourceName.trim();
   if (!name) return [];
   const sanitized = name.replace(/\//g, "-");
-  for (const root of candidateRoots(dataDir)) {
+  for (const root of domainPackRoots(dataDir)) {
     const sourcesRoot = join(root, "sources");
     if (!existsSync(sourcesRoot)) continue;
     const candidates = [name, sanitized];
@@ -498,7 +446,7 @@ export function normalizeStacks(raw: unknown): Array<{ id: string; stack: StackE
   return [];
 }
 
-export function normalizeConflict(raw: unknown): {
+function normalizeConflict(raw: unknown): {
   slug_or_path: string;
   sources: string[];
   resolution: string;
@@ -531,12 +479,12 @@ export function normalizeConflict(raw: unknown): {
  * regardless of what the user is building. `matchAll` preserves the old
  * behaviour for callers that have no repository to ask.
  */
-export type LiveSourceFilter = { has: (name: string | null | undefined) => boolean };
+type LiveSourceFilter = { has: (name: string | null | undefined) => boolean };
 
-export const MATCH_ALL_SOURCES: LiveSourceFilter = { has: () => true };
+const MATCH_ALL_SOURCES: LiveSourceFilter = { has: () => true };
 
 /** Case- and separator-insensitive so `DW-Tas-emu` matches `DW-Tas/emu`. */
-export function liveSourceFilter(sourceNames?: readonly string[] | null): LiveSourceFilter {
+function liveSourceFilter(sourceNames?: readonly string[] | null): LiveSourceFilter {
   if (!sourceNames) return MATCH_ALL_SOURCES;
   const compact = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
   const live = new Set(sourceNames.map(compact).filter(Boolean));
@@ -610,7 +558,7 @@ function formatConflictsSection(dataDir: string | null): string[] {
 }
 
 function formatSourceDigestsSection(dataDir: string | null, live: LiveSourceFilter): string[] {
-  for (const root of candidateRoots(dataDir)) {
+  for (const root of domainPackRoots(dataDir)) {
     const sourcesRoot = join(root, "sources");
     if (!existsSync(sourcesRoot)) continue;
     let dirs: string[];
@@ -743,7 +691,7 @@ function writeText(path: string, contents: string): void {
   writeFileSync(path, contents, "utf8");
 }
 
-export type DomainImportResult = {
+type DomainImportResult = {
   wrote_files: boolean;
   root: string | null;
   notes_created: number;
@@ -864,7 +812,7 @@ export function importAssistantDomainPack(
 function findSourcePackDir(dataDir: string | null | undefined, sourceName: string): string | null {
   const name = sourceName.trim();
   const sanitized = name.replace(/\//g, "-");
-  for (const root of candidateRoots(dataDir)) {
+  for (const root of domainPackRoots(dataDir)) {
     for (const dirName of [name, sanitized]) {
       const dir = join(root, "sources", dirName);
       if (existsSync(dir)) return dir;
@@ -885,8 +833,4 @@ function findSourcePackDir(dataDir: string | null | undefined, sourceName: strin
     }
   }
   return null;
-}
-
-export function resolveDomainPackDir(dataDir?: string | null): string | null {
-  return firstExisting(...candidateRoots(dataDir));
 }

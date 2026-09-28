@@ -1,8 +1,4 @@
-import { queryKeys } from "../queries/keys";
-
-export const optimisticReviewCacheKey = queryKeys.planReview;
-
-export type OptimisticRollback<T> =
+type OptimisticRollback<T> =
   | { kind: "restore"; previous: T }
   | { kind: "remove" };
 

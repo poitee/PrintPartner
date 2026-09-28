@@ -4,7 +4,7 @@ import Database from "better-sqlite3";
 import { createBackup, validateBackup, type BackupDatabase } from "../services/backup-restore.js";
 import { currentSchemaVersion, schemaVersionKey } from "./schema.js";
 
-export type UpgradePreparation =
+type UpgradePreparation =
   | Readonly<{ kind: "fresh-install" }>
   | Readonly<{
       kind: "backup-created" | "backup-reused";

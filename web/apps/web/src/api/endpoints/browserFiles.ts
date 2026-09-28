@@ -3,7 +3,6 @@ import {
   pickLocalDirectoryWeb,
   pickLocalFilesWeb,
   pickZipArchiveFileWeb,
-  saveTextFileWeb,
 } from "@/lib/webFilePickers";
 import { resolveEngineUrl } from "../contractRequest";
 
@@ -18,13 +17,6 @@ export async function pickLocalDirectory(): Promise<File[]> {
 
 export async function pickLocalFiles(): Promise<File[]> {
   return pickLocalFilesWeb();
-}
-
-export async function saveTextFile(
-  defaultName: string,
-  contents: string,
-): Promise<string | null> {
-  return saveTextFileWeb(defaultName, contents);
 }
 
 /**

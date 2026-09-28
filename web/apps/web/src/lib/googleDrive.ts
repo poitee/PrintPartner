@@ -44,7 +44,7 @@ type GisWindow = Window & {
 let gisLoad: Promise<void> | null = null;
 let cachedToken: { token: string; expiresAt: number } | null = null;
 
-export function clearGoogleDriveTokenCache(): void {
+function clearGoogleDriveTokenCache(): void {
   cachedToken = null;
 }
 

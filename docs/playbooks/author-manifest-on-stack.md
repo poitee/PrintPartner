@@ -19,7 +19,7 @@ Repository maintainers should publish the manifest with the source. Community ma
 - Use `replaces` or a shared slot when an add-on replaces a base part.
 - Never store absolute paths or database ids in a published manifest.
 
-Common path patterns are listed in [`docs/path-hints.yaml`](../path-hints.yaml).
+Common path patterns are listed in [`path-hints.yaml`](../../web/apps/server/src/data/path-hints.yaml).
 
 ## Cross-source choices
 

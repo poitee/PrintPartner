@@ -15,7 +15,7 @@ export type SourceActivityEvent = {
   detail: string | null;
 };
 
-export type GithubBranchesResponse = {
+type GithubBranchesResponse = {
   owner: string;
   repo: string;
   default_branch: string;
@@ -23,7 +23,7 @@ export type GithubBranchesResponse = {
   branches: string[];
 };
 
-export type GithubTagsResponse = {
+type GithubTagsResponse = {
   owner: string;
   repo: string;
   tags: string[];
@@ -140,29 +140,4 @@ export async function fetchSourceNotes(sourceId: number, profileId?: number | nu
   const q = profileId != null && profileId > 0 ? `?profile_id=${profileId}` : "";
   const body = await engineFetch<{ notes: SourceNote[] }>(`/sources/${sourceId}/notes${q}`);
   return body.notes;
-}
-
-export async function createSourceNote(
-  sourceId: number,
-  input: { title?: string; body_markdown: string; profile_id?: number | null },
-): Promise<SourceNote> {
-  return engineFetch(`/sources/${sourceId}/notes`, {
-    method: "POST",
-    body: JSON.stringify(input),
-  });
-}
-
-export async function updateSourceNote(
-  sourceId: number,
-  noteId: number,
-  input: { title?: string; body_markdown?: string; profile_id?: number | null },
-): Promise<SourceNote> {
-  return engineFetch(`/sources/${sourceId}/notes/${noteId}`, {
-    method: "PATCH",
-    body: JSON.stringify(input),
-  });
-}
-
-export async function deleteSourceNote(sourceId: number, noteId: number): Promise<void> {
-  await engineFetch(`/sources/${sourceId}/notes/${noteId}`, { method: "DELETE" });
 }

@@ -89,7 +89,7 @@ type RouteDeps = {
   coversDir: string;
   dataDir: string;
   hostedPlanning: boolean;
-  jobs?: import("./jobs.js").InProcessJobRunner;
+  jobs?: import("../services/job-runner.js").InProcessJobRunner;
 };
 
 async function prefetchSourceCover(deps: RouteDeps, sourceId: number): Promise<void> {

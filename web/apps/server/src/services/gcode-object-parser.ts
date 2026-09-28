@@ -8,14 +8,14 @@ import {
  * Handles OrcaSlicer/BambuStudio (EXCLUDE_OBJECT format) and PrusaSlicer (M486/quoted EXCLUDE_OBJECT).
  */
 
-export type ParsedGcodeObject = {
+type ParsedGcodeObject = {
   name: string; // raw NAME from gcode/API
   stlBasename: string; // extracted filename e.g. "a_drive_frame_lower.stl"
   copyIndex: number; // 0-based copy index (0,1,2... for qty>1)
   format: "exclude_object_orca" | "exclude_object_prusa" | "m486" | "unknown";
 };
 
-export type PlateMatch = {
+type PlateMatch = {
   stlBasename: string; // lowercase, normalized
   count: number; // how many copies on plate
   objects: ParsedGcodeObject[];
@@ -32,7 +32,7 @@ export type PlateMatch = {
  *
  * PrusaSlicer M486: "a_drive_frame_lower_stl" (same but unquoted, no Instance suffix for single)
  */
-export function parseGcodeObjectName(raw: string): ParsedGcodeObject {
+function parseGcodeObjectName(raw: string): ParsedGcodeObject {
   const interpreted = interpretSlicedObjectName(raw);
   const isQuoted = raw.startsWith("'") && raw.endsWith("'");
   const format: ParsedGcodeObject["format"] =
@@ -76,16 +76,6 @@ export function groupObjectsByPart(names: string[]): Map<string, PlateMatch> {
     }
   }
   return result;
-}
-
-/**
- * Parse object names from PrusaSlicer objects_info JSON format.
- * Input: raw objects array from objects_info JSON.
- * Format: "part.stl" (single) or "part.stl (Instance N)" (multiple, 1-based).
- * Returns the same Map<string, PlateMatch> as groupObjectsByPart.
- */
-export function parseObjectsInfoNames(names: string[]): Map<string, PlateMatch> {
-  return groupObjectsByPart(names);
 }
 
 /**

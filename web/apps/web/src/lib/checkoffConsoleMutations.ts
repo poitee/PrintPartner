@@ -17,13 +17,13 @@ import {
   type CheckoffRowErrors,
 } from "./checkoffConsoleRowErrors";
 
-export type CheckoffProgressMutation = {
+type CheckoffProgressMutation = {
   part: ReviewPart;
   action: "checkoff" | "correction" | "assembly";
   run: () => Promise<unknown>;
 };
 
-export type CheckoffProgressMutations = {
+type CheckoffProgressMutations = {
   rowErrors: CheckoffRowErrors;
   runMutation: (input: CheckoffProgressMutation) => void;
   retryRow: (partId: number) => void;

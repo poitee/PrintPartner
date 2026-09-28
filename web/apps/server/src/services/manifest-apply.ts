@@ -13,12 +13,7 @@ import {
   type ManifestSelections,
 } from "./manifest-selections.js";
 import { findSourceManifestPath } from "./source-workspace.js";
-
-export const CANONICAL_MANIFEST = "print-partner.manifest.yaml";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value != null && typeof value === "object" && !Array.isArray(value);
-}
+import { isRecord } from "../lib/guards.js";
 
 export function matchKeyMatches(pattern: string, matchKey: string): boolean {
   const pat = pattern.replace(/\\/g, "/").toLowerCase().trim();
@@ -55,14 +50,14 @@ export type ManifestOptionGroup = {
   max?: number | null;
 };
 
-export type ManifestPartRule = {
+type ManifestPartRule = {
   match: string;
   requirement?: string;
   option_group?: string;
   default_included?: boolean;
 };
 
-export type ManifestDoc = {
+type ManifestDoc = {
   project?: string;
   parts?: ManifestPartRule[];
   addons?: Array<{ parts?: ManifestPartRule[]; project?: string; source_id?: string }>;
@@ -218,7 +213,7 @@ export function loadManifestYaml(manifestYaml: string): ManifestDoc {
   };
 }
 
-export function optionGroupPatterns(group: ManifestOptionGroup): string[] {
+function optionGroupPatterns(group: ManifestOptionGroup): string[] {
   const patterns = [...group.parts];
   for (const variant of group.variants) {
     patterns.push(...variant.parts);
@@ -276,7 +271,7 @@ export function mergeOptionGroups(
   }
 }
 
-export function partInOptionGroup(matchKey: string, _groupId: string, group: ManifestOptionGroup): boolean {
+function partInOptionGroup(matchKey: string, _groupId: string, group: ManifestOptionGroup): boolean {
   return optionGroupPatterns(group).some((pat) => matchKeyMatches(pat, matchKey));
 }
 
@@ -326,7 +321,7 @@ function selectedIdsForGroup(
   return selectedIds.filter((variantId) => knownIds.has(variantId));
 }
 
-export function optionGroupSelectionInputError(
+function optionGroupSelectionInputError(
   groupId: string,
   group: ManifestOptionGroup,
   selection: ManifestSelection | undefined,
@@ -420,7 +415,7 @@ function loadCommunityManifest(slug: string): ManifestDoc | null {
   }
 }
 
-export function collectRepoManifests(
+function collectRepoManifests(
   repo: AppRepository,
   profileId: number,
 ): Array<{ projectName: string; doc: ManifestDoc; source: string }> {

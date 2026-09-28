@@ -1,4 +1,4 @@
-export const SIDEBAR_UI_STORAGE_KEY = "print-partner.sidebar.ui.v1";
+const SIDEBAR_UI_STORAGE_KEY = "print-partner.sidebar.ui.v1";
 
 export function readSidebarCollapsed(): boolean {
   if (typeof localStorage === "undefined") return false;

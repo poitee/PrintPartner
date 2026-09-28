@@ -11,7 +11,7 @@ import type { AppRepository } from "../db/repository.js";
 import { tenantExportDirectory } from "../lib/secure-path.js";
 import { migratePrinterSendQueueArtifactPaths } from "./printer-send-queue-store.js";
 
-export type LegacyExportMigrationResult = {
+type LegacyExportMigrationResult = {
   movedEntries: number;
   migratedQueuePaths: number;
 };

@@ -8,7 +8,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { PDFParse } from "pdf-parse";
 import { resolvedFileUnderRoot } from "../lib/secure-path.js";
 import { chargeTenantDiskBytes, TenantDiskQuotaError } from "../lib/tenant-disk-quota.js";
@@ -16,20 +16,20 @@ import { chargeTenantDiskBytes, TenantDiskQuotaError } from "../lib/tenant-disk-
 export const DOCS_TEXT_DIR = ".docs-text";
 
 /** Pages per chunk written for assistant retrieval. */
-export const PDF_CHUNK_PAGES = 5;
+const PDF_CHUNK_PAGES = 5;
 
 /** Files at or above this size extract in a background job (per-page). */
 export const PDF_BG_EXTRACT_BYTES = 8 * 1024 * 1024;
 
-export type PdfExtractStatus = "pending" | "ready" | "error" | "skipped" | "na";
+type PdfExtractStatus = "pending" | "ready" | "error" | "skipped" | "na";
 
-export type PdfPageChunk = {
+type PdfPageChunk = {
   pageStart: number;
   pageEnd: number;
   text: string;
 };
 
-export type PdfExtractResult = {
+type PdfExtractResult = {
   status: PdfExtractStatus;
   hash: string;
   pageCount: number;
@@ -39,7 +39,7 @@ export type PdfExtractResult = {
   error?: string;
 };
 
-export type PdfTextCacheOptions = {
+type PdfTextCacheOptions = {
   /** Writable directory for extracted text and page chunks. */
   cacheRoot?: string;
   /** Read-only cache directories used by older Source layouts. */
@@ -228,7 +228,7 @@ function pagesToChunks(
   return { text: allParts.join("\n\n"), chunks, pageCount };
 }
 
-export type ExtractPdfOptions = {
+type ExtractPdfOptions = {
   /** Force re-extract even if sidecar exists. */
   force?: boolean;
   /** Optional progress callback (page-oriented). */
@@ -392,4 +392,3 @@ export function docTitleFromPath(path: string): string {
   return base;
 }
 
-export { dirname };

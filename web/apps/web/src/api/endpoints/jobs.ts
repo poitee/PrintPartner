@@ -5,7 +5,7 @@ const JOB_TERMINAL = new Set(["done", "error", "cancelled"]);
 
 export type StlPackGroupBy = "color" | "color_dir";
 
-export type ExportStlPackOptions = {
+type ExportStlPackOptions = {
   profile_id: number;
   missing_only?: boolean;
   group_by?: StlPackGroupBy;
@@ -54,14 +54,6 @@ export async function startExportStlPack(
       ...(options?.filename_grouping ? { filename_grouping: options.filename_grouping } : {}),
       ...(options?.unit_tokens?.length ? { unit_tokens: [...options.unit_tokens] } : {}),
     }),
-  });
-  return body.job_id;
-}
-
-export async function startExportChecklistHtml(profileId: number): Promise<string> {
-  const body = await engineFetch<{ job_id: string }>("/jobs/export-checklist-html", {
-    method: "POST",
-    body: JSON.stringify({ profile_id: profileId }),
   });
   return body.job_id;
 }

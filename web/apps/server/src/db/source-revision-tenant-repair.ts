@@ -99,7 +99,7 @@ export const STRANDED_SOURCE_REVISION_QUERY = `SELECT revision.id,
   ORDER BY revision.id
   LIMIT 1`;
 
-export type StrandedSourceRevision = Readonly<{
+type StrandedSourceRevision = Readonly<{
   id: number;
   project_id: number;
   revision_tenant_id: string;
@@ -107,7 +107,7 @@ export type StrandedSourceRevision = Readonly<{
   upstream_revision_key: string;
 }>;
 
-export function strandedSourceRevisionError(
+function strandedSourceRevisionError(
   revision: StrandedSourceRevision,
 ): Error {
   return new Error(

@@ -9,7 +9,7 @@ export type SuggestedPrinterClaim = {
   stlBasename: string;
 };
 
-export type CheckoffPrinterActivityParts = {
+type CheckoffPrinterActivityParts = {
   printingPartIds: Map<number, string>;
   awaitingPartIds: Map<number, string>;
   suggestedPartIds: Map<number, SuggestedPrinterClaim>;

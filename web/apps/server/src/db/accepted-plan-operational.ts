@@ -28,7 +28,6 @@ import {
 } from "./accepted-plan-operational-model.js";
 
 export {
-  ACCEPTED_IN_LIST_SIZE,
   ACCEPTED_READ_PAGE_SIZE,
   ACCEPTED_TEXT_PAGE_SIZE,
 } from "./accepted-plan-operational-model.js";

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AppRepository } from "../db/repository.js";
-import type { InProcessJobRunner } from "./jobs.js";
+import type { InProcessJobRunner } from "../services/job-runner.js";
 
 const resolveBambuConnectHostPath = vi.hoisted(() =>
   vi.fn(() => {

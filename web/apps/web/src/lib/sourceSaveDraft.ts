@@ -11,7 +11,7 @@ export type SourceSaveDraft = {
   category: string;
 };
 
-export type SourceSavePayload = {
+type SourceSavePayload = {
   name: string;
   url: string;
   branch: string;

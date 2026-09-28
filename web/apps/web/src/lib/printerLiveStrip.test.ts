@@ -3,7 +3,6 @@ import {
   formatEtaSeconds,
   formatPrinterHostCaption,
   formatPrinterJobLine,
-  formatPrinterLiveLine,
   formatPrinterStatusPill,
   printerDeskTypeLabel,
   printerHostTypeLabel,
@@ -81,53 +80,6 @@ describe("formatPrinterStatusPill", () => {
 
   it("shows Idle", () => {
     expect(formatPrinterStatusPill({ state: "idle" })).toBe("Idle");
-  });
-});
-
-describe("formatPrinterLiveLine", () => {
-  it("shows loading placeholder", () => {
-    expect(formatPrinterLiveLine({ name: "Trident", status: null })).toBe("Trident · …");
-  });
-
-  it("formats idle and offline", () => {
-    expect(
-      formatPrinterLiveLine({ name: "Trident", status: { state: "idle", message: "Idle" } }),
-    ).toBe("Trident · Idle");
-    expect(
-      formatPrinterLiveLine({ name: "Trident", status: { state: "offline", message: "down" } }),
-    ).toBe("Trident · Offline");
-  });
-
-  it("formats printing with filename, progress, and ETA", () => {
-    expect(
-      formatPrinterLiveLine({
-        name: "Shop Voron",
-        status: {
-          state: "printing",
-          filename: "frame_x.gcode",
-          progress: 34.2,
-          eta_seconds: 720,
-        },
-      }),
-    ).toBe("Shop Voron · Printing frame_x.gcode · 34% · ETA ~12m");
-  });
-
-  it("formats complete", () => {
-    expect(
-      formatPrinterLiveLine({
-        name: "Trident",
-        status: { state: "complete", filename: "frame_x.gcode" },
-      }),
-    ).toBe("Trident · Complete · frame_x.gcode");
-  });
-
-  it("omits ETA when missing", () => {
-    expect(
-      formatPrinterLiveLine({
-        name: "Shop Voron",
-        status: { state: "printing", filename: "a.gcode", progress: 10 },
-      }),
-    ).toBe("Shop Voron · Printing a.gcode · 10%");
   });
 });
 

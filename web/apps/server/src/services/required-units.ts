@@ -2,7 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { basename } from "node:path";
 
 export const REQUIRED_UNIT_MAP_FORMAT = "required-unit-map-v1";
-export const MAX_REQUIRED_UNIT_OBJECT_NAME_LENGTH = 200;
+const MAX_REQUIRED_UNIT_OBJECT_NAME_LENGTH = 200;
 export const MAX_REQUIRED_UNIT_INDEX = 9_999;
 
 declare const requiredUnitTokenBrand: unique symbol;

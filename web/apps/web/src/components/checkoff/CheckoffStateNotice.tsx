@@ -2,7 +2,7 @@ import { Alert, AlertActions, AlertTitle } from "../ui/alert";
 import { Button } from "../ui/button";
 import { Spinner } from "../ui/spinner";
 
-export type CheckoffResourceState = "loading" | "ready" | "error" | "empty" | "offline";
+type CheckoffResourceState = "loading" | "ready" | "error" | "empty" | "offline";
 
 type Props = {
   engineState: CheckoffResourceState;

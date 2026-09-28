@@ -74,7 +74,7 @@ function activeManifestDigest(
   return revision?.manifest_digest ?? null;
 }
 
-export type SourcePdfTextStorage = {
+type SourcePdfTextStorage = {
   cacheRoot: string;
   legacyCacheRoots: readonly string[];
 };

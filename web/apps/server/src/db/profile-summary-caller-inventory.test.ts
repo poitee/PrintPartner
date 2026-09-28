@@ -47,7 +47,6 @@ describe("Profile summary caller inventory", () => {
       { file: "services/build-workflow.ts", count: 1 },
     ]);
     expect(knownProductionCallers("getProfileHeader", "db/repository.ts")).toEqual([
-      { file: "assistant/assistant-context.ts", count: 1 },
       { file: "assistant/tools.ts", count: 1 },
       { file: "routes/printers.ts", count: 1 },
       { file: "routes/production-setup.ts", count: 2 },

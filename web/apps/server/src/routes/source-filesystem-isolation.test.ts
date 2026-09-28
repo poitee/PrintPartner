@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
@@ -9,8 +9,8 @@ import { loadConfig } from "../config.js";
 import { getDb } from "../db/client.js";
 import { projects } from "../db/schema.js";
 import type { SelfHostDbStore } from "../adapters/self-host/index.js";
+import { ASSISTANT_TOOL_SPECS } from "../assistant/tool-specs.js";
 import {
-  ASSISTANT_TOOL_SPECS,
   applyAssistantAction,
   invokeAssistantTool,
 } from "../assistant/tools.js";
@@ -18,7 +18,7 @@ import {
 const cleanups: Array<() => Promise<void>> = [];
 
 async function sourceApp(multiUser: boolean) {
-  const dataDir = mkdtempSync(join(tmpdir(), "pp-source-isolation-"));
+  const dataDir = realpathSync(mkdtempSync(join(tmpdir(), "pp-source-isolation-")));
   const config: ServerConfig = {
     ...loadConfig(),
     dataDir,

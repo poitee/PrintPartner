@@ -22,6 +22,7 @@ import {
   type FullBackupRoot,
 } from "./backup-scope.js";
 import { readFreeDiskBytes } from "./storage-inventory.js";
+import { isRecord } from "../lib/guards.js";
 
 export type BackupDatabase = {
   readonly dbPath: string;
@@ -29,7 +30,7 @@ export type BackupDatabase = {
   backupToFile(destinationPath: string): Promise<void>;
 };
 
-export type CreateBackupOptions = Readonly<{
+type CreateBackupOptions = Readonly<{
   includeDataDirectories?: boolean;
   validationLimits?: BackupValidationLimits;
 }>;
@@ -77,12 +78,12 @@ const BACKUP_CORE_FILES = new Set([
 const SQLITE_HEADER = Buffer.from("SQLite format 3\0", "binary");
 const MAX_METADATA_BYTES = 64 * 1024;
 const DEFAULT_MAX_BACKUP_ENTRIES = 100_000;
-export const MAX_BACKUP_ENTRY_BYTES = 8 * 1024 * 1024 * 1024;
-export const MAX_BACKUP_EXPANDED_BYTES = 20 * 1024 * 1024 * 1024;
+const MAX_BACKUP_ENTRY_BYTES = 8 * 1024 * 1024 * 1024;
+const MAX_BACKUP_EXPANDED_BYTES = 20 * 1024 * 1024 * 1024;
 const DEFAULT_MAX_DECOMPRESSION_RATIO = 200;
 const RESTORE_FREE_SPACE_RESERVE_BYTES = 64 * 1024 * 1024;
 
-export type BackupValidationLimits = {
+type BackupValidationLimits = {
   maxEntries?: number;
   maxTotalBytes?: number;
   maxEntryBytes?: number;
@@ -96,7 +97,7 @@ export type RestorePreflight = Readonly<{
   sufficient: boolean;
 }>;
 
-export type RestoreInspectionOptions = BackupValidationLimits &
+type RestoreInspectionOptions = BackupValidationLimits &
   Readonly<{
     readFreeBytes?: (path: string) => Promise<number>;
   }>;
@@ -288,10 +289,6 @@ export async function inspectRestore(
     freeBytes,
     sufficient: freeBytes >= requiredBytes,
   };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function sameRoots(left: readonly FullBackupRoot[], right: readonly FullBackupRoot[]): boolean {

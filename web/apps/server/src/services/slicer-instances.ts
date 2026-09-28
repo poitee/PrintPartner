@@ -2,7 +2,7 @@ export type SlicerInstanceKind = "orca" | "prusa" | "bambu" | "custom";
 
 export type SlicerDialect = "orca_json" | "bambu_json" | "prusa_ini";
 
-export type SlicerSyncKind = "orca" | "prusa" | "bambu";
+type SlicerSyncKind = "orca" | "prusa" | "bambu";
 
 export function dialectToSyncKind(dialect: SlicerDialect): SlicerSyncKind {
   if (dialect === "prusa_ini") return "prusa";
@@ -36,7 +36,7 @@ export function defaultWatchDirs(dialect: SlicerDialect): {
   };
 }
 
-export type SlicerInstancePreset = {
+type SlicerInstancePreset = {
   kind: Exclude<SlicerInstanceKind, "custom">;
   name: string;
   dialect: SlicerDialect;

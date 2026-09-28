@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { AssistantProposedAction } from "@print-partner/contracts";
 
-export type SyncActionParams = {
+type SyncActionParams = {
   planId: number;
   projectIds?: number[];
   sourceName?: string | null;

@@ -11,7 +11,7 @@ export type CatalogColor = {
   swatch_url: string;
 };
 
-export type FilamentCatalogPayload = {
+type FilamentCatalogPayload = {
   synced_at: string;
   source: string;
   status: string;

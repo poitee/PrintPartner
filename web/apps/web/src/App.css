@@ -18,17 +18,6 @@
    These back the pages/components not yet ported to Tailwind.
    ============================================================ */
 
-.card h3 {
-  margin: 0 0 0.75rem;
-  font-size: 0.95rem;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-}
-
-.empty-state p {
-  margin: 0;
-}
-
 .status-err {
   color: var(--destructive);
   margin: 0 0 0.75rem;
@@ -39,68 +28,13 @@
   color: var(--success);
 }
 
-.table-wrap {
-  overflow-x: auto;
-  padding: 0;
-}
-
-.data-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.9rem;
-  border-radius: var(--radius);
-  overflow: hidden;
-}
-
-.data-table th,
-.data-table td {
-  padding: 0.75rem 1rem;
-  text-align: left;
-  border-bottom: 1px solid var(--border);
-}
-
-.data-table th {
-  color: var(--muted-foreground);
-  font-weight: 600;
-  font-size: 0.75rem;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  background: color-mix(in srgb, var(--surface-sunken) 80%, transparent);
-}
-
-.data-table tbody tr:hover td {
-  background: color-mix(in srgb, var(--primary) 4%, transparent);
-}
-
-.data-table tr:last-child td {
-  border-bottom: none;
-}
-
 .mono {
   font-family: var(--font-mono);
   font-size: 0.85rem;
 }
 
-.badge.manifest-yes {
-  border-color: color-mix(in srgb, var(--success) 30%, transparent);
-  background: color-mix(in srgb, var(--success) 14%, transparent);
-  color: var(--success);
-}
-
-@media (max-width: 720px) {
-  .two-col {
-    grid-template-columns: 1fr;
-  }
-}
-
 .warnings h3 {
   color: var(--warning);
-}
-
-.warning-list.compact {
-  margin: 0 0 0.75rem;
-  padding-left: 1.1rem;
-  font-size: 0.85rem;
 }
 
 .toolbar-row {
@@ -117,30 +51,6 @@
 .option-group h4 {
   margin: 0 0 0.5rem;
   font-size: 0.95rem;
-}
-
-.dialog-card label {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  margin-bottom: 0.75rem;
-}
-
-.dialog-card input,
-.dialog-card select,
-.rules-textarea {
-  width: 100%;
-  padding: 0.4rem 0.5rem;
-  border: 1px solid var(--border-strong);
-  border-radius: 4px;
-  background: var(--card);
-  color: inherit;
-  font: inherit;
-}
-
-.rules-textarea {
-  font-family: var(--font-mono);
-  font-size: 0.85rem;
 }
 
 .help-prose ol {
@@ -184,11 +94,6 @@
   background: var(--card);
 }
 
-.qty-display {
-  font-variant-numeric: tabular-nums;
-  font-weight: 600;
-}
-
 @media (max-width: 767px) {
   .qty-btn {
     min-width: 2.75rem;
@@ -215,16 +120,6 @@
   font-size: 0.85rem;
   word-break: break-all;
   margin: 0 0 0.5rem;
-}
-
-.part-thumb.large {
-  width: 72px;
-  height: 72px;
-}
-
-.part-thumb.compact {
-  width: 36px;
-  height: 36px;
 }
 
 .filament-list {
@@ -415,45 +310,6 @@
 
 .preview3d-dims-caption {
   margin: 0.4rem 0 0;
-  font-variant-numeric: tabular-nums;
-}
-
-.checkoff-grid.compact {
-  grid-template-columns: 1fr;
-}
-
-.checkoff-card.compact {
-  padding: 0;
-}
-
-.checkoff-card-top {
-  display: flex;
-  align-items: flex-start;
-  gap: 0.65rem;
-}
-
-.checkoff-thumb-wrap.compact {
-  max-width: 2.75rem;
-}
-
-.progress-ring-track {
-  stroke: color-mix(in srgb, var(--foreground) 10%, transparent);
-}
-
-.progress-ring-fill {
-  stroke: var(--warning);
-  stroke-linecap: round;
-  transition: stroke-dashoffset 0.2s ease;
-}
-
-.progress-ring-fill.complete {
-  stroke: var(--success);
-}
-
-.progress-ring-label {
-  fill: var(--foreground);
-  font-size: 0.62rem;
-  font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
 
@@ -821,32 +677,6 @@
   align-items: flex-start;
 }
 
-.checkoff-mobile-thumb {
-  width: 72px;
-  height: 72px;
-  flex-shrink: 0;
-  border: 1px solid var(--paper-border);
-  border-radius: 8px;
-  overflow: hidden;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--paper-surface);
-}
-
-.checkoff-mobile-thumb-img {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-}
-
-.checkoff-mobile-thumb-ph {
-  width: 50%;
-  height: 50%;
-  border-radius: 4px;
-  opacity: 0.5;
-}
-
 .checkoff-mobile-card-meta {
   min-width: 0;
   flex: 1;
@@ -925,10 +755,6 @@
 .checkoff-sheet .qty-btn:disabled {
   opacity: 0.45;
   cursor: not-allowed;
-}
-
-.checkoff-sheet .qty-display {
-  color: var(--paper-fg);
 }
 
 .checkoff-sheet .sheet-remove-btn {

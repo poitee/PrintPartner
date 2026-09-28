@@ -8,8 +8,6 @@ vi.mock("../lib/outbound-url.js", async (importOriginal) => {
 });
 import {
   buildSpoolmanFilamentId,
-  buildSpoolmanSpoolId,
-  formatSpoolOptionLabel,
   formatSpoolSummaryBadge,
   formatSpoolmanFilamentLabel,
   listSpoolmanFilaments,
@@ -19,10 +17,8 @@ import {
   normalizeSpoolmanVendor,
   parseSpoolmanFilamentId,
   parseSpoolmanFilamentList,
-  parseSpoolmanSpoolId,
   parseSpoolmanSpoolList,
   spoolSummariesForFilament,
-  spoolSummariesForPart,
   spoolmanFilamentToCatalogColor,
   testSpoolmanConnection,
   useSpoolFilament,
@@ -92,20 +88,6 @@ describe("spoolman-client", () => {
     const summaries = spoolSummariesForFilament(spools, 7);
     expect(summaries).toEqual([{ spool_id: 3, remaining_g: 420.2 }]);
     expect(formatSpoolSummaryBadge(summaries)).toBe("~420 g on spool #3");
-  });
-
-  it("parses spool ids and prefers a selected spool", () => {
-    const spoolRef = buildSpoolmanSpoolId("int-1", 3);
-    expect(parseSpoolmanSpoolId(spoolRef)).toEqual({ integrationId: "int-1", spoolId: 3 });
-    const spools = [
-      { id: 3, filament_id: 7, remaining_weight: 420.2, location: "Shelf A" },
-      { id: 8, filament_id: 7, remaining_weight: 200 },
-    ];
-    expect(spoolSummariesForPart(spools, 7, spoolRef)).toEqual([
-      { spool_id: 3, remaining_g: 420.2 },
-    ]);
-    expect(spoolSummariesForPart(spools, 7, null)).toHaveLength(2);
-    expect(formatSpoolOptionLabel(spools[0]!)).toBe("#3 · ~420 g · Shelf A");
   });
 
   it("testSpoolmanConnection succeeds on /info", async () => {

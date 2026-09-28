@@ -1,4 +1,4 @@
-export type CompletedUnit = {
+type CompletedUnit = {
   readonly unitIndex: number;
   readonly completed: boolean;
 };

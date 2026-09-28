@@ -2,7 +2,7 @@
  * Golden eval fixtures for kit-advisor tool / action behavior.
  * These encode expected Q→tool outcomes without calling a live LLM.
  */
-export type GoldenEvalCase = {
+type GoldenEvalCase = {
   id: string;
   description: string;
   /** Natural-language question (documentation / future LLM eval harness). */

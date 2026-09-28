@@ -4,7 +4,7 @@ import { resolvedFileUnderRoot } from "./secure-path.js";
 
 const README_NAMES = ["README.md", "readme.md", "Readme.md"] as const;
 
-export function findReadme(repoPath: string): string | null {
+function findReadme(repoPath: string): string | null {
   const root = resolve(repoPath);
   for (const name of README_NAMES) {
     const candidate = resolvedFileUnderRoot(root, join(root, name));

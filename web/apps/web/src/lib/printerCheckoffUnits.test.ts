@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import type { ReviewPart } from "../api/endpoints/planManifests";
 import {
   incompleteUnitsForParts,
-  incompleteUnitsForSelectedParts,
 } from "./printerCheckoffUnits";
 
 function part(overrides: Partial<ReviewPart> & Pick<ReviewPart, "id">): ReviewPart {
@@ -36,16 +35,5 @@ describe("printerCheckoffUnits", () => {
       part({ id: 3, included: false, missing: true, print_units: [false] }),
     ];
     expect(incompleteUnitsForParts(parts)).toEqual([{ part_id: 1, unit_index: 1 }]);
-  });
-
-  it("filters by selected part ids", () => {
-    const parts = [
-      part({ id: 1 }),
-      part({ id: 2, filename: "b.stl" }),
-    ];
-    expect(incompleteUnitsForSelectedParts(parts, [2])).toEqual([
-      { part_id: 2, unit_index: 0 },
-      { part_id: 2, unit_index: 1 },
-    ]);
   });
 });

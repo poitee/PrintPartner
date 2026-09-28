@@ -25,7 +25,7 @@ export const DIRECT_EXPORT_3MF_LIMITS = {
   maxOutputBytes: 512 * 1024 * 1024,
 } as const;
 
-export type MaterializeDirectExport3mfCommand = Readonly<{
+type MaterializeDirectExport3mfCommand = Readonly<{
   profileId: number;
   tokens: readonly string[];
 }>;

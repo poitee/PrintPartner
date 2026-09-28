@@ -41,7 +41,7 @@ export function canonicalWorkingSources(sources: readonly WorkingSource[]): read
   return canonical;
 }
 
-export function digestWorkingSources(sources: readonly WorkingSource[]): string {
+function digestWorkingSources(sources: readonly WorkingSource[]): string {
   const canonical = canonicalWorkingSources(sources);
   return createHash("sha256")
     .update(

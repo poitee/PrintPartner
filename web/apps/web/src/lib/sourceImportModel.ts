@@ -1,9 +1,9 @@
 import type { SourceSummary } from "@print-partner/contracts";
 import type { SourceKind } from "../components/sources/sourceLabels";
 
-export type SyncingSourceIds = number[] | "all" | null;
+type SyncingSourceIds = number[] | "all" | null;
 
-export type ReposImportResultLike = {
+type ReposImportResultLike = {
   created: number;
   updated: number;
   skipped: number;
@@ -15,7 +15,7 @@ export type ReposImportResultLike = {
   }>;
 };
 
-export type NewImportedSource = { source_id: number; name: string };
+type NewImportedSource = { source_id: number; name: string };
 
 export function sourceKindNeedsArchiveUpload(kind: SourceKind): boolean {
   return (

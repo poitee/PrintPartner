@@ -1,5 +1,4 @@
 import type { Octokit } from "@octokit/rest";
-import { resolve } from "node:path";
 import { Readable } from "node:stream";
 import { cancelResponseBody } from "../lib/bounded-response.js";
 import {
@@ -17,16 +16,7 @@ import { SOURCE_MANIFEST_FILENAME } from "./source-workspace.js";
 
 const GITHUB_SNAPSHOT_FORMAT_VERSION = 2;
 
-function safeRepoFilePath(repoDir: string, relativePath: string): string | null {
-  const normalized = relativePath.replace(/\\/g, "/").replace(/^\/+/, "");
-  if (!normalized || normalized.includes("..")) return null;
-  const root = resolve(repoDir);
-  const dest = resolve(root, normalized);
-  if (dest !== root && !dest.startsWith(`${root}/`)) return null;
-  return dest;
-}
-
-export type GithubRepoRef = {
+type GithubRepoRef = {
   owner: string;
   repo: string;
   branch: string;
@@ -219,7 +209,7 @@ export type SyncDocEntry = {
   sizeBytes: number;
 };
 
-export type SyncProgress = {
+type SyncProgress = {
   phase: "stls" | "docs";
   current: number;
   total: number;
@@ -227,7 +217,7 @@ export type SyncProgress = {
   message?: string;
 };
 
-export type SyncResult = {
+type SyncResult = {
   commitSha: string;
   snapshot: PublishedSourceSnapshot;
   stlPaths: string[];
@@ -323,7 +313,7 @@ async function fetchGithubTreeEntries(
   return { commitSha, entries, truncated: tree.data.truncated === true };
 }
 
-export type GithubRepoTreeSummary = {
+type GithubRepoTreeSummary = {
   owner: string;
   repo: string;
   ref: string;
@@ -366,7 +356,7 @@ export async function fetchGithubRepoTreeSummary(
   };
 }
 
-export type SyncGithubOptions = {
+type SyncGithubOptions = {
   maxStlFiles?: number;
   /** Timeout for each raw file response and body stream. */
   fileTimeoutMs?: number;
@@ -376,7 +366,7 @@ export type SyncGithubOptions = {
   onProgress?: (progress: SyncProgress) => void;
 };
 
-export type SyncGithubSourceInput = {
+type SyncGithubSourceInput = {
   url: string;
   branch: string;
   reposDir: string;
@@ -566,4 +556,4 @@ export async function syncGithubSource(input: SyncGithubSourceInput): Promise<Sy
   };
 }
 
-export { classifyDocPath, safeRepoFilePath };
+export { classifyDocPath };
