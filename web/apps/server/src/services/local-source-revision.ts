@@ -17,7 +17,15 @@ import {
   type SnapshotFileKind,
 } from "./local-source-snapshot.js";
 import { loadManifestYaml } from "./manifest-apply.js";
-import { SOURCE_MANIFEST_FILENAME } from "./source-workspace.js";
+import {
+  isSourceMetadataPath,
+  SOURCE_MANIFEST_FILENAME,
+  SOURCE_PHASE_MANIFEST_FILENAME,
+} from "./source-workspace.js";
+import {
+  MAX_PHASE_MANIFEST_BYTES,
+  PHASE_MANIFEST_TOO_LARGE_DETAIL,
+} from "./upload-limits.js";
 import { isRecord } from "../lib/guards.js";
 
 const DEFAULT_LOCAL_SNAPSHOT_STL_LIMIT = 500;
@@ -54,7 +62,7 @@ function classifySnapshotPath(path: string): SnapshotFileKind | null {
   const lower = path.toLowerCase();
   if (lower.endsWith(".stl")) return "stl";
   if (lower.endsWith(".3mf") || lower.endsWith(".zip")) return "artifact";
-  if (path === SOURCE_MANIFEST_FILENAME) return "artifact";
+  if (isSourceMetadataPath(path)) return "artifact";
   if (!lower.endsWith(".md") && !lower.endsWith(".pdf")) return null;
   if (lower.endsWith(".pdf")) return "pdf";
   const base = lower.split("/").pop() ?? lower;
@@ -130,6 +138,12 @@ function assertSnapshotResourceLimits(input: {
   maxDocumentationBytes: number;
   maxTotalBytes: number;
 }): void {
+  const phaseManifest = input.files.find(
+    (file) => file.relativePath === SOURCE_PHASE_MANIFEST_FILENAME,
+  );
+  if (phaseManifest && phaseManifest.sizeHintBytes > MAX_PHASE_MANIFEST_BYTES) {
+    throw new Error(PHASE_MANIFEST_TOO_LARGE_DETAIL);
+  }
   const stlCount = input.files.filter((file) => file.kind === "stl").length;
   if (stlCount > input.maxStlFiles) {
     throw new Error(

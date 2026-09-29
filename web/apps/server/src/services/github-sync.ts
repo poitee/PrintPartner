@@ -1,5 +1,5 @@
 import type { Octokit } from "@octokit/rest";
-import { Readable } from "node:stream";
+import { Readable, Transform, type TransformCallback } from "node:stream";
 import { cancelResponseBody } from "../lib/bounded-response.js";
 import {
   LocalSourceSnapshotStore,
@@ -12,9 +12,18 @@ import {
 } from "./local-source-snapshot.js";
 import { summarizeRepoTreePaths, type RepoTreeSummary } from "./repo-tree-summary.js";
 import { createGithubClient } from "./github-client.js";
-import { SOURCE_MANIFEST_FILENAME } from "./source-workspace.js";
+import {
+  isSourceMetadataPath,
+  SOURCE_MANIFEST_FILENAME,
+  SOURCE_PHASE_MANIFEST_FILENAME,
+} from "./source-workspace.js";
+import {
+  MAX_PHASE_MANIFEST_BYTES,
+  PHASE_MANIFEST_TOO_LARGE_DETAIL,
+} from "./upload-limits.js";
 
-const GITHUB_SNAPSHOT_FORMAT_VERSION = 2;
+const GITHUB_MANIFEST_SNAPSHOT_FORMAT_VERSION = 2;
+const GITHUB_PHASE_SNAPSHOT_FORMAT_VERSION = 3;
 
 type GithubRepoRef = {
   owner: string;
@@ -272,6 +281,42 @@ async function openRawFile(
   };
 }
 
+function limitPhaseManifestResponse(response: SnapshotFileResponse): SnapshotFileResponse {
+  if (
+    response.contentLengthBytes != null &&
+    response.contentLengthBytes > MAX_PHASE_MANIFEST_BYTES
+  ) {
+    response.stream.destroy();
+    throw new Error(PHASE_MANIFEST_TOO_LARGE_DETAIL);
+  }
+  let receivedBytes = 0;
+  const bounded = new Transform({
+    transform(chunk: unknown, encoding: BufferEncoding, callback: TransformCallback): void {
+      const bytes = Buffer.isBuffer(chunk)
+        ? chunk
+        : chunk instanceof Uint8Array
+          ? Buffer.from(chunk)
+          : typeof chunk === "string"
+            ? Buffer.from(chunk, encoding)
+            : null;
+      if (!bytes) {
+        callback(new TypeError("Source file stream emitted a non-byte chunk"));
+        return;
+      }
+      receivedBytes += bytes.byteLength;
+      if (receivedBytes > MAX_PHASE_MANIFEST_BYTES) {
+        callback(new Error(PHASE_MANIFEST_TOO_LARGE_DETAIL));
+        return;
+      }
+      callback(null, bytes);
+    },
+  });
+  response.stream.on("error", (error) => bounded.destroy(error));
+  bounded.on("close", () => response.stream.destroy());
+  response.stream.pipe(bounded);
+  return { ...response, stream: bounded };
+}
+
 type RepoTreeEntry = {
   path: string;
   type: "blob" | "tree" | "commit";
@@ -377,14 +422,21 @@ type SyncGithubSourceInput = {
 
 function snapshotKind(path: string): SnapshotFileKind | null {
   if (path.toLowerCase().endsWith(".stl")) return "stl";
-  if (path === SOURCE_MANIFEST_FILENAME) return "artifact";
+  if (isSourceMetadataPath(path)) return "artifact";
   return classifyDocPath(path);
 }
 
-function githubSnapshotRevisionKey(commitSha: string, hasCanonicalManifest: boolean): string {
-  return hasCanonicalManifest
-    ? `${commitSha}.snapshot-v${GITHUB_SNAPSHOT_FORMAT_VERSION}`
-    : commitSha;
+function githubSnapshotRevisionKey(
+  commitSha: string,
+  metadataPaths: ReadonlySet<string>,
+): string {
+  if (metadataPaths.has(SOURCE_PHASE_MANIFEST_FILENAME)) {
+    return `${commitSha}.snapshot-v${GITHUB_PHASE_SNAPSHOT_FORMAT_VERSION}`;
+  }
+  if (metadataPaths.has(SOURCE_MANIFEST_FILENAME)) {
+    return `${commitSha}.snapshot-v${GITHUB_MANIFEST_SNAPSHOT_FORMAT_VERSION}`;
+  }
+  return commitSha;
 }
 
 function isRegularBlob(entry: RepoTreeEntry): boolean {
@@ -435,10 +487,18 @@ export async function syncGithubSource(input: SyncGithubSourceInput): Promise<Sy
 
   const selectedEntries = selectedTreeFiles(entries);
   const stlBlobs = selectedEntries.filter((item) => snapshotKind(item.path) === "stl");
-  const manifestBlobs = selectedEntries.filter(
-    (item) => item.path === SOURCE_MANIFEST_FILENAME,
-  );
+  const metadataBlobs = selectedEntries.filter((item) => isSourceMetadataPath(item.path));
+  const metadataPaths = new Set(metadataBlobs.map((item) => item.path));
   const docBlobs = selectedEntries.filter((item) => classifyDocPath(item.path) !== null);
+  const phaseManifest = metadataBlobs.find(
+    (item) => item.path === SOURCE_PHASE_MANIFEST_FILENAME,
+  );
+  if (
+    phaseManifest?.size != null &&
+    phaseManifest.size > MAX_PHASE_MANIFEST_BYTES
+  ) {
+    throw new Error(PHASE_MANIFEST_TOO_LARGE_DETAIL);
+  }
 
   const stlPaths = stlBlobs.map((b) => b.path).sort();
   const maxStlFiles = options?.maxStlFiles ?? 500;
@@ -460,10 +520,10 @@ export async function syncGithubSource(input: SyncGithubSourceInput): Promise<Sy
     throw new Error("GitHub file timeout must be a positive safe integer");
   }
 
-  let docsBudgetUsed = manifestBlobs.reduce((sum, entry) => sum + (entry.size ?? 0), 0);
+  let docsBudgetUsed = metadataBlobs.reduce((sum, entry) => sum + (entry.size ?? 0), 0);
   if (docsBudgetUsed > maxDocsBytes) {
     throw new Error(
-      `GitHub Source manifest exceeds the ${maxDocsBytes} byte documentation limit`,
+      `GitHub Source metadata exceeds the ${maxDocsBytes} byte documentation limit`,
     );
   }
   const selectedDocs: RepoTreeEntry[] = [];
@@ -494,20 +554,20 @@ export async function syncGithubSource(input: SyncGithubSourceInput): Promise<Sy
     docsBudgetUsed += size;
   }
 
-  const files: SnapshotFile[] = [...stlBlobs, ...manifestBlobs, ...selectedDocs].map((entry) => ({
+  const files: SnapshotFile[] = [...stlBlobs, ...metadataBlobs, ...selectedDocs].map((entry) => ({
     path: sourceRelativePath(entry.path),
     kind: snapshotKind(entry.path)!,
     sizeHintBytes: entry.size,
   }));
   const totals = {
     stls: stlBlobs.length,
-    docs: manifestBlobs.length + selectedDocs.length,
+    docs: metadataBlobs.length + selectedDocs.length,
   };
   const progress = { stls: 0, docs: 0 };
   const store = new LocalSourceSnapshotStore({ reposDir });
   const snapshot = await store.materialize({
     sourceId,
-    upstreamRevisionKey: githubSnapshotRevisionKey(commitSha, manifestBlobs.length > 0),
+    upstreamRevisionKey: githubSnapshotRevisionKey(commitSha, metadataPaths),
     files,
     selection: {
       maxStlFiles,
@@ -527,7 +587,17 @@ export async function syncGithubSource(input: SyncGithubSourceInput): Promise<Sy
             ? `Downloading STL ${progress[phase]}/${totals[phase]}`
             : `Downloading doc ${progress[phase]}/${totals[phase]}: ${file.path}`,
       });
-      return openRawFile(ref.owner, ref.repo, commitSha, file.path, token, fileTimeoutMs);
+      const response = await openRawFile(
+        ref.owner,
+        ref.repo,
+        commitSha,
+        file.path,
+        token,
+        fileTimeoutMs,
+      );
+      return file.path === SOURCE_PHASE_MANIFEST_FILENAME
+        ? limitPhaseManifestResponse(response)
+        : response;
     },
   });
 

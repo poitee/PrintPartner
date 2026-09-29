@@ -41,6 +41,7 @@ import { LocalSourceSnapshotStore, sourceRelativePath } from "./local-source-sna
 const COMMIT_A = "a".repeat(40);
 const COMMIT_B = "b".repeat(40);
 const roots: string[] = [];
+const PHASE_MANIFEST_LIMIT_BYTES = 1024 * 1024;
 
 type TreeItem = {
   path: string;
@@ -199,6 +200,116 @@ describe("atomic GitHub Source sync", () => {
         "identity",
       );
     }
+  });
+
+  it("publishes root phase metadata without admitting arbitrary JSON files", async () => {
+    const root = reposRoot();
+    const phases = JSON.stringify({
+      phases: [
+        { name: "Foundation", folders: ["foundation"] },
+        { name: "Assembly", folders: ["assembly"], depends_on: ["Foundation"] },
+      ],
+    });
+    setTree(COMMIT_A, [
+      { path: "part.stl", type: "blob", mode: "100644", size: 5 },
+      { path: "pp-phases.json", type: "blob", mode: "100644", size: Buffer.byteLength(phases) },
+      { path: "ignored.json", type: "blob", mode: "100644", size: 2 },
+    ]);
+    const fetchMock = rawResponse({
+      "part.stl": "solid",
+      "pp-phases.json": phases,
+      "ignored.json": "{}",
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await syncGithubSource({
+      url: "https://github.com/example/printer",
+      branch: "main",
+      reposDir: root,
+      sourceId: 8,
+    });
+
+    expect(result.snapshot.upstreamRevisionKey).toBe(`${COMMIT_A}.snapshot-v3`);
+    expect(readFileSync(join(result.snapshot.absolutePath, "pp-phases.json"), "utf8"))
+      .toBe(phases);
+    expect(existsSync(join(result.snapshot.absolutePath, "ignored.json"))).toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    const changedPhases = JSON.stringify({
+      phases: [{ name: "Assembly", folders: ["assembly"] }],
+    });
+    setTree(COMMIT_B, [
+      { path: "part.stl", type: "blob", mode: "100644", size: 5 },
+      {
+        path: "pp-phases.json",
+        type: "blob",
+        mode: "100644",
+        size: Buffer.byteLength(changedPhases),
+      },
+    ]);
+    vi.stubGlobal("fetch", rawResponse({
+      "part.stl": "solid",
+      "pp-phases.json": changedPhases,
+    }));
+
+    const changed = await syncGithubSource({
+      url: "https://github.com/example/printer",
+      branch: "main",
+      reposDir: root,
+      sourceId: 8,
+    });
+
+    expect(changed.snapshot.upstreamRevisionKey).toBe(`${COMMIT_B}.snapshot-v3`);
+    expect(changed.snapshot.manifestDigest).not.toBe(result.snapshot.manifestDigest);
+    expect(readFileSync(join(changed.snapshot.absolutePath, "pp-phases.json"), "utf8"))
+      .toBe(changedPhases);
+  });
+
+  it("rejects a phase manifest whose GitHub tree size exceeds its byte limit", async () => {
+    const root = reposRoot();
+    setTree(COMMIT_A, [{
+      path: "pp-phases.json",
+      type: "blob",
+      mode: "100644",
+      size: PHASE_MANIFEST_LIMIT_BYTES + 1,
+    }]);
+    const fetchMock = rawResponse({ "pp-phases.json": "{}" });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(syncGithubSource({
+      url: "https://github.com/example/printer",
+      branch: "main",
+      reposDir: root,
+      sourceId: 17,
+    })).rejects.toThrow("Source phase manifest exceeds the 1048576 byte limit");
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(existsSync(join(root, "17", "revisions"))).toBe(false);
+  });
+
+  it("stops an oversized phase-manifest stream when GitHub understates its size", async () => {
+    const root = reposRoot();
+    setTree(COMMIT_A, [{
+      path: "pp-phases.json",
+      type: "blob",
+      mode: "100644",
+      size: 1,
+    }]);
+    const fetchMock = vi.fn(async () => new Response(
+      Buffer.alloc(PHASE_MANIFEST_LIMIT_BYTES + 1),
+      { status: 200, headers: { "content-length": "1" } },
+    ));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(syncGithubSource({
+      url: "https://github.com/example/printer",
+      branch: "main",
+      reposDir: root,
+      sourceId: 18,
+    })).rejects.toThrow("Source phase manifest exceeds the 1048576 byte limit");
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(
+      existsSync(join(root, "18", "revisions", `${COMMIT_A}.snapshot-v3`)),
+    ).toBe(false);
   });
 
   it("requests identity encoding so a compressed Content-Length cannot mismatch the decoded body", async () => {

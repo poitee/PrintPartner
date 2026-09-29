@@ -8,6 +8,7 @@ export const MAX_PRINT_FILE_UPLOAD_BYTES = 64 * 1024 * 1024;
 export const MAX_THUMBNAIL_UPLOAD_BYTES = 1024 * 1024;
 export const MAX_BACKUP_UPLOAD_BYTES = 20 * 1024 * 1024 * 1024;
 export const MAX_MULTIPART_FIELD_BYTES = 64 * 1024;
+export const MAX_PHASE_MANIFEST_BYTES = 1024 * 1024;
 
 export const SOURCE_UPLOAD_TOO_LARGE_DETAIL =
   `Uploaded source exceeds the ${MAX_SOURCE_UPLOAD_BYTES / 1024 / 1024} MiB upload limit`;
@@ -21,4 +22,5 @@ export const MCP_INLINE_UPLOAD_TOO_LARGE_DETAIL =
   `upload exceeds the ${MAX_MCP_INLINE_FILE_BYTES / 1024 / 1024} MiB MCP limit`;
 export const BACKUP_UPLOAD_TOO_LARGE_DETAIL =
   `Backup archive exceeds the ${MAX_BACKUP_UPLOAD_BYTES / 1024 / 1024 / 1024} GiB upload limit`;
-
+export const PHASE_MANIFEST_TOO_LARGE_DETAIL =
+  `Source phase manifest exceeds the ${MAX_PHASE_MANIFEST_BYTES} byte limit`;

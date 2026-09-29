@@ -28,6 +28,7 @@ import {
 vi.mock("node:fs/promises", { spy: true });
 
 const roots: string[] = [];
+const PHASE_MANIFEST_LIMIT_BYTES = 1024 * 1024;
 
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -153,6 +154,27 @@ describe("publishLocalSourceWorkingTree", () => {
     sqlite.close();
   });
 
+  it("rejects a phase manifest above its dedicated byte limit before staging", async () => {
+    const { dir, sqlite, repo, source, workingTree } = fixture();
+    writeFileSync(
+      join(workingTree, "pp-phases.json"),
+      Buffer.alloc(PHASE_MANIFEST_LIMIT_BYTES + 1),
+    );
+    const blockedReposDir = join(dir, "blocked-repos");
+    writeFileSync(blockedReposDir, "staging must not begin");
+
+    await expect(
+      publishLocalSourceWorkingTree({
+        repo,
+        reposDir: blockedReposDir,
+        sourceId: source.id,
+        workingTree,
+      }),
+    ).rejects.toThrow("Source phase manifest exceeds the 1048576 byte limit");
+    expect(readFileSync(blockedReposDir, "utf8")).toBe("staging must not begin");
+    sqlite.close();
+  });
+
   it("counts uploaded 3MF and ZIP artifacts against the byte limit", async () => {
     const { dir, sqlite, repo, source, workingTree } = fixture();
     writeFileSync(join(workingTree, "project.3mf"), Buffer.alloc(16));
@@ -226,6 +248,41 @@ describe("publishLocalSourceWorkingTree", () => {
     });
     expect(again.current_source_revision_id).toBe(activated.current_source_revision_id);
 
+    sqlite.close();
+  });
+
+  it("preserves phase metadata and changes revision identity when it changes", async () => {
+    const { sqlite, repo, source, workingTree } = fixture();
+    const firstPhases = JSON.stringify({
+      phases: [{ name: "Foundation", folders: ["foundation"] }],
+    });
+    writeFileSync(join(workingTree, "pp-phases.json"), firstPhases);
+
+    const first = await publishLocalSourceWorkingTree({
+      repo,
+      reposDir: sqlite.reposDir,
+      sourceId: source.id,
+      workingTree,
+    });
+    expect(readFileSync(join(first.local_path!, "pp-phases.json"), "utf8")).toBe(firstPhases);
+
+    const secondPhases = JSON.stringify({
+      phases: [
+        { name: "Foundation", folders: ["foundation"] },
+        { name: "Assembly", folders: ["assembly"], depends_on: ["Foundation"] },
+      ],
+    });
+    writeFileSync(join(workingTree, "pp-phases.json"), secondPhases);
+
+    const second = await publishLocalSourceWorkingTree({
+      repo,
+      reposDir: sqlite.reposDir,
+      sourceId: source.id,
+      workingTree,
+    });
+    expect(second.current_source_revision_id).not.toBe(first.current_source_revision_id);
+    expect(readFileSync(join(second.local_path!, "pp-phases.json"), "utf8")).toBe(secondPhases);
+    expect(readFileSync(join(first.local_path!, "pp-phases.json"), "utf8")).toBe(firstPhases);
     sqlite.close();
   });
 

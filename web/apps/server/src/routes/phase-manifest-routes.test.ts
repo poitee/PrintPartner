@@ -7,6 +7,7 @@ import { buildApp } from "../app.js";
 import { loadConfig } from "../config.js";
 
 const directories: string[] = [];
+const PHASE_MANIFEST_LIMIT_BYTES = 1024 * 1024;
 
 afterEach(() => {
   for (const directory of directories.splice(0)) {
@@ -94,6 +95,41 @@ describe("plan phase manifest route", () => {
       const response = await app.inject({ method: "GET", url: `/plans/${profile.id}/phase-manifest` });
       expect(response.statusCode).toBe(200);
       expect(response.json()).toEqual({ profile_id: profile.id, has_phases: false, phases: [] });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("falls back before parsing a phase manifest above its byte limit", async () => {
+    const { app, ports, directory } = await fixture();
+    try {
+      const repo = ports.repository!;
+      const sourceRoot = join(directory, "repos", "oversized-phase-source");
+      mkdirSync(sourceRoot, { recursive: true });
+      const validManifest = JSON.stringify({
+        phases: [{ name: "Too large", folders: ["parts"] }],
+      });
+      writeFileSync(
+        join(sourceRoot, "pp-phases.json"),
+        validManifest.padEnd(PHASE_MANIFEST_LIMIT_BYTES + 1, " "),
+      );
+      const source = repo.createSource({
+        name: "Oversized phase source",
+        source_kind: "local",
+        local_path: sourceRoot,
+      });
+      const profile = repo.createProfile("Oversized phase Build", source.id);
+
+      const response = await app.inject({
+        method: "GET",
+        url: `/plans/${profile.id}/phase-manifest`,
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({
+        profile_id: profile.id,
+        has_phases: false,
+        phases: [],
+      });
     } finally {
       await app.close();
     }
