@@ -13,6 +13,7 @@ import {
 } from "../../queries/acceptedPlates";
 import { useProductionSetup } from "../../queries/productionSetup";
 import { usePrintersQuery } from "../../queries/printerFleet";
+import { productionPlateReadiness } from "../../lib/productionSelection";
 import { Button } from "../ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui/card";
 import { Input } from "../ui/input";
@@ -34,7 +35,13 @@ function newId(): string {
     : `rule-${Date.now().toString(36)}`;
 }
 
-export default function ProductionRulesPanel({ profileId }: { profileId: number }) {
+export default function ProductionRulesPanel({
+  profileId,
+  selectedTokens,
+}: {
+  profileId: number;
+  selectedTokens: ReadonlySet<string>;
+}) {
   const setup = useProductionSetup(profileId);
   const workspaceQuery = useAcceptedPlateWorkspaceQuery(profileId);
   const initialize = useInitializeAcceptedPlatesMutation(profileId);
@@ -46,23 +53,32 @@ export default function ProductionRulesPanel({ profileId }: { profileId: number 
   const [materialType, setMaterialType] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const printers = usePrintersQuery().data ?? [];
+  const selectedUnassigned = productionPlateReadiness(
+    workspaceQuery.data,
+    selectedTokens,
+  ).unassigned;
+  const regenerationBlocked = selectedTokens.size === 0 || selectedUnassigned > 0;
 
   const regeneratePlates = async () => {
     const workspace = workspaceQuery.data;
     if (workspace?.kind !== "ready") return;
-    if (workspace.unassigned.length > 0) {
-      toast.error("Assign every unit to a printer before regenerating Plates.");
+    if (selectedTokens.size === 0) {
+      toast.error("Select at least one unit before regenerating Plates.");
+      return;
+    }
+    if (productionPlateReadiness(workspace, selectedTokens).unassigned > 0) {
+      toast.error("Assign every selected unit to a printer before regenerating Plates.");
       return;
     }
     const assignments = [
-      ...workspace.plates.flatMap((plate) => plate.units.map((unit) => ({
-        token: unit.token,
-        printer_id: plate.printer.id,
-      }))),
-      ...workspace.unplaced.map((unit) => ({
-        token: unit.token,
-        printer_id: unit.printer_id,
-      })),
+      ...workspace.plates.flatMap((plate) =>
+        plate.units
+          .filter((unit) => selectedTokens.has(unit.token))
+          .map((unit) => ({ token: unit.token, printer_id: plate.printer.id })),
+      ),
+      ...workspace.unplaced
+        .filter((unit) => selectedTokens.has(unit.token))
+        .map((unit) => ({ token: unit.token, printer_id: unit.printer_id })),
     ];
     try {
       await initialize.mutateAsync({
@@ -170,9 +186,11 @@ export default function ProductionRulesPanel({ profileId }: { profileId: number 
             <div className="space-y-1">
               <p className="text-sm font-medium">Apply rules to the current Plates</p>
               <p className="text-xs text-muted-foreground">
-                Regeneration repacks every assigned unit and replaces manual Plate positions.
-                {workspaceQuery.data.unassigned.length > 0
-                  ? " Assign all units first."
+                Regeneration repacks every selected assigned unit and replaces manual Plate positions.
+                {selectedTokens.size === 0
+                  ? " Select at least one unit first."
+                  : selectedUnassigned > 0
+                    ? " Assign all selected units first."
                   : " Your current printer assignments are preserved."}
               </p>
             </div>
@@ -184,7 +202,7 @@ export default function ProductionRulesPanel({ profileId }: { profileId: number 
                 setup.saving ||
                 initialize.isPending ||
                 revisionWritePending ||
-                workspaceQuery.data.unassigned.length > 0
+                regenerationBlocked
               }
               loading={initialize.isPending}
             >
