@@ -38,6 +38,7 @@ import {
 } from "../services/printer-checkoff.js";
 import {
   createUnattributedPrint,
+  dismissUnattributedPrint,
   listUnattributedPrints,
   saveUnattributedPrint,
 } from "../services/unattributed-print-store.js";
@@ -933,6 +934,67 @@ describe("printer progress route", () => {
       expect.objectContaining({
         filename: "dismissed.bgcode",
         id: expect.not.stringMatching(printId),
+      }),
+    ]);
+  });
+
+  it("allows a new observed execution of a dismissed filename to complete", async () => {
+    const { app, repo } = await setup();
+    repo.setSetting("printer.plan_bindings", "[]");
+    const prior = createUnattributedPrint(
+      "prusa-1",
+      "default",
+      "Core One",
+      "reprinted.bgcode",
+      ["bracket_01"],
+      [],
+    );
+    saveUnattributedPrint(repo, prior);
+    expect(dismissUnattributedPrint(repo, prior.id)).toBe(true);
+
+    let hostState = "PRINTING";
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("/api/v1/status")) {
+        return response({
+          printer: { state: hostState },
+          job: { file: { display_name: "reprinted.bgcode" } },
+        });
+      }
+      if (url.includes("/api/v1/job")) {
+        return response({
+          state: hostState,
+          file: { display_name: "reprinted.bgcode" },
+          refs: { download: "/usb/reprinted.bgcode" },
+        });
+      }
+      if (url.includes("/usb/reprinted.bgcode")) {
+        return new Response('objects_info={"objects":[{"name":"bracket_01"}]}', {
+          status: 206,
+        });
+      }
+      return response({});
+    }));
+
+    const active = await app.inject({
+      method: "POST",
+      url: "/printer-checkoff/reconcile",
+      payload: { integration_id: "prusa-1" },
+    });
+    expect(active.statusCode).toBe(200);
+    expect(active.json().unattributed).toEqual([]);
+    expect(listUnattributedPrints(repo)).toEqual([]);
+
+    hostState = "FINISHED";
+    const completed = await app.inject({
+      method: "POST",
+      url: "/printer-checkoff/reconcile",
+      payload: { integration_id: "prusa-1" },
+    });
+    expect(completed.json().unattributed).toEqual([
+      expect.objectContaining({
+        filename: "reprinted.bgcode",
+        id: expect.not.stringMatching(prior.id),
       }),
     ]);
   });

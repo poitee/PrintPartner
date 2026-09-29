@@ -58,6 +58,7 @@ import {
 import {
   claimUnattributedPrint,
   createUnattributedPrint,
+  discardDismissedUnattributedPrints,
   dismissUnattributedPrint,
   listOpenUnattributedPrints,
   listUnattributedPrints,
@@ -850,6 +851,15 @@ export async function registerPrinterCheckoffRoutes(
         status.filename
       ) {
         const normalizedFilename = normalizePrinterFilename(status.filename);
+        const dismissedIds = listUnattributedPrints(deps.repo)
+          .filter(
+            (print) =>
+              print.dismissed &&
+              print.integration_id === integrationId &&
+              normalizePrinterFilename(print.filename) === normalizedFilename,
+          )
+          .map((print) => print.id);
+        discardDismissedUnattributedPrints(deps.repo, dismissedIds);
 
         const watching = listWatchingPrinterCheckoffLinks(deps.repo, integrationId);
         const alreadyWatching = watching.some(

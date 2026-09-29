@@ -132,6 +132,20 @@ export function dismissUnattributedPrint(
   return true;
 }
 
+export function discardDismissedUnattributedPrints(
+  repo: AppRepository,
+  ids: readonly string[],
+): void {
+  if (ids.length === 0) return;
+  const discardedIds = new Set(ids);
+  const all = loadRaw(repo);
+  const retained = all.filter(
+    (print) => !print.dismissed || !discardedIds.has(print.id),
+  );
+  if (retained.length === all.length) return;
+  saveRaw(repo, pruneEntries(retained));
+}
+
 export function createUnattributedPrint(
   integrationId: string,
   printerId: string,
