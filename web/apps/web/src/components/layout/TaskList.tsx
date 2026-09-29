@@ -77,10 +77,10 @@ function TaskBody({ task }: { task: WorkflowTask }) {
   return (
     <>
       <TaskIcon state={task.state} />
-      {/* On a phone the label owns the full row width and the status and action
-          drop to a second line. Squeezing all three onto one line shrinks the
-          label to a narrow column that wraps after every word. */}
-      <span className="min-w-0 flex-1 basis-[calc(100%-2.25rem)] sm:basis-auto">
+      {/* In the compact layout the label owns the full row width and the status
+          and action drop to a second line. Squeezing all three onto one line
+          shrinks the label to a narrow column that wraps after every word. */}
+      <span className="min-w-0 flex-1 basis-[calc(100%-2.25rem)] xl:basis-auto">
         <span className="block text-sm font-medium text-foreground">{task.label}</span>
         {task.hint ? (
           <span className="mt-0.5 block text-xs text-muted-foreground">{task.hint}</span>
@@ -139,28 +139,28 @@ export default function TaskList({ title, description, tasks, className }: Props
               {task.to && task.state !== "blocked" ? (
                 <Link
                   to={task.to}
-                  className="flex min-h-11 w-full flex-wrap items-start gap-x-3 gap-y-2 px-4 py-3 text-left transition-colors hover:bg-accent/60 focus-visible:bg-accent/60 sm:flex-nowrap"
+                  className="flex min-h-11 w-full flex-wrap items-start gap-x-3 gap-y-2 px-4 py-3 text-left transition-colors hover:bg-accent/60 focus-visible:bg-accent/60 xl:flex-nowrap"
                 >
                   <TaskBody task={task} />
-                  <span className="flex w-full items-center gap-2 pl-9 sm:w-auto sm:pl-0">
+                  <span className="flex w-full flex-wrap items-center gap-2 pl-9 xl:w-auto xl:shrink-0 xl:flex-nowrap xl:pl-0">
                     {status}
                     <ChevronRight
-                      className="ml-auto h-4 w-4 shrink-0 text-muted-foreground sm:ml-0 sm:mt-0.5"
+                      className="ml-auto h-4 w-4 shrink-0 text-muted-foreground xl:ml-0 xl:mt-0.5"
                       aria-hidden
                     />
                   </span>
                 </Link>
               ) : (
-                <div className="flex min-h-11 w-full flex-wrap items-start gap-x-3 gap-y-2 px-4 py-3 sm:flex-nowrap">
+                <div className="flex min-h-11 w-full flex-wrap items-start gap-x-3 gap-y-2 px-4 py-3 xl:flex-nowrap">
                   <TaskBody task={task} />
-                  <span className="flex w-full items-center gap-2 pl-9 sm:w-auto sm:pl-0">
+                  <span className="flex w-full flex-wrap items-center gap-2 pl-9 xl:w-auto xl:shrink-0 xl:flex-nowrap xl:pl-0">
                     {status}
                     {task.onAction && task.state !== "blocked" ? (
                       <Button
                         type="button"
                         size="sm"
                         variant="secondary"
-                        className="ml-auto min-h-9 shrink-0 sm:ml-0"
+                        className="ml-auto min-h-9 max-w-full shrink-0 xl:ml-0"
                         onClick={task.onAction}
                       >
                         {task.actionLabel ?? task.label}

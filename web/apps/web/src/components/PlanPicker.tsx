@@ -114,12 +114,11 @@ export default function PlanPicker({
   }, [actionTargetId, selected?.id, selected?.name]);
 
   useEffect(() => {
-    registerOpenCreate(() => setCreateOpen(true));
-    return () => registerOpenCreate(null);
+    return registerOpenCreate(() => setCreateOpen(true));
   }, [registerOpenCreate]);
 
   useEffect(() => {
-    registerOpenRename((planId) => {
+    return registerOpenRename((planId) => {
       const id = planId ?? selectedProfileId;
       if (id == null) return;
       const plan = profiles.find((p) => p.id === id);
@@ -127,11 +126,10 @@ export default function PlanPicker({
       setRenameName(plan?.name ?? "");
       setRenameOpen(true);
     });
-    return () => registerOpenRename(null);
   }, [registerOpenRename, selectedProfileId, profiles]);
 
   useEffect(() => {
-    registerOpenDuplicate((planId) => {
+    return registerOpenDuplicate((planId) => {
       const id = planId ?? selectedProfileId;
       if (id == null) return;
       const plan = profiles.find((p) => p.id === id);
@@ -140,27 +138,24 @@ export default function PlanPicker({
       setDuplicateClearCheckoff(false);
       setDuplicateOpen(true);
     });
-    return () => registerOpenDuplicate(null);
   }, [registerOpenDuplicate, selectedProfileId, profiles]);
 
   useEffect(() => {
-    registerOpenDelete((planId) => {
+    return registerOpenDelete((planId) => {
       const id = planId ?? selectedProfileId;
       if (id == null) return;
       setActionTargetId(id);
       setDeleteOpen(true);
     });
-    return () => registerOpenDelete(null);
   }, [registerOpenDelete, selectedProfileId]);
 
   useEffect(() => {
-    registerOpenArchive((planId) => {
+    return registerOpenArchive((planId) => {
       const id = planId ?? selectedProfileId;
       if (id == null) return;
       setActionTargetId(id);
       setArchiveOpen(true);
     });
-    return () => registerOpenArchive(null);
   }, [registerOpenArchive, selectedProfileId]);
 
   const closeActionDialog = () => {

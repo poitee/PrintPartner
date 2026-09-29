@@ -63,7 +63,7 @@ async function rowsFromFile(file: File): Promise<{
 
 export default function PartsManifestTransfer({ review, sources, onApplied }: Props) {
   const { health } = useEngineHealth();
-  const { draftWorkspace, editActivePlanDraft } = usePlanWorkspace();
+  const { draftWorkspace, savePlanPartChanges } = usePlanWorkspace();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const fileInputId = useId();
   const applyIncludedId = `${fileInputId}-apply-included`;
@@ -152,7 +152,7 @@ export default function PartsManifestTransfer({ review, sources, onApplied }: Pr
         applyIncluded,
         applyPrintedProgress: applyPrinted,
         draftWorkspace,
-        applyDraftDecisions: editActivePlanDraft,
+        applyPlanChanges: savePlanPartChanges,
         applyAcceptedProgress: async (expected, progressRows) => {
           await importAcceptedPrintedCounts({
             profileId: review.profile_id,

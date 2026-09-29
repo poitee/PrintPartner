@@ -362,9 +362,9 @@ export default function PlansPage() {
                           {planStatusLabel(plan)}
                         </TableCell>
                         <TableCell className="px-0 py-2.5 pr-3 font-mono tabular-nums text-muted-foreground">
-                          <span className="inline-flex items-center gap-2 whitespace-nowrap">
+                          <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
                             <PlanProgressBar progress={plan.accepted_progress} />
-                            {planProgressLabel(plan.accepted_progress)}
+                            <span>{planProgressLabel(plan.accepted_progress)}</span>
                           </span>
                         </TableCell>
                         <TableCell className="px-0 py-2.5 pr-3 font-mono tabular-nums text-muted-foreground">

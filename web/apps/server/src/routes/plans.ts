@@ -1,5 +1,4 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { resolvedFileUnderRoot } from "../lib/secure-path.js";
 import type {
@@ -46,11 +45,15 @@ import {
   type LegacyProgressFailure,
 } from "./plan-summary-presenter.js";
 import { acceptedStateDetail } from "./accepted-state-detail.js";
-import { parsePhaseManifestText } from "./phase-manifest-route-model.js";
+import {
+  parsePhaseManifestText,
+  readPhaseManifestFile,
+} from "./phase-manifest-route-model.js";
 import { completeRoleAssignment } from "./plan-role-assignment-model.js";
 import { sendAcceptedFilamentFailure } from "./accepted-filament-failure.js";
 import { readBuildWorkflowWorkspace } from "../services/build-workflow.js";
 import { MAX_BULK_JSON_BODY_BYTES } from "../services/upload-limits.js";
+import { SOURCE_PHASE_MANIFEST_FILENAME } from "../services/source-workspace.js";
 
 type RouteDeps = { repo: AppRepository; dataDir: string; reposDir: string; thumbsDir: string };
 export type PlanSummaryContract = "accepted" | "legacy-v1";
@@ -498,17 +501,13 @@ export async function registerPlanRoutes(
       if (layer.project_id == null) continue;
       const row = deps.repo.getProjectRow(layer.project_id);
       if (!row?.localPath) continue;
-      let text: string;
-      try {
-        const path = resolvedFileUnderRoot(
-          row.localPath,
-          join(row.localPath, "pp-phases.json"),
-        );
-        if (!path) continue;
-        text = readFileSync(path, "utf8");
-      } catch {
-        continue;
-      }
+      const path = resolvedFileUnderRoot(
+        row.localPath,
+        join(row.localPath, SOURCE_PHASE_MANIFEST_FILENAME),
+      );
+      if (!path) continue;
+      const text = readPhaseManifestFile(path);
+      if (text == null) continue;
       const phases = parsePhaseManifestText(text);
       if (phases) return { profile_id: id, has_phases: true, phases };
     }

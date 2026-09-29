@@ -1,10 +1,28 @@
 import { useCallback, useEffect, useRef, useState, type SetStateAction } from "react";
-import type { RequiredUnitToken } from "@print-partner/contracts";
+import type { ProductionSetup, RequiredUnitToken } from "@print-partner/contracts";
 import {
   initialProductionSelection,
   type ProductionSelectableUnit,
 } from "../lib/productionSelection";
 import { useProductionSetup } from "../queries/productionSetup";
+
+function resolveProductionSelection(
+  units: readonly ProductionSelectableUnit[],
+  select: string | null,
+  setup: ProductionSetup | undefined,
+): Set<RequiredUnitToken> {
+  if (select) return initialProductionSelection(units, select);
+  if (setup?.selection.mode === "custom") {
+    const available = new Set(units.map((unit) => unit.token));
+    return new Set(setup.selection.selected_unit_tokens.filter((token) =>
+      available.has(token as RequiredUnitToken)
+    ) as RequiredUnitToken[]);
+  }
+  if (setup?.selection.mode === "all_incomplete") {
+    return new Set(units.filter((unit) => !unit.completed).map((unit) => unit.token));
+  }
+  return initialProductionSelection(units, select);
+}
 
 export function useProductionSelection(
   units: readonly ProductionSelectableUnit[],
@@ -16,28 +34,13 @@ export function useProductionSelection(
   const identity = `${profileId ?? ""}:${select ?? ""}:${setup.data ? "ready" : "loading"}:${units.map((unit) => unit.token).sort().join(",")}`;
   const previousIdentity = useRef(identity);
   const [selection, setSelection] = useState<ReadonlySet<RequiredUnitToken>>(() =>
-    initialProductionSelection(units, select),
+    resolveProductionSelection(units, select, setup.data),
   );
 
   useEffect(() => {
     if (previousIdentity.current === identity) return;
     previousIdentity.current = identity;
-    if (select) {
-      setSelection(initialProductionSelection(units, select));
-      return;
-    }
-    if (setup.data?.selection.mode === "custom") {
-      const available = new Set(units.map((unit) => unit.token));
-      setSelection(new Set(setup.data.selection.selected_unit_tokens.filter((token) =>
-        available.has(token as RequiredUnitToken)
-      ) as RequiredUnitToken[]));
-      return;
-    }
-    if (setup.data?.selection.mode === "all_incomplete") {
-      setSelection(new Set(units.filter((unit) => !unit.completed).map((unit) => unit.token)));
-      return;
-    }
-    setSelection(initialProductionSelection(units, select));
+    setSelection(resolveProductionSelection(units, select, setup.data));
   }, [identity, select, setup.data, units]);
 
   const setPersistedSelection = useCallback((action: SetStateAction<ReadonlySet<RequiredUnitToken>>) => {

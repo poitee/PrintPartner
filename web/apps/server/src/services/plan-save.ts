@@ -3,7 +3,8 @@ import type { PlanSnapshotPart } from "./plan-drafts.js";
 type ChoiceTarget = Readonly<{ partKey: string; relativePath: string; sourceLayer: string | null }>;
 export type PlanChoiceChange =
   | Readonly<{ target: ChoiceTarget; kind: "set_included"; value: boolean }>
-  | Readonly<{ target: ChoiceTarget; kind: "set_quantity_override"; value: number | null }>;
+  | Readonly<{ target: ChoiceTarget; kind: "set_quantity_override"; value: number | null }>
+  | Readonly<{ target: ChoiceTarget; kind: "set_role_override"; value: string | null }>;
 
 function normalizedPath(value: string): string {
   return value.replace(/\\/g, "/").toLowerCase().replace(/^\/+|\/+$/g, "");
@@ -50,9 +51,21 @@ export function applyPlanChoiceChanges<T extends PlanSnapshotPart>(
     const field = `${position}:${change.kind}`;
     if (touched.has(field)) return { kind: "part_ambiguous" };
     touched.add(field);
-    next[position] = change.kind === "set_included"
-      ? { ...part, included: change.value }
-      : { ...part, quantityOverride: change.value, quantityEffective: change.value ?? part.quantityInferred };
+    switch (change.kind) {
+      case "set_included":
+        next[position] = { ...part, included: change.value };
+        break;
+      case "set_quantity_override":
+        next[position] = {
+          ...part,
+          quantityOverride: change.value,
+          quantityEffective: change.value ?? part.quantityInferred,
+        };
+        break;
+      case "set_role_override":
+        next[position] = { ...part, roleOverride: change.value };
+        break;
+    }
   }
   return { kind: "ready", parts: next };
 }

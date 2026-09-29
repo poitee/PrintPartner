@@ -547,7 +547,10 @@ export default function ExportPage() {
               <p className="mb-3 text-xs text-muted-foreground">
                 Save repeatable grouping, material, or printer rules for this Build. Most work packages only need the bulk assignment controls above.
               </p>
-              <ProductionRulesPanel profileId={selectedProfileId} />
+              <ProductionRulesPanel
+                profileId={selectedProfileId}
+                selectedTokens={new Set(selectedTokens)}
+              />
             </div>
           </details>
 

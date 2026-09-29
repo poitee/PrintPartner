@@ -3,6 +3,11 @@ import type { AppRepository, ProjectRow } from "../db/repository.js";
 import { resolvedFileUnderRoot } from "../lib/secure-path.js";
 
 export const SOURCE_MANIFEST_FILENAME = "print-partner.manifest.yaml";
+export const SOURCE_PHASE_MANIFEST_FILENAME = "pp-phases.json";
+
+export function isSourceMetadataPath(path: string): boolean {
+  return path === SOURCE_MANIFEST_FILENAME || path === SOURCE_PHASE_MANIFEST_FILENAME;
+}
 
 const LEGACY_DERIVED_KEY = "legacy";
 

@@ -38,6 +38,7 @@ import {
 } from "../services/printer-checkoff.js";
 import {
   createUnattributedPrint,
+  dismissUnattributedPrint,
   listUnattributedPrints,
   saveUnattributedPrint,
 } from "../services/unattributed-print-store.js";
@@ -49,6 +50,7 @@ import { capturePrinterFile, readPrinterFileSnapshot, printerFileSnapshotSource 
 const cleanup: Array<() => Promise<void>> = [];
 
 afterEach(async () => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   for (const fn of cleanup.splice(0)) await fn();
 });
@@ -864,6 +866,137 @@ describe("printer progress route", () => {
         filename: "external.bgcode",
       }],
     });
+  });
+
+  it("keeps a dismissed external completion suppressed on later reconcile polls", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-29T12:00:00.000Z"));
+    const { app, repo } = await setup();
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("/api/v1/status")) {
+        return response({
+          printer: { state: "FINISHED" },
+          job: { file: { display_name: "dismissed.bgcode" } },
+        });
+      }
+      if (url.includes("/api/v1/job")) {
+        return response({
+          state: "FINISHED",
+          file: { display_name: "dismissed.bgcode" },
+          refs: { download: "/usb/dismissed.bgcode" },
+        });
+      }
+      if (url.includes("/usb/dismissed.bgcode")) {
+        return new Response('objects_info={"objects":[{"name":"bracket_01"}]}', {
+          status: 206,
+        });
+      }
+      return response({});
+    }));
+
+    const observed = await app.inject({
+      method: "POST",
+      url: "/printer-checkoff/reconcile",
+      payload: { integration_id: "prusa-1" },
+    });
+    const printId = observed.json().unattributed[0]?.id;
+    expect(printId).toEqual(expect.any(String));
+
+    const dismissed = await app.inject({
+      method: "POST",
+      url: `/printer-checkoff/unattributed/${printId}/dismiss`,
+    });
+    expect(dismissed.statusCode).toBe(200);
+    expect((await app.inject("/printer-checkoff/unattributed")).json().prints).toEqual([]);
+
+    const repeated = await app.inject({
+      method: "POST",
+      url: "/printer-checkoff/reconcile",
+      payload: { integration_id: "prusa-1" },
+    });
+    expect(repeated.json().unattributed).toEqual([]);
+    expect(listUnattributedPrints(repo)).toEqual([
+      expect.objectContaining({
+        id: printId,
+        dismissed: true,
+        dismissed_at: "2026-09-29T12:00:00.000Z",
+      }),
+    ]);
+
+    vi.setSystemTime(new Date("2026-10-07T12:00:00.000Z"));
+    const afterRetention = await app.inject({
+      method: "POST",
+      url: "/printer-checkoff/reconcile",
+      payload: { integration_id: "prusa-1" },
+    });
+    expect(afterRetention.json().unattributed).toEqual([
+      expect.objectContaining({
+        filename: "dismissed.bgcode",
+        id: expect.not.stringMatching(printId),
+      }),
+    ]);
+  });
+
+  it("allows a new observed execution of a dismissed filename to complete", async () => {
+    const { app, repo } = await setup();
+    repo.setSetting("printer.plan_bindings", "[]");
+    const prior = createUnattributedPrint(
+      "prusa-1",
+      "default",
+      "Core One",
+      "reprinted.bgcode",
+      ["bracket_01"],
+      [],
+    );
+    saveUnattributedPrint(repo, prior);
+    expect(dismissUnattributedPrint(repo, prior.id)).toBe(true);
+
+    let hostState = "PRINTING";
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("/api/v1/status")) {
+        return response({
+          printer: { state: hostState },
+          job: { file: { display_name: "reprinted.bgcode" } },
+        });
+      }
+      if (url.includes("/api/v1/job")) {
+        return response({
+          state: hostState,
+          file: { display_name: "reprinted.bgcode" },
+          refs: { download: "/usb/reprinted.bgcode" },
+        });
+      }
+      if (url.includes("/usb/reprinted.bgcode")) {
+        return new Response('objects_info={"objects":[{"name":"bracket_01"}]}', {
+          status: 206,
+        });
+      }
+      return response({});
+    }));
+
+    const active = await app.inject({
+      method: "POST",
+      url: "/printer-checkoff/reconcile",
+      payload: { integration_id: "prusa-1" },
+    });
+    expect(active.statusCode).toBe(200);
+    expect(active.json().unattributed).toEqual([]);
+    expect(listUnattributedPrints(repo)).toEqual([]);
+
+    hostState = "FINISHED";
+    const completed = await app.inject({
+      method: "POST",
+      url: "/printer-checkoff/reconcile",
+      payload: { integration_id: "prusa-1" },
+    });
+    expect(completed.json().unattributed).toEqual([
+      expect.objectContaining({
+        filename: "reprinted.bgcode",
+        id: expect.not.stringMatching(prior.id),
+      }),
+    ]);
   });
 
   it("claims an unattributed Required-unit Object name through accepted attribution", async () => {

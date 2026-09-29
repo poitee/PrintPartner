@@ -50,10 +50,48 @@ function unit(token: RequiredUnitToken, completed = false): ProductionSelectable
   };
 }
 
+function cachedSetup(selection: ProductionSetup["selection"]): ProductionSetup {
+  return {
+    format: "production-setup-v1",
+    profile_id: 7,
+    preferred_slicer_instance_id: null,
+    selection,
+    printer_assignments: [],
+    route: null,
+    rules: [],
+    updated_at: "2026-08-29T00:00:00.000Z",
+  };
+}
+
 describe("useProductionSelection", () => {
   beforeEach(() => {
     setupState.data = undefined;
     setupState.save.mockReset().mockResolvedValue(undefined);
+  });
+
+  it("uses a cached all-incomplete selection on first mount", () => {
+    setupState.data = cachedSetup({ mode: "all_incomplete" });
+
+    const { result } = renderHook(
+      () => useProductionSelection([unit(first), unit(second, true)], null, 7),
+      { wrapper },
+    );
+
+    expect([...result.current.selection]).toEqual([first]);
+  });
+
+  it("uses a cached custom selection on first mount, including a completed unit", () => {
+    setupState.data = cachedSetup({
+      mode: "custom",
+      selected_unit_tokens: [second],
+    });
+
+    const { result } = renderHook(
+      () => useProductionSelection([unit(first), unit(second, true)], null, 7),
+      { wrapper },
+    );
+
+    expect([...result.current.selection]).toEqual([second]);
   });
 
   it("preserves manual selection across workspace-only refetches", () => {

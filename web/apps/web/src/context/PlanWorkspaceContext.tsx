@@ -72,6 +72,10 @@ export type QuantityUpdate =
   | number
   | ((currentQuantity: number) => number);
 
+type PlanPartChange =
+  | { kind: "set_quantity"; part: PlanEditablePart; value: number }
+  | { kind: "set_included"; part: PlanEditablePart; value: boolean };
+
 type DraftPartEdit =
   | { kind: "set_included"; value: boolean }
   | { kind: "set_quantity"; value: QuantityUpdate };
@@ -137,6 +141,7 @@ type PlanWorkspaceValue = {
   ) => Promise<void>;
   setIncluded: (part: PlanEditablePart, included: boolean) => Promise<void>;
   setFilesIncluded: (parts: readonly PlanEditablePart[], included: boolean) => Promise<void>;
+  savePlanPartChanges: (changes: readonly PlanPartChange[]) => Promise<void>;
   setSpoolmanSpool: (
     partId: number,
     spoolman_spool_id: string | null,
@@ -754,6 +759,18 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
     [review, editDraft],
   );
 
+  const savePlanPartChanges = useCallback(
+    (changes: readonly PlanPartChange[]) => editDraft(
+      changes.map((change): PlanEdits[number] => ({
+        part: change.part,
+        edit: change.kind === "set_quantity"
+          ? { kind: "set_quantity", value: change.value }
+          : { kind: "set_included", value: change.value },
+      })),
+    ),
+    [editDraft],
+  );
+
   const saveFileChoices = useCallback(
     (profileId: number, choices: readonly PlanFileChoice[]) => editDraft(
       choices.map((choice) => ({ part: choice.part, edit: { kind: "set_included", value: choice.included } })),
@@ -961,6 +978,7 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
       setQuantity,
       setIncluded,
       setFilesIncluded,
+      savePlanPartChanges,
       setSpoolmanSpool,
       toggleUnit,
       toggleAssembled,
@@ -992,6 +1010,7 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
       setQuantity,
       setIncluded,
       setFilesIncluded,
+      savePlanPartChanges,
       setSpoolmanSpool,
       toggleUnit,
       toggleAssembled,

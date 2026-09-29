@@ -15,6 +15,11 @@ import {
 import { inferStackPresetId, summarizeOtherBuildsAsExamples } from "./example-builds.js";
 import { hydrateBuildPlanningBrief, newBuildPlanningBrief, readBuildPlanningBrief, saveBuildPlanningBrief } from "../services/build-planning.js";
 import { loadKitManifest } from "../services/kit-manifest-store.js";
+import {
+  createUnattributedPrint,
+  dismissUnattributedPrint,
+  saveUnattributedPrint,
+} from "../services/unattributed-print-store.js";
 
 const FIXTURE = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -476,6 +481,35 @@ option_groups:
     expect(verifiedApplied.ok).toBe(true);
     const after = JSON.parse((await invokeAssistantTool("get_plan_checkoff", { plan_id: plan.id }, { repo })).content);
     expect(after.parts.find((row: { part_id: number }) => row.part_id === part.projectionPartId).printed_count).toBe(1);
+  });
+
+  it("keeps dismissed unattributed prints out of assistant reads", async () => {
+    const open = createUnattributedPrint(
+      "prusa-open",
+      "default",
+      "Open printer",
+      "open.bgcode",
+      [],
+      [],
+    );
+    const dismissed = createUnattributedPrint(
+      "prusa-dismissed",
+      "default",
+      "Dismissed printer",
+      "dismissed.bgcode",
+      [],
+      [],
+    );
+    saveUnattributedPrint(repo, open);
+    saveUnattributedPrint(repo, dismissed);
+    expect(dismissUnattributedPrint(repo, dismissed.id)).toBe(true);
+
+    const result = JSON.parse(
+      (await invokeAssistantTool("get_printer_checkoff", {}, { repo })).content,
+    );
+    expect(result.unattributed).toEqual([
+      expect.objectContaining({ id: open.id, filename: "open.bgcode" }),
+    ]);
   });
 
   it("persists confirmed checklist items and named custom filament", async () => {

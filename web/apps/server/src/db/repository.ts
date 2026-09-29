@@ -180,6 +180,7 @@ import {
 import {
   projectionPlanningFieldsMatch,
   readAcceptedPlanOperationalSnapshotInternal,
+  type AcceptedOperationalPart,
   type ReadAcceptedPlanOperationalSnapshotResult,
 } from "./accepted-plan-operational.js";
 import {
@@ -305,6 +306,165 @@ function filamentAssignmentFromRecord(row: Record<string, unknown>): FilamentAss
     color,
     spoolmanSpoolId: typeof row.spoolman_spool_id === "string" ? row.spoolman_spool_id : null,
   };
+}
+
+function duplicatedPlanChoices(parts: readonly AcceptedOperationalPart[]): PlanChoiceChange[] {
+  return parts.flatMap((part) => {
+    const target = {
+      partKey: part.partKey,
+      relativePath: part.relativePath,
+      sourceLayer: part.sourceLayer,
+    };
+    return [
+      { target, kind: "set_included", value: part.included },
+      { target, kind: "set_quantity_override", value: part.quantityOverride },
+      { target, kind: "set_role_override", value: part.roleOverride },
+    ];
+  });
+}
+
+type ImportedKitPart = Readonly<{
+  target: PlanChoiceChange["target"];
+  changes: readonly PlanChoiceChange[];
+  assignment: FilamentAssignment;
+  printedCount: number | null;
+}>;
+
+type ImportedKitParts =
+  | Readonly<{ kind: "invalid" }>
+  | Readonly<{
+      kind: "ready";
+      parts: readonly ImportedKitPart[];
+      changes: readonly PlanChoiceChange[];
+    }>;
+
+function importedKitParts(parts: readonly Record<string, unknown>[]): ImportedKitParts {
+  const imported: ImportedKitPart[] = [];
+  const allChanges: PlanChoiceChange[] = [];
+  for (const part of parts) {
+    const hasIncluded = "included" in part;
+    const hasQuantityOverride = "quantity_override" in part;
+    const hasRole = "role" in part;
+    const partKey = typeof part.match_key === "string" ? part.match_key.trim() : "";
+    const relativePath = typeof part.relative_path === "string"
+      ? part.relative_path.trim()
+      : partKey;
+    const sourceLayer = typeof part.source_layer === "string" ? part.source_layer : null;
+    if (!partKey || !relativePath) return { kind: "invalid" };
+    const target = { partKey, relativePath, sourceLayer };
+    const changes: PlanChoiceChange[] = [];
+
+    if (hasIncluded) {
+      if (typeof part.included !== "boolean") return { kind: "invalid" };
+      changes.push({ target, kind: "set_included", value: part.included });
+    }
+    if (hasQuantityOverride) {
+      const value = part.quantity_override;
+      if (
+        value !== null &&
+        (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1 || value > 10_000)
+      ) {
+        return { kind: "invalid" };
+      }
+      changes.push({
+        target,
+        kind: "set_quantity_override",
+        value,
+      });
+    }
+    if (hasRole) {
+      if (typeof part.role !== "string" || !part.role.trim() || part.role.length > 200) {
+        return { kind: "invalid" };
+      }
+      changes.push({ target, kind: "set_role_override", value: part.role });
+    }
+    allChanges.push(...changes);
+    imported.push({
+      target,
+      changes,
+      assignment: filamentAssignmentFromRecord(part),
+      printedCount: Array.isArray(part.print_units)
+        ? completedPrefixLength(
+            part.print_units.map((completed, unitIndex) => ({
+              unitIndex,
+              completed: Boolean(completed),
+            })),
+          )
+        : null,
+    });
+  }
+  return { kind: "ready", parts: imported, changes: allChanges };
+}
+
+type ResolvablePlanPart = Readonly<{
+  partKey: string;
+  relativePath: string;
+  sourceLayer: string;
+}>;
+
+type ResolvedImportedKitParts<T extends ResolvablePlanPart> =
+  | Readonly<{ kind: "part_not_found" | "part_ambiguous"; target: PlanChoiceChange["target"] }>
+  | Readonly<{
+      kind: "ready";
+      parts: readonly Readonly<{ source: ImportedKitPart; target: T }>[];
+    }>;
+
+function normalizedImportedPartPath(value: string): string {
+  return value.replace(/\\/g, "/").toLowerCase().replace(/^\/+|\/+$/g, "");
+}
+
+function resolveImportedKitParts<T extends ResolvablePlanPart>(
+  targets: readonly T[],
+  sources: readonly ImportedKitPart[],
+): ResolvedImportedKitParts<T> {
+  const byKey = new Map<string, number[]>();
+  const byLayerPath = new Map<string, number[]>();
+  const byPath = new Map<string, number[]>();
+  const byNormalizedKey = new Map<string, number[]>();
+  const add = (index: Map<string, number[]>, key: string, position: number): void => {
+    const matches = index.get(key);
+    if (matches) matches.push(position);
+    else index.set(key, [position]);
+  };
+  targets.forEach((target, position) => {
+    const path = normalizedImportedPartPath(target.relativePath);
+    add(byKey, target.partKey, position);
+    add(byLayerPath, JSON.stringify([target.sourceLayer, path]), position);
+    add(byPath, path, position);
+    add(byNormalizedKey, normalizedImportedPartPath(target.partKey), position);
+  });
+
+  const claimed = new Set<number>();
+  const resolved: Array<Readonly<{ source: ImportedKitPart; target: T }>> = [];
+  for (const source of sources) {
+    const keyMatches = byKey.get(source.target.partKey) ?? [];
+    const restrict = (matches: readonly number[] | undefined): readonly number[] =>
+      keyMatches.length > 0
+        ? (matches ?? []).filter((position) => keyMatches.includes(position))
+        : (matches ?? []);
+    const path = normalizedImportedPartPath(source.target.relativePath);
+    const candidates = [
+      keyMatches,
+      restrict(byLayerPath.get(JSON.stringify([source.target.sourceLayer ?? "", path]))),
+      restrict(byPath.get(path)),
+      restrict(byNormalizedKey.get(normalizedImportedPartPath(source.target.partKey))),
+    ];
+    const position = candidates.find((matches) => matches.length === 1)?.[0];
+    if (position == null) {
+      return {
+        kind: candidates.some((matches) => matches.length > 1)
+          ? "part_ambiguous"
+          : "part_not_found",
+        target: source.target,
+      };
+    }
+    const target = targets[position];
+    if (!target) throw new Error("Resolved imported Part is missing");
+    if (claimed.has(position)) return { kind: "part_ambiguous", target: source.target };
+    claimed.add(position);
+    resolved.push({ source, target });
+  }
+  return { kind: "ready", parts: resolved };
 }
 
 export type SchemaTables = Pick<
@@ -7177,11 +7337,7 @@ export class AppRepository {
 
   private overlayAcceptedOperationalCopy(
     profileId: number,
-    sourceParts: readonly {
-      readonly partKey: string;
-      readonly assignment: FilamentAssignment;
-      readonly printedCount: number | null;
-    }[],
+    sourceParts: readonly ImportedKitPart[],
   ): string | null {
     if (!this.syncSqlite) return "Accepted Plan update is unavailable";
     return this.transaction((): string | null => {
@@ -7198,12 +7354,12 @@ export class AppRepository {
       if (accepted.kind !== "ready") return `Accepted Plan state is ${accepted.kind}`;
       if (accepted.snapshot.profile.archivedAt) return "Accepted Plan is archived";
 
-      const targetByPartKey = new Map(accepted.snapshot.parts.map((part) => [part.partKey, part] as const));
-      const changes = sourceParts.flatMap((source) => {
-        const target = targetByPartKey.get(source.partKey);
-        return target ? [{ source, target }] : [];
-      });
-      for (const { source, target } of changes) {
+      const resolved = resolveImportedKitParts(accepted.snapshot.parts, sourceParts);
+      if (resolved.kind !== "ready") {
+        const reason = resolved.kind === "part_ambiguous" ? "ambiguous" : "missing";
+        return `Imported Part target is ${reason}: ${resolved.target.partKey}`;
+      }
+      for (const { source, target } of resolved.parts) {
         if (
           source.printedCount != null &&
           (!Number.isSafeInteger(source.printedCount) ||
@@ -7214,7 +7370,7 @@ export class AppRepository {
         }
       }
 
-      for (const { source, target } of changes) {
+      for (const { source, target } of resolved.parts) {
         const written = this.db
           .update(this.schema.parts)
           .set(filamentAssignmentColumns(source.assignment))
@@ -7298,22 +7454,6 @@ export class AppRepository {
       }
 
       const sourceAccepted = this.readAcceptedPlanOperationalSnapshot(id);
-      if (layers.length > 0) {
-        const published = this.publishWorkingPlan(newProfile.id, "system:duplicate", `duplicate:${newProfile.id}`);
-        if (!published) throw new Error("Failed to publish duplicated Plan");
-      }
-      if (sourceAccepted.kind === "ready") {
-        const overlayFailure = this.overlayAcceptedOperationalCopy(
-          newProfile.id,
-          sourceAccepted.snapshot.parts.map((part) => ({
-            partKey: part.partKey,
-            assignment: liveAssignmentFrom(part),
-            printedCount: options?.clearCheckoff === true ? null : completedPrefixLength(part.units),
-          })),
-        );
-        if (overlayFailure) throw new Error(`Failed to copy accepted Plan state: ${overlayFailure}`);
-      }
-
       const roleFilaments = this.getSetting(roleFilamentSettingKey(id));
       if (roleFilaments) {
         this.setSetting(roleFilamentSettingKey(newProfile.id), roleFilaments);
@@ -7324,6 +7464,42 @@ export class AppRepository {
         updatedAt: new Date().toISOString(),
       });
       saveKitManifest(this, newProfile.id, loadKitManifest(this, id));
+
+      if (layers.length > 0) {
+        if (sourceAccepted.kind === "ready") {
+          const published = this.savePlanChoices({
+            profileId: newProfile.id,
+            actorId: "system:duplicate",
+            idempotencyKey: `duplicate:${newProfile.id}`,
+            expectedBase: { kind: "empty", planVersion: 0 },
+            expectedDraft: null,
+            remapCheckoffLinks: false,
+            changes: duplicatedPlanChoices(sourceAccepted.snapshot.parts),
+          });
+          if (published.kind !== "saved") {
+            throw new Error(`Failed to publish duplicated Plan: ${published.kind}`);
+          }
+        } else {
+          const published = this.publishWorkingPlan(newProfile.id, "system:duplicate", `duplicate:${newProfile.id}`);
+          if (!published) throw new Error("Failed to publish duplicated Plan");
+        }
+      }
+      if (sourceAccepted.kind === "ready") {
+        const overlayFailure = this.overlayAcceptedOperationalCopy(
+          newProfile.id,
+          sourceAccepted.snapshot.parts.map((part) => ({
+            target: {
+              partKey: part.partKey,
+              relativePath: part.relativePath,
+              sourceLayer: part.sourceLayer,
+            },
+            changes: [],
+            assignment: liveAssignmentFrom(part),
+            printedCount: options?.clearCheckoff === true ? null : completedPrefixLength(part.units),
+          })),
+        );
+        if (overlayFailure) throw new Error(`Failed to copy accepted Plan state: ${overlayFailure}`);
+      }
 
       return {
         ...this.getProfileHeader(newProfile.id)!,
@@ -7924,32 +8100,72 @@ export class AppRepository {
       layersImported += 1;
     }
 
-    const published =
-      layersImported > 0 ? this.publishWorkingPlan(profile.id, "system:kit-import", `kit-import:${profile.id}`) : false;
+    const bundleParts = Array.isArray(data.parts)
+      ? data.parts.filter(
+          (part): part is Record<string, unknown> =>
+            part !== null && typeof part === "object" && !Array.isArray(part),
+        )
+      : [];
+    const planParts = importedKitParts(bundleParts);
+    let published = false;
+    if (layersImported > 0) {
+      if (planParts.kind === "ready" && planParts.changes.length > 0) {
+        const prepared = this.preparePlanDraft(
+          profile.id,
+          { baseRevisionId: null, basePlanVersion: 0 },
+          { applyManifest: false, preferAccepted: true },
+        );
+        if (prepared.kind === "prepared") {
+          const planningParts = planParts.parts.filter((part) => part.changes.length > 0);
+          const resolved = resolveImportedKitParts(prepared.value.parts, planningParts);
+          if (resolved.kind === "ready") {
+            const changes = resolved.parts.flatMap(({ source, target }) =>
+              source.changes.map((change): PlanChoiceChange => ({
+                ...change,
+                target: {
+                  partKey: target.partKey,
+                  relativePath: target.relativePath,
+                  sourceLayer: target.sourceLayer,
+                },
+              })),
+            );
+            published =
+              this.savePlanChoices({
+                profileId: profile.id,
+                actorId: "system:kit-import",
+                idempotencyKey: `kit-import:${profile.id}`,
+                expectedBase: { kind: "empty", planVersion: 0 },
+                expectedDraft: null,
+                remapCheckoffLinks: false,
+                changes,
+              }).kind === "saved";
+          }
+        }
+      } else if (planParts.kind === "ready") {
+        published = this.publishWorkingPlan(
+          profile.id,
+          "system:kit-import",
+          `kit-import:${profile.id}`,
+        );
+      }
+    }
     if (layersImported > 0 && !published) {
       warnings.push("Accepted Plan publication failed; imported filament and checkoff state was not applied.");
     }
     const accepted = published ? this.readAcceptedPlanOperationalSnapshot(profile.id) : { kind: "empty" as const };
     let partsImported = 0;
-    if (accepted.kind === "ready") {
+    if (accepted.kind === "ready" && planParts.kind === "ready") {
       partsImported = accepted.snapshot.parts.length;
       const overlayFailure = this.overlayAcceptedOperationalCopy(
         profile.id,
-        ((data.parts as Array<Record<string, unknown>>) ?? []).map((partData) => ({
-          partKey: String(partData.match_key ?? ""),
-          assignment: filamentAssignmentFromRecord(partData),
-          printedCount: Array.isArray(partData.print_units)
-            ? completedPrefixLength(
-                partData.print_units.map((completed, unitIndex) => ({
-                  unitIndex,
-                  completed: Boolean(completed),
-                })),
-              )
-            : null,
-        })),
+        planParts.parts,
       );
       if (overlayFailure) {
-        warnings.push(`Accepted Plan state was not applied: ${overlayFailure}.`);
+        warnings.push(
+          planParts.changes.length > 0
+            ? `Accepted Plan choices were applied, but imported filament and checkoff state was not applied: ${overlayFailure}.`
+            : `Accepted Plan was published, but imported filament and checkoff state was not applied: ${overlayFailure}.`,
+        );
       }
     }
 

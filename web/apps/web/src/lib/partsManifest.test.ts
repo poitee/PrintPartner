@@ -94,7 +94,50 @@ const sampleSources: SourceSummary[] = [
 ];
 
 describe("partsManifest CSV", () => {
-  it("validates the whole spreadsheet before grouped saved-draft edits", async () => {
+  it("applies quantity and inclusion changes to a saved Plan without a Working Plan", async () => {
+    const review = sampleReview();
+    const rows = buildPartsManifestRows({ review, sources: sampleSources });
+    const applyPlanChanges = vi.fn().mockResolvedValue(undefined);
+
+    const result = await applyPartsManifest(
+      [{ ...rows[0]!, quantity: "3", included: "false" }],
+      review,
+      { applyIncluded: true, applyPlanChanges },
+    );
+
+    expect(result).toEqual({ updated: 1, skipped: 0, errors: [] });
+    expect(applyPlanChanges).toHaveBeenCalledOnce();
+    expect(applyPlanChanges).toHaveBeenCalledWith([
+      {
+        kind: "set_quantity",
+        part: expect.objectContaining({
+          id: 42,
+          match_key: "frame/x_extrusion.stl",
+          relative_path: "frame/x_extrusion.stl",
+          source_layer: "base:Voron2",
+          filename: "x_extrusion.stl",
+        }),
+        value: 3,
+      },
+      {
+        kind: "set_included",
+        part: expect.objectContaining({
+          id: 42,
+          match_key: "frame/x_extrusion.stl",
+          relative_path: "frame/x_extrusion.stl",
+          source_layer: "base:Voron2",
+          filename: "x_extrusion.stl",
+        }),
+        value: false,
+      },
+    ]);
+    expect(review.part_groups[0]!.parts[0]).toMatchObject({
+      quantity_effective: 2,
+      included: true,
+    });
+  });
+
+  it("validates the whole spreadsheet before the saved Plan batch", async () => {
     const review = sampleReview();
     const rows = buildPartsManifestRows({ review, sources: sampleSources });
     const workspace = {
@@ -122,32 +165,47 @@ describe("partsManifest CSV", () => {
       diff: { base_is_current: true, added: [], removed: [], changed: [] },
       reconciliation: { kind: "ready" as const, reused_units: 2, new_units: 0, surplus_units: 0 },
     };
-    const decisions: unknown[] = [];
-    let batchCalls = 0;
-    const applyDraftDecisions = async (batch: unknown[]) => {
-      batchCalls++;
-      decisions.push(...batch);
-      return workspace;
-    };
+    const applyPlanChanges = vi.fn().mockResolvedValue(undefined);
 
     const invalid = await applyPartsManifest(
-      [{ ...rows[0]!, quantity: "3" }, { ...rows[0]!, part_id: "", match_key: "missing", quantity: "0" }],
+      [
+        { ...rows[0]!, quantity: "3" },
+        {
+          ...rows[0]!,
+          part_id: "",
+          match_key: "missing.stl",
+          relative_path: "missing.stl",
+          file_name: "missing.stl",
+        },
+      ],
       review,
-      { applyIncluded: true, draftWorkspace: workspace, applyDraftDecisions },
+      { applyIncluded: true, draftWorkspace: workspace, applyPlanChanges },
     );
-    expect(invalid.errors.length).toBeGreaterThan(0);
-    expect(decisions).toEqual([]);
+    expect(invalid).toEqual({
+      updated: 0,
+      skipped: 2,
+      errors: [{ row: 3, message: "No matching part for missing.stl" }],
+    });
+    expect(applyPlanChanges).not.toHaveBeenCalled();
 
     const result = await applyPartsManifest(
       [{ ...rows[0]!, quantity: "3", included: "false" }],
       review,
-      { applyIncluded: true, draftWorkspace: workspace, applyDraftDecisions },
+      { applyIncluded: true, draftWorkspace: workspace, applyPlanChanges },
     );
     expect(result).toEqual({ updated: 1, skipped: 0, errors: [] });
-    expect(batchCalls).toBe(1);
-    expect(decisions).toEqual([
-      { kind: "set_quantity_override", draft_part_ids: [17], value: 3 },
-      { kind: "set_included", draft_part_ids: [17], value: false },
+    expect(applyPlanChanges).toHaveBeenCalledOnce();
+    expect(applyPlanChanges).toHaveBeenCalledWith([
+      {
+        kind: "set_quantity",
+        part: expect.objectContaining({ match_key: "frame/x_extrusion.stl" }),
+        value: 3,
+      },
+      {
+        kind: "set_included",
+        part: expect.objectContaining({ match_key: "frame/x_extrusion.stl" }),
+        value: false,
+      },
     ]);
     expect(review.part_groups[0]!.parts[0]).toMatchObject({
       quantity_effective: 2,
@@ -183,33 +241,41 @@ describe("partsManifest CSV", () => {
       diff: { base_is_current: true, added: [], removed: [], changed: [] },
       reconciliation: { kind: "ready" as const, reused_units: 2, new_units: 0, surplus_units: 0 },
     };
-    const applyDraftDecisions = vi.fn().mockResolvedValue(workspace);
+    const applyPlanChanges = vi.fn().mockResolvedValue(undefined);
 
     const restoreAcceptedValues = await applyPartsManifest(rows, review, {
       applyIncluded: true,
       draftWorkspace: workspace,
-      applyDraftDecisions,
+      applyPlanChanges,
     });
     expect(restoreAcceptedValues).toEqual({ updated: 1, skipped: 0, errors: [] });
-    expect(applyDraftDecisions).toHaveBeenCalledWith([
-      { kind: "set_quantity_override", draft_part_ids: [17], value: 2 },
-      { kind: "set_included", draft_part_ids: [17], value: true },
+    expect(applyPlanChanges).toHaveBeenCalledWith([
+      {
+        kind: "set_quantity",
+        part: expect.objectContaining({ match_key: "frame/x_extrusion.stl" }),
+        value: 2,
+      },
+      {
+        kind: "set_included",
+        part: expect.objectContaining({ match_key: "frame/x_extrusion.stl" }),
+        value: true,
+      },
     ]);
 
-    applyDraftDecisions.mockClear();
+    applyPlanChanges.mockClear();
     const keepDraftValues = await applyPartsManifest(
       [{ ...rows[0]!, quantity: "3", included: "false" }],
       review,
-      { applyIncluded: true, draftWorkspace: workspace, applyDraftDecisions },
+      { applyIncluded: true, draftWorkspace: workspace, applyPlanChanges },
     );
     expect(keepDraftValues).toEqual({ updated: 0, skipped: 1, errors: [] });
-    expect(applyDraftDecisions).not.toHaveBeenCalled();
+    expect(applyPlanChanges).not.toHaveBeenCalled();
   });
 
   it("rejects mixed proposed planning and accepted progress before either write", async () => {
     const review = sampleReview();
     const rows = buildPartsManifestRows({ review, sources: sampleSources });
-    const applyDraftDecisions = vi.fn();
+    const applyPlanChanges = vi.fn();
     const applyAcceptedProgress = vi.fn();
 
     const result = await applyPartsManifest(
@@ -242,7 +308,7 @@ describe("partsManifest CSV", () => {
           diff: { base_is_current: true, added: [], removed: [], changed: [] },
           reconciliation: { kind: "ready", reused_units: 2, new_units: 0, surplus_units: 0 },
         },
-        applyDraftDecisions,
+        applyPlanChanges,
         applyAcceptedProgress,
       },
     );
@@ -251,7 +317,7 @@ describe("partsManifest CSV", () => {
       row: 0,
       message: "Quantity/inclusion and printed counts must be imported separately",
     }]);
-    expect(applyDraftDecisions).not.toHaveBeenCalled();
+    expect(applyPlanChanges).not.toHaveBeenCalled();
     expect(applyAcceptedProgress).not.toHaveBeenCalled();
   });
 
