@@ -380,6 +380,50 @@ describe("PlanWorkspaceProvider saved draft lifecycle", () => {
     expect(hook.result.current.saving).toBe(false);
   });
 
+  it("saves a manifest batch from an accepted Plan without creating a Working Plan", async () => {
+    draftQueryState.hasOpenDraft = false;
+    draftQueryState.hasWorkspace = false;
+    const client = new QueryClient();
+    client.setQueryData(queryKeys.planReview(7, true), savedChoices().review);
+    const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(client) });
+
+    await act(async () => {
+      await hook.result.current.savePlanPartChanges([
+        { kind: "set_quantity", part: planRow, value: 2 },
+        { kind: "set_included", part: planRow, value: false },
+      ]);
+    });
+
+    expect(savePlanChoices).toHaveBeenCalledOnce();
+    expect(savePlanChoices).toHaveBeenCalledWith(7, expect.objectContaining({
+      expected_draft: null,
+      remap_checkoff_links: true,
+      decisions: [
+        {
+          kind: "set_quantity_override",
+          target: {
+            part_key: planRow.match_key,
+            relative_path: planRow.relative_path,
+            source_layer: planRow.source_layer,
+          },
+          value: 2,
+        },
+        {
+          kind: "set_included",
+          target: {
+            part_key: planRow.match_key,
+            relative_path: planRow.relative_path,
+            source_layer: planRow.source_layer,
+          },
+          value: false,
+        },
+      ],
+    }), expect.any(String));
+    expect(editPlanDraftParts).not.toHaveBeenCalled();
+    expect(applyPlanDraft).not.toHaveBeenCalled();
+    expect(recomputePlanDraft).not.toHaveBeenCalled();
+  });
+
   it("saves inclusion from the accepted Plan without creating a draft in the browser", async () => {
     const freshWorkspace: PlanDraftWorkspace = {
       ...savedWorkspace,

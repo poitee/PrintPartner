@@ -1,4 +1,4 @@
-import type { AppRepository } from "../db/repository.js";
+import type { AppRepository, PlanDraftPartChoice } from "../db/repository.js";
 import type { PlanDraftSnapshot } from "../services/plan-drafts.js";
 import type { RequiredUnitReconciliationDecision } from "../services/required-unit-reconciliation.js";
 
@@ -82,7 +82,16 @@ function applyDraft(repo: AppRepository, draft: PlanDraftSnapshot): void {
   }
 }
 
-export function acceptPlanForTest(repo: AppRepository, profileId: number): {
+export function acceptPlanForTest(
+  repo: AppRepository,
+  profileId: number,
+  options: {
+    readonly partChoicesBySourceId?: ReadonlyMap<
+      number,
+      ReadonlyMap<string, PlanDraftPartChoice>
+    >;
+  } = {},
+): {
   merged: boolean;
   part_count?: number;
   reason?: string;
@@ -92,6 +101,7 @@ export function acceptPlanForTest(repo: AppRepository, profileId: number): {
     profileId,
     actor: "test:fixture",
     idempotencyKey: commandKey("draft"),
+    partChoicesBySourceId: options.partChoicesBySourceId,
   });
   if (result.kind !== "created" && result.kind !== "existing") {
     return { merged: false, reason: result.kind, layer_debug: [] };

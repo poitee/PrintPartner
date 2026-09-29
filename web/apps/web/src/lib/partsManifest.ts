@@ -7,12 +7,11 @@
  *   part_id, included, notes
  *
  * Import matches rows to plan parts by part_id → match_key → relative_path →
- * file_name (unique only). Quantity and inclusion become saved Plan draft edits.
+ * file_name (unique only). Quantity and inclusion become saved Plan edits.
  */
 
 import type {
   AcceptedPlanBasisContract,
-  PlanDraftPartDecisionContract,
   PlanDraftWorkspace,
   ReviewPart,
   SourceSummary,
@@ -52,14 +51,16 @@ export type ManifestParseIssue = {
   message: string;
 };
 
+type ManifestPlanChange =
+  | { kind: "set_quantity"; part: ReviewPart; value: number }
+  | { kind: "set_included"; part: ReviewPart; value: boolean };
+
 type ManifestApplyOptions = {
   applyQuantity?: boolean;
   applyIncluded?: boolean;
   applyPrintedProgress?: boolean;
   draftWorkspace?: PlanDraftWorkspace | null;
-  applyDraftDecisions?: (
-    decisions: PlanDraftPartDecisionContract[],
-  ) => Promise<PlanDraftWorkspace>;
+  applyPlanChanges?: (changes: readonly ManifestPlanChange[]) => Promise<void>;
   applyAcceptedProgress?: (
     expected: AcceptedPlanBasisContract,
     rows: Array<{ part_id: number; printed_count: number }>,
@@ -436,64 +437,29 @@ export async function applyPartsManifest(
     };
   }
 
-  const applyDraftDecisions = options.applyDraftDecisions;
-  if (planningChanges > 0 && (!workspace || !applyDraftDecisions)) {
+  const applyPlanChanges = options.applyPlanChanges;
+  if (planningChanges > 0 && !applyPlanChanges) {
     return {
       updated: 0,
       skipped: rows.length,
-      errors: [{ row: 0, message: "Build a Working Plan from Sources before importing" }],
+      errors: [{
+        row: 0,
+        message: "Reload the saved Plan before importing quantity or inclusion changes",
+      }],
     };
   }
 
-  const draftPartIdsByKey = new Map<string, number[]>();
-  for (const part of workspace?.parts ?? []) {
-    const ids = draftPartIdsByKey.get(part.part_key) ?? [];
-    ids.push(part.draft_part_id);
-    draftPartIdsByKey.set(part.part_key, ids);
-  }
-  const quantityGroups = new Map<number, number[]>();
-  const inclusionGroups = new Map<boolean, number[]>();
   const changedRows = new Set<number>();
+  const planChanges: ManifestPlanChange[] = [];
   for (const { rowNum, part, value } of quantityChanges) {
-    const draftPartIds = draftPartIdsByKey.get(part.match_key) ?? [];
-    if (draftPartIds.length !== 1) {
-      errors.push({ row: rowNum, message: `Saved draft does not have one match for ${part.filename}` });
-      continue;
-    }
-    const group = quantityGroups.get(value) ?? [];
-    group.push(draftPartIds[0]!);
-    quantityGroups.set(value, group);
+    planChanges.push({ kind: "set_quantity", part, value });
     changedRows.add(rowNum);
   }
   for (const { rowNum, part, value } of inclusionChanges) {
-    const draftPartIds = draftPartIdsByKey.get(part.match_key) ?? [];
-    if (draftPartIds.length !== 1) {
-      errors.push({ row: rowNum, message: `Saved draft does not have one match for ${part.filename}` });
-      continue;
-    }
-    const group = inclusionGroups.get(value) ?? [];
-    group.push(draftPartIds[0]!);
-    inclusionGroups.set(value, group);
+    planChanges.push({ kind: "set_included", part, value });
     changedRows.add(rowNum);
   }
-  if (errors.length > 0) return { updated: 0, skipped: rows.length, errors };
-
-  const decisions: PlanDraftPartDecisionContract[] = [];
-  for (const [value, draftPartIds] of quantityGroups) {
-    decisions.push({
-      kind: "set_quantity_override",
-      draft_part_ids: draftPartIds,
-      value,
-    });
-  }
-  for (const [value, draftPartIds] of inclusionGroups) {
-    decisions.push({
-      kind: "set_included",
-      draft_part_ids: draftPartIds,
-      value,
-    });
-  }
-  if (decisions.length > 0) await applyDraftDecisions!(decisions);
+  if (planChanges.length > 0) await applyPlanChanges!(planChanges);
 
   if (progressRows.length > 0) {
     if (!review.accepted_basis || !options.applyAcceptedProgress) {
