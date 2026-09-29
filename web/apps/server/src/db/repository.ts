@@ -8116,7 +8116,8 @@ export class AppRepository {
           { applyManifest: false, preferAccepted: true },
         );
         if (prepared.kind === "prepared") {
-          const resolved = resolveImportedKitParts(prepared.value.parts, planParts.parts);
+          const planningParts = planParts.parts.filter((part) => part.changes.length > 0);
+          const resolved = resolveImportedKitParts(prepared.value.parts, planningParts);
           if (resolved.kind === "ready") {
             const changes = resolved.parts.flatMap(({ source, target }) =>
               source.changes.map((change): PlanChoiceChange => ({

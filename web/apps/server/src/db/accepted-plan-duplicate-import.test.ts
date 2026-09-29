@@ -340,6 +340,59 @@ describe("duplicateProfile accepted publish", () => {
 });
 
 describe("importKitBundle accepted publish", () => {
+  it("publishes matched choices when an unrelated no-choice Part is missing", () => {
+    const { database, repo, plan, source } = acceptedPlanFixture("MixedPlanningImportHost");
+    const sourceAccepted = repo.readAcceptedPlanOperationalSnapshot(plan.id);
+    if (sourceAccepted.kind !== "ready") throw new Error("source Plan is not ready");
+    const sourcePart = sourceAccepted.snapshot.parts[0];
+    if (!sourcePart) throw new Error("source Part is missing");
+
+    const imported = repo.importKitBundle(
+      {
+        format: "print-partner-kit",
+        version: 3,
+        profile: { name: "Mixed planning import" },
+        layers: [
+          {
+            layer_order: 0,
+            layer_type: "base",
+            project: { name: source.name, url: source.url },
+          },
+        ],
+        parts: [
+          {
+            match_key: sourcePart.partKey,
+            relative_path: sourcePart.relativePath,
+            source_layer: sourcePart.sourceLayer,
+            filename: sourcePart.filename,
+            quantity_override: 3,
+            filament_color_id: "pla-black",
+          },
+          {
+            match_key: "missing:ghost.stl",
+            relative_path: "parts/ghost.stl",
+            source_layer: "base:ghost",
+            filename: "ghost.stl",
+          },
+        ],
+      },
+      "Mixed planning import",
+    );
+
+    expect(imported.warnings).toContain(
+      "Accepted Plan choices were applied, but imported filament and checkoff state was not applied: Imported Part target is missing: missing:ghost.stl.",
+    );
+    expect(imported.parts_imported).toBe(1);
+    const accepted = repo.readAcceptedPlanOperationalSnapshot(imported.profile_id);
+    if (accepted.kind !== "ready") throw new Error("imported Plan is not ready");
+    expect(accepted.snapshot.parts[0]).toMatchObject({
+      quantityOverride: 3,
+      quantityEffective: 3,
+      filamentColorId: null,
+    });
+    database.close();
+  });
+
   it("remaps choices, filament, and progress together when the exported Part key is stale", () => {
     const { database, repo, plan, source } = acceptedPlanFixture("RemappedImportHost");
     const sourceAccepted = repo.readAcceptedPlanOperationalSnapshot(plan.id);
