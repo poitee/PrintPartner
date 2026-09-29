@@ -8,6 +8,13 @@ import {
 } from "react";
 
 type PlanIdHandler = (planId?: number) => void;
+type PlanActionHandler<Args extends unknown[]> = (...args: Args) => void;
+type PlanActionRegistration<Args extends unknown[]> = {
+  handler: PlanActionHandler<Args>;
+};
+type RegisterPlanAction<Args extends unknown[]> = (
+  handler: PlanActionHandler<Args>,
+) => () => void;
 
 type PlanActionsContextValue = {
   openCreatePlan: () => void;
@@ -15,61 +22,52 @@ type PlanActionsContextValue = {
   openDuplicatePlan: PlanIdHandler;
   openDeletePlan: PlanIdHandler;
   openArchivePlan: PlanIdHandler;
-  registerOpenCreate: (fn: (() => void) | null) => void;
-  registerOpenRename: (fn: PlanIdHandler | null) => void;
-  registerOpenDuplicate: (fn: PlanIdHandler | null) => void;
-  registerOpenDelete: (fn: PlanIdHandler | null) => void;
-  registerOpenArchive: (fn: PlanIdHandler | null) => void;
+  registerOpenCreate: RegisterPlanAction<[]>;
+  registerOpenRename: RegisterPlanAction<[planId?: number]>;
+  registerOpenDuplicate: RegisterPlanAction<[planId?: number]>;
+  registerOpenDelete: RegisterPlanAction<[planId?: number]>;
+  registerOpenArchive: RegisterPlanAction<[planId?: number]>;
 };
 
 const PlanActionsContext = createContext<PlanActionsContextValue | null>(null);
 
+function usePlanActionRegistry<Args extends unknown[]>() {
+  const registrationsRef = useRef<PlanActionRegistration<Args>[]>([]);
+
+  const register = useCallback<RegisterPlanAction<Args>>((handler) => {
+    const registration = { handler };
+    registrationsRef.current.push(registration);
+    return () => {
+      registrationsRef.current = registrationsRef.current.filter(
+        (candidate) => candidate !== registration,
+      );
+    };
+  }, []);
+
+  const open = useCallback((...args: Args) => {
+    const registrations = registrationsRef.current;
+    registrations[registrations.length - 1]?.handler(...args);
+  }, []);
+
+  return [open, register] as const;
+}
+
+function usePlanIdActionRegistry() {
+  const [openRegisteredAction, register] =
+    usePlanActionRegistry<[planId?: number]>();
+  const open = useCallback<PlanIdHandler>((planId) => {
+    openRegisteredAction(typeof planId === "number" ? planId : undefined);
+  }, [openRegisteredAction]);
+
+  return [open, register] as const;
+}
+
 export function PlanActionsProvider({ children }: { children: ReactNode }) {
-  const openCreateRef = useRef<(() => void) | null>(null);
-  const openRenameRef = useRef<PlanIdHandler | null>(null);
-  const openDuplicateRef = useRef<PlanIdHandler | null>(null);
-  const openDeleteRef = useRef<PlanIdHandler | null>(null);
-  const openArchiveRef = useRef<PlanIdHandler | null>(null);
-
-  const registerOpenCreate = useCallback((fn: (() => void) | null) => {
-    openCreateRef.current = fn;
-  }, []);
-
-  const registerOpenRename = useCallback((fn: PlanIdHandler | null) => {
-    openRenameRef.current = fn;
-  }, []);
-
-  const registerOpenDuplicate = useCallback((fn: PlanIdHandler | null) => {
-    openDuplicateRef.current = fn;
-  }, []);
-
-  const registerOpenDelete = useCallback((fn: PlanIdHandler | null) => {
-    openDeleteRef.current = fn;
-  }, []);
-
-  const registerOpenArchive = useCallback((fn: PlanIdHandler | null) => {
-    openArchiveRef.current = fn;
-  }, []);
-
-  const openCreatePlan = useCallback(() => {
-    openCreateRef.current?.();
-  }, []);
-
-  const openRenamePlan = useCallback((planId?: number) => {
-    openRenameRef.current?.(typeof planId === "number" ? planId : undefined);
-  }, []);
-
-  const openDuplicatePlan = useCallback((planId?: number) => {
-    openDuplicateRef.current?.(typeof planId === "number" ? planId : undefined);
-  }, []);
-
-  const openDeletePlan = useCallback((planId?: number) => {
-    openDeleteRef.current?.(typeof planId === "number" ? planId : undefined);
-  }, []);
-
-  const openArchivePlan = useCallback((planId?: number) => {
-    openArchiveRef.current?.(typeof planId === "number" ? planId : undefined);
-  }, []);
+  const [openCreatePlan, registerOpenCreate] = usePlanActionRegistry<[]>();
+  const [openRenamePlan, registerOpenRename] = usePlanIdActionRegistry();
+  const [openDuplicatePlan, registerOpenDuplicate] = usePlanIdActionRegistry();
+  const [openDeletePlan, registerOpenDelete] = usePlanIdActionRegistry();
+  const [openArchivePlan, registerOpenArchive] = usePlanIdActionRegistry();
 
   const value = useMemo(
     () => ({
