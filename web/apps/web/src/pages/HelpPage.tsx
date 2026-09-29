@@ -242,16 +242,17 @@ export default function HelpPage() {
         <CardContent className="space-y-3 text-sm text-muted-foreground">
           <ol className="list-decimal space-y-2 pl-5">
             <li>
-              Sync the source, then on <strong className="font-medium text-foreground">Plan</strong>{" "}
-              apply a stack preset (if available) or attach the base repo.
+              On <strong className="font-medium text-foreground">Sources</strong>, attach the
+              Library source as the main source for the Build, then sync it.
             </li>
             <li>
-              Expand the base source card → <strong className="font-medium text-foreground">Kit variants</strong>{" "}
-              and choose the options required by each group (selections save automatically).
+              On <strong className="font-medium text-foreground">Plan</strong>, expand{" "}
+              <strong className="font-medium text-foreground">Kit variants</strong> and choose
+              the options required by each group.
             </li>
             <li>
-              Run <strong className="font-medium text-foreground">Update plan</strong> so variant
-              parts appear on Plan.
+              Wait for <strong className="font-medium text-foreground">Saved</strong>. Print
+              Partner refreshes the Plan parts automatically.
             </li>
           </ol>
           <ul className="list-disc space-y-2 pl-5">
@@ -263,8 +264,8 @@ export default function HelpPage() {
               <code className="font-mono text-xs">pick_n</code> option groups, then sync the source.
             </li>
             <li>
-              Stack presets (when configured) attach base + addon layers and pre-fill variant
-              choices — see the workflow guide below for how to define them.
+              Each Build has one main source and can have additional sources. Attach them on
+              Sources before choosing the variants on Plan.
             </li>
           </ul>
           <p className="text-xs">
