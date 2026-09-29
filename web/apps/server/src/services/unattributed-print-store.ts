@@ -22,11 +22,12 @@ export type UnattributedPrint = {
   claimed_profile_id?: number;
   // Set when dismissed
   dismissed?: boolean;
+  dismissed_at?: string;
 };
 
 const SETTINGS_KEY = "printer.unattributed_prints";
 const MAX_ENTRIES = 100;
-const CLAIMED_RETENTION_DAYS = 7;
+const TERMINAL_RETENTION_DAYS = 7;
 
 function loadRaw(repo: AppRepository): UnattributedPrint[] {
   const raw = repo.getSetting(SETTINGS_KEY);
@@ -52,14 +53,16 @@ function saveRaw(repo: AppRepository, prints: UnattributedPrint[]): void {
 
 function pruneEntries(prints: UnattributedPrint[]): UnattributedPrint[] {
   const now = Date.now();
-  const retentionMs = CLAIMED_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+  const retentionMs = TERMINAL_RETENTION_DAYS * 24 * 60 * 60 * 1000;
 
-  // Remove dismissed entries and old claimed entries
+  // Keep terminal entries briefly so an unchanged completed host job is not rediscovered.
   const filtered = prints.filter((p) => {
-    if (p.dismissed) return false;
-    if (p.claimed_at) {
-      const claimedAt = new Date(p.claimed_at).getTime();
-      if (now - claimedAt > retentionMs) return false;
+    const terminalAt = p.dismissed
+      ? (p.dismissed_at ?? p.completed_at)
+      : p.claimed_at;
+    if (terminalAt) {
+      const terminalTime = new Date(terminalAt).getTime();
+      if (Number.isFinite(terminalTime) && now - terminalTime > retentionMs) return false;
     }
     return true;
   });
@@ -120,7 +123,11 @@ export function dismissUnattributedPrint(
   const all = loadRaw(repo);
   const idx = all.findIndex((p) => p.id === id);
   if (idx < 0) return false;
-  all[idx] = { ...all[idx]!, dismissed: true };
+  all[idx] = {
+    ...all[idx]!,
+    dismissed: true,
+    dismissed_at: new Date().toISOString(),
+  };
   saveRaw(repo, pruneEntries(all));
   return true;
 }

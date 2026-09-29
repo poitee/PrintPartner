@@ -205,9 +205,7 @@ export default function CheckoffPage() {
   const search = getCheckoffSearch(consolePrefs, selectedProfileId);
   const [previewPart, setPreviewPart] = useState<ReviewPart | null>(null);
   const [printPrep, setPrintPrep] = useState(false);
-  const [pastPrintOpen, setPastPrintOpen] = useState(
-    () => searchParams.get("add") === "past-print",
-  );
+  const pastPrintOpen = searchParams.get("add") === "past-print";
   const [verifyRefreshKey, setVerifyRefreshKey] = useState(0);
   const [correctionTarget, setCorrectionTarget] =
     useState<CheckoffCorrectionTarget | null>(null);
@@ -230,22 +228,16 @@ export default function CheckoffPage() {
   const mutations = useCheckoffProgressMutations();
   const { runMutation, retryRow, clearAll: clearRowErrors } = mutations;
 
-  useEffect(() => {
-    if (searchParams.get("add") === "past-print") setPastPrintOpen(true);
-  }, [searchParams]);
-
   const openPastPrintIntake = useCallback(() => {
     const next = new URLSearchParams(searchParams);
     next.set("add", "past-print");
     setSearchParams(next, { replace: true });
-    setPastPrintOpen(true);
   }, [searchParams, setSearchParams]);
 
   const closePastPrintIntake = useCallback(() => {
     const next = new URLSearchParams(searchParams);
     next.delete("add");
     setSearchParams(next, { replace: true });
-    setPastPrintOpen(false);
   }, [searchParams, setSearchParams]);
 
   useEffect(() => {

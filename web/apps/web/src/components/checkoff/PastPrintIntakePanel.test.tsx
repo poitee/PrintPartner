@@ -272,6 +272,9 @@ describe("PastPrintIntakePanel", () => {
     expect(
       await screen.findByText(/bracket.bgcode is on the record and 1 Required unit is checked off/),
     ).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Review parts in Checkoff" }).getAttribute("href")).toBe(
+      "/progress?profile=7",
+    );
     expect(screen.getByRole("link", { name: "See the units in Checkoff" }).getAttribute("href")).toBe(
       "/progress?profile=7",
     );
@@ -298,7 +301,12 @@ describe("PastPrintIntakePanel", () => {
       await screen.findByText(/bracket.bgcode is on the record, covering 1 Required unit/),
     ).toBeTruthy();
     expect(screen.getByText(/The units are not checked off yet/)).toBeTruthy();
-    expect(screen.getByRole("link", { name: "Finish the units in Checkoff" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Review parts in Checkoff" }).getAttribute("href")).toBe(
+      "/progress?profile=7",
+    );
+    expect(
+      screen.getByRole("link", { name: "Finish the units in Checkoff" }).getAttribute("href"),
+    ).toBe("/progress?profile=7");
   });
 
   it("retains several manual print records and resets the form for the next printer or plate", async () => {

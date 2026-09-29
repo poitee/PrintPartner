@@ -1417,7 +1417,7 @@ export async function invokeAssistantTool(
           (!integrationId || link.integration_id === integrationId),
         );
         const unattributed = listUnattributedPrints(ctx.repo).filter((print) =>
-          planId == null || print.claimed_profile_id === planId,
+          !print.dismissed && (planId == null || print.claimed_profile_id === planId),
         );
         return {
           content: JSON.stringify({

@@ -2,7 +2,7 @@
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
 import type { PlanReview, ReviewPart } from "../api/endpoints/planManifests";
 import CheckoffPage from "./CheckoffPage";
 
@@ -147,6 +147,9 @@ vi.mock("../components/checkoff/SortableProgressPart", () => ({
 vi.mock("../components/checkoff/PhaseProgressView", () => ({
   default: () => null,
 }));
+vi.mock("../components/checkoff/PastPrintIntakePanel", () => ({
+  default: () => null,
+}));
 vi.mock("../components/parts/PartPreviewDialog", () => ({
   default: () => null,
 }));
@@ -162,6 +165,28 @@ vi.mock("../components/pwa/PwaInstallBanner", () => ({
 vi.mock("../components/PlanSpecialRequestLine", () => ({
   default: () => null,
 }));
+
+function PastPrintRouteControls() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  return (
+    <>
+      <output data-testid="location">
+        {location.pathname}
+        {location.search}
+      </output>
+      <button data-testid="follow-checkoff-link" onClick={() => navigate("/progress?profile=7")}>
+        Follow Checkoff link
+      </button>
+      <button data-testid="back" onClick={() => navigate(-1)}>
+        Back
+      </button>
+      <button data-testid="forward" onClick={() => navigate(1)}>
+        Forward
+      </button>
+    </>
+  );
+}
 
 describe("CheckoffPage accessibility", () => {
   afterEach(cleanup);
@@ -211,6 +236,47 @@ describe("CheckoffPage accessibility", () => {
     expect(
       screen.getByRole("searchbox", { name: "Search progress parts" }).tagName,
     ).toBe("INPUT");
+  });
+
+  it("keeps the past-print dialog synchronized with route navigation and explicit close", async () => {
+    render(
+      <MemoryRouter initialEntries={["/progress?profile=7&add=past-print"]}>
+        <CheckoffPage />
+        <PastPrintRouteControls />
+      </MemoryRouter>,
+    );
+
+    expect(
+      screen.getByRole("heading", { name: "Add a past print to Voron" }),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId("follow-checkoff-link"));
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("heading", { name: "Add a past print to Voron" }),
+      ).toBeNull(),
+    );
+
+    fireEvent.click(screen.getByTestId("back"));
+    expect(
+      await screen.findByRole("heading", { name: "Add a past print to Voron" }),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId("forward"));
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("heading", { name: "Add a past print to Voron" }),
+      ).toBeNull(),
+    );
+
+    fireEvent.click(screen.getByTestId("back"));
+    fireEvent.click(await screen.findByRole("button", { name: "Close" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("location").textContent).toBe("/progress?profile=7");
+      expect(
+        screen.queryByRole("heading", { name: "Add a past print to Voron" }),
+      ).toBeNull();
+    });
   });
 
   it("persists source/directory sorting and restores manual bag controls", () => {
