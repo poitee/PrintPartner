@@ -172,6 +172,34 @@ describe("restorePlanSnapshotPayload", () => {
     expect(repo.getProfileLayers(plan.id)).toEqual(layersBeforeRestore);
   });
 
+  it.each(["missing", "unsynced"])("preserves shared source refs when a later source is %s", (failure) => {
+    const base = repo.createSource({ name: "Shared Base", source_kind: "local", branch: "main" });
+    const addon = repo.createSource({ name: "Later Addon", source_kind: "local" });
+    const plan = repo.createProfile("Failed ref restore");
+    const peer = repo.createProfile("Shared source peer");
+    repo.updateSource(base.id, { last_synced_at: "2026-09-30T12:00:00.000Z" });
+    repo.setBaseLayer(plan.id, base.id);
+    repo.addAddonLayer(plan.id, addon.id);
+    repo.setBaseLayer(peer.id, base.id);
+    const snapshot = createPlanSnapshot(repo, plan.id, { name: "Changed ref" });
+    const payload = {
+      ...snapshot.payload,
+      layers: snapshot.payload.layers.map((layer) =>
+        layer.layer_type === "base"
+          ? { ...layer, branch: "release" }
+          : { ...layer, source_name: failure === "missing" ? "Missing Source" : layer.source_name },
+      ),
+    };
+    const sourcesBefore = repo.listSources();
+    const layersBefore = repo.getProfileLayers(plan.id);
+    const peerLayersBefore = repo.getProfileLayers(peer.id);
+
+    expect(restorePlanSnapshotPayload(repo, plan.id, payload)).toMatchObject({ ok: false });
+    expect(repo.listSources()).toEqual(sourcesBefore);
+    expect(repo.getProfileLayers(plan.id)).toEqual(layersBefore);
+    expect(repo.getProfileLayers(peer.id)).toEqual(peerLayersBefore);
+  });
+
   it("restores a bidirectional base and add-on role swap", () => {
     const first = repo.createSource({ name: "First Source", source_kind: "local" });
     const second = repo.createSource({ name: "Second Source", source_kind: "local" });
