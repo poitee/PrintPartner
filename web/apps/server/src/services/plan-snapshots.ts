@@ -140,22 +140,15 @@ export function restorePlanSnapshotPayload(
   }
 
   const base = resolved.find((l) => l.layer_type === "base");
-  if (base) {
-    if (!(repo.getSource(base.project_id)?.local_path && repo.getSource(base.project_id)?.last_synced_at)) {
-      return {
-        ok: false,
-        detail: `Base source must be synced before restore.`,
-        needs_sync: true,
-      };
-    }
-    repo.setBaseLayer(planId, base.project_id);
-  }
-
-  const current = repo.getProfileLayers(planId);
-  for (const layer of current) {
-    if (layer.layer_type !== "base" || !base) {
-      repo.removeLayer(layer.id);
-    }
+  if (
+    base &&
+    !(repo.getSource(base.project_id)?.local_path && repo.getSource(base.project_id)?.last_synced_at)
+  ) {
+    return {
+      ok: false,
+      detail: `Base source must be synced before restore.`,
+      needs_sync: true,
+    };
   }
   for (const layer of resolved) {
     if (layer.layer_type === "base") continue;
@@ -167,6 +160,19 @@ export function restorePlanSnapshotPayload(
         needs_sync: true,
       };
     }
+  }
+  if (base) {
+    repo.setBaseLayer(planId, base.project_id);
+  }
+
+  const current = repo.getProfileLayers(planId);
+  for (const layer of current) {
+    if (layer.layer_type !== "base" || !base) {
+      repo.removeLayer(layer.id);
+    }
+  }
+  for (const layer of resolved) {
+    if (layer.layer_type === "base") continue;
     repo.addAddonLayer(planId, layer.project_id);
   }
 

@@ -150,4 +150,25 @@ describe("restorePlanSnapshotPayload", () => {
       selections: {},
     });
   });
+
+  it("preserves current layers when a snapshot add-on is not synced", () => {
+    const base = repo.createSource({ name: "Current Base", source_kind: "local" });
+    const addon = repo.createSource({ name: "Snapshot Addon", source_kind: "local" });
+    const plan = repo.createProfile("Failed snapshot restore");
+    repo.updateSource(addon.id, { last_synced_at: "2026-09-30T12:00:00.000Z" });
+    repo.addAddonLayer(plan.id, addon.id);
+    const snapshot = createPlanSnapshot(repo, plan.id, { name: "Addon only" });
+    const addonLayer = repo.getProfileLayers(plan.id)[0];
+    if (!addonLayer) throw new Error("test add-on layer is missing");
+    repo.removeLayer(addonLayer.id);
+    repo.setBaseLayer(plan.id, base.id);
+    repo.updateSource(addon.id, { last_synced_at: null });
+    const layersBeforeRestore = repo.getProfileLayers(plan.id);
+
+    expect(restorePlanSnapshotPayload(repo, plan.id, snapshot.payload)).toMatchObject({
+      ok: false,
+      needs_sync: true,
+    });
+    expect(repo.getProfileLayers(plan.id)).toEqual(layersBeforeRestore);
+  });
 });
