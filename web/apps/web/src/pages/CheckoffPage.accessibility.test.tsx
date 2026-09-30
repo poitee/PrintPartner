@@ -458,9 +458,10 @@ describe("CheckoffPage accessibility", () => {
     await waitFor(() =>
       expect(screen.queryByRole("region", { name: "Phase progress" })).toBeNull(),
     );
-    expect(screen.getByText("accessory_badge.stl")).toBeTruthy();
-    expect(screen.queryByText("frame.stl")).toBeNull();
-    expect(screen.queryByText("accessory_badge_finished.stl")).toBeNull();
+    const worklist = screen.getByLabelText("Checkoff worklist");
+    expect(within(worklist).getByText("accessory_badge.stl")).toBeTruthy();
+    expect(within(worklist).queryByText("frame.stl")).toBeNull();
+    expect(within(worklist).queryByText("accessory_badge_finished.stl")).toBeNull();
 
     fireEvent.change(search, { target: { value: "no-match" } });
     expect(await screen.findByText("No parts match")).toBeTruthy();
