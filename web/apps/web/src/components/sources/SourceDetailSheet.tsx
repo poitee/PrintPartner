@@ -22,6 +22,8 @@ import { useSourceContent } from "../../queries/sourceContent";
 import { sourceNamingDirty } from "../../lib/sourceDetailModel";
 import { rulesEqual } from "../../lib/importRulesSave";
 import { statusTone } from "../../lib/statusTone";
+import { sourceSyncIssue } from "../../lib/sourceMonitoring";
+import { sourceContentAvailable } from "../../lib/sourceContentAvailable";
 import { cn } from "@/lib/utils";
 import { StlNamingEditorEmbedded } from "../settings/StlNamingEditor";
 import ImportRulesTree from "../ImportRulesTree";
@@ -66,6 +68,7 @@ type Props = {
   categories?: string[];
   onEdit: (source: SourceSummary) => void;
   onDelete: (source: SourceSummary) => void;
+  onSync?: (sourceId: number) => void;
   onAssignCategory?: (source: SourceSummary, category: string | null) => void;
   runImportScan: (sourceId: number) => void;
 };
@@ -107,6 +110,7 @@ export default function SourceDetailSheet({
   categories = [],
   onEdit,
   onDelete,
+  onSync,
   onAssignCategory,
   runImportScan,
 }: Props) {
@@ -346,6 +350,7 @@ export default function SourceDetailSheet({
   if (!source) return null;
 
   const activeNote = content.notes.find((note) => note.id === activeNoteId) ?? null;
+  const syncIssue = sourceSyncIssue(source);
 
   return (
     <Sheet open={open} onOpenChange={(nextOpen) => {
@@ -436,6 +441,15 @@ export default function SourceDetailSheet({
             </div>
           </div>
         </SheetHeader>
+
+        {syncIssue && (
+          <div className={cn("mx-4 mt-3 space-y-2 rounded-md p-3 text-sm", statusTone({ tone: "warning", emphasis: "soft" }))} role={syncIssue.kind === "failed" ? "alert" : "status"}>
+            <p className="font-medium">{syncIssue.kind === "failed" ? "Sync failed" : "Sync required"}</p>
+            {syncIssue.kind === "failed" && <p className="break-words">{syncIssue.error}</p>}
+            {sourceContentAvailable(source) && <p>Previously synced files remain available.</p>}
+            {onSync && <Button size="sm" variant="secondary" disabled={busy} onClick={() => onSync(source.id)}>{syncIssue.kind === "failed" ? "Retry sync" : "Sync"}</Button>}
+          </div>
+        )}
 
         <Tabs
           value={tab}

@@ -4,6 +4,14 @@ import type { SourceKind } from "../components/sources/sourceLabels";
 const AUTOMATIC_KINDS = new Set(["github", "git"]);
 const TRACKED_MODEL_KINDS = new Set(["printables", "makerworld", "thangs"]);
 
+type SourceSyncIssue = { kind: "failed"; error: string } | { kind: "required" };
+
+export function sourceSyncIssue(source: Pick<SourceSummary, "metadata">): SourceSyncIssue | null {
+  const error = source.metadata?.sync_error;
+  if (typeof error === "string" && error.trim()) return { kind: "failed", error };
+  return source.metadata?.sync_required === true ? { kind: "required" } : null;
+}
+
 type SourceMonitoringCapability = "automatic" | "manual_model" | "local";
 
 export function sourceMonitoringCapability(kind: string): SourceMonitoringCapability {
@@ -28,12 +36,18 @@ export function sourceMonitoringSummary(sources: readonly SourceSummary[]) {
   let automaticCount = 0;
   let manualTrackedCount = 0;
   let updateCount = 0;
+  let attentionCount = 0;
+  let unknownCount = 0;
   let lastCheckedAt: string | null = null;
   let lastCheckedTime = Number.NEGATIVE_INFINITY;
 
   for (const source of sources) {
     const capability = sourceMonitoringCapability(source.source_kind);
-    if (capability === "automatic") automaticCount += 1;
+    if (capability === "automatic") {
+      automaticCount += 1;
+      if (sourceSyncIssue(source)) attentionCount += 1;
+      else if (source.update_status !== "up_to_date" && source.update_status !== "updates_available") unknownCount += 1;
+    }
     if (capability === "manual_model") manualTrackedCount += 1;
     if (source.update_status === "updates_available") updateCount += 1;
     if (source.update_checked_at) {
@@ -49,6 +63,8 @@ export function sourceMonitoringSummary(sources: readonly SourceSummary[]) {
     automaticCount,
     manualTrackedCount,
     updateCount,
+    attentionCount,
+    unknownCount,
     lastCheckedAt,
   } as const;
 }

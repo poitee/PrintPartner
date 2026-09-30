@@ -47,12 +47,24 @@ describe("source monitoring", () => {
         source({ id: 2, source_kind: "thangs", source_type: "local" }),
         source({ id: 3, update_checked_at: "2026-08-31T10:00:00.000Z" }),
       ]),
-    ).toEqual({
+    ).toMatchObject({
       automaticCount: 2,
       manualTrackedCount: 1,
       updateCount: 1,
       lastCheckedAt: "2026-08-31T10:00:00.000Z",
     });
+  });
+
+  it("separates repositories needing sync from repositories whose update status is unknown", () => {
+    const summary = sourceMonitoringSummary([
+      source({ id: 1, last_synced_at: "2026-09-29T12:00:00Z", metadata: { sync_required: true, sync_error: "No commit found" } }),
+      source({ id: 2, metadata: { sync_required: true } }),
+      source({ id: 3, update_status: "unknown" }),
+      source({ id: 4, update_status: null }),
+      source({ id: 5, update_status: "up_to_date" }),
+      source({ id: 6, source_kind: "archive", update_status: "unknown" }),
+    ]);
+    expect(summary).toMatchObject({ automaticCount: 5, attentionCount: 2, unknownCount: 2 });
   });
 
   it("provides provider-specific URL examples", () => {

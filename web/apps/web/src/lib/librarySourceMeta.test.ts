@@ -120,4 +120,51 @@ describe("librarySourceMeta", () => {
     expect(meta.pickLabel).toBe("not attached");
     expect(meta.barPct).toBe(0);
   });
+
+  it.each([
+    [{ sync_required: true, sync_error: "No commit found for missing-tag" }, "Sync failed"],
+    [{ sync_required: true }, "Sync required"],
+  ])("shows the current sync issue despite a retained successful timestamp (%j)", (metadata, label) => {
+    const meta = buildLibraryCardMeta({
+      source: source({
+        id: 6,
+        name: "Retained Source",
+        last_synced_at: "2026-09-29T12:00:00Z",
+        update_status: "unknown",
+        metadata,
+      }),
+      attached: true,
+      pickCount: 3,
+      syncing: false,
+      syncProgress: null,
+      formatDate: () => "29 Sep",
+    });
+    expect(meta.stateLabel).toBe(label);
+    expect(meta.stateTone).toBe("warning");
+  });
+
+  it("shows active sync before a retained failure", () => {
+    const meta = buildLibraryCardMeta({
+      source: source({ id: 6, name: "Retrying Source", metadata: { sync_error: "Previous failure" } }),
+      attached: false,
+      pickCount: null,
+      syncing: true,
+      syncProgress: 0.5,
+      formatDate: () => "29 Sep",
+    });
+    expect(meta.stateLabel).toBe("Syncing 50%");
+  });
+
+  it("returns to the successful timestamp once the server clears the sync issue", () => {
+    const meta = buildLibraryCardMeta({
+      source: source({ id: 6, name: "Recovered Source", metadata: {}, update_status: "up_to_date", last_synced_at: "2026-09-30T12:00:00Z" }),
+      attached: false,
+      pickCount: null,
+      syncing: false,
+      syncProgress: null,
+      formatDate: () => "30 Sep",
+    });
+    expect(meta.stateLabel).toBe("Synced 30 Sep");
+    expect(meta.stateTone).toBe("muted");
+  });
 });

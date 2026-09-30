@@ -495,6 +495,7 @@ export default function SourcesPage() {
       (snap) => {
         setSyncingSourceIds(null);
         void refresh();
+        void queryClient.invalidateQueries({ queryKey: queryKeys.sourceActivity });
         toastJobResult(snap, label, "Sync failed");
       },
     );
@@ -942,6 +943,8 @@ export default function SourcesPage() {
         githubSourceCount={monitoring.automaticCount}
         manualTrackedCount={monitoring.manualTrackedCount}
         updateCount={monitoring.updateCount}
+        attentionCount={monitoring.attentionCount}
+        unknownCount={monitoring.unknownCount}
         attachedUpdateCount={attachedStaleCount}
         lastCheckedAt={monitoring.lastCheckedAt}
         checking={updateBusy}
@@ -1504,6 +1507,9 @@ export default function SourcesPage() {
         categories={categories}
         onEdit={openEditWizard}
         onDelete={setDeleteTarget}
+        onSync={detailSource && sourceMonitoringCapability(detailSource.source_kind) === "automatic"
+          ? (sourceId) => syncSources([sourceId])
+          : undefined}
         onAssignCategory={(source, category) =>
           void assignSourceCategory(source, category)
         }
