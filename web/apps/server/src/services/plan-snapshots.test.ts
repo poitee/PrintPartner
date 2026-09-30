@@ -171,4 +171,33 @@ describe("restorePlanSnapshotPayload", () => {
     });
     expect(repo.getProfileLayers(plan.id)).toEqual(layersBeforeRestore);
   });
+
+  it("restores a bidirectional base and add-on role swap", () => {
+    const first = repo.createSource({ name: "First Source", source_kind: "local" });
+    const second = repo.createSource({ name: "Second Source", source_kind: "local" });
+    const plan = repo.createProfile("Role swap restore");
+    const syncedAt = "2026-09-30T12:00:00.000Z";
+    repo.updateSource(first.id, { last_synced_at: syncedAt });
+    repo.updateSource(second.id, { last_synced_at: syncedAt });
+    repo.setBaseLayer(plan.id, first.id);
+    repo.addAddonLayer(plan.id, second.id);
+    const snapshot = createPlanSnapshot(repo, plan.id, { name: "Original roles" });
+
+    for (const layer of repo.getProfileLayers(plan.id)) repo.removeLayer(layer.id);
+    repo.setBaseLayer(plan.id, second.id);
+    repo.addAddonLayer(plan.id, first.id);
+
+    expect(restorePlanSnapshotPayload(repo, plan.id, snapshot.payload)).toMatchObject({
+      ok: true,
+    });
+    expect(
+      repo.getProfileLayers(plan.id).map((layer) => ({
+        layer_type: layer.layer_type,
+        project_id: layer.project_id,
+      })),
+    ).toEqual([
+      { layer_type: "base", project_id: first.id },
+      { layer_type: "addon", project_id: second.id },
+    ]);
+  });
 });
