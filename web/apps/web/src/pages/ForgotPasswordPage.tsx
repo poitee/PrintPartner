@@ -15,6 +15,7 @@ export default function ForgotPasswordPage() {
   const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
   const [sent, setSent] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [devResetUrl, setDevResetUrl] = useState<string | null>(null);
 
   if (!loading && !authRequired) {
@@ -26,6 +27,7 @@ export default function ForgotPasswordPage() {
   }
 
   const onSubmit = () => {
+    setError(null);
     setBusy(true);
     void (async () => {
       try {
@@ -34,7 +36,7 @@ export default function ForgotPasswordPage() {
         setDevResetUrl(res.dev_reset_url ?? null);
         toast.success(res.message);
       } catch (e) {
-        toast.error(e instanceof Error ? e.message : String(e));
+        setError(e instanceof Error ? e.message : String(e));
       } finally {
         setBusy(false);
       }
@@ -67,6 +69,11 @@ export default function ForgotPasswordPage() {
                 autoComplete="email"
               />
             </AuthField>
+            {error ? (
+              <p role="alert" className="text-sm text-destructive">
+                {error}
+              </p>
+            ) : null}
             <Button
               type="submit"
               className="w-full"
