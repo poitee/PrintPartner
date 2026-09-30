@@ -25,6 +25,8 @@ const props = {
   githubSourceCount: 1,
   manualTrackedCount: 0,
   updateCount: 0,
+  attentionCount: 0,
+  unknownCount: 0,
   attachedUpdateCount: 0,
   lastCheckedAt: null,
   checking: false,
@@ -61,6 +63,20 @@ describe("SourceWatchPanel activity", () => {
     );
     expect(await screen.findByText(label)).toBeTruthy();
     expect(screen.queryByText("Up to date")).toBeNull();
+  });
+
+  it("shows current monitoring work and returns to up to date after recovery", async () => {
+    api.fetchSourceActivity.mockResolvedValue([]);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { rerender } = render(
+      <QueryClientProvider client={queryClient}>
+        <SourceWatchPanel {...props} attentionCount={1} syncing />
+      </QueryClientProvider>,
+    );
+    expect(await screen.findAllByText("Syncing…")).toHaveLength(2);
+    expect(screen.queryByText("Up to date")).toBeNull();
+    rerender(<QueryClientProvider client={queryClient}><SourceWatchPanel {...props} /></QueryClientProvider>);
+    expect(await screen.findByText("Up to date")).toBeTruthy();
   });
 
   it("distinguishes an activity failure from an empty activity feed and retries", async () => {

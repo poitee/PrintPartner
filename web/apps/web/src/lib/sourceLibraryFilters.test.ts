@@ -81,4 +81,11 @@ describe("source library filters", () => {
 
     expect(filtered.map((item) => item.name)).toEqual(["Voron"]);
   });
+
+  it.each([{ sync_required: true }, { sync_required: true, sync_error: "No commit found" }])("keeps a failed or pending configuration out of the Synced filter (%j)", (metadata) => {
+    const retained = source({ id: 6, name: "Retained Source", last_synced_at: "2026-09-29T12:00:00Z", metadata });
+    const filters = { search: "", categoryFilter: "all", platformFilter: "all" };
+    expect(matchesSourceLibraryFilters(retained, { ...filters, syncFilter: "synced" })).toBe(false);
+    expect(matchesSourceLibraryFilters(retained, { ...filters, syncFilter: "unsynced" })).toBe(true);
+  });
 });

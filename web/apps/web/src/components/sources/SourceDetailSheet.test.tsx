@@ -135,7 +135,7 @@ describe("SourceDetailSheet loading", () => {
       update_status: "unknown",
       metadata: { sync_required: true, sync_error: "No commit found for missing-tag" },
     };
-    render(
+    const { rerender } = render(
       <SourceDetailSheet {...baseProps} {...{ onSync }} source={failedSource} />,
       { wrapper: createQueryWrapper() },
     );
@@ -144,6 +144,12 @@ describe("SourceDetailSheet loading", () => {
     expect(await screen.findByText("Previous successfully synced guide")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Retry sync" }));
     expect(onSync).toHaveBeenCalledWith(6);
+    rerender(<SourceDetailSheet {...baseProps} onSync={onSync} busy source={failedSource} />);
+    expect(screen.getByRole("button", { name: "Retry sync" }).hasAttribute("disabled")).toBe(true);
+    rerender(<SourceDetailSheet {...baseProps} onSync={onSync} source={{ ...failedSource, metadata: {}, update_status: "up_to_date" }} />);
+    expect(screen.queryByText("No commit found for missing-tag")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry sync" })).toBeNull();
+    expect(screen.getByText("Previous successfully synced guide")).toBeTruthy();
   });
 
   it("does not let the previous Source overwrite the current Source", async () => {

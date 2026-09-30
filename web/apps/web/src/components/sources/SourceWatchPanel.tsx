@@ -26,6 +26,8 @@ type Props = Readonly<{
   githubSourceCount: number;
   manualTrackedCount: number;
   updateCount: number;
+  attentionCount: number;
+  unknownCount: number;
   attachedUpdateCount: number;
   lastCheckedAt: string | null;
   checking: boolean;
@@ -55,6 +57,8 @@ export default function SourceWatchPanel({
   githubSourceCount,
   manualTrackedCount,
   updateCount,
+  attentionCount,
+  unknownCount,
   attachedUpdateCount,
   lastCheckedAt,
   checking,
@@ -122,9 +126,13 @@ export default function SourceWatchPanel({
               <CardTitle id="source-watch-heading" className="text-base">
                 Source monitoring
               </CardTitle>
-              <Badge variant={updateCount > 0 ? "warning" : "muted"}>
-                {updateCount > 0
-                  ? `${updateCount} update${updateCount === 1 ? "" : "s"}`
+              <Badge variant={attentionCount > 0 || updateCount > 0 ? "warning" : "muted"}>
+                {syncing ? "Syncing…"
+                  : checking ? "Checking…"
+                  : attentionCount > 0 ? `${attentionCount} Source${attentionCount === 1 ? " needs" : "s need"} sync`
+                  : updateCount > 0 ? `${updateCount} update${updateCount === 1 ? "" : "s"}`
+                  : unknownCount > 0 ? `${unknownCount} update status${unknownCount === 1 ? "" : "es"} unknown`
+                  : githubSourceCount === 0 ? "No repositories"
                   : "Up to date"}
               </Badge>
             </div>

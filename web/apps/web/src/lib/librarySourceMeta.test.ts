@@ -154,4 +154,17 @@ describe("librarySourceMeta", () => {
     });
     expect(meta.stateLabel).toBe("Syncing 50%");
   });
+
+  it("returns to the successful timestamp once the server clears the sync issue", () => {
+    const meta = buildLibraryCardMeta({
+      source: source({ id: 6, name: "Recovered Source", metadata: {}, update_status: "up_to_date", last_synced_at: "2026-09-30T12:00:00Z" }),
+      attached: false,
+      pickCount: null,
+      syncing: false,
+      syncProgress: null,
+      formatDate: () => "30 Sep",
+    });
+    expect(meta.stateLabel).toBe("Synced 30 Sep");
+    expect(meta.stateTone).toBe("muted");
+  });
 });

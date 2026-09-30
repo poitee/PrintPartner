@@ -24,4 +24,10 @@ describe("sync job completion toasts", () => {
     toastJobResult({ ...syncJob(null), status: "error", message: "No commit found" }, "Synced 2 sources");
     expect(toast.error).toHaveBeenCalledWith("No commit found");
   });
+
+  it("leaves other job kinds with similarly named result fields unchanged", () => {
+    toastJobResult({ ...syncJob({ synced: 1, failed: 1 }), kind: "export" }, "Export ready");
+    expect(toast.success).toHaveBeenCalledWith("Export ready");
+    expect(toast.warning).not.toHaveBeenCalled();
+  });
 });

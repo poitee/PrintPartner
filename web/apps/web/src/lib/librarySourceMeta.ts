@@ -1,5 +1,6 @@
 import { categoryPathSegments, type SourceSummary } from "@print-partner/contracts";
 import type { PlanReview } from "../api/endpoints/planManifests";
+import { sourceSyncIssue } from "./sourceMonitoring";
 
 export type LibraryCardTone = "default" | "update" | "syncing" | "attached" | "local";
 
@@ -127,10 +128,13 @@ export function buildLibraryCardMeta({
     };
   }
 
-  if (source.update_status === "updates_available") {
+  const syncIssue = sourceSyncIssue(source);
+  if (syncIssue || source.update_status === "updates_available") {
     return {
       slug,
-      stateLabel: "Update available",
+      stateLabel: syncIssue
+        ? syncIssue.kind === "failed" ? "Sync failed" : "Sync required"
+        : "Update available",
       stateTone: "warning",
       pickLabel,
       barPct: 100,

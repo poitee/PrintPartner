@@ -1,4 +1,5 @@
 import type { SourceSummary } from "@print-partner/contracts";
+import { sourceSyncIssue } from "./sourceMonitoring";
 import { matchesSourceCategoryFilter } from "./sourceCategoryAssignment";
 
 type SourceLibrarySyncFilter = "all" | "synced" | "unsynced" | "updates";
@@ -22,8 +23,9 @@ export function matchesSourceLibraryFilters(
   if (!matchesSourceCategoryFilter(source.category, filters.categoryFilter)) {
     return false;
   }
-  if (filters.syncFilter === "synced" && !source.last_synced_at) return false;
-  if (filters.syncFilter === "unsynced" && source.last_synced_at) return false;
+  const synced = Boolean(source.last_synced_at) && sourceSyncIssue(source) === null;
+  if (filters.syncFilter === "synced" && !synced) return false;
+  if (filters.syncFilter === "unsynced" && synced) return false;
   if (filters.syncFilter === "updates" && source.update_status !== "updates_available") {
     return false;
   }
