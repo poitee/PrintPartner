@@ -17,32 +17,32 @@ const { api, engineHealth, source, workspace, profileSelection } = vi.hoisted(()
     profiles: [], selectedProfileId: null,
   };
   return {
-  workspace,
-  profileSelection,
-  api: {
-    fetchSources: vi.fn(),
-    fetchSourceCategories: vi.fn(),
-    fetchPlanLayers: vi.fn(),
-  },
-  engineHealth: { health: { ok: true } as { ok: boolean } | null, error: null as string | null, loading: false },
-  source: (name: string): SourceSummary => ({
-    id: 7,
-    name,
-    url: "https://github.com/example/source",
-    source_kind: "github",
-    source_type: "git",
-    role: "",
-    category: null,
-    branch: "main",
-    tag: null,
-    local_path: null,
-    last_synced_at: null,
-    last_commit_sha: null,
-    current_source_revision_id: null,
-    docs_url: null,
-    manifest_community_slug: null,
-    metadata: null,
-  }),
+    workspace,
+    profileSelection,
+    api: {
+      fetchSources: vi.fn(),
+      fetchSourceCategories: vi.fn(),
+      fetchPlanLayers: vi.fn(),
+    },
+    engineHealth: { health: { ok: true } as { ok: boolean } | null, error: null as string | null, loading: false },
+    source: (name: string): SourceSummary => ({
+      id: 7,
+      name,
+      url: "https://github.com/example/source",
+      source_kind: "github",
+      source_type: "git",
+      role: "",
+      category: null,
+      branch: "main",
+      tag: null,
+      local_path: null,
+      last_synced_at: null,
+      last_commit_sha: null,
+      current_source_revision_id: null,
+      docs_url: null,
+      manifest_community_slug: null,
+      metadata: null,
+    }),
   };
 });
 
@@ -212,7 +212,7 @@ describe("SourcesPage Source state ownership", () => {
     fireEvent.click(screen.getByRole("checkbox", { name: "Select Updated Source" }));
     await act(async () => { queryClient.setQueryData(queryKeys.planLayers(16), layers.slice(0, 1)); });
 
-    expect(screen.getByText(/1 attached to Audit Build/)).toBeTruthy();
+    expect(await screen.findByText(/1 attached to Audit Build/)).toBeTruthy();
     expect(screen.getByText("not attached")).toBeTruthy();
     expect(screen.getByText("1 pick")).toBeTruthy();
     expect(screen.getByTestId("attached-update-count").textContent).toBe("0");

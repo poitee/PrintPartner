@@ -82,10 +82,11 @@ import { useJobRunner } from "../hooks/useJobRunner";
 import { deskNextStepLine } from "../lib/deskNextStep";
 import { sourceContentAvailable } from "../lib/sourceContentAvailable";
 import {
-  attachedSourceIds,
   buildLibraryCardMeta,
   pickCountsBySourceId,
 } from "../lib/librarySourceMeta";
+import { attachedPlanSourceIds } from "../lib/buildSourceLayers";
+import { usePlanLayersQuery } from "../queries/planLayers";
 import {
   countSourcesByCategory,
   reconcileSourceCategoryFilter,
@@ -224,6 +225,7 @@ export default function SourcesPage() {
     error: sourcesQueryError,
     refetch: refetchSources,
   } = useSourcesQuery(engineReady);
+  const layersQuery = usePlanLayersQuery(selectedProfileId, engineReady);
   const categoriesQuery = useSourceCategoriesQuery(engineReady);
   /** Flat, ordered category paths — "Printers" and "Printers/Frame" alike. */
   const categories = categoriesQuery.data ?? EMPTY_SOURCE_CATEGORIES;
@@ -417,7 +419,10 @@ export default function SourcesPage() {
   const showSourceSkeletons = sourcesLoading && !sourcesLoaded;
 
   const selectedPlan = profiles.find((p) => p.id === selectedProfileId) ?? null;
-  const attachedIds = useMemo(() => attachedSourceIds(review), [review]);
+  const attachedIds = useMemo(
+    () => attachedPlanSourceIds(layersQuery.data ?? []),
+    [layersQuery.data],
+  );
   const pickCounts = useMemo(() => pickCountsBySourceId(review), [review]);
   const attachedCount = attachedIds.size;
 

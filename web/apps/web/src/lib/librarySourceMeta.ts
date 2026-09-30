@@ -78,15 +78,6 @@ export function pickCountsBySourceId(review: PlanReview | null | undefined): Map
   return counts;
 }
 
-export function attachedSourceIds(review: PlanReview | null | undefined): Set<number> {
-  const ids = new Set<number>();
-  if (!review) return ids;
-  for (const layer of review.layers) {
-    if (layer.project_id != null) ids.add(layer.project_id);
-  }
-  return ids;
-}
-
 type BuildMetaArgs = {
   source: SourceSummary;
   attached: boolean;
