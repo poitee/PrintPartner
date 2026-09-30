@@ -124,6 +124,28 @@ describe("SourceDetailSheet loading", () => {
 
   afterEach(cleanup);
 
+  it("shows a retained sync failure and lets the user retry without hiding prior docs", async () => {
+    api.fetchSourceDocs.mockResolvedValue([{ path: "README.md", title: "Retained guide" }]);
+    api.fetchSourceDocMarkdown.mockResolvedValue("Previous successfully synced guide");
+    const onSync = vi.fn();
+    const failedSource: SourceSummary = {
+      ...source(6, "Failed Source"),
+      last_synced_at: "2026-09-29T12:00:00Z",
+      content_available: true,
+      update_status: "unknown",
+      metadata: { sync_required: true, sync_error: "No commit found for missing-tag" },
+    };
+    render(
+      <SourceDetailSheet {...baseProps} {...{ onSync }} source={failedSource} />,
+      { wrapper: createQueryWrapper() },
+    );
+    expect(await screen.findByText("No commit found for missing-tag")).toBeTruthy();
+    expect(screen.getByText("Previously synced files remain available.")).toBeTruthy();
+    expect(await screen.findByText("Previous successfully synced guide")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Retry sync" }));
+    expect(onSync).toHaveBeenCalledWith(6);
+  });
+
   it("does not let the previous Source overwrite the current Source", async () => {
     const firstDocs = deferred<Array<{ path: string; title: string }>>();
     api.fetchSourceDocs.mockImplementation((sourceId: number) =>

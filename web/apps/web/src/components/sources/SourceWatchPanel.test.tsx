@@ -48,6 +48,21 @@ describe("SourceWatchPanel activity", () => {
 
   afterEach(cleanup);
 
+  it.each([
+    [{ attentionCount: 1, unknownCount: 0 }, "1 Source needs sync"],
+    [{ attentionCount: 0, unknownCount: 1 }, "1 update status unknown"],
+  ])("does not claim repositories are up to date while their current state needs attention (%j)", async (summary, label) => {
+    api.fetchSourceActivity.mockResolvedValue([]);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <SourceWatchPanel {...props} {...summary} />
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByText(label)).toBeTruthy();
+    expect(screen.queryByText("Up to date")).toBeNull();
+  });
+
   it("distinguishes an activity failure from an empty activity feed and retries", async () => {
     api.fetchSourceActivity
       .mockRejectedValueOnce(new Error("alerts offline"))
