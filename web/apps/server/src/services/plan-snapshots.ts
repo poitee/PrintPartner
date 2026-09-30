@@ -151,10 +151,9 @@ export function restorePlanSnapshotPayload(
     repo.setBaseLayer(planId, base.project_id);
   }
 
-  // Remove existing addons then re-add from snapshot order.
   const current = repo.getProfileLayers(planId);
   for (const layer of current) {
-    if (layer.layer_type !== "base") {
+    if (layer.layer_type !== "base" || !base) {
       repo.removeLayer(layer.id);
     }
   }
@@ -175,13 +174,13 @@ export function restorePlanSnapshotPayload(
     const currentKit = loadKitManifest(repo, planId);
     saveKitManifest(repo, planId, {
       ...currentKit,
-      name: (kitRaw.name ?? currentKit.name) as typeof currentKit.name,
+      name: "name" in kitRaw ? kitRaw.name : currentKit.name,
       selections: { ...(kitRaw.selections ?? {}) },
       include: [...(kitRaw.include ?? [])],
       exclude: [...(kitRaw.exclude ?? [])],
       replacements: { ...(kitRaw.replacements ?? {}) },
-      base_source_id: (kitRaw.base_source_id ??
-        currentKit.base_source_id) as typeof currentKit.base_source_id,
+      base_source_id:
+        "base_source_id" in kitRaw ? kitRaw.base_source_id : currentKit.base_source_id,
       addon_source_ids: [...(kitRaw.addon_source_ids ?? [])],
     });
   }

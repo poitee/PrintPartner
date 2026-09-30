@@ -1,11 +1,14 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { getDb, SqliteDatabase } from "../db/client.js";
+import { acceptedPlanBasis } from "../db/accepted-plan-progress.js";
 import { AppRepository } from "../db/repository.js";
+import { acceptPlanForTest } from "../test/accept-plan.js";
 import { loadKitManifest, saveKitManifest } from "./kit-manifest-store.js";
 import { createPlanSnapshot, restorePlanSnapshotPayload } from "./plan-snapshots.js";
+import { parseRequiredUnitToken } from "./required-units.js";
 
 describe("restorePlanSnapshotPayload", () => {
   let dataDir: string;
@@ -45,6 +48,15 @@ describe("restorePlanSnapshotPayload", () => {
 
     repo.setBaseLayer(plan.id, base.id);
     repo.addAddonLayer(plan.id, addon.id);
+    const basePath = repo.getSource(base.id)?.local_path;
+    const addonPath = repo.getSource(addon.id)?.local_path;
+    if (!basePath || !addonPath) throw new Error("test Source path is missing");
+    mkdirSync(join(basePath, "parts"), { recursive: true });
+    mkdirSync(join(addonPath, "parts"), { recursive: true });
+    writeFileSync(join(basePath, "parts", "base.stl"), "solid base");
+    writeFileSync(join(addonPath, "parts", "addon.stl"), "solid addon");
+    repo.updateImportRules(base.id, ["parts/"]);
+    repo.updateImportRules(addon.id, ["parts/"]);
     saveKitManifest(repo, plan.id, {
       name: "Configured kit",
       base_source_id: String(base.id),
@@ -54,6 +66,19 @@ describe("restorePlanSnapshotPayload", () => {
       exclude: ["parts/optional/**"],
       replacements: { "parts/default.stl": "parts/custom.stl" },
     });
+    expect(acceptPlanForTest(repo, plan.id)).toMatchObject({ merged: true, part_count: 2 });
+    const accepted = repo.readAcceptedPlanOperationalSnapshot(plan.id);
+    if (accepted.kind !== "ready") throw new Error("test accepted Plan is missing");
+    const firstUnit = accepted.snapshot.parts.flatMap((part) => part.units)[0];
+    if (!firstUnit) throw new Error("test accepted unit is missing");
+    expect(
+      repo.setAcceptedUnitCompletion({
+        expected: acceptedPlanBasis(accepted.snapshot),
+        token: parseRequiredUnitToken(firstUnit.token),
+        completed: true,
+      }),
+    ).toMatchObject({ kind: "updated" });
+    const acceptedBeforeRestore = repo.readAcceptedPlanOperationalSnapshot(plan.id);
     const sourcesBeforeRestore = repo.listSources();
 
     expect(restorePlanSnapshotPayload(repo, plan.id, snapshot.payload)).toMatchObject({
@@ -90,6 +115,39 @@ describe("restorePlanSnapshotPayload", () => {
         replacements: {},
       },
       sources: sourcesBeforeRestore,
+    });
+    expect(repo.readAcceptedPlanOperationalSnapshot(plan.id)).toEqual(acceptedBeforeRestore);
+    expect(repo.getProfileHeader(plan.id)?.freshness).toMatchObject({
+      status: "stale",
+      reasons: expect.arrayContaining([{ kind: "plan_configuration_changed" }]),
+    });
+  });
+
+  it("preserves nullable kit fields omitted by a legacy snapshot", () => {
+    const plan = repo.createProfile("Legacy snapshot restore");
+    saveKitManifest(repo, plan.id, {
+      name: "Current kit",
+      base_source_id: "current-base",
+      selections: { toolhead: "dragonburner" },
+    });
+
+    expect(
+      restorePlanSnapshotPayload(repo, plan.id, {
+        layers: [],
+        kit_manifest: {
+          selections: {},
+          include: [],
+          exclude: [],
+          replacements: {},
+          addon_source_ids: [],
+        },
+      }),
+    ).toMatchObject({ ok: true });
+
+    expect(loadKitManifest(repo, plan.id)).toMatchObject({
+      name: "Current kit",
+      base_source_id: "current-base",
+      selections: {},
     });
   });
 });
