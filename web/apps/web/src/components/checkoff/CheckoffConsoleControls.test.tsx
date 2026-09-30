@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildCheckoffAttentionItems } from "../../lib/checkoffConsoleModel";
@@ -99,6 +99,42 @@ describe("CheckoffCorrectionDialog", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Save correction" }));
     expect(onConfirm).toHaveBeenCalledWith({ reason: null, note: "" });
+  });
+
+  it("blocks duplicate submits and cancellation while the correction is saving", async () => {
+    let resolveSave = () => {};
+    const onConfirm = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveSave = resolve;
+        }),
+    );
+    const onCancel = vi.fn();
+    render(
+      <CheckoffCorrectionDialog
+        target={{
+          partId: 1,
+          filename: "gantry.stl",
+          printedCount: 2,
+          impact: { printerHistory: true, materialDeduction: false },
+        }}
+        onCancel={onCancel}
+        onConfirm={onConfirm}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Reason"), { target: { value: "recount" } });
+    const save = screen.getByRole("button", { name: "Save correction" });
+    fireEvent.click(save);
+    fireEvent.click(save);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(onConfirm).toHaveBeenCalledOnce();
+    expect((save as HTMLButtonElement).disabled).toBe(true);
+    expect(onCancel).not.toHaveBeenCalled();
+
+    await act(async () => resolveSave());
+    await waitFor(() => expect((save as HTMLButtonElement).disabled).toBe(false));
   });
 });
 
