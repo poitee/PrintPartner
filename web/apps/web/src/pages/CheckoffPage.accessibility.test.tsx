@@ -513,7 +513,7 @@ describe("CheckoffPage accessibility", () => {
     fireEvent.click(screen.getByRole("button", { name: "Remove this bag bar" }));
     expect(await screen.findByRole("region", { name: "Phase progress" })).toBeTruthy();
     expect(screen.queryByRole("textbox", { name: "Bag or sort label" })).toBeNull();
-    expect(screen.getByText("0 of 1 printed · 1 remaining")).toBeTruthy();
+    expect(screen.getByRole("progressbar", { name: "0% of print units verified" })).toBeTruthy();
   });
 
   it("keeps the past-print dialog synchronized with route navigation and explicit close", async () => {

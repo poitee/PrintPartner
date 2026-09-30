@@ -330,6 +330,7 @@ export default function CheckoffPage() {
     partIds: includedPartIds,
   });
   const planProgressRows = worklistOrder.rows;
+  const hasBagBars = planProgressRows.some((row) => row.kind === "bag");
 
   const attentionItems = useMemo(
     () =>
@@ -849,7 +850,7 @@ export default function CheckoffPage() {
             )}
           </div>
 
-          {view === "remaining" && sort === "manual" && !search.trim() && phaseProgress ? (
+          {view === "remaining" && sort === "manual" && !search.trim() && !hasBagBars && phaseProgress ? (
             <PhaseProgressView
               phases={phaseProgress}
               onSetAllPrinted={onSetAllPrinted}
