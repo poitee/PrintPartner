@@ -41,3 +41,27 @@ it("keeps a failed special request across navigation and retries it", async () =
   expect(window.dispatchEvent(new Event("beforeunload", { cancelable: true }))).toBe(true);
   client.clear();
 });
+
+it("keeps an unblurred request with its Build when switching Builds", async () => {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  update.mockResolvedValue(undefined);
+  const field = (profileId: number, value: string | null) => (
+    <QueryClientProvider client={client}>
+      <PlanSpecialRequestField profileId={profileId} value={value} />
+    </QueryClientProvider>
+  );
+  const first = render(field(9002, null));
+  fireEvent.change(screen.getByRole("textbox", { name: "Special request" }), { target: { value: "Keep with Build 9002" } });
+  expect(window.dispatchEvent(new Event("beforeunload", { cancelable: true }))).toBe(false);
+  first.unmount();
+  const other = render(field(9003, null));
+  expect(screen.getByRole("textbox", { name: "Special request" })).toHaveProperty("value", "");
+  other.unmount();
+  const returned = render(field(9002, null));
+  expect(screen.getByRole("textbox", { name: "Special request" })).toHaveProperty("value", "Keep with Build 9002");
+  fireEvent.blur(screen.getByRole("textbox", { name: "Special request" }));
+  await waitFor(() => expect(update).toHaveBeenCalledWith({ id: 9002, special_request: "Keep with Build 9002" }));
+  returned.rerender(field(9002, "Keep with Build 9002"));
+  await waitFor(() => expect(window.dispatchEvent(new Event("beforeunload", { cancelable: true }))).toBe(true));
+  client.clear();
+});
