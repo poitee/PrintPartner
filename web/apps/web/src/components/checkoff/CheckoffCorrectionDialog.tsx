@@ -8,6 +8,7 @@ import {
   type CheckoffCorrectionImpact,
   type CheckoffCorrectionReason,
 } from "../../lib/checkoffConsoleCorrection";
+import { describeCheckoffMutationFailure } from "../../lib/checkoffConsoleRowErrors";
 import { statusTone } from "../../lib/statusTone";
 import { cn } from "@/lib/utils";
 import { Button } from "../ui/button";
@@ -25,7 +26,10 @@ type Props = {
   target: CheckoffCorrectionTarget | null;
   busy?: boolean;
   onCancel: () => void;
-  onConfirm: (input: { reason: CheckoffCorrectionReason | null; note: string }) => void;
+  onConfirm: (input: {
+    reason: CheckoffCorrectionReason | null;
+    note: string;
+  }) => Promise<void>;
 };
 
 /**
@@ -44,17 +48,26 @@ export default function CheckoffCorrectionDialog({
   const [reason, setReason] = useState<CheckoffCorrectionReason | null>(null);
   const [note, setNote] = useState("");
   const [submitted, setSubmitted] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const summaryRef = useRef<HTMLDivElement>(null);
+  const savingRef = useRef(false);
+  const submissionIdRef = useRef(0);
 
   useEffect(() => {
+    submissionIdRef.current += 1;
+    savingRef.current = false;
     setReason(null);
     setNote("");
     setSubmitted(false);
-  }, [target?.partId, target?.printedCount, target?.scope]);
+    setSaving(false);
+    setSubmitError(null);
+  }, [target]);
 
   const needsReason = target ? checkoffCorrectionNeedsReason(target.impact) : false;
   const validation = validateCheckoffCorrection({ draft: { reason, note }, needsReason });
-  const showErrors = submitted && !validation.ok;
+  const showErrors = (submitted && !validation.ok) || submitError != null;
+  const disabled = busy || saving;
 
   useEffect(() => {
     if (showErrors) summaryRef.current?.focus();
@@ -67,7 +80,7 @@ export default function CheckoffCorrectionDialog({
     <Dialog
       open={target != null}
       onOpenChange={(open) => {
-        if (!open) onCancel();
+        if (!open && !busy && !savingRef.current) onCancel();
       }}
     >
       <DialogContent className="max-w-md" aria-describedby="checkoff-correction-impact">
@@ -92,11 +105,14 @@ export default function CheckoffCorrectionDialog({
             )}
           >
             <p className="font-semibold text-destructive">There is a problem</p>
-            <ul className="mt-1 list-disc pl-5 text-destructive">
-              {validation.errors.map((error) => (
-                <li key={error.field}>{error.message}</li>
-              ))}
-            </ul>
+            {submitted && !validation.ok ? (
+              <ul className="mt-1 list-disc pl-5 text-destructive">
+                {validation.errors.map((error) => (
+                  <li key={error.field}>{error.message}</li>
+                ))}
+              </ul>
+            ) : null}
+            {submitError ? <p className="mt-1 text-destructive">{submitError}</p> : null}
           </div>
         ) : null}
 
@@ -113,6 +129,7 @@ export default function CheckoffCorrectionDialog({
             <select
               id="checkoff-correction-reason"
               className="min-h-11 w-full rounded-md border border-input bg-background px-2 text-sm"
+              disabled={disabled}
               value={reason ?? ""}
               aria-describedby={
                 showErrors && reasonError ? "checkoff-correction-reason-error" : undefined
@@ -146,6 +163,7 @@ export default function CheckoffCorrectionDialog({
               id="checkoff-correction-note"
               type="text"
               className="min-h-11 w-full rounded-md border border-input bg-background px-2 text-sm"
+              disabled={disabled}
               value={note}
               maxLength={CHECKOFF_CORRECTION_NOTE_MAX}
               aria-describedby={
@@ -160,20 +178,43 @@ export default function CheckoffCorrectionDialog({
           <Button
             type="button"
             className="min-h-11"
-            disabled={busy}
-            onClick={() => {
+            disabled={disabled}
+            aria-busy={saving || undefined}
+            onClick={async () => {
               setSubmitted(true);
               if (!validateCheckoffCorrection({ draft: { reason, note }, needsReason }).ok) return;
-              onConfirm({ reason, note });
+              if (savingRef.current) return;
+              savingRef.current = true;
+              const submissionId = submissionIdRef.current + 1;
+              submissionIdRef.current = submissionId;
+              setSaving(true);
+              setSubmitError(null);
+              try {
+                await onConfirm({ reason, note });
+              } catch (cause: unknown) {
+                if (submissionIdRef.current !== submissionId) return;
+                setSubmitError(
+                  describeCheckoffMutationFailure({
+                    action: "correction",
+                    filename: target?.filename ?? "this part",
+                    cause,
+                  }),
+                );
+              } finally {
+                if (submissionIdRef.current === submissionId) {
+                  savingRef.current = false;
+                  setSaving(false);
+                }
+              }
             }}
           >
-            Save correction
+            {saving ? "Saving…" : "Save correction"}
           </Button>
           <Button
             type="button"
             variant="ghost"
             className="min-h-11"
-            disabled={busy}
+            disabled={disabled}
             onClick={onCancel}
           >
             Cancel

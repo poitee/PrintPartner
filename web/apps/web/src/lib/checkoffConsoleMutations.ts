@@ -1,9 +1,9 @@
 /**
  * Checkoff progress mutations with per-row recovery.
  *
- * Every checkoff, correction, and assembly toggle runs through here so a
- * failure lands on the row that broke, with a Retry that reruns the same
- * operation. The operator never loses their place to a toast.
+ * Progress actions without their own recovery UI run through here so a failure
+ * lands on the row that broke, with a Retry that reruns the same operation.
+ * The operator never loses their place to a toast.
  */
 
 import { useCallback, useRef, useState } from "react";

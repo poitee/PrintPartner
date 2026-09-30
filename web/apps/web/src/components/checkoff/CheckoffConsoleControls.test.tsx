@@ -131,6 +131,8 @@ describe("CheckoffCorrectionDialog", () => {
 
     expect(onConfirm).toHaveBeenCalledOnce();
     expect((save as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByLabelText("Reason") as HTMLSelectElement).disabled).toBe(true);
+    expect((screen.getByLabelText("Note (optional)") as HTMLInputElement).disabled).toBe(true);
     expect(onCancel).not.toHaveBeenCalled();
 
     await act(async () => resolveSave());
