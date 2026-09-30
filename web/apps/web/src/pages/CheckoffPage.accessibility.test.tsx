@@ -4,10 +4,13 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
 import type { PlanReview, ReviewPart } from "../api/endpoints/planManifests";
+import type { PlanPhaseManifestResponse } from "../api/endpoints/planVariants";
 import CheckoffPage from "./CheckoffPage";
 
 const state = vi.hoisted(() => ({
   completed: false,
+  reviewParts: null as ReviewPart[] | null,
+  phaseManifest: null as PlanPhaseManifestResponse | null,
   selectedProfileId: 7,
   toggleUnit: vi.fn().mockResolvedValue(undefined),
   profiles: [
@@ -46,55 +49,55 @@ vi.mock("../context/ProfileContext", () => ({
 vi.mock("../context/PlanWorkspaceContext", () => ({
   usePlanWorkspace: () => {
     const secondBuild = state.selectedProfileId === 8;
+    const defaultPart = {
+      id: secondBuild ? 22 : 11,
+      match_key: secondBuild ? "badge" : "gantry",
+      relative_path: secondBuild ? "parts/badge.stl" : "parts/gantry.stl",
+      filename: secondBuild ? "badge.stl" : "gantry.stl",
+      source_layer: "base:kit",
+      status: "ok",
+      role: "primary",
+      requirement: null,
+      option_group_id: null,
+      included: true,
+      filament_color_id: null,
+      quantity_auto: 1,
+      quantity_override: null,
+      quantity_effective: state.completed ? 4 : 1,
+      print_units: state.completed ? [true, true, true, true] : [false],
+      printed_count: state.completed ? 4 : 0,
+      missing: !state.completed,
+      filament_display: "ABS",
+    };
+    const parts = state.reviewParts ?? [defaultPart];
     return {
-    review: {
-      profile_id: state.selectedProfileId,
-      plan_name: secondBuild ? "Switchwire" : "Voron",
-      layers: [],
-      totals: {
-        included_parts: 1,
-        total_print_units: 1,
-        by_role: {},
-        by_filament: {},
-      },
-      issues: [],
-      has_blockers: false,
-      part_groups: [
-        {
-          folder: "(root)",
-          source_layer: "base:kit",
-          parts: [
-            {
-              id: secondBuild ? 22 : 11,
-              match_key: secondBuild ? "badge" : "gantry",
-              relative_path: secondBuild ? "parts/badge.stl" : "parts/gantry.stl",
-              filename: secondBuild ? "badge.stl" : "gantry.stl",
-              source_layer: "base:kit",
-              status: "ok",
-              role: "primary",
-              requirement: null,
-              option_group_id: null,
-              included: true,
-              filament_color_id: null,
-              quantity_auto: 1,
-              quantity_override: null,
-              quantity_effective: state.completed ? 4 : 1,
-              print_units: state.completed ? [true, true, true, true] : [false],
-              printed_count: state.completed ? 4 : 0,
-              missing: !state.completed,
-              filament_display: "ABS",
-            },
-          ],
+      review: {
+        profile_id: state.selectedProfileId,
+        plan_name: secondBuild ? "Switchwire" : "Voron",
+        layers: [],
+        totals: {
+          included_parts: parts.length,
+          total_print_units: parts.reduce((total, part) => total + part.quantity_effective, 0),
+          by_role: {},
+          by_filament: {},
         },
-      ],
-    } as unknown as PlanReview,
-    loading: false,
-    error: null,
-    refresh: vi.fn(),
-    toggleUnit: state.toggleUnit,
-    toggleAssembled: vi.fn(),
-    busyPartId: null,
-  };
+        issues: [],
+        has_blockers: false,
+        part_groups: [
+          {
+            folder: "(root)",
+            source_layer: "base:kit",
+            parts,
+          },
+        ],
+      } as unknown as PlanReview,
+      loading: false,
+      error: null,
+      refresh: vi.fn(),
+      toggleUnit: state.toggleUnit,
+      toggleAssembled: vi.fn(),
+      busyPartId: null,
+    };
   },
 }));
 vi.mock("../hooks/useJobRunner", () => ({
@@ -119,11 +122,11 @@ vi.mock("../api/endpoints/checkoff", async (importOriginal) => {
   };
 });
 
-vi.mock("../api/endpoints/planManifests", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../api/endpoints/planManifests")>();
+vi.mock("../api/endpoints/planVariants", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../api/endpoints/planVariants")>();
   return {
     ...actual,
-    fetchPlanPhaseManifest: vi.fn().mockResolvedValue(null),
+    fetchPlanPhaseManifest: vi.fn(async () => state.phaseManifest),
   };
 });
 
@@ -145,11 +148,29 @@ vi.mock("../components/checkoff/UnattributedPrintCard", () => ({
 }));
 vi.mock("../components/checkoff/SortableProgressPart", () => ({
   default: ({ part, onSetAllPrinted }: { part: ReviewPart; onSetAllPrinted: (part: ReviewPart, completed: boolean) => void }) => (
-    <button onClick={() => onSetAllPrinted(part, false)}>Clear all test copies</button>
+    <div>
+      <span>{part.filename}</span>
+      <button onClick={() => onSetAllPrinted(part, false)}>Clear all test copies</button>
+    </div>
   ),
 }));
 vi.mock("../components/checkoff/PhaseProgressView", () => ({
-  default: () => null,
+  default: ({
+    phases,
+  }: {
+    phases: Array<{ phase: { name: string }; parts: ReviewPart[] }>;
+  }) => (
+    <section aria-label="Phase progress">
+      {phases.map(({ phase, parts }) => (
+        <div key={phase.name}>
+          <h2>{phase.name}</h2>
+          {parts.map((part) => (
+            <span key={part.id}>{part.filename}</span>
+          ))}
+        </div>
+      ))}
+    </section>
+  ),
 }));
 vi.mock("../components/checkoff/PastPrintIntakePanel", () => ({
   default: () => null,
@@ -197,6 +218,8 @@ describe("CheckoffPage accessibility", () => {
 
   beforeEach(() => {
     state.completed = false;
+    state.reviewParts = null;
+    state.phaseManifest = null;
     state.selectedProfileId = 7;
     state.toggleUnit.mockReset().mockResolvedValue(undefined);
     state.profiles = [
@@ -333,6 +356,120 @@ describe("CheckoffPage accessibility", () => {
     expect(
       screen.getByRole("searchbox", { name: "Search progress parts" }).tagName,
     ).toBe("INPUT");
+  });
+
+  it("uses the filtered Remaining worklist while searching a phased Build", async () => {
+    state.reviewParts = [
+      {
+        id: 11,
+        match_key: "accessory-badge",
+        relative_path: "foundation/accessory_badge.stl",
+        filename: "accessory_badge.stl",
+        source_layer: "base:kit",
+        status: "ok",
+        role: "primary",
+        requirement: null,
+        option_group_id: null,
+        included: true,
+        filament_color_id: null,
+        quantity_auto: 1,
+        quantity_override: null,
+        quantity_effective: 1,
+        print_units: [false],
+        printed_count: 0,
+        missing: true,
+        filament_display: "ABS",
+      },
+      {
+        id: 12,
+        match_key: "frame",
+        relative_path: "assembly/frame.stl",
+        filename: "frame.stl",
+        source_layer: "base:kit",
+        status: "ok",
+        role: "primary",
+        requirement: null,
+        option_group_id: null,
+        included: true,
+        filament_color_id: null,
+        quantity_auto: 1,
+        quantity_override: null,
+        quantity_effective: 1,
+        print_units: [false],
+        printed_count: 0,
+        missing: true,
+        filament_display: "ABS",
+      },
+      {
+        id: 13,
+        match_key: "accessory-badge-finished",
+        relative_path: "assembly/accessory_badge_finished.stl",
+        filename: "accessory_badge_finished.stl",
+        source_layer: "base:kit",
+        status: "ok",
+        role: "primary",
+        requirement: null,
+        option_group_id: null,
+        included: true,
+        filament_color_id: null,
+        quantity_auto: 1,
+        quantity_override: null,
+        quantity_effective: 1,
+        print_units: [true],
+        printed_count: 1,
+        missing: false,
+        filament_display: "ABS",
+      },
+    ];
+    state.phaseManifest = {
+      profile_id: 7,
+      has_phases: true,
+      phases: [
+        {
+          name: "Foundation",
+          order: 1,
+          folders: ["foundation"],
+          depends_on: [],
+        },
+        {
+          name: "Assembly",
+          order: 2,
+          folders: ["assembly"],
+          depends_on: ["Foundation"],
+        },
+      ],
+    };
+    localStorage.setItem(
+      "print-partner.checkoff.console.v1",
+      JSON.stringify({ view: "remaining", sort: "manual" }),
+    );
+
+    render(
+      <MemoryRouter>
+        <CheckoffPage />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("region", { name: "Phase progress" })).toBeTruthy();
+
+    const search = screen.getByRole("searchbox", { name: "Search progress parts" });
+    fireEvent.change(search, { target: { value: "badge" } });
+
+    await waitFor(() =>
+      expect(screen.queryByRole("region", { name: "Phase progress" })).toBeNull(),
+    );
+    const worklist = screen.getByLabelText("Checkoff worklist");
+    expect(within(worklist).getByText("accessory_badge.stl")).toBeTruthy();
+    expect(within(worklist).queryByText("frame.stl")).toBeNull();
+    expect(within(worklist).queryByText("accessory_badge_finished.stl")).toBeNull();
+
+    fireEvent.change(search, { target: { value: "no-match" } });
+    expect(await screen.findByText("No parts match")).toBeTruthy();
+
+    fireEvent.change(search, { target: { value: "" } });
+    expect(await screen.findByRole("region", { name: "Phase progress" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Foundation" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Assembly" })).toBeTruthy();
   });
 
   it("keeps the past-print dialog synchronized with route navigation and explicit close", async () => {

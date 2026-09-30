@@ -849,7 +849,7 @@ export default function CheckoffPage() {
             )}
           </div>
 
-          {view === "remaining" && sort === "manual" && phaseProgress ? (
+          {view === "remaining" && sort === "manual" && !search.trim() && phaseProgress ? (
             <PhaseProgressView
               phases={phaseProgress}
               onSetAllPrinted={onSetAllPrinted}
