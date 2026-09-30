@@ -161,15 +161,14 @@ export function restorePlanSnapshotPayload(
       };
     }
   }
-  if (base) {
-    repo.setBaseLayer(planId, base.project_id);
-  }
-
   const current = repo.getProfileLayers(planId);
   for (const layer of current) {
     if (layer.layer_type !== "base" || !base) {
       repo.removeLayer(layer.id);
     }
+  }
+  if (base) {
+    repo.setBaseLayer(planId, base.project_id);
   }
   for (const layer of resolved) {
     if (layer.layer_type === "base") continue;
