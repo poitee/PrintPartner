@@ -105,6 +105,10 @@ export function restorePlanSnapshotPayload(
     tag: string | null;
     branch: string | null;
   }> = [];
+  const sourcePatches: Array<{
+    sourceId: number;
+    patch: Pick<Parameters<AppRepository["updateSource"]>[1], "tag" | "branch">;
+  }> = [];
   let needsSync = false;
 
   for (const layer of layersRaw as PlanSnapshotPayload["layers"]) {
@@ -129,7 +133,7 @@ export function restorePlanSnapshotPayload(
       needsSync = true;
     }
     if (Object.keys(patch).length) {
-      repo.updateSource(src.id, patch);
+      sourcePatches.push({ sourceId: src.id, patch });
     }
     resolved.push({
       layer_type: layer.layer_type === "base" ? "base" : "addon",
@@ -140,23 +144,15 @@ export function restorePlanSnapshotPayload(
   }
 
   const base = resolved.find((l) => l.layer_type === "base");
-  if (base) {
-    if (!(repo.getSource(base.project_id)?.local_path && repo.getSource(base.project_id)?.last_synced_at)) {
-      return {
-        ok: false,
-        detail: `Base source must be synced before restore.`,
-        needs_sync: true,
-      };
-    }
-    repo.setBaseLayer(planId, base.project_id);
-  }
-
-  // Remove existing addons then re-add from snapshot order.
-  const current = repo.getProfileLayers(planId);
-  for (const layer of current) {
-    if (layer.layer_type !== "base") {
-      repo.removeLayer(layer.id);
-    }
+  if (
+    base &&
+    !(repo.getSource(base.project_id)?.local_path && repo.getSource(base.project_id)?.last_synced_at)
+  ) {
+    return {
+      ok: false,
+      detail: `Base source must be synced before restore.`,
+      needs_sync: true,
+    };
   }
   for (const layer of resolved) {
     if (layer.layer_type === "base") continue;
@@ -168,6 +164,21 @@ export function restorePlanSnapshotPayload(
         needs_sync: true,
       };
     }
+  }
+  for (const { sourceId, patch } of sourcePatches) {
+    repo.updateSource(sourceId, patch);
+  }
+  const current = repo.getProfileLayers(planId);
+  for (const layer of current) {
+    if (layer.layer_type !== "base" || !base) {
+      repo.removeLayer(layer.id);
+    }
+  }
+  if (base) {
+    repo.setBaseLayer(planId, base.project_id);
+  }
+  for (const layer of resolved) {
+    if (layer.layer_type === "base") continue;
     repo.addAddonLayer(planId, layer.project_id);
   }
 
@@ -175,13 +186,13 @@ export function restorePlanSnapshotPayload(
     const currentKit = loadKitManifest(repo, planId);
     saveKitManifest(repo, planId, {
       ...currentKit,
-      name: (kitRaw.name ?? currentKit.name) as typeof currentKit.name,
+      name: "name" in kitRaw ? kitRaw.name : currentKit.name,
       selections: { ...(kitRaw.selections ?? {}) },
       include: [...(kitRaw.include ?? [])],
       exclude: [...(kitRaw.exclude ?? [])],
       replacements: { ...(kitRaw.replacements ?? {}) },
-      base_source_id: (kitRaw.base_source_id ??
-        currentKit.base_source_id) as typeof currentKit.base_source_id,
+      base_source_id:
+        "base_source_id" in kitRaw ? kitRaw.base_source_id : currentKit.base_source_id,
       addon_source_ids: [...(kitRaw.addon_source_ids ?? [])],
     });
   }
