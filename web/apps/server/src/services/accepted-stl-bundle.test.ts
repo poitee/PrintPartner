@@ -24,12 +24,30 @@ const acceptedArtifactTestHook = vi.hoisted(() => ({
   afterVerifiedOpen: undefined as (() => void) | undefined,
   failZipRead: false,
   zipReadFailures: 0,
+  failFileFlush: false,
+  holdCopyFlushes: false,
+  fileFlushCalls: 0,
+  pendingFlushes: new Array<() => void>(),
 }));
 
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
   return {
     ...actual,
+    fsync(descriptor: number, callback: (error: NodeJS.ErrnoException | null) => void) {
+      acceptedArtifactTestHook.fileFlushCalls++;
+      if (acceptedArtifactTestHook.failFileFlush) {
+        callback(new Error("file flush failed"));
+        return;
+      }
+      actual.fsync(descriptor, (error) => {
+        if (acceptedArtifactTestHook.holdCopyFlushes && acceptedArtifactTestHook.fileFlushCalls > 1) {
+          acceptedArtifactTestHook.pendingFlushes.push(() => callback(error));
+        } else {
+          callback(error);
+        }
+      });
+    },
     createReadStream(...args: Parameters<typeof actual.createReadStream>) {
       const [path, options] = args;
       if (acceptedArtifactTestHook.failZipRead && typeof path === "string" && path.includes("/.tmp-") && path.endsWith(".stl")) {
@@ -206,10 +224,58 @@ afterEach(() => {
   acceptedArtifactTestHook.afterVerifiedOpen = undefined;
   acceptedArtifactTestHook.failZipRead = false;
   acceptedArtifactTestHook.zipReadFailures = 0;
+  acceptedArtifactTestHook.failFileFlush = false;
+  acceptedArtifactTestHook.holdCopyFlushes = false;
+  acceptedArtifactTestHook.fileFlushCalls = 0;
+  for (const release of acceptedArtifactTestHook.pendingFlushes.splice(0)) release();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
 describe("materializeAcceptedStlBundle", () => {
+  it("does not publish an export when a file flush fails", async () => {
+    const paths = fixture();
+    acceptedArtifactTestHook.failFileFlush = true;
+    const result = await materializeAcceptedStlBundle({
+      ...paths,
+      capture: capture([part({ snapshotRoot: paths.snapshotRoot, completed: [false] })]),
+      selection: "all", groupBy: "color", roleOrder: ["accent"],
+    });
+
+    expect(result).toEqual({ kind: "output_failure" });
+    const entries = readdirSync(paths.tenantExportsDir, { recursive: true });
+    expect(entries.some((entry) => String(entry).includes(".tmp-") || String(entry).includes("content-"))).toBe(false);
+  });
+
+  it("drains pending copy flushes before cleaning up a quota failure", async () => {
+    const paths = fixture();
+    acceptedArtifactTestHook.holdCopyFlushes = true;
+    let settled = false;
+    const failure = runWithTenantDiskQuota({
+      dataDir: dirname(paths.tenantExportsDir),
+      reposDir: paths.reposDir,
+      tenantId: "default",
+      sourceIds: () => [],
+      quotaBytes: 24,
+    }, async () => materializeAcceptedStlBundle({
+      ...paths,
+      capture: capture([part({ snapshotRoot: paths.snapshotRoot, completed: [false, false, false, false] })]),
+      selection: "all", groupBy: "color", roleOrder: ["accent"],
+    })).then(
+      (result) => { settled = true; return result; },
+      (error: unknown) => { settled = true; return error; },
+    );
+
+    await vi.waitFor(() => expect(acceptedArtifactTestHook.pendingFlushes).toHaveLength(1));
+    expect(settled).toBe(false);
+    const staging = readdirSync(paths.tenantExportsDir, { recursive: true });
+    expect(staging.some((entry) => String(entry).endsWith("widget_01.stl"))).toBe(true);
+    for (const release of acceptedArtifactTestHook.pendingFlushes.splice(0)) release();
+
+    expect(await failure).toBeInstanceOf(TenantDiskQuotaError);
+    const entries = readdirSync(paths.tenantExportsDir, { recursive: true });
+    expect(entries.some((entry) => String(entry).includes(".tmp-") || String(entry).includes("content-"))).toBe(false);
+  });
+
   it("propagates quota rejection and removes copied and ZIP staging", async () => {
     const paths = fixture();
     const dataDir = dirname(paths.tenantExportsDir);
