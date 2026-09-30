@@ -244,6 +244,58 @@ describe("SourcesPage Source state ownership", () => {
     expect(profileSelection.selectedProfileId).toBe(17);
   });
 
+  it("waits for current attachments before showing Library badges and alerts", async () => {
+    profileSelection.selectedProfileId = 17;
+    let resolveLayers: ((layers: ProfileLayer[]) => void) | undefined;
+    api.fetchPlanLayers.mockImplementation(() => new Promise<ProfileLayer[]>((resolve) => {
+      resolveLayers = resolve;
+    }));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    queryClient.setQueryData(queryKeys.sources, [{ ...source("Cached Source"), update_status: "updates_available" }]);
+
+    render(<QueryClientProvider client={queryClient}><MemoryRouter><SourcesPage /></MemoryRouter></QueryClientProvider>);
+
+    expect(await screen.findByRole("status", { name: "Loading Source Library" })).toBeTruthy();
+    expect(screen.queryByText("not attached")).toBeNull();
+    expect(screen.queryByTestId("attached-update-count")).toBeNull();
+    expect(screen.queryByText("Your plan may still use older files.")).toBeNull();
+    await act(async () => resolveLayers?.([{ id: 3, layer_order: 0, layer_type: "base", project_id: 7, project_name: "Cached Source" }]));
+    expect(await screen.findByText("0 picks")).toBeTruthy();
+    expect(screen.getByTestId("attached-update-count").textContent).toBe("1");
+  });
+
+  it("shows an attachment read failure and retries without declaring Sources unattached", async () => {
+    profileSelection.selectedProfileId = 17;
+    api.fetchPlanLayers.mockRejectedValueOnce(new Error("Layer read failed"));
+    api.fetchPlanLayers.mockResolvedValue([{ id: 3, layer_order: 0, layer_type: "base", project_id: 7, project_name: "Cached Source" }]);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    queryClient.setQueryData(queryKeys.sources, [source("Cached Source")]);
+
+    render(<QueryClientProvider client={queryClient}><MemoryRouter><SourcesPage /></MemoryRouter></QueryClientProvider>);
+
+    expect((await screen.findByRole("alert")).textContent).toContain("Layer read failed");
+    expect(screen.queryByText("not attached")).toBeNull();
+    expect(screen.queryByTestId("attached-update-count")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("0 picks")).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("retains cached attachments when a background read fails", async () => {
+    profileSelection.selectedProfileId = 17;
+    api.fetchPlanLayers.mockRejectedValue(new Error("Background layer read failed"));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    queryClient.setQueryData(queryKeys.sources, [source("Cached Source")]);
+    queryClient.setQueryData(queryKeys.planLayers(17), [{ id: 3, layer_order: 0, layer_type: "base", project_id: 7, project_name: "Cached Source" }]);
+
+    render(<QueryClientProvider client={queryClient}><MemoryRouter><SourcesPage /></MemoryRouter></QueryClientProvider>);
+
+    expect((await screen.findByRole("alert")).textContent).toContain("Background layer read failed");
+    expect(screen.getByText("0 picks")).toBeTruthy();
+    expect(screen.queryByText("not attached")).toBeNull();
+    expect(screen.queryByRole("status", { name: "Loading Source Library" })).toBeNull();
+  });
+
   it("keeps the card and open detail sheet subscribed to the shared Source cache", async () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, staleTime: Number.POSITIVE_INFINITY } },
