@@ -59,6 +59,7 @@ function Picker() {
   const plan = usePlanWorkspace();
   return <>
     <span role="status">{plan.saving ? "Saving" : plan.draftError ? "Not saved" : "Saved"}</span>
+    <span data-testid="quantity">{plan.review?.part_groups[0]?.parts[0]?.quantity_effective}</span>
     {plan.draftError && <p role="alert">{plan.draftError}</p>}
     <button onClick={() => void plan.preparePlan().catch(() => {})}>Retry save</button>
     <button onClick={() => void plan.discardPendingEdits().catch(() => {})}>Discard</button>
@@ -157,6 +158,31 @@ it.each(["network", "reply"])("retains the same payload and key through an uncer
   expect(calls[1]).toEqual(calls[0]);
   expect(calls[2]).toEqual(calls[0]);
   expect(checked()).toBe("false");
+});
+
+it("retries a failed quantity edit with its original payload and idempotency key", async () => {
+  const savedQuantity = saved(true);
+  savedQuantity.review.part_groups[0]!.parts[0] = { ...part, quantity_override: 2, quantity_effective: 2, print_units: [false, false] };
+  savedQuantity.review.totals.total_print_units = 2;
+  vi.mocked(savePlanChoices)
+    .mockRejectedValueOnce(new Error("offline"))
+    .mockRejectedValueOnce(new Error("offline"))
+    .mockResolvedValueOnce(savedQuantity);
+  mount();
+  await waitFor(() => expect(checked()).toBe("true"));
+  expect(screen.getByTestId("quantity").textContent).toBe("1");
+  fireEvent.click(screen.getByRole("button", { name: "Set quantity" }));
+  await waitFor(() => expect(screen.getByRole("status").textContent).toBe("Not saved"));
+  const beforeRetry = vi.mocked(savePlanChoices).mock.calls;
+  expect(beforeRetry).toHaveLength(2);
+  expect(beforeRetry[0]?.[1].decisions[0]).toEqual(expect.objectContaining({ kind: "set_quantity_override", value: 2 }));
+  expect(beforeRetry[1]).toEqual(beforeRetry[0]);
+
+  fireEvent.click(screen.getByRole("button", { name: "Retry save" }));
+  await waitFor(() => expect(vi.mocked(savePlanChoices).mock.calls).toHaveLength(3));
+  expect(vi.mocked(savePlanChoices).mock.calls[2]).toEqual(beforeRetry[0]);
+  await waitFor(() => expect(screen.getByRole("status").textContent).toBe("Saved"));
+  expect(screen.getByTestId("quantity").textContent).toBe("2");
 });
 
 it("discards an ambiguous command without replaying it before the next different edit", async () => {
