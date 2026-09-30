@@ -184,11 +184,10 @@ describe("restorePlanSnapshotPayload", () => {
     const snapshot = createPlanSnapshot(repo, plan.id, { name: "Changed ref" });
     const payload = {
       ...snapshot.payload,
-      layers: snapshot.payload.layers.map((layer) =>
-        layer.layer_type === "base"
-          ? { ...layer, branch: "release" }
-          : { ...layer, source_name: failure === "missing" ? "Missing Source" : layer.source_name },
-      ),
+      layers: [
+        { layer_type: "base", project_id: base.id, source_name: base.name, tag: null, branch: "release", order: 0 },
+        { layer_type: "addon", project_id: addon.id, source_name: failure === "missing" ? "Missing Source" : addon.name, tag: null, branch: null, order: 1 },
+      ],
     };
     const sourcesBefore = repo.listSources();
     const layersBefore = repo.getProfileLayers(plan.id);
