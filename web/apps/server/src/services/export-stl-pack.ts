@@ -4,7 +4,7 @@ import {
   constants,
   createReadStream,
   createWriteStream,
-  fsyncSync,
+  fsync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -17,6 +17,7 @@ import {
   writeSync,
 } from "node:fs";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { promisify } from "node:util";
 import { pipeline } from "node:stream/promises";
 import { Readable, Transform, type TransformCallback } from "node:stream";
 import { ZipFile } from "yazl";
@@ -38,6 +39,8 @@ import {
 } from "../lib/tenant-disk-quota.js";
 
 const ROLE_ORDER = ["primary", "accent", "clear", "opaque"] as const;
+const COPY_BATCH_SIZE = 4;
+const flushFile = promisify(fsync);
 
 export type StlPackGroupBy = "color" | "color_dir";
 export class FilenameGroupingConflictError extends Error {
@@ -226,7 +229,7 @@ async function writeVerifiedStream(
       position = writeChunk(descriptor, chunk, position);
     }
     valid = position === expected.size && hash.digest("hex") === expected.sha256;
-    if (valid) fsyncSync(descriptor);
+    if (valid) await flushFile(descriptor);
     return valid;
   } finally {
     closeSync(descriptor);
@@ -600,22 +603,24 @@ export async function materializeAcceptedStlBundle(input: Readonly<{
           usedNames.set(folder, names);
           const directory = join(stage, ...folder.split("/"));
           mkdirSync(directory, { recursive: true, mode: 0o700 });
-          for (const unit of entry.units) {
-            const filename = entryName(entry.part, unit, names);
-            const relativePath = `${folder}/${filename}`;
-            const expectedFile = {
-              relativePath,
+          for (let offset = 0; offset < entry.units.length; offset += COPY_BATCH_SIZE) {
+            const files = entry.units.slice(offset, offset + COPY_BATCH_SIZE).map((unit) => ({
+              relativePath: `${folder}/${entryName(entry.part, unit, names)}`,
               size: opened.lease.size,
               sha256: opened.lease.expectedSha256,
-            };
-            const copied = await copyVerifiedStagedFile(
-              join(stage, ...relativePath.split("/")),
+            }));
+            const copied = await Promise.allSettled(files.map((file) => copyVerifiedStagedFile(
+              join(directory, basename(file.relativePath)),
               stagedSource,
-              expectedFile,
-            );
-            if (!copied) return { kind: "output_failure" };
-            expected.push(expectedFile);
-            fileCounts[role] = (fileCounts[role] ?? 0) + 1;
+              file,
+            )));
+            const rejected = copied.find((result) => result.status === "rejected");
+            if (rejected) throw rejected.reason;
+            if (copied.some((result) => result.status === "fulfilled" && !result.value)) {
+              return { kind: "output_failure" };
+            }
+            expected.push(...files);
+            fileCounts[role] = (fileCounts[role] ?? 0) + files.length;
           }
         } finally {
           rmSync(stagedSource, { force: true });
