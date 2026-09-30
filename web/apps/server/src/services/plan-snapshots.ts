@@ -105,6 +105,10 @@ export function restorePlanSnapshotPayload(
     tag: string | null;
     branch: string | null;
   }> = [];
+  const sourcePatches: Array<{
+    sourceId: number;
+    patch: Pick<Parameters<AppRepository["updateSource"]>[1], "tag" | "branch">;
+  }> = [];
   let needsSync = false;
 
   for (const layer of layersRaw as PlanSnapshotPayload["layers"]) {
@@ -129,7 +133,7 @@ export function restorePlanSnapshotPayload(
       needsSync = true;
     }
     if (Object.keys(patch).length) {
-      repo.updateSource(src.id, patch);
+      sourcePatches.push({ sourceId: src.id, patch });
     }
     resolved.push({
       layer_type: layer.layer_type === "base" ? "base" : "addon",
@@ -160,6 +164,9 @@ export function restorePlanSnapshotPayload(
         needs_sync: true,
       };
     }
+  }
+  for (const { sourceId, patch } of sourcePatches) {
+    repo.updateSource(sourceId, patch);
   }
   const current = repo.getProfileLayers(planId);
   for (const layer of current) {
