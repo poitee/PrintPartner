@@ -785,8 +785,13 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
       await flushFileChoices(selectedProfileId);
       if (!options?.applyManifest) return;
     }
+    const pending = selectedProfileId == null ? null : pendingSaveByBuild.current.get(selectedProfileId);
+    if (pending && selectedProfileId != null) {
+      await editDraft(pending.edits, selectedProfileId);
+      if (!options?.applyManifest) return;
+    }
     await preparePlan(options);
-  }, [flushFileChoices, hasPendingFileChoices, preparePlan, selectedProfileId]);
+  }, [editDraft, flushFileChoices, hasPendingFileChoices, preparePlan, selectedProfileId]);
 
   const reconcileActivePlanDraft = useCallback(
     async (decisions: RequiredUnitDecisionContract[]) => {
