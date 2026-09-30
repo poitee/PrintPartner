@@ -147,10 +147,23 @@ vi.mock("../components/checkoff/UnattributedPrintCard", () => ({
   default: () => null,
 }));
 vi.mock("../components/checkoff/SortableProgressPart", () => ({
-  default: ({ part, onSetAllPrinted }: { part: ReviewPart; onSetAllPrinted: (part: ReviewPart, completed: boolean) => void }) => (
+  default: (props: {
+    kind: "part";
+    part: ReviewPart;
+    onSetAllPrinted: (part: ReviewPart, completed: boolean) => void;
+  } | {
+    kind: "bag";
+    label: string;
+    onRemove: () => void;
+  }) => props.kind === "bag" ? (
     <div>
-      <span>{part.filename}</span>
-      <button onClick={() => onSetAllPrinted(part, false)}>Clear all test copies</button>
+      <input aria-label="Bag or sort label" value={props.label} readOnly />
+      <button onClick={props.onRemove}>Remove this bag bar</button>
+    </div>
+  ) : (
+    <div>
+      <span>{props.part.filename}</span>
+      <button onClick={() => props.onSetAllPrinted(props.part, false)}>Clear all test copies</button>
     </div>
   ),
 }));
@@ -470,6 +483,37 @@ describe("CheckoffPage accessibility", () => {
     expect(await screen.findByRole("region", { name: "Phase progress" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Foundation" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Assembly" })).toBeTruthy();
+  });
+
+  it("shows saved bag bars in a phased Build and restores phases after removal", async () => {
+    state.phaseManifest = {
+      profile_id: 7,
+      has_phases: true,
+      phases: [{ name: "Assembly", order: 1, folders: ["parts"], depends_on: [] }],
+    };
+    localStorage.setItem(
+      "print-partner.checkoff.console.v1",
+      JSON.stringify({ view: "remaining", sort: "manual" }),
+    );
+
+    render(<MemoryRouter><CheckoffPage /></MemoryRouter>);
+    expect(await screen.findByRole("region", { name: "Phase progress" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Add bag" }));
+    expect(await screen.findByRole("textbox", { name: "Bag or sort label" })).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "Phase progress" })).toBeNull();
+
+    await waitFor(() =>
+      expect(localStorage.getItem("print-partner.checkoff.ui.v1")).toContain('"label":"Bag 1"'),
+    );
+    cleanup();
+    render(<MemoryRouter><CheckoffPage /></MemoryRouter>);
+    expect(await screen.findByRole("textbox", { name: "Bag or sort label" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove this bag bar" }));
+    expect(await screen.findByRole("region", { name: "Phase progress" })).toBeTruthy();
+    expect(screen.queryByRole("textbox", { name: "Bag or sort label" })).toBeNull();
+    expect(screen.getByRole("progressbar", { name: "0% of print units verified" })).toBeTruthy();
   });
 
   it("keeps the past-print dialog synchronized with route navigation and explicit close", async () => {
