@@ -79,6 +79,31 @@ describe("authentication page headings", () => {
     });
   });
 
+  it("shows forgot-password failures inline and preserves the email for retry", async () => {
+    api.requestPasswordReset
+      .mockRejectedValueOnce(new Error("Could not reach the mail service"))
+      .mockResolvedValueOnce({ message: "Sent" });
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <ForgotPasswordPage />
+      </MemoryRouter>,
+    );
+
+    const email = screen.getByRole("textbox", { name: "Email" });
+    await user.type(email, "person@example.com");
+    await user.click(screen.getByRole("button", { name: "Send reset link" }));
+
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "Could not reach the mail service",
+    );
+    expect((email as HTMLInputElement).value).toBe("person@example.com");
+
+    await user.click(screen.getByRole("button", { name: "Send reset link" }));
+    await waitFor(() => expect(api.requestPasswordReset).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("submits the reset-password form with Enter", async () => {
     const user = userEvent.setup();
     render(
@@ -93,5 +118,54 @@ describe("authentication page headings", () => {
     await waitFor(() => {
       expect(api.resetPasswordWithToken).toHaveBeenCalledWith("test-token", "password123");
     });
+  });
+
+  it("shows password mismatch inline and preserves both password fields", async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={["/reset-password?token=test-token"]}>
+        <ResetPasswordPage />
+      </MemoryRouter>,
+    );
+
+    const password = screen.getByLabelText("New password");
+    const confirm = screen.getByLabelText("Confirm password");
+    await user.type(password, "password123");
+    await user.type(confirm, "password456");
+    await user.click(screen.getByRole("button", { name: "Update password" }));
+
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "Passwords do not match",
+    );
+    expect((password as HTMLInputElement).value).toBe("password123");
+    expect((confirm as HTMLInputElement).value).toBe("password456");
+    expect(api.resetPasswordWithToken).not.toHaveBeenCalled();
+  });
+
+  it("shows rejected password resets inline and allows retry", async () => {
+    api.resetPasswordWithToken
+      .mockRejectedValueOnce(new Error("This reset link is invalid or expired"))
+      .mockResolvedValueOnce(undefined);
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={["/reset-password?token=test-token"]}>
+        <ResetPasswordPage />
+      </MemoryRouter>,
+    );
+
+    await user.type(screen.getByLabelText("New password"), "password123");
+    await user.type(screen.getByLabelText("Confirm password"), "password123");
+    await user.click(screen.getByRole("button", { name: "Update password" }));
+
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "This reset link is invalid or expired",
+    );
+    expect((screen.getByLabelText("New password") as HTMLInputElement).value).toBe(
+      "password123",
+    );
+
+    await user.click(screen.getByRole("button", { name: "Update password" }));
+    await waitFor(() => expect(api.resetPasswordWithToken).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 });

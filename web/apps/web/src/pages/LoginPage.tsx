@@ -28,6 +28,7 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [busy, setBusy] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
   const [createdAccountEmail, setCreatedAccountEmail] = useState<string | null>(null);
 
   const from = (location.state as { from?: string } | null)?.from ?? "/";
@@ -62,6 +63,7 @@ export default function LoginPage() {
 
   const onSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    setFormError(null);
     setBusy(true);
     void (async () => {
       try {
@@ -73,7 +75,13 @@ export default function LoginPage() {
         }
         if (mode === "login") toast.success("Signed in");
       } catch (e) {
-        toast.error(e instanceof Error ? e.message : String(e));
+        setFormError(
+          mode === "login"
+            ? "Could not sign in. Check your email and password, then try again."
+            : e instanceof Error
+              ? e.message
+              : String(e),
+        );
       } finally {
         setBusy(false);
       }
@@ -149,6 +157,11 @@ export default function LoginPage() {
             required
           />
         </AuthField>
+        {formError ? (
+          <p role="alert" className="text-sm text-destructive">
+            {formError}
+          </p>
+        ) : null}
         <Button type="submit" className="w-full" size="shop" disabled={busy}>
           {busy
             ? "Please wait…"
@@ -170,7 +183,10 @@ export default function LoginPage() {
           <button
             type="button"
             className="w-full text-center text-sm text-primary hover:underline"
-            onClick={() => setMode(mode === "login" ? "register" : "login")}
+            onClick={() => {
+              setFormError(null);
+              setMode(mode === "login" ? "register" : "login");
+            }}
           >
             {mode === "login"
               ? "Need an account? Register"

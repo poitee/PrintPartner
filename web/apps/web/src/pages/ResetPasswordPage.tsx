@@ -15,6 +15,7 @@ export default function ResetPasswordPage() {
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   if (!loading && !authRequired) {
     return <Navigate to="/" replace />;
@@ -25,8 +26,9 @@ export default function ResetPasswordPage() {
   }
 
   const onSubmit = () => {
+    setError(null);
     if (password !== confirm) {
-      toast.error("Passwords do not match");
+      setError("Passwords do not match");
       return;
     }
     setBusy(true);
@@ -37,7 +39,7 @@ export default function ResetPasswordPage() {
         toast.success("Password updated — you are signed in");
         navigate("/", { replace: true });
       } catch (e) {
-        toast.error(e instanceof Error ? e.message : String(e));
+        setError(e instanceof Error ? e.message : String(e));
       } finally {
         setBusy(false);
       }
@@ -73,6 +75,11 @@ export default function ResetPasswordPage() {
               autoComplete="new-password"
             />
           </AuthField>
+          {error ? (
+            <p role="alert" className="text-sm text-destructive">
+              {error}
+            </p>
+          ) : null}
           <Button
             type="submit"
             className="w-full"

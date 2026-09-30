@@ -122,6 +122,11 @@ import {
 import PwaInstallBanner from "../components/pwa/PwaInstallBanner";
 import { useSyncComplete } from "../lib/useSyncComplete";
 
+type ActiveCheckoffCorrection = CheckoffCorrectionTarget & {
+  profileId: number;
+  unitIndex: number;
+};
+
 /**
  * Checkoff: the operator console beside the printer.
  *
@@ -208,7 +213,7 @@ export default function CheckoffPage() {
   const pastPrintOpen = searchParams.get("add") === "past-print";
   const [verifyRefreshKey, setVerifyRefreshKey] = useState(0);
   const [correctionTarget, setCorrectionTarget] =
-    useState<CheckoffCorrectionTarget | null>(null);
+    useState<ActiveCheckoffCorrection | null>(null);
   const [moveTarget, setMoveTarget] = useState<CheckoffMoveTarget | null>(null);
   const [liveStrip, setLiveStrip] = useState<PrinterLiveStripState>({
     anyPrinting: false,
@@ -276,6 +281,7 @@ export default function CheckoffPage() {
 
   useEffect(() => {
     setVerifyQueue({ awaitingCount: 0, watchingCount: 0, primaryHostName: null });
+    setCorrectionTarget(null);
     clearRowErrors();
   }, [clearRowErrors, selectedProfileId]);
 
@@ -516,7 +522,8 @@ export default function CheckoffPage() {
 
   const onDecrement = useCallback(
     (part: ReviewPart, scope: "one" | "all" = "one") => {
-      if (lastCompletedUnit(part.print_units) < 0) return;
+      const lastCompleted = lastCompletedUnit(part.print_units);
+      if (lastCompleted < 0) return;
       const impact = checkoffCorrectionImpact({
         printingOn: printingPartIds.get(part.id),
         awaitingVerify: awaitingPartIds.get(part.id),
@@ -526,15 +533,18 @@ export default function CheckoffPage() {
         decrementPart(part, scope);
         return;
       }
+      if (selectedProfileId == null) return;
       setCorrectionTarget({
+        profileId: selectedProfileId,
         partId: part.id,
+        unitIndex: scope === "all" ? 0 : lastCompleted,
         filename: part.filename,
         printedCount: part.printed_count,
         scope,
         impact,
       });
     },
-    [awaitingPartIds, decrementPart, printingPartIds],
+    [awaitingPartIds, decrementPart, printingPartIds, selectedProfileId],
   );
 
   const onSetAllPrinted = useCallback(
@@ -554,27 +564,27 @@ export default function CheckoffPage() {
   );
 
   const onConfirmCorrection = useCallback(
-    (input: { reason: CheckoffCorrectionReason | null; note: string }) => {
+    async (input: { reason: CheckoffCorrectionReason | null; note: string }) => {
       const target = correctionTarget;
-      setCorrectionTarget(null);
-      if (!target) return;
-      const part = partsById.get(target.partId);
-      if (!part) return;
+      if (!target || target.profileId !== selectedProfileId) {
+        throw new Error("This correction belongs to another Build");
+      }
+      await toggleUnit(target.partId, target.unitIndex, false);
       const reason = input.reason;
-      if (reason && selectedProfileId != null) {
+      if (reason) {
         setConsolePrefs((prev) =>
-          withCheckoffCorrection(prev, selectedProfileId, {
-            partId: part.id,
-            unitIndex: target.scope === "all" ? 0 : lastCompletedUnit(part.print_units),
+          withCheckoffCorrection(prev, target.profileId, {
+            partId: target.partId,
+            unitIndex: target.unitIndex,
             reason,
             note: input.note,
             at: new Date().toISOString(),
           }),
         );
       }
-      decrementPart(part, target.scope);
+      setCorrectionTarget((current) => (current === target ? null : current));
     },
-    [correctionTarget, decrementPart, partsById, selectedProfileId],
+    [correctionTarget, selectedProfileId, toggleUnit],
   );
 
   const onClaimSuggestion = useCallback(
@@ -925,7 +935,9 @@ export default function CheckoffPage() {
       )}
 
       <CheckoffCorrectionDialog
-        target={correctionTarget}
+        target={
+          correctionTarget?.profileId === selectedProfileId ? correctionTarget : null
+        }
         busy={toggleBusy}
         onCancel={() => setCorrectionTarget(null)}
         onConfirm={onConfirmCorrection}

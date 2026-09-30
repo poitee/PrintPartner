@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
 import type { PlanReview, ReviewPart } from "../api/endpoints/planManifests";
@@ -8,6 +8,7 @@ import CheckoffPage from "./CheckoffPage";
 
 const state = vi.hoisted(() => ({
   completed: false,
+  selectedProfileId: 7,
   toggleUnit: vi.fn().mockResolvedValue(undefined),
   profiles: [
     {
@@ -35,7 +36,7 @@ vi.mock("../queries/buildWorkflow", () => ({
 }));
 vi.mock("../context/ProfileContext", () => ({
   useProfileSelection: () => ({
-    selectedProfileId: 7,
+    selectedProfileId: state.selectedProfileId,
     profiles: state.profiles,
     loading: state.profilesLoading,
     error: state.profilesError,
@@ -43,10 +44,12 @@ vi.mock("../context/ProfileContext", () => ({
   }),
 }));
 vi.mock("../context/PlanWorkspaceContext", () => ({
-  usePlanWorkspace: () => ({
+  usePlanWorkspace: () => {
+    const secondBuild = state.selectedProfileId === 8;
+    return {
     review: {
-      profile_id: 7,
-      plan_name: "Voron",
+      profile_id: state.selectedProfileId,
+      plan_name: secondBuild ? "Switchwire" : "Voron",
       layers: [],
       totals: {
         included_parts: 1,
@@ -62,10 +65,10 @@ vi.mock("../context/PlanWorkspaceContext", () => ({
           source_layer: "base:kit",
           parts: [
             {
-              id: 11,
-              match_key: "gantry",
-              relative_path: "parts/gantry.stl",
-              filename: "gantry.stl",
+              id: secondBuild ? 22 : 11,
+              match_key: secondBuild ? "badge" : "gantry",
+              relative_path: secondBuild ? "parts/badge.stl" : "parts/gantry.stl",
+              filename: secondBuild ? "badge.stl" : "gantry.stl",
               source_layer: "base:kit",
               status: "ok",
               role: "primary",
@@ -91,7 +94,8 @@ vi.mock("../context/PlanWorkspaceContext", () => ({
     toggleUnit: state.toggleUnit,
     toggleAssembled: vi.fn(),
     busyPartId: null,
-  }),
+  };
+  },
 }));
 vi.mock("../hooks/useJobRunner", () => ({
   useJobRunner: () => ({ busy: false, runJob: vi.fn() }),
@@ -193,7 +197,8 @@ describe("CheckoffPage accessibility", () => {
 
   beforeEach(() => {
     state.completed = false;
-    state.toggleUnit.mockClear();
+    state.selectedProfileId = 7;
+    state.toggleUnit.mockReset().mockResolvedValue(undefined);
     state.profiles = [
       {
         id: 7,
@@ -224,6 +229,98 @@ describe("CheckoffPage accessibility", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save correction" }));
     await waitFor(() => expect(state.toggleUnit).toHaveBeenCalledExactlyOnceWith(11, 0, false));
     expect(localStorage.getItem("print-partner.checkoff.console.v1")).toContain('"reason":"recount"');
+  });
+
+  it("keeps a failed correction draft available and records it only after retry succeeds", async () => {
+    state.completed = true;
+    state.toggleUnit
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce(undefined);
+    localStorage.setItem("print-partner.checkoff.console.v1", JSON.stringify({ view: "completed" }));
+    render(<MemoryRouter><CheckoffPage /></MemoryRouter>);
+    fireEvent.click(screen.getByRole("button", { name: /^Completed/ }));
+    fireEvent.click(await screen.findByText("Clear all test copies"));
+    fireEvent.change(screen.getByLabelText("Reason"), {
+      target: { value: "wrong_row" },
+    });
+    fireEvent.change(screen.getByLabelText("Note (optional)"), {
+      target: { value: "Badge was another Build" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Save correction" }));
+
+    const failedDialog = await screen.findByRole("dialog");
+    await waitFor(() =>
+      expect(within(failedDialog).getByRole("alert").textContent).toContain(
+        "Could not save the correction for gantry.stl: offline",
+      ),
+    );
+    expect((screen.getByLabelText("Reason") as HTMLSelectElement).value).toBe("wrong_row");
+    expect((screen.getByLabelText("Note (optional)") as HTMLInputElement).value).toBe(
+      "Badge was another Build",
+    );
+    expect(localStorage.getItem("print-partner.checkoff.console.v1")).not.toContain(
+      '"reason":"wrong_row"',
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Save correction" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(state.toggleUnit).toHaveBeenCalledTimes(2);
+    expect(localStorage.getItem("print-partner.checkoff.console.v1")).toContain(
+      '"reason":"wrong_row"',
+    );
+    expect(localStorage.getItem("print-partner.checkoff.console.v1")).toContain(
+      '"note":"Badge was another Build"',
+    );
+  });
+
+  it("ignores a late failed save after switching Builds and opening another correction", async () => {
+    state.completed = true;
+    let rejectSave = (_error: Error) => {};
+    state.toggleUnit.mockImplementationOnce(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          rejectSave = reject;
+        }),
+    );
+    state.profiles = [
+      ...state.profiles,
+      {
+        id: 8,
+        name: "Switchwire",
+        archived_at: null,
+        part_count: 1,
+        accepted_progress: { kind: "ready" as const, remaining_units: 0, total_units: 4 },
+        build_stale: false,
+        special_request: null,
+      },
+    ];
+    localStorage.setItem("print-partner.checkoff.console.v1", JSON.stringify({ view: "completed" }));
+    const { rerender } = render(<MemoryRouter><CheckoffPage /></MemoryRouter>);
+    fireEvent.click(screen.getByRole("button", { name: /^Completed/ }));
+    fireEvent.click(await screen.findByText("Clear all test copies"));
+    fireEvent.change(screen.getByLabelText("Reason"), { target: { value: "recount" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save correction" }));
+    await waitFor(() => expect(state.toggleUnit).toHaveBeenCalledOnce());
+
+    state.selectedProfileId = 8;
+    rerender(<MemoryRouter><CheckoffPage /></MemoryRouter>);
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    fireEvent.click(screen.getByRole("button", { name: /^Completed/ }));
+    fireEvent.click(await screen.findByText("Clear all test copies"));
+    expect(screen.getByRole("dialog").textContent).toContain(
+      "Clear all printed copies of badge.stl",
+    );
+
+    await act(async () => rejectSave(new Error("old Build offline")));
+
+    const currentDialog = screen.getByRole("dialog");
+    expect(currentDialog.textContent).toContain("Clear all printed copies of badge.stl");
+    expect(within(currentDialog).queryByRole("alert")).toBeNull();
+    expect((within(currentDialog).getByLabelText("Reason") as HTMLSelectElement).value).toBe("");
+    expect(localStorage.getItem("print-partner.checkoff.console.v1")).not.toContain(
+      '"reason":"recount"',
+    );
   });
 
   it("names the progress parts search", () => {
