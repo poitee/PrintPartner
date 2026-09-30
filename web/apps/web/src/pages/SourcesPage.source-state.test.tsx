@@ -246,12 +246,14 @@ describe("SourcesPage Source state ownership", () => {
 
   it("waits for current attachments before showing Library badges and alerts", async () => {
     profileSelection.selectedProfileId = 17;
+    const updatedSource = { ...source("Cached Source"), update_status: "updates_available" };
+    api.fetchSources.mockResolvedValue([updatedSource]);
     let resolveLayers: ((layers: ProfileLayer[]) => void) | undefined;
     api.fetchPlanLayers.mockImplementation(() => new Promise<ProfileLayer[]>((resolve) => {
       resolveLayers = resolve;
     }));
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    queryClient.setQueryData(queryKeys.sources, [{ ...source("Cached Source"), update_status: "updates_available" }]);
+    queryClient.setQueryData(queryKeys.sources, [updatedSource]);
 
     render(<QueryClientProvider client={queryClient}><MemoryRouter><SourcesPage /></MemoryRouter></QueryClientProvider>);
 
