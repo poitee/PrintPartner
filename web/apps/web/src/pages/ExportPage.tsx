@@ -114,6 +114,11 @@ const TASK_LIST_TITLE: Readonly<Record<ProductionRoute, string>> = {
  * on the Plates route where they were written.
  */
 export default function ExportPage() {
+  const { selectedProfileId } = useProfileSelection();
+  return <ProductionWorkspace key={selectedProfileId ?? "none"} />;
+}
+
+function ProductionWorkspace() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { health, error: engineError, loading: healthLoading } = useEngineHealth();
   const hostedPlanning = isHostedPlanning(health);
@@ -204,7 +209,10 @@ export default function ExportPage() {
     selectParam,
     selectedProfileId,
   );
-  const selectedTokens = selectedProductionTokens(selectableUnits, selection);
+  const selectedTokens = useMemo(
+    () => selectedProductionTokens(selectableUnits, selection),
+    [selectableUnits, selection],
+  );
   const productionSetup = useProductionSetup(selectedProfileId, engineState === "ready");
   const setup = productionSetup.data;
   /** Null until the operator answers the question. There is no default route. */

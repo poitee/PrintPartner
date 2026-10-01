@@ -18,11 +18,12 @@ server.stderr.on("data", (chunk) => { diagnostics = (diagnostics + chunk).slice(
 const exited = new Promise((resolve) => server.once("exit", resolve));
 try {
   let ready = false;
-  for (let attempt = 0; attempt < 120; attempt++) {
+  const startupDeadline = Date.now() + 30_000;
+  while (Date.now() < startupDeadline) {
     if (server.exitCode !== null || server.signalCode !== null) throw new Error(diagnostics);
     base = /Server listening at (http:\/\/127\.0\.0\.1:\d+)/.exec(diagnostics)?.[1] ?? "";
     try {
-      if (base && (await globalThis.fetch(`${base}/health`)).ok) { ready = true; break; }
+      if (base && (await globalThis.fetch(`${base}/health`, { signal: globalThis.AbortSignal.timeout(1_000) })).ok) { ready = true; break; }
     } catch { /* Wait for the listener. */ }
     await delay(250);
   }

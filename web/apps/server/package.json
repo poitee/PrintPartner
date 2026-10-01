@@ -9,6 +9,7 @@
     "start": "node dist/current/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
+    "test:ci": "vitest run --exclude src/services/accepted-stl-bundle.test.ts && vitest run src/services/accepted-stl-bundle.test.ts --maxWorkers=1 --no-file-parallelism",
     "mcp": "tsx src/mcp/stdio-server.ts",
     "db:migrate": "tsx src/db/migrate.ts"
   },

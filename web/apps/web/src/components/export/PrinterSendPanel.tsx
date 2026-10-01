@@ -127,6 +127,10 @@ export default function PrinterSendPanel({
   const pendingActionRef = useRef<"send" | "start" | null>(null);
   const parseGenRef = useRef(0);
 
+  useEffect(() => () => {
+    parseGenRef.current += 1;
+  }, []);
+
   const hasLinked = linkedPrinters.length > 0;
   const hasBambuLinked = bambuPrinters.length > 0;
   const busy = printerUploadJob.busy || bambuBusy || parseBusy;
@@ -205,6 +209,7 @@ export default function PrinterSendPanel({
   };
 
   const runUpload = (file: File, start: boolean) => {
+    const gen = parseGenRef.current;
     const retry = () => runUpload(file, start);
     if (!planBind.canSend || profileId == null) {
       setSendFailure({ message: "Pick a Build before you send this file.", retry });
@@ -251,6 +256,7 @@ export default function PrinterSendPanel({
           unlabeled_names: unlabeled,
         }),
       (snap) => {
+        if (gen !== parseGenRef.current) return;
         if (snap.status === "error") {
           setSendFailure({
             message: snap.message || `Could not send ${file.name} to ${printerName}.`,
@@ -336,7 +342,9 @@ export default function PrinterSendPanel({
     const pending = pendingActionRef.current;
     pendingActionRef.current = null;
     void (async () => {
+      const gen = parseGenRef.current + 1;
       const proposed = await applyObjectParse(file);
+      if (gen !== parseGenRef.current) return;
       // Preview before Send when objects were matched — don't auto-upload past the preview.
       if (pending) {
         if (proposed && proposed.units.length > 0) {
@@ -369,10 +377,12 @@ export default function PrinterSendPanel({
       return;
     }
     setChosenFile(file);
+    const gen = ++parseGenRef.current;
     void (async () => {
       let handoffUnits: typeof proposedUnits | undefined;
       try {
         const parsed = await parseSlicedObjectsFile(file);
+        if (gen !== parseGenRef.current) return;
         setObjectParse(parsed);
         const proposed = proposeCheckoffFromObjects(parsed.names, remainingParts);
         setObjectPropose(proposed);
@@ -380,6 +390,7 @@ export default function PrinterSendPanel({
           handoffUnits = proposed.units;
         }
       } catch {
+        if (gen !== parseGenRef.current) return;
         setObjectParse({ objects: [], names: [], format: "unknown", unlabeled: true });
         setObjectPropose({ units: [], matches: [], unmatchedNames: [] });
       }
@@ -392,6 +403,7 @@ export default function PrinterSendPanel({
           profile_id: profileId,
           checkoff_units: handoffUnits,
         });
+        if (gen !== parseGenRef.current) return;
         if (result.launched) {
           toast.success(result.message, {
             description: result.checkoff_link_id
@@ -420,9 +432,10 @@ export default function PrinterSendPanel({
           }
         }
       } catch (e) {
+        if (gen !== parseGenRef.current) return;
         toast.error(e instanceof Error ? e.message : String(e));
       } finally {
-        setBambuBusy(false);
+        if (gen === parseGenRef.current) setBambuBusy(false);
       }
     })();
   };

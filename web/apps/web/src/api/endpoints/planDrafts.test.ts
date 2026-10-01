@@ -82,6 +82,8 @@ describe("plan draft endpoints", () => {
   });
 
   it.each([
+    { ...saved, review: { ...saved.review, issues: [{ code: "x", message: "y", severity: "unknown" }] } },
+    { ...saved, review: { ...saved.review, layers: [null] } },
     { ...saved, profile: { ...saved.profile, id: 8 } },
     { ...saved, review: { ...saved.review, accepted_basis: basis } },
     { ...saved, review: { ...saved.review, part_groups: null } },

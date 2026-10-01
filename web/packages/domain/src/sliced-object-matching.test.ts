@@ -3,6 +3,7 @@ import {
   suggestSlicedObjectNames,
   interpretSlicedObjectName,
   matchSlicedObjectName,
+  createSlicedObjectMatcher,
 } from "./sliced-object-matching.js";
 
 describe("import name suggestions", () => {
@@ -15,6 +16,54 @@ describe("import name suggestions", () => {
     expect(suggestSlicedObjectNames("mount_left_350.stl", [
       "mount_right_350.stl", "mount_left_250.stl", "mount_left_350_rev.stl",
     ])).toEqual(["mount_left_350_rev.stl"]);
+  });
+});
+
+describe("prepared sliced object matcher", () => {
+  it("preserves path priority and duplicate candidate order", () => {
+    const match = createSlicedObjectMatcher([
+      "kit-b/bracket.stl", "kit-a/bracket.stl", "kit-a/bracket.stl",
+    ]);
+    expect(match("kit-b/bracket.stl")).toEqual({
+      kind: "matched", filename: "kit-b/bracket.stl", basis: "path",
+    });
+    expect(match("bracket.stl")).toEqual({
+      kind: "ambiguous", basis: "filename",
+      filenames: ["kit-b/bracket.stl", "kit-a/bracket.stl", "kit-a/bracket.stl"],
+    });
+    expect(match("kit-a/bracket.stl")).toEqual({
+      kind: "ambiguous", basis: "path",
+      filenames: ["kit-a/bracket.stl", "kit-a/bracket.stl"],
+    });
+  });
+
+  it("owns a snapshot of filenames without freezing the caller's array", () => {
+    const filenames = ["frame_left.stl"];
+    const match = createSlicedObjectMatcher(filenames);
+    filenames.splice(0, 1, "frame_right.stl");
+    expect(match("frame_left.stl_id_7_copy_2")).toEqual({
+      kind: "matched", filename: "frame_left.stl", basis: "filename",
+    });
+    expect(match("frame_right.stl").kind).toBe("unmatched");
+    expect(matchSlicedObjectName("frame_right.stl", filenames)).toEqual({
+      kind: "matched", filename: "frame_right.stl", basis: "filename",
+    });
+  });
+
+  it.each([
+    ["'caf%C3%A9%2Fframe-left.STL.gcode'", ["café/frame_left.stl"]],
+    ["frame_left_02.stl", ["frame_left.stl"]],
+    ["z_tensionr_left.stl", ["z_tensioner_left.stl", "z_tensioner_right.stl"]],
+    ["tensioner_fron.stl", ["tensioner_front.stl", "tensioner_from.stl"]],
+    ["motor_mount_2.stl", ["motor_mount_3.stl"]],
+    ["xy_joint_x.stl", ["xy_joint_y.stl"]],
+    ["%not-a-path", ["not_a_path.stl", "other.stl"]],
+    ["", ["frame_left.stl"]],
+    ["unknown.stl", []],
+  ])("retains scalar matching decisions for %s", (raw, filenames) => {
+    expect(createSlicedObjectMatcher(filenames)(raw)).toEqual(
+      matchSlicedObjectName(raw, filenames),
+    );
   });
 });
 

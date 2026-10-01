@@ -8263,9 +8263,10 @@ export class AppRepository {
       pageCount?: number | null;
       extractError?: string | null;
     },
-  ): void {
-    if (!this.schema.sourceDocs) return;
-    this.db
+    expectedDocId: number,
+  ): boolean {
+    if (!this.schema.sourceDocs) return false;
+    const result = this.db
       .update(this.schema.sourceDocs)
       .set({
         extractStatus: patch.extractStatus,
@@ -8279,9 +8280,11 @@ export class AppRepository {
           eq(this.schema.sourceDocs.tenantId, this.tenantId),
           eq(this.schema.sourceDocs.projectId, projectId),
           eq(this.schema.sourceDocs.path, path),
+          eq(this.schema.sourceDocs.id, expectedDocId),
         ),
       )
       .run();
+    return result.changes === 1;
   }
 
   listPendingPdfDocs(projectId: number): SourceDocSummary[] {

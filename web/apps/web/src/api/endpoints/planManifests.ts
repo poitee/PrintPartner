@@ -1,9 +1,8 @@
 import type {
-  AcceptedPlanBasisContract,
   ManifestSelections,
-  ReviewPart,
 } from "@print-partner/contracts";
-import { parseAcceptedPlanBasis } from "@print-partner/contracts";
+import { parsePlanReview, type PlanReview } from "../planReview";
+export type { PlanReview, PlanReviewIssue, PlanReviewPartGroup } from "../planReview";
 import { engineFetch } from "../engineTransport";
 import type {
   RepoManifestDocument,
@@ -69,47 +68,6 @@ export type ManifestRegistryEntry = {
   manifest_file: string;
 };
 
-export type PlanReviewIssue = {
-  code: string;
-  message: string;
-  severity: "blocker" | "warning";
-  link_hint?: "sources" | "build" | null;
-};
-
-export type PlanReviewLayer = {
-  id: number;
-  layer_type: string;
-  project_id: number | null;
-  project_name: string | null;
-  local_path: string | null;
-  synced: boolean;
-  last_synced_at: string | null;
-};
-
-export type PlanReviewTotals = {
-  included_parts: number;
-  total_print_units: number;
-  by_role: Record<string, number>;
-  by_filament: Record<string, number>;
-};
-
-export type PlanReviewPartGroup = {
-  folder: string;
-  source_layer: string | null;
-  parts: ReviewPart[];
-};
-
-export type PlanReview = {
-  profile_id: number;
-  accepted_basis: AcceptedPlanBasisContract | null;
-  plan_name: string;
-  layers: PlanReviewLayer[];
-  totals: PlanReviewTotals;
-  issues: PlanReviewIssue[];
-  has_blockers: boolean;
-  part_groups: PlanReviewPartGroup[];
-};
-
 type BuildPlanningEvidence = {
   id: string;
   normalized_url: string;
@@ -170,12 +128,7 @@ export async function fetchPlanReview(
   options?: { includeExcluded?: boolean },
 ): Promise<PlanReview> {
   const qs = options?.includeExcluded === true ? "?include_excluded=true" : "";
-  const review = await engineFetch<PlanReview>(`/plans/${profileId}/review${qs}`);
-  return {
-    ...review,
-    accepted_basis:
-      review.accepted_basis == null ? null : parseAcceptedPlanBasis(review.accepted_basis),
-  };
+  return parsePlanReview(await engineFetch<unknown>(`/plans/${profileId}/review${qs}`), profileId);
 }
 
 export async function fetchPlanKitManifest(profileId: number): Promise<KitManifest> {

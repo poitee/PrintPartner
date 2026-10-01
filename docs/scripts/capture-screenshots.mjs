@@ -10,8 +10,7 @@
  * Chrome: set PLAYWRIGHT_CHROMIUM_EXECUTABLE, or install Playwright Chromium:
  *   cd docs/scripts && npm install && npx playwright install chromium
  *
- * For representative kit data without a long-lived app, run:
- *   node web/apps/web/test/browser/capture-fixture-screenshots.mjs
+ * Prepare representative kit data with docs/screenshots/README.md.
  */
 
 import { existsSync } from "node:fs";

@@ -18,7 +18,12 @@ import { loadFleet } from "../services/printer-fleet.js";
 import { parsePrinterUploadMultipart } from "../services/printer-upload-multipart.js";
 import { cleanupPrinterUploadArtifactDir } from "../services/printer-upload-job.js";
 import { ACCEPTED_PLATE_EXPORT_LIMITS } from "../services/accepted-plate-export-delivery.js";
-import { captureAcceptedOperationalExport } from "../services/accepted-operational-export.js";
+import {
+  AcceptedOperationalExportPublicError,
+  acceptedOperationalExportHttpStatus,
+  acceptedOperationalExportPublicError,
+  captureAcceptedOperationalExport,
+} from "../services/accepted-operational-export.js";
 import { DIRECT_EXPORT_3MF_LIMITS } from "../services/accepted-direct-export-3mf.js";
 import type { InProcessJobRunner } from "../services/job-runner.js";
 import { isRecord, positiveSafeInteger } from "./job-route-inputs.js";
@@ -85,7 +90,17 @@ export async function registerJobRoutes(
     if (!repo.getOwnedProfileIdentity(profileId)) return sendProblem(reply, 404, "Not Found", "Build not found");
     const stored = repo.getSetting(`filename_grouping:${profileId}`);
     const definition = stored ? filenameGroupingSchema.parse(JSON.parse(stored)) : miloFilenameGrouping;
-    const capture = captureAcceptedOperationalExport({ repository: repo, profileId });
+    let capture: ReturnType<typeof captureAcceptedOperationalExport>;
+    try {
+      capture = captureAcceptedOperationalExport({ repository: repo, profileId });
+    } catch {
+      const error = new AcceptedOperationalExportPublicError("unexpected");
+      return reply.status(acceptedOperationalExportHttpStatus(error)).send({ detail: error.message, code: error.code });
+    }
+    if (capture.kind !== "ready" && capture.kind !== "empty") {
+      const error = acceptedOperationalExportPublicError(capture);
+      return reply.status(acceptedOperationalExportHttpStatus(error)).send({ detail: error.message, code: error.code });
+    }
     const parts = capture.kind === "ready" ? capture.export.parts.filter((part) => part.included).map((part) => ({
       relativePath: part.relativePath, sourceLayer: part.sourceLayer, role: part.role,
       units: part.units.map((unit) => ({ token: unit.token, completed: unit.completed })),

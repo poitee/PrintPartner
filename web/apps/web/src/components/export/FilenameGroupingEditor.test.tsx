@@ -58,7 +58,7 @@ describe("filename grouping editor", () => {
     const { rerender } = render(<FilenameGroupingEditor profileId={7} onChange={onChange} selectedTokens={["clean", "finished"]} scope="remaining" />);
     await screen.findByLabelText("Grouping name");
     expect(screen.queryByRole("alert")).toBeNull();
-    expect(onChange).toHaveBeenLastCalledWith({ definition, arrangement: "color_group" });
+    await waitFor(() => expect(onChange).toHaveBeenLastCalledWith({ definition, arrangement: "color_group" }));
 
     rerender(<FilenameGroupingEditor profileId={7} onChange={onChange} selectedTokens={["clean", "finished"]} scope="all" />);
     expect(screen.getByRole("alert").textContent).toContain("different groups");

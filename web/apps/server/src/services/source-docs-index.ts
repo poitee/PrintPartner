@@ -115,12 +115,13 @@ export async function extractPendingPdfsForSource(
         );
       },
     });
-    repo.updateSourceDocExtract(projectId, doc.path, {
+    const updated = repo.updateSourceDocExtract(projectId, doc.path, {
       extractStatus: result.status,
       contentHash: result.hash || null,
       pageCount: result.pageCount || null,
       extractError: result.error ?? null,
-    });
+    }, doc.id);
+    if (!updated) continue;
     if (result.status === "ready") extracted += 1;
     else errors += 1;
   }

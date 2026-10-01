@@ -1,6 +1,7 @@
 import base64
 from io import BytesIO
 import stat
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -109,8 +110,8 @@ class SidecarTest(unittest.TestCase):
             sidecar.WORKDIR_ROOT = str(Path(temp_dir) / "jobs")
             try:
                 with patch.object(
-                    sidecar.subprocess,
-                    "run",
+                    sidecar,
+                    "_run_slicer",
                     side_effect=OSError("private path /srv/customer/secrets"),
                 ):
                     response = self._post_model()
@@ -119,6 +120,35 @@ class SidecarTest(unittest.TestCase):
                 self.assertNotIn("private path", response.get_data(as_text=True))
             finally:
                 sidecar.WORKDIR_ROOT = old_workdir
+
+    def test_slice_keeps_job_directory_when_process_cannot_be_reaped(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            fake_slicer = root / "fake-slicer"
+            self._write_slicer(fake_slicer, "sleep 30\n")
+            registry = sidecar.SliceJobs()
+            with (
+                patch.object(sidecar, "SLICER_BIN", str(fake_slicer)),
+                patch.object(sidecar, "WORKDIR_ROOT", str(root / "jobs")),
+                patch.object(sidecar, "jobs", registry),
+            ):
+                try:
+                    with (
+                        patch.object(subprocess.Popen, "communicate", side_effect=subprocess.TimeoutExpired("slicer", 1)),
+                        patch.object(subprocess.Popen, "wait", side_effect=subprocess.TimeoutExpired("slicer", 4)),
+                    ):
+                        response = self._post_model()
+                    self.assertEqual(response.status_code, 504)
+                    self.assertEqual(len(registry.active), 1)
+                    job_dir, job = next(iter(registry.active.items()))
+                    self.assertTrue(job_dir.is_dir())
+                    self.assertFalse(job.process_cleaned)
+                    self.assertTrue(job.process.stdout.closed)
+                    self.assertTrue(job.process.stderr.closed)
+                finally:
+                    for job in registry.active.values():
+                        if job.process is not None:
+                            job.process.wait(timeout=2)
 
     def test_health_is_unhealthy_when_slicer_binary_is_missing(self):
         old_bin = sidecar.SLICER_BIN

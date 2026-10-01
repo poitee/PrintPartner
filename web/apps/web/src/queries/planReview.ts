@@ -8,6 +8,13 @@ import { queryKeys } from "./keys";
 import { invalidateProfiles } from "./profiles";
 import { invalidateRoleFilaments } from "./roleFilaments";
 
+type ReviewMutationContext = {
+  profileId: number | null;
+  includeExcluded: boolean;
+  key?: ReturnType<typeof queryKeys.planReview>;
+  previous?: PlanReview;
+};
+
 export function usePlanReviewQuery(
   profileId: number | null,
   options?: { includeExcluded?: boolean; enabled?: boolean },
@@ -53,11 +60,12 @@ export function usePatchPartMutation(profileId: number | null) {
       partId: number;
       body: Parameters<typeof patchPart>[1];
     }) => patchPart(partId, body),
-    onSuccess: () => {
-      if (profileId != null) {
-        void invalidatePlanReview(qc, profileId);
+    onMutate: () => ({ profileId }),
+    onSuccess: (_part, _variables, context) => {
+      if (context?.profileId != null) {
+        void invalidatePlanReview(qc, context.profileId);
         void invalidateProfiles(qc);
-        void invalidateRoleFilaments(qc, profileId);
+        void invalidateRoleFilaments(qc, context.profileId);
       }
     },
   });
@@ -79,8 +87,9 @@ export function usePatchPartProgressMutation(
       completed: boolean;
       optimisticReview?: PlanReview;
     }) => patchPartProgress(partId, unitIndex, completed),
-    onMutate: async ({ partId, unitIndex, completed, optimisticReview }) => {
-      if (profileId == null || !optimisticReview) return undefined;
+    onMutate: async ({ partId, unitIndex, completed, optimisticReview }): Promise<ReviewMutationContext> => {
+      const context = { profileId, includeExcluded };
+      if (profileId == null || !optimisticReview) return context;
       const key = queryKeys.planReview(profileId, includeExcluded);
       await qc.cancelQueries({ queryKey: key });
       const previous = qc.getQueryData<PlanReview>(key);
@@ -108,7 +117,7 @@ export function usePatchPartProgressMutation(
           }),
         );
       }
-      return { previous, key };
+      return { ...context, previous, key };
     },
     onError: (_err, _vars, ctx) => {
       if (!ctx?.key) return;
@@ -120,6 +129,7 @@ export function usePatchPartProgressMutation(
       }
     },
     onSuccess: (progress, { partId }, ctx) => {
+      const profileId = ctx?.profileId;
       if (profileId == null) return;
       if (ctx?.key) {
         const current = qc.getQueryData<PlanReview>(ctx.key);
@@ -138,10 +148,10 @@ export function usePatchPartProgressMutation(
         }
       } else {
         void qc.invalidateQueries({
-          queryKey: queryKeys.planReview(profileId, includeExcluded),
+          queryKey: queryKeys.planReview(profileId, ctx.includeExcluded),
         });
       }
-      void invalidateOtherPlanReviewVariants(qc, profileId, includeExcluded);
+      void invalidateOtherPlanReviewVariants(qc, profileId, ctx.includeExcluded);
       void invalidateProfiles(qc);
     },
   });
@@ -163,8 +173,9 @@ export function usePatchPartAssembledMutation(
       assembled: boolean;
       optimisticReview?: PlanReview;
     }) => patchPartAssembled(partId, unitIndex, assembled),
-    onMutate: async ({ partId, unitIndex, assembled, optimisticReview }) => {
-      if (profileId == null || !optimisticReview) return undefined;
+    onMutate: async ({ partId, unitIndex, assembled, optimisticReview }): Promise<ReviewMutationContext> => {
+      const context = { profileId, includeExcluded };
+      if (profileId == null || !optimisticReview) return context;
       const key = queryKeys.planReview(profileId, includeExcluded);
       await qc.cancelQueries({ queryKey: key });
       const previous = qc.getQueryData<PlanReview>(key);
@@ -183,7 +194,7 @@ export function usePatchPartAssembledMutation(
           }),
         );
       }
-      return { previous, key };
+      return { ...context, previous, key };
     },
     onError: (_err, _vars, ctx) => {
       if (!ctx?.key) return;
@@ -195,6 +206,7 @@ export function usePatchPartAssembledMutation(
       }
     },
     onSuccess: (progress, { partId }, ctx) => {
+      const profileId = ctx?.profileId;
       if (profileId == null) return;
       if (ctx?.key) {
         const current = qc.getQueryData<PlanReview>(ctx.key);
@@ -208,10 +220,10 @@ export function usePatchPartAssembledMutation(
         }
       } else {
         void qc.invalidateQueries({
-          queryKey: queryKeys.planReview(profileId, includeExcluded),
+          queryKey: queryKeys.planReview(profileId, ctx.includeExcluded),
         });
       }
-      void invalidateOtherPlanReviewVariants(qc, profileId, includeExcluded);
+      void invalidateOtherPlanReviewVariants(qc, profileId, ctx.includeExcluded);
     },
   });
 }

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { act, renderHook } from "@testing-library/react";
-import { createElement, type PropsWithChildren } from "react";
+import { createElement, StrictMode, type PropsWithChildren } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import {
@@ -33,7 +33,9 @@ const second = parseRequiredUnitTokenContract(`ppu_${"b".repeat(32)}`);
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
 function wrapper({ children }: PropsWithChildren) {
-  return createElement(QueryClientProvider, { client: queryClient }, children);
+  return createElement(QueryClientProvider, { client: queryClient },
+    createElement(StrictMode, null, children),
+  );
 }
 
 function unit(token: RequiredUnitToken, completed = false): ProductionSelectableUnit {
@@ -92,6 +94,45 @@ describe("useProductionSelection", () => {
     );
 
     expect([...result.current.selection]).toEqual([second]);
+  });
+
+  it("saves one selection change once in StrictMode", () => {
+    setupState.data = cachedSetup({ mode: "custom", selected_unit_tokens: [first] });
+    const { result } = renderHook(
+      () => useProductionSelection([unit(first), unit(second)], null, 7),
+      { wrapper },
+    );
+
+    act(() => result.current.setSelection((current) => new Set([...current, second])));
+
+    expect(setupState.save).toHaveBeenCalledExactlyOnceWith({
+      kind: "set_selection",
+      selection: { mode: "custom", selected_unit_tokens: [first, second] },
+    });
+  });
+
+  it("keeps rapid functional selection changes and saves each once", () => {
+    setupState.data = cachedSetup({ mode: "custom", selected_unit_tokens: [first] });
+    const { result } = renderHook(
+      () => useProductionSelection([unit(first), unit(second)], null, 7),
+      { wrapper },
+    );
+
+    act(() => {
+      result.current.setSelection((current) => new Set([...current, second]));
+      result.current.setSelection((current) => new Set([...current].filter((token) => token !== first)));
+    });
+
+    expect([...result.current.selection]).toEqual([second]);
+    expect(setupState.save).toHaveBeenCalledTimes(2);
+    expect(setupState.save).toHaveBeenNthCalledWith(1, {
+      kind: "set_selection",
+      selection: { mode: "custom", selected_unit_tokens: [first, second] },
+    });
+    expect(setupState.save).toHaveBeenNthCalledWith(2, {
+      kind: "set_selection",
+      selection: { mode: "custom", selected_unit_tokens: [second] },
+    });
   });
 
   it("preserves manual selection across workspace-only refetches", () => {

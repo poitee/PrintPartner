@@ -115,18 +115,16 @@ async function buildCandidatesFromObjectNames(
   if (!objectNames.length) return [];
 
   const profiles = repo.listProfileHeaders();
-  const allFilenames: string[] = [];
+  const allFilenames = new Set<string>();
   for (const profile of profiles) {
     const { parts } = repo.listParts(profile.id, 10000, 0);
     for (const part of parts) {
-      if (part.filename && !allFilenames.includes(part.filename)) {
-        allFilenames.push(part.filename);
-      }
+      if (part.filename) allFilenames.add(part.filename);
     }
   }
 
   const grouped = groupObjectsByPart(objectNames);
-  const matched = matchObjectsToFilenames(grouped, allFilenames);
+  const matched = matchObjectsToFilenames(grouped, [...allFilenames]);
 
   const candidates: Array<{
     stl_basename: string;
@@ -809,17 +807,15 @@ export async function registerPrinterCheckoffRoutes(
       ) {
         const normalizedFilename = normalizePrinterFilename(status.filename);
         // Check if we already stored this as unattributed
-        const existing = listUnattributedPrints(deps.repo).find(
-          (p) =>
-            p.integration_id === integrationId &&
-            normalizePrinterFilename(p.filename) === normalizedFilename,
-        );
-        const existingLink = loadPrinterCheckoffLinks(deps.repo).find(
-          (link) =>
-            link.integration_id === integrationId &&
-            normalizePrinterFilename(link.filename) === normalizedFilename,
-        );
-        if (!existing && !existingLink) {
+        const alreadyTracked = () =>
+          listUnattributedPrints(deps.repo).some(
+            (p) => p.integration_id === integrationId &&
+              normalizePrinterFilename(p.filename) === normalizedFilename,
+          ) || loadPrinterCheckoffLinks(deps.repo).some(
+            (link) => link.integration_id === integrationId &&
+              normalizePrinterFilename(link.filename) === normalizedFilename,
+          );
+        if (!alreadyTracked()) {
           const objectNames = await getObjectListForIntegration(
             deps.repo,
             integrationId,
@@ -828,15 +824,17 @@ export async function registerPrinterCheckoffRoutes(
             deps.repo,
             objectNames,
           );
-          const unattributedPrint = createUnattributedPrint(
-            integrationId,
-            "default",
-            integrationSummary.name || "Printer",
-            status.filename,
-            objectNames,
-            candidates,
-          );
-          saveUnattributedPrint(deps.repo, unattributedPrint);
+          if (!alreadyTracked()) {
+            const unattributedPrint = createUnattributedPrint(
+              integrationId,
+              "default",
+              integrationSummary.name || "Printer",
+              status.filename,
+              objectNames,
+              candidates,
+            );
+            saveUnattributedPrint(deps.repo, unattributedPrint);
+          }
         }
       }
 

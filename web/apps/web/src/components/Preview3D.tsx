@@ -408,7 +408,7 @@ export default function Preview3D({
         }
         if (appearance === "studio") {
           renderer.shadowMap.enabled = true;
-          renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+          renderer.shadowMap.type = THREE.PCFShadowMap;
           renderer.outputColorSpace = THREE.SRGBColorSpace;
           // No tone mapping anywhere: ACES desaturates highlights, which would
           // report a filament colour the user never loaded, and would make this

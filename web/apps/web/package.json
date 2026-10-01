@@ -9,10 +9,10 @@
     "preview": "vite preview",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "test:browser:filename-grouping": "node test/browser/filename-grouping.browser.mjs",
+    "test:browser:filename-grouping": "node test/browser/filename-grouping.isolated.mjs",
     "test:browser:part-color": "node test/browser/part-color.isolated.mjs",
-    "test:browser": "node test/browser/skip-link.browser.mjs && node test/browser/checkoff-sheet-dark.browser.mjs && node test/browser/filament-preview-colors.browser.mjs && node test/browser/stl-orientation.browser.mjs && node test/browser/thumbnail-recovery.browser.mjs && node test/browser/filename-grouping.isolated.mjs && node test/browser/part-color.isolated.mjs",
-    "test:bundles": "node scripts/route-bundles.mjs"
+    "test:browser": "node --experimental-vm-modules --test test/isolated-startup.test.mjs && node test/browser/skip-link.browser.mjs && node test/browser/checkoff-sheet-dark.browser.mjs && node test/browser/filament-preview-colors.browser.mjs && node test/browser/stl-orientation.browser.mjs && node test/browser/thumbnail-recovery.browser.mjs && node test/browser/filename-grouping.isolated.mjs && node test/browser/part-color.isolated.mjs",
+    "test:bundles": "node --test test/route-bundles.test.mjs && node scripts/route-bundles.mjs"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

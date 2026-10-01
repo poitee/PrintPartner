@@ -1,14 +1,16 @@
 // @vitest-environment jsdom
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, renderHook, waitFor } from "@testing-library/react";
-import { patchPartProgress } from "../api/endpoints/checkoff";
-import { describe, expect, it, vi } from "vitest";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { patchPartAssembled, patchPartProgress } from "../api/endpoints/checkoff";
+import { patchPart } from "../api/endpoints/plans";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import type { PlanReview } from "../api/endpoints/planManifests";
 import { queryKeys } from "./keys";
 import {
   usePatchPartAssembledMutation,
+  usePatchPartMutation,
   usePatchPartProgressMutation,
 } from "./planReview";
 
@@ -178,5 +180,54 @@ describe("Plan review mutations", () => {
     expect(
       queryClient.getQueryState(queryKeys.planReview(1, false))?.isInvalidated,
     ).toBe(true);
+  });
+});
+
+function pendingQuerySave<T>() {
+  let resolve: ((value: T) => void) | undefined;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  if (!resolve) throw new Error("Deferred mutation absent");
+  return { promise, resolve };
+}
+afterEach(cleanup);
+describe("Plan mutation Build ownership", () => {
+  it.each((["progress", "assembly"] as const).flatMap((kind) =>
+    [false, true].flatMap((includeExcluded) => [2, null].map((nextProfileId) => ({ kind, includeExcluded, nextProfileId }))),
+  ))("preserves $kind ownership with excluded=$includeExcluded after switching to $nextProfileId", async ({ kind, includeExcluded, nextProfileId }) => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    queryClient.setQueryData(queryKeys.planReview(1, includeExcluded), review);
+    queryClient.setQueryData(queryKeys.planReview(1, !includeExcluded), review);
+    queryClient.setQueryData(queryKeys.planReview(2, !includeExcluded), { ...review, profile_id: 2 });
+    const pending = pendingQuerySave<{ printed_count: number; print_units: boolean[]; assembled_count: number; assembled_units: boolean[]; missing: boolean }>();
+    if (kind === "progress") vi.mocked(patchPartProgress).mockReturnValueOnce(pending.promise);
+    else vi.mocked(patchPartAssembled).mockReturnValueOnce(pending.promise);
+    const hook = renderHook(({ profileId }) => {
+      const progress = usePatchPartProgressMutation(profileId, includeExcluded);
+      const assembly = usePatchPartAssembledMutation(profileId, includeExcluded);
+      return kind === "progress" ? progress : assembly;
+    }, { initialProps: { profileId: 1 as number | null }, wrapper: wrapper(queryClient) });
+    let save: Promise<unknown> | undefined;
+    act(() => { save = hook.result.current.mutateAsync({ partId: 42, unitIndex: 0, completed: true, assembled: true, optimisticReview: review }); });
+    await waitFor(() => expect(hook.result.current.isPending).toBe(true));
+    hook.rerender({ profileId: nextProfileId });
+    await act(async () => { pending.resolve({ printed_count: 1, print_units: [true], assembled_count: 1, assembled_units: [true], missing: false }); await save; });
+    expect(queryClient.getQueryState(queryKeys.planReview(1, !includeExcluded))?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(queryKeys.planReview(2, !includeExcluded))?.isInvalidated).toBe(false);
+    hook.unmount();
+  });
+  it.each([2, null])("invalidates the original part-edit Build after switching to %s", async (nextProfileId) => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(queryKeys.planReview(1, false), review);
+    queryClient.setQueryData(queryKeys.planReview(2, false), { ...review, profile_id: 2 });
+    const pending = pendingQuerySave<Awaited<ReturnType<typeof patchPart>>>();
+    vi.mocked(patchPart).mockReturnValueOnce(pending.promise);
+    const hook = renderHook(({ profileId }) => usePatchPartMutation(profileId), { initialProps: { profileId: 1 as number | null }, wrapper: wrapper(queryClient) });
+    let save: Promise<unknown> | undefined;
+    act(() => { save = hook.result.current.mutateAsync({ partId: 42, body: { spoolman_spool_id: "4" } }); });
+    await waitFor(() => expect(hook.result.current.isPending).toBe(true));
+    hook.rerender({ profileId: nextProfileId });
+    await act(async () => { pending.resolve({ ...review.part_groups[0]!.parts[0]! }); await save; });
+    expect(queryClient.getQueryState(queryKeys.planReview(1, false))?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(queryKeys.planReview(2, false))?.isInvalidated).toBe(false);
   });
 });

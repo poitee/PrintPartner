@@ -34,4 +34,33 @@ describe("references-only Share panel", () => {
     expect((await screen.findByRole("alert")).textContent).toContain("Source unavailable");
     expect(screen.queryByRole("button", { name: "Download manifest" })).toBeNull();
   });
+  it("rejects oversized manifests before reading or sending their contents", async () => {
+    render(<ReferenceSharePanel profileId={7} />);
+    await screen.findByRole("button", { name: "Download manifest" });
+    const text = vi.fn();
+    fireEvent.change(screen.getByLabelText("Choose reference manifest JSON"), {
+      target: { files: [{ size: 4 * 1024 * 1024 + 1, text }] },
+    });
+    expect((await screen.findByRole("alert")).textContent).toContain("4 MiB");
+    expect(text).not.toHaveBeenCalled();
+    expect(engineFetch).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/^Valid /)).toBeNull();
+  });
+  it("allows the same received file to be retried after validation fails", async () => {
+    render(<ReferenceSharePanel profileId={7} />);
+    await screen.findByRole("button", { name: "Download manifest" });
+    vi.mocked(engineFetch).mockRejectedValueOnce(new Error("Invalid manifest JSON"));
+    const file = { size: 12, text: vi.fn().mockResolvedValue("{invalid") };
+    const input = screen.getByLabelText("Choose reference manifest JSON") as HTMLInputElement;
+    fireEvent.change(input, { target: { files: [file] } });
+    expect((await screen.findByRole("alert")).textContent).toContain("Invalid manifest JSON");
+    expect(input.value).toBe("");
+    expect(input.disabled).toBe(false);
+    expect(screen.queryByText(/^Valid /)).toBeNull();
+    vi.mocked(engineFetch).mockResolvedValueOnce({ manifest: { ...manifest, kind: "collection" }, warnings: [] });
+    fireEvent.change(input, { target: { files: [file] } });
+    expect(await screen.findByText(/Valid collection: My Build/)).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(engineFetch).toHaveBeenCalledTimes(3);
+  });
 });

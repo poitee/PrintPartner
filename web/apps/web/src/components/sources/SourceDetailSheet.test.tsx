@@ -6,6 +6,8 @@ import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_STL_NAMING_PROFILE, type SourceSummary } from "@print-partner/contracts";
 import SourceDetailSheet from "./SourceDetailSheet";
+import { queryClient } from "../../queries/queryClient";
+import { ContractRequestError } from "../../api/contractRequest";
 import { LibraryDraftProvider } from "../../context/LibraryDraftContext";
 
 const { api } = vi.hoisted(() => ({
@@ -54,6 +56,9 @@ vi.mock("../ImportRulesTree", () => ({
       </button>
       <button type="button" onClick={() => onRulesChange(["second-source/**"])}>
         Change rule draft again
+      </button>
+      <button type="button" onClick={() => onRulesChange(["original/**"])}>
+        Restore original rules
       </button>
     </>
   ),
@@ -429,6 +434,7 @@ describe("SourceDetailSheet loading", () => {
   it("keeps the Source sheet open when the user cancels discarding unsaved rules", async () => {
     api.fetchSourceDocs.mockResolvedValue([]);
     api.fetchImportRules.mockResolvedValue({ rules: ["original/**"] });
+    api.saveImportRules.mockResolvedValue({ rules: ["first-source/**"] });
     const onOpenChange = vi.fn();
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
     try {
@@ -441,6 +447,34 @@ describe("SourceDetailSheet loading", () => {
       fireEvent.click(screen.getByRole("button", { name: "Close source details" }));
       expect(confirm).toHaveBeenCalledOnce();
       expect(onOpenChange).not.toHaveBeenCalled();
+      expect(api.saveImportRules).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole("button", { name: "Save rules" }));
+      await waitFor(() => expect(api.saveImportRules).toHaveBeenCalledWith(1, ["first-source/**"]));
+    } finally {
+      confirm.mockRestore();
+    }
+  });
+
+  it("closes without confirming or saving after restoring the original import rules", async () => {
+    api.fetchSourceDocs.mockResolvedValue([]);
+    api.fetchImportRules.mockResolvedValue({ rules: ["original/**"] });
+    const onOpenChange = vi.fn();
+    const runImportScan = vi.fn();
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    try {
+      render(
+        <SourceDetailSheet {...baseProps} onOpenChange={onOpenChange} runImportScan={runImportScan} tab="rules" source={source(1, "Source")} />,
+        { wrapper: createQueryWrapper() },
+      );
+      await waitFor(() => expect((screen.getByRole("button", { name: "Save rules" }) as HTMLButtonElement).disabled).toBe(false));
+      fireEvent.click(screen.getByRole("button", { name: "Change rule draft" }));
+      fireEvent.click(screen.getByRole("button", { name: "Restore original rules" }));
+      fireEvent.click(screen.getByRole("button", { name: "Close source details" }));
+
+      expect(confirm).not.toHaveBeenCalled();
+      expect(onOpenChange).toHaveBeenCalledWith(false);
+      expect(api.saveImportRules).not.toHaveBeenCalled();
+      expect(runImportScan).not.toHaveBeenCalled();
     } finally {
       confirm.mockRestore();
     }
@@ -513,5 +547,81 @@ describe("SourceDetailSheet loading", () => {
     await waitFor(() =>
       expect((screen.getByRole("checkbox", { name: "Use app default naming rules" }) as HTMLButtonElement).disabled).toBe(false),
     );
+  });
+});
+
+describe("Source naming recovery", () => {
+  beforeEach(() => {
+    for (const mock of Object.values(api)) mock.mockReset();
+    api.fetchSourceDocs.mockResolvedValue([]);
+    api.fetchSourceNotes.mockResolvedValue([]);
+    api.fetchStlNaming.mockResolvedValue(DEFAULT_STL_NAMING_PROFILE);
+
+  });
+  afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+  it("reloads a naming save after returning while it is still pending", async () => {
+    const original = { use_defaults: true, override: {}, effective: DEFAULT_STL_NAMING_PROFILE, effective_digest: "0".repeat(64) };
+    const saved = { ...original, use_defaults: false, override: DEFAULT_STL_NAMING_PROFILE };
+    let stored = original;
+    const pending = deferred<typeof saved>();
+    api.fetchSourceNaming.mockImplementation(() => Promise.resolve(stored));
+    api.saveSourceNaming.mockReturnValueOnce(pending.promise);
+    const view = render(<SourceDetailSheet {...baseProps} tab="naming" source={source(1, "A")} />, { wrapper: createQueryWrapper() });
+    await waitFor(() => expect(screen.getByRole("checkbox", { name: "Use app default naming rules" })).toHaveProperty("disabled", false));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Use app default naming rules" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save naming" }));
+    expect(api.saveSourceNaming).toHaveBeenCalledTimes(1);
+    view.rerender(<SourceDetailSheet {...baseProps} tab="naming" source={source(2, "B")} />);
+    await waitFor(() => expect(screen.getByRole("checkbox", { name: "Use app default naming rules" })).toHaveProperty("disabled", false));
+    view.rerender(<SourceDetailSheet {...baseProps} tab="naming" source={source(1, "A")} />);
+    expect(api.fetchSourceNaming).toHaveBeenCalledTimes(2);
+    await act(async () => { stored = saved; pending.resolve(saved); await pending.promise; });
+    expect(screen.getByRole("checkbox", { name: "Use app default naming rules" }).getAttribute("data-state")).toBe("unchecked");
+  });
+  it("invalidates Build summaries when a naming save completes after the sheet closes", async () => {
+    const original = { use_defaults: true, override: {}, effective: DEFAULT_STL_NAMING_PROFILE, effective_digest: "0".repeat(64) };
+    const saved = { ...original, use_defaults: false, override: DEFAULT_STL_NAMING_PROFILE };
+    const pending = deferred<typeof saved>();
+    const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+    api.fetchSourceNaming.mockResolvedValue(original);
+    api.saveSourceNaming.mockReturnValueOnce(pending.promise);
+    const view = render(<SourceDetailSheet {...baseProps} tab="naming" source={source(1, "A")} />, { wrapper: createQueryWrapper() });
+    await waitFor(() => expect(screen.getByRole("checkbox", { name: "Use app default naming rules" })).toHaveProperty("disabled", false));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Use app default naming rules" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save naming" }));
+    view.rerender(<SourceDetailSheet {...baseProps} tab="naming" open={false} source={source(1, "A")} />);
+    await act(async () => { pending.resolve(saved); await pending.promise; });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["profiles"] });
+  });
+  it("offers an in-place retry after transient naming load failure", async () => {
+    api.fetchSourceNaming.mockRejectedValueOnce(new Error("Naming temporarily offline"));
+    render(<SourceDetailSheet {...baseProps} tab="naming" source={source(1, "A")} />, { wrapper: createQueryWrapper() });
+    expect(await screen.findByText("Source naming request failed.")).toBeTruthy();
+    api.fetchSourceNaming.mockResolvedValue({ use_defaults: true, override: {}, effective: DEFAULT_STL_NAMING_PROFILE, effective_digest: "0".repeat(64) });
+    fireEvent.click(screen.getByRole("button", { name: "Retry loading Source naming" }));
+    await waitFor(() => expect(screen.getByRole("checkbox", { name: "Use app default naming rules" })).toHaveProperty("disabled", false));
+    expect(api.fetchSourceNaming).toHaveBeenCalledTimes(2);
+  });
+  it("keeps a missing Source unavailable instead of offering naming retry", async () => {
+    api.fetchSourceNaming.mockRejectedValue(new ContractRequestError({ kind: "endpoint", method: "GET", route: "/sources/:sourceId/naming", status: 404, error: { code: "source_not_found" } }));
+    render(<SourceDetailSheet {...baseProps} tab="naming" source={source(1, "A")} />, { wrapper: createQueryWrapper() });
+    expect(await screen.findByRole("alert")).toHaveProperty("textContent", "Unable to load naming overrides because this Source no longer exists.");
+    expect(screen.queryByRole("button", { name: "Retry loading Source naming" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Save naming" })).toHaveProperty("disabled", true);
+  });
+  it("retains a failed naming save draft for Save naming instead of reloading it", async () => {
+    api.fetchSourceDocs.mockResolvedValue([]);
+    api.fetchSourceNotes.mockResolvedValue([]);
+    api.fetchStlNaming.mockResolvedValue(DEFAULT_STL_NAMING_PROFILE);
+    api.fetchSourceNaming.mockResolvedValue({ use_defaults: true, override: {}, effective: DEFAULT_STL_NAMING_PROFILE, effective_digest: "0".repeat(64) });
+    api.saveSourceNaming.mockRejectedValueOnce(new Error("Save offline"));
+    render(<SourceDetailSheet {...baseProps} tab="naming" source={source(1, "A")} />, { wrapper: createQueryWrapper() });
+    await waitFor(() => expect(screen.getByRole("checkbox", { name: "Use app default naming rules" })).toHaveProperty("disabled", false));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Use app default naming rules" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save naming" }));
+    expect(await screen.findByRole("alert")).toHaveProperty("textContent", "Source naming request failed.");
+    expect(screen.queryByRole("button", { name: "Retry loading Source naming" })).toBeNull();
+    expect(screen.getByRole("checkbox", { name: "Use app default naming rules" }).getAttribute("data-state")).toBe("unchecked");
+    expect(screen.getByRole("button", { name: "Save naming" })).toHaveProperty("disabled", false);
   });
 });

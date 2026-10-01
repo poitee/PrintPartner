@@ -217,23 +217,35 @@ export function suggestSlicedObjectNames(rawName: string, filenames: readonly st
     .slice(0, 3).map((row) => row.filename);
 }
 
-/**
- * Match one slicer label to library filenames. Exact path and basename evidence
- * wins; bounded fuzzy matching is allowed only for a unique semantic match.
- */
+function indexFilenames(filenames: readonly string[]): readonly IndexedFilename[] {
+  return filenames.map((filename) => ({
+    filename,
+    interpreted: interpretSlicedObjectName(filename),
+  }));
+}
+
+export function createSlicedObjectMatcher(
+  libraryFilenames: readonly string[],
+): (rawName: string) => SlicedObjectNameMatch {
+  const index = indexFilenames(libraryFilenames);
+  return (rawName) => matchIndexedName(interpretSlicedObjectName(rawName), index);
+}
+
 export function matchSlicedObjectName(
   rawName: string,
   libraryFilenames: readonly string[],
 ): SlicedObjectNameMatch {
   const observed = interpretSlicedObjectName(rawName);
   if (!observed.basenameKey) return { kind: "unmatched", suggestions: [] };
-  const indexed = libraryFilenames.map((filename) => ({
-    filename,
-    interpreted: interpretSlicedObjectName(filename),
-  }));
+  return matchIndexedName(observed, indexFilenames(libraryFilenames));
+}
 
-  const hasObservedPath = observed.pathKey.includes("/");
-  if (hasObservedPath) {
+function matchIndexedName(
+  observed: InterpretedSlicedObjectName,
+  indexed: readonly IndexedFilename[],
+): SlicedObjectNameMatch {
+  if (!observed.basenameKey) return { kind: "unmatched", suggestions: [] };
+  if (observed.pathKey.includes("/")) {
     const path = exactOutcome(
       "path",
       indexed.filter((row) => row.interpreted.pathKey === observed.pathKey),

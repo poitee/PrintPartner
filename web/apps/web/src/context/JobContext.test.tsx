@@ -165,3 +165,16 @@ describe("JobProvider terminal retention", () => {
     expect(queryClient.getQueryState(queryKeys.acceptedPlateExportJobs(7))?.isInvalidated).toBe(true);
   });
 });
+
+it("reports a job-start rejection once with the same local failure identity", async () => {
+  const queryClient = new QueryClient();
+  const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={queryClient}><JobProvider>{children}</JobProvider></QueryClientProvider>;
+  const { result } = renderHook(useJobContext, { wrapper });
+  const onDone = vi.fn();
+  const websocketCalls = vi.mocked(connectJobWebSocket).mock.calls.length;
+  await act(async () => { await result.current.runJob("printer-upload", () => Promise.reject(new Error("Printer request offline")), onDone, { profileId: 7, sourceIds: [3] }); });
+  const job = result.current.activeJobs[0];
+  expect(job).toMatchObject({ status: "error", message: "Printer request offline", profileId: 7, sourceIds: [3] });
+  expect(onDone).toHaveBeenCalledExactlyOnceWith({ job_id: job?.jobId, kind: "printer-upload", status: "error", message: "Printer request offline", error: "Printer request offline", progress: null, result: null });
+  expect(connectJobWebSocket).toHaveBeenCalledTimes(websocketCalls);
+});
