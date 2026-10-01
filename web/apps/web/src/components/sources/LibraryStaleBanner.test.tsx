@@ -25,10 +25,7 @@ describe("LibraryStaleBanner", () => {
     expect(alert.textContent).toContain("3 sources moved upstream.");
     expect(alert.textContent).toContain("1 of them is in your plan.");
 
-    // The banner used to be one big <button>, which cannot legally contain
-    // role="alert". The action is a real control now, named for what it does
-    // rather than inheriting the whole sentence as its accessible name.
-    const action = screen.getByRole("button", { name: "See what changed" });
+    const action = screen.getByRole("button", { name: "View synced docs" });
     await userEvent.click(action);
     expect(onSeeChanges).toHaveBeenCalledTimes(1);
   });

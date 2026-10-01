@@ -9,7 +9,6 @@ type Props = {
   className?: string;
 };
 
-/** Banner when upstream GitHub sources have moved since last sync. */
 export default function LibraryStaleBanner({
   staleCount,
   attachedStaleCount = 0,
@@ -32,7 +31,7 @@ export default function LibraryStaleBanner({
       <AlertDescription>{detail}</AlertDescription>
       <AlertActions>
         <Button size="sm" variant="outline" onClick={onSeeChanges}>
-          See what changed
+          View synced docs
         </Button>
       </AlertActions>
     </Alert>

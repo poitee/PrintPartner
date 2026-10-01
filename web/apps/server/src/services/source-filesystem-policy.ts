@@ -39,9 +39,14 @@ export function resolveSourceFilesystemRoot(
 
   const workspace = sourceWorkspaceRoot(reposDir, sourceId);
   const candidate = resolve(storedPath);
-  if (candidate !== workspace && !candidate.startsWith(`${workspace}${sep}`)) return null;
 
   try {
+    const canonicalConfiguredWorkspace = sourceWorkspaceRoot(realpathSync(reposDir), sourceId);
+    if (
+      candidate !== workspace && !candidate.startsWith(`${workspace}${sep}`) &&
+      candidate !== canonicalConfiguredWorkspace &&
+      !candidate.startsWith(`${canonicalConfiguredWorkspace}${sep}`)
+    ) return null;
     const workspaceStat = lstatSync(workspace);
     if (workspaceStat.isSymbolicLink() || !workspaceStat.isDirectory()) return null;
     const canonicalWorkspace = realpathSync(workspace);

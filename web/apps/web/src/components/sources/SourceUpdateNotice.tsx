@@ -34,12 +34,7 @@ function activityNotice(event: SourceActivityEvent | undefined): Notice | null {
         tone: "failure",
       };
     case "source.update_available":
-      return {
-        signature: `event:${event.id}`,
-        title: `${event.source_name} has an update`,
-        detail: "Review or sync it in Source Library.",
-        tone: "update",
-      };
+      return null;
     default: {
       const _exhaustive: never = event.kind;
       return _exhaustive;
