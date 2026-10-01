@@ -106,6 +106,7 @@ export async function registerSourceDocsRoutes(
       const pdfTextStorage = sourcePdfTextStorage(deps.repo, id, row.localPath);
       let cached = readCachedPdfText(row.localPath, docPath, pdfTextStorage);
       if (!cached) {
+        const indexedDocId = deps.repo.listSourceDocs(id).find((doc) => doc.path === docPath)?.id;
         const extracted = await runWithTenantDiskQuota({
           dataDir: deps.diskQuota?.dataDir ?? "", reposDir: deps.repo.reposDir,
           tenantId: request.tenantId, quotaBytes: deps.diskQuota?.quotaBytes ?? null,
@@ -120,12 +121,14 @@ export async function registerSourceDocsRoutes(
         if (!extracted) return;
         if (extracted.status === "ready") {
           cached = { text: extracted.text, chunks: extracted.chunks, hash: extracted.hash };
-          deps.repo.updateSourceDocExtract(id, docPath, {
-            extractStatus: "ready",
-            contentHash: extracted.hash,
-            pageCount: extracted.pageCount,
-            extractError: null,
-          });
+          if (indexedDocId != null) {
+            deps.repo.updateSourceDocExtract(id, docPath, {
+              extractStatus: "ready",
+              contentHash: extracted.hash,
+              pageCount: extracted.pageCount,
+              extractError: null,
+            }, indexedDocId);
+          }
         } else {
           return reply.status(500).send({
             detail: extracted.error ?? "PDF text extraction failed",

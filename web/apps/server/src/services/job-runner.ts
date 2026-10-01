@@ -674,7 +674,8 @@ export class InProcessJobRunner {
           profileName: recipe.profile.name,
           exportsDir: this.getExportsDir(),
         });
-      } catch {
+      } catch (error) {
+        if (error instanceof TenantDiskQuotaError) throw error;
         throw new AcceptedOperationalExportPublicError("export_output_failure");
       }
       return {

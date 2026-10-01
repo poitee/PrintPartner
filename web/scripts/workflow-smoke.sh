@@ -66,8 +66,9 @@ wait_job() {
 }
 
 echo "== 0. GET /health =="
-request -s -w "\nHTTP:%{http_code}\n" "$BASE/health" | tee /tmp/pp-smoke-health.txt
-grep -q '"ok":true' /tmp/pp-smoke-health.txt
+HEALTH_RESP=$(request -s -w "\nHTTP:%{http_code}\n" "$BASE/health")
+printf '%s\n' "$HEALTH_RESP"
+grep -q '"ok":true' <<< "$HEALTH_RESP"
 
 echo "== 1. POST /sources =="
 if [[ "$SOURCE_KIND" == "local" ]]; then

@@ -868,6 +868,63 @@ describe("printer progress route", () => {
     });
   });
 
+  async function pendingExternalCompletion() {
+    const f = await setup();
+    const adapter = getIntegrationAdapter("prusalink")!;
+    const status = vi.spyOn(adapter, "getStatus").mockResolvedValue({
+      state: "complete", filename: "external.bgcode",
+    });
+    const objectReads: Array<(objects: string[]) => void> = [];
+    const objects = vi.spyOn(adapter, "getObjectList").mockImplementation(() =>
+      new Promise<string[]>((resolve) => objectReads.push(resolve)),
+    );
+    cleanup.push(async () => { status.mockRestore(); objects.mockRestore(); });
+    const request = () => f.app.inject({
+      method: "POST", url: "/printer-checkoff/reconcile", payload: { integration_id: "prusa-1" },
+    });
+    return { ...f, objectReads, request };
+  }
+
+  it("records one unattributed completion when concurrent polls finish together", async () => {
+    const f = await pendingExternalCompletion();
+    const requests = [f.request(), f.request()];
+    await vi.waitFor(() => expect(f.objectReads).toHaveLength(2));
+
+    for (const resolve of f.objectReads) resolve(["external_01"]);
+    const responses = await Promise.all(requests);
+
+    expect(responses.map((res) => res.statusCode)).toEqual([200, 200]);
+    const prints = listUnattributedPrints(f.repo);
+    expect(prints).toHaveLength(1);
+    expect(prints[0]).toMatchObject({ integration_id: "prusa-1", filename: "external.bgcode" });
+    for (const res of responses) expect(res.json().unattributed).toEqual(prints);
+  });
+
+  it.each(["dismissed print", "link"] as const)("suppresses a completion recorded as a %s while object reads are pending", async (recorded) => {
+    const f = await pendingExternalCompletion();
+    const request = f.request();
+    await vi.waitFor(() => expect(f.objectReads).toHaveLength(1));
+    if (recorded === "dismissed print") {
+      const print = createUnattributedPrint("prusa-1", "default", "Core One", "EXTERNAL.BGCODE", [], []);
+      saveUnattributedPrint(f.repo, print);
+      expect(dismissUnattributedPrint(f.repo, print.id)).toBe(true);
+    } else {
+      createPrinterCheckoffLink(f.repo, {
+        profile_id: f.plan.id, integration_id: "prusa-1", printer_id: "core-one",
+        host_name: "Core One", filename: "EXTERNAL.BGCODE", units: [],
+      });
+    }
+
+    f.objectReads[0]!(["external_01"]);
+    const response = await request;
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().unattributed).toEqual([]);
+    const prints = listUnattributedPrints(f.repo);
+    expect(prints).toHaveLength(recorded === "dismissed print" ? 1 : 0);
+    if (recorded === "dismissed print") expect(prints[0]?.dismissed).toBe(true);
+  });
+
   it("keeps a dismissed external completion suppressed on later reconcile polls", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-09-29T12:00:00.000Z"));

@@ -51,7 +51,7 @@ export default function AcceptedPlate3DPreview({
     }
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.shadowMap.type = THREE.PCFShadowMap;
     mount.appendChild(renderer.domElement);
 
     const bedWidth = plate.printer.bed_width_um / 1_000;

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { Buffer } from "node:buffer";
-import type { PlanDraftPart, PlanDraftSnapshot } from "./plan-drafts.js";
+import type { PlanDraftPart, PlanDraftSnapshot, PlanSnapshotPart } from "./plan-drafts.js";
 import { parseRequiredUnitToken } from "./required-units.js";
 import type { RequiredUnitAssignment } from "./required-unit-reconciliation.js";
 
@@ -59,29 +59,7 @@ type PreparedPlanPublication = {
   readonly revisionDigest: string;
 };
 
-type PlanRevisionDigestPart = {
-  readonly partKey: string;
-  readonly relativePath: string;
-  readonly filename: string;
-  readonly sourceLayer: string;
-  readonly status: string;
-  readonly roleInferred: string;
-  readonly roleOverride: string | null;
-  readonly filamentColorId: string | null;
-  readonly filamentCustomHex: string | null;
-  readonly spoolmanSpoolId: string | null;
-  readonly quantityInferred: number;
-  readonly quantityOverride: number | null;
-  readonly quantityEffective: number;
-  readonly included: boolean;
-  readonly notes: string;
-  readonly githubBlobUrl: string | null;
-  readonly geometrySame: boolean | null;
-  readonly requirement: string | null;
-  readonly optionGroupId: string | null;
-  readonly manifestSource: string | null;
-  readonly artifactDigest: string | null;
-};
+type PlanRevisionDigestPart = Readonly<PlanSnapshotPart>;
 
 type PublishedPlanRevisionPart = PlanRevisionDigestPart & {
   readonly id: number;

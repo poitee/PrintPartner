@@ -13,11 +13,10 @@ import {
   parseApplyPlanDraftReceipt,
   parsePlanDraftIdentity,
   parsePlanDraftWorkspace,
-  parseAcceptedPlanBasis,
   parseSavePlanChoicesRequest,
 } from "@print-partner/contracts";
 import { engineFetch, randomIdempotencyKey } from "../engineTransport";
-import type { PlanReview } from "./planManifests";
+import { parsePlanReview, type PlanReview } from "../planReview";
 
 export type SavePlanChoicesResponse = {
   receipt: ApplyPlanDraftReceipt;
@@ -37,32 +36,16 @@ export async function savePlanChoices(
     body: JSON.stringify(parseSavePlanChoicesRequest(request)),
   });
   const receipt = parseApplyPlanDraftReceipt(body?.receipt);
-  const review = body?.review;
+  const review = parsePlanReview(body?.review, profileId);
   const profile = body?.profile;
-  const basis = parseAcceptedPlanBasis(review?.accepted_basis);
-  if (receipt.profile_id !== profileId || review?.profile_id !== profileId ||
-      basis.profile_id !== profileId || profile?.id !== profileId ||
+  const basis = review.accepted_basis;
+  if (receipt.profile_id !== profileId ||
+      !basis || profile?.id !== profileId ||
       basis.plan_version < receipt.plan_version ||
       (basis.plan_version === receipt.plan_version &&
         (basis.plan_revision_id !== receipt.revision_id ||
          basis.plan_revision_digest !== receipt.revision_digest ||
          basis.required_unit_mapping_digest !== receipt.required_unit_mapping_digest)) ||
-      typeof review.plan_name !== "string" || !Array.isArray(review.layers) ||
-      !Array.isArray(review.issues) || typeof review.has_blockers !== "boolean" ||
-      !review.totals || !Number.isSafeInteger(review.totals.included_parts) ||
-      !Number.isSafeInteger(review.totals.total_print_units) ||
-      review.totals.included_parts < 0 || review.totals.total_print_units < 0 ||
-      !review.totals.by_role || !review.totals.by_filament ||
-      !Array.isArray(review.part_groups) || review.part_groups.some((group) =>
-        !group || typeof group.folder !== "string" || !Array.isArray(group.parts) ||
-        group.parts.some((part) => !part || !Number.isSafeInteger(part.id) || part.id <= 0 ||
-          typeof part.match_key !== "string" || typeof part.relative_path !== "string" ||
-          typeof part.filename !== "string" || typeof part.included !== "boolean" ||
-          (part.source_layer !== null && typeof part.source_layer !== "string") ||
-          typeof part.missing !== "boolean" || typeof part.filament_display !== "string" ||
-          !Number.isSafeInteger(part.quantity_effective) || !Array.isArray(part.print_units) ||
-          part.print_units.some((printed) => typeof printed !== "boolean") ||
-          !Number.isSafeInteger(part.printed_count) || part.printed_count < 0)) ||
       typeof profile.name !== "string" || !Number.isSafeInteger(profile.part_count) ||
       !profile.accepted_progress || !["ready", "empty", "unavailable"].includes(profile.accepted_progress.kind) ||
       (profile.accepted_progress.kind === "ready" &&
@@ -73,7 +56,7 @@ export async function savePlanChoices(
       body.closed_draft_ids.some((id) => !Number.isSafeInteger(id) || id <= 0)) {
     throw new Error("The saved Plan response is incomplete or belongs to a different Plan revision");
   }
-  return { ...body, receipt, review: { ...review, accepted_basis: basis } };
+  return { ...body, receipt, review };
 }
 
 export async function listPlanDrafts(profileId: number): Promise<PlanDraftIdentity[]> {

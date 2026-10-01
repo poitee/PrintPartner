@@ -266,12 +266,15 @@ export function JobProvider({ children }: { children: ReactNode }) {
         observer.abort();
         localFailureSequence += 1;
         const failureJobId = `local-failure-${localFailureSequence}`;
+        const message = e instanceof Error ? e.message : String(e);
+        onDone?.({ job_id: failureJobId, kind, status: "error", message,
+          error: message, progress: null, result: null });
         setActiveJobs((prev) =>
           upsertJob(prev, {
             jobId: failureJobId,
             kind,
             status: "error",
-            message: e instanceof Error ? e.message : String(e),
+            message,
             progress: null,
             profileId: options?.profileId ?? null,
             sourceIds,

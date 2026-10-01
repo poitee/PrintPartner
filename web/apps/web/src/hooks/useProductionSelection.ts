@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type SetStateAction } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type SetStateAction } from "react";
 import type { ProductionSetup, RequiredUnitToken } from "@print-partner/contracts";
 import {
   initialProductionSelection,
@@ -31,29 +31,32 @@ export function useProductionSelection(
   persist = true,
 ) {
   const setup = useProductionSetup(profileId, persist);
-  const identity = `${profileId ?? ""}:${select ?? ""}:${setup.data ? "ready" : "loading"}:${units.map((unit) => unit.token).sort().join(",")}`;
+  const unitIdentity = useMemo(() => units.map((unit) => unit.token).sort().join(","), [units]);
+  const identity = `${profileId ?? ""}:${select ?? ""}:${setup.data ? "ready" : "loading"}:${unitIdentity}`;
   const previousIdentity = useRef(identity);
   const [selection, setSelection] = useState<ReadonlySet<RequiredUnitToken>>(() =>
     resolveProductionSelection(units, select, setup.data),
   );
+  const currentSelection = useRef(selection);
 
   useEffect(() => {
     if (previousIdentity.current === identity) return;
     previousIdentity.current = identity;
-    setSelection(resolveProductionSelection(units, select, setup.data));
+    const next = resolveProductionSelection(units, select, setup.data);
+    currentSelection.current = next;
+    setSelection(next);
   }, [identity, select, setup.data, units]);
 
   const setPersistedSelection = useCallback((action: SetStateAction<ReadonlySet<RequiredUnitToken>>) => {
-    setSelection((current) => {
-      const next = typeof action === "function" ? action(current) : action;
-      if (persist && profileId != null) {
-        void setup.save({
-          kind: "set_selection",
-          selection: { mode: "custom", selected_unit_tokens: [...next] },
-        }).catch(() => undefined);
-      }
-      return next;
-    });
+    const next = typeof action === "function" ? action(currentSelection.current) : action;
+    currentSelection.current = next;
+    setSelection(next);
+    if (persist && profileId != null) {
+      void setup.save({
+        kind: "set_selection",
+        selection: { mode: "custom", selected_unit_tokens: [...next] },
+      }).catch(() => undefined);
+    }
   }, [persist, profileId, setup]);
 
   return {

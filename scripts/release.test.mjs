@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -23,8 +23,9 @@ function write(root, path, contents) {
   writeFileSync(absolute, contents);
 }
 
-function fixture() {
+function fixture(context) {
   const root = mkdtempSync(join(tmpdir(), "print-partner-release-"));
+  context.after(() => rmSync(root, { recursive: true, force: true }));
   write(root, "web/package.json", '{\n  "version": "3.1.0"\n}\n');
   write(
     root,
@@ -66,8 +67,8 @@ test("parseAppVersion accepts release SemVer and rejects tags or suffixes", () =
   }
 });
 
-test("release dry-run plan updates every current sink without writing", () => {
-  const root = fixture();
+test("release dry-run plan updates every current sink without writing", (context) => {
+  const root = fixture(context);
   const before = readFileSync(join(root, "web/package.json"), "utf8");
 
   const plan = planRelease({ repoRoot: root, nextVersion: "3.2.0", date: "2026-08-20" });
@@ -89,16 +90,16 @@ test("release dry-run plan updates every current sink without writing", () => {
   );
 });
 
-test("release preparation rejects impossible calendar dates", () => {
-  const root = fixture();
+test("release preparation rejects impossible calendar dates", (context) => {
+  const root = fixture(context);
   assert.throws(
     () => planRelease({ repoRoot: root, nextVersion: "3.2.0", date: "2026-02-30" }),
     /release date/i,
   );
 });
 
-test("applying a release plan preserves private dependency versions and changelog history", () => {
-  const root = fixture();
+test("applying a release plan preserves private dependency versions and changelog history", (context) => {
+  const root = fixture(context);
   const plan = planRelease({ repoRoot: root, nextVersion: "3.2.0", date: "2026-08-20" });
   applyReleasePlan(plan);
 
@@ -162,8 +163,9 @@ test("release guide asks maintainers for the next version", () => {
   assert.match(deployGuide, /NEXT_VERSION=X\.Y\.Z/);
 });
 
-test("annotated tag validation uses the peeled commit, not the tag object", () => {
+test("annotated tag validation uses the peeled commit, not the tag object", (context) => {
   const root = mkdtempSync(join(tmpdir(), "print-partner-tag-"));
+  context.after(() => rmSync(root, { recursive: true, force: true }));
   execFileSync("git", ["init", "-q"], { cwd: root });
   execFileSync("git", ["config", "user.email", "release-test@example.test"], { cwd: root });
   execFileSync("git", ["config", "user.name", "Release Test"], { cwd: root });
@@ -185,8 +187,8 @@ test("annotated tag validation uses the peeled commit, not the tag object", () =
   assert.equal(resolveTagCommit(root, "v3.2.0"), commit);
 });
 
-test("release check rejects a dirty worktree", () => {
-  const root = fixture();
+test("release check rejects a dirty worktree", (context) => {
+  const root = fixture(context);
   execFileSync("git", ["init", "-q"], { cwd: root });
   execFileSync("git", ["config", "user.email", "release-test@example.test"], { cwd: root });
   execFileSync("git", ["config", "user.name", "Release Test"], { cwd: root });
@@ -198,8 +200,8 @@ test("release check rejects a dirty worktree", () => {
   assert.throws(() => checkRelease({ repoRoot: root }), /working tree/i);
 });
 
-test("release check ignores commented versions and validates the active Docker argument", () => {
-  const root = fixture();
+test("release check ignores commented versions and validates the active Docker argument", (context) => {
+  const root = fixture(context);
   write(root, "Dockerfile", "# ARG PP_APP_VERSION=3.1.0\nARG PP_APP_VERSION=3.0.0\n");
   execFileSync("git", ["init", "-q"], { cwd: root });
   execFileSync("git", ["config", "user.email", "release-test@example.test"], { cwd: root });

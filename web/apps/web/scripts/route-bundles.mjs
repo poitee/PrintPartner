@@ -36,20 +36,34 @@ const kb = (bytes) => `${Math.round(bytes / 1024)} KB`;
 
 const entry = Object.keys(manifest).find((key) => manifest[key].isEntry);
 const shell = Object.keys(manifest).find((key) => key.endsWith("src/AuthenticatedApp.tsx"));
-const base = new Set([...staticClosure(entry), ...staticClosure(shell)]);
+const publicBase = staticClosure(entry);
+const authenticatedBase = new Set([...publicBase, ...staticClosure(shell)]);
+const publicPages = new Set([
+  "src/pages/LoginPage.tsx",
+  "src/pages/ForgotPasswordPage.tsx",
+  "src/pages/ResetPasswordPage.tsx",
+]);
 const pages = Object.keys(manifest)
   .filter((key) => /src\/pages\/\w+\.tsx$/.test(key))
   .sort();
 
-const rows = [["route", "raw", "gzip", "three.js"], ["(every visit)", kb(sum(base, "raw")), kb(sum(base, "gzip")), ""]];
+const rows = [
+  ["route", "baseline", "raw", "gzip", "three.js"],
+  ["(public visits)", "", kb(sum(publicBase, "raw")), kb(sum(publicBase, "gzip")), ""],
+  ["(authenticated visits)", "", kb(sum(authenticatedBase, "raw")), kb(sum(authenticatedBase, "gzip")), ""],
+];
 const leaks = [];
 for (const page of pages) {
+  const isPublic = publicPages.has(page);
+  const base = isPublic ? publicBase : authenticatedBase;
   const extra = new Set([...staticClosure(page)].filter((key) => !base.has(key)));
   const three = [...staticClosure(page)].some((key) => file(key).hasThree);
   if (three) leaks.push(page);
-  rows.push([page.replace(/^src\/pages\//, ""), `+${kb(sum(extra, "raw"))}`, `+${kb(sum(extra, "gzip"))}`, three ? "static" : ""]);
+  rows.push([page.replace(/^src\/pages\//, ""), isPublic ? "public" : "authenticated", `+${kb(sum(extra, "raw"))}`, `+${kb(sum(extra, "gzip"))}`, three ? "static" : ""]);
 }
-if ([...base].some((key) => file(key).hasThree)) leaks.push("(every visit)");
+for (const [label, base] of [["public visits", publicBase], ["authenticated visits", authenticatedBase]]) {
+  if ([...base].some((key) => file(key).hasThree)) leaks.push(`(${label})`);
+}
 
 const widths = rows[0].map((_, column) => Math.max(...rows.map((row) => row[column].length)));
 for (const row of rows) process.stdout.write(`${row.map((cell, column) => cell.padEnd(widths[column])).join("  ")}\n`);

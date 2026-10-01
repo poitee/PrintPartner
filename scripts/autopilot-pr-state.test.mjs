@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -422,8 +422,9 @@ test("CLI --help explains the helper", () => {
   assert.match(chunks.join(""), /--fixture/);
 });
 
-test("CLI --fixture prints JSON for a saved snapshot", () => {
+test("CLI --fixture prints JSON for a saved snapshot", (context) => {
   const dir = mkdtempSync(join(tmpdir(), "autopilot-pr-state-"));
+  context.after(() => rmSync(dir, { recursive: true, force: true }));
   const fixture = join(dir, "snapshot.json");
   writeFileSync(
     fixture,

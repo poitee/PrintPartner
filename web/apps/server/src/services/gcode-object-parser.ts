@@ -1,6 +1,6 @@
 import {
   interpretSlicedObjectName,
-  matchSlicedObjectName,
+  createSlicedObjectMatcher,
 } from "@print-partner/domain";
 
 /**
@@ -88,8 +88,9 @@ export function matchObjectsToFilenames(
   libraryFilenames: string[], // all unique filenames across all parts in all profiles
 ): Map<string, string[]> {
   const result = new Map<string, string[]>();
+  const matchFilename = createSlicedObjectMatcher(libraryFilenames);
   for (const [stlKey, _plateMatch] of plateMatches) {
-    const match = matchSlicedObjectName(stlKey, libraryFilenames);
+    const match = matchFilename(stlKey);
     result.set(
       stlKey,
       match.kind === "matched"

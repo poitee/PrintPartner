@@ -135,12 +135,13 @@ export default function SourceDetailSheet({
   const [namingApiMissing, setNamingApiMissing] = useState(false);
   const [namingOwnerId, setNamingOwnerId] = useState<number | null>(null);
   const [namingLoading, setNamingLoading] = useState(false);
-  const [namingSaving, setNamingSaving] = useState(false);
+  const [savingNamingSourceIds, setSavingNamingSourceIds] = useState<Set<number>>(() => new Set());
   const [namingNote, setNamingNote] = useState<string | null>(null);
   const rulesGenerationRef = useRef(0);
   const rulesSavePendingRef = useRef(new Map<number, { generation: number; promise: Promise<unknown> }>());
   const requestedRulesSourceRef = useRef<number | null>(null);
   const namingGenerationRef = useRef(0);
+  const namingSavePendingRef = useRef(new Map<number, { generation: number; promise: Promise<unknown> }>());
   const requestedNamingSourceRef = useRef<number | null>(null);
 
   const previewProfile = useMemo(
@@ -165,6 +166,11 @@ export default function SourceDetailSheet({
     setNamingApiMissing(false);
     setNamingNote(null);
     try {
+      const pendingSave = namingSavePendingRef.current.get(sourceId)?.promise;
+      if (pendingSave) {
+        await pendingSave.catch(() => undefined);
+        if (namingGenerationRef.current !== generation) return;
+      }
       const [global, sourceNaming] = await Promise.all([
         fetchStlNaming(),
         fetchSourceNaming(sourceId),
@@ -224,6 +230,7 @@ export default function SourceDetailSheet({
 
   const sourceId = open ? source?.id ?? null : null;
   const rulesSaving = sourceId != null && savingRuleSourceIds.has(sourceId);
+  const namingSaving = sourceId != null && savingNamingSourceIds.has(sourceId);
 
   useEffect(() => {
     rulesGenerationRef.current += 1;
@@ -233,7 +240,6 @@ export default function SourceDetailSheet({
     if (sourceId == null) return;
     setDocsSubTab("synced");
     setScanResult(null);
-    setNamingSaving(false);
     setActiveNoteId(null);
     setRulesOwnerId(null);
     setPendingRules([]);
@@ -297,25 +303,26 @@ export default function SourceDetailSheet({
   };
 
   const saveNaming = async () => {
-    if (!source || namingOwnerId !== source.id || namingLoading) return;
+    if (!source || namingOwnerId !== source.id || namingLoading || namingSavePendingRef.current.has(source.id)) return;
     const generation = namingGenerationRef.current + 1;
     namingGenerationRef.current = generation;
-    setNamingSaving(true);
+    const savePromise = saveSourceNaming(
+      source.id,
+      useDefaults
+        ? { use_defaults: true }
+        : { use_defaults: false, override: overrideDraft },
+    );
+    namingSavePendingRef.current.set(source.id, { generation, promise: savePromise });
+    setSavingNamingSourceIds((current) => new Set(current).add(source.id));
     setNamingLoadError(null);
     setNamingNote(null);
     try {
-      const saved = await saveSourceNaming(
-        source.id,
-        useDefaults
-          ? { use_defaults: true }
-          : { use_defaults: false, override: overrideDraft },
-      );
+      const saved = await savePromise;
+      await invalidateProfiles(queryClient);
       if (namingGenerationRef.current !== generation) return;
       setSavedUseDefaults(saved.use_defaults);
       setSavedOverride(saved.override);
       setOverrideDraft(mergeStlNamingProfiles(globalNaming, saved.override));
-      await invalidateProfiles(queryClient);
-      if (namingGenerationRef.current !== generation) return;
       setNamingNote("Naming rules saved.");
     } catch (e) {
       if (namingGenerationRef.current !== generation) return;
@@ -323,7 +330,14 @@ export default function SourceDetailSheet({
       setNamingLoadError(msg);
       toast.error(msg);
     } finally {
-      if (namingGenerationRef.current === generation) setNamingSaving(false);
+      if (namingSavePendingRef.current.get(source.id)?.generation === generation) {
+        namingSavePendingRef.current.delete(source.id);
+        setSavingNamingSourceIds((current) => {
+          const next = new Set(current);
+          next.delete(source.id);
+          return next;
+        });
+      }
     }
   };
 
@@ -661,7 +675,23 @@ export default function SourceDetailSheet({
                   Override how STL paths are parsed for this source. Changes apply on the next{" "}
                   <strong>Rebuild the Plan</strong> after reviewing this source change.
                 </p>
-                {namingLoadError && <p className="text-sm text-destructive">{namingLoadError}</p>}
+                {namingLoadError && (
+                  <div className="space-y-2 text-sm text-destructive" role="alert">
+                    <p>{namingLoadError}</p>
+                    {!namingApiMissing && !namingReady && (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="secondary"
+                        aria-label="Retry loading Source naming"
+                        disabled={namingLoading || namingSaving}
+                        onClick={() => void loadNaming(source.id)}
+                      >
+                        Retry
+                      </Button>
+                    )}
+                  </div>
+                )}
                 {namingLoading && (
                   <p className="text-sm text-muted-foreground" role="status">
                     Loading naming rules…

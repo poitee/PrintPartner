@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { MemoryRouter, useNavigate, useSearchParams } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   defaultProductionSetup,
@@ -124,7 +124,11 @@ vi.mock("../components/export/PartsManifestTransfer", () => ({
   default: () => <div data-testid="panel-manifest" />,
 }));
 vi.mock("../components/export/PrinterSendPanel", () => ({
-  default: () => <div data-testid="panel-send" />,
+  default: ({ onSlicedFileChange }: { onSlicedFileChange?: (file: { name: string }) => void }) => (
+    <div data-testid="panel-send">
+      <button onClick={() => onSlicedFileChange?.({ name: "build-one.gcode" })}>Choose test sliced file</button>
+    </div>
+  ),
 }));
 vi.mock("../components/export/PrinterSendQueuePanel", () => ({
   default: () => <div data-testid="panel-send-queue" />,
@@ -141,13 +145,16 @@ vi.mock("../hooks/useEngineHealth", () => ({
   useEngineHealth: () => ({ health: { ok: true }, error: null, loading: false }),
 }));
 vi.mock("../context/ProfileContext", () => ({
-  useProfileSelection: () => ({
-    selectedProfileId: 1,
-    profiles: [{ id: 1, name: "Voron 2.4 Workshop" }],
-    loading: false,
-    error: null,
-    reloadProfiles: vi.fn(),
-  }),
+  useProfileSelection: () => {
+    const [params] = useSearchParams();
+    return {
+      selectedProfileId: Number(params.get("profile")) || 1,
+      profiles: [{ id: 1, name: "Voron 2.4 Workshop" }, { id: 2, name: "Second Build" }],
+      loading: false,
+      error: null,
+      reloadProfiles: vi.fn(),
+    };
+  },
 }));
 vi.mock("../context/PlanWorkspaceContext", () => ({
   usePlanWorkspace: () => ({
@@ -181,9 +188,9 @@ vi.mock("../hooks/useProductionSelection", () => ({
   }),
 }));
 vi.mock("../queries/productionSetup", () => ({
-  useProductionSetup: () => ({
+  useProductionSetup: (profileId: number) => ({
     data: {
-      ...defaultProductionSetup(1),
+      ...defaultProductionSetup(profileId),
       route: state.route,
       printer_assignments: state.printerAssignments,
     },
@@ -196,9 +203,15 @@ vi.mock("../queries/productionSetup", () => ({
 
 const { default: ExportPage } = await import("./ExportPage");
 
+function BuildSwitcher() {
+  const navigate = useNavigate();
+  return <button onClick={() => navigate("/export?profile=2")}>Switch to second Build</button>;
+}
+
 function renderAt(path: string) {
   return render(
     <MemoryRouter initialEntries={[path]}>
+      <BuildSwitcher />
       <ExportPage />
     </MemoryRouter>,
   );
@@ -257,6 +270,18 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("ExportPage work packages", () => {
+  it("clears the sliced file when switching Builds on the same route", async () => {
+    state.exportRecords = [exportRecord()];
+    renderAt("/export?profile=1");
+    fireEvent.click(await screen.findByRole("button", { name: "Choose test sliced file" }));
+    expect(screen.getByText("build-one.gcode is ready to send.")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Switch to second Build" }));
+
+    expect(screen.queryByText("build-one.gcode is ready to send.")).toBeNull();
+    expect(screen.getByText("Slice the exported files, then add the G-code here. You can come back later.")).toBeTruthy();
+  });
+
   it("requires preparing Plates again when the previous batch contains an unselected unit", () => {
     state.selectedTokens = new Set([TOKEN_A]);
     renderAt("/export?profile=1");
@@ -389,6 +414,43 @@ describe("ExportPage work packages", () => {
 describe("ExportPage route question", () => {
   const chooseRoute = (name: RegExp) => fireEvent.click(screen.getByRole("radio", { name }));
   const continueOn = () => fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+
+  it("removes a previous Build's route failure and retry after switching Builds", async () => {
+    state.route = null;
+    const firstSave = vi.fn(() => Promise.reject(new Error("First Build save failed")));
+    state.save = firstSave;
+    renderAt("/export?profile=1");
+    chooseRoute(/Generate 3MF plates/);
+    continueOn();
+    expect((await screen.findByRole("alert")).textContent).toContain("First Build save failed");
+
+    state.save = vi.fn(() => Promise.resolve(undefined));
+    fireEvent.click(screen.getByRole("button", { name: "Switch to second Build" }));
+
+    expect(screen.queryByText(/First Build save failed/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    chooseRoute(/Download sorted STL files/);
+    continueOn();
+    await waitFor(() => expect(state.save).toHaveBeenCalledExactlyOnceWith({ kind: "set_route", route: "stl" }));
+    expect(firstSave).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores a route failure that arrives after switching Builds", async () => {
+    state.route = null;
+    let rejectSave: ((reason: Error) => void) | undefined;
+    state.save = vi.fn(() => new Promise((_resolve, reject) => { rejectSave = reject; }));
+    renderAt("/export?profile=1");
+    chooseRoute(/Generate 3MF plates/);
+    continueOn();
+    state.save = vi.fn(() => Promise.resolve(undefined));
+    fireEvent.click(screen.getByRole("button", { name: "Switch to second Build" }));
+
+    if (!rejectSave) throw new Error("First Build save did not start");
+    await act(async () => rejectSave?.(new Error("Late first Build failure")));
+
+    expect(screen.queryByText(/Late first Build failure/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  });
 
   it("asks the question and shows no task list until the Build has a route", () => {
     state.route = null;

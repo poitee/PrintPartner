@@ -34,17 +34,21 @@ export function useCheckoffProgressMutations(): CheckoffProgressMutations {
   const [rowErrors, setRowErrors] = useState<CheckoffRowErrors>(NO_CHECKOFF_ROW_ERRORS);
   const retryHandlers = useRef(new Map<number, () => void>());
   const runRef = useRef<(input: CheckoffProgressMutation) => void>(() => {});
+  const generation = useRef(0);
 
   const runMutation = useCallback((input: CheckoffProgressMutation) => {
+    const startedGeneration = generation.current;
     const key = checkoffRowErrorKey(input.part.id);
     retryHandlers.current.set(input.part.id, () => runRef.current(input));
     void input
       .run()
       .then(() => {
+        if (generation.current !== startedGeneration) return;
         retryHandlers.current.delete(input.part.id);
         setRowErrors((errors) => clearCheckoffRowError(errors, key));
       })
       .catch((cause: unknown) => {
+        if (generation.current !== startedGeneration) return;
         setRowErrors((errors) =>
           setCheckoffRowError(errors, key, {
             message: describeCheckoffMutationFailure({
@@ -65,6 +69,7 @@ export function useCheckoffProgressMutations(): CheckoffProgressMutations {
   }, []);
 
   const clearAll = useCallback(() => {
+    generation.current += 1;
     retryHandlers.current.clear();
     setRowErrors(NO_CHECKOFF_ROW_ERRORS);
   }, []);

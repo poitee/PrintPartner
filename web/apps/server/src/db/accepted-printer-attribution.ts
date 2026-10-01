@@ -8,7 +8,8 @@ import type {
 } from "@print-partner/contracts";
 import {
   interpretSlicedObjectName,
-  matchSlicedObjectName,
+  createSlicedObjectMatcher,
+  type SlicedObjectNameMatch,
 } from "@print-partner/domain";
 import { acceptedPlanBasis, type AcceptedPlanBasis } from "./accepted-plan-progress.js";
 import type {
@@ -241,12 +242,10 @@ function parsedObjectName(rawName: string): string {
 }
 
 function matchingAcceptedParts(
-  rawName: string,
+  matched: SlicedObjectNameMatch,
   parts: readonly AcceptedOperationalPart[],
   positiveOnly = false,
 ): readonly AcceptedOperationalPart[] {
-  const paths = parts.map((part) => part.relativePath || part.filename);
-  const matched = matchSlicedObjectName(rawName, paths);
   if (matched.kind === "unmatched") return [];
   if (positiveOnly && matched.basis === "fuzzy") return [];
   const matchingPaths = new Set(
@@ -282,6 +281,7 @@ export function resolveAcceptedPrinterAttribution(
   const usedCoordinates = new Set<string>();
   const outcomesByIndex = new Map<number, AcceptedPrinterNameOutcome>();
   let recognizedCanonical = false;
+  let matchFilename: ReturnType<typeof createSlicedObjectMatcher> | undefined;
 
   const coordinateKey = (coordinate: Readonly<PrinterCheckoffUnit>): string =>
     `${coordinate.part_id}:${coordinate.unit_index}`;
@@ -314,7 +314,10 @@ export function resolveAcceptedPrinterAttribution(
 
   for (const [inputIndex, rawName] of observation.objectNames.entries()) {
     if (outcomesByIndex.has(inputIndex)) continue;
-    const parts = matchingAcceptedParts(rawName, acceptedParts, observation.positiveOnly);
+    matchFilename ??= createSlicedObjectMatcher(
+      acceptedParts.map((part) => part.relativePath || part.filename),
+    );
+    const parts = matchingAcceptedParts(matchFilename(rawName), acceptedParts, observation.positiveOnly);
     if (parts.length > 1) {
       outcomesByIndex.set(inputIndex, { inputIndex, rawName, kind: "ambiguous_filename" });
       continue;
@@ -351,7 +354,12 @@ export function resolveAcceptedPrinterAttribution(
     : "unused";
   if (units.length === 0 && !recognizedCanonical && observation.fallbackFilename?.trim() &&
     (!observation.positiveOnly || observation.objectNames.length === 0)) {
-    const parts = matchingAcceptedParts(observation.fallbackFilename, acceptedParts, observation.positiveOnly);
+    matchFilename ??= createSlicedObjectMatcher(
+      acceptedParts.map((part) => part.relativePath || part.filename),
+    );
+    const parts = matchingAcceptedParts(
+      matchFilename(observation.fallbackFilename), acceptedParts, observation.positiveOnly,
+    );
     if (parts.length === 1) {
       const fallbackSlot = availableSlots.find(
         (slot) => slot.part.projectionPartId === parts[0]!.projectionPartId,

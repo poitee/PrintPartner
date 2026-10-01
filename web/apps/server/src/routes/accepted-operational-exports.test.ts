@@ -1,12 +1,13 @@
 import { acceptPlanForTest } from "../test/accept-plan.js";
 import Fastify from "fastify";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { drizzle } from "drizzle-orm/node-postgres";
 import type { Pool } from "pg";
 import { eq } from "drizzle-orm";
+import { miloFilenameGrouping } from "@print-partner/contracts";
 import { getDb, SqliteDatabase } from "../db/client.js";
 import { AcceptedPlanOperationalIntegrityError } from "../db/accepted-plan-operational.js";
 import { AppRepository, type SchemaTables } from "../db/repository.js";
@@ -20,6 +21,9 @@ import { loadConfig } from "../config.js";
 import { AuthStore } from "../services/auth-store.js";
 import { getLogger } from "../services/logger.js";
 import { InProcessJobRunner } from "../services/job-runner.js";
+import { TenantDiskQuotaError } from "../lib/tenant-disk-quota.js";
+import { registerRequestLoggingMiddleware } from "../middleware/request-logging.js";
+import { registerJobRoutes } from "./jobs.js";
 import { registerShareRoutes } from "./shares.js";
 
 const webhookCapture = vi.hoisted(() => ({
@@ -110,6 +114,150 @@ function applyTrackedPlan(repo: AppRepository, sourceId: number, profileId: numb
 }
 
 describe("accepted operational export routes", () => {
+  it.each(["compatibility_dirty", "uninitialized"] as const)(
+    "returns unavailable accepted state from filename grouping: %s",
+    async (kind) => {
+      const { dir, repo, profile } = fixture();
+      vi.spyOn(repo, "readAcceptedPlanOperationalSnapshot").mockReturnValue({ kind });
+      const runner = new InProcessJobRunner({
+        getRepo: () => repo,
+        reposDir: join(dir, "repos"),
+        exportsDir: join(dir, "exports"),
+        dataDir: dir,
+      });
+      const app = Fastify();
+      cleanups.push(() => app.close());
+      await registerJobRoutes(app, runner);
+
+      const response = await app.inject(`/plans/${profile.id}/filename-grouping`);
+
+      expect(response.statusCode).toBe(409);
+      expect(response.json()).toEqual({
+        code: "accepted_state_unavailable",
+        detail: "Accepted Plan state is unavailable. Apply or repair the Plan, then export again.",
+      });
+    },
+  );
+
+  it("returns a sanitized accepted integrity failure from filename grouping", async () => {
+    const { dir, repo, profile } = fixture();
+    vi.spyOn(repo, "readAcceptedPlanOperationalSnapshot").mockImplementation(() => {
+      throw new AcceptedPlanOperationalIntegrityError("progress", "private SQL and token ppu_secret");
+    });
+    const runner = new InProcessJobRunner({
+      getRepo: () => repo,
+      reposDir: join(dir, "repos"),
+      exportsDir: join(dir, "exports"),
+      dataDir: dir,
+    });
+    const app = Fastify();
+    cleanups.push(() => app.close());
+    await registerJobRoutes(app, runner);
+
+    const response = await app.inject(`/plans/${profile.id}/filename-grouping`);
+
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toEqual({
+      code: "accepted_integrity",
+      detail: "Accepted Plan export failed integrity verification.",
+    });
+    expect(response.body).not.toContain("ppu_secret");
+    expect(response.body).not.toContain("private SQL");
+  });
+
+  it("redacts unexpected filename grouping read errors from the response and request logs", async () => {
+    const { dir, repo, profile } = fixture();
+    const sentinel = "private-path-/secret/token-ppu_grouping_leak";
+    vi.spyOn(repo, "readAcceptedPlanOperationalSnapshot").mockImplementation(() => {
+      throw new Error(sentinel);
+    });
+    const workflowLog = vi.spyOn(getLogger(), "logWorkflow").mockImplementation(() => undefined);
+    const requestLog: string[] = [];
+    const runner = new InProcessJobRunner({
+      getRepo: () => repo,
+      reposDir: join(dir, "repos"),
+      exportsDir: join(dir, "exports"),
+      dataDir: dir,
+    });
+    const app = Fastify({ logger: { level: "error", stream: { write: (line) => requestLog.push(line) } } });
+    cleanups.push(() => app.close());
+    await registerRequestLoggingMiddleware(app);
+    await registerJobRoutes(app, runner);
+
+    const response = await app.inject(`/plans/${profile.id}/filename-grouping`);
+
+    expect(response.statusCode).toBe(500);
+    expect.soft(response.json()).toEqual({
+      code: "unexpected",
+      detail: "Accepted Plan export failed.",
+    });
+    expect.soft(response.body).not.toContain(sentinel);
+    expect.soft(requestLog.join("\n")).not.toContain(sentinel);
+    expect.soft(JSON.stringify(workflowLog.mock.calls)).not.toContain(sentinel);
+    expect(workflowLog).toHaveBeenCalledWith(expect.objectContaining({
+      method: "GET",
+      url: `/plans/${profile.id}/filename-grouping`,
+      statusCode: 500,
+    }));
+  });
+
+  it.each([false, true])("preserves filename grouping success with accepted Parts: %s", async (apply) => {
+    const { dir, repo, source, profile } = fixture(false);
+    if (apply) applyTrackedPlan(repo, source.id, profile.id);
+    const runner = new InProcessJobRunner({
+      getRepo: () => repo,
+      reposDir: join(dir, "repos"),
+      exportsDir: join(dir, "exports"),
+      dataDir: dir,
+    });
+    const app = Fastify();
+    cleanups.push(() => app.close());
+    await registerJobRoutes(app, runner);
+
+    const response = await app.inject(`/plans/${profile.id}/filename-grouping`);
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.definition).toEqual(miloFilenameGrouping);
+    if (apply) {
+      expect(body.parts).toEqual([{
+        relativePath: "part.stl",
+        sourceLayer: "base:Source",
+        role: "primary",
+        units: [{ token: expect.stringMatching(/^ppu_[0-9a-f]{32}$/), completed: false }],
+      }]);
+    } else {
+      expect(body.parts).toEqual([]);
+    }
+    expect((await app.inject("/plans/999999/filename-grouping")).statusCode).toBe(404);
+  });
+
+  it.each([false, true])("preserves quota errors in kit export jobs with print progress: %s", async (includePrintProgress) => {
+    const { dir, repo, source, profile } = fixture(false);
+    applyTrackedPlan(repo, source.id, profile.id);
+    const runner = new InProcessJobRunner({
+      getRepo: () => repo,
+      reposDir: join(dir, "repos"),
+      exportsDir: join(dir, "exports"),
+      dataDir: dir,
+      tenantDiskQuotaBytes: 128,
+    });
+
+    const jobId = await runner.start(
+      "export-kit-bundle",
+      { profile_id: profile.id, include_print_progress: includePrintProgress },
+      "default",
+    );
+    const job = await runner.waitForTerminal(jobId, 2_000, "default");
+
+    expect(job.status).toBe("error");
+    expect(job.error).toBe(new TenantDiskQuotaError().message);
+    expect(job.result).toBeNull();
+    expect(readdirSync(join(dir, "exports"), { recursive: true, encoding: "utf8" }).filter(
+      (entry) => entry.endsWith(".zip") || entry.endsWith(".tmp"),
+    )).toEqual([]);
+  });
+
   it("returns the fixed explicit-progress job failure without private integrity detail", async () => {
     const { dir, repo, profile } = fixture();
     repo.readAcceptedPlanOperationalSnapshot = () => {
