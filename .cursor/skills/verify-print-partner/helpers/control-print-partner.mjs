@@ -182,7 +182,6 @@ async function cmdLaunch(values) {
         message: "Existing verification instance is healthy; reuse it or run cleanup first.",
       });
     } catch {
-      // stale state — continue to relaunch
     }
   }
 
@@ -245,7 +244,6 @@ async function cmdLaunch(values) {
     return;
   }
 
-  // npm mode: isolated API + Vite (dev surface) — fallback when Docker is unavailable
   {
   const apiPort = Number(values["api-port"] || 18765);
   const uiPort = Number(values["ui-port"] || 5173);
