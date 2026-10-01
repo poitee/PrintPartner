@@ -111,6 +111,7 @@ export async function registerCoreRoutes(
   });
   await registerSlicerHandoffRoutes(app, {
     repo: deps.repo,
+    jobs: deps.jobs,
     config: deps.config,
     exportsDir: join(deps.dataDir, "exports"),
     dataDir: deps.dataDir,

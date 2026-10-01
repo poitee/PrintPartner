@@ -7,6 +7,7 @@ import { getDb, SqliteDatabase } from "../db/client.js";
 import { AppRepository } from "../db/repository.js";
 import { registerSlicerHandoffRoutes } from "./slicer-handoff.js";
 import type { ServerConfig } from "../config.js";
+import { InProcessJobRunner } from "../services/job-runner.js";
 
 const cleanup: Array<() => void> = [];
 
@@ -28,6 +29,12 @@ describe("slicer handoff exchange-status", () => {
     const repo = new AppRepository(getDb(sqlite), undefined, sqlite.reposDir);
     await registerSlicerHandoffRoutes(app, {
       repo,
+      jobs: new InProcessJobRunner({
+        getRepo: () => repo,
+        reposDir: sqlite.reposDir,
+        exportsDir: join(dir, "exports"),
+        dataDir: dir,
+      }),
       config: minimalConfig(dir),
       exportsDir: join(dir, "exports"),
       dataDir: dir,
@@ -59,6 +66,12 @@ describe("slicer handoff exchange-status", () => {
     const repo = new AppRepository(getDb(sqlite), undefined, sqlite.reposDir);
     await registerSlicerHandoffRoutes(app, {
       repo,
+      jobs: new InProcessJobRunner({
+        getRepo: () => repo,
+        reposDir: sqlite.reposDir,
+        exportsDir: join(sqliteDir, "exports"),
+        dataDir: sqliteDir,
+      }),
       config: minimalConfig("/definitely/missing/exchange-pp"),
       exportsDir: join(sqliteDir, "exports"),
       dataDir: sqliteDir,

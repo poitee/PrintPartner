@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import {
   DATE_FORMAT_DEFAULT,
   filenameExportSchema,
@@ -36,6 +37,7 @@ import { getLogger } from "./logger.js";
 import {
   ACCEPTED_PLATE_EXPORT_LIMITS,
   materializeAcceptedPlateExport,
+  type MaterializedAcceptedPlateExport,
 } from "./accepted-plate-export-delivery.js";
 import {
   AcceptedOperationalExportPublicError,
@@ -276,6 +278,42 @@ export class InProcessJobRunner {
     withoutTenantDiskQuota(() => setImmediate(() => {
       void this.runJob(jobId, kind, { ...payload, _tenant_id: tenantId });
     }));
+    return jobId;
+  }
+
+  recordAcceptedPlateExport(
+    materialized: MaterializedAcceptedPlateExport,
+    tenantId: string,
+  ): string {
+    const result = this.buildAcceptedPlateExportResult(materialized, tenantId);
+    const existing = this.listJobs({ profile_id: result.profile_id }, tenantId)
+      .find((snapshot) => snapshot.kind === "export-accepted-plate-3mf"
+        && snapshot.status === "done"
+        && isDeepStrictEqual(snapshot.result, result));
+    if (existing) return existing.job_id;
+
+    const jobId = crypto.randomUUID();
+    const now = Date.now();
+    this.jobs.set(jobId, {
+      job_id: jobId,
+      kind: "export-accepted-plate-3mf",
+      status: "done",
+      message: "Accepted Plates staged for the slicer",
+      progress: 100,
+      result,
+      error: null,
+      finished_at: new Date(now).toISOString(),
+    });
+    this.jobMeta.set(jobId, {
+      payload: {
+        profile_id: result.profile_id,
+        expected_plate_revision_id: result.plate_revision_id,
+        _tenant_id: tenantId,
+      },
+      tenantId,
+      updatedAt: now,
+    });
+    this.pruneCompletedJobs(now);
     return jobId;
   }
 
@@ -730,43 +768,49 @@ export class InProcessJobRunner {
       if (materialized.kind !== "materialized") {
         throw new AcceptedPlateExportPublicError(acceptedPlateExportError(materialized));
       }
-      const downloadUrl = (path: string): string => {
-        const url = this.downloadUrlForPath(path);
-        if (!url) throw new Error(ACCEPTED_PLATE_EXPORT_ERRORS.unexpected);
-        return url;
-      };
-      const plates = materialized.plates.map((plate) => ({
-        plate_id: parseAcceptedPlateId(plate.plateId),
-        ordinal: plate.ordinal,
-        filename: plate.filename,
-        download_url: downloadUrl(plate.absolutePath),
-      }));
-      const solePlate = plates.length === 1 ? plates[0] : undefined;
-      const result: AcceptedPlateExportJobResult = {
-        format: "accepted-plate-export-job-v1",
-        profile_id: profileId,
-        basis: {
-          profile_id: materialized.basis.profileId,
-          plan_version: materialized.basis.planVersion,
-          plan_revision_id: materialized.basis.revisionId,
-          plan_revision_digest: materialized.basis.revisionDigest,
-          required_unit_mapping_digest: materialized.basis.requiredUnitMappingDigest,
-        },
-        plate_revision_id: materialized.plateRevisionId,
-        plate_revision_number: materialized.plateRevisionNumber,
-        layout_digest: materialized.layoutDigest,
-        download_url: solePlate?.download_url ?? downloadUrl(materialized.bundle.absolutePath),
-        manifest_download_url: downloadUrl(materialized.manifest.absolutePath),
-        bundle_download_url: downloadUrl(materialized.bundle.absolutePath),
-        plates,
-      };
-      return result;
+      return this.buildAcceptedPlateExportResult(materialized, getRequestTenantId());
     } catch (error) {
       if (error instanceof TenantDiskQuotaError || error instanceof AcceptedPlateExportPublicError) {
         throw error;
       }
       return unexpectedFailure();
     }
+  }
+
+  private buildAcceptedPlateExportResult(
+    materialized: MaterializedAcceptedPlateExport,
+    tenantId: string,
+  ): AcceptedPlateExportJobResult {
+    const downloadUrl = (path: string): string => {
+      const key = exportDownloadKey(this.deps.dataDir, tenantId, path);
+      if (!key) throw new Error(ACCEPTED_PLATE_EXPORT_ERRORS.unexpected);
+      return `/exports/${key}`;
+    };
+    const plates = materialized.plates.map((plate) => ({
+      plate_id: parseAcceptedPlateId(plate.plateId),
+      ordinal: plate.ordinal,
+      filename: plate.filename,
+      download_url: downloadUrl(plate.absolutePath),
+    }));
+    const solePlate = plates.length === 1 ? plates[0] : undefined;
+    return {
+      format: "accepted-plate-export-job-v1",
+      profile_id: materialized.basis.profileId,
+      basis: {
+        profile_id: materialized.basis.profileId,
+        plan_version: materialized.basis.planVersion,
+        plan_revision_id: materialized.basis.revisionId,
+        plan_revision_digest: materialized.basis.revisionDigest,
+        required_unit_mapping_digest: materialized.basis.requiredUnitMappingDigest,
+      },
+      plate_revision_id: materialized.plateRevisionId,
+      plate_revision_number: materialized.plateRevisionNumber,
+      layout_digest: materialized.layoutDigest,
+      download_url: solePlate?.download_url ?? downloadUrl(materialized.bundle.absolutePath),
+      manifest_download_url: downloadUrl(materialized.manifest.absolutePath),
+      bundle_download_url: downloadUrl(materialized.bundle.absolutePath),
+      plates,
+    };
   }
 
   private async runDirectExport3mf(

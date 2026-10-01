@@ -271,6 +271,12 @@ describe("projectWorkPackages bench status on the Plates route", () => {
     expect(projection.bench?.links.exportArtifact?.jobId).toBe("job-90");
   });
 
+  it("keeps a newer Plate revision ready to slice when only an older revision was exported", () => {
+    const projection = projectWorkPackages(input({ exportRecords: [exportRecord(89)] }));
+    expect(projection.bench?.status).toBe("ready_to_slice");
+    expect(projection.bench?.links.exportArtifact).toBeNull();
+  });
+
   it("is Ready to send once a sliced file is added", () => {
     const projection = projectWorkPackages(
       input({ exportRecords: [exportRecord(90)], slicedFile: { name: "batch.gcode" } }),
