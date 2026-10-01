@@ -261,7 +261,13 @@ async function cmdLaunch(values) {
   const logPath = join(STATE_DIR, project, "npm-dev.log");
   mkdirSync(dirname(logPath), { recursive: true });
   const fd = openSync(logPath, "a");
-  const dev = spawn("npm", ["run", "dev"], {
+  const devCommand = [
+    "npm run predev",
+    "exec npm exec -- concurrently -n server,web -c blue,green " +
+      '"npm run dev -w @print-partner/server" ' +
+      `"npm run dev -w @print-partner/web -- --host 127.0.0.1 --port ${uiPort} --strictPort"`,
+  ].join(" && ");
+  const dev = spawn("sh", ["-c", devCommand], {
     cwd: join(REPO_ROOT, "web"),
     env: {
       ...process.env,
@@ -281,8 +287,15 @@ async function cmdLaunch(values) {
   let health;
   try {
     health = await waitForHealth(healthUrl, 90);
+    const uiHealth = await waitForHealth(baseUrl, 90);
+    if ([health, uiHealth].some((candidate) => candidate.data_dir !== dataDir || candidate.port !== apiPort)) {
+      throw new Error("Verification health belongs to another instance");
+    }
   } catch (err) {
-    fail(err.message, { logPath });
+    try {
+      process.kill(-dev.pid, "SIGTERM");
+    } catch {}
+    fail(err.message, { logPath, pid: dev.pid });
   }
 
   const state = {
