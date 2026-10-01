@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import type { SourceSummary } from "@print-partner/contracts";
 import type { PlanReview } from "../api/endpoints/planManifests";
 import {
-  attachedSourceIds,
   buildLibraryCardMeta,
   pickCountsBySourceId,
   sourceSlug,
@@ -41,7 +40,7 @@ describe("librarySourceMeta", () => {
     ).toBe("VoronDesign/Voron-Trident");
   });
 
-  it("counts attached picks per source from review", () => {
+  it("counts saved picks per source from review", () => {
     const review = {
       layers: [
         {
@@ -77,7 +76,6 @@ describe("librarySourceMeta", () => {
       ],
     } as unknown as PlanReview;
 
-    expect([...attachedSourceIds(review)].sort()).toEqual([10, 20]);
     const picks = pickCountsBySourceId(review);
     expect(picks.get(10)).toBe(2);
     expect(picks.get(20)).toBe(1);

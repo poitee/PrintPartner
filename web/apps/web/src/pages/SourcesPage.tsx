@@ -82,10 +82,11 @@ import { useJobRunner } from "../hooks/useJobRunner";
 import { deskNextStepLine } from "../lib/deskNextStep";
 import { sourceContentAvailable } from "../lib/sourceContentAvailable";
 import {
-  attachedSourceIds,
   buildLibraryCardMeta,
   pickCountsBySourceId,
 } from "../lib/librarySourceMeta";
+import { attachedPlanSourceIds } from "../lib/buildSourceLayers";
+import { usePlanLayersQuery } from "../queries/planLayers";
 import {
   countSourcesByCategory,
   reconcileSourceCategoryFilter,
@@ -224,6 +225,8 @@ export default function SourcesPage() {
     error: sourcesQueryError,
     refetch: refetchSources,
   } = useSourcesQuery(engineReady);
+  const layersQuery = usePlanLayersQuery(selectedProfileId, engineReady);
+  const attachmentsKnown = selectedProfileId == null || layersQuery.data !== undefined;
   const categoriesQuery = useSourceCategoriesQuery(engineReady);
   /** Flat, ordered category paths — "Printers" and "Printers/Frame" alike. */
   const categories = categoriesQuery.data ?? EMPTY_SOURCE_CATEGORIES;
@@ -244,7 +247,10 @@ export default function SourcesPage() {
       : sourcesQueryError
         ? String(sourcesQueryError)
         : null;
-  const pageLoadError = loadError ?? sourceQueryError;
+  const layerQueryError = layersQuery.error
+    ? `Could not load Build attachments: ${layersQuery.error.message}`
+    : null;
+  const pageLoadError = loadError ?? sourceQueryError ?? layerQueryError;
   const categoryError =
     categoriesQuery.error instanceof Error
       ? `Could not load source categories: ${categoriesQuery.error.message}`
@@ -303,10 +309,11 @@ export default function SourcesPage() {
     setLoadError(null);
     await Promise.allSettled([
       refetchSources(),
+      ...(selectedProfileId == null ? [] : [layersQuery.refetch()]),
       categoriesQuery.refetch(),
       invalidateSourceContent(queryClient),
     ]);
-  }, [categoriesQuery, engineReady, queryClient, refetchSources]);
+  }, [categoriesQuery, engineReady, layersQuery, queryClient, refetchSources, selectedProfileId]);
 
   const onCategoriesReorder = useCallback(async (next: string[]) => {
     try {
@@ -414,10 +421,14 @@ export default function SourcesPage() {
 
   const hasSyncedSources = sources.some(sourceContentAvailable);
 
-  const showSourceSkeletons = sourcesLoading && !sourcesLoaded;
+  const showSourceSkeletons = (sourcesLoading && !sourcesLoaded)
+    || (!attachmentsKnown && !layersQuery.isError);
 
   const selectedPlan = profiles.find((p) => p.id === selectedProfileId) ?? null;
-  const attachedIds = useMemo(() => attachedSourceIds(review), [review]);
+  const attachedIds = useMemo(
+    () => attachedPlanSourceIds(layersQuery.data ?? []),
+    [layersQuery.data],
+  );
   const pickCounts = useMemo(() => pickCountsBySourceId(review), [review]);
   const attachedCount = attachedIds.size;
 
@@ -447,9 +458,9 @@ export default function SourcesPage() {
 
   const headerSubtitle = useMemo(() => {
     const srcLabel = `${sources.length} source${sources.length === 1 ? "" : "s"}`;
-    if (!selectedPlan || attachedCount === 0) return srcLabel;
+    if (!attachmentsKnown || !selectedPlan || attachedCount === 0) return srcLabel;
     return `${srcLabel} · ${attachedCount} attached to ${selectedPlan.name}`;
-  }, [sources.length, selectedPlan, attachedCount]);
+  }, [sources.length, attachmentsKnown, selectedPlan, attachedCount]);
 
   const libraryNextStep = deskNextStepLine("library", {
     sourceCount: sources.length,
@@ -939,29 +950,31 @@ export default function SourcesPage() {
       />
       <DeskNextStep>{libraryNextStep}</DeskNextStep>
 
-      <SourceWatchPanel
-        githubSourceCount={monitoring.automaticCount}
-        manualTrackedCount={monitoring.manualTrackedCount}
-        updateCount={monitoring.updateCount}
-        attentionCount={monitoring.attentionCount}
-        unknownCount={monitoring.unknownCount}
-        attachedUpdateCount={attachedStaleCount}
-        lastCheckedAt={monitoring.lastCheckedAt}
-        checking={updateBusy}
-        syncing={busy}
-        onCheckNow={checkUpdates}
-        onSyncGitHub={() =>
-          syncSources(
-            sources
-              .filter(
-                (source) => sourceMonitoringCapability(source.source_kind) === "automatic",
-              )
-              .map((source) => source.id),
-          )
-        }
-        onShowUpdates={() => setSyncFilter("updates")}
-        onImportRepositories={() => setReposImportOpen(true)}
-      />
+      {attachmentsKnown && (
+        <SourceWatchPanel
+          githubSourceCount={monitoring.automaticCount}
+          manualTrackedCount={monitoring.manualTrackedCount}
+          updateCount={monitoring.updateCount}
+          attentionCount={monitoring.attentionCount}
+          unknownCount={monitoring.unknownCount}
+          attachedUpdateCount={attachedStaleCount}
+          lastCheckedAt={monitoring.lastCheckedAt}
+          checking={updateBusy}
+          syncing={busy}
+          onCheckNow={checkUpdates}
+          onSyncGitHub={() =>
+            syncSources(
+              sources
+                .filter(
+                  (source) => sourceMonitoringCapability(source.source_kind) === "automatic",
+                )
+                .map((source) => source.id),
+            )
+          }
+          onShowUpdates={() => setSyncFilter("updates")}
+          onImportRepositories={() => setReposImportOpen(true)}
+        />
+      )}
 
       <div className="overflow-hidden rounded-xl border border-border bg-card lg:grid lg:min-h-[min(70vh,720px)] lg:grid-cols-[178px_minmax(0,1fr)]">
         <LibraryCategoryRail
@@ -1028,11 +1041,13 @@ export default function SourcesPage() {
               </Button>
             </div>
 
-            <LibraryStaleBanner
-              staleCount={staleSources.length}
-              attachedStaleCount={attachedStaleCount}
-              onSeeChanges={onSeeStaleChanges}
-            />
+            {attachmentsKnown && (
+              <LibraryStaleBanner
+                staleCount={staleSources.length}
+                attachedStaleCount={attachedStaleCount}
+                onSeeChanges={onSeeStaleChanges}
+              />
+            )}
 
             <BulkCategoryBar
               count={selectedSourceIds.size}
@@ -1118,7 +1133,7 @@ export default function SourcesPage() {
                   ))}
                 </div>
               )
-            ) : pageLoadError && sources.length === 0 ? (
+            ) : pageLoadError && (sources.length === 0 || !attachmentsKnown) ? (
               <Card className={cn("shadow-none", statusTone({ tone: "error", emphasis: "surface" }))}>
                 <CardContent className="space-y-3 pt-6">
                   <p className="text-sm text-destructive">

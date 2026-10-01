@@ -12,6 +12,7 @@ export const queryKeys = {
   planReviews: ["planReview"] as const,
   planReview: (profileId: number, includeExcluded?: boolean) =>
     ["planReview", profileId, includeExcluded ?? false] as const,
+  allPlanLayers: ["planLayers"] as const,
   planLayers: (profileId: number) => ["planLayers", profileId] as const,
   planRecipeBundle: (profileId: number) => ["planRecipeBundle", profileId] as const,
   planDrafts: (profileId: number) => ["planDrafts", profileId] as const,

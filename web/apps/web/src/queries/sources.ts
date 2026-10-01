@@ -82,7 +82,10 @@ export function useDeleteSourceMutation() {
       qc.setQueryData<SourceSummary[]>(queryKeys.sources, (current) =>
         (current ?? []).filter((source) => source.id !== id),
       );
-      await invalidateSourceDependents(qc);
+      await Promise.all([
+        invalidateSourceDependents(qc),
+        qc.invalidateQueries({ queryKey: queryKeys.allPlanLayers }),
+      ]);
     },
   });
 }
