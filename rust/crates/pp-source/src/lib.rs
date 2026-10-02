@@ -1,7 +1,10 @@
+pub mod archive;
 mod directory;
+mod path_policy;
 
 use directory::Directory;
 use fs2::FileExt;
+use path_policy::PathCollisions;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -275,34 +278,12 @@ fn validate_request(request: &mut SnapshotRequest) -> Result<()> {
     {
         return Err(Error::Limit);
     }
-    let mut paths = BTreeSet::new();
+    let mut paths = PathCollisions::default();
     for file in &request.files {
         if file.size_hint_bytes.is_some_and(|n| n > MAX_SAFE_INTEGER) {
             return Err(Error::Limit);
         }
-        if !paths.insert(file.path.0.to_lowercase()) {
-            return Err(Error::DuplicatePath);
-        }
-    }
-    for path in &paths {
-        let mut parent = path.as_str();
-        while let Some((prefix, _)) = parent.rsplit_once('/') {
-            if paths.contains(prefix) {
-                return Err(Error::DuplicatePath);
-            }
-            parent = prefix;
-        }
-    }
-    let mut tree_entries = paths.clone();
-    for path in &paths {
-        let mut parent = path.as_str();
-        while let Some((prefix, _)) = parent.rsplit_once('/') {
-            tree_entries.insert(format!("{prefix}/"));
-            if tree_entries.len() > MAX_ENTRIES {
-                return Err(Error::Limit);
-            }
-            parent = prefix;
-        }
+        paths.insert(&file.path, false)?;
     }
     for file in &request.selection.omitted_files {
         if matches!(file.kind, FileKind::Stl | FileKind::Artifact)
@@ -310,9 +291,7 @@ fn validate_request(request: &mut SnapshotRequest) -> Result<()> {
         {
             return Err(Error::CorruptSnapshot);
         }
-        if !paths.insert(file.path.0.to_lowercase()) {
-            return Err(Error::DuplicatePath);
-        }
+        paths.insert(&file.path, false)?;
     }
     request
         .files
