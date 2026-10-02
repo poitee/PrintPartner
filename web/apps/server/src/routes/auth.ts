@@ -1,3 +1,4 @@
+import { desktopContext, desktopPrincipal } from "../desktop-context.js";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { randomBytes } from "node:crypto";
 import type { ServerConfig } from "../config.js";
@@ -534,6 +535,7 @@ function resolveRequestAuth(
   config: ServerConfig,
   authStore: AuthStore | null,
 ): SessionUser | null {
+  if (desktopContext()) return desktopPrincipal(request);
   if (!config.multiUser && !config.singleUserAuth && config.deployMode === "self-host") {
     return {
       user_id: "local",

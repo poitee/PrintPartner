@@ -1,0 +1,22 @@
+[package]
+name = "pp-gateway"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+axum.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+rand.workspace = true
+sha2.workspace = true
+hex.workspace = true
+tower-http.workspace = true
+tokio-util.workspace = true
+http-body.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+pp-compat = { path = "../pp-compat" }

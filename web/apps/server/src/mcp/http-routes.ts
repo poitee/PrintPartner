@@ -1,3 +1,4 @@
+import { desktopContext } from "../desktop-context.js";
 /**
  * Streamable HTTP MCP on the live app process (same tools as stdio).
  * Mounted under /api/v1/mcp.
@@ -87,7 +88,7 @@ function assertMcpHttpAllowed(
   }
 
   if (!config.integrationApiKey) {
-    if (isLoopbackBindHost(config.host)) return true;
+    if (!desktopContext() && isLoopbackBindHost(config.host)) return true;
     void sendProblem(
       reply,
       503,
