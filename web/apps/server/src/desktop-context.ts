@@ -46,7 +46,7 @@ export function installDesktopContext(input: unknown): void {
   context = parsed;
 }
 
-export function assertDataDirectoryAvailable(dataDir: string): void {
+function assertDataDirectoryAvailable(dataDir: string): void {
   if (!existsSync(dataDir)) return;
   const canonical = realpathSync(dataDir);
   if (!existsSync(join(canonical, ".desktop-owner.json"))) return;
