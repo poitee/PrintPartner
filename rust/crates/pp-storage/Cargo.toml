@@ -9,7 +9,7 @@ license.workspace = true
 anyhow.workspace = true
 rusqlite.workspace = true
 serde.workspace = true
-serde_json.workspace = true
+serde_json = { workspace = true, features = ["preserve_order"] }
 fs2.workspace = true
 rand.workspace = true
 sha2.workspace = true
@@ -21,3 +21,6 @@ base64 = "=0.22.1"
 subtle = { version = "=2.6.1", default-features = false }
 hmac.workspace = true
 getrandom = "=0.3.4"
+icu_collator = "=2.3.1"
+regress = "=0.11.1"
+ryu-js = "=1.0.2"
