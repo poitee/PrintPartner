@@ -57,6 +57,10 @@ for name, relative in [('contracts', 'packages/contracts'), ('domain', 'packages
         alias.parent.mkdir(parents=True, exist_ok=True)
         alias.symlink_to(os.path.relpath(web / relative, alias.parent))
 if system == 'macos':
+    from macos_addon_slices import normalize_addon
+    target_architecture = {'aarch64': 'arm64', 'x86_64': 'x86_64'}[arch]
+    for addon in list(web.rglob('*.node')):
+        normalize_addon(addon, target_architecture)
     frameworks = stage / 'Frameworks'
     frameworks.mkdir()
     for addon in list(web.rglob('*.node')):
@@ -75,7 +79,7 @@ identity_path = stage / ('Resources/desktop-runtime/release.json' if system == '
 identity_path.write_text(json.dumps(release, sort_keys=True)+'\n')
 if system == 'macos':
     native_config = json.loads((pathlib.Path(__file__).resolve().parents[1] / 'crates/pp-desktop/tauri.conf.json').read_text())
-    bundle = {'resources': {str(stage / 'Resources/desktop-runtime'): 'desktop-runtime'},
+    bundle = {'resources': {},
               'macOS': {'minimumSystemVersion': native_config['bundle']['macOS']['minimumSystemVersion'],
                         'files': {str(path.relative_to(stage)): str(path)
                                   for directory in ['MacOS', 'Frameworks']

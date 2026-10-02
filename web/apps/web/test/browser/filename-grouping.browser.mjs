@@ -82,20 +82,65 @@ try {
   assert.equal(await page.evaluate(() => globalThis.document.documentElement.scrollWidth > globalThis.innerWidth), false);
   assert.deepEqual(errors, []);
   const recoveryPage = await browser.newPage();
-  await recoveryPage.routeWebSocket(/\/jobs\/[^/]+\/events/, (socket) => socket.close());
+  /** @type {{ closedSocketJobs: string[], deniedPollJobs: string[], recoveredPollJobs: string[] }} */
+  const observation = { closedSocketJobs: [], deniedPollJobs: [], recoveredPollJobs: [] };
+  const firstClosedSocket = Promise.withResolvers();
   const jobStatus = /\/jobs\/[^/?]+$/;
-  await recoveryPage.route(jobStatus, (route) => route.request().method() === "GET"
-    ? route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "Test connection interrupted" }) })
-    : route.continue());
-  await recoveryPage.goto(`${ui}/export?profile=${build.id}`);
-  await recoveryPage.getByRole("button", { name: /Download.*STL|Choose and download/i }).first().click();
-  await recoveryPage.getByRole("button", { name: "Download sorted STL files", exact: true }).click();
-  await recoveryPage.getByText("Could not download the STL files", { exact: true }).waitFor();
-  await recoveryPage.getByText(/Lost contact with the job/).first().waitFor();
-  assert.equal(await recoveryPage.getByRole("button", { name: "Download sorted STL files", exact: true }).isEnabled(), true);
-  await recoveryPage.unroute(jobStatus);
-  await recoveryPage.getByRole("button", { name: "Try again", exact: true }).click();
-  await recoveryPage.getByRole("link", { name: "Save the files", exact: true }).waitFor();
+  const jobIdFromUrl = (url) => {
+    const match = new globalThis.URL(url).pathname.match(/\/jobs\/([^/]+)$/);
+    assert.ok(match, "Expected a fixture job endpoint");
+    return decodeURIComponent(match[1]);
+  };
+  await recoveryPage.routeWebSocket(/\/ws\/jobs\/[^/?]+$/, async (socket) => {
+    const jobId = jobIdFromUrl(socket.url());
+    await socket.close();
+    observation.closedSocketJobs.push(jobId);
+    firstClosedSocket.resolve(jobId);
+  });
+  await recoveryPage.route(jobStatus, async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    const jobId = jobIdFromUrl(route.request().url());
+    const closedJobId = await firstClosedSocket.promise;
+    assert.equal(jobId, closedJobId, "The failed poll must observe the interrupted socket's job");
+    await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "Test connection interrupted" }) });
+    observation.deniedPollJobs.push(jobId);
+  });
+  recoveryPage.on("response", (response) => {
+    if (response.request().method() === "GET" && response.status() === 200 && jobStatus.test(response.url())) {
+      observation.recoveredPollJobs.push(jobIdFromUrl(response.url()));
+    }
+  });
+  const recoveryError = recoveryPage.getByText("Could not download the STL files", { exact: true });
+  const lostContact = recoveryPage.getByText(/Lost contact with the job/).first();
+  const recoveredDownload = recoveryPage.getByRole("link", { name: "Save the files", exact: true });
+  try {
+    await recoveryPage.goto(`${ui}/export?profile=${build.id}`);
+    await recoveryPage.getByRole("button", { name: /Download.*STL|Choose and download/i }).first().click();
+    await recoveryPage.getByRole("button", { name: "Download sorted STL files", exact: true }).click();
+    await recoveryError.waitFor();
+    await lostContact.waitFor();
+    assert.ok(observation.closedSocketJobs.length > 0, "The canonical job socket must be intercepted and closed");
+    assert.ok(observation.deniedPollJobs.length > 0, "The job HTTP status request must receive the injected 503");
+    assert.ok(observation.deniedPollJobs.every((id) => observation.closedSocketJobs.includes(id)));
+    assert.equal(await recoveryPage.getByRole("button", { name: "Download sorted STL files", exact: true }).isEnabled(), true);
+    await recoveryPage.unroute(jobStatus);
+    await recoveryPage.getByRole("button", { name: "Try again", exact: true }).click();
+    await recoveredDownload.waitFor();
+    assert.ok(observation.recoveredPollJobs.length > 0, "Retry must receive a real successful HTTP job status");
+    assert.ok(observation.recoveredPollJobs.every((id) => !observation.deniedPollJobs.includes(id)), "Retry must observe a new job");
+    log("PASS: job observation fault witnesses", { build: build.id, ...observation });
+  } catch (error) {
+    log("FAIL: job observation fault witnesses", {
+      build: build.id,
+      closedSockets: observation.closedSocketJobs.length,
+      deniedPolls: observation.deniedPollJobs.length,
+      successfulRetryPolls: observation.recoveredPollJobs.length,
+      errorVisible: await recoveryError.isVisible(),
+      lostContactVisible: await lostContact.isVisible(),
+      downloadVisible: await recoveredDownload.isVisible(),
+    });
+    throw error;
+  }
   await recoveryPage.close();
   log("PASS: interrupted job observation stops the spinner; retry completes through HTTP polling without WebSocket");
   log("PASS: real upload, saved rules reload, Accent + Structural ZIP download with identical STL bytes, overlap warning, mobile layout", { build: build.id });
