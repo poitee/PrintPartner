@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/pp-storage", "crates/pp-core", "crates/pp-compat", "crates/pp-gateway", "crates/pp-server", "crates/pp-contracts", "crates/pp-source", "crates/pp-desktop"]
+members = ["crates/pp-api", "crates/pp-storage", "crates/pp-core", "crates/pp-compat", "crates/pp-gateway", "crates/pp-server", "crates/pp-contracts", "crates/pp-source", "crates/pp-desktop"]
 default-members = ["crates/pp-storage", "crates/pp-core", "crates/pp-compat", "crates/pp-gateway", "crates/pp-server", "crates/pp-contracts", "crates/pp-source"]
 resolver = "3"
 
