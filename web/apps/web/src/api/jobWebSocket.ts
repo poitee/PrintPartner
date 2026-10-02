@@ -1,5 +1,5 @@
 import type { JobEvent } from "@print-partner/contracts";
-import { getEngineBaseUrl, resolveEngineUrl } from "./contractRequest";
+import { getEngineBaseUrl } from "./contractRequest";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -26,34 +26,68 @@ export function connectJobWebSocket(
 ): () => void {
   let closed = false;
   let socket: WebSocket | null = null;
+  let retryTimer: ReturnType<typeof setTimeout> | null = null;
+  let retryDelay = 500;
+  let url: URL;
 
   try {
     const base = getEngineBaseUrl();
     const origin = base || (typeof window === "undefined" ? "" : window.location.origin.replace(/\/$/, ""));
-    const httpUrl = resolveEngineUrl(`/jobs/${jobId}/events`);
-    const url = new URL(httpUrl, origin || "http://localhost");
+    url = new URL(`${origin || "http://localhost"}/ws/jobs/${encodeURIComponent(jobId)}`);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-    if (!closed) {
-      socket = new WebSocket(url.toString());
-      socket.onmessage = (event) => {
+  } catch (error) {
+    onError(error instanceof Error ? error : new Error(String(error)));
+    return () => undefined;
+  }
+
+  function disconnect() {
+    closed = true;
+    if (retryTimer !== null) clearTimeout(retryTimer);
+    socket?.close();
+  }
+
+  function reconnect() {
+    if (closed) return;
+    retryTimer = setTimeout(connect, retryDelay);
+    retryDelay = Math.min(retryDelay * 2, 10_000);
+  }
+
+  function connect() {
+    retryTimer = null;
+    if (closed) return;
+    try {
+      const current = new WebSocket(url.toString());
+      socket = current;
+      current.onmessage = (event) => {
+        if (closed || socket !== current) return;
         try {
           const value: unknown = JSON.parse(String(event.data));
           if (!isJobEvent(value)) {
             throw new Error("Job event stream returned an invalid event");
+          }
+          retryDelay = 500;
+          if (value.status === "done" || value.status === "error" || value.status === "cancelled") {
+            disconnect();
           }
           onEvent(value);
         } catch (error) {
           onError(error instanceof Error ? error : new Error(String(error)));
         }
       };
-      socket.onerror = () => onError(new Error("Job event stream failed"));
+      current.onerror = () => {
+        if (!closed && socket === current) onError(new Error("Job event stream failed"));
+      };
+      current.onclose = () => {
+        if (closed || socket !== current) return;
+        socket = null;
+        reconnect();
+      };
+    } catch (error) {
+      onError(error instanceof Error ? error : new Error(String(error)));
+      reconnect();
     }
-  } catch (error) {
-    onError(error instanceof Error ? error : new Error(String(error)));
   }
 
-  return () => {
-    closed = true;
-    socket?.close();
-  };
+  connect();
+  return disconnect;
 }
