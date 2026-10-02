@@ -1,0 +1,9 @@
+solid accepted
+facet normal 0 0 1
+outer loop
+vertex -2 -3 -4
+vertex 1 -3 -4
+vertex -2 2 6
+endloop
+endfacet
+endsolid accepted

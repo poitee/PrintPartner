@@ -1,3 +1,4 @@
+import { acquireDataDirectory } from "../desktop-context.js";
 /**
  * Thin stdio MCP server exposing Print Partner product verbs.
  *
@@ -36,59 +37,77 @@ async function main(): Promise<void> {
   }
 
   const ports = createPorts(config);
-  await ports.db.connect();
-
-  const getRepo = (): AppRepository => {
-    if (ports.repository) return ports.repository;
-    if (ports.getRepository) return ports.getRepository("default");
-    throw new Error("No repository available");
+  const releaseOwner = acquireDataDirectory(config.dataDir);
+  let stopping = false;
+  const stop = async () => {
+    if (stopping) return;
+    stopping = true;
+    await ports.db.close();
+    releaseOwner();
+    process.exit(0);
   };
+  process.stdin.once("end", () => { void stop(); });
+  process.once("SIGTERM", () => { void stop(); });
+  process.once("SIGINT", () => { void stop(); });
+  try {
+    await ports.db.connect();
 
-  const migration = await migrateLegacySourceManifestOverridesForTenant(
-    getRepo(),
-    "default",
-  );
-  for (const retained of migration.retained) {
-    console.error(
-      `Retained legacy Source manifest override for Source ${retained.sourceId}: ${retained.reason}`,
+    const getRepo = (): AppRepository => {
+      if (ports.repository) return ports.repository;
+      if (ports.getRepository) return ports.getRepository("default");
+      throw new Error("No repository available");
+    };
+
+    const migration = await migrateLegacySourceManifestOverridesForTenant(
+      getRepo(),
+      "default",
     );
-  }
-  for (const migrated of migration.migrated) {
-    if (!migrated.changedDuringMigration) continue;
-    const backupPath = migrated.backupPath ?? "an unknown path";
+    for (const retained of migration.retained) {
+      console.error(
+        `Retained legacy Source manifest override for Source ${retained.sourceId}: ${retained.reason}`,
+      );
+    }
+    for (const migrated of migration.migrated) {
+      if (!migrated.changedDuringMigration) continue;
+      const backupPath = migrated.backupPath ?? "an unknown path";
+      console.error(
+        `Legacy Source manifest for Source ${migrated.sourceId} changed during migration; ` +
+          `the changed bytes remain archived at ${backupPath}`,
+      );
+    }
+
+    if (!mcpAccessEnabled(readExternalAccessSettings(getRepo()).mode)) {
+      throw new Error("MCP access is turned off in Print Partner Settings.");
+    }
+
+    const jobs: InProcessJobRunner = createJobRunner(getRepo, config.dataDir);
+    const pending = new Map<string, AssistantProposedAction>();
+
+    const planEnv = process.env.PRINT_PARTNER_MCP_PLAN_ID;
+    const defaultPlanId =
+      planEnv && Number.isFinite(Number(planEnv)) ? Math.trunc(Number(planEnv)) : null;
+
+    const server = createProductMcpServer({
+      getRepo,
+      jobs,
+      config,
+      defaultPlanId,
+      pending,
+      isEnabled: () =>
+        mcpAccessEnabled(readExternalAccessSettings(getRepo()).mode),
+    });
+
+    const transport = new StdioServerTransport();
+    await server.connect(transport);
     console.error(
-      `Legacy Source manifest for Source ${migrated.sourceId} changed during migration; ` +
-        `the changed bytes remain archived at ${backupPath}`,
+      `print-partner-assistant MCP on stdio (data=${config.dataDir}` +
+        `${defaultPlanId != null ? `, plan=${defaultPlanId}` : ""})`,
     );
+  } catch (error) {
+    await ports.db.close();
+    releaseOwner();
+    throw error;
   }
-
-  if (!mcpAccessEnabled(readExternalAccessSettings(getRepo()).mode)) {
-    throw new Error("MCP access is turned off in Print Partner Settings.");
-  }
-
-  const jobs: InProcessJobRunner = createJobRunner(getRepo, config.dataDir);
-  const pending = new Map<string, AssistantProposedAction>();
-
-  const planEnv = process.env.PRINT_PARTNER_MCP_PLAN_ID;
-  const defaultPlanId =
-    planEnv && Number.isFinite(Number(planEnv)) ? Math.trunc(Number(planEnv)) : null;
-
-  const server = createProductMcpServer({
-    getRepo,
-    jobs,
-    config,
-    defaultPlanId,
-    pending,
-    isEnabled: () =>
-      mcpAccessEnabled(readExternalAccessSettings(getRepo()).mode),
-  });
-
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
-  console.error(
-    `print-partner-assistant MCP on stdio (data=${config.dataDir}` +
-      `${defaultPlanId != null ? `, plan=${defaultPlanId}` : ""})`,
-  );
 }
 
 main().catch((err) => {

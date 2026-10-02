@@ -15,7 +15,8 @@
     "apps/server": {
       "entry": [
         "capture-digest-fixtures.ts",
-        "src/**/*.test.ts"
+        "src/**/*.test.ts",
+        "src/desktop.ts"
       ],
       "project": [
         "src/**/*.ts",

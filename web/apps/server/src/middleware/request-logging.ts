@@ -1,3 +1,4 @@
+import { desktopContext } from "../desktop-context.js";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { getLogger, type LogSeverity } from "../services/logger.js";
 
@@ -36,15 +37,15 @@ export async function registerRequestLoggingMiddleware(app: FastifyInstance): Pr
 
     logger.logWorkflow({
       method: request.method,
-      url: request.url,
+      url: desktopContext() ? (request.routeOptions.url ?? "unmatched") : request.url,
       userId: (request as RequestWithTiming).userId,
       duration,
       statusCode: reply.statusCode,
       severity,
-      message: `${request.method} ${request.url}`,
+      message: `${request.method} ${desktopContext() ? (request.routeOptions.url ?? "unmatched") : request.url}`,
       context: {
-        params: request.params,
-        query: request.query,
+        params: desktopContext() ? undefined : request.params,
+        query: desktopContext() ? undefined : request.query,
       },
     });
   });
@@ -59,15 +60,15 @@ export async function registerRequestLoggingMiddleware(app: FastifyInstance): Pr
 
     logger.logWorkflow({
       method: request.method,
-      url: request.url,
+      url: desktopContext() ? (request.routeOptions.url ?? "unmatched") : request.url,
       userId: (request as RequestWithTiming).userId,
       duration,
       statusCode: reply.statusCode || 500,
       severity: "error",
-      message: `Error in ${request.method} ${request.url}`,
+      message: desktopContext() ? "Desktop request failed" : `Error in ${request.method} ${request.url}`,
       error: {
-        message: errorMessage,
-        stack: errorStack,
+        message: desktopContext() ? "Request failed" : errorMessage,
+        stack: desktopContext() ? undefined : errorStack,
       },
     });
 

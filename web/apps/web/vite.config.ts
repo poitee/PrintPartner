@@ -125,7 +125,15 @@ export default defineConfig({
   test: {
     include: ["src/**/*.test.{ts,tsx}"],
   },
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), {
+    name: "print-partner-desktop-build",
+    generateBundle() {
+      if (process.env.VITE_PRINT_PARTNER_DESKTOP !== "1") return;
+      this.emitFile({ type: "asset", fileName: "desktop-build.json", source: JSON.stringify({
+        mode: "desktop", version: appVersion, service_worker: false,
+      }) });
+    },
+  }],
   resolve: {
     alias: {
       "@": path.resolve(SOURCE_DIR),

@@ -1,0 +1,2322 @@
+{
+  "scope": "Initial protected product proof; unknown operations denied",
+  "routes": [
+    {
+      "method": "GET",
+      "path": "/plans/:id/plates",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/accepted-plates.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/plans/:id/plates",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/accepted-plates.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/plans/:id/plates/initialize",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/accepted-plates.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v2/plans/:id/plates/initialize",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/accepted-plates.ts"
+    },
+    {
+      "method": "PATCH",
+      "path": "/plans/:id/plates/:plateId/units/:token",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/accepted-plates.ts"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v2/plans/:id/plates/:plateId/units/:token",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/accepted-plates.ts"
+    },
+    {
+      "method": "PATCH",
+      "path": "/plans/:id/plates/:plateId/units/:token/pin",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/accepted-plates.ts"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v2/plans/:id/plates/:plateId/units/:token/pin",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/accepted-plates.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/plans/:id/plates/:plateId/units/:token/unplace",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/accepted-plates.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v2/plans/:id/plates/:plateId/units/:token/unplace",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/accepted-plates.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/plans/:id/plates/:plateId/units/:token/transfer",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/accepted-plates.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v2/plans/:id/plates/:plateId/units/:token/transfer",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/accepted-plates.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/plans/:id/plates/arrange",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/accepted-plates.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v2/plans/:id/plates/arrange",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/accepted-plates.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/plans/:id/plates/restore",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/accepted-plates.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v2/plans/:id/plates/restore",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/accepted-plates.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/auth/me",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/auth.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/exports/*",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/exports.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/exports/*",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/exports.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/health",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/health.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/jobs/sync",
+      "owner": "compat",
+      "effect": "external_effect",
+      "source": "web/apps/server/src/routes/jobs.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/jobs/sync",
+      "owner": "compat",
+      "effect": "external_effect",
+      "source": "web/apps/server/src/routes/jobs.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/jobs/import-scan",
+      "owner": "compat",
+      "effect": "external_effect",
+      "source": "web/apps/server/src/routes/jobs.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/jobs/import-scan",
+      "owner": "compat",
+      "effect": "external_effect",
+      "source": "web/apps/server/src/routes/jobs.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/jobs/check-source-updates",
+      "owner": "compat",
+      "effect": "external_effect",
+      "source": "web/apps/server/src/routes/jobs.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/jobs/check-source-updates",
+      "owner": "compat",
+      "effect": "external_effect",
+      "source": "web/apps/server/src/routes/jobs.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/jobs/extract-source-docs",
+      "owner": "compat",
+      "effect": "external_effect",
+      "source": "web/apps/server/src/routes/jobs.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/jobs/extract-source-docs",
+      "owner": "compat",
+      "effect": "external_effect",
+      "source": "web/apps/server/src/routes/jobs.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/plans/:profileId/filename-grouping",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/jobs.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/plans/:profileId/filename-grouping",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/jobs.ts"
+    },
+    {
+      "method": "PUT",
+      "path": "/plans/:profileId/filename-grouping",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/jobs.ts"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/plans/:profileId/filename-grouping",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/jobs.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/jobs/export-stl-pack",
+      "owner": "compat",
+      "effect": "external_effect",
+      "source": "web/apps/server/src/routes/jobs.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/jobs/export-stl-pack",
+      "owner": "compat",
+      "effect": "external_effect",
+      "source": "web/apps/server/src/routes/jobs.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/jobs/export-checklist-html",
+      "owner": "compat",
+      "effect": "external_effect",
+      "source": "web/apps/server/src/routes/jobs.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/jobs/export-checklist-html",
+      "owner": "compat",
+      "effect": "external_effect",
+      "source": "web/apps/server/src/routes/jobs.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/jobs/export-kit-bundle",
+      "owner": "compat",
+      "effect": "external_effect",
+      "source": "web/apps/server/src/routes/jobs.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/jobs/export-kit-bundle",
+      "owner": "compat",
+      "effect": "external_effect",
+      "source": "web/apps/server/src/routes/jobs.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/jobs/export-accepted-plate-3mf",
+      "owner": "compat",
+      "effect": "external_effect",
+      "source": "web/apps/server/src/routes/jobs.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/jobs/export-accepted-plate-3mf",
+      "owner": "compat",
+      "effect": "external_effect",
+      "source": "web/apps/server/src/routes/jobs.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/jobs/export-direct-3mf",
+      "owner": "compat",
+      "effect": "external_effect",
+      "source": "web/apps/server/src/routes/jobs.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/jobs/export-direct-3mf",
+      "owner": "compat",
+      "effect": "external_effect",
+      "source": "web/apps/server/src/routes/jobs.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/jobs/printer-upload",
+      "owner": "compat",
+      "effect": "external_effect",
+      "source": "web/apps/server/src/routes/jobs.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/jobs/printer-upload",
+      "owner": "compat",
+      "effect": "external_effect",
+      "source": "web/apps/server/src/routes/jobs.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/jobs/:id",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/jobs.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/jobs/:id",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/jobs.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/ws/jobs/:jobId",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/jobs.ts"
+    },
+    {
+      "method": "PATCH",
+      "path": "/parts/:id",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/parts.ts"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/parts/:id",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/parts.ts"
+    },
+    {
+      "method": "PATCH",
+      "path": "/parts/:id/progress",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/parts.ts"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/parts/:id/progress",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/parts.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/parts/:id/assembled",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/parts.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/parts/:id/assembled",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/parts.ts"
+    },
+    {
+      "method": "PATCH",
+      "path": "/parts/:id/assembled",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/parts.ts"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/parts/:id/assembled",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/parts.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/parts/:id/mesh",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/parts.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/parts/:id/mesh",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/parts.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/parts/:id/thumbnail",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/parts.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/parts/:id/thumbnail",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/parts.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/parts/:id/preview",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/parts.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/parts/:id/preview",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/parts.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/plans/:id/regenerate-thumbnails",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/parts.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/plans/:id/regenerate-thumbnails",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/parts.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/parts/:id/thumbnail",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/parts.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/parts/:id/thumbnail",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/parts.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/plans/:id/save",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plan-drafts.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v2/plans/:id/save",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plan-drafts.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/plans/:id/drafts",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plan-drafts.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/plans/:id/drafts",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plan-drafts.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/plans/:id/drafts/:draftId",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plan-drafts.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/plans/:id/drafts/:draftId",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plan-drafts.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/plans/:id/drafts/recompute",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plan-drafts.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v2/plans/:id/drafts/recompute",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plan-drafts.ts"
+    },
+    {
+      "method": "PATCH",
+      "path": "/plans/:id/drafts/:draftId/parts",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plan-drafts.ts"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v2/plans/:id/drafts/:draftId/parts",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plan-drafts.ts"
+    },
+    {
+      "method": "PUT",
+      "path": "/plans/:id/drafts/:draftId/reconciliation",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plan-drafts.ts"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v2/plans/:id/drafts/:draftId/reconciliation",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plan-drafts.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/plans/:id/drafts/:draftId/apply",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plan-drafts.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v2/plans/:id/drafts/:draftId/apply",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plan-drafts.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/plans/:id/drafts/:draftId/abandon",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plan-drafts.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v2/plans/:id/drafts/:draftId/abandon",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plan-drafts.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/plans/:id/drafts/:draftId/rebase",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plan-drafts.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v2/plans/:id/drafts/:draftId/rebase",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plan-drafts.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/plans/:id/progress/import",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plan-drafts.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v2/plans/:id/progress/import",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plan-drafts.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/plans",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/plans",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/plans",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/plans",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v2/plans",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/plans",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/plans/:id",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/plans/:id",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/plans/:id",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/plans/:id/build-planning",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/plans/:id/build-planning",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/plans/:id/build-planning",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/plans/:id/workflow",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/plans/:id/workflow",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/plans/:id/workflow",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "DELETE",
+      "path": "/plans/:id",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v2/plans/:id",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/plans/:id",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "PATCH",
+      "path": "/plans/:id",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v2/plans/:id",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/plans/:id",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/plans/:id/touch",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v2/plans/:id/touch",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/plans/:id/touch",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/plans/:id/archive",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v2/plans/:id/archive",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/plans/:id/archive",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/plans/:id/duplicate",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v2/plans/:id/duplicate",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/plans/:id/duplicate",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "DELETE",
+      "path": "/plans/:id/layers/:layerId",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v2/plans/:id/layers/:layerId",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/plans/:id/layers/:layerId",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "PUT",
+      "path": "/plans/:id/layers/:layerId",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v2/plans/:id/layers/:layerId",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/plans/:id/layers/:layerId",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/plans/:id/layers",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/plans/:id/layers",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/plans/:id/layers",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/plans/:id/phase-manifest",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/plans/:id/phase-manifest",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/plans/:id/phase-manifest",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "PUT",
+      "path": "/plans/:id/layers/base",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v2/plans/:id/layers/base",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/plans/:id/layers/base",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/plans/:id/layers",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v2/plans/:id/layers",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/plans/:id/layers",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/plans/:id/parts",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/plans/:id/parts",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/plans/:id/parts",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/plans/:id/parts-grouped",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/plans/:id/parts-grouped",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/plans/:id/parts-grouped",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/plans/:id/review",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/plans/:id/review",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/plans/:id/review",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/plans/maintenance",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/plans/maintenance",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/plans/maintenance",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/plans/:id/manifest-summary",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/plans/:id/manifest-summary",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/plans/:id/manifest-summary",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/plans/:id/manifest-warnings",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/plans/:id/manifest-warnings",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/plans/:id/manifest-warnings",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/plans/:id/role-filaments",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/plans/:id/role-filaments",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/plans/:id/role-filaments",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "PUT",
+      "path": "/plans/:id/role-filament",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v2/plans/:id/role-filament",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/plans/:id/role-filament",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/plans/:id/apply-role-colors",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v2/plans/:id/apply-role-colors",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/plans/:id/apply-role-colors",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/plans/:id/checkoff",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/plans/:id/checkoff",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/plans/:id/checkoff",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/plans/:id/kit-manifest",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/plans/:id/kit-manifest",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/plans/:id/kit-manifest",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "PUT",
+      "path": "/plans/:id/kit-manifest",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v2/plans/:id/kit-manifest",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/plans/:id/kit-manifest",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/plans/:id/manifest-v2",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/plans/:id/manifest-v2",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/plans/:id/manifest-v2",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/plans/:id/plan-manifest-builder",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/plans/:id/plan-manifest-builder",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/plans/:id/plan-manifest-builder",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/plans/:id/decisions",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/plans/:id/decisions",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/plans/:id/decisions",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/plans/:id/decisions",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v2/plans/:id/decisions",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/plans/:id/decisions",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/plans/:id/recipe",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/plans/:id/recipe",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/plans/:id/recipe",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/plans/:id/snapshots",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/plans/:id/snapshots",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/plans/:id/snapshots",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/plans/:id/snapshots",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v2/plans/:id/snapshots",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/plans/:id/snapshots",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/plans/:id/snapshots/:sid",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/plans/:id/snapshots/:sid",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/plans/:id/snapshots/:sid",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/plans/:id/snapshots/:sid/restore",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v2/plans/:id/snapshots/:sid/restore",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/plans/:id/snapshots/:sid/restore",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/plans/:id/variant-dimensions",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/plans/:id/variant-dimensions",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/plans/:id/variant-dimensions",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/plans/:id/variant-selection",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v2/plans/:id/variant-selection",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/plans/:id/variant-selection",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/plans.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/printer-checkoff",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/printer-checkoff.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/printer-checkoff",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/printer-checkoff.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/printer-checkoff/reconcile",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/printer-checkoff.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/printer-checkoff/verify",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/printer-checkoff.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/printer-checkoff/dismiss",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/printer-checkoff.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/printer-checkoff/file-assignments/preview",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/printer-checkoff.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/printer-checkoff/file-assignments/upload",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/printer-checkoff.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/printer-checkoff/file-assignments",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/printer-checkoff.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/printer-checkoff/:id/recheck-remote-file",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/printer-checkoff.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/printer-checkoff/:id/manual-complete",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/printer-checkoff.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/printer-outcomes/summary",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/printer-checkoff.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/printer-outcomes/summary",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/printer-checkoff.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/printer-checkoff/unattributed",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/printer-checkoff.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/printer-checkoff/unattributed",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/printer-checkoff.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/printer-checkoff/unattributed/:id/claim",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/printer-checkoff.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/printer-checkoff/unattributed/:id/dismiss",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/printer-checkoff.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/plans/:id/production-setup",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/production-setup.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/plans/:id/production-setup",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/production-setup.ts"
+    },
+    {
+      "method": "PATCH",
+      "path": "/plans/:id/production-setup",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/production-setup.ts"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/plans/:id/production-setup",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/production-setup.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/profile-library",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/profile-library.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/profile-library",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/profile-library.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/settings/update-check",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/settings/update-check",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/settings/source-categories",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/settings/source-categories",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "PUT",
+      "path": "/settings/source-categories",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/settings/source-categories",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/settings/date-format",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/settings/date-format",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "PUT",
+      "path": "/settings/date-format",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/settings/date-format",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/settings/stl-naming",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/settings/stl-naming",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "PUT",
+      "path": "/settings/stl-naming",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/settings/stl-naming",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/settings/stl-naming/preview",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/settings/stl-naming/preview",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/settings/github-pat",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/settings/github-pat",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "PUT",
+      "path": "/settings/github-pat",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/settings/github-pat",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/settings/source-update-check",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/settings/source-update-check",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/settings/build-tracking",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/settings/build-tracking",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "PUT",
+      "path": "/settings/build-tracking",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/settings/build-tracking",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/settings/external-access",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/settings/external-access",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "PUT",
+      "path": "/settings/external-access",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/settings/external-access",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/settings/discord-notify",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/settings/discord-notify",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "PUT",
+      "path": "/settings/discord-notify",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/settings/discord-notify",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/settings/discord-notify/test",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/settings/discord-notify/test",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "PUT",
+      "path": "/settings/source-update-check",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/settings/source-update-check",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/settings/printer-plan-bindings",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/settings/printer-plan-bindings",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "PUT",
+      "path": "/settings/printer-plan-bindings",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/settings/printer-plan-bindings",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "DELETE",
+      "path": "/settings/printer-plan-bindings/:integration_id",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/settings/printer-plan-bindings/:integration_id",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/sources/:id/naming",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sources/:id/naming",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "PUT",
+      "path": "/sources/:id/naming",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/sources/:id/naming",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/settings/spoolman-default",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/settings/spoolman-default",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "PUT",
+      "path": "/settings/spoolman-default",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/settings/spoolman-default",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/filaments/catalog",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/filaments/catalog",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/filaments/custom",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/filaments/custom",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/filaments/custom",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/filaments/custom",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "DELETE",
+      "path": "/filaments/custom/:id",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/filaments/custom/:id",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/help/workflow",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/help/workflow",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/settings.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/sources",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/sources.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sources",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/sources.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/sources/activity",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/sources.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sources/activity",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/sources.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/sources/github-branches",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/sources.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sources/github-branches",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/sources.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/sources/github-tags",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/sources.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sources/github-tags",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/sources.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/sources/:id",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/sources.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sources/:id",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/sources.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/sources",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/sources.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/sources",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/sources.ts"
+    },
+    {
+      "method": "PATCH",
+      "path": "/sources/:id",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/sources.ts"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/sources/:id",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/sources.ts"
+    },
+    {
+      "method": "DELETE",
+      "path": "/sources/:id",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/sources.ts"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/sources/:id",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/sources.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/sources/bulk-category",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/sources.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/sources/bulk-category",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/sources.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/sources/:id/import-rules",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/sources.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sources/:id/import-rules",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/sources.ts"
+    },
+    {
+      "method": "PUT",
+      "path": "/sources/:id/import-rules",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/sources.ts"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/sources/:id/import-rules",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/sources.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/sources/:id/upload-zip",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/sources.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/sources/:id/upload-zip",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/sources.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/sources/:id/upload-files",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/sources.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/sources/:id/upload-files",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/sources.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/sources/:id/has-manifest",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/sources.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sources/:id/has-manifest",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/sources.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/sources/:id/cover",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/sources.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sources/:id/cover",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/sources.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/sources/stl-search",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/sources.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sources/stl-search",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/sources.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/sources/maintenance",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/sources.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sources/maintenance",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/sources.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/sources/import-repos-txt",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/sources.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/sources/import-repos-txt",
+      "owner": "compat",
+      "effect": "local_commit",
+      "source": "web/apps/server/src/routes/sources.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/sources/:id/stl-tree",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/sources.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sources/:id/stl-tree",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/sources.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/sources/:id/stl/*",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/sources.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sources/:id/stl/*",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/sources.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/jobs/:id/events",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/jobs.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/ws/jobs/:id",
+      "owner": "compat",
+      "effect": "observation",
+      "source": "web/apps/server/src/routes/jobs.ts"
+    }
+  ],
+  "writers": {
+    "startup": [
+      "prepareSqliteUpgrade",
+      "migratePrintOutcomesBlob",
+      "backfillAdvisorNotesFromDomainPack",
+      "migrateLegacySourceManifestOverridesForTenant",
+      "transfer-artifact-retention"
+    ],
+    "background": [
+      "profile-sync",
+      "source-watcher",
+      "InProcessJobRunner"
+    ],
+    "files": [
+      "accepted-plate-export-delivery",
+      "export-stl-pack",
+      "export-kit",
+      "source-workspace"
+    ]
+  },
+  "writer_owner": "compat"
+}
