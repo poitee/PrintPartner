@@ -19,7 +19,8 @@
       "entry": [
         "capture-digest-fixtures.ts",
         "src/**/*.test.ts",
-        "src/desktop.ts"
+        "src/desktop.ts",
+        "src/desktop-resolution.ts"
       ],
       "project": [
         "src/**/*.ts",

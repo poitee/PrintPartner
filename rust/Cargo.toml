@@ -1,5 +1,6 @@
 [workspace]
-members = ["crates/pp-core", "crates/pp-compat", "crates/pp-gateway", "crates/pp-server", "crates/pp-contracts"]
+members = ["crates/pp-core", "crates/pp-compat", "crates/pp-gateway", "crates/pp-server", "crates/pp-contracts", "crates/pp-desktop"]
+default-members = ["crates/pp-core", "crates/pp-compat", "crates/pp-gateway", "crates/pp-server", "crates/pp-contracts"]
 resolver = "3"
 
 [workspace.package]
@@ -25,7 +26,7 @@ sha2 = "=0.10.9"
 hex = "=0.4.3"
 fs2 = "=0.4.3"
 libc = "=0.2.189"
-tower-http = { version = "=0.6.6", features = ["fs"] }
+tower-http = { version = "=0.6.11", features = ["fs"] }
 tokio-util = { version = "=0.7.16", features = ["rt"] }
 
 [profile.dev.package.sha2]
