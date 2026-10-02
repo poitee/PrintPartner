@@ -75,7 +75,7 @@ identity_path = stage / ('Resources/desktop-runtime/release.json' if system == '
 identity_path.write_text(json.dumps(release, sort_keys=True)+'\n')
 if system == 'macos':
     native_config = json.loads((pathlib.Path(__file__).resolve().parents[1] / 'crates/pp-desktop/tauri.conf.json').read_text())
-    bundle = {'resources': {str(stage / 'Resources/desktop-runtime'): 'desktop-runtime'},
+    bundle = {'resources': {},
               'macOS': {'minimumSystemVersion': native_config['bundle']['macOS']['minimumSystemVersion'],
                         'files': {str(path.relative_to(stage)): str(path)
                                   for directory in ['MacOS', 'Frameworks']

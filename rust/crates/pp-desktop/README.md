@@ -30,7 +30,11 @@ The unsigned bundle helper expects pinned `cargo-tauri` 2.12.1 installed on macO
 PP_DESKTOP_STAGE=/absolute/stage/path bash rust/scripts/desktop-bundle.sh
 ```
 
-It invokes Tauri with `--no-sign --no-binary-patching` and refuses other hosts. This helper has not established a signed release. macOS nested code must be signed before generating its final inventory and compiling Rust. Bundling must preserve those bytes. Sign the outer app afterward, compare nested hashes again, and verify notarization, stapling, installation, and native launch separately. A Linux native process receipt proves neither macOS behavior nor successful UI rendering.
+It validates the completed measured stage, invokes Tauri with `--no-sign --no-binary-patching`, and refuses other hosts. The generated macOS configuration leaves runtime resources to `assemble-macos-resources.py`; Tauri still copies the measured Node and Frameworks files and creates the icon, plist and main executable.
+
+The assembly helper requires a fresh unsigned app with matching product identity and native bytes. It copies the complete runtime tree with relative aliases intact, checks the private candidate against the unchanged manifest, and atomically publishes it to the absent `Contents/Resources/desktop-runtime` destination. Missing or altered source files, escaping aliases, unrelated resources, an existing runtime destination and failed copies stop assembly.
+
+This helper has not established a signed release. macOS nested code must be signed before generating its final inventory and compiling Rust. Bundling must preserve those bytes. Sign the outer app afterward, compare nested hashes again, and verify notarization, stapling, installation, and native launch separately. A Linux native process receipt proves neither macOS behavior nor successful UI rendering.
 
 ## Check unsigned macOS bundles in CI
 
