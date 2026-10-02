@@ -368,6 +368,14 @@ def run_server():
             io_failed = True
             app.logger.exception("Waitress failed")
 
+    def close_io():
+        nonlocal io_failed
+        try:
+            wasyncore.close_all(socket_map)
+        except Exception:
+            io_failed = True
+            app.logger.exception("Waitress socket cleanup failed")
+
     io_thread = threading.Thread(target=run_io, name="waitress-io", daemon=True)
     io_thread.start()
     exit_code = 0
@@ -391,8 +399,15 @@ def run_server():
         exit_code = 1
     finally:
         server.task_dispatcher.shutdown(timeout=max(0, deadline - time.monotonic()))
-        wasyncore.close_all(socket_map)
+        if io_thread.is_alive():
+            try:
+                server.trigger.pull_trigger(close_io)
+            except OSError:
+                io_failed = True
+                app.logger.exception("Waitress shutdown wakeup failed")
         io_thread.join(max(0, deadline - time.monotonic()))
+        if not io_thread.is_alive() and socket_map:
+            close_io()
     if io_failed or server.task_dispatcher.threads or io_thread.is_alive() or time.monotonic() >= deadline:
         app.logger.error("Waitress shutdown exceeded the shutdown deadline")
         exit_code = 1

@@ -108,7 +108,7 @@ class ShutdownTest(unittest.TestCase):
         finally:
             connection.close()
 
-    def _start_server(self, mode="cooperative", timeout=240):
+    def _start_server(self, mode="cooperative", timeout=240, entrypoint=None):
         env = dict(os.environ)
         env.update(
             PORT=str(self.port),
@@ -120,7 +120,7 @@ class ShutdownTest(unittest.TestCase):
             TEST_MODE=mode,
         )
         self.server = subprocess.Popen(
-            [sys.executable, "-B", str(Path(__file__).with_name("sidecar.py"))],
+            [sys.executable, "-B", str(entrypoint or Path(__file__).with_name("sidecar.py"))],
             env=env, stdout=self.log, stderr=self.log,
         )
 
@@ -174,7 +174,10 @@ class ShutdownTest(unittest.TestCase):
     def _stop(self, signum=signal.SIGTERM):
         started = time.monotonic()
         self.server.send_signal(signum)
-        self.assertEqual(self.server.wait(timeout=4.8), 0)
+        exit_code = self.server.wait(timeout=4.8)
+        self.log.flush()
+        self.log.seek(0)
+        self.assertEqual(exit_code, 0, self.log.read())
         elapsed = time.monotonic() - started
         self.assertLess(elapsed, 3.5)
         for thread in self.requests:
@@ -186,6 +189,57 @@ class ShutdownTest(unittest.TestCase):
     def test_idle_sigterm(self):
         self._start_server()
         self.assertLess(self._stop(), 1)
+
+    def test_shutdown_closes_sockets_on_io_thread_before_next_select(self):
+        entrypoint = self.root / "select-race-server.py"
+        entrypoint.write_text(
+            f"import sys\nsys.path.insert(0, {str(Path(__file__).parent)!r})\n" + dedent("""\
+                import os
+                import threading
+                from pathlib import Path
+
+                import sidecar
+                from waitress import trigger, wasyncore
+
+                events = Path(os.environ["TEST_EVENTS"])
+                resume = threading.Event()
+                select = wasyncore.select.select
+                close_all = wasyncore.close_all
+                pull_trigger = trigger.trigger.pull_trigger
+
+                def gated_select(*args):
+                    if (events / "arm-select").exists() and not (events / "select-ready").exists():
+                        (events / "select-ready").touch()
+                        if not resume.wait(2):
+                            raise RuntimeError("Shutdown did not release the select gate")
+                    return select(*args)
+
+                def record_close(*args, **kwargs):
+                    (events / "close-thread").write_text(threading.current_thread().name)
+                    try:
+                        return close_all(*args, **kwargs)
+                    finally:
+                        resume.set()
+
+                def release_pull(self, thunk=None):
+                    try:
+                        return pull_trigger(self, thunk)
+                    finally:
+                        if thunk is not None:
+                            resume.set()
+
+                wasyncore.select.select = gated_select
+                wasyncore.close_all = record_close
+                trigger.trigger.pull_trigger = release_pull
+                raise SystemExit(sidecar.run_server())
+                """),
+            encoding="utf-8",
+        )
+        self._start_server(entrypoint=entrypoint)
+        (self.events / "arm-select").touch()
+        self._wait_for(lambda: (self.events / "select-ready").exists())
+        self._stop()
+        self.assertEqual((self.events / "close-thread").read_text(), "waitress-io")
 
     def test_idle_sigint(self):
         self._start_server()
