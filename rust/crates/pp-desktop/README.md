@@ -31,3 +31,27 @@ PP_DESKTOP_STAGE=/absolute/stage/path bash rust/scripts/desktop-bundle.sh
 ```
 
 It invokes Tauri with `--no-sign --no-binary-patching` and refuses other hosts. This helper has not established a signed release. macOS nested code must be signed before generating its final inventory and compiling Rust. Bundling must preserve those bytes. Sign the outer app afterward, compare nested hashes again, and verify notarization, stapling, installation, and native launch separately. A Linux native process receipt proves neither macOS behavior nor successful UI rendering.
+
+## Check unsigned macOS bundles in CI
+
+The `Native macOS bundle` workflow builds separate arm64 and x86_64 apps on `macos-26` and `macos-26-intel`. Each job installs Rust 1.99.0, Node 24.21.0 ABI 137, and Tauri CLI 2.12.1. It installs the locked npm tree on that architecture, builds the desktop React assets, stages production dependencies, and calls the existing unsigned bundle helper once. Native npm builds inherit `MACOSX_DEPLOYMENT_TARGET=13.5`. Cargo fetch uses the committed lockfile; the app build runs offline and fails if either lockfile changes.
+
+To inspect a completed app on macOS, keep the exact manifest used to compile it, then run:
+
+```sh
+python3 rust/scripts/check-macos-bundle.py \
+  --app '/path/Print Partner.app' \
+  --manifest /path/bundle-manifest.json \
+  --arch arm64 \
+  --receipt /path/bundle-verifier.json
+```
+
+Use `--arch x86_64` for the Intel app. The checker requires the installed `Info.plist` floor to equal 13.5. It compares installed Node, frontend, backend, metadata, complete dependency files, resolver roots, and relative workspace aliases with the frozen inventory. It inspects every app-owned Mach-O with `file`, `lipo`, and `otool`. Every binary must match the job architecture and target macOS 13.5 or earlier. External native dependencies fail verification unless they are system libraries under `/usr/lib` or `/System/Library`. Receipts list those system libraries; the app does not bundle them. Dependency traversal keeps the loading executable and image chain separate for each process. Node addons use `printpartner-node` and the rpaths of their own loader chain. They cannot borrow the Tauri executable's rpaths. Dylibs inherit rpaths from their actual chain, and `@loader_path` resolves relative to the image that declares it. Receipts retain those executable contexts and resolved dependencies.
+
+The workflow copies the app to a separate path with a space in its directory name and repeats all checks against that installed tree. Each verifier runs the installed Node, checks a real SQLite query, and paints and encodes a Canvas image through the locked `@napi-rs/canvas` addon. It checks the pixel values, PNG signature, and canonical loaded addon paths against both installed aliases. This probe uses the measured resolution preload and confined arguments. It does not establish that the current shipping process passes those arguments; that enforcement has a separate review gate.
+
+Each architecture uploads an unsigned app archive when one exists, the exact compile-time manifest, the stage manifest after bundling, generated bundle configuration, tool versions, build logs, and original and relocated verifier receipts. Available evidence uploads even when a check fails. Parser and inventory negative controls also run on Linux with `python3 rust/scripts/check-macos-bundle.py --self-test`. Linux checks cannot establish Mach-O, Info.plist, or bundle behavior.
+
+These jobs cover unsigned assembly and installed resource checks. Native launch and rendered React verification remain separate gates. The existing timed lifecycle probe needs a debug build and Linux-specific isolation, so these release jobs do not run it. Signing still follows the required sequence: finish nested signing, measure nested bytes, compile Rust with that manifest, assemble without signing or binary patching, then sign the outer app and compare the nested hashes again. This workflow supplies no signing credentials and creates no release, notarization submission, or deployment. Node remains temporary compatibility code.
+
+The `Desktop runtime` workflow runs on Ubuntu 24.04 for Rust and desktop dependency changes. It generates a current-head manifest after the real desktop asset build, builds `pp-server`, runs the eight real `runtime_m0` tests, backend units and Clippy, boundary and format checks, authenticated workflow and cleanup proofs, and gateway effects, product, and streaming probes. Crate selection excludes `pp-desktop` from Linux compilation. The test fixtures require `/usr/bin/node`, so the disposable runner points that path at the pinned setup-node runtime before measurement. Logs and exact manifest bytes upload on failure. This workflow needs the gateway test files from the reviewed integration stack; the Native-only base does not contain them.
