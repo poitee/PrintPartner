@@ -23,6 +23,7 @@ import { statusTone } from "../../lib/statusTone";
 import { cn } from "../../lib/utils";
 import {
   acceptedPlateCapability,
+  invalidateAcceptedPlateExportJobs,
   invalidateAcceptedPlateWorkspace,
   useAcceptedPlateRevisionPending,
   useAcceptedPlateWorkspaceQuery,
@@ -224,6 +225,7 @@ export default function SlicerHandoffPanel({ onFailure }: Props = {}) {
         profile_id: capability.profileId,
         expected_plate_revision_id: capability.plateRevisionId,
       });
+      void invalidateAcceptedPlateExportJobs(queryClient, capability.profileId);
       setFailure(null);
       toast.success("Accepted Plates staged for the slicer", {
         description: result.inbox_relative_path,

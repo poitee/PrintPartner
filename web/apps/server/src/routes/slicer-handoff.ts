@@ -6,6 +6,7 @@ import type {
 } from "@print-partner/contracts";
 import type { AppRepository } from "../db/repository.js";
 import type { ServerConfig } from "../config.js";
+import type { InProcessJobRunner } from "../services/job-runner.js";
 import { validateSlicerGuiUrl } from "../services/slicer-instances.js";
 import { exportDownloadKey, tenantExportDirectory } from "../lib/secure-path.js";
 import {
@@ -18,6 +19,7 @@ import { isRecord, positiveSafeInteger } from "../lib/guards.js";
 
 type RouteDeps = {
   repo: AppRepository;
+  jobs: InProcessJobRunner;
   config: ServerConfig;
   exportsDir: string;
   dataDir: string;
@@ -158,6 +160,7 @@ export async function registerSlicerHandoffRoutes(
           note: "Open the revision directory from the configured slicer exchange mount.",
         },
       };
+      deps.jobs.recordAcceptedPlateExport(materialized, request.tenantId);
       return result;
     } catch {
       request.log.error(

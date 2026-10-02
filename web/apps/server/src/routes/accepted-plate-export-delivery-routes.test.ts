@@ -159,21 +159,20 @@ endsolid accepted`);
     watchPath: "",
     enabled: true,
   });
-  if (jobOptions) {
-    ports.jobs = new InProcessJobRunner({
-      getRepo: () => repo,
-      reposDir: join(root, "repos"),
-      exportsDir: join(root, "exports"),
-      dataDir: root,
-    }, jobOptions);
-  }
+  const jobs = new InProcessJobRunner({
+    getRepo: () => repo,
+    reposDir: join(root, "repos"),
+    exportsDir: join(root, "exports"),
+    dataDir: root,
+  }, jobOptions);
+  ports.jobs = jobs;
   const app = await buildApp({ ...loadConfig(), dataDir: root, exchangeDir }, ports);
   cleanups.push(async () => {
     await app.close();
     ports.db.close();
     rmSync(root, { recursive: true, force: true });
   });
-  return { app, root, exchangeDir, repo, profile, plateRevisionId, slicer, token: unit.token };
+  return { app, root, exchangeDir, repo, jobs, profile, plateRevisionId, slicer, token: unit.token };
 }
 
 describe("accepted Plate export delivery routes", () => {
@@ -604,7 +603,7 @@ describe("accepted Plate export delivery routes", () => {
   });
 
   it("stages the downloaded Plate bytes without returning server paths", async () => {
-    const { app, exchangeDir, profile, plateRevisionId, slicer } = await fixture();
+    const { app, exchangeDir, jobs, profile, plateRevisionId, slicer } = await fixture();
     const response = await app.inject({
       method: "POST",
       url: `/slicer-instances/${slicer.id}/open-accepted-plates`,
@@ -636,6 +635,31 @@ describe("accepted Plate export delivery routes", () => {
     expect(retry.statusCode).toBe(200);
     expect(retry.json()).toEqual(result);
 
+    const history = (await app.inject({ method: "GET", url: `/api/v1/jobs?profile_id=${profile.id}` })).json<{ jobs: JobSnapshot[] }>().jobs;
+    const exported = history.filter((job) => job.kind === "export-accepted-plate-3mf" && job.status === "done");
+    expect(exported).toHaveLength(1);
+    const receipt = parseAcceptedPlateExportJobResult(exported[0]!.result);
+    expect(receipt).toMatchObject({
+      profile_id: profile.id,
+      plate_revision_id: plateRevisionId,
+      plate_revision_number: result.plate_revision_number,
+      layout_digest: result.layout_digest,
+      download_url: result.download_url,
+      plates: [{ ordinal: 1, filename: "0001.3mf", download_url: result.download_url }],
+    });
+    for (const url of [receipt.manifest_download_url, receipt.bundle_download_url]) {
+      expect((await app.inject({ method: "GET", url })).statusCode).toBe(200);
+    }
+    const concurrent = await Promise.all(Array.from({ length: 3 }, () => app.inject({
+      method: "POST", url: `/slicer-instances/${slicer.id}/open-accepted-plates`,
+      payload: { profile_id: profile.id, expected_plate_revision_id: plateRevisionId },
+    })));
+    expect(concurrent.map((response) => response.statusCode)).toEqual([200, 200, 200]);
+    expect((await app.inject({ method: "GET", url: `/api/v1/jobs?profile_id=${profile.id}` })).json().jobs).toEqual(history);
+    expect(dispatchWebhooks).not.toHaveBeenCalled();
+    expect(jobs.listJobs({ profile_id: profile.id }, "other-tenant")).toEqual([]);
+    expect(await jobs.get(exported[0]!.job_id, "other-tenant")).toBeNull();
+
     const stagedPath = join(exchangeDir, result.inbox_relative_path, "0001.3mf");
     writeFileSync(stagedPath, "tampered");
     const conflict = await app.inject({
@@ -649,5 +673,43 @@ describe("accepted Plate export delivery routes", () => {
       code: "output_conflict",
     });
     expect(readFileSync(stagedPath, "utf8")).toBe("tampered");
+    expect((await app.inject({ method: "GET", url: `/api/v1/jobs?profile_id=${profile.id}` })).json().jobs).toEqual(history);
+  });
+
+  it("reuses a completed download export when the same accepted Plates are staged", async () => {
+    const { app, profile, plateRevisionId, slicer } = await fixture();
+    const started = await app.inject({
+      method: "POST", url: "/jobs/export-accepted-plate-3mf",
+      payload: { profile_id: profile.id, expected_plate_revision_id: plateRevisionId },
+    });
+    const downloaded = await waitForJob(app, started.json().job_id);
+    expect(downloaded.status).toBe("done");
+    const before = (await app.inject({ method: "GET", url: `/api/v1/jobs?profile_id=${profile.id}` })).json().jobs;
+    const staged = await app.inject({
+      method: "POST", url: `/slicer-instances/${slicer.id}/open-accepted-plates`,
+      payload: { profile_id: profile.id, expected_plate_revision_id: plateRevisionId },
+    });
+    expect(staged.statusCode).toBe(200);
+    expect((await app.inject({ method: "GET", url: `/api/v1/jobs?profile_id=${profile.id}` })).json().jobs).toEqual(before);
+  });
+
+  it("does not complete an export when managed staging conflicts or the requested Plate revision is stale", async () => {
+    const { app, exchangeDir, profile, plateRevisionId, slicer } = await fixture();
+    const inbox = join(exchangeDir, "pp-inbox", slicer.id, `profile-${profile.id}`, `revision-${plateRevisionId}`);
+    mkdirSync(inbox, { recursive: true });
+    writeFileSync(join(inbox, "0001.3mf"), "conflicting exchange bytes");
+    const conflict = await app.inject({
+      method: "POST", url: `/slicer-instances/${slicer.id}/open-accepted-plates`,
+      payload: { profile_id: profile.id, expected_plate_revision_id: plateRevisionId },
+    });
+    expect(conflict.statusCode).toBe(409);
+    expect(conflict.json().code).toBe("output_conflict");
+    const stale = await app.inject({
+      method: "POST", url: `/slicer-instances/${slicer.id}/open-accepted-plates`,
+      payload: { profile_id: profile.id, expected_plate_revision_id: plateRevisionId + 1 },
+    });
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json().code).toBe("plate_revision_changed");
+    expect((await app.inject({ method: "GET", url: `/api/v1/jobs?profile_id=${profile.id}` })).json().jobs).toEqual([]);
   });
 });
