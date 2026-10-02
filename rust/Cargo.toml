@@ -1,6 +1,6 @@
 [workspace]
-members = ["crates/pp-core", "crates/pp-compat", "crates/pp-gateway", "crates/pp-server", "crates/pp-contracts", "crates/pp-desktop"]
-default-members = ["crates/pp-core", "crates/pp-compat", "crates/pp-gateway", "crates/pp-server", "crates/pp-contracts"]
+members = ["crates/pp-core", "crates/pp-compat", "crates/pp-gateway", "crates/pp-server", "crates/pp-contracts", "crates/pp-source", "crates/pp-desktop"]
+default-members = ["crates/pp-core", "crates/pp-compat", "crates/pp-gateway", "crates/pp-server", "crates/pp-contracts", "crates/pp-source"]
 resolver = "3"
 
 [workspace.package]
