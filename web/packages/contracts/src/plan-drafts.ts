@@ -3,6 +3,7 @@ import { acceptedPlanBasisSchema } from "./accepted-plates.js";
 
 const positiveId = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
 const nonnegativeVersion = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
+const scalarText = z.string().refine((value) => !/[\uD800-\uDFFF]/u.test(value), { message: "invalid_unicode_scalar_text" });
 const digest = z.string().regex(/^[0-9a-f]{64}$/);
 
 export const planDraftBasisSchema = z.strictObject({
@@ -19,7 +20,7 @@ export const planDraftBasisSchema = z.strictObject({
 
 export type PlanDraftBasis = z.infer<typeof planDraftBasisSchema>;
 
-const planDraftIdentitySchema = z.strictObject({
+export const planDraftIdentitySchema = z.strictObject({
   draft_id: positiveId,
   state: z.enum(["open", "abandoned", "consumed"]),
   lifecycle_version: nonnegativeVersion,
@@ -195,7 +196,7 @@ const applyPlanDraftRequestSchema = z.strictObject({
 
 export type ApplyPlanDraftRequest = z.infer<typeof applyPlanDraftRequestSchema>;
 
-const applyPlanDraftReceiptSchema = z.strictObject({
+export const applyPlanDraftReceiptSchema = z.strictObject({
   profile_id: positiveId,
   draft_id: positiveId,
   revision_id: positiveId,
@@ -203,15 +204,15 @@ const applyPlanDraftReceiptSchema = z.strictObject({
   draft_lifecycle_version: positiveId,
   revision_digest: digest,
   required_unit_mapping_digest: digest,
-  applied_at: z.string().min(1).max(100),
+  applied_at: scalarText.min(1).max(100),
 });
 
 export type ApplyPlanDraftReceipt = z.infer<typeof applyPlanDraftReceiptSchema>;
 
 const planFileTargetSchema = z.strictObject({
-  part_key: z.string().min(1).max(4_096),
-  relative_path: z.string().min(1).max(4_096),
-  source_layer: z.string().max(1_000).nullable(),
+  part_key: scalarText.min(1).max(4_096),
+  relative_path: scalarText.min(1).max(4_096),
+  source_layer: scalarText.max(1_000).nullable(),
 });
 
 const planChoiceSchema = z.discriminatedUnion("kind", [
@@ -219,7 +220,7 @@ const planChoiceSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("set_quantity_override"), target: planFileTargetSchema, value: positiveId.max(10_000).nullable() }),
 ]);
 
-const savePlanChoicesRequestSchema = z.strictObject({
+export const savePlanChoicesRequestSchema = z.strictObject({
   expected_base: planDraftBasisSchema,
   expected_draft: planDraftIdentitySchema.nullable(),
   remap_checkoff_links: z.boolean(),

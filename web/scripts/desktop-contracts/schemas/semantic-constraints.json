@@ -1,0 +1,1605 @@
+{
+  "schema_derived": {
+    "parseSavePlanChoicesRequest:input": [
+      {
+        "path": "$.type",
+        "keyword": "type",
+        "value": "object"
+      },
+      {
+        "path": "$.properties.expected_base.type",
+        "keyword": "type",
+        "value": "object"
+      },
+      {
+        "path": "$.properties.expected_base.properties.revision_id.anyOf.0.type",
+        "keyword": "type",
+        "value": "integer"
+      },
+      {
+        "path": "$.properties.expected_base.properties.revision_id.anyOf.0.exclusiveMinimum",
+        "keyword": "exclusiveMinimum",
+        "value": 0
+      },
+      {
+        "path": "$.properties.expected_base.properties.revision_id.anyOf.0.maximum",
+        "keyword": "maximum",
+        "value": 9007199254740991
+      },
+      {
+        "path": "$.properties.expected_base.properties.revision_id.anyOf.1.type",
+        "keyword": "type",
+        "value": "null"
+      },
+      {
+        "path": "$.properties.expected_base.properties.plan_version.type",
+        "keyword": "type",
+        "value": "integer"
+      },
+      {
+        "path": "$.properties.expected_base.properties.plan_version.minimum",
+        "keyword": "minimum",
+        "value": 0
+      },
+      {
+        "path": "$.properties.expected_base.properties.plan_version.maximum",
+        "keyword": "maximum",
+        "value": 9007199254740991
+      },
+      {
+        "path": "$.properties.expected_base.required",
+        "keyword": "required",
+        "value": [
+          "revision_id",
+          "plan_version"
+        ]
+      },
+      {
+        "path": "$.properties.expected_base.additionalProperties",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "path": "$.properties.expected_draft.anyOf.0.type",
+        "keyword": "type",
+        "value": "object"
+      },
+      {
+        "path": "$.properties.expected_draft.anyOf.0.properties.draft_id.type",
+        "keyword": "type",
+        "value": "integer"
+      },
+      {
+        "path": "$.properties.expected_draft.anyOf.0.properties.draft_id.exclusiveMinimum",
+        "keyword": "exclusiveMinimum",
+        "value": 0
+      },
+      {
+        "path": "$.properties.expected_draft.anyOf.0.properties.draft_id.maximum",
+        "keyword": "maximum",
+        "value": 9007199254740991
+      },
+      {
+        "path": "$.properties.expected_draft.anyOf.0.properties.state.type",
+        "keyword": "type",
+        "value": "string"
+      },
+      {
+        "path": "$.properties.expected_draft.anyOf.0.properties.state.enum",
+        "keyword": "enum",
+        "value": [
+          "open",
+          "abandoned",
+          "consumed"
+        ]
+      },
+      {
+        "path": "$.properties.expected_draft.anyOf.0.properties.lifecycle_version.type",
+        "keyword": "type",
+        "value": "integer"
+      },
+      {
+        "path": "$.properties.expected_draft.anyOf.0.properties.lifecycle_version.minimum",
+        "keyword": "minimum",
+        "value": 0
+      },
+      {
+        "path": "$.properties.expected_draft.anyOf.0.properties.lifecycle_version.maximum",
+        "keyword": "maximum",
+        "value": 9007199254740991
+      },
+      {
+        "path": "$.properties.expected_draft.anyOf.0.properties.snapshot_digest.type",
+        "keyword": "type",
+        "value": "string"
+      },
+      {
+        "path": "$.properties.expected_draft.anyOf.0.properties.snapshot_digest.pattern",
+        "keyword": "pattern",
+        "value": "^[0-9a-f]{64}$"
+      },
+      {
+        "path": "$.properties.expected_draft.anyOf.0.properties.base.type",
+        "keyword": "type",
+        "value": "object"
+      },
+      {
+        "path": "$.properties.expected_draft.anyOf.0.properties.base.properties.revision_id.anyOf.0.type",
+        "keyword": "type",
+        "value": "integer"
+      },
+      {
+        "path": "$.properties.expected_draft.anyOf.0.properties.base.properties.revision_id.anyOf.0.exclusiveMinimum",
+        "keyword": "exclusiveMinimum",
+        "value": 0
+      },
+      {
+        "path": "$.properties.expected_draft.anyOf.0.properties.base.properties.revision_id.anyOf.0.maximum",
+        "keyword": "maximum",
+        "value": 9007199254740991
+      },
+      {
+        "path": "$.properties.expected_draft.anyOf.0.properties.base.properties.revision_id.anyOf.1.type",
+        "keyword": "type",
+        "value": "null"
+      },
+      {
+        "path": "$.properties.expected_draft.anyOf.0.properties.base.properties.plan_version.type",
+        "keyword": "type",
+        "value": "integer"
+      },
+      {
+        "path": "$.properties.expected_draft.anyOf.0.properties.base.properties.plan_version.minimum",
+        "keyword": "minimum",
+        "value": 0
+      },
+      {
+        "path": "$.properties.expected_draft.anyOf.0.properties.base.properties.plan_version.maximum",
+        "keyword": "maximum",
+        "value": 9007199254740991
+      },
+      {
+        "path": "$.properties.expected_draft.anyOf.0.properties.base.required",
+        "keyword": "required",
+        "value": [
+          "revision_id",
+          "plan_version"
+        ]
+      },
+      {
+        "path": "$.properties.expected_draft.anyOf.0.properties.base.additionalProperties",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "path": "$.properties.expected_draft.anyOf.0.required",
+        "keyword": "required",
+        "value": [
+          "draft_id",
+          "state",
+          "lifecycle_version",
+          "snapshot_digest",
+          "base"
+        ]
+      },
+      {
+        "path": "$.properties.expected_draft.anyOf.0.additionalProperties",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "path": "$.properties.expected_draft.anyOf.1.type",
+        "keyword": "type",
+        "value": "null"
+      },
+      {
+        "path": "$.properties.remap_checkoff_links.type",
+        "keyword": "type",
+        "value": "boolean"
+      },
+      {
+        "path": "$.properties.decisions.minItems",
+        "keyword": "minItems",
+        "value": 1
+      },
+      {
+        "path": "$.properties.decisions.maxItems",
+        "keyword": "maxItems",
+        "value": 10000
+      },
+      {
+        "path": "$.properties.decisions.type",
+        "keyword": "type",
+        "value": "array"
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.0.type",
+        "keyword": "type",
+        "value": "object"
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.0.properties.kind.type",
+        "keyword": "type",
+        "value": "string"
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.0.properties.kind.const",
+        "keyword": "const",
+        "value": "set_included"
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.0.properties.target.type",
+        "keyword": "type",
+        "value": "object"
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.0.properties.target.properties.part_key.type",
+        "keyword": "type",
+        "value": "string"
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.0.properties.target.properties.part_key.minLength",
+        "keyword": "minLength",
+        "value": 1
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.0.properties.target.properties.part_key.maxLength",
+        "keyword": "maxLength",
+        "value": 4096
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.0.properties.target.properties.relative_path.type",
+        "keyword": "type",
+        "value": "string"
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.0.properties.target.properties.relative_path.minLength",
+        "keyword": "minLength",
+        "value": 1
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.0.properties.target.properties.relative_path.maxLength",
+        "keyword": "maxLength",
+        "value": 4096
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.0.properties.target.properties.source_layer.anyOf.0.type",
+        "keyword": "type",
+        "value": "string"
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.0.properties.target.properties.source_layer.anyOf.0.maxLength",
+        "keyword": "maxLength",
+        "value": 1000
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.0.properties.target.properties.source_layer.anyOf.1.type",
+        "keyword": "type",
+        "value": "null"
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.0.properties.target.required",
+        "keyword": "required",
+        "value": [
+          "part_key",
+          "relative_path",
+          "source_layer"
+        ]
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.0.properties.target.additionalProperties",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.0.properties.value.type",
+        "keyword": "type",
+        "value": "boolean"
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.0.required",
+        "keyword": "required",
+        "value": [
+          "kind",
+          "target",
+          "value"
+        ]
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.0.additionalProperties",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.1.type",
+        "keyword": "type",
+        "value": "object"
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.1.properties.kind.type",
+        "keyword": "type",
+        "value": "string"
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.1.properties.kind.const",
+        "keyword": "const",
+        "value": "set_quantity_override"
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.1.properties.target.type",
+        "keyword": "type",
+        "value": "object"
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.1.properties.target.properties.part_key.type",
+        "keyword": "type",
+        "value": "string"
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.1.properties.target.properties.part_key.minLength",
+        "keyword": "minLength",
+        "value": 1
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.1.properties.target.properties.part_key.maxLength",
+        "keyword": "maxLength",
+        "value": 4096
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.1.properties.target.properties.relative_path.type",
+        "keyword": "type",
+        "value": "string"
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.1.properties.target.properties.relative_path.minLength",
+        "keyword": "minLength",
+        "value": 1
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.1.properties.target.properties.relative_path.maxLength",
+        "keyword": "maxLength",
+        "value": 4096
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.1.properties.target.properties.source_layer.anyOf.0.type",
+        "keyword": "type",
+        "value": "string"
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.1.properties.target.properties.source_layer.anyOf.0.maxLength",
+        "keyword": "maxLength",
+        "value": 1000
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.1.properties.target.properties.source_layer.anyOf.1.type",
+        "keyword": "type",
+        "value": "null"
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.1.properties.target.required",
+        "keyword": "required",
+        "value": [
+          "part_key",
+          "relative_path",
+          "source_layer"
+        ]
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.1.properties.target.additionalProperties",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.1.properties.value.anyOf.0.type",
+        "keyword": "type",
+        "value": "integer"
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.1.properties.value.anyOf.0.exclusiveMinimum",
+        "keyword": "exclusiveMinimum",
+        "value": 0
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.1.properties.value.anyOf.0.maximum",
+        "keyword": "maximum",
+        "value": 10000
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.1.properties.value.anyOf.1.type",
+        "keyword": "type",
+        "value": "null"
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.1.required",
+        "keyword": "required",
+        "value": [
+          "kind",
+          "target",
+          "value"
+        ]
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.1.additionalProperties",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "path": "$.required",
+        "keyword": "required",
+        "value": [
+          "expected_base",
+          "expected_draft",
+          "remap_checkoff_links",
+          "decisions"
+        ]
+      },
+      {
+        "path": "$.additionalProperties",
+        "keyword": "additionalProperties",
+        "value": false
+      }
+    ],
+    "parseSavePlanChoicesRequest:output": [
+      {
+        "path": "$.type",
+        "keyword": "type",
+        "value": "object"
+      },
+      {
+        "path": "$.properties.expected_base.type",
+        "keyword": "type",
+        "value": "object"
+      },
+      {
+        "path": "$.properties.expected_base.properties.revision_id.anyOf.0.type",
+        "keyword": "type",
+        "value": "integer"
+      },
+      {
+        "path": "$.properties.expected_base.properties.revision_id.anyOf.0.exclusiveMinimum",
+        "keyword": "exclusiveMinimum",
+        "value": 0
+      },
+      {
+        "path": "$.properties.expected_base.properties.revision_id.anyOf.0.maximum",
+        "keyword": "maximum",
+        "value": 9007199254740991
+      },
+      {
+        "path": "$.properties.expected_base.properties.revision_id.anyOf.1.type",
+        "keyword": "type",
+        "value": "null"
+      },
+      {
+        "path": "$.properties.expected_base.properties.plan_version.type",
+        "keyword": "type",
+        "value": "integer"
+      },
+      {
+        "path": "$.properties.expected_base.properties.plan_version.minimum",
+        "keyword": "minimum",
+        "value": 0
+      },
+      {
+        "path": "$.properties.expected_base.properties.plan_version.maximum",
+        "keyword": "maximum",
+        "value": 9007199254740991
+      },
+      {
+        "path": "$.properties.expected_base.required",
+        "keyword": "required",
+        "value": [
+          "revision_id",
+          "plan_version"
+        ]
+      },
+      {
+        "path": "$.properties.expected_base.additionalProperties",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "path": "$.properties.expected_draft.anyOf.0.type",
+        "keyword": "type",
+        "value": "object"
+      },
+      {
+        "path": "$.properties.expected_draft.anyOf.0.properties.draft_id.type",
+        "keyword": "type",
+        "value": "integer"
+      },
+      {
+        "path": "$.properties.expected_draft.anyOf.0.properties.draft_id.exclusiveMinimum",
+        "keyword": "exclusiveMinimum",
+        "value": 0
+      },
+      {
+        "path": "$.properties.expected_draft.anyOf.0.properties.draft_id.maximum",
+        "keyword": "maximum",
+        "value": 9007199254740991
+      },
+      {
+        "path": "$.properties.expected_draft.anyOf.0.properties.state.type",
+        "keyword": "type",
+        "value": "string"
+      },
+      {
+        "path": "$.properties.expected_draft.anyOf.0.properties.state.enum",
+        "keyword": "enum",
+        "value": [
+          "open",
+          "abandoned",
+          "consumed"
+        ]
+      },
+      {
+        "path": "$.properties.expected_draft.anyOf.0.properties.lifecycle_version.type",
+        "keyword": "type",
+        "value": "integer"
+      },
+      {
+        "path": "$.properties.expected_draft.anyOf.0.properties.lifecycle_version.minimum",
+        "keyword": "minimum",
+        "value": 0
+      },
+      {
+        "path": "$.properties.expected_draft.anyOf.0.properties.lifecycle_version.maximum",
+        "keyword": "maximum",
+        "value": 9007199254740991
+      },
+      {
+        "path": "$.properties.expected_draft.anyOf.0.properties.snapshot_digest.type",
+        "keyword": "type",
+        "value": "string"
+      },
+      {
+        "path": "$.properties.expected_draft.anyOf.0.properties.snapshot_digest.pattern",
+        "keyword": "pattern",
+        "value": "^[0-9a-f]{64}$"
+      },
+      {
+        "path": "$.properties.expected_draft.anyOf.0.properties.base.type",
+        "keyword": "type",
+        "value": "object"
+      },
+      {
+        "path": "$.properties.expected_draft.anyOf.0.properties.base.properties.revision_id.anyOf.0.type",
+        "keyword": "type",
+        "value": "integer"
+      },
+      {
+        "path": "$.properties.expected_draft.anyOf.0.properties.base.properties.revision_id.anyOf.0.exclusiveMinimum",
+        "keyword": "exclusiveMinimum",
+        "value": 0
+      },
+      {
+        "path": "$.properties.expected_draft.anyOf.0.properties.base.properties.revision_id.anyOf.0.maximum",
+        "keyword": "maximum",
+        "value": 9007199254740991
+      },
+      {
+        "path": "$.properties.expected_draft.anyOf.0.properties.base.properties.revision_id.anyOf.1.type",
+        "keyword": "type",
+        "value": "null"
+      },
+      {
+        "path": "$.properties.expected_draft.anyOf.0.properties.base.properties.plan_version.type",
+        "keyword": "type",
+        "value": "integer"
+      },
+      {
+        "path": "$.properties.expected_draft.anyOf.0.properties.base.properties.plan_version.minimum",
+        "keyword": "minimum",
+        "value": 0
+      },
+      {
+        "path": "$.properties.expected_draft.anyOf.0.properties.base.properties.plan_version.maximum",
+        "keyword": "maximum",
+        "value": 9007199254740991
+      },
+      {
+        "path": "$.properties.expected_draft.anyOf.0.properties.base.required",
+        "keyword": "required",
+        "value": [
+          "revision_id",
+          "plan_version"
+        ]
+      },
+      {
+        "path": "$.properties.expected_draft.anyOf.0.properties.base.additionalProperties",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "path": "$.properties.expected_draft.anyOf.0.required",
+        "keyword": "required",
+        "value": [
+          "draft_id",
+          "state",
+          "lifecycle_version",
+          "snapshot_digest",
+          "base"
+        ]
+      },
+      {
+        "path": "$.properties.expected_draft.anyOf.0.additionalProperties",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "path": "$.properties.expected_draft.anyOf.1.type",
+        "keyword": "type",
+        "value": "null"
+      },
+      {
+        "path": "$.properties.remap_checkoff_links.type",
+        "keyword": "type",
+        "value": "boolean"
+      },
+      {
+        "path": "$.properties.decisions.minItems",
+        "keyword": "minItems",
+        "value": 1
+      },
+      {
+        "path": "$.properties.decisions.maxItems",
+        "keyword": "maxItems",
+        "value": 10000
+      },
+      {
+        "path": "$.properties.decisions.type",
+        "keyword": "type",
+        "value": "array"
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.0.type",
+        "keyword": "type",
+        "value": "object"
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.0.properties.kind.type",
+        "keyword": "type",
+        "value": "string"
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.0.properties.kind.const",
+        "keyword": "const",
+        "value": "set_included"
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.0.properties.target.type",
+        "keyword": "type",
+        "value": "object"
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.0.properties.target.properties.part_key.type",
+        "keyword": "type",
+        "value": "string"
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.0.properties.target.properties.part_key.minLength",
+        "keyword": "minLength",
+        "value": 1
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.0.properties.target.properties.part_key.maxLength",
+        "keyword": "maxLength",
+        "value": 4096
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.0.properties.target.properties.relative_path.type",
+        "keyword": "type",
+        "value": "string"
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.0.properties.target.properties.relative_path.minLength",
+        "keyword": "minLength",
+        "value": 1
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.0.properties.target.properties.relative_path.maxLength",
+        "keyword": "maxLength",
+        "value": 4096
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.0.properties.target.properties.source_layer.anyOf.0.type",
+        "keyword": "type",
+        "value": "string"
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.0.properties.target.properties.source_layer.anyOf.0.maxLength",
+        "keyword": "maxLength",
+        "value": 1000
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.0.properties.target.properties.source_layer.anyOf.1.type",
+        "keyword": "type",
+        "value": "null"
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.0.properties.target.required",
+        "keyword": "required",
+        "value": [
+          "part_key",
+          "relative_path",
+          "source_layer"
+        ]
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.0.properties.target.additionalProperties",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.0.properties.value.type",
+        "keyword": "type",
+        "value": "boolean"
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.0.required",
+        "keyword": "required",
+        "value": [
+          "kind",
+          "target",
+          "value"
+        ]
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.0.additionalProperties",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.1.type",
+        "keyword": "type",
+        "value": "object"
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.1.properties.kind.type",
+        "keyword": "type",
+        "value": "string"
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.1.properties.kind.const",
+        "keyword": "const",
+        "value": "set_quantity_override"
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.1.properties.target.type",
+        "keyword": "type",
+        "value": "object"
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.1.properties.target.properties.part_key.type",
+        "keyword": "type",
+        "value": "string"
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.1.properties.target.properties.part_key.minLength",
+        "keyword": "minLength",
+        "value": 1
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.1.properties.target.properties.part_key.maxLength",
+        "keyword": "maxLength",
+        "value": 4096
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.1.properties.target.properties.relative_path.type",
+        "keyword": "type",
+        "value": "string"
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.1.properties.target.properties.relative_path.minLength",
+        "keyword": "minLength",
+        "value": 1
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.1.properties.target.properties.relative_path.maxLength",
+        "keyword": "maxLength",
+        "value": 4096
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.1.properties.target.properties.source_layer.anyOf.0.type",
+        "keyword": "type",
+        "value": "string"
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.1.properties.target.properties.source_layer.anyOf.0.maxLength",
+        "keyword": "maxLength",
+        "value": 1000
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.1.properties.target.properties.source_layer.anyOf.1.type",
+        "keyword": "type",
+        "value": "null"
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.1.properties.target.required",
+        "keyword": "required",
+        "value": [
+          "part_key",
+          "relative_path",
+          "source_layer"
+        ]
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.1.properties.target.additionalProperties",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.1.properties.value.anyOf.0.type",
+        "keyword": "type",
+        "value": "integer"
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.1.properties.value.anyOf.0.exclusiveMinimum",
+        "keyword": "exclusiveMinimum",
+        "value": 0
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.1.properties.value.anyOf.0.maximum",
+        "keyword": "maximum",
+        "value": 10000
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.1.properties.value.anyOf.1.type",
+        "keyword": "type",
+        "value": "null"
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.1.required",
+        "keyword": "required",
+        "value": [
+          "kind",
+          "target",
+          "value"
+        ]
+      },
+      {
+        "path": "$.properties.decisions.items.oneOf.1.additionalProperties",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "path": "$.required",
+        "keyword": "required",
+        "value": [
+          "expected_base",
+          "expected_draft",
+          "remap_checkoff_links",
+          "decisions"
+        ]
+      },
+      {
+        "path": "$.additionalProperties",
+        "keyword": "additionalProperties",
+        "value": false
+      }
+    ],
+    "parseApplyPlanDraftReceipt:input": [
+      {
+        "path": "$.type",
+        "keyword": "type",
+        "value": "object"
+      },
+      {
+        "path": "$.properties.profile_id.type",
+        "keyword": "type",
+        "value": "integer"
+      },
+      {
+        "path": "$.properties.profile_id.exclusiveMinimum",
+        "keyword": "exclusiveMinimum",
+        "value": 0
+      },
+      {
+        "path": "$.properties.profile_id.maximum",
+        "keyword": "maximum",
+        "value": 9007199254740991
+      },
+      {
+        "path": "$.properties.draft_id.type",
+        "keyword": "type",
+        "value": "integer"
+      },
+      {
+        "path": "$.properties.draft_id.exclusiveMinimum",
+        "keyword": "exclusiveMinimum",
+        "value": 0
+      },
+      {
+        "path": "$.properties.draft_id.maximum",
+        "keyword": "maximum",
+        "value": 9007199254740991
+      },
+      {
+        "path": "$.properties.revision_id.type",
+        "keyword": "type",
+        "value": "integer"
+      },
+      {
+        "path": "$.properties.revision_id.exclusiveMinimum",
+        "keyword": "exclusiveMinimum",
+        "value": 0
+      },
+      {
+        "path": "$.properties.revision_id.maximum",
+        "keyword": "maximum",
+        "value": 9007199254740991
+      },
+      {
+        "path": "$.properties.plan_version.type",
+        "keyword": "type",
+        "value": "integer"
+      },
+      {
+        "path": "$.properties.plan_version.exclusiveMinimum",
+        "keyword": "exclusiveMinimum",
+        "value": 0
+      },
+      {
+        "path": "$.properties.plan_version.maximum",
+        "keyword": "maximum",
+        "value": 9007199254740991
+      },
+      {
+        "path": "$.properties.draft_lifecycle_version.type",
+        "keyword": "type",
+        "value": "integer"
+      },
+      {
+        "path": "$.properties.draft_lifecycle_version.exclusiveMinimum",
+        "keyword": "exclusiveMinimum",
+        "value": 0
+      },
+      {
+        "path": "$.properties.draft_lifecycle_version.maximum",
+        "keyword": "maximum",
+        "value": 9007199254740991
+      },
+      {
+        "path": "$.properties.revision_digest.type",
+        "keyword": "type",
+        "value": "string"
+      },
+      {
+        "path": "$.properties.revision_digest.pattern",
+        "keyword": "pattern",
+        "value": "^[0-9a-f]{64}$"
+      },
+      {
+        "path": "$.properties.required_unit_mapping_digest.type",
+        "keyword": "type",
+        "value": "string"
+      },
+      {
+        "path": "$.properties.required_unit_mapping_digest.pattern",
+        "keyword": "pattern",
+        "value": "^[0-9a-f]{64}$"
+      },
+      {
+        "path": "$.properties.applied_at.type",
+        "keyword": "type",
+        "value": "string"
+      },
+      {
+        "path": "$.properties.applied_at.minLength",
+        "keyword": "minLength",
+        "value": 1
+      },
+      {
+        "path": "$.properties.applied_at.maxLength",
+        "keyword": "maxLength",
+        "value": 100
+      },
+      {
+        "path": "$.required",
+        "keyword": "required",
+        "value": [
+          "profile_id",
+          "draft_id",
+          "revision_id",
+          "plan_version",
+          "draft_lifecycle_version",
+          "revision_digest",
+          "required_unit_mapping_digest",
+          "applied_at"
+        ]
+      },
+      {
+        "path": "$.additionalProperties",
+        "keyword": "additionalProperties",
+        "value": false
+      }
+    ],
+    "parseApplyPlanDraftReceipt:output": [
+      {
+        "path": "$.type",
+        "keyword": "type",
+        "value": "object"
+      },
+      {
+        "path": "$.properties.profile_id.type",
+        "keyword": "type",
+        "value": "integer"
+      },
+      {
+        "path": "$.properties.profile_id.exclusiveMinimum",
+        "keyword": "exclusiveMinimum",
+        "value": 0
+      },
+      {
+        "path": "$.properties.profile_id.maximum",
+        "keyword": "maximum",
+        "value": 9007199254740991
+      },
+      {
+        "path": "$.properties.draft_id.type",
+        "keyword": "type",
+        "value": "integer"
+      },
+      {
+        "path": "$.properties.draft_id.exclusiveMinimum",
+        "keyword": "exclusiveMinimum",
+        "value": 0
+      },
+      {
+        "path": "$.properties.draft_id.maximum",
+        "keyword": "maximum",
+        "value": 9007199254740991
+      },
+      {
+        "path": "$.properties.revision_id.type",
+        "keyword": "type",
+        "value": "integer"
+      },
+      {
+        "path": "$.properties.revision_id.exclusiveMinimum",
+        "keyword": "exclusiveMinimum",
+        "value": 0
+      },
+      {
+        "path": "$.properties.revision_id.maximum",
+        "keyword": "maximum",
+        "value": 9007199254740991
+      },
+      {
+        "path": "$.properties.plan_version.type",
+        "keyword": "type",
+        "value": "integer"
+      },
+      {
+        "path": "$.properties.plan_version.exclusiveMinimum",
+        "keyword": "exclusiveMinimum",
+        "value": 0
+      },
+      {
+        "path": "$.properties.plan_version.maximum",
+        "keyword": "maximum",
+        "value": 9007199254740991
+      },
+      {
+        "path": "$.properties.draft_lifecycle_version.type",
+        "keyword": "type",
+        "value": "integer"
+      },
+      {
+        "path": "$.properties.draft_lifecycle_version.exclusiveMinimum",
+        "keyword": "exclusiveMinimum",
+        "value": 0
+      },
+      {
+        "path": "$.properties.draft_lifecycle_version.maximum",
+        "keyword": "maximum",
+        "value": 9007199254740991
+      },
+      {
+        "path": "$.properties.revision_digest.type",
+        "keyword": "type",
+        "value": "string"
+      },
+      {
+        "path": "$.properties.revision_digest.pattern",
+        "keyword": "pattern",
+        "value": "^[0-9a-f]{64}$"
+      },
+      {
+        "path": "$.properties.required_unit_mapping_digest.type",
+        "keyword": "type",
+        "value": "string"
+      },
+      {
+        "path": "$.properties.required_unit_mapping_digest.pattern",
+        "keyword": "pattern",
+        "value": "^[0-9a-f]{64}$"
+      },
+      {
+        "path": "$.properties.applied_at.type",
+        "keyword": "type",
+        "value": "string"
+      },
+      {
+        "path": "$.properties.applied_at.minLength",
+        "keyword": "minLength",
+        "value": 1
+      },
+      {
+        "path": "$.properties.applied_at.maxLength",
+        "keyword": "maxLength",
+        "value": 100
+      },
+      {
+        "path": "$.required",
+        "keyword": "required",
+        "value": [
+          "profile_id",
+          "draft_id",
+          "revision_id",
+          "plan_version",
+          "draft_lifecycle_version",
+          "revision_digest",
+          "required_unit_mapping_digest",
+          "applied_at"
+        ]
+      },
+      {
+        "path": "$.additionalProperties",
+        "keyword": "additionalProperties",
+        "value": false
+      }
+    ],
+    "parsePlanDraftIdentity:input": [
+      {
+        "path": "$.type",
+        "keyword": "type",
+        "value": "object"
+      },
+      {
+        "path": "$.properties.draft_id.type",
+        "keyword": "type",
+        "value": "integer"
+      },
+      {
+        "path": "$.properties.draft_id.exclusiveMinimum",
+        "keyword": "exclusiveMinimum",
+        "value": 0
+      },
+      {
+        "path": "$.properties.draft_id.maximum",
+        "keyword": "maximum",
+        "value": 9007199254740991
+      },
+      {
+        "path": "$.properties.state.type",
+        "keyword": "type",
+        "value": "string"
+      },
+      {
+        "path": "$.properties.state.enum",
+        "keyword": "enum",
+        "value": [
+          "open",
+          "abandoned",
+          "consumed"
+        ]
+      },
+      {
+        "path": "$.properties.lifecycle_version.type",
+        "keyword": "type",
+        "value": "integer"
+      },
+      {
+        "path": "$.properties.lifecycle_version.minimum",
+        "keyword": "minimum",
+        "value": 0
+      },
+      {
+        "path": "$.properties.lifecycle_version.maximum",
+        "keyword": "maximum",
+        "value": 9007199254740991
+      },
+      {
+        "path": "$.properties.snapshot_digest.type",
+        "keyword": "type",
+        "value": "string"
+      },
+      {
+        "path": "$.properties.snapshot_digest.pattern",
+        "keyword": "pattern",
+        "value": "^[0-9a-f]{64}$"
+      },
+      {
+        "path": "$.properties.base.type",
+        "keyword": "type",
+        "value": "object"
+      },
+      {
+        "path": "$.properties.base.properties.revision_id.anyOf.0.type",
+        "keyword": "type",
+        "value": "integer"
+      },
+      {
+        "path": "$.properties.base.properties.revision_id.anyOf.0.exclusiveMinimum",
+        "keyword": "exclusiveMinimum",
+        "value": 0
+      },
+      {
+        "path": "$.properties.base.properties.revision_id.anyOf.0.maximum",
+        "keyword": "maximum",
+        "value": 9007199254740991
+      },
+      {
+        "path": "$.properties.base.properties.revision_id.anyOf.1.type",
+        "keyword": "type",
+        "value": "null"
+      },
+      {
+        "path": "$.properties.base.properties.plan_version.type",
+        "keyword": "type",
+        "value": "integer"
+      },
+      {
+        "path": "$.properties.base.properties.plan_version.minimum",
+        "keyword": "minimum",
+        "value": 0
+      },
+      {
+        "path": "$.properties.base.properties.plan_version.maximum",
+        "keyword": "maximum",
+        "value": 9007199254740991
+      },
+      {
+        "path": "$.properties.base.required",
+        "keyword": "required",
+        "value": [
+          "revision_id",
+          "plan_version"
+        ]
+      },
+      {
+        "path": "$.properties.base.additionalProperties",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "path": "$.required",
+        "keyword": "required",
+        "value": [
+          "draft_id",
+          "state",
+          "lifecycle_version",
+          "snapshot_digest",
+          "base"
+        ]
+      },
+      {
+        "path": "$.additionalProperties",
+        "keyword": "additionalProperties",
+        "value": false
+      }
+    ],
+    "parsePlanDraftIdentity:output": [
+      {
+        "path": "$.type",
+        "keyword": "type",
+        "value": "object"
+      },
+      {
+        "path": "$.properties.draft_id.type",
+        "keyword": "type",
+        "value": "integer"
+      },
+      {
+        "path": "$.properties.draft_id.exclusiveMinimum",
+        "keyword": "exclusiveMinimum",
+        "value": 0
+      },
+      {
+        "path": "$.properties.draft_id.maximum",
+        "keyword": "maximum",
+        "value": 9007199254740991
+      },
+      {
+        "path": "$.properties.state.type",
+        "keyword": "type",
+        "value": "string"
+      },
+      {
+        "path": "$.properties.state.enum",
+        "keyword": "enum",
+        "value": [
+          "open",
+          "abandoned",
+          "consumed"
+        ]
+      },
+      {
+        "path": "$.properties.lifecycle_version.type",
+        "keyword": "type",
+        "value": "integer"
+      },
+      {
+        "path": "$.properties.lifecycle_version.minimum",
+        "keyword": "minimum",
+        "value": 0
+      },
+      {
+        "path": "$.properties.lifecycle_version.maximum",
+        "keyword": "maximum",
+        "value": 9007199254740991
+      },
+      {
+        "path": "$.properties.snapshot_digest.type",
+        "keyword": "type",
+        "value": "string"
+      },
+      {
+        "path": "$.properties.snapshot_digest.pattern",
+        "keyword": "pattern",
+        "value": "^[0-9a-f]{64}$"
+      },
+      {
+        "path": "$.properties.base.type",
+        "keyword": "type",
+        "value": "object"
+      },
+      {
+        "path": "$.properties.base.properties.revision_id.anyOf.0.type",
+        "keyword": "type",
+        "value": "integer"
+      },
+      {
+        "path": "$.properties.base.properties.revision_id.anyOf.0.exclusiveMinimum",
+        "keyword": "exclusiveMinimum",
+        "value": 0
+      },
+      {
+        "path": "$.properties.base.properties.revision_id.anyOf.0.maximum",
+        "keyword": "maximum",
+        "value": 9007199254740991
+      },
+      {
+        "path": "$.properties.base.properties.revision_id.anyOf.1.type",
+        "keyword": "type",
+        "value": "null"
+      },
+      {
+        "path": "$.properties.base.properties.plan_version.type",
+        "keyword": "type",
+        "value": "integer"
+      },
+      {
+        "path": "$.properties.base.properties.plan_version.minimum",
+        "keyword": "minimum",
+        "value": 0
+      },
+      {
+        "path": "$.properties.base.properties.plan_version.maximum",
+        "keyword": "maximum",
+        "value": 9007199254740991
+      },
+      {
+        "path": "$.properties.base.required",
+        "keyword": "required",
+        "value": [
+          "revision_id",
+          "plan_version"
+        ]
+      },
+      {
+        "path": "$.properties.base.additionalProperties",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "path": "$.required",
+        "keyword": "required",
+        "value": [
+          "draft_id",
+          "state",
+          "lifecycle_version",
+          "snapshot_digest",
+          "base"
+        ]
+      },
+      {
+        "path": "$.additionalProperties",
+        "keyword": "additionalProperties",
+        "value": false
+      }
+    ],
+    "planDraftBasisSchema:input": [
+      {
+        "path": "$.type",
+        "keyword": "type",
+        "value": "object"
+      },
+      {
+        "path": "$.properties.revision_id.anyOf.0.type",
+        "keyword": "type",
+        "value": "integer"
+      },
+      {
+        "path": "$.properties.revision_id.anyOf.0.exclusiveMinimum",
+        "keyword": "exclusiveMinimum",
+        "value": 0
+      },
+      {
+        "path": "$.properties.revision_id.anyOf.0.maximum",
+        "keyword": "maximum",
+        "value": 9007199254740991
+      },
+      {
+        "path": "$.properties.revision_id.anyOf.1.type",
+        "keyword": "type",
+        "value": "null"
+      },
+      {
+        "path": "$.properties.plan_version.type",
+        "keyword": "type",
+        "value": "integer"
+      },
+      {
+        "path": "$.properties.plan_version.minimum",
+        "keyword": "minimum",
+        "value": 0
+      },
+      {
+        "path": "$.properties.plan_version.maximum",
+        "keyword": "maximum",
+        "value": 9007199254740991
+      },
+      {
+        "path": "$.required",
+        "keyword": "required",
+        "value": [
+          "revision_id",
+          "plan_version"
+        ]
+      },
+      {
+        "path": "$.additionalProperties",
+        "keyword": "additionalProperties",
+        "value": false
+      }
+    ],
+    "planDraftBasisSchema:output": [
+      {
+        "path": "$.type",
+        "keyword": "type",
+        "value": "object"
+      },
+      {
+        "path": "$.properties.revision_id.anyOf.0.type",
+        "keyword": "type",
+        "value": "integer"
+      },
+      {
+        "path": "$.properties.revision_id.anyOf.0.exclusiveMinimum",
+        "keyword": "exclusiveMinimum",
+        "value": 0
+      },
+      {
+        "path": "$.properties.revision_id.anyOf.0.maximum",
+        "keyword": "maximum",
+        "value": 9007199254740991
+      },
+      {
+        "path": "$.properties.revision_id.anyOf.1.type",
+        "keyword": "type",
+        "value": "null"
+      },
+      {
+        "path": "$.properties.plan_version.type",
+        "keyword": "type",
+        "value": "integer"
+      },
+      {
+        "path": "$.properties.plan_version.minimum",
+        "keyword": "minimum",
+        "value": 0
+      },
+      {
+        "path": "$.properties.plan_version.maximum",
+        "keyword": "maximum",
+        "value": 9007199254740991
+      },
+      {
+        "path": "$.required",
+        "keyword": "required",
+        "value": [
+          "revision_id",
+          "plan_version"
+        ]
+      },
+      {
+        "path": "$.additionalProperties",
+        "keyword": "additionalProperties",
+        "value": false
+      }
+    ]
+  },
+  "domain_refinements": [
+    {
+      "category": "basis_inconsistent",
+      "rule": "revision_id is null exactly when plan_version is zero",
+      "scopes": [
+        "expected_base",
+        "expected_draft.base",
+        "identity.base"
+      ],
+      "witnesses": [
+        "empty-base-version-mismatch",
+        "revision-base-version-zero"
+      ],
+      "rust": "PlanDraftBasis TryFrom validator"
+    },
+    {
+      "category": "observed_draft_mismatch",
+      "rule": "non-null observed draft must be open and its revision_id/plan_version must equal expected_base",
+      "scope": "expected_draft",
+      "witnesses": [
+        "observed-consumed-draft",
+        "observed-draft-base-mismatch"
+      ],
+      "rust": "SavePlanChoicesRequest TryFrom validator"
+    },
+    {
+      "category": "duplicate_target_field",
+      "rule": "unique tuple of decision kind, nullable source_layer, relative_path and part_key; different fields on same file are allowed",
+      "scope": "decisions",
+      "witnesses": [
+        "duplicate-field",
+        "different-fields-same-target"
+      ],
+      "rust": "HashSet of decision kind and exact FileTarget"
+    }
+  ],
+  "wire_semantics": {
+    "nullable_presence": "revision_id, expected_draft, source_layer and quantity value are required fields whose values may be null; no serde default",
+    "numeric": "JSON numbers must be mathematically integral and bounded; integral float lexemes accepted, strings and booleans rejected; IDs and versions limited to JavaScript MAX_SAFE_INTEGER",
+    "strings": "Installed Zod4.5.4 uses Unicode code-point lengths; Rust chars().count() matches the measured 1000/1001 emoji bounds",
+    "receipt": "applied_at is bounded nonempty text, not an ISO timestamp refinement; all IDs/digests are serialized from provided values unchanged"
+  },
+  "diagnostic_projection": {
+    "equal": [
+      "accepted versus rejected",
+      "accepted parsed JSON values",
+      "serialized receipt fields"
+    ],
+    "separate": [
+      "Zod issue array and message wording",
+      "Rust category, field/path and detailed serde error"
+    ],
+    "rejection_categories": [
+      "missing_field",
+      "unknown_field",
+      "invalid_variant",
+      "invalid_shape",
+      "integer_type",
+      "integer_bounds",
+      "text_codepoint_bounds",
+      "digest_pattern",
+      "decision_count",
+      "basis_inconsistent",
+      "observed_draft_mismatch",
+      "duplicate_target_field",
+      "invalid_json",
+      "invalid_unicode_scalar_text"
+    ],
+    "note": "Serde tagged-enum buffering can report a containing decision index while detail identifies its nested missing/unknown field. This is retained honestly and is not claimed equal to Zod's path presentation."
+  },
+  "scalar_text": {
+    "fields": [
+      "decisions[].target.part_key",
+      "decisions[].target.relative_path",
+      "decisions[].target.source_layer",
+      "applied_at"
+    ],
+    "category": "invalid_unicode_scalar_text",
+    "rule": "Reject unpaired UTF-16 surrogates; preserve valid pairs and scalar values; length counts code points",
+    "structural_schema_encodes_this_refinement": false
+  }
+}
