@@ -82,8 +82,12 @@ try {
   assert.equal(await page.evaluate(() => globalThis.document.documentElement.scrollWidth > globalThis.innerWidth), false);
   assert.deepEqual(errors, []);
   const recoveryPage = await browser.newPage();
-  /** @type {{ exportJobs: string[], closedSocketJobs: string[], deniedPollJobs: string[], failedPollJobs: string[], recoveredPollJobs: string[], fixtureErrors: string[] }} */
-  const observation = { exportJobs: [], closedSocketJobs: [], deniedPollJobs: [], failedPollJobs: [], recoveredPollJobs: [], fixtureErrors: [] };
+  const initialAttempt = { trigger: "initial download", exportJobs: [] };
+  const retryAttempt = { trigger: "explicit Try again", exportJobs: [] };
+  let currentAttempt = initialAttempt;
+  const jobAttempts = new Map();
+  /** @type {{ exportJobs: string[], closedSocketJobs: string[], deniedPollJobs: string[], failedPollJobs: string[], recoveredPollJobs: string[], fixtureErrors: string[], attempts: typeof initialAttempt[] }} */
+  const observation = { exportJobs: [], closedSocketJobs: [], deniedPollJobs: [], failedPollJobs: [], recoveredPollJobs: [], fixtureErrors: [], attempts: [initialAttempt, retryAttempt] };
   /** @type {Map<string, ReturnType<typeof Promise.withResolvers>>} */
   const socketClosures = new Map();
   const socketClosureFor = (jobId) => {
@@ -119,6 +123,7 @@ try {
     const jobId = jobIdFromUrl(request.url());
     try {
       if (request.method() === "POST" && jobId === "export-stl-pack") {
+        const attempt = currentAttempt;
         assert.equal(request.postDataJSON().profile_id, build.id, "The export must belong to the fixture Build");
         const response = await route.fetch({ maxRetries: 0, maxRedirects: 0 });
         assert.ok(response.ok(), "The real export start must succeed");
@@ -127,12 +132,15 @@ try {
         assert.ok(started.job_id.length > 0, "The real export start must return a job ID");
         assert.ok(!observation.exportJobs.includes(started.job_id), "Each export must start a new job");
         observation.exportJobs.push(started.job_id);
+        attempt.exportJobs.push(started.job_id);
+        jobAttempts.set(started.job_id, attempt);
         await route.fulfill({ response });
         return;
       }
-      if (request.method() !== "GET" || jobId !== observation.exportJobs[0]) return await route.continue();
-      const closedJobId = await awaitWitness(socketClosureFor(jobId).promise, `closed socket for failed poll job ${jobId}`);
-      assert.equal(jobId, closedJobId, "The failed poll must observe its own interrupted socket");
+      if (request.method() !== "GET" || !jobAttempts.has(jobId)) return await route.continue();
+      const closedJobId = await awaitWitness(socketClosureFor(jobId).promise, `closed socket for poll job ${jobId}`);
+      assert.equal(jobId, closedJobId, "The poll must observe its own interrupted socket");
+      if (jobAttempts.get(jobId) === retryAttempt) return await route.continue();
       await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "Test connection interrupted" }) });
       observation.deniedPollJobs.push(jobId);
     } catch (error) {
@@ -151,25 +159,29 @@ try {
   const lostContact = recoveryPage.getByText(/Lost contact with the job/).first();
   const recoveredDownload = recoveryPage.getByRole("link", { name: "Save the files", exact: true });
   try {
-    await recoveryPage.goto(`${ui}/export?profile=${build.id}`);
-    await recoveryPage.getByRole("button", { name: /Download.*STL|Choose and download/i }).first().click();
-    await recoveryPage.getByRole("button", { name: "Download sorted STL files", exact: true }).click();
+    await recoveryPage.goto(`${ui}/export?profile=${build.id}&task=download-stl`);
+    const recoveryButton = recoveryPage.getByRole("button", { name: "Download sorted STL files", exact: true });
+    await recoveryButton.waitFor();
+    assert.deepEqual(observation.exportJobs, [], "Opening the saved STL task must not start an export");
+    await recoveryButton.click();
     await recoveryError.waitFor();
     await lostContact.waitFor();
     assert.deepEqual(observation.fixtureErrors, [], "Fault handlers must finish without errors");
-    assert.equal(observation.exportJobs.length, 1, "The interrupted export must have one real start receipt");
-    const interruptedJobId = observation.exportJobs[0];
+    assert.equal(initialAttempt.exportJobs.length, 1, "One initial download action must start one real export");
+    assert.deepEqual(retryAttempt.exportJobs, [], "No retry may start before the explicit Try again action");
+    const interruptedJobId = initialAttempt.exportJobs[0];
     assert.ok(observation.closedSocketJobs.includes(interruptedJobId), "The intended export's canonical job socket must be closed");
     assert.ok(observation.deniedPollJobs.length > 0, "The job HTTP status request must receive the injected 503");
     assert.ok(observation.deniedPollJobs.every((id) => id === interruptedJobId && observation.closedSocketJobs.includes(id)));
     assert.ok(observation.failedPollJobs.includes(interruptedJobId), "The browser must receive the intended export's HTTP 503");
-    const recoveryButton = recoveryPage.getByRole("button", { name: "Download sorted STL files", exact: true });
     assert.equal(await recoveryButton.isEnabled(), true);
     assert.equal(await recoveryButton.getAttribute("aria-busy"), null, "The failed export spinner must stop");
+    currentAttempt = retryAttempt;
     await recoveryPage.getByRole("button", { name: "Try again", exact: true }).click();
     await recoveredDownload.waitFor();
-    assert.equal(observation.exportJobs.length, 2, "Try again must start a real new export");
-    const retryJobId = observation.exportJobs[1];
+    assert.equal(retryAttempt.exportJobs.length, 1, "Try again must start one real new export");
+    assert.equal(initialAttempt.exportJobs.length, 1, "The failed initial attempt must stay separate from retry");
+    const retryJobId = retryAttempt.exportJobs[0];
     assert.notEqual(retryJobId, interruptedJobId, "Retry must observe a new job");
     await awaitWitness(socketClosureFor(retryJobId).promise, `closed socket for retry job ${retryJobId}`);
     assert.ok(observation.recoveredPollJobs.includes(retryJobId), "Retry must receive a real successful HTTP job status");
