@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+pp-storage = { path = "../pp-storage" }
 anyhow.workspace = true
 tokio.workspace = true
 serde.workspace = true
