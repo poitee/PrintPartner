@@ -271,7 +271,10 @@ def verify_macho(root, arch, executable, receipt):
         records[path.relative_to(root).as_posix()]['loader_contexts'] = []
 
     def system_library(path):
-        return path.is_relative_to('/usr/lib') or path.is_relative_to('/System/Library')
+        value = str(path)
+        return ((value in ('/usr/lib', '/System/Library') or value.startswith(('/usr/lib/', '/System/Library/')))
+                and '\\' not in value
+                and all(part not in ('', '.', '..') for part in value[1:].split('/')))
 
     def expand(value, loader, loading_executable):
         if value == '@loader_path':
@@ -283,6 +286,8 @@ def verify_macho(root, arch, executable, receipt):
         if value.startswith('@executable_path/'):
             return loading_executable.parent / value.removeprefix('@executable_path/')
         require(value.startswith('/'), 'Unresolved dyld path: '+value)
+        require('\\' not in value and all(part not in ('', '.', '..') for part in value[1:].split('/')),
+                'Noncanonical dyld path: '+value)
         return pathlib.Path(value)
 
     checked = set()
@@ -292,8 +297,10 @@ def verify_macho(root, arch, executable, receipt):
         search = []
         for owner in (image, *reversed(ancestors)):
             for value in rpaths[owner]:
-                base = expand(value, owner, loading_executable).resolve()
-                require(base.is_relative_to(root) or system_library(base), 'LC_RPATH escapes Contents')
+                base = expand(value, owner, loading_executable)
+                if not system_library(base):
+                    base = base.resolve()
+                    require(base.is_relative_to(root), 'LC_RPATH escapes Contents')
                 if base not in search:
                     search.append(base)
         key = (image, loading_executable, tuple(search))
@@ -307,17 +314,19 @@ def verify_macho(root, arch, executable, receipt):
         records[image.relative_to(root).as_posix()]['loader_contexts'].append(context)
         for library in libraries[image]:
             if library.startswith('@rpath/'):
-                choices = [base / library.removeprefix('@rpath/') for base in search]
+                suffix = relative_path(library.removeprefix('@rpath/'))
+                choices = [base / suffix for base in search]
             else:
                 choices = [expand(library, image, loading_executable)]
             target = None
             for choice in choices:
-                resolved = choice.resolve()
-                if system_library(resolved):
-                    sysroot.add(str(resolved))
+                if system_library(choice):
+                    sysroot.add(str(choice))
                     receipt['sysroot_libraries'] = sorted(sysroot)
-                    target = resolved
+                    target = choice
                     break
+                require(choice.is_relative_to(root), 'Native dependency escapes Contents: '+library)
+                resolved = choice.resolve()
                 require(resolved.is_relative_to(root), 'Native dependency escapes Contents: '+library)
                 if resolved in outputs:
                     target = resolved
@@ -379,6 +388,86 @@ def verify(app, manifest_path, arch, receipt):
 
 
 class ParserTests(unittest.TestCase):
+    def test_system_install_names_preserve_loader_authority(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary).resolve()
+            main = root / 'MacOS/pp-desktop'
+            node = root / 'MacOS/printpartner-node'
+            addon = root / 'Frameworks/addon.node'
+            for image in (main, node, addon):
+                image.parent.mkdir(parents=True, exist_ok=True)
+                image.write_bytes(image.name.encode())
+                image.chmod(0o755)
+            framework = '/System/Library/Frameworks/WebKit.framework/Versions/A/WebKit'
+            dependencies = {main: framework}
+            paths = {}
+            base = 'binary:\nLoad command 0\n cmd LC_BUILD_VERSION\n platform 1\n minos 13.5\n'
+
+            def tool(*args, **kwargs):
+                image = pathlib.Path(args[-1])
+                if args[0] == '/usr/bin/file':
+                    return 'Mach-O 64-bit arm64'
+                if args[0] == '/usr/bin/lipo':
+                    return 'arm64'
+                if args[1] == '-l':
+                    value = paths.get(image)
+                    return base + ('Load command 1\n cmd LC_RPATH\n path '+value+' (offset 12)\n' if value else '')
+                if args[1] == '-L':
+                    value = dependencies.get(image, '/usr/lib/libSystem.B.dylib')
+                    return str(image)+':\n\t'+value+' (compatibility version 1.0.0, current version 1.0.0)'
+                raise AssertionError(args)
+
+            original_resolve = pathlib.Path.resolve
+
+            def resolve(path, *args, **kwargs):
+                if str(path) == framework:
+                    return pathlib.Path('/outside/synthetic-system-indirection/WebKit')
+                return original_resolve(path, *args, **kwargs)
+
+            with patch(__name__+'.command', side_effect=tool), patch.object(pathlib.Path, 'resolve', resolve):
+                report = verify_macho(root, 'arm64', 'pp-desktop', {})
+                self.assertIn(framework, report['sysroot_libraries'])
+                self.assertEqual(report['mach_o']['MacOS/pp-desktop']['loader_contexts'][0]
+                                 ['resolved_libraries'][framework], framework)
+                with patch.object(pathlib.Path, 'exists', side_effect=AssertionError('Cache-only name touched disk')):
+                    verify_macho(root, 'arm64', 'pp-desktop', {})
+                paths[main] = '/System/Library/Frameworks/WebKit.framework/Versions/A'
+                dependencies[main] = '@rpath/WebKit'
+                verify_macho(root, 'arm64', 'pp-desktop', {})
+                paths[main] = '/usr/lib'
+                dependencies[main] = '@rpath/libSystem.B.dylib'
+                verify_macho(root, 'arm64', 'pp-desktop', {})
+                paths.clear()
+                for library in ['/usr/local/lib/libcustom.dylib', '/System/Library-lookalike/libcustom.dylib',
+                                '/Library/Frameworks/Custom.framework/Custom', '/private/tmp/libcustom.dylib',
+                                '/Users/fixture/libcustom.dylib', '/System/Volumes/unproven/libcustom.dylib',
+                                '/System/Library/../../tmp/libcustom.dylib', '/usr/lib/../../tmp/libcustom.dylib',
+                                '/System//Library/Frameworks/WebKit.framework/Versions/A/WebKit',
+                                '/System/Library/./Frameworks/WebKit.framework/Versions/A/WebKit',
+                                '//System/Library/Frameworks/WebKit.framework/Versions/A/WebKit',
+                                '/usr/lib\\libcustom.dylib', '@unknown/libcustom.dylib', 'libcustom.dylib',
+                                '@rpath/libcustom.dylib']:
+                    dependencies[main] = library
+                    with self.subTest(library=library), self.assertRaises(ValueError):
+                        verify_macho(root, 'arm64', 'pp-desktop', {})
+                dependencies[main] = '@rpath/WebKit'
+                for rpath in ['/usr/local/lib', '/System/Library-lookalike', '/private/tmp',
+                              '/System/Library/../../tmp', '/System//Library/Frameworks']:
+                    paths[main] = rpath
+                    with self.subTest(rpath=rpath), self.assertRaises(ValueError):
+                        verify_macho(root, 'arm64', 'pp-desktop', {})
+                paths[main] = '/System/Library/Frameworks/WebKit.framework/Versions/A'
+                dependencies[main] = '@rpath/../../../../../tmp/libcustom.dylib'
+                with self.assertRaises(ValueError):
+                    verify_macho(root, 'arm64', 'pp-desktop', {})
+                paths.clear()
+                dependencies[main] = framework
+                alias = root / 'Frameworks/user-alias.dylib'
+                alias.symlink_to('/usr/lib/libSystem.B.dylib')
+                dependencies[addon] = '@loader_path/user-alias.dylib'
+                with self.assertRaisesRegex(ValueError, 'Native dependency escapes Contents'):
+                    verify_macho(root, 'arm64', 'pp-desktop', {})
+
     def test_node_addon_uses_node_executable_and_loader_chain(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary).resolve()
