@@ -1,5 +1,7 @@
 pub mod auth;
+pub mod catalog;
 pub mod lease;
+pub mod read_model;
 mod schema;
 
 use anyhow::{Result, anyhow, ensure};
@@ -57,6 +59,18 @@ enum Work {
     Backup(PathBuf),
 }
 enum Envelope {
+    Read {
+        command: read_model::Command,
+        reply: mpsc::Sender<Result<read_model::Batch>>,
+    },
+    Catalog {
+        command: catalog::Command,
+        reply: mpsc::Sender<Result<catalog::Reply>>,
+    },
+    CatalogRequest {
+        command: catalog::Command,
+        reply: mpsc::Sender<Result<catalog::Outcome>>,
+    },
     Setting {
         work: Work,
         reply: mpsc::Sender<Result<bool>>,
@@ -296,6 +310,7 @@ impl WriterOwner {
             capacity: limits.queued_writes,
         });
         let worker = shared.clone();
+        let mut catalog_state = catalog::State::new(lease.data_dir().to_owned());
         let join = thread::spawn(move || {
             loop {
                 let envelope = {
@@ -315,6 +330,24 @@ impl WriterOwner {
                     }
                 };
                 match envelope {
+                    Envelope::Read { command, reply } => {
+                        let _ = reply.send(read_model::execute(&mut connection, command));
+                    }
+                    Envelope::Catalog { command, reply } => {
+                        let _ = reply.send(catalog::execute(
+                            &mut connection,
+                            &mut catalog_state,
+                            command,
+                        ));
+                    }
+                    Envelope::CatalogRequest { command, reply } => {
+                        let result = catalog::execute(&mut connection, &mut catalog_state, command)
+                            .and_then(|r| match r {
+                                catalog::Reply::Outcome(o) => Ok(o),
+                                _ => Err(anyhow!("Unexpected catalog reply")),
+                            });
+                        let _ = reply.send(result);
+                    }
                     Envelope::Setting { work, reply } => {
                         let _ = reply.send(execute(&mut connection, work));
                     }

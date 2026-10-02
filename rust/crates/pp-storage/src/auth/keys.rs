@@ -210,3 +210,24 @@ pub(super) fn resolve(tx: &Transaction<'_>, tenant: &str, raw: Secret) -> Result
         },
     })
 }
+
+pub(super) fn read_tenant(tx: &Transaction<'_>, tenant: &str, secret: &Secret) -> Result<String> {
+    ensure!(
+        !tenant.is_empty()
+            && tenant.len() <= 512
+            && !secret.expose().is_empty()
+            && secret.expose().len() <= 4096,
+        "Authentication required"
+    );
+    let bytes: i64 = tx.query_row("SELECT coalesce(sum(length(cast(value AS blob))),0) FROM app_settings WHERE key='api_keys_v1' AND tenant_id=?1", [tenant], |r| r.get(0))?;
+    ensure!(bytes <= 1024 * 1024, "API key collection too large");
+    let (keys, _) = load(tx, tenant)?;
+    let hash = digest(secret.expose());
+    ensure!(
+        keys.iter().any(|key| key.is_active
+            && unexpired(&key.expires_at)
+            && bool::from(key.key_hash.as_bytes().ct_eq(hash.as_bytes()))),
+        "Authentication required"
+    );
+    Ok(tenant.to_owned())
+}
