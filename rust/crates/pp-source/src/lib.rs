@@ -1,5 +1,6 @@
 pub mod archive;
 mod directory;
+pub mod media;
 mod path_policy;
 
 use directory::Directory;
