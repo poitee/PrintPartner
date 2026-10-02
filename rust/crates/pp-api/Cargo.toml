@@ -1,0 +1,25 @@
+[package]
+name = "pp-api"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+pp-storage = { path = "../pp-storage" }
+anyhow.workspace = true
+axum.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
+base64 = "=0.22.1"
+getrandom = "=0.3.4"
+reqwest = { version = "=0.13.5", default-features = false, features = ["rustls", "json", "form", "stream"] }
+rustls = { version = "=0.23.45", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
+lettre = { version = "=0.11.23", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls", "aws-lc-rs", "webpki-roots"] }
+
+[dev-dependencies]
+tokio-rustls = { version = "=0.26.6", default-features = false, features = ["aws_lc_rs", "tls12"] }
+rusqlite.workspace = true
