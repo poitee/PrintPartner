@@ -18,7 +18,7 @@
     "test": "npm run test:release && npm run test:build-tools && npm run test -w @print-partner/contracts --if-present && npm run test -w @print-partner/domain --if-present && npm run test -w @print-partner/web --if-present && npm run test:ci -w @print-partner/server --if-present",
     "test:release": "node ../scripts/audit-public-release.mjs && node --test ../scripts/release.test.mjs ../scripts/site-map-docs.test.mjs ../scripts/autopilot-pr-state.test.mjs ../scripts/docker-startup.test.mjs",
     "test:build-tools": "node --test scripts/atomic-package-build.test.mjs",
-    "test:runtime": "node --test scripts/server-runtime.test.mjs",
+    "test:runtime": "node --test scripts/server-runtime.test.mjs ../.cursor/skills/verify-print-partner/helpers/control-print-partner.test.mjs",
     "test:browser": "npm run test:browser -w @print-partner/web",
     "test:workflow-smoke": "python3 -m unittest scripts.test_workflow_smoke",
     "audit:cleanup": "node ../scripts/audit-cleanup.mjs",
