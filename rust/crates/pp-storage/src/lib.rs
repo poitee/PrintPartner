@@ -4,6 +4,7 @@ pub mod checkoff_progress;
 pub mod jobs;
 pub mod lease;
 pub mod plan_publication;
+pub use working_drafts::save as plan_save;
 pub mod read_model;
 pub mod required_units;
 mod schema;
@@ -65,6 +66,10 @@ enum Work {
     Backup(PathBuf),
 }
 enum Envelope {
+    PlanSave {
+        command: plan_save::Command,
+        reply: mpsc::Sender<Result<plan_save::Outcome>>,
+    },
     WorkingDraft {
         command: working_drafts::Command,
         reply: mpsc::Sender<Result<pp_contracts::working_drafts::Outcome>>,
@@ -398,6 +403,13 @@ impl WriterOwner {
                     }
                 };
                 match envelope {
+                    Envelope::PlanSave { command, reply } => {
+                        let _ = reply.send(plan_save::execute(
+                            &mut connection,
+                            command,
+                            tokens.as_mut(),
+                        ));
+                    }
                     Envelope::WorkingDraft { command, reply } => {
                         let _ = reply.send(working_drafts::execute(&mut connection, command));
                     }

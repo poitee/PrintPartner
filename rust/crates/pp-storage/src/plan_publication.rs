@@ -144,6 +144,20 @@ pub(crate) struct AuthenticatedPublicationContext {
     actor: String,
 }
 impl AuthenticatedPublicationContext {
+    pub(crate) fn resolve_ref(
+        tx: &Transaction<'_>,
+        credential: &Credential,
+        policy: auth::AuthPolicy,
+    ) -> Result<Self> {
+        let (tenant, actor) = auth::reconciliation_actor_ref(tx, credential, policy)?;
+        Ok(Self { tenant, actor })
+    }
+    pub(crate) fn tenant(&self) -> &str {
+        &self.tenant
+    }
+    pub(crate) fn actor(&self) -> &str {
+        &self.actor
+    }
     pub(crate) fn resolve(
         tx: &Transaction<'_>,
         credential: Credential,
@@ -277,7 +291,11 @@ fn historical_mapping(
     );
     Ok(digest)
 }
-fn receipt(tx: &Transaction<'_>, tenant: &str, row: &Value) -> Result<ApplyPlanDraftReceipt> {
+pub(crate) fn receipt(
+    tx: &Transaction<'_>,
+    tenant: &str,
+    row: &Value,
+) -> Result<ApplyPlanDraftReceipt> {
     let profile = num(row, "profileId")?;
     let draft = num(row, "draftId")?;
     let revision = num(row, "revisionId")?;
