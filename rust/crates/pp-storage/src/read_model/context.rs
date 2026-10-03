@@ -1033,3 +1033,22 @@ fn validate_current_plates(
     )?;
     Ok(())
 }
+pub(super) fn draft_freshness_current(
+    tx: &Transaction<'_>,
+    tenant: &str,
+    id: i64,
+    b: &mut Budget,
+) -> Result<bool> {
+    let p = required(
+        one(
+            tx,
+            "build_profiles",
+            "id=?1 AND tenant_id=?2",
+            &[&id, &tenant],
+            "profile",
+            b,
+        )?,
+        "profile",
+    )?;
+    Ok(freshness(tx, tenant, id, &p, b)?.0["status"] == "current")
+}
