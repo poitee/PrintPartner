@@ -327,7 +327,7 @@ fn validate_source(d: &Draft, r: &RebaseRequest) -> Result<Option<Outcome>> {
     }
     Ok(None)
 }
-fn inputs_equal(a: &[Value], b: &[Value]) -> bool {
+pub(super) fn inputs_equal(a: &[Value], b: &[Value]) -> bool {
     let canonical = |v: &[Value]| {
         let mut out: Vec<_> = v
             .iter()

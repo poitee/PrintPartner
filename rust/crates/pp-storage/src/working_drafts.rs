@@ -3,6 +3,7 @@ mod manifest;
 pub mod observation;
 mod preparation;
 mod rebase;
+pub mod save;
 mod siblings;
 mod yaml;
 use crate::{
@@ -586,19 +587,49 @@ fn insert_prepared(
     p: &preparation::PreparedDraftSnapshot,
     origin: Option<RebaseOrigin<'_>>,
 ) -> Result<i64> {
+    insert_snapshot(
+        tx,
+        tenant,
+        actor,
+        profile,
+        key,
+        SnapshotContent {
+            base: &p.base,
+            inputs: &p.capture.inputs,
+            parts: &p.parts,
+            digest: &p.digest,
+        },
+        origin,
+    )
+}
+struct SnapshotContent<'a> {
+    base: &'a Value,
+    inputs: &'a [Value],
+    parts: &'a [Value],
+    digest: &'a str,
+}
+fn insert_snapshot(
+    tx: &Transaction<'_>,
+    tenant: &str,
+    actor: &str,
+    profile: i64,
+    key: &str,
+    p: SnapshotContent<'_>,
+    origin: Option<RebaseOrigin<'_>>,
+) -> Result<i64> {
     let id = insert(
         tx,
         "plan_drafts",
         json!({"tenantId":tenant,"profileId":profile,"baseRevisionId":p.base["baseRevisionId"],"basePlanVersion":p.base["basePlanVersion"],"state":"open","digestFormat":"plan-draft-v1","snapshotDigest":p.digest,"createdBy":actor,"idempotencyKey":key,"createdAt":auth::catalog_timestamp(),"rebasedFromDraftId":origin.as_ref().map(|o|o.source_id),"rebasedFromLifecycleVersion":origin.as_ref().map(|o|o.generation),"rebasedFromSnapshotDigest":origin.as_ref().map(|o|o.digest)}),
     )?;
-    for input in &p.capture.inputs {
+    for input in p.inputs {
         let mut row = json!({"tenantId":tenant,"draftId":id});
         for f in required_units::model::INPUT_FIELDS {
             row[*f] = input[*f].clone()
         }
         insert(tx, "plan_draft_inputs", row)?;
     }
-    for part in &p.parts {
+    for part in p.parts {
         let mut row =
             json!({"tenantId":tenant,"draftId":id,"baseRevisionPartId":part["baseRevisionPartId"]});
         for f in required_units::model::PART_FIELDS {

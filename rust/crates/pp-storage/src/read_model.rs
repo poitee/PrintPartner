@@ -215,3 +215,23 @@ pub(crate) fn reusable_draft_base(
         AcceptedRead::Ready { .. }
     ))
 }
+pub(crate) fn capture_published(
+    tx: &rusqlite::Transaction<'_>,
+    tenant: &str,
+    profile: i64,
+    repos: &std::path::Path,
+    minimum_version: u64,
+) -> Result<(Box<Snapshot>, CapturedContext)> {
+    let mut budget = graph::Budget::default();
+    let accepted = graph::read(tx, tenant, profile, repos, &mut budget)?;
+    let context = context::capture(tx, tenant, profile, &accepted, &mut budget)?
+        .ok_or_else(|| anyhow!("Published Build context missing"))?;
+    let AcceptedRead::Ready { snapshot } = accepted else {
+        return Err(anyhow!("Published accepted authority unavailable"));
+    };
+    ensure!(
+        snapshot.plan_version >= minimum_version as i64,
+        "Accepted capture predates Save receipt"
+    );
+    Ok((snapshot, context))
+}

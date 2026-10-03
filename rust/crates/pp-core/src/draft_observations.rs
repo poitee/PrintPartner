@@ -36,6 +36,13 @@ pub fn issue_working_drafts(
     let repos = configuration.repos.clone();
     owner.working_drafts_with_policy(policy, Arc::new(Reader { configuration }), limits, repos)
 }
+pub fn issue_plan_save(
+    owner: &WriterOwner,
+    policy: AuthPolicy,
+    configuration: DraftReadConfiguration,
+) -> anyhow::Result<pp_storage::plan_save::PlanSaveClient> {
+    Ok(issue_working_drafts(owner, policy, configuration)?.plan_save())
+}
 struct Reader {
     configuration: DraftReadConfiguration,
 }
