@@ -962,3 +962,32 @@ pub(crate) fn catalog_tenant(
         }
     }
 }
+
+pub(crate) fn job_session_actor(
+    tx: &Transaction<'_>,
+    token: &str,
+    policy: AuthPolicy,
+) -> Result<(String, String)> {
+    ensure!(
+        token.len() <= 4096,
+        AuthFailure::InvalidInput(AuthInputFailure::TooLong)
+    );
+    let actor = actor(tx, &crypto::digest(token))?;
+    Ok((
+        policy::tenant_for_authenticated_actor(tx, &actor, policy)?,
+        format!("user:{}", actor.user_id),
+    ))
+}
+pub(crate) fn job_key_actor(
+    tx: &Transaction<'_>,
+    tenant: &str,
+    key: Secret,
+) -> Result<(String, String)> {
+    match keys::resolve(tx, tenant, key)? {
+        Outcome::KeyResolved {
+            principal: Some(principal),
+            ..
+        } => Ok((principal.tenant_id, format!("key:{}", principal.key_id))),
+        _ => Err(AuthFailure::SessionRequired.into()),
+    }
+}

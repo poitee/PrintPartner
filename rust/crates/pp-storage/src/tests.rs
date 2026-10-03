@@ -199,7 +199,7 @@ fn reader_pool_resets_pragmas_rejects_writes_and_is_bounded() {
 }
 #[test]
 fn ahead_and_old_versions_reject_before_side_effects() {
-    for version in [30, 35] {
+    for version in [30, 36] {
         let path = directory("version");
         let database = path.join("print-partner.db");
         let conn = Connection::open(&database).unwrap();
@@ -402,7 +402,7 @@ fn wal_only_unsupported_versions_preserve_every_input_file() {
         entries.sort();
         entries
     };
-    for version in [30, 35] {
+    for version in [30, 36] {
         for with_shm in [false, true] {
             let source = directory("wal-source");
             let raw = Connection::open(source.join("print-partner.db")).unwrap();
