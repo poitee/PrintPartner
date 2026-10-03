@@ -1015,6 +1015,38 @@ async fn domain_server() -> Server {
     )
     .await
 }
+fn domain_job(
+    client: &pp_storage::jobs::AtomicJobClient,
+    credential: pp_storage::jobs::Credential,
+    key: &str,
+) -> anyhow::Result<pp_storage::jobs::JobRecord> {
+    use pp_storage::jobs::{Outcome, Payload, UserOperation};
+    match client
+        .submit(
+            credential,
+            UserOperation::Enqueue {
+                key: key.into(),
+                payload_version: 1,
+                payload: Payload::CheckSourceUpdates {},
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?
+        .receive()?
+    {
+        Outcome::Job(job, _) => Ok(job),
+        _ => panic!("Expected job"),
+    }
+}
+fn job_session(token: &str) -> pp_storage::jobs::Credential {
+    pp_storage::jobs::Credential::Session(secret(token))
+}
+fn job_key(tenant: &str, raw: &str) -> pp_storage::jobs::Credential {
+    pp_storage::jobs::Credential::RoutedKey {
+        tenant: tenant.into(),
+        key: secret(raw),
+    }
+}
 #[tokio::test]
 async fn public_cookie_catalog_and_accepted_reads_share_default_tenant() {
     use pp_storage::{
@@ -1040,6 +1072,9 @@ async fn public_cookie_catalog_and_accepted_reads_share_default_tenant() {
     let browser_cookie = cookie(&login);
     let token = browser_cookie.strip_prefix("pp_session=").unwrap();
     let catalog = domain_catalog(&server.owner, token);
+    let jobs = server.owner.jobs(domain_policy()).unwrap();
+    let cookie_job = domain_job(&jobs, job_session(token), "cookie-job").unwrap();
+    assert_eq!(cookie_job.tenant, "default");
     let reader = server
         .owner
         .accepted_reads_with_policy(domain_policy())
@@ -1072,6 +1107,22 @@ async fn public_cookie_catalog_and_accepted_reads_share_default_tenant() {
             .is_err()
     );
     assert!(domain_read(&reader, "invalid").is_err());
+    assert!(domain_job(&jobs, job_session("invalid"), "invalid").is_err());
+    let mut neutral_policy = domain_policy();
+    neutral_policy.session_tenant = pp_storage::auth::SessionTenantPolicy::AccountTenant;
+    let neutral_jobs = server.owner.jobs(neutral_policy).unwrap();
+    assert_eq!(
+        domain_job(&neutral_jobs, job_session(token), "neutral-job")
+            .unwrap()
+            .tenant,
+        account
+    );
+    assert_eq!(
+        domain_job(&jobs, job_session(token), "strict-still-default")
+            .unwrap()
+            .tenant,
+        "default"
+    );
     let neutral = server.owner.accepted_reads();
     assert!(matches!(
         domain_read(&neutral, token).unwrap().builds[0].accepted,
@@ -1102,6 +1153,13 @@ async fn public_cookie_catalog_and_accepted_reads_share_default_tenant() {
     let key: Value = key.json().await.unwrap();
     let raw = key["key"].as_str().unwrap();
     let key_catalog = domain_key_catalog(&server.owner, "default", raw);
+    assert_eq!(
+        domain_job(&jobs, job_key("default", raw), "key-job")
+            .unwrap()
+            .tenant,
+        "default"
+    );
+    assert!(domain_job(&jobs, job_key(account, raw), "wrong-key-route").is_err());
     assert!(matches!(
         domain_key_read(&reader, "default", raw).unwrap().builds[0].accepted,
         AcceptedRead::Ready { .. }
@@ -1132,6 +1190,7 @@ async fn public_cookie_catalog_and_accepted_reads_share_default_tenant() {
     assert_eq!(revoked.status(), 200);
     assert!(domain_key_read(&reader, "default", raw).is_err());
     assert!(key_catalog.execute(CatalogRequest::List {}).is_err());
+    assert!(domain_job(&jobs, job_key("default", raw), "revoked-key").is_err());
     let changed = server
         .request(
             Method::POST,
@@ -1145,6 +1204,13 @@ async fn public_cookie_catalog_and_accepted_reads_share_default_tenant() {
     let new_token = changed_cookie.strip_prefix("pp_session=").unwrap();
     assert!(domain_read(&reader, token).is_err());
     assert!(catalog.execute(CatalogRequest::List {}).is_err());
+    assert!(domain_job(&jobs, job_session(token), "replaced-password").is_err());
+    assert_eq!(
+        domain_job(&jobs, job_session(new_token), "new-password")
+            .unwrap()
+            .tenant,
+        "default"
+    );
     let new_catalog = domain_catalog(&server.owner, new_token);
     new_catalog.execute(CatalogRequest::List {}).unwrap();
     let after = domain_read(&reader, new_token).unwrap();
@@ -1163,6 +1229,7 @@ async fn public_cookie_catalog_and_accepted_reads_share_default_tenant() {
     assert_eq!(logout.status(), 200);
     assert!(domain_read(&reader, new_token).is_err());
     assert!(new_catalog.execute(CatalogRequest::List {}).is_err());
+    assert!(domain_job(&jobs, job_session(new_token), "logged-out").is_err());
     let directory = server.stop().await;
     let owner = WriterOwner::open(&directory, Limits::default()).unwrap().0;
     let server = Server::from_owner(
@@ -1185,6 +1252,15 @@ async fn public_cookie_catalog_and_accepted_reads_share_default_tenant() {
     assert_eq!(login.status(), 200);
     let restarted_cookie = cookie(&login);
     let restarted_token = restarted_cookie.strip_prefix("pp_session=").unwrap();
+    let restarted_jobs = server.owner.jobs(domain_policy()).unwrap();
+    assert_eq!(
+        domain_job(&restarted_jobs, job_session(restarted_token), "cookie-job")
+            .unwrap()
+            .job_id,
+        cookie_job.job_id
+    );
+    assert!(domain_job(&restarted_jobs, job_key("default", raw), "restart-revoked").is_err());
+    assert!(domain_job(&restarted_jobs, job_session(new_token), "restart-logout").is_err());
     let restarted_reader = server
         .owner
         .accepted_reads_with_policy(domain_policy())
@@ -1235,6 +1311,9 @@ async fn imported_multiple_accounts_close_all_session_domain_clients() {
     let browser_cookie = cookie(&registered);
     let token = browser_cookie.strip_prefix("pp_session=").unwrap();
     let catalog = domain_catalog(&server.owner, token);
+    let jobs = server.owner.jobs(domain_policy()).unwrap();
+    let cookie_job = domain_job(&jobs, job_session(token), "cookie-job").unwrap();
+    assert_eq!(cookie_job.tenant, "default");
     let reader = server
         .owner
         .accepted_reads_with_policy(domain_policy())
@@ -1268,6 +1347,13 @@ async fn imported_multiple_accounts_close_all_session_domain_clients() {
         catalog
             .execute(CatalogRequest::List {})
             .unwrap_err()
+            .to_string()
+            .contains("owner mapping")
+    );
+    assert!(
+        domain_job(&jobs, job_session(token), "multiple-accounts")
+            .err()
+            .unwrap()
             .to_string()
             .contains("owner mapping")
     );
