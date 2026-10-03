@@ -10,7 +10,7 @@ use std::{
 };
 
 #[derive(Debug)]
-pub(super) struct Integrity {
+pub(crate) struct Integrity {
     pub code: &'static str,
     pub message: String,
 }
@@ -32,7 +32,7 @@ pub(super) fn check(ok: bool, code: &'static str, message: &str) -> Result<()> {
     }
 }
 #[derive(Default)]
-pub(super) struct Budget {
+pub(crate) struct Budget {
     rows: usize,
     bytes: usize,
 }
@@ -436,7 +436,7 @@ fn canonical_part(r: &Row) -> Result<String> {
     }
     Ok(object(values))
 }
-pub(super) fn read(
+pub(crate) fn read(
     tx: &Transaction<'_>,
     tenant: &str,
     id: i64,
