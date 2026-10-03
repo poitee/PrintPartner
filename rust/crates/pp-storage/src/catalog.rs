@@ -1,6 +1,10 @@
+mod activity;
 mod categories;
 mod json;
+mod location;
 mod naming;
+pub use activity::SourceActivityEvent;
+pub use naming::{NamingOverride, NamingPreview};
 
 use crate::{Envelope, SettingsClient, WriterOwner, auth};
 use anyhow::{Result, anyhow, ensure};
@@ -17,6 +21,70 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[derive(Debug)]
+pub enum CatalogFailure {
+    Input(String),
+    DuplicateName(String),
+    NotFound,
+    InvalidStoredNaming,
+    Referenced,
+    QueueFull,
+    Stopped,
+    Cancelled,
+    TooLarge,
+    CommitUnknown,
+    Storage,
+}
+impl std::fmt::Display for CatalogFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Input(detail) => detail,
+            Self::DuplicateName(name) => return write!(f, "Source already exists: {name}"),
+            Self::NotFound => "Source not found",
+            Self::InvalidStoredNaming => "Stored Source naming settings are invalid",
+            Self::Referenced => "Source historical name is referenced and cannot be changed",
+            Self::QueueFull => "Writer queue full",
+            Self::Stopped => "Storage stopped",
+            Self::Cancelled => "Cancelled before admission",
+            Self::TooLarge => "Catalog request too large",
+            Self::CommitUnknown => "Catalog result unknown",
+            Self::Storage => "Catalog unavailable",
+        })
+    }
+}
+impl std::error::Error for CatalogFailure {}
+#[derive(Clone)]
+pub struct CatalogAccess {
+    client: SettingsClient,
+    policy: auth::AuthPolicy,
+}
+#[derive(Clone)]
+pub struct CatalogKeyAccess {
+    access: CatalogAccess,
+    tenant: String,
+}
+impl CatalogAccess {
+    pub fn session(&self, secret: auth::Secret) -> SourceCatalogClient {
+        SourceCatalogClient {
+            client: self.client.clone(),
+            authority: Authority::Credentials(Credentials::Session(secret), self.policy),
+        }
+    }
+}
+impl CatalogKeyAccess {
+    pub fn key(&self, secret: auth::Secret) -> SourceCatalogClient {
+        SourceCatalogClient {
+            client: self.access.client.clone(),
+            authority: Authority::Credentials(
+                Credentials::Key {
+                    tenant_id: self.tenant.clone(),
+                    key: secret,
+                },
+                self.access.policy,
+            ),
+        }
+    }
+}
 pub enum Credentials {
     Session(auth::Secret),
     Key {
@@ -66,6 +134,29 @@ fn nullable<'de, D: serde::Deserializer<'de>>(
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Request {
     List {},
+    PreviewNaming {
+        relative_path: String,
+        profile: Option<NamingOverride>,
+    },
+    SourceActivity {
+        limit: u8,
+    },
+    GetCategoriesWithTree {},
+    SaveCategoriesWithTree {
+        categories: Vec<String>,
+        replacements: HashMap<String, Option<String>>,
+    },
+    CreateForHttp {
+        source: CreateSource,
+    },
+    UpdateForHttp {
+        id: i64,
+        patch: SourcePatch,
+    },
+    BulkCategoryForHttp {
+        source_ids: Vec<serde_json::Number>,
+        category: Option<String>,
+    },
     Get {
         id: i64,
     },
@@ -148,11 +239,34 @@ pub enum Deletion {
 #[derive(Debug, Serialize)]
 #[serde(untagged)]
 pub enum Outcome {
+    Preview(NamingPreview),
+    Activity(Vec<SourceActivityEvent>),
+    Categories(CategorySettings),
     Source(Option<Box<SourceSummary>>),
     Sources(Vec<SourceSummary>),
     Deletion(Deletion),
     Data(Value),
 }
+#[derive(Debug, Serialize)]
+pub struct CategorySettings {
+    pub categories: Vec<String>,
+    pub tree: Vec<CategoryNode>,
+}
+#[derive(Debug, Serialize)]
+pub struct CategoryNode {
+    pub path: String,
+    pub name: String,
+    pub depth: usize,
+    pub parent: Option<String>,
+    pub children: Vec<CategoryNode>,
+}
+impl CategorySettings {
+    fn new(categories: Vec<String>) -> Self {
+        let tree = categories::nodes(&categories, None);
+        Self { categories, tree }
+    }
+}
+pub const IMPORT_RULE_BODY_LIMIT: usize = 8 * 1024 * 1024;
 pub type CatalogReply = mpsc::Receiver<Result<Outcome>>;
 pub(super) enum Command {
     Run {
@@ -193,6 +307,27 @@ pub struct SourceWorkLease {
     token: Option<u64>,
 }
 impl WriterOwner {
+    pub fn catalog_access(&self, policy: auth::AuthPolicy) -> Result<CatalogAccess> {
+        auth::validate_policy(policy)?;
+        Ok(CatalogAccess {
+            client: self.client(),
+            policy,
+        })
+    }
+    pub fn catalog_key_access(
+        &self,
+        policy: auth::AuthPolicy,
+        tenant: String,
+    ) -> Result<CatalogKeyAccess> {
+        ensure!(
+            !tenant.is_empty() && tenant.len() <= 4096,
+            CatalogFailure::Input("Invalid routed tenant".into())
+        );
+        Ok(CatalogKeyAccess {
+            access: self.catalog_access(policy)?,
+            tenant,
+        })
+    }
     pub fn source_catalog(&self, credentials: Credentials) -> SourceCatalogClient {
         SourceCatalogClient {
             client: self.client(),
@@ -259,12 +394,12 @@ fn enqueue(
         .shared
         .queue
         .lock()
-        .map_err(|_| anyhow!("Writer admission poisoned"))?;
+        .map_err(|_| anyhow!(CatalogFailure::Storage))?;
     loop {
-        ensure!(!q.closed, "Storage stopped");
+        ensure!(!q.closed, CatalogFailure::Stopped);
         ensure!(
             !cancelled.load(Ordering::Acquire),
-            "Cancelled before admission"
+            CatalogFailure::Cancelled
         );
         if q.pending.len() < client.shared.capacity {
             let (reply, rx) = mpsc::channel();
@@ -272,12 +407,12 @@ fn enqueue(
             client.shared.changed.notify_all();
             return Ok(rx);
         }
-        ensure!(Instant::now() < deadline, "Writer queue full");
+        ensure!(Instant::now() < deadline, CatalogFailure::QueueFull);
         q = client
             .shared
             .changed
             .wait_timeout(q, Duration::from_millis(5))
-            .map_err(|_| anyhow!("Writer admission poisoned"))?
+            .map_err(|_| anyhow!(CatalogFailure::Storage))?
             .0;
     }
 }
@@ -288,10 +423,18 @@ impl SourceCatalogClient {
         cancelled: &AtomicBool,
         wait: Duration,
     ) -> Result<CatalogReply> {
-        ensure!(
-            serde_json::to_vec(&request)?.len() <= 1024 * 1024,
-            "Catalog request too large"
-        );
+        let length = match &request {
+            Request::SaveImportRules { rules, .. } => {
+                serde_json::to_vec(&json!({"rules": rules}))?.len()
+            }
+            _ => serde_json::to_vec(&request)?.len(),
+        };
+        let limit = if matches!(request, Request::SaveImportRules { .. }) {
+            IMPORT_RULE_BODY_LIMIT
+        } else {
+            1024 * 1024
+        };
+        ensure!(length <= limit, CatalogFailure::TooLarge);
         let (reply, rx) = mpsc::channel();
         let command = Command::Run {
             authority: self.authority.duplicate(),
@@ -303,12 +446,12 @@ impl SourceCatalogClient {
             .shared
             .queue
             .lock()
-            .map_err(|_| anyhow!("Writer admission poisoned"))?;
+            .map_err(|_| anyhow!(CatalogFailure::Storage))?;
         loop {
-            ensure!(!q.closed, "Storage stopped");
+            ensure!(!q.closed, CatalogFailure::Stopped);
             ensure!(
                 !cancelled.load(Ordering::Acquire),
-                "Cancelled before admission"
+                CatalogFailure::Cancelled
             );
             if q.pending.len() < self.client.shared.capacity {
                 q.pending
@@ -316,20 +459,20 @@ impl SourceCatalogClient {
                 self.client.shared.changed.notify_all();
                 return Ok(rx);
             }
-            ensure!(Instant::now() < deadline, "Writer queue full");
+            ensure!(Instant::now() < deadline, CatalogFailure::QueueFull);
             q = self
                 .client
                 .shared
                 .changed
                 .wait_timeout(q, Duration::from_millis(5))
-                .map_err(|_| anyhow!("Writer admission poisoned"))?
+                .map_err(|_| anyhow!(CatalogFailure::Storage))?
                 .0;
         }
     }
     pub fn execute(&self, request: Request) -> Result<Outcome> {
         self.submit(request, &AtomicBool::new(false), Duration::from_secs(5))?
             .recv()
-            .map_err(|_| anyhow!("Writer stopped without catalog result"))?
+            .map_err(|_| anyhow!(CatalogFailure::CommitUnknown))?
     }
     pub fn begin_work(
         &self,
@@ -408,6 +551,21 @@ impl Drop for SourceWorkLease {
     }
 }
 pub(super) fn execute(
+    connection: &mut Connection,
+    state: &mut State,
+    command: Command,
+) -> Result<Reply> {
+    execute_inner(connection, state, command).map_err(|error| {
+        if error.downcast_ref::<CatalogFailure>().is_some()
+            || error.downcast_ref::<auth::AuthFailure>().is_some()
+        {
+            error
+        } else {
+            error.context(CatalogFailure::Storage)
+        }
+    })
+}
+fn execute_inner(
     connection: &mut Connection,
     state: &mut State,
     command: Command,
@@ -539,7 +697,7 @@ fn get(tx: &Transaction<'_>, tenant: &str, id: i64) -> Result<Option<SourceSumma
         .optional()?)
 }
 fn require(tx: &Transaction<'_>, tenant: &str, id: i64) -> Result<SourceSummary> {
-    get(tx, tenant, id)?.ok_or_else(|| anyhow!("Source not found"))
+    get(tx, tenant, id)?.ok_or_else(|| anyhow!(CatalogFailure::NotFound))
 }
 fn list(tx: &Transaction<'_>, tenant: &str) -> Result<Vec<SourceSummary>> {
     Ok(tx
@@ -579,8 +737,14 @@ fn patch(tx: &Transaction<'_>, tenant: &str, id: i64, p: SourcePatch) -> Result<
         let name = trim(&v);
         ensure!(
             name == row.name || !name_referenced(tx, tenant, &row.name)?,
-            "Source historical name is referenced and cannot be changed"
+            CatalogFailure::Referenced
         );
+        let duplicate: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM projects WHERE tenant_id=?1 AND name=?2 AND id<>?3)",
+            params![tenant, name, id],
+            |r| r.get(0),
+        )?;
+        ensure!(!duplicate, CatalogFailure::DuplicateName(name.into()));
         row.name = name.into();
     }
     if let Some(v) = p.url {
@@ -650,17 +814,97 @@ pub(crate) fn run(
     request: Request,
 ) -> Result<Outcome> {
     Ok(match request {
+        Request::PreviewNaming {
+            relative_path,
+            profile,
+        } => Outcome::Preview(naming::preview(tx, tenant, relative_path, profile)?),
+        Request::SourceActivity { limit } => Outcome::Activity(activity::list(tx, tenant, limit)?),
+        Request::GetCategoriesWithTree {} => {
+            Outcome::Categories(CategorySettings::new(categories::load(tx, tenant)?))
+        }
+        Request::SaveCategoriesWithTree {
+            categories,
+            replacements,
+        } => Outcome::Categories(CategorySettings::new(categories::save(
+            tx,
+            tenant,
+            categories,
+            replacements,
+        )?)),
+        Request::CreateForHttp { mut source } => {
+            location::create(&mut source)?;
+            return run(tx, state, tenant, Request::Create { source });
+        }
+        Request::UpdateForHttp { id, mut patch } => {
+            let existing = require(tx, tenant, id)?;
+            location::update(&existing, &mut patch);
+            return run(tx, state, tenant, Request::Update { id, patch });
+        }
+        Request::BulkCategoryForHttp {
+            source_ids,
+            category,
+        } => {
+            ensure!(
+                !source_ids.is_empty(),
+                CatalogFailure::Input("source_ids must be a non-empty array".into())
+            );
+            let mut seen = Vec::new();
+            let mut results = Vec::new();
+            let mut updated = Vec::new();
+            for number in source_ids {
+                let n = number.as_f64().ok_or_else(|| {
+                    anyhow!(CatalogFailure::Input("Invalid Source lookup".into()))
+                })?;
+                if seen.contains(&n) {
+                    continue;
+                }
+                seen.push(n);
+                let id = if n.fract() == 0.0 && n >= i64::MIN as f64 && n < -(i64::MIN as f64) {
+                    Some(n as i64)
+                } else {
+                    None
+                };
+                let exists = match id {
+                    Some(id) => get(tx, tenant, id)?.is_some(),
+                    None => false,
+                };
+                if exists {
+                    updated.push(patch(
+                        tx,
+                        tenant,
+                        id.expect("existing Source"),
+                        SourcePatch {
+                            metadata: Some(Map::from_iter([(
+                                "category".into(),
+                                json!(categories::normalize(category.as_deref().unwrap_or(""))),
+                            )])),
+                            ..Default::default()
+                        },
+                    )?);
+                    results.push(json!({"source_id":number,"ok":true}));
+                } else {
+                    results
+                        .push(json!({"source_id":number,"ok":false,"detail":"Source not found"}));
+                }
+            }
+            Outcome::Data(
+                json!({"succeeded":updated.len(),"failed":results.len()-updated.len(),"updated":updated,"results":results}),
+            )
+        }
         Request::List {} => Outcome::Sources(list(tx, tenant)?),
         Request::Get { id } => Outcome::Source(get(tx, tenant, id)?.map(Box::new)),
         Request::Create { source: s } => {
             let name = trim(&s.name);
-            ensure!(!name.is_empty(), "Source name is required");
+            ensure!(
+                !name.is_empty(),
+                CatalogFailure::Input("Source name is required".into())
+            );
             let exists: bool = tx.query_row(
                 "SELECT EXISTS(SELECT 1 FROM projects WHERE tenant_id=?1 AND name=?2)",
                 params![tenant, name],
                 |r| r.get(0),
             )?;
-            ensure!(!exists, "Source already exists: {name}");
+            ensure!(!exists, CatalogFailure::DuplicateName(name.into()));
             let kind = s.source_kind.unwrap_or("github".into()).to_lowercase();
             let source_type = s.source_type.unwrap_or(
                 if matches!(kind.as_str(), "github" | "git") {
