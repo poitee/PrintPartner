@@ -923,7 +923,7 @@ pub(crate) fn read_session_tenant(
 ) -> Result<String> {
     ensure!(
         !secret.expose().is_empty() && secret.expose().len() <= 4096,
-        "Authentication required"
+        AuthFailure::SessionRequired
     );
     policy::tenant_for_authenticated_actor(
         tx,
@@ -948,7 +948,7 @@ pub(crate) fn catalog_tenant(
 ) -> Result<String> {
     match credentials {
         crate::catalog::Credentials::Session(token) => {
-            ensure!(token.expose().len() <= 4096, "Invalid session");
+            ensure!(token.expose().len() <= 4096, AuthFailure::SessionRequired);
             read_session_tenant(tx, &token, policy)
         }
         crate::catalog::Credentials::Key { tenant_id, key } => {
@@ -957,7 +957,7 @@ pub(crate) fn catalog_tenant(
                     principal: Some(principal),
                     ..
                 } => Ok(principal.tenant_id),
-                _ => bail!("Authentication required"),
+                _ => bail!(AuthFailure::SessionRequired),
             }
         }
     }
