@@ -1175,3 +1175,85 @@ impl ServerWorkerClient {
         )
     }
 }
+
+pub(crate) fn publication_conflicts(
+    tx: &Transaction<'_>,
+    tenant: &str,
+    profile: i64,
+) -> Result<Vec<pp_contracts::publication::ExecutionConflict>> {
+    let records = tx
+        .prepare("SELECT id,kind,state,document FROM durable_jobs WHERE tenant=? ORDER BY id")?
+        .query_map([tenant], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut result = Vec::new();
+    for (id, kind, state, document) in records {
+        let record = decode(&document)?;
+        record.payload.validate()?;
+        ensure!(
+            record.tenant == tenant
+                && record.job_id == id
+                && record.kind == record.payload.kind()
+                && record.kind.name() == kind
+                && record.state.name() == state,
+            "Job identity mismatch"
+        );
+        if record.state.terminal() {
+            continue;
+        }
+        let affected = match &record.payload {
+            Payload::Sync { .. }
+            | Payload::ImportScan { .. }
+            | Payload::ExtractSourceDocs { .. }
+            | Payload::CheckSourceUpdates {}
+            | Payload::SuppliedSourceImport { .. } => false,
+            Payload::ExportStlPack { profile_id, .. }
+            | Payload::ExportChecklistHtml { profile_id }
+            | Payload::ExportKitBundle { profile_id, .. }
+            | Payload::ExportAcceptedPlate3mf { profile_id, .. }
+            | Payload::ExportDirect3mf { profile_id, .. } => *profile_id == profile as u64,
+            Payload::PrinterUpload {
+                profile_id,
+                checkoff_units,
+                ..
+            } => {
+                let mut owners = std::collections::HashSet::new();
+                let mut unresolved = false;
+                for u in checkoff_units {
+                    let owner: Option<i64> = tx
+                        .query_row(
+                            "SELECT p.profile_id FROM parts p JOIN build_profiles b ON b.id=p.profile_id AND b.tenant_id=p.tenant_id WHERE p.tenant_id=? AND p.id=?",
+                            params![tenant, u.part_id as i64],
+                            |r| r.get(0),
+                        )
+                        .optional()?;
+                    if let Some(owner) = owner {
+                        owners.insert(owner);
+                    } else {
+                        unresolved = true;
+                    }
+                }
+                ensure!(
+                    owners.len() <= 1
+                        && profile_id.is_none_or(|p| owners.iter().all(|o| *o as u64 == p)),
+                    "Job coordinate ownership mismatch"
+                );
+                unresolved || *profile_id == Some(profile as u64) || owners.contains(&profile)
+            }
+        };
+        if affected {
+            result.push(pp_contracts::publication::ExecutionConflict {
+                operation_id: id,
+                kind,
+                state,
+            });
+        }
+    }
+    Ok(result)
+}
