@@ -35,7 +35,7 @@ fn paths(input: &[String], strict: bool) -> Result<Vec<String>> {
         let segments: Vec<_> = path.split('/').collect();
         let valid = !path.is_empty() && segments.len() <= 9;
         if strict {
-            ensure!(valid, "Invalid category path")
+            ensure!(valid, CatalogFailure::Input("Invalid category path".into()))
         }
         if !valid {
             continue;
@@ -51,7 +51,10 @@ fn paths(input: &[String], strict: bool) -> Result<Vec<String>> {
         }
     }
     if strict {
-        ensure!(!out.is_empty(), "At least one category is required")
+        ensure!(
+            !out.is_empty(),
+            CatalogFailure::Input("At least one category is required".into())
+        )
     }
     Ok(out)
 }
@@ -71,10 +74,22 @@ pub(super) fn load(tx: &Transaction<'_>, tenant: &str) -> Result<Vec<String>> {
         p
     })
 }
+pub(super) fn nodes(paths: &[String], parent: Option<&str>) -> Vec<CategoryNode> {
+    paths
+        .iter()
+        .filter(|p| {
+            p.rsplit_once('/').map(|(p, _)| p.to_lowercase()) == parent.map(str::to_lowercase)
+        })
+        .map(|p| CategoryNode {
+            path: p.clone(),
+            name: p.rsplit('/').next().unwrap_or(p).into(),
+            depth: p.matches('/').count(),
+            parent: p.rsplit_once('/').map(|(p, _)| p.into()),
+            children: nodes(paths, Some(p)),
+        })
+        .collect()
+}
 pub(super) fn tree(paths: &[String]) -> Value {
-    fn nodes(paths: &[String], parent: Option<&str>) -> Vec<Value> {
-        paths.iter().filter(|p|p.rsplit_once('/').map(|(p,_)|p.to_lowercase())==parent.map(str::to_lowercase)).map(|p|json!({"path":p,"name":p.rsplit('/').next(),"depth":p.matches('/').count(),"parent":p.rsplit_once('/').map(|(p,_)|p),"children":nodes(paths,Some(p))})).collect()
-    }
     json!(nodes(paths, None))
 }
 pub(super) fn save(
@@ -91,7 +106,7 @@ pub(super) fn save(
         let from = normalize(&from).to_lowercase();
         ensure!(
             previous.iter().any(|p| p.to_lowercase() == from),
-            "Unknown source category"
+            CatalogFailure::Input("Unknown source category".into())
         );
         let to = to
             .map(|t| {
@@ -99,7 +114,9 @@ pub(super) fn save(
                     .get(&normalize(&t).to_lowercase())
                     .cloned()
                     .ok_or_else(|| {
-                        anyhow!("Replacement category must be in the saved category list")
+                        anyhow!(CatalogFailure::Input(
+                            "Replacement category must be in the saved category list".into()
+                        ))
                     })
             })
             .transpose()?;
@@ -107,7 +124,7 @@ pub(super) fn save(
             let t = t.to_lowercase();
             ensure!(
                 t != from && !t.starts_with(&format!("{from}/")),
-                "Cannot move category inside itself"
+                CatalogFailure::Input("Cannot move category inside itself".into())
             );
         }
         replacements_map.insert(from, to);
