@@ -3,6 +3,7 @@ pub mod catalog;
 pub mod checkoff_progress;
 pub mod jobs;
 pub mod lease;
+pub mod plan_publication;
 pub mod read_model;
 pub mod required_units;
 mod schema;
@@ -63,6 +64,10 @@ enum Work {
     Backup(PathBuf),
 }
 enum Envelope {
+    Publication {
+        command: plan_publication::Command,
+        reply: mpsc::Sender<Result<pp_contracts::publication::Outcome>>,
+    },
     RequiredUnits {
         command: required_units::Command,
         reply: mpsc::Sender<Result<pp_contracts::reconciliation::Outcome>>,
@@ -294,6 +299,37 @@ impl WriterOwner {
         limits: Limits,
         seed_timestamp: &str,
     ) -> Result<(Self, SchemaReady)> {
+        Self::open_configured(
+            directory,
+            limits,
+            seed_timestamp,
+            plan_publication::random_tokens(),
+        )
+    }
+    pub fn open_with_token_allocator(
+        directory: &Path,
+        limits: Limits,
+        tokens: Box<dyn plan_publication::RequiredUnitTokenAllocator>,
+    ) -> Result<(Self, SchemaReady)> {
+        let now = time::OffsetDateTime::now_utc();
+        let timestamp = format!(
+            "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
+            now.year(),
+            u8::from(now.month()),
+            now.day(),
+            now.hour(),
+            now.minute(),
+            now.second(),
+            now.millisecond()
+        );
+        Self::open_configured(directory, limits, &timestamp, tokens)
+    }
+    fn open_configured(
+        directory: &Path,
+        limits: Limits,
+        seed_timestamp: &str,
+        mut tokens: Box<dyn plan_publication::RequiredUnitTokenAllocator>,
+    ) -> Result<(Self, SchemaReady)> {
         ensure!(
             limits.queued_writes > 0 && limits.readers > 0,
             "Storage limits must be positive"
@@ -357,6 +393,13 @@ impl WriterOwner {
                     }
                 };
                 match envelope {
+                    Envelope::Publication { command, reply } => {
+                        let _ = reply.send(plan_publication::execute(
+                            &mut connection,
+                            command,
+                            tokens.as_mut(),
+                        ));
+                    }
                     Envelope::RequiredUnits { command, reply } => {
                         let _ = reply.send(required_units::execute(&mut connection, command));
                     }

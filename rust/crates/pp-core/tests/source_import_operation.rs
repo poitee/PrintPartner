@@ -1380,3 +1380,349 @@ fn combined_owner_quota_crosses_tenants_while_local_progress_remains_available()
     drop(svc);
     owner.shutdown().unwrap();
 }
+
+fn publication_secret() -> Secret {
+    Secret::new("publication-fixture-secret".into())
+}
+fn publication_fixture() -> (PathBuf, PathBuf, WriterOwner, serde_json::Value) {
+    let root = temp();
+    std::fs::write(
+        root.join("print-partner.db"),
+        include_bytes!("fixtures/publication-source/node.db"),
+    )
+    .unwrap();
+    let old = root.join("repos/1/revisions/fixture");
+    std::fs::create_dir_all(&old).unwrap();
+    std::fs::write(
+        old.join("bracket.stl"),
+        include_bytes!("fixtures/publication-source/bracket.stl"),
+    )
+    .unwrap();
+    let files = root.join("supplied");
+    std::fs::create_dir(&files).unwrap();
+    std::fs::write(
+        files.join("triangle.stl"),
+        include_bytes!("fixtures/source-import/triangle.stl"),
+    )
+    .unwrap();
+    std::fs::write(files.join("README.md"), "# Later Source\n").unwrap();
+    let owner = WriterOwner::open(&root, Limits::default()).unwrap().0;
+    let initial: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/publication-source/request.json")).unwrap();
+    let response = owner
+        .checkoff_progress()
+        .apply(
+            catalog::Credentials::Session(publication_secret()),
+            pp_storage::checkoff_progress::Request::CompletionCoordinate {
+                part_id: 1,
+                body: serde_json::json!({"unit_index":2,"completed":true}),
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+    assert_eq!(response.status, 200);
+    let selected = owner.required_units().reconcile(
+        pp_storage::required_units::ReconciliationCommand::new(
+            serde_json::from_value(serde_json::json!(1)).unwrap(),
+            serde_json::from_value(serde_json::json!(2)).unwrap(),
+            serde_json::from_value(serde_json::json!({"expected_snapshot_digest":initial["expected_snapshot_digest"],"decisions":[]})).unwrap(),
+            "publication-source-selection".into(),
+            pp_storage::read_model::Credential::Session(publication_secret()),
+        ).unwrap(), &AtomicBool::new(false), Duration::from_secs(5),
+    ).unwrap();
+    let selected = serde_json::to_value(selected).unwrap();
+    assert_eq!(selected["kind"], "ready");
+    let draft = &selected["workspace"]["draft"];
+    let command = serde_json::json!({"expected_snapshot_digest":draft["snapshot_digest"],"expected_lifecycle_version":draft["lifecycle_version"],"expected_base":draft["base"],"remap_checkoff_links":true});
+    assert_eq!(count(&root, "accepted_plate_revisions"), 1);
+    assert_eq!(count(&root, "accepted_plates"), 1);
+    assert!(count(&root, "accepted_plate_units") > 0);
+    (root, files, owner, command)
+}
+fn publish_selected(owner: &WriterOwner, request: &serde_json::Value) -> serde_json::Value {
+    serde_json::to_value(
+        owner
+            .publication()
+            .apply(
+                pp_storage::plan_publication::PublicationCommand::new(
+                    serde_json::from_value(serde_json::json!(1)).unwrap(),
+                    serde_json::from_value(serde_json::json!(2)).unwrap(),
+                    serde_json::from_value(request.clone()).unwrap(),
+                    "publication-source".into(),
+                    pp_storage::read_model::Credential::Session(publication_secret()),
+                )
+                .unwrap(),
+                &AtomicBool::new(false),
+                Duration::from_secs(5),
+            )
+            .unwrap(),
+    )
+    .unwrap()
+}
+fn publication_foreign(root: &Path) -> Vec<(String, Vec<String>)> {
+    let db = read(root);
+    graph(&db)
+        .into_iter()
+        .filter_map(|(name, _)| {
+            let mut query = db.prepare(&format!("SELECT * FROM {name}")).unwrap();
+            let column = query
+                .column_names()
+                .iter()
+                .position(|n| *n == "tenant_id" || *n == "tenant");
+            column.map(|column| {
+                let n = query.column_count();
+                let rows = query
+                    .query_map([], |r| {
+                        let tenant: String = r.get(column)?;
+                        let values = (0..n)
+                            .map(|i| r.get::<_, rusqlite::types::Value>(i))
+                            .collect::<Result<Vec<_>, _>>()?;
+                        Ok((tenant, format!("{values:?}")))
+                    })
+                    .unwrap()
+                    .collect::<Result<Vec<_>, _>>()
+                    .unwrap()
+                    .into_iter()
+                    .filter(|(tenant, _)| tenant == "foreign")
+                    .map(|(_, row)| row)
+                    .collect();
+                (name, rows)
+            })
+        })
+        .collect()
+}
+fn assert_publication_preserves_source(root: &Path, before: &[(String, Vec<String>)]) {
+    let after = graph(&read(root));
+    for (table, rows) in before {
+        if [
+            "projects",
+            "source_revisions",
+            "source_docs",
+            "source_import_operations",
+            "source_import_quota",
+            "durable_jobs",
+            "durable_job_keys",
+            "durable_job_history",
+            "durable_job_reconciliations",
+            "accepted_plate_revisions",
+            "accepted_plates",
+            "accepted_plate_units",
+            "required_units",
+        ]
+        .contains(&table.as_str())
+        {
+            assert_eq!(
+                &after.iter().find(|(name, _)| name == table).unwrap().1,
+                rows,
+                "{table}"
+            );
+        }
+    }
+    assert_eq!(
+        std::fs::read(root.join("repos/1/revisions/fixture/bracket.stl")).unwrap(),
+        include_bytes!("fixtures/publication-source/bracket.stl")
+    );
+}
+fn assert_source_preserves_publication(root: &Path, before: &[(String, Vec<String>)]) {
+    let after = graph(&read(root));
+    for (table, rows) in before {
+        if table.starts_with("plan_")
+            || table.starts_with("accepted_")
+            || ["parts", "required_units", "print_progress"].contains(&table.as_str())
+        {
+            assert_eq!(
+                &after.iter().find(|(name, _)| name == table).unwrap().1,
+                rows,
+                "{table}"
+            );
+        }
+    }
+}
+#[test]
+fn publication_pending_supplied_import_preserves_owned_job_and_pinned_source() {
+    let (root, files, owner, command) = publication_fixture();
+    let svc = service(&owner);
+    let pending = svc
+        .admit(
+            credential(&owner),
+            request("pending-publication", Target::Existing { source_id: 1 }),
+            &files,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+    let before = graph(&read(&root));
+    let foreign = publication_foreign(&root);
+    assert!(foreign.iter().any(|(_, rows)| !rows.is_empty()));
+    let applied = publish_selected(&owner, &command);
+    assert_eq!(applied["kind"], "applied");
+    assert_publication_preserves_source(&root, &before);
+    assert_eq!(publication_foreign(&root), foreign);
+    assert_eq!(
+        svc.get(credential(&owner), pending.key.clone()).unwrap(),
+        pending
+    );
+    assert_eq!(
+        publish_selected(&owner, &command)["receipt"],
+        applied["receipt"]
+    );
+    drop(svc);
+    owner.shutdown().unwrap();
+}
+#[test]
+fn publication_active_supplied_claim_and_live_lease_remain_exact() {
+    let (root, files, owner, command) = publication_fixture();
+    let svc = service(&owner);
+    let pending = svc
+        .admit(
+            credential(&owner),
+            request("active-publication", Target::Existing { source_id: 1 }),
+            &files,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+    let worker = owner
+        .job_worker(jobs::WorkerAdmission {
+            kinds: vec![(jobs::JobKind::SuppliedSourceImport, 1)],
+            total: 1,
+            per_resource: 1,
+            lease_seconds: 3600,
+        })
+        .unwrap();
+    let (job, attempt) = worker.claim_import(&pending.job_id).unwrap().unwrap();
+    let mut live = worker
+        .begin_source_work(
+            &attempt,
+            None,
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+    let active = worker.import_phase(&attempt, Phase::Read).unwrap();
+    let before = graph(&read(&root));
+    assert_eq!(job.state, jobs::PersistentState::Running);
+    assert_eq!(publish_selected(&owner, &command)["kind"], "applied");
+    assert_publication_preserves_source(&root, &before);
+    assert_eq!(worker.import_phase(&attempt, Phase::Read).unwrap(), active);
+    assert!(matches!(
+        owner
+            .local_source_catalog()
+            .execute(catalog::Request::Delete { id: 1 })
+            .unwrap(),
+        catalog::Outcome::Deletion(catalog::Deletion::ActiveWork)
+    ));
+    live.release().unwrap();
+    drop(svc);
+    owner.shutdown().unwrap();
+}
+#[test]
+fn publication_then_source_activation_preserves_receipt_progress_and_plate_history() {
+    let (root, files, owner, command) = publication_fixture();
+    let svc = service(&owner);
+    let pending = svc
+        .admit(
+            credential(&owner),
+            request(
+                "activate-after-publication",
+                Target::Existing { source_id: 1 },
+            ),
+            &files,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+    let published = publish_selected(&owner, &command);
+    assert_eq!(published["kind"], "applied");
+    let before = graph(&read(&root));
+    let foreign = publication_foreign(&root);
+    let accepted = owner
+        .accepted_reads()
+        .read(
+            pp_storage::read_model::Credential::Session(publication_secret()),
+            &[1],
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+    let accepted = serde_json::to_value(&accepted.builds[0].accepted).unwrap();
+    assert_eq!(accepted["kind"], "ready");
+    let completed = svc
+        .work_operation(
+            &pending.job_id,
+            Some(&files),
+            Through::Settled,
+            &AtomicBool::new(false),
+        )
+        .unwrap()
+        .unwrap();
+    assert!(completed.receipt.as_ref().unwrap().activated && completed.cleanup_settled);
+    assert_eq!(
+        completed.receipt.as_ref().unwrap().postprocessing,
+        Postprocessing::DocumentMetadataIndexed
+    );
+    assert_source_preserves_publication(&root, &before);
+    assert_eq!(publication_foreign(&root), foreign);
+    assert_eq!(
+        publish_selected(&owner, &command)["receipt"],
+        published["receipt"]
+    );
+    drop(svc);
+    owner.shutdown().unwrap();
+    let owner = WriterOwner::open(&root, Limits::default()).unwrap().0;
+    let replay = publish_selected(&owner, &command);
+    assert_eq!(replay["kind"], "existing");
+    assert_eq!(replay["receipt"], published["receipt"]);
+    let read = owner
+        .accepted_reads()
+        .read(
+            pp_storage::read_model::Credential::Session(publication_secret()),
+            &[1],
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(&read.builds[0].accepted).unwrap(),
+        accepted
+    );
+    let svc = service(&owner);
+    assert_eq!(svc.get(credential(&owner), pending.key).unwrap(), completed);
+    assert_source_preserves_publication(&root, &before);
+    drop(svc);
+    owner.shutdown().unwrap();
+}
+#[test]
+fn publication_source_schema36_backup_retains_full35_and_foreign_graph() {
+    let (root, files, owner, command) = publication_fixture();
+    owner.shutdown().unwrap();
+    let conn = Connection::open(root.join("print-partner.db")).unwrap();
+    conn.execute_batch("DROP TABLE source_import_quota; DROP TABLE source_import_operations; UPDATE app_settings SET value='35' WHERE tenant_id='default' AND key='schema_version'; PRAGMA wal_checkpoint(TRUNCATE);").unwrap();
+    let prior = graph(&conn);
+    drop(conn);
+    let (owner, ready) = WriterOwner::open(&root, Limits::default()).unwrap();
+    assert_eq!(ready.previous_version, 35);
+    assert_eq!(ready.version, 36);
+    let backup = root.join("publication-backup-copy.db");
+    std::fs::copy(ready.backup.unwrap(), &backup).unwrap();
+    assert_eq!(graph(&Connection::open(backup).unwrap()), prior);
+    let foreign = publication_foreign(&root);
+    let svc = service(&owner);
+    svc.admit(
+        credential(&owner),
+        request("backup-publication", Target::Existing { source_id: 1 }),
+        &files,
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    assert_eq!(publish_selected(&owner, &command)["kind"], "applied");
+    assert_eq!(publication_foreign(&root), foreign);
+    let before = graph(&read(&root));
+    let completed = svc
+        .work_next(Some(&files), Through::Settled, &AtomicBool::new(false))
+        .unwrap()
+        .unwrap();
+    assert!(completed.receipt.unwrap().activated);
+    assert_source_preserves_publication(&root, &before);
+    assert_eq!(publication_foreign(&root), foreign);
+    drop(svc);
+    owner.shutdown().unwrap();
+}

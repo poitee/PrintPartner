@@ -1,4 +1,4 @@
-mod model;
+pub(crate) mod model;
 use crate::{Envelope, Shared, WriterOwner, auth, read_model::Credential};
 use anyhow::{Result, anyhow, bail, ensure};
 use model::{FORMAT, digest, planning, selection};
@@ -149,7 +149,11 @@ fn camel(name: &str) -> String {
     }
     out
 }
-fn rows(tx: &Transaction<'_>, sql: &str, args: &[&dyn rusqlite::ToSql]) -> Result<Vec<Value>> {
+pub(crate) fn rows(
+    tx: &Transaction<'_>,
+    sql: &str,
+    args: &[&dyn rusqlite::ToSql],
+) -> Result<Vec<Value>> {
     let mut stmt = tx.prepare(sql)?;
     let columns: Vec<_> = stmt.column_names().iter().map(|n| camel(n)).collect();
     let mut query = stmt.query(args)?;
@@ -191,16 +195,20 @@ fn rows(tx: &Transaction<'_>, sql: &str, args: &[&dyn rusqlite::ToSql]) -> Resul
     }
     Ok(out)
 }
-fn one(tx: &Transaction<'_>, sql: &str, args: &[&dyn rusqlite::ToSql]) -> Result<Option<Value>> {
+pub(crate) fn one(
+    tx: &Transaction<'_>,
+    sql: &str,
+    args: &[&dyn rusqlite::ToSql],
+) -> Result<Option<Value>> {
     Ok(rows(tx, sql, args)?.into_iter().next())
 }
-fn text<'a>(v: &'a Value, k: &str) -> Result<&'a str> {
+pub(crate) fn text<'a>(v: &'a Value, k: &str) -> Result<&'a str> {
     v[k].as_str().ok_or_else(|| anyhow!("Invalid stored {k}"))
 }
-fn num(v: &Value, k: &str) -> Result<i64> {
+pub(crate) fn num(v: &Value, k: &str) -> Result<i64> {
     v[k].as_i64().ok_or_else(|| anyhow!("Invalid stored {k}"))
 }
-fn normalize_parts(rows: &mut [Value]) -> Result<()> {
+pub(crate) fn normalize_parts(rows: &mut [Value]) -> Result<()> {
     for p in rows {
         for k in ["included", "geometrySame"] {
             if !p[k].is_null() {
@@ -212,18 +220,18 @@ fn normalize_parts(rows: &mut [Value]) -> Result<()> {
     }
     Ok(())
 }
-struct Draft {
-    header: Value,
-    inputs: Vec<Value>,
-    parts: Vec<Value>,
-    planning: String,
-    selected: Option<Saved>,
+pub(crate) struct Draft {
+    pub(crate) header: Value,
+    pub(crate) inputs: Vec<Value>,
+    pub(crate) parts: Vec<Value>,
+    pub(crate) planning: String,
+    pub(crate) selected: Option<Saved>,
 }
-struct Saved {
-    header: Value,
-    result: model::Reconciled,
+pub(crate) struct Saved {
+    pub(crate) header: Value,
+    pub(crate) result: model::Reconciled,
 }
-fn selection_basis_digest(mapping: &Value, basis: &Value) -> String {
+pub(crate) fn selection_basis_digest(mapping: &Value, basis: &Value) -> String {
     digest(&json!({"format":FORMAT,"base_mapping_digest":mapping,"rows":basis}))
 }
 fn reconciliation_digest(h: &Value) -> String {
@@ -444,7 +452,12 @@ fn validate_saved_json(basis: &Value, result: &Value) -> Result<()> {
     }
     Ok(())
 }
-fn draft(tx: &Transaction<'_>, tenant: &str, profile: i64, id: i64) -> Result<Option<Draft>> {
+pub(crate) fn draft(
+    tx: &Transaction<'_>,
+    tenant: &str,
+    profile: i64,
+    id: i64,
+) -> Result<Option<Draft>> {
     let Some(header) = one(
         tx,
         "SELECT * FROM plan_drafts WHERE tenant_id=? AND profile_id=? AND id=?",
@@ -587,7 +600,7 @@ fn workspace(
         json!({"profile_id":h["profileId"],"draft":{"draft_id":h["id"],"state":h["state"],"lifecycle_version":h["lifecycleVersion"],"snapshot_digest":h["snapshotDigest"],"base":{"revision_id":h["baseRevisionId"],"plan_version":h["basePlanVersion"]}},"parts":d.parts.iter().map(part_view).collect::<Vec<_>>(),"diff":{"base_is_current":profile["acceptedPlanRevisionId"]==h["baseRevisionId"] && profile["acceptedPlanVersion"]==h["basePlanVersion"],"added":added.into_iter().map(part_view).collect::<Vec<_>>(),"removed":removed.into_iter().map(reference).collect::<Vec<_>>(),"changed":changed.into_iter().map(|(_,v)|v).collect::<Vec<_>>()},"reconciliation":rec}),
     )?))
 }
-fn base(
+pub(crate) fn base(
     tx: &Transaction<'_>,
     tenant: &str,
     profile: i64,
