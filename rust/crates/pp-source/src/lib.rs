@@ -1,5 +1,6 @@
 pub mod archive;
 mod directory;
+pub mod local_selection;
 pub mod media;
 mod path_policy;
 

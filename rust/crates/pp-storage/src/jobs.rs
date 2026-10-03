@@ -134,6 +134,7 @@ pub(crate) enum Command {
         storage: Arc<crate::Shared>,
     },
     Claim {
+        job_id: Option<String>,
         worker: String,
         admission: Arc<WorkerAdmission>,
     },
@@ -278,6 +279,10 @@ impl AtomicJobClient {
             model::text(key, 128)?;
             ensure!(*payload_version == 1, "Unsupported payload version");
             payload.validate()?;
+            ensure!(
+                !matches!(payload, Payload::SuppliedSourceImport { .. }),
+                "Supplied imports require atomic domain admission"
+            );
         }
         submit(
             &self.storage,
@@ -308,6 +313,7 @@ impl ServerWorkerClient {
         Ok(PendingClaim(submit(
             &self.storage,
             Command::Claim {
+                job_id: None,
                 worker: self.identity.clone(),
                 admission: self.admission.clone(),
             },
@@ -402,7 +408,7 @@ fn owned(tx: &Transaction<'_>, id: &str, tenant: &str) -> Result<JobRecord> {
     ensure!(record.tenant == tenant, "Job not found");
     Ok(record)
 }
-fn save(tx: &Transaction<'_>, job: &mut JobRecord, event: &str) -> Result<()> {
+pub(crate) fn save(tx: &Transaction<'_>, job: &mut JobRecord, event: &str) -> Result<()> {
     job.state_version += 1;
     job.updated_at = now();
     if job.state.terminal() {
@@ -440,7 +446,7 @@ fn recover_in(tx: &Transaction<'_>, all: bool) -> Result<()> {
             job.state = PersistentState::ReconciliationRequired;
             job.recovery =
                 Some("Resume from confirmed receipts requires handler reconciliation".into());
-        } else if job.cancel_requested {
+        } else if job.cancel_requested && job.kind != JobKind::SuppliedSourceImport {
             job.state = PersistentState::Cancelled;
         } else if job.attempt >= 100 {
             job.state = PersistentState::Failed;
@@ -468,24 +474,18 @@ pub(crate) fn execute(connection: &mut Connection, command: Command) -> Result<O
             storage,
         } => {
             let auth_committed = matches!(&credential, Credential::RoutedKey { .. });
-            let (tenant, subject) = match credential {
-                Credential::Session(token) => auth::job_session_actor(&tx, token.expose(), policy)?,
-                Credential::RoutedKey { tenant, key } => auth::job_key_actor(&tx, &tenant, key)?,
-                Credential::PhysicalOwner(owner) => {
-                    ensure!(
-                        Arc::ptr_eq(&storage, &owner.storage),
-                        "Foreign physical owner"
-                    );
-                    ("default".into(), "physical-owner".into())
-                }
-            };
+            let (tenant, subject) = actor(&tx, credential, policy, &storage)?;
             let mut outcome = user(&tx, &tenant, &subject, operation)?;
             if auth_committed && let Outcome::Job(_, commit) = &mut outcome {
                 *commit = LocalCommit::Committed;
             }
             outcome
         }
-        Command::Claim { worker, admission } => claim(&tx, &worker, &admission)?,
+        Command::Claim {
+            worker,
+            admission,
+            job_id,
+        } => claim(&tx, &worker, &admission, job_id.as_deref())?,
         Command::Worker {
             lease,
             operation,
@@ -529,7 +529,7 @@ fn prune(tx: &Transaction<'_>, per_tenant: usize, global: usize) -> Result<usize
     }
     Ok(removed.len())
 }
-fn user(
+pub(crate) fn user(
     tx: &Transaction<'_>,
     tenant: &str,
     subject: &str,
@@ -680,7 +680,13 @@ fn user(
                 return Ok(Outcome::Job(job, LocalCommit::ReadOnly));
             }
             job.cancel_requested = true;
-            if job.effects.is_empty() {
+            if job.kind == JobKind::SuppliedSourceImport {
+                job.state = PersistentState::Queued;
+                job.generation += 1;
+                job.fence = None;
+                job.worker = None;
+                job.lease_until = None;
+            } else if job.effects.is_empty() {
                 job.state = PersistentState::Cancelled;
                 job.generation += 1;
             } else {
@@ -761,7 +767,12 @@ fn user(
         }
     }
 }
-fn claim(tx: &Transaction<'_>, worker: &str, admission: &WorkerAdmission) -> Result<Outcome> {
+fn claim(
+    tx: &Transaction<'_>,
+    worker: &str,
+    admission: &WorkerAdmission,
+    job_id: Option<&str>,
+) -> Result<Outcome> {
     recover_in(tx, false)?;
     let active: i64 = tx.query_row(
         "SELECT COUNT(*) FROM durable_jobs WHERE state IN ('running','effect_admitted')",
@@ -779,6 +790,15 @@ fn claim(tx: &Transaction<'_>, worker: &str, admission: &WorkerAdmission) -> Res
         let documents=tx.prepare("SELECT document FROM durable_jobs WHERE state='queued' AND kind=?1 ORDER BY created,id")?.query_map([kind.name()],|r|r.get::<_,String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
         for document in documents {
             let mut job: JobRecord = decode(&document)?;
+            if let Some(id) = job_id {
+                if job.job_id != id {
+                    continue;
+                }
+                ensure!(
+                    job.kind == JobKind::SuppliedSourceImport,
+                    "Targeted claim requires supplied import"
+                );
+            }
             let resource = job.payload.resource();
             if !resource.is_empty() {
                 let count:i64=tx.query_row("SELECT COUNT(*) FROM durable_jobs WHERE tenant=?1 AND state IN ('running','effect_admitted','reconciliation_required') AND (resource=?2 OR (?2 LIKE 'source:%' AND resource='source:*') OR (?2='source:*' AND resource LIKE 'source:%'))",params![job.tenant,resource],|r|r.get(0))?;
@@ -809,6 +829,7 @@ fn claim(tx: &Transaction<'_>, worker: &str, admission: &WorkerAdmission) -> Res
 }
 fn completion_proven(job: &JobRecord, result: Option<&ResultArtifact>) -> bool {
     match &job.payload {
+        Payload::SuppliedSourceImport { .. } => false,
         Payload::PrinterUpload {
             printer_id, start, ..
         } => {
@@ -829,7 +850,7 @@ fn completion_proven(job: &JobRecord, result: Option<&ResultArtifact>) -> bool {
         _ => true,
     }
 }
-fn claimed_job(tx: &Transaction<'_>, lease: &AttemptLease) -> Result<JobRecord> {
+pub(crate) fn claimed_job(tx: &Transaction<'_>, lease: &AttemptLease) -> Result<JobRecord> {
     let job = owned(tx, &lease.job_id, &lease.tenant)?;
     ensure!(
         job.worker.as_deref() == Some(lease.worker.as_str())
@@ -852,7 +873,9 @@ pub(crate) fn claimed_source(
 ) -> Result<(String, i64)> {
     let job = claimed_job(tx, lease)?;
     let id = match job.payload {
-        Payload::ImportScan { project_id } | Payload::ExtractSourceDocs { project_id } => {
+        Payload::ImportScan { project_id }
+        | Payload::ExtractSourceDocs { project_id }
+        | Payload::SuppliedSourceImport { project_id, .. } => {
             ensure!(
                 source_id.is_none(),
                 "Individual Source attempt uses its stored Source"
@@ -876,6 +899,14 @@ fn advance(
     admission: &WorkerAdmission,
 ) -> Result<Outcome> {
     let mut job = claimed_job(tx, &lease)?;
+    ensure!(
+        job.kind != JobKind::SuppliedSourceImport
+            || matches!(
+                operation,
+                WorkerOperation::Heartbeat | WorkerOperation::Progress(_)
+            ),
+        "Supplied imports advance through owned phases"
+    );
     let event = match operation {
         WorkerOperation::Heartbeat => "heartbeat",
         WorkerOperation::Progress(progress) => {
@@ -1090,4 +1121,57 @@ pub(crate) fn validate_schema(connection: &Connection, version: u64) -> Result<(
         );
     }
     Ok(())
+}
+
+pub(crate) fn actor(
+    tx: &Transaction<'_>,
+    credential: Credential,
+    policy: AuthPolicy,
+    storage: &Arc<crate::Shared>,
+) -> Result<(String, String)> {
+    match credential {
+        Credential::Session(token) => auth::job_session_actor(tx, token.expose(), policy),
+        Credential::RoutedKey { tenant, key } => auth::job_key_actor(tx, &tenant, key),
+        Credential::PhysicalOwner(owner) => {
+            ensure!(
+                Arc::ptr_eq(storage, &owner.storage),
+                "Foreign physical owner"
+            );
+            Ok(("default".into(), "physical-owner".into()))
+        }
+    }
+}
+impl ServerWorkerClient {
+    pub fn claim_import(&self, job_id: &str) -> Result<Option<(JobRecord, AttemptLease)>> {
+        match submit(
+            &self.storage,
+            Command::Claim {
+                job_id: Some(job_id.into()),
+                worker: self.identity.clone(),
+                admission: self.admission.clone(),
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?
+        .receive()?
+        {
+            Outcome::Claimed(claim) => Ok(claim),
+            _ => unreachable!(),
+        }
+    }
+    pub fn import_phase(
+        &self,
+        lease: &AttemptLease,
+        phase: crate::uploads::Phase,
+    ) -> Result<crate::uploads::Operation> {
+        ensure!(lease.worker == self.identity, "Foreign worker");
+        crate::uploads::submit(
+            &self.storage,
+            crate::uploads::Command::Phase {
+                lease: lease.clone(),
+                phase,
+            },
+            &AtomicBool::new(false),
+        )
+    }
 }

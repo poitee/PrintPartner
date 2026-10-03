@@ -60,7 +60,7 @@ impl Fixture {
                 .unwrap();
         }
         let (owner, ready) = WriterOwner::open(&root, Limits::default()).unwrap();
-        assert_eq!(ready.version, 35);
+        assert_eq!(ready.version, 36);
         Self {
             root,
             owner: Some(owner),

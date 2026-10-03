@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 pub enum JobKind {
     Sync,
     ImportScan,
+    SuppliedSourceImport,
     ExtractSourceDocs,
     CheckSourceUpdates,
     ExportStlPack,
@@ -19,9 +20,10 @@ pub enum JobKind {
     PrinterUpload,
 }
 impl JobKind {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::Sync,
         Self::ImportScan,
+        Self::SuppliedSourceImport,
         Self::ExtractSourceDocs,
         Self::CheckSourceUpdates,
         Self::ExportStlPack,
@@ -67,6 +69,11 @@ pub enum Payload {
     },
     ImportScan {
         project_id: u64,
+    },
+    SuppliedSourceImport {
+        project_id: u64,
+        operation_key: String,
+        input_version: u32,
     },
     ExtractSourceDocs {
         project_id: u64,
@@ -150,6 +157,7 @@ impl Payload {
     pub fn kind(&self) -> JobKind {
         match self {
             Self::Sync { .. } => JobKind::Sync,
+            Self::SuppliedSourceImport { .. } => JobKind::SuppliedSourceImport,
             Self::ImportScan { .. } => JobKind::ImportScan,
             Self::ExtractSourceDocs { .. } => JobKind::ExtractSourceDocs,
             Self::CheckSourceUpdates {} => JobKind::CheckSourceUpdates,
@@ -177,6 +185,15 @@ impl Payload {
             }
             Self::ImportScan { project_id } | Self::ExtractSourceDocs { project_id } => {
                 id(*project_id)?
+            }
+            Self::SuppliedSourceImport {
+                project_id,
+                operation_key,
+                input_version,
+            } => {
+                id(*project_id)?;
+                text(operation_key, 128)?;
+                ensure!(*input_version == 1, "Unsupported supplied input version");
             }
             Self::CheckSourceUpdates {} => {}
             Self::ExportStlPack {
@@ -277,7 +294,9 @@ impl Payload {
     pub(super) fn resource(&self) -> String {
         match self {
             Self::PrinterUpload { printer_id, .. } => format!("printer:{printer_id}"),
-            Self::ImportScan { project_id } | Self::ExtractSourceDocs { project_id } => {
+            Self::ImportScan { project_id }
+            | Self::ExtractSourceDocs { project_id }
+            | Self::SuppliedSourceImport { project_id, .. } => {
                 format!("source:{project_id}")
             }
             Self::Sync { .. } | Self::CheckSourceUpdates {} => "source:*".into(),

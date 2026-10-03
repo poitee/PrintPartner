@@ -643,7 +643,12 @@ fn normalize_rule(s: &str) -> String {
         format!("{s}/")
     }
 }
-fn run(tx: &Transaction<'_>, state: &State, tenant: &str, request: Request) -> Result<Outcome> {
+pub(crate) fn run(
+    tx: &Transaction<'_>,
+    state: &State,
+    tenant: &str,
+    request: Request,
+) -> Result<Outcome> {
     Ok(match request {
         Request::List {} => Outcome::Sources(list(tx, tenant)?),
         Request::Get { id } => Outcome::Source(get(tx, tenant, id)?.map(Box::new)),
@@ -818,7 +823,8 @@ fn delete(tx: &Transaction<'_>, state: &State, tenant: &str, id: i64) -> Result<
         return Ok(Deletion::NotFound);
     };
     if state.active.values().any(|(t, s)| t == tenant && *s == id)
-        || crate::jobs::source_reserved(tx, tenant, id)?
+        || (crate::jobs::source_reserved(tx, tenant, id)?
+            || crate::uploads::source_reserved(tx, tenant, id)?)
     {
         return Ok(Deletion::ActiveWork);
     }

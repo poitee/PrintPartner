@@ -105,14 +105,15 @@ pub(crate) fn preflight(path: &Path, owned: bool) -> Result<u64> {
         }
     };
     ensure!(
-        version <= 35,
-        "Database schema version {version} is newer than supported version 35"
+        version <= 36,
+        "Database schema version {version} is newer than supported version 36"
     );
     ensure!(
         version == 0 || version >= 31,
         "Cannot upgrade database schema version {version}; install Print Partner v3.3.0 first"
     );
     crate::jobs::validate_schema(&conn, version)?;
+    crate::uploads::validate_schema(&conn, version)?;
     Ok(version)
 }
 
@@ -183,8 +184,8 @@ pub(crate) fn initialize(
     now: &str,
 ) -> Result<(Connection, SchemaReady)> {
     let mut conn = Connection::open(path)?;
-    let backup_path = if version < 35 && path.metadata()?.len() > 0 {
-        let target = path.parent().unwrap().join("backups/pre-schema35.db");
+    let backup_path = if version < 36 && path.metadata()?.len() > 0 {
+        let target = path.parent().unwrap().join("backups/pre-schema36.db");
         backup(&conn, &target, true)?;
         Some(target)
     } else {
@@ -270,10 +271,19 @@ pub(crate) fn initialize(
         )?;
         tx.commit()?;
     }
+    if version < 36 {
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute_batch(include_str!("uploads/schema.sql"))?;
+        tx.execute(
+            "UPDATE app_settings SET value='36' WHERE tenant_id='default' AND key='schema_version'",
+            [],
+        )?;
+        tx.commit()?;
+    }
     Ok((
         conn,
         SchemaReady {
-            version: 35,
+            version: 36,
             previous_version: version,
             backup: backup_path,
         },

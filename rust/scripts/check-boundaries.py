@@ -3,7 +3,7 @@ from pathlib import Path
 import subprocess
 import sys
 
-ALLOWED = {"pp-api": {"pp-storage"}, "pp-source": set(), "pp-core": {"pp-gateway", "pp-compat", "pp-storage"}, "pp-storage": {"pp-contracts"}, "pp-gateway": {"pp-compat"}, "pp-compat": set(), "pp-server": {"pp-core"}, "pp-contracts": set(), "pp-desktop": {"pp-core"}}
+ALLOWED = {"pp-api": {"pp-storage"}, "pp-source": set(), "pp-core": {"pp-gateway", "pp-compat", "pp-storage", "pp-source"}, "pp-storage": {"pp-contracts"}, "pp-gateway": {"pp-compat"}, "pp-compat": set(), "pp-server": {"pp-core"}, "pp-contracts": set(), "pp-desktop": {"pp-core"}}
 
 
 def violations(packages):
