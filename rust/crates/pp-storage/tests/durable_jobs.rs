@@ -29,7 +29,7 @@ fn policy() -> AuthPolicy {
 fn fixture() -> (PathBuf, WriterOwner) {
     let path = directory();
     let (owner, ready) = WriterOwner::open(&path, Limits::default()).unwrap();
-    assert_eq!(ready.version, 35);
+    assert_eq!(ready.version, 36);
     (path, owner)
 }
 fn admission() -> WorkerAdmission {
@@ -817,8 +817,12 @@ fn ticket_t_28_recovery_every_existing_kind_has_incomplete_intent_policy() {
         },
         printer("test-printer"),
     ];
-    assert_eq!(payloads.len(), JobKind::ALL.len());
-    for (payload, kind) in payloads.into_iter().zip(JobKind::ALL) {
+    let existing = JobKind::ALL
+        .into_iter()
+        .filter(|kind| *kind != JobKind::SuppliedSourceImport)
+        .collect::<Vec<_>>();
+    assert_eq!(payloads.len(), existing.len());
+    for (payload, kind) in payloads.into_iter().zip(existing) {
         assert_eq!(payload.kind(), kind);
         let (path, owner) = fixture();
         let queued = enqueue(&owner, "kind-coverage", payload);
@@ -1073,9 +1077,9 @@ fn ticket_t_28_claims_list_filters_pagination_and_history() {
     owner.shutdown().unwrap();
 }
 #[test]
-fn ticket_t_28_claims_schema35_corruption_and36_preserve_input_bytes() {
+fn ticket_t_28_claims_schema35_corruption_and37_preserve_input_bytes() {
     for corruption in [
-        "UPDATE app_settings SET value='36' WHERE tenant_id='default' AND key='schema_version'",
+        "UPDATE app_settings SET value='37' WHERE tenant_id='default' AND key='schema_version'",
         "ALTER TABLE durable_jobs ADD COLUMN unintended TEXT",
         "UPDATE durable_jobs SET version=version+1",
     ] {
@@ -1099,6 +1103,7 @@ fn ticket_t_28_claims_wire_job_kinds_match_existing_contract() {
         [
             "sync",
             "import-scan",
+            "supplied-source-import",
             "extract-source-docs",
             "check-source-updates",
             "export-stl-pack",
@@ -1203,7 +1208,7 @@ fn ticket_t_28_claims_schema35_migration_rollback_and_backup_restart() {
     let (path, owner) = fixture();
     owner.shutdown().unwrap();
     let fixture = Connection::open(path.join("print-partner.db")).unwrap();
-    fixture.execute_batch("DROP TABLE durable_job_reconciliations; DROP TABLE durable_job_history; DROP TABLE durable_job_keys; DROP TABLE durable_jobs; UPDATE app_settings SET value='34' WHERE tenant_id='default' AND key='schema_version'; CREATE TRIGGER reject_schema35 BEFORE UPDATE ON app_settings WHEN NEW.key='schema_version' AND NEW.value='35' BEGIN SELECT RAISE(ABORT,'fixture migration constraint'); END;").unwrap();
+    fixture.execute_batch("DROP TABLE source_import_quota; DROP TABLE source_import_operations; DROP TABLE durable_job_reconciliations; DROP TABLE durable_job_history; DROP TABLE durable_job_keys; DROP TABLE durable_jobs; UPDATE app_settings SET value='34' WHERE tenant_id='default' AND key='schema_version'; CREATE TRIGGER reject_schema35 BEFORE UPDATE ON app_settings WHEN NEW.key='schema_version' AND NEW.value='35' BEGIN SELECT RAISE(ABORT,'fixture migration constraint'); END;").unwrap();
     drop(fixture);
     assert!(WriterOwner::open(&path, Limits::default()).is_err());
     let raw = Connection::open(path.join("print-partner.db")).unwrap();
