@@ -1,6 +1,7 @@
 use super::*;
 use crate::plan_publication::{
-    self as publication, AuthenticatedPublicationContext, RequiredUnitTokenAllocator,
+    self as publication, AuthenticatedPublicationContext, PublicationRequests,
+    RequiredUnitTokenAllocator,
 };
 use pp_contracts::{
     autosave::{ApplyPlanDraftReceipt, PlanChoice, SavePlanChoicesRequest},
@@ -510,7 +511,7 @@ fn transact(
         &context,
         c.input.profile,
         draft_id,
-        &apply,
+        PublicationRequests::direct(&apply),
         &key,
         tokens,
     )?;

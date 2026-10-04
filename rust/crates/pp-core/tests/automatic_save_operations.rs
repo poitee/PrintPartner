@@ -216,6 +216,21 @@ fn save_issued_auth_replay_reopen_key_audit_and_job_refusal_preserve_graphs() {
     };
     assert_eq!(authority.snapshot.plan_version, 1);
     let saved_graph = graph(&root);
+    assert_eq!(
+        saved_graph["plan_apply_requests"].as_array().unwrap().len(),
+        1
+    );
+    assert_eq!(
+        saved_graph["plan_apply_admissions"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        saved_graph["plan_apply_requests"][0]["request_digest"],
+        saved_graph["plan_apply_admissions"][0]["request_digest"]
+    );
     assert!(matches!(
         save(&client, session(&token), "session-save", &request).unwrap(),
         Outcome::Saved { .. }
@@ -264,6 +279,7 @@ fn save_issued_auth_replay_reopen_key_audit_and_job_refusal_preserve_graphs() {
     };
     assert_eq!(second_receipt.plan_version().get(), 2);
     let after = graph(&root);
+    assert_eq!(after["plan_apply_admissions"].as_array().unwrap().len(), 2);
     let auth::Outcome::Keys { keys, .. } = auth_call(
         &owner,
         auth::Request::ListKeys {
@@ -350,5 +366,30 @@ fn save_issued_auth_replay_reopen_key_audit_and_job_refusal_preserve_graphs() {
     )
     .unwrap();
     println!("Save graph evidence: {}", root.display());
+    owner.shutdown().unwrap();
+}
+
+#[test]
+fn save_failure_after_publication_rolls_back_admission_and_complete_graph() {
+    let (root, owner, token, request) = fixture();
+    let client = issue_plan_save(&owner, policy(), configuration(&root)).unwrap();
+    let connection = rusqlite::Connection::open(root.join("print-partner.db")).unwrap();
+    connection.execute_batch("CREATE TRIGGER fail_save_closure BEFORE UPDATE ON plan_drafts WHEN NEW.state='abandoned' BEGIN SELECT RAISE(ABORT,'fixture save closure failure'); END;").unwrap();
+    drop(connection);
+    let before = graph(&root);
+    assert!(save(&client, session(&token), "late-save-failure", &request).is_err());
+    assert_eq!(graph(&root), before);
+    let connection = rusqlite::Connection::open(root.join("print-partner.db")).unwrap();
+    connection
+        .execute_batch("DROP TRIGGER fail_save_closure")
+        .unwrap();
+    drop(connection);
+    assert!(matches!(
+        save(&client, session(&token), "late-save-failure", &request).unwrap(),
+        Outcome::Saved { .. }
+    ));
+    let after = graph(&root);
+    assert_eq!(after["plan_apply_requests"].as_array().unwrap().len(), 1);
+    assert_eq!(after["plan_apply_admissions"].as_array().unwrap().len(), 1);
     owner.shutdown().unwrap();
 }

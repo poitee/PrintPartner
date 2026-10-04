@@ -22,6 +22,39 @@ use std::{
     time::{Duration, Instant},
 };
 
+pub(crate) fn validate_schema(connection: &Connection, version: u64) -> Result<()> {
+    let objects = |connection: &Connection| -> Result<Vec<(String, Option<String>)>> {
+        Ok(connection
+            .prepare(
+                "SELECT name,sql FROM sqlite_master WHERE name='plan_apply_admissions' OR name LIKE 'trg_plan_apply_admissions_%' ORDER BY name",
+            )?
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<rusqlite::Result<_>>()?)
+    };
+    let actual = objects(connection)?;
+    if version < 37 {
+        ensure!(actual.is_empty(), "Unexpected Plan Apply admission schema");
+        return Ok(());
+    }
+    let expected = Connection::open_in_memory()?;
+    expected.execute_batch(
+        "CREATE TABLE build_profiles(id INTEGER PRIMARY KEY,tenant_id TEXT NOT NULL);
+         CREATE TABLE plan_apply_requests(id INTEGER PRIMARY KEY,tenant_id TEXT NOT NULL,profile_id INTEGER NOT NULL);",
+    )?;
+    expected.execute_batch(include_str!("plan_publication/schema.sql"))?;
+    ensure!(
+        actual == objects(&expected)?,
+        "Plan Apply admission schema mismatch"
+    );
+    let orphans: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM plan_apply_admissions admission LEFT JOIN plan_apply_requests request ON request.id=admission.apply_request_id WHERE request.id IS NULL)",
+        [],
+        |row| row.get(0),
+    )?;
+    ensure!(!orphans, "Orphan Plan Apply admission");
+    Ok(())
+}
+
 pub trait RequiredUnitTokenAllocator: Send {
     fn allocate(&mut self) -> std::result::Result<[u8; 16], TokenAllocationFailure>;
 }
@@ -46,7 +79,8 @@ pub struct PublicationClient {
 pub struct PublicationCommand {
     profile: PositiveId,
     draft: PositiveId,
-    request: ApplyRequest,
+    admitted_request: ApplyRequest,
+    execution_request: ApplyRequest,
     key: String,
     credential: Credential,
 }
@@ -66,10 +100,24 @@ impl PublicationCommand {
         Ok(Self {
             profile,
             draft,
-            request,
+            admitted_request: request.clone(),
+            execution_request: request,
             key,
             credential,
         })
+    }
+
+    pub fn normalized_http(
+        profile: PositiveId,
+        draft: PositiveId,
+        admitted_request: ApplyRequest,
+        execution_request: ApplyRequest,
+        key: String,
+        credential: Credential,
+    ) -> Result<Self> {
+        let mut command = Self::new(profile, draft, execution_request, key, credential)?;
+        command.admitted_request = admitted_request;
+        Ok(command)
     }
 }
 pub(crate) struct Command {
@@ -143,6 +191,21 @@ pub(crate) struct AuthenticatedPublicationContext {
     tenant: String,
     actor: String,
 }
+pub(crate) struct PublicationRequests<'a> {
+    admitted: &'a ApplyRequest,
+    execution: &'a ApplyRequest,
+}
+impl<'a> PublicationRequests<'a> {
+    pub(crate) fn new(admitted: &'a ApplyRequest, execution: &'a ApplyRequest) -> Self {
+        Self {
+            admitted,
+            execution,
+        }
+    }
+    pub(crate) fn direct(request: &'a ApplyRequest) -> Self {
+        Self::new(request, request)
+    }
+}
 impl AuthenticatedPublicationContext {
     pub(crate) fn resolve_ref(
         tx: &Transaction<'_>,
@@ -176,7 +239,13 @@ pub(crate) fn execute(
     let c = command.input;
     let context = AuthenticatedPublicationContext::resolve(&tx, c.credential, command.policy)?;
     let result = publish_in_transaction(
-        &tx, &context, c.profile, c.draft, &c.request, &c.key, tokens,
+        &tx,
+        &context,
+        c.profile,
+        c.draft,
+        PublicationRequests::new(&c.admitted_request, &c.execution_request),
+        &c.key,
+        tokens,
     )?;
     if matches!(
         result,
@@ -190,6 +259,46 @@ fn request_digest(profile: i64, draft: i64, request: &ApplyRequest) -> String {
     ru::model::digest(
         &json!({"format":model::REQUEST_FORMAT,"profile_id":profile,"draft_id":draft,"expected_snapshot_digest":request.expected_snapshot_digest,"expected_lifecycle_version":request.expected_lifecycle_version,"expected_base_revision_id":request.expected_base.revision_id(),"expected_base_plan_version":request.expected_base.plan_version()}),
     )
+}
+
+fn stored_admission(
+    tx: &Transaction<'_>,
+    parent: &Value,
+) -> Result<Option<(ApplyRequest, String)>> {
+    let Some(row) = one(
+        tx,
+        "SELECT * FROM plan_apply_admissions WHERE apply_request_id=?",
+        &[&num(parent, "id")?],
+    )?
+    else {
+        return Ok(None);
+    };
+    let profile = num(parent, "profileId")?;
+    let draft = num(parent, "draftId")?;
+    let request: ApplyRequest = serde_json::from_value(json!({
+        "expected_snapshot_digest":row["expectedSnapshotDigest"],
+        "expected_lifecycle_version":row["expectedLifecycleVersion"],
+        "expected_base":{
+            "revision_id":row["expectedBaseRevisionId"],
+            "plan_version":row["expectedBasePlanVersion"]
+        }
+    }))?;
+    let digest = request_digest(profile, draft, &request);
+    ensure!(
+        row["requestFormat"] == model::REQUEST_FORMAT && row["requestDigest"] == digest,
+        "Invalid publication admission"
+    );
+    Ok(Some((request, digest)))
+}
+
+fn admission_matches(tx: &Transaction<'_>, parent: &Value, request: &ApplyRequest) -> Result<bool> {
+    let profile = num(parent, "profileId")?;
+    let draft = num(parent, "draftId")?;
+    let digest = request_digest(profile, draft, request);
+    Ok(match stored_admission(tx, parent)? {
+        Some((_, admitted_digest)) => admitted_digest == digest,
+        None => parent["requestDigest"] == digest,
+    })
 }
 fn validate_text(row: &Value) -> Result<()> {
     ensure!(
@@ -309,6 +418,7 @@ pub(crate) fn receipt(
             && num(row, "draftLifecycleVersion")? == num(row, "expectedLifecycleVersion")? + 1,
         "Invalid publication receipt"
     );
+    stored_admission(tx, row)?;
     let d =
         ru::draft(tx, tenant, profile, draft)?.ok_or_else(|| anyhow!("Missing receipt draft"))?;
     let selected = d
@@ -755,7 +865,7 @@ pub(crate) fn publish_in_transaction(
     context: &AuthenticatedPublicationContext,
     profile: PositiveId,
     draft_id: PositiveId,
-    request: &ApplyRequest,
+    requests: PublicationRequests<'_>,
     key: &str,
     tokens: &mut dyn RequiredUnitTokenAllocator,
 ) -> Result<Outcome> {
@@ -763,13 +873,14 @@ pub(crate) fn publish_in_transaction(
     let actor = context.actor.as_str();
     let profile = profile.get() as i64;
     let draft_id = draft_id.get() as i64;
-    let request_hash = request_digest(profile, draft_id, request);
+    let admitted_hash = request_digest(profile, draft_id, requests.admitted);
+    let request_hash = request_digest(profile, draft_id, requests.execution);
     if let Some(row) = one(
         tx,
         "SELECT * FROM plan_apply_requests WHERE tenant_id=? AND actor_id=? AND profile_id=? AND idempotency_key=?",
         &[&tenant, &actor, &profile, &key],
     )? {
-        return Ok(if row["requestDigest"] == request_hash {
+        return Ok(if admission_matches(tx, &row, requests.admitted)? {
             Outcome::Existing {
                 receipt: receipt(tx, tenant, &row)?,
             }
@@ -811,12 +922,13 @@ pub(crate) fn publish_in_transaction(
             state: serde_json::from_value(h["state"].clone())?,
         });
     }
-    if h["lifecycleVersion"].as_u64() != Some(request.expected_lifecycle_version.get())
-        || h["snapshotDigest"] != request.expected_snapshot_digest.as_str()
+    if h["lifecycleVersion"].as_u64() != Some(requests.execution.expected_lifecycle_version.get())
+        || h["snapshotDigest"] != requests.execution.expected_snapshot_digest.as_str()
         || !["plan-draft-v1", "plan-draft-v2"].contains(&text(&h, "digestFormat")?)
     {
         return Ok(Outcome::DraftChanged);
     }
+    let request = requests.execution;
     let previous = request
         .expected_base
         .revision_id()
@@ -1114,7 +1226,21 @@ pub(crate) fn publish_in_transaction(
     let reconciliation = num(&selected.header, "id")?;
     ensure!(tx.execute("UPDATE plan_drafts SET state='consumed',lifecycle_version=?,consumed_revision_id=?,consumed_at=? WHERE tenant_id=? AND profile_id=? AND id=? AND state='open' AND lifecycle_version=? AND snapshot_digest=? AND current_required_unit_reconciliation_id=?",params![life+1,revision,at,tenant,profile,draft_id,life,request.expected_snapshot_digest.as_str(),reconciliation])?==1,"Draft consumption failed");
     let receipt_row = json!({"tenantId":tenant,"profileId":profile,"draftId":draft_id,"actorId":actor,"idempotencyKey":key,"requestFormat":model::REQUEST_FORMAT,"requestDigest":request_hash,"expectedSnapshotDigest":request.expected_snapshot_digest,"expectedLifecycleVersion":life,"expectedBaseRevisionId":previous,"expectedBasePlanVersion":version,"reconciliationId":reconciliation,"reconciliationDigest":selected.header["reconciliationDigest"],"revisionId":revision,"planVersion":version+1,"revisionDigest":prepared.digest,"requiredUnitMappingDigest":mapping_digest,"draftLifecycleVersion":life+1,"appliedAt":at});
-    insert(tx, "plan_apply_requests", &receipt_row, false)?;
+    let apply_request_id = insert(tx, "plan_apply_requests", &receipt_row, false)?;
+    insert(
+        tx,
+        "plan_apply_admissions",
+        &json!({
+            "applyRequestId":apply_request_id,
+            "requestFormat":model::REQUEST_FORMAT,
+            "requestDigest":admitted_hash,
+            "expectedSnapshotDigest":requests.admitted.expected_snapshot_digest,
+            "expectedLifecycleVersion":requests.admitted.expected_lifecycle_version,
+            "expectedBaseRevisionId":requests.admitted.expected_base.revision_id(),
+            "expectedBasePlanVersion":requests.admitted.expected_base.plan_version()
+        }),
+        false,
+    )?;
     let stored = one(
         tx,
         "SELECT * FROM plan_apply_requests WHERE tenant_id=? AND profile_id=? AND draft_id=?",
@@ -1209,7 +1335,7 @@ mod tests {
                 &context,
                 PositiveId::new(1).unwrap(),
                 PositiveId::new(1).unwrap(),
-                &request,
+                PublicationRequests::direct(&request),
                 "nested",
                 random_tokens().as_mut(),
             )
@@ -1230,6 +1356,7 @@ mod tests {
         );
         for table in [
             "plan_apply_requests",
+            "plan_apply_admissions",
             "required_units",
             "plan_revision_required_units",
             "plan_revision_required_unit_sets",

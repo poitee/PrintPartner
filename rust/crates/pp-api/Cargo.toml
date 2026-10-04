@@ -7,6 +7,9 @@ license.workspace = true
 
 [dependencies]
 pp-storage = { path = "../pp-storage" }
+pp-contracts = { path = "../pp-contracts" }
+pp-core = { path = "../pp-core" }
+pp-source = { path = "../pp-source" }
 anyhow.workspace = true
 axum.workspace = true
 tokio.workspace = true

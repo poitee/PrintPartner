@@ -105,8 +105,8 @@ pub(crate) fn preflight(path: &Path, owned: bool) -> Result<u64> {
         }
     };
     ensure!(
-        version <= 36,
-        "Database schema version {version} is newer than supported version 36"
+        version <= 37,
+        "Database schema version {version} is newer than supported version 37"
     );
     ensure!(
         version == 0 || version >= 31,
@@ -114,6 +114,7 @@ pub(crate) fn preflight(path: &Path, owned: bool) -> Result<u64> {
     );
     crate::jobs::validate_schema(&conn, version)?;
     crate::uploads::validate_schema(&conn, version)?;
+    crate::plan_publication::validate_schema(&conn, version)?;
     Ok(version)
 }
 
@@ -184,10 +185,21 @@ pub(crate) fn initialize(
     now: &str,
 ) -> Result<(Connection, SchemaReady)> {
     let mut conn = Connection::open(path)?;
-    let backup_path = if version < 36 && path.metadata()?.len() > 0 {
-        let target = path.parent().unwrap().join("backups/pre-schema36.db");
-        backup(&conn, &target, true)?;
-        Some(target)
+    let backup_path = if path.metadata()?.len() > 0 {
+        let name = if version < 36 {
+            Some("pre-schema36.db")
+        } else if version == 36 {
+            Some("pre-schema37.db")
+        } else {
+            None
+        };
+        if let Some(name) = name {
+            let target = path.parent().unwrap().join("backups").join(name);
+            backup(&conn, &target, true)?;
+            Some(target)
+        } else {
+            None
+        }
     } else {
         None
     };
@@ -280,10 +292,20 @@ pub(crate) fn initialize(
         )?;
         tx.commit()?;
     }
+    if version < 37 {
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute_batch(include_str!("plan_publication/schema.sql"))?;
+        tx.execute(
+            "UPDATE app_settings SET value='37' WHERE tenant_id='default' AND key='schema_version'",
+            [],
+        )?;
+        tx.commit()?;
+    }
+    crate::plan_publication::validate_schema(&conn, 37)?;
     Ok((
         conn,
         SchemaReady {
-            version: 36,
+            version: 37,
             previous_version: version,
             backup: backup_path,
         },

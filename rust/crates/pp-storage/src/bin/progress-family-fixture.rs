@@ -135,7 +135,7 @@ fn main() -> Result<()> {
     let directory = Path::new(&args[1]);
     let request: ReconciliationRequest = serde_json::from_slice(&std::fs::read(&args[2])?)?;
     let (owner, ready) = WriterOwner::open(directory, Limits::default())?;
-    ensure!(ready.version == 36, "Schema changed");
+    ensure!(ready.version == 37, "Schema changed");
     let before = graph(directory)?;
     let original = snapshot(&owner)?;
     let part = original
@@ -296,7 +296,7 @@ fn main() -> Result<()> {
     owner.shutdown()?;
     println!(
         "{}",
-        json!({"schema":36,"progress":response,"selection":selected,"selection_basis":basis,"graph_before":before,"graph_after":final_graph,"restart":true,"stale_claim_refused":true,"source_reservation":true,"handler_calls":0})
+        json!({"schema":37,"progress":response,"selection":selected,"selection_basis":basis,"graph_before":before,"graph_after":final_graph,"restart":true,"stale_claim_refused":true,"source_reservation":true,"handler_calls":0})
     );
     Ok(())
 }

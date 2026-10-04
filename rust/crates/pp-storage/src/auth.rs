@@ -5,14 +5,14 @@ pub use policy::{
     AuthFailure, AuthInputFailure, AuthPolicy, AuthStatus, RegistrationPolicy, SessionTenantPolicy,
 };
 
-use crate::{Envelope, SettingsClient, WriterOwner};
+use crate::{SettingsClient, WriterOwner};
 use anyhow::{Result, anyhow, bail, ensure};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 use std::{
     sync::{
-        Arc, Mutex, OnceLock,
+        Arc, Condvar, Mutex, OnceLock,
         atomic::{AtomicBool, Ordering},
         mpsc,
     },
@@ -231,49 +231,316 @@ pub type AuthReply = mpsc::Receiver<Result<Outcome>>;
 pub struct AuthClient {
     storage: SettingsClient,
     policy: AuthPolicy,
+    runtime: Arc<AuthRuntime>,
+    #[cfg(test)]
+    kdf_gate: Option<Arc<TestKdfGate>>,
 }
-struct Job {
-    client: AuthClient,
-    request: Request,
+#[cfg(test)]
+struct TestKdfGate {
+    entered: mpsc::SyncSender<()>,
+    release: Mutex<mpsc::Receiver<()>>,
+}
+#[cfg(test)]
+struct TestKdfRelease {
+    sender: mpsc::SyncSender<()>,
+    released: bool,
+}
+#[cfg(test)]
+impl TestKdfRelease {
+    fn release(&mut self) {
+        self.sender.send(()).expect("KDF gate dropped");
+        self.sender.send(()).expect("KDF gate dropped");
+        self.released = true;
+    }
+}
+#[cfg(test)]
+impl Drop for TestKdfRelease {
+    fn drop(&mut self) {
+        if !self.released {
+            let _ = self.sender.try_send(());
+            let _ = self.sender.try_send(());
+        }
+    }
+}
+#[cfg(test)]
+impl TestKdfGate {
+    fn new() -> (Arc<Self>, mpsc::Receiver<()>, TestKdfRelease) {
+        let (entered_send, entered_receive) = mpsc::sync_channel(2);
+        let (release_send, release_receive) = mpsc::sync_channel(2);
+        (
+            Arc::new(Self {
+                entered: entered_send,
+                release: Mutex::new(release_receive),
+            }),
+            entered_receive,
+            TestKdfRelease {
+                sender: release_send,
+                released: false,
+            },
+        )
+    }
+
+    fn wait(&self) {
+        self.entered.send(()).expect("KDF gate observer dropped");
+        self.release
+            .lock()
+            .expect("KDF gate poisoned")
+            .recv()
+            .expect("KDF gate release dropped");
+    }
+}
+struct Admission {
+    admitted: Mutex<usize>,
+    changed: Condvar,
+}
+struct AuthLease {
+    admission: Arc<Admission>,
+}
+impl Drop for AuthLease {
+    fn drop(&mut self) {
+        let mut admitted = self
+            .admission
+            .admitted
+            .lock()
+            .expect("Auth admission poisoned");
+        *admitted -= 1;
+        self.admission.changed.notify_one();
+    }
+}
+struct Completion {
+    reply: Option<mpsc::Sender<Result<Outcome>>>,
+}
+impl Completion {
+    fn finish(mut self, result: Result<Outcome>) {
+        if let Some(reply) = self.reply.take() {
+            let _ = reply.send(normalize_result(result));
+        }
+    }
+}
+impl Drop for Completion {
+    fn drop(&mut self) {
+        if let Some(reply) = self.reply.take() {
+            let _ = reply.send(Err(AuthFailure::CommitUnknown.into()));
+        }
+    }
+}
+struct AuthFlow {
+    storage: SettingsClient,
+    policy: AuthPolicy,
+    runtime: Arc<AuthRuntime>,
     cancelled: Arc<AtomicBool>,
-    reply: mpsc::Sender<Result<Outcome>>,
+    completion: Completion,
+    _lease: AuthLease,
+    #[cfg(test)]
+    kdf_gate: Option<Arc<TestKdfGate>>,
 }
-struct Pool {
-    sender: mpsc::SyncSender<Job>,
+impl AuthFlow {
+    fn finish(self, result: Result<Outcome>) {
+        self.completion.finish(result);
+    }
 }
-impl Pool {
-    fn global() -> &'static Self {
-        static POOL: OnceLock<Pool> = OnceLock::new();
-        POOL.get_or_init(|| {
-            let (sender, receiver) = mpsc::sync_channel::<Job>(32);
-            let receiver = Arc::new(Mutex::new(receiver));
-            for _ in 0..2 {
-                let receiver = receiver.clone();
-                thread::spawn(move || {
-                    loop {
-                        let job = receiver.lock().expect("Auth pool poisoned").recv();
-                        let Ok(job) = job else {
-                            break;
-                        };
-                        let result = if job.cancelled.load(Ordering::Acquire) {
-                            Err(anyhow!("Cancelled before authentication"))
-                        } else {
-                            job.client.perform(job.request, &job.cancelled)
-                        };
-                        let result = result.map_err(|error| {
-                            if error.downcast_ref::<AuthFailure>().is_some() {
-                                error
-                            } else {
-                                error.context(AuthFailure::Storage)
-                            }
-                        });
-                        let _ = job.reply.send(result);
-                    }
+enum WriterStage {
+    Begin(Request),
+    KdfReady {
+        task: KdfTask,
+        continuation: Continuation,
+    },
+    Resume {
+        continuation: Continuation,
+        result: Result<KdfOutcome>,
+    },
+}
+pub(super) struct WriterWork {
+    flow: AuthFlow,
+    stage: WriterStage,
+    ready_since: Instant,
+    retry_not_before: Option<Instant>,
+}
+impl WriterWork {
+    fn begin(flow: AuthFlow, request: Request) -> Self {
+        Self {
+            flow,
+            stage: WriterStage::Begin(request),
+            ready_since: Instant::now(),
+            retry_not_before: None,
+        }
+    }
+    fn resume(flow: AuthFlow, continuation: Continuation, result: Result<KdfOutcome>) -> Self {
+        Self {
+            flow,
+            stage: WriterStage::Resume {
+                continuation,
+                result,
+            },
+            ready_since: Instant::now(),
+            retry_not_before: None,
+        }
+    }
+    pub(super) fn eligible(&self, now: Instant) -> bool {
+        self.retry_not_before.is_none_or(|retry| retry <= now)
+    }
+    pub(super) fn retry_at(&self) -> Option<Instant> {
+        self.retry_not_before
+    }
+}
+enum KdfTask {
+    HashNewPassword(Secret),
+    Login {
+        password: Secret,
+        stored: crypto::SupportedPasswordHash,
+    },
+    ChangePassword {
+        current: Secret,
+        replacement: Secret,
+        stored: crypto::SupportedPasswordHash,
+    },
+    HashResetReplacement(Secret),
+}
+enum Continuation {
+    Register {
+        email: String,
+        display_name: String,
+    },
+    Login(Credential),
+    ChangePassword {
+        session: String,
+        credential: Credential,
+    },
+    ResetPassword {
+        token: String,
+    },
+}
+enum KdfOutcome {
+    Hash(String),
+    LoginVerified(Option<String>),
+    ChangeVerified(String),
+}
+struct KdfJob {
+    flow: AuthFlow,
+    task: KdfTask,
+    continuation: Continuation,
+    writer_ready_since: Instant,
+}
+struct KdfPool {
+    sender: mpsc::SyncSender<KdfJob>,
+}
+struct AuthRuntime {
+    admission: Arc<Admission>,
+    kdf: KdfPool,
+}
+impl AuthRuntime {
+    fn global() -> Arc<Self> {
+        static RUNTIME: OnceLock<Arc<AuthRuntime>> = OnceLock::new();
+        RUNTIME
+            .get_or_init(|| {
+                let (sender, receiver) = mpsc::sync_channel::<KdfJob>(32);
+                let receiver = Arc::new(Mutex::new(receiver));
+                for _ in 0..2 {
+                    let receiver = receiver.clone();
+                    thread::spawn(move || {
+                        loop {
+                            let job = receiver.lock().expect("KDF pool poisoned").recv();
+                            let Ok(job) = job else {
+                                break;
+                            };
+                            run_kdf(job);
+                        }
+                    });
+                }
+                Arc::new(Self {
+                    admission: Arc::new(Admission {
+                        admitted: Mutex::new(0),
+                        changed: Condvar::new(),
+                    }),
+                    kdf: KdfPool { sender },
+                })
+            })
+            .clone()
+    }
+    fn acquire(&self, cancelled: &AtomicBool, wait: Duration) -> Result<AuthLease> {
+        let deadline = Instant::now() + wait;
+        let mut admitted = self
+            .admission
+            .admitted
+            .lock()
+            .map_err(|_| anyhow!("Auth admission poisoned"))?;
+        loop {
+            ensure!(
+                !cancelled.load(Ordering::Acquire),
+                "Cancelled before admission"
+            );
+            if *admitted < 34 {
+                *admitted += 1;
+                return Ok(AuthLease {
+                    admission: self.admission.clone(),
                 });
             }
-            Pool { sender }
-        })
+            ensure!(Instant::now() < deadline, AuthFailure::QueueFull);
+            admitted = self
+                .admission
+                .changed
+                .wait_timeout(admitted, Duration::from_millis(2))
+                .map_err(|_| anyhow!("Auth admission poisoned"))?
+                .0;
+        }
     }
+}
+fn normalize_result(result: Result<Outcome>) -> Result<Outcome> {
+    result.map_err(|error| {
+        if error.downcast_ref::<AuthFailure>().is_some() {
+            error
+        } else {
+            error.context(AuthFailure::Storage)
+        }
+    })
+}
+fn run_kdf(job: KdfJob) {
+    let KdfJob {
+        flow,
+        task,
+        continuation,
+        writer_ready_since: _,
+    } = job;
+    let result = if flow.cancelled.load(Ordering::Acquire) {
+        Err(anyhow!("Cancelled before authentication"))
+    } else {
+        #[cfg(test)]
+        if let Some(gate) = &flow.kdf_gate {
+            gate.wait();
+        }
+        (|| -> Result<KdfOutcome> {
+            match task {
+                KdfTask::HashNewPassword(password) | KdfTask::HashResetReplacement(password) => {
+                    crypto::hash(&password).map(KdfOutcome::Hash)
+                }
+                KdfTask::Login { password, stored } => {
+                    ensure!(
+                        crypto::verify_supported(&password, &stored),
+                        AuthFailure::InvalidCredentials
+                    );
+                    let replacement = if stored.is_legacy() {
+                        Some(crypto::hash(&password)?)
+                    } else {
+                        None
+                    };
+                    Ok(KdfOutcome::LoginVerified(replacement))
+                }
+                KdfTask::ChangePassword {
+                    current,
+                    replacement,
+                    stored,
+                } => {
+                    ensure!(
+                        crypto::verify_supported(&current, &stored),
+                        AuthFailure::CurrentPasswordIncorrect
+                    );
+                    crypto::hash(&replacement).map(KdfOutcome::ChangeVerified)
+                }
+            }
+        })()
+    };
+    let storage = flow.storage.clone();
+    storage.enqueue_auth(WriterWork::resume(flow, continuation, result));
 }
 impl WriterOwner {
     pub fn auth(&self, first_user: FirstUserTenant) -> AuthClient {
@@ -284,6 +551,9 @@ impl WriterOwner {
                 session_tenant: SessionTenantPolicy::AccountTenant,
                 first_user,
             },
+            runtime: AuthRuntime::global(),
+            #[cfg(test)]
+            kdf_gate: None,
         }
     }
     pub fn auth_with_policy(&self, policy: AuthPolicy) -> Result<AuthClient> {
@@ -291,6 +561,9 @@ impl WriterOwner {
         Ok(AuthClient {
             storage: self.client(),
             policy,
+            runtime: AuthRuntime::global(),
+            #[cfg(test)]
+            kdf_gate: None,
         })
     }
 }
@@ -308,6 +581,16 @@ pub(crate) fn validate_policy(policy: AuthPolicy) -> Result<()> {
     Ok(())
 }
 impl AuthClient {
+    #[cfg(test)]
+    fn with_kdf_gate(&self, gate: Arc<TestKdfGate>) -> Self {
+        Self {
+            storage: self.storage.clone(),
+            policy: self.policy,
+            runtime: self.runtime.clone(),
+            kdf_gate: Some(gate),
+        }
+    }
+
     pub fn submit(
         &self,
         request: Request,
@@ -315,205 +598,381 @@ impl AuthClient {
         wait: Duration,
     ) -> Result<AuthReply> {
         request.validate()?;
+        let lease = self.runtime.acquire(&cancelled, wait)?;
         let (reply, receiver) = mpsc::channel();
-        let mut job = Job {
-            client: self.clone(),
-            request,
-            cancelled,
-            reply,
-        };
-        let deadline = Instant::now() + wait;
-        loop {
-            ensure!(
-                !job.cancelled.load(Ordering::Acquire),
-                "Cancelled before admission"
-            );
-            match Pool::global().sender.try_send(job) {
-                Ok(()) => return Ok(receiver),
-                Err(mpsc::TrySendError::Disconnected(_)) => bail!(AuthFailure::Stopped),
-                Err(mpsc::TrySendError::Full(returned)) => job = returned,
-            }
-            ensure!(Instant::now() < deadline, AuthFailure::QueueFull);
-            thread::sleep(Duration::from_millis(2));
-        }
-    }
-    fn command(&self, command: Command, cancelled: &AtomicBool) -> Result<Reply> {
-        let deadline = Instant::now() + Duration::from_secs(5);
-        let shared = &self.storage.shared;
-        let mut queue = shared
-            .queue
-            .lock()
-            .map_err(|_| anyhow!("Writer admission poisoned"))?;
-        loop {
-            ensure!(!queue.closed, AuthFailure::Stopped);
-            ensure!(
-                !cancelled.load(Ordering::Acquire),
-                "Cancelled before write admission"
-            );
-            if queue.pending.len() < shared.capacity {
-                break;
-            }
-            ensure!(Instant::now() < deadline, AuthFailure::QueueFull);
-            queue = shared
-                .changed
-                .wait_timeout(queue, Duration::from_millis(5))
-                .map_err(|_| anyhow!("Writer admission poisoned"))?
-                .0;
-        }
-        let (reply, receiver) = mpsc::channel();
-        queue.pending.push_back(Envelope::Auth {
-            command,
+        let flow = AuthFlow {
+            storage: self.storage.clone(),
             policy: self.policy,
-            reply,
-        });
-        shared.changed.notify_all();
-        drop(queue);
-        receiver
-            .recv()
-            .map_err(|_| anyhow!(AuthFailure::CommitUnknown))?
+            runtime: self.runtime.clone(),
+            cancelled,
+            completion: Completion { reply: Some(reply) },
+            _lease: lease,
+            #[cfg(test)]
+            kdf_gate: self.kdf_gate.clone(),
+        };
+        self.storage.enqueue_auth(WriterWork::begin(flow, request));
+        Ok(receiver)
     }
-    fn perform(&self, request: Request, cancelled: &AtomicBool) -> Result<Outcome> {
-        let command = match request {
-            Request::Status => Command::Status,
-            Request::IdentityExists {
-                provider,
-                provider_user_id,
-            } => {
-                validate_identity(provider, &provider_user_id)?;
+
+    #[cfg(test)]
+    fn submit_verified_login(
+        &self,
+        credential: Credential,
+        replacement: String,
+    ) -> Result<AuthReply> {
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let lease = self.runtime.acquire(&cancelled, Duration::from_secs(5))?;
+        let (reply, receiver) = mpsc::channel();
+        let flow = AuthFlow {
+            storage: self.storage.clone(),
+            policy: self.policy,
+            runtime: self.runtime.clone(),
+            cancelled,
+            completion: Completion { reply: Some(reply) },
+            _lease: lease,
+            kdf_gate: None,
+        };
+        self.storage.enqueue_auth(WriterWork::resume(
+            flow,
+            Continuation::Login(credential),
+            Ok(KdfOutcome::LoginVerified(Some(replacement))),
+        ));
+        Ok(receiver)
+    }
+}
+
+enum Prepared {
+    Complete(Outcome),
+    Kdf(KdfTask, Continuation),
+}
+
+pub(super) fn finish_stopped(work: WriterWork) {
+    work.flow.finish(Err(AuthFailure::Stopped.into()));
+}
+
+pub(super) fn advance(connection: &mut Connection, work: WriterWork) -> Option<WriterWork> {
+    let WriterWork {
+        flow,
+        stage,
+        ready_since,
+        retry_not_before: _,
+    } = work;
+    if Instant::now().duration_since(ready_since) >= Duration::from_secs(5) {
+        flow.finish(Err(AuthFailure::QueueFull.into()));
+        return None;
+    }
+    if flow.cancelled.load(Ordering::Acquire) {
+        flow.finish(Err(anyhow!("Cancelled before write admission")));
+        return None;
+    }
+    match stage {
+        WriterStage::Begin(request) => match prepare(connection, &flow, request) {
+            Ok(Prepared::Complete(outcome)) => {
+                flow.finish(Ok(outcome));
+                None
+            }
+            Ok(Prepared::Kdf(task, continuation)) => submit_kdf(KdfJob {
+                flow,
+                task,
+                continuation,
+                writer_ready_since: Instant::now(),
+            }),
+            Err(error) => {
+                flow.finish(Err(error));
+                None
+            }
+        },
+        WriterStage::KdfReady { task, continuation } => submit_kdf(KdfJob {
+            flow,
+            task,
+            continuation,
+            writer_ready_since: ready_since,
+        }),
+        WriterStage::Resume {
+            continuation,
+            result,
+        } => {
+            let policy = flow.policy;
+            flow.finish(result.and_then(|result| resume(connection, policy, continuation, result)));
+            None
+        }
+    }
+}
+
+fn submit_kdf(job: KdfJob) -> Option<WriterWork> {
+    let runtime = job.flow.runtime.clone();
+    match runtime.kdf.sender.try_send(job) {
+        Ok(()) => None,
+        Err(mpsc::TrySendError::Full(job)) => Some(WriterWork {
+            flow: job.flow,
+            stage: WriterStage::KdfReady {
+                task: job.task,
+                continuation: job.continuation,
+            },
+            ready_since: job.writer_ready_since,
+            retry_not_before: Some(Instant::now() + Duration::from_millis(2)),
+        }),
+        Err(mpsc::TrySendError::Disconnected(job)) => {
+            job.flow.finish(Err(AuthFailure::Stopped.into()));
+            None
+        }
+    }
+}
+
+fn prepare(connection: &mut Connection, flow: &AuthFlow, request: Request) -> Result<Prepared> {
+    let policy = flow.policy;
+    match request {
+        Request::Status => execute_outcome(connection, Command::Status, policy),
+        Request::IdentityExists {
+            provider,
+            provider_user_id,
+        } => {
+            validate_identity(provider, &provider_user_id)?;
+            execute_outcome(
+                connection,
                 Command::IdentityExists {
                     provider,
                     provider_user_id,
-                }
-            }
-            Request::Register {
-                email,
-                display_name,
-                password,
-            } => {
-                validate_email(&email)?;
-                Command::Register {
+                },
+                policy,
+            )
+        }
+        Request::Register {
+            email,
+            display_name,
+            password,
+        } => {
+            validate_email(&email)?;
+            crypto::validate(&password)?;
+            Ok(Prepared::Kdf(
+                KdfTask::HashNewPassword(password),
+                Continuation::Register {
                     email: email.to_lowercase(),
                     display_name,
-                    hash: crypto::hash(&password)?,
-                    first_user: self.policy.first_user,
-                }
-            }
-            Request::Login { email, password } => {
-                let Reply::Credential(Some(credential)) =
-                    self.command(Command::CredentialByEmail(email.to_lowercase()), cancelled)?
-                else {
-                    bail!(AuthFailure::InvalidCredentials);
-                };
-                ensure!(
-                    credential
-                        .hash
-                        .as_ref()
-                        .is_some_and(|hash| crypto::verify(&password, hash)),
-                    AuthFailure::InvalidCredentials
-                );
-                let replacement = if credential
-                    .hash
-                    .as_ref()
-                    .is_some_and(|hash| hash.starts_with("scrypt:"))
-                {
-                    Some(crypto::hash(&password)?)
-                } else {
-                    None
-                };
-                Command::Login {
-                    credential,
+                },
+            ))
+        }
+        Request::Login { email, password } => {
+            let credential = execute_credential(
+                connection,
+                Command::CredentialByEmail(email.to_lowercase()),
+                policy,
+            )?
+            .ok_or_else(|| anyhow!(AuthFailure::InvalidCredentials))?;
+            let stored = credential
+                .hash
+                .as_deref()
+                .and_then(crypto::inspect)
+                .ok_or_else(|| anyhow!(AuthFailure::InvalidCredentials))?;
+            Ok(Prepared::Kdf(
+                KdfTask::Login { password, stored },
+                Continuation::Login(credential),
+            ))
+        }
+        Request::ResolveSession { token, provider } => execute_outcome(
+            connection,
+            Command::ResolveSession {
+                token: crypto::digest(token.expose()),
+                provider,
+            },
+            policy,
+        ),
+        Request::Logout { token } => execute_outcome(
+            connection,
+            Command::Logout(crypto::digest(token.expose())),
+            policy,
+        ),
+        Request::LogoutAll { session } => execute_outcome(
+            connection,
+            Command::LogoutAll(crypto::digest(session.expose())),
+            policy,
+        ),
+        Request::ChangePassword {
+            session,
+            current,
+            replacement,
+        } => {
+            let session = crypto::digest(session.expose());
+            let credential = execute_credential(
+                connection,
+                Command::CredentialBySession(session.clone()),
+                policy,
+            )?
+            .ok_or_else(|| anyhow!(AuthFailure::SessionRequired))?;
+            let hash = credential
+                .hash
+                .as_deref()
+                .ok_or_else(|| anyhow!(AuthFailure::OAuthOnlyAccount))?;
+            let stored = crypto::inspect(hash)
+                .ok_or_else(|| anyhow!(AuthFailure::CurrentPasswordIncorrect))?;
+            Ok(Prepared::Kdf(
+                KdfTask::ChangePassword {
+                    current,
                     replacement,
-                }
-            }
-            Request::ChangePassword {
-                session,
-                current,
-                replacement,
-            } => {
-                let Reply::Credential(Some(credential)) = self.command(
-                    Command::CredentialBySession(crypto::digest(session.expose())),
-                    cancelled,
-                )?
-                else {
-                    bail!(AuthFailure::SessionRequired);
-                };
-                ensure!(credential.hash.is_some(), AuthFailure::OAuthOnlyAccount);
-                ensure!(
-                    credential
-                        .hash
-                        .as_ref()
-                        .is_some_and(|hash| crypto::verify(&current, hash)),
-                    AuthFailure::CurrentPasswordIncorrect
-                );
-                Command::ChangePassword {
-                    session: crypto::digest(session.expose()),
+                    stored,
+                },
+                Continuation::ChangePassword {
+                    session,
                     credential,
-                    replacement: crypto::hash(&replacement)?,
-                }
+                },
+            ))
+        }
+        Request::RequestReset { email } => execute_outcome(
+            connection,
+            Command::RequestReset(email.to_lowercase()),
+            policy,
+        ),
+        Request::ResetPassword { token, replacement } => {
+            crypto::validate(&replacement)?;
+            Ok(Prepared::Kdf(
+                KdfTask::HashResetReplacement(replacement),
+                Continuation::ResetPassword {
+                    token: crypto::digest(token.expose()),
+                },
+            ))
+        }
+        Request::OAuthLogin {
+            provider,
+            provider_user_id,
+            email,
+            display_name,
+        } => {
+            validate_identity(provider, &provider_user_id)?;
+            if let Some(email) = &email {
+                validate_email(email)?;
             }
-            Request::ResetPassword { token, replacement } => Command::ResetPassword {
-                token: crypto::digest(token.expose()),
-                replacement: crypto::hash(&replacement)?,
-            },
-            Request::ResolveSession { token, provider } => Command::ResolveSession {
-                token: crypto::digest(token.expose()),
-                provider,
-            },
-            Request::Logout { token } => Command::Logout(crypto::digest(token.expose())),
-            Request::LogoutAll { session } => Command::LogoutAll(crypto::digest(session.expose())),
-            Request::RequestReset { email } => Command::RequestReset(email.to_lowercase()),
-            Request::OAuthLogin {
-                provider,
-                provider_user_id,
-                email,
-                display_name,
-            } => {
-                validate_identity(provider, &provider_user_id)?;
-                if let Some(email) = &email {
-                    validate_email(email)?;
-                }
+            execute_outcome(
+                connection,
                 Command::OAuthLogin {
                     provider,
                     provider_user_id,
                     email: email.map(|email| email.to_lowercase()),
                     display_name,
-                    first_user: self.policy.first_user,
-                }
-            }
-            Request::LinkIdentity {
-                session,
-                provider,
-                provider_user_id,
-            } => {
-                validate_identity(provider, &provider_user_id)?;
+                    first_user: policy.first_user,
+                },
+                policy,
+            )
+        }
+        Request::LinkIdentity {
+            session,
+            provider,
+            provider_user_id,
+        } => {
+            validate_identity(provider, &provider_user_id)?;
+            execute_outcome(
+                connection,
                 Command::LinkIdentity {
                     session: crypto::digest(session.expose()),
                     provider,
                     provider_user_id,
-                }
-            }
-            Request::ListKeys { session } => Command::Keys {
+                },
+                policy,
+            )
+        }
+        Request::ListKeys { session } => execute_outcome(
+            connection,
+            Command::Keys {
                 session: crypto::digest(session.expose()),
                 action: keys::Action::List,
             },
-            Request::CreateKey { session } => Command::Keys {
+            policy,
+        ),
+        Request::CreateKey { session } => execute_outcome(
+            connection,
+            Command::Keys {
                 session: crypto::digest(session.expose()),
                 action: keys::Action::Create,
             },
-            Request::RevokeKey { session, key_id } => Command::Keys {
+            policy,
+        ),
+        Request::RevokeKey { session, key_id } => execute_outcome(
+            connection,
+            Command::Keys {
                 session: crypto::digest(session.expose()),
                 action: keys::Action::Revoke(key_id),
             },
-            Request::RotateKey { session, key_id } => Command::Keys {
+            policy,
+        ),
+        Request::RotateKey { session, key_id } => execute_outcome(
+            connection,
+            Command::Keys {
                 session: crypto::digest(session.expose()),
                 action: keys::Action::Rotate(key_id),
             },
-            Request::ResolveKey { tenant_id, key } => Command::ResolveKey { tenant_id, key },
-        };
-        match self.command(command, cancelled)? {
-            Reply::Outcome(outcome) => Ok(outcome),
-            _ => bail!("Unexpected authentication reply"),
+            policy,
+        ),
+        Request::ResolveKey { tenant_id, key } => {
+            execute_outcome(connection, Command::ResolveKey { tenant_id, key }, policy)
         }
+    }
+}
+
+fn execute_outcome(
+    connection: &mut Connection,
+    command: Command,
+    policy: AuthPolicy,
+) -> Result<Prepared> {
+    match execute(connection, command, policy)? {
+        Reply::Outcome(outcome) => Ok(Prepared::Complete(outcome)),
+        Reply::Credential(_) => bail!("Unexpected authentication reply"),
+    }
+}
+
+fn execute_credential(
+    connection: &mut Connection,
+    command: Command,
+    policy: AuthPolicy,
+) -> Result<Option<Credential>> {
+    match execute(connection, command, policy)? {
+        Reply::Credential(credential) => Ok(credential),
+        Reply::Outcome(_) => bail!("Unexpected authentication reply"),
+    }
+}
+
+fn resume(
+    connection: &mut Connection,
+    policy: AuthPolicy,
+    continuation: Continuation,
+    result: KdfOutcome,
+) -> Result<Outcome> {
+    let command = match (continuation, result) {
+        (
+            Continuation::Register {
+                email,
+                display_name,
+            },
+            KdfOutcome::Hash(hash),
+        ) => Command::Register {
+            email,
+            display_name,
+            hash,
+            first_user: policy.first_user,
+        },
+        (Continuation::Login(credential), KdfOutcome::LoginVerified(replacement)) => {
+            Command::Login {
+                credential,
+                replacement,
+            }
+        }
+        (
+            Continuation::ChangePassword {
+                session,
+                credential,
+            },
+            KdfOutcome::ChangeVerified(replacement),
+        ) => Command::ChangePassword {
+            session,
+            credential,
+            replacement,
+        },
+        (Continuation::ResetPassword { token }, KdfOutcome::Hash(replacement)) => {
+            Command::ResetPassword { token, replacement }
+        }
+        _ => bail!(AuthFailure::Storage),
+    };
+    match execute(connection, command, policy)? {
+        Reply::Outcome(outcome) => Ok(outcome),
+        Reply::Credential(_) => bail!("Unexpected authentication reply"),
     }
 }
 fn validate_email(email: &str) -> Result<()> {

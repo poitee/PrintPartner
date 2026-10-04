@@ -38,7 +38,7 @@ fn fixture() -> (PathBuf, PathBuf, WriterOwner) {
     .unwrap();
     std::fs::write(files.join("README.md"), "# Ordinary Source\n").unwrap();
     let (owner, ready) = WriterOwner::open(&root, Limits::default()).unwrap();
-    assert_eq!(ready.version, 36);
+    assert_eq!(ready.version, 37);
     (root, files, owner)
 }
 fn request(key: &str, target: Target) -> Admission {
@@ -763,12 +763,12 @@ fn changed_content_replay_and_changed_during_capture_are_refused() {
     owner.shutdown().unwrap();
 }
 #[test]
-fn schema36_backup_preserves35_and_future_or_corrupt_input_is_unchanged() {
+fn schema37_backup_preserves35_and_future_or_corrupt_input_is_unchanged() {
     let (root, _files, owner) = fixture();
     owner.shutdown().unwrap();
     let db = root.join("print-partner.db");
     let conn = Connection::open(&db).unwrap();
-    conn.execute_batch("DROP TABLE source_import_quota; DROP TABLE source_import_operations; UPDATE app_settings SET value='35' WHERE tenant_id='default' AND key='schema_version'; PRAGMA wal_checkpoint(TRUNCATE);").unwrap();
+    conn.execute_batch("DROP TRIGGER trg_plan_apply_admissions_immutable_delete; DROP TRIGGER trg_plan_apply_admissions_immutable_update; DROP TABLE plan_apply_admissions; DROP TABLE source_import_quota; DROP TABLE source_import_operations; UPDATE app_settings SET value='35' WHERE tenant_id='default' AND key='schema_version'; PRAGMA wal_checkpoint(TRUNCATE);").unwrap();
     drop(conn);
     let before =
         graph(&Connection::open_with_flags(&db, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap());
@@ -790,7 +790,7 @@ fn schema36_backup_preserves35_and_future_or_corrupt_input_is_unchanged() {
     std::fs::copy(&db, future.join("print-partner.db")).unwrap();
     let conn = Connection::open(future.join("print-partner.db")).unwrap();
     conn.execute(
-        "UPDATE app_settings SET value='37' WHERE tenant_id='default' AND key='schema_version'",
+        "UPDATE app_settings SET value='38' WHERE tenant_id='default' AND key='schema_version'",
         [],
     )
     .unwrap();
@@ -1215,7 +1215,7 @@ fn combined_pending_import_allows_progress_and_selection_then_preserves_pinned_h
     owner.shutdown().unwrap();
 }
 #[test]
-fn combined_schema36_backup_preserves_selected_progress_and_jobs35_graph() {
+fn combined_schema37_backup_preserves_selected_progress_and_jobs35_graph() {
     let (root, _, owner) = progress_history_fixture();
     complete_progress(&owner);
     let selected = select_progress(&owner);
@@ -1238,12 +1238,12 @@ fn combined_schema36_backup_preserves_selected_progress_and_jobs35_graph() {
     owner.shutdown().unwrap();
     let db = root.join("print-partner.db");
     let conn = Connection::open(&db).unwrap();
-    conn.execute_batch("DROP TABLE source_import_quota; DROP TABLE source_import_operations; UPDATE app_settings SET value='35' WHERE tenant_id='default' AND key='schema_version'; PRAGMA wal_checkpoint(TRUNCATE);").unwrap();
+    conn.execute_batch("DROP TRIGGER trg_plan_apply_admissions_immutable_delete; DROP TRIGGER trg_plan_apply_admissions_immutable_update; DROP TABLE plan_apply_admissions; DROP TABLE source_import_quota; DROP TABLE source_import_operations; UPDATE app_settings SET value='35' WHERE tenant_id='default' AND key='schema_version'; PRAGMA wal_checkpoint(TRUNCATE);").unwrap();
     let before = graph(&conn);
     drop(conn);
     let (owner, ready) = WriterOwner::open(&root, Limits::default()).unwrap();
     assert_eq!(ready.previous_version, 35);
-    assert_eq!(ready.version, 36);
+    assert_eq!(ready.version, 37);
     let backup_copy = root.join("backup-copy.db");
     std::fs::copy(ready.backup.unwrap(), &backup_copy).unwrap();
     assert_eq!(graph(&Connection::open(backup_copy).unwrap()), before);
@@ -1691,16 +1691,16 @@ fn publication_then_source_activation_preserves_receipt_progress_and_plate_histo
     owner.shutdown().unwrap();
 }
 #[test]
-fn publication_source_schema36_backup_retains_full35_and_foreign_graph() {
+fn publication_source_schema37_backup_retains_full35_and_foreign_graph() {
     let (root, files, owner, command) = publication_fixture();
     owner.shutdown().unwrap();
     let conn = Connection::open(root.join("print-partner.db")).unwrap();
-    conn.execute_batch("DROP TABLE source_import_quota; DROP TABLE source_import_operations; UPDATE app_settings SET value='35' WHERE tenant_id='default' AND key='schema_version'; PRAGMA wal_checkpoint(TRUNCATE);").unwrap();
+    conn.execute_batch("DROP TRIGGER trg_plan_apply_admissions_immutable_delete; DROP TRIGGER trg_plan_apply_admissions_immutable_update; DROP TABLE plan_apply_admissions; DROP TABLE source_import_quota; DROP TABLE source_import_operations; UPDATE app_settings SET value='35' WHERE tenant_id='default' AND key='schema_version'; PRAGMA wal_checkpoint(TRUNCATE);").unwrap();
     let prior = graph(&conn);
     drop(conn);
     let (owner, ready) = WriterOwner::open(&root, Limits::default()).unwrap();
     assert_eq!(ready.previous_version, 35);
-    assert_eq!(ready.version, 36);
+    assert_eq!(ready.version, 37);
     let backup = root.join("publication-backup-copy.db");
     std::fs::copy(ready.backup.unwrap(), &backup).unwrap();
     assert_eq!(graph(&Connection::open(backup).unwrap()), prior);
