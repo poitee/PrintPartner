@@ -313,11 +313,10 @@ def run_bundle_probe(argv, *, cwd, env, timeout_seconds):
     try:
         if timed_out:
             cleanup_deadline = time.monotonic() + PROBE_CLEANUP_SECONDS
-            if process.poll() is None:
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
             graceful_deadline = cleanup_deadline - PROBE_FORCE_CLEANUP_SECONDS
             cleanup_complete = drain_until(graceful_deadline)
             if cleanup_complete:
@@ -566,7 +565,7 @@ class ParserTests(unittest.TestCase):
                 [sys.executable, '-c', script],
                 cwd=pathlib.Path.cwd(),
                 env=os.environ.copy(),
-                timeout_seconds=0.05,
+                timeout_seconds=0.5,
             )
             elapsed = time.monotonic() - started
             group_pid, descendant_pid = map(int, capture.stdout.split())
@@ -602,31 +601,103 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(capture.exit_code, 0)
         self.assertFalse(group_alive)
         self.assertFalse(descendant_alive)
-        self.assertLess(elapsed, 1.2)
+        self.assertLess(elapsed, 1.7)
+
+    def test_bundle_probe_signals_exited_leader_group_promptly(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            heartbeat = pathlib.Path(temporary) / 'heartbeat'
+            script = (
+                'import os,sys,time\n'
+                'heartbeat=sys.argv[1]\n'
+                'parent_pid=os.getpid()\n'
+                'pid=os.fork()\n'
+                'if pid:\n'
+                ' os.write(1,f"{os.getpid()} {pid}\\n".encode())\n'
+                ' os._exit(0)\n'
+                'while os.getppid()==parent_pid:\n'
+                ' time.sleep(0.001)\n'
+                'os.close(1)\n'
+                'os.close(2)\n'
+                'fd=os.open(heartbeat,os.O_WRONLY|os.O_CREAT|os.O_TRUNC,0o600)\n'
+                'end=time.monotonic()+3\n'
+                'while time.monotonic()<end:\n'
+                ' os.write(fd,f"{time.monotonic()}\\n".encode())\n'
+                ' time.sleep(0.01)\n'
+                'os.close(fd)\n'
+                'os._exit(0)\n'
+            )
+            group_pid = None
+            descendant_pid = None
+            cleanup_complete = False
+            try:
+                started = time.monotonic()
+                capture = run_bundle_probe(
+                    [sys.executable, '-c', script, str(heartbeat)],
+                    cwd=pathlib.Path.cwd(),
+                    env=os.environ.copy(),
+                    timeout_seconds=0.5,
+                )
+                elapsed = time.monotonic() - started
+                group_pid, descendant_pid = map(int, capture.stdout.split())
+                heartbeats = [float(value) for value in heartbeat.read_text().splitlines()]
+                try:
+                    os.killpg(group_pid, 0)
+                    group_alive = True
+                except ProcessLookupError:
+                    group_alive = False
+                try:
+                    os.kill(descendant_pid, 0)
+                    descendant_alive = True
+                except ProcessLookupError:
+                    descendant_alive = False
+            finally:
+                if group_pid is not None:
+                    try:
+                        os.killpg(group_pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                if descendant_pid is not None:
+                    cleanup_deadline = time.monotonic() + 1
+                    while time.monotonic() < cleanup_deadline:
+                        try:
+                            os.kill(descendant_pid, 0)
+                        except ProcessLookupError:
+                            cleanup_complete = True
+                            break
+                        time.sleep(0.01)
+
+        self.assertTrue(cleanup_complete)
+        self.assertGreater(heartbeats[-1] - started, 0.2)
+        self.assertLess(heartbeats[-1] - started, 1.05)
+        self.assertTrue(capture.timed_out)
+        self.assertFalse(capture.cleanup_timed_out)
+        self.assertEqual(capture.exit_code, 0)
+        self.assertFalse(group_alive)
+        self.assertFalse(descendant_alive)
+        self.assertLess(elapsed, 1.7)
 
     def test_bundle_probe_deadline_includes_inherited_pipe_lifetime(self):
         script = (
-            'import os,time\n'
-            'pid=os.fork()\n'
-            'if pid:\n'
-            ' os.write(1,b"{}\\n")\n'
-            ' os._exit(0)\n'
-            'time.sleep(0.4)\n'
-            'os._exit(0)\n'
+            'printf "{}\\n"\n'
+            'sleep 5 &\n'
         )
         started = time.monotonic()
         capture = run_bundle_probe(
-            [sys.executable, '-c', script],
+            ['/bin/sh', '-c', script],
             cwd=pathlib.Path.cwd(),
             env=os.environ.copy(),
-            timeout_seconds=0.05,
+            timeout_seconds=0.5,
         )
         elapsed = time.monotonic() - started
 
         self.assertTrue(capture.timed_out)
         self.assertFalse(capture.cleanup_timed_out)
         self.assertEqual(capture.exit_code, 0)
-        self.assertLess(elapsed, 1.05)
+        self.assertEqual(capture.stdout, '{}\n')
+        self.assertEqual(capture.stderr, '')
+        self.assertFalse(capture.stdout_truncated)
+        self.assertFalse(capture.stderr_truncated)
+        self.assertLess(elapsed, 1.75)
 
     def test_better_sqlite3_prebuild_selection_and_containment(self):
         inventory = [
@@ -656,8 +727,14 @@ class ParserTests(unittest.TestCase):
             select_better_sqlite3_prebuild(inventory, 'unsupported')
 
         with tempfile.TemporaryDirectory() as temporary:
-            temporary = pathlib.Path(temporary)
-            root = temporary / 'installed/Contents'
+            storage = pathlib.Path(temporary)
+            real_temporary = storage / 'real'
+            real_temporary.mkdir()
+            temporary = storage / 'alias'
+            temporary.symlink_to(real_temporary, target_is_directory=True)
+            fixture_root = temporary / 'installed/Contents'
+            root = fixture_root.resolve()
+            self.assertNotEqual(fixture_root, root)
             framework = root / 'Frameworks/fixture.node'
             framework.parent.mkdir(parents=True)
             framework.write_bytes(b'fixture')
@@ -665,7 +742,14 @@ class ParserTests(unittest.TestCase):
             alias.parent.mkdir(parents=True)
             alias.symlink_to(os.path.relpath(framework, alias.parent))
             self.assertEqual(contained(root, alias), framework.resolve())
-            relocated = temporary / 'relocated app/Contents'
+            outside = real_temporary / 'outside.node'
+            outside.write_bytes(b'outside')
+            escape = alias.with_name('escape.node')
+            escape.symlink_to(os.path.relpath(outside, escape.parent))
+            with self.assertRaisesRegex(ValueError, 'Resource escapes Contents'):
+                contained(root, escape)
+            escape.unlink()
+            relocated = (temporary / 'relocated app/Contents').resolve()
             shutil.copytree(root, relocated, symlinks=True)
             relocated_alias = relocated / WEB / better_sqlite3_addon_path('arm64')
             self.assertEqual(contained(relocated, relocated_alias),
