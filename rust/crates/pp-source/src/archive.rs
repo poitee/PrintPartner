@@ -9,11 +9,18 @@ use std::{
     io::{self, Read, Seek, SeekFrom, Write},
     sync::atomic::{AtomicBool, Ordering},
 };
+use unicode_normalization::UnicodeNormalization;
 
 const CANDIDATE: &str = ".candidate";
 pub const MAX_COMPRESSED_BYTES: u64 = 256 * 1024 * 1024;
 pub const MAX_INFLATED_BYTES: u64 = 1024 * 1024 * 1024;
 const MAX_METADATA_BYTES: u64 = 8 * 1024 * 1024;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ArchiveLabelPolicy {
+    Strict,
+    NfcAtAcquisition,
+}
 
 #[derive(Debug)]
 pub enum ArchiveError {
@@ -157,8 +164,17 @@ impl ExtractedArchive {
 impl SourceRoot {
     pub fn extract_zip(
         &mut self,
+        input: ZipInput,
+        limits: ArchiveLimits,
+        cancelled: &AtomicBool,
+    ) -> Result<ExtractedArchive> {
+        self.extract_zip_with_label_policy(input, limits, ArchiveLabelPolicy::Strict, cancelled)
+    }
+    pub fn extract_zip_with_label_policy(
+        &mut self,
         mut input: ZipInput,
         limits: ArchiveLimits,
+        label_policy: ArchiveLabelPolicy,
         cancelled: &AtomicBool,
     ) -> Result<ExtractedArchive> {
         if limits.max_compressed_bytes > MAX_COMPRESSED_BYTES
@@ -183,7 +199,7 @@ impl SourceRoot {
             root,
             cleaned: false,
         };
-        let outcome = self.extract_to(&mut input, limits, cancelled, &stage);
+        let outcome = self.extract_to(&mut input, limits, label_policy, cancelled, &stage);
         match outcome {
             Ok((files, receipt)) => Ok(ExtractedArchive {
                 stage,
@@ -203,6 +219,7 @@ impl SourceRoot {
         &self,
         input: &mut ZipInput,
         limits: ArchiveLimits,
+        label_policy: ArchiveLabelPolicy,
         cancelled: &AtomicBool,
         stage: &Stage,
     ) -> Result<(LocalFiles, ArchiveReceipt)> {
@@ -216,7 +233,13 @@ impl SourceRoot {
         )?;
         compressed.sync_all()?;
         let mut archive_file = stage.root.file("archive.zip", false)?;
-        let entries = inspect_index(&mut archive_file, compressed_bytes, limits, cancelled)?;
+        let entries = inspect_index_with_label_policy(
+            &mut archive_file,
+            compressed_bytes,
+            limits,
+            label_policy,
+            cancelled,
+        )?;
         let mut archive = zip::ZipArchive::with_config(
             zip::read::Config {
                 archive_offset: zip::read::ArchiveOffset::Known(0),
@@ -360,6 +383,16 @@ pub(crate) fn inspect_index(
     limits: ArchiveLimits,
     cancelled: &AtomicBool,
 ) -> Result<Vec<Entry>> {
+    inspect_index_with_label_policy(file, length, limits, ArchiveLabelPolicy::Strict, cancelled)
+}
+
+fn inspect_index_with_label_policy(
+    file: &mut (impl Read + Seek),
+    length: u64,
+    limits: ArchiveLimits,
+    label_policy: ArchiveLabelPolicy,
+    cancelled: &AtomicBool,
+) -> Result<Vec<Entry>> {
     let tail_size = length.min(65_557) as usize;
     file.seek(SeekFrom::End(-(tail_size as i64)))?;
     let mut tail = vec![0u8; tail_size];
@@ -465,12 +498,7 @@ pub(crate) fn inspect_index(
             return Err(ArchiveError::UnsafeEntry);
         }
         let directory = raw_name.ends_with('/');
-        let path = SourcePath::try_from(if directory {
-            raw_name[..raw_name.len() - 1].to_owned()
-        } else {
-            raw_name.clone()
-        })
-        .map_err(|_| ArchiveError::UnsafeEntry)?;
+        let path = archive_path(&raw_name, directory, label_policy)?;
         paths
             .insert(&path, directory)
             .map_err(|error| match error {
@@ -535,6 +563,27 @@ pub(crate) fn inspect_index(
     }
     file.seek(SeekFrom::Start(0))?;
     Ok(entries)
+}
+
+fn archive_path(
+    raw_name: &str,
+    directory: bool,
+    label_policy: ArchiveLabelPolicy,
+) -> Result<SourcePath> {
+    let raw_label = if directory {
+        &raw_name[..raw_name.len() - 1]
+    } else {
+        raw_name
+    };
+    let label = match label_policy {
+        ArchiveLabelPolicy::Strict => raw_label.to_owned(),
+        ArchiveLabelPolicy::NfcAtAcquisition => raw_label
+            .split('/')
+            .map(|segment| segment.nfc().collect::<String>())
+            .collect::<Vec<_>>()
+            .join("/"),
+    };
+    SourcePath::try_from(label).map_err(|_| ArchiveError::UnsafeEntry)
 }
 
 fn validate_local_header(

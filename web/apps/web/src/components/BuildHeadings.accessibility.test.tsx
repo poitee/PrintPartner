@@ -46,10 +46,7 @@ vi.mock("../context/JobContext", () => ({
   useJobContext: () => ({ activeJobs: [] }),
 }));
 vi.mock("../context/BuildSaveFlushContext", () => ({
-  useBuildSaveFlushRegistry: () => ({
-    registerFlush: vi.fn(),
-    unregisterFlush: vi.fn(),
-  }),
+  useBuildSaveFlushRegistry: () => vi.fn(() => vi.fn()),
 }));
 vi.mock("../hooks/useKitManifestAutosave", () => ({
   useKitManifestAutosave: () => ({

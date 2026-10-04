@@ -17,8 +17,7 @@ type Options = {
   baseKit: KitManifest | null;
   onPersisted?: (kit: KitManifest) => Promise<void>;
   onSaved: (kit: KitManifest) => void | Promise<void>;
-  onRegisterFlush?: (profileId: number, flush: () => Promise<void>) => void;
-  onUnregisterFlush?: (profileId: number) => void;
+  onRegisterFlush?: (profileId: number, flush: () => Promise<void>) => () => void;
 };
 
 type ProfileSaveState = {
@@ -47,7 +46,6 @@ export function useKitManifestAutosave({
   onPersisted,
   onSaved,
   onRegisterFlush,
-  onUnregisterFlush,
 }: Options) {
   const [status, setStatus] = useState<AutosaveStatus>("idle");
   const savedClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -222,9 +220,8 @@ export function useKitManifestAutosave({
 
   useEffect(() => {
     if (!onRegisterFlush) return;
-    onRegisterFlush(profileId, () => registeredFlush.flush());
-    return () => onUnregisterFlush?.(profileId);
-  }, [onRegisterFlush, onUnregisterFlush, profileId, registeredFlush]);
+    return onRegisterFlush(profileId, () => registeredFlush.flush());
+  }, [onRegisterFlush, profileId, registeredFlush]);
 
   useEffect(() => {
     const flushForProfile = () => registeredFlush.flush();

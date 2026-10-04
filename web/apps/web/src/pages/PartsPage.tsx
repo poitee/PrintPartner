@@ -23,7 +23,7 @@ import { cn } from "../lib/utils";
 
 export default function PartsPage() {
   const { selectedProfileId, profiles } = useProfileSelection();
-  const { review, loading, error, draftError, draftWorkspace, draftLoading, preparePlan, saving, refresh, mergeConflict, discardPendingEdits } = usePlanWorkspace();
+  const { review, loading, error, draftError, draftWorkspace, draftLoading, preparePlan, retryPlanSave, saving, refresh, mergeConflict, canDiscardPendingEdits, discardPendingEdits } = usePlanWorkspace();
   const layers = usePlanLayersQuery(selectedProfileId);
   const sheetRef = useRef<ReviewPartsSheetHandle>(null);
   const prepared = useRef<number | null>(null);
@@ -81,13 +81,13 @@ export default function PartsPage() {
       {draftError && (
         <div role="alert" className={cn("space-y-2 rounded-lg border p-4", statusTone({ tone: "error", emphasis: "soft" }))}>
           <p className="text-sm">{draftError}</p>
-          {mergeConflict && (
+          {canDiscardPendingEdits && (
             <div className="space-y-2">
-              <p className="text-sm">Your pending choices remain below. To start from the latest saved Plan, discard these pending edits and make your changes again. Finished print progress is kept.</p>
+              {mergeConflict && <p className="text-sm">Your pending choices remain below. To start from the latest saved Plan, discard these pending edits and make your changes again. Finished print progress is kept.</p>}
               <Button variant="secondary" disabled={saving} onClick={() => void discardPendingEdits().catch(() => {})}>Discard pending edits and use saved Plan</Button>
             </div>
           )}
-          <Button variant="secondary" disabled={saving} onClick={() => void preparePlan().catch(() => {})}>Retry save</Button>
+          <Button variant="secondary" disabled={saving} onClick={() => void retryPlanSave().catch(() => {})}>Retry save</Button>
         </div>
       )}
       {draftWorkspace && <PlanProgressChoices key={`${draftWorkspace.profile_id}:${draftWorkspace.draft.snapshot_digest}`} workspace={draftWorkspace} />}

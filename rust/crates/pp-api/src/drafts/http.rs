@@ -1,4 +1,4 @@
-use super::SnapshotReviewObserver;
+use super::ReviewObservationPort;
 use anyhow::{Result, ensure};
 use axum::{
     Json, Router,
@@ -107,7 +107,7 @@ pub struct DraftHttpClients {
 struct App {
     config: DraftHttpConfig,
     clients: DraftHttpClients,
-    observer: SnapshotReviewObserver,
+    observer: Arc<dyn ReviewObservationPort>,
     admission: Arc<tokio::sync::Semaphore>,
     waiters: Arc<tokio::sync::Semaphore>,
 }
@@ -207,7 +207,7 @@ struct TransitionBody {
 pub fn draft_router(
     config: DraftHttpConfig,
     clients: DraftHttpClients,
-    observer: SnapshotReviewObserver,
+    observer: Arc<dyn ReviewObservationPort>,
 ) -> Router {
     let app = App {
         config,
@@ -711,7 +711,7 @@ async fn save_call(
     let observation_flag = cancelled.flag();
     let (snapshot, observations) = match tokio::task::spawn_blocking(move || {
         observer_for_scan
-            .observe(&snapshot, &observation_flag)
+            .review_observations(&snapshot, &observation_flag)
             .map(|observations| (snapshot, observations))
     })
     .await
@@ -738,7 +738,7 @@ async fn save_call(
         }
     };
     let read = AcceptedRead::Ready { snapshot };
-    let review = match views::review(&read, true, &observations, &filament) {
+    let review = match views::review(&read, true, &observations, filament.as_ref()) {
         Ok(value) => present_review(ReviewContract::Current, value),
         Err(_) => {
             return save_uncertain(
@@ -848,7 +848,7 @@ async fn review_call(
             let scan_flag = cancelled.flag();
             let (snapshot, observations) = match tokio::task::spawn_blocking(move || {
                 scan_observer
-                    .observe(&snapshot, &scan_flag)
+                    .review_observations(&snapshot, &scan_flag)
                     .map(|observations| (snapshot, observations))
             })
             .await
@@ -861,7 +861,7 @@ async fn review_call(
                 Err(_) => return failure(500, "Accepted Plan review observation failed"),
             };
             let read = AcceptedRead::Ready { snapshot };
-            match views::review(&read, include_excluded, &observations, &filament) {
+            match views::review(&read, include_excluded, &observations, filament.as_ref()) {
                 Ok(value) => json_response(200, &present_review(contract, value)),
                 Err(_) => failure(500, "Accepted Plan data is inconsistent"),
             }
@@ -1378,4 +1378,429 @@ fn failure(status: u16, detail: &str) -> Response {
         Json(json!({"detail":detail})),
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pp_storage::{
+        Limits, WriterOwner,
+        auth::{AuthPolicy, FirstUserTenant, RegistrationPolicy, SessionTenantPolicy},
+        read_model::views::{CatalogOnly, ReviewObservations},
+        working_drafts::observation::{
+            ArtifactRead, CheckoutManifestUse, DocumentRead, DraftReads, InventoryPath,
+            OwnedCatalogReadRequest, OwnedCheckoutReadRequest, OwnedStlReadRequest,
+            PreparationBudget, PreparationLimits, ReadFailure, ReadResult, StlInventory,
+            StlRootRead,
+        },
+    };
+    use sha2::{Digest, Sha256};
+    use std::sync::{
+        Mutex,
+        atomic::AtomicUsize,
+        mpsc::{Receiver, SyncSender, sync_channel},
+    };
+    use tower::ServiceExt;
+
+    struct FixtureDraftReads {
+        repos: std::path::PathBuf,
+    }
+
+    struct FixtureStlRoot {
+        path: std::path::PathBuf,
+        logical_path: String,
+    }
+
+    struct FixtureStlInventory {
+        root: std::path::PathBuf,
+        entries: Vec<InventoryPath>,
+    }
+
+    impl StlRootRead for FixtureStlRoot {
+        fn logical_resolved_path(&self) -> Option<&str> {
+            Some(&self.logical_path)
+        }
+
+        fn scan_stls(
+            &mut self,
+            budget: &mut PreparationBudget<'_>,
+        ) -> ReadResult<Box<dyn StlInventory>> {
+            let mut paths = Vec::new();
+            for entry in
+                std::fs::read_dir(&self.path).map_err(|error| ReadFailure::Io(error.kind()))?
+            {
+                let entry = entry.map_err(|error| ReadFailure::Io(error.kind()))?;
+                let path = entry.path();
+                if path.extension().and_then(|value| value.to_str()) != Some("stl") {
+                    continue;
+                }
+                let relative = entry.file_name().to_string_lossy().into_owned();
+                budget.entry(1, relative.len())?;
+                paths.push(relative);
+            }
+            paths.sort();
+            Ok(Box::new(FixtureStlInventory {
+                root: self.path.clone(),
+                entries: paths
+                    .into_iter()
+                    .enumerate()
+                    .map(
+                        |(traversal_ordinal, physical_relative_path)| InventoryPath {
+                            physical_relative_path,
+                            traversal_ordinal,
+                        },
+                    )
+                    .collect(),
+            }))
+        }
+    }
+
+    impl StlInventory for FixtureStlInventory {
+        fn entries(&self) -> &[InventoryPath] {
+            &self.entries
+        }
+
+        fn hash_tracked_winner(
+            &mut self,
+            index: usize,
+            budget: &mut PreparationBudget<'_>,
+        ) -> ReadResult<ArtifactRead> {
+            let entry = self.entries.get(index).ok_or(ReadFailure::Unavailable)?;
+            let bytes = std::fs::read(self.root.join(&entry.physical_relative_path))
+                .map_err(|error| ReadFailure::Io(error.kind()))?;
+            budget.artifact(bytes.len() as u64, bytes.len())?;
+            Ok(ArtifactRead {
+                byte_count: bytes.len() as u64,
+                byte_sha256: hex::encode(Sha256::digest(bytes)),
+            })
+        }
+    }
+
+    impl DraftReads for FixtureDraftReads {
+        fn resolve_stl_root(
+            &self,
+            request: &OwnedStlReadRequest,
+            budget: &mut PreparationBudget<'_>,
+        ) -> ReadResult<Box<dyn StlRootRead>> {
+            budget.check()?;
+            let path = request
+                .stored_path()
+                .map(|stored| self.repos.join(stored))
+                .ok_or(ReadFailure::UnsafeLocator)?;
+            let logical_path = path.to_string_lossy().into_owned();
+            Ok(Box::new(FixtureStlRoot { path, logical_path }))
+        }
+
+        fn read_checkout_manifest(
+            &self,
+            _: &OwnedCheckoutReadRequest,
+            _: CheckoutManifestUse,
+            budget: &mut PreparationBudget<'_>,
+        ) -> ReadResult<DocumentRead> {
+            budget.check()?;
+            Ok(DocumentRead::Missing)
+        }
+
+        fn read_catalog_document(
+            &self,
+            _: &OwnedCatalogReadRequest,
+            budget: &mut PreparationBudget<'_>,
+        ) -> ReadResult<DocumentRead> {
+            budget.check()?;
+            Ok(DocumentRead::Missing)
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    enum FakeMode {
+        ScanFailure,
+        FilamentFailure,
+        BlockingScan,
+    }
+
+    struct FakePort {
+        mode: FakeMode,
+        scans: AtomicUsize,
+        filaments: AtomicUsize,
+        entered: Mutex<Option<SyncSender<()>>>,
+        cancelled: Arc<AtomicBool>,
+    }
+
+    impl FakePort {
+        fn new(mode: FakeMode) -> (Arc<Self>, Option<Receiver<()>>) {
+            let (entered, receiver) = if matches!(mode, FakeMode::BlockingScan) {
+                let (sender, receiver) = sync_channel(1);
+                (Some(sender), Some(receiver))
+            } else {
+                (None, None)
+            };
+            (
+                Arc::new(Self {
+                    mode,
+                    scans: AtomicUsize::new(0),
+                    filaments: AtomicUsize::new(0),
+                    entered: Mutex::new(entered),
+                    cancelled: Arc::new(AtomicBool::new(false)),
+                }),
+                receiver,
+            )
+        }
+    }
+
+    impl ReviewObservationPort for FakePort {
+        fn review_observations(
+            &self,
+            _: &pp_storage::read_model::Snapshot,
+            cancelled: &AtomicBool,
+        ) -> Result<ReviewObservations> {
+            self.scans.fetch_add(1, Ordering::Relaxed);
+            match self.mode {
+                FakeMode::ScanFailure => Err(anyhow::anyhow!("scan failed")),
+                FakeMode::FilamentFailure => Ok(ReviewObservations {
+                    available_input_roots: Default::default(),
+                    media_by_part_id: Default::default(),
+                }),
+                FakeMode::BlockingScan => {
+                    if let Some(sender) = self.entered.lock().unwrap().take() {
+                        sender.send(()).unwrap();
+                    }
+                    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+                    while !cancelled.load(Ordering::Acquire) && std::time::Instant::now() < deadline
+                    {
+                        std::thread::park_timeout(Duration::from_millis(1));
+                    }
+                    if !cancelled.load(Ordering::Acquire) {
+                        return Err(anyhow::anyhow!("cancellation deadline elapsed"));
+                    }
+                    self.cancelled.store(true, Ordering::Release);
+                    Err(anyhow::anyhow!("scan cancelled"))
+                }
+            }
+        }
+
+        fn filament_lookup<'a>(
+            &'a self,
+            _: &'a pp_storage::read_model::Snapshot,
+            _: Arc<AtomicBool>,
+        ) -> super::super::FilamentFuture<'a> {
+            self.filaments.fetch_add(1, Ordering::Relaxed);
+            Box::pin(async move {
+                if matches!(self.mode, FakeMode::FilamentFailure) {
+                    Err(anyhow::anyhow!("filament failed"))
+                } else {
+                    Ok(Box::new(CatalogOnly)
+                        as Box<
+                            dyn pp_storage::read_model::views::FilamentLookup + Send + Sync,
+                        >)
+                }
+            })
+        }
+    }
+
+    fn test_policy() -> AuthPolicy {
+        AuthPolicy {
+            registration: RegistrationPolicy::FirstAccountOnly,
+            first_user: FirstUserTenant::NewUser,
+            session_tenant: SessionTenantPolicy::SingleAccountDefault,
+        }
+    }
+
+    fn test_directory() -> std::path::PathBuf {
+        let mut bytes = [0; 12];
+        getrandom::fill(&mut bytes).unwrap();
+        std::env::temp_dir().join(format!("pp-api-draft-port-{}", hex::encode(bytes)))
+    }
+
+    fn test_app(
+        observer: Arc<dyn ReviewObservationPort>,
+    ) -> (App, WriterOwner, std::path::PathBuf) {
+        let directory = test_directory();
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(
+            directory.join("print-partner.db"),
+            include_bytes!("../../../pp-storage/tests/fixtures/required-units/unchanged.db"),
+        )
+        .unwrap();
+        let revision = directory.join("repos/1/revisions/fixture");
+        std::fs::create_dir_all(&revision).unwrap();
+        std::fs::write(revision.join("bracket.stl"), b"solid bracket").unwrap();
+        std::fs::write(revision.join("excluded.stl"), b"solid excluded").unwrap();
+        std::fs::write(revision.join("gear.stl"), b"solid gear").unwrap();
+        let (owner, _) = WriterOwner::open(&directory, Limits::default()).unwrap();
+        let policy = test_policy();
+        let drafts = owner
+            .working_drafts_with_policy(
+                policy,
+                Arc::new(FixtureDraftReads {
+                    repos: directory.join("repos"),
+                }),
+                PreparationLimits::default(),
+                directory.join("repos"),
+            )
+            .unwrap();
+        let app = App {
+            config: DraftHttpConfig::new("http://127.0.0.1:1", "default").unwrap(),
+            clients: DraftHttpClients {
+                saves: drafts.plan_save(),
+                publication: owner.publication_with_policy(policy).unwrap(),
+                accepted: owner.accepted_reads_with_policy(policy).unwrap(),
+                drafts,
+            },
+            observer,
+            admission: Arc::new(tokio::sync::Semaphore::new(64)),
+            waiters: Arc::new(tokio::sync::Semaphore::new(64)),
+        };
+        (app, owner, directory)
+    }
+
+    fn save_request() -> Value {
+        json!({
+            "expected_base":{"revision_id":1,"plan_version":1},
+            "expected_draft":{
+                "draft_id":2,
+                "state":"open",
+                "lifecycle_version":0,
+                "snapshot_digest":"ae11e670337e3e5eab736b29b4e294edbea8b564661cf15972625783f8930ee3",
+                "base":{"revision_id":1,"plan_version":1}
+            },
+            "remap_checkoff_links":false,
+            "decisions":[{
+                "kind":"set_quantity_override",
+                "target":{
+                    "part_key":"bracket.stl",
+                    "relative_path":"bracket.stl",
+                    "source_layer":"base:Fixture Source"
+                },
+                "value":4
+            }]
+        })
+    }
+
+    async fn send_save(client: &reqwest::Client, origin: &str, key: &str) -> (u16, Value) {
+        let response = client
+            .post(format!("{origin}/plans/1/save"))
+            .header("Origin", origin)
+            .header("Cookie", "pp_session=required-unit-fixture-secret")
+            .header("Idempotency-Key", key)
+            .json(&save_request())
+            .send()
+            .await
+            .unwrap();
+        let status = response.status().as_u16();
+        let body = response.json().await.unwrap();
+        (status, body)
+    }
+
+    async fn router_saves(
+        mode: FakeMode,
+        key: &str,
+    ) -> ((u16, Value), (u16, Value), Arc<FakePort>) {
+        let (observer, _) = FakePort::new(mode);
+        let (app, owner, directory) = test_app(observer.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let router = draft_router(
+            DraftHttpConfig::new(&origin, "default").unwrap(),
+            app.clients,
+            app.observer,
+        );
+        let (stop, stopped) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                router.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .with_graceful_shutdown(async {
+                let _ = stopped.await;
+            })
+            .await
+            .unwrap();
+        });
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let first = send_save(&client, &origin, key).await;
+        let replay = send_save(&client, &origin, key).await;
+        stop.send(()).unwrap();
+        server.await.unwrap();
+        owner.shutdown().unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
+        (first, replay, observer)
+    }
+
+    fn assert_uncertain_save(response: &(u16, Value), stage: &str, key: &str) {
+        assert_eq!(response.0, 500, "{}", response.1);
+        assert_eq!(
+            response.1["code"], "save_response_uncertain",
+            "{}",
+            response.1
+        );
+        assert_eq!(response.1["stage"], stage, "{}", response.1);
+        assert_eq!(response.1["idempotency_key"], key, "{}", response.1);
+        assert_eq!(response.1["receipt"]["profile_id"], 1, "{}", response.1);
+        assert_eq!(response.1["receipt"]["draft_id"], 3, "{}", response.1);
+        assert_eq!(response.1["receipt"]["plan_version"], 2, "{}", response.1);
+        assert_eq!(response.1["closed_draft_ids"], json!([2]), "{}", response.1);
+    }
+
+    #[tokio::test]
+    async fn api_only_port_keeps_scan_and_filament_failures_distinct_through_router() {
+        let scan_key = "api-port-scan-uncertain";
+        let (scan, scan_replay, scan_failure) = router_saves(FakeMode::ScanFailure, scan_key).await;
+        assert_uncertain_save(&scan, "review_observation", scan_key);
+        assert_uncertain_save(&scan_replay, "review_observation", scan_key);
+        assert_eq!(scan_replay.1["receipt"], scan.1["receipt"]);
+        assert_eq!(
+            scan_replay.1["closed_draft_ids"],
+            scan.1["closed_draft_ids"]
+        );
+        assert_eq!(scan_failure.scans.load(Ordering::Relaxed), 2);
+        assert_eq!(scan_failure.filaments.load(Ordering::Relaxed), 0);
+
+        let filament_key = "api-port-filament-uncertain";
+        let (filament, filament_replay, filament_failure) =
+            router_saves(FakeMode::FilamentFailure, filament_key).await;
+        assert_uncertain_save(&filament, "filament_observation", filament_key);
+        assert_uncertain_save(&filament_replay, "filament_observation", filament_key);
+        assert_eq!(filament_replay.1["receipt"], filament.1["receipt"]);
+        assert_eq!(
+            filament_replay.1["closed_draft_ids"],
+            filament.1["closed_draft_ids"]
+        );
+        assert_eq!(filament_failure.scans.load(Ordering::Relaxed), 2);
+        assert_eq!(filament_failure.filaments.load(Ordering::Relaxed), 2);
+    }
+
+    #[tokio::test]
+    async fn dropped_review_request_releases_observation_cancellation() {
+        let (observer, entered) = FakePort::new(FakeMode::BlockingScan);
+        let entered = entered.unwrap();
+        let cancelled = observer.cancelled.clone();
+        let (app, owner, directory) = test_app(observer);
+        let router = draft_router(app.config, app.clients, app.observer);
+        let mut request = axum::http::Request::builder()
+            .method(Method::GET)
+            .uri("/plans/1/review")
+            .header("Host", "127.0.0.1:1")
+            .header("Origin", "http://127.0.0.1:1")
+            .header("Cookie", "pp_session=required-unit-fixture-secret")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 49152))));
+        let task = tokio::spawn(router.oneshot(request));
+        tokio::task::spawn_blocking(move || entered.recv_timeout(Duration::from_secs(2)).unwrap())
+            .await
+            .unwrap();
+        task.abort();
+        let _ = task.await;
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !cancelled.load(Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        owner.shutdown().unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 }

@@ -8,8 +8,6 @@ license.workspace = true
 [dependencies]
 pp-storage = { path = "../pp-storage" }
 pp-contracts = { path = "../pp-contracts" }
-pp-core = { path = "../pp-core" }
-pp-source = { path = "../pp-source" }
 anyhow.workspace = true
 axum.workspace = true
 tokio.workspace = true
@@ -26,3 +24,4 @@ lettre = { version = "=0.11.23", default-features = false, features = ["builder"
 [dev-dependencies]
 tokio-rustls = { version = "=0.26.6", default-features = false, features = ["aws_lc_rs", "tls12"] }
 rusqlite.workspace = true
+tower = { version = "=0.5.3", features = ["util"] }

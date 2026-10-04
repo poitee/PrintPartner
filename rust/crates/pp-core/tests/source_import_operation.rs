@@ -4,9 +4,13 @@ use pp_storage::{
     auth::{self, AuthPolicy, FirstUserTenant, RegistrationPolicy, Secret, SessionTenantPolicy},
     catalog::{self, CreateSource, SourcePatch},
     jobs::{self, Credential},
-    uploads::{Admission, Input, Phase, Postprocessing, State, Target},
+    uploads::{
+        Admission, AdmissionLimits, CaptureId, CapturedInputV2, CapturedPayloadV1, File, Input,
+        Phase, Postprocessing, State, Target,
+    },
 };
 use rusqlite::{Connection, OpenFlags};
+use sha2::Digest;
 use std::{
     path::{Path, PathBuf},
     sync::{Arc, atomic::AtomicBool},
@@ -51,6 +55,103 @@ fn request(key: &str, target: Target) -> Admission {
         reserved_bytes: 20 * 1024 * 1024,
         max_input_bytes: 65536,
         max_prepared_bytes: 65536,
+    }
+}
+fn crc32(bytes: &[u8]) -> u32 {
+    let mut crc = u32::MAX;
+    for byte in bytes {
+        crc ^= u32::from(*byte);
+        for _ in 0..8 {
+            crc = (crc >> 1) ^ (0xedb8_8320 & 0u32.wrapping_sub(crc & 1));
+        }
+    }
+    !crc
+}
+fn push_u16(output: &mut Vec<u8>, value: u16) {
+    output.extend_from_slice(&value.to_le_bytes());
+}
+fn push_u32(output: &mut Vec<u8>, value: u32) {
+    output.extend_from_slice(&value.to_le_bytes());
+}
+fn zip_bytes(name: &str, content: &[u8]) -> Vec<u8> {
+    let name = name.as_bytes();
+    let size = u32::try_from(content.len()).unwrap();
+    let checksum = crc32(content);
+    let mut output = Vec::new();
+    push_u32(&mut output, 0x0403_4b50);
+    push_u16(&mut output, 20);
+    push_u16(&mut output, 0x0800);
+    push_u16(&mut output, 0);
+    push_u16(&mut output, 0);
+    push_u16(&mut output, 0);
+    push_u32(&mut output, checksum);
+    push_u32(&mut output, size);
+    push_u32(&mut output, size);
+    push_u16(&mut output, u16::try_from(name.len()).unwrap());
+    push_u16(&mut output, 0);
+    output.extend_from_slice(name);
+    output.extend_from_slice(content);
+    let central_offset = u32::try_from(output.len()).unwrap();
+    push_u32(&mut output, 0x0201_4b50);
+    push_u16(&mut output, 20);
+    push_u16(&mut output, 20);
+    push_u16(&mut output, 0x0800);
+    push_u16(&mut output, 0);
+    push_u16(&mut output, 0);
+    push_u16(&mut output, 0);
+    push_u32(&mut output, checksum);
+    push_u32(&mut output, size);
+    push_u32(&mut output, size);
+    push_u16(&mut output, u16::try_from(name.len()).unwrap());
+    push_u16(&mut output, 0);
+    push_u16(&mut output, 0);
+    push_u16(&mut output, 0);
+    push_u16(&mut output, 0);
+    push_u32(&mut output, 0);
+    push_u32(&mut output, 0);
+    output.extend_from_slice(name);
+    let central_size = u32::try_from(output.len()).unwrap() - central_offset;
+    push_u32(&mut output, 0x0605_4b50);
+    push_u16(&mut output, 0);
+    push_u16(&mut output, 0);
+    push_u16(&mut output, 1);
+    push_u16(&mut output, 1);
+    push_u32(&mut output, central_size);
+    push_u32(&mut output, central_offset);
+    push_u16(&mut output, 0);
+    output
+}
+fn captured_zip_request(key: &str, target: Target, zip: &[u8]) -> Admission {
+    let limits = AdmissionLimits {
+        reserved_bytes: 20 * 1024 * 1024,
+        max_input_bytes: 65536,
+        max_prepared_bytes: 65536,
+    };
+    let requested = vec![File {
+        path: "upload.zip".into(),
+        size: zip.len().try_into().unwrap(),
+        sha256: hex::encode(sha2::Sha256::digest(zip)),
+        kind: "input".into(),
+    }];
+    let input = Input::Captured(
+        CapturedInputV2::bind(
+            CaptureId::new(format!("capture-{key}")).unwrap(),
+            CapturedPayloadV1::zip("upload.zip".into()),
+            "physical-owner",
+            key,
+            &target,
+            limits,
+            &requested,
+        )
+        .unwrap(),
+    );
+    Admission {
+        key: key.into(),
+        target,
+        input,
+        reserved_bytes: limits.reserved_bytes,
+        max_input_bytes: limits.max_input_bytes,
+        max_prepared_bytes: limits.max_prepared_bytes,
     }
 }
 fn create(name: &str) -> Target {
@@ -109,7 +210,12 @@ fn create_update_exact_retry_never_repoints_and_preserves_originals() {
         .unwrap();
     assert_eq!(admitted.state, State::Admitted);
     let first = svc
-        .work_next(Some(&files), Through::Settled, &AtomicBool::new(false))
+        .work_operation(
+            &admitted.job_id,
+            Some(&files),
+            Through::Settled,
+            &AtomicBool::new(false),
+        )
         .unwrap()
         .unwrap();
     assert!(first.receipt.as_ref().unwrap().activated);
@@ -136,20 +242,26 @@ fn create_update_exact_retry_never_repoints_and_preserves_originals() {
         )
         .unwrap();
     assert_eq!(retry, first);
-    svc.admit(
-        credential(&owner),
-        request(
-            "unchanged",
-            Target::Existing {
-                source_id: first.source_id,
-            },
-        ),
-        &files,
-        &AtomicBool::new(false),
-    )
-    .unwrap();
+    let unchanged_admitted = svc
+        .admit(
+            credential(&owner),
+            request(
+                "unchanged",
+                Target::Existing {
+                    source_id: first.source_id,
+                },
+            ),
+            &files,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
     let unchanged = svc
-        .work_next(Some(&files), Through::Settled, &AtomicBool::new(false))
+        .work_operation(
+            &unchanged_admitted.job_id,
+            Some(&files),
+            Through::Settled,
+            &AtomicBool::new(false),
+        )
         .unwrap()
         .unwrap();
     assert_eq!(
@@ -164,20 +276,26 @@ fn create_update_exact_retry_never_repoints_and_preserves_originals() {
             .replace("vertex 1 0 0", "vertex 2 0 0"),
     )
     .unwrap();
-    svc.admit(
-        credential(&owner),
-        request(
-            "two",
-            Target::Existing {
-                source_id: first.source_id,
-            },
-        ),
-        &files,
-        &AtomicBool::new(false),
-    )
-    .unwrap();
+    let second_admitted = svc
+        .admit(
+            credential(&owner),
+            request(
+                "two",
+                Target::Existing {
+                    source_id: first.source_id,
+                },
+            ),
+            &files,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
     let second = svc
-        .work_next(Some(&files), Through::Settled, &AtomicBool::new(false))
+        .work_operation(
+            &second_admitted.job_id,
+            Some(&files),
+            Through::Settled,
+            &AtomicBool::new(false),
+        )
         .unwrap()
         .unwrap();
     assert_ne!(
@@ -229,7 +347,7 @@ fn restart_each_durable_fact_and_exact_activation_acknowledgement() {
             )
             .unwrap();
         let before = through.map(|t| {
-            svc.work_next(Some(&files), t, &AtomicBool::new(false))
+            svc.work_operation(&admitted.job_id, Some(&files), t, &AtomicBool::new(false))
                 .unwrap()
                 .unwrap()
         });
@@ -255,18 +373,18 @@ fn restart_each_durable_fact_and_exact_activation_acknowledgement() {
                 .unwrap(),
             catalog::Outcome::Deletion(catalog::Deletion::ActiveWork)
         ));
-        let resumed = svc
-            .work_next(
-                if through.is_none() {
-                    Some(&files)
-                } else {
-                    None
-                },
+        let resumed = if through.is_none() {
+            svc.work_operation(
+                &admitted.job_id,
+                Some(&files),
                 Through::Settled,
                 &AtomicBool::new(false),
             )
-            .unwrap()
-            .unwrap();
+        } else {
+            svc.work_next(Through::Settled, &AtomicBool::new(false))
+        }
+        .unwrap()
+        .unwrap();
         assert_eq!(resumed.source_id, admitted.source_id);
         assert!(resumed.cleanup_settled);
         if let Some(receipt) = before.and_then(|o| o.receipt) {
@@ -288,6 +406,227 @@ fn restart_each_durable_fact_and_exact_activation_acknowledgement() {
     }
 }
 #[test]
+fn captured_zip_has_explicit_ready_only_ownership_and_nfc_replay() {
+    let (root, files, owner) = fixture();
+    let zip = zip_bytes(
+        "cafe\u{301}.stl",
+        include_bytes!("fixtures/source-import/triangle.stl"),
+    );
+    std::fs::write(files.join("upload.zip"), &zip).unwrap();
+    let svc = service(&owner);
+    let admitted = svc
+        .admit(
+            credential(&owner),
+            captured_zip_request("captured-zip", create("Captured ZIP"), &zip),
+            &files,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+    assert_eq!(admitted.input_version, 2);
+    let ordinary_worker = owner
+        .job_worker(jobs::WorkerAdmission {
+            kinds: vec![(jobs::JobKind::SuppliedSourceImport, 1)],
+            total: 1,
+            per_resource: 1,
+            lease_seconds: 3600,
+        })
+        .unwrap();
+    assert!(ordinary_worker.claim().unwrap().is_none());
+    assert!(
+        svc.work_next(Through::OwnedInput, &AtomicBool::new(false))
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        svc.get(credential(&owner), admitted.key.clone())
+            .unwrap()
+            .state,
+        State::Admitted
+    );
+    let settled = svc
+        .work_operation(
+            &admitted.job_id,
+            Some(&files),
+            Through::Settled,
+            &AtomicBool::new(false),
+        )
+        .unwrap()
+        .unwrap();
+    assert!(settled.cleanup_settled);
+    assert!(
+        settled
+            .artifact
+            .as_ref()
+            .unwrap()
+            .files
+            .iter()
+            .any(|file| file.path == "caf\u{e9}.stl")
+    );
+    assert_eq!(
+        settled.requested_digest,
+        hex::encode(sha2::Sha256::digest(
+            serde_json::to_vec(&settled.requested_files).unwrap()
+        ))
+    );
+    let (quota_reserved, quota_settled): (i64, bool) = read(&root)
+        .query_row(
+            "SELECT reserved_bytes,settled FROM source_import_quota WHERE operation_key=?1",
+            [&settled.key],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(quota_reserved, 0);
+    assert!(quota_settled);
+    assert_eq!(settled.reserved_bytes, 20 * 1024 * 1024);
+    drop(svc);
+    owner.shutdown().unwrap();
+
+    let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
+    let svc = service(&owner);
+    assert_eq!(
+        svc.get(credential(&owner), settled.key.clone()).unwrap(),
+        settled
+    );
+    let legacy = svc
+        .admit(
+            credential(&owner),
+            Admission {
+                key: "legacy-strict-zip".into(),
+                target: create("Legacy Strict ZIP"),
+                input: Input::Zip {
+                    path: "upload.zip".into(),
+                },
+                reserved_bytes: 20 * 1024 * 1024,
+                max_input_bytes: 65536,
+                max_prepared_bytes: 65536,
+            },
+            &files,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+    assert!(
+        svc.work_operation(
+            &legacy.job_id,
+            Some(&files),
+            Through::Settled,
+            &AtomicBool::new(false),
+        )
+        .is_err()
+    );
+    assert_eq!(
+        svc.get(credential(&owner), legacy.key).unwrap().state,
+        State::Failed
+    );
+    drop(svc);
+    owner.shutdown().unwrap();
+}
+
+#[test]
+fn archived_captured_job_reopens_and_rejects_future_payload_version_without_mutation() {
+    let (root, files, owner) = fixture();
+    let zip = zip_bytes(
+        "archived.stl",
+        include_bytes!("fixtures/source-import/triangle.stl"),
+    );
+    std::fs::write(files.join("upload.zip"), &zip).unwrap();
+    let svc = service(&owner);
+    let admitted = svc
+        .admit(
+            credential(&owner),
+            captured_zip_request("captured-archive", create("Captured Archive"), &zip),
+            &files,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+    let settled = svc
+        .work_operation(
+            &admitted.job_id,
+            Some(&files),
+            Through::Settled,
+            &AtomicBool::new(false),
+        )
+        .unwrap()
+        .unwrap();
+    assert!(settled.cleanup_settled);
+    drop(svc);
+    owner.shutdown().unwrap();
+
+    let database = root.join("print-partner.db");
+    let connection = Connection::open(&database).unwrap();
+    let raw: String = connection
+        .query_row(
+            "SELECT document FROM durable_jobs WHERE id=?1",
+            [&admitted.job_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let mut job: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    job["updated_at"] = serde_json::json!(0);
+    connection
+        .execute(
+            "UPDATE durable_jobs SET updated=0,document=?2 WHERE id=?1",
+            (&admitted.job_id, serde_json::to_string(&job).unwrap()),
+        )
+        .unwrap();
+    drop(connection);
+
+    let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
+    assert_eq!(owner.retain_jobs(1, 1).unwrap(), 1);
+    owner.shutdown().unwrap();
+    let connection = Connection::open(&database).unwrap();
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM durable_jobs WHERE id=?1",
+                [&admitted.job_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        0
+    );
+    assert!(
+        connection
+            .query_row(
+                "SELECT archived_document IS NOT NULL FROM durable_job_keys WHERE job_id=?1",
+                [&admitted.job_id],
+                |row| row.get::<_, bool>(0),
+            )
+            .unwrap()
+    );
+    drop(connection);
+
+    let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
+    assert_eq!(
+        service(&owner)
+            .get(credential(&owner), admitted.key.clone())
+            .unwrap(),
+        settled
+    );
+    owner.shutdown().unwrap();
+
+    let connection = Connection::open(&database).unwrap();
+    let archived: String = connection
+        .query_row(
+            "SELECT archived_document FROM durable_job_keys WHERE job_id=?1",
+            [&admitted.job_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let mut future: serde_json::Value = serde_json::from_str(&archived).unwrap();
+    future["payload_version"] = serde_json::json!(2);
+    connection
+        .execute(
+            "UPDATE durable_job_keys SET archived_document=?2 WHERE job_id=?1",
+            (&admitted.job_id, serde_json::to_string(&future).unwrap()),
+        )
+        .unwrap();
+    drop(connection);
+    let before = std::fs::read(&database).unwrap();
+    assert!(WriterOwner::open(&root, Limits::default()).is_err());
+    assert_eq!(std::fs::read(&database).unwrap(), before);
+    assert!(!root.join(".desktop-owner.json").exists());
+}
+#[test]
 fn metadata_cas_conflict_keeps_inactive_revision() {
     let (root, files, owner) = fixture();
     let svc = service(&owner);
@@ -299,8 +638,13 @@ fn metadata_cas_conflict_keeps_inactive_revision() {
             &AtomicBool::new(false),
         )
         .unwrap();
-    svc.work_next(Some(&files), Through::Published, &AtomicBool::new(false))
-        .unwrap();
+    svc.work_operation(
+        &op.job_id,
+        Some(&files),
+        Through::Published,
+        &AtomicBool::new(false),
+    )
+    .unwrap();
     owner
         .local_source_catalog()
         .execute(catalog::Request::Update {
@@ -316,7 +660,7 @@ fn metadata_cas_conflict_keeps_inactive_revision() {
     let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
     let svc = service(&owner);
     let result = svc
-        .work_next(None, Through::Settled, &AtomicBool::new(false))
+        .work_next(Through::Settled, &AtomicBool::new(false))
         .unwrap()
         .unwrap();
     assert_eq!(result.state, State::Conflict);
@@ -428,7 +772,7 @@ fn quota_atomic_admission_missing_duplicate_cancelled_and_unsupported() {
         std::fs::create_dir_all(&path).unwrap();
         std::fs::write(path.join("ordinary.txt"), "ordinary pending staging").unwrap();
     }
-    cancel(&owner, one.job_id);
+    cancel(&owner, one.job_id.clone());
     assert!(matches!(
         owner
             .local_source_catalog()
@@ -437,7 +781,7 @@ fn quota_atomic_admission_missing_duplicate_cancelled_and_unsupported() {
         catalog::Outcome::Deletion(catalog::Deletion::ActiveWork)
     ));
     let cancelled = svc
-        .work_next(None, Through::Settled, &AtomicBool::new(false))
+        .work_operation(&one.job_id, None, Through::Settled, &AtomicBool::new(false))
         .unwrap()
         .unwrap();
     assert_eq!(cancelled.state, State::Cancelled);
@@ -473,8 +817,13 @@ fn quota_atomic_admission_missing_duplicate_cancelled_and_unsupported() {
         )
         .unwrap();
     assert!(
-        svc.work_next(Some(&files), Through::Settled, &AtomicBool::new(false))
-            .is_err()
+        svc.work_operation(
+            &op.job_id,
+            Some(&files),
+            Through::Settled,
+            &AtomicBool::new(false),
+        )
+        .is_err()
     );
     let failed = svc.get(credential(&owner), op.key).unwrap();
     assert_eq!(failed.state, State::Failed);
@@ -506,8 +855,8 @@ fn stale_attempt_cannot_write_import_phases() {
             lease_seconds: 3600,
         })
         .unwrap();
-    let (_, lease) = worker.claim().unwrap().unwrap();
-    cancel(&owner, op.job_id);
+    let (_, lease) = worker.claim_import(&op.job_id).unwrap().unwrap();
+    cancel(&owner, op.job_id.clone());
     assert!(worker.import_phase(&lease, Phase::Read).is_err());
     assert!(
         worker
@@ -520,7 +869,7 @@ fn stale_attempt_cannot_write_import_phases() {
             .is_err()
     );
     let done = svc
-        .work_next(None, Through::Settled, &AtomicBool::new(false))
+        .work_operation(&op.job_id, None, Through::Settled, &AtomicBool::new(false))
         .unwrap()
         .unwrap();
     assert_eq!(done.state, State::Cancelled);
@@ -752,8 +1101,13 @@ fn changed_content_replay_and_changed_during_capture_are_refused() {
         .is_err()
     );
     assert!(
-        svc.work_next(Some(&files), Through::Settled, &AtomicBool::new(false))
-            .is_err()
+        svc.work_operation(
+            &first.job_id,
+            Some(&files),
+            Through::Settled,
+            &AtomicBool::new(false),
+        )
+        .is_err()
     );
     let failed = svc.get(credential(&owner), first.key).unwrap();
     assert_eq!(failed.state, State::Failed);
@@ -859,8 +1213,13 @@ fn settlement_invalidates_stale_physical_usage_observation() {
     let client = owner.imports(policy(), 128 * 1024 * 1024).unwrap();
     let stale = client.accounting_epoch();
     let old_bytes = pp_source::local_selection::stored_bytes(&root.join("repos")).unwrap();
-    svc.work_next(Some(&files), Through::Settled, &AtomicBool::new(false))
-        .unwrap();
+    svc.work_operation(
+        &admitted.job_id,
+        Some(&files),
+        Through::Settled,
+        &AtomicBool::new(false),
+    )
+    .unwrap();
     assert!(
         client
             .admit(
@@ -894,20 +1253,26 @@ fn settlement_invalidates_stale_physical_usage_observation() {
 fn cancellation_after_activation_preserves_receipt_and_settles_cleanup() {
     let (root, files, owner) = fixture();
     let svc = service(&owner);
-    svc.admit(
-        credential(&owner),
-        request("activated", create("Activated")),
-        &files,
-        &AtomicBool::new(false),
-    )
-    .unwrap();
+    let admitted = svc
+        .admit(
+            credential(&owner),
+            request("activated", create("Activated")),
+            &files,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
     let activated = svc
-        .work_next(Some(&files), Through::Activated, &AtomicBool::new(false))
+        .work_operation(
+            &admitted.job_id,
+            Some(&files),
+            Through::Activated,
+            &AtomicBool::new(false),
+        )
         .unwrap()
         .unwrap();
     cancel(&owner, activated.job_id);
     let settled = svc
-        .work_next(None, Through::Settled, &AtomicBool::new(false))
+        .work_next(Through::Settled, &AtomicBool::new(false))
         .unwrap()
         .unwrap();
     assert_eq!(settled.receipt, activated.receipt);
@@ -1706,18 +2071,24 @@ fn publication_source_schema37_backup_retains_full35_and_foreign_graph() {
     assert_eq!(graph(&Connection::open(backup).unwrap()), prior);
     let foreign = publication_foreign(&root);
     let svc = service(&owner);
-    svc.admit(
-        credential(&owner),
-        request("backup-publication", Target::Existing { source_id: 1 }),
-        &files,
-        &AtomicBool::new(false),
-    )
-    .unwrap();
+    let admitted = svc
+        .admit(
+            credential(&owner),
+            request("backup-publication", Target::Existing { source_id: 1 }),
+            &files,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
     assert_eq!(publish_selected(&owner, &command)["kind"], "applied");
     assert_eq!(publication_foreign(&root), foreign);
     let before = graph(&read(&root));
     let completed = svc
-        .work_next(Some(&files), Through::Settled, &AtomicBool::new(false))
+        .work_operation(
+            &admitted.job_id,
+            Some(&files),
+            Through::Settled,
+            &AtomicBool::new(false),
+        )
         .unwrap()
         .unwrap();
     assert!(completed.receipt.unwrap().activated);

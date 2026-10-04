@@ -84,8 +84,8 @@ describe("useKitManifestAutosave", () => {
   });
 
   it("keeps its registered flush available when the Plan refresh callback changes", () => {
-    const register = vi.fn();
     const unregister = vi.fn();
+    const register = vi.fn(() => unregister);
     const onSaved = vi.fn();
     const props = { onPersisted: vi.fn().mockResolvedValue(undefined) };
     const hook = renderHook(({ onPersisted }) => useKitManifestAutosave({
@@ -99,12 +99,13 @@ describe("useKitManifestAutosave", () => {
       onPersisted,
       onSaved,
       onRegisterFlush: register,
-      onUnregisterFlush: unregister,
     }), { initialProps: props });
     expect(register).toHaveBeenCalledTimes(1);
     hook.rerender({ onPersisted: vi.fn().mockResolvedValue(undefined) });
     expect(unregister).not.toHaveBeenCalled();
     expect(register).toHaveBeenCalledTimes(1);
+    hook.unmount();
+    expect(unregister).toHaveBeenCalledTimes(1);
   });
 
   it("rejects a failed flush so navigation can keep the editor open", async () => {

@@ -193,7 +193,10 @@ impl Payload {
             } => {
                 id(*project_id)?;
                 text(operation_key, 128)?;
-                ensure!(*input_version == 1, "Unsupported supplied input version");
+                ensure!(
+                    matches!(*input_version, 1 | 2),
+                    "Unsupported supplied input version"
+                );
             }
             Self::CheckSourceUpdates {} => {}
             Self::ExportStlPack {

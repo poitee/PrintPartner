@@ -2,9 +2,12 @@ use anyhow::{Result, ensure};
 use pp_api::{
     auth::{AuthHttpConfig, CookieTransport, ProviderClient, ResetMailer, auth_router},
     catalog::{CatalogHttpConfig, catalog_router},
-    drafts::{DraftHttpClients, DraftHttpConfig, SnapshotReviewObserver, draft_router},
+    drafts::{DraftHttpClients, DraftHttpConfig, draft_router},
 };
-use pp_core::draft_observations::{DraftReadConfiguration, FilesystemPolicy, issue_working_drafts};
+use pp_core::{
+    draft_observations::{DraftReadConfiguration, FilesystemPolicy, issue_working_drafts},
+    review_observations::SnapshotReviewObserver,
+};
 use pp_storage::{
     Limits, WriterOwner,
     auth::{AuthPolicy, FirstUserTenant, RegistrationPolicy, SessionTenantPolicy},
@@ -69,7 +72,10 @@ async fn main() -> Result<()> {
             accepted: owner.accepted_reads_with_policy(policy)?,
             drafts,
         },
-        SnapshotReviewObserver::new(repos, Some(data.join("thumbs")))?,
+        std::sync::Arc::new(SnapshotReviewObserver::new(
+            repos,
+            Some(data.join("thumbs")),
+        )?),
     ));
     println!(
         "{}",

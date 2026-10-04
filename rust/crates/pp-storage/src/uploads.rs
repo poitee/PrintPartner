@@ -8,6 +8,7 @@ use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
+    fmt,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -26,11 +27,479 @@ pub enum Target {
         metadata: Box<catalog::CreateSource>,
     },
 }
+
+#[derive(Clone, Serialize, PartialEq, Eq)]
+#[serde(transparent)]
+pub struct CaptureId(String);
+
+impl CaptureId {
+    pub fn new(value: impl Into<String>) -> Result<Self> {
+        let value = value.into();
+        ensure!(
+            !value.is_empty() && value.len() <= 128 && !value.chars().any(char::is_control),
+            "Invalid capture identifier"
+        );
+        Ok(Self(value))
+    }
+}
+
+impl<'de> Deserialize<'de> for CaptureId {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Self::new(String::deserialize(deserializer)?).map_err(serde::de::Error::custom)
+    }
+}
+
+impl fmt::Debug for CaptureId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("CaptureId([redacted])")
+    }
+}
+
+#[derive(Clone, Serialize, PartialEq, Eq)]
+#[serde(transparent)]
+struct Sha256Digest(String);
+
+impl Sha256Digest {
+    fn new(value: String) -> Result<Self> {
+        digest(&value)?;
+        Ok(Self(value))
+    }
+}
+
+impl<'de> Deserialize<'de> for Sha256Digest {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Self::new(String::deserialize(deserializer)?).map_err(serde::de::Error::custom)
+    }
+}
+
+impl fmt::Debug for Sha256Digest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("Sha256Digest([redacted])")
+    }
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum RelativePathsTransitionV1 {
+    NodeJsonArrayStringFilterBooleanV1,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum LabelSelectionV1 {
+    TrimmedRelativeThenSlashFilenameThenOrdinalStlV1,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum BackslashBoundaryV1 {
+    ReplaceWithSlashAtLabelBoundaryV1,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum CanonicalPathsV1 {
+    SourcePathNfcCaseFoldPrefixV1,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum ArchiveLabelsV1 {
+    NfcAtAcquisition,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct FilePolicyV1 {
+    policy_version: u32,
+    relative_paths_transition: RelativePathsTransitionV1,
+    label_selection: LabelSelectionV1,
+    backslash_boundary: BackslashBoundaryV1,
+    canonical_paths: CanonicalPathsV1,
+    max_raw_input_bytes: u64,
+    max_prepared_bytes: u64,
+    max_files: u32,
+    max_multipart_parts: u32,
+    max_metadata_bytes: u64,
+}
+
+impl FilePolicyV1 {
+    fn fixed() -> Self {
+        Self {
+            policy_version: 1,
+            relative_paths_transition:
+                RelativePathsTransitionV1::NodeJsonArrayStringFilterBooleanV1,
+            label_selection: LabelSelectionV1::TrimmedRelativeThenSlashFilenameThenOrdinalStlV1,
+            backslash_boundary: BackslashBoundaryV1::ReplaceWithSlashAtLabelBoundaryV1,
+            canonical_paths: CanonicalPathsV1::SourcePathNfcCaseFoldPrefixV1,
+            max_raw_input_bytes: 268_435_456,
+            max_prepared_bytes: 1_073_741_824,
+            max_files: 10_000,
+            max_multipart_parts: 10_001,
+            max_metadata_bytes: 65_536,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct ZipPolicyV1 {
+    policy_version: u32,
+    archive_labels: ArchiveLabelsV1,
+    canonical_paths: CanonicalPathsV1,
+    max_raw_input_bytes: u64,
+    max_prepared_bytes: u64,
+    max_zip_entries: u32,
+}
+
+impl ZipPolicyV1 {
+    fn fixed() -> Self {
+        Self {
+            policy_version: 1,
+            archive_labels: ArchiveLabelsV1::NfcAtAcquisition,
+            canonical_paths: CanonicalPathsV1::SourcePathNfcCaseFoldPrefixV1,
+            max_raw_input_bytes: 268_435_456,
+            max_prepared_bytes: 1_073_741_824,
+            max_zip_entries: 10_000,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum CapturedPayloadKindV1 {
+    Files {
+        paths: Vec<String>,
+        policy: FilePolicyV1,
+    },
+    Zip {
+        path: String,
+        policy: ZipPolicyV1,
+    },
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(transparent)]
+pub struct CapturedPayloadV1(CapturedPayloadKindV1);
+
+impl fmt::Debug for CapturedPayloadV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("CapturedPayloadV1([redacted])")
+    }
+}
+
+impl CapturedPayloadV1 {
+    pub fn files(paths: Vec<String>) -> Self {
+        Self(CapturedPayloadKindV1::Files {
+            paths,
+            policy: FilePolicyV1::fixed(),
+        })
+    }
+
+    pub fn zip(path: String) -> Self {
+        Self(CapturedPayloadKindV1::Zip {
+            path,
+            policy: ZipPolicyV1::fixed(),
+        })
+    }
+
+    fn requested_paths(&self) -> Vec<&str> {
+        match &self.0 {
+            CapturedPayloadKindV1::Files { paths, .. } => {
+                paths.iter().map(String::as_str).collect()
+            }
+            CapturedPayloadKindV1::Zip { path, .. } => vec![path],
+        }
+    }
+
+    fn validate_policy(&self) -> Result<()> {
+        ensure!(
+            match &self.0 {
+                CapturedPayloadKindV1::Files { policy, .. } => {
+                    policy == &FilePolicyV1::fixed()
+                }
+                CapturedPayloadKindV1::Zip { policy, .. } => {
+                    policy == &ZipPolicyV1::fixed()
+                }
+            },
+            "Unsupported capture policy"
+        );
+        Ok(())
+    }
+}
+
+#[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum PolicyBindingV1<'a> {
+    Files { policy: &'a FilePolicyV1 },
+    Zip { policy: &'a ZipPolicyV1 },
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AdmissionLimits {
+    pub reserved_bytes: u64,
+    pub max_input_bytes: u64,
+    pub max_prepared_bytes: u64,
+}
+
+#[derive(Serialize)]
+struct CaptureManifestBindingV1<'a> {
+    manifest_version: u32,
+    capture_id: &'a CaptureId,
+    operation_key: &'a str,
+    actor: &'a str,
+    target_digest: &'a Sha256Digest,
+    input: &'a CapturedPayloadV1,
+    admission_limits: AdmissionLimits,
+    policy_digest: &'a Sha256Digest,
+    requested_files: &'a [File],
+    requested_digest: &'a Sha256Digest,
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CapturedInputV2 {
+    capture_version: u32,
+    capture_id: CaptureId,
+    payload: CapturedPayloadV1,
+    policy_digest: Sha256Digest,
+    target_digest: Sha256Digest,
+    manifest_digest: Sha256Digest,
+}
+
+impl fmt::Debug for CapturedInputV2 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CapturedInputV2")
+            .field("capture_version", &self.capture_version)
+            .field("capture_id", &self.capture_id)
+            .field("payload", &self.payload)
+            .field("policy_digest", &self.policy_digest)
+            .field("target_digest", &self.target_digest)
+            .field("manifest_digest", &self.manifest_digest)
+            .finish()
+    }
+}
+
+fn serialized_digest(value: &impl Serialize) -> Result<Sha256Digest> {
+    Sha256Digest::new(hex::encode(Sha256::digest(serde_json::to_vec(value)?)))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn capture_manifest_digest(
+    capture_id: &CaptureId,
+    operation_key: &str,
+    actor: &str,
+    target_digest: &Sha256Digest,
+    input: &CapturedPayloadV1,
+    admission_limits: AdmissionLimits,
+    policy_digest: &Sha256Digest,
+    requested_files: &[File],
+    requested_digest: &Sha256Digest,
+) -> Result<Sha256Digest> {
+    serialized_digest(&(
+        "pp-source-capture-binding-v1",
+        CaptureManifestBindingV1 {
+            manifest_version: 1,
+            capture_id,
+            operation_key,
+            actor,
+            target_digest,
+            input,
+            admission_limits,
+            policy_digest,
+            requested_files,
+            requested_digest,
+        },
+    ))
+}
+
+struct CaptureBindingDigests {
+    policy_digest: Sha256Digest,
+    manifest_digest: Sha256Digest,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn calculate_capture_binding(
+    capture_id: &CaptureId,
+    operation_key: &str,
+    actor: &str,
+    target_digest: &Sha256Digest,
+    input: &CapturedPayloadV1,
+    admission_limits: AdmissionLimits,
+    requested_files: &[File],
+) -> Result<CaptureBindingDigests> {
+    let requested_digest = serialized_digest(&requested_files)?;
+    let policy_digest = input.policy_digest()?;
+    let manifest_digest = capture_manifest_digest(
+        capture_id,
+        operation_key,
+        actor,
+        target_digest,
+        input,
+        admission_limits,
+        &policy_digest,
+        requested_files,
+        &requested_digest,
+    )?;
+    Ok(CaptureBindingDigests {
+        policy_digest,
+        manifest_digest,
+    })
+}
+
+struct AdmissionDigests {
+    requested_digest: Sha256Digest,
+    intent_digest: Sha256Digest,
+}
+
+fn calculate_admission_digests(
+    admission: &Admission,
+    requested_files: &[File],
+) -> Result<AdmissionDigests> {
+    Ok(AdmissionDigests {
+        requested_digest: serialized_digest(&requested_files)?,
+        intent_digest: serialized_digest(&(admission, requested_files))?,
+    })
+}
+
+impl CapturedInputV2 {
+    pub fn bind(
+        capture_id: CaptureId,
+        payload: CapturedPayloadV1,
+        actor: &str,
+        operation_key: &str,
+        target: &Target,
+        admission_limits: AdmissionLimits,
+        requested_files: &[File],
+    ) -> Result<Self> {
+        payload.validate_policy()?;
+        let target_digest = serialized_digest(&("pp-source-import-target-v1", target))?;
+        let binding = calculate_capture_binding(
+            &capture_id,
+            operation_key,
+            actor,
+            &target_digest,
+            &payload,
+            admission_limits,
+            requested_files,
+        )?;
+        Ok(Self {
+            capture_version: 1,
+            capture_id,
+            payload,
+            policy_digest: binding.policy_digest,
+            target_digest,
+            manifest_digest: binding.manifest_digest,
+        })
+    }
+
+    fn validate(
+        &self,
+        actor: &str,
+        operation_key: &str,
+        target: Option<&Target>,
+        admission_limits: AdmissionLimits,
+        requested_files: &[File],
+    ) -> Result<()> {
+        ensure!(self.capture_version == 1, "Unsupported capture version");
+        self.payload.validate_policy()?;
+        let binding = calculate_capture_binding(
+            &self.capture_id,
+            operation_key,
+            actor,
+            &self.target_digest,
+            &self.payload,
+            admission_limits,
+            requested_files,
+        )?;
+        ensure!(
+            binding.policy_digest == self.policy_digest,
+            "Capture policy digest mismatch"
+        );
+        if let Some(target) = target {
+            ensure!(
+                serialized_digest(&("pp-source-import-target-v1", target))? == self.target_digest,
+                "Capture target digest mismatch"
+            );
+        }
+        ensure!(
+            binding.manifest_digest == self.manifest_digest,
+            "Capture manifest digest mismatch"
+        );
+        Ok(())
+    }
+}
+
+impl CapturedPayloadV1 {
+    fn policy_digest(&self) -> Result<Sha256Digest> {
+        let binding = match &self.0 {
+            CapturedPayloadKindV1::Files { policy, .. } => PolicyBindingV1::Files { policy },
+            CapturedPayloadKindV1::Zip { policy, .. } => PolicyBindingV1::Zip { policy },
+        };
+        serialized_digest(&("pp-source-acquisition-policy-v1", binding))
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RecordedArchiveLabels {
+    LegacyStrict,
+    CapturedNfcAtAcquisition,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ZipInputRef<'a> {
+    pub path: &'a str,
+    pub labels: RecordedArchiveLabels,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Input {
     Files { paths: Vec<String> },
     Zip { path: String },
+    Captured(CapturedInputV2),
+}
+
+impl Input {
+    pub fn version(&self) -> u32 {
+        match self {
+            Self::Files { .. } | Self::Zip { .. } => 1,
+            Self::Captured(_) => 2,
+        }
+    }
+
+    pub fn requested_paths(&self) -> Vec<&str> {
+        match self {
+            Self::Files { paths } => paths.iter().map(String::as_str).collect(),
+            Self::Zip { path } => vec![path],
+            Self::Captured(captured) => captured.payload.requested_paths(),
+        }
+    }
+
+    pub fn zip_input(&self) -> Option<ZipInputRef<'_>> {
+        match self {
+            Self::Files { .. } => None,
+            Self::Zip { path } => Some(ZipInputRef {
+                path,
+                labels: RecordedArchiveLabels::LegacyStrict,
+            }),
+            Self::Captured(captured) => match &captured.payload.0 {
+                CapturedPayloadKindV1::Files { .. } => None,
+                CapturedPayloadKindV1::Zip { path, .. } => Some(ZipInputRef {
+                    path,
+                    labels: RecordedArchiveLabels::CapturedNfcAtAcquisition,
+                }),
+            },
+        }
+    }
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -389,12 +858,31 @@ pub(crate) fn execute(
                 "Invalid operation key"
             );
             files(&expected_files, request.max_input_bytes)?;
-            let requested_digest =
-                hex::encode(Sha256::digest(serde_json::to_vec(&expected_files)?));
-            let intent_digest = hex::encode(Sha256::digest(serde_json::to_vec(&(
-                &request,
-                &expected_files,
-            ))?));
+            if let Input::Captured(captured) = &request.input {
+                ensure!(
+                    request.input.requested_paths()
+                        == expected_files
+                            .iter()
+                            .map(|file| file.path.as_str())
+                            .collect::<Vec<_>>()
+                        && expected_files.iter().all(|file| file.kind == "input"),
+                    "Capture inventory mismatch"
+                );
+                captured.validate(
+                    &actor,
+                    &request.key,
+                    Some(&request.target),
+                    AdmissionLimits {
+                        reserved_bytes: request.reserved_bytes,
+                        max_input_bytes: request.max_input_bytes,
+                        max_prepared_bytes: request.max_prepared_bytes,
+                    },
+                    &expected_files,
+                )?;
+            }
+            let admission_digests = calculate_admission_digests(&request, &expected_files)?;
+            let requested_digest = admission_digests.requested_digest.0;
+            let intent_digest = admission_digests.intent_digest.0;
             if let Some(prior) = load(&tx, &tenant, &request.key)? {
                 ensure!(
                     prior.actor == actor && prior.intent_digest == intent_digest,
@@ -426,17 +914,15 @@ pub(crate) fn execute(
                         .is_some_and(|v| v <= quota),
                     "Owner import quota exceeded"
                 );
-                let paths = match &request.input {
-                    Input::Files { paths } => paths.clone(),
-                    Input::Zip { path } => vec![path.clone()],
-                };
+                let paths = request.input.requested_paths();
                 ensure!(
                     !paths.is_empty() && paths.len() <= 10000,
                     "Invalid supplied input"
                 );
                 for p in paths {
-                    path(&p)?;
+                    path(p)?;
                 }
+                let input_version = request.input.version();
                 let id = match request.target {
                     Target::Existing { source_id } => source_id,
                     Target::Create { metadata } => match catalog::run(
@@ -461,7 +947,7 @@ pub(crate) fn execute(
                 let payload = jobs::Payload::SuppliedSourceImport {
                     project_id: id.try_into()?,
                     operation_key: request.key.clone(),
-                    input_version: 1,
+                    input_version,
                 };
                 let job = match jobs::user(
                     &tx,
@@ -486,7 +972,7 @@ pub(crate) fn execute(
                     intent_digest,
                     source_id: id,
                     job_id: job.job_id,
-                    input_version: 1,
+                    input_version,
                     input: request.input,
                     requested_files: expected_files,
                     requested_digest,
@@ -512,18 +998,20 @@ pub(crate) fn execute(
         }
         Command::Phase { lease, phase } => {
             let mut job = jobs::claimed_job(&tx, &lease)?;
-            let (source_id, key) = match &job.payload {
+            let (source_id, key, input_version) = match &job.payload {
                 jobs::Payload::SuppliedSourceImport {
                     project_id,
                     operation_key,
-                    input_version: 1,
-                } => (*project_id as i64, operation_key.clone()),
+                    input_version,
+                } => (*project_id as i64, operation_key.clone(), *input_version),
                 _ => return Err(anyhow!("Not supplied Source import")),
             };
             let mut op =
                 load(&tx, &job.tenant, &key)?.ok_or_else(|| anyhow!("Missing import operation"))?;
             ensure!(
-                op.job_id == job.job_id && op.source_id == source_id,
+                op.job_id == job.job_id
+                    && op.source_id == source_id
+                    && op.input_version == input_version,
                 "Import job binding mismatch"
             );
             ensure!(
@@ -758,7 +1246,6 @@ pub(crate) fn validate_schema(conn: &Connection, version: u64) -> Result<()> {
         let op: Operation = serde_json::from_str(&raw)?;
         ensure!(
             v == 1
-                && op.input_version == 1
                 && t == op.tenant
                 && k == op.key
                 && a == op.actor
@@ -772,13 +1259,14 @@ pub(crate) fn validate_schema(conn: &Connection, version: u64) -> Result<()> {
         let document: String = conn.query_row("SELECT document FROM durable_jobs WHERE id=?1 UNION ALL SELECT archived_document FROM durable_job_keys WHERE job_id=?1 AND archived_document IS NOT NULL LIMIT 1",[&j],|r|r.get(0))?;
         let job: jobs::JobRecord = serde_json::from_str(&document)?;
         ensure!(
-            job.job_id == j
+            job.payload_version == 1
+                && job.job_id == j
                 && job.tenant == t
                 && job.payload
                     == jobs::Payload::SuppliedSourceImport {
                         project_id: s.try_into()?,
                         operation_key: k.clone(),
-                        input_version: 1
+                        input_version: op.input_version
                     },
             "Import job binding mismatch"
         );
@@ -815,13 +1303,112 @@ pub(crate) fn validate_schema(conn: &Connection, version: u64) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
+mod captured_digest_tests {
+    use super::*;
+
+    #[test]
+    fn changed_typed_policy_preserves_inventory_and_changes_bound_digests() {
+        let files = vec![File {
+            path: "upload.zip".into(),
+            size: 3,
+            sha256: "a".repeat(64),
+            kind: "input".into(),
+        }];
+        let capture_id = CaptureId::new("capture-policy-proof").unwrap();
+        let limits = AdmissionLimits {
+            reserved_bytes: 3_506_438_144,
+            max_input_bytes: 268_435_456,
+            max_prepared_bytes: 1_073_741_824,
+        };
+        let original_payload = CapturedPayloadV1::zip("upload.zip".into());
+        let mut changed_payload = original_payload.clone();
+        match &mut changed_payload.0 {
+            CapturedPayloadKindV1::Zip { policy, .. } => policy.max_zip_entries = 9_999,
+            CapturedPayloadKindV1::Files { .. } => panic!("ZIP policy proof requires ZIP payload"),
+        }
+        assert!(changed_payload.validate_policy().is_err());
+
+        let target = Target::Existing { source_id: 42 };
+        let original_input = CapturedInputV2::bind(
+            capture_id.clone(),
+            original_payload,
+            "physical-owner",
+            "policy-proof",
+            &target,
+            limits,
+            &files,
+        )
+        .unwrap();
+        original_input
+            .validate(
+                "physical-owner",
+                "policy-proof",
+                Some(&target),
+                limits,
+                &files,
+            )
+            .unwrap();
+        let changed_binding = calculate_capture_binding(
+            &capture_id,
+            "policy-proof",
+            "physical-owner",
+            &original_input.target_digest,
+            &changed_payload,
+            limits,
+            &files,
+        )
+        .unwrap();
+        let changed_input = CapturedInputV2 {
+            capture_version: 1,
+            capture_id,
+            payload: changed_payload,
+            policy_digest: changed_binding.policy_digest,
+            target_digest: original_input.target_digest.clone(),
+            manifest_digest: changed_binding.manifest_digest,
+        };
+        let original_admission = Admission {
+            key: "policy-proof".into(),
+            target: Target::Existing { source_id: 42 },
+            input: Input::Captured(original_input.clone()),
+            reserved_bytes: limits.reserved_bytes,
+            max_input_bytes: limits.max_input_bytes,
+            max_prepared_bytes: limits.max_prepared_bytes,
+        };
+        let changed_admission = Admission {
+            key: "policy-proof".into(),
+            target: Target::Existing { source_id: 42 },
+            input: Input::Captured(changed_input.clone()),
+            reserved_bytes: limits.reserved_bytes,
+            max_input_bytes: limits.max_input_bytes,
+            max_prepared_bytes: limits.max_prepared_bytes,
+        };
+        let original_digests = calculate_admission_digests(&original_admission, &files).unwrap();
+        let changed_digests = calculate_admission_digests(&changed_admission, &files).unwrap();
+
+        assert_eq!(
+            original_digests.requested_digest,
+            changed_digests.requested_digest
+        );
+        assert_ne!(original_input.policy_digest, changed_input.policy_digest);
+        assert_ne!(
+            original_input.manifest_digest,
+            changed_input.manifest_digest
+        );
+        assert_ne!(
+            serde_json::to_vec(&original_admission.input).unwrap(),
+            serde_json::to_vec(&changed_admission.input).unwrap()
+        );
+        assert_ne!(
+            original_digests.intent_digest,
+            changed_digests.intent_digest
+        );
+    }
+}
+
 fn validate_operation(op: &Operation) -> Result<()> {
     ensure!(
-        op.input_version == 1
-            && op.source_id > 0
-            && !op.key.is_empty()
-            && op.key.len() <= 128
-            && !op.actor.is_empty(),
+        op.source_id > 0 && !op.key.is_empty() && op.key.len() <= 128 && !op.actor.is_empty(),
         "Invalid import identity"
     );
     digest(&op.job_id)?;
@@ -833,16 +1420,32 @@ fn validate_operation(op: &Operation) -> Result<()> {
             == op.requested_digest,
         "Input digest mismatch"
     );
-    let paths = match &op.input {
-        Input::Files { paths } => paths.clone(),
-        Input::Zip { path } => vec![path.clone()],
-    };
+    match &op.input {
+        Input::Files { .. } | Input::Zip { .. } => {
+            ensure!(op.input_version == 1, "Invalid import input version");
+        }
+        Input::Captured(captured) => {
+            ensure!(op.input_version == 2, "Invalid import input version");
+            captured.validate(
+                &op.actor,
+                &op.key,
+                None,
+                AdmissionLimits {
+                    reserved_bytes: op.reserved_bytes,
+                    max_input_bytes: op.max_input_bytes,
+                    max_prepared_bytes: op.max_prepared_bytes,
+                },
+                &op.requested_files,
+            )?;
+        }
+    }
+    let paths = op.input.requested_paths();
     ensure!(
         paths
             == op
                 .requested_files
                 .iter()
-                .map(|f| f.path.clone())
+                .map(|f| f.path.as_str())
                 .collect::<Vec<_>>()
             && op.requested_files.iter().all(|f| f.kind == "input"),
         "Input binding mismatch"

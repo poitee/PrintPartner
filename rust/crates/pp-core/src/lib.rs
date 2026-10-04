@@ -1,4 +1,5 @@
 pub mod draft_observations;
+pub mod review_observations;
 pub mod uploads;
 use anyhow::{Context, Result, bail};
 use pp_compat::{Bundle, CompatHandle, SpawnSpec, Supervisor};

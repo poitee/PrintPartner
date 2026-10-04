@@ -1,12 +1,12 @@
 use pp_api::{
     auth::{AuthHttpConfig, CookieTransport, ProviderClient, ResetMailer, auth_router},
     catalog::{CatalogHttpConfig, catalog_router},
-    drafts::{
-        DraftHttpClients, DraftHttpConfig, FilamentProviderConfig, ObservationLimits,
-        SnapshotReviewObserver, draft_router,
-    },
+    drafts::{DraftHttpClients, DraftHttpConfig, draft_router},
 };
-use pp_core::draft_observations::{DraftReadConfiguration, FilesystemPolicy, issue_working_drafts};
+use pp_core::{
+    draft_observations::{DraftReadConfiguration, FilesystemPolicy, issue_working_drafts},
+    review_observations::{FilamentProviderConfig, ObservationLimits, SnapshotReviewObserver},
+};
 use pp_storage::{
     Limits, WriterOwner,
     auth::{AuthPolicy, FirstUserTenant, RegistrationPolicy, SessionTenantPolicy},
@@ -181,7 +181,7 @@ impl Server {
                 accepted: owner.accepted_reads_with_policy(policy).unwrap(),
                 drafts,
             },
-            observer,
+            Arc::new(observer),
         ));
         let (stop, receiver) = tokio::sync::oneshot::channel();
         let task = tokio::spawn(async move {
