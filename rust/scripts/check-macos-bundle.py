@@ -369,14 +369,15 @@ def verify(app, manifest_path, arch, receipt):
     measured_native = set(manifest['dependencies']['files']) | {'MacOS/printpartner-node', 'MacOS/'+executable}
     require(set(native['mach_o']).issubset(measured_native), 'Unmeasured native code in app')
     env = {key: value for key, value in os.environ.items() if key not in ('NODE_OPTIONS', 'NODE_PATH')}
-    sqlite_program = "const D=require('better-sqlite3');const db=new D(':memory:');db.pragma('user_version = 42');const answer=db.pragma('user_version',{simple:true});db.close();if(answer!==42)throw Error('SQLite failed');console.log(JSON.stringify({version:process.version,abi:process.versions.modules,os:process.platform,arch:process.arch,sqlite_answer:answer,native_addons:Object.keys(require.cache).filter(p=>p.endsWith('.node')).map(p=>require('node:fs').realpathSync(p)).sort()}));"
+    sqlite_program = "const D=require('better-sqlite3');let db=new D(':memory:');db.pragma('user_version = 42');const answer=db.pragma('user_version',{simple:true});db.close();db=null;if(globalThis.gc)globalThis.gc();if(answer!==42)throw Error('SQLite failed');console.log(JSON.stringify({version:process.version,abi:process.versions.modules,os:process.platform,arch:process.arch,sqlite_answer:answer,native_addons:Object.keys(require.cache).filter(p=>p.endsWith('.node')).map(p=>require('node:fs').realpathSync(p)).sort()}));"
     canvas_program = "const {createCanvas}=require('@napi-rs/canvas');const canvas=createCanvas(2,2);const ctx=canvas.getContext('2d');ctx.fillStyle='#123456';ctx.fillRect(0,0,2,2);const pixel=Array.from(ctx.getImageData(0,0,1,1).data);const png=canvas.toBuffer('image/png');if(JSON.stringify(pixel)!=='[18,52,86,255]'||png.subarray(0,8).toString('hex')!=='89504e470d0a1a0a')throw Error('Canvas failed');console.log(JSON.stringify({canvas_pixel:pixel,canvas_png_signature:png.subarray(0,8).toString('hex'),native_addons:Object.keys(require.cache).filter(p=>p.endsWith('.node')).map(p=>require('node:fs').realpathSync(p)).sort()}));"
     node_arch = {'arm64': 'arm64', 'x86_64': 'x64'}[arch]
     expected_addons = sorted(str(contained(root, root / WEB / name)) for name in [
         'node_modules/better-sqlite3/build/Release/better_sqlite3.node',
         f'node_modules/@napi-rs/canvas-darwin-{node_arch}/skia.darwin-{node_arch}.node'])
-    sqlite_result = json.loads(command(str(root / 'MacOS/printpartner-node'), '--no-global-search-paths',
-        '--import', str(root / WEB / 'apps/server/dist/current/desktop-resolution.js'), '-e', sqlite_program,
+    sqlite_result = json.loads(command(str(root / 'MacOS/printpartner-node'), '--expose-gc',
+        '--no-global-search-paths', '--import',
+        str(root / WEB / 'apps/server/dist/current/desktop-resolution.js'), '-e', sqlite_program,
         'bundle-probe', '--pp-desktop-package-root='+str(root), cwd=root / WEB, env=env, timeout=30))
     canvas_result = json.loads(command(str(root / 'MacOS/printpartner-node'), '--no-global-search-paths',
         '--import', str(root / WEB / 'apps/server/dist/current/desktop-resolution.js'), '-e', canvas_program,
