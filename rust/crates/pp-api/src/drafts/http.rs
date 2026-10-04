@@ -828,8 +828,11 @@ async fn review_call(
     };
     match read {
         AcceptedRead::Missing => failure(404, "Profile not found"),
-        AcceptedRead::CompatibilityDirty | AcceptedRead::Uninitialized => {
-            failure(409, "Accepted Plan state unavailable")
+        AcceptedRead::CompatibilityDirty => {
+            failure(409, "Accepted Plan requires compatibility repair")
+        }
+        AcceptedRead::Uninitialized => {
+            failure(409, "Accepted Plan operational state is not initialized")
         }
         AcceptedRead::IntegrityFailure { .. } => failure(500, "Accepted Plan data is inconsistent"),
         AcceptedRead::Empty { .. } => {
