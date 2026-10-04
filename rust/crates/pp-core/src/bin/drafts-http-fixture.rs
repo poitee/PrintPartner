@@ -1,6 +1,7 @@
 use anyhow::{Result, ensure};
 use pp_api::{
     auth::{AuthHttpConfig, CookieTransport, ProviderClient, ResetMailer, auth_router},
+    builds::{BuildHttpConfig, build_router},
     catalog::{CatalogHttpConfig, catalog_router},
     drafts::{DraftHttpClients, DraftHttpConfig, draft_router},
 };
@@ -63,6 +64,10 @@ async fn main() -> Result<()> {
         CatalogHttpConfig::new(&origin)?,
         owner.catalog_access(policy)?,
         Some(owner.catalog_key_access(policy, "default".into())?),
+    ))
+    .merge(build_router(
+        BuildHttpConfig::new(&origin, "default")?,
+        owner.build_graph_with_policy(policy)?,
     ))
     .merge(draft_router(
         DraftHttpConfig::new(&origin, "default")?,
