@@ -8,34 +8,43 @@ import {
 } from "react";
 
 type FlushFn = () => Promise<void>;
+type UnregisterFlush = () => void;
 
 type BuildSaveFlushContextValue = {
-  registerFlush: (profileId: number, flush: FlushFn) => void;
-  unregisterFlush: (profileId: number) => void;
+  registerFlush: (profileId: number, flush: FlushFn) => UnregisterFlush;
   flushAll: () => Promise<void>;
 };
 
 const BuildSaveFlushContext = createContext<BuildSaveFlushContextValue | null>(null);
 
 export function BuildSaveFlushProvider({ children }: { children: ReactNode }) {
-  const flushByProfile = useRef(new Map<number, FlushFn>());
+  const flushByProfile = useRef(new Map<number, Map<symbol, FlushFn>>());
 
   const registerFlush = useCallback((profileId: number, flush: FlushFn) => {
-    flushByProfile.current.set(profileId, flush);
-  }, []);
-
-  const unregisterFlush = useCallback((profileId: number) => {
-    flushByProfile.current.delete(profileId);
+    const token = Symbol();
+    const registrations = flushByProfile.current.get(profileId) ?? new Map<symbol, FlushFn>();
+    registrations.set(token, flush);
+    flushByProfile.current.set(profileId, registrations);
+    return () => {
+      const current = flushByProfile.current.get(profileId);
+      if (!current) return;
+      current.delete(token);
+      if (current.size === 0) flushByProfile.current.delete(profileId);
+    };
   }, []);
 
   const flushAll = useCallback(async () => {
-    const flushes = [...flushByProfile.current.values()];
-    await Promise.all(flushes.map((fn) => fn()));
+    const flushes = [...flushByProfile.current.values()].flatMap((registrations) =>
+      [...registrations.values()]
+    );
+    const results = await Promise.allSettled(flushes.map((flush) => flush()));
+    const failed = results.find((result) => result.status === "rejected");
+    if (failed?.status === "rejected") throw failed.reason;
   }, []);
 
   const value = useMemo(
-    () => ({ registerFlush, unregisterFlush, flushAll }),
-    [registerFlush, unregisterFlush, flushAll],
+    () => ({ registerFlush, flushAll }),
+    [registerFlush, flushAll],
   );
 
   return (
@@ -51,13 +60,11 @@ function useBuildSaveFlushContext(): BuildSaveFlushContextValue {
   return ctx;
 }
 
-/** Registers kit-manifest autosave flushes by Profile id. */
 export function useBuildSaveFlushRegistry() {
-  const { registerFlush, unregisterFlush } = useBuildSaveFlushContext();
-  return useMemo(() => ({ registerFlush, unregisterFlush }), [registerFlush, unregisterFlush]);
+  const { registerFlush } = useBuildSaveFlushContext();
+  return registerFlush;
 }
 
-/** Await pending kit-manifest writes before leaving Build. */
 export function useFlushBuildPageSaves(): () => Promise<void> {
   return useBuildSaveFlushContext().flushAll;
 }

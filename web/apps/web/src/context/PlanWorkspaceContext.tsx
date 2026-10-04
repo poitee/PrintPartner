@@ -60,7 +60,12 @@ import {
   WorkingPlanChangedError,
 } from "../lib/workingPlanChanged";
 import { useProfileSelection } from "./ProfileContext";
-import { usePlanFileChoices, type PlanFileChoice } from "../hooks/usePlanFileChoices";
+import { useBuildSaveFlushRegistry } from "./BuildSaveFlushContext";
+import {
+  usePlanFileChoices,
+  type PlanFileChoice,
+  type PlanFileChoiceBatch,
+} from "../hooks/usePlanFileChoices";
 
 /** The Plan row being edited — enough identity to find it in the saved draft. */
 export type PlanEditablePart = PlanRowIdentity & {
@@ -81,7 +86,129 @@ type DraftPartEdit =
   | { kind: "set_quantity"; value: QuantityUpdate };
 
 type PlanEdits = readonly { part: PlanEditablePart; edit: DraftPartEdit }[];
-type PendingPlanSave = { edits: PlanEdits; request: SavePlanChoicesRequest; key: string };
+type PlanChoiceDecision = SavePlanChoicesRequest["decisions"][number];
+type PlanChoiceKind = PlanChoiceDecision["kind"];
+type PlanChoiceTarget = PlanChoiceDecision["target"];
+declare const planChoiceFieldIdentityBrand: unique symbol;
+type PlanChoiceFieldIdentity = string & {
+  readonly [planChoiceFieldIdentityBrand]: true;
+};
+type PlanChoiceIntentOrigin =
+  | Readonly<{ kind: "direct" }>
+  | Readonly<{ kind: "file_choices"; acknowledgeSaved: () => void }>;
+type QueuedPlanChoiceIntent = Readonly<{
+  id: symbol;
+  enqueueOrder: number;
+  edits: PlanEdits;
+  origin: PlanChoiceIntentOrigin;
+}>;
+type PendingPlanSave = Readonly<{
+  intent: QueuedPlanChoiceIntent;
+  request: SavePlanChoicesRequest;
+  key: string;
+  fields: ReadonlySet<PlanChoiceFieldIdentity>;
+}>;
+type FailedChoiceBase = Readonly<{
+  intentId: symbol;
+  remainingFields: ReadonlySet<PlanChoiceFieldIdentity>;
+  readonly error: unknown;
+  notCorrectableThroughOrder: number;
+  failureSequence: number;
+}>;
+type FailedChoiceIntent = FailedChoiceBase & (
+  | Readonly<{
+      certainty: "definitive";
+      explicitRetryCommand: PendingPlanSave | null;
+    }>
+  | Readonly<{
+      certainty: "uncertain";
+      explicitRetryCommand: PendingPlanSave;
+    }>
+);
+type NonChoiceFailureKind = "prepare" | "direct_draft_edit" | "discard";
+type NonChoiceFailure = Readonly<{
+  kind: NonChoiceFailureKind;
+  error: unknown;
+  failureSequence: number;
+}>;
+type DraftEditLane = {
+  tail: Promise<void>;
+  readonly operations: Set<Promise<unknown>>;
+  lastEnqueuedOrder: number;
+  lastFailureSequence: number;
+  readonly choiceFailures: Map<symbol, FailedChoiceIntent>;
+  readonly nonChoiceFailures: Map<NonChoiceFailureKind, NonChoiceFailure>;
+};
+
+type UnresolvedDraftError = FailedChoiceIntent | NonChoiceFailure;
+
+type PublishPlanSaveOutcome =
+  | Readonly<{ kind: "saved" }>
+  | Readonly<{
+      kind: "failed";
+      certainty: "definitive" | "uncertain";
+      error: unknown;
+      command: PendingPlanSave;
+    }>;
+
+function planChoiceFieldIdentity(
+  target: PlanChoiceTarget,
+  kind: PlanChoiceKind,
+): PlanChoiceFieldIdentity {
+  return JSON.stringify([
+    target.part_key,
+    target.relative_path,
+    target.source_layer,
+    kind,
+  ]) as PlanChoiceFieldIdentity;
+}
+
+function planChoiceFields(
+  request: SavePlanChoicesRequest,
+): ReadonlySet<PlanChoiceFieldIdentity> {
+  return new Set(request.decisions.map((decision) =>
+    planChoiceFieldIdentity(decision.target, decision.kind)));
+}
+
+function planChoiceFieldHints(
+  edits: PlanEdits,
+): ReadonlySet<PlanChoiceFieldIdentity> {
+  return new Set(edits.map(({ part, edit }) => planChoiceFieldIdentity({
+    part_key: part.match_key,
+    relative_path: part.relative_path,
+    source_layer: part.source_layer,
+  }, edit.kind === "set_included" ? "set_included" : "set_quantity_override")));
+}
+
+function firstUnresolvedDraftError(lane: DraftEditLane | undefined): UnresolvedDraftError | null {
+  const failedDiscard = lane?.nonChoiceFailures.get("discard");
+  if (failedDiscard != null) return failedDiscard;
+  let first: UnresolvedDraftError | null = null;
+  for (const failure of lane?.choiceFailures.values() ?? []) {
+    if (first == null || failure.failureSequence < first.failureSequence) first = failure;
+  }
+  for (const failure of lane?.nonChoiceFailures.values() ?? []) {
+    if (first == null || failure.failureSequence < first.failureSequence) first = failure;
+  }
+  return first;
+}
+
+function firstUncertainChoiceFailure(lane: DraftEditLane): FailedChoiceIntent & { certainty: "uncertain" } | null {
+  let first: (FailedChoiceIntent & { certainty: "uncertain" }) | null = null;
+  for (const failure of lane.choiceFailures.values()) {
+    if (failure.certainty !== "uncertain") continue;
+    if (first == null || failure.failureSequence < first.failureSequence) first = failure;
+  }
+  return first;
+}
+
+function firstChoiceFailure(lane: DraftEditLane): FailedChoiceIntent | null {
+  let first: FailedChoiceIntent | null = null;
+  for (const failure of lane.choiceFailures.values()) {
+    if (first == null || failure.failureSequence < first.failureSequence) first = failure;
+  }
+  return first;
+}
 
 function samePlanEdits(left: PlanEdits, right: PlanEdits): boolean {
   return left.length === right.length && left.every((item, index) => {
@@ -117,8 +244,10 @@ type PlanWorkspaceValue = {
   progressSummary: string;
   refresh: () => Promise<void>;
   preparePlan: (options?: { applyManifest?: boolean }) => Promise<void>;
+  retryPlanSave: (options?: { applyManifest?: boolean }) => Promise<void>;
   saving: boolean;
   mergeConflict: boolean;
+  canDiscardPendingEdits: boolean;
   discardPendingEdits: () => Promise<void>;
   pendingFileChoices: ReadonlyMap<string, PlanFileChoice>;
   draftWorkspace: PlanDraftWorkspace | null;
@@ -183,9 +312,9 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
     ReadonlyMap<number, BuildDraftUiState>
   >(() => new Map());
   const draftUiByBuildRef = useRef(draftUiByBuild);
-  const draftEditQueueByBuild = useRef<Map<number, Promise<void>>>(new Map());
+  const draftEditLanesByBuild = useRef(new Map<number, DraftEditLane>());
+  const [, setDraftOutcomeRevision] = useState(0);
   const closedDraftIds = useRef(new Set<number>());
-  const pendingSaveByBuild = useRef(new Map<number, PendingPlanSave>());
   const selectedDraftUi =
     selectedProfileId == null
       ? EMPTY_BUILD_DRAFT_UI_STATE
@@ -342,40 +471,122 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
     [draftQuery.data, queryClient, selectedProfileId],
   );
 
-  const enqueueDraftEdit = useCallback(
-    <T,>(profileId: number, operation: () => Promise<T>): Promise<T> => {
-      const currentQueue =
-        draftEditQueueByBuild.current.get(profileId) ?? Promise.resolve();
-      const result = currentQueue.then(operation);
-      const settled = result.then(
-        () => undefined,
-        () => undefined,
-      );
-      draftEditQueueByBuild.current.set(profileId, settled);
-      void settled.then(() => {
-        if (draftEditQueueByBuild.current.get(profileId) === settled) {
-          draftEditQueueByBuild.current.delete(profileId);
-        }
-      });
+  const notifyDraftOutcomeChanged = useCallback(() => {
+    setDraftOutcomeRevision((revision) => revision + 1);
+  }, []);
+
+  const getOrCreateDraftEditLane = useCallback((profileId: number): DraftEditLane => {
+    const current = draftEditLanesByBuild.current.get(profileId);
+    if (current) return current;
+    const lane: DraftEditLane = {
+      tail: Promise.resolve(),
+      operations: new Set(),
+      lastEnqueuedOrder: 0,
+      lastFailureSequence: 0,
+      choiceFailures: new Map(),
+      nonChoiceFailures: new Map(),
+    };
+    draftEditLanesByBuild.current.set(profileId, lane);
+    return lane;
+  }, []);
+
+  const deleteEmptyDraftEditLane = useCallback((profileId: number, lane: DraftEditLane) => {
+    if (
+      draftEditLanesByBuild.current.get(profileId) === lane &&
+      lane.operations.size === 0 &&
+      lane.choiceFailures.size === 0 &&
+      lane.nonChoiceFailures.size === 0
+    ) {
+      draftEditLanesByBuild.current.delete(profileId);
+    }
+  }, []);
+
+  const enqueueDraftLaneOperation = useCallback(
+    <T,>(profileId: number, run: () => Promise<T>): Promise<T> => {
+      const lane = getOrCreateDraftEditLane(profileId);
+      const result = lane.tail.then(run);
+      lane.tail = result.then(() => undefined, () => undefined);
+      lane.operations.add(result);
+      void result.finally(() => {
+        lane.operations.delete(result);
+        deleteEmptyDraftEditLane(profileId, lane);
+      }).catch(() => undefined);
       return result;
     },
-    [],
+    [deleteEmptyDraftEditLane, getOrCreateDraftEditLane],
+  );
+
+  const enqueueNonChoiceDraftOperation = useCallback(
+    <T,>(profileId: number, kind: NonChoiceFailureKind, run: () => Promise<T>): Promise<T> => {
+      const lane = getOrCreateDraftEditLane(profileId);
+      return enqueueDraftLaneOperation(profileId, async () => {
+        try {
+          const value = await run();
+          if (kind === "discard") {
+            lane.choiceFailures.clear();
+            lane.nonChoiceFailures.clear();
+          } else {
+            lane.nonChoiceFailures.delete(kind);
+          }
+          notifyDraftOutcomeChanged();
+          return value;
+        } catch (error: unknown) {
+          const previous = lane.nonChoiceFailures.get(kind);
+          lane.nonChoiceFailures.set(kind, {
+            kind,
+            error,
+            failureSequence: previous?.failureSequence ?? ++lane.lastFailureSequence,
+          });
+          notifyDraftOutcomeChanged();
+          throw error;
+        }
+      });
+    },
+    [enqueueDraftLaneOperation, getOrCreateDraftEditLane, notifyDraftOutcomeChanged],
+  );
+
+  const enqueueChoiceDraftOperation = useCallback(
+    <T,>(
+      profileId: number,
+      edits: PlanEdits,
+      origin: PlanChoiceIntentOrigin,
+      run: (intent: QueuedPlanChoiceIntent) => Promise<T>,
+    ): Promise<T> => {
+      const lane = getOrCreateDraftEditLane(profileId);
+      const intent: QueuedPlanChoiceIntent = {
+        id: Symbol("plan-choice-intent"),
+        enqueueOrder: ++lane.lastEnqueuedOrder,
+        edits,
+        origin,
+      };
+      return enqueueDraftLaneOperation(profileId, () => run(intent));
+    },
+    [enqueueDraftLaneOperation, getOrCreateDraftEditLane],
   );
 
   const startPlanDraftForProfile = useCallback(
-    async (profileId: number, options?: { applyManifest?: boolean }, refreshSummaries = true) => {
-      updateDraftUi(profileId, (current) => ({
-        ...current,
-        draftMutationError: null,
-      }));
+    async (
+      profileId: number,
+      options?: { applyManifest?: boolean },
+      refreshSummaries = true,
+      reportMutationError = true,
+    ) => {
+      if (reportMutationError) {
+        updateDraftUi(profileId, (current) => ({
+          ...current,
+          draftMutationError: null,
+        }));
+      }
       try {
         return storeWorkspace(await (options ? recomputePlanDraft(profileId, options) : recomputePlanDraft(profileId)), refreshSummaries);
       } catch (error) {
-        updateDraftUi(profileId, (current) => ({
-          ...current,
-          draftMutationError:
-            error instanceof Error ? error.message : String(error),
-        }));
+        if (reportMutationError) {
+          updateDraftUi(profileId, (current) => ({
+            ...current,
+            draftMutationError:
+              error instanceof Error ? error.message : String(error),
+          }));
+        }
         throw error;
       }
     },
@@ -410,11 +621,14 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
     async (
       workspace: PlanDraftWorkspace,
       decisions: PlanDraftPartDecisionContract[],
+      reportMutationError = true,
     ) => {
-      updateDraftUi(workspace.profile_id, (current) => ({
-        ...current,
-        draftMutationError: null,
-      }));
+      if (reportMutationError) {
+        updateDraftUi(workspace.profile_id, (current) => ({
+          ...current,
+          draftMutationError: null,
+        }));
+      }
       try {
         return await persistDraftEdit(workspace, decisions);
       } catch (error) {
@@ -424,10 +638,12 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
           : error instanceof Error
             ? error.message
             : String(error);
-        updateDraftUi(workspace.profile_id, (current) => ({
-          ...current,
-          draftMutationError: message,
-        }));
+        if (reportMutationError) {
+          updateDraftUi(workspace.profile_id, (current) => ({
+            ...current,
+            draftMutationError: message,
+          }));
+        }
         throw new Error(message, { cause: error });
       }
     },
@@ -550,10 +766,10 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
     ],
   );
 
-  const preparePlan = useCallback((options?: { applyManifest?: boolean }) => {
+  const prepareCurrentPlan = useCallback((options?: { applyManifest?: boolean }) => {
     const profileId = selectedProfileId;
     if (profileId == null) return Promise.reject(new Error("Choose a Build first"));
-    return enqueueDraftEdit(profileId, async () => {
+    return enqueueNonChoiceDraftOperation(profileId, "prepare", async () => {
       updateDraftUi(profileId, (current) => ({ ...current, saving: true, draftMutationError: null, mergeConflict: false }));
       try {
         let workspace = await resolveOpenDraftWorkspace(profileId);
@@ -564,7 +780,7 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
           await applyWorkspace(workspace, { remapCheckoffLinks: true });
           workspace = null;
         }
-        workspace ??= await startPlanDraftForProfile(profileId, options);
+        workspace ??= await startPlanDraftForProfile(profileId, options, true, false);
         if (workspace.draft.base.revision_id != null && workspace.diff.base_is_current &&
             workspace.diff.added.length === 0 && workspace.diff.changed.length === 0 && workspace.diff.removed.length === 0) {
           await abandonPlanDraft(profileId, workspace.draft);
@@ -576,13 +792,13 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
           await applyWorkspace(workspace, { remapCheckoffLinks: true });
         }
       } catch (error) {
-        updateDraftUi(profileId, (current) => ({ ...current, draftMutationError: planSaveError(error, currentDraftWorkspace(profileId)), mergeConflict: planSaveHasMergeConflict(error) }));
+        updateDraftUi(profileId, (current) => ({ ...current, mergeConflict: planSaveHasMergeConflict(error) }));
         throw error;
       } finally {
         updateDraftUi(profileId, (current) => ({ ...current, saving: false }));
       }
     });
-  }, [applyWorkspace, currentDraftWorkspace, enqueueDraftEdit, queryClient, rebaseWorkspace, resolveOpenDraftWorkspace, selectedProfileId, startPlanDraftForProfile, updateDraftUi]);
+  }, [applyWorkspace, enqueueNonChoiceDraftOperation, queryClient, rebaseWorkspace, resolveOpenDraftWorkspace, selectedProfileId, startPlanDraftForProfile, updateDraftUi]);
 
   const editActivePlanDraft = useCallback(
     (decisions: PlanDraftPartDecisionContract[]) => {
@@ -591,67 +807,169 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
         return Promise.reject(
           new Error("Select a Build before editing its Working Plan"),
         );
-      return enqueueDraftEdit(profileId, async () => {
+      return enqueueNonChoiceDraftOperation(profileId, "direct_draft_edit", async () => {
         const workspace = await resolveOpenDraftWorkspace(profileId);
         if (!workspace)
           throw new Error("Create a Working Plan from Sources first");
-        return editWorkspaceParts(workspace, decisions);
+        return editWorkspaceParts(workspace, decisions, false);
       });
     },
     [
       editWorkspaceParts,
-      enqueueDraftEdit,
+      enqueueNonChoiceDraftOperation,
       resolveOpenDraftWorkspace,
       selectedProfileId,
     ],
   );
 
+  const recordChoiceFailure = useCallback((
+    lane: DraftEditLane,
+    intent: QueuedPlanChoiceIntent,
+    fields: ReadonlySet<PlanChoiceFieldIdentity>,
+    error: unknown,
+    failedCommand: PublishPlanSaveOutcome & { kind: "failed" } | null,
+  ) => {
+    const previous = lane.choiceFailures.get(intent.id);
+    const base = {
+      intentId: intent.id,
+      remainingFields: previous?.remainingFields ?? fields,
+      error,
+      notCorrectableThroughOrder:
+        previous?.notCorrectableThroughOrder ?? lane.lastEnqueuedOrder,
+      failureSequence:
+        previous?.failureSequence ?? ++lane.lastFailureSequence,
+    };
+    lane.choiceFailures.set(intent.id, failedCommand?.certainty === "uncertain"
+      ? {
+          ...base,
+          certainty: "uncertain",
+          explicitRetryCommand: failedCommand.command,
+        }
+      : {
+          ...base,
+          certainty: "definitive",
+          explicitRetryCommand:
+            failedCommand?.command ?? previous?.explicitRetryCommand ?? null,
+        });
+    notifyDraftOutcomeChanged();
+  }, [notifyDraftOutcomeChanged]);
+
+  const acknowledgeExactReplay = useCallback((
+    lane: DraftEditLane,
+    failure: FailedChoiceIntent,
+  ) => {
+    lane.choiceFailures.delete(failure.intentId);
+    if (failure.explicitRetryCommand?.intent.origin.kind === "file_choices") {
+      failure.explicitRetryCommand.intent.origin.acknowledgeSaved();
+    }
+    notifyDraftOutcomeChanged();
+  }, [notifyDraftOutcomeChanged]);
+
+  const acknowledgeSuccessfulCorrection = useCallback((
+    lane: DraftEditLane,
+    intent: QueuedPlanChoiceIntent,
+    fields: ReadonlySet<PlanChoiceFieldIdentity>,
+  ) => {
+    for (const [intentId, failure] of lane.choiceFailures) {
+      if (
+        failure.certainty !== "definitive" ||
+        intent.enqueueOrder <= failure.notCorrectableThroughOrder
+      ) {
+        continue;
+      }
+      const remainingFields = new Set(
+        [...failure.remainingFields].filter((field) => !fields.has(field)),
+      );
+      if (remainingFields.size === 0) lane.choiceFailures.delete(intentId);
+      else lane.choiceFailures.set(intentId, { ...failure, remainingFields });
+    }
+    if (intent.origin.kind === "file_choices") intent.origin.acknowledgeSaved();
+    notifyDraftOutcomeChanged();
+  }, [notifyDraftOutcomeChanged]);
+
+  const publishPendingPlanSave = useCallback(async (
+    profileId: number,
+    command: PendingPlanSave,
+  ): Promise<PublishPlanSaveOutcome> => {
+    for (let retry = 0; ; retry += 1) {
+      try {
+        const observed = capturePlanSaveCache(queryClient, profileId);
+        const saved = await savePlanChoices(profileId, command.request, command.key);
+        await hydratePlanSave(queryClient, saved, observed);
+        for (const id of saved.closed_draft_ids) closedDraftIds.current.add(id);
+        updateDraftUi(profileId, (current) => ({
+          ...current,
+          recentlyAppliedDraftId: saved.receipt.draft_id,
+          activeDraftId: current.activeDraftId != null && saved.closed_draft_ids.includes(current.activeDraftId)
+            ? null : current.activeDraftId,
+        }));
+        return { kind: "saved" };
+      } catch (error) {
+        const definitive = error instanceof EngineHttpError && error.status < 500 && error.status !== 408;
+        if (!definitive && retry === 0) continue;
+        return {
+          kind: "failed",
+          certainty: definitive ? "definitive" : "uncertain",
+          error,
+          command,
+        };
+      }
+    }
+  }, [queryClient, updateDraftUi]);
+
   const editDraft = useCallback(
-    (edits: PlanEdits, profileId = selectedProfileId) => {
+    (
+      edits: PlanEdits,
+      profileId = selectedProfileId,
+      origin: PlanChoiceIntentOrigin = { kind: "direct" },
+    ) => {
       if (edits.length === 0) return Promise.resolve();
       if (profileId == null)
         return Promise.reject(
           new Error("Select a Build before editing its Working Plan"),
         );
-      return enqueueDraftEdit(profileId, async () => {
+      return enqueueChoiceDraftOperation(profileId, edits, origin, async (intent) => {
+        const lane = getOrCreateDraftEditLane(profileId);
         updateDraftUi(profileId, (current) => ({
           ...current,
           busyPartId: edits[0]?.part.id ?? null,
           saving: true,
-          draftMutationError: null,
           mergeConflict: false,
         }));
-        const publish = async (pending: PendingPlanSave) => {
-          for (let retry = 0; ; retry += 1) {
-            try {
-              const observed = capturePlanSaveCache(queryClient, profileId);
-              const saved = await savePlanChoices(profileId, pending.request, pending.key);
-              await hydratePlanSave(queryClient, saved, observed);
-              for (const id of saved.closed_draft_ids) closedDraftIds.current.add(id);
+        let failureAlreadyRecorded = false;
+        let command: PendingPlanSave | null = null;
+        let failedCommand: (PublishPlanSaveOutcome & { kind: "failed" }) | null = null;
+        try {
+          const uncertain = firstUncertainChoiceFailure(lane);
+          if (uncertain) {
+            const replay = await publishPendingPlanSave(
+              profileId,
+              uncertain.explicitRetryCommand,
+            );
+            if (replay.kind === "failed") {
+              const replayError = new Error(planSaveError(replay.error), { cause: replay.error });
+              recordChoiceFailure(
+                lane,
+                uncertain.explicitRetryCommand.intent,
+                uncertain.remainingFields,
+                replayError,
+                replay,
+              );
               updateDraftUi(profileId, (current) => ({
                 ...current,
-                recentlyAppliedDraftId: saved.receipt.draft_id,
-                activeDraftId: current.activeDraftId != null && saved.closed_draft_ids.includes(current.activeDraftId)
-                  ? null : current.activeDraftId,
+                mergeConflict: planSaveHasMergeConflict(replay.error),
               }));
-              pendingSaveByBuild.current.delete(profileId);
-              return;
-            } catch (error) {
-              const definitive = error instanceof EngineHttpError && error.status < 500 && error.status !== 408;
-              if (definitive) pendingSaveByBuild.current.delete(profileId);
-              if (!definitive && retry === 0) continue;
-              throw error;
+              failureAlreadyRecorded = true;
+              throw replayError;
             }
+            acknowledgeExactReplay(lane, uncertain);
+            if (samePlanEdits(uncertain.explicitRetryCommand.intent.edits, edits)) return;
           }
-        };
-        try {
+
+          let fields = planChoiceFieldHints(edits);
           for (let attempt = 0; attempt < 3; attempt += 1) {
+            failedCommand = null;
             try {
-              const pending = pendingSaveByBuild.current.get(profileId);
-              if (pending) {
-                await publish(pending);
-                if (samePlanEdits(pending.edits, edits)) return;
-              }
               let workspace = currentDraftWorkspace(profileId);
               if (workspace && (!workspace.diff.base_is_current || workspace.draft.state === "abandoned")) {
                 workspace = await rebaseWorkspace(workspace);
@@ -695,10 +1013,21 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
                   };
                 }),
               };
-              const command = { edits, request: parseSavePlanChoicesRequest(request), key: randomIdempotencyKey() };
-              pendingSaveByBuild.current.set(profileId, command);
-              await publish(command);
-              return;
+              const parsedRequest = parseSavePlanChoicesRequest(request);
+              fields = planChoiceFields(parsedRequest);
+              command = {
+                intent,
+                request: parsedRequest,
+                key: randomIdempotencyKey(),
+                fields,
+              };
+              const outcome = await publishPendingPlanSave(profileId, command);
+              if (outcome.kind === "saved") {
+                acknowledgeSuccessfulCorrection(lane, intent, fields);
+                return;
+              }
+              failedCommand = outcome;
+              throw outcome.error;
             } catch (error) {
               if (attempt < 2 && error instanceof EngineHttpError && error.status === 409) {
                 const replaced = replaceFromConflict(profileId, error);
@@ -721,12 +1050,20 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
             }
           }
         } catch (error) {
+          if (failureAlreadyRecorded) throw error;
+          const displayError = new Error(planSaveError(error), { cause: error });
+          recordChoiceFailure(
+            lane,
+            intent,
+            command?.fields ?? planChoiceFieldHints(edits),
+            displayError,
+            failedCommand,
+          );
           updateDraftUi(profileId, (current) => ({
             ...current,
-            draftMutationError: planSaveError(error),
             mergeConflict: planSaveHasMergeConflict(error),
           }));
-          throw new Error(planSaveError(error), { cause: error });
+          throw displayError;
         } finally {
           updateDraftUi(profileId, (current) => ({
             ...current,
@@ -737,10 +1074,15 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
       });
     },
     [
+      acknowledgeExactReplay,
+      acknowledgeSuccessfulCorrection,
       currentDraftWorkspace,
       draftListQuery.data,
-      enqueueDraftEdit,
+      enqueueChoiceDraftOperation,
+      getOrCreateDraftEditLane,
       queryClient,
+      recordChoiceFailure,
+      publishPendingPlanSave,
       rebaseWorkspace,
       replaceFromConflict,
       resolveOpenDraftWorkspace,
@@ -772,26 +1114,119 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
   );
 
   const saveFileChoices = useCallback(
-    (profileId: number, choices: readonly PlanFileChoice[]) => editDraft(
-      choices.map((choice) => ({ part: choice.part, edit: { kind: "set_included", value: choice.included } })),
+    (profileId: number, batch: PlanFileChoiceBatch) => editDraft(
+      batch.choices.map((choice) => ({ part: choice.part, edit: { kind: "set_included", value: choice.included } })),
       profileId,
+      { kind: "file_choices", acknowledgeSaved: batch.acknowledgeSaved },
     ),
     [editDraft],
   );
-  const { choices: pendingFileChoices, saving: savingFiles, error: fileChoiceError, select: setFilesIncluded, flush: flushFileChoices, hasPending: hasPendingFileChoices, discard: discardFileChoices } = usePlanFileChoices(selectedProfileId, saveFileChoices);
+  const { choices: pendingFileChoices, saving: savingFiles, select: setFilesIncluded, flush: flushFileChoices, hasPending: hasPendingFileChoices, discard: discardFileChoices } = usePlanFileChoices(selectedProfileId, saveFileChoices);
+  const registerBuildSaveFlush = useBuildSaveFlushRegistry();
+  const retryFailedChoice = useCallback((
+    profileId: number,
+    selectedFailure: FailedChoiceIntent,
+  ): Promise<void> => enqueueDraftLaneOperation(profileId, async () => {
+    const lane = getOrCreateDraftEditLane(profileId);
+    const failure = lane.choiceFailures.get(selectedFailure.intentId);
+    if (failure == null) return;
+    const command = failure.explicitRetryCommand;
+    if (command == null) throw failure.error;
+    updateDraftUi(profileId, (current) => ({
+      ...current,
+      busyPartId: command.intent.edits[0]?.part.id ?? null,
+      saving: true,
+      mergeConflict: false,
+    }));
+    try {
+      const outcome = await publishPendingPlanSave(profileId, command);
+      if (outcome.kind === "saved") {
+        acknowledgeExactReplay(lane, failure);
+        return;
+      }
+      const displayError = new Error(planSaveError(outcome.error), {
+        cause: outcome.error,
+      });
+      recordChoiceFailure(
+        lane,
+        command.intent,
+        failure.remainingFields,
+        displayError,
+        outcome,
+      );
+      updateDraftUi(profileId, (current) => ({
+        ...current,
+        mergeConflict: planSaveHasMergeConflict(outcome.error),
+      }));
+      throw displayError;
+    } finally {
+      updateDraftUi(profileId, (current) => ({
+        ...current,
+        busyPartId: null,
+        saving: false,
+      }));
+    }
+  }), [
+    acknowledgeExactReplay,
+    enqueueDraftLaneOperation,
+    getOrCreateDraftEditLane,
+    publishPendingPlanSave,
+    recordChoiceFailure,
+    updateDraftUi,
+  ]);
+  const flushDraftEdits = useCallback(async (profileId: number) => {
+    while (true) {
+      const lane = draftEditLanesByBuild.current.get(profileId);
+      if (lane && lane.operations.size > 0) {
+        await Promise.allSettled([...lane.operations]);
+        continue;
+      }
+      const uncertain = lane ? firstUncertainChoiceFailure(lane) : null;
+      if (uncertain) {
+        await editDraft(uncertain.explicitRetryCommand.intent.edits, profileId);
+        continue;
+      }
+      const settledLane = draftEditLanesByBuild.current.get(profileId);
+      if (settledLane && settledLane.operations.size > 0) continue;
+      const failure = firstUnresolvedDraftError(settledLane);
+      if (failure != null) throw failure.error;
+      return;
+    }
+  }, [editDraft]);
+  const flushPlanChanges = useCallback(async (profileId: number) => {
+    await flushDraftEdits(profileId);
+    await flushFileChoices(profileId);
+    await flushDraftEdits(profileId);
+  }, [flushDraftEdits, flushFileChoices]);
+  useEffect(() => {
+    if (selectedProfileId == null) return;
+    const profileId = selectedProfileId;
+    return registerBuildSaveFlush(profileId, () => flushPlanChanges(profileId));
+  }, [flushPlanChanges, registerBuildSaveFlush, selectedProfileId]);
   const setIncluded = useCallback((part: PlanEditablePart, included: boolean) => setFilesIncluded([part], included), [setFilesIncluded]);
-  const retryOrPreparePlan = useCallback(async (options?: { applyManifest?: boolean }) => {
-    if (selectedProfileId != null && hasPendingFileChoices(selectedProfileId)) {
-      await flushFileChoices(selectedProfileId);
+  const preparePlan = useCallback(async (options?: { applyManifest?: boolean }) => {
+    const lane = selectedProfileId == null ? null : draftEditLanesByBuild.current.get(selectedProfileId);
+    const failedChoice = lane == null ? null : firstChoiceFailure(lane);
+    if (failedChoice && selectedProfileId != null) {
+      if (failedChoice.certainty === "definitive") throw failedChoice.error;
+      await retryFailedChoice(selectedProfileId, failedChoice);
       if (!options?.applyManifest) return;
     }
-    const pending = selectedProfileId == null ? null : pendingSaveByBuild.current.get(selectedProfileId);
-    if (pending && selectedProfileId != null) {
-      await editDraft(pending.edits, selectedProfileId);
+    if (selectedProfileId != null && hasPendingFileChoices(selectedProfileId)) {
+      await flushFileChoices(selectedProfileId, true);
+      if (!options?.applyManifest) return;
+    }
+    await prepareCurrentPlan(options);
+  }, [flushFileChoices, hasPendingFileChoices, prepareCurrentPlan, retryFailedChoice, selectedProfileId]);
+  const retryPlanSave = useCallback(async (options?: { applyManifest?: boolean }) => {
+    const lane = selectedProfileId == null ? null : draftEditLanesByBuild.current.get(selectedProfileId);
+    const failedChoice = lane == null ? null : firstChoiceFailure(lane);
+    if (failedChoice && selectedProfileId != null) {
+      await retryFailedChoice(selectedProfileId, failedChoice);
       if (!options?.applyManifest) return;
     }
     await preparePlan(options);
-  }, [editDraft, flushFileChoices, hasPendingFileChoices, preparePlan, selectedProfileId]);
+  }, [preparePlan, retryFailedChoice, selectedProfileId]);
 
   const reconcileActivePlanDraft = useCallback(
     async (decisions: RequiredUnitDecisionContract[]) => {
@@ -843,10 +1278,11 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
   const discardPendingEdits = useCallback(() => {
     const profileId = selectedProfileId;
     if (profileId == null) return Promise.reject(new Error("Choose a Build first"));
-    return enqueueDraftEdit(profileId, async () => {
+    return enqueueNonChoiceDraftOperation(profileId, "discard", async () => {
       updateDraftUi(profileId, (current) => ({ ...current, saving: true }));
       try {
-        const ambiguousSave = pendingSaveByBuild.current.has(profileId);
+        const lane = getOrCreateDraftEditLane(profileId);
+        const ambiguousSave = firstUncertainChoiceFailure(lane) != null;
         const workspace = await resolveOpenDraftWorkspace(profileId);
         if (workspace) {
           await abandonPlanDraft(profileId, workspace.draft);
@@ -864,17 +1300,13 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
           ...(ambiguousSave ? [] : [invalidatePlanReview(queryClient, profileId)]),
           queryClient.invalidateQueries({ queryKey: queryKeys.buildWorkflow(profileId) }),
         ]);
-        pendingSaveByBuild.current.delete(profileId);
         discardFileChoices(profileId);
         updateDraftUi(profileId, (current) => ({ ...current, activeDraftId: null, draftMutationError: null, mergeConflict: false }));
-      } catch (error) {
-        updateDraftUi(profileId, (current) => ({ ...current, draftMutationError: planSaveError(error) }));
-        throw error;
       } finally {
         updateDraftUi(profileId, (current) => ({ ...current, saving: false }));
       }
     });
-  }, [discardFileChoices, enqueueDraftEdit, queryClient, resolveOpenDraftWorkspace, selectedProfileId, updateDraftUi]);
+  }, [discardFileChoices, enqueueNonChoiceDraftOperation, getOrCreateDraftEditLane, queryClient, resolveOpenDraftWorkspace, selectedProfileId, updateDraftUi]);
 
   const setSpoolmanSpool = useCallback(
     async (partId: number, spoolman_spool_id: string | null) => {
@@ -949,23 +1381,32 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
     [review, patchAssembledMutation, selectedProfileId, updateDraftUi],
   );
 
+  const selectedUnresolvedDraftError = selectedProfileId == null
+    ? null
+    : firstUnresolvedDraftError(draftEditLanesByBuild.current.get(selectedProfileId));
+
   const value = useMemo(
     (): PlanWorkspaceValue => ({
       review,
       draftWorkspace: draftQuery.data ?? null,
       draftLoading: draftListQuery.isLoading || draftQuery.isLoading,
       draftError:
+        (selectedUnresolvedDraftError != null
+          ? planSaveError(selectedUnresolvedDraftError.error)
+          : null) ??
         draftMutationError ??
-        (fileChoiceError != null ? planSaveError(fileChoiceError) : null) ??
         (draftQuery.error instanceof Error ? draftQuery.error.message : null) ??
         (draftListQuery.error instanceof Error
           ? draftListQuery.error.message
           : null),
       startPlanDraft,
-      preparePlan: retryOrPreparePlan,
+      preparePlan,
+      retryPlanSave,
       saving: saving || savingFiles,
       pendingFileChoices,
       mergeConflict,
+      canDiscardPendingEdits:
+        mergeConflict || selectedUnresolvedDraftError != null,
       discardPendingEdits,
       applyActivePlanDraft,
       rebaseActivePlanDraft,
@@ -997,9 +1438,10 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
       draftListQuery.error,
       draftListQuery.isLoading,
       draftMutationError,
-      fileChoiceError,
+      selectedUnresolvedDraftError,
       startPlanDraft,
-      retryOrPreparePlan,
+      preparePlan,
+      retryPlanSave,
       saving,
       savingFiles,
       pendingFileChoices,

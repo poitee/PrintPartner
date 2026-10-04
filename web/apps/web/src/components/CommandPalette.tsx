@@ -98,6 +98,21 @@ export default function CommandPalette(_props?: Props) {
       if (onBuild) void flushBuildSaves().then(go).catch(() => toast.error("Save failed. Retry before leaving Sources."));
       else go();
     };
+    const launchExportAfterBuildFlush = (
+      launch: () => void,
+      afterLaunch: () => void,
+    ) => {
+      void flushBuildSaves().then(
+        () => {
+          launch();
+          afterLaunch();
+          setOpen(false);
+        },
+        () => {
+          toast.error("Save failed. Retry or discard pending Plan edits before exporting.");
+        },
+      );
+    };
 
     const list: Action[] = [
       {
@@ -284,18 +299,23 @@ export default function CommandPalette(_props?: Props) {
           group: "Workflow",
           disabled: kitExportJob.busy,
           run: () => {
-            void kitExportJob.runJob(
-              () => startExportKitBundle(selectedProfileId, false),
-              (snap) => {
-                if (snap.status === "error") {
-                  toast.error(snap.message || "Export failed");
-                  return;
-                }
-                completeExportDownload("Share build", snap.result);
+            launchExportAfterBuildFlush(
+              () => {
+                void kitExportJob.runJob(
+                  () => startExportKitBundle(selectedProfileId, false),
+                  (snap) => {
+                    if (snap.status === "error") {
+                      toast.error(snap.message || "Export failed");
+                      return;
+                    }
+                    completeExportDownload("Share build", snap.result);
+                  },
+                );
+              },
+              () => {
+                if (!onBuild && !onReview) navigate(buildSourcesRoute(selectedProfileId));
               },
             );
-            if (!onBuild && !onReview) navigate(buildSourcesRoute(selectedProfileId));
-            setOpen(false);
           },
         });
       }
@@ -311,18 +331,23 @@ export default function CommandPalette(_props?: Props) {
               group: "Actions" as const,
               disabled: stlExportJob.busy,
               run: () => {
-                void stlExportJob.runJob(
-                  () => startExportStlPack(selectedProfileId, { group_by: groupBy }),
-                  (snap) => {
-                    handleStlPackExportJobDone("STL export", snap, {
-                      pathField: "root_path",
-                    });
+                launchExportAfterBuildFlush(
+                  () => {
+                    void stlExportJob.runJob(
+                      () => startExportStlPack(selectedProfileId, { group_by: groupBy }),
+                      (snap) => {
+                        handleStlPackExportJobDone("STL export", snap, {
+                          pathField: "root_path",
+                        });
+                      },
+                    );
+                  },
+                  () => {
+                    if (!onBuild && !onReview) {
+                      navigate(partsRoute(selectedProfileId));
+                    }
                   },
                 );
-                if (!onBuild && !onReview) {
-                  navigate(partsRoute(selectedProfileId));
-                }
-                setOpen(false);
               },
             },
             {
@@ -335,20 +360,25 @@ export default function CommandPalette(_props?: Props) {
               group: "Actions" as const,
               disabled: stlExportJob.busy || remainingUnits === 0,
               run: () => {
-                void stlExportJob.runJob(
-                  () =>
-                    startExportStlPack(selectedProfileId, {
-                      missing_only: true,
-                      group_by: groupBy,
-                    }),
-                  (snap) => {
-                    handleStlPackExportJobDone("Export remaining", snap, {
-                      pathField: "root_path",
-                    });
+                launchExportAfterBuildFlush(
+                  () => {
+                    void stlExportJob.runJob(
+                      () =>
+                        startExportStlPack(selectedProfileId, {
+                          missing_only: true,
+                          group_by: groupBy,
+                        }),
+                      (snap) => {
+                        handleStlPackExportJobDone("Export remaining", snap, {
+                          pathField: "root_path",
+                        });
+                      },
+                    );
+                  },
+                  () => {
+                    navigate(exportRoute(selectedProfileId));
                   },
                 );
-                navigate(exportRoute(selectedProfileId));
-                setOpen(false);
               },
             },
           ];

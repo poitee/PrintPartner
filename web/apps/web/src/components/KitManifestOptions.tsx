@@ -69,7 +69,7 @@ export default function KitManifestOptions({
   const [optionGroups, setOptionGroups] = useState<Record<string, RepoManifestOptionGroup>>({});
   const [detailsOpen, setDetailsOpen] = useState(false);
 
-  const { registerFlush, unregisterFlush } = useBuildSaveFlushRegistry();
+  const registerFlush = useBuildSaveFlushRegistry();
 
   const onSaved = useCallback((kit: KitManifest) => {
     setSavedKit(kit);
@@ -88,7 +88,6 @@ export default function KitManifestOptions({
     onPersisted: onUpdated,
     onSaved,
     onRegisterFlush: registerFlush,
-    onUnregisterFlush: unregisterFlush,
   });
 
   const saveStatusLabel = autosaveStatusLabel(status);
