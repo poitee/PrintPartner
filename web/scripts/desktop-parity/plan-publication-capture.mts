@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
+import {createRequire} from 'node:module';
 import {mkdirSync,writeFileSync,copyFileSync} from 'node:fs';
 import {createHash} from 'node:crypto';
 import {SqliteDatabase,getDb} from '../../apps/server/src/db/client.ts';
 import {digestPlanDraft} from '../../apps/server/src/services/plan-drafts.ts';
 import {AppRepository} from '../../apps/server/src/db/repository.ts';
+const require=createRequire(import.meta.url);
 const output=process.argv[2];mkdirSync(output,{recursive:true});
 function dump(raw){return Object.fromEntries(raw.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all().map(({name})=>{const columns=raw.prepare(`PRAGMA table_info("${name}")`).all();const keys=columns.filter(c=>c.pk).sort((a,b)=>a.pk-b.pk);return[name,raw.prepare(`SELECT * FROM "${name}" ORDER BY ${(keys.length?keys:columns).map(c=>`"${c.name}"`).join(',')}`).all()]}))}
 for(const name of ['first','unchanged','growth','shrink','excluded','prior-completion','replace','missing-selection','unresolved','stale-progress','stale-digest','stale-lifecycle','stale-base','archived','foreign','moved-attachment','pinned-source','collision','collision-exhausted','production-active','remap-unchanged','shrink-watch-surplus','shrink-watch-survivor','rollback','legacy-baseline','live-filament','unexclude','empty-link','queue-active','foreign-collision']){
