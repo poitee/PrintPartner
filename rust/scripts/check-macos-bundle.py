@@ -300,6 +300,8 @@ def run_bundle_probe(argv, *, cwd, env, timeout_seconds):
                 os.killpg(process.pid, 0)
             except ProcessLookupError:
                 return True
+            except PermissionError:
+                pass
             if time.monotonic() >= deadline:
                 return False
             time.sleep(0.01)
