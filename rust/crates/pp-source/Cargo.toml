@@ -18,3 +18,4 @@ zip = { version = "=8.6.0", default-features = false, features = ["deflate-flate
 regex = "=1.13.1"
 ryu-js = "=1.0.2"
 icu_collator = "=2.3.1"
+getrandom = "=0.3.4"

@@ -1450,6 +1450,19 @@ pub(crate) fn job_key_actor(
         _ => Err(AuthFailure::SessionRequired.into()),
     }
 }
+pub(crate) fn job_key_actor_ref(
+    tx: &Transaction<'_>,
+    tenant: &str,
+    key: &Secret,
+) -> Result<(String, String)> {
+    match keys::resolve_ref(tx, tenant, key)? {
+        Outcome::KeyResolved {
+            principal: Some(principal),
+            ..
+        } => Ok((principal.tenant_id, format!("key:{}", principal.key_id))),
+        _ => Err(AuthFailure::SessionRequired.into()),
+    }
+}
 
 pub(crate) fn reconciliation_actor(
     tx: &Transaction<'_>,

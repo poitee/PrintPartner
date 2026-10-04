@@ -4,6 +4,7 @@ pub mod local_selection;
 pub mod media;
 pub mod observation;
 mod path_policy;
+pub mod retained_capture;
 
 use directory::Directory;
 use fs2::FileExt;
@@ -34,6 +35,8 @@ pub enum Error {
     DuplicatePath,
     Limit,
     CorruptSnapshot,
+    CaptureCollisionLimit,
+    Entropy,
     Io(io::Error),
     Json(serde_json::Error),
 }
@@ -63,6 +66,8 @@ impl Error {
             Self::DuplicatePath => "duplicate-path",
             Self::Limit => "limit",
             Self::CorruptSnapshot => "corrupt-snapshot",
+            Self::CaptureCollisionLimit => "capture-collision-limit",
+            Self::Entropy => "entropy-unavailable",
             Self::Io(_) => "io",
             Self::Json(_) => "invalid-json",
         }
