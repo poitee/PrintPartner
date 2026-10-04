@@ -1,5 +1,5 @@
 {
-  "$schema": "https://unpkg.com/knip@5/schema.json",
+  "$schema": "https://unpkg.com/knip@6.5.0/schema.json",
   "ignoreBinaries": [
     "python3"
   ],
@@ -7,7 +7,6 @@
     ".": {
       "entry": [
         "scripts/*.{mjs,mts,ts}",
-        "scripts/desktop-parity/verify.mts",
         "scripts/desktop-parity/capture.mts",
         "scripts/desktop-parity/compare.mts"
       ],
@@ -27,8 +26,7 @@
         "*.ts"
       ],
       "ignore": [
-        "src/db/schema.ts",
-        "src/db/schema-pg.ts"
+        "src/db/schema.ts"
       ]
     },
     "apps/web": {
