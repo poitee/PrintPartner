@@ -399,6 +399,7 @@ pub(super) enum AuthorityRefusalPhase {
     Claim,
     TargetedClaim,
     WorkerAdvance,
+    SourceWriter,
 }
 
 #[derive(Serialize, Deserialize)]

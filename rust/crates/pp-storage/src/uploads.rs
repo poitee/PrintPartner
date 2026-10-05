@@ -567,6 +567,15 @@ pub struct Artifact {
     pub files: Vec<File>,
     pub suggested_rules: Vec<String>,
 }
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SourceAuthorityRevision {
+    pub version: u8,
+    pub source_configuration_version: i64,
+    pub activation_observation_digest: String,
+    pub input_digest: String,
+    pub producer_version: String,
+}
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Postprocessing {
@@ -588,6 +597,8 @@ pub struct Receipt {
     pub activated: bool,
     pub applied_at: String,
     pub postprocessing: Postprocessing,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authority_revision: Option<SourceAuthorityRevision>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -613,6 +624,10 @@ pub struct Operation {
     pub artifact: Option<Artifact>,
     pub receipt: Option<Receipt>,
     pub cleanup_settled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authority_revision: Option<SourceAuthorityRevision>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observation_cursor: Option<i64>,
 }
 #[derive(Clone, Debug)]
 pub enum Phase {
@@ -622,6 +637,57 @@ pub enum Phase {
     Activate,
     Cleanup,
     Fail,
+}
+impl Phase {
+    fn observation_name(&self) -> &'static str {
+        match self {
+            Self::Read => "read",
+            Self::Owned(_) => "owned",
+            Self::Published(_) => "published",
+            Self::Activate => "activated",
+            Self::Cleanup => "cleanup",
+            Self::Fail => "failed",
+        }
+    }
+}
+
+struct SourceObservationContext {
+    job_id: String,
+    attempt_generation: i64,
+    attempt_fence: Option<String>,
+    revision_id: Option<i64>,
+    receipt_activated: Option<bool>,
+    cancel_requested: bool,
+}
+
+impl SourceObservationContext {
+    fn claimed(job: &jobs::JobRecord, lease: &jobs::AttemptLease, op: &Operation) -> Self {
+        Self {
+            job_id: job.job_id.clone(),
+            attempt_generation: lease.generation(),
+            attempt_fence: Some(lease.fence().to_owned()),
+            revision_id: op.receipt.as_ref().map(|receipt| receipt.revision_id),
+            receipt_activated: op.receipt.as_ref().map(|receipt| receipt.activated),
+            cancel_requested: job.cancel_requested,
+        }
+    }
+
+    fn targeted_refusal(job: &jobs::JobRecord) -> Self {
+        Self {
+            job_id: job.job_id.clone(),
+            attempt_generation: job.generation,
+            attempt_fence: None,
+            revision_id: None,
+            receipt_activated: None,
+            cancel_requested: job.cancel_requested,
+        }
+    }
+}
+
+struct SourceDocumentProvenance<'a> {
+    revision_id: i64,
+    input_digest: &'a str,
+    producer_version: &'a str,
 }
 pub(crate) enum Command {
     Admit {
@@ -643,6 +709,7 @@ pub(crate) enum Command {
     Phase {
         lease: jobs::AttemptLease,
         phase: Phase,
+        policy: AuthPolicy,
     },
 }
 
@@ -975,6 +1042,63 @@ fn store(tx: &Transaction<'_>, op: &Operation) -> Result<()> {
 fn basis(tx: &Transaction<'_>, tenant: &str, id: i64) -> Result<Basis> {
     Ok(tx.query_row("SELECT current_source_revision_id,url,branch,tag,source_kind,source_type,local_path,last_commit_sha,legacy_manifest_cutover FROM projects WHERE tenant_id=?1 AND id=?2",params![tenant,id],|r|Ok(Basis{current_source_revision_id:r.get(0)?,url:r.get(1)?,branch:r.get(2)?,tag:r.get(3)?,source_kind:r.get(4)?,source_type:r.get(5)?,local_path:r.get(6)?,last_commit_sha:r.get(7)?,legacy_manifest_cutover:r.get(8)?}))?)
 }
+fn source_authority_revision(
+    tx: &Transaction<'_>,
+    tenant: &str,
+    source_id: i64,
+    basis: &Basis,
+    input_digest: &str,
+) -> Result<SourceAuthorityRevision> {
+    let source_configuration_version: i64 = tx.query_row(
+        "SELECT source_configuration_version FROM projects WHERE tenant_id=?1 AND id=?2",
+        params![tenant, source_id],
+        |row| row.get(0),
+    )?;
+    ensure!(
+        source_configuration_version > 0,
+        "Invalid Source configuration version"
+    );
+    digest(input_digest)?;
+    Ok(SourceAuthorityRevision {
+        version: 1,
+        source_configuration_version,
+        activation_observation_digest: hex::encode(Sha256::digest(serde_json::to_vec(basis)?)),
+        input_digest: input_digest.into(),
+        producer_version: "supplied-source-import-v1".into(),
+    })
+}
+
+fn validate_source_authority_revision(tx: &Transaction<'_>, operation: &Operation) -> Result<()> {
+    let revision = operation
+        .authority_revision
+        .as_ref()
+        .ok_or_else(|| anyhow!("Legacy Source operation requires repair"))?;
+    ensure!(
+        revision.version == 1
+            && revision.producer_version == "supplied-source-import-v1"
+            && revision.source_configuration_version > 0,
+        "Unsupported Source authority revision"
+    );
+    digest(&revision.activation_observation_digest)?;
+    digest(&revision.input_digest)?;
+    ensure!(
+        revision.input_digest == operation.requested_digest
+            && revision.activation_observation_digest
+                == hex::encode(Sha256::digest(serde_json::to_vec(&operation.basis)?)),
+        "Source authority revision binding mismatch"
+    );
+    let current: i64 = tx.query_row(
+        "SELECT source_configuration_version FROM projects WHERE tenant_id=?1 AND id=?2",
+        params![operation.tenant, operation.source_id],
+        |row| row.get(0),
+    )?;
+    ensure!(
+        current == revision.source_configuration_version,
+        "Source configuration changed after admission"
+    );
+    Ok(())
+}
+
 fn digest(s: &str) -> Result<()> {
     ensure!(
         s.len() == 64
@@ -1132,18 +1256,24 @@ pub(crate) fn execute(
                 storage.import_epoch.load(Ordering::Acquire) == accounting_epoch,
                 "Import accounting changed; retry admission"
             );
-            let (tenant, actor) = match authority {
+            let (tenant, actor, original_authority) = match authority {
                 AdmissionAuthority::Credential(credential) => {
-                    jobs::actor(&tx, credential, policy, &storage)?
+                    auth::authority::admit(&tx, credential, policy, &storage)?
                 }
                 AdmissionAuthority::Preflighted(preflight) => {
-                    let (tenant, actor) =
+                    let (preflight_tenant, preflight_actor) =
                         jobs::actor_ref(&tx, &preflight.credential, policy, &storage)?;
                     ensure!(
-                        tenant == preflight.tenant && actor == preflight.actor,
+                        preflight_tenant == preflight.tenant && preflight_actor == preflight.actor,
                         "Capture authority changed"
                     );
-                    (tenant, actor)
+                    let (tenant, actor, authority) =
+                        auth::authority::admit(&tx, preflight.credential, policy, &storage)?;
+                    ensure!(
+                        tenant == preflight_tenant && actor == preflight_actor,
+                        "Capture authority changed"
+                    );
+                    (tenant, actor, authority)
                 }
             };
             ensure!(
@@ -1224,23 +1354,24 @@ pub(crate) fn execute(
                     },
                 };
                 let basis = basis(&tx, &tenant, id)?;
+                let authority_revision =
+                    source_authority_revision(&tx, &tenant, id, &basis, &requested_digest)?;
                 let original_rules: Option<String> = tx.query_row(
                     "SELECT imported_paths FROM projects WHERE tenant_id=?1 AND id=?2",
                     params![tenant, id],
                     |r| r.get(0),
                 )?;
-                let default_rules = original_rules
-                    .as_ref()
-                    .is_none_or(|s| s.trim().is_empty() || s.trim() == "[]");
+                let default_rules = original_rules.is_none();
                 let payload = jobs::Payload::SuppliedSourceImport {
                     project_id: id.try_into()?,
                     operation_key: request.key.clone(),
                     input_version,
                 };
-                let job = match jobs::user(
+                let job = match jobs::user_with_authority(
                     &tx,
                     &tenant,
                     &actor,
+                    original_authority,
                     jobs::UserOperation::Enqueue {
                         key: format!(
                             "source-import:{}",
@@ -1275,6 +1406,8 @@ pub(crate) fn execute(
                     artifact: None,
                     receipt: None,
                     cleanup_settled: false,
+                    authority_revision: Some(authority_revision),
+                    observation_cursor: Some(0),
                 };
                 tx.execute("INSERT INTO source_import_operations(tenant,operation_key,actor,intent_digest,source_id,job_id,state,document_version,document) VALUES(?1,?2,?3,?4,?5,?6,'admitted',1,?7)",params![op.tenant,op.key,op.actor,op.intent_digest,op.source_id,op.job_id,serde_json::to_string(&op)?])?;
                 tx.execute(
@@ -1284,7 +1417,11 @@ pub(crate) fn execute(
                 op
             }
         }
-        Command::Phase { lease, phase } => {
+        Command::Phase {
+            lease,
+            phase,
+            policy,
+        } => {
             let mut job = jobs::claimed_job(&tx, &lease)?;
             let (source_id, key, input_version) = match &job.payload {
                 jobs::Payload::SuppliedSourceImport {
@@ -1302,6 +1439,20 @@ pub(crate) fn execute(
                     && op.input_version == input_version,
                 "Import job binding mismatch"
             );
+            let phase_name = phase.observation_name();
+            if let Err(error) = jobs::revalidate_source_authority(&tx, &job, policy) {
+                let context = SourceObservationContext::claimed(&job, &lease, &op);
+                if jobs::commit_source_authority_refusal(&tx, &mut job, &error)? {
+                    record_observation(&tx, &mut op, "authority_refused", context)?;
+                    store(&tx, &op)?;
+                    tx.commit()
+                        .map_err(|_| anyhow!(jobs::JobFailure::CommitUnknown))?;
+                }
+                return Err(error);
+            }
+            if matches!(&phase, Phase::Activate) {
+                validate_source_authority_revision(&tx, &op)?;
+            }
             ensure!(
                 !job.cancel_requested
                     || matches!(phase, Phase::Cleanup | Phase::Fail | Phase::Read),
@@ -1345,7 +1496,7 @@ pub(crate) fn execute(
                 }
                 Phase::Activate => {
                     ensure!(op.state == State::Published, "Artifact not published");
-                    activate(&tx, catalog_state, &mut op)?;
+                    activate(&tx, catalog_state, &mut op, &lease)?;
                 }
                 Phase::Fail => {
                     ensure!(op.receipt.is_none(), "Import already completed");
@@ -1373,6 +1524,10 @@ pub(crate) fn execute(
                     jobs::save(&tx, &mut job, "source_import_settled")?;
                 }
             }
+            if !matches!(phase_name, "read") {
+                let context = SourceObservationContext::claimed(&job, &lease, &op);
+                record_observation(&tx, &mut op, phase_name, context)?;
+            }
             store(&tx, &op)?;
             op
         }
@@ -1380,18 +1535,84 @@ pub(crate) fn execute(
     tx.commit()?;
     Ok(operation)
 }
-fn activate(tx: &Transaction<'_>, state: &catalog::State, op: &mut Operation) -> Result<()> {
+fn record_observation(
+    tx: &Transaction<'_>,
+    op: &mut Operation,
+    phase: &str,
+    context: SourceObservationContext,
+) -> Result<()> {
+    if op.authority_revision.is_none() {
+        return Ok(());
+    }
+    let cursor = op
+        .observation_cursor
+        .ok_or_else(|| anyhow!("Missing U10 observation cursor"))?
+        .checked_add(1)
+        .ok_or_else(|| anyhow!("U10 observation cursor overflow"))?;
+    tx.execute(
+        "INSERT INTO source_revision_observations(tenant_id,operation_key,cursor,phase,job_id,attempt_generation,attempt_fence,revision_id,receipt_activated,cancel_requested,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+        params![op.tenant, op.key, cursor, phase, context.job_id, context.attempt_generation, context.attempt_fence, context.revision_id, context.receipt_activated, context.cancel_requested, auth::catalog_timestamp()],
+    )?;
+    op.observation_cursor = Some(cursor);
+    Ok(())
+}
+
+pub(crate) fn record_targeted_authority_refusal(
+    tx: &Transaction<'_>,
+    job: &jobs::JobRecord,
+) -> Result<()> {
+    let (source_id, operation_key, input_version) = match &job.payload {
+        jobs::Payload::SuppliedSourceImport {
+            project_id,
+            operation_key,
+            input_version,
+        } => (*project_id as i64, operation_key, *input_version),
+        _ => return Err(anyhow!("Targeted refusal is not a supplied Source import")),
+    };
+    let Some(mut op) = load(tx, &job.tenant, operation_key)? else {
+        return Ok(());
+    };
+    ensure!(
+        op.job_id == job.job_id && op.source_id == source_id && op.input_version == input_version,
+        "Import job binding mismatch"
+    );
+    record_observation(
+        tx,
+        &mut op,
+        "authority_refused",
+        SourceObservationContext::targeted_refusal(job),
+    )?;
+    store(tx, &op)
+}
+fn activate(
+    tx: &Transaction<'_>,
+    state: &catalog::State,
+    op: &mut Operation,
+    lease: &jobs::AttemptLease,
+) -> Result<()> {
     let a = op
         .artifact
         .as_ref()
         .ok_or_else(|| anyhow!("Missing artifact"))?;
     let now = auth::catalog_timestamp();
-    tx.execute("INSERT INTO source_revisions(tenant_id,project_id,upstream_revision_key,manifest_digest,snapshot_locator,synced_at,completeness) VALUES(?1,?2,?3,?4,?5,?6,'complete') ON CONFLICT DO NOTHING",params![op.tenant,op.source_id,a.upstream_key,a.manifest_digest,a.locator,now])?;
+    let authority_revision = op
+        .authority_revision
+        .as_ref()
+        .ok_or_else(|| anyhow!("Legacy Source operation requires repair"))?;
+    tx.execute("INSERT INTO source_revisions(tenant_id,project_id,upstream_revision_key,manifest_digest,snapshot_locator,synced_at,completeness,source_configuration_version,activation_observation_digest,input_digest,producer_version) VALUES(?1,?2,?3,?4,?5,?6,'complete',?7,?8,?9,?10) ON CONFLICT DO NOTHING",params![op.tenant,op.source_id,a.upstream_key,a.manifest_digest,a.locator,now,authority_revision.source_configuration_version,authority_revision.activation_observation_digest,authority_revision.input_digest,authority_revision.producer_version])?;
     let(id,digest,locator,synced):(i64,String,String,String)=tx.query_row("SELECT id,manifest_digest,snapshot_locator,synced_at FROM source_revisions WHERE tenant_id=?1 AND project_id=?2 AND upstream_revision_key=?3 AND completeness='complete'",params![op.tenant,op.source_id,a.upstream_key],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)))?;
     ensure!(
         digest == a.manifest_digest && locator == a.locator,
         "Accepted revision identity mismatch"
     );
+    tx.execute(
+        "INSERT INTO source_revision_attempts(tenant_id,operation_key,job_id,source_id,revision_id,source_configuration_version,activation_observation_digest,input_digest,producer_version,attempt_generation,attempt_fence,activated,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,0,?12)",
+        params![op.tenant,op.key,op.job_id,op.source_id,id,authority_revision.source_configuration_version,authority_revision.activation_observation_digest,authority_revision.input_digest,authority_revision.producer_version,lease.generation(),lease.fence(),now],
+    )?;
+    tx.execute(
+        "INSERT INTO source_revision_artifacts(revision_id,artifact_kind,input_digest,producer_version,artifact_digest) VALUES(?1,'snapshot_manifest',?2,?3,?4) ON CONFLICT DO NOTHING",
+        params![id,authority_revision.input_digest,authority_revision.producer_version,a.manifest_digest],
+    )?;
     let b = &op.basis;
     let local = state
         .directory
@@ -1404,6 +1625,11 @@ fn activate(tx: &Transaction<'_>, state: &catalog::State, op: &mut Operation) ->
     let activated = changed == 1;
     let mut postprocessing = Postprocessing::NotActivated;
     if activated {
+        let document_provenance = SourceDocumentProvenance {
+            revision_id: id,
+            input_digest: &authority_revision.input_digest,
+            producer_version: &authority_revision.producer_version,
+        };
         let raw: Option<String> = tx.query_row(
             "SELECT metadata_json FROM projects WHERE tenant_id=?1 AND id=?2",
             params![op.tenant, op.source_id],
@@ -1457,7 +1683,7 @@ fn activate(tx: &Transaction<'_>, state: &catalog::State, op: &mut Operation) ->
             });
             for f in ordered {
                 if ["readme", "md", "pdf"].contains(&f.kind.as_str()) {
-                    tx.execute("INSERT INTO source_docs(tenant_id,project_id,path,kind,size_bytes,content_hash,extract_status,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",params![op.tenant,op.source_id,f.path,f.kind,i64::try_from(f.size)?,&f.sha256[..24],if f.kind=="pdf"{"pending"}else{"na"},now])?;
+                    tx.execute("INSERT INTO source_docs(tenant_id,project_id,path,kind,size_bytes,content_hash,extract_status,source_revision_id,input_digest,producer_version,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",params![op.tenant,op.source_id,f.path,f.kind,i64::try_from(f.size)?,&f.sha256[..24],if f.kind=="pdf"{"pending"}else{"na"},document_provenance.revision_id,document_provenance.input_digest,document_provenance.producer_version,now])?;
                 }
             }
             Ok(())
@@ -1490,12 +1716,104 @@ fn activate(tx: &Transaction<'_>, state: &catalog::State, op: &mut Operation) ->
         activated,
         applied_at: now,
         postprocessing,
+        authority_revision: Some(authority_revision.clone()),
     });
+    if activated {
+        tx.execute(
+            "UPDATE source_revision_attempts SET activated=1 WHERE tenant_id=?1 AND operation_key=?2",
+            params![op.tenant, op.key],
+        )?;
+    }
     Ok(())
 }
 pub(crate) fn source_reserved(tx: &Transaction<'_>, tenant: &str, id: i64) -> Result<bool> {
     Ok(tx.query_row("SELECT EXISTS(SELECT 1 FROM source_import_operations o JOIN source_import_quota q USING(tenant,operation_key) WHERE o.tenant=?1 AND o.source_id=?2 AND q.settled=0)",params![tenant,id],|r|r.get(0))?)
 }
+
+#[derive(Debug, PartialEq, Eq)]
+struct ColumnDefinition {
+    declared_type: String,
+    not_null: bool,
+    default_value: Option<String>,
+    primary_key: bool,
+}
+
+fn column_definition(
+    connection: &Connection,
+    table: &str,
+    column: &str,
+) -> Result<ColumnDefinition> {
+    let mut statement = connection.prepare(&format!("PRAGMA table_info({table})"))?;
+    let columns = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(1)?,
+                ColumnDefinition {
+                    declared_type: row.get(2)?,
+                    not_null: row.get::<_, i64>(3)? != 0,
+                    default_value: row.get(4)?,
+                    primary_key: row.get::<_, i64>(5)? != 0,
+                },
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    columns
+        .into_iter()
+        .find_map(|(name, definition)| (name == column).then_some(definition))
+        .ok_or_else(|| anyhow!("Missing Source revision column {table}.{column}"))
+}
+
+fn normalize_schema_sql(sql: &str) -> String {
+    let mut literal = false;
+    let mut normalized = String::new();
+    for character in sql.chars() {
+        if character == '\'' {
+            literal = !literal;
+        }
+        if literal || character == '\'' {
+            normalized.push(character);
+        } else if !character.is_ascii_whitespace() {
+            normalized.extend(character.to_lowercase());
+        }
+    }
+    normalized
+}
+
+fn column_schema_sql(connection: &Connection, table: &str, column: &str) -> Result<String> {
+    let sql: String = connection.query_row(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name=?1",
+        [table],
+        |row| row.get(0),
+    )?;
+    let body = &sql[sql
+        .find('(')
+        .ok_or_else(|| anyhow!("Missing table definition"))?
+        + 1..];
+    let mut depth = 0;
+    let mut literal = false;
+    let mut start = 0;
+    for (index, character) in body.char_indices() {
+        if character == '\'' {
+            literal = !literal;
+        }
+        if literal {
+            continue;
+        }
+        if character == '(' {
+            depth += 1;
+        } else if (character == ',' || character == ')') && depth == 0 {
+            let definition = body[start..index].trim();
+            if definition.split_whitespace().next() == Some(column) {
+                return Ok(normalize_schema_sql(definition));
+            }
+            start = index + 1;
+        } else if character == ')' {
+            depth -= 1;
+        }
+    }
+    Err(anyhow!("Missing Source column definition {table}.{column}"))
+}
+
 pub(crate) fn validate_schema(conn: &Connection, version: u64) -> Result<()> {
     let names = [
         "source_import_operations",
@@ -1526,6 +1844,107 @@ pub(crate) fn validate_schema(conn: &Connection, version: u64) -> Result<()> {
                 r.get(0)
             })?;
         ensure!(sql == canonical, "Source import schema mismatch");
+    }
+    if version >= 38 {
+        let expected = Connection::open_in_memory()?;
+        expected.execute_batch(
+            "CREATE TABLE projects(\
+               id INTEGER PRIMARY KEY,\
+               source_configuration_version INTEGER NOT NULL DEFAULT 1\
+             );\
+             CREATE TABLE source_revisions(\
+               id INTEGER PRIMARY KEY,\
+               source_configuration_version INTEGER,\
+               activation_observation_digest TEXT,\
+               input_digest TEXT,\
+               producer_version TEXT\
+             );\
+             CREATE TABLE source_docs(\
+               id INTEGER PRIMARY KEY,\
+               source_revision_id INTEGER REFERENCES source_revisions(id) ON DELETE RESTRICT,\
+               input_digest TEXT,\
+               producer_version TEXT CHECK ((source_revision_id IS NULL AND input_digest IS NULL AND producer_version IS NULL) OR (source_revision_id IS NOT NULL AND input_digest IS NOT NULL AND length(input_digest) = 64 AND producer_version IS NOT NULL))\
+             );\
+             CREATE TABLE source_import_operations(\
+               tenant TEXT NOT NULL, operation_key TEXT NOT NULL,\
+               PRIMARY KEY(tenant, operation_key)\
+             );",
+        )?;
+        expected.execute_batch(include_str!("remote_sources/schema.sql"))?;
+        for name in [
+            "source_revision_attempts",
+            "source_revision_artifacts",
+            "source_revision_observations",
+            "trg_source_revisions_provenance_immutable_update",
+            "trg_source_revisions_provenance_immutable_delete",
+            "trg_source_revision_attempts_immutable_update",
+            "trg_source_revision_attempts_immutable_delete",
+            "trg_source_revision_artifacts_immutable_update",
+            "trg_source_revision_artifacts_immutable_delete",
+            "trg_source_revision_observations_immutable_update",
+            "trg_source_revision_observations_immutable_delete",
+        ] {
+            let sql: String =
+                conn.query_row("SELECT sql FROM sqlite_master WHERE name=?1", [name], |r| {
+                    r.get(0)
+                })?;
+            let canonical: String =
+                expected.query_row("SELECT sql FROM sqlite_master WHERE name=?1", [name], |r| {
+                    r.get(0)
+                })?;
+            ensure!(
+                normalize_schema_sql(&sql) == normalize_schema_sql(&canonical),
+                "Source revision journal schema mismatch"
+            );
+        }
+        for (table, column) in [
+            ("projects", "source_configuration_version"),
+            ("source_revisions", "source_configuration_version"),
+            ("source_revisions", "activation_observation_digest"),
+            ("source_revisions", "input_digest"),
+            ("source_revisions", "producer_version"),
+            ("source_docs", "source_revision_id"),
+            ("source_docs", "input_digest"),
+            ("source_docs", "producer_version"),
+        ] {
+            ensure!(
+                column_definition(conn, table, column)?
+                    == column_definition(&expected, table, column)?,
+                "Source revision column schema mismatch"
+            );
+            ensure!(
+                column_schema_sql(conn, table, column)?
+                    == column_schema_sql(&expected, table, column)?,
+                "Source revision column constraint mismatch"
+            );
+        }
+        let partial_document_provenance: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM source_docs WHERE NOT ((source_revision_id IS NULL AND input_digest IS NULL AND producer_version IS NULL) OR (source_revision_id IS NOT NULL AND input_digest IS NOT NULL AND length(input_digest) = 64 AND producer_version IS NOT NULL)))",
+            [],
+            |row| row.get(0),
+        )?;
+        ensure!(
+            !partial_document_provenance,
+            "Partial Source document provenance"
+        );
+        let partial_revision_provenance: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM source_revisions WHERE NOT ((source_configuration_version IS NULL AND activation_observation_digest IS NULL AND input_digest IS NULL AND producer_version IS NULL) OR (source_configuration_version IS NOT NULL AND activation_observation_digest IS NOT NULL AND length(activation_observation_digest) = 64 AND input_digest IS NOT NULL AND length(input_digest) = 64 AND producer_version IS NOT NULL)))",
+            [],
+            |row| row.get(0),
+        )?;
+        ensure!(
+            !partial_revision_provenance,
+            "Partial Source revision provenance"
+        );
+        let invalid_observation_context: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM source_revision_observations WHERE attempt_generation <= 0 OR cancel_requested NOT IN (0,1) OR receipt_activated NOT IN (0,1) OR (receipt_activated IS NOT NULL AND revision_id IS NULL))",
+            [],
+            |row| row.get(0),
+        )?;
+        ensure!(
+            !invalid_observation_context,
+            "Invalid Source observation context"
+        );
     }
     let orphans:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM source_import_quota q LEFT JOIN source_import_operations o USING(tenant,operation_key) WHERE o.tenant IS NULL)",[],|r|r.get(0))?;
     ensure!(!orphans, "Orphan Source quota");
@@ -1702,6 +2121,28 @@ fn validate_operation(op: &Operation) -> Result<()> {
     digest(&op.job_id)?;
     digest(&op.intent_digest)?;
     digest(&op.requested_digest)?;
+    if let Some(authority_revision) = &op.authority_revision {
+        ensure!(
+            authority_revision.version == 1
+                && authority_revision.source_configuration_version > 0
+                && authority_revision.producer_version == "supplied-source-import-v1"
+                && authority_revision.input_digest == op.requested_digest
+                && authority_revision.activation_observation_digest
+                    == hex::encode(Sha256::digest(serde_json::to_vec(&op.basis)?)),
+            "Invalid Source authority revision"
+        );
+        digest(&authority_revision.activation_observation_digest)?;
+        digest(&authority_revision.input_digest)?;
+        ensure!(
+            op.observation_cursor.is_some_and(|cursor| cursor >= 0),
+            "Invalid U10 cursor"
+        );
+    } else {
+        ensure!(
+            op.observation_cursor.is_none(),
+            "Legacy Source cursor without authority revision"
+        );
+    }
     files(&op.requested_files, op.max_input_bytes)?;
     ensure!(
         hex::encode(Sha256::digest(serde_json::to_vec(&op.requested_files)?))
@@ -1772,6 +2213,10 @@ fn validate_operation(op: &Operation) -> Result<()> {
                 && Some(&r.artifact) == op.artifact.as_ref()
                 && r.activated == (op.state == State::Activated),
             "Receipt binding mismatch"
+        );
+        ensure!(
+            r.authority_revision == op.authority_revision,
+            "Receipt authority revision mismatch"
         );
         ensure!(
             match r.postprocessing {

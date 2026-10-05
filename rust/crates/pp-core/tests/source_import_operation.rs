@@ -109,12 +109,15 @@ fn resolved_claim_rechecks_eleven_fields_before_attempt_mutation() {
         _ => panic!("exact manifest did not resolve"),
     };
     let worker = owner
-        .job_worker(WorkerAdmission {
-            kinds: vec![(JobKind::SuppliedSourceImport, 1)],
-            total: 1,
-            per_resource: 1,
-            lease_seconds: 3600,
-        })
+        .job_worker_with_policy(
+            policy(),
+            WorkerAdmission {
+                kinds: vec![(JobKind::SuppliedSourceImport, 1)],
+                total: 1,
+                per_resource: 1,
+                lease_seconds: 3600,
+            },
+        )
         .unwrap();
     let (claimed, lease) = worker.claim_resolved_import(resolved).unwrap().unwrap();
     assert_eq!(claimed.attempt, 1);
@@ -183,7 +186,7 @@ fn fixture() -> (PathBuf, PathBuf, WriterOwner) {
     .unwrap();
     std::fs::write(files.join("README.md"), "# Ordinary Source\n").unwrap();
     let (owner, ready) = WriterOwner::open(&root, Limits::default()).unwrap();
-    assert_eq!(ready.version, 37);
+    assert_eq!(ready.version, 38);
     (root, files, owner)
 }
 fn request(key: &str, target: Target) -> Admission {
@@ -323,6 +326,39 @@ fn count(root: &Path, table: &str) -> i64 {
         .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
         .unwrap()
 }
+#[derive(Debug, PartialEq, Eq)]
+struct SourceObservation {
+    cursor: i64,
+    phase: String,
+    job_id: String,
+    generation: i64,
+    fence: Option<String>,
+    revision_id: Option<i64>,
+    activated: Option<bool>,
+    cancelled: bool,
+}
+
+fn observations(root: &Path, key: &str) -> Vec<SourceObservation> {
+    read(root)
+        .prepare("SELECT cursor,phase,job_id,attempt_generation,attempt_fence,revision_id,receipt_activated,cancel_requested FROM source_revision_observations WHERE operation_key=?1 ORDER BY cursor")
+        .unwrap()
+        .query_map([key], |row| {
+            Ok(SourceObservation {
+                cursor: row.get(0)?,
+                phase: row.get(1)?,
+                job_id: row.get(2)?,
+                generation: row.get(3)?,
+                fence: row.get(4)?,
+                revision_id: row.get(5)?,
+                activated: row.get(6)?,
+                cancelled: row.get(7)?,
+            })
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap()
+}
+
 fn cancel(owner: &WriterOwner, id: String) {
     owner
         .jobs(policy())
@@ -367,6 +403,13 @@ fn create_update_exact_retry_never_repoints_and_preserves_originals() {
     );
     assert_eq!(count(&root, "source_docs"), 1);
     assert_eq!(count(&root, "source_revisions"), 1);
+    assert_eq!(count(&root, "source_revision_attempts"), 1);
+    assert_eq!(count(&root, "source_revision_artifacts"), 1);
+    assert_eq!(count(&root, "source_revision_observations"), 4);
+    assert_eq!(
+        first.authority_revision.as_ref().unwrap().producer_version,
+        "supplied-source-import-v1"
+    );
     let old = first.artifact.as_ref().unwrap();
     let old_bytes =
         std::fs::read(root.join("repos").join(&old.locator).join("triangle.stl")).unwrap();
@@ -410,6 +453,8 @@ fn create_update_exact_retry_never_repoints_and_preserves_originals() {
         first.receipt.as_ref().unwrap().revision_id
     );
     assert_eq!(count(&root, "source_revisions"), 1);
+    assert_eq!(count(&root, "source_revision_attempts"), 2);
+    assert_eq!(count(&root, "source_revision_artifacts"), 1);
     std::fs::write(
         files.join("triangle.stl"),
         String::from_utf8(old_bytes.clone())
@@ -444,6 +489,8 @@ fn create_update_exact_retry_never_repoints_and_preserves_originals() {
         old.upstream_key
     );
     assert_eq!(count(&root, "source_revisions"), 2);
+    assert_eq!(count(&root, "source_revision_attempts"), 3);
+    assert_eq!(count(&root, "source_revision_artifacts"), 2);
     assert_eq!(svc.get(credential(&owner), "one".into()).unwrap(), first);
     let current: i64 = read(&root)
         .query_row(
@@ -501,6 +548,22 @@ fn restart_each_durable_fact_and_exact_activation_acknowledgement() {
                 .unwrap(),
             catalog::Outcome::Deletion(catalog::Deletion::ActiveWork)
         ));
+        let prior_observations = observations(&root, &admitted.key);
+        if !prior_observations.is_empty() {
+            let context: (i64, String) = read(&root)
+                .query_row(
+                    "SELECT generation,json_extract(document,'$._attempt_fence') FROM durable_jobs WHERE id=?1",
+                    [&admitted.job_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap();
+            for observation in &prior_observations {
+                assert_eq!(observation.job_id, admitted.job_id);
+                assert_eq!(observation.generation, context.0);
+                assert_eq!(observation.fence.as_ref(), Some(&context.1));
+                assert!(!observation.cancelled);
+            }
+        }
         drop(svc);
         owner.shutdown().unwrap();
         let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
@@ -528,6 +591,99 @@ fn restart_each_durable_fact_and_exact_activation_acknowledgement() {
         .unwrap();
         assert_eq!(resumed.source_id, admitted.source_id);
         assert!(resumed.cleanup_settled);
+        let receipt = resumed.receipt.as_ref().unwrap();
+        let job_context: (i64, Option<String>, i64) = read(&root)
+            .query_row(
+                "SELECT json_extract(document,'$.generation'),json_extract(document,'$._attempt_fence'),json_extract(document,'$.cancel_requested') FROM durable_jobs WHERE id=?1",
+                [&admitted.job_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        let observation_context: (
+            String,
+            i64,
+            Option<String>,
+            Option<i64>,
+            Option<i64>,
+            i64,
+            String,
+        ) = read(&root)
+            .query_row(
+                "SELECT job_id,attempt_generation,attempt_fence,revision_id,receipt_activated,cancel_requested,phase FROM source_revision_observations WHERE operation_key=?1 ORDER BY cursor DESC LIMIT 1",
+                [&admitted.key],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                        row.get(6)?,
+                    ))
+                },
+            )
+            .unwrap();
+        let observation_fence = observation_context.2.as_ref().unwrap();
+        assert!(
+            observation_fence.len() == 64
+                && observation_fence
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        );
+        assert_eq!(
+            read(&root)
+                .query_row(
+                    "SELECT COUNT(DISTINCT attempt_fence) FROM source_revision_observations WHERE operation_key=?1 AND attempt_generation=?2",
+                    rusqlite::params![admitted.key, observation_context.1],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            (
+                observation_context.0,
+                observation_context.1,
+                observation_context.3,
+                observation_context.4,
+                observation_context.5,
+                observation_context.6,
+            ),
+            (
+                admitted.job_id.clone(),
+                job_context.0,
+                Some(receipt.revision_id),
+                Some(1),
+                job_context.2,
+                "cleanup".into(),
+            )
+        );
+        let all_observations = observations(&root, &admitted.key);
+        assert_eq!(
+            all_observations[..prior_observations.len()],
+            prior_observations
+        );
+        let resumed_fence = all_observations.last().unwrap().fence.as_ref().unwrap();
+        if let Some(prior) = prior_observations.last() {
+            assert!(job_context.0 > prior.generation);
+            assert_ne!(Some(resumed_fence), prior.fence.as_ref());
+        }
+        for (index, observation) in all_observations.iter().enumerate() {
+            assert_eq!(observation.cursor, index as i64 + 1);
+            let has_receipt = matches!(observation.phase.as_str(), "activated" | "cleanup");
+            assert_eq!(
+                observation.revision_id,
+                has_receipt.then_some(receipt.revision_id)
+            );
+            assert_eq!(observation.activated, has_receipt.then_some(true));
+            if index >= prior_observations.len() {
+                assert_eq!(observation.job_id, admitted.job_id);
+                assert_eq!(observation.generation, job_context.0);
+                assert_eq!(observation.fence.as_ref(), Some(resumed_fence));
+                assert!(!observation.cancelled);
+            }
+        }
         if let Some(receipt) = before.and_then(|o| o.receipt) {
             assert_eq!(resumed.receipt.unwrap(), receipt);
         }
@@ -565,12 +721,15 @@ fn captured_zip_has_explicit_ready_only_ownership_and_nfc_replay() {
         .unwrap();
     assert_eq!(admitted.input_version, 2);
     let ordinary_worker = owner
-        .job_worker(jobs::WorkerAdmission {
-            kinds: vec![(jobs::JobKind::SuppliedSourceImport, 1)],
-            total: 1,
-            per_resource: 1,
-            lease_seconds: 3600,
-        })
+        .job_worker_with_policy(
+            policy(),
+            jobs::WorkerAdmission {
+                kinds: vec![(jobs::JobKind::SuppliedSourceImport, 1)],
+                total: 1,
+                per_resource: 1,
+                lease_seconds: 3600,
+            },
+        )
         .unwrap();
     assert!(ordinary_worker.claim().unwrap().is_none());
     assert!(
@@ -768,7 +927,7 @@ fn archived_captured_job_reopens_and_rejects_future_payload_version_without_muta
     assert!(!root.join(".desktop-owner.json").exists());
 }
 #[test]
-fn metadata_cas_conflict_keeps_inactive_revision() {
+fn changed_source_binding_refuses_registration_before_cas() {
     let (root, files, owner) = fixture();
     let svc = service(&owner);
     let op = svc
@@ -800,17 +959,11 @@ fn metadata_cas_conflict_keeps_inactive_revision() {
     owner.shutdown().unwrap();
     let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
     let svc = service(&owner);
-    let result = svc
+    let error = svc
         .work_next(Through::Settled, &AtomicBool::new(false))
-        .unwrap()
-        .unwrap();
-    assert_eq!(result.state, State::Conflict);
-    assert!(!result.receipt.as_ref().unwrap().activated);
-    assert_eq!(
-        result.receipt.as_ref().unwrap().postprocessing,
-        Postprocessing::NotActivated
-    );
-    assert_eq!(count(&root, "source_revisions"), 1);
+        .unwrap_err();
+    assert!(error.to_string().contains("Source configuration changed"));
+    assert_eq!(count(&root, "source_revisions"), 0);
     let row: (String, Option<i64>) = read(&root)
         .query_row(
             "SELECT branch,current_source_revision_id FROM projects WHERE id=?1",
@@ -820,6 +973,125 @@ fn metadata_cas_conflict_keeps_inactive_revision() {
         .unwrap();
     assert_eq!(row, ("newer".into(), None));
     assert_eq!(count(&root, "source_docs"), 0);
+    drop(svc);
+    owner.shutdown().unwrap();
+}
+#[test]
+fn active_pointer_competition_registers_inactive_revision_with_attempt_provenance() {
+    let (root, files, owner) = fixture();
+    let svc = service(&owner);
+    let base = svc
+        .import(
+            credential(&owner),
+            request("pointer-base", create("Pointer competition")),
+            &files,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+    let first_files = root.join("pointer-first");
+    let second_files = root.join("pointer-second");
+    std::fs::create_dir(&first_files).unwrap();
+    std::fs::create_dir(&second_files).unwrap();
+    for directory in [&first_files, &second_files] {
+        std::fs::copy(files.join("triangle.stl"), directory.join("triangle.stl")).unwrap();
+        std::fs::copy(files.join("README.md"), directory.join("README.md")).unwrap();
+    }
+    std::fs::write(
+        first_files.join("triangle.stl"),
+        std::fs::read_to_string(first_files.join("triangle.stl"))
+            .unwrap()
+            .replace("vertex 1 0 0", "vertex 3 0 0"),
+    )
+    .unwrap();
+    std::fs::write(
+        second_files.join("triangle.stl"),
+        std::fs::read_to_string(second_files.join("triangle.stl"))
+            .unwrap()
+            .replace("vertex 1 0 0", "vertex 2 0 0"),
+    )
+    .unwrap();
+    let first = svc
+        .admit(
+            credential(&owner),
+            request(
+                "pointer-first",
+                Target::Existing {
+                    source_id: base.source_id,
+                },
+            ),
+            &first_files,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+    let second = svc
+        .admit(
+            credential(&owner),
+            request(
+                "pointer-second",
+                Target::Existing {
+                    source_id: base.source_id,
+                },
+            ),
+            &second_files,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+    assert_eq!(first.basis, second.basis);
+    assert_eq!(
+        first.basis.current_source_revision_id,
+        base.receipt.as_ref().map(|receipt| receipt.revision_id)
+    );
+    let activated = svc
+        .work_operation(
+            &first.job_id,
+            Some(&first_files),
+            Through::Settled,
+            &AtomicBool::new(false),
+        )
+        .unwrap()
+        .unwrap();
+    let after_first: i64 = read(&root)
+        .query_row(
+            "SELECT current_source_revision_id FROM projects WHERE id=?1",
+            [base.source_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(after_first, activated.receipt.as_ref().unwrap().revision_id);
+    assert_ne!(after_first, first.basis.current_source_revision_id.unwrap());
+    assert_eq!(
+        svc.get(credential(&owner), second.key.clone())
+            .unwrap()
+            .basis,
+        second.basis
+    );
+    let inactive = svc
+        .work_operation(
+            &second.job_id,
+            Some(&second_files),
+            Through::Settled,
+            &AtomicBool::new(false),
+        )
+        .unwrap()
+        .unwrap();
+    assert_ne!(
+        activated.artifact.as_ref().unwrap().upstream_key,
+        inactive.artifact.as_ref().unwrap().upstream_key
+    );
+    assert!(activated.receipt.as_ref().unwrap().activated);
+    assert_eq!(inactive.state, State::Conflict);
+    assert!(!inactive.receipt.as_ref().unwrap().activated);
+    assert_eq!(count(&root, "source_revisions"), 3);
+    assert_eq!(count(&root, "source_revision_attempts"), 3);
+    assert_eq!(count(&root, "source_revision_artifacts"), 3);
+    let current: i64 = read(&root)
+        .query_row(
+            "SELECT current_source_revision_id FROM projects WHERE id=?1",
+            [base.source_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(current, activated.receipt.unwrap().revision_id);
     drop(svc);
     owner.shutdown().unwrap();
 }
@@ -989,12 +1261,15 @@ fn stale_attempt_cannot_write_import_phases() {
         )
         .unwrap();
     let worker = owner
-        .job_worker(jobs::WorkerAdmission {
-            kinds: vec![(jobs::JobKind::SuppliedSourceImport, 1)],
-            total: 1,
-            per_resource: 1,
-            lease_seconds: 3600,
-        })
+        .job_worker_with_policy(
+            policy(),
+            jobs::WorkerAdmission {
+                kinds: vec![(jobs::JobKind::SuppliedSourceImport, 1)],
+                total: 1,
+                per_resource: 1,
+                lease_seconds: 3600,
+            },
+        )
         .unwrap();
     let (_, lease) = worker.claim_import(&op.job_id).unwrap().unwrap();
     cancel(&owner, op.job_id.clone());
@@ -1026,6 +1301,274 @@ fn auth_call(owner: &WriterOwner, p: AuthPolicy, r: auth::Request) -> auth::Outc
         .recv()
         .unwrap()
         .unwrap()
+}
+#[test]
+fn original_session_revocation_after_snapshot_keeps_source_inactive() {
+    let (root, files, owner) = fixture();
+    let strict = AuthPolicy {
+        registration: RegistrationPolicy::FirstAccountOnly,
+        session_tenant: SessionTenantPolicy::SingleAccountDefault,
+        first_user: FirstUserTenant::NewUser,
+    };
+    let token = match auth_call(
+        &owner,
+        strict,
+        auth::Request::Register {
+            email: "source-revision-authority@example.test".into(),
+            display_name: "Source revision authority".into(),
+            password: Secret::new("ordinary-password".into()),
+        },
+    ) {
+        auth::Outcome::Session { token, .. } => token.expose().to_owned(),
+        _ => panic!("session"),
+    };
+    let service = SourceImports::new(&owner, strict, 128 * 1024 * 1024).unwrap();
+    let admitted = service
+        .admit(
+            Credential::Session(Secret::new(token.clone())),
+            request(
+                "source-revision-authority",
+                create("Source revision authority"),
+            ),
+            &files,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+    let published = service
+        .work_operation(
+            &admitted.job_id,
+            Some(&files),
+            Through::Published,
+            &AtomicBool::new(false),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(published.state, State::Published);
+    assert_eq!(count(&root, "source_revisions"), 0);
+    auth_call(
+        &owner,
+        strict,
+        auth::Request::Logout {
+            token: Secret::new(token),
+        },
+    );
+    drop(service);
+    owner.shutdown().unwrap();
+
+    let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
+    let resumed = SourceImports::new(&owner, strict, 128 * 1024 * 1024).unwrap();
+    let error = resumed
+        .work_operation(
+            &admitted.job_id,
+            Some(&files),
+            Through::Settled,
+            &AtomicBool::new(false),
+        )
+        .unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<auth::AuthorityFailure>(),
+        Some(&auth::AuthorityFailure::CredentialInvalid)
+    );
+    assert_eq!(count(&root, "source_revisions"), 0);
+    assert_eq!(
+        read(&root)
+            .query_row(
+                "SELECT state FROM durable_jobs WHERE id=?1",
+                [&admitted.job_id],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+        "failed"
+    );
+    let refusal: (String, i64) = read(&root)
+        .query_row(
+            "SELECT json_extract(document,'$._authority_refusal.phase'),json_extract(document,'$._authority_refusal.generation') FROM durable_jobs WHERE id=?1",
+            [&admitted.job_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(refusal.0, "targeted_claim");
+    assert!(refusal.1 > 0);
+    let job_context: (i64, i64, Option<String>, i64) = read(&root)
+        .query_row(
+            "SELECT json_extract(document,'$.generation'),json_extract(document,'$._authority_refusal.generation'),json_extract(document,'$._attempt_fence'),json_extract(document,'$.cancel_requested') FROM durable_jobs WHERE id=?1",
+            [&admitted.job_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .unwrap();
+    let source = read(&root);
+    let last_source_phase: String = source
+        .query_row(
+            "SELECT phase FROM source_revision_observations WHERE operation_key=?1 ORDER BY cursor DESC LIMIT 1",
+            [&admitted.key],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let source_context_columns = source
+        .prepare("PRAGMA table_info(source_revision_observations)")
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(1))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    let required_context = [
+        "job_id",
+        "attempt_generation",
+        "attempt_fence",
+        "revision_id",
+        "receipt_activated",
+        "cancel_requested",
+    ];
+    let has_context = required_context.iter().all(|expected| {
+        source_context_columns
+            .iter()
+            .any(|actual| actual == expected)
+    });
+    let exact_refusal_context = if has_context {
+        let row: (String, i64, Option<String>, Option<i64>, Option<i64>, i64) = source
+            .query_row(
+                "SELECT job_id,attempt_generation,attempt_fence,revision_id,receipt_activated,cancel_requested FROM source_revision_observations WHERE operation_key=?1 ORDER BY cursor DESC LIMIT 1",
+                [&admitted.key],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                    ))
+                },
+            )
+            .unwrap();
+        row == (admitted.job_id.clone(), refusal.1, None, None, None, 0)
+    } else {
+        false
+    };
+    eprintln!(
+        "targeted refusal job_generation={} refusal_generation={} final_fence_present={} cancel_requested={} source_phase={} source_columns={source_context_columns:?}",
+        job_context.0,
+        job_context.1,
+        job_context.2.is_some(),
+        job_context.3,
+        last_source_phase,
+    );
+    assert!(
+        last_source_phase == "authority_refused" && exact_refusal_context,
+        "targeted claim refusal did not emit a Source cursor with exact generation, fence, result, and cancellation context"
+    );
+    drop(resumed);
+    owner.shutdown().unwrap();
+}
+#[test]
+fn original_session_revocation_after_claim_commits_source_writer_refusal() {
+    let (root, files, owner) = fixture();
+    let strict = AuthPolicy {
+        registration: RegistrationPolicy::FirstAccountOnly,
+        session_tenant: SessionTenantPolicy::SingleAccountDefault,
+        first_user: FirstUserTenant::NewUser,
+    };
+    let token = match auth_call(
+        &owner,
+        strict,
+        auth::Request::Register {
+            email: "source-writer-refusal@example.test".into(),
+            display_name: "Source writer refusal".into(),
+            password: Secret::new("ordinary-password".into()),
+        },
+    ) {
+        auth::Outcome::Session { token, .. } => token.expose().to_owned(),
+        _ => panic!("session"),
+    };
+    let service = SourceImports::new(&owner, strict, 128 * 1024 * 1024).unwrap();
+    let admitted = service
+        .admit(
+            Credential::Session(Secret::new(token.clone())),
+            request("source-writer-refusal", create("Source writer refusal")),
+            &files,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+    let worker = owner
+        .job_worker_with_policy(
+            strict,
+            WorkerAdmission {
+                kinds: vec![(JobKind::SuppliedSourceImport, 1)],
+                total: 1,
+                per_resource: 1,
+                lease_seconds: 3600,
+            },
+        )
+        .unwrap();
+    let (_, lease) = worker.claim_import(&admitted.job_id).unwrap().unwrap();
+    let claimed_context: (i64, String, i64) = read(&root)
+        .query_row(
+            "SELECT json_extract(document,'$.generation'),json_extract(document,'$._attempt_fence'),json_extract(document,'$.cancel_requested') FROM durable_jobs WHERE id=?1",
+            [&admitted.job_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    auth_call(
+        &owner,
+        strict,
+        auth::Request::Logout {
+            token: Secret::new(token),
+        },
+    );
+    let error = worker.import_phase(&lease, Phase::Read).unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<auth::AuthorityFailure>(),
+        Some(&auth::AuthorityFailure::CredentialInvalid)
+    );
+    assert_eq!(count(&root, "source_revisions"), 0);
+    let refusal: String = read(&root)
+        .query_row(
+            "SELECT json_extract(document,'$._authority_refusal.phase') FROM durable_jobs WHERE id=?1",
+            [&admitted.job_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(refusal, "source_writer");
+    assert_eq!(
+        read(&root)
+            .query_row(
+                "SELECT phase FROM source_revision_observations WHERE operation_key=?1 ORDER BY cursor DESC LIMIT 1",
+                [&admitted.key],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+        "authority_refused"
+    );
+    let source_context: (String, i64, Option<String>, Option<i64>, Option<i64>, i64) = read(&root)
+        .query_row(
+            "SELECT job_id,attempt_generation,attempt_fence,revision_id,receipt_activated,cancel_requested FROM source_revision_observations WHERE operation_key=?1 ORDER BY cursor DESC LIMIT 1",
+            [&admitted.key],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        source_context,
+        (
+            admitted.job_id.clone(),
+            claimed_context.0,
+            Some(claimed_context.1),
+            None,
+            None,
+            claimed_context.2,
+        )
+    );
+    drop(worker);
+    drop(service);
+    owner.shutdown().unwrap();
 }
 #[test]
 fn real_session_policy_key_actor_replay_revocation_and_atomic_audit() {
@@ -1285,7 +1828,7 @@ fn schema37_backup_preserves35_and_future_or_corrupt_input_is_unchanged() {
     std::fs::copy(&db, future.join("print-partner.db")).unwrap();
     let conn = Connection::open(future.join("print-partner.db")).unwrap();
     conn.execute(
-        "UPDATE app_settings SET value='38' WHERE tenant_id='default' AND key='schema_version'",
+        "UPDATE app_settings SET value='39' WHERE tenant_id='default' AND key='schema_version'",
         [],
     )
     .unwrap();
@@ -1411,7 +1954,8 @@ fn cancellation_after_activation_preserves_receipt_and_settles_cleanup() {
         )
         .unwrap()
         .unwrap();
-    cancel(&owner, activated.job_id);
+    let before_cancel = observations(&root, &activated.key);
+    cancel(&owner, activated.job_id.clone());
     let settled = svc
         .work_next(Through::Settled, &AtomicBool::new(false))
         .unwrap()
@@ -1420,6 +1964,27 @@ fn cancellation_after_activation_preserves_receipt_and_settles_cleanup() {
     assert_eq!(settled.state, State::Activated);
     assert!(settled.cleanup_settled);
     assert_eq!(count(&root, "source_revisions"), 1);
+    let after_cancel = observations(&root, &activated.key);
+    assert_eq!(after_cancel[..before_cancel.len()], before_cancel);
+    let cleanup = after_cancel.last().unwrap();
+    assert_eq!(cleanup.phase, "cleanup");
+    assert_eq!(cleanup.job_id, activated.job_id);
+    assert!(cleanup.cancelled);
+    assert!(cleanup.fence.is_some());
+    let generation: i64 = read(&root)
+        .query_row(
+            "SELECT generation FROM durable_jobs WHERE id=?1",
+            [&activated.job_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(cleanup.generation, generation);
+    assert_eq!(
+        cleanup.revision_id,
+        Some(activated.receipt.as_ref().unwrap().revision_id)
+    );
+    assert_eq!(cleanup.activated, Some(true));
+
     drop(svc);
     owner.shutdown().unwrap();
 }
@@ -1513,10 +2078,246 @@ fn index_constraint_keeps_activation_receipt_and_previous_complete_doc_projectio
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
     assert_eq!(old_docs, docs);
+    let document_columns = read(&root)
+        .prepare("PRAGMA table_info(source_docs)")
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(1))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    eprintln!("source_docs columns after IndexError: {document_columns:?}");
+    assert!(
+        ["source_revision_id", "input_digest", "producer_version"]
+            .iter()
+            .all(|expected| document_columns.iter().any(|actual| actual == expected)),
+        "preserved document rows lack immutable revision, full-input, and producer ownership"
+    );
+    let first_receipt = first.receipt.as_ref().unwrap();
+    let first_authority = first_receipt.authority_revision.as_ref().unwrap();
+    let preserved_provenance: (i64, String, String) = read(&root)
+        .query_row(
+            "SELECT source_revision_id,input_digest,producer_version FROM source_docs WHERE id=?1",
+            [old_docs[0].0],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        preserved_provenance,
+        (
+            first_receipt.revision_id,
+            first_authority.input_digest.clone(),
+            first_authority.producer_version.clone(),
+        )
+    );
     assert_eq!(
         svc.get(credential(&owner), op.key.clone()).unwrap().receipt,
         op.receipt
     );
+    Connection::open(root.join("print-partner.db"))
+        .unwrap()
+        .execute_batch("DROP TRIGGER ordinary_doc_constraint")
+        .unwrap();
+    std::fs::write(files.join("README.md"), "# Successful replacement\n").unwrap();
+    let replacement = svc
+        .import(
+            credential(&owner),
+            request(
+                "replacement",
+                Target::Existing {
+                    source_id: first.source_id,
+                },
+            ),
+            &files,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+    assert_eq!(replacement.state, State::Activated);
+    let replacement_receipt = replacement.receipt.as_ref().unwrap();
+    assert_eq!(
+        replacement_receipt.postprocessing,
+        Postprocessing::DocumentMetadataIndexed
+    );
+    let replacement_authority = replacement_receipt.authority_revision.as_ref().unwrap();
+    let replacement_provenance = read(&root)
+        .prepare("SELECT source_revision_id,input_digest,producer_version FROM source_docs")
+        .unwrap()
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert!(!replacement_provenance.is_empty());
+    assert!(replacement_provenance.iter().all(|provenance| {
+        provenance
+            == &(
+                replacement_receipt.revision_id,
+                replacement_authority.input_digest.clone(),
+                replacement_authority.producer_version.clone(),
+            )
+    }));
+    drop(svc);
+    owner.shutdown().unwrap();
+}
+
+#[test]
+fn explicit_empty_import_selection_is_not_replaced_by_suggestions() {
+    let (root, files, owner) = fixture();
+    let svc = service(&owner);
+    let initial = svc
+        .import(
+            credential(&owner),
+            request("selection-initial", create("Selection")),
+            &files,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+    assert!(
+        !initial
+            .receipt
+            .as_ref()
+            .unwrap()
+            .artifact
+            .suggested_rules
+            .is_empty()
+    );
+    let null_import_all_result: Vec<String> = serde_json::from_str(
+        &read(&root)
+            .query_row(
+                "SELECT imported_paths FROM projects WHERE id=?1",
+                [initial.source_id],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(!null_import_all_result.is_empty());
+
+    owner
+        .local_source_catalog()
+        .execute(catalog::Request::SaveImportRules {
+            id: initial.source_id,
+            rules: Vec::new(),
+        })
+        .unwrap();
+    assert_eq!(
+        read(&root)
+            .query_row(
+                "SELECT imported_paths FROM projects WHERE id=?1",
+                [initial.source_id],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+        "[]"
+    );
+
+    std::fs::write(files.join("README.md"), "# Updated selection fixture\n").unwrap();
+    let updated = svc
+        .import(
+            credential(&owner),
+            request(
+                "selection-update",
+                Target::Existing {
+                    source_id: initial.source_id,
+                },
+            ),
+            &files,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+    assert_eq!(updated.state, State::Activated);
+    assert!(
+        !updated
+            .receipt
+            .as_ref()
+            .unwrap()
+            .artifact
+            .suggested_rules
+            .is_empty()
+    );
+    assert_eq!(
+        read(&root)
+            .query_row(
+                "SELECT imported_paths FROM projects WHERE id=?1",
+                [initial.source_id],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+        "[]"
+    );
+    let explicit_subset = vec!["triangle.stl".to_owned()];
+    owner
+        .local_source_catalog()
+        .execute(catalog::Request::SaveImportRules {
+            id: initial.source_id,
+            rules: explicit_subset.clone(),
+        })
+        .unwrap();
+    std::fs::write(files.join("README.md"), "# Explicit subset fixture\n").unwrap();
+    let subset = svc
+        .import(
+            credential(&owner),
+            request(
+                "selection-subset",
+                Target::Existing {
+                    source_id: initial.source_id,
+                },
+            ),
+            &files,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+    assert_eq!(subset.state, State::Activated);
+    let stored: String = read(&root)
+        .query_row(
+            "SELECT imported_paths FROM projects WHERE id=?1",
+            [initial.source_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Vec<String>>(&stored).unwrap(),
+        explicit_subset
+    );
+    drop(svc);
+    owner.shutdown().unwrap();
+}
+
+#[test]
+fn null_import_selection_accepts_first_import_suggestions() {
+    let (root, files, owner) = fixture();
+    let svc = service(&owner);
+    let imported = svc
+        .import(
+            credential(&owner),
+            request("null-selection-control", create("Null selection control")),
+            &files,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+    let suggested = imported
+        .receipt
+        .as_ref()
+        .unwrap()
+        .artifact
+        .suggested_rules
+        .clone();
+    assert!(!suggested.is_empty());
+    let stored: Vec<String> = serde_json::from_str(
+        &read(&root)
+            .query_row(
+                "SELECT imported_paths FROM projects WHERE id=?1",
+                [imported.source_id],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(stored, suggested);
     drop(svc);
     owner.shutdown().unwrap();
 }
@@ -1749,7 +2550,7 @@ fn combined_schema37_backup_preserves_selected_progress_and_jobs35_graph() {
     drop(conn);
     let (owner, ready) = WriterOwner::open(&root, Limits::default()).unwrap();
     assert_eq!(ready.previous_version, 35);
-    assert_eq!(ready.version, 37);
+    assert_eq!(ready.version, 38);
     let backup_copy = root.join("backup-copy.db");
     std::fs::copy(ready.backup.unwrap(), &backup_copy).unwrap();
     assert_eq!(graph(&Connection::open(backup_copy).unwrap()), before);
@@ -2088,12 +2889,15 @@ fn publication_active_supplied_claim_and_live_lease_remain_exact() {
         )
         .unwrap();
     let worker = owner
-        .job_worker(jobs::WorkerAdmission {
-            kinds: vec![(jobs::JobKind::SuppliedSourceImport, 1)],
-            total: 1,
-            per_resource: 1,
-            lease_seconds: 3600,
-        })
+        .job_worker_with_policy(
+            policy(),
+            jobs::WorkerAdmission {
+                kinds: vec![(jobs::JobKind::SuppliedSourceImport, 1)],
+                total: 1,
+                per_resource: 1,
+                lease_seconds: 3600,
+            },
+        )
         .unwrap();
     let (job, attempt) = worker.claim_import(&pending.job_id).unwrap().unwrap();
     let mut live = worker
@@ -2206,7 +3010,7 @@ fn publication_source_schema37_backup_retains_full35_and_foreign_graph() {
     drop(conn);
     let (owner, ready) = WriterOwner::open(&root, Limits::default()).unwrap();
     assert_eq!(ready.previous_version, 35);
-    assert_eq!(ready.version, 37);
+    assert_eq!(ready.version, 38);
     let backup = root.join("publication-backup-copy.db");
     std::fs::copy(ready.backup.unwrap(), &backup).unwrap();
     assert_eq!(graph(&Connection::open(backup).unwrap()), prior);

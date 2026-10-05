@@ -300,12 +300,15 @@ fn ordered_absence_and_owned_or_later_cleanup_converge() {
         _ => panic!("capture did not resolve"),
     };
     let worker = owner
-        .job_worker(WorkerAdmission {
-            kinds: vec![(JobKind::SuppliedSourceImport, 1)],
-            total: 1,
-            per_resource: 1,
-            lease_seconds: 3600,
-        })
+        .job_worker_with_policy(
+            policy(),
+            WorkerAdmission {
+                kinds: vec![(JobKind::SuppliedSourceImport, 1)],
+                total: 1,
+                per_resource: 1,
+                lease_seconds: 3600,
+            },
+        )
         .unwrap();
     let (_, lease) = worker.claim_resolved_import(resolved).unwrap().unwrap();
     let operation = owned.operation.unwrap();

@@ -105,8 +105,8 @@ pub(crate) fn preflight(path: &Path, owned: bool) -> Result<u64> {
         }
     };
     ensure!(
-        version <= 37,
-        "Database schema version {version} is newer than supported version 37"
+        version <= 38,
+        "Database schema version {version} is newer than supported version 38"
     );
     ensure!(
         version == 0 || version >= 31,
@@ -190,6 +190,8 @@ pub(crate) fn initialize(
             Some("pre-schema36.db")
         } else if version == 36 {
             Some("pre-schema37.db")
+        } else if version == 37 {
+            Some("pre-schema38.db")
         } else {
             None
         };
@@ -301,15 +303,75 @@ pub(crate) fn initialize(
         )?;
         tx.commit()?;
     }
-    crate::plan_publication::validate_schema(&conn, 37)?;
+    if version < 38 {
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        install_source38_columns(&tx)?;
+        tx.execute_batch(include_str!("remote_sources/schema.sql"))?;
+        tx.execute(
+            "UPDATE app_settings SET value='38' WHERE tenant_id='default' AND key='schema_version'",
+            [],
+        )?;
+        tx.commit()?;
+    }
+    crate::jobs::validate_schema(&conn, 38)?;
+    crate::uploads::validate_schema(&conn, 38)?;
+    crate::plan_publication::validate_schema(&conn, 38)?;
     Ok((
         conn,
         SchemaReady {
-            version: 37,
+            version: 38,
             previous_version: version,
             backup: backup_path,
         },
     ))
+}
+
+fn install_source38_columns(conn: &Connection) -> Result<()> {
+    for (table, column, sql) in [
+        (
+            "projects",
+            "source_configuration_version",
+            "ALTER TABLE projects ADD COLUMN source_configuration_version INTEGER NOT NULL DEFAULT 1",
+        ),
+        (
+            "source_revisions",
+            "source_configuration_version",
+            "ALTER TABLE source_revisions ADD COLUMN source_configuration_version INTEGER",
+        ),
+        (
+            "source_revisions",
+            "activation_observation_digest",
+            "ALTER TABLE source_revisions ADD COLUMN activation_observation_digest TEXT",
+        ),
+        (
+            "source_revisions",
+            "input_digest",
+            "ALTER TABLE source_revisions ADD COLUMN input_digest TEXT",
+        ),
+        (
+            "source_revisions",
+            "producer_version",
+            "ALTER TABLE source_revisions ADD COLUMN producer_version TEXT",
+        ),
+        (
+            "source_docs",
+            "source_revision_id",
+            "ALTER TABLE source_docs ADD COLUMN source_revision_id INTEGER REFERENCES source_revisions(id) ON DELETE RESTRICT",
+        ),
+        (
+            "source_docs",
+            "input_digest",
+            "ALTER TABLE source_docs ADD COLUMN input_digest TEXT",
+        ),
+        (
+            "source_docs",
+            "producer_version",
+            "ALTER TABLE source_docs ADD COLUMN producer_version TEXT CHECK ((source_revision_id IS NULL AND input_digest IS NULL AND producer_version IS NULL) OR (source_revision_id IS NOT NULL AND input_digest IS NOT NULL AND length(input_digest) = 64 AND producer_version IS NOT NULL))",
+        ),
+    ] {
+        add_column(conn, table, column, sql)?;
+    }
+    Ok(())
 }
 
 fn add_column(conn: &Connection, table: &str, column: &str, sql: &str) -> Result<()> {
