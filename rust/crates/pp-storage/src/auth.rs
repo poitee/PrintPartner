@@ -519,7 +519,7 @@ fn run_kdf(job: KdfJob) {
                         AuthFailure::InvalidCredentials
                     );
                     let replacement = if stored.is_legacy() {
-                        Some(crypto::hash(&password)?)
+                        crypto::hash(&password).ok()
                     } else {
                         None
                     };
