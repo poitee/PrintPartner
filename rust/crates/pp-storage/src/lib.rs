@@ -353,9 +353,13 @@ impl WriterOwner {
         let name = destination
             .file_name()
             .ok_or_else(|| anyhow!("Backup file name missing"))?;
+        let managed_runtime = match lease.runtime_dir().canonicalize() {
+            Ok(runtime) => parent.starts_with(runtime),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+            Err(error) => return Err(error.into()),
+        };
         ensure!(
-            !parent.starts_with(lease.data_dir())
-                && !parent.starts_with(lease.runtime_dir().canonicalize()?),
+            !parent.starts_with(lease.data_dir()) && !managed_runtime,
             "Backup destination is inside managed storage"
         );
         let destination = parent.join(name);
