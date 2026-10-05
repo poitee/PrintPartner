@@ -539,6 +539,13 @@ fn patch(tx: &Transaction<'_>, tenant: &str, id: i64, p: SourcePatch) -> Result<
         });
     if let Some(v) = p.name {
         let name = trim(&v);
+        ensure!(!name.is_empty(), "Source name is required");
+        let exists: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM projects WHERE tenant_id=?1 AND name=?2 AND id!=?3)",
+            params![tenant, name, id],
+            |r| r.get(0),
+        )?;
+        ensure!(!exists, "Source already exists: {name}");
         ensure!(
             name == row.name || !name_referenced(tx, tenant, &row.name)?,
             "Source historical name is referenced and cannot be changed"
@@ -752,7 +759,7 @@ fn get_setting(tx: &Transaction<'_>, tenant: &str, key: &str) -> Result<Option<S
 }
 fn name_referenced(tx: &Transaction<'_>, tenant: &str, name: &str) -> Result<bool> {
     for table in ["parts", "plan_revision_parts", "plan_draft_parts"] {
-        if tx.query_row(&format!("SELECT EXISTS(SELECT 1 FROM {table} WHERE tenant_id=?1 AND instr(source_layer, ':')>0 AND substr(source_layer,instr(source_layer, ':')+1)=?2)"),params![tenant,name],|r|r.get::<_,bool>(0))? {return Ok(true)}
+        if tx.query_row(&format!("SELECT EXISTS(SELECT 1 FROM {table} WHERE tenant_id=?1 AND instr(source_layer, ':')>0 AND lower(substr(source_layer,instr(source_layer, ':')+1))=lower(?2))"),params![tenant,name],|r|r.get::<_,bool>(0))? {return Ok(true)}
     }
     let mut statement = tx.prepare("SELECT payload_json FROM plan_snapshots WHERE tenant_id=?1")?;
     for raw in statement.query_map([tenant], |r| r.get::<_, String>(0))? {
