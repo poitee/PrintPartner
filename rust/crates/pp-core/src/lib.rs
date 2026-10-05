@@ -1,3 +1,4 @@
+pub mod uploads;
 use anyhow::{Context, Result, bail};
 use pp_compat::{Bundle, CompatHandle, SpawnSpec, Supervisor};
 use pp_gateway::{Gateway, LaunchTarget};

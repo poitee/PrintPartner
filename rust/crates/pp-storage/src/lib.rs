@@ -6,6 +6,7 @@ pub mod lease;
 pub mod read_model;
 pub mod required_units;
 mod schema;
+pub mod uploads;
 
 use anyhow::{Result, anyhow, ensure};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, params};
@@ -16,7 +17,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, Condvar, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc,
     },
     thread::{self, JoinHandle},
@@ -70,6 +71,10 @@ enum Envelope {
         command: checkoff_progress::Command,
         reply: mpsc::Sender<Result<checkoff_progress::Response>>,
     },
+    Uploads {
+        command: uploads::Command,
+        reply: mpsc::Sender<Result<uploads::Operation>>,
+    },
     Read {
         command: read_model::Command,
         reply: mpsc::Sender<Result<read_model::Batch>>,
@@ -104,7 +109,10 @@ struct Shared {
     queue: Mutex<Queue>,
     changed: Condvar,
     capacity: usize,
+    orphaned_source_leases: Mutex<Vec<u64>>,
     job_admission: Mutex<Option<Arc<jobs::WorkerAdmission>>>,
+    import_epoch: AtomicU64,
+    import_quota: Mutex<Option<u64>>,
 }
 #[derive(Clone)]
 pub struct SettingsClient {
@@ -325,7 +333,10 @@ impl WriterOwner {
             }),
             changed: Condvar::new(),
             capacity: limits.queued_writes,
+            orphaned_source_leases: Mutex::new(Vec::new()),
             job_admission: Mutex::new(None),
+            import_epoch: AtomicU64::new(0),
+            import_quota: Mutex::new(None),
         });
         let worker = shared.clone();
         let mut catalog_state = catalog::State::new(lease.data_dir().to_owned());
@@ -347,12 +358,27 @@ impl WriterOwner {
                         None => break,
                     }
                 };
+                let orphaned = std::mem::take(
+                    &mut *worker
+                        .orphaned_source_leases
+                        .lock()
+                        .expect("Source lease recovery poisoned"),
+                );
+                catalog_state.reap(orphaned);
                 match envelope {
                     Envelope::RequiredUnits { command, reply } => {
                         let _ = reply.send(required_units::execute(&mut connection, command));
                     }
                     Envelope::Checkoff { command, reply } => {
                         let _ = reply.send(checkoff_progress::execute(&mut connection, command));
+                    }
+                    Envelope::Uploads { command, reply } => {
+                        let changes_accounting = command.changes_accounting();
+                        let result = uploads::execute(&mut connection, &catalog_state, command);
+                        if result.is_ok() && changes_accounting {
+                            worker.import_epoch.fetch_add(1, Ordering::AcqRel);
+                        }
+                        let _ = reply.send(result);
                     }
                     Envelope::Read { command, reply } => {
                         let _ = reply.send(read_model::execute(&mut connection, command));
@@ -373,7 +399,8 @@ impl WriterOwner {
                         let _ = reply.send(result);
                     }
                     Envelope::Jobs { command, reply } => {
-                        let _ = reply.send(jobs::execute(&mut connection, command));
+                        let _ =
+                            reply.send(jobs::execute(&mut connection, &mut catalog_state, command));
                     }
                     Envelope::Setting { work, reply } => {
                         let _ = reply.send(execute(&mut connection, work));

@@ -18,7 +18,10 @@ fn ticket_t_59_catalog_private_full_queue_retains_unreleased_work() {
         }),
         changed: Condvar::new(),
         capacity: 1,
+        orphaned_source_leases: Mutex::new(Vec::new()),
         job_admission: Mutex::new(None),
+        import_epoch: std::sync::atomic::AtomicU64::new(0),
+        import_quota: Mutex::new(None),
     });
     let readers = Arc::new(ReaderPool {
         state: Mutex::new(ReaderState {
@@ -46,6 +49,15 @@ fn ticket_t_59_catalog_private_full_queue_retains_unreleased_work() {
         .is_err()
     );
     drop(lease);
+    assert_eq!(
+        shared.orphaned_source_leases.lock().unwrap().as_slice(),
+        &[17]
+    );
+    let mut state = State::default();
+    state.active.insert(17, ("default".into(), 1));
+    let orphaned = std::mem::take(&mut *shared.orphaned_source_leases.lock().unwrap());
+    state.reap(orphaned);
+    assert!(!state.active.contains_key(&17));
     let mut queue = shared.queue.lock().unwrap();
     assert_eq!(queue.pending.len(), 1);
     let Envelope::Catalog {
@@ -70,4 +82,15 @@ fn ticket_t_59_catalog_private_full_queue_retains_unreleased_work() {
         panic!("release must be serialized")
     };
     assert_eq!(token, 17);
+}
+
+#[test]
+fn unknown_source_work_lease_is_rejected_without_database_work() {
+    let mut connection = Connection::open_in_memory().unwrap();
+    let mut state = State::default();
+    let error = match execute(&mut connection, &mut state, Command::End(17)) {
+        Err(error) => error,
+        Ok(_) => panic!("unknown Source lease released"),
+    };
+    assert_eq!(error.to_string(), "Unknown work lease");
 }
