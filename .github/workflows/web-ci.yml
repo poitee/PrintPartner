@@ -61,6 +61,8 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - name: Install
         run: npm ci
+      - name: Check workaround ratchet
+        run: node ../scripts/workaround-ratchet.mjs && node --test ../scripts/workaround-ratchet.test.mjs
       - name: Audit high-severity vulnerabilities
         run: npm audit --audit-level=high
       - name: Full quality suite
