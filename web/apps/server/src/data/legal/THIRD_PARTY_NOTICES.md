@@ -14,7 +14,7 @@ Transitive packages are recorded in `web/package-lock.json` and remain subject t
 | @fastify/compress | 8.3.1 | MIT | https://github.com/fastify/fastify-compress#readme |
 | @fastify/cookie | 11.1.2 | MIT | https://github.com/fastify/fastify-cookie#readme |
 | @fastify/cors | 11.3.0 | MIT | https://github.com/fastify/fastify-cors#readme |
-| @fastify/multipart | 10.1.1 | MIT | https://github.com/fastify/fastify-multipart#readme |
+| @fastify/multipart | 10.1.2 | MIT | https://github.com/fastify/fastify-multipart#readme |
 | @fastify/rate-limit | 11.2.0 | MIT | https://github.com/fastify/fastify-rate-limit#readme |
 | @fastify/static | 10.1.3 | MIT | https://github.com/fastify/fastify-static |
 | @fastify/swagger | 9.8.1 | MIT | https://github.com/fastify/fastify-swagger#readme |
@@ -38,22 +38,22 @@ Transitive packages are recorded in `web/package-lock.json` and remain subject t
 | @radix-ui/react-tooltip | 1.2.16 | MIT | https://radix-ui.com/primitives |
 | @sentry/react | 10.75.1 | MIT | https://github.com/getsentry/sentry-javascript/tree/master/packages/react |
 | @tailwindcss/vite | 4.3.3 | MIT | https://tailwindcss.com |
-| @tanstack/react-query | 5.102.4 | MIT | https://tanstack.com/query |
+| @tanstack/react-query | 5.103.2 | MIT | https://tanstack.com/query |
 | adm-zip | 0.6.1 | MIT | https://github.com/cthackers/adm-zip |
-| better-sqlite3 | 12.11.1 | MIT | https://github.com/WiseLibs/better-sqlite3 |
+| better-sqlite3 | 13.0.3 | MIT | https://github.com/WiseLibs/better-sqlite3 |
 | chokidar | 4.0.3 | MIT | https://github.com/paulmillr/chokidar |
 | class-variance-authority | 0.7.1 | Apache-2.0 | https://github.com/joe-bell/cva#readme |
 | clsx | 2.1.1 | MIT | https://github.com/lukeed/clsx |
 | cmdk | 1.1.1 | MIT | https://github.com/pacocoursey/cmdk#readme |
 | dockerode | 5.0.1 | Apache-2.0 | https://github.com/apocas/dockerode |
 | drizzle-orm | 0.45.2 | Apache-2.0 | https://orm.drizzle.team |
-| fastify | 5.12.1 | MIT | https://fastify.dev/ |
+| fastify | 5.12.5 | MIT | https://fastify.dev/ |
 | fflate | 0.8.3 | MIT | https://101arrowz.github.io/fflate |
 | js-yaml | 5.4.1 | MIT | https://github.com/nodeca/js-yaml |
 | jszip | 3.10.2 | (MIT OR GPL-3.0-or-later) | https://github.com/Stuk/jszip |
 | lucide-react | 1.34.0 | ISC | https://lucide.dev |
 | mqtt | 5.15.2 | MIT | https://github.com/mqttjs/MQTT.js |
-| nodemailer | 9.1.1 | MIT-0 | https://nodemailer.com/ |
+| nodemailer | 10.0.12 | MIT-0 | https://nodemailer.com/ |
 | pdf-parse | 2.4.5 | Apache-2.0 | https://mehmet-kozan.github.io/pdf-parse/ |
 | pg | 8.23.0 | MIT | https://github.com/brianc/node-postgres |
 | pino | 10.3.1 | MIT | https://getpino.io |
@@ -63,7 +63,7 @@ Transitive packages are recorded in `web/package-lock.json` and remain subject t
 | sonner | 2.0.8 | MIT | https://sonner.emilkowal.ski/ |
 | tailwind-merge | 3.6.0 | MIT | https://github.com/dcastil/tailwind-merge |
 | tar | 7.5.22 | BlueOak-1.0.0 | https://github.com/isaacs/node-tar |
-| three | 0.185.1 | MIT | https://threejs.org/ |
+| three | 0.186.1 | MIT | https://threejs.org/ |
 | undici | 7.29.1 | MIT | https://undici.nodejs.org |
 | yazl | 3.3.1 | MIT | https://github.com/thejoshwolfe/yazl |
 | zod | 4.5.4 | MIT | https://zod.dev |
