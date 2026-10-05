@@ -218,6 +218,34 @@ fn public_prefix_assembly_import_replay_and_reopen_preserve_history() {
     assert_eq!(read, serde_json::to_value(f.snapshot()).unwrap());
     assert_eq!(f.apply(f.command(0, false)).status, 200);
 }
+
+#[test]
+fn import_into_a_missing_plan_returns_not_found() {
+    let f = Fixture::new("");
+    let snapshot = f.snapshot();
+    let part = snapshot.parts.iter().find(|part| part.included).unwrap();
+    let mut expected = Basis::from(&snapshot);
+    expected.profile_id = 9_007_199_254_740_991;
+
+    let response = f.apply(Request::Import {
+        request: Import {
+            expected,
+            rows: vec![ImportRow {
+                part_id: part.projection_part_id,
+                printed_count: 1,
+            }],
+        },
+    });
+
+    assert_eq!(response.status, 404);
+    assert_eq!(
+        response.body,
+        Body::Failure {
+            detail: "Plan or Part not found".into(),
+            code: Some("progress_target_not_found".into()),
+        }
+    );
+}
 #[test]
 fn ordinary_late_sql_failure_rolls_back_entire_graph() {
     let id: Value =

@@ -87,7 +87,7 @@ impl Directory {
             let entry = entry?;
             let name = entry.file_name().to_str().map_err(|_| Error::UnsafePath)?;
             if name != "." && name != ".." {
-                if entries.len() >= crate::MAX_ENTRIES {
+                if entries.len() > crate::MAX_ENTRIES {
                     return Err(Error::Limit);
                 }
                 entries.push(name.to_owned());

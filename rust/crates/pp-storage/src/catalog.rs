@@ -613,6 +613,7 @@ fn patch(tx: &Transaction<'_>, tenant: &str, id: i64, p: SourcePatch) -> Result<
         });
     if let Some(v) = p.name {
         let name = trim(&v);
+        ensure!(!name.is_empty(), "Source name is required");
         ensure!(
             name == row.name || !name_referenced(tx, tenant, &row.name)?,
             "Source historical name is referenced and cannot be changed"
@@ -830,8 +831,16 @@ fn get_setting(tx: &Transaction<'_>, tenant: &str, key: &str) -> Result<Option<S
         .optional()?)
 }
 fn name_referenced(tx: &Transaction<'_>, tenant: &str, name: &str) -> Result<bool> {
+    let name = name.to_lowercase();
     for table in ["parts", "plan_revision_parts", "plan_draft_parts"] {
-        if tx.query_row(&format!("SELECT EXISTS(SELECT 1 FROM {table} WHERE tenant_id=?1 AND instr(source_layer, ':')>0 AND substr(source_layer,instr(source_layer, ':')+1)=?2)"),params![tenant,name],|r|r.get::<_,bool>(0))? {return Ok(true)}
+        let mut statement = tx.prepare(&format!(
+            "SELECT substr(source_layer,instr(source_layer, ':')+1) FROM {table} WHERE tenant_id=?1 AND instr(source_layer, ':')>0"
+        ))?;
+        for reference in statement.query_map([tenant], |row| row.get::<_, String>(0))? {
+            if reference?.to_lowercase() == name {
+                return Ok(true);
+            }
+        }
     }
     let mut statement = tx.prepare("SELECT payload_json FROM plan_snapshots WHERE tenant_id=?1")?;
     for raw in statement.query_map([tenant], |r| r.get::<_, String>(0))? {
@@ -845,7 +854,7 @@ fn name_referenced(tx: &Transaction<'_>, tenant: &str, name: &str) -> Result<boo
                 layer
                     .get("source_name")
                     .and_then(Value::as_str)
-                    .is_some_and(|reference| reference.to_lowercase() == name.to_lowercase())
+                    .is_some_and(|reference| reference.to_lowercase() == name)
             }) {
                 return Ok(true);
             }

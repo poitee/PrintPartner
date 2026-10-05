@@ -1428,6 +1428,9 @@ fn combined_schema36_backup_preserves_selected_progress_and_jobs35_graph() {
         .receive()
         .unwrap();
     owner.shutdown().unwrap();
+    let preparation_backup = root.join("fixture-preparation-backup.db");
+    std::fs::rename(root.join("backups/pre-schema36.db"), &preparation_backup).unwrap();
+    let preparation_bytes = std::fs::read(&preparation_backup).unwrap();
     let db = root.join("print-partner.db");
     let conn = Connection::open(&db).unwrap();
     conn.execute_batch("DROP TABLE source_import_quota; DROP TABLE source_import_operations; UPDATE app_settings SET value='35' WHERE tenant_id='default' AND key='schema_version'; PRAGMA wal_checkpoint(TRUNCATE);").unwrap();
@@ -1450,6 +1453,10 @@ fn combined_schema36_backup_preserves_selected_progress_and_jobs35_graph() {
     assert_eq!(count(&root, "source_import_operations"), 0);
     assert_eq!(count(&root, "durable_jobs"), 1);
     owner.shutdown().unwrap();
+    assert_eq!(
+        std::fs::read(preparation_backup).unwrap(),
+        preparation_bytes
+    );
 }
 #[test]
 fn combined_obsolete_receipt_refuses_without_changing_progress_history() {
