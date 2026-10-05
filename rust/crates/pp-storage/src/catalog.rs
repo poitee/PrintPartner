@@ -758,7 +758,7 @@ fn read_source(row: &rusqlite::Row<'_>) -> rusqlite::Result<SourceSummary> {
     })
 }
 const SELECT: &str = "SELECT p.id,p.name,p.url,p.source_kind,p.source_type,p.role,p.branch,p.tag,p.local_path,p.last_synced_at,p.last_commit_sha,p.current_source_revision_id,p.docs_url,p.manifest_community_slug,(SELECT count(*) FROM source_docs d WHERE d.project_id=p.id AND d.tenant_id=p.tenant_id),p.metadata_json FROM projects p";
-fn get(tx: &Transaction<'_>, tenant: &str, id: i64) -> Result<Option<SourceSummary>> {
+pub(crate) fn get(tx: &Transaction<'_>, tenant: &str, id: i64) -> Result<Option<SourceSummary>> {
     Ok(tx
         .query_row(
             &format!("{SELECT} WHERE p.tenant_id=?1 AND p.id=?2"),

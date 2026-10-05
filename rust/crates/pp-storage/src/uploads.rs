@@ -1087,14 +1087,18 @@ pub(crate) fn validate_resolved_claim(
         job.tenant == operation.tenant
             && job.job_id == operation.job_id
             && matches!(
-                &job.payload,
-                jobs::Payload::SuppliedSourceImport {
-                    project_id,
-                    operation_key,
-                    input_version: 2,
-                } if *project_id as i64 == operation.source_id
-                    && operation_key == &operation.key
+                    &job.payload,
+                    jobs::Payload::SuppliedSourceImport {
+                        project_id,
+                        operation_key,
+                        input_version: 2,
+                    } if *project_id as i64 == operation.source_id
+                        && operation_key == &operation.key
             ),
+        "Captured import requires repair"
+    );
+    ensure!(
+        catalog::get(tx, &operation.tenant, operation.source_id)?.is_some(),
         "Captured import requires repair"
     );
     Ok(claim.job_id.clone())

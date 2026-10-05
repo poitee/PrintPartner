@@ -108,6 +108,33 @@ fn resolved_claim_rechecks_eleven_fields_before_attempt_mutation() {
         CaptureJournalCorrelation::ExactAdmitted(resolved) => resolved,
         _ => panic!("exact manifest did not resolve"),
     };
+    let correlation_before: (String, i64, String, String, String) = read(&root)
+        .query_row(
+            "SELECT j.state,j.version,j.document,o.state,o.document FROM durable_jobs j JOIN source_import_operations o ON o.job_id=j.id WHERE j.id=?1",
+            [&admitted.job_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+        )
+        .unwrap();
+    let write = Connection::open(root.join("print-partner.db")).unwrap();
+    write.busy_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(
+        write
+            .execute(
+                "UPDATE projects SET tenant_id='foreign-retained-claim' WHERE tenant_id='default' AND id=?1",
+                [admitted.source_id],
+            )
+            .unwrap(),
+        1
+    );
+    drop(write);
+    let correlation_after_move: (String, i64, String, String, String) = read(&root)
+        .query_row(
+            "SELECT j.state,j.version,j.document,o.state,o.document FROM durable_jobs j JOIN source_import_operations o ON o.job_id=j.id WHERE j.id=?1",
+            [&admitted.job_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+        )
+        .unwrap();
+    assert_eq!(correlation_after_move, correlation_before);
     let worker = owner
         .job_worker(WorkerAdmission {
             kinds: vec![(JobKind::SuppliedSourceImport, 1)],
@@ -116,6 +143,38 @@ fn resolved_claim_rechecks_eleven_fields_before_attempt_mutation() {
             lease_seconds: 3600,
         })
         .unwrap();
+    let repair = match worker.claim_resolved_import(resolved) {
+        Err(error) => error,
+        Ok(_) => panic!("resolved claim accepted a Source owned by another tenant"),
+    };
+    assert_eq!(repair.to_string(), "Captured import requires repair");
+    let correlation_after_claim: (String, i64, String, String, String) = read(&root)
+        .query_row(
+            "SELECT j.state,j.version,j.document,o.state,o.document FROM durable_jobs j JOIN source_import_operations o ON o.job_id=j.id WHERE j.id=?1",
+            [&admitted.job_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+        )
+        .unwrap();
+    assert_eq!(correlation_after_claim, correlation_before);
+    let write = Connection::open(root.join("print-partner.db")).unwrap();
+    write.busy_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(
+        write
+            .execute(
+                "UPDATE projects SET tenant_id='default' WHERE tenant_id='foreign-retained-claim' AND id=?1",
+                [admitted.source_id],
+            )
+            .unwrap(),
+        1
+    );
+    drop(write);
+    let resolved = match client
+        .correlate_capture_manifest(manifest.clone(), files.clone())
+        .unwrap()
+    {
+        CaptureJournalCorrelation::ExactAdmitted(resolved) => resolved,
+        _ => panic!("restored manifest did not resolve"),
+    };
     let (claimed, lease) = worker.claim_resolved_import(resolved).unwrap().unwrap();
     assert_eq!(claimed.attempt, 1);
     assert_eq!(claimed.generation, 1);
