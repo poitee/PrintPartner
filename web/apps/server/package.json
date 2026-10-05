@@ -28,7 +28,7 @@
     "@print-partner/contracts": "*",
     "@print-partner/domain": "*",
     "adm-zip": "^0.6.1",
-    "better-sqlite3": "^12.11.1",
+    "better-sqlite3": "^13.0.3",
     "chokidar": "^4.0.3",
     "dockerode": "^5.0.1",
     "drizzle-orm": "^0.45.2",
