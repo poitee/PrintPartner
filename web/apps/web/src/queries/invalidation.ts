@@ -6,6 +6,7 @@ import { invalidateSources } from "./sources";
 import {
   invalidateAcceptedPlateExportJobs,
 } from "./acceptedPlates";
+import { invalidateSourceContent } from "./sourceContent";
 
 const SYNC_KINDS = new Set(["sync", "sync-all", "check-source-updates", "import-scan"]);
 const SOURCE_MUTATION_KINDS = new Set([
@@ -31,6 +32,10 @@ export function invalidateAfterJob(
     void invalidateSources(qc);
     void invalidateProfiles(qc);
     void qc.invalidateQueries({ queryKey: queryKeys.planReviews });
+  }
+
+  if (kind === "extract-source-docs") {
+    void invalidateSourceContent(qc);
   }
 
   if (kind === "stl-export" || kind === "export-kit-bundle" || kind === "export-checklist-html") {

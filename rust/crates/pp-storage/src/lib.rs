@@ -4,6 +4,7 @@ pub mod catalog;
 pub mod checkoff_progress;
 pub mod jobs;
 pub mod lease;
+pub mod native_secrets;
 pub mod plan_publication;
 pub use working_drafts::save as plan_save;
 pub mod read_model;
@@ -110,6 +111,10 @@ enum Envelope {
     Jobs {
         command: jobs::Command,
         reply: mpsc::Sender<Result<jobs::Outcome>>,
+    },
+    NativeSecrets {
+        command: native_secrets::Command,
+        reply: native_secrets::Reply,
     },
     Setting {
         work: Work,
@@ -579,6 +584,10 @@ impl WriterOwner {
                     }
                     Envelope::Jobs { command, reply } => {
                         let _ = reply.send(jobs::execute(&mut connection, command));
+                    }
+                    Envelope::NativeSecrets { command, reply } => {
+                        let _ =
+                            reply.send(native_secrets::execute(&mut connection, &worker, command));
                     }
                     Envelope::Setting { work, reply } => {
                         let _ = reply.send(execute(&mut connection, work));

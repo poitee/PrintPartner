@@ -10,6 +10,7 @@
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_print_progress_part_unit ON print_progress (part_id, unit_index)",
     "CREATE TABLE IF NOT EXISTS app_settings (\n    tenant_id TEXT NOT NULL DEFAULT 'default',\n    key TEXT NOT NULL,\n    value TEXT NOT NULL DEFAULT ''\n  )",
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_app_settings_tenant_key ON app_settings (tenant_id, key)",
+    "CREATE TABLE IF NOT EXISTS native_secret_migrations (\n    tenant_id TEXT NOT NULL,\n    purpose TEXT NOT NULL CHECK (purpose = 'github_pat'),\n    generation INTEGER NOT NULL CHECK (generation > 0),\n    migration_id TEXT NOT NULL CHECK (\n      length(migration_id) = 64\n      AND migration_id NOT GLOB '*[^0-9a-f]*'\n    ),\n    state TEXT NOT NULL CHECK (state IN ('prepared', 'legacy_row_removed')),\n    legacy_rowid INTEGER NOT NULL CHECK (legacy_rowid > 0),\n    CONSTRAINT pk_native_secret_migrations PRIMARY KEY (tenant_id, purpose),\n    CONSTRAINT uq_native_secret_migrations_id UNIQUE (migration_id)\n  )",
     "CREATE TABLE IF NOT EXISTS users (\n    id TEXT PRIMARY KEY,\n    email TEXT UNIQUE,\n    display_name TEXT NOT NULL,\n    password_hash TEXT,\n    is_admin INTEGER NOT NULL DEFAULT 0,\n    created_at TEXT NOT NULL\n  )",
     "CREATE TABLE IF NOT EXISTS auth_identities (\n    id INTEGER PRIMARY KEY AUTOINCREMENT,\n    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,\n    provider TEXT NOT NULL,\n    provider_user_id TEXT NOT NULL\n  )",
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_auth_identity_provider ON auth_identities (provider, provider_user_id)",
