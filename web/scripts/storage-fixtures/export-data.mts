@@ -1,6 +1,5 @@
 import { createRequire } from 'node:module';
 import { readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { mock } from 'node:test';
 import { schemaMigrations } from '../../apps/server/src/db/migrations-sqlite.js';
 import { seedStarterProfiles } from '../../apps/server/src/db/seed-starter-profiles.js';
