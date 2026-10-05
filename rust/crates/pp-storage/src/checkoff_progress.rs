@@ -508,7 +508,7 @@ fn mutate(
     {
         AcceptedRead::Ready { snapshot } => snapshot,
         AcceptedRead::Missing => {
-            return Ok(refusal(import, if import { "internal" } else { "missing" }));
+            return Ok(refusal(import, "missing"));
         }
         AcceptedRead::Empty { .. } => return Ok(refusal(import, "stale")),
         AcceptedRead::CompatibilityDirty => return Ok(refusal(import, "dirty")),
