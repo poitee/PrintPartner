@@ -96,6 +96,32 @@ jobs:
           CARGO_NET_OFFLINE=true bash rust/scripts/desktop-bundle.sh 2>&1 | tee "$PP_EVIDENCE/bundle-build.log"
           cmp "$PP_EVIDENCE/bundle-manifest.json" "$PP_DESKTOP_STAGE/bundle-manifest.json"
           git diff --exit-code -- rust/Cargo.lock
+      - name: Verify bundled compatibility lifecycle
+        run: |
+          set -o pipefail
+          app="$GITHUB_WORKSPACE/rust/target/release/bundle/macos/Print Partner.app"
+          PP_DESKTOP_RELEASE_MANIFEST="$PP_DESKTOP_STAGE/bundle-manifest.json" \
+          PP_COMPAT_BUNDLE_CONTENTS="$app/Contents" \
+          PP_COMPAT_TEST_DATA_DIR="$RUNNER_TEMP/compat-data" \
+          PP_COMPAT_TEST_RUNTIME_DIR="$RUNNER_TEMP/compat-runtime" \
+          PP_COMPAT_TEST_RECEIPT="$PP_EVIDENCE/compat-lifecycle.json" \
+          CARGO_NET_OFFLINE=true cargo test --manifest-path rust/Cargo.toml \
+            -p pp-compat --test installed_bundle_lifecycle \
+            -- --exact installed_bundle_start_health_shutdown --nocapture \
+            2>&1 | tee "$PP_EVIDENCE/compat-lifecycle.log"
+          python3 - "$PP_EVIDENCE/compat-lifecycle.json" "$GITHUB_SHA" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          receipt = json.loads(pathlib.Path(sys.argv[1]).read_text())
+          if receipt.get('status') != 'passed' or receipt.get('source_commit') != sys.argv[2]:
+              raise SystemExit('Compatibility lifecycle receipt identity mismatch')
+          if receipt.get('shutdown') != 'stopped_with_observed_accepted_exit':
+              raise SystemExit('Compatibility lifecycle shutdown was not observed')
+          if not receipt.get('child_pid_absent') or not receipt.get('runtime_socket_absent'):
+              raise SystemExit('Compatibility lifecycle cleanup is incomplete')
+          PY
       - name: Verify installed app and relocated copy
         run: |
           app="$GITHUB_WORKSPACE/rust/target/release/bundle/macos/Print Partner.app"

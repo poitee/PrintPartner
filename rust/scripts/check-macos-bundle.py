@@ -1,21 +1,42 @@
 #!/usr/bin/env python3
 import argparse
+from dataclasses import asdict, dataclass
 import hashlib
 import json
 import os
 import pathlib
 import plistlib
 import re
+import selectors
+import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
+
+from macos_addon_slices import better_sqlite3_addon_path, select_better_sqlite3_prebuild
 
 WEB = 'Resources/desktop-runtime/web'
 ARTIFACTS = {'frontend': 'apps/web/dist', 'backend': 'apps/server/dist/current',
              'contracts': 'packages/contracts/dist/current', 'domain': 'packages/domain/dist/current'}
 FLOOR = (13, 5, 0)
+MAX_PROBE_STREAM_BYTES = 4096
+PROBE_CLEANUP_SECONDS = 1
+PROBE_FORCE_CLEANUP_SECONDS = 0.2
+
+
+@dataclass(frozen=True)
+class ProbeCapture:
+    timed_out: bool
+    cleanup_timed_out: bool
+    exit_code: int | None
+    stdout: str
+    stderr: str
+    stdout_truncated: bool
+    stderr_truncated: bool
 
 
 def require(condition, message):
@@ -229,6 +250,132 @@ def command(*args, **kwargs):
     return subprocess.check_output(args, text=True, **kwargs).strip()
 
 
+def run_bundle_probe(argv, *, cwd, env, timeout_seconds):
+    process = subprocess.Popen(
+        argv,
+        cwd=cwd,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    selector = selectors.DefaultSelector()
+    captures = {
+        'stdout': {'bytes': bytearray(), 'total': 0},
+        'stderr': {'bytes': bytearray(), 'total': 0},
+    }
+    selector.register(process.stdout, selectors.EVENT_READ, 'stdout')
+    selector.register(process.stderr, selectors.EVENT_READ, 'stderr')
+
+    def drain_until(deadline):
+        while process.poll() is None or selector.get_map():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            if not selector.get_map():
+                try:
+                    process.wait(timeout=remaining)
+                except subprocess.TimeoutExpired:
+                    return False
+                continue
+            events = selector.select(remaining)
+            if not events:
+                return False
+            for key, _ in events:
+                chunk = os.read(key.fd, 65536)
+                if not chunk:
+                    selector.unregister(key.fileobj)
+                    key.fileobj.close()
+                    continue
+                capture = captures[key.data]
+                capture['total'] += len(chunk)
+                available = MAX_PROBE_STREAM_BYTES - len(capture['bytes'])
+                if available > 0:
+                    capture['bytes'].extend(chunk[:available])
+        return True
+
+    def process_group_gone(deadline):
+        while True:
+            try:
+                os.killpg(process.pid, 0)
+            except ProcessLookupError:
+                return True
+            except PermissionError:
+                pass
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.01)
+
+    deadline = time.monotonic() + timeout_seconds
+    completed = drain_until(deadline)
+    if completed:
+        completed = process_group_gone(deadline)
+    timed_out = not completed
+    cleanup_timed_out = False
+    try:
+        if timed_out:
+            cleanup_deadline = time.monotonic() + PROBE_CLEANUP_SECONDS
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            graceful_deadline = cleanup_deadline - PROBE_FORCE_CLEANUP_SECONDS
+            cleanup_complete = drain_until(graceful_deadline)
+            if cleanup_complete:
+                cleanup_complete = process_group_gone(graceful_deadline)
+            if not cleanup_complete:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                cleanup_complete = drain_until(cleanup_deadline)
+                if cleanup_complete:
+                    cleanup_complete = process_group_gone(cleanup_deadline)
+            cleanup_timed_out = not cleanup_complete
+        else:
+            process.wait()
+    finally:
+        selector.close()
+        for stream in (process.stdout, process.stderr):
+            if not stream.closed:
+                stream.close()
+    stdout = captures['stdout']['bytes'].decode('utf-8', errors='replace')
+    stderr = captures['stderr']['bytes'].decode('utf-8', errors='replace')
+    return ProbeCapture(
+        timed_out=timed_out,
+        cleanup_timed_out=cleanup_timed_out,
+        exit_code=process.returncode,
+        stdout=stdout,
+        stderr=stderr,
+        stdout_truncated=captures['stdout']['total'] > MAX_PROBE_STREAM_BYTES,
+        stderr_truncated=captures['stderr']['total'] > MAX_PROBE_STREAM_BYTES,
+    )
+
+
+def decode_bundle_probe(capture):
+    require(not capture.timed_out, 'Installed runtime probe timed out')
+    require(not capture.cleanup_timed_out, 'Installed runtime probe cleanup timed out')
+    require(not capture.stdout_truncated and not capture.stderr_truncated,
+            'Installed runtime probe output exceeded 4096 bytes')
+    require(capture.exit_code == 0, 'Installed runtime probe failed')
+    try:
+        return json.loads(capture.stdout)
+    except json.JSONDecodeError as error:
+        raise ValueError('Installed runtime probe returned malformed JSON') from error
+
+
+def validate_bundle_probe(capture, expected):
+    result = decode_bundle_probe(capture)
+    require(result == expected, 'Installed runtime identity mismatch')
+    return result
+
+
+def bundle_probe_environment(environment):
+    for key in ('LD_PRELOAD', 'DYLD_INSERT_LIBRARIES'):
+        require(key not in environment, key+' is forbidden during bundle verification')
+    return {key: value for key, value in environment.items() if key not in ('NODE_OPTIONS', 'NODE_PATH')}
+
+
 def verify_macho(root, arch, executable, receipt):
     records, sysroot = {}, set()
     receipt['mach_o'] = records
@@ -368,19 +515,27 @@ def verify(app, manifest_path, arch, receipt):
     native = verify_macho(root, arch, executable, receipt)
     measured_native = set(manifest['dependencies']['files']) | {'MacOS/printpartner-node', 'MacOS/'+executable}
     require(set(native['mach_o']).issubset(measured_native), 'Unmeasured native code in app')
-    env = {key: value for key, value in os.environ.items() if key not in ('NODE_OPTIONS', 'NODE_PATH')}
+    env = bundle_probe_environment(os.environ)
+    receipt['bundle_probe_environment'] = {
+        'forbidden': ['DYLD_INSERT_LIBRARIES', 'LD_PRELOAD'],
+        'removed': ['NODE_OPTIONS', 'NODE_PATH'],
+    }
     program = "const D=require('better-sqlite3');let db=new D(':memory:');let stmt=db.prepare('SELECT 42 answer');const answer=stmt.get().answer;stmt=null;db.close();db=null;if(globalThis.gc)globalThis.gc();if(answer!==42)throw Error('SQLite failed');const {createCanvas}=require('@napi-rs/canvas');const canvas=createCanvas(2,2);const ctx=canvas.getContext('2d');ctx.fillStyle='#123456';ctx.fillRect(0,0,2,2);const pixel=Array.from(ctx.getImageData(0,0,1,1).data);const png=canvas.toBuffer('image/png');if(JSON.stringify(pixel)!=='[18,52,86,255]'||png.subarray(0,8).toString('hex')!=='89504e470d0a1a0a')throw Error('Canvas failed');console.log(JSON.stringify({version:process.version,abi:process.versions.modules,os:process.platform,arch:process.arch,sqlite_answer:answer,canvas_pixel:pixel,canvas_png_signature:png.subarray(0,8).toString('hex'),native_addons:Object.keys(require.cache).filter(p=>p.endsWith('.node')).map(p=>require('node:fs').realpathSync(p)).sort()}));"
     node_arch = {'arm64': 'arm64', 'x86_64': 'x64'}[arch]
     expected_addons = sorted(str(contained(root, root / WEB / name)) for name in [
-        'node_modules/better-sqlite3/build/Release/better_sqlite3.node',
+        better_sqlite3_addon_path(arch),
         f'node_modules/@napi-rs/canvas-darwin-{node_arch}/skia.darwin-{node_arch}.node'])
-    result = json.loads(command(str(root / 'MacOS/printpartner-node'), '--expose-gc', '--no-global-search-paths',
+    capture = run_bundle_probe([str(root / 'MacOS/printpartner-node'), '--expose-gc', '--no-global-search-paths',
         '--import', str(root / WEB / 'apps/server/dist/current/desktop-resolution.js'), '-e', program,
-        'bundle-probe', '--pp-desktop-package-root='+str(root), cwd=root / WEB, env=env, timeout=30))
-    require(result == {'version': 'v24.21.0', 'abi': '137', 'os': 'darwin',
-                       'arch': {'arm64': 'arm64', 'x86_64': 'x64'}[arch], 'sqlite_answer': 42,
-                       'canvas_pixel': [18, 52, 86, 255], 'canvas_png_signature': '89504e470d0a1a0a',
-                       'native_addons': expected_addons}, 'Installed runtime identity mismatch')
+        'bundle-probe', '--pp-desktop-package-root='+str(root)], cwd=root / WEB, env=env,
+        timeout_seconds=30)
+    receipt['bundle_probe'] = asdict(capture)
+    result = validate_bundle_probe(capture, {
+        'version': 'v24.21.0', 'abi': '137', 'os': 'darwin',
+        'arch': {'arm64': 'arm64', 'x86_64': 'x64'}[arch], 'sqlite_answer': 42,
+        'canvas_pixel': [18, 52, 86, 255], 'canvas_png_signature': '89504e470d0a1a0a',
+        'native_addons': expected_addons,
+    })
     require(digest(root / 'MacOS/printpartner-node') == manifest['node_sha256'], 'Node changed during probe')
     return {'proof_class': 'unsigned_macos_bundle', 'app': str(app.resolve()), 'architecture': arch,
             'manifest_sha256': digest(manifest_path), 'minimum_macos': '13.5', 'resources': resources,
@@ -388,6 +543,287 @@ def verify(app, manifest_path, arch, receipt):
 
 
 class ParserTests(unittest.TestCase):
+    def test_bundle_probe_cleans_up_closed_stream_descendant(self):
+        script = (
+            'import os,time\n'
+            'parent_pid=os.getpid()\n'
+            'pid=os.fork()\n'
+            'if pid:\n'
+            ' os.write(1,f"{os.getpid()} {pid}\\n".encode())\n'
+            ' os._exit(0)\n'
+            'while os.getppid()==parent_pid:\n'
+            ' time.sleep(0.001)\n'
+            'os.close(1)\n'
+            'os.close(2)\n'
+            'time.sleep(3)\n'
+            'os._exit(0)\n'
+        )
+        group_pid = None
+        descendant_pid = None
+        cleanup_complete = False
+        try:
+            started = time.monotonic()
+            capture = run_bundle_probe(
+                [sys.executable, '-c', script],
+                cwd=pathlib.Path.cwd(),
+                env=os.environ.copy(),
+                timeout_seconds=0.5,
+            )
+            elapsed = time.monotonic() - started
+            group_pid, descendant_pid = map(int, capture.stdout.split())
+            try:
+                os.killpg(group_pid, 0)
+                group_alive = True
+            except ProcessLookupError:
+                group_alive = False
+            try:
+                os.kill(descendant_pid, 0)
+                descendant_alive = True
+            except ProcessLookupError:
+                descendant_alive = False
+        finally:
+            if group_pid is not None:
+                try:
+                    os.killpg(group_pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            if descendant_pid is not None:
+                cleanup_deadline = time.monotonic() + 1
+                while time.monotonic() < cleanup_deadline:
+                    try:
+                        os.kill(descendant_pid, 0)
+                    except ProcessLookupError:
+                        cleanup_complete = True
+                        break
+                    time.sleep(0.01)
+
+        self.assertTrue(cleanup_complete)
+        self.assertTrue(capture.timed_out)
+        self.assertFalse(capture.cleanup_timed_out)
+        self.assertEqual(capture.exit_code, 0)
+        self.assertFalse(group_alive)
+        self.assertFalse(descendant_alive)
+        self.assertLess(elapsed, 1.7)
+
+    def test_bundle_probe_signals_exited_leader_group_promptly(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            heartbeat = pathlib.Path(temporary) / 'heartbeat'
+            script = (
+                'import os,sys,time\n'
+                'heartbeat=sys.argv[1]\n'
+                'parent_pid=os.getpid()\n'
+                'pid=os.fork()\n'
+                'if pid:\n'
+                ' os.write(1,f"{os.getpid()} {pid}\\n".encode())\n'
+                ' os._exit(0)\n'
+                'while os.getppid()==parent_pid:\n'
+                ' time.sleep(0.001)\n'
+                'os.close(1)\n'
+                'os.close(2)\n'
+                'fd=os.open(heartbeat,os.O_WRONLY|os.O_CREAT|os.O_TRUNC,0o600)\n'
+                'end=time.monotonic()+3\n'
+                'while time.monotonic()<end:\n'
+                ' os.write(fd,f"{time.monotonic()}\\n".encode())\n'
+                ' time.sleep(0.01)\n'
+                'os.close(fd)\n'
+                'os._exit(0)\n'
+            )
+            group_pid = None
+            descendant_pid = None
+            cleanup_complete = False
+            try:
+                started = time.monotonic()
+                capture = run_bundle_probe(
+                    [sys.executable, '-c', script, str(heartbeat)],
+                    cwd=pathlib.Path.cwd(),
+                    env=os.environ.copy(),
+                    timeout_seconds=0.5,
+                )
+                elapsed = time.monotonic() - started
+                group_pid, descendant_pid = map(int, capture.stdout.split())
+                heartbeats = [float(value) for value in heartbeat.read_text().splitlines()]
+                try:
+                    os.killpg(group_pid, 0)
+                    group_alive = True
+                except ProcessLookupError:
+                    group_alive = False
+                try:
+                    os.kill(descendant_pid, 0)
+                    descendant_alive = True
+                except ProcessLookupError:
+                    descendant_alive = False
+            finally:
+                if group_pid is not None:
+                    try:
+                        os.killpg(group_pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                if descendant_pid is not None:
+                    cleanup_deadline = time.monotonic() + 1
+                    while time.monotonic() < cleanup_deadline:
+                        try:
+                            os.kill(descendant_pid, 0)
+                        except ProcessLookupError:
+                            cleanup_complete = True
+                            break
+                        time.sleep(0.01)
+
+        self.assertTrue(cleanup_complete)
+        self.assertGreater(heartbeats[-1] - started, 0.2)
+        self.assertLess(heartbeats[-1] - started, 1.05)
+        self.assertTrue(capture.timed_out)
+        self.assertFalse(capture.cleanup_timed_out)
+        self.assertEqual(capture.exit_code, 0)
+        self.assertFalse(group_alive)
+        self.assertFalse(descendant_alive)
+        self.assertLess(elapsed, 1.7)
+
+    def test_bundle_probe_deadline_includes_inherited_pipe_lifetime(self):
+        script = (
+            'printf "{}\\n"\n'
+            'sleep 5 &\n'
+        )
+        started = time.monotonic()
+        capture = run_bundle_probe(
+            ['/bin/sh', '-c', script],
+            cwd=pathlib.Path.cwd(),
+            env=os.environ.copy(),
+            timeout_seconds=0.5,
+        )
+        elapsed = time.monotonic() - started
+
+        self.assertTrue(capture.timed_out)
+        self.assertFalse(capture.cleanup_timed_out)
+        self.assertEqual(capture.exit_code, 0)
+        self.assertEqual(capture.stdout, '{}\n')
+        self.assertEqual(capture.stderr, '')
+        self.assertFalse(capture.stdout_truncated)
+        self.assertFalse(capture.stderr_truncated)
+        self.assertLess(elapsed, 1.75)
+
+    def test_better_sqlite3_prebuild_selection_and_containment(self):
+        inventory = [
+            'darwin-arm64.node',
+            'darwin-x64.node',
+            'linux-arm64.node',
+            'linux-x64.node',
+            'linuxmusl-arm64.node',
+            'linuxmusl-x64.node',
+            'win32-arm64.node',
+            'win32-x64.node',
+        ]
+        for architecture, selected in [('arm64', 'darwin-arm64.node'),
+                                       ('x86_64', 'darwin-x64.node')]:
+            selection = select_better_sqlite3_prebuild(inventory, architecture)
+            self.assertEqual(selection.selected_name, selected)
+            self.assertEqual(selection.discard_names,
+                             tuple(sorted(name for name in inventory if name != selected)))
+            with self.assertRaises(ValueError):
+                select_better_sqlite3_prebuild(
+                    [name for name in inventory if name != selected],
+                    architecture,
+                )
+        with self.assertRaises(ValueError):
+            select_better_sqlite3_prebuild([*inventory, 'darwin-universal.node'], 'arm64')
+        with self.assertRaises(ValueError):
+            select_better_sqlite3_prebuild(inventory, 'unsupported')
+
+        with tempfile.TemporaryDirectory() as temporary:
+            storage = pathlib.Path(temporary)
+            real_temporary = storage / 'real'
+            real_temporary.mkdir()
+            temporary = storage / 'alias'
+            temporary.symlink_to(real_temporary, target_is_directory=True)
+            fixture_root = temporary / 'installed/Contents'
+            root = fixture_root.resolve()
+            self.assertNotEqual(fixture_root, root)
+            framework = root / 'Frameworks/fixture.node'
+            framework.parent.mkdir(parents=True)
+            framework.write_bytes(b'fixture')
+            alias = root / WEB / better_sqlite3_addon_path('arm64')
+            alias.parent.mkdir(parents=True)
+            alias.symlink_to(os.path.relpath(framework, alias.parent))
+            self.assertEqual(contained(root, alias), framework.resolve())
+            outside = real_temporary / 'outside.node'
+            outside.write_bytes(b'outside')
+            escape = alias.with_name('escape.node')
+            escape.symlink_to(os.path.relpath(outside, escape.parent))
+            with self.assertRaisesRegex(ValueError, 'Resource escapes Contents'):
+                contained(root, escape)
+            escape.unlink()
+            relocated = (temporary / 'relocated app/Contents').resolve()
+            shutil.copytree(root, relocated, symlinks=True)
+            relocated_alias = relocated / WEB / better_sqlite3_addon_path('arm64')
+            self.assertEqual(contained(relocated, relocated_alias),
+                             (relocated / 'Frameworks/fixture.node').resolve())
+
+    def test_bundle_probe_capture_preserves_failure(self):
+        script = ('import sys;sys.stdout.write("x"*5000);sys.stderr.write("y"*5000);'
+                  'sys.stdout.flush();sys.stderr.flush();sys.exit(7)')
+        capture = run_bundle_probe(
+            [sys.executable, '-c', script],
+            cwd=pathlib.Path.cwd(),
+            env=os.environ.copy(),
+            timeout_seconds=5,
+        )
+        self.assertFalse(capture.timed_out)
+        self.assertEqual(capture.exit_code, 7)
+        self.assertEqual(len(capture.stdout.encode()), MAX_PROBE_STREAM_BYTES)
+        self.assertEqual(len(capture.stderr.encode()), MAX_PROBE_STREAM_BYTES)
+        self.assertTrue(capture.stdout_truncated)
+        self.assertTrue(capture.stderr_truncated)
+        with self.assertRaisesRegex(ValueError, 'output exceeded'):
+            decode_bundle_probe(capture)
+
+        nonzero = run_bundle_probe(
+            [sys.executable, '-c', 'import sys;print("{}");sys.exit(7)'],
+            cwd=pathlib.Path.cwd(),
+            env=os.environ.copy(),
+            timeout_seconds=5,
+        )
+        self.assertFalse(nonzero.timed_out)
+        self.assertEqual(nonzero.exit_code, 7)
+        with self.assertRaisesRegex(ValueError, 'probe failed'):
+            decode_bundle_probe(nonzero)
+
+        malformed = run_bundle_probe(
+            [sys.executable, '-c', 'print("not-json")'],
+            cwd=pathlib.Path.cwd(),
+            env=os.environ.copy(),
+            timeout_seconds=5,
+        )
+        self.assertFalse(malformed.timed_out)
+        self.assertEqual(malformed.exit_code, 0)
+        with self.assertRaisesRegex(ValueError, 'malformed JSON'):
+            decode_bundle_probe(malformed)
+
+        valid = ProbeCapture(
+            timed_out=False,
+            cleanup_timed_out=False,
+            exit_code=0,
+            stdout='{"answer": 42}\n',
+            stderr='',
+            stdout_truncated=False,
+            stderr_truncated=False,
+        )
+        self.assertEqual(validate_bundle_probe(valid, {'answer': 42}), {'answer': 42})
+        with self.assertRaisesRegex(ValueError, 'identity mismatch'):
+            validate_bundle_probe(valid, {'answer': 41})
+
+        timed_out = run_bundle_probe(
+            [sys.executable, '-c', 'import time;time.sleep(10)'],
+            cwd=pathlib.Path.cwd(),
+            env=os.environ.copy(),
+            timeout_seconds=0.05,
+        )
+        self.assertTrue(timed_out.timed_out)
+        with self.assertRaisesRegex(ValueError, 'timed out'):
+            decode_bundle_probe(timed_out)
+        with self.assertRaisesRegex(ValueError, 'LD_PRELOAD'):
+            bundle_probe_environment({'LD_PRELOAD': '/tmp/injected.dylib'})
+        self.assertEqual(bundle_probe_environment({'NODE_OPTIONS': 'forbidden', 'SAFE': '1'}),
+                         {'SAFE': '1'})
+
     def test_system_install_names_preserve_loader_authority(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary).resolve()
@@ -593,7 +1029,7 @@ class ParserTests(unittest.TestCase):
             addon = root / 'Frameworks/fixture.node'
             addon.parent.mkdir()
             addon.write_text('fixture addon bytes')
-            alias = web / 'node_modules/better-sqlite3/build/Release/better_sqlite3.node'
+            alias = web / better_sqlite3_addon_path('arm64')
             alias.parent.mkdir(parents=True)
             alias.symlink_to(os.path.relpath(addon, alias.parent))
             workspaces = web / 'node_modules/@print-partner'
