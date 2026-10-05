@@ -387,6 +387,62 @@ fn backup_rejects_managed_trees_aliases_and_existing_files() {
 }
 
 #[test]
+fn backup_survives_missing_runtime_without_relaxing_destination_checks() {
+    use std::os::unix::fs::symlink;
+    let (path, owner, client) = fixture("backup-missing-runtime");
+    let external = directory("backup-missing-runtime-external");
+    owner.backup(&external.join("before.db")).unwrap();
+    set(&client, "wal-only", "committed")
+        .unwrap()
+        .recv()
+        .unwrap()
+        .unwrap();
+    assert!(path.join("print-partner.db-wal").metadata().unwrap().len() > 32);
+    let marker: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(path.join(".desktop-owner.json")).unwrap()).unwrap();
+    let runtime = PathBuf::from(marker["runtime_dir"].as_str().unwrap());
+    assert_eq!(std::fs::read_dir(&runtime).unwrap().count(), 0);
+    std::fs::remove_dir(&runtime).unwrap();
+    let existing = external.join("existing.db");
+    std::fs::write(&existing, b"preserve").unwrap();
+    symlink(&existing, external.join("existing-link.db")).unwrap();
+    symlink(external.join("absent.db"), external.join("dangling.db")).unwrap();
+    symlink(&path, external.join("data-alias")).unwrap();
+    for destination in [
+        path.join("backup.db"),
+        runtime.join("backup.db"),
+        external.join("data-alias/backup.db"),
+        existing.clone(),
+        external.join("existing-link.db"),
+        external.join("dangling.db"),
+    ] {
+        assert!(owner.backup(&destination).is_err());
+    }
+    assert_eq!(std::fs::read(existing).unwrap(), b"preserve");
+    let target = external.join("after.db");
+    let result = owner.backup(&target);
+    assert!(!runtime.exists());
+    owner.shutdown().unwrap();
+    result.unwrap();
+    let backup = Connection::open_with_flags(&target, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+    assert_eq!(
+        snapshot(&backup, "test", "wal-only").unwrap(),
+        SettingSnapshot::Stored {
+            value: "committed".into()
+        }
+    );
+    assert_eq!(
+        backup
+            .query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0))
+            .unwrap(),
+        "ok"
+    );
+    drop(backup);
+    std::fs::remove_dir_all(external).unwrap();
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
 fn failed_cleanup_retains_marker_and_lock_until_explicit_retry() {
     use fs2::FileExt;
     let (path, owner, _) = fixture("retained-release");
