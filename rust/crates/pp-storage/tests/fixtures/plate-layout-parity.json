@@ -1,0 +1,200 @@
+{
+  "layout": {
+    "format1": "78c8f4cb2a574b6082dddf3d1747c4441bc3e564789f7495cf7f2416fe8b408a",
+    "format2": "2bb5e9301f80941b32edbc0ad359401478ca965a5c95b7ba9a81c7cbc1808e78",
+    "normalizedPrinterNameLength": 200
+  },
+  "initialPlateId": "plate_b0f96d52840717324f219292d3eca2a8",
+  "packed": {
+    "kind": "packed",
+    "plates": [
+      {
+        "units": [
+          {
+            "token": "ppu_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "widthUm": 50,
+            "depthUm": 30,
+            "heightUm": 10,
+            "xUm": 10,
+            "yUm": 10
+          },
+          {
+            "token": "ppu_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "widthUm": 40,
+            "depthUm": 40,
+            "heightUm": 10,
+            "xUm": 70,
+            "yUm": 10
+          },
+          {
+            "token": "ppu_cccccccccccccccccccccccccccccccc",
+            "widthUm": 30,
+            "depthUm": 20,
+            "heightUm": 10,
+            "xUm": 10,
+            "yUm": 60
+          }
+        ]
+      }
+    ]
+  },
+  "around": {
+    "kind": "packed",
+    "plates": [
+      {
+        "units": [
+          {
+            "token": "ppu_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "widthUm": 30,
+            "depthUm": 20,
+            "heightUm": 10,
+            "xUm": 40,
+            "yUm": 40
+          },
+          {
+            "token": "ppu_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "widthUm": 30,
+            "depthUm": 20,
+            "heightUm": 10,
+            "xUm": 10,
+            "yUm": 10
+          }
+        ]
+      },
+      {
+        "units": [
+          {
+            "token": "ppu_cccccccccccccccccccccccccccccccc",
+            "widthUm": 50,
+            "depthUm": 30,
+            "heightUm": 10,
+            "xUm": 10,
+            "yUm": 10
+          }
+        ]
+      }
+    ]
+  },
+  "grouped": [
+    [
+      "ppu_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "ppu_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    ],
+    [
+      "ppu_cccccccccccccccccccccccccccccccc"
+    ]
+  ],
+  "printerConversion": {
+    "accepted": {
+      "id": "printer",
+      "name": "Printer",
+      "model": "Model",
+      "bed_width_um": 120,
+      "bed_depth_um": 100,
+      "bed_height_um": 80,
+      "margin_um": 10
+    },
+    "fractionalRejected": true
+  },
+  "stl": {
+    "dimensions": {
+      "widthUm": 1,
+      "depthUm": 3,
+      "heightUm": 4
+    },
+    "envelopes": [
+      {
+        "name": "validLf",
+        "hex": "736f6c696420610a6661636574206e6f726d616c2030203020310a6f75746572206c6f6f700a7665727465782030203020300a7665727465782031203020300a7665727465782030203120310a656e646c6f6f700a656e6466616365740a656e64736f6c69642061",
+        "accepted": true
+      },
+      {
+        "name": "validCrLf",
+        "hex": "736f6c696420610d0a6661636574206e6f726d616c2030203020310d0a6f75746572206c6f6f700d0a7665727465782030203020300d0a7665727465782031203020300d0a7665727465782030203120310d0a656e646c6f6f700d0a656e6466616365740d0a656e64736f6c69642061",
+        "accepted": true
+      },
+      {
+        "name": "oneNewlineLf",
+        "hex": "736f6c696420610a656e64736f6c69642061",
+        "accepted": false
+      },
+      {
+        "name": "oneNewlineCrLf",
+        "hex": "736f6c696420610d0a656e64736f6c69642061",
+        "accepted": false
+      },
+      {
+        "name": "headerEmbeddedCr",
+        "hex": "736f6c696420610d620a6661636574206e6f726d616c2030203020310a6f75746572206c6f6f700a7665727465782030203020300a7665727465782031203020300a7665727465782030203120310a656e646c6f6f700a656e6466616365740a656e64736f6c69642061",
+        "accepted": false
+      },
+      {
+        "name": "headerDoubleCr",
+        "hex": "736f6c696420610d0d0a6661636574206e6f726d616c2030203020310a6f75746572206c6f6f700a7665727465782030203020300a7665727465782031203020300a7665727465782030203120310a656e646c6f6f700a656e6466616365740a656e64736f6c69642061",
+        "accepted": false
+      },
+      {
+        "name": "footerEmbeddedCr",
+        "hex": "736f6c696420610a6661636574206e6f726d616c2030203020310a6f75746572206c6f6f700a7665727465782030203020300a7665727465782031203020300a7665727465782030203120310a656e646c6f6f700a656e6466616365740a656e64736f6c696420610d62",
+        "accepted": false
+      },
+      {
+        "name": "footerTrailingCrCr",
+        "hex": "736f6c696420610a6661636574206e6f726d616c2030203020310a6f75746572206c6f6f700a7665727465782030203020300a7665727465782031203020300a7665727465782030203120310a656e646c6f6f700a656e6466616365740a656e64736f6c696420610d0d",
+        "accepted": true
+      }
+    ],
+    "dimensionCases": [
+      {
+        "name": "roundsBelowHalfToZero",
+        "widthMm": 0.0004999,
+        "dimensions": null
+      },
+      {
+        "name": "roundsHalfUp",
+        "widthMm": 0.0005,
+        "dimensions": {
+          "widthUm": 1,
+          "depthUm": 1000,
+          "heightUm": 1000
+        }
+      },
+      {
+        "name": "layoutMaximum",
+        "widthMm": 2147483.647,
+        "dimensions": {
+          "widthUm": 2147483647,
+          "depthUm": 1000,
+          "heightUm": 1000
+        }
+      },
+      {
+        "name": "layoutMaximumPlusOne",
+        "widthMm": 2147483.648,
+        "dimensions": {
+          "widthUm": 2147483648,
+          "depthUm": 1000,
+          "heightUm": 1000
+        }
+      },
+      {
+        "name": "largestRepresentableSafeBelowLimit",
+        "widthMm": 9007199254740.99,
+        "dimensions": {
+          "widthUm": 9007199254740990,
+          "depthUm": 1000,
+          "heightUm": 1000
+        }
+      },
+      {
+        "name": "nextRepresentableAboveLimit",
+        "widthMm": 9007199254740.992,
+        "dimensions": null
+      }
+    ],
+    "binaryExtraRejected": true,
+    "truncatedRejected": true,
+    "nonfiniteNormalAccepted": true,
+    "invalidUtf8HeaderAccepted": true
+  }
+}
