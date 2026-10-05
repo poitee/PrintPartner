@@ -90,7 +90,7 @@ jobs:
           cargo test --manifest-path rust/Cargo.toml --locked -p pp-core -p pp-compat -p pp-gateway -p pp-server --lib --bins 2>&1 | tee "$PP_EVIDENCE/backend-units.log"
           cargo clippy --manifest-path rust/Cargo.toml --locked --workspace --all-targets -- -D warnings 2>&1 | tee "$PP_EVIDENCE/backend-clippy.log"
       - name: Check workaround ratchet
-        run: node scripts/workaround-ratchet.mjs
+        run: node scripts/workaround-ratchet.mjs && node --test scripts/workaround-ratchet.test.mjs
       - name: Verify gateway effects
         run: |
           set -euo pipefail
