@@ -426,6 +426,8 @@ describe("accepted media PNG cache", () => {
       await waitFor(() => ready);
       expect(ready, stderr).toBe(true);
       expect(sawOld).toBe(true);
+      absentReads = 0;
+      partialReads = 0;
       expect(child.send("start")).toBe(true);
       await waitFor(() => published);
       expect(published, stderr).toBe(true);
