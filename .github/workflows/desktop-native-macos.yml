@@ -116,6 +116,7 @@ jobs:
           PP_COMPAT_BUNDLE_CONTENTS="$app/Contents" \
           PP_COMPAT_TEST_DATA_DIR="$RUNNER_TEMP/compat-data" \
           PP_COMPAT_TEST_RUNTIME_DIR="$RUNNER_TEMP/compat-runtime" \
+          PP_COMPAT_TEST_FAILURE_DIR="$PP_EVIDENCE/compat-failure" \
           PP_COMPAT_TEST_RECEIPT="$PP_EVIDENCE/compat-lifecycle.json" \
           CARGO_NET_OFFLINE=true cargo test --manifest-path rust/Cargo.toml \
             -p pp-compat --test installed_bundle_lifecycle \
