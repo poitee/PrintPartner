@@ -708,6 +708,7 @@ fn auto_select(
     committed: Option<Value>,
     expected: Option<&pp_contracts::working_drafts::ExpectedDraft>,
 ) -> Result<Outcome> {
+    ensure!(!c.cancelled.load(Ordering::Acquire), Failure::Cancelled);
     let tx = connection.transaction()?;
     let (tenant, _) = auth::observe_reconciliation_actor(&tx, &c.credential, c.policy)?;
     let profile = c.profile.get() as i64;
@@ -770,6 +771,7 @@ fn auto_select(
     )?;
     let key = format!("auto-{}", text(&d.header, "snapshotDigest")?);
     tx.commit()?;
+    ensure!(!c.cancelled.load(Ordering::Acquire), Failure::Cancelled);
     let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let result = required_units::reconcile_in_transaction(
         &tx,
