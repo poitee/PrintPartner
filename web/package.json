@@ -29,6 +29,9 @@
     "quality": "npm run lint && npm run lint:dead && npm run typecheck && npm test && npm run test:workflow-smoke && npm run build && npm run test:bundles -w @print-partner/web && npm run test:runtime && npm run test:browser",
     "db:migrate": "npm run db:migrate -w @print-partner/server",
     "lint:dead": "knip --no-gitignore",
+    "fixture:storage:export-data": "node --conditions=development --import tsx scripts/storage-fixtures/export-data.mts",
+    "fixture:storage:node-access": "node --conditions=development --import tsx scripts/storage-fixtures/node-access.mts",
+    "fixture:storage:prepare": "node --conditions=development --import tsx scripts/storage-fixtures/prepare.mts",
     "test:desktop-parity": "node --conditions=development --import tsx scripts/desktop-parity/verify.mts",
     "contracts:schemas": "node --conditions=development --import tsx scripts/desktop-contracts/schema-check.mjs",
     "contracts:verify": "node scripts/desktop-contracts/verify.mjs"
