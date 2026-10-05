@@ -98,11 +98,12 @@ function setSessionCookie(reply: FastifyReply, rawToken: string, secure: boolean
 function finishOAuthLogin(
   authStore: AuthStore,
   user: ReturnType<AuthStore["upsertOAuthUser"]>,
+  provider: AuthIdentityProvider,
   reply: FastifyReply,
   redirectUrl: string,
   secure: boolean,
 ): void {
-  const raw = authStore.createSession(user.id);
+  const raw = authStore.createSession(user.id, provider);
   setSessionCookie(reply, raw, secure);
   reply.clearCookie("oauth_state", { path: "/" });
   reply.redirect(redirectUrl);
@@ -194,7 +195,7 @@ export function registerAuthRoutes(
       }
       const passwordHash = hashPassword(password);
       const user = authStore.createUser({ email: emailRaw, displayName, passwordHash });
-      const raw = authStore.createSession(user.id);
+      const raw = authStore.createSession(user.id, "email");
       setSessionCookie(reply, raw, config.sessionCookieSecure);
       const sessionUser: SessionUser = {
         user_id: user.id,
@@ -219,7 +220,7 @@ export function registerAuthRoutes(
       if (!user?.passwordHash || !verifyPassword(password, user.passwordHash)) {
         return reply.status(401).send({ detail: "Invalid email or password" });
       }
-      const raw = authStore.createSession(user.id);
+      const raw = authStore.createSession(user.id, "email");
       setSessionCookie(reply, raw, config.sessionCookieSecure);
       return {
         user: toPublicUser({
@@ -288,7 +289,7 @@ export function registerAuthRoutes(
       const user = authStore.findUserById(userId);
       if (!user) return reply.status(500).send({ detail: "User not found" });
 
-      const raw = authStore.createSession(user.id);
+      const raw = authStore.createSession(user.id, "email");
       setSessionCookie(reply, raw, config.sessionCookieSecure);
       return {
         ok: true,
@@ -327,7 +328,7 @@ export function registerAuthRoutes(
 
       authStore.updatePasswordHash(user.id, hashPassword(newPassword));
       authStore.deleteAllUserSessions(user.id);
-      const raw = authStore.createSession(user.id);
+      const raw = authStore.createSession(user.id, "email");
       setSessionCookie(reply, raw, config.sessionCookieSecure);
       return { ok: true };
     });
@@ -406,7 +407,7 @@ export function registerAuthRoutes(
           displayName: ghUser.displayName,
           email,
         });
-        finishOAuthLogin(authStore, user, reply, config.authSuccessRedirect, config.sessionCookieSecure);
+        finishOAuthLogin(authStore, user, "github", reply, config.authSuccessRedirect, config.sessionCookieSecure);
       } catch (error) {
         return replyToOAuthProviderFailure("GitHub", error, request, reply);
       }
@@ -491,7 +492,7 @@ export function registerAuthRoutes(
           displayName: dcUser.displayName,
           email: dcUser.email,
         });
-        finishOAuthLogin(authStore, user, reply, config.authSuccessRedirect, config.sessionCookieSecure);
+        finishOAuthLogin(authStore, user, "discord", reply, config.authSuccessRedirect, config.sessionCookieSecure);
       } catch (error) {
         return replyToOAuthProviderFailure("Discord", error, request, reply);
       }
@@ -513,7 +514,7 @@ export function registerAuthRoutes(
         email: body.email ?? `${body.login ?? "dev"}@dev.local`,
         displayName: body.login ?? "dev",
       });
-      const raw = authStore.createSession(user.id);
+      const raw = authStore.createSession(user.id, "email");
       setSessionCookie(reply, raw, config.sessionCookieSecure);
       return {
         user: toPublicUser({

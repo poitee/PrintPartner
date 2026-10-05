@@ -171,6 +171,18 @@ pub(crate) enum Command {
         phase: Phase,
     },
 }
+impl Command {
+    pub(crate) fn changes_accounting(&self) -> bool {
+        !matches!(
+            self,
+            Self::Get { .. }
+                | Self::Phase {
+                    phase: Phase::Read,
+                    ..
+                }
+        )
+    }
+}
 pub struct ImportClient {
     storage: SettingsClient,
     policy: AuthPolicy,

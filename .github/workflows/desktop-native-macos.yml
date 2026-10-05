@@ -33,10 +33,12 @@ jobs:
             arch: arm64
             node_arch: arm64
             rust_host: aarch64-apple-darwin
+            tauri_cli_sha256: ee35ee364a0c626df7852d9a5bc0c5394b6440772e9864cfb9b11dcb8d33f527
           - runner: macos-26-intel
             arch: x86_64
             node_arch: x64
             rust_host: x86_64-apple-darwin
+            tauri_cli_sha256: e5386ba6dadc3fbbdcf46c1f95b700f28caf03db979de50a29adb872022b4a57
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     env:
@@ -70,7 +72,17 @@ jobs:
           rustup toolchain install 1.99.0 --profile minimal
           rustc --version --verbose | tee "$PP_EVIDENCE/rust-version.txt"
           test "$(rustc --version --verbose | sed -n 's/^host: //p')" = '${{ matrix.rust_host }}'
-          cargo install tauri-cli --version '=2.12.1' --locked --root "$RUNNER_TEMP/tauri-cli" 2>&1 | tee "$PP_EVIDENCE/tauri-install.log"
+          cli_archive="$RUNNER_TEMP/cargo-tauri.zip"
+          curl --fail --location --retry 3 --output "$cli_archive" \
+            'https://github.com/tauri-apps/tauri/releases/download/tauri-cli-v2.12.1/cargo-tauri-${{ matrix.rust_host }}.zip'
+          printf '%s  %s\n' '${{ matrix.tauri_cli_sha256 }}' "$cli_archive" \
+            | shasum -a 256 -c - | tee "$PP_EVIDENCE/tauri-install.log"
+          mkdir -p "$RUNNER_TEMP/tauri-cli/bin"
+          unzip -q "$cli_archive" -d "$RUNNER_TEMP/tauri-cli/bin"
+          chmod +x "$RUNNER_TEMP/tauri-cli/bin/cargo-tauri"
+          "$RUNNER_TEMP/tauri-cli/bin/cargo-tauri" --version \
+            | tee "$PP_EVIDENCE/tauri-version.txt"
+          grep -Fx 'tauri-cli 2.12.1' "$PP_EVIDENCE/tauri-version.txt"
           echo "$RUNNER_TEMP/tauri-cli/bin" >> "$GITHUB_PATH"
       - name: Build desktop React and target-native production modules
         run: |
@@ -96,6 +108,32 @@ jobs:
           CARGO_NET_OFFLINE=true bash rust/scripts/desktop-bundle.sh 2>&1 | tee "$PP_EVIDENCE/bundle-build.log"
           cmp "$PP_EVIDENCE/bundle-manifest.json" "$PP_DESKTOP_STAGE/bundle-manifest.json"
           git diff --exit-code -- rust/Cargo.lock
+      - name: Verify bundled compatibility lifecycle
+        run: |
+          set -o pipefail
+          app="$GITHUB_WORKSPACE/rust/target/release/bundle/macos/Print Partner.app"
+          PP_DESKTOP_RELEASE_MANIFEST="$PP_DESKTOP_STAGE/bundle-manifest.json" \
+          PP_COMPAT_BUNDLE_CONTENTS="$app/Contents" \
+          PP_COMPAT_TEST_DATA_DIR="$RUNNER_TEMP/compat-data" \
+          PP_COMPAT_TEST_RUNTIME_DIR="$RUNNER_TEMP/compat-runtime" \
+          PP_COMPAT_TEST_RECEIPT="$PP_EVIDENCE/compat-lifecycle.json" \
+          CARGO_NET_OFFLINE=true cargo test --manifest-path rust/Cargo.toml \
+            -p pp-compat --test installed_bundle_lifecycle \
+            -- --exact installed_bundle_start_health_shutdown --nocapture \
+            2>&1 | tee "$PP_EVIDENCE/compat-lifecycle.log"
+          python3 - "$PP_EVIDENCE/compat-lifecycle.json" "$GITHUB_SHA" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          receipt = json.loads(pathlib.Path(sys.argv[1]).read_text())
+          if receipt.get('status') != 'passed' or receipt.get('source_commit') != sys.argv[2]:
+              raise SystemExit('Compatibility lifecycle receipt identity mismatch')
+          if receipt.get('shutdown') != 'stopped_with_observed_accepted_exit':
+              raise SystemExit('Compatibility lifecycle shutdown was not observed')
+          if not receipt.get('child_pid_absent') or not receipt.get('runtime_socket_absent'):
+              raise SystemExit('Compatibility lifecycle cleanup is incomplete')
+          PY
       - name: Verify installed app and relocated copy
         run: |
           app="$GITHUB_WORKSPACE/rust/target/release/bundle/macos/Print Partner.app"
