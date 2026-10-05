@@ -731,12 +731,12 @@ fn user(
                         receipt.ok_or_else(|| anyhow!("Confirmation receipt required"))?;
                     effect.confirmed = true;
                     effect.receipt = Some(receipt.clone());
-                    job.result = Some(receipt);
-                    ensure!(
-                        completion_proven(&job, job.result.as_ref()),
-                        "Remaining job effects require an explicit decision"
-                    );
-                    job.state = PersistentState::Succeeded;
+                    if completion_proven(&job, Some(&receipt)) {
+                        job.result = Some(receipt);
+                        job.state = PersistentState::Succeeded;
+                    } else {
+                        job.state = PersistentState::Queued;
+                    }
                 }
                 Decision::ConfirmNoEffect => {
                     ensure!(receipt.is_none(), "No-effect decision cannot carry receipt");

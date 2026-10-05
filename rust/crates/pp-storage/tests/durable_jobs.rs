@@ -951,6 +951,58 @@ fn ticket_t_28_recovery_abandon_keeps_uncertain_proof_and_resource_lock() {
     owner.shutdown().unwrap();
 }
 #[test]
+fn ticket_t_28_recovery_split_printer_upload_reconcile_resumes_for_start() {
+    let (_, owner) = fixture();
+    let queued = enqueue(&owner, "split-upload", printer("split-printer"));
+    let worker = owner.job_worker(admission()).unwrap();
+    let (_, mut lease) = worker.claim().unwrap().unwrap();
+    worker
+        .update(
+            &mut lease,
+            WorkerOperation::BeginEffect(intent(EffectOperation::PrinterUpload, "split-printer")),
+        )
+        .unwrap();
+    let pending = worker.update(&mut lease, WorkerOperation::Fail).unwrap();
+    assert_eq!(pending.state, PersistentState::ReconciliationRequired);
+    let resumed = job(call(
+        &owner,
+        UserOperation::Reconcile {
+            job_id: queued.job_id.clone(),
+            expected_version: pending.state_version,
+            expected_generation: pending.generation,
+            effect_hash: "b".repeat(64),
+            decision: Decision::ConfirmSucceeded,
+            receipt: Some(receipt("split-printer")),
+        },
+    )
+    .unwrap());
+    assert_eq!(resumed.state, PersistentState::Queued);
+    assert!(resumed.effects[0].confirmed);
+    assert!(resumed.result.is_none());
+    let (claimed, mut lease) = worker.claim().unwrap().unwrap();
+    assert_eq!(claimed.job_id, queued.job_id);
+    worker
+        .update(
+            &mut lease,
+            WorkerOperation::BeginEffect(intent(EffectOperation::PrinterStart, "split-printer")),
+        )
+        .unwrap();
+    worker
+        .update(
+            &mut lease,
+            WorkerOperation::ConfirmEffect(receipt("split-printer")),
+        )
+        .unwrap();
+    assert_eq!(
+        worker
+            .update(&mut lease, WorkerOperation::Finish(None))
+            .unwrap()
+            .state,
+        PersistentState::Succeeded
+    );
+    owner.shutdown().unwrap();
+}
+#[test]
 fn ticket_t_28_claims_duplicate_concurrent_enqueue_and_no_handler_admission() {
     let (_, owner) = fixture();
     let client = owner.jobs(policy()).unwrap();
