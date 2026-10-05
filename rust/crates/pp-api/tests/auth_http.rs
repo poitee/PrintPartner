@@ -7,6 +7,7 @@ use pp_storage::{
     },
 };
 use reqwest::{Client, Method, Response};
+use rusqlite::Connection;
 use serde_json::{Value, json};
 use std::{
     net::SocketAddr,
@@ -178,7 +179,6 @@ async fn registration_race_and_owner_policy_are_transactional() {
         &server.auth,
         Request::ResolveSession {
             token: secret(cookie.strip_prefix("pp_session=").unwrap()),
-            provider: Provider::Email,
         },
     )
     .await
@@ -242,6 +242,36 @@ async fn registration_race_and_owner_policy_are_transactional() {
             .await
             .status(),
         403
+    );
+    let health: Value = server
+        .request(Method::GET, "/health", None, Some(&cookie))
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(health["owner_mapping_required"], true);
+    assert_eq!(health["authenticated"], false);
+    server.close().await;
+}
+
+#[tokio::test]
+async fn health_propagates_invalid_stored_session_provider() {
+    let server = Server::start(RegistrationPolicy::Open, false, false, None).await;
+    let response = server.register("corrupt-session@example.com").await;
+    assert_eq!(response.status(), 200);
+    let cookie = cookie(&response);
+    let db = Connection::open(server.directory.join("print-partner.db")).unwrap();
+    db.execute("UPDATE sessions SET provider='unknown'", [])
+        .unwrap();
+    drop(db);
+
+    let response = server
+        .request(Method::GET, "/health", None, Some(&cookie))
+        .await;
+    assert_eq!(response.status(), 500);
+    assert_eq!(
+        response.json::<Value>().await.unwrap()["detail"],
+        "Authentication unavailable"
     );
     server.close().await;
 }
