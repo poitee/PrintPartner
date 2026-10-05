@@ -154,7 +154,9 @@ pub fn resolve_logical(base: &Path, path: &str) -> PathBuf {
     for c in combined.components() {
         match c {
             std::path::Component::ParentDir => {
-                out.pop();
+                if out.file_name().is_some() {
+                    out.pop();
+                }
             }
             std::path::Component::CurDir => {}
             _ => out.push(c),
