@@ -61,3 +61,39 @@ test("main checks tracked files against the baseline", (t) => {
   writeFileSync(join(root, "a.rs"), "#[allow(unused)]\n#[allow(dead_code)]\nfn a() {}\n");
   assert.equal(main([], root, baselinePath), 1);
 });
+
+test("counts bare markers on lines inside multi-line block comments", () => {
+  const ts = ["/*", "  TODO: remove workaround", "  plain line", "*/", "TODO_LIST.push(1);"].join("\n");
+  assert.equal(countText(ts, "web/a.ts").todoComments, 1);
+  assert.equal(countText(["/**", " * docs", "FIXME no star prefix", " */"].join("\n"), "a.rs").todoComments, 1);
+  assert.equal(countText(["<!--", "HACK: inline", "-->"].join("\n"), "index.html").todoComments, 1);
+  // A closed comment, a glob in a string, and a Rust lifetime do not leave a block open.
+  assert.equal(countText(["/* note */", "const TODO = 1;"].join("\n"), "a.ts").todoComments, 0);
+  assert.equal(countText(['const glob = "src/**/*.ts";', "const TODO = 1;"].join("\n"), "a.ts").todoComments, 0);
+  assert.equal(countText(["fn f<'a>(s: &'a str) {} // ok", "let TODO = 1;"].join("\n"), "a.rs").todoComments, 0);
+  // Python and shell have no block comments.
+  assert.equal(countText(["x = '/*'", "TODO = 1"].join("\n"), "a.py").todoComments, 0);
+});
+
+test("--update refuses to raise an existing baseline and still lowers it", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "ratchet-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  execFileSync("git", ["init", "-q"], { cwd: root });
+  writeFileSync(join(root, "a.rs"), "#[allow(unused)]\nfn a() {}\n");
+  execFileSync("git", ["add", "a.rs"], { cwd: root });
+  const baselinePath = join(root, "baseline.json");
+  t.mock.method(console, "log", () => {});
+  t.mock.method(console, "error", () => {});
+  const baseline = () => JSON.parse(readFileSync(baselinePath, "utf8"));
+
+  assert.equal(main(["--update"], root, baselinePath), 0);
+  assert.equal(baseline().rustAllow, 1);
+
+  writeFileSync(join(root, "a.rs"), "#[allow(unused)]\n#[allow(dead_code)]\nfn a() {}\n");
+  assert.equal(main(["--update"], root, baselinePath), 1);
+  assert.equal(baseline().rustAllow, 1, "a refused update leaves the baseline unchanged");
+
+  writeFileSync(join(root, "a.rs"), "fn a() {}\n");
+  assert.equal(main(["--update"], root, baselinePath), 0);
+  assert.equal(baseline().rustAllow, 0);
+});
