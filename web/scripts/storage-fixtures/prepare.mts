@@ -32,7 +32,7 @@ for (const { version, name } of cases) {
         const raw = new Database(join(original, 'print-partner.db'));
         if (name === 'immutable-corpus') {
             const golden = JSON.parse(readFileSync(new URL('../../packages/contracts/test-fixtures/desktop/autosave-v1.json', import.meta.url), 'utf8'));
-            const states = Object.entries(golden.normalized.states).filter(([_, state]) => state.database.accepted_plate_heads.length > 0).sort((a, b) => b[1].database.accepted_plate_revisions.length - a[1].database.accepted_plate_revisions.length);
+            const states = Object.entries(golden.normalized.states).filter(([, state]) => state.database.accepted_plate_heads.length > 0).sort((a, b) => b[1].database.accepted_plate_revisions.length - a[1].database.accepted_plate_revisions.length);
             const [stateId, state] = states[0];
             const triggers = raw.prepare("SELECT name,sql FROM sqlite_master WHERE type='trigger'").all();
             raw.pragma('foreign_keys=OFF');
