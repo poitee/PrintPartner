@@ -219,6 +219,52 @@ fn ahead_and_old_versions_reject_before_side_effects() {
         assert_eq!(std::fs::read_dir(&path).unwrap().count(), 1);
     }
 }
+
+#[test]
+fn reopen_preserves_the_pre_upgrade_backup() {
+    let path = directory("upgrade-backup");
+    let database = path.join("print-partner.db");
+    std::fs::write(
+        &database,
+        include_bytes!("../tests/fixtures/accepted-plan-node.db"),
+    )
+    .unwrap();
+    let older_backup = path.join("backups/pre-schema34.db");
+    std::fs::create_dir_all(older_backup.parent().unwrap()).unwrap();
+    std::fs::write(&older_backup, b"retained older recovery copy").unwrap();
+    let raw = Connection::open(&database).unwrap();
+    raw.execute(
+        "UPDATE app_settings SET value='33' WHERE tenant_id='default' AND key='schema_version'",
+        [],
+    )
+    .unwrap();
+    drop(raw);
+
+    let (owner, ready) = WriterOwner::open(&path, Limits::default()).unwrap();
+    let backup = ready.backup.unwrap();
+    owner.shutdown().unwrap();
+    let version = |path: &Path| {
+        Connection::open(path)
+            .unwrap()
+            .query_row(
+                "SELECT value FROM app_settings WHERE tenant_id='default' AND key='schema_version'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap()
+    };
+    assert_eq!(version(&backup), "33");
+
+    let (owner, ready) = WriterOwner::open(&path, Limits::default()).unwrap();
+    assert!(ready.backup.is_none());
+    owner.shutdown().unwrap();
+    assert_eq!(version(&backup), "33");
+    assert_ne!(backup, older_backup);
+    assert_eq!(
+        std::fs::read(older_backup).unwrap(),
+        b"retained older recovery copy"
+    );
+}
 #[test]
 fn backup_includes_uncheckpointed_wal() {
     let (path, owner, client) = fixture("backup");
@@ -348,6 +394,62 @@ fn backup_rejects_managed_trees_aliases_and_existing_files() {
     }
     drop(reader);
     owner.shutdown().unwrap();
+}
+
+#[test]
+fn backup_survives_missing_runtime_without_relaxing_destination_checks() {
+    use std::os::unix::fs::symlink;
+    let (path, owner, client) = fixture("backup-missing-runtime");
+    let external = directory("backup-missing-runtime-external");
+    owner.backup(&external.join("before.db")).unwrap();
+    set(&client, "wal-only", "committed")
+        .unwrap()
+        .recv()
+        .unwrap()
+        .unwrap();
+    assert!(path.join("print-partner.db-wal").metadata().unwrap().len() > 32);
+    let marker: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(path.join(".desktop-owner.json")).unwrap()).unwrap();
+    let runtime = PathBuf::from(marker["runtime_dir"].as_str().unwrap());
+    assert_eq!(std::fs::read_dir(&runtime).unwrap().count(), 0);
+    std::fs::remove_dir(&runtime).unwrap();
+    let existing = external.join("existing.db");
+    std::fs::write(&existing, b"preserve").unwrap();
+    symlink(&existing, external.join("existing-link.db")).unwrap();
+    symlink(external.join("absent.db"), external.join("dangling.db")).unwrap();
+    symlink(&path, external.join("data-alias")).unwrap();
+    for destination in [
+        path.join("backup.db"),
+        runtime.join("backup.db"),
+        external.join("data-alias/backup.db"),
+        existing.clone(),
+        external.join("existing-link.db"),
+        external.join("dangling.db"),
+    ] {
+        assert!(owner.backup(&destination).is_err());
+    }
+    assert_eq!(std::fs::read(existing).unwrap(), b"preserve");
+    let target = external.join("after.db");
+    let result = owner.backup(&target);
+    assert!(!runtime.exists());
+    owner.shutdown().unwrap();
+    result.unwrap();
+    let backup = Connection::open_with_flags(&target, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+    assert_eq!(
+        snapshot(&backup, "test", "wal-only").unwrap(),
+        SettingSnapshot::Stored {
+            value: "committed".into()
+        }
+    );
+    assert_eq!(
+        backup
+            .query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0))
+            .unwrap(),
+        "ok"
+    );
+    drop(backup);
+    std::fs::remove_dir_all(external).unwrap();
+    std::fs::remove_dir_all(path).unwrap();
 }
 
 #[test]

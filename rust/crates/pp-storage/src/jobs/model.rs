@@ -113,6 +113,80 @@ pub enum Payload {
         #[serde(default)]
         unlabeled_names: Vec<String>,
     },
+    PrinterStart(PrinterStartRequest),
+}
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PrinterStartRequest {
+    pub uploaded_job_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    binding: Option<PrinterStartBinding>,
+}
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PrinterStartBinding {
+    printer_id: String,
+    upload_effect: EffectReceipt,
+}
+impl PrinterStartRequest {
+    pub fn new(uploaded_job_id: impl Into<String>) -> Self {
+        Self {
+            uploaded_job_id: uploaded_job_id.into(),
+            binding: None,
+        }
+    }
+    pub fn printer_id(&self) -> Option<&str> {
+        self.binding
+            .as_ref()
+            .map(|binding| binding.printer_id.as_str())
+    }
+    pub fn upload_effect(&self) -> Option<&EffectReceipt> {
+        self.binding.as_ref().map(|binding| &binding.upload_effect)
+    }
+    fn validate_common(&self) -> Result<()> {
+        text(&self.uploaded_job_id, 128)
+    }
+    fn validate_request(&self) -> Result<()> {
+        self.validate_common()?;
+        ensure!(
+            self.binding.is_none(),
+            "Printer start binding is server-owned"
+        );
+        Ok(())
+    }
+    fn validate_stored(&self) -> Result<()> {
+        self.validate_common()?;
+        let binding = self
+            .binding
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Missing printer start binding"))?;
+        text(&binding.printer_id, 128)?;
+        let effect = &binding.upload_effect;
+        ensure!(
+            effect.intent.operation == EffectOperation::PrinterUpload
+                && effect.intent.target == binding.printer_id
+                && effect.attempt > 0
+                && effect.generation > 0,
+            "Invalid printer start binding"
+        );
+        ensure!(
+            matches!(effect.outcome()?, EffectOutcome::Confirmed(_)),
+            "Invalid printer start binding"
+        );
+        digest(&effect.intent.basis_hash)?;
+        digest(&effect.intent.content_hash)?;
+        let receipt = effect
+            .receipt
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Missing upload receipt"))?;
+        receipt.validate()?;
+        ensure!(
+            receipt.content_hash == effect.intent.content_hash
+                && receipt.target == effect.intent.target,
+            "Upload receipt mismatch"
+        );
+        Ok(())
+    }
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -159,6 +233,7 @@ impl Payload {
             Self::ExportAcceptedPlate3mf { .. } => JobKind::ExportAcceptedPlate3mf,
             Self::ExportDirect3mf { .. } => JobKind::ExportDirect3mf,
             Self::PrinterUpload { .. } => JobKind::PrinterUpload,
+            Self::PrinterStart(_) => JobKind::PrinterUpload,
         }
     }
     pub fn validate(&self) -> Result<()> {
@@ -231,6 +306,7 @@ impl Payload {
                     id(*value)?;
                 }
             }
+            Self::PrinterStart(request) => request.validate_request()?,
         }
         if let Self::ExportDirect3mf { tokens, .. } = self {
             ensure!(!tokens.is_empty(), "Direct export requires units");
@@ -274,9 +350,38 @@ impl Payload {
         }
         Ok(())
     }
+    pub(super) fn validate_stored(&self) -> Result<()> {
+        ensure!(
+            serde_json::to_vec(self)?.len() <= 65536,
+            "Payload too large"
+        );
+        match self {
+            Self::PrinterStart(request) => request.validate_stored(),
+            _ => self.validate(),
+        }
+    }
+    pub(super) fn bind_printer_start(
+        &mut self,
+        printer_id: String,
+        upload_effect: EffectReceipt,
+    ) -> Result<()> {
+        let Self::PrinterStart(request) = self else {
+            return Ok(());
+        };
+        ensure!(request.binding.is_none(), "Printer start already bound");
+        request.binding = Some(PrinterStartBinding {
+            printer_id,
+            upload_effect,
+        });
+        request.validate_stored()
+    }
     pub(super) fn resource(&self) -> String {
         match self {
             Self::PrinterUpload { printer_id, .. } => format!("printer:{printer_id}"),
+            Self::PrinterStart(request) => request
+                .printer_id()
+                .map(|id| format!("printer:{id}"))
+                .unwrap_or_default(),
             Self::ImportScan { project_id } | Self::ExtractSourceDocs { project_id } => {
                 format!("source:{project_id}")
             }
@@ -292,6 +397,7 @@ pub enum PersistentState {
     Running,
     EffectAdmitted,
     ReconciliationRequired,
+    UploadedOnly,
     Succeeded,
     Failed,
     Cancelled,
@@ -303,13 +409,17 @@ impl PersistentState {
             Self::Running => "running",
             Self::EffectAdmitted => "effect_admitted",
             Self::ReconciliationRequired => "reconciliation_required",
+            Self::UploadedOnly => "uploaded_only",
             Self::Succeeded => "succeeded",
             Self::Failed => "failed",
             Self::Cancelled => "cancelled",
         }
     }
     pub fn terminal(self) -> bool {
-        matches!(self, Self::Succeeded | Self::Failed | Self::Cancelled)
+        matches!(
+            self,
+            Self::UploadedOnly | Self::Succeeded | Self::Failed | Self::Cancelled
+        )
     }
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -336,7 +446,44 @@ pub struct EffectReceipt {
     pub attempt: i64,
     pub generation: i64,
     pub confirmed: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub no_effect: bool,
     pub receipt: Option<ResultArtifact>,
+}
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+pub enum EffectOutcome<'a> {
+    Unresolved,
+    Confirmed(&'a ResultArtifact),
+    Denied,
+}
+impl EffectReceipt {
+    pub(super) fn outcome(&self) -> Result<EffectOutcome<'_>> {
+        match (self.confirmed, self.no_effect, self.receipt.as_ref()) {
+            (false, false, None) => Ok(EffectOutcome::Unresolved),
+            (true, false, Some(receipt)) => Ok(EffectOutcome::Confirmed(receipt)),
+            (false, true, None) => Ok(EffectOutcome::Denied),
+            _ => Err(anyhow::anyhow!("Invalid effect outcome")),
+        }
+    }
+    pub(super) fn confirm(&mut self, receipt: ResultArtifact) -> Result<()> {
+        ensure!(
+            matches!(self.outcome()?, EffectOutcome::Unresolved),
+            "Effect already resolved"
+        );
+        self.confirmed = true;
+        self.receipt = Some(receipt);
+        Ok(())
+    }
+    pub(super) fn deny(&mut self) -> Result<()> {
+        ensure!(
+            matches!(self.outcome()?, EffectOutcome::Unresolved),
+            "Effect already resolved"
+        );
+        self.no_effect = true;
+        Ok(())
+    }
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -390,6 +537,80 @@ pub struct JobSnapshot {
     pub updated_at: String,
 }
 impl JobRecord {
+    pub(super) fn validate_state(&self) -> Result<()> {
+        for effect in &self.effects {
+            let outcome = effect.outcome()?;
+            digest(&effect.intent.basis_hash)?;
+            digest(&effect.intent.content_hash)?;
+            text(&effect.intent.target, 1024)?;
+            if let EffectOutcome::Confirmed(receipt) = outcome {
+                receipt.validate()?;
+                ensure!(
+                    receipt.content_hash == effect.intent.content_hash
+                        && receipt.target == effect.intent.target,
+                    "Effect receipt mismatch"
+                );
+            }
+            ensure!(
+                !effect.no_effect || self.state.terminal(),
+                "Denied effect requires terminal job"
+            );
+        }
+        ensure!(
+            self.state != PersistentState::UploadedOnly || self.uploaded_only_proof().is_some(),
+            "Invalid uploaded-only job"
+        );
+        Ok(())
+    }
+    pub(super) fn uploaded_only_proof(&self) -> Option<UploadedProof<'_>> {
+        let Payload::PrinterUpload {
+            printer_id,
+            start: true,
+            ..
+        } = &self.payload
+        else {
+            return None;
+        };
+        let mut upload = None;
+        let mut starts = 0;
+        for effect in &self.effects {
+            let outcome = effect.outcome().ok()?;
+            match effect.intent.operation {
+                EffectOperation::PrinterUpload => {
+                    if upload.is_some()
+                        || effect.intent.target != *printer_id
+                        || !matches!(outcome, EffectOutcome::Confirmed(_))
+                    {
+                        return None;
+                    }
+                    upload = Some(effect);
+                }
+                EffectOperation::PrinterStart => {
+                    starts += 1;
+                    if starts > 1 || !matches!(outcome, EffectOutcome::Denied) {
+                        return None;
+                    }
+                }
+                EffectOperation::SpoolmanDeduction => {
+                    if matches!(outcome, EffectOutcome::Unresolved) {
+                        return None;
+                    }
+                }
+                _ => return None,
+            }
+        }
+        let upload = upload?;
+        let receipt = match upload.outcome().ok()? {
+            EffectOutcome::Confirmed(receipt) => receipt,
+            _ => return None,
+        };
+        if receipt.content_hash != upload.intent.content_hash
+            || receipt.target != upload.intent.target
+        {
+            return None;
+        }
+        (self.result.as_ref() == Some(receipt)).then_some(UploadedProof { printer_id, upload })
+    }
     pub fn snapshot(&self) -> JobSnapshot {
         let (status, message) = match self.state {
             PersistentState::Queued => ("pending", "Waiting for a compatible worker"),
@@ -407,6 +628,7 @@ impl JobRecord {
                     }
                 },
             ),
+            PersistentState::UploadedOnly => ("done", "Uploaded only; print not started"),
             PersistentState::Succeeded => ("done", "Complete"),
             PersistentState::Failed => ("error", "Job failed"),
             PersistentState::Cancelled => ("cancelled", "Cancelled before effects"),
@@ -423,6 +645,10 @@ impl JobRecord {
             updated_at: timestamp(self.updated_at),
         }
     }
+}
+pub(super) struct UploadedProof<'a> {
+    pub printer_id: &'a str,
+    pub upload: &'a EffectReceipt,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HistoryEntry {
