@@ -364,8 +364,16 @@ impl WriterOwner {
                         let _ = reply.send(checkoff_progress::execute(&mut connection, command));
                     }
                     Envelope::Uploads { command, reply } => {
+                        let bump_epoch = !matches!(
+                            &command,
+                            uploads::Command::Get { .. }
+                                | uploads::Command::Phase {
+                                    phase: uploads::Phase::Read,
+                                    ..
+                                }
+                        );
                         let result = uploads::execute(&mut connection, &catalog_state, command);
-                        if result.is_ok() {
+                        if result.is_ok() && bump_epoch {
                             worker.import_epoch.fetch_add(1, Ordering::AcqRel);
                         }
                         let _ = reply.send(result);

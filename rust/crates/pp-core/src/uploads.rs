@@ -181,16 +181,18 @@ impl SourceImports {
         let Some((job, lease)) = claim else {
             return Ok(None);
         };
+        // Cancel settlement must not wait on Source work: the fenced prior attempt may
+        // still hold it, and failing begin_source_work would leave this claim Running.
+        let mut op = self.worker.import_phase(&lease, Phase::Read)?;
+        if job.cancel_requested && op.receipt.is_none() {
+            op = self.worker.import_phase(&lease, Phase::Fail)?;
+            let _ = self.cleanup(&op);
+            return self.worker.import_phase(&lease, Phase::Cleanup).map(Some);
+        }
         let live =
             self.worker
                 .begin_source_work(&lease, None, cancelled, Duration::from_secs(5))?;
-        let mut op = self.worker.import_phase(&lease, Phase::Read)?;
         let result = (|| -> Result<Operation> {
-            if job.cancel_requested && op.receipt.is_none() {
-                op = self.worker.import_phase(&lease, Phase::Fail)?;
-                self.cleanup(&op)?;
-                return self.worker.import_phase(&lease, Phase::Cleanup);
-            }
             if op.state == State::Admitted {
                 let supplied =
                     supplied.ok_or_else(|| anyhow!("Import requires explicitly supplied input"))?;
@@ -331,8 +333,10 @@ impl SourceImports {
             op = self.worker.import_phase(&lease, Phase::Cleanup)?;
             Ok(op.clone())
         })();
+        // Do not fail-close Published: the artifact is durable and activation can resume.
         if result.is_err()
             && op.receipt.is_none()
+            && op.state != State::Published
             && self.worker.import_phase(&lease, Phase::Fail).is_ok()
             && self.cleanup(&op).is_ok()
         {
