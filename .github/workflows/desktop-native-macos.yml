@@ -33,10 +33,12 @@ jobs:
             arch: arm64
             node_arch: arm64
             rust_host: aarch64-apple-darwin
+            tauri_cli_sha256: ee35ee364a0c626df7852d9a5bc0c5394b6440772e9864cfb9b11dcb8d33f527
           - runner: macos-26-intel
             arch: x86_64
             node_arch: x64
             rust_host: x86_64-apple-darwin
+            tauri_cli_sha256: e5386ba6dadc3fbbdcf46c1f95b700f28caf03db979de50a29adb872022b4a57
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     env:
@@ -70,7 +72,17 @@ jobs:
           rustup toolchain install 1.99.0 --profile minimal
           rustc --version --verbose | tee "$PP_EVIDENCE/rust-version.txt"
           test "$(rustc --version --verbose | sed -n 's/^host: //p')" = '${{ matrix.rust_host }}'
-          cargo install tauri-cli --version '=2.12.1' --locked --root "$RUNNER_TEMP/tauri-cli" 2>&1 | tee "$PP_EVIDENCE/tauri-install.log"
+          cli_archive="$RUNNER_TEMP/cargo-tauri.zip"
+          curl --fail --location --retry 3 --output "$cli_archive" \
+            'https://github.com/tauri-apps/tauri/releases/download/tauri-cli-v2.12.1/cargo-tauri-${{ matrix.rust_host }}.zip'
+          printf '%s  %s\n' '${{ matrix.tauri_cli_sha256 }}' "$cli_archive" \
+            | shasum -a 256 -c - | tee "$PP_EVIDENCE/tauri-install.log"
+          mkdir -p "$RUNNER_TEMP/tauri-cli/bin"
+          unzip -q "$cli_archive" -d "$RUNNER_TEMP/tauri-cli/bin"
+          chmod +x "$RUNNER_TEMP/tauri-cli/bin/cargo-tauri"
+          "$RUNNER_TEMP/tauri-cli/bin/cargo-tauri" --version \
+            | tee "$PP_EVIDENCE/tauri-version.txt"
+          grep -Fx 'tauri-cli 2.12.1' "$PP_EVIDENCE/tauri-version.txt"
           echo "$RUNNER_TEMP/tauri-cli/bin" >> "$GITHUB_PATH"
       - name: Build desktop React and target-native production modules
         run: |
