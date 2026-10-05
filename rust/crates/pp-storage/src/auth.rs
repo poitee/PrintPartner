@@ -419,7 +419,7 @@ impl AuthClient {
                     .as_ref()
                     .is_some_and(|hash| hash.starts_with("scrypt:"))
                 {
-                    Some(crypto::hash(&password)?)
+                    crypto::hash(&password).ok()
                 } else {
                     None
                 };
