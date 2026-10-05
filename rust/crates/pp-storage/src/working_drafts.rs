@@ -295,8 +295,8 @@ pub(super) fn execute(connection: &mut Connection, command: Command) -> Result<O
             Outcome::Rebased { draft }
             | Outcome::Created { draft }
             | Outcome::Existing { draft }
-            | Outcome::Updated { draft }
-            | Outcome::Unchanged { draft } => Some(draft),
+            | Outcome::Updated { draft } => Some(draft),
+            Outcome::Unchanged { draft } if draft["state"] == "open" => Some(draft),
             _ => None,
         };
         if let Some(draft) = draft {
