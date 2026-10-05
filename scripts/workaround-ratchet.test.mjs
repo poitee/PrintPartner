@@ -34,6 +34,185 @@ test("ignores workaround marker spellings in ordinary quoted text", () => {
   assert.deepEqual(counts, { todoComments: 0, eslintDisable: 0, rustAllow: 0 });
 });
 
+test("distinguishes JSX text and attributes from embedded comments", () => {
+  const text = `const node = <div data-note="// FIXME: attribute">It's /* HACK: text */ {/* TODO: real */}</div>;`;
+  assert.deepEqual(countText(text, "a.tsx"), { todoComments: 1, eslintDisable: 0, rustAllow: 0 });
+});
+
+test("returns from nested JSX expressions, fragments, and self-closing tags", () => {
+  const text = [
+    "const node = (",
+    '  <section data-note="',
+    "    // TODO: attribute",
+    '  ">',
+    "    <>",
+    "      {ready ? <span>{value /* TODO: nested */}</span> : <Fallback />}",
+    "    </>",
+    "  </section>",
+    ");",
+    "// FIXME: after JSX",
+  ].join("\n");
+  assert.deepEqual(countText(text, "a.tsx"), { todoComments: 2, eslintDisable: 0, rustAllow: 0 });
+});
+
+test("counts comments in JSX opening tags but not text or attributes", () => {
+  const text = [
+    'const block = <p data-note="/* TODO: attribute */" /* TODO: block */>/* FIXME: text */</p>;',
+    "const line = <p // HACK: line",
+    ">text</p>;",
+  ].join("\n");
+  assert.deepEqual(countText(text, "a.tsx"), { todoComments: 2, eslintDisable: 0, rustAllow: 0 });
+});
+
+test("counts comments in direct and nested template expressions", () => {
+  const text = [
+    "const literal = `// TODO: literal /* FIXME */`;",
+    "const direct = `${",
+    "  input // TODO: direct",
+    "}`;",
+    "const nested = `${{",
+    "  value: `inner /* TODO: literal */",
+    "    ${input /* FIXME: nested */}",
+    "  `,",
+    "} /* HACK: outer */}`;",
+  ].join("\n");
+  assert.deepEqual(countText(text, "a.ts"), { todoComments: 3, eslintDisable: 0, rustAllow: 0 });
+});
+
+test("keeps regex braces and TSX generics in their code contexts", () => {
+  const text = [
+    "const map = <T extends { id: string }>(value: T) => value;",
+    "const result = map<Result<{ id: string }>>(value);",
+    "const matched = `${",
+    "  /\\}|[}]|a{1,2}|https?:\\/\\/TODO/.test(input)",
+    "    ? value /* TODO: regex-safe */",
+    "    : other",
+    "}`;",
+    "// FIXME: after template",
+  ].join("\n");
+  assert.deepEqual(countText(text, "a.tsx"), { todoComments: 2, eslintDisable: 0, rustAllow: 0 });
+});
+
+test("keeps definite multiline TSX generic heads in code", () => {
+  const text = [
+    "const identity = <T,>(",
+    "  value: T,",
+    ") => value;",
+    "// TODO: real",
+  ].join("\n");
+  assert.deepEqual(countText(text, "a.tsx"), { todoComments: 1, eslintDisable: 0, rustAllow: 0 });
+});
+
+test("classifies postfix and binary punctuation before slash tokens", () => {
+  const fixtures = {
+    nonNullDivision: "const ratio = value! / divisor; /* TODO: real */",
+    incrementDivision: "const ratio = value++ / divisor; /* TODO: real */",
+    decrementDivision: "const ratio = value-- / divisor; /* TODO: real */",
+    plusRegex: "const result = `${1 + /}/.test(value) /* TODO: real */}`;",
+    minusRegex: "const result = `${1 - /}/.test(value) /* TODO: real */}`;",
+    inequalityRegex: "const result = value != /}/.test(value); /* TODO: real */",
+    strictInequalityRegex: "const result = value !== /}/.test(value); /* TODO: real */",
+    controlRegex: [
+      "const result = `${(() => {",
+      "  if (ready) /}/.test(value);",
+      "  return 1;",
+      "})() /* TODO: real */}`;",
+    ].join("\n"),
+  };
+  const actual = Object.fromEntries(
+    Object.entries(fixtures).map(([name, source]) => [name, countText(source, "a.ts")]),
+  );
+  const expected = { todoComments: 1, eslintDisable: 0, rustAllow: 0 };
+  assert.deepEqual(actual, Object.fromEntries(Object.keys(fixtures).map((name) => [name, expected])));
+});
+
+test("parses final reviewer JavaScript and TypeScript cases", () => {
+  const fixtures = {
+    memberNamedIf: {
+      path: "a.ts",
+      source: "const ratio = obj.if(value) / divisor; /* TODO: real */",
+    },
+    elseRegex: {
+      path: "a.ts",
+      source: [
+        "const result = `${(() => {",
+        "  if (ready) /x/.test(value);",
+        "  else /}/.test(value);",
+        "  return 1;",
+        "})() /* TODO: real */}`;",
+      ].join("\n"),
+    },
+    multipleTypeParameters: {
+      path: "a.tsx",
+      source: [
+        "const pair = <T, U>(",
+        "  left: T, right: U,",
+        ") => [left, right];",
+        "// TODO: real",
+      ].join("\n"),
+    },
+    constrainedTypeParameter: {
+      path: "a.tsx",
+      source: [
+        "const identity = <T extends unknown>(",
+        "  value: T,",
+        ") => value;",
+        "// TODO: real",
+      ].join("\n"),
+    },
+    jsxApostropheBeforeArrow: {
+      path: "a.tsx",
+      source: "const node = <p>(Don't panic)</p>; const later = () => 1; // TODO: real",
+    },
+    jsxApostrophe: {
+      path: "a.tsx",
+      source: "const node = <p>Don't panic</p>; // TODO: real",
+    },
+    unicodeDivision: {
+      path: "a.ts",
+      source: "const café = value; const ratio = café / divisor; /* TODO: real */",
+    },
+  };
+  const actual = Object.fromEntries(
+    Object.entries(fixtures).map(([name, { path, source }]) => [name, countText(source, path).todoComments]),
+  );
+  assert.deepEqual(actual, Object.fromEntries(Object.keys(fixtures).map((name) => [name, 1])));
+});
+
+test("counts parser comments once per key per physical line", () => {
+  assert.deepEqual(countText("/* TODO */ /* FIXME */ // eslint-disable TODO", "a.ts"), {
+    todoComments: 1,
+    eslintDisable: 1,
+    rustAllow: 0,
+  });
+  assert.deepEqual(
+    countText("/* TODO one\r\nFIXME two\rHACK three\u2028TODO four\u2029eslint-disable five */", "a.ts"),
+    {
+      todoComments: 4,
+      eslintDisable: 1,
+      rustAllow: 0,
+    },
+  );
+});
+
+test("uses parser comment semantics for supported JavaScript extensions", () => {
+  const source = "const value = `${1 /* TODO: real */}`;";
+  for (const extension of ["ts", "tsx", "mts", "cts", "js", "jsx", "mjs", "cjs"]) {
+    assert.equal(countText(source, `a.${extension}`).todoComments, 1, extension);
+  }
+});
+
+test("reports malformed JavaScript with its path and parser cause", () => {
+  assert.throws(
+    () => countText("const =", "web/broken.ts"),
+    (error) => {
+      assert.match(error.message, /web\/broken\.ts/);
+      assert.ok(error.cause instanceof Error);
+      return true;
+    },
+  );
+});
+
 test("counts Rust allow attributes but ignores allow spellings in strings and comments", () => {
   const counts = countText(
     [
@@ -58,6 +237,28 @@ test("ignores marker spellings in Rust raw strings", () => {
     "a.rs",
   );
   assert.deepEqual(counts, { todoComments: 0, eslintDisable: 0, rustAllow: 0 });
+});
+
+test("keeps Rust character literals separate from strings and lifetimes", () => {
+  const fixtures = {
+    quote: ["let quote = '\"'; // TODO: real", "#[allow(dead_code)]"].join("\n"),
+    escapedQuote: ["let quote = '\\\"'; // TODO: real", "#![allow(dead_code)]"].join("\n"),
+    controls: [
+      "fn borrow<'a>(value: &'a str) -> &'a str { value } // TODO: real",
+      "'outer: loop { break 'outer; }",
+      "let apostrophe = '\\'';",
+      "let slash = '\\\\';",
+      "let hex = '\\x22';",
+      "let unicode_escape = '\\u{1F600}';",
+      "let unicode = 'é';",
+      "#[allow(dead_code)]",
+    ].join("\n"),
+  };
+  const actual = Object.fromEntries(
+    Object.entries(fixtures).map(([name, source]) => [name, countText(source, "a.rs")]),
+  );
+  const expected = { todoComments: 1, eslintDisable: 0, rustAllow: 1 };
+  assert.deepEqual(actual, { quote: expected, escapedQuote: expected, controls: expected });
 });
 
 test("uses path-specific comment and quote syntax", () => {

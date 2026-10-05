@@ -3,15 +3,23 @@
 // may only go down: lower it with --update after removing markers.
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { createRequire } from "node:module";
+import { dirname, isAbsolute, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(SCRIPT_DIR, "..");
 const BASELINE_PATH = join(SCRIPT_DIR, "workaround-baseline.json");
+const requireWeb = createRequire(join(REPO_ROOT, "web/package.json"));
 
+const JAVASCRIPT_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"]);
 const SOURCE_EXTENSIONS = new Set([
-  ".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".rs", ".py", ".sh", ".css", ".html",
+  ...JAVASCRIPT_EXTENSIONS,
+  ".rs",
+  ".py",
+  ".sh",
+  ".css",
+  ".html",
 ]);
 
 // The ratchet's own files mention every marker on purpose.
@@ -26,6 +34,7 @@ export const MARKERS = {
   rustAllow: /#!?\[allow\(/,
 };
 
+const JS_LINE_TERMINATORS = /\r\n|[\n\r\u2028\u2029]/;
 const CODE_STATE = Object.freeze({ kind: "code" });
 const HTML_TAG_STATE = Object.freeze({ kind: "htmlTag" });
 const QUOTES = {
@@ -33,7 +42,7 @@ const QUOTES = {
     { open: '"', close: '"', escape: true, multiline: false },
     { open: "'", close: "'", escape: true, multiline: false },
   ],
-  javascript: [
+  default: [
     { open: '"', close: '"', escape: true, multiline: false },
     { open: "'", close: "'", escape: true, multiline: false },
     { open: "`", close: "`", escape: true, multiline: true },
@@ -53,29 +62,22 @@ const QUOTES = {
 
 const SYNTAX = {
   cStyle: { block: ["/*", "*/"], line: null, quotes: QUOTES.cStyle, rustAllow: false },
-  default: { block: ["/*", "*/"], line: "mixed", quotes: QUOTES.javascript, leadingStar: true, rustAllow: true },
+  default: { block: ["/*", "*/"], line: "mixed", quotes: QUOTES.default, leadingStar: true, rustAllow: true },
   html: { block: ["<!--", "-->"], line: null, quotes: QUOTES.cStyle, html: true, rustAllow: false },
-  javascript: { block: ["/*", "*/"], line: "slash", quotes: QUOTES.javascript, rustAllow: false },
   python: { block: null, line: "hash", quotes: QUOTES.python, rustAllow: false },
   rust: { block: ["/*", "*/"], line: "slash", quotes: QUOTES.rust, rustRawStrings: true, rustAllow: true },
   shell: { block: null, line: "shellHash", quotes: QUOTES.shell, rustAllow: false },
 };
 
 const SYNTAX_BY_EXTENSION = new Map([
-  [".ts", SYNTAX.javascript],
-  [".tsx", SYNTAX.javascript],
-  [".mts", SYNTAX.javascript],
-  [".cts", SYNTAX.javascript],
-  [".js", SYNTAX.javascript],
-  [".jsx", SYNTAX.javascript],
-  [".mjs", SYNTAX.javascript],
-  [".cjs", SYNTAX.javascript],
   [".rs", SYNTAX.rust],
   [".py", SYNTAX.python],
   [".sh", SYNTAX.shell],
   [".css", SYNTAX.cStyle],
   [".html", SYNTAX.html],
 ]);
+
+let javascriptParser;
 
 function extensionOf(path) {
   const dot = path.lastIndexOf(".");
@@ -85,6 +87,48 @@ function extensionOf(path) {
 export function isSourcePath(path) {
   if (EXCLUDED_PATHS.has(path)) return false;
   return SOURCE_EXTENSIONS.has(extensionOf(path));
+}
+
+function getJavaScriptParser() {
+  if (javascriptParser) return javascriptParser;
+  try {
+    const parser = requireWeb("typescript-eslint").parser;
+    if (typeof parser?.parseForESLint !== "function") throw new TypeError("parseForESLint is unavailable");
+    javascriptParser = parser;
+    return javascriptParser;
+  } catch (cause) {
+    throw new Error("Workaround ratchet needs typescript-eslint. Run npm ci in web.", { cause });
+  }
+}
+
+function countJavaScriptComments(text, path) {
+  const parser = getJavaScriptParser();
+  const filePath = isAbsolute(path) ? path : join(REPO_ROOT, path);
+  let comments;
+  try {
+    const result = parser.parseForESLint(text, {
+      comment: true,
+      filePath,
+      jsx: extensionOf(path) === ".jsx" || extensionOf(path) === ".tsx",
+      loc: true,
+      range: true,
+      sourceType: "module",
+    });
+    comments = result.ast.comments ?? [];
+  } catch (cause) {
+    throw new Error(`Workaround ratchet could not parse ${path}: ${cause.message}`, { cause });
+  }
+
+  const todoLines = new Set();
+  const eslintLines = new Set();
+  for (const comment of comments) {
+    for (const [offset, segment] of comment.value.split(JS_LINE_TERMINATORS).entries()) {
+      const line = comment.loc.start.line + offset;
+      if (MARKERS.todoComments.test(segment)) todoLines.add(line);
+      if (MARKERS.eslintDisable.test(segment)) eslintLines.add(line);
+    }
+  }
+  return { todoComments: todoLines.size, eslintDisable: eslintLines.size, rustAllow: 0 };
 }
 
 function syntaxFor(path) {
@@ -109,6 +153,14 @@ function rustRawQuoteAt(line, index) {
   const match = /^(?:br|r)(#{0,255})"/.exec(line.slice(index));
   if (!match) return null;
   return { open: match[0], close: `"${match[1]}`, escape: false, multiline: true };
+}
+
+function rustCharLengthAt(line, index) {
+  if (line[index] !== "'") return 0;
+  const match = /^'(?:\\(?:['"\\nrt0]|x[0-9A-Fa-f]{2}|u\{[0-9A-Fa-f_]{1,6}\})|[^\r\n\\'])'/u.exec(
+    line.slice(index),
+  );
+  return match?.[0].length ?? 0;
 }
 
 function quoteAt(line, index, syntax) {
@@ -161,6 +213,14 @@ function scanLine(line, syntax, initialState) {
       continue;
     }
 
+    if (syntax.rustRawStrings && line[index] === "'") {
+      const length = rustCharLengthAt(line, index);
+      if (length > 0) {
+        index += length;
+        continue;
+      }
+    }
+
     const quote = (!syntax.html || state.kind === "htmlTag") && quoteAt(line, index, syntax);
     if (quote) {
       index += quote.open.length;
@@ -184,7 +244,7 @@ function scanLine(line, syntax, initialState) {
   return { commentText: commentText.join(""), unquotedCodeText: unquotedCodeText.join(""), state };
 }
 
-export function countText(text, path = "") {
+function countNonJavaScriptText(text, path) {
   const counts = Object.fromEntries(Object.keys(MARKERS).map((key) => [key, 0]));
   const syntax = syntaxFor(path);
   let state = CODE_STATE;
@@ -196,6 +256,11 @@ export function countText(text, path = "") {
     if (syntax.rustAllow && MARKERS.rustAllow.test(scanned.unquotedCodeText)) counts.rustAllow += 1;
   }
   return counts;
+}
+
+export function countText(text, path = "") {
+  if (JAVASCRIPT_EXTENSIONS.has(extensionOf(path))) return countJavaScriptComments(text, path);
+  return countNonJavaScriptText(text, path);
 }
 
 export function countFiles(root, paths) {
