@@ -337,7 +337,10 @@ impl WriterOwner {
             .ok_or_else(|| anyhow!("Backup file name missing"))?;
         ensure!(
             !parent.starts_with(lease.data_dir())
-                && !parent.starts_with(lease.runtime_dir().canonicalize()?),
+                && !lease
+                    .runtime_dir()
+                    .canonicalize()
+                    .is_ok_and(|runtime| parent.starts_with(runtime)),
             "Backup destination is inside managed storage"
         );
         let destination = parent.join(name);

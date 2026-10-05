@@ -279,6 +279,33 @@ fn backup_includes_uncheckpointed_wal() {
 }
 
 #[test]
+fn backup_succeeds_after_unused_runtime_dir_is_removed() {
+    let (path, owner, client) = fixture("backup-missing-runtime");
+    set(&client, "kept", "yes")
+        .unwrap()
+        .recv()
+        .unwrap()
+        .unwrap();
+    let marker = std::fs::read(path.join(".desktop-owner.json")).unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&marker).unwrap();
+    let runtime = PathBuf::from(value["runtime_dir"].as_str().unwrap());
+    std::fs::remove_dir(&runtime).unwrap();
+    assert!(!runtime.exists());
+    let target = path.with_extension("backup.db");
+    owner.backup(&target).unwrap();
+    let snapshot_db =
+        Connection::open_with_flags(target, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+    assert_eq!(
+        snapshot(&snapshot_db, "test", "kept").unwrap(),
+        SettingSnapshot::Stored {
+            value: "yes".into()
+        }
+    );
+    drop(snapshot_db);
+    owner.shutdown().unwrap();
+}
+
+#[test]
 fn backup_cannot_replace_the_open_database() {
     let (path, owner, client) = fixture("backup-destination");
     set(&client, "retained", "yes")
