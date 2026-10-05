@@ -219,6 +219,42 @@ fn ahead_and_old_versions_reject_before_side_effects() {
         assert_eq!(std::fs::read_dir(&path).unwrap().count(), 1);
     }
 }
+
+#[test]
+fn reopen_preserves_the_pre_upgrade_backup() {
+    let path = directory("upgrade-backup");
+    let (owner, _) = WriterOwner::open(&path, Limits::default()).unwrap();
+    owner.shutdown().unwrap();
+
+    let database = path.join("print-partner.db");
+    let raw = Connection::open(&database).unwrap();
+    raw.execute(
+        "UPDATE app_settings SET value='33' WHERE tenant_id='default' AND key='schema_version'",
+        [],
+    )
+    .unwrap();
+    drop(raw);
+
+    let (owner, ready) = WriterOwner::open(&path, Limits::default()).unwrap();
+    let backup = ready.backup.unwrap();
+    owner.shutdown().unwrap();
+    let version = |path: &Path| {
+        Connection::open(path)
+            .unwrap()
+            .query_row(
+                "SELECT value FROM app_settings WHERE tenant_id='default' AND key='schema_version'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap()
+    };
+    assert_eq!(version(&backup), "33");
+
+    let (owner, ready) = WriterOwner::open(&path, Limits::default()).unwrap();
+    assert!(ready.backup.is_none());
+    owner.shutdown().unwrap();
+    assert_eq!(version(&backup), "33");
+}
 #[test]
 fn backup_includes_uncheckpointed_wal() {
     let (path, owner, client) = fixture("backup");
