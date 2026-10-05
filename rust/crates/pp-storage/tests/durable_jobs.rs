@@ -1001,22 +1001,35 @@ fn ticket_t_28_claims_duplicate_concurrent_enqueue_and_no_handler_admission() {
 }
 #[test]
 fn ticket_t_28_claims_expired_lease_fences_old_worker() {
-    let (_, owner) = fixture();
+    let (path, owner) = fixture();
     let queued = enqueue(&owner, "expiry", Payload::CheckSourceUpdates {});
     let mut config = admission();
     config.lease_seconds = 1;
-    let worker = owner.job_worker(config).unwrap();
-    let (_, mut old) = worker.claim().unwrap().unwrap();
+    let expired_worker = owner.job_worker(config).unwrap();
+    let (first, mut old) = expired_worker.claim().unwrap().unwrap();
     thread::sleep(Duration::from_millis(1100));
-    assert!(worker.update(&mut old, WorkerOperation::Heartbeat).is_err());
-    let (next, mut current) = worker.claim().unwrap().unwrap();
+    assert!(
+        expired_worker
+            .update(&mut old, WorkerOperation::Heartbeat)
+            .is_err()
+    );
+    owner.shutdown().unwrap();
+
+    let owner = WriterOwner::open(&path, Limits::default()).unwrap().0;
+    let current_worker = owner.job_worker(admission()).unwrap();
+    let (next, mut current) = current_worker.claim().unwrap().unwrap();
     assert_eq!(next.job_id, queued.job_id);
     assert_eq!(next.attempt, 2);
-    assert!(next.generation > 1);
-    assert!(worker.update(&mut old, WorkerOperation::Fail).is_err());
-    worker
+    assert!(next.generation > first.generation);
+    assert!(
+        expired_worker
+            .update(&mut old, WorkerOperation::Fail)
+            .is_err()
+    );
+    let finished = current_worker
         .update(&mut current, WorkerOperation::Finish(None))
         .unwrap();
+    assert_eq!(finished.state, PersistentState::Succeeded);
     owner.shutdown().unwrap();
 }
 #[test]
@@ -1280,7 +1293,7 @@ fn ticket_t_28_recovery_reconciliation_records_authenticated_subject() {
         },
     )
     .unwrap());
-    let worker = owner.job_worker(admission()).unwrap();
+    let worker = owner.job_worker_with_policy(policy(), admission()).unwrap();
     let (_, mut lease) = worker.claim().unwrap().unwrap();
     worker
         .update(
@@ -1332,7 +1345,7 @@ fn ticket_t_28_recovery_global_and_per_tenant_history_limits() {
     let (_, owner) = fixture();
     let (_, a) = register(&owner, "history-a@example.com");
     let (_, b) = register(&owner, "history-b@example.com");
-    let worker = owner.job_worker(admission()).unwrap();
+    let worker = owner.job_worker_with_policy(policy(), admission()).unwrap();
     for token in [&a, &b] {
         for index in 0..3 {
             session_call(
@@ -1657,7 +1670,7 @@ fn integration_wildcard_lookup_and_reservations_are_tenant_owned() {
         },
     )
     .unwrap());
-    let worker = owner.job_worker(admission()).unwrap();
+    let worker = owner.job_worker_with_policy(policy(), admission()).unwrap();
     let (_, lease) = worker.claim().unwrap().unwrap();
     assert!(source_lease(&worker, &lease, Some(local_id)).is_err());
     let mut live = source_lease(&worker, &lease, Some(tenant_id)).unwrap();

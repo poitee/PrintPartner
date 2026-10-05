@@ -19,7 +19,7 @@ use std::{
 };
 
 pub struct PhysicalOwner {
-    storage: Arc<crate::Shared>,
+    pub(crate) storage: Arc<crate::Shared>,
 }
 pub enum Credential {
     Session(Secret),
@@ -36,6 +36,7 @@ pub struct ServerWorkerClient {
     storage: SettingsClient,
     identity: String,
     admission: Arc<WorkerAdmission>,
+    policy: Option<AuthPolicy>,
 }
 #[derive(Clone)]
 pub struct AttemptLease {
@@ -128,6 +129,39 @@ pub enum Outcome {
     CapturePreflighted(Box<crate::uploads::PreflightedCapture>),
     CaptureCorrelation(crate::uploads::CaptureJournalCorrelation),
 }
+
+enum TransactionDecision {
+    Outcome(Outcome),
+    Authority {
+        authority: ValidatedAuthority,
+        reply: mpsc::Sender<ValidatedAuthority>,
+    },
+    Refused(CommittedRefusal),
+    ErrorAfterCommit(anyhow::Error),
+}
+
+struct CommittedRefusal {
+    job: JobRecord,
+    failure: auth::AuthorityFailure,
+}
+
+enum AuthorityDecision {
+    Authorized(ValidatedAuthority),
+    Refused(AuthorityRefusalReason),
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ValidatedAuthority {
+    tenant: String,
+    subject: String,
+}
+impl ValidatedAuthority {
+    pub fn tenant(&self) -> &str {
+        &self.tenant
+    }
+    pub fn subject(&self) -> &str {
+        &self.subject
+    }
+}
 pub(crate) enum Command {
     User {
         credential: Credential,
@@ -139,11 +173,13 @@ pub(crate) enum Command {
         job_id: Option<String>,
         worker: String,
         admission: Arc<WorkerAdmission>,
+        policy: Option<AuthPolicy>,
     },
     ClaimResolved {
         claim: crate::uploads::ResolvedCapturedClaim,
         worker: String,
         admission: Arc<WorkerAdmission>,
+        policy: Option<AuthPolicy>,
     },
     PreflightCapture {
         credential: Credential,
@@ -162,6 +198,12 @@ pub(crate) enum Command {
         lease: AttemptLease,
         operation: WorkerOperation,
         admission: Arc<WorkerAdmission>,
+        policy: Option<AuthPolicy>,
+    },
+    Authorize {
+        lease: AttemptLease,
+        policy: AuthPolicy,
+        reply: mpsc::Sender<ValidatedAuthority>,
     },
     Retain {
         per_tenant: usize,
@@ -250,6 +292,21 @@ impl WriterOwner {
         }
     }
     pub fn job_worker(&self, admission: WorkerAdmission) -> Result<ServerWorkerClient> {
+        self.job_worker_inner(admission, None)
+    }
+    pub fn job_worker_with_policy(
+        &self,
+        policy: AuthPolicy,
+        admission: WorkerAdmission,
+    ) -> Result<ServerWorkerClient> {
+        self.auth_with_policy(policy)?;
+        self.job_worker_inner(admission, Some(policy))
+    }
+    fn job_worker_inner(
+        &self,
+        admission: WorkerAdmission,
+        policy: Option<AuthPolicy>,
+    ) -> Result<ServerWorkerClient> {
         admission.validate()?;
         let mut configured = self
             .client
@@ -270,6 +327,7 @@ impl WriterOwner {
             storage: self.client(),
             identity: random(),
             admission,
+            policy,
         })
     }
     pub fn retain_jobs(&self, per_tenant: usize, global: usize) -> Result<usize> {
@@ -344,6 +402,7 @@ impl ServerWorkerClient {
                 job_id: None,
                 worker: self.identity.clone(),
                 admission: self.admission.clone(),
+                policy: self.policy,
             },
             cancelled,
             wait,
@@ -365,6 +424,7 @@ impl ServerWorkerClient {
                 lease: lease.clone(),
                 operation,
                 admission: self.admission.clone(),
+                policy: self.policy,
             },
             &AtomicBool::new(false),
             Duration::from_secs(5),
@@ -378,7 +438,27 @@ impl ServerWorkerClient {
             _ => unreachable!(),
         }
     }
+    pub fn authorize(&self, lease: &AttemptLease) -> Result<ValidatedAuthority> {
+        ensure!(lease.worker == self.identity, "Foreign worker lease");
+        let policy = self.policy.ok_or(auth::AuthorityFailure::PolicyRequired)?;
+        let (reply, receiver) = mpsc::channel();
+        submit(
+            &self.storage,
+            Command::Authorize {
+                lease: lease.clone(),
+                policy,
+                reply,
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?
+        .receive()?;
+        receiver
+            .recv()
+            .map_err(|_| anyhow!(JobFailure::CommitUnknown))
+    }
 }
+
 fn random() -> String {
     hex::encode(rand::random::<[u8; 32]>())
 }
@@ -389,6 +469,27 @@ fn encode(job: &JobRecord) -> Result<String> {
     let mut document = serde_json::to_value(job)?;
     document["_attempt_worker"] = serde_json::to_value(&job.worker)?;
     document["_attempt_fence"] = serde_json::to_value(&job.fence)?;
+    match job.authority_disposition {
+        AuthorityDisposition::Original => {
+            document["_authority"] = auth::authority::encode(
+                job.authority
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("Missing durable authority"))?,
+            )?;
+        }
+        AuthorityDisposition::PhysicalOwner => {
+            document["_authority"] = serde_json::Value::Null;
+        }
+        AuthorityDisposition::LegacyMissing => {
+            document
+                .as_object_mut()
+                .expect("job document")
+                .remove("_authority");
+        }
+    }
+    if let Some(observation) = &job.authority_refusal {
+        document["_authority_refusal"] = serde_json::to_value(observation)?;
+    }
     Ok(serde_json::to_string(&document)?)
 }
 fn decode(document: &str) -> Result<JobRecord> {
@@ -407,6 +508,25 @@ fn decode(document: &str) -> Result<JobRecord> {
             .cloned()
             .unwrap_or(serde_json::Value::Null),
     )?;
+    match value.get("_authority") {
+        Some(authority) if authority.is_null() => {
+            job.authority = None;
+            job.authority_disposition = AuthorityDisposition::PhysicalOwner;
+        }
+        Some(authority) => {
+            job.authority = Some(auth::authority::decode(authority.clone())?);
+            job.authority_disposition = AuthorityDisposition::Original;
+        }
+        None => {
+            job.authority = None;
+            job.authority_disposition = AuthorityDisposition::LegacyMissing;
+        }
+    }
+    job.authority_refusal = value
+        .get("_authority_refusal")
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()?;
     for timestamp in [
         Some(job.created_at),
         Some(job.updated_at),
@@ -498,7 +618,7 @@ pub(crate) fn recover(connection: &mut Connection) -> Result<()> {
 }
 pub(crate) fn execute(connection: &mut Connection, command: Command) -> Result<Outcome> {
     let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let outcome = match command {
+    let decision = match command {
         Command::User {
             credential,
             policy,
@@ -506,25 +626,36 @@ pub(crate) fn execute(connection: &mut Connection, command: Command) -> Result<O
             storage,
         } => {
             let auth_committed = matches!(&credential, Credential::RoutedKey { .. });
-            let (tenant, subject) = actor(&tx, credential, policy, &storage)?;
-            let mut outcome = user(&tx, &tenant, &subject, operation)?;
+            let mut outcome = match operation {
+                UserOperation::Enqueue { .. } => {
+                    let (tenant, subject, authority) =
+                        auth::authority::admit(&tx, credential, policy, &storage)?;
+                    user_with_authority(&tx, &tenant, &subject, authority, operation)?
+                }
+                operation => {
+                    let (tenant, subject) = actor(&tx, credential, policy, &storage)?;
+                    user(&tx, &tenant, &subject, operation)?
+                }
+            };
             if auth_committed && let Outcome::Job(_, commit) = &mut outcome {
                 *commit = LocalCommit::Committed;
             }
-            outcome
+            TransactionDecision::Outcome(outcome)
         }
         Command::Claim {
             worker,
             admission,
             job_id,
-        } => claim(&tx, &worker, &admission, job_id.as_deref())?,
+            policy,
+        } => claim(&tx, &worker, &admission, policy, job_id.as_deref())?,
         Command::ClaimResolved {
             claim: resolved,
             worker,
             admission,
+            policy,
         } => {
             let job_id = crate::uploads::validate_resolved_claim(&tx, &resolved)?.to_owned();
-            claim(&tx, &worker, &admission, Some(&job_id))?
+            claim(&tx, &worker, &admission, policy, Some(&job_id))?
         }
         Command::PreflightCapture {
             credential,
@@ -545,35 +676,64 @@ pub(crate) fn execute(connection: &mut Connection, command: Command) -> Result<O
                 &payload,
                 limits,
             )?;
-            Outcome::CapturePreflighted(Box::new(crate::uploads::PreflightedCapture {
-                credential,
-                tenant,
-                actor,
-                target,
-                replay,
-            }))
+            TransactionDecision::Outcome(Outcome::CapturePreflighted(Box::new(
+                crate::uploads::PreflightedCapture {
+                    credential,
+                    tenant,
+                    actor,
+                    target,
+                    replay,
+                },
+            )))
         }
         Command::CorrelateCapture {
             manifest,
             inventory,
-        } => Outcome::CaptureCorrelation(crate::uploads::correlate_capture(
-            &tx, manifest, inventory,
-        )?),
+        } => TransactionDecision::Outcome(Outcome::CaptureCorrelation(
+            crate::uploads::correlate_capture(&tx, manifest, inventory)?,
+        )),
         Command::Worker {
             lease,
             operation,
             admission,
-        } => advance(&tx, lease, operation, &admission)?,
+            policy,
+        } => advance(&tx, lease, operation, &admission, policy)?,
+        Command::Authorize {
+            lease,
+            policy,
+            reply,
+        } => {
+            let job = claimed_job(&tx, &lease)?;
+            TransactionDecision::Authority {
+                authority: require_original_authority(&tx, &job, policy)?,
+                reply,
+            }
+        }
         Command::Retain { per_tenant, global } => {
-            Outcome::Retained(prune(&tx, per_tenant, global)?)
+            TransactionDecision::Outcome(Outcome::Retained(prune(&tx, per_tenant, global)?))
         }
     };
-    if matches!(&outcome,Outcome::Job(job,LocalCommit::Committed) if job.state.terminal()) {
+    if matches!(&decision,TransactionDecision::Outcome(Outcome::Job(job,LocalCommit::Committed)) if job.state.terminal())
+        || matches!(&decision, TransactionDecision::Refused(CommittedRefusal { job, .. }) if job.state.terminal())
+    {
         prune(&tx, 1000, 10000)?;
     }
     tx.commit()
         .map_err(|_| anyhow!(JobFailure::CommitUnknown))?;
-    Ok(outcome)
+    match decision {
+        TransactionDecision::Outcome(outcome) => Ok(outcome),
+        TransactionDecision::Authority { authority, reply } => {
+            reply
+                .send(authority)
+                .map_err(|_| anyhow!(JobFailure::CommitUnknown))?;
+            Ok(Outcome::Claimed(None))
+        }
+        TransactionDecision::Refused(CommittedRefusal { job, failure }) => {
+            let _committed_transition = job;
+            Err(failure.into())
+        }
+        TransactionDecision::ErrorAfterCommit(error) => Err(error),
+    }
 }
 fn prune(tx: &Transaction<'_>, per_tenant: usize, global: usize) -> Result<usize> {
     let mut statement=tx.prepare(
@@ -606,6 +766,15 @@ pub(crate) fn user(
     tx: &Transaction<'_>,
     tenant: &str,
     subject: &str,
+    operation: UserOperation,
+) -> Result<Outcome> {
+    user_with_authority(tx, tenant, subject, None, operation)
+}
+fn user_with_authority(
+    tx: &Transaction<'_>,
+    tenant: &str,
+    subject: &str,
+    authority: Option<auth::authority::AuthorityBasis>,
     operation: UserOperation,
 ) -> Result<Outcome> {
     match operation {
@@ -661,6 +830,13 @@ pub(crate) fn user(
                 effects: vec![],
                 result: None,
                 recovery: None,
+                authority_disposition: if authority.is_some() {
+                    AuthorityDisposition::Original
+                } else {
+                    AuthorityDisposition::PhysicalOwner
+                },
+                authority,
+                authority_refusal: None,
                 fence: None,
                 worker: None,
             };
@@ -844,16 +1020,18 @@ fn claim(
     tx: &Transaction<'_>,
     worker: &str,
     admission: &WorkerAdmission,
+    policy: Option<AuthPolicy>,
     job_id: Option<&str>,
-) -> Result<Outcome> {
+) -> Result<TransactionDecision> {
     recover_in(tx, false)?;
+    let mut terminalized_refusal = false;
     let active: i64 = tx.query_row(
         "SELECT COUNT(*) FROM durable_jobs WHERE state IN ('running','effect_admitted')",
         [],
         |r| r.get(0),
     )?;
     if active >= admission.total as i64 {
-        return Ok(Outcome::Claimed(None));
+        return Ok(TransactionDecision::Outcome(Outcome::Claimed(None)));
     }
     for (kind, capacity) in &admission.kinds {
         let count:i64=tx.query_row("SELECT COUNT(*) FROM durable_jobs WHERE kind=?1 AND state IN ('running','effect_admitted')",[kind.name()],|r|r.get(0))?;
@@ -890,6 +1068,51 @@ fn claim(
                 }
             }
             ensure!(job.attempt < 100, "Job attempt limit reached");
+            let authority = match job.authority_disposition {
+                AuthorityDisposition::PhysicalOwner => None,
+                AuthorityDisposition::LegacyMissing => Some(AuthorityDecision::Refused(
+                    AuthorityRefusalReason::MissingOriginal,
+                )),
+                AuthorityDisposition::Original => {
+                    let Some(policy) = policy else {
+                        if terminalized_refusal {
+                            prune(tx, 1000, 10000)?;
+                        }
+                        return Ok(TransactionDecision::ErrorAfterCommit(
+                            auth::AuthorityFailure::PolicyRequired.into(),
+                        ));
+                    };
+                    Some(decide_original_authority(tx, &job, policy)?)
+                }
+            };
+            if let Some(AuthorityDecision::Authorized(authority)) = &authority {
+                debug_assert_eq!(authority.tenant(), job.tenant);
+            }
+            if let Some(AuthorityDecision::Refused(reason)) = authority {
+                let failure = reason.failure();
+                record_refusal(
+                    tx,
+                    &mut job,
+                    reason,
+                    if job_id.is_some() {
+                        AuthorityRefusalPhase::TargetedClaim
+                    } else {
+                        AuthorityRefusalPhase::Claim
+                    },
+                    None,
+                )?;
+                terminalized_refusal |= job.state.terminal();
+                if job_id.is_some() {
+                    if terminalized_refusal {
+                        prune(tx, 1000, 10000)?;
+                    }
+                    return Ok(TransactionDecision::Refused(CommittedRefusal {
+                        job,
+                        failure,
+                    }));
+                }
+                continue;
+            }
             job.state = PersistentState::Running;
             job.attempt += 1;
             job.generation += 1;
@@ -905,10 +1128,18 @@ fn claim(
                 fence: job.fence.clone().expect("claim fence"),
                 worker: worker.into(),
             };
-            return Ok(Outcome::Claimed(Some((job, lease))));
+            if terminalized_refusal {
+                prune(tx, 1000, 10000)?;
+            }
+            return Ok(TransactionDecision::Outcome(Outcome::Claimed(Some((
+                job, lease,
+            )))));
         }
     }
-    Ok(Outcome::Claimed(None))
+    if terminalized_refusal {
+        prune(tx, 1000, 10000)?;
+    }
+    Ok(TransactionDecision::Outcome(Outcome::Claimed(None)))
 }
 fn completion_proven(job: &JobRecord, result: Option<&ResultArtifact>) -> bool {
     match &job.payload {
@@ -975,13 +1206,141 @@ pub(crate) fn claimed_source(
 pub(crate) fn source_reserved(tx: &Transaction<'_>, tenant: &str, id: i64) -> Result<bool> {
     Ok(tx.query_row("SELECT EXISTS(SELECT 1 FROM durable_jobs WHERE tenant=?1 AND resource IN (?2,'source:*') AND state IN ('queued','running','effect_admitted','reconciliation_required'))", params![tenant, format!("source:{id}")], |row| row.get(0))?)
 }
+
+impl AuthorityRefusalReason {
+    fn failure(self) -> auth::AuthorityFailure {
+        match self {
+            Self::MissingOriginal => auth::AuthorityFailure::Missing,
+            Self::CredentialInvalid => auth::AuthorityFailure::CredentialInvalid,
+            Self::PolicyChanged => auth::AuthorityFailure::PolicyChanged,
+            Self::TenantChanged => auth::AuthorityFailure::TenantChanged,
+            Self::SubjectChanged => auth::AuthorityFailure::SubjectChanged,
+        }
+    }
+}
+
+fn decide_original_authority(
+    tx: &Transaction<'_>,
+    job: &JobRecord,
+    policy: AuthPolicy,
+) -> Result<AuthorityDecision> {
+    match require_original_authority(tx, job, policy) {
+        Ok(authority) => Ok(AuthorityDecision::Authorized(authority)),
+        Err(error) => {
+            let reason = match error.downcast_ref::<auth::AuthorityFailure>() {
+                Some(auth::AuthorityFailure::CredentialInvalid) => {
+                    AuthorityRefusalReason::CredentialInvalid
+                }
+                Some(auth::AuthorityFailure::PolicyChanged) => {
+                    AuthorityRefusalReason::PolicyChanged
+                }
+                Some(auth::AuthorityFailure::TenantChanged) => {
+                    AuthorityRefusalReason::TenantChanged
+                }
+                Some(auth::AuthorityFailure::SubjectChanged) => {
+                    AuthorityRefusalReason::SubjectChanged
+                }
+                _ => return Err(error),
+            };
+            Ok(AuthorityDecision::Refused(reason))
+        }
+    }
+}
+
+fn record_refusal(
+    tx: &Transaction<'_>,
+    job: &mut JobRecord,
+    reason: AuthorityRefusalReason,
+    phase: AuthorityRefusalPhase,
+    matching_receipt: Option<ResultArtifact>,
+) -> Result<()> {
+    if let Some(receipt) = matching_receipt {
+        let effect = job
+            .effects
+            .last_mut()
+            .ok_or_else(|| anyhow!("No effect intent"))?;
+        effect.receipt = Some(receipt);
+    }
+    job.authority_refusal = Some(AuthorityRefusalObservation {
+        version: 1,
+        reason,
+        phase,
+        observed_at: now(),
+        generation: job.generation,
+    });
+    job.generation += 1;
+    job.fence = None;
+    job.worker = None;
+    job.lease_until = None;
+    if job.effects.is_empty() {
+        job.state = PersistentState::Failed;
+        job.recovery = Some("Original authority is no longer valid".into());
+    } else {
+        job.state = PersistentState::ReconciliationRequired;
+        job.recovery = Some("Inspect retained effect evidence and reconcile explicitly".into());
+    }
+    save(tx, job, "authority_refused")
+}
+
 fn advance(
     tx: &Transaction<'_>,
     lease: AttemptLease,
     operation: WorkerOperation,
     admission: &WorkerAdmission,
-) -> Result<Outcome> {
+    policy: Option<AuthPolicy>,
+) -> Result<TransactionDecision> {
     let mut job = claimed_job(tx, &lease)?;
+    let authority = match job.authority_disposition {
+        AuthorityDisposition::PhysicalOwner => None,
+        AuthorityDisposition::LegacyMissing => Some(AuthorityDecision::Refused(
+            AuthorityRefusalReason::MissingOriginal,
+        )),
+        AuthorityDisposition::Original => {
+            let Some(policy) = policy else {
+                return Ok(TransactionDecision::ErrorAfterCommit(
+                    auth::AuthorityFailure::PolicyRequired.into(),
+                ));
+            };
+            Some(decide_original_authority(tx, &job, policy)?)
+        }
+    };
+    if let Some(AuthorityDecision::Authorized(authority)) = &authority {
+        debug_assert_eq!(authority.tenant(), job.tenant);
+    }
+    if let Some(AuthorityDecision::Refused(reason)) = authority {
+        let matching_receipt = if let WorkerOperation::ConfirmEffect(receipt) = &operation {
+            ensure!(
+                job.state == PersistentState::EffectAdmitted,
+                "No admitted effect"
+            );
+            receipt.validate()?;
+            let effect = job
+                .effects
+                .last()
+                .ok_or_else(|| anyhow!("No effect intent"))?;
+            ensure!(
+                !effect.confirmed
+                    && receipt.content_hash == effect.intent.content_hash
+                    && receipt.target == effect.intent.target,
+                "Receipt mismatch"
+            );
+            Some(receipt.clone())
+        } else {
+            None
+        };
+        let failure = reason.failure();
+        record_refusal(
+            tx,
+            &mut job,
+            reason,
+            AuthorityRefusalPhase::WorkerAdvance,
+            matching_receipt,
+        )?;
+        return Ok(TransactionDecision::Refused(CommittedRefusal {
+            job,
+            failure,
+        }));
+    }
     ensure!(
         job.kind != JobKind::SuppliedSourceImport
             || matches!(
@@ -1154,7 +1513,28 @@ fn advance(
         job.lease_until = Some(now() + i64::from(admission.lease_seconds));
     }
     save(tx, &mut job, event)?;
-    Ok(Outcome::Job(job, LocalCommit::Committed))
+    Ok(TransactionDecision::Outcome(Outcome::Job(
+        job,
+        LocalCommit::Committed,
+    )))
+}
+
+fn require_original_authority(
+    tx: &Transaction<'_>,
+    job: &JobRecord,
+    policy: AuthPolicy,
+) -> Result<ValidatedAuthority> {
+    ensure!(
+        job.authority_disposition == AuthorityDisposition::Original,
+        auth::AuthorityFailure::Missing
+    );
+    let basis = job
+        .authority
+        .as_ref()
+        .ok_or(auth::AuthorityFailure::Missing)?;
+    let (tenant, subject) = auth::authority::resolve(tx, basis, policy)?;
+    ensure!(tenant == job.tenant, auth::AuthorityFailure::TenantChanged);
+    Ok(ValidatedAuthority { tenant, subject })
 }
 
 pub(crate) fn validate_schema(connection: &Connection, version: u64) -> Result<()> {
@@ -1254,6 +1634,7 @@ impl ServerWorkerClient {
                 claim,
                 worker: self.identity.clone(),
                 admission: self.admission.clone(),
+                policy: self.policy,
             },
             &AtomicBool::new(false),
             Duration::from_secs(5),
@@ -1272,6 +1653,7 @@ impl ServerWorkerClient {
                 job_id: Some(job_id.into()),
                 worker: self.identity.clone(),
                 admission: self.admission.clone(),
+                policy: self.policy,
             },
             &AtomicBool::new(false),
             Duration::from_secs(5),
@@ -1434,4 +1816,126 @@ pub(crate) fn publication_conflicts(
         }
     }
     Ok(result)
+}
+
+#[cfg(test)]
+mod authority_lease_tests {
+    use super::*;
+    use crate::{
+        Limits,
+        auth::{FirstUserTenant, RegistrationPolicy, SessionTenantPolicy},
+    };
+
+    fn policy() -> AuthPolicy {
+        AuthPolicy {
+            registration: RegistrationPolicy::Open,
+            session_tenant: SessionTenantPolicy::AccountTenant,
+            first_user: FirstUserTenant::NewUser,
+        }
+    }
+
+    fn admission() -> WorkerAdmission {
+        WorkerAdmission {
+            kinds: vec![(JobKind::ExportChecklistHtml, 2)],
+            total: 2,
+            per_resource: 2,
+            lease_seconds: 60,
+        }
+    }
+
+    #[test]
+    fn authority_bearing_live_lease_rejects_stale_foreign_cross_job_and_tenant_mismatch() {
+        let path = std::env::temp_dir().join(format!(
+            "pp-authority-lease-unit-{}",
+            hex::encode(rand::random::<[u8; 16]>())
+        ));
+        std::fs::create_dir_all(&path).unwrap();
+        let owner = WriterOwner::open(&path, Limits::default()).unwrap().0;
+        let auth::Outcome::Session { user, token } = owner
+            .auth_with_policy(policy())
+            .unwrap()
+            .submit(
+                auth::Request::Register {
+                    email: "authority-lease-unit@example.com".into(),
+                    display_name: "Authority lease unit".into(),
+                    password: Secret::new("long-test-password".into()),
+                },
+                Arc::new(AtomicBool::new(false)),
+                Duration::from_secs(5),
+            )
+            .unwrap()
+            .recv()
+            .unwrap()
+            .unwrap()
+        else {
+            panic!("session expected")
+        };
+        let token = token.expose().to_owned();
+        let client = owner.jobs(policy()).unwrap();
+        for (key, profile_id) in [("lease-a", 1), ("lease-b", 2)] {
+            client
+                .submit(
+                    Credential::Session(Secret::new(token.clone())),
+                    UserOperation::Enqueue {
+                        key: key.into(),
+                        payload_version: 1,
+                        payload: Payload::ExportChecklistHtml { profile_id },
+                    },
+                    &AtomicBool::new(false),
+                    Duration::from_secs(5),
+                )
+                .unwrap()
+                .receive()
+                .unwrap();
+        }
+        let worker = owner.job_worker_with_policy(policy(), admission()).unwrap();
+        let (_, mut first) = worker.claim().unwrap().unwrap();
+        let (_, second) = worker.claim().unwrap().unwrap();
+        let authority = worker.authorize(&first).unwrap();
+        assert_eq!(authority.tenant(), user.tenant_id);
+        assert_eq!(authority.subject(), format!("user:{}", user.user_id));
+
+        let stale = first.clone();
+        worker
+            .update(&mut first, WorkerOperation::Progress(7))
+            .unwrap();
+        assert!(
+            worker
+                .authorize(&stale)
+                .unwrap_err()
+                .to_string()
+                .contains("Stale")
+        );
+
+        let foreign = owner.job_worker_with_policy(policy(), admission()).unwrap();
+        assert!(
+            foreign
+                .authorize(&first)
+                .unwrap_err()
+                .to_string()
+                .contains("Foreign worker")
+        );
+
+        let mut cross_job = first.clone();
+        cross_job.job_id = second.job_id.clone();
+        assert!(
+            worker
+                .authorize(&cross_job)
+                .unwrap_err()
+                .to_string()
+                .contains("Stale attempt fence")
+        );
+
+        let mut wrong_tenant = first.clone();
+        wrong_tenant.tenant = "wrong-tenant".into();
+        assert!(
+            worker
+                .authorize(&wrong_tenant)
+                .unwrap_err()
+                .to_string()
+                .contains("Job not found")
+        );
+        assert_eq!(worker.authorize(&first).unwrap(), authority);
+        owner.shutdown().unwrap();
+    }
 }

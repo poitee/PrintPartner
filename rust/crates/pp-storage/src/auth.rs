@@ -1,6 +1,8 @@
+pub(crate) mod authority;
 mod crypto;
 mod keys;
 mod policy;
+pub use authority::AuthorityFailure;
 pub use policy::{
     AuthFailure, AuthInputFailure, AuthPolicy, AuthStatus, RegistrationPolicy, SessionTenantPolicy,
 };

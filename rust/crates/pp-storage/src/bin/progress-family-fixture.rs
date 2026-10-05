@@ -193,12 +193,15 @@ fn main() -> Result<()> {
             payload: Payload::ImportScan { project_id: 1 },
         },
     )?;
-    let worker = owner.job_worker(WorkerAdmission {
-        kinds: vec![(JobKind::ImportScan, 1)],
-        total: 1,
-        per_resource: 1,
-        lease_seconds: 60,
-    })?;
+    let worker = owner.job_worker_with_policy(
+        policy(),
+        WorkerAdmission {
+            kinds: vec![(JobKind::ImportScan, 1)],
+            total: 1,
+            per_resource: 1,
+            lease_seconds: 60,
+        },
+    )?;
     let (_, lease) = worker
         .claim()?
         .ok_or_else(|| anyhow!("Missing real claim"))?;

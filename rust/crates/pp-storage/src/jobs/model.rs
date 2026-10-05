@@ -374,7 +374,44 @@ impl ResultArtifact {
         text(&self.target, 1024)
     }
 }
-#[derive(Clone, Serialize, Deserialize)]
+
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub(super) enum AuthorityDisposition {
+    Original,
+    PhysicalOwner,
+    #[default]
+    LegacyMissing,
+}
+
+#[derive(Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum AuthorityRefusalReason {
+    MissingOriginal,
+    CredentialInvalid,
+    PolicyChanged,
+    TenantChanged,
+    SubjectChanged,
+}
+
+#[derive(Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum AuthorityRefusalPhase {
+    Claim,
+    TargetedClaim,
+    WorkerAdvance,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct AuthorityRefusalObservation {
+    pub(super) version: u8,
+    pub(super) reason: AuthorityRefusalReason,
+    pub(super) phase: AuthorityRefusalPhase,
+    pub(super) observed_at: i64,
+    pub(super) generation: i64,
+}
+
+#[derive(Serialize, Deserialize)]
 pub struct JobRecord {
     pub job_id: String,
     pub tenant: String,
@@ -394,6 +431,12 @@ pub struct JobRecord {
     pub effects: Vec<EffectReceipt>,
     pub result: Option<ResultArtifact>,
     pub recovery: Option<String>,
+    #[serde(skip)]
+    pub(crate) authority: Option<crate::auth::authority::AuthorityBasis>,
+    #[serde(skip)]
+    pub(super) authority_disposition: AuthorityDisposition,
+    #[serde(skip)]
+    pub(super) authority_refusal: Option<AuthorityRefusalObservation>,
     #[serde(skip)]
     pub(crate) fence: Option<String>,
     #[serde(skip)]
