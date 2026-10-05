@@ -22,6 +22,79 @@ test("counts comment markers, eslint-disable, and Rust allow attributes", () => 
   assert.deepEqual(counts, { todoComments: 3, eslintDisable: 1, rustAllow: 2 });
 });
 
+test("ignores workaround marker spellings in ordinary quoted text", () => {
+  const counts = countText(
+    [
+      "const single = '// TODO: shown to users';",
+      'const double = "/* FIXME */ eslint-disable";',
+      "const template = `# HACK: example`;",
+    ].join("\n"),
+    "a.ts",
+  );
+  assert.deepEqual(counts, { todoComments: 0, eslintDisable: 0, rustAllow: 0 });
+});
+
+test("counts Rust allow attributes but ignores allow spellings in strings and comments", () => {
+  const counts = countText(
+    [
+      'const OUTER: &str = "#[allow(dead_code)]";',
+      'const INNER: &str = "#![allow(clippy::all)]";',
+      "// #[allow(unused)]",
+      "/* #![allow(non_snake_case)] */",
+      "#[allow(dead_code)]",
+      "#![allow(clippy::all)]",
+    ].join("\n"),
+    "a.rs",
+  );
+  assert.deepEqual(counts, { todoComments: 0, eslintDisable: 0, rustAllow: 2 });
+});
+
+test("ignores marker spellings in Rust raw strings", () => {
+  const counts = countText(
+    [
+      'const TEXT: &str = r###"// TODO #[allow(dead_code)]"###;',
+      'const BYTES: &[u8] = br"#![allow(unused)]";',
+    ].join("\n"),
+    "a.rs",
+  );
+  assert.deepEqual(counts, { todoComments: 0, eslintDisable: 0, rustAllow: 0 });
+});
+
+test("uses path-specific comment and quote syntax", () => {
+  assert.equal(countText(["value = '# TODO'", "# TODO: real"].join("\n"), "a.py").todoComments, 1);
+  assert.equal(
+    countText(["echo '# TODO'", "echo $#", "echo ${name#prefix}", "# TODO: real"].join("\n"), "a.sh").todoComments,
+    1,
+  );
+  assert.equal(
+    countText(['content: "/* TODO */";', "// TODO", "/* TODO: real */"].join("\n"), "a.css").todoComments,
+    1,
+  );
+  assert.equal(
+    countText(['<p>TODO</p>', '<div title="<!-- TODO -->">', "<!-- TODO: real -->"].join("\n"), "a.html").todoComments,
+    1,
+  );
+});
+
+test("counts real marker comments without counting code after a block close", () => {
+  assert.deepEqual(
+    countText("fn borrow<'a>(value: &'a str) -> &'a str { value } // TODO: simplify", "a.rs"),
+    {
+      todoComments: 1,
+      eslintDisable: 0,
+      rustAllow: 0,
+    },
+  );
+  assert.deepEqual(
+    countText(["// eslint-disable-next-line no-console", "/* closed */ const TODO = 1;"].join("\n"), "a.ts"),
+    {
+      todoComments: 0,
+      eslintDisable: 1,
+      rustAllow: 0,
+    },
+  );
+});
+
 test("only scans source extensions and skips the ratchet itself", () => {
   assert.equal(isSourcePath("rust/crates/pp-core/src/lib.rs"), true);
   assert.equal(isSourcePath("web/apps/web/src/App.tsx"), true);
@@ -67,11 +140,9 @@ test("counts bare markers on lines inside multi-line block comments", () => {
   assert.equal(countText(ts, "web/a.ts").todoComments, 1);
   assert.equal(countText(["/**", " * docs", "FIXME no star prefix", " */"].join("\n"), "a.rs").todoComments, 1);
   assert.equal(countText(["<!--", "HACK: inline", "-->"].join("\n"), "index.html").todoComments, 1);
-  // A closed comment, a glob in a string, and a Rust lifetime do not leave a block open.
   assert.equal(countText(["/* note */", "const TODO = 1;"].join("\n"), "a.ts").todoComments, 0);
   assert.equal(countText(['const glob = "src/**/*.ts";', "const TODO = 1;"].join("\n"), "a.ts").todoComments, 0);
   assert.equal(countText(["fn f<'a>(s: &'a str) {} // ok", "let TODO = 1;"].join("\n"), "a.rs").todoComments, 0);
-  // Python and shell have no block comments.
   assert.equal(countText(["x = '/*'", "TODO = 1"].join("\n"), "a.py").todoComments, 0);
 });
 
