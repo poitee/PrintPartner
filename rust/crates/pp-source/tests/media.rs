@@ -3,8 +3,8 @@ use pp_source::{
     media::{MediaError, MediaLimits, discover_import_rules},
 };
 use std::{
-    fs::{self, File},
-    io::Write,
+    fs::{self, File, OpenOptions},
+    io::{Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     sync::{
         Arc,
@@ -39,6 +39,58 @@ impl Fixture {
         }
         zip.write_all(b"</mesh></object></model>").unwrap();
         zip.finish().unwrap();
+    }
+    fn model_with_large_padding(&self) {
+        self.model(1);
+        let path = self.0.join("input/model.3mf");
+        let bytes = fs::read(&path).unwrap();
+        let end = bytes.len() - 22;
+        let central_offset =
+            u32::from_le_bytes(bytes[end + 16..end + 20].try_into().unwrap()) as usize;
+        let original_central = &bytes[central_offset..end];
+        let name = b"padding.bin";
+        let padding = pp_source::archive::MAX_COMPRESSED_BYTES;
+        let mut file = OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .open(&path)
+            .unwrap();
+        file.write_all(&bytes[..central_offset]).unwrap();
+        let padding_offset = central_offset as u32;
+        file.write_all(b"PK\x03\x04").unwrap();
+        file.write_all(&20u16.to_le_bytes()).unwrap();
+        file.write_all(&[0; 8]).unwrap();
+        file.write_all(&0u32.to_le_bytes()).unwrap();
+        file.write_all(&(padding as u32).to_le_bytes()).unwrap();
+        file.write_all(&(padding as u32).to_le_bytes()).unwrap();
+        file.write_all(&(name.len() as u16).to_le_bytes()).unwrap();
+        file.write_all(&0u16.to_le_bytes()).unwrap();
+        file.write_all(name).unwrap();
+        let central_start = central_offset as u64 + 30 + name.len() as u64 + padding;
+        file.set_len(central_start).unwrap();
+        file.seek(SeekFrom::Start(central_start)).unwrap();
+        file.write_all(original_central).unwrap();
+        file.write_all(b"PK\x01\x02").unwrap();
+        file.write_all(&20u16.to_le_bytes()).unwrap();
+        file.write_all(&20u16.to_le_bytes()).unwrap();
+        file.write_all(&[0; 8]).unwrap();
+        file.write_all(&0u32.to_le_bytes()).unwrap();
+        file.write_all(&(padding as u32).to_le_bytes()).unwrap();
+        file.write_all(&(padding as u32).to_le_bytes()).unwrap();
+        file.write_all(&(name.len() as u16).to_le_bytes()).unwrap();
+        file.write_all(&[0; 8]).unwrap();
+        file.write_all(&0u32.to_le_bytes()).unwrap();
+        file.write_all(&padding_offset.to_le_bytes()).unwrap();
+        file.write_all(name).unwrap();
+        let central_size = original_central.len() as u32 + 46 + name.len() as u32;
+        file.write_all(b"PK\x05\x06").unwrap();
+        file.write_all(&[0; 4]).unwrap();
+        file.write_all(&2u16.to_le_bytes()).unwrap();
+        file.write_all(&2u16.to_le_bytes()).unwrap();
+        file.write_all(&central_size.to_le_bytes()).unwrap();
+        file.write_all(&(central_start as u32).to_le_bytes())
+            .unwrap();
+        file.write_all(&0u16.to_le_bytes()).unwrap();
     }
     fn local(&self) -> LocalFiles {
         LocalFiles::open(&self.0.join("input")).unwrap()
@@ -151,6 +203,25 @@ fn conversion_owns_candidate_and_published_original_and_derived_bytes_survive_re
     );
     drop(prepared);
     assert!(!f.candidate().exists());
+}
+
+#[test]
+fn package_larger_than_archive_cap_uses_media_limits() {
+    let f = Fixture::new();
+    f.model_with_large_padding();
+    let mut source = f.tenant().source(42).unwrap();
+    let prepared = source
+        .prepare_media(
+            &f.local(),
+            &[path("model.3mf")],
+            &[],
+            MediaLimits::default(),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+    assert!(prepared.receipt().original_bytes > pp_source::archive::MAX_COMPRESSED_BYTES);
+    assert_eq!(prepared.receipt().conversions[0].result.object_count, 1);
+    prepared.discard().unwrap();
 }
 #[test]
 fn failure_after_writing_a_facet_cleans_all_private_files_and_retry_succeeds() {
