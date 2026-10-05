@@ -87,7 +87,8 @@ impl Directory {
             let entry = entry?;
             let name = entry.file_name().to_str().map_err(|_| Error::UnsafePath)?;
             if name != "." && name != ".." {
-                if entries.len() >= crate::MAX_ENTRIES {
+                // Allow the reserved root manifest beyond the content entry cap.
+                if entries.len() >= crate::MAX_ENTRIES + 1 {
                     return Err(Error::Limit);
                 }
                 entries.push(name.to_owned());
