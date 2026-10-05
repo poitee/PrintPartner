@@ -46,6 +46,11 @@ pub struct AttemptLease {
     fence: String,
     worker: String,
 }
+pub struct ClaimedAttempt {
+    pub job: JobRecord,
+    pub lease: AttemptLease,
+    pub source_work: Option<crate::catalog::SourceWorkLease>,
+}
 impl AttemptLease {
     pub fn job_id(&self) -> &str {
         &self.job_id
@@ -98,6 +103,7 @@ pub enum UserOperation {
         before_version: Option<i64>,
         limit: u16,
     },
+    /// A cancelled supplied import stays queued until the prior Source lease is released.
     Cancel {
         job_id: String,
     },
@@ -123,7 +129,7 @@ pub enum Outcome {
     List(Vec<JobRecord>),
     History(Vec<HistoryEntry>),
     Reconciliations(Vec<ReconciliationRecord>),
-    Claimed(Option<(JobRecord, AttemptLease)>),
+    Claimed(Option<ClaimedAttempt>),
     Retained(usize),
 }
 pub(crate) enum Command {
@@ -137,6 +143,7 @@ pub(crate) enum Command {
         job_id: Option<String>,
         worker: String,
         admission: Arc<WorkerAdmission>,
+        storage: SettingsClient,
     },
     Worker {
         lease: AttemptLease,
@@ -160,7 +167,7 @@ impl std::fmt::Display for JobFailure {
 impl std::error::Error for JobFailure {}
 pub struct PendingClaim(Pending);
 impl PendingClaim {
-    pub fn receive(self) -> Result<Option<(JobRecord, AttemptLease)>> {
+    pub fn receive(self) -> Result<Option<ClaimedAttempt>> {
         match self.0.receive()? {
             Outcome::Claimed(value) => Ok(value),
             _ => unreachable!(),
@@ -316,12 +323,13 @@ impl ServerWorkerClient {
                 job_id: None,
                 worker: self.identity.clone(),
                 admission: self.admission.clone(),
+                storage: self.storage.clone(),
             },
             cancelled,
             wait,
         )?))
     }
-    pub fn claim(&self) -> Result<Option<(JobRecord, AttemptLease)>> {
+    pub fn claim(&self) -> Result<Option<ClaimedAttempt>> {
         self.claim_pending(&AtomicBool::new(false), Duration::from_secs(5))?
             .receive()
     }
@@ -464,8 +472,38 @@ pub(crate) fn recover(connection: &mut Connection) -> Result<()> {
     tx.commit()?;
     Ok(())
 }
-pub(crate) fn execute(connection: &mut Connection, command: Command) -> Result<Outcome> {
+pub(crate) fn execute(
+    connection: &mut Connection,
+    catalog_state: &mut crate::catalog::State,
+    command: Command,
+) -> Result<Outcome> {
     let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    if let Command::Claim {
+        worker,
+        admission,
+        job_id,
+        storage,
+    } = command
+    {
+        let claim = claim(&tx, catalog_state, &worker, &admission, job_id.as_deref())?;
+        tx.commit()
+            .map_err(|_| anyhow!(JobFailure::CommitUnknown))?;
+        return match claim {
+            ClaimResult::Claimed(claim) => {
+                let source_work = claim.source.map(|source| {
+                    catalog_state.activate(source.token, source.tenant, source.id);
+                    crate::catalog::lease(storage, source.token)
+                });
+                Ok(Outcome::Claimed(Some(ClaimedAttempt {
+                    job: claim.job,
+                    lease: claim.lease,
+                    source_work,
+                })))
+            }
+            ClaimResult::SourceBusy => Err(anyhow!(crate::catalog::SourceBusy)),
+            ClaimResult::Empty => Ok(Outcome::Claimed(None)),
+        };
+    }
     let outcome = match command {
         Command::User {
             credential,
@@ -481,11 +519,7 @@ pub(crate) fn execute(connection: &mut Connection, command: Command) -> Result<O
             }
             outcome
         }
-        Command::Claim {
-            worker,
-            admission,
-            job_id,
-        } => claim(&tx, &worker, &admission, job_id.as_deref())?,
+        Command::Claim { .. } => unreachable!(),
         Command::Worker {
             lease,
             operation,
@@ -767,12 +801,44 @@ pub(crate) fn user(
         }
     }
 }
+struct SourceReservation {
+    token: u64,
+    tenant: String,
+    id: i64,
+}
+struct ClaimPlan {
+    job: JobRecord,
+    lease: AttemptLease,
+    source: Option<SourceReservation>,
+}
+enum ClaimResult {
+    Claimed(Box<ClaimPlan>),
+    SourceBusy,
+    Empty,
+}
+enum SourceBinding {
+    None,
+    Individual(i64),
+    Wildcard,
+}
+fn source_binding(payload: &Payload) -> Result<SourceBinding> {
+    Ok(match payload {
+        Payload::ImportScan { project_id }
+        | Payload::ExtractSourceDocs { project_id }
+        | Payload::SuppliedSourceImport { project_id, .. } => {
+            SourceBinding::Individual(i64::try_from(*project_id)?)
+        }
+        Payload::Sync { .. } | Payload::CheckSourceUpdates {} => SourceBinding::Wildcard,
+        _ => SourceBinding::None,
+    })
+}
 fn claim(
     tx: &Transaction<'_>,
+    catalog_state: &crate::catalog::State,
     worker: &str,
     admission: &WorkerAdmission,
     job_id: Option<&str>,
-) -> Result<Outcome> {
+) -> Result<ClaimResult> {
     recover_in(tx, false)?;
     let active: i64 = tx.query_row(
         "SELECT COUNT(*) FROM durable_jobs WHERE state IN ('running','effect_admitted')",
@@ -780,7 +846,7 @@ fn claim(
         |r| r.get(0),
     )?;
     if active >= admission.total as i64 {
-        return Ok(Outcome::Claimed(None));
+        return Ok(ClaimResult::Empty);
     }
     for (kind, capacity) in &admission.kinds {
         let count:i64=tx.query_row("SELECT COUNT(*) FROM durable_jobs WHERE kind=?1 AND state IN ('running','effect_admitted')",[kind.name()],|r|r.get(0))?;
@@ -806,6 +872,31 @@ fn claim(
                     continue;
                 }
             }
+            let source = match source_binding(&job.payload)? {
+                SourceBinding::Individual(id) => {
+                    if crate::catalog::get(tx, &job.tenant, id)?.is_none() {
+                        job.state = PersistentState::Failed;
+                        job.recovery = Some("Source is unavailable for this job".into());
+                        save(tx, &mut job, "source_unavailable")?;
+                        if job_id.is_some() {
+                            return Ok(ClaimResult::Empty);
+                        }
+                        continue;
+                    }
+                    if catalog_state.source_busy(&job.tenant, id) {
+                        if job_id.is_some() {
+                            return Ok(ClaimResult::SourceBusy);
+                        }
+                        continue;
+                    }
+                    Some(SourceReservation {
+                        token: catalog_state.next_token()?,
+                        tenant: job.tenant.clone(),
+                        id,
+                    })
+                }
+                SourceBinding::None | SourceBinding::Wildcard => None,
+            };
             ensure!(job.attempt < 100, "Job attempt limit reached");
             job.state = PersistentState::Running;
             job.attempt += 1;
@@ -822,10 +913,14 @@ fn claim(
                 fence: job.fence.clone().expect("claim fence"),
                 worker: worker.into(),
             };
-            return Ok(Outcome::Claimed(Some((job, lease))));
+            return Ok(ClaimResult::Claimed(Box::new(ClaimPlan {
+                job,
+                lease,
+                source,
+            })));
         }
     }
-    Ok(Outcome::Claimed(None))
+    Ok(ClaimResult::Empty)
 }
 fn completion_proven(job: &JobRecord, result: Option<&ResultArtifact>) -> bool {
     match &job.payload {
@@ -872,20 +967,18 @@ pub(crate) fn claimed_source(
     source_id: Option<i64>,
 ) -> Result<(String, i64)> {
     let job = claimed_job(tx, lease)?;
-    let id = match job.payload {
-        Payload::ImportScan { project_id }
-        | Payload::ExtractSourceDocs { project_id }
-        | Payload::SuppliedSourceImport { project_id, .. } => {
+    let id = match source_binding(&job.payload)? {
+        SourceBinding::Individual(id) => {
             ensure!(
                 source_id.is_none(),
                 "Individual Source attempt uses its stored Source"
             );
-            i64::try_from(project_id)?
+            id
         }
-        Payload::Sync { .. } | Payload::CheckSourceUpdates {} => {
+        SourceBinding::Wildcard => {
             source_id.ok_or_else(|| anyhow!("Wildcard Source attempt requires Source"))?
         }
-        _ => return Err(anyhow!("Attempt is not Source work")),
+        SourceBinding::None => return Err(anyhow!("Attempt is not Source work")),
     };
     Ok((job.tenant, id))
 }
@@ -1142,13 +1235,14 @@ pub(crate) fn actor(
     }
 }
 impl ServerWorkerClient {
-    pub fn claim_import(&self, job_id: &str) -> Result<Option<(JobRecord, AttemptLease)>> {
+    pub fn claim_import(&self, job_id: &str) -> Result<Option<ClaimedAttempt>> {
         match submit(
             &self.storage,
             Command::Claim {
                 job_id: Some(job_id.into()),
                 worker: self.identity.clone(),
                 admission: self.admission.clone(),
+                storage: self.storage.clone(),
             },
             &AtomicBool::new(false),
             Duration::from_secs(5),
