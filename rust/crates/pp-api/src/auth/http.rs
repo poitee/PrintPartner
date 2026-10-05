@@ -481,8 +481,8 @@ async fn health(State(app): State<App>, headers: HeaderMap) -> Result<Response, 
                     provider: Provider::Email
                 }
             )
-            .await?,
-            Outcome::User(Some(_))
+            .await,
+            Ok(Outcome::User(Some(_)))
         )
     } else {
         false

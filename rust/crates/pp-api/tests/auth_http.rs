@@ -243,6 +243,14 @@ async fn registration_race_and_owner_policy_are_transactional() {
             .status(),
         403
     );
+    let health: Value = server
+        .request(Method::GET, "/health", None, Some(&cookie))
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(health["owner_mapping_required"], true);
+    assert_eq!(health["authenticated"], false);
     server.close().await;
 }
 

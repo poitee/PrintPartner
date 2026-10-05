@@ -734,6 +734,28 @@ fn link(tx: &Transaction<'_>, user: &str, provider: Provider, provider_id: &str)
     }
     Ok(())
 }
+fn provider_for_user(
+    tx: &Transaction<'_>,
+    user_id: &str,
+    has_password: bool,
+    fallback: Provider,
+) -> Result<Provider> {
+    if has_password {
+        return Ok(Provider::Email);
+    }
+    let name: Option<String> = tx
+        .query_row(
+            "SELECT provider FROM auth_identities WHERE user_id=?1 ORDER BY id ASC LIMIT 1",
+            [user_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(match name.as_deref() {
+        Some("github") => Provider::Github,
+        Some("discord") => Provider::Discord,
+        _ => fallback,
+    })
+}
 pub(super) fn execute(
     connection: &mut Connection,
     command: Command,
@@ -795,7 +817,8 @@ pub(super) fn execute(
                 .map(|c| {
                     let mut user = c.user;
                     user.tenant_id = policy::tenant_for_authenticated_actor(&tx, &user, policy)?;
-                    user.provider = provider;
+                    user.provider =
+                        provider_for_user(&tx, &user.user_id, c.hash.is_some(), provider)?;
                     Ok::<_, anyhow::Error>(user)
                 })
                 .transpose()?,

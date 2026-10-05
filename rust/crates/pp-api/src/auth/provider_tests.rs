@@ -330,6 +330,7 @@ async fn github_pkce_verified_email_skip_enrichment_and_one_use_state() {
         .await
         .unwrap();
     assert_eq!(me["user"]["email"], "primary@example.com");
+    assert_eq!(me["user"]["provider"], "github");
     assert_eq!(
         server
             .finish(Provider::Github, &url, &cookie, "first")
