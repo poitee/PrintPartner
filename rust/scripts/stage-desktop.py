@@ -57,8 +57,15 @@ for name, relative in [('contracts', 'packages/contracts'), ('domain', 'packages
         alias.parent.mkdir(parents=True, exist_ok=True)
         alias.symlink_to(os.path.relpath(web / relative, alias.parent))
 if system == 'macos':
-    from macos_addon_slices import normalize_addon
+    from macos_addon_slices import normalize_addon, select_better_sqlite3_prebuild
     target_architecture = {'aarch64': 'arm64', 'x86_64': 'x86_64'}[arch]
+    sqlite_prebuilds = web / 'node_modules/better-sqlite3/prebuilds'
+    sqlite_selection = select_better_sqlite3_prebuild(
+        [entry.name for entry in sqlite_prebuilds.iterdir()],
+        target_architecture,
+    )
+    for name in sqlite_selection.discard_names:
+        (sqlite_prebuilds / name).unlink()
     for addon in list(web.rglob('*.node')):
         normalize_addon(addon, target_architecture)
     frameworks = stage / 'Frameworks'
