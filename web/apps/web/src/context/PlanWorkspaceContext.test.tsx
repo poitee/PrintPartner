@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -25,6 +25,10 @@ import {
   PlanWorkspaceProvider,
   usePlanWorkspace,
 } from "./PlanWorkspaceContext";
+import {
+  BuildSaveFlushProvider,
+  useFlushBuildPageSaves,
+} from "./BuildSaveFlushContext";
 
 const acceptedReview: PlanReview = {
   profile_id: 7,
@@ -82,6 +86,14 @@ const planRow = {
   relative_path: "frame/bracket.stl",
   source_layer: "base:Voron",
   filename: "bracket.stl",
+};
+
+const otherPlanRow = {
+  id: 43,
+  match_key: "frame/other.stl",
+  relative_path: "frame/other.stl",
+  source_layer: "base:Voron",
+  filename: "other.stl",
 };
 
 function savedChoices(quantity = 1, planVersion = 2): SavePlanChoicesResponse {
@@ -224,34 +236,41 @@ vi.mock("../queries/planDraft", () => ({
       error: null,
     };
   },
-  usePlanDraftWorkspaceQuery: vi.fn(
-    (profileId: number | null, draftId: number | null) => {
-      const workspace =
-        profileId === savedWorkspace.profile_id
-          ? (draftQueryState.workspace ?? savedWorkspace)
-          : profileId === otherWorkspace.profile_id &&
-              draftQueryState.hasOtherWorkspace
-            ? otherWorkspace
-            : null;
-      return {
-        data:
-          workspace &&
-          draftQueryState.hasWorkspace &&
-          draftId === workspace.draft.draft_id
-            ? workspace
-            : undefined,
-        isLoading: false,
-        error: null,
-      };
-    },
-  ),
+  usePlanDraftWorkspaceQuery: vi.fn(),
 }));
+
+function usePlanDraftWorkspaceFixture(
+  profileId: number | null,
+  draftId: number | null,
+) {
+  const workspace =
+    profileId === savedWorkspace.profile_id
+      ? (draftQueryState.workspace ?? savedWorkspace)
+      : profileId === otherWorkspace.profile_id &&
+          draftQueryState.hasOtherWorkspace
+        ? otherWorkspace
+        : null;
+  const enabled =
+    workspace !== null &&
+    draftQueryState.hasWorkspace &&
+    draftId === workspace.draft.draft_id;
+  return useQuery({
+    queryKey: queryKeys.planDraft(profileId ?? 0, draftId ?? 0),
+    queryFn: async () => {
+      if (!workspace) throw new Error("Expected a Plan draft workspace fixture");
+      return workspace;
+    },
+    enabled,
+  });
+}
 
 function wrapper(client: QueryClient) {
   return function Wrapper({ children }: { children: ReactNode }) {
     return (
       <QueryClientProvider client={client}>
-        <PlanWorkspaceProvider>{children}</PlanWorkspaceProvider>
+        <BuildSaveFlushProvider>
+          <PlanWorkspaceProvider>{children}</PlanWorkspaceProvider>
+        </BuildSaveFlushProvider>
       </QueryClientProvider>
     );
   };
@@ -279,8 +298,13 @@ beforeEach(() => {
   draftQueryState.hasWorkspace = true;
   draftQueryState.listPending = false;
   draftQueryState.workspace = null;
+  vi.mocked(usePlanDraftWorkspaceQuery).mockReset();
+  vi.mocked(usePlanDraftWorkspaceQuery).mockImplementation(
+    usePlanDraftWorkspaceFixture,
+  );
   vi.mocked(savePlanChoices).mockReset();
   vi.mocked(savePlanChoices).mockResolvedValue(savedChoices());
+  vi.mocked(recomputePlanDraft).mockReset();
   vi.mocked(listPlanDrafts).mockImplementation(async () =>
     draftQueryState.hasOpenDraft ? [savedWorkspace.draft] : [],
   );
@@ -627,6 +651,570 @@ describe("PlanWorkspaceProvider saved draft lifecycle", () => {
     });
     expect(applyPlanDraft).not.toHaveBeenCalled();
     expect(client.getQueryData<PlanReview>(queryKeys.planReview(7, true))?.part_groups[0]?.parts[0]?.quantity_effective).toBe(4);
+  });
+
+  it("keeps the Build barrier pending until an in-flight quantity Save finishes", async () => {
+    const save = deferred<SavePlanChoicesResponse>();
+    vi.mocked(savePlanChoices).mockReturnValueOnce(save.promise);
+    const hook = renderHook(
+      () => ({ plan: usePlanWorkspace(), flushAll: useFlushBuildPageSaves() }),
+      { wrapper: wrapper(new QueryClient()) },
+    );
+    await waitFor(() => expect(hook.result.current.plan.draftWorkspace).not.toBeNull());
+
+    let savePromise: Promise<void> | null = null;
+    act(() => {
+      savePromise = hook.result.current.plan.setQuantity(planRow, 2);
+    });
+    await waitFor(() => expect(savePlanChoices).toHaveBeenCalledOnce());
+
+    let barrierFinished = false;
+    let barrierPromise: Promise<void> | null = null;
+    act(() => {
+      barrierPromise = hook.result.current.flushAll().then(() => {
+        barrierFinished = true;
+      });
+    });
+    await act(async () => Promise.resolve());
+    expect(barrierFinished).toBe(false);
+
+    const pendingSave = savePromise;
+    const pendingBarrier = barrierPromise;
+    if (!pendingSave || !pendingBarrier) throw new Error("Expected pending Save and barrier");
+    await act(async () => {
+      save.resolve(savedChoices(2, 2));
+      await Promise.all([pendingSave, pendingBarrier]);
+    });
+    expect(barrierFinished).toBe(true);
+  });
+
+  it("keeps the Build barrier pending until an in-flight inclusion Save finishes", async () => {
+    const save = deferred<SavePlanChoicesResponse>();
+    vi.mocked(savePlanChoices).mockReturnValueOnce(save.promise);
+    const hook = renderHook(
+      () => ({ plan: usePlanWorkspace(), flushAll: useFlushBuildPageSaves() }),
+      { wrapper: wrapper(new QueryClient()) },
+    );
+    await waitFor(() => expect(hook.result.current.plan.draftWorkspace).not.toBeNull());
+
+    let savePromise!: Promise<void>;
+    act(() => {
+      savePromise = hook.result.current.plan.setIncluded(planRow, false);
+    });
+    await waitFor(() => expect(savePlanChoices).toHaveBeenCalledOnce());
+    let barrierFinished = false;
+    const barrier = hook.result.current.flushAll().then(() => {
+      barrierFinished = true;
+    });
+    await act(async () => Promise.resolve());
+    expect(barrierFinished).toBe(false);
+
+    await act(async () => {
+      save.resolve(savedChoices(1, 2));
+      await Promise.all([savePromise, barrier]);
+    });
+    expect(barrierFinished).toBe(true);
+  });
+
+  it("keeps draining when another quantity edit arrives behind the observed Save", async () => {
+    const first = deferred<SavePlanChoicesResponse>();
+    const second = deferred<SavePlanChoicesResponse>();
+    vi.mocked(savePlanChoices)
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+    const hook = renderHook(
+      () => ({ plan: usePlanWorkspace(), flushAll: useFlushBuildPageSaves() }),
+      { wrapper: wrapper(new QueryClient()) },
+    );
+    await waitFor(() => expect(hook.result.current.plan.draftWorkspace).not.toBeNull());
+
+    let firstEdit!: Promise<void>;
+    act(() => {
+      firstEdit = hook.result.current.plan.setQuantity(planRow, 2);
+    });
+    await waitFor(() => expect(savePlanChoices).toHaveBeenCalledOnce());
+    let barrierFinished = false;
+    const barrier = hook.result.current.flushAll().then(() => {
+      barrierFinished = true;
+    });
+    let secondEdit!: Promise<void>;
+    act(() => {
+      secondEdit = hook.result.current.plan.setQuantity(planRow, 3);
+    });
+
+    await act(async () => {
+      first.resolve(savedChoices(2, 2));
+      await firstEdit;
+    });
+    await waitFor(() => expect(savePlanChoices).toHaveBeenCalledTimes(2));
+    expect(barrierFinished).toBe(false);
+
+    await act(async () => {
+      second.resolve(savedChoices(3, 3));
+      await Promise.all([secondEdit, barrier]);
+    });
+    expect(barrierFinished).toBe(true);
+  });
+
+  it("retries an uncertain Save with its retained idempotency key before releasing the barrier", async () => {
+    const uncertain = new EngineHttpError("Save could not be confirmed", 500);
+    vi.mocked(savePlanChoices)
+      .mockRejectedValueOnce(uncertain)
+      .mockRejectedValueOnce(uncertain)
+      .mockResolvedValueOnce(savedChoices(2, 2));
+    const hook = renderHook(
+      () => ({ plan: usePlanWorkspace(), flushAll: useFlushBuildPageSaves() }),
+      { wrapper: wrapper(new QueryClient()) },
+    );
+    await waitFor(() => expect(hook.result.current.plan.draftWorkspace).not.toBeNull());
+
+    await act(async () => {
+      await expect(hook.result.current.plan.setQuantity(planRow, 2)).rejects.toThrow("Save could not be confirmed");
+    });
+    expect(savePlanChoices).toHaveBeenCalledTimes(2);
+    const retainedKey = vi.mocked(savePlanChoices).mock.calls[0]?.[2];
+    expect(vi.mocked(savePlanChoices).mock.calls[1]?.[2]).toBe(retainedKey);
+
+    await act(async () => {
+      await hook.result.current.flushAll();
+    });
+    expect(savePlanChoices).toHaveBeenCalledTimes(3);
+    expect(vi.mocked(savePlanChoices).mock.calls[2]?.[2]).toBe(retainedKey);
+  });
+
+  it("returns the actual definitive Save failure from the barrier", async () => {
+    vi.mocked(savePlanChoices).mockRejectedValueOnce(
+      new EngineHttpError("Quantity is no longer valid", 422),
+    );
+    const hook = renderHook(
+      () => ({ plan: usePlanWorkspace(), flushAll: useFlushBuildPageSaves() }),
+      { wrapper: wrapper(new QueryClient()) },
+    );
+    await waitFor(() => expect(hook.result.current.plan.draftWorkspace).not.toBeNull());
+
+    let saveFailure: unknown;
+    await act(async () => {
+      saveFailure = await hook.result.current.plan.setQuantity(planRow, 2).catch((error: unknown) => error);
+    });
+    expect(saveFailure).toBeInstanceOf(Error);
+    await expect(hook.result.current.flushAll()).rejects.toBe(saveFailure);
+    expect(savePlanChoices).toHaveBeenCalledOnce();
+  });
+
+  it("retains a definitive Save failure until a later corrective Save succeeds", async () => {
+    const first = deferred<SavePlanChoicesResponse>();
+    const second = deferred<SavePlanChoicesResponse>();
+    vi.mocked(savePlanChoices)
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise)
+      .mockResolvedValueOnce(savedChoices(4, 3));
+    const hook = renderHook(
+      () => ({ plan: usePlanWorkspace(), flushAll: useFlushBuildPageSaves() }),
+      { wrapper: wrapper(new QueryClient()) },
+    );
+    await waitFor(() => expect(hook.result.current.plan.draftWorkspace).not.toBeNull());
+
+    let firstEdit!: Promise<void>;
+    let secondEdit!: Promise<void>;
+    act(() => {
+      firstEdit = hook.result.current.plan.setQuantity(planRow, 2);
+      secondEdit = hook.result.current.plan.setQuantity(planRow, 3);
+    });
+    const firstOutcome = firstEdit.catch((error: unknown) => error);
+    await waitFor(() => expect(savePlanChoices).toHaveBeenCalledOnce());
+    const barrierOutcome = hook.result.current.flushAll().catch((error: unknown) => error);
+
+    await act(async () => {
+      first.reject(new EngineHttpError("Quantity is no longer valid", 422));
+      await firstOutcome;
+    });
+    await waitFor(() => expect(savePlanChoices).toHaveBeenCalledTimes(2));
+    await act(async () => {
+      second.resolve(savedChoices(3, 2));
+      await secondEdit;
+    });
+
+    const firstFailure = await firstOutcome;
+    await expect(barrierOutcome).resolves.toBe(firstFailure);
+
+    await act(async () => {
+      await hook.result.current.plan.setQuantity(planRow, 4);
+    });
+    await expect(hook.result.current.flushAll()).resolves.toBeUndefined();
+    expect(savePlanChoices).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not let an unrelated later choice erase a definitive failure", async () => {
+    draftQueryState.workspace = {
+      ...savedWorkspace,
+      parts: [
+        ...savedWorkspace.parts,
+        {
+          ...savedWorkspace.parts[0]!,
+          draft_part_id: 18,
+          base_revision_part_id: 43,
+          part_key: otherPlanRow.match_key,
+          filename: otherPlanRow.filename,
+          relative_path: otherPlanRow.relative_path,
+        },
+      ],
+    };
+    const failure = new EngineHttpError("Quantity is no longer valid", 422);
+    vi.mocked(savePlanChoices)
+      .mockRejectedValueOnce(failure)
+      .mockResolvedValueOnce(savedChoices(1, 2));
+    const hook = renderHook(
+      () => ({ plan: usePlanWorkspace(), flushAll: useFlushBuildPageSaves() }),
+      { wrapper: wrapper(new QueryClient()) },
+    );
+    await waitFor(() => expect(hook.result.current.plan.draftWorkspace).not.toBeNull());
+
+    await act(async () => {
+      await expect(hook.result.current.plan.setQuantity(planRow, 2)).rejects.toThrow(
+        "Quantity is no longer valid",
+      );
+    });
+    await act(async () => {
+      await hook.result.current.plan.setIncluded(otherPlanRow, false);
+    });
+
+    expect(hook.result.current.plan.draftError).toContain("Quantity is no longer valid");
+    await expect(hook.result.current.flushAll()).rejects.toThrow(
+      "Quantity is no longer valid",
+    );
+  });
+
+  it("acknowledges an uncertain intent when an already queued successor replays its exact key", async () => {
+    const firstAttempt = deferred<SavePlanChoicesResponse>();
+    const secondAttempt = deferred<SavePlanChoicesResponse>();
+    const uncertain = new EngineHttpError("Save could not be confirmed", 500);
+    vi.mocked(savePlanChoices)
+      .mockReturnValueOnce(firstAttempt.promise)
+      .mockReturnValueOnce(secondAttempt.promise)
+      .mockResolvedValueOnce(savedChoices(2, 2))
+      .mockResolvedValueOnce(savedChoices(3, 3));
+    const hook = renderHook(
+      () => ({ plan: usePlanWorkspace(), flushAll: useFlushBuildPageSaves() }),
+      { wrapper: wrapper(new QueryClient()) },
+    );
+    await waitFor(() => expect(hook.result.current.plan.draftWorkspace).not.toBeNull());
+
+    let firstEdit!: Promise<void>;
+    let successor!: Promise<void>;
+    act(() => {
+      firstEdit = hook.result.current.plan.setQuantity(planRow, 2);
+    });
+    await waitFor(() => expect(savePlanChoices).toHaveBeenCalledOnce());
+    act(() => {
+      successor = hook.result.current.plan.setQuantity(planRow, 3);
+    });
+    const firstOutcome = firstEdit.catch((error: unknown) => error);
+
+    await act(async () => {
+      firstAttempt.reject(uncertain);
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(savePlanChoices).toHaveBeenCalledTimes(2));
+    await act(async () => {
+      secondAttempt.reject(uncertain);
+      await firstOutcome;
+    });
+    await waitFor(() => expect(savePlanChoices).toHaveBeenCalledTimes(4));
+    await act(async () => {
+      await successor;
+    });
+
+    const calls = vi.mocked(savePlanChoices).mock.calls;
+    expect(calls[2]?.[2]).toBe(calls[0]?.[2]);
+    expect(hook.result.current.plan.draftError).toBeNull();
+    await expect(hook.result.current.flushAll()).resolves.toBeUndefined();
+  });
+
+  it("does not auto-retry a definitively failed inclusion from the Build barrier", async () => {
+    const failure = new EngineHttpError("Inclusion is no longer valid", 422);
+    vi.mocked(savePlanChoices)
+      .mockRejectedValueOnce(failure)
+      .mockResolvedValueOnce(savedChoices(1, 2));
+    const hook = renderHook(
+      () => ({ plan: usePlanWorkspace(), flushAll: useFlushBuildPageSaves() }),
+      { wrapper: wrapper(new QueryClient()) },
+    );
+    await waitFor(() => expect(hook.result.current.plan.draftWorkspace).not.toBeNull());
+
+    let editFailure: unknown;
+    await act(async () => {
+      editFailure = await hook.result.current.plan
+        .setIncluded(planRow, false)
+        .catch((error: unknown) => error);
+    });
+    expect(savePlanChoices).toHaveBeenCalledOnce();
+
+    const barrierOutcome = hook.result.current.flushAll().catch((error: unknown) => error);
+    await act(async () => {
+      await barrierOutcome;
+    });
+
+    expect(await barrierOutcome).toBe(editFailure);
+    expect(savePlanChoices).toHaveBeenCalledOnce();
+  });
+
+  it("retries a definitive quantity Save with its exact original command and key", async () => {
+    const firstFailure = new EngineHttpError("Quantity is no longer valid", 422);
+    const retryFailure = new EngineHttpError("Quantity retry was refused", 422);
+    vi.mocked(savePlanChoices)
+      .mockRejectedValueOnce(firstFailure)
+      .mockRejectedValueOnce(retryFailure)
+      .mockResolvedValueOnce(savedChoices(2, 2));
+    const hook = renderHook(
+      () => ({ plan: usePlanWorkspace(), flushAll: useFlushBuildPageSaves() }),
+      { wrapper: wrapper(new QueryClient()) },
+    );
+    await waitFor(() => expect(hook.result.current.plan.draftWorkspace).not.toBeNull());
+
+    await act(async () => {
+      await expect(hook.result.current.plan.setQuantity(planRow, 2)).rejects.toThrow(
+        "Quantity is no longer valid",
+      );
+    });
+    const originalRequest = vi.mocked(savePlanChoices).mock.calls[0]?.[1];
+    const originalKey = vi.mocked(savePlanChoices).mock.calls[0]?.[2];
+
+    await act(async () => {
+      await expect(hook.result.current.plan.retryPlanSave()).rejects.toThrow(
+        "Quantity retry was refused",
+      );
+    });
+    expect(savePlanChoices).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(savePlanChoices).mock.calls[1]?.[1]).toBe(originalRequest);
+    expect(vi.mocked(savePlanChoices).mock.calls[1]?.[2]).toBe(originalKey);
+    expect(hook.result.current.plan.draftError).toContain("Quantity retry was refused");
+    await expect(hook.result.current.flushAll()).rejects.toThrow(
+      "Quantity retry was refused",
+    );
+    expect(savePlanChoices).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      await hook.result.current.plan.retryPlanSave();
+    });
+    expect(savePlanChoices).toHaveBeenCalledTimes(3);
+    expect(vi.mocked(savePlanChoices).mock.calls[2]?.[1]).toBe(originalRequest);
+    expect(vi.mocked(savePlanChoices).mock.calls[2]?.[2]).toBe(originalKey);
+    expect(recomputePlanDraft).not.toHaveBeenCalled();
+    expect(hook.result.current.plan.draftError).toBeNull();
+    await expect(hook.result.current.flushAll()).resolves.toBeUndefined();
+  });
+
+  it("retries one definitive batch without retiring an unrelated failed intent", async () => {
+    draftQueryState.workspace = {
+      ...savedWorkspace,
+      parts: [
+        ...savedWorkspace.parts,
+        {
+          ...savedWorkspace.parts[0]!,
+          draft_part_id: 18,
+          base_revision_part_id: 43,
+          part_key: otherPlanRow.match_key,
+          filename: otherPlanRow.filename,
+          relative_path: otherPlanRow.relative_path,
+        },
+      ],
+    };
+    vi.mocked(savePlanChoices)
+      .mockRejectedValueOnce(new EngineHttpError("Batch is no longer valid", 422))
+      .mockRejectedValueOnce(new EngineHttpError("Other choice is no longer valid", 422))
+      .mockResolvedValueOnce(savedChoices(2, 2))
+      .mockResolvedValueOnce(savedChoices(3, 3));
+    const hook = renderHook(
+      () => ({ plan: usePlanWorkspace(), flushAll: useFlushBuildPageSaves() }),
+      { wrapper: wrapper(new QueryClient()) },
+    );
+    await waitFor(() => expect(hook.result.current.plan.draftWorkspace).not.toBeNull());
+
+    await act(async () => {
+      await expect(hook.result.current.plan.savePlanPartChanges([
+        { kind: "set_quantity", part: planRow, value: 2 },
+        { kind: "set_included", part: planRow, value: false },
+      ])).rejects.toThrow("Batch is no longer valid");
+    });
+    await act(async () => {
+      await expect(hook.result.current.plan.setQuantity(otherPlanRow, 3)).rejects.toThrow(
+        "Other choice is no longer valid",
+      );
+    });
+    const batchRequest = vi.mocked(savePlanChoices).mock.calls[0]?.[1];
+    const batchKey = vi.mocked(savePlanChoices).mock.calls[0]?.[2];
+    const otherRequest = vi.mocked(savePlanChoices).mock.calls[1]?.[1];
+    const otherKey = vi.mocked(savePlanChoices).mock.calls[1]?.[2];
+
+    await act(async () => {
+      await expect(hook.result.current.plan.preparePlan()).rejects.toThrow(
+        "Batch is no longer valid",
+      );
+    });
+    expect(savePlanChoices).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      await hook.result.current.plan.retryPlanSave();
+    });
+    expect(vi.mocked(savePlanChoices).mock.calls[2]?.[1]).toBe(batchRequest);
+    expect(vi.mocked(savePlanChoices).mock.calls[2]?.[2]).toBe(batchKey);
+    expect(hook.result.current.plan.draftError).toContain("Other choice is no longer valid");
+    await expect(hook.result.current.flushAll()).rejects.toThrow(
+      "Other choice is no longer valid",
+    );
+    expect(savePlanChoices).toHaveBeenCalledTimes(3);
+
+    await act(async () => {
+      await hook.result.current.plan.retryPlanSave();
+    });
+    expect(vi.mocked(savePlanChoices).mock.calls[3]?.[1]).toBe(otherRequest);
+    expect(vi.mocked(savePlanChoices).mock.calls[3]?.[2]).toBe(otherKey);
+    expect(recomputePlanDraft).not.toHaveBeenCalled();
+    expect(hook.result.current.plan.draftError).toBeNull();
+  });
+
+  it("corrects only overlapping fields from a failed batch", async () => {
+    draftQueryState.workspace = {
+      ...savedWorkspace,
+      parts: [
+        ...savedWorkspace.parts,
+        {
+          ...savedWorkspace.parts[0]!,
+          draft_part_id: 18,
+          base_revision_part_id: 43,
+          part_key: otherPlanRow.match_key,
+          filename: otherPlanRow.filename,
+          relative_path: otherPlanRow.relative_path,
+        },
+      ],
+    };
+    vi.mocked(savePlanChoices)
+      .mockRejectedValueOnce(new EngineHttpError("Batch is no longer valid", 422))
+      .mockResolvedValueOnce(savedChoices(3, 2))
+      .mockResolvedValueOnce(savedChoices(3, 3));
+    const hook = renderHook(
+      () => ({ plan: usePlanWorkspace(), flushAll: useFlushBuildPageSaves() }),
+      { wrapper: wrapper(new QueryClient()) },
+    );
+    await waitFor(() => expect(hook.result.current.plan.draftWorkspace).not.toBeNull());
+
+    await act(async () => {
+      await expect(hook.result.current.plan.savePlanPartChanges([
+        { kind: "set_quantity", part: planRow, value: 2 },
+        { kind: "set_included", part: planRow, value: false },
+        { kind: "set_included", part: otherPlanRow, value: false },
+      ])).rejects.toThrow("Batch is no longer valid");
+    });
+    await act(async () => {
+      await hook.result.current.plan.savePlanPartChanges([
+        { kind: "set_quantity", part: planRow, value: 3 },
+        { kind: "set_included", part: otherPlanRow, value: true },
+      ]);
+    });
+
+    await expect(hook.result.current.flushAll()).rejects.toThrow("Batch is no longer valid");
+    expect(hook.result.current.plan.draftError).toContain("Batch is no longer valid");
+
+    await act(async () => {
+      await hook.result.current.plan.savePlanPartChanges([
+        { kind: "set_included", part: planRow, value: true },
+      ]);
+    });
+    await expect(hook.result.current.flushAll()).resolves.toBeUndefined();
+    expect(hook.result.current.plan.draftError).toBeNull();
+  });
+
+  it("keeps the same uncertain command through repeated replay and stops retrying after a definitive result", async () => {
+    const uncertain = new EngineHttpError("Save could not be confirmed", 500);
+    const definitive = new EngineHttpError("Choice is no longer valid", 422);
+    vi.mocked(savePlanChoices)
+      .mockRejectedValueOnce(uncertain)
+      .mockRejectedValueOnce(uncertain)
+      .mockRejectedValueOnce(uncertain)
+      .mockRejectedValueOnce(uncertain)
+      .mockRejectedValueOnce(definitive);
+    const hook = renderHook(
+      () => ({ plan: usePlanWorkspace(), flushAll: useFlushBuildPageSaves() }),
+      { wrapper: wrapper(new QueryClient()) },
+    );
+    await waitFor(() => expect(hook.result.current.plan.draftWorkspace).not.toBeNull());
+
+    await act(async () => {
+      await expect(hook.result.current.plan.setQuantity(planRow, 2)).rejects.toThrow(
+        "Save could not be confirmed",
+      );
+    });
+    await expect(hook.result.current.flushAll()).rejects.toThrow(
+      "Save could not be confirmed",
+    );
+    const retainedKey = vi.mocked(savePlanChoices).mock.calls[0]?.[2];
+    expect(vi.mocked(savePlanChoices).mock.calls.slice(1, 4).every((call) => call[2] === retainedKey)).toBe(true);
+
+    await expect(hook.result.current.flushAll()).rejects.toThrow(
+      "Choice is no longer valid",
+    );
+    expect(savePlanChoices).toHaveBeenCalledTimes(5);
+    expect(vi.mocked(savePlanChoices).mock.calls[4]?.[2]).toBe(retainedKey);
+
+    await expect(hook.result.current.flushAll()).rejects.toThrow(
+      "Choice is no longer valid",
+    );
+    expect(savePlanChoices).toHaveBeenCalledTimes(5);
+  });
+
+  it("acknowledges a replayed inclusion batch without losing a newer choice", async () => {
+    const firstAttempt = deferred<SavePlanChoicesResponse>();
+    const secondAttempt = deferred<SavePlanChoicesResponse>();
+    const uncertain = new EngineHttpError("Save could not be confirmed", 500);
+    vi.mocked(savePlanChoices)
+      .mockReturnValueOnce(firstAttempt.promise)
+      .mockReturnValueOnce(secondAttempt.promise)
+      .mockResolvedValueOnce(savedChoices(1, 2))
+      .mockResolvedValueOnce(savedChoices(2, 3))
+      .mockResolvedValueOnce(savedChoices(2, 4));
+    const hook = renderHook(
+      () => ({ plan: usePlanWorkspace(), flushAll: useFlushBuildPageSaves() }),
+      { wrapper: wrapper(new QueryClient()) },
+    );
+    await waitFor(() => expect(hook.result.current.plan.draftWorkspace).not.toBeNull());
+
+    let firstChoice!: Promise<void>;
+    let newerChoice!: Promise<void>;
+    act(() => {
+      firstChoice = hook.result.current.plan.setIncluded(planRow, false);
+    });
+    await waitFor(() => expect(savePlanChoices).toHaveBeenCalledOnce());
+    act(() => {
+      newerChoice = hook.result.current.plan.setIncluded(planRow, true);
+    });
+    const firstOutcome = firstChoice.catch((error: unknown) => error);
+    const newerOutcome = newerChoice.catch((error: unknown) => error);
+    await act(async () => {
+      firstAttempt.reject(uncertain);
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(savePlanChoices).toHaveBeenCalledTimes(2));
+    await act(async () => {
+      secondAttempt.reject(uncertain);
+      await Promise.all([firstOutcome, newerOutcome]);
+    });
+
+    await act(async () => {
+      await hook.result.current.plan.setQuantity(planRow, 2);
+    });
+    await act(async () => {
+      await hook.result.current.flushAll();
+    });
+
+    const calls = vi.mocked(savePlanChoices).mock.calls;
+    expect(calls).toHaveLength(5);
+    expect(calls[2]?.[2]).toBe(calls[0]?.[2]);
+    expect(calls[4]?.[1].decisions).toEqual([
+      expect.objectContaining({ kind: "set_included", value: true }),
+    ]);
+    expect(calls[4]?.[2]).not.toBe(calls[0]?.[2]);
+    expect(hook.result.current.plan.pendingFileChoices.size).toBe(0);
+    expect(hook.result.current.plan.draftError).toBeNull();
   });
 
   it.each(["inputs_changed", "base_changed"])("recovers %s during the combined save without a manual retry", async (code) => {
@@ -1059,11 +1647,7 @@ describe("PlanWorkspaceProvider saved draft lifecycle", () => {
       ...savedWorkspace,
       diff: { ...savedWorkspace.diff, base_is_current: false },
     };
-    vi.mocked(usePlanDraftWorkspaceQuery).mockReturnValue({
-      data: staleWorkspace,
-      isLoading: false,
-      error: null,
-    } as ReturnType<typeof usePlanDraftWorkspaceQuery>);
+    draftQueryState.workspace = staleWorkspace;
     const client = new QueryClient();
     const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(client) });
     await waitFor(() =>
@@ -1100,6 +1684,130 @@ describe("PlanWorkspaceProvider saved draft lifecycle", () => {
     expect(applyPlanDraft).not.toHaveBeenCalled();
     expect(hook.result.current.mergeConflict).toBe(false);
     expect(hook.result.current.draftError).toBeNull();
+  });
+
+  it("recovers a prepare failure only through a successful prepare", async () => {
+    vi.mocked(abandonPlanDraft)
+      .mockRejectedValueOnce(new Error("Prepare failed"))
+      .mockResolvedValueOnce({
+        ...savedWorkspace.draft,
+        state: "abandoned",
+        lifecycle_version: 1,
+      });
+    const hook = renderHook(
+      () => ({ plan: usePlanWorkspace(), flushAll: useFlushBuildPageSaves() }),
+      { wrapper: wrapper(new QueryClient()) },
+    );
+    await waitFor(() => expect(hook.result.current.plan.draftWorkspace).not.toBeNull());
+
+    await act(async () => {
+      await expect(hook.result.current.plan.preparePlan()).rejects.toThrow("Prepare failed");
+    });
+    await act(async () => {
+      await hook.result.current.plan.setQuantity(planRow, 2);
+    });
+    await expect(hook.result.current.flushAll()).rejects.toThrow("Prepare failed");
+    await act(async () => {
+      await hook.result.current.plan.preparePlan();
+    });
+    await expect(hook.result.current.flushAll()).resolves.toBeUndefined();
+  });
+
+  it("recovers a direct-draft failure only through a successful direct edit", async () => {
+    vi.mocked(savePlanChoices).mockResolvedValue({
+      ...savedChoices(3, 2),
+      closed_draft_ids: [],
+    });
+    vi.mocked(editPlanDraftParts)
+      .mockRejectedValueOnce(new Error("Draft edit failed"))
+      .mockResolvedValueOnce(editedWorkspace);
+    const hook = renderHook(
+      () => ({ plan: usePlanWorkspace(), flushAll: useFlushBuildPageSaves() }),
+      { wrapper: wrapper(new QueryClient()) },
+    );
+    await waitFor(() => expect(hook.result.current.plan.draftWorkspace).not.toBeNull());
+
+    await act(async () => {
+      await expect(hook.result.current.plan.editActivePlanDraft([
+        { kind: "set_included", draft_part_ids: [17], value: false },
+      ])).rejects.toThrow("Draft edit failed");
+    });
+    await act(async () => {
+      await hook.result.current.plan.setQuantity(planRow, 3);
+    });
+    await expect(hook.result.current.flushAll()).rejects.toThrow("Draft edit failed");
+    await act(async () => {
+      await hook.result.current.plan.editActivePlanDraft([
+        { kind: "set_included", draft_part_ids: [17], value: true },
+      ]);
+    });
+    await expect(hook.result.current.flushAll()).resolves.toBeUndefined();
+  });
+
+  it("successful discard clears a standalone failed prepare with no open draft", async () => {
+    draftQueryState.hasOpenDraft = false;
+    draftQueryState.hasWorkspace = false;
+    vi.mocked(recomputePlanDraft).mockRejectedValue(new Error("Prepare failed"));
+    const hook = renderHook(
+      () => ({ plan: usePlanWorkspace(), flushAll: useFlushBuildPageSaves() }),
+      { wrapper: wrapper(new QueryClient()) },
+    );
+
+    await act(async () => {
+      await expect(hook.result.current.plan.preparePlan()).rejects.toThrow("Prepare failed");
+    });
+    expect(hook.result.current.plan.canDiscardPendingEdits).toBe(true);
+    await act(async () => {
+      await hook.result.current.plan.discardPendingEdits();
+    });
+
+    expect(abandonPlanDraft).not.toHaveBeenCalled();
+    expect(hook.result.current.plan.draftError).toBeNull();
+    await expect(hook.result.current.flushAll()).resolves.toBeUndefined();
+  });
+
+  it("keeps older failures when discard fails and clears them only after discard succeeds", async () => {
+    vi.mocked(savePlanChoices).mockRejectedValueOnce(
+      new EngineHttpError("Quantity is no longer valid", 422),
+    );
+    vi.mocked(abandonPlanDraft)
+      .mockRejectedValueOnce(new Error("Discard failed"))
+      .mockResolvedValueOnce({
+        ...savedWorkspace.draft,
+        state: "abandoned",
+        lifecycle_version: 1,
+      });
+    const hook = renderHook(
+      () => ({ plan: usePlanWorkspace(), flushAll: useFlushBuildPageSaves() }),
+      { wrapper: wrapper(new QueryClient()) },
+    );
+    await waitFor(() => expect(hook.result.current.plan.draftWorkspace).not.toBeNull());
+
+    await act(async () => {
+      await expect(hook.result.current.plan.setQuantity(planRow, 2)).rejects.toThrow(
+        "Quantity is no longer valid",
+      );
+      await expect(hook.result.current.plan.discardPendingEdits()).rejects.toThrow(
+        "Discard failed",
+      );
+    });
+    const originalSave = vi.mocked(savePlanChoices).mock.calls[0];
+    expect(hook.result.current.plan.draftError).toContain("Discard failed");
+    await expect(hook.result.current.flushAll()).rejects.toThrow("Discard failed");
+    expect(savePlanChoices).toHaveBeenCalledOnce();
+
+    await act(async () => {
+      await hook.result.current.plan.retryPlanSave();
+    });
+    expect(vi.mocked(savePlanChoices).mock.calls[1]).toEqual(originalSave);
+    expect(hook.result.current.plan.draftError).toContain("Discard failed");
+    await expect(hook.result.current.flushAll()).rejects.toThrow("Discard failed");
+
+    await act(async () => {
+      await hook.result.current.plan.discardPendingEdits();
+    });
+    expect(hook.result.current.plan.draftError).toBeNull();
+    await expect(hook.result.current.flushAll()).resolves.toBeUndefined();
   });
 
   it("refreshes only the selected Build summary", async () => {

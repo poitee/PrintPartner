@@ -49,10 +49,10 @@ export default function AuthenticatedApp() {
       <JobProvider>
         <ProfileProvider>
           <PlanActionsProvider>
-            <PlanWorkspaceProvider>
-              <StlAutoSyncProvider>
-                <SaveStatusProvider>
-                  <BuildSaveFlushProvider>
+            <BuildSaveFlushProvider>
+              <PlanWorkspaceProvider>
+                <StlAutoSyncProvider>
+                  <SaveStatusProvider>
                     <LibraryDraftProvider>
                     <BuildSaveNavigationGuard />
                     <Routes>
@@ -109,10 +109,10 @@ export default function AuthenticatedApp() {
                       </Route>
                     </Routes>
                     </LibraryDraftProvider>
-                  </BuildSaveFlushProvider>
-                </SaveStatusProvider>
-              </StlAutoSyncProvider>
-            </PlanWorkspaceProvider>
+                  </SaveStatusProvider>
+                </StlAutoSyncProvider>
+              </PlanWorkspaceProvider>
+            </BuildSaveFlushProvider>
           </PlanActionsProvider>
         </ProfileProvider>
       </JobProvider>

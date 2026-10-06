@@ -112,7 +112,12 @@ function openAcceptedMediaPngDescriptor(input: {
   try {
     const rootStats = lstatSync(resolve(input.thumbsDir));
     if (rootStats.isSymbolicLink() || !rootStats.isDirectory()) return { status: "miss" };
-    const beforeOpen = lstatSync(input.path);
+    let beforeOpen: Stats;
+    try {
+      beforeOpen = lstatSync(input.path);
+    } catch (error) {
+      return { status: isRenameWindowError(error) ? "retryable_race" : "miss" };
+    }
     if (beforeOpen.isSymbolicLink() || !beforeOpen.isFile()) return { status: "miss" };
     if (beforeOpen.size < PNG_SIGNATURE.length) return { status: "miss" };
 
@@ -127,8 +132,8 @@ function openAcceptedMediaPngDescriptor(input: {
     const openedDescriptor = descriptor;
     descriptor = null;
     return { status: "opened", descriptor: openedDescriptor, stats: opened };
-  } catch {
-    return { status: "miss" };
+  } catch (error) {
+    return { status: isRenameWindowError(error) ? "retryable_race" : "miss" };
   } finally {
     if (descriptor != null) closeSync(descriptor);
   }

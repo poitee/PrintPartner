@@ -17,6 +17,7 @@ import { EngineHttpError } from "../../api/engineTransport";
 import type { PlanReview, ReviewPart } from "../../api/endpoints/planManifests";
 import { queryKeys } from "../../queries/keys";
 import { PlanWorkspaceProvider, usePlanWorkspace } from "../../context/PlanWorkspaceContext";
+import { BuildSaveFlushProvider } from "../../context/BuildSaveFlushContext";
 import {
   REVIEW_PARTS_UI_STORAGE_KEY,
   serializePersistedReviewPartsUi,
@@ -163,10 +164,12 @@ function renderSheet() {
   return render(
     <MemoryRouter>
       <QueryClientProvider client={client}>
-        <PlanWorkspaceProvider>
-          <ReviewPartsSheet review={state.review!} planName="Voron" />
-          <DraftErrorProbe />
-        </PlanWorkspaceProvider>
+        <BuildSaveFlushProvider>
+          <PlanWorkspaceProvider>
+            <ReviewPartsSheet review={state.review!} planName="Voron" />
+            <DraftErrorProbe />
+          </PlanWorkspaceProvider>
+        </BuildSaveFlushProvider>
       </QueryClientProvider>
     </MemoryRouter>,
   );

@@ -330,6 +330,24 @@ describe("accepted media PNG cache", () => {
     expect(descriptorStats).toHaveBeenCalledTimes(2);
   });
 
+  it("retries when publication swaps the target before stat", () => {
+    const thumbsDir = cacheFixture();
+    mkdirSync(thumbsDir);
+    writeFileSync(acceptedMediaCachePath({ thumbsDir, basis }), png);
+    const rootStats = statSync(thumbsDir);
+    const pathStats = vi.mocked(lstatSync);
+    pathStats.mockClear();
+    pathStats.mockImplementationOnce(() => rootStats);
+    pathStats.mockImplementationOnce(() => {
+      throw Object.assign(new Error("transient accepted media publish window"), {
+        code: "ENOENT",
+      });
+    });
+
+    expect(readAcceptedMediaPng({ thumbsDir, basis })).toEqual(png);
+    expect(pathStats).toHaveBeenCalledTimes(4);
+  });
+
   it("reads the complete replacement when publication swaps the target between stat and open", () => {
     const thumbsDir = cacheFixture();
     mkdirSync(thumbsDir);

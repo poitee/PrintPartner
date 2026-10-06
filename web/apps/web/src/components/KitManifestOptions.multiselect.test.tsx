@@ -45,10 +45,7 @@ vi.mock("../api/endpoints/planManifests", async (importOriginal) => {
 });
 
 vi.mock("../context/BuildSaveFlushContext", () => ({
-  useBuildSaveFlushRegistry: () => ({
-    registerFlush: vi.fn(),
-    unregisterFlush: vi.fn(),
-  }),
+  useBuildSaveFlushRegistry: () => vi.fn(() => vi.fn()),
 }));
 
 vi.mock("../hooks/useKitManifestAutosave", () => ({
