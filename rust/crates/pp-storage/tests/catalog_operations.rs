@@ -2,8 +2,8 @@ use pp_storage::{
     Limits, WriterOwner,
     auth::{FirstUserTenant, Outcome as AuthOutcome, Request as AuthRequest, Secret},
     catalog::{
-        CreateSource, Credentials, Deletion, NamingCommand, NamingProfile, Outcome, Request,
-        SourceCatalogClient, SourcePatch,
+        CreateSource, Credentials, Deletion, NamingCommand, NamingProfile, NumericCategoryCommand,
+        Outcome, Request, SourceCatalogClient, SourcePatch,
     },
 };
 use rusqlite::Connection;
@@ -288,6 +288,31 @@ fn ticket_t_59_catalog_work_delete_ordering() {
             .begin_work(id, &AtomicBool::new(true), Duration::ZERO)
             .is_err()
     );
+    owner.shutdown().unwrap();
+}
+#[test]
+fn duplicate_direct_source_lease_preserves_typed_catalog_context() {
+    let fixture = Fixture::new();
+    let owner = fixture.open();
+    let client = owner.local_source_catalog();
+    let id = create(&client, "Typed busy context");
+    let active = client
+        .begin_work(id, &AtomicBool::new(false), Duration::from_secs(5))
+        .unwrap();
+    let duplicate = match client.begin_work(id, &AtomicBool::new(false), Duration::from_secs(5)) {
+        Err(error) => error,
+        Ok(_) => panic!("duplicate direct Source lease accepted"),
+    };
+    assert!(
+        duplicate
+            .downcast_ref::<pp_storage::catalog::SourceBusy>()
+            .is_some()
+    );
+    assert!(matches!(
+        duplicate.downcast_ref::<pp_storage::catalog::CatalogFailure>(),
+        Some(pp_storage::catalog::CatalogFailure::Storage)
+    ));
+    drop(active);
     owner.shutdown().unwrap();
 }
 #[test]
@@ -863,5 +888,216 @@ fn ticket_t_59_catalog_regex_complexity_rejection_preserves_writer_and_settings(
     assert_eq!(value(&client, Request::Get { id })["name"], "Naming");
     assert_eq!(rows(&fixture.0), original);
     assert_eq!(database_bytes(&fixture.0), bytes);
+    owner.shutdown().unwrap();
+}
+
+#[test]
+fn catalog_http_owner_access_and_typed_failures() {
+    use pp_storage::{
+        auth::{AuthFailure, AuthPolicy, RegistrationPolicy, Secret, SessionTenantPolicy},
+        catalog::CatalogFailure,
+    };
+    let fixture = Fixture::new();
+    let owner = fixture.open();
+    let (_, token) = actor(&owner, "typed@example.test");
+    let policy = AuthPolicy {
+        registration: RegistrationPolicy::FirstAccountOnly,
+        session_tenant: SessionTenantPolicy::SingleAccountDefault,
+        first_user: FirstUserTenant::NewUser,
+    };
+    let access = owner.catalog_access(policy).unwrap();
+    let client = access.session(Secret::new(token));
+    assert!(matches!(
+        client.execute(Request::GetCategoriesWithTree {}).unwrap(),
+        Outcome::Categories(_)
+    ));
+    let invalid = client
+        .execute(Request::CreateCatalogSource {
+            source: CreateSource::default(),
+        })
+        .unwrap_err();
+    assert!(matches!(
+        invalid.downcast_ref::<CatalogFailure>(),
+        Some(CatalogFailure::Input(_))
+    ));
+    let missing = client.execute(Request::GetNaming { id: 999 }).unwrap_err();
+    assert!(matches!(
+        missing.downcast_ref::<CatalogFailure>(),
+        Some(CatalogFailure::NotFound)
+    ));
+    let unauthorized = access
+        .session(Secret::new("invalid".into()))
+        .execute(Request::List {})
+        .unwrap_err();
+    assert!(matches!(
+        unauthorized.downcast_ref::<AuthFailure>(),
+        Some(AuthFailure::SessionRequired)
+    ));
+    let id = create(&client, "Owned");
+    assert_eq!(
+        value(&owner.local_source_catalog(), Request::Get { id })["name"],
+        "Owned"
+    );
+    owner.shutdown().unwrap();
+    let stopped = client.execute(Request::List {}).unwrap_err();
+    assert!(matches!(
+        stopped.downcast_ref::<CatalogFailure>(),
+        Some(CatalogFailure::Stopped)
+    ));
+}
+
+#[test]
+fn catalog_numeric_category_serde_and_exact_integer_domains() {
+    let fixture = Fixture::new();
+    let owner = fixture.open();
+    let client = owner.local_source_catalog();
+    let request = Request::ApplyNumericCategory {
+        command: NumericCategoryCommand::from_finite_numbers(
+            [1.0, 1.0, 1.5, -2.0, 999.0],
+            Some("Category".into()),
+        )
+        .unwrap(),
+    };
+    let serialized = serde_json::to_value(&request).unwrap();
+    assert_eq!(serialized["operation"], "apply_numeric_category");
+    assert_eq!(
+        serialized["command"]["selectors"],
+        json!([1.0, 1.0, 1.5, -2.0, 999.0])
+    );
+    assert!(
+        serde_json::from_value::<Request>(json!({
+            "operation": "apply_numeric_category",
+            "command": {
+                "selectors": [1.0],
+                "category": null,
+                "lookup_ids": [1]
+            }
+        }))
+        .is_err()
+    );
+    let decoded: Request = serde_json::from_value(serialized).unwrap();
+    let numeric = value(&client, decoded);
+    assert_eq!(numeric["succeeded"], 0);
+    assert_eq!(numeric["failed"], 4);
+    assert_eq!(numeric["results"][0]["source_id"], json!(1.0));
+    assert_eq!(numeric["results"][1]["source_id"], json!(1.5));
+
+    let lower = 9_007_199_254_740_992_i64;
+    let upper = 9_007_199_254_740_993_i64;
+    let exact = value(
+        &client,
+        Request::BulkCategory {
+            source_ids: vec![lower, upper, lower],
+            category: None,
+        },
+    );
+    assert_eq!(exact["succeeded"], 0);
+    assert_eq!(exact["failed"], 2);
+    assert_eq!(exact["results"][0]["source_id"], json!(lower));
+    assert_eq!(exact["results"][1]["source_id"], json!(upper));
+    assert_ne!(
+        exact["results"][0]["source_id"],
+        exact["results"][1]["source_id"]
+    );
+    owner.shutdown().unwrap();
+}
+
+#[test]
+fn catalog_normalized_edit_uses_authenticated_current_source_state() {
+    use pp_storage::{
+        auth::{AuthFailure, AuthPolicy, RegistrationPolicy, SessionTenantPolicy},
+        catalog::CatalogFailure,
+    };
+
+    let fixture = Fixture::new();
+    let owner = fixture.open();
+    let (_, token) = actor(&owner, "normalized-edit@example.test");
+    let policy = AuthPolicy {
+        registration: RegistrationPolicy::FirstAccountOnly,
+        session_tenant: SessionTenantPolicy::SingleAccountDefault,
+        first_user: FirstUserTenant::NewUser,
+    };
+    let access = owner.catalog_access(policy).unwrap();
+    let client = access.session(Secret::new(token.clone()));
+    let created = value(
+        &client,
+        Request::CreateCatalogSource {
+            source: CreateSource {
+                name: "Normalized".into(),
+                url: Some("https://github.com/owner/original.git".into()),
+                branch: Some("initial".into()),
+                ..Default::default()
+            },
+        },
+    );
+    let id = created["id"].as_i64().unwrap();
+    let prepared = Request::UpdateCatalogSource {
+        id,
+        patch: SourcePatch {
+            url: Some("https://github.com/owner/replacement.git".into()),
+            ..Default::default()
+        },
+    };
+    value(
+        &client,
+        Request::Update {
+            id,
+            patch: SourcePatch {
+                branch: Some("current-at-execution".into()),
+                source_kind: Some("git".into()),
+                ..Default::default()
+            },
+        },
+    );
+    let updated = value(&client, prepared);
+    assert_eq!(updated["url"], "https://github.com/owner/replacement");
+    assert_eq!(updated["branch"], "current-at-execution");
+
+    let missing = client
+        .execute(Request::UpdateCatalogSource {
+            id: i64::MAX,
+            patch: SourcePatch::default(),
+        })
+        .unwrap_err();
+    assert!(matches!(
+        missing.downcast_ref::<CatalogFailure>(),
+        Some(CatalogFailure::NotFound)
+    ));
+    let invalid = access
+        .session(Secret::new("invalid".into()))
+        .execute(Request::UpdateCatalogSource {
+            id: i64::MAX,
+            patch: SourcePatch::default(),
+        })
+        .unwrap_err();
+    assert!(matches!(
+        invalid.downcast_ref::<AuthFailure>(),
+        Some(AuthFailure::SessionRequired)
+    ));
+
+    let logout = owner
+        .auth(FirstUserTenant::NewUser)
+        .submit(
+            AuthRequest::Logout {
+                token: Secret::new(token),
+            },
+            Arc::new(AtomicBool::new(false)),
+            Duration::from_secs(5),
+        )
+        .unwrap()
+        .recv()
+        .unwrap()
+        .unwrap();
+    assert!(matches!(logout, AuthOutcome::Changed(true)));
+    let revoked = client
+        .execute(Request::UpdateCatalogSource {
+            id: i64::MAX,
+            patch: SourcePatch::default(),
+        })
+        .unwrap_err();
+    assert!(matches!(
+        revoked.downcast_ref::<AuthFailure>(),
+        Some(AuthFailure::SessionRequired)
+    ));
     owner.shutdown().unwrap();
 }
