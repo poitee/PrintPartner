@@ -834,6 +834,7 @@ export const sessions = pgTable("sessions", {
     .notNull()
     .references(() => users.id, { onDelete: "cascade" }),
   expiresAt: text("expires_at").notNull(),
+  provider: text("provider").notNull().default("email"),
 });
 
 export const planShares = pgTable("plan_shares", {

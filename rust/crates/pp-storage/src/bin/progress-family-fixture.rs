@@ -199,10 +199,13 @@ fn main() -> Result<()> {
         per_resource: 1,
         lease_seconds: 60,
     })?;
-    let (_, lease) = worker
+    let mut claim = worker
         .claim()?
         .ok_or_else(|| anyhow!("Missing real claim"))?;
-    let mut source_lease = worker.begin_source_work(&lease, None, &AtomicBool::new(false), WAIT)?;
+    let mut source_lease = claim
+        .source_work
+        .take()
+        .ok_or_else(|| anyhow!("Missing Source claim authority"))?;
     source_lease.release()?;
     ensure!(
         matches!(
@@ -256,7 +259,7 @@ fn main() -> Result<()> {
     })?;
     ensure!(
         new_worker
-            .begin_source_work(&lease, None, &AtomicBool::new(false), WAIT)
+            .begin_source_work(&claim.lease, None, &AtomicBool::new(false), WAIT)
             .is_err(),
         "Stale lease accepted"
     );

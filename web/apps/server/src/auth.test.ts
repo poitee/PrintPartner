@@ -69,7 +69,7 @@ describe("AuthStore", () => {
       expect(repo.listSources()).toHaveLength(0);
     });
 
-    const raw = auth.createSession(user.id);
+    const raw = auth.createSession(user.id, "email");
     const session = auth.resolveSession(raw);
     expect(session?.user_id).toBe(user.id);
     expect(session?.tenant_id).toBe(user.id);
@@ -221,7 +221,7 @@ describe("AuthStore", () => {
       displayName: "Reset User",
       passwordHash: hashPassword("old-password"),
     });
-    const sessionRaw = auth.createSession(user.id);
+    const sessionRaw = auth.createSession(user.id, "email");
     expect(auth.resolveSession(sessionRaw)).not.toBeNull();
 
     auth.invalidatePasswordResetTokens(user.id);
