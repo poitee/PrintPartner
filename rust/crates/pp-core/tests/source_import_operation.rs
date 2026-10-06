@@ -2265,9 +2265,9 @@ fn publication_source_schema37_backup_retains_full35_and_foreign_graph() {
     let (owner, ready) = WriterOwner::open(&root, Limits::default()).unwrap();
     assert_eq!(ready.previous_version, 35);
     assert_eq!(ready.version, 37);
-    let backup_copy = root.join("publication-backup-copy.db");
-    std::fs::copy(ready.backup.unwrap(), &backup_copy).unwrap();
-    assert_eq!(graph(&Connection::open(backup_copy).unwrap()), prior);
+    let backup = root.join("publication-backup-copy.db");
+    std::fs::copy(ready.backup.unwrap(), &backup).unwrap();
+    assert_eq!(graph(&Connection::open(backup).unwrap()), prior);
     let foreign = publication_foreign(&root);
     let svc = service(&owner);
     let admitted = svc
