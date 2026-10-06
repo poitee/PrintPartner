@@ -50,6 +50,29 @@ function cacheFixture(): string {
   return join(root, "thumbs");
 }
 
+async function withDescriptorMutationAfterRead<T>(
+  mutate: (attempt: number) => void,
+  read: () => T,
+): Promise<T> {
+  const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
+  const descriptorStats = vi.mocked(fstatSync);
+  descriptorStats.mockClear();
+  let calls = 0;
+  descriptorStats.mockImplementation((descriptor) => {
+    calls += 1;
+    if (calls % 2 === 0) {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+      mutate((calls / 2) - 1);
+    }
+    return actualFs.fstatSync(descriptor);
+  });
+  try {
+    return read();
+  } finally {
+    descriptorStats.mockImplementation(actualFs.fstatSync);
+  }
+}
+
 afterEach(() => {
   for (const root of temporaryRoots.splice(0)) {
     rmSync(root, { recursive: true, force: true });
@@ -329,6 +352,94 @@ describe("accepted media PNG cache", () => {
     expect(existsSync(replacement)).toBe(false);
   });
 
+  it("returns complete bytes when every read overlaps an atomic replacement", async () => {
+    const thumbsDir = cacheFixture();
+    const target = acceptedMediaCachePath({ thumbsDir, basis });
+    const nextPng = Buffer.concat([png.subarray(0, 8), Buffer.from("replacement")]);
+    writeAcceptedMediaPng({ thumbsDir, basis, png });
+    const replacements = Array.from({ length: 8 }, (_, index) => {
+      const replacement = join(thumbsDir, `replacement-${index}.png`);
+      writeFileSync(replacement, index % 2 === 0 ? nextPng : png);
+      return replacement;
+    });
+    const result = await withDescriptorMutationAfterRead(
+      (attempt) => renameSync(replacements[attempt]!, target),
+      () => readAcceptedMediaPng({ thumbsDir, basis }),
+    );
+
+    expect(result != null && (result.equals(png) || result.equals(nextPng))).toBe(true);
+  });
+
+  it("observes a present cache when every read overlaps an atomic replacement", async () => {
+    const thumbsDir = cacheFixture();
+    const target = acceptedMediaCachePath({ thumbsDir, basis });
+    const nextPng = Buffer.concat([png.subarray(0, 8), Buffer.from("replacement")]);
+    writeAcceptedMediaPng({ thumbsDir, basis, png });
+    const replacements = Array.from({ length: 8 }, (_, index) => {
+      const replacement = join(thumbsDir, `replacement-${index}.png`);
+      writeFileSync(replacement, index % 2 === 0 ? nextPng : png);
+      return replacement;
+    });
+    const result = await withDescriptorMutationAfterRead(
+      (attempt) => renameSync(replacements[attempt]!, target),
+      () => observeAcceptedMediaPng({ thumbsDir, basis }),
+    );
+
+    expect(result).toEqual({ kind: "present" });
+  });
+
+  it("returns complete bytes when all 64 attempts overlap atomic replacement", async () => {
+    const thumbsDir = cacheFixture();
+    const target = acceptedMediaCachePath({ thumbsDir, basis });
+    const nextPng = Buffer.concat([png.subarray(0, 8), Buffer.from("replacement")]);
+    writeAcceptedMediaPng({ thumbsDir, basis, png });
+    const replacements = Array.from({ length: 64 }, (_, index) => {
+      const replacement = join(thumbsDir, `replacement-${index}.png`);
+      writeFileSync(replacement, index % 2 === 0 ? nextPng : png);
+      return replacement;
+    });
+    const result = await withDescriptorMutationAfterRead(
+      (attempt) => renameSync(replacements[attempt]!, target),
+      () => readAcceptedMediaPng({ thumbsDir, basis }),
+    );
+
+    expect(result != null && (result.equals(png) || result.equals(nextPng))).toBe(true);
+  });
+
+  it("observes a present cache when all 64 attempts overlap atomic replacement", async () => {
+    const thumbsDir = cacheFixture();
+    const target = acceptedMediaCachePath({ thumbsDir, basis });
+    const nextPng = Buffer.concat([png.subarray(0, 8), Buffer.from("replacement")]);
+    writeAcceptedMediaPng({ thumbsDir, basis, png });
+    const replacements = Array.from({ length: 64 }, (_, index) => {
+      const replacement = join(thumbsDir, `replacement-${index}.png`);
+      writeFileSync(replacement, index % 2 === 0 ? nextPng : png);
+      return replacement;
+    });
+    const result = await withDescriptorMutationAfterRead(
+      (attempt) => renameSync(replacements[attempt]!, target),
+      () => observeAcceptedMediaPng({ thumbsDir, basis }),
+    );
+
+    expect(result).toEqual({ kind: "present" });
+  });
+
+  it("retries when an opened cache file is rewritten in place", async () => {
+    const thumbsDir = cacheFixture();
+    const target = acceptedMediaCachePath({ thumbsDir, basis });
+    const nextPng = Buffer.from(png);
+    nextPng[nextPng.length - 1] ^= 1;
+    writeAcceptedMediaPng({ thumbsDir, basis, png });
+    const result = await withDescriptorMutationAfterRead(
+      (attempt) => {
+        if (attempt === 0) writeFileSync(target, nextPng);
+      },
+      () => readAcceptedMediaPng({ thumbsDir, basis }),
+    );
+
+    expect(result).toEqual(nextPng);
+  });
+
   it("exposes only complete old or new bytes while another process publishes", async () => {
     const thumbsDir = cacheFixture();
     const nextPng = Buffer.concat([
@@ -426,6 +537,8 @@ describe("accepted media PNG cache", () => {
       await waitFor(() => ready);
       expect(ready, stderr).toBe(true);
       expect(sawOld).toBe(true);
+      absentReads = 0;
+      partialReads = 0;
       expect(child.send("start")).toBe(true);
       await waitFor(() => published);
       expect(published, stderr).toBe(true);

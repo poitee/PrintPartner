@@ -650,6 +650,18 @@ pub(crate) enum AdmissionAuthority {
     Credential(jobs::Credential),
     Preflighted(Box<PreflightedCapture>),
 }
+impl Command {
+    pub(crate) fn changes_accounting(&self) -> bool {
+        !matches!(
+            self,
+            Self::Get { .. }
+                | Self::Phase {
+                    phase: Phase::Read,
+                    ..
+                }
+        )
+    }
+}
 #[derive(Clone)]
 pub struct ImportClient {
     storage: SettingsClient,
@@ -1095,6 +1107,10 @@ pub(crate) fn validate_resolved_claim(
                 } if *project_id as i64 == operation.source_id
                     && operation_key == &operation.key
             ),
+        "Captured import requires repair"
+    );
+    ensure!(
+        catalog::get(tx, &operation.tenant, operation.source_id)?.is_some(),
         "Captured import requires repair"
     );
     Ok(claim.job_id.clone())
