@@ -315,15 +315,7 @@ pub(super) fn session_response(
 async fn me(State(app): State<App>, headers: HeaderMap) -> Result<Response, Failure> {
     let session = wire::session(&headers)
         .map_err(|_| Failure(StatusCode::UNAUTHORIZED, "Not authenticated"))?;
-    match invoke(
-        &app.auth,
-        Request::ResolveSession {
-            token: session,
-            provider: Provider::Email,
-        },
-    )
-    .await?
-    {
+    match invoke(&app.auth, Request::ResolveSession { token: session }).await? {
         Outcome::User(Some(user)) => Ok(wire::json_response(
             json!({"user":wire::public_user(user),"multi_user":app.config.multi_user}),
         )),
@@ -473,17 +465,21 @@ async fn health(State(app): State<App>, headers: HeaderMap) -> Result<Response, 
         unreachable!()
     };
     let authenticated = if let Some(token) = wire::cookie(&headers, "pp_session") {
-        matches!(
-            invoke(
-                &app.auth,
-                Request::ResolveSession {
-                    token: Secret::new(token),
-                    provider: Provider::Email
-                }
-            )
-            .await?,
-            Outcome::User(Some(_))
+        match invoke(
+            &app.auth,
+            Request::ResolveSession {
+                token: Secret::new(token),
+            },
         )
+        .await
+        {
+            Ok(Outcome::User(user)) => user.is_some(),
+            Err(Failure(StatusCode::FORBIDDEN, "Explicit account owner mapping is required")) => {
+                false
+            }
+            Err(error) => return Err(error),
+            Ok(_) => unreachable!(),
+        }
     } else {
         false
     };

@@ -650,6 +650,18 @@ pub(crate) enum AdmissionAuthority {
     Credential(jobs::Credential),
     Preflighted(Box<PreflightedCapture>),
 }
+impl Command {
+    pub(crate) fn changes_accounting(&self) -> bool {
+        !matches!(
+            self,
+            Self::Get { .. }
+                | Self::Phase {
+                    phase: Phase::Read,
+                    ..
+                }
+        )
+    }
+}
 #[derive(Clone)]
 pub struct ImportClient {
     storage: SettingsClient,
@@ -1136,18 +1148,18 @@ pub(crate) fn execute(
                 storage.import_epoch.load(Ordering::Acquire) == accounting_epoch,
                 "Import accounting changed; retry admission"
             );
-            let (tenant, actor) = match authority {
+            let (tenant, actor, durable_authority) = match authority {
                 AdmissionAuthority::Credential(credential) => {
-                    jobs::actor(&tx, credential, policy, &storage)?
+                    jobs::admit_actor(&tx, credential, policy, &storage)?
                 }
                 AdmissionAuthority::Preflighted(preflight) => {
-                    let (tenant, actor) =
-                        jobs::actor_ref(&tx, &preflight.credential, policy, &storage)?;
+                    let (tenant, actor, durable_authority) =
+                        jobs::admit_actor(&tx, preflight.credential, policy, &storage)?;
                     ensure!(
                         tenant == preflight.tenant && actor == preflight.actor,
                         "Capture authority changed"
                     );
-                    (tenant, actor)
+                    (tenant, actor, durable_authority)
                 }
             };
             ensure!(
@@ -1241,10 +1253,11 @@ pub(crate) fn execute(
                     operation_key: request.key.clone(),
                     input_version,
                 };
-                let job = match jobs::user(
+                let job = match jobs::user_with_authority(
                     &tx,
                     &tenant,
                     &actor,
+                    durable_authority,
                     jobs::UserOperation::Enqueue {
                         key: format!(
                             "source-import:{}",
