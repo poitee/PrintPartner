@@ -803,7 +803,7 @@ pub(crate) fn get(tx: &Transaction<'_>, tenant: &str, id: i64) -> Result<Option<
         )
         .optional()?)
 }
-pub(crate) fn require(tx: &Transaction<'_>, tenant: &str, id: i64) -> Result<SourceSummary> {
+fn require(tx: &Transaction<'_>, tenant: &str, id: i64) -> Result<SourceSummary> {
     get(tx, tenant, id)?.ok_or_else(|| anyhow!(CatalogFailure::NotFound))
 }
 fn list(tx: &Transaction<'_>, tenant: &str) -> Result<Vec<SourceSummary>> {

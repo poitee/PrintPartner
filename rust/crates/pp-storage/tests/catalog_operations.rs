@@ -291,6 +291,31 @@ fn ticket_t_59_catalog_work_delete_ordering() {
     owner.shutdown().unwrap();
 }
 #[test]
+fn duplicate_direct_source_lease_preserves_typed_catalog_context() {
+    let fixture = Fixture::new();
+    let owner = fixture.open();
+    let client = owner.local_source_catalog();
+    let id = create(&client, "Typed busy context");
+    let active = client
+        .begin_work(id, &AtomicBool::new(false), Duration::from_secs(5))
+        .unwrap();
+    let duplicate = match client.begin_work(id, &AtomicBool::new(false), Duration::from_secs(5)) {
+        Err(error) => error,
+        Ok(_) => panic!("duplicate direct Source lease accepted"),
+    };
+    assert!(
+        duplicate
+            .downcast_ref::<pp_storage::catalog::SourceBusy>()
+            .is_some()
+    );
+    assert!(matches!(
+        duplicate.downcast_ref::<pp_storage::catalog::CatalogFailure>(),
+        Some(pp_storage::catalog::CatalogFailure::Storage)
+    ));
+    drop(active);
+    owner.shutdown().unwrap();
+}
+#[test]
 fn ticket_t_59_catalog_categories_naming_and_import_invalidation() {
     let fixture = Fixture::new();
     let owner = fixture.open();
