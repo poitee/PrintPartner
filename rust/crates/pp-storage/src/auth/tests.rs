@@ -168,7 +168,6 @@ fn verified_short_legacy_password_logs_in_without_rehashing() {
     assert_eq!(current, stored);
     assert_eq!(sessions, 2);
 }
-
 #[test]
 fn cheap_auth_progresses_while_two_valid_logins_are_in_kdf() {
     let directory = std::env::temp_dir().join(format!(
@@ -221,10 +220,7 @@ fn cheap_auth_progresses_while_two_valid_logins_are_in_kdf() {
         .unwrap();
     let session = gated
         .submit(
-            Request::ResolveSession {
-                token,
-                provider: Provider::Email,
-            },
+            Request::ResolveSession { token },
             Arc::new(AtomicBool::new(false)),
             Duration::from_secs(5),
         )
@@ -381,14 +377,7 @@ fn ticket_t_17_transaction_cas_rejects_verified_login_after_public_reset() {
         .unwrap();
     assert_eq!(old.err().unwrap().to_string(), "Credential changed");
     assert!(matches!(
-        run(
-            &client,
-            Request::ResolveSession {
-                token: old_session,
-                provider: Provider::Email
-            }
-        )
-        .unwrap(),
+        run(&client, Request::ResolveSession { token: old_session },).unwrap(),
         Outcome::User(None)
     ));
     assert!(matches!(
@@ -396,7 +385,6 @@ fn ticket_t_17_transaction_cas_rejects_verified_login_after_public_reset() {
             &client,
             Request::ResolveSession {
                 token: reset_session,
-                provider: Provider::Email
             }
         )
         .unwrap(),

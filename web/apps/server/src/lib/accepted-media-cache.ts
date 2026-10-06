@@ -148,8 +148,7 @@ function descriptorStayedStable(
     afterRead.dev === opened.dev &&
     afterRead.ino === opened.ino &&
     afterRead.size === opened.size &&
-    afterRead.mtimeMs === opened.mtimeMs &&
-    afterRead.ctimeMs === opened.ctimeMs
+    afterRead.mtimeMs === opened.mtimeMs
   );
 }
 

@@ -132,6 +132,7 @@ struct Shared {
     queue: Mutex<Queue>,
     changed: Condvar,
     capacity: usize,
+    orphaned_source_leases: Mutex<Vec<u64>>,
     job_admission: Mutex<Option<Arc<jobs::WorkerAdmission>>>,
     import_epoch: AtomicU64,
     import_quota: Mutex<Option<u64>>,
@@ -473,6 +474,7 @@ impl WriterOwner {
             }),
             changed: Condvar::new(),
             capacity: limits.queued_writes,
+            orphaned_source_leases: Mutex::new(Vec::new()),
             job_admission: Mutex::new(None),
             import_epoch: AtomicU64::new(0),
             import_quota: Mutex::new(None),
@@ -520,6 +522,13 @@ impl WriterOwner {
                         continue;
                     }
                 };
+                let orphaned = std::mem::take(
+                    &mut *worker
+                        .orphaned_source_leases
+                        .lock()
+                        .expect("Source lease recovery poisoned"),
+                );
+                catalog_state.reap(orphaned);
                 match envelope {
                     Envelope::PlanSave { command, reply } => {
                         let _ = reply.send(plan_save::execute(
@@ -545,8 +554,9 @@ impl WriterOwner {
                         let _ = reply.send(checkoff_progress::execute(&mut connection, command));
                     }
                     Envelope::Uploads { command, reply } => {
+                        let changes_accounting = command.changes_accounting();
                         let result = uploads::execute(&mut connection, &catalog_state, command);
-                        if result.is_ok() {
+                        if result.is_ok() && changes_accounting {
                             worker.import_epoch.fetch_add(1, Ordering::AcqRel);
                         }
                         let _ = reply.send(result);
@@ -570,7 +580,8 @@ impl WriterOwner {
                         let _ = reply.send(result);
                     }
                     Envelope::Jobs { command, reply } => {
-                        let _ = reply.send(jobs::execute(&mut connection, command));
+                        let _ =
+                            reply.send(jobs::execute(&mut connection, &mut catalog_state, command));
                     }
                     Envelope::Setting { work, reply } => {
                         let _ = reply.send(execute(&mut connection, work));
@@ -604,9 +615,13 @@ impl WriterOwner {
         let name = destination
             .file_name()
             .ok_or_else(|| anyhow!("Backup file name missing"))?;
+        let managed_runtime = match lease.runtime_dir().canonicalize() {
+            Ok(runtime) => parent.starts_with(runtime),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+            Err(error) => return Err(error.into()),
+        };
         ensure!(
-            !parent.starts_with(lease.data_dir())
-                && !parent.starts_with(lease.runtime_dir().canonicalize()?),
+            !parent.starts_with(lease.data_dir()) && !managed_runtime,
             "Backup destination is inside managed storage"
         );
         let destination = parent.join(name);

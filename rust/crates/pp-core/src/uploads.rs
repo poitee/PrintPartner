@@ -18,7 +18,6 @@ use sha2::{Digest, Sha256};
 use std::{
     path::{Path, PathBuf},
     sync::atomic::AtomicBool,
-    time::Duration,
 };
 
 pub struct SourceImports {
@@ -174,12 +173,14 @@ impl SourceImports {
             Some(id) => self.worker.claim_import(id)?,
             None => self.worker.claim()?,
         };
-        let Some((job, lease)) = claim else {
+        let Some(claim) = claim else {
             return Ok(None);
         };
-        let live =
-            self.worker
-                .begin_source_work(&lease, None, cancelled, Duration::from_secs(5))?;
+        let job = claim.job;
+        let lease = claim.lease;
+        let live = claim
+            .source_work
+            .ok_or_else(|| anyhow!("Supplied import claim missing Source authority"))?;
         let mut op = self.worker.import_phase(&lease, Phase::Read)?;
         let result = (|| -> Result<Operation> {
             if job.cancel_requested && op.receipt.is_none() {
@@ -345,6 +346,7 @@ impl SourceImports {
         })();
         if result.is_err()
             && op.receipt.is_none()
+            && op.state != State::Published
             && self.worker.import_phase(&lease, Phase::Fail).is_ok()
             && self.cleanup(&op).is_ok()
         {
