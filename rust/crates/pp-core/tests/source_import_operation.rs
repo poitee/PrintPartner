@@ -873,7 +873,7 @@ fn stale_attempt_cannot_write_import_phases() {
             lease_seconds: 3600,
         })
         .unwrap();
-    let mut claim = worker.claim().unwrap().unwrap();
+    let mut claim = worker.claim_import(&op.job_id).unwrap().unwrap();
     let lease = claim.lease;
     cancel(&owner, op.job_id.clone());
     assert!(worker.import_phase(&lease, Phase::Read).is_err());
