@@ -1345,6 +1345,17 @@ describe("database schema migrations (Postgres DDL parity)", () => {
     expect(missing, `Postgres DDL never creates: ${missing.join(", ")}`).toEqual([]);
   });
 
+  it("persists the session provider with the legacy email default", () => {
+    const present = new Set([
+      ...pgCreatedColumns("sessions"),
+      ...pgAddedColumns("sessions"),
+    ]);
+    expect(present).toContain("provider");
+    expect(POSTGRES_DDL).toMatch(
+      /ALTER TABLE sessions ADD COLUMN IF NOT EXISTS provider TEXT NOT NULL DEFAULT 'email'/i,
+    );
+  });
+
   it("creates every column declared for the v9-v13 tables", () => {
     const byName = new Map(pgTables().map((t) => [t.name, t.columns]));
     for (const table of V9_TO_V12_TABLES) {

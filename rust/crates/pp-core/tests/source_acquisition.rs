@@ -307,11 +307,11 @@ fn ordered_absence_and_owned_or_later_cleanup_converge() {
             lease_seconds: 3600,
         })
         .unwrap();
-    let (_, lease) = worker.claim_resolved_import(resolved).unwrap().unwrap();
+    let claim = worker.claim_resolved_import(resolved).unwrap().unwrap();
     let operation = owned.operation.unwrap();
     worker
         .import_phase(
-            &lease,
+            &claim.lease,
             Phase::Owned(OwnedInput {
                 locator: format!(".pp-imports/{}", operation.job_id),
                 digest: hex::encode(Sha256::digest(serde_json::to_vec(&owned.files).unwrap())),

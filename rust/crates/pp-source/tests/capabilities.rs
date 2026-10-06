@@ -161,3 +161,35 @@ fn conflicting_directory_case_is_rejected_before_copying() {
             .is_none()
     );
 }
+
+#[test]
+fn max_flat_snapshot_publishes_and_retries_cleanly() {
+    let fixture = Fixture::new();
+    let input_dir = fixture.0.join("input");
+    let mut files = Vec::new();
+    for i in 0..pp_source::MAX_ENTRIES {
+        let name = format!("f{i:05}.stl");
+        fs::write(input_dir.join(&name), b"x").unwrap();
+        files.push(SelectedFile {
+            path: SourcePath::try_from(name).unwrap(),
+            kind: FileKind::Stl,
+            size_hint_bytes: Some(1),
+        });
+    }
+    let mut req = request();
+    req.files = files;
+    req.selection.max_stl_files = pp_source::MAX_ENTRIES as u64;
+    let budget = ArtifactBudget::new(16 * 1024 * 1024, 16 * 1024 * 1024).unwrap();
+    let input = LocalFiles::open(&input_dir).unwrap();
+    let mut source = fixture.repos().source(42).unwrap();
+    let first = source.materialize(req.clone(), &input, budget).unwrap();
+    assert_eq!(first.publication, Publication::Created);
+    assert!(
+        !fixture
+            .0
+            .join("repos/42/revisions/.pp-source-candidate")
+            .exists()
+    );
+    let second = source.materialize(req, &input, budget).unwrap();
+    assert_eq!(second.publication, Publication::Reused);
+}

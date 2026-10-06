@@ -520,12 +520,12 @@ def verify(app, manifest_path, arch, receipt):
         'forbidden': ['DYLD_INSERT_LIBRARIES', 'LD_PRELOAD'],
         'removed': ['NODE_OPTIONS', 'NODE_PATH'],
     }
-    program = "const D=require('better-sqlite3');const db=new D(':memory:');const answer=db.prepare('SELECT 42 answer').get().answer;db.close();if(answer!==42)throw Error('SQLite failed');const {createCanvas}=require('@napi-rs/canvas');const canvas=createCanvas(2,2);const ctx=canvas.getContext('2d');ctx.fillStyle='#123456';ctx.fillRect(0,0,2,2);const pixel=Array.from(ctx.getImageData(0,0,1,1).data);const png=canvas.toBuffer('image/png');if(JSON.stringify(pixel)!=='[18,52,86,255]'||png.subarray(0,8).toString('hex')!=='89504e470d0a1a0a')throw Error('Canvas failed');console.log(JSON.stringify({version:process.version,abi:process.versions.modules,os:process.platform,arch:process.arch,sqlite_answer:answer,canvas_pixel:pixel,canvas_png_signature:png.subarray(0,8).toString('hex'),native_addons:Object.keys(require.cache).filter(p=>p.endsWith('.node')).map(p=>require('node:fs').realpathSync(p)).sort()}));"
+    program = "const D=require('better-sqlite3');let db=new D(':memory:');let stmt=db.prepare('SELECT 42 answer');const answer=stmt.get().answer;stmt=null;db.close();db=null;if(globalThis.gc)globalThis.gc();if(answer!==42)throw Error('SQLite failed');const {createCanvas}=require('@napi-rs/canvas');const canvas=createCanvas(2,2);const ctx=canvas.getContext('2d');ctx.fillStyle='#123456';ctx.fillRect(0,0,2,2);const pixel=Array.from(ctx.getImageData(0,0,1,1).data);const png=canvas.toBuffer('image/png');if(JSON.stringify(pixel)!=='[18,52,86,255]'||png.subarray(0,8).toString('hex')!=='89504e470d0a1a0a')throw Error('Canvas failed');console.log(JSON.stringify({version:process.version,abi:process.versions.modules,os:process.platform,arch:process.arch,sqlite_answer:answer,canvas_pixel:pixel,canvas_png_signature:png.subarray(0,8).toString('hex'),native_addons:Object.keys(require.cache).filter(p=>p.endsWith('.node')).map(p=>require('node:fs').realpathSync(p)).sort()}));"
     node_arch = {'arm64': 'arm64', 'x86_64': 'x64'}[arch]
     expected_addons = sorted(str(contained(root, root / WEB / name)) for name in [
         better_sqlite3_addon_path(arch),
         f'node_modules/@napi-rs/canvas-darwin-{node_arch}/skia.darwin-{node_arch}.node'])
-    capture = run_bundle_probe([str(root / 'MacOS/printpartner-node'), '--no-global-search-paths',
+    capture = run_bundle_probe([str(root / 'MacOS/printpartner-node'), '--expose-gc', '--no-global-search-paths',
         '--import', str(root / WEB / 'apps/server/dist/current/desktop-resolution.js'), '-e', program,
         'bundle-probe', '--pp-desktop-package-root='+str(root)], cwd=root / WEB, env=env,
         timeout_seconds=30)
