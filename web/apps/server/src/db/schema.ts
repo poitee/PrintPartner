@@ -849,6 +849,7 @@ export const sessions = sqliteTable("sessions", {
     .notNull()
     .references(() => users.id, { onDelete: "cascade" }),
   expiresAt: text("expires_at").notNull(),
+  provider: text("provider").notNull().default("email"),
 });
 
 export const planShares = sqliteTable("plan_shares", {

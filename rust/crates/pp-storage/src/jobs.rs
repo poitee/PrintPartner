@@ -46,6 +46,11 @@ pub struct AttemptLease {
     fence: String,
     worker: String,
 }
+pub struct ClaimedAttempt {
+    pub job: JobRecord,
+    pub lease: AttemptLease,
+    pub source_work: Option<crate::catalog::SourceWorkLease>,
+}
 impl AttemptLease {
     pub fn job_id(&self) -> &str {
         &self.job_id
@@ -98,6 +103,7 @@ pub enum UserOperation {
         before_version: Option<i64>,
         limit: u16,
     },
+    /// A cancelled supplied import stays queued until the prior Source lease is released.
     Cancel {
         job_id: String,
     },
@@ -123,7 +129,7 @@ pub enum Outcome {
     List(Vec<JobRecord>),
     History(Vec<HistoryEntry>),
     Reconciliations(Vec<ReconciliationRecord>),
-    Claimed(Option<(JobRecord, AttemptLease)>),
+    Claimed(Option<ClaimedAttempt>),
     Retained(usize),
 }
 pub(crate) enum Command {
@@ -137,6 +143,7 @@ pub(crate) enum Command {
         job_id: Option<String>,
         worker: String,
         admission: Arc<WorkerAdmission>,
+        storage: SettingsClient,
     },
     Worker {
         lease: AttemptLease,
@@ -160,7 +167,7 @@ impl std::fmt::Display for JobFailure {
 impl std::error::Error for JobFailure {}
 pub struct PendingClaim(Pending);
 impl PendingClaim {
-    pub fn receive(self) -> Result<Option<(JobRecord, AttemptLease)>> {
+    pub fn receive(self) -> Result<Option<ClaimedAttempt>> {
         match self.0.receive()? {
             Outcome::Claimed(value) => Ok(value),
             _ => unreachable!(),
@@ -316,12 +323,13 @@ impl ServerWorkerClient {
                 job_id: None,
                 worker: self.identity.clone(),
                 admission: self.admission.clone(),
+                storage: self.storage.clone(),
             },
             cancelled,
             wait,
         )?))
     }
-    pub fn claim(&self) -> Result<Option<(JobRecord, AttemptLease)>> {
+    pub fn claim(&self) -> Result<Option<ClaimedAttempt>> {
         self.claim_pending(&AtomicBool::new(false), Duration::from_secs(5))?
             .receive()
     }
@@ -393,6 +401,8 @@ fn decode(document: &str) -> Result<JobRecord> {
             "Invalid job timestamp"
         );
     }
+    job.payload.validate_stored()?;
+    job.validate_state()?;
     Ok(job)
 }
 fn load(tx: &Transaction<'_>, id: &str) -> Result<Option<JobRecord>> {
@@ -408,7 +418,74 @@ fn owned(tx: &Transaction<'_>, id: &str, tenant: &str) -> Result<JobRecord> {
     ensure!(record.tenant == tenant, "Job not found");
     Ok(record)
 }
+fn retained_owned(tx: &Transaction<'_>, id: &str, tenant: &str) -> Result<JobRecord> {
+    if let Some(record) = load(tx, id)? {
+        ensure!(
+            record.tenant == tenant && record.job_id == id,
+            "Job not found"
+        );
+        return Ok(record);
+    }
+    let document: Option<String> = tx
+        .query_row(
+            "SELECT archived_document FROM durable_job_keys WHERE tenant=?1 AND job_id=?2 AND archived_document IS NOT NULL LIMIT 1",
+            params![tenant, id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    document
+        .map(|value| decode(&value))
+        .transpose()?
+        .map(|record| {
+            ensure!(
+                record.tenant == tenant && record.job_id == id,
+                "Job not found"
+            );
+            Ok(record)
+        })
+        .transpose()?
+        .ok_or_else(|| anyhow!("Job not found"))
+}
+fn bind_printer_start(tx: &Transaction<'_>, tenant: &str, mut payload: Payload) -> Result<Payload> {
+    let Payload::PrinterStart(request) = &payload else {
+        return Ok(payload);
+    };
+    let parent_id = request.uploaded_job_id.clone();
+    let parent = retained_owned(tx, &parent_id, tenant)?;
+    ensure!(
+        parent.state == PersistentState::UploadedOnly,
+        "Parent job is not an uploaded-only print"
+    );
+    let proof = parent
+        .uploaded_only_proof()
+        .ok_or_else(|| anyhow!("Parent job is not an uploaded-only print"))?;
+    let upload = proof.upload.clone();
+    let printer_id = proof.printer_id.to_owned();
+    let documents = tx
+        .prepare(
+            "SELECT document FROM durable_jobs WHERE tenant=?1 AND json_extract(document,'$.payload.payload.uploaded_job_id')=?2
+             UNION ALL
+             SELECT archived_document FROM durable_job_keys WHERE tenant=?1 AND archived_document IS NOT NULL AND json_extract(archived_document,'$.payload.payload.uploaded_job_id')=?2",
+        )?
+        .query_map(params![tenant, parent_id], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    for document in documents {
+        let existing = decode(&document)?;
+        if matches!(
+            &existing.payload,
+            Payload::PrinterStart(value) if value.uploaded_job_id == parent_id
+        ) && !matches!(
+            existing.state,
+            PersistentState::Failed | PersistentState::Cancelled
+        ) {
+            return Err(anyhow!("Printer start already requested"));
+        }
+    }
+    payload.bind_printer_start(printer_id, upload)?;
+    Ok(payload)
+}
 pub(crate) fn save(tx: &Transaction<'_>, job: &mut JobRecord, event: &str) -> Result<()> {
+    job.payload.validate_stored()?;
     job.state_version += 1;
     job.updated_at = now();
     if job.state.terminal() {
@@ -417,6 +494,7 @@ pub(crate) fn save(tx: &Transaction<'_>, job: &mut JobRecord, event: &str) -> Re
         job.fence = None;
         job.worker = None;
     }
+    job.validate_state()?;
     tx.execute("INSERT INTO durable_jobs(id,tenant,kind,state,resource,version,generation,lease_until,created,updated,document) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11) ON CONFLICT(id) DO UPDATE SET state=excluded.state,version=excluded.version,generation=excluded.generation,lease_until=excluded.lease_until,updated=excluded.updated,document=excluded.document",params![job.job_id,job.tenant,job.kind.name(),job.state.name(),job.payload.resource(),job.state_version,job.generation,job.lease_until,job.created_at,job.updated_at,encode(job)?])?;
     tx.execute("DELETE FROM durable_job_history WHERE job_id=?1 AND event IN ('heartbeat','progress') AND version<?2",params![job.job_id,job.state_version-128])?;
     tx.execute(
@@ -464,8 +542,38 @@ pub(crate) fn recover(connection: &mut Connection) -> Result<()> {
     tx.commit()?;
     Ok(())
 }
-pub(crate) fn execute(connection: &mut Connection, command: Command) -> Result<Outcome> {
+pub(crate) fn execute(
+    connection: &mut Connection,
+    catalog_state: &mut crate::catalog::State,
+    command: Command,
+) -> Result<Outcome> {
     let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    if let Command::Claim {
+        worker,
+        admission,
+        job_id,
+        storage,
+    } = command
+    {
+        let claim = claim(&tx, catalog_state, &worker, &admission, job_id.as_deref())?;
+        tx.commit()
+            .map_err(|_| anyhow!(JobFailure::CommitUnknown))?;
+        return match claim {
+            ClaimResult::Claimed(claim) => {
+                let source_work = claim.source.map(|source| {
+                    catalog_state.activate(source.token, source.tenant, source.id);
+                    crate::catalog::lease(storage, source.token)
+                });
+                Ok(Outcome::Claimed(Some(ClaimedAttempt {
+                    job: claim.job,
+                    lease: claim.lease,
+                    source_work,
+                })))
+            }
+            ClaimResult::SourceBusy => Err(anyhow!(crate::catalog::SourceBusy)),
+            ClaimResult::Empty => Ok(Outcome::Claimed(None)),
+        };
+    }
     let outcome = match command {
         Command::User {
             credential,
@@ -481,11 +589,7 @@ pub(crate) fn execute(connection: &mut Connection, command: Command) -> Result<O
             }
             outcome
         }
-        Command::Claim {
-            worker,
-            admission,
-            job_id,
-        } => claim(&tx, &worker, &admission, job_id.as_deref())?,
+        Command::Claim { .. } => unreachable!(),
         Command::Worker {
             lease,
             operation,
@@ -507,7 +611,7 @@ fn prune(tx: &Transaction<'_>, per_tenant: usize, global: usize) -> Result<usize
         "WITH ranked AS (
             SELECT id,document,updated,rowid AS sequence,
                    ROW_NUMBER() OVER(PARTITION BY tenant ORDER BY updated DESC,rowid DESC) AS local_rank
-            FROM durable_jobs WHERE state IN ('succeeded','failed','cancelled')
+            FROM durable_jobs WHERE state IN ('uploaded_only','succeeded','failed','cancelled')
          )
          SELECT id,document FROM ranked
          WHERE updated<=?3 OR local_rank>?1 OR id NOT IN (
@@ -539,7 +643,7 @@ pub(crate) fn user(
         UserOperation::Enqueue {
             key,
             payload_version,
-            payload,
+            mut payload,
         } => {
             model::text(&key, 128)?;
             ensure!(payload_version == 1, "Unsupported payload version");
@@ -567,7 +671,8 @@ pub(crate) fn user(
                     LocalCommit::ReadOnly,
                 ));
             }
-            let active:i64=tx.query_row("SELECT COUNT(*) FROM durable_jobs WHERE state NOT IN ('succeeded','failed','cancelled')",[],|r|r.get(0))?;
+            payload = bind_printer_start(tx, tenant, payload)?;
+            let active:i64=tx.query_row("SELECT COUNT(*) FROM durable_jobs WHERE state NOT IN ('uploaded_only','succeeded','failed','cancelled')",[],|r|r.get(0))?;
             ensure!(active < 1024, "Durable queue full");
             let mut job = JobRecord {
                 job_id: random(),
@@ -620,7 +725,7 @@ pub(crate) fn user(
             if let Some((_, id)) = &query.before {
                 model::text(id, 128)?;
             }
-            let documents=tx.prepare("SELECT document FROM durable_jobs WHERE tenant=?1 AND (?2 IS NULL OR CASE state WHEN 'queued' THEN 'pending' WHEN 'running' THEN 'running' WHEN 'effect_admitted' THEN 'running' WHEN 'succeeded' THEN 'done' WHEN 'cancelled' THEN 'cancelled' ELSE 'error' END=?2) AND (?3 IS NULL OR updated>=?3) AND (?4 IS NULL OR json_extract(document,'$.payload.payload.profile_id')=?4) AND (?5 IS NULL OR updated<?5 OR (updated=?5 AND id<?6)) ORDER BY updated DESC,id DESC LIMIT ?7")?.query_map(params![tenant,query.status,query.since,query.profile_id.map(|v|v as i64),query.before.as_ref().map(|c|c.0),query.before.as_ref().map(|c|c.1.as_str()),query.limit],|r|r.get::<_,String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+            let documents=tx.prepare("SELECT document FROM durable_jobs WHERE tenant=?1 AND (?2 IS NULL OR CASE state WHEN 'queued' THEN 'pending' WHEN 'running' THEN 'running' WHEN 'effect_admitted' THEN 'running' WHEN 'uploaded_only' THEN 'done' WHEN 'succeeded' THEN 'done' WHEN 'cancelled' THEN 'cancelled' ELSE 'error' END=?2) AND (?3 IS NULL OR updated>=?3) AND (?4 IS NULL OR json_extract(document,'$.payload.payload.profile_id')=?4) AND (?5 IS NULL OR updated<?5 OR (updated=?5 AND id<?6)) ORDER BY updated DESC,id DESC LIMIT ?7")?.query_map(params![tenant,query.status,query.since,query.profile_id.map(|v|v as i64),query.before.as_ref().map(|c|c.0),query.before.as_ref().map(|c|c.1.as_str()),query.limit],|r|r.get::<_,String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
             Ok(Outcome::List(
                 documents.iter().map(|s| decode(s)).collect::<Result<_>>()?,
             ))
@@ -715,45 +820,66 @@ pub(crate) fn user(
                     && job.generation == expected_generation,
                 "Stale reconciliation"
             );
-            let effect = job
+            let effect_index = job
                 .effects
-                .last_mut()
+                .len()
+                .checked_sub(1)
                 .ok_or_else(|| anyhow!("Missing effect"))?;
             ensure!(
-                effect.intent.content_hash == effect_hash,
+                job.effects[effect_index].intent.content_hash == effect_hash,
                 "Wrong reconciliation subject"
             );
             if let Some(receipt) = &receipt {
                 receipt.validate()?;
                 ensure!(
-                    receipt.content_hash == effect.intent.content_hash
-                        && receipt.target == effect.intent.target,
+                    receipt.content_hash == job.effects[effect_index].intent.content_hash
+                        && receipt.target == job.effects[effect_index].intent.target,
                     "Receipt mismatch"
                 );
             }
+            let prior_result = job.result.clone();
+            let mut subject_receipt = None;
             match decision {
                 Decision::ConfirmSucceeded => {
                     let receipt =
                         receipt.ok_or_else(|| anyhow!("Confirmation receipt required"))?;
-                    effect.confirmed = true;
-                    effect.receipt = Some(receipt.clone());
+                    let effect = &mut job.effects[effect_index];
+                    match effect.outcome()? {
+                        EffectOutcome::Confirmed(stored) => {
+                            ensure!(stored == &receipt, "Receipt mismatch")
+                        }
+                        EffectOutcome::Unresolved => effect.confirm(receipt.clone())?,
+                        EffectOutcome::Denied => return Err(anyhow!("Effect already resolved")),
+                    }
+                    subject_receipt = Some(receipt.clone());
                     job.result = Some(receipt);
-                    ensure!(
-                        completion_proven(&job, job.result.as_ref()),
-                        "Remaining job effects require an explicit decision"
-                    );
-                    job.state = PersistentState::Succeeded;
+                    if completion_proven(&job, job.result.as_ref()) {
+                        job.state = PersistentState::Succeeded;
+                    } else if !settle_uploaded_only(&mut job) {
+                        if resolved_printer_failure(&job) {
+                            job.result = prior_result;
+                            job.state = PersistentState::Failed;
+                        } else {
+                            return Err(anyhow!(
+                                "Remaining job effects require an explicit decision"
+                            ));
+                        }
+                    }
                 }
                 Decision::ConfirmNoEffect => {
                     ensure!(receipt.is_none(), "No-effect decision cannot carry receipt");
-                    job.state = PersistentState::Failed;
+                    job.effects[effect_index].deny()?;
+                    if !settle_uploaded_only(&mut job) {
+                        job.result = prior_result;
+                        job.state = PersistentState::Failed;
+                    }
                 }
                 Decision::Abandon => {
                     job.state = PersistentState::ReconciliationRequired;
                 }
             }
             let effect = job.effects.last().expect("reconciliation effect");
-            tx.execute("INSERT INTO durable_job_reconciliations(job_id,version,subject,generation,effect_hash,basis_hash,target,decision,receipt,at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",params![job.job_id,job.state_version+1,subject,expected_generation,effect_hash,effect.intent.basis_hash,effect.intent.target,format!("{decision:?}"),serde_json::to_string(&job.result)?,now()])?;
+            tx.execute("INSERT INTO durable_job_reconciliations(job_id,version,subject,generation,effect_hash,basis_hash,target,decision,receipt,at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",params![job.job_id,job.state_version+1,subject,expected_generation,effect_hash,effect.intent.basis_hash,effect.intent.target,format!("{decision:?}"),serde_json::to_string(&subject_receipt)?,now()])?;
             job.recovery = Some(format!("User reconciliation: {decision:?}"));
             save(
                 tx,
@@ -767,12 +893,44 @@ pub(crate) fn user(
         }
     }
 }
+struct SourceReservation {
+    token: u64,
+    tenant: String,
+    id: i64,
+}
+struct ClaimPlan {
+    job: JobRecord,
+    lease: AttemptLease,
+    source: Option<SourceReservation>,
+}
+enum ClaimResult {
+    Claimed(Box<ClaimPlan>),
+    SourceBusy,
+    Empty,
+}
+enum SourceBinding {
+    None,
+    Individual(i64),
+    Wildcard,
+}
+fn source_binding(payload: &Payload) -> Result<SourceBinding> {
+    Ok(match payload {
+        Payload::ImportScan { project_id }
+        | Payload::ExtractSourceDocs { project_id }
+        | Payload::SuppliedSourceImport { project_id, .. } => {
+            SourceBinding::Individual(i64::try_from(*project_id)?)
+        }
+        Payload::Sync { .. } | Payload::CheckSourceUpdates {} => SourceBinding::Wildcard,
+        _ => SourceBinding::None,
+    })
+}
 fn claim(
     tx: &Transaction<'_>,
+    catalog_state: &crate::catalog::State,
     worker: &str,
     admission: &WorkerAdmission,
     job_id: Option<&str>,
-) -> Result<Outcome> {
+) -> Result<ClaimResult> {
     recover_in(tx, false)?;
     let active: i64 = tx.query_row(
         "SELECT COUNT(*) FROM durable_jobs WHERE state IN ('running','effect_admitted')",
@@ -780,7 +938,7 @@ fn claim(
         |r| r.get(0),
     )?;
     if active >= admission.total as i64 {
-        return Ok(Outcome::Claimed(None));
+        return Ok(ClaimResult::Empty);
     }
     for (kind, capacity) in &admission.kinds {
         let count:i64=tx.query_row("SELECT COUNT(*) FROM durable_jobs WHERE kind=?1 AND state IN ('running','effect_admitted')",[kind.name()],|r|r.get(0))?;
@@ -806,6 +964,31 @@ fn claim(
                     continue;
                 }
             }
+            let source = match source_binding(&job.payload)? {
+                SourceBinding::Individual(id) => {
+                    if crate::catalog::get(tx, &job.tenant, id)?.is_none() {
+                        job.state = PersistentState::Failed;
+                        job.recovery = Some("Source is unavailable for this job".into());
+                        save(tx, &mut job, "source_unavailable")?;
+                        if job_id.is_some() {
+                            return Ok(ClaimResult::Empty);
+                        }
+                        continue;
+                    }
+                    if catalog_state.source_busy(&job.tenant, id) {
+                        if job_id.is_some() {
+                            return Ok(ClaimResult::SourceBusy);
+                        }
+                        continue;
+                    }
+                    Some(SourceReservation {
+                        token: catalog_state.next_token()?,
+                        tenant: job.tenant.clone(),
+                        id,
+                    })
+                }
+                SourceBinding::None | SourceBinding::Wildcard => None,
+            };
             ensure!(job.attempt < 100, "Job attempt limit reached");
             job.state = PersistentState::Running;
             job.attempt += 1;
@@ -822,10 +1005,14 @@ fn claim(
                 fence: job.fence.clone().expect("claim fence"),
                 worker: worker.into(),
             };
-            return Ok(Outcome::Claimed(Some((job, lease))));
+            return Ok(ClaimResult::Claimed(Box::new(ClaimPlan {
+                job,
+                lease,
+                source,
+            })));
         }
     }
-    Ok(Outcome::Claimed(None))
+    Ok(ClaimResult::Empty)
 }
 fn completion_proven(job: &JobRecord, result: Option<&ResultArtifact>) -> bool {
     match &job.payload {
@@ -842,6 +1029,16 @@ fn completion_proven(job: &JobRecord, result: Option<&ResultArtifact>) -> bool {
                 || (confirmed(EffectOperation::PrinterUpload)
                     && (!*start || confirmed(EffectOperation::PrinterStart)))
         }
+        Payload::PrinterStart(request) => request.upload_effect().is_some_and(|upload| {
+            job.effects.iter().any(|effect| {
+                effect.intent.operation == EffectOperation::PrinterStart
+                    && effect.intent.basis_hash == upload.intent.basis_hash
+                    && effect.intent.content_hash == upload.intent.content_hash
+                    && effect.intent.target == upload.intent.target
+                    && effect.confirmed
+                    && effect.receipt.as_ref() == result
+            })
+        }),
         Payload::ExportStlPack { .. }
         | Payload::ExportChecklistHtml { .. }
         | Payload::ExportKitBundle { .. }
@@ -849,6 +1046,46 @@ fn completion_proven(job: &JobRecord, result: Option<&ResultArtifact>) -> bool {
         | Payload::ExportDirect3mf { .. } => result.is_some(),
         _ => true,
     }
+}
+fn settle_uploaded_only(job: &mut JobRecord) -> bool {
+    let prior = job.result.clone();
+    job.result = job
+        .effects
+        .iter()
+        .find(|effect| effect.intent.operation == EffectOperation::PrinterUpload)
+        .and_then(|effect| match effect.outcome().ok()? {
+            EffectOutcome::Confirmed(receipt) => Some(receipt.clone()),
+            _ => None,
+        });
+    if job.uploaded_only_proof().is_some() {
+        job.state = PersistentState::UploadedOnly;
+        true
+    } else {
+        job.result = prior;
+        false
+    }
+}
+fn resolved_printer_failure(job: &JobRecord) -> bool {
+    matches!(job.payload, Payload::PrinterUpload { .. })
+        && !job.effects.is_empty()
+        && job.effects.iter().all(|effect| {
+            matches!(
+                effect.intent.operation,
+                EffectOperation::PrinterUpload
+                    | EffectOperation::PrinterStart
+                    | EffectOperation::PrinterUploadAndStart
+                    | EffectOperation::SpoolmanDeduction
+            ) && !matches!(effect.outcome(), Ok(EffectOutcome::Unresolved) | Err(_))
+        })
+        && !job.effects.iter().any(|effect| {
+            matches!(effect.outcome(), Ok(EffectOutcome::Confirmed(_)))
+                && matches!(
+                    effect.intent.operation,
+                    EffectOperation::PrinterUpload
+                        | EffectOperation::PrinterStart
+                        | EffectOperation::PrinterUploadAndStart
+                )
+        })
 }
 pub(crate) fn claimed_job(tx: &Transaction<'_>, lease: &AttemptLease) -> Result<JobRecord> {
     let job = owned(tx, &lease.job_id, &lease.tenant)?;
@@ -872,20 +1109,18 @@ pub(crate) fn claimed_source(
     source_id: Option<i64>,
 ) -> Result<(String, i64)> {
     let job = claimed_job(tx, lease)?;
-    let id = match job.payload {
-        Payload::ImportScan { project_id }
-        | Payload::ExtractSourceDocs { project_id }
-        | Payload::SuppliedSourceImport { project_id, .. } => {
+    let id = match source_binding(&job.payload)? {
+        SourceBinding::Individual(id) => {
             ensure!(
                 source_id.is_none(),
                 "Individual Source attempt uses its stored Source"
             );
-            i64::try_from(project_id)?
+            id
         }
-        Payload::Sync { .. } | Payload::CheckSourceUpdates {} => {
+        SourceBinding::Wildcard => {
             source_id.ok_or_else(|| anyhow!("Wildcard Source attempt requires Source"))?
         }
-        _ => return Err(anyhow!("Attempt is not Source work")),
+        SourceBinding::None => return Err(anyhow!("Attempt is not Source work")),
     };
     Ok((job.tenant, id))
 }
@@ -939,6 +1174,18 @@ fn advance(
                 EffectOperation::LocalArtifact => job.kind != JobKind::PrinterUpload,
             };
             ensure!(allowed, "Effect does not belong to job kind");
+            if let Payload::PrinterStart(request) = &job.payload {
+                let upload = request
+                    .upload_effect()
+                    .ok_or_else(|| anyhow!("Missing printer start binding"))?;
+                ensure!(
+                    intent.operation == EffectOperation::PrinterStart
+                        && intent.basis_hash == upload.intent.basis_hash
+                        && intent.content_hash == upload.intent.content_hash
+                        && intent.target == upload.intent.target,
+                    "Effect does not match uploaded artifact"
+                );
+            }
             ensure!(
                 !job.effects
                     .iter()
@@ -996,6 +1243,7 @@ fn advance(
                 attempt: job.attempt,
                 generation: job.generation,
                 confirmed: false,
+                no_effect: false,
                 receipt: None,
             });
             job.state = PersistentState::EffectAdmitted;
@@ -1017,8 +1265,7 @@ fn advance(
                     && receipt.target == effect.intent.target,
                 "Receipt mismatch"
             );
-            effect.confirmed = true;
-            effect.receipt = Some(receipt);
+            effect.confirm(receipt)?;
             job.state = PersistentState::Running;
             "effect_confirmed"
         }
@@ -1090,7 +1337,7 @@ pub(crate) fn validate_schema(connection: &Connection, version: u64) -> Result<(
     let mut rows = query.query([])?;
     while let Some(row) = rows.next()? {
         let job = decode(&row.get::<_, String>(10)?)?;
-        job.payload.validate()?;
+        job.payload.validate_stored()?;
         ensure!(
             job.payload_version == 1
                 && job.kind == job.payload.kind()
@@ -1142,13 +1389,14 @@ pub(crate) fn actor(
     }
 }
 impl ServerWorkerClient {
-    pub fn claim_import(&self, job_id: &str) -> Result<Option<(JobRecord, AttemptLease)>> {
+    pub fn claim_import(&self, job_id: &str) -> Result<Option<ClaimedAttempt>> {
         match submit(
             &self.storage,
             Command::Claim {
                 job_id: Some(job_id.into()),
                 worker: self.identity.clone(),
                 admission: self.admission.clone(),
+                storage: self.storage.clone(),
             },
             &AtomicBool::new(false),
             Duration::from_secs(5),
@@ -1176,6 +1424,37 @@ impl ServerWorkerClient {
     }
 }
 
+fn printer_upload_conflicts(
+    tx: &Transaction<'_>,
+    tenant: &str,
+    profile: i64,
+    profile_id: Option<u64>,
+    checkoff_units: &[CheckoffUnit],
+) -> Result<bool> {
+    let mut owners = std::collections::HashSet::new();
+    let mut unresolved = false;
+    for unit in checkoff_units {
+        let owner: Option<i64> = tx
+            .query_row(
+                "SELECT p.profile_id FROM parts p JOIN build_profiles b ON b.id=p.profile_id AND b.tenant_id=p.tenant_id WHERE p.tenant_id=? AND p.id=?",
+                params![tenant, unit.part_id as i64],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(owner) = owner {
+            owners.insert(owner);
+        } else {
+            unresolved = true;
+        }
+    }
+    ensure!(
+        owners.len() <= 1
+            && profile_id.is_none_or(|id| owners.iter().all(|owner| *owner as u64 == id)),
+        "Job coordinate ownership mismatch"
+    );
+    Ok(unresolved || profile_id == Some(profile as u64) || owners.contains(&profile))
+}
+
 pub(crate) fn publication_conflicts(
     tx: &Transaction<'_>,
     tenant: &str,
@@ -1195,7 +1474,6 @@ pub(crate) fn publication_conflicts(
     let mut result = Vec::new();
     for (id, kind, state, document) in records {
         let record = decode(&document)?;
-        record.payload.validate()?;
         ensure!(
             record.tenant == tenant
                 && record.job_id == id
@@ -1222,29 +1500,31 @@ pub(crate) fn publication_conflicts(
                 profile_id,
                 checkoff_units,
                 ..
-            } => {
-                let mut owners = std::collections::HashSet::new();
-                let mut unresolved = false;
-                for u in checkoff_units {
-                    let owner: Option<i64> = tx
-                        .query_row(
-                            "SELECT p.profile_id FROM parts p JOIN build_profiles b ON b.id=p.profile_id AND b.tenant_id=p.tenant_id WHERE p.tenant_id=? AND p.id=?",
-                            params![tenant, u.part_id as i64],
-                            |r| r.get(0),
-                        )
-                        .optional()?;
-                    if let Some(owner) = owner {
-                        owners.insert(owner);
-                    } else {
-                        unresolved = true;
-                    }
-                }
+            } => printer_upload_conflicts(tx, tenant, profile, *profile_id, checkoff_units)?,
+            Payload::PrinterStart(request) => {
+                let parent = retained_owned(tx, &request.uploaded_job_id, tenant)?;
                 ensure!(
-                    owners.len() <= 1
-                        && profile_id.is_none_or(|p| owners.iter().all(|o| *o as u64 == p)),
-                    "Job coordinate ownership mismatch"
+                    parent.kind == JobKind::PrinterUpload
+                        && parent.state == PersistentState::UploadedOnly,
+                    "Parent job is not an uploaded-only print"
                 );
-                unresolved || *profile_id == Some(profile as u64) || owners.contains(&profile)
+                let proof = parent
+                    .uploaded_only_proof()
+                    .ok_or_else(|| anyhow!("Parent job is not an uploaded-only print"))?;
+                ensure!(
+                    request.printer_id() == Some(proof.printer_id)
+                        && request.upload_effect() == Some(proof.upload),
+                    "Printer start binding mismatch"
+                );
+                let Payload::PrinterUpload {
+                    profile_id,
+                    checkoff_units,
+                    ..
+                } = &parent.payload
+                else {
+                    return Err(anyhow!("Parent job is not an uploaded-only print"));
+                };
+                printer_upload_conflicts(tx, tenant, profile, *profile_id, checkoff_units)?
             }
         };
         if affected {
