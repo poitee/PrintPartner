@@ -21,6 +21,89 @@ pub struct CapturedContext {
     pub required_units: Vec<UnitHistory>,
     pub plate_revisions: Vec<PlateRef>,
 }
+
+#[derive(Debug, Clone)]
+pub(crate) struct BuildSummaryFacts {
+    pub id: i64,
+    pub name: String,
+    pub order_number: Option<String>,
+    pub special_request: Option<String>,
+    pub part_count: i64,
+    pub accepted_progress: AcceptedProgressFacts,
+    pub freshness: FreshnessFacts,
+    pub archived_at: Option<String>,
+    pub last_used_at: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum AcceptedProgressFacts {
+    Ready {
+        total_units: i64,
+        remaining_units: i64,
+    },
+    Empty,
+    CompatibilityDirty,
+    Uninitialized,
+    Integrity,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum FreshnessFacts {
+    Current {
+        accepted_input_set_id: i64,
+        accepted_at: String,
+    },
+    Stale {
+        accepted_input_set_id: i64,
+        accepted_at: String,
+        reasons: Vec<StaleReasonFacts>,
+        untracked_sources: Vec<UntrackedReasonFacts>,
+    },
+    Untracked {
+        accepted_input_set_id: Option<i64>,
+        accepted_at: Option<String>,
+        reasons: Vec<UntrackedReasonFacts>,
+    },
+}
+
+impl FreshnessFacts {
+    fn is_current(&self) -> bool {
+        matches!(self, Self::Current { .. })
+    }
+
+    fn is_stale(&self) -> bool {
+        matches!(self, Self::Stale { .. })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum StaleReasonFacts {
+    SourceRevisionChanged {
+        source_id: i64,
+        source_name: String,
+        accepted_revision_id: i64,
+        current_revision_id: i64,
+    },
+    SourceRevisionUnavailable {
+        source_id: i64,
+        source_name: String,
+        accepted_revision_id: i64,
+    },
+    NamingRulesChanged {
+        source_id: i64,
+        source_name: String,
+        accepted_digest: String,
+        current_digest: String,
+    },
+    PlanInputsInvalid,
+    PlanConfigurationChanged,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum UntrackedReasonFacts {
+    NoAcceptedInputs,
+    SourceRevisionUntracked { source_id: i64, source_name: String },
+}
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RevisionRef {
@@ -203,13 +286,91 @@ fn setting(
     .transpose()
     .map(Option::flatten)
 }
+
+fn stale_reason_json(reason: &StaleReasonFacts) -> Value {
+    match reason {
+        StaleReasonFacts::SourceRevisionChanged {
+            source_id,
+            source_name,
+            accepted_revision_id,
+            current_revision_id,
+        } => {
+            json!({"kind":"source_revision_changed","source_id":source_id,"source_name":source_name,"accepted_revision_id":accepted_revision_id,"current_revision_id":current_revision_id})
+        }
+        StaleReasonFacts::SourceRevisionUnavailable {
+            source_id,
+            source_name,
+            accepted_revision_id,
+        } => {
+            json!({"kind":"source_revision_unavailable","source_id":source_id,"source_name":source_name,"accepted_revision_id":accepted_revision_id})
+        }
+        StaleReasonFacts::NamingRulesChanged {
+            source_id,
+            source_name,
+            accepted_digest,
+            current_digest,
+        } => {
+            json!({"kind":"naming_rules_changed","source_id":source_id,"source_name":source_name,"accepted_digest":accepted_digest,"current_digest":current_digest})
+        }
+        StaleReasonFacts::PlanInputsInvalid => json!({"kind":"plan_inputs_invalid"}),
+        StaleReasonFacts::PlanConfigurationChanged => {
+            json!({"kind":"plan_configuration_changed"})
+        }
+    }
+}
+
+fn untracked_reason_json(reason: &UntrackedReasonFacts) -> Value {
+    match reason {
+        UntrackedReasonFacts::NoAcceptedInputs => json!({"kind":"no_accepted_inputs"}),
+        UntrackedReasonFacts::SourceRevisionUntracked {
+            source_id,
+            source_name,
+        } => {
+            json!({"kind":"source_revision_untracked","source_id":source_id,"source_name":source_name})
+        }
+    }
+}
+
+fn freshness_json(freshness: &FreshnessFacts) -> Value {
+    match freshness {
+        FreshnessFacts::Current {
+            accepted_input_set_id,
+            accepted_at,
+        } => {
+            json!({"status":"current","accepted_input_set_id":accepted_input_set_id,"accepted_at":accepted_at})
+        }
+        FreshnessFacts::Stale {
+            accepted_input_set_id,
+            accepted_at,
+            reasons,
+            untracked_sources,
+        } => json!({
+            "status":"stale",
+            "accepted_input_set_id":accepted_input_set_id,
+            "accepted_at":accepted_at,
+            "reasons":reasons.iter().map(stale_reason_json).collect::<Vec<_>>(),
+            "untracked_sources":untracked_sources.iter().map(untracked_reason_json).collect::<Vec<_>>()
+        }),
+        FreshnessFacts::Untracked {
+            accepted_input_set_id,
+            accepted_at,
+            reasons,
+        } => json!({
+            "status":"untracked",
+            "accepted_input_set_id":accepted_input_set_id,
+            "accepted_at":accepted_at,
+            "reasons":reasons.iter().map(untracked_reason_json).collect::<Vec<_>>()
+        }),
+    }
+}
+
 fn freshness(
     tx: &Transaction<'_>,
     tenant: &str,
     id: i64,
     p: &Row,
     b: &mut Budget,
-) -> Result<(Value, u64)> {
+) -> Result<(FreshnessFacts, u64)> {
     let mut layers = rows(
         tx,
         "profile_layers",
@@ -233,7 +394,11 @@ fn freshness(
     )?
     else {
         return Ok((
-            json!({"status":"untracked","accepted_input_set_id":null,"accepted_at":null,"reasons":[{"kind":"no_accepted_inputs"}]}),
+            FreshnessFacts::Untracked {
+                accepted_input_set_id: None,
+                accepted_at: None,
+                reasons: vec![UntrackedReasonFacts::NoAcceptedInputs],
+            },
             attached,
         ));
     };
@@ -251,7 +416,11 @@ fn freshness(
     )?;
     if s.n("format_version")? != 2 {
         return Ok((
-            json!({"status":"untracked","accepted_input_set_id":sid,"accepted_at":a.v("accepted_at"),"reasons":[{"kind":"no_accepted_inputs"}]}),
+            FreshnessFacts::Untracked {
+                accepted_input_set_id: Some(sid),
+                accepted_at: Some(a.s("accepted_at")?.into()),
+                reasons: vec![UntrackedReasonFacts::NoAcceptedInputs],
+            },
             attached,
         ));
     }
@@ -318,7 +487,7 @@ fn freshness(
     let mut stale = Vec::new();
     let mut untracked = Vec::new();
     if invalid {
-        stale.push(json!({"kind":"plan_inputs_invalid"}));
+        stale.push(StaleReasonFacts::PlanInputsInvalid);
     }
     let config = p.os("config_modified_at")?;
     let recomputed = p.os("last_recomputed_at")?;
@@ -332,7 +501,7 @@ fn freshness(
             .iter()
             .any(|i| !current.contains_key(&i.n("source_id").unwrap_or(0)))
     {
-        stale.push(json!({"kind":"plan_configuration_changed"}));
+        stale.push(StaleReasonFacts::PlanConfigurationChanged);
     }
     for i in inputs {
         let source = i.n("source_id")?;
@@ -343,30 +512,133 @@ fn freshness(
         let accepted_revision = i.on("source_revision_id")?;
         let current_revision = now.on("current_source_revision_id")?;
         if i.s("tracking_kind")? == "untracked" || accepted_revision.is_none() {
-            untracked.push(
-                json!({"kind":"source_revision_untracked","source_id":source,"source_name":name}),
-            );
-        } else if current_revision.is_none() {
-            stale.push(json!({"kind":"source_revision_unavailable","source_id":source,"source_name":name,"accepted_revision_id":accepted_revision}));
-        } else if current_revision != accepted_revision {
-            stale.push(json!({"kind":"source_revision_changed","source_id":source,"source_name":name,"accepted_revision_id":accepted_revision,"current_revision_id":current_revision}));
+            untracked.push(UntrackedReasonFacts::SourceRevisionUntracked {
+                source_id: source,
+                source_name: name.into(),
+            });
+        } else if let (Some(accepted_revision_id), None) = (accepted_revision, current_revision) {
+            stale.push(StaleReasonFacts::SourceRevisionUnavailable {
+                source_id: source,
+                source_name: name.into(),
+                accepted_revision_id,
+            });
+        } else if let (Some(accepted_revision_id), Some(current_revision_id)) =
+            (accepted_revision, current_revision)
+            && current_revision_id != accepted_revision_id
+        {
+            stale.push(StaleReasonFacts::SourceRevisionChanged {
+                source_id: source,
+                source_name: name.into(),
+                accepted_revision_id,
+                current_revision_id,
+            });
         }
         if i.s("effective_naming_digest")? != digest {
-            stale.push(json!({"kind":"naming_rules_changed","source_id":source,"source_name":name,"accepted_digest":i.v("effective_naming_digest"),"current_digest":digest}));
+            stale.push(StaleReasonFacts::NamingRulesChanged {
+                source_id: source,
+                source_name: name.into(),
+                accepted_digest: i.s("effective_naming_digest")?.into(),
+                current_digest: digest.clone(),
+            });
         }
     }
-    let mut value =
-        json!({"status":"current","accepted_input_set_id":sid,"accepted_at":a.v("accepted_at")});
-    if !stale.is_empty() {
-        value["status"] = json!("stale");
-        value["reasons"] = json!(stale);
-        value["untracked_sources"] = json!(untracked);
+    let accepted_at = a.s("accepted_at")?.into();
+    let value = if !stale.is_empty() {
+        FreshnessFacts::Stale {
+            accepted_input_set_id: sid,
+            accepted_at,
+            reasons: stale,
+            untracked_sources: untracked,
+        }
     } else if !untracked.is_empty() {
-        value["status"] = json!("untracked");
-        value["reasons"] = json!(untracked);
-    }
+        FreshnessFacts::Untracked {
+            accepted_input_set_id: Some(sid),
+            accepted_at: Some(accepted_at),
+            reasons: untracked,
+        }
+    } else {
+        FreshnessFacts::Current {
+            accepted_input_set_id: sid,
+            accepted_at,
+        }
+    };
     Ok((value, attached))
 }
+
+fn accepted_progress_facts(accepted: &AcceptedRead) -> AcceptedProgressFacts {
+    match accepted {
+        AcceptedRead::Ready { snapshot } => {
+            let units = snapshot
+                .parts
+                .iter()
+                .filter(|part| part.included)
+                .flat_map(|part| part.units.iter())
+                .collect::<Vec<_>>();
+            AcceptedProgressFacts::Ready {
+                total_units: units.len() as i64,
+                remaining_units: units.iter().filter(|unit| !unit.completed).count() as i64,
+            }
+        }
+        AcceptedRead::Empty { .. } => AcceptedProgressFacts::Empty,
+        AcceptedRead::CompatibilityDirty => AcceptedProgressFacts::CompatibilityDirty,
+        AcceptedRead::Uninitialized => AcceptedProgressFacts::Uninitialized,
+        AcceptedRead::IntegrityFailure { .. } => AcceptedProgressFacts::Integrity,
+        AcceptedRead::Missing => unreachable!("profile exists"),
+    }
+}
+
+fn summary_facts(
+    id: i64,
+    profile: &Row,
+    part_count: i64,
+    accepted: &AcceptedRead,
+    freshness: FreshnessFacts,
+) -> Result<BuildSummaryFacts> {
+    Ok(BuildSummaryFacts {
+        id,
+        name: profile.s("name")?.into(),
+        order_number: profile.os("order_number")?,
+        special_request: profile
+            .os("special_request")?
+            .as_deref()
+            .map(trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned),
+        part_count,
+        accepted_progress: accepted_progress_facts(accepted),
+        freshness,
+        archived_at: profile.os("archived_at")?,
+        last_used_at: profile.os("last_used_at")?,
+    })
+}
+
+pub(super) fn capture_build_summary(
+    tx: &Transaction<'_>,
+    tenant: &str,
+    id: i64,
+    accepted: &AcceptedRead,
+    budget: &mut Budget,
+) -> Result<Option<BuildSummaryFacts>> {
+    let Some(profile) = one(
+        tx,
+        "build_profiles",
+        "id=?1 AND tenant_id=?2",
+        &[&id, &tenant],
+        "pointer",
+        budget,
+    )?
+    else {
+        return Ok(None);
+    };
+    let freshness = freshness(tx, tenant, id, &profile, budget)?.0;
+    let part_count = tx.query_row(
+        "SELECT count(*) FROM parts WHERE profile_id=?1",
+        [id],
+        |row| row.get(0),
+    )?;
+    summary_facts(id, &profile, part_count, accepted, freshness).map(Some)
+}
+
 fn working(
     tx: &Transaction<'_>,
     tenant: &str,
@@ -585,7 +857,8 @@ pub(super) fn capture(
     else {
         return Ok(None);
     };
-    let (freshness, attached) = freshness(tx, tenant, id, &p, b)?;
+    let (freshness_facts, attached) = freshness(tx, tenant, id, &p, b)?;
+    let freshness = freshness_json(&freshness_facts);
     let part_count: i64 = tx.query_row(
         "SELECT count(*) FROM parts WHERE profile_id=?1",
         [id],
@@ -599,7 +872,7 @@ pub(super) fn capture(
         .remove("profileId");
     let sources = if attached == 0 {
         Sources::Empty
-    } else if freshness["status"] == "stale" {
+    } else if freshness_facts.is_stale() {
         Sources::Stale {
             attached_count: attached,
             issue_count: (freshness["reasons"].as_array().map_or(0, Vec::len)
@@ -771,13 +1044,20 @@ pub(super) fn capture(
         checkoff,
     };
     let (accepted_progress, legacy) = match accepted {
-        AcceptedRead::Ready { .. } => (
-            json!({"kind":"ready","total_units":progress["totalUnits"],"remaining_units":progress["remainingUnits"]}),
-            Some((
-                progress["totalUnits"].clone(),
-                progress["remainingUnits"].clone(),
-            )),
-        ),
+        AcceptedRead::Ready { snapshot } => {
+            let units = snapshot
+                .parts
+                .iter()
+                .filter(|part| part.included)
+                .flat_map(|part| part.units.iter())
+                .collect::<Vec<_>>();
+            let total_units = units.len() as i64;
+            let remaining_units = units.iter().filter(|unit| !unit.completed).count() as i64;
+            (
+                json!({"kind":"ready","total_units":total_units,"remaining_units":remaining_units}),
+                Some((json!(total_units), json!(remaining_units))),
+            )
+        }
         AcceptedRead::Empty { .. } => (json!({"kind":"empty"}), Some((json!(0), json!(0)))),
         AcceptedRead::CompatibilityDirty => (
             json!({"kind":"unavailable","reason":"compatibility_dirty"}),
@@ -786,7 +1066,10 @@ pub(super) fn capture(
         AcceptedRead::Uninitialized => {
             (json!({"kind":"unavailable","reason":"uninitialized"}), None)
         }
-        _ => (json!({"kind":"unavailable","reason":"integrity"}), None),
+        AcceptedRead::IntegrityFailure { .. } => {
+            (json!({"kind":"unavailable","reason":"integrity"}), None)
+        }
+        AcceptedRead::Missing => unreachable!("profile exists"),
     };
     let mut profile_summary_v2 = header.clone();
     profile_summary_v2["accepted_progress"] = accepted_progress;
@@ -1050,5 +1333,5 @@ pub(super) fn draft_freshness_current(
         )?,
         "profile",
     )?;
-    Ok(freshness(tx, tenant, id, &p, b)?.0["status"] == "current")
+    Ok(freshness(tx, tenant, id, &p, b)?.0.is_current())
 }

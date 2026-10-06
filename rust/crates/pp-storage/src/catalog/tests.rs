@@ -100,3 +100,69 @@ fn unknown_source_work_lease_is_rejected_without_database_work() {
     assert_eq!(error.root_cause().to_string(), "Unknown work lease");
     connection.execute_batch("ROLLBACK").unwrap();
 }
+
+#[test]
+fn build_graph_envelope_reaps_orphaned_source_work_before_dispatch() {
+    let root = std::env::temp_dir().join(format!(
+        "pp-build-source-orphan-{}-{}",
+        std::process::id(),
+        rand::random::<u64>()
+    ));
+    let (owner, _) = WriterOwner::open(&root, crate::Limits::default()).unwrap();
+    let catalog = owner.local_source_catalog();
+    let Outcome::Source(Some(source)) = catalog
+        .execute(Request::Create {
+            source: CreateSource {
+                name: "Build orphan control".into(),
+                source_kind: Some("local".into()),
+                ..Default::default()
+            },
+        })
+        .unwrap()
+    else {
+        panic!("Source expected")
+    };
+    let mut lease = catalog
+        .begin_work(source.id, &AtomicBool::new(false), Duration::from_secs(2))
+        .unwrap();
+    let busy = match catalog.begin_work(source.id, &AtomicBool::new(false), Duration::from_secs(2))
+    {
+        Ok(_) => panic!("live Source lease must exclude overlap"),
+        Err(error) => error,
+    };
+    assert!(busy.downcast_ref::<SourceBusy>().is_some());
+    let token = lease.token.take().unwrap();
+    let shared = lease.client.shared.clone();
+    drop(lease);
+    shared.orphaned_source_leases.lock().unwrap().push(token);
+    assert_eq!(
+        shared.orphaned_source_leases.lock().unwrap().as_slice(),
+        &[token]
+    );
+    let builds = owner
+        .build_graph_with_policy(auth::AuthPolicy {
+            registration: auth::RegistrationPolicy::Open,
+            first_user: auth::FirstUserTenant::NewUser,
+            session_tenant: auth::SessionTenantPolicy::AccountTenant,
+        })
+        .unwrap();
+    let error = builds
+        .execute(
+            crate::read_model::Credential::Session(auth::Secret::new("missing-session".into())),
+            crate::build_graph::BuildCommand::List,
+            Arc::new(AtomicBool::new(false)),
+            Duration::from_secs(2),
+        )
+        .unwrap_err();
+    assert!(matches!(
+        error.downcast_ref::<auth::AuthFailure>(),
+        Some(auth::AuthFailure::SessionRequired)
+    ));
+    assert!(shared.orphaned_source_leases.lock().unwrap().is_empty());
+    let mut acquired = catalog
+        .begin_work(source.id, &AtomicBool::new(false), Duration::from_secs(2))
+        .unwrap();
+    acquired.release().unwrap();
+    owner.shutdown().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}

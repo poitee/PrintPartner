@@ -1,4 +1,8 @@
 use super::AcceptedRead;
+pub(crate) use super::context::{
+    AcceptedProgressFacts, BuildSummaryFacts, FreshnessFacts, StaleReasonFacts,
+    UntrackedReasonFacts,
+};
 use anyhow::{Result, anyhow};
 use rusqlite::{Transaction, types::ValueRef};
 use serde::Serialize;
@@ -8,6 +12,31 @@ use std::{
     collections::{BTreeMap, HashMap, HashSet},
     path::Path,
 };
+
+pub(crate) fn build_summary(
+    tx: &Transaction<'_>,
+    tenant: &str,
+    profile: i64,
+    repos: &std::path::Path,
+) -> Result<Option<crate::build_graph::ProfileSummary>> {
+    let mut budget = Budget::default();
+    let accepted = match read(tx, tenant, profile, repos, &mut budget) {
+        Ok(read) => read,
+        Err(error) => match error.downcast_ref::<Integrity>() {
+            Some(error) => super::AcceptedRead::IntegrityFailure {
+                code: error.code.to_owned(),
+                message: error.message.clone(),
+            },
+            None => return Err(error),
+        },
+    };
+    if matches!(accepted, super::AcceptedRead::Missing) {
+        return Ok(None);
+    }
+    let facts = super::context::capture_build_summary(tx, tenant, profile, &accepted, &mut budget)?
+        .ok_or_else(|| anyhow::anyhow!("Build context missing"))?;
+    Ok(Some(crate::build_graph::projection::profile_summary(facts)))
+}
 
 #[derive(Debug)]
 pub(crate) struct Integrity {

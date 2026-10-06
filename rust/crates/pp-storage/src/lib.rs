@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod build_graph;
 pub mod catalog;
 pub mod checkoff_progress;
 pub mod jobs;
@@ -66,6 +67,10 @@ enum Work {
     Backup(PathBuf),
 }
 enum Envelope {
+    BuildGraph {
+        command: build_graph::Command,
+        reply: build_graph::Reply,
+    },
     PlanSave {
         command: plan_save::Command,
         reply: mpsc::Sender<Result<plan_save::Outcome>>,
@@ -530,6 +535,9 @@ impl WriterOwner {
                 );
                 catalog_state.reap(orphaned);
                 match envelope {
+                    Envelope::BuildGraph { command, reply } => {
+                        reply.send(build_graph::execute(&mut connection, command));
+                    }
                     Envelope::PlanSave { command, reply } => {
                         let _ = reply.send(plan_save::execute(
                             &mut connection,
