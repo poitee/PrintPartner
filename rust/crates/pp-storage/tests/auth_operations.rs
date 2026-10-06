@@ -61,7 +61,6 @@ fn resolve(client: &AuthClient, token: &str) -> Option<pp_storage::auth::User> {
         client,
         Request::ResolveSession {
             token: secret(token),
-            provider: Provider::Email,
         },
     )
     .unwrap() else {
@@ -788,4 +787,57 @@ fn ticket_t_17_key_collection_growth_rejects_atomically() {
     );
     drop(reader);
     owner.shutdown().unwrap();
+}
+
+#[test]
+fn session_provider_migrates_old_rows_and_rejects_unknown_values() {
+    let path = directory();
+    let owner = open(&path);
+    let client = owner.auth(FirstUserTenant::NewUser);
+    let (user, token) = register(&client, "legacy-session@example.com");
+    owner.shutdown().unwrap();
+
+    let db = Connection::open(path.join("print-partner.db")).unwrap();
+    let session: (String, String) = db
+        .query_row(
+            "SELECT id,expires_at FROM sessions WHERE user_id=?1",
+            [&user.user_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    db.execute_batch("ALTER TABLE sessions DROP COLUMN provider; DELETE FROM sessions")
+        .unwrap();
+    db.execute(
+        "INSERT INTO sessions(id,user_id,expires_at) VALUES(?1,?2,?3)",
+        params![session.0, user.user_id, session.1],
+    )
+    .unwrap();
+    drop(db);
+
+    let owner = open(&path);
+    let client = owner.auth(FirstUserTenant::NewUser);
+    assert_eq!(resolve(&client, &token).unwrap().provider, Provider::Email);
+    owner.shutdown().unwrap();
+
+    let db = Connection::open(path.join("print-partner.db")).unwrap();
+    db.execute("UPDATE sessions SET provider='unknown'", [])
+        .unwrap();
+    drop(db);
+    let owner = open(&path);
+    let client = owner.auth(FirstUserTenant::NewUser);
+    let error = match call(
+        &client,
+        Request::ResolveSession {
+            token: secret(&token),
+        },
+    ) {
+        Err(error) => error,
+        Ok(_) => panic!("invalid provider accepted"),
+    };
+    assert!(matches!(
+        error.downcast_ref(),
+        Some(pp_storage::auth::AuthFailure::Storage)
+    ));
+    owner.shutdown().unwrap();
+    std::fs::remove_dir_all(path).unwrap();
 }
