@@ -100,7 +100,7 @@ pub struct SourceCatalogClient {
     client: SettingsClient,
     authority: Authority,
 }
-#[derive(Default, Deserialize, Serialize)]
+#[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct CreateSource {
     pub name: String,
@@ -806,6 +806,38 @@ pub(crate) fn get(tx: &Transaction<'_>, tenant: &str, id: i64) -> Result<Option<
 fn require(tx: &Transaction<'_>, tenant: &str, id: i64) -> Result<SourceSummary> {
     get(tx, tenant, id)?.ok_or_else(|| anyhow!(CatalogFailure::NotFound))
 }
+
+pub(crate) fn validate_capture_existing(tx: &Transaction<'_>, tenant: &str, id: i64) -> Result<()> {
+    require(tx, tenant, id).map(drop)
+}
+
+fn validate_create(tx: &Transaction<'_>, tenant: &str, source: &CreateSource) -> Result<()> {
+    let name = trim(&source.name);
+    ensure!(
+        !name.is_empty(),
+        CatalogFailure::Input("Source name is required".into())
+    );
+    let exists: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM projects WHERE tenant_id=?1 AND name=?2)",
+        params![tenant, name],
+        |row| row.get(0),
+    )?;
+    ensure!(!exists, CatalogFailure::DuplicateName(name.into()));
+    Ok(())
+}
+
+pub(crate) fn validate_capture_create(
+    tx: &Transaction<'_>,
+    tenant: &str,
+    source: &mut CreateSource,
+) -> Result<()> {
+    normalize_capture_create(source)?;
+    validate_create(tx, tenant, source)
+}
+
+pub(crate) fn normalize_capture_create(source: &mut CreateSource) -> Result<()> {
+    location::create(source)
+}
 fn list(tx: &Transaction<'_>, tenant: &str) -> Result<Vec<SourceSummary>> {
     Ok(tx
         .prepare(&format!(
@@ -1023,17 +1055,8 @@ pub(crate) fn run(
         Request::List {} => Outcome::Sources(list(tx, tenant)?),
         Request::Get { id } => Outcome::Source(get(tx, tenant, id)?.map(Box::new)),
         Request::Create { source: s } => {
+            validate_create(tx, tenant, &s)?;
             let name = trim(&s.name);
-            ensure!(
-                !name.is_empty(),
-                CatalogFailure::Input("Source name is required".into())
-            );
-            let exists: bool = tx.query_row(
-                "SELECT EXISTS(SELECT 1 FROM projects WHERE tenant_id=?1 AND name=?2)",
-                params![tenant, name],
-                |r| r.get(0),
-            )?;
-            ensure!(!exists, CatalogFailure::DuplicateName(name.into()));
             let kind = s.source_kind.unwrap_or("github".into()).to_lowercase();
             let source_type = s.source_type.unwrap_or(
                 if matches!(kind.as_str(), "github" | "git") {

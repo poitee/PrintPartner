@@ -131,6 +131,8 @@ pub enum Outcome {
     Reconciliations(Vec<ReconciliationRecord>),
     Claimed(Option<ClaimedAttempt>),
     Retained(usize),
+    CapturePreflighted(Box<crate::uploads::PreflightedCapture>),
+    CaptureCorrelation(crate::uploads::CaptureJournalCorrelation),
 }
 pub(crate) enum Command {
     User {
@@ -145,6 +147,25 @@ pub(crate) enum Command {
         admission: Arc<WorkerAdmission>,
         storage: SettingsClient,
     },
+    ClaimResolved {
+        claim: crate::uploads::ResolvedCapturedClaim,
+        worker: String,
+        admission: Arc<WorkerAdmission>,
+        storage: SettingsClient,
+    },
+    PreflightCapture {
+        credential: Credential,
+        operation_key: String,
+        target: crate::uploads::Target,
+        payload: crate::uploads::CapturedPayloadV1,
+        limits: crate::uploads::AdmissionLimits,
+        policy: AuthPolicy,
+        storage: Arc<crate::Shared>,
+    },
+    CorrelateCapture {
+        manifest: Vec<u8>,
+        inventory: Vec<crate::uploads::File>,
+    },
     Worker {
         lease: AttemptLease,
         operation: WorkerOperation,
@@ -154,6 +175,14 @@ pub(crate) enum Command {
         per_tenant: usize,
         global: usize,
     },
+}
+
+pub(crate) struct CapturePreflightRequest {
+    pub(crate) credential: Credential,
+    pub(crate) operation_key: String,
+    pub(crate) target: crate::uploads::Target,
+    pub(crate) payload: crate::uploads::CapturedPayloadV1,
+    pub(crate) limits: crate::uploads::AdmissionLimits,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JobFailure {
@@ -182,7 +211,7 @@ impl Pending {
             .map_err(|_| anyhow!(JobFailure::CommitUnknown))?
     }
 }
-fn submit(
+pub(crate) fn submit(
     storage: &SettingsClient,
     command: Command,
     cancelled: &AtomicBool,
@@ -413,6 +442,10 @@ fn load(tx: &Transaction<'_>, id: &str) -> Result<Option<JobRecord>> {
         .optional()?;
     document.map(|v| decode(&v)).transpose()
 }
+
+pub(crate) fn load_for_capture_claim(tx: &Transaction<'_>, id: &str) -> Result<JobRecord> {
+    load(tx, id)?.ok_or_else(|| anyhow!("Captured import job requires repair"))
+}
 fn owned(tx: &Transaction<'_>, id: &str, tenant: &str) -> Result<JobRecord> {
     let record = load(tx, id)?.ok_or_else(|| anyhow!("Job not found"))?;
     ensure!(record.tenant == tenant, "Job not found");
@@ -548,32 +581,52 @@ pub(crate) fn execute(
     command: Command,
 ) -> Result<Outcome> {
     let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    if let Command::Claim {
-        worker,
-        admission,
-        job_id,
-        storage,
-    } = command
-    {
-        let claim = claim(&tx, catalog_state, &worker, &admission, job_id.as_deref())?;
-        tx.commit()
-            .map_err(|_| anyhow!(JobFailure::CommitUnknown))?;
-        return match claim {
-            ClaimResult::Claimed(claim) => {
-                let source_work = claim.source.map(|source| {
-                    catalog_state.activate(source.token, source.tenant, source.id);
-                    crate::catalog::lease(storage, source.token)
-                });
-                Ok(Outcome::Claimed(Some(ClaimedAttempt {
-                    job: claim.job,
-                    lease: claim.lease,
-                    source_work,
-                })))
-            }
-            ClaimResult::SourceBusy => Err(anyhow!(crate::catalog::SourceBusy)),
-            ClaimResult::Empty => Ok(Outcome::Claimed(None)),
-        };
-    }
+    let claim_command = match command {
+        Command::Claim {
+            worker,
+            admission,
+            job_id,
+            storage,
+        } => Ok((
+            claim(&tx, catalog_state, &worker, &admission, job_id.as_deref())?,
+            storage,
+        )),
+        Command::ClaimResolved {
+            claim: resolved,
+            worker,
+            admission,
+            storage,
+        } => {
+            let job_id = crate::uploads::validate_resolved_claim(&tx, &resolved)?;
+            Ok((
+                claim(&tx, catalog_state, &worker, &admission, Some(&job_id))?,
+                storage,
+            ))
+        }
+        command => Err(command),
+    };
+    let command = match claim_command {
+        Ok((claim, storage)) => {
+            tx.commit()
+                .map_err(|_| anyhow!(JobFailure::CommitUnknown))?;
+            return match claim {
+                ClaimResult::Claimed(claim) => {
+                    let source_work = claim.source.map(|source| {
+                        catalog_state.activate(source.token, source.tenant, source.id);
+                        crate::catalog::lease(storage, source.token)
+                    });
+                    Ok(Outcome::Claimed(Some(ClaimedAttempt {
+                        job: claim.job,
+                        lease: claim.lease,
+                        source_work,
+                    })))
+                }
+                ClaimResult::SourceBusy => Err(anyhow!(crate::catalog::SourceBusy)),
+                ClaimResult::Empty => Ok(Outcome::Claimed(None)),
+            };
+        }
+        Err(command) => command,
+    };
     let outcome = match command {
         Command::User {
             credential,
@@ -589,7 +642,40 @@ pub(crate) fn execute(
             }
             outcome
         }
-        Command::Claim { .. } => unreachable!(),
+        Command::Claim { .. } | Command::ClaimResolved { .. } => unreachable!(),
+        Command::PreflightCapture {
+            credential,
+            operation_key,
+            mut target,
+            payload,
+            limits,
+            policy,
+            storage,
+        } => {
+            let (tenant, actor) = actor_ref(&tx, &credential, policy, &storage)?;
+            let replay = crate::uploads::preflight_capture_target(
+                &tx,
+                &tenant,
+                &actor,
+                &operation_key,
+                &mut target,
+                &payload,
+                limits,
+            )?;
+            Outcome::CapturePreflighted(Box::new(crate::uploads::PreflightedCapture {
+                credential,
+                tenant,
+                actor,
+                target,
+                replay,
+            }))
+        }
+        Command::CorrelateCapture {
+            manifest,
+            inventory,
+        } => Outcome::CaptureCorrelation(crate::uploads::correlate_capture(
+            &tx, manifest, inventory,
+        )?),
         Command::Worker {
             lease,
             operation,
@@ -1398,7 +1484,48 @@ pub(crate) fn actor(
         }
     }
 }
+
+pub(crate) fn actor_ref(
+    tx: &Transaction<'_>,
+    credential: &Credential,
+    policy: AuthPolicy,
+    storage: &Arc<crate::Shared>,
+) -> Result<(String, String)> {
+    match credential {
+        Credential::Session(token) => auth::job_session_actor(tx, token.expose(), policy),
+        Credential::RoutedKey { tenant, key } => auth::job_key_actor_ref(tx, tenant, key),
+        Credential::PhysicalOwner(owner) => {
+            ensure!(
+                Arc::ptr_eq(storage, &owner.storage),
+                "Foreign physical owner"
+            );
+            Ok(("default".into(), "physical-owner".into()))
+        }
+    }
+}
 impl ServerWorkerClient {
+    pub fn claim_resolved_import(
+        &self,
+        claim: crate::uploads::ResolvedCapturedClaim,
+    ) -> Result<Option<ClaimedAttempt>> {
+        match submit(
+            &self.storage,
+            Command::ClaimResolved {
+                claim,
+                worker: self.identity.clone(),
+                admission: self.admission.clone(),
+                storage: self.storage.clone(),
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?
+        .receive()?
+        {
+            Outcome::Claimed(claim) => Ok(claim),
+            _ => unreachable!(),
+        }
+    }
+
     pub fn claim_import(&self, job_id: &str) -> Result<Option<ClaimedAttempt>> {
         match submit(
             &self.storage,
@@ -1431,6 +1558,61 @@ impl ServerWorkerClient {
             },
             &AtomicBool::new(false),
         )
+    }
+}
+
+pub(crate) fn preflight_capture(
+    storage: &SettingsClient,
+    request: CapturePreflightRequest,
+    policy: AuthPolicy,
+    shared: Arc<crate::Shared>,
+) -> Result<crate::uploads::PreflightedCapture> {
+    let CapturePreflightRequest {
+        credential,
+        operation_key,
+        target,
+        payload,
+        limits,
+    } = request;
+    match submit(
+        storage,
+        Command::PreflightCapture {
+            credential,
+            operation_key,
+            target,
+            payload,
+            limits,
+            policy,
+            storage: shared,
+        },
+        &AtomicBool::new(false),
+        Duration::from_secs(5),
+    )?
+    .receive()?
+    {
+        Outcome::CapturePreflighted(preflight) => Ok(*preflight),
+        _ => Err(anyhow!("Unexpected capture authentication reply")),
+    }
+}
+
+pub(crate) fn correlate_capture(
+    storage: &SettingsClient,
+    manifest: Vec<u8>,
+    inventory: Vec<crate::uploads::File>,
+) -> Result<crate::uploads::CaptureJournalCorrelation> {
+    match submit(
+        storage,
+        Command::CorrelateCapture {
+            manifest,
+            inventory,
+        },
+        &AtomicBool::new(false),
+        Duration::from_secs(5),
+    )?
+    .receive()?
+    {
+        Outcome::CaptureCorrelation(correlation) => Ok(correlation),
+        _ => Err(anyhow!("Unexpected capture correlation reply")),
     }
 }
 

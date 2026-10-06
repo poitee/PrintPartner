@@ -5,8 +5,8 @@ use pp_storage::{
     catalog::{self, CreateSource, SourcePatch},
     jobs::{self, Credential, JobKind, WorkerAdmission},
     uploads::{
-        Admission, AdmissionLimits, CaptureId, CapturedInputV2, CapturedPayloadV1, File, Input,
-        Phase, Postprocessing, State, Target,
+        Admission, AdmissionLimits, CaptureId, CaptureJournalCorrelation, CapturedInputV2,
+        CapturedPayloadV1, File, Input, Phase, Postprocessing, State, Target,
     },
 };
 use rusqlite::{Connection, OpenFlags};
@@ -23,6 +23,244 @@ fn policy() -> AuthPolicy {
         first_user: FirstUserTenant::NewUser,
     }
 }
+
+#[test]
+fn resolved_claim_rechecks_eleven_fields_before_attempt_mutation() {
+    let (root, files_root, owner) = fixture();
+    let client = owner.imports(policy(), 8 * 1024 * 1024 * 1024).unwrap();
+    let bytes = std::fs::read(files_root.join("triangle.stl")).unwrap();
+    let files = vec![File {
+        path: "triangle.stl".into(),
+        size: bytes.len() as u64,
+        sha256: hex::encode(sha2::Sha256::digest(&bytes)),
+        kind: "input".into(),
+    }];
+    let limits = AdmissionLimits {
+        reserved_bytes: 3_506_438_144,
+        max_input_bytes: 268_435_456,
+        max_prepared_bytes: 1_073_741_824,
+    };
+    let preflight = client
+        .preflight_capture(
+            credential(&owner),
+            "retained-claim".into(),
+            create("Retained claim"),
+            CapturedPayloadV1::files(vec!["triangle.stl".into()]),
+            limits,
+        )
+        .unwrap();
+    let prepared = preflight
+        .prepare(
+            CaptureId::new("ab".repeat(32)).unwrap(),
+            "retained-claim".into(),
+            CapturedPayloadV1::files(vec!["triangle.stl".into()]),
+            limits,
+            files.clone(),
+        )
+        .unwrap();
+    let manifest = prepared.manifest().to_vec();
+    let admitted = client
+        .admit_prepared(prepared, 0, client.accounting_epoch())
+        .unwrap();
+    let before: (i64, i64, String, String) = read(&root)
+        .query_row(
+            "SELECT json_extract(document,'$.attempt'), json_extract(document,'$.generation'), COALESCE(json_extract(document,'$.lease_until'),'null'), COALESCE(json_extract(document,'$._attempt_fence'),'') FROM durable_jobs WHERE id=?1",
+            [&admitted.job_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .unwrap();
+    let fields = [
+        "manifest_version",
+        "capture_id",
+        "operation_key",
+        "actor",
+        "target",
+        "target_digest",
+        "input",
+        "admission_limits",
+        "policy_digest",
+        "requested_files",
+        "requested_digest",
+    ];
+    for field in fields {
+        let mut value: serde_json::Value = serde_json::from_slice(&manifest).unwrap();
+        value[field] = serde_json::json!(null);
+        let result =
+            client.correlate_capture_manifest(serde_json::to_vec(&value).unwrap(), files.clone());
+        assert!(
+            result.is_err()
+                || !matches!(result.unwrap(), CaptureJournalCorrelation::ExactAdmitted(_)),
+            "{field} mutation produced a claim"
+        );
+        let after: (i64, i64, String, String) = read(&root)
+            .query_row(
+                "SELECT json_extract(document,'$.attempt'), json_extract(document,'$.generation'), COALESCE(json_extract(document,'$.lease_until'),'null'), COALESCE(json_extract(document,'$._attempt_fence'),'') FROM durable_jobs WHERE id=?1",
+                [&admitted.job_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(after, before, "{field} mutated claim state");
+    }
+    let resolved = match client
+        .correlate_capture_manifest(manifest.clone(), files.clone())
+        .unwrap()
+    {
+        CaptureJournalCorrelation::ExactAdmitted(resolved) => resolved,
+        _ => panic!("exact manifest did not resolve"),
+    };
+    let worker = owner
+        .job_worker(WorkerAdmission {
+            kinds: vec![(JobKind::SuppliedSourceImport, 1)],
+            total: 1,
+            per_resource: 1,
+            lease_seconds: 3600,
+        })
+        .unwrap();
+    let claim = worker.claim_resolved_import(resolved).unwrap().unwrap();
+    let claimed = &claim.job;
+    let lease = &claim.lease;
+    assert_eq!(claimed.attempt, 1);
+    assert_eq!(claimed.generation, 1);
+    assert!(claim.source_work.is_some());
+    assert!(
+        matches!(claimed.payload, jobs::Payload::SuppliedSourceImport { project_id, .. } if project_id as i64 == admitted.source_id)
+    );
+    let busy = match owner.local_source_catalog().begin_work(
+        admitted.source_id,
+        &AtomicBool::new(false),
+        Duration::from_secs(5),
+    ) {
+        Err(error) => error,
+        Ok(_) => panic!("resolved claim must own its Source before core work begins"),
+    };
+    assert!(busy.downcast_ref::<catalog::SourceBusy>().is_some());
+    let catalog::Outcome::Source(Some(unrelated)) = owner
+        .local_source_catalog()
+        .execute(catalog::Request::Create {
+            source: CreateSource {
+                name: "Unrelated retained Source".into(),
+                source_kind: Some("local".into()),
+                ..Default::default()
+            },
+        })
+        .unwrap()
+    else {
+        panic!("unrelated Source")
+    };
+    let mut unrelated_work = owner
+        .local_source_catalog()
+        .begin_work(
+            unrelated.id,
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+    unrelated_work.release().unwrap();
+    worker
+        .import_phase(
+            lease,
+            Phase::Owned(pp_storage::uploads::OwnedInput {
+                locator: format!(".pp-imports/{}", admitted.job_id),
+                digest: hex::encode(sha2::Sha256::digest(serde_json::to_vec(&files).unwrap())),
+                files: files.clone(),
+            }),
+        )
+        .unwrap();
+    assert!(matches!(
+        client
+            .correlate_capture_manifest(manifest, files.clone())
+            .unwrap(),
+        CaptureJournalCorrelation::ExactOwnedOrLater
+    ));
+    let absent = client
+        .preflight_capture(
+            credential(&owner),
+            "ordered-absent".into(),
+            Target::Existing {
+                source_id: admitted.source_id,
+            },
+            CapturedPayloadV1::files(vec!["triangle.stl".into()]),
+            limits,
+        )
+        .unwrap()
+        .prepare(
+            CaptureId::new("cd".repeat(32)).unwrap(),
+            "ordered-absent".into(),
+            CapturedPayloadV1::files(vec!["triangle.stl".into()]),
+            limits,
+            files.clone(),
+        )
+        .unwrap();
+    assert!(matches!(
+        client
+            .correlate_capture_manifest(absent.manifest().to_vec(), files)
+            .unwrap(),
+        CaptureJournalCorrelation::Absent
+    ));
+    drop(claim);
+    let mut released = owner
+        .local_source_catalog()
+        .begin_work(
+            admitted.source_id,
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+    released.release().unwrap();
+    drop(worker);
+    drop(client);
+    owner.shutdown().unwrap();
+}
+
+#[test]
+fn targeted_claim_owns_source_before_core_work() {
+    let (_root, files, owner) = fixture();
+    let svc = service(&owner);
+    let admitted = svc
+        .admit(
+            credential(&owner),
+            request("targeted-claim-owner", create("Targeted claim owner")),
+            &files,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+    let worker = owner
+        .job_worker(WorkerAdmission {
+            kinds: vec![(JobKind::SuppliedSourceImport, 1)],
+            total: 1,
+            per_resource: 1,
+            lease_seconds: 3600,
+        })
+        .unwrap();
+    let claim = worker.claim_import(&admitted.job_id).unwrap().unwrap();
+
+    assert!(
+        owner
+            .local_source_catalog()
+            .begin_work(
+                admitted.source_id,
+                &AtomicBool::new(false),
+                Duration::from_secs(5),
+            )
+            .is_err(),
+        "targeted claim must own its Source before core work begins"
+    );
+
+    assert!(claim.source_work.is_some());
+    drop(claim);
+    let mut released = owner
+        .local_source_catalog()
+        .begin_work(
+            admitted.source_id,
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+    released.release().unwrap();
+    drop(svc);
+    owner.shutdown().unwrap();
+}
+
 fn temp() -> PathBuf {
     let p = std::env::temp_dir().join(format!(
         "source-import-{}",
