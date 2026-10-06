@@ -195,7 +195,9 @@ pub(crate) fn initialize(
         };
         if let Some(name) = name {
             let target = path.parent().unwrap().join("backups").join(name);
-            backup(&conn, &target, true)?;
+            if !target.exists() {
+                backup(&conn, &target, true)?;
+            }
             Some(target)
         } else {
             None

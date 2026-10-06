@@ -80,15 +80,13 @@ fn main() -> Result<()> {
                 ),
                 "Queued reservation missing"
             );
-            let (_, lease) = worker
+            let mut claim = worker
                 .claim()?
                 .ok_or_else(|| anyhow!("Source claim missing"))?;
-            let mut source_work = worker.begin_source_work(
-                &lease,
-                None,
-                &AtomicBool::new(false),
-                Duration::from_secs(5),
-            )?;
+            let mut source_work = claim
+                .source_work
+                .take()
+                .ok_or_else(|| anyhow!("Source claim authority missing"))?;
             ensure!(
                 matches!(
                     catalog.execute(Request::Delete { id: source.id })?,
@@ -108,7 +106,7 @@ fn main() -> Result<()> {
             ensure!(
                 worker
                     .begin_source_work(
-                        &lease,
+                        &claim.lease,
                         None,
                         &AtomicBool::new(false),
                         Duration::from_secs(5)
@@ -141,7 +139,7 @@ fn main() -> Result<()> {
                 first.job_id == duplicate.job_id,
                 "Duplicate created another job"
             );
-            let (claimed, _lease) = if command == "concurrent" {
+            let claim = if command == "concurrent" {
                 let barrier = Arc::new(Barrier::new(8));
                 let handles: Vec<_> = (0..8)
                     .map(|_| {
@@ -168,25 +166,25 @@ fn main() -> Result<()> {
                 worker.claim()?.ok_or_else(|| anyhow!("No claim"))?
             };
             ensure!(
-                claimed.job_id == first.job_id && worker.claim()?.is_none(),
+                claim.job.job_id == first.job_id && worker.claim()?.is_none(),
                 "Claim exclusivity failed"
             );
             println!(
                 "{}",
-                serde_json::json!({"schema":ready.version,"duplicate_same_job":true,"claim":claimed.snapshot(),"attempt":claimed.attempt,"state_version":claimed.state_version,"concurrent_consumers":if command=="concurrent"{8}else{1}})
+                serde_json::json!({"schema":ready.version,"duplicate_same_job":true,"claim":claim.job.snapshot(),"attempt":claim.job.attempt,"state_version":claim.job.state_version,"concurrent_consumers":if command=="concurrent"{8}else{1}})
             );
         }
         "restart" => {
-            let (claimed, _lease) = worker
+            let claim = worker
                 .claim()?
                 .ok_or_else(|| anyhow!("No recovered claim"))?;
             ensure!(
-                claimed.attempt == 2 && claimed.generation >= 3,
+                claim.job.attempt == 2 && claim.job.generation >= 3,
                 "Restart failed to fence old attempt"
             );
             println!(
                 "{}",
-                serde_json::json!({"schema":ready.version,"restart_fenced":true,"attempt":claimed.attempt,"generation":claimed.generation,"job":claimed.snapshot()})
+                serde_json::json!({"schema":ready.version,"restart_fenced":true,"attempt":claim.job.attempt,"generation":claim.job.generation,"job":claim.job.snapshot()})
             );
         }
         "effect-intent" | "effect-restart" => {
@@ -208,7 +206,10 @@ fn main() -> Result<()> {
                 },
             )?;
             if command == "effect-intent" {
-                let (_, mut lease) = worker.claim()?.ok_or_else(|| anyhow!("No effect claim"))?;
+                let mut lease = worker
+                    .claim()?
+                    .ok_or_else(|| anyhow!("No effect claim"))?
+                    .lease;
                 let admitted = worker.update(
                     &mut lease,
                     WorkerOperation::BeginEffect(EffectIntent {

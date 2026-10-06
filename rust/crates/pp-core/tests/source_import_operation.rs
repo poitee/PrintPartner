@@ -3,7 +3,7 @@ use pp_storage::{
     Limits, WriterOwner,
     auth::{self, AuthPolicy, FirstUserTenant, RegistrationPolicy, Secret, SessionTenantPolicy},
     catalog::{self, CreateSource, SourcePatch},
-    jobs::{self, Credential},
+    jobs::{self, Credential, JobKind, WorkerAdmission},
     uploads::{
         Admission, AdmissionLimits, CaptureId, CapturedInputV2, CapturedPayloadV1, File, Input,
         Phase, Postprocessing, State, Target,
@@ -195,6 +195,24 @@ fn cancel(owner: &WriterOwner, id: String) {
         .unwrap()
         .receive()
         .unwrap();
+}
+fn durable_job(owner: &WriterOwner, id: &str) -> jobs::JobRecord {
+    match owner
+        .jobs(policy())
+        .unwrap()
+        .submit(
+            credential(owner),
+            jobs::UserOperation::Get { job_id: id.into() },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )
+        .unwrap()
+        .receive()
+        .unwrap()
+    {
+        jobs::Outcome::Job(job, _) => job,
+        _ => panic!("job result required"),
+    }
 }
 #[test]
 fn create_update_exact_retry_never_repoints_and_preserves_originals() {
@@ -855,7 +873,8 @@ fn stale_attempt_cannot_write_import_phases() {
             lease_seconds: 3600,
         })
         .unwrap();
-    let (_, lease) = worker.claim_import(&op.job_id).unwrap().unwrap();
+    let mut claim = worker.claim_import(&op.job_id).unwrap().unwrap();
+    let lease = claim.lease;
     cancel(&owner, op.job_id.clone());
     assert!(worker.import_phase(&lease, Phase::Read).is_err());
     assert!(
@@ -868,11 +887,64 @@ fn stale_attempt_cannot_write_import_phases() {
             )
             .is_err()
     );
+    drop(claim.source_work.take());
     let done = svc
         .work_operation(&op.job_id, None, Through::Settled, &AtomicBool::new(false))
         .unwrap()
         .unwrap();
     assert_eq!(done.state, State::Cancelled);
+    drop(svc);
+    owner.shutdown().unwrap();
+}
+#[test]
+fn cancelled_import_cannot_overlap_source_work() {
+    let (root, files, owner) = fixture();
+    let svc = service(&owner);
+    let op = svc
+        .admit(
+            credential(&owner),
+            request("overlap", create("Overlap")),
+            &files,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+    let worker = owner
+        .job_worker(jobs::WorkerAdmission {
+            kinds: vec![(jobs::JobKind::SuppliedSourceImport, 1)],
+            total: 1,
+            per_resource: 1,
+            lease_seconds: 3600,
+        })
+        .unwrap();
+    let first = worker.claim_import(&op.job_id).unwrap().unwrap();
+    let source = first.source_work.unwrap();
+    let owned = root.join("repos/.pp-imports").join(&op.job_id);
+    std::fs::create_dir_all(&owned).unwrap();
+    std::fs::write(owned.join("held.txt"), "held by the fenced attempt").unwrap();
+    cancel(&owner, op.job_id.clone());
+    let before = durable_job(&owner, &op.job_id);
+    let error =
+        match svc.work_operation(&op.job_id, None, Through::Settled, &AtomicBool::new(false)) {
+            Err(error) => error,
+            Ok(_) => panic!("cancelled import reclaimed an active Source"),
+        };
+    assert!(
+        error
+            .downcast_ref::<pp_storage::catalog::SourceBusy>()
+            .is_some()
+    );
+    let after = durable_job(&owner, &op.job_id);
+    assert_eq!(after.state_version, before.state_version);
+    assert_eq!(after.attempt, before.attempt);
+    assert_eq!(after.generation, before.generation);
+    assert!(owned.join("held.txt").exists());
+    drop(source);
+    let cancelled = svc
+        .work_operation(&op.job_id, None, Through::Settled, &AtomicBool::new(false))
+        .unwrap()
+        .unwrap();
+    assert_eq!(cancelled.state, State::Cancelled);
+    assert!(!owned.exists());
     drop(svc);
     owner.shutdown().unwrap();
 }
@@ -1250,6 +1322,126 @@ fn settlement_invalidates_stale_physical_usage_observation() {
     owner.shutdown().unwrap();
 }
 #[test]
+fn import_reads_do_not_invalidate_physical_usage_observation() {
+    let (_root, files, owner) = fixture();
+    let svc = service(&owner);
+    let admitted = svc
+        .admit(
+            credential(&owner),
+            request("read-only", create("Read only")),
+            &files,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+    let client = owner.imports(policy(), 128 * 1024 * 1024).unwrap();
+    let observed = client.accounting_epoch();
+
+    svc.get(credential(&owner), admitted.key.clone()).unwrap();
+    assert_eq!(client.accounting_epoch(), observed);
+
+    let worker = owner
+        .job_worker(WorkerAdmission {
+            kinds: vec![(JobKind::SuppliedSourceImport, 1)],
+            total: 1,
+            per_resource: 1,
+            lease_seconds: 3600,
+        })
+        .unwrap();
+    let claim = worker.claim_import(&admitted.job_id).unwrap().unwrap();
+    let lease = claim.lease;
+    worker.import_phase(&lease, Phase::Read).unwrap();
+    assert_eq!(client.accounting_epoch(), observed);
+
+    drop(claim.source_work);
+    drop(svc);
+    owner.shutdown().unwrap();
+}
+#[test]
+fn published_import_resumes_after_repaired_error_and_restart() {
+    let (root, files, owner) = fixture();
+    let svc = service(&owner);
+    let admitted = svc
+        .admit(
+            credential(&owner),
+            request("published-retry", create("Published retry")),
+            &files,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+    let published = svc
+        .work_operation(
+            &admitted.job_id,
+            Some(&files),
+            Through::Published,
+            &AtomicBool::new(false),
+        )
+        .unwrap()
+        .unwrap();
+    let artifact = published.artifact.as_ref().unwrap();
+    let file = &artifact.files[0];
+    let path = root.join("repos").join(&artifact.locator).join(&file.path);
+    let contents = std::fs::read(&path).unwrap();
+    drop(svc);
+    owner.shutdown().unwrap();
+    let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
+    let svc = service(&owner);
+    std::fs::write(&path, b"damaged after publication").unwrap();
+
+    assert!(
+        svc.work_operation(
+            &admitted.job_id,
+            None,
+            Through::Settled,
+            &AtomicBool::new(false),
+        )
+        .is_err()
+    );
+    std::fs::write(&path, contents).unwrap();
+    let retained = svc.get(credential(&owner), admitted.key.clone()).unwrap();
+    assert_eq!(retained.state, State::Published);
+    assert!(!retained.cleanup_settled);
+    assert_eq!(count(&root, "source_revisions"), 0);
+    assert_eq!(
+        read(&root)
+            .query_row(
+                "SELECT reserved_bytes FROM source_import_quota WHERE operation_key=?1 AND settled=0",
+                [&admitted.key],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        i64::try_from(admitted.reserved_bytes).unwrap()
+    );
+
+    drop(svc);
+    owner.shutdown().unwrap();
+    let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
+    let svc = service(&owner);
+    let resumed = svc
+        .work_operation(
+            &admitted.job_id,
+            None,
+            Through::Settled,
+            &AtomicBool::new(false),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(resumed.state, State::Activated);
+    assert!(resumed.cleanup_settled);
+    assert_eq!(count(&root, "source_revisions"), 1);
+    assert_eq!(
+        read(&root)
+            .query_row(
+                "SELECT reserved_bytes FROM source_import_quota WHERE operation_key=?1 AND settled=1",
+                [&admitted.key],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        0
+    );
+    drop(svc);
+    owner.shutdown().unwrap();
+}
+#[test]
 fn cancellation_after_activation_preserves_receipt_and_settles_cleanup() {
     let (root, files, owner) = fixture();
     let svc = service(&owner);
@@ -1601,6 +1793,9 @@ fn combined_schema37_backup_preserves_selected_progress_and_jobs35_graph() {
         .receive()
         .unwrap();
     owner.shutdown().unwrap();
+    let preparation_backup = root.join("fixture-preparation-backup.db");
+    std::fs::rename(root.join("backups/pre-schema36.db"), &preparation_backup).unwrap();
+    let preparation_bytes = std::fs::read(&preparation_backup).unwrap();
     let db = root.join("print-partner.db");
     let conn = Connection::open(&db).unwrap();
     conn.execute_batch("DROP TRIGGER trg_plan_apply_admissions_immutable_delete; DROP TRIGGER trg_plan_apply_admissions_immutable_update; DROP TABLE plan_apply_admissions; DROP TABLE source_import_quota; DROP TABLE source_import_operations; UPDATE app_settings SET value='35' WHERE tenant_id='default' AND key='schema_version'; PRAGMA wal_checkpoint(TRUNCATE);").unwrap();
@@ -1623,6 +1818,10 @@ fn combined_schema37_backup_preserves_selected_progress_and_jobs35_graph() {
     assert_eq!(count(&root, "source_import_operations"), 0);
     assert_eq!(count(&root, "durable_jobs"), 1);
     owner.shutdown().unwrap();
+    assert_eq!(
+        std::fs::read(preparation_backup).unwrap(),
+        preparation_bytes
+    );
 }
 #[test]
 fn combined_obsolete_receipt_refuses_without_changing_progress_history() {
@@ -1954,21 +2153,17 @@ fn publication_active_supplied_claim_and_live_lease_remain_exact() {
             lease_seconds: 3600,
         })
         .unwrap();
-    let (job, attempt) = worker.claim_import(&pending.job_id).unwrap().unwrap();
-    let mut live = worker
-        .begin_source_work(
-            &attempt,
-            None,
-            &AtomicBool::new(false),
-            Duration::from_secs(5),
-        )
-        .unwrap();
-    let active = worker.import_phase(&attempt, Phase::Read).unwrap();
+    let mut claim = worker.claim_import(&pending.job_id).unwrap().unwrap();
+    let mut live = claim.source_work.take().expect("claimed Source work");
+    let active = worker.import_phase(&claim.lease, Phase::Read).unwrap();
     let before = graph(&read(&root));
-    assert_eq!(job.state, jobs::PersistentState::Running);
+    assert_eq!(claim.job.state, jobs::PersistentState::Running);
     assert_eq!(publish_selected(&owner, &command)["kind"], "applied");
     assert_publication_preserves_source(&root, &before);
-    assert_eq!(worker.import_phase(&attempt, Phase::Read).unwrap(), active);
+    assert_eq!(
+        worker.import_phase(&claim.lease, Phase::Read).unwrap(),
+        active
+    );
     assert!(matches!(
         owner
             .local_source_catalog()
@@ -2059,6 +2254,10 @@ fn publication_then_source_activation_preserves_receipt_progress_and_plate_histo
 fn publication_source_schema37_backup_retains_full35_and_foreign_graph() {
     let (root, files, owner, command) = publication_fixture();
     owner.shutdown().unwrap();
+    let backup = root.join("backups/pre-schema36.db");
+    let preparation_backup = root.join("preparation-pre-schema36.db");
+    let preparation_backup_bytes = std::fs::read(&backup).unwrap();
+    std::fs::rename(&backup, &preparation_backup).unwrap();
     let conn = Connection::open(root.join("print-partner.db")).unwrap();
     conn.execute_batch("DROP TRIGGER trg_plan_apply_admissions_immutable_delete; DROP TRIGGER trg_plan_apply_admissions_immutable_update; DROP TABLE plan_apply_admissions; DROP TABLE source_import_quota; DROP TABLE source_import_operations; UPDATE app_settings SET value='35' WHERE tenant_id='default' AND key='schema_version'; PRAGMA wal_checkpoint(TRUNCATE);").unwrap();
     let prior = graph(&conn);
@@ -2096,4 +2295,8 @@ fn publication_source_schema37_backup_retains_full35_and_foreign_graph() {
     assert_eq!(publication_foreign(&root), foreign);
     drop(svc);
     owner.shutdown().unwrap();
+    assert_eq!(
+        std::fs::read(preparation_backup).unwrap(),
+        preparation_backup_bytes
+    );
 }

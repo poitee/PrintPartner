@@ -408,10 +408,16 @@ fn inspect_index_with_label_policy(
     let mut count = u16_at(footer, 10) as u64;
     let mut central_size = u32_at(footer, 12) as u64;
     let mut central_offset = u32_at(footer, 16) as u64;
-    if u16_at(footer, 4) != 0 || u16_at(footer, 6) != 0 || u16_at(footer, 8) as u64 != count {
+    let disk = u16_at(footer, 4);
+    let start_disk = u16_at(footer, 6);
+    if ![0, u16::MAX].contains(&disk)
+        || ![0, u16::MAX].contains(&start_disk)
+        || u16_at(footer, 8) as u64 != count
+    {
         return Err(ArchiveError::Unsupported);
     }
     let mut central_end = end_offset;
+    let mut zip64_eocd = false;
     if end_offset >= 20 {
         file.seek(SeekFrom::Start(end_offset - 20))?;
         let mut locator = [0; 20];
@@ -458,7 +464,11 @@ fn inspect_index_with_label_policy(
             count = u64_at(&record, 32);
             central_size = u64_at(&record, 40);
             central_offset = u64_at(&record, 48);
+            zip64_eocd = true;
         }
+    }
+    if (disk == u16::MAX || start_disk == u16::MAX) && !zip64_eocd {
+        return Err(ArchiveError::Unsupported);
     }
     if count > limits.max_entries as u64 || central_size > MAX_METADATA_BYTES {
         return Err(ArchiveError::Limit);
