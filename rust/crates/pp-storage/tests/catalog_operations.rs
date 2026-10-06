@@ -639,21 +639,64 @@ fn database_bytes(path: &Path) -> Vec<Option<Vec<u8>>> {
 }
 
 #[test]
+fn catalog_rename_requires_a_name_and_preserves_unique_index_enforcement() {
+    let fixture = Fixture::new();
+    let owner = fixture.open();
+    let client = owner.local_source_catalog();
+    let first = create(&client, "First");
+    create(&client, "Second");
+
+    let error = client
+        .execute(Request::Update {
+            id: first,
+            patch: SourcePatch {
+                name: Some(" \u{2003} ".into()),
+                ..Default::default()
+            },
+        })
+        .unwrap_err();
+    assert_eq!(error.to_string(), "Source name is required");
+
+    assert!(
+        client
+            .execute(Request::Update {
+                id: first,
+                patch: SourcePatch {
+                    name: Some("Second".into()),
+                    ..Default::default()
+                },
+            })
+            .is_err()
+    );
+    assert_eq!(value(&client, Request::Get { id: first })["name"], "First");
+    owner.shutdown().unwrap();
+}
+
+#[test]
 fn ticket_t_59_catalog_legacy_names_cannot_be_renamed_out_of_history() {
     let fixture = Fixture::new();
     let owner = fixture.open();
     let client = owner.local_source_catalog();
-    for name in ["Legacy", "Accepted", "Draft", "Snapshot", "Modern", "Empty"] {
+    for name in [
+        "Legacy",
+        "Accepted",
+        "Draft",
+        "Snapshot",
+        "Modern",
+        "Empty",
+        "Ångström",
+    ] {
         create(&client, name);
     }
     owner.shutdown().unwrap();
     fixture.sql().execute_batch("PRAGMA foreign_keys=ON;
         INSERT INTO build_profiles(id,tenant_id,name) VALUES(1,'default','Build');
-        INSERT INTO parts(tenant_id,profile_id,match_key,filename,source_layer) VALUES('default',1,'p','a.stl','base:Legacy');
+        INSERT INTO parts(tenant_id,profile_id,match_key,filename,source_layer) VALUES('default',1,'p','a.stl','base:legacy');
+        INSERT INTO parts(tenant_id,profile_id,match_key,filename,source_layer) VALUES('default',1,'unicode','b.stl','base:ångström');
         INSERT INTO plan_revisions(id,tenant_id,profile_id,revision_number,provenance_kind,digest_format,snapshot_digest,created_by,accepted_by,created_at,accepted_at) VALUES(1,'default',1,1,'legacy','v1','digest','user','user','then','then');
-        INSERT INTO plan_revision_parts(tenant_id,revision_id,part_key,source_layer) VALUES('default',1,'accepted','addon:Accepted');
+        INSERT INTO plan_revision_parts(tenant_id,revision_id,part_key,source_layer) VALUES('default',1,'accepted','addon:ACCEPTED');
         INSERT INTO plan_drafts(id,tenant_id,profile_id,base_plan_version,state,digest_format,snapshot_digest,created_by,idempotency_key,created_at) VALUES(1,'default',1,0,'open','v1','digest','fixture','key','then');
-        INSERT INTO plan_draft_parts(tenant_id,draft_id,part_key,source_layer) VALUES('default',1,'draft','base:Draft');
+        INSERT INTO plan_draft_parts(tenant_id,draft_id,part_key,source_layer) VALUES('default',1,'draft','base:dRaFt');
         INSERT INTO plan_snapshots(tenant_id,profile_id,name,created_at,payload_json) VALUES('default',1,'Historical','then','{\"layers\":[{\"source_name\":\"snapshot\"}]}');
         INSERT INTO plan_revision_input_sets(id,tenant_id,profile_id,input_set_digest,expected_input_count,recorded_at,published_at) VALUES(1,'default',1,'inputs',1,'then','then');
         INSERT INTO plan_revision_inputs(tenant_id,input_set_id,source_id,source_layer,tracking_kind) VALUES('default',1,5,'base:Modern','untracked');
@@ -662,7 +705,7 @@ fn ticket_t_59_catalog_legacy_names_cannot_be_renamed_out_of_history() {
     let client = owner.local_source_catalog();
     let original = rows(&fixture.0);
     let bytes = database_bytes(&fixture.0);
-    for id in 1..=4 {
+    for id in [1, 2, 3, 4, 7] {
         let error = client
             .execute(Request::Update {
                 id,

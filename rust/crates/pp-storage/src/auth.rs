@@ -49,6 +49,14 @@ impl Provider {
             Self::Discord => "discord",
         }
     }
+    fn from_name(value: &str) -> Result<Self> {
+        match value {
+            "email" => Ok(Self::Email),
+            "github" => Ok(Self::Github),
+            "discord" => Ok(Self::Discord),
+            _ => Err(AuthFailure::Storage.into()),
+        }
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct User {
@@ -123,7 +131,6 @@ pub enum Request {
     },
     ResolveSession {
         token: Secret,
-        provider: Provider,
     },
     Logout {
         token: Secret,
@@ -186,7 +193,7 @@ impl Request {
                 password,
             } => vec![email, display_name, password.expose()],
             Self::Login { email, password } => vec![email, password.expose()],
-            Self::ResolveSession { token, .. } | Self::Logout { token } => vec![token.expose()],
+            Self::ResolveSession { token } | Self::Logout { token } => vec![token.expose()],
             Self::LogoutAll { session }
             | Self::ListKeys { session }
             | Self::CreateKey { session } => vec![session.expose()],
@@ -416,7 +423,7 @@ impl AuthClient {
                     .as_ref()
                     .is_some_and(|hash| hash.starts_with("scrypt:"))
                 {
-                    Some(crypto::hash(&password)?)
+                    crypto::hash(&password).ok()
                 } else {
                     None
                 };
@@ -455,10 +462,9 @@ impl AuthClient {
                 token: crypto::digest(token.expose()),
                 replacement: crypto::hash(&replacement)?,
             },
-            Request::ResolveSession { token, provider } => Command::ResolveSession {
-                token: crypto::digest(token.expose()),
-                provider,
-            },
+            Request::ResolveSession { token } => {
+                Command::ResolveSession(crypto::digest(token.expose()))
+            }
             Request::Logout { token } => Command::Logout(crypto::digest(token.expose())),
             Request::LogoutAll { session } => Command::LogoutAll(crypto::digest(session.expose())),
             Request::RequestReset { email } => Command::RequestReset(email.to_lowercase()),
@@ -556,10 +562,7 @@ pub(super) enum Command {
         credential: Credential,
         replacement: Option<String>,
     },
-    ResolveSession {
-        token: String,
-        provider: Provider,
-    },
+    ResolveSession(String),
     Logout(String),
     LogoutAll(String),
     ChangePassword {
@@ -642,15 +645,22 @@ fn by_email(tx: &Transaction<'_>, email: &str) -> Result<Option<Credential>> {
         .optional()?)
 }
 fn session_user(tx: &Transaction<'_>, token: &str) -> Result<Option<Credential>> {
-    let id: Option<String> = tx
+    let session: Option<(String, String)> = tx
         .query_row(
-            "SELECT user_id FROM sessions WHERE id=?1 AND expires_at>?2",
+            "SELECT user_id,provider FROM sessions WHERE id=?1 AND expires_at>?2",
             params![token, timestamp(0)],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()?;
-    match id {
-        Some(id) => by_id(tx, &id),
+    match session {
+        Some((id, provider)) => {
+            let provider = Provider::from_name(&provider)?;
+            let mut credential = by_id(tx, &id)?;
+            if let Some(credential) = &mut credential {
+                credential.user.provider = provider;
+            }
+            Ok(credential)
+        }
         None => Ok(None),
     }
 }
@@ -700,15 +710,22 @@ fn create_user(
         .ok_or_else(|| anyhow!("User insert failed"))?
         .user)
 }
-fn create_session(tx: &Transaction<'_>, mut user: User, policy: AuthPolicy) -> Result<Outcome> {
+fn create_session(
+    tx: &Transaction<'_>,
+    mut user: User,
+    provider: Provider,
+    policy: AuthPolicy,
+) -> Result<Outcome> {
     user.tenant_id = policy::tenant_for_authenticated_actor(tx, &user, policy)?;
+    user.provider = provider;
     let token = crypto::token()?;
     tx.execute(
-        "INSERT INTO sessions(id,user_id,expires_at) VALUES(?1,?2,?3)",
+        "INSERT INTO sessions(id,user_id,expires_at,provider) VALUES(?1,?2,?3,?4)",
         params![
             crypto::digest(token.expose()),
             user.user_id,
-            timestamp(14 * 24 * 60 * 60)
+            timestamp(14 * 24 * 60 * 60),
+            provider.name()
         ],
     )?;
     Ok(Outcome::Session { user, token })
@@ -774,7 +791,7 @@ pub(super) fn execute(
                 AuthFailure::DuplicateEmail
             );
             let user = create_user(&tx, Some(email), display_name, Some(hash), first_user)?;
-            create_session(&tx, user, policy)?
+            create_session(&tx, user, Provider::Email, policy)?
         }
         Command::Login {
             credential,
@@ -792,14 +809,13 @@ pub(super) fn execute(
                     params![hash, current.user.user_id],
                 )?;
             }
-            create_session(&tx, current.user, policy)?
+            create_session(&tx, current.user, Provider::Email, policy)?
         }
-        Command::ResolveSession { token, provider } => Outcome::User(
+        Command::ResolveSession(token) => Outcome::User(
             session_user(&tx, &token)?
-                .map(|c| {
-                    let mut user = c.user;
+                .map(|credential| {
+                    let mut user = credential.user;
                     user.tenant_id = policy::tenant_for_authenticated_actor(&tx, &user, policy)?;
-                    user.provider = provider;
                     Ok::<_, anyhow::Error>(user)
                 })
                 .transpose()?,
@@ -828,7 +844,7 @@ pub(super) fn execute(
             )?;
             ensure!(changed == 1, AuthFailure::CredentialChanged);
             invalidate(&tx, &user.user_id)?;
-            create_session(&tx, user, policy)?
+            create_session(&tx, user, Provider::Email, policy)?
         }
         Command::RequestReset(email) => {
             if let Some(credential) = by_email(&tx, &email)? {
@@ -863,7 +879,7 @@ pub(super) fn execute(
                 let user = by_id(&tx, &id)?
                     .ok_or_else(|| anyhow!("Reset user missing"))?
                     .user;
-                create_session(&tx, user, policy)?
+                create_session(&tx, user, Provider::Email, policy)?
             } else {
                 Outcome::Changed(false)
             }
@@ -885,13 +901,12 @@ pub(super) fn execute(
                     }
                 }
             };
-            let mut user = match existing {
+            let user = match existing {
                 Some(c) => c.user,
                 None => create_user(&tx, email, display_name, None, first_user)?,
             };
             link(&tx, &user.user_id, provider, &provider_user_id)?;
-            user.provider = provider;
-            create_session(&tx, user, policy)?
+            create_session(&tx, user, provider, policy)?
         }
         Command::LinkIdentity {
             session,
