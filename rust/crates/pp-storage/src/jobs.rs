@@ -1423,3 +1423,117 @@ impl ServerWorkerClient {
         )
     }
 }
+
+fn printer_upload_conflicts(
+    tx: &Transaction<'_>,
+    tenant: &str,
+    profile: i64,
+    profile_id: Option<u64>,
+    checkoff_units: &[CheckoffUnit],
+) -> Result<bool> {
+    let mut owners = std::collections::HashSet::new();
+    let mut unresolved = false;
+    for unit in checkoff_units {
+        let owner: Option<i64> = tx
+            .query_row(
+                "SELECT p.profile_id FROM parts p JOIN build_profiles b ON b.id=p.profile_id AND b.tenant_id=p.tenant_id WHERE p.tenant_id=? AND p.id=?",
+                params![tenant, unit.part_id as i64],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(owner) = owner {
+            owners.insert(owner);
+        } else {
+            unresolved = true;
+        }
+    }
+    ensure!(
+        owners.len() <= 1
+            && profile_id.is_none_or(|id| owners.iter().all(|owner| *owner as u64 == id)),
+        "Job coordinate ownership mismatch"
+    );
+    Ok(unresolved || profile_id == Some(profile as u64) || owners.contains(&profile))
+}
+
+pub(crate) fn publication_conflicts(
+    tx: &Transaction<'_>,
+    tenant: &str,
+    profile: i64,
+) -> Result<Vec<pp_contracts::publication::ExecutionConflict>> {
+    let records = tx
+        .prepare("SELECT id,kind,state,document FROM durable_jobs WHERE tenant=? ORDER BY id")?
+        .query_map([tenant], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut result = Vec::new();
+    for (id, kind, state, document) in records {
+        let record = decode(&document)?;
+        ensure!(
+            record.tenant == tenant
+                && record.job_id == id
+                && record.kind == record.payload.kind()
+                && record.kind.name() == kind
+                && record.state.name() == state,
+            "Job identity mismatch"
+        );
+        if record.state.terminal() {
+            continue;
+        }
+        let affected = match &record.payload {
+            Payload::Sync { .. }
+            | Payload::ImportScan { .. }
+            | Payload::ExtractSourceDocs { .. }
+            | Payload::CheckSourceUpdates {}
+            | Payload::SuppliedSourceImport { .. } => false,
+            Payload::ExportStlPack { profile_id, .. }
+            | Payload::ExportChecklistHtml { profile_id }
+            | Payload::ExportKitBundle { profile_id, .. }
+            | Payload::ExportAcceptedPlate3mf { profile_id, .. }
+            | Payload::ExportDirect3mf { profile_id, .. } => *profile_id == profile as u64,
+            Payload::PrinterUpload {
+                profile_id,
+                checkoff_units,
+                ..
+            } => printer_upload_conflicts(tx, tenant, profile, *profile_id, checkoff_units)?,
+            Payload::PrinterStart(request) => {
+                let parent = retained_owned(tx, &request.uploaded_job_id, tenant)?;
+                ensure!(
+                    parent.kind == JobKind::PrinterUpload
+                        && parent.state == PersistentState::UploadedOnly,
+                    "Parent job is not an uploaded-only print"
+                );
+                let proof = parent
+                    .uploaded_only_proof()
+                    .ok_or_else(|| anyhow!("Parent job is not an uploaded-only print"))?;
+                ensure!(
+                    request.printer_id() == Some(proof.printer_id)
+                        && request.upload_effect() == Some(proof.upload),
+                    "Printer start binding mismatch"
+                );
+                let Payload::PrinterUpload {
+                    profile_id,
+                    checkoff_units,
+                    ..
+                } = &parent.payload
+                else {
+                    return Err(anyhow!("Parent job is not an uploaded-only print"));
+                };
+                printer_upload_conflicts(tx, tenant, profile, *profile_id, checkoff_units)?
+            }
+        };
+        if affected {
+            result.push(pp_contracts::publication::ExecutionConflict {
+                operation_id: id,
+                kind,
+                state,
+            });
+        }
+    }
+    Ok(result)
+}

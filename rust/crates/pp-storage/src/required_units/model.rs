@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 
 pub(super) const FORMAT: &str = "required-unit-reconciliation-v1";
-pub(super) const PART_FIELDS: &[&str] = &[
+pub(crate) const PART_FIELDS: &[&str] = &[
     "partKey",
     "relativePath",
     "filename",
@@ -28,7 +28,7 @@ pub(super) const PART_FIELDS: &[&str] = &[
     "manifestSource",
     "artifactDigest",
 ];
-pub(super) const INPUT_FIELDS: &[&str] = &[
+pub(crate) const INPUT_FIELDS: &[&str] = &[
     "sourceId",
     "sourceLayer",
     "layerOrder",
@@ -37,15 +37,15 @@ pub(super) const INPUT_FIELDS: &[&str] = &[
     "manifestDigest",
     "effectiveNamingDigest",
 ];
-pub(super) fn digest(value: &Value) -> String {
+pub(crate) fn digest(value: &Value) -> String {
     hex::encode(Sha256::digest(value.to_string()))
 }
-pub(super) fn js_cmp(a: &Value, b: &Value) -> std::cmp::Ordering {
+pub(crate) fn js_cmp(a: &Value, b: &Value) -> std::cmp::Ordering {
     a.to_string()
         .encode_utf16()
         .cmp(b.to_string().encode_utf16())
 }
-pub(super) fn project(row: &Value, fields: &[&str]) -> Value {
+pub(crate) fn project(row: &Value, fields: &[&str]) -> Value {
     let mut out = serde_json::Map::new();
     for field in fields {
         out.insert((*field).into(), row[*field].clone());
@@ -98,21 +98,21 @@ pub(super) fn decisions(input: &[Decision]) -> Result<Vec<Value>> {
     Ok(result)
 }
 #[derive(Clone)]
-pub(super) struct Unit {
+pub(crate) struct Unit {
     pub token: String,
     pub prior_index: i64,
     pub created_at: String,
     pub completed: bool,
     pub assembled: bool,
 }
-pub(super) struct BasePart {
+pub(crate) struct BasePart {
     pub id: i64,
     pub source_id: Option<i64>,
     pub artifact: Option<String>,
     pub role: String,
     pub units: Vec<Unit>,
 }
-pub(super) struct Reconciled {
+pub(crate) struct Reconciled {
     pub result: Value,
     pub basis: Value,
 }
@@ -205,7 +205,7 @@ fn exact(target: &Target, source: Option<i64>, base: &BasePart) -> bool {
             .unwrap_or(&target.role_inferred)
             == &base.role
 }
-pub(super) fn role(part: &Value) -> &str {
+pub(crate) fn role(part: &Value) -> &str {
     part["roleOverride"]
         .as_str()
         .or_else(|| part["roleInferred"].as_str())
@@ -457,7 +457,7 @@ pub(super) fn reconcile(
         basis: json!(rows),
     })
 }
-pub(super) fn validate_token(t: &str) -> Result<()> {
+pub(crate) fn validate_token(t: &str) -> Result<()> {
     ensure!(
         t.len() == 36
             && t.starts_with("ppu_")
