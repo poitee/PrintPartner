@@ -1012,6 +1012,13 @@ pub(crate) fn reconciliation_actor(
     credential: crate::read_model::Credential,
     policy: AuthPolicy,
 ) -> Result<(String, String)> {
+    reconciliation_actor_ref(tx, &credential, policy)
+}
+pub(crate) fn reconciliation_actor_ref(
+    tx: &Transaction<'_>,
+    credential: &crate::read_model::Credential,
+    policy: AuthPolicy,
+) -> Result<(String, String)> {
     match credential {
         crate::read_model::Credential::Session(secret) => {
             ensure!(
@@ -1025,7 +1032,7 @@ pub(crate) fn reconciliation_actor(
         crate::read_model::Credential::ApiKey {
             routed_tenant,
             secret,
-        } => match keys::resolve(tx, &routed_tenant, secret)? {
+        } => match keys::resolve_ref(tx, routed_tenant, secret)? {
             Outcome::KeyResolved {
                 principal: Some(principal),
                 ..
@@ -1035,5 +1042,30 @@ pub(crate) fn reconciliation_actor(
             }
             _ => bail!("Authentication required"),
         },
+    }
+}
+
+pub(crate) fn observe_reconciliation_actor(
+    tx: &Transaction<'_>,
+    credential: &crate::read_model::Credential,
+    policy: AuthPolicy,
+) -> Result<(String, String)> {
+    match credential {
+        crate::read_model::Credential::Session(secret) => {
+            ensure!(
+                !secret.expose().is_empty() && secret.expose().len() <= 4096,
+                AuthFailure::SessionRequired
+            );
+            let user = actor(tx, &crypto::digest(secret.expose()))?;
+            let tenant = policy::tenant_for_authenticated_actor(tx, &user, policy)?;
+            Ok((tenant, user.user_id))
+        }
+        crate::read_model::Credential::ApiKey {
+            routed_tenant,
+            secret,
+        } => {
+            let tenant = keys::read_tenant(tx, routed_tenant, secret)?;
+            Ok((tenant.clone(), format!("tenant:{tenant}")))
+        }
     }
 }

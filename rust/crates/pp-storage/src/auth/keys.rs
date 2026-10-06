@@ -173,6 +173,9 @@ fn unexpired(expires: &Option<String>) -> bool {
     }
 }
 pub(super) fn resolve(tx: &Transaction<'_>, tenant: &str, raw: Secret) -> Result<Outcome> {
+    resolve_ref(tx, tenant, &raw)
+}
+pub(super) fn resolve_ref(tx: &Transaction<'_>, tenant: &str, raw: &Secret) -> Result<Outcome> {
     ensure!(
         !tenant.is_empty() && tenant.len() <= 512 && raw.expose().len() <= 4096,
         "Invalid key request"

@@ -8,6 +8,7 @@ pub mod read_model;
 pub mod required_units;
 mod schema;
 pub mod uploads;
+pub mod working_drafts;
 
 use anyhow::{Result, anyhow, ensure};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, params};
@@ -64,6 +65,10 @@ enum Work {
     Backup(PathBuf),
 }
 enum Envelope {
+    WorkingDraft {
+        command: working_drafts::Command,
+        reply: mpsc::Sender<Result<pp_contracts::working_drafts::Outcome>>,
+    },
     Publication {
         command: plan_publication::Command,
         reply: mpsc::Sender<Result<pp_contracts::publication::Outcome>>,
@@ -402,6 +407,9 @@ impl WriterOwner {
                 );
                 catalog_state.reap(orphaned);
                 match envelope {
+                    Envelope::WorkingDraft { command, reply } => {
+                        let _ = reply.send(working_drafts::execute(&mut connection, command));
+                    }
                     Envelope::Publication { command, reply } => {
                         let _ = reply.send(plan_publication::execute(
                             &mut connection,

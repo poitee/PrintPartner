@@ -52,7 +52,7 @@ pub(crate) fn project(row: &Value, fields: &[&str]) -> Value {
     }
     Value::Object(out)
 }
-pub(super) fn planning(draft: &Value, inputs: &[Value], parts: &[Value]) -> String {
+pub(crate) fn planning(draft: &Value, inputs: &[Value], parts: &[Value]) -> String {
     let mut inputs: Vec<_> = inputs.iter().map(|r| project(r, INPUT_FIELDS)).collect();
     inputs.sort_by(|a, b| {
         a["layerOrder"]
@@ -76,7 +76,7 @@ pub(super) fn planning(draft: &Value, inputs: &[Value], parts: &[Value]) -> Stri
         &json!({"format":"plan-draft-v1","base_revision_id":draft["baseRevisionId"],"base_plan_version":draft["basePlanVersion"],"inputs":inputs,"parts":parts}),
     )
 }
-pub(super) fn selection(planning: &str, reconciliation: Option<&str>) -> String {
+pub(crate) fn selection(planning: &str, reconciliation: Option<&str>) -> String {
     digest(
         &json!({"format":"plan-draft-v2","planning_digest":planning,"required_unit_reconciliation":reconciliation.map(|d| json!({"format":FORMAT,"digest":d}))}),
     )
