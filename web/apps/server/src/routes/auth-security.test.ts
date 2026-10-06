@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import Database from "better-sqlite3";
 import { buildApp } from "../app.js";
 import { createSelfHostPorts } from "../adapters/self-host/index.js";
 import { loadConfig, type ServerConfig } from "../config.js";
@@ -78,6 +79,40 @@ describe("production authentication routes", () => {
     }
   });
 
+  it("allows logout when a stored session provider is invalid", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pp-auth-invalid-provider-"));
+    const { app, ports } = await makeProductionApp(dir);
+
+    try {
+      const registration = await app.inject({
+        method: "POST",
+        url: "/auth/register",
+        payload: {
+          email: "logout@example.com",
+          password: "correct-horse-battery",
+          display_name: "Logout",
+        },
+      });
+      const session = registration.cookies.find((cookie) => cookie.name === "pp_session");
+      const db = new Database(join(dir, "print-partner.db"));
+      db.prepare("UPDATE sessions SET provider='unknown'").run();
+      db.close();
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/auth/logout",
+        cookies: { pp_session: session?.value ?? "" },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({ ok: true });
+      expect(response.cookies.find((cookie) => cookie.name === "pp_session")?.value).toBe("");
+    } finally {
+      await app.close();
+      ports.db.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("invalidates other sessions when the password changes", async () => {
     const dir = mkdtempSync(join(tmpdir(), "pp-auth-change-password-"));
     const { app, ports } = await makeProductionApp(dir);
@@ -105,6 +140,12 @@ describe("production authentication routes", () => {
       });
       expect(secondLogin.statusCode).toBe(200);
       const secondCookie = String(secondLogin.headers["set-cookie"]).split(";", 1)[0];
+      const passwordSession = await app.inject({
+        method: "GET",
+        url: "/auth/me",
+        headers: { cookie: secondCookie },
+      });
+      expect(passwordSession.json().user).toMatchObject({ provider: "email" });
 
       const changed = await app.inject({
         method: "POST",
@@ -320,7 +361,7 @@ describe("production authentication routes", () => {
         cookies: { pp_session: sessionCookie?.value ?? "" },
       });
       expect(currentUser.statusCode).toBe(200);
-      expect(currentUser.json().user).toMatchObject({ email: null });
+      expect(currentUser.json().user).toMatchObject({ email: null, provider: "github" });
       expect(currentUser.json().user.user_id).not.toBe(registeredUserId);
     } finally {
       await app.close();
@@ -383,7 +424,7 @@ describe("production authentication routes", () => {
         url: "/auth/me",
         cookies: { pp_session: sessionCookie?.value ?? "" },
       });
-      expect(currentUser.json().user).toMatchObject({ email: null });
+      expect(currentUser.json().user).toMatchObject({ email: null, provider: "github" });
     } finally {
       await app.close();
       ports.db.close();
@@ -444,7 +485,10 @@ describe("production authentication routes", () => {
         url: "/auth/me",
         cookies: { pp_session: firstSession },
       });
-      expect(firstUser.json().user).toMatchObject({ email: "verified@example.com" });
+      expect(firstUser.json().user).toMatchObject({
+        email: "verified@example.com",
+        provider: "github",
+      });
       const linkedUserId = firstUser.json().user.user_id;
 
       fetchMock.mockClear();
@@ -488,6 +532,7 @@ describe("production authentication routes", () => {
       expect(currentUser.json().user).toMatchObject({
         user_id: linkedUserId,
         email: "verified@example.com",
+        provider: "github",
       });
     } finally {
       await app.close();
@@ -558,7 +603,7 @@ describe("production authentication routes", () => {
         cookies: { pp_session: sessionCookie?.value ?? "" },
       });
       expect(currentUser.statusCode).toBe(200);
-      expect(currentUser.json().user).toMatchObject({ email: null });
+      expect(currentUser.json().user).toMatchObject({ email: null, provider: "discord" });
       expect(currentUser.json().user.user_id).not.toBe(registeredUserId);
     } finally {
       await app.close();

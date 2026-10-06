@@ -264,7 +264,41 @@ impl TestServer {
             .await
             .unwrap()
     }
+    fn session_cookie(response: &reqwest::Response) -> String {
+        response
+            .headers()
+            .get_all("set-cookie")
+            .iter()
+            .find_map(|header| {
+                header
+                    .to_str()
+                    .ok()
+                    .filter(|value| value.starts_with("pp_session="))
+                    .map(|value| value.split(';').next().unwrap().to_owned())
+            })
+            .unwrap()
+    }
+    async fn me(&self, cookie: &str) -> Value {
+        self.client
+            .get(format!("{}/auth/me", self.origin))
+            .header("Cookie", cookie)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap()
+    }
     async fn close(self, expected_users: i64, expected_identities: i64) {
+        self.close_with_pairs(expected_users, expected_identities, &[])
+            .await;
+    }
+    async fn close_with_pairs(
+        self,
+        expected_users: i64,
+        expected_identities: i64,
+        expected_pairs: &[(&str, &str)],
+    ) {
         self.app_stop.send(()).unwrap();
         self.app_task.await.unwrap();
         self.fake_task.abort();
@@ -282,9 +316,74 @@ impl TestServer {
                 .unwrap(),
             expected_identities
         );
+        if !expected_pairs.is_empty() {
+            let mut statement = db
+                .prepare(
+                    "SELECT provider,provider_user_id FROM auth_identities ORDER BY provider,provider_user_id",
+                )
+                .unwrap();
+            let pairs: Vec<(String, String)> = statement
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap();
+            assert_eq!(
+                pairs,
+                expected_pairs
+                    .iter()
+                    .map(|(provider, id)| ((*provider).to_owned(), (*id).to_owned()))
+                    .collect::<Vec<_>>()
+            );
+        }
         drop(db);
         std::fs::remove_dir_all(self.directory).unwrap();
     }
+}
+
+#[tokio::test]
+async fn linked_account_sessions_remember_their_sign_in_provider() {
+    let server = TestServer::start(RegistrationPolicy::Open, false).await;
+    let registered = server
+        .client
+        .post(format!("{}/auth/register", server.origin))
+        .header("Origin", &server.origin)
+        .json(&json!({
+            "email": "primary@example.com",
+            "password": "password-1234",
+            "display_name": "Primary"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(registered.status(), 200);
+    let email_session = TestServer::session_cookie(&registered);
+
+    let (github_url, github_state) = server.begin(Provider::Github).await;
+    let github = server
+        .finish(Provider::Github, &github_url, &github_state, "first")
+        .await;
+    assert_eq!(github.status(), 302);
+    let github_session = TestServer::session_cookie(&github);
+
+    let (discord_url, discord_state) = server.begin(Provider::Discord).await;
+    let discord = server
+        .finish(Provider::Discord, &discord_url, &discord_state, "first")
+        .await;
+    assert_eq!(discord.status(), 302);
+    let discord_session = TestServer::session_cookie(&discord);
+
+    for (cookie, expected) in [
+        (&email_session, "email"),
+        (&github_session, "github"),
+        (&discord_session, "discord"),
+    ] {
+        let me = server.me(cookie).await;
+        assert_eq!(me["user"]["provider"], expected);
+    }
+
+    server
+        .close_with_pairs(1, 2, &[("discord", "123"), ("github", "123")])
+        .await;
 }
 
 #[tokio::test]

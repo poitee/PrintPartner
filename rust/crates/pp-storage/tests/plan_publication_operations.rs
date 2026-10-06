@@ -168,6 +168,12 @@ fn enqueue(owner: &WriterOwner, key: &str, payload: jobs::Payload) -> jobs::JobR
     )
 }
 fn upload(profile: Option<u64>, part: Option<u64>) -> jobs::Payload {
+    match part {
+        Some(part) => upload_parts(profile, &[part]),
+        None => upload_parts(profile, &[]),
+    }
+}
+fn upload_parts(profile: Option<u64>, parts: &[u64]) -> jobs::Payload {
     jobs::Payload::PrinterUpload {
         printer_id: "fixture-printer".into(),
         artifact_path: "exports/fixture.gcode".into(),
@@ -175,15 +181,139 @@ fn upload(profile: Option<u64>, part: Option<u64>) -> jobs::Payload {
         start: false,
         profile_id: profile,
         host_name: None,
-        checkoff_units: part
-            .into_iter()
+        checkoff_units: parts
+            .iter()
             .map(|part_id| jobs::CheckoffUnit {
-                part_id,
+                part_id: *part_id,
                 unit_index: 0,
                 object_name: None,
             })
             .collect(),
         unlabeled_names: vec![],
+    }
+}
+fn uploaded_only_parent(
+    owner: &WriterOwner,
+    key: &str,
+    profile: Option<u64>,
+    parts: &[u64],
+) -> jobs::JobRecord {
+    let mut payload = upload_parts(profile, parts);
+    let jobs::Payload::PrinterUpload { start, .. } = &mut payload else {
+        unreachable!()
+    };
+    *start = true;
+    let parent = enqueue(owner, key, payload);
+    let worker = owner.job_worker(admission()).unwrap();
+    let mut claim = worker.claim().unwrap().unwrap();
+    assert_eq!(claim.job.job_id, parent.job_id);
+    assert!(claim.source_work.is_none());
+    let intent = jobs::EffectIntent {
+        operation: jobs::EffectOperation::PrinterUpload,
+        basis_hash: "a".repeat(64),
+        content_hash: "b".repeat(64),
+        target: "fixture-printer".into(),
+    };
+    worker
+        .update(
+            &mut claim.lease,
+            jobs::WorkerOperation::BeginEffect(intent.clone()),
+        )
+        .unwrap();
+    let uncertain = worker
+        .update(&mut claim.lease, jobs::WorkerOperation::Fail)
+        .unwrap();
+    jobs_call(
+        owner,
+        jobs::UserOperation::Reconcile {
+            job_id: uncertain.job_id,
+            expected_version: uncertain.state_version,
+            expected_generation: uncertain.generation,
+            effect_hash: intent.content_hash.clone(),
+            decision: jobs::Decision::ConfirmSucceeded,
+            receipt: Some(jobs::ResultArtifact {
+                receipt_id: format!("{key}-receipt"),
+                content_hash: intent.content_hash,
+                target: intent.target,
+            }),
+        },
+    )
+}
+fn bound_start(owner: &WriterOwner, key: &str, parent: &jobs::JobRecord) -> jobs::JobRecord {
+    enqueue(
+        owner,
+        key,
+        jobs::Payload::PrinterStart(jobs::PrinterStartRequest::new(&parent.job_id)),
+    )
+}
+fn advance_bound_start(owner: &WriterOwner, child: &jobs::JobRecord, state: &str) {
+    if state == "queued" {
+        return;
+    }
+    let worker = owner.job_worker(admission()).unwrap();
+    let mut claim = worker.claim().unwrap().unwrap();
+    assert_eq!(claim.job.job_id, child.job_id);
+    assert!(claim.source_work.is_none());
+    if state == "running" {
+        return;
+    }
+    let jobs::Payload::PrinterStart(request) = &claim.job.payload else {
+        panic!("printer start")
+    };
+    let mut intent = request.upload_effect().unwrap().intent.clone();
+    intent.operation = jobs::EffectOperation::PrinterStart;
+    worker
+        .update(&mut claim.lease, jobs::WorkerOperation::BeginEffect(intent))
+        .unwrap();
+    if state == "reconciliation_required" {
+        jobs_call(
+            owner,
+            jobs::UserOperation::Cancel {
+                job_id: child.job_id.clone(),
+            },
+        );
+    }
+}
+fn archive_parent(fixture: &Fixture, owner: WriterOwner, parent: &jobs::JobRecord) -> WriterOwner {
+    owner.shutdown().unwrap();
+    let connection = fixture.sql();
+    connection
+        .execute(
+            "UPDATE durable_jobs SET updated=updated-172800,document=json_set(document,'$.updated_at',updated-172800) WHERE id=?1",
+            [&parent.job_id],
+        )
+        .unwrap();
+    drop(connection);
+    let owner = fixture.open();
+    assert_eq!(owner.retain_jobs(1, 1).unwrap(), 1);
+    let connection = fixture.sql();
+    let retained: (i64, i64) = connection
+        .query_row(
+            "SELECT (SELECT COUNT(*) FROM durable_jobs WHERE id=?1),(SELECT COUNT(*) FROM durable_job_keys WHERE job_id=?1 AND archived_document IS NOT NULL)",
+            [&parent.job_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(retained, (0, 1));
+    drop(connection);
+    owner.shutdown().unwrap();
+    fixture.open()
+}
+fn assert_job_tables_unchanged(before: &Value, after: &Value) {
+    for table in ["durable_jobs", "durable_job_keys", "durable_job_history"] {
+        assert_eq!(before[table], after[table], "{table}");
+    }
+}
+fn state_name(state: jobs::PersistentState) -> &'static str {
+    match state {
+        jobs::PersistentState::Queued => "queued",
+        jobs::PersistentState::Running => "running",
+        jobs::PersistentState::EffectAdmitted => "effect_admitted",
+        jobs::PersistentState::ReconciliationRequired => "reconciliation_required",
+        jobs::PersistentState::Succeeded => "succeeded",
+        jobs::PersistentState::UploadedOnly => "uploaded_only",
+        jobs::PersistentState::Failed => "failed",
+        jobs::PersistentState::Cancelled => "cancelled",
     }
 }
 fn admission() -> jobs::WorkerAdmission {
@@ -192,6 +322,292 @@ fn admission() -> jobs::WorkerAdmission {
         total: 2,
         per_resource: 1,
         lease_seconds: 60,
+    }
+}
+#[test]
+fn bound_start_matching_profile_refuses_without_mutation() {
+    let f = Fixture::new(true);
+    let owner = f.open();
+    let parent = uploaded_only_parent(&owner, "start-parent", Some(1), &[1]);
+    let child = bound_start(&owner, "start-child", &parent);
+    let before = f.graph();
+    assert_eq!(
+        f.call(&owner.publication(), "blocked").unwrap(),
+        json!({"kind":"execution_conflict","operations":[{"operation_id":child.job_id,"kind":"printer-upload","state":"queued"}]})
+    );
+    assert_eq!(f.graph(), before);
+    owner.shutdown().unwrap();
+}
+#[test]
+fn bound_start_states_conflict_through_live_and_archived_parent_after_restart() {
+    for archived in [false, true] {
+        for state in [
+            "queued",
+            "running",
+            "effect_admitted",
+            "reconciliation_required",
+        ] {
+            let fixture = Fixture::new(true);
+            let mut owner = fixture.open();
+            let parent = uploaded_only_parent(
+                &owner,
+                &format!("state-parent-{archived}-{state}"),
+                Some(1),
+                &[1],
+            );
+            let child = bound_start(&owner, &format!("state-child-{archived}-{state}"), &parent);
+            if archived {
+                owner = archive_parent(&fixture, owner, &parent);
+            }
+            advance_bound_start(&owner, &child, state);
+            for attempt in 0..if archived { 2 } else { 1 } {
+                let current = jobs_call(
+                    &owner,
+                    jobs::UserOperation::Get {
+                        job_id: child.job_id.clone(),
+                    },
+                );
+                if attempt == 0 {
+                    assert_eq!(state_name(current.state), state);
+                }
+                let expected_state = state_name(current.state);
+                let before = fixture.graph();
+                assert_eq!(
+                    fixture
+                        .call(
+                            &owner.publication(),
+                            &format!("state-publication-{archived}-{state}-{attempt}"),
+                        )
+                        .unwrap(),
+                    json!({"kind":"execution_conflict","operations":[{"operation_id":child.job_id,"kind":"printer-upload","state":expected_state}]})
+                );
+                assert_eq!(fixture.graph(), before);
+                if attempt == 0 {
+                    owner.shutdown().unwrap();
+                    owner = fixture.open();
+                }
+            }
+            owner.shutdown().unwrap();
+        }
+    }
+}
+#[test]
+fn bound_start_coordinate_matrix_matches_direct_upload_policy() {
+    for (index, (profile, parts, conflicts)) in [
+        (Some(1), vec![], true),
+        (None, vec![1], true),
+        (Some(2), vec![], false),
+        (None, vec![], false),
+        (None, vec![999], true),
+        (Some(2), vec![999], true),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let fixture = Fixture::new(true);
+        let owner = fixture.open();
+        let parent =
+            uploaded_only_parent(&owner, &format!("matrix-parent-{index}"), profile, &parts);
+        let child = bound_start(&owner, &format!("matrix-child-{index}"), &parent);
+        let before = fixture.graph();
+        let result = fixture
+            .call(&owner.publication(), &format!("matrix-{index}"))
+            .unwrap();
+        if conflicts {
+            assert_eq!(
+                result,
+                json!({"kind":"execution_conflict","operations":[{"operation_id":child.job_id,"kind":"printer-upload","state":"queued"}]})
+            );
+            assert_eq!(fixture.graph(), before);
+        } else {
+            assert_eq!(result["kind"], "applied");
+            assert_job_tables_unchanged(&before, &fixture.graph());
+        }
+        owner.shutdown().unwrap();
+    }
+}
+#[test]
+fn bound_start_coordinate_contradictions_fail_without_mutation() {
+    for multiple_owners in [false, true] {
+        let fixture = Fixture::new(true);
+        if multiple_owners {
+            let connection = fixture.sql();
+            connection
+                .execute(
+                    "INSERT INTO build_profiles(id,tenant_id,name,accepted_plan_version) VALUES(3,'default','Other',0)",
+                    [],
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "INSERT INTO parts(id,tenant_id,profile_id,match_key,relative_path,filename,source_layer,status,role,quantity_auto,quantity_effective,included,notes) VALUES(3,'default',3,'other-part','other.stl','other.stl','fixture','base','primary',1,1,1,'')",
+                    [],
+                )
+                .unwrap();
+        }
+        let owner = fixture.open();
+        let parent = uploaded_only_parent(
+            &owner,
+            &format!("contradiction-parent-{multiple_owners}"),
+            (!multiple_owners).then_some(2),
+            if multiple_owners { &[1, 3] } else { &[1] },
+        );
+        bound_start(
+            &owner,
+            &format!("contradiction-child-{multiple_owners}"),
+            &parent,
+        );
+        let before = fixture.graph();
+        assert!(
+            fixture
+                .call(
+                    &owner.publication(),
+                    &format!("contradiction-{multiple_owners}"),
+                )
+                .is_err()
+        );
+        assert_eq!(fixture.graph(), before);
+        owner.shutdown().unwrap();
+    }
+}
+#[test]
+fn terminal_uploaded_parent_and_cancelled_bound_child_allow_publication() {
+    for cancelled_child in [false, true] {
+        let fixture = Fixture::new(true);
+        let owner = fixture.open();
+        let parent = uploaded_only_parent(
+            &owner,
+            &format!("terminal-parent-{cancelled_child}"),
+            Some(1),
+            &[1],
+        );
+        if cancelled_child {
+            let child = bound_start(&owner, "terminal-child", &parent);
+            let cancelled = jobs_call(
+                &owner,
+                jobs::UserOperation::Cancel {
+                    job_id: child.job_id,
+                },
+            );
+            assert_eq!(cancelled.state, jobs::PersistentState::Cancelled);
+        }
+        let before = fixture.graph();
+        assert_eq!(
+            fixture
+                .call(&owner.publication(), &format!("terminal-{cancelled_child}"),)
+                .unwrap()["kind"],
+            "applied"
+        );
+        assert_job_tables_unchanged(&before, &fixture.graph());
+        owner.shutdown().unwrap();
+    }
+}
+#[test]
+fn bound_start_parent_and_binding_tampering_fail_without_mutation() {
+    for case in [
+        "live-parent-id",
+        "live-parent-tenant",
+        "missing-parent",
+        "binding-receipt",
+        "archived-parent-id",
+        "archived-parent-tenant",
+        "archived-parent-kind",
+        "archived-parent-state",
+    ] {
+        let fixture = Fixture::new(true);
+        let mut owner = fixture.open();
+        let parent = uploaded_only_parent(&owner, &format!("tamper-parent-{case}"), Some(1), &[1]);
+        let child = bound_start(&owner, &format!("tamper-child-{case}"), &parent);
+        if case.starts_with("archived-") {
+            owner = archive_parent(&fixture, owner, &parent);
+        }
+        let connection = fixture.sql();
+        match case {
+            "live-parent-id" => {
+                connection
+                    .execute(
+                        "UPDATE durable_jobs SET document=json_set(document,'$.job_id','other-parent') WHERE id=?1",
+                        [&parent.job_id],
+                    )
+                    .unwrap();
+            }
+            "live-parent-tenant" => {
+                connection
+                    .execute(
+                        "UPDATE durable_jobs SET document=json_set(document,'$.tenant','other-tenant') WHERE id=?1",
+                        [&parent.job_id],
+                    )
+                    .unwrap();
+            }
+            "missing-parent" => {
+                connection
+                    .execute(
+                        "DELETE FROM durable_job_history WHERE job_id=?1",
+                        [&parent.job_id],
+                    )
+                    .unwrap();
+                connection
+                    .execute(
+                        "DELETE FROM durable_job_keys WHERE job_id=?1",
+                        [&parent.job_id],
+                    )
+                    .unwrap();
+                connection
+                    .execute("DELETE FROM durable_jobs WHERE id=?1", [&parent.job_id])
+                    .unwrap();
+            }
+            "binding-receipt" => {
+                connection
+                    .execute(
+                        "UPDATE durable_jobs SET document=json_set(document,'$.payload.payload.binding.upload_effect.receipt.receipt_id','other-receipt') WHERE id=?1",
+                        [&child.job_id],
+                    )
+                    .unwrap();
+            }
+            "archived-parent-id" => {
+                connection
+                    .execute(
+                        "UPDATE durable_job_keys SET archived_document=json_set(archived_document,'$.job_id','other-parent') WHERE job_id=?1",
+                        [&parent.job_id],
+                    )
+                    .unwrap();
+            }
+            "archived-parent-tenant" => {
+                connection
+                    .execute(
+                        "UPDATE durable_job_keys SET archived_document=json_set(archived_document,'$.tenant','other-tenant') WHERE job_id=?1",
+                        [&parent.job_id],
+                    )
+                    .unwrap();
+            }
+            "archived-parent-kind" => {
+                connection
+                    .execute(
+                        "UPDATE durable_job_keys SET archived_document=json_set(archived_document,'$.kind','sync') WHERE job_id=?1",
+                        [&parent.job_id],
+                    )
+                    .unwrap();
+            }
+            "archived-parent-state" => {
+                connection
+                    .execute(
+                        "UPDATE durable_job_keys SET archived_document=json_set(archived_document,'$.state','failed') WHERE job_id=?1",
+                        [&parent.job_id],
+                    )
+                    .unwrap();
+            }
+            _ => unreachable!(),
+        }
+        drop(connection);
+        let before = fixture.graph();
+        assert!(
+            fixture
+                .call(&owner.publication(), &format!("tamper-{case}"))
+                .is_err(),
+            "{case}"
+        );
+        assert_eq!(fixture.graph(), before, "{case}");
+        owner.shutdown().unwrap();
     }
 }
 #[test]
@@ -256,11 +672,12 @@ fn affected_printer_states_refuse_without_mutation() {
         let job = enqueue(&owner, "printer", upload(Some(1), Some(1)));
         let worker = owner.job_worker(admission()).unwrap();
         if state != "queued" {
-            let (_, mut lease) = worker.claim().unwrap().unwrap();
+            let mut claim = worker.claim().unwrap().unwrap();
+            assert!(claim.source_work.is_none());
             if state != "running" {
                 worker
                     .update(
-                        &mut lease,
+                        &mut claim.lease,
                         jobs::WorkerOperation::BeginEffect(jobs::EffectIntent {
                             operation: jobs::EffectOperation::PrinterUpload,
                             basis_hash: "a".repeat(64),
@@ -373,14 +790,18 @@ fn every_uncaptured_export_refuses_queued_and_running() {
             let owner = f.open();
             let job = enqueue(&owner, "export", payload.clone());
             let worker = owner.job_worker(admission()).unwrap();
-            if running {
-                worker.claim().unwrap().unwrap();
-            }
+            let claim = running.then(|| worker.claim().unwrap().unwrap());
+            assert!(
+                claim
+                    .as_ref()
+                    .is_none_or(|claim| claim.source_work.is_none())
+            );
             let before = f.graph();
             let result = f.call(&owner.publication(), "publish").unwrap();
             assert_eq!(result["kind"], "execution_conflict");
             assert_eq!(result["operations"][0]["operation_id"], job.job_id);
             assert_eq!(before, f.graph());
+            drop(claim);
             owner.shutdown().unwrap();
         }
     }
@@ -395,10 +816,13 @@ fn pinned_publication_preserves_real_source_lease() {
         jobs::Payload::ImportScan { project_id: 1 },
     );
     let worker = owner.job_worker(admission()).unwrap();
-    let (_, lease) = worker.claim().unwrap().unwrap();
-    let mut source_lease = worker
-        .begin_source_work(&lease, None, &AtomicBool::new(false), WAIT)
-        .unwrap();
+    let mut claim = worker.claim().unwrap().unwrap();
+    let mut source_lease = claim.source_work.take().expect("claimed Source work");
+    assert!(
+        worker
+            .begin_source_work(&claim.lease, None, &AtomicBool::new(false), WAIT)
+            .is_err()
+    );
     let before = f.graph();
     assert_eq!(
         f.call(&owner.publication(), "publish").unwrap()["kind"],
@@ -414,7 +838,16 @@ fn pinned_publication_preserves_real_source_lease() {
     ] {
         assert_eq!(before[table], after[table]);
     }
+    assert!(
+        worker
+            .begin_source_work(&claim.lease, None, &AtomicBool::new(false), WAIT)
+            .is_err()
+    );
     source_lease.release().unwrap();
+    let mut reacquired = worker
+        .begin_source_work(&claim.lease, None, &AtomicBool::new(false), WAIT)
+        .unwrap();
+    reacquired.release().unwrap();
     owner.shutdown().unwrap();
 }
 #[test]
