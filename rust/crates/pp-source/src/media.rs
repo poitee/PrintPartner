@@ -367,9 +367,6 @@ fn read_model(
     cancelled: &AtomicBool,
 ) -> Result<(ModelDocument, ModelReadStats)> {
     let length = input.metadata()?.len();
-    if length > archive::MAX_COMPRESSED_BYTES {
-        return Err(MediaError::Invalid("media-package-limit"));
-    }
     let mut reader = CountingReader {
         inner: input,
         bytes: 0,

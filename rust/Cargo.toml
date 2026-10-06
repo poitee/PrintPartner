@@ -9,9 +9,6 @@ edition = "2024"
 rust-version = "1.99"
 license = "AGPL-3.0-only"
 
-# Clippy's default groups at their default levels, applied to every crate.
-# CI adds `-D warnings`, so any warning fails the build. Tighten lints here,
-# not with per-crate `#[allow]`.
 [workspace.lints.clippy]
 correctness = { level = "deny", priority = -1 }
 suspicious = { level = "warn", priority = -1 }

@@ -60,6 +60,40 @@ impl Fixture {
             .join("repos/42/revisions/.pp-source-archives/.candidate")
     }
 }
+
+fn zip64_disk_sentinels(path: &Path) {
+    let mut bytes = fs::read(path).unwrap();
+    let end = bytes.len() - 22;
+    assert_eq!(&bytes[end..end + 4], b"PK\x05\x06");
+    let count = u16::from_le_bytes(bytes[end + 10..end + 12].try_into().unwrap()) as u64;
+    let central_size = u32::from_le_bytes(bytes[end + 12..end + 16].try_into().unwrap()) as u64;
+    let central_offset = u32::from_le_bytes(bytes[end + 16..end + 20].try_into().unwrap()) as u64;
+    bytes.truncate(end);
+    let zip64_offset = bytes.len() as u64;
+    bytes.extend_from_slice(b"PK\x06\x06");
+    bytes.extend_from_slice(&44u64.to_le_bytes());
+    bytes.extend_from_slice(&45u16.to_le_bytes());
+    bytes.extend_from_slice(&45u16.to_le_bytes());
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    bytes.extend_from_slice(&count.to_le_bytes());
+    bytes.extend_from_slice(&count.to_le_bytes());
+    bytes.extend_from_slice(&central_size.to_le_bytes());
+    bytes.extend_from_slice(&central_offset.to_le_bytes());
+    bytes.extend_from_slice(b"PK\x06\x07");
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    bytes.extend_from_slice(&zip64_offset.to_le_bytes());
+    bytes.extend_from_slice(&1u32.to_le_bytes());
+    bytes.extend_from_slice(b"PK\x05\x06");
+    bytes.extend_from_slice(&u16::MAX.to_le_bytes());
+    bytes.extend_from_slice(&u16::MAX.to_le_bytes());
+    bytes.extend_from_slice(&(count as u16).to_le_bytes());
+    bytes.extend_from_slice(&(count as u16).to_le_bytes());
+    bytes.extend_from_slice(&(central_size as u32).to_le_bytes());
+    bytes.extend_from_slice(&(central_offset as u32).to_le_bytes());
+    bytes.extend_from_slice(&0u16.to_le_bytes());
+    fs::write(path, bytes).unwrap();
+}
 impl Drop for Fixture {
     fn drop(&mut self) {
         fs::remove_dir_all(&self.0).unwrap();
@@ -117,6 +151,44 @@ fn owned_extraction_feeds_snapshot_and_cleanup_preserves_published_bytes() {
         .unwrap(),
         vec![7; 65536]
     );
+}
+
+#[test]
+fn zip64_disk_sentinels_resolve_to_single_disk() {
+    let fixture = Fixture::new();
+    fixture.zip(1);
+    zip64_disk_sentinels(&fixture.0.join("input/upload.zip"));
+    fixture
+        .tenant()
+        .source(42)
+        .unwrap()
+        .extract_zip(
+            fixture.input(),
+            ArchiveLimits::default(),
+            &AtomicBool::new(false),
+        )
+        .unwrap()
+        .discard()
+        .unwrap();
+}
+
+#[test]
+fn disk_sentinels_without_zip64_metadata_are_rejected() {
+    let fixture = Fixture::new();
+    fixture.zip(1);
+    let path = fixture.0.join("input/upload.zip");
+    let mut bytes = fs::read(&path).unwrap();
+    let end = bytes.len() - 22;
+    bytes[end + 4..end + 8].fill(0xff);
+    fs::write(path, bytes).unwrap();
+    assert!(matches!(
+        fixture.tenant().source(42).unwrap().extract_zip(
+            fixture.input(),
+            ArchiveLimits::default(),
+            &AtomicBool::new(false),
+        ),
+        Err(ArchiveError::Unsupported)
+    ));
 }
 
 #[test]
