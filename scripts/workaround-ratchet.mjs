@@ -1,6 +1,4 @@
 #!/usr/bin/env node
-// Fails CI when tracked source gains workaround markers. The committed baseline
-// may only go down: lower it with --update after removing markers.
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -65,7 +63,14 @@ const SYNTAX = {
   default: { block: ["/*", "*/"], line: "mixed", quotes: QUOTES.default, leadingStar: true, rustAllow: true },
   html: { block: ["<!--", "-->"], line: null, quotes: QUOTES.cStyle, html: true, rustAllow: false },
   python: { block: null, line: "hash", quotes: QUOTES.python, rustAllow: false },
-  rust: { block: ["/*", "*/"], line: "slash", quotes: QUOTES.rust, rustRawStrings: true, rustAllow: true },
+  rust: {
+    block: ["/*", "*/"],
+    line: "slash",
+    quotes: QUOTES.rust,
+    nestedBlock: true,
+    rustRawStrings: true,
+    rustAllow: true,
+  },
   shell: { block: null, line: "shellHash", quotes: QUOTES.shell, rustAllow: false },
 };
 
@@ -179,10 +184,19 @@ function scanLine(line, syntax, initialState) {
 
   while (index < line.length) {
     if (state.kind === "blockComment") {
-      const length = line.startsWith(state.close, index) ? state.close.length : 1;
+      if (state.depth > 0 && line.startsWith(state.open, index)) {
+        for (let offset = 0; offset < state.open.length; offset += 1) {
+          commentText[index + offset] = line[index + offset];
+        }
+        index += state.open.length;
+        state = { ...state, depth: state.depth + 1 };
+        continue;
+      }
+      const closes = line.startsWith(state.close, index);
+      const length = closes ? state.close.length : 1;
       for (let offset = 0; offset < length; offset += 1) commentText[index + offset] = line[index + offset];
       index += length;
-      if (length === state.close.length) state = state.resume;
+      if (closes) state = state.depth > 1 ? { ...state, depth: state.depth - 1 } : state.resume;
       continue;
     }
 
@@ -201,7 +215,7 @@ function scanLine(line, syntax, initialState) {
       const [open, close] = syntax.block;
       for (let offset = 0; offset < open.length; offset += 1) commentText[index + offset] = line[index + offset];
       index += open.length;
-      state = { kind: "blockComment", close, resume: state };
+      state = { kind: "blockComment", open, close, depth: syntax.nestedBlock ? 1 : 0, resume: state };
       continue;
     }
 
@@ -300,8 +314,6 @@ export function main(argv = process.argv.slice(2), root = REPO_ROOT, baselinePat
   const current = countFiles(root, trackedFiles(root));
   const shownPath = relative(root, baselinePath);
   if (argv.includes("--update")) {
-    // An existing baseline may only go down. Only a missing baseline is
-    // written from scratch.
     if (existsSync(baselinePath)) {
       const { increased } = compare(current, JSON.parse(readFileSync(baselinePath, "utf8")));
       if (increased.length > 0) {

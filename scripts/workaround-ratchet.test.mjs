@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -336,6 +336,39 @@ test("main checks tracked files against the baseline", (t) => {
   assert.equal(main([], root, baselinePath), 1);
 });
 
+test("CLI rejects a tracked marker increase without changing the baseline", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "ratchet-cli-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  execFileSync("git", ["init", "-q"], { cwd: root });
+  mkdirSync(join(root, "scripts"));
+  const scriptPath = join(root, "scripts/workaround-ratchet.mjs");
+  copyFileSync(new URL("./workaround-ratchet.mjs", import.meta.url), scriptPath);
+  const baselinePath = join(root, "scripts/workaround-baseline.json");
+  const baseline = `${JSON.stringify({ todoComments: 0, eslintDisable: 0, rustAllow: 0 }, null, 2)}\n`;
+  writeFileSync(baselinePath, baseline);
+  writeFileSync(join(root, "a.rs"), "// TODO: tracked increase\n");
+  execFileSync("git", ["add", "a.rs"], { cwd: root });
+
+  const result = spawnSync(process.execPath, [scriptPath], { cwd: root, encoding: "utf8" });
+  assert.equal(result.status, 1);
+  assert.equal(result.signal, null);
+  assert.equal(
+    result.stdout,
+    ["todoComments: 1 (baseline 0)", "eslintDisable: 0 (baseline 0)", "rustAllow: 0 (baseline 0)", ""].join(
+      "\n",
+    ),
+  );
+  assert.equal(
+    result.stderr,
+    [
+      "Workaround ratchet: todoComments rose to 1, above the baseline of 0.",
+      "Fix the underlying issue instead of adding a workaround marker.",
+      "",
+    ].join("\n"),
+  );
+  assert.equal(readFileSync(baselinePath, "utf8"), baseline);
+});
+
 test("counts bare markers on lines inside multi-line block comments", () => {
   const ts = ["/*", "  TODO: remove workaround", "  plain line", "*/", "TODO_LIST.push(1);"].join("\n");
   assert.equal(countText(ts, "web/a.ts").todoComments, 1);
@@ -345,6 +378,33 @@ test("counts bare markers on lines inside multi-line block comments", () => {
   assert.equal(countText(['const glob = "src/**/*.ts";', "const TODO = 1;"].join("\n"), "a.ts").todoComments, 0);
   assert.equal(countText(["fn f<'a>(s: &'a str) {} // ok", "let TODO = 1;"].join("\n"), "a.rs").todoComments, 0);
   assert.equal(countText(["x = '/*'", "TODO = 1"].join("\n"), "a.py").todoComments, 0);
+});
+
+test("counts bare markers after a nested Rust block comment closes", () => {
+  const source = [
+    "/* outer",
+    "  /* inner */",
+    "  TODO: remove temporary branch",
+    "*/",
+    "fn example() {}",
+  ].join("\n");
+  assert.equal(countText(source, "a.rs").todoComments, 1);
+  assert.deepEqual(
+    countText(
+      [
+        "/* outer",
+        "  /* middle",
+        "    /* inner */",
+        "    FIXME: still middle",
+        "  */",
+        "  HACK: still outer",
+        "*/",
+        "const TODO = 1;",
+      ].join("\n"),
+      "a.rs",
+    ),
+    { todoComments: 2, eslintDisable: 0, rustAllow: 0 },
+  );
 });
 
 test("--update refuses to raise an existing baseline and still lowers it", (t) => {
