@@ -28,6 +28,16 @@ impl LaunchTarget {
     }
 }
 
+#[derive(Clone)]
+pub struct ShutdownRequested {
+    token: CancellationToken,
+}
+impl ShutdownRequested {
+    pub async fn wait(self) {
+        self.token.cancelled_owned().await;
+    }
+}
+
 struct Sessions {
     bootstrap: Option<([u8; 32], tokio::time::Instant)>,
     sessions: HashSet<[u8; 32]>,
@@ -62,6 +72,7 @@ struct GatewayState {
     routes: Vec<Operation>,
     draining: AtomicBool,
     inflight: AtomicUsize,
+    shutdown_requested: CancellationToken,
 }
 
 pub struct Gateway {
@@ -106,6 +117,7 @@ impl Gateway {
             routes: manifest.routes,
             draining: AtomicBool::new(false),
             inflight: AtomicUsize::new(0),
+            shutdown_requested: CancellationToken::new(),
         });
         let stop = CancellationToken::new();
         let stopping = stop.clone();
@@ -129,6 +141,11 @@ impl Gateway {
         self.launch
             .take()
             .context("Launch target already transferred")
+    }
+    pub fn shutdown_requested(&self) -> ShutdownRequested {
+        ShutdownRequested {
+            token: self.state.shutdown_requested.clone(),
+        }
     }
     pub async fn drain(&self) {
         self.state.draining.store(true, Ordering::SeqCst);
@@ -190,6 +207,56 @@ fn matches_path(pattern: &str, path: &str) -> bool {
         }
     }
     actual.next().is_none()
+}
+
+fn is_spa_client_path(path: &str) -> bool {
+    if matches!(
+        path,
+        "/" | "/login"
+            | "/setup"
+            | "/forgot-password"
+            | "/reset-password"
+            | "/sources"
+            | "/build"
+            | "/builds"
+            | "/review"
+            | "/checkoff"
+            | "/settings"
+            | "/help"
+            | "/plan"
+            | "/plans"
+            | "/plate"
+            | "/print"
+            | "/printers"
+            | "/library"
+            | "/parts"
+            | "/progress"
+            | "/export"
+            | "/production"
+            | "/board"
+    ) {
+        return true;
+    }
+    let path_bytes = path.as_bytes();
+    if path_bytes
+        .get(..7)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"/board/"))
+    {
+        let bytes = &path_bytes[7..];
+        return bytes.len() == 36
+            && bytes[8] == b'-'
+            && bytes[13] == b'-'
+            && matches!(bytes[14], b'1'..=b'8')
+            && bytes[18] == b'-'
+            && matches!(bytes[19].to_ascii_lowercase(), b'8' | b'9' | b'a' | b'b')
+            && bytes[23] == b'-'
+            && bytes.iter().enumerate().all(|(index, byte)| {
+                matches!(index, 8 | 13 | 18 | 23) || byte.is_ascii_hexdigit()
+            });
+    }
+    path.strip_prefix("/plans/")
+        .and_then(|value| value.strip_suffix("/studio"))
+        .is_some_and(|id| !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
 async fn handle(
@@ -276,6 +343,7 @@ async fn handle(
             .expect("Session mutex poisoned")
             .sessions
             .clear();
+        state.shutdown_requested.cancel();
         return axum::Json(serde_json::json!({"ok":true})).into_response();
     }
     if path == "/mcp" || path == "/api/v1/mcp" {
@@ -287,23 +355,7 @@ async fn handle(
     let document = request.method() == "GET"
         && (header(&request, "sec-fetch-mode") == Some("navigate")
             || header(&request, "accept").is_some_and(|v| v.contains("text/html")));
-    let spa = matches!(
-        path.as_str(),
-        "/" | "/builds"
-            | "/library"
-            | "/sources"
-            | "/plan"
-            | "/production"
-            | "/progress"
-            | "/settings"
-            | "/printers"
-            | "/help"
-            | "/parts"
-            | "/plans"
-            | "/export"
-            | "/login"
-            | "/setup"
-    );
+    let spa = is_spa_client_path(&path);
     if (document && spa)
         || path.starts_with("/assets/")
         || matches!(path.as_str(), "/favicon.ico" | "/logo.png")
@@ -431,6 +483,63 @@ async fn handle(
     }
 }
 
+#[cfg(test)]
+mod spa_tests {
+    use super::is_spa_client_path;
+
+    #[test]
+    fn spa_client_paths_match_the_node_router() {
+        for path in [
+            "/",
+            "/login",
+            "/setup",
+            "/forgot-password",
+            "/reset-password",
+            "/sources",
+            "/build",
+            "/builds",
+            "/review",
+            "/checkoff",
+            "/settings",
+            "/help",
+            "/plan",
+            "/plans",
+            "/plate",
+            "/print",
+            "/printers",
+            "/library",
+            "/parts",
+            "/progress",
+            "/export",
+            "/production",
+            "/board",
+            "/board/123e4567-e89b-42d3-a456-426614174000",
+            "/board/123E4567-E89B-42D3-B456-426614174000",
+            "/BOARD/123e4567-e89b-42d3-a456-426614174000",
+            "/BoArD/123E4567-E89B-42D3-B456-426614174000",
+            "/plans/1/studio",
+            "/plans/000/studio",
+        ] {
+            assert!(is_spa_client_path(path), "expected SPA path: {path}");
+        }
+
+        for path in [
+            "/unknown",
+            "/api/unknown",
+            "/board/not-a-uuid",
+            "/board/123e4567-e89b-02d3-a456-426614174000",
+            "/board/123e4567-e89b-42d3-7456-426614174000",
+            "/board/123e4567-e89b-42d3-a456-426614174000/extra",
+            "/plans/-1/studio",
+            "/plans/1.5/studio",
+            "/plans/abc/studio",
+            "/plans/1/studio/extra",
+        ] {
+            assert!(!is_spa_client_path(path), "unexpected SPA path: {path}");
+        }
+    }
+}
+
 struct TrackedBody {
     body: Body,
     state: Arc<GatewayState>,
@@ -459,6 +568,8 @@ impl Drop for TrackedBody {
 
 #[cfg(test)]
 mod tests {
+    use tokio_util::sync::CancellationToken;
+
     #[test]
     fn effectful_get_is_explicit() {
         let manifest: super::Manifest =
@@ -466,5 +577,18 @@ mod tests {
         assert!(manifest.routes.iter().any(|r| r.method == "GET"
             && r.path == "/printer-checkoff"
             && r.effect == super::EffectClass::LocalCommit));
+    }
+
+    #[tokio::test]
+    async fn shutdown_request_observation_is_monotonic() {
+        let token = CancellationToken::new();
+        let requested = super::ShutdownRequested {
+            token: token.clone(),
+        };
+        let first = requested.clone();
+        token.cancel();
+        first.wait().await;
+        token.cancel();
+        requested.wait().await;
     }
 }
