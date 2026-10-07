@@ -1,8 +1,10 @@
+use pp_source::archive::ArchiveLabelPolicy;
 use pp_source::{
     ArtifactBudget, FileKind, LocalFiles, SelectedFile, Selection, SnapshotRequest, SourcePath,
     TenantRepos,
     archive::{ArchiveError, ArchiveLimits, ZipInput},
 };
+use sha2::{Digest, Sha256};
 use std::{
     fs::{self, File},
     io::Write,
@@ -462,4 +464,120 @@ fn decomposed_archive_names_reject_without_normalizing_published_paths() {
         Err(ArchiveError::UnsafeEntry)
     ));
     assert!(!fixture.candidate().exists());
+}
+
+#[test]
+fn decomposed_archive_name_is_accepted_only_with_acquisition_policy() {
+    let fixture = Fixture::new();
+    let mut zip = ZipWriter::new(File::create(fixture.0.join("input/upload.zip")).unwrap());
+    zip.start_file("cafe\u{301}.stl", SimpleFileOptions::default())
+        .unwrap();
+    zip.write_all(b"ordinary macOS bytes").unwrap();
+    zip.finish().unwrap();
+
+    let mut source = fixture.tenant().source(42).unwrap();
+    let extracted = source
+        .extract_zip_with_label_policy(
+            fixture.input(),
+            ArchiveLimits::default(),
+            ArchiveLabelPolicy::NfcAtAcquisition,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+
+    assert_eq!(extracted.receipt().files[0].path.as_str(), "café.stl");
+    assert_eq!(
+        fs::read(fixture.candidate().join("files/café.stl")).unwrap(),
+        b"ordinary macOS bytes"
+    );
+    assert_eq!(
+        extracted.receipt().archive_sha256,
+        hex::encode(Sha256::digest(
+            fs::read(fixture.0.join("input/upload.zip")).unwrap()
+        ))
+    );
+    extracted.discard().unwrap();
+}
+
+#[test]
+fn strict_default_refuses_a_decomposed_archive_name() {
+    let fixture = Fixture::new();
+    let mut zip = ZipWriter::new(File::create(fixture.0.join("input/upload.zip")).unwrap());
+    zip.start_file("cafe\u{301}.stl", SimpleFileOptions::default())
+        .unwrap();
+    zip.write_all(b"ordinary macOS bytes").unwrap();
+    zip.finish().unwrap();
+
+    assert!(matches!(
+        fixture.tenant().source(42).unwrap().extract_zip(
+            fixture.input(),
+            ArchiveLimits::default(),
+            &AtomicBool::new(false),
+        ),
+        Err(ArchiveError::UnsafeEntry)
+    ));
+}
+
+#[test]
+fn acquisition_policy_rejects_canonical_casefold_and_prefix_collisions() {
+    for names in [
+        ["café.stl", "cafe\u{301}.stl"].as_slice(),
+        ["Straße.stl", "STRASSE.stl"].as_slice(),
+        ["cafe\u{301}", "café/part.stl"].as_slice(),
+    ] {
+        let fixture = Fixture::new();
+        let mut zip = ZipWriter::new(File::create(fixture.0.join("input/upload.zip")).unwrap());
+        for name in names {
+            zip.start_file(name, SimpleFileOptions::default()).unwrap();
+            zip.write_all(b"x").unwrap();
+        }
+        zip.finish().unwrap();
+
+        assert!(matches!(
+            fixture
+                .tenant()
+                .source(42)
+                .unwrap()
+                .extract_zip_with_label_policy(
+                    fixture.input(),
+                    ArchiveLimits::default(),
+                    ArchiveLabelPolicy::NfcAtAcquisition,
+                    &AtomicBool::new(false),
+                ),
+            Err(ArchiveError::DuplicateEntry)
+        ));
+        assert!(!fixture.candidate().exists(), "{names:?}");
+    }
+}
+
+#[test]
+fn acquisition_policy_canonicalizes_directory_labels_without_changing_contents() {
+    let fixture = Fixture::new();
+    let mut zip = ZipWriter::new(File::create(fixture.0.join("input/upload.zip")).unwrap());
+    zip.add_directory("cafe\u{301}/", SimpleFileOptions::default())
+        .unwrap();
+    zip.start_file("cafe\u{301}/part.stl", SimpleFileOptions::default())
+        .unwrap();
+    zip.write_all(b"preserved archive content").unwrap();
+    zip.finish().unwrap();
+
+    let extracted = fixture
+        .tenant()
+        .source(42)
+        .unwrap()
+        .extract_zip_with_label_policy(
+            fixture.input(),
+            ArchiveLimits::default(),
+            ArchiveLabelPolicy::NfcAtAcquisition,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+
+    assert_eq!(extracted.receipt().directories[0].as_str(), "café");
+    assert_eq!(extracted.receipt().files[0].path.as_str(), "café/part.stl");
+    assert_eq!(
+        fs::read(fixture.candidate().join("files/café/part.stl")).unwrap(),
+        b"preserved archive content"
+    );
+    extracted.discard().unwrap();
 }

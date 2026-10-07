@@ -3,6 +3,10 @@ import type { PlanEditablePart } from "../context/PlanWorkspaceContext";
 import type { PlanRowIdentity } from "../lib/planDraftPartMatch";
 
 export type PlanFileChoice = Readonly<{ part: PlanEditablePart; included: boolean }>;
+export type PlanFileChoiceBatch = Readonly<{
+  choices: readonly PlanFileChoice[];
+  acknowledgeSaved: () => void;
+}>;
 type Choices = ReadonlyMap<string, PlanFileChoice>;
 type ChoiceSave = { kind: "idle" } | { kind: "saving" } | { kind: "failed"; error: unknown };
 type BuildChoices = Readonly<{ choices: Choices; save: ChoiceSave }>;
@@ -14,7 +18,7 @@ export function planFileIdentity(part: PlanRowIdentity): string {
 
 export function usePlanFileChoices(
   profileId: number | null,
-  save: (profileId: number, choices: readonly PlanFileChoice[]) => Promise<void>,
+  save: (profileId: number, batch: PlanFileChoiceBatch) => Promise<void>,
 ) {
   const [byBuild, setByBuild] = useState<ReadonlyMap<number, BuildChoices>>(new Map());
   const current = useRef(byBuild);
@@ -26,22 +30,30 @@ export function usePlanFileChoices(
     setByBuild(next);
   }, []);
 
-  const flush = useCallback((id: number): Promise<void> => {
+  const flush = useCallback((id: number, retryFailed = false): Promise<void> => {
     const running = jobs.current.get(id);
     if (running) return running;
+    const currentState = current.current.get(id) ?? EMPTY;
+    if (currentState.save.kind === "failed" && !retryFailed) {
+      return Promise.reject(currentState.save.error);
+    }
     update(id, (state) => ({ ...state, save: { kind: "saving" } }));
     const job = Promise.resolve().then(async () => {
       while (true) {
         const batch = current.current.get(id)?.choices ?? EMPTY.choices;
         if (batch.size === 0) return;
-        await save(id, [...batch.values()]);
-        update(id, (state) => {
+        const acknowledgeSaved = () => update(id, (state) => {
           const choices = new Map(state.choices);
           for (const [key, choice] of batch) {
             if (choices.get(key)?.included === choice.included) choices.delete(key);
           }
-          return { ...state, choices };
+          return {
+            choices,
+            save: state.save.kind === "failed" ? { kind: "idle" } : state.save,
+          };
         });
+        await save(id, { choices: [...batch.values()], acknowledgeSaved });
+        acknowledgeSaved();
       }
     }).catch((error: unknown) => {
       update(id, (state) => ({ ...state, save: { kind: "failed", error } }));
@@ -62,7 +74,7 @@ export function usePlanFileChoices(
       for (const part of parts) choices.set(planFileIdentity(part), { part, included });
       return { ...state, choices };
     });
-    return flush(profileId);
+    return flush(profileId, true);
   }, [flush, profileId, update]);
 
   const hasPending = useCallback((id: number) => (current.current.get(id)?.choices.size ?? 0) > 0, []);

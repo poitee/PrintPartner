@@ -948,6 +948,16 @@ fn claim(
         let documents=tx.prepare("SELECT document FROM durable_jobs WHERE state='queued' AND kind=?1 ORDER BY created,id")?.query_map([kind.name()],|r|r.get::<_,String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
         for document in documents {
             let mut job: JobRecord = decode(&document)?;
+            if job_id.is_none()
+                && job.kind == JobKind::SuppliedSourceImport
+                && tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM source_import_operations WHERE tenant=?1 AND job_id=?2 AND state='admitted')",
+                    params![job.tenant, job.job_id],
+                    |row| row.get::<_, bool>(0),
+                )?
+            {
+                continue;
+            }
             if let Some(id) = job_id {
                 if job.job_id != id {
                     continue;

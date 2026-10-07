@@ -1,5 +1,5 @@
 use super::*;
-use crate::Limits;
+use crate::{Limits, Setting, SettingCommand};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 
 #[test]
@@ -18,7 +18,24 @@ fn bounded_auth_workers_and_cancelled_queue_do_not_write() {
     .unwrap();
     let client = owner.auth(FirstUserTenant::NewUser);
     let storage = owner.client();
-    let held = storage.shared.queue.lock().unwrap();
+    let raw = Connection::open(directory.join("print-partner.db")).unwrap();
+    raw.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let blocking = storage
+        .submit(
+            SettingCommand::Set(Setting {
+                tenant: "test".into(),
+                key: "blocking".into(),
+                value: "yes".into(),
+            }),
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !storage.shared.queue.lock().unwrap().pending.is_empty() {
+        assert!(Instant::now() < deadline);
+        thread::yield_now();
+    }
     let cancelled = Arc::new(AtomicBool::new(false));
     let mut replies = Vec::new();
     for _ in 0..35 {
@@ -38,7 +55,13 @@ fn bounded_auth_workers_and_cancelled_queue_do_not_write() {
     }
     assert!((32..=34).contains(&replies.len()));
     cancelled.store(true, Ordering::Release);
-    drop(held);
+    raw.execute_batch("ROLLBACK").unwrap();
+    assert!(
+        blocking
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .is_ok()
+    );
     for reply in replies {
         assert!(reply.recv_timeout(Duration::from_secs(5)).unwrap().is_err());
     }
@@ -62,7 +85,7 @@ fn run(client: &AuthClient, request: Request) -> Result<Outcome> {
             Arc::new(AtomicBool::new(false)),
             Duration::from_secs(5),
         )?
-        .recv()
+        .recv_timeout(Duration::from_secs(5))
         .unwrap()
 }
 
@@ -145,6 +168,143 @@ fn verified_short_legacy_password_logs_in_without_rehashing() {
     assert_eq!(current, stored);
     assert_eq!(sessions, 2);
 }
+
+#[test]
+fn cheap_auth_progresses_while_two_valid_logins_are_in_kdf() {
+    let directory = std::env::temp_dir().join(format!(
+        "pp-auth-kdf-progress-{}",
+        hex::encode(rand::random::<[u8; 16]>())
+    ));
+    let (owner, _) = WriterOwner::open(&directory, Limits::default()).unwrap();
+    let client = owner.auth(FirstUserTenant::NewUser);
+    let Outcome::Session { token, .. } = run(
+        &client,
+        Request::Register {
+            email: "progress@example.com".into(),
+            display_name: "Progress".into(),
+            password: Secret::new("ordinary-password".into()),
+        },
+    )
+    .unwrap() else {
+        panic!("session expected")
+    };
+    let (gate, entered, mut release) = TestKdfGate::new();
+    let gated = client.with_kdf_gate(gate);
+    let first_login = gated
+        .submit(
+            Request::Login {
+                email: "progress@example.com".into(),
+                password: Secret::new("ordinary-password".into()),
+            },
+            Arc::new(AtomicBool::new(false)),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+    let second_login = gated
+        .submit(
+            Request::Login {
+                email: "progress@example.com".into(),
+                password: Secret::new("ordinary-password".into()),
+            },
+            Arc::new(AtomicBool::new(false)),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+    entered.recv_timeout(Duration::from_secs(5)).unwrap();
+    entered.recv_timeout(Duration::from_secs(5)).unwrap();
+    let status = gated
+        .submit(
+            Request::Status,
+            Arc::new(AtomicBool::new(false)),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+    let session = gated
+        .submit(
+            Request::ResolveSession { token },
+            Arc::new(AtomicBool::new(false)),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+    let status_before_release = status.recv_timeout(Duration::from_millis(250));
+    let session_before_release = session.recv_timeout(Duration::from_millis(250));
+    release.release();
+    assert!(
+        first_login
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .is_ok()
+    );
+    assert!(
+        second_login
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .is_ok()
+    );
+    let status_progressed = match status_before_release {
+        Ok(Ok(Outcome::Status(_))) => true,
+        Ok(_) => panic!("status outcome expected"),
+        Err(_) => {
+            let _ = status.recv_timeout(Duration::from_secs(5));
+            false
+        }
+    };
+    let session_progressed = match session_before_release {
+        Ok(Ok(Outcome::User(Some(_)))) => true,
+        Ok(_) => panic!("resolved session expected"),
+        Err(_) => {
+            let _ = session.recv_timeout(Duration::from_secs(5));
+            false
+        }
+    };
+    owner.shutdown().unwrap();
+    assert!(status_progressed);
+    assert!(session_progressed);
+}
+
+#[test]
+fn kdf_completion_after_owner_close_returns_stopped() {
+    let directory = std::env::temp_dir().join(format!(
+        "pp-auth-kdf-close-{}",
+        hex::encode(rand::random::<[u8; 16]>())
+    ));
+    let (owner, _) = WriterOwner::open(&directory, Limits::default()).unwrap();
+    let client = owner.auth(FirstUserTenant::NewUser);
+    run(
+        &client,
+        Request::Register {
+            email: "close@example.com".into(),
+            display_name: "Close".into(),
+            password: Secret::new("ordinary-password".into()),
+        },
+    )
+    .unwrap();
+    let (gate, entered, mut release) = TestKdfGate::new();
+    let reply = client
+        .with_kdf_gate(gate)
+        .submit(
+            Request::Login {
+                email: "close@example.com".into(),
+                password: Secret::new("ordinary-password".into()),
+            },
+            Arc::new(AtomicBool::new(false)),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+    entered.recv_timeout(Duration::from_secs(5)).unwrap();
+    owner.shutdown().unwrap();
+    release.release();
+    assert_eq!(
+        reply
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .err()
+            .unwrap()
+            .to_string(),
+        "Storage stopped"
+    );
+}
+
 #[test]
 fn ticket_t_17_transaction_cas_rejects_verified_login_after_public_reset() {
     let directory = std::env::temp_dir().join(format!(
@@ -154,7 +314,8 @@ fn ticket_t_17_transaction_cas_rejects_verified_login_after_public_reset() {
     let (owner, _) = WriterOwner::open(&directory, Limits::default()).unwrap();
     let client = owner.auth(FirstUserTenant::NewUser);
     let Outcome::Session {
-        token: old_session, ..
+        user,
+        token: old_session,
     } = run(
         &client,
         Request::Register {
@@ -178,23 +339,17 @@ fn ticket_t_17_transaction_cas_rejects_verified_login_after_public_reset() {
     };
     owner.shutdown().unwrap();
     let db = Connection::open(directory.join("print-partner.db")).unwrap();
-    db.execute(
-        "UPDATE users SET password_hash=?1",
-        [include_str!("../../tests/node-scrypt.txt").trim()],
-    )
-    .unwrap();
+    let legacy_hash = include_str!("../../tests/node-scrypt.txt")
+        .trim()
+        .to_owned();
+    db.execute("UPDATE users SET password_hash=?1", [&legacy_hash])
+        .unwrap();
     drop(db);
     let (owner, _) = WriterOwner::open(&directory, Limits::default()).unwrap();
     let client = owner.auth(FirstUserTenant::NewUser);
-    let cancelled = AtomicBool::new(false);
-    let Reply::Credential(Some(credential)) = client
-        .command(
-            Command::CredentialByEmail("race@example.com".into()),
-            &cancelled,
-        )
-        .unwrap()
-    else {
-        panic!("credential expected")
+    let credential = Credential {
+        user,
+        hash: Some(legacy_hash),
     };
     let old_password = Secret::new("legacy-🖨️-password".into());
     assert!(crypto::verify(
@@ -216,41 +371,12 @@ fn ticket_t_17_transaction_cas_rejects_verified_login_after_public_reset() {
     else {
         panic!("reset session expected")
     };
-    let Reply::Credential(Some(after_reset)) = client
-        .command(
-            Command::CredentialByEmail("race@example.com".into()),
-            &cancelled,
-        )
+    let old = client
+        .submit_verified_login(credential, replacement)
         .unwrap()
-    else {
-        panic!("reset credential expected")
-    };
-    assert_ne!(after_reset.hash, credential.hash);
-    assert!(crypto::verify(
-        &Secret::new("reset-winner-password".into()),
-        after_reset.hash.as_ref().unwrap()
-    ));
-    let old = client.command(
-        Command::Login {
-            credential,
-            replacement: Some(replacement),
-        },
-        &cancelled,
-    );
-    assert_eq!(
-        old.err().map(|error| error.to_string()).unwrap(),
-        "Credential changed"
-    );
-    let Reply::Credential(Some(after_rejected_login)) = client
-        .command(
-            Command::CredentialByEmail("race@example.com".into()),
-            &cancelled,
-        )
-        .unwrap()
-    else {
-        panic!("credential expected")
-    };
-    assert_eq!(after_rejected_login.hash, after_reset.hash);
+        .recv()
+        .unwrap();
+    assert_eq!(old.err().unwrap().to_string(), "Credential changed");
     assert!(matches!(
         run(&client, Request::ResolveSession { token: old_session }).unwrap(),
         Outcome::User(None)
@@ -295,5 +421,20 @@ fn ticket_t_17_transaction_cas_rejects_verified_login_after_public_reset() {
             row.get(0)
         })
         .unwrap();
+    let stored: String = db
+        .query_row(
+            "SELECT password_hash FROM users WHERE email='race@example.com'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
     assert_eq!((sessions, resets), (2, 0));
+    assert!(crypto::verify(
+        &Secret::new("reset-winner-password".into()),
+        &stored
+    ));
+    assert!(!crypto::verify(
+        &Secret::new("legacy-🖨️-password".into()),
+        &stored
+    ));
 }

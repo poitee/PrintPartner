@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { useState, type ReactNode } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { PlanReview, ReviewPart } from "../api/endpoints/planManifests";
@@ -8,6 +9,10 @@ import { savePlanChoices, recomputePlanDraft, editPlanDraftParts, applyPlanDraft
 import { EngineHttpError } from "../api/engineTransport";
 import PlanFileSelection from "../components/review/PlanFileSelection";
 import { PlanWorkspaceProvider, usePlanWorkspace } from "./PlanWorkspaceContext";
+import {
+  BuildSaveFlushProvider,
+  useFlushBuildPageSaves,
+} from "./BuildSaveFlushContext";
 import { queryKeys } from "../queries/keys";
 
 const selection = vi.hoisted(() => ({ profileId: 7 }));
@@ -57,19 +62,32 @@ function saved(included: boolean, profileId = 7, version = 2): SavePlanChoicesRe
 }
 function Picker() {
   const plan = usePlanWorkspace();
+  const flushBuildSaves = useFlushBuildPageSaves();
+  const [flushError, setFlushError] = useState<string | null>(null);
   return <>
     <span role="status">{plan.saving ? "Saving" : plan.draftError ? "Not saved" : "Saved"}</span>
     <span data-testid="quantity">{plan.review?.part_groups[0]?.parts[0]?.quantity_effective}</span>
     {plan.draftError && <p role="alert">{plan.draftError}</p>}
-    <button onClick={() => void plan.preparePlan().catch(() => {})}>Retry save</button>
+    <button onClick={() => void plan.retryPlanSave().catch(() => {})}>Retry save</button>
     <button onClick={() => void plan.discardPendingEdits().catch(() => {})}>Discard</button>
     <button onClick={() => void plan.setQuantity(part, 2).catch(() => {})}>Set quantity</button>
+    <button onClick={() => void flushBuildSaves().catch((error: unknown) => {
+      setFlushError(error instanceof Error ? error.message : String(error));
+    })}>Flush saves</button>
+    {flushError && <div data-testid="flush-error">{flushError}</div>}
     <PlanFileSelection profileId={selection.profileId} disabled={false} />
   </>;
 }
 let client: QueryClient;
+function Providers({ children }: { children: ReactNode }) {
+  return (
+    <QueryClientProvider client={client}>
+      <BuildSaveFlushProvider>{children}</BuildSaveFlushProvider>
+    </QueryClientProvider>
+  );
+}
 function mount() {
-  return render(<QueryClientProvider client={client}><PlanWorkspaceProvider><Picker /></PlanWorkspaceProvider></QueryClientProvider>);
+  return render(<Providers><PlanWorkspaceProvider><Picker /></PlanWorkspaceProvider></Providers>);
 }
 const checkbox = () => screen.getByRole("checkbox", { name: "Include bracket.stl" });
 const checked = () => checkbox().getAttribute("aria-checked");
@@ -215,10 +233,17 @@ it("retains an ambiguous command when discard cannot read the accepted Plan", as
   expect(screen.getByRole("status").textContent).toBe("Not saved");
   vi.mocked(fetchPlanReview).mockResolvedValue(review(true));
   fireEvent.click(screen.getByRole("button", { name: "Retry save" }));
-  await waitFor(() => expect(screen.getByRole("status").textContent).toBe("Saved"));
+  await waitFor(() => expect(savePlanChoices).toHaveBeenCalledTimes(3));
   expect(savePlanChoices).toHaveBeenCalledTimes(3);
   const calls = vi.mocked(savePlanChoices).mock.calls;
   expect(calls[2]).toEqual(calls[0]);
+  expect(screen.getByRole("status").textContent).toBe("Not saved");
+  expect(screen.getAllByRole("alert").map((alert) => alert.textContent).join(" ")).toContain("cannot confirm discard");
+  fireEvent.click(screen.getByRole("button", { name: "Flush saves" }));
+  await waitFor(() => expect(screen.getByTestId("flush-error").textContent).toContain("cannot confirm discard"));
+  expect(savePlanChoices).toHaveBeenCalledTimes(3);
+  fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+  await waitFor(() => expect(screen.getByRole("status").textContent).toBe("Saved"));
 });
 
 it("keeps a pending choice in its Build when the user switches Builds", async () => {
@@ -229,13 +254,13 @@ it("keeps a pending choice in its Build when the user switches Builds", async ()
   fireEvent.click(checkbox());
   await waitFor(() => expect(savePlanChoices).toHaveBeenCalledOnce());
   selection.profileId = 8;
-  page.rerender(<QueryClientProvider client={client}><PlanWorkspaceProvider><Picker /></PlanWorkspaceProvider></QueryClientProvider>);
+  page.rerender(<Providers><PlanWorkspaceProvider><Picker /></PlanWorkspaceProvider></Providers>);
   await waitFor(() => expect(checked()).toBe("true"));
   expect(screen.getByRole("status").textContent).toBe("Saved");
   await act(async () => { first.resolve(saved(false)); });
   expect(checked()).toBe("true");
   selection.profileId = 7;
-  page.rerender(<QueryClientProvider client={client}><PlanWorkspaceProvider><Picker /></PlanWorkspaceProvider></QueryClientProvider>);
+  page.rerender(<Providers><PlanWorkspaceProvider><Picker /></PlanWorkspaceProvider></Providers>);
   await waitFor(() => expect(screen.getByRole("status").textContent).toBe("Saved"));
   expect(checked()).toBe("false");
 });

@@ -28,6 +28,7 @@
     "typecheck": "npm run build -w @print-partner/contracts && npm run build -w @print-partner/domain && npm run typecheck -w @print-partner/server && npm run typecheck -w @print-partner/web",
     "quality": "npm run lint && npm run lint:dead && npm run typecheck && npm test && npm run test:workflow-smoke && npm run build && npm run test:bundles -w @print-partner/web && npm run test:runtime && npm run test:browser",
     "db:migrate": "npm run db:migrate -w @print-partner/server",
+    "prelint:dead": "npm run build -w @print-partner/contracts && npm run build -w @print-partner/domain",
     "lint:dead": "knip --no-gitignore",
     "fixture:plan-publication:capture": "node --conditions=development --import tsx scripts/desktop-parity/plan-publication-capture.mts",
     "fixture:storage:export-data": "node --conditions=development --import tsx scripts/storage-fixtures/export-data.mts",
@@ -58,10 +59,13 @@
     "fast-uri": "3.1.8",
     "find-my-way": "9.7.0",
     "nanoid": "3.3.18",
-    "shell-quote": "1.10.0",
+    "shell-quote": "1.11.0",
     "hono": "4.13.8",
     "postcss": "8.5.26",
-    "qs": "6.16.0"
+    "qs": "6.16.0",
+    "@fastify/busboy": "3.2.2",
+    "proxy-addr": "2.0.8",
+    "source-map-js": "1.2.2"
   },
   "description": "Print Partner monorepo: Fastify API + React SPA for layered STL kit work (Library → Builds → Sources → Plan → Production ↔ Checkoff)."
 }

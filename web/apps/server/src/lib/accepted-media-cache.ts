@@ -28,7 +28,7 @@ export type AcceptedMediaBasisInput = {
 
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-const ACCEPTED_MEDIA_READ_ATTEMPTS = 8;
+const ACCEPTED_MEDIA_READ_ATTEMPTS = 64;
 
 function normalizedRole(value: string): string {
   const role = value.trim().toLowerCase();
@@ -112,7 +112,12 @@ function openAcceptedMediaPngDescriptor(input: {
   try {
     const rootStats = lstatSync(resolve(input.thumbsDir));
     if (rootStats.isSymbolicLink() || !rootStats.isDirectory()) return { status: "miss" };
-    const beforeOpen = lstatSync(input.path);
+    let beforeOpen: Stats;
+    try {
+      beforeOpen = lstatSync(input.path);
+    } catch (error) {
+      return { status: isRenameWindowError(error) ? "retryable_race" : "miss" };
+    }
     if (beforeOpen.isSymbolicLink() || !beforeOpen.isFile()) return { status: "miss" };
     if (beforeOpen.size < PNG_SIGNATURE.length) return { status: "miss" };
 

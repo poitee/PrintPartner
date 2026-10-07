@@ -1,7 +1,7 @@
 use anyhow::{Result, anyhow, ensure};
 use pp_source::{
     ArtifactBudget, LocalFiles, Selection, SnapshotRequest, SourcePath, TenantRepos,
-    archive::{ArchiveLimits, ZipInput},
+    archive::{ArchiveLabelPolicy, ArchiveLimits, ZipInput},
     local_selection::{self, InputFile},
     media::MediaLimits,
 };
@@ -10,7 +10,8 @@ use pp_storage::{
     auth::AuthPolicy,
     jobs::{Credential, JobKind, ServerWorkerClient, WorkerAdmission},
     uploads::{
-        Admission, Artifact, File, ImportClient, Input, Operation, OwnedInput, Phase, State,
+        Admission, Artifact, File, ImportClient, Input, Operation, OwnedInput, Phase,
+        RecordedArchiveLabels, State, ZipInputRef,
     },
 };
 use sha2::{Digest, Sha256};
@@ -56,13 +57,13 @@ impl SourceImports {
             "Invalid import input limit"
         );
         let local = LocalFiles::open(supplied)?;
-        let paths = match &request.input {
-            Input::Files { paths } => paths.clone(),
-            Input::Zip { path } => vec![path.clone()],
-        }
-        .into_iter()
-        .map(SourcePath::try_from)
-        .collect::<std::result::Result<Vec<_>, _>>()?;
+        let paths = request
+            .input
+            .requested_paths()
+            .into_iter()
+            .map(str::to_owned)
+            .map(SourcePath::try_from)
+            .collect::<std::result::Result<Vec<_>, _>>()?;
         let expected_files = local
             .inventory(&paths, request.max_input_bytes)?
             .into_iter()
@@ -149,13 +150,8 @@ impl SourceImports {
         local_selection::discard_owned(&self.repos, &op.job_id)?;
         Ok(())
     }
-    pub fn work_next(
-        &self,
-        supplied: Option<&Path>,
-        through: Through,
-        cancelled: &AtomicBool,
-    ) -> Result<Option<Operation>> {
-        self.work(None, supplied, through, cancelled)
+    pub fn work_next(&self, through: Through, cancelled: &AtomicBool) -> Result<Option<Operation>> {
+        self.work(None, None, through, cancelled)
     }
     pub fn work_operation(
         &self,
@@ -195,13 +191,13 @@ impl SourceImports {
             if op.state == State::Admitted {
                 let supplied =
                     supplied.ok_or_else(|| anyhow!("Import requires explicitly supplied input"))?;
-                let paths = match &op.input {
-                    Input::Files { paths } => paths.clone(),
-                    Input::Zip { path } => vec![path.clone()],
-                }
-                .into_iter()
-                .map(SourcePath::try_from)
-                .collect::<std::result::Result<Vec<_>, _>>()?;
+                let paths = op
+                    .input
+                    .requested_paths()
+                    .into_iter()
+                    .map(str::to_owned)
+                    .map(SourcePath::try_from)
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
                 local_selection::discard_owned(&self.repos, &op.job_id)?;
                 let local = LocalFiles::open(supplied)?;
                 let (_owned, inventory) = local.capture(
@@ -249,9 +245,13 @@ impl SourceImports {
                 );
                 let mut root = TenantRepos::open(op.tenant.clone(), &self.repos)?
                     .source(op.source_id.try_into()?)?;
-                let archive = match &op.input {
-                    Input::Zip { path } => Some(root.extract_zip(
-                        ZipInput::open(&local, &SourcePath::try_from(path.clone())?)?,
+                let archive = match op.input.zip_input() {
+                    None => None,
+                    Some(ZipInputRef {
+                        path,
+                        labels: RecordedArchiveLabels::LegacyStrict,
+                    }) => Some(root.extract_zip(
+                        ZipInput::open(&local, &SourcePath::try_from(path.to_owned())?)?,
                         ArchiveLimits {
                             max_compressed_bytes: op.max_input_bytes,
                             max_inflated_bytes: op.max_prepared_bytes,
@@ -259,7 +259,19 @@ impl SourceImports {
                         },
                         cancelled,
                     )?),
-                    _ => None,
+                    Some(ZipInputRef {
+                        path,
+                        labels: RecordedArchiveLabels::CapturedNfcAtAcquisition,
+                    }) => Some(root.extract_zip_with_label_policy(
+                        ZipInput::open(&local, &SourcePath::try_from(path.to_owned())?)?,
+                        ArchiveLimits {
+                            max_compressed_bytes: op.max_input_bytes,
+                            max_inflated_bytes: op.max_prepared_bytes,
+                            max_entries: 10000,
+                        },
+                        ArchiveLabelPolicy::NfcAtAcquisition,
+                        cancelled,
+                    )?),
                 };
                 let input = archive.as_ref().map_or(&local, |a| a.files());
                 let prepared = root.prepare_media(

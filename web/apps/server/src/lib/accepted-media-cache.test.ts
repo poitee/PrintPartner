@@ -388,6 +388,42 @@ describe("accepted media PNG cache", () => {
     expect(result).toEqual({ kind: "present" });
   });
 
+  it("returns complete bytes when all 64 attempts overlap atomic replacement", async () => {
+    const thumbsDir = cacheFixture();
+    const target = acceptedMediaCachePath({ thumbsDir, basis });
+    const nextPng = Buffer.concat([png.subarray(0, 8), Buffer.from("replacement")]);
+    writeAcceptedMediaPng({ thumbsDir, basis, png });
+    const replacements = Array.from({ length: 64 }, (_, index) => {
+      const replacement = join(thumbsDir, `replacement-${index}.png`);
+      writeFileSync(replacement, index % 2 === 0 ? nextPng : png);
+      return replacement;
+    });
+    const result = await withDescriptorMutationAfterRead(
+      (attempt) => renameSync(replacements[attempt]!, target),
+      () => readAcceptedMediaPng({ thumbsDir, basis }),
+    );
+
+    expect(result != null && (result.equals(png) || result.equals(nextPng))).toBe(true);
+  });
+
+  it("observes a present cache when all 64 attempts overlap atomic replacement", async () => {
+    const thumbsDir = cacheFixture();
+    const target = acceptedMediaCachePath({ thumbsDir, basis });
+    const nextPng = Buffer.concat([png.subarray(0, 8), Buffer.from("replacement")]);
+    writeAcceptedMediaPng({ thumbsDir, basis, png });
+    const replacements = Array.from({ length: 64 }, (_, index) => {
+      const replacement = join(thumbsDir, `replacement-${index}.png`);
+      writeFileSync(replacement, index % 2 === 0 ? nextPng : png);
+      return replacement;
+    });
+    const result = await withDescriptorMutationAfterRead(
+      (attempt) => renameSync(replacements[attempt]!, target),
+      () => observeAcceptedMediaPng({ thumbsDir, basis }),
+    );
+
+    expect(result).toEqual({ kind: "present" });
+  });
+
   it("retries when an opened cache file is rewritten in place", async () => {
     const thumbsDir = cacheFixture();
     const target = acceptedMediaCachePath({ thumbsDir, basis });
@@ -501,6 +537,8 @@ describe("accepted media PNG cache", () => {
       await waitFor(() => ready);
       expect(ready, stderr).toBe(true);
       expect(sawOld).toBe(true);
+      absentReads = 0;
+      partialReads = 0;
       expect(child.send("start")).toBe(true);
       await waitFor(() => published);
       expect(published, stderr).toBe(true);

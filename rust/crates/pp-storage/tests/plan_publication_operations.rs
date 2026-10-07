@@ -79,6 +79,22 @@ impl Fixture {
         )
         .unwrap()
     }
+    fn normalized_command(
+        &self,
+        key: &str,
+        admitted: ApplyRequest,
+        execution: ApplyRequest,
+    ) -> PublicationCommand {
+        PublicationCommand::normalized_http(
+            PositiveId::new(1).unwrap(),
+            PositiveId::new(self.draft).unwrap(),
+            admitted,
+            execution,
+            key.into(),
+            session(),
+        )
+        .unwrap()
+    }
     fn call(&self, client: &PublicationClient, key: &str) -> anyhow::Result<Value> {
         Ok(serde_json::to_value(client.apply(
             self.command(key, self.request.clone(), session()),
@@ -617,6 +633,12 @@ fn production_random_tokens_receipt_replay_new_key_and_reopen() {
     let first = f.call(&owner.publication(), "random").unwrap();
     assert_eq!(first["kind"], "applied");
     let graph = f.graph();
+    assert_eq!(graph["plan_apply_requests"].as_array().unwrap().len(), 1);
+    assert_eq!(graph["plan_apply_admissions"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        graph["plan_apply_requests"][0]["request_digest"],
+        graph["plan_apply_admissions"][0]["request_digest"]
+    );
     let token = graph["required_units"][0]["token"].as_str().unwrap();
     assert_eq!(token.len(), 36);
     assert!(token.starts_with("ppu_") && token[4..].bytes().all(|b| b.is_ascii_hexdigit()));
@@ -657,6 +679,425 @@ fn production_random_tokens_receipt_replay_new_key_and_reopen() {
     let owner = f.open();
     let reopened = f.call(&owner.publication(), "random").unwrap();
     assert_eq!(reopened["receipt"], first["receipt"]);
+    owner.shutdown().unwrap();
+}
+
+#[test]
+fn normalized_admission_replays_after_reopen_and_execution_identity_conflicts() {
+    let f = Fixture::new(false);
+    let execution = f.request.clone();
+    let mut admitted = execution.clone();
+    admitted.expected_snapshot_digest =
+        pp_contracts::autosave::Digest::new("f".repeat(64)).unwrap();
+    let owner = f.open();
+    let first = owner
+        .publication()
+        .apply(
+            f.normalized_command("normalized", admitted.clone(), execution.clone()),
+            &AtomicBool::new(false),
+            WAIT,
+        )
+        .unwrap();
+    assert!(matches!(first, Outcome::Applied { .. }));
+    let graph = f.graph();
+    assert_ne!(
+        graph["plan_apply_requests"][0]["request_digest"],
+        graph["plan_apply_admissions"][0]["request_digest"]
+    );
+    assert_eq!(
+        graph["plan_apply_admissions"][0]["expected_snapshot_digest"],
+        "f".repeat(64)
+    );
+    let mut remap = admitted.clone();
+    remap.remap_checkoff_links = !remap.remap_checkoff_links;
+    assert!(matches!(
+        owner
+            .publication()
+            .apply(
+                f.normalized_command("normalized", remap, execution.clone()),
+                &AtomicBool::new(false),
+                WAIT
+            )
+            .unwrap(),
+        Outcome::Existing { .. }
+    ));
+    assert!(matches!(
+        owner
+            .publication()
+            .apply(
+                f.command("normalized", execution.clone(), session()),
+                &AtomicBool::new(false),
+                WAIT
+            )
+            .unwrap(),
+        Outcome::IdempotencyConflict
+    ));
+    for changed in [
+        serde_json::from_value(json!({
+            "expected_snapshot_digest":"e".repeat(64),
+            "expected_lifecycle_version":admitted.expected_lifecycle_version,
+            "expected_base":admitted.expected_base,
+        }))
+        .unwrap(),
+        serde_json::from_value(json!({
+            "expected_snapshot_digest":admitted.expected_snapshot_digest,
+            "expected_lifecycle_version":1,
+            "expected_base":admitted.expected_base,
+        }))
+        .unwrap(),
+        serde_json::from_value(json!({
+            "expected_snapshot_digest":admitted.expected_snapshot_digest,
+            "expected_lifecycle_version":admitted.expected_lifecycle_version,
+            "expected_base":{"revision_id":1,"plan_version":1},
+        }))
+        .unwrap(),
+    ] {
+        assert!(matches!(
+            owner
+                .publication()
+                .apply(
+                    f.normalized_command("normalized", changed, execution.clone()),
+                    &AtomicBool::new(false),
+                    WAIT
+                )
+                .unwrap(),
+            Outcome::IdempotencyConflict
+        ));
+        assert_eq!(f.graph(), graph);
+    }
+    owner.shutdown().unwrap();
+    let owner = f.open();
+    let reopened = owner
+        .publication()
+        .apply(
+            f.normalized_command("normalized", admitted, execution),
+            &AtomicBool::new(false),
+            WAIT,
+        )
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(reopened).unwrap()["receipt"],
+        serde_json::to_value(first).unwrap()["receipt"]
+    );
+    owner.shutdown().unwrap();
+}
+
+#[test]
+fn admission_constraints_cascade_and_child_insert_failure_preserve_graph() {
+    let f = Fixture::new(false);
+    let owner = f.open();
+    owner.shutdown().unwrap();
+    f.sql().execute_batch("CREATE TRIGGER publication_admission_failure BEFORE INSERT ON plan_apply_admissions BEGIN SELECT RAISE(ABORT,'admission constraint'); END").unwrap();
+    let owner = f.open();
+    let before = f.graph();
+    assert!(f.call(&owner.publication(), "child-failure").is_err());
+    assert_eq!(f.graph(), before);
+    owner.shutdown().unwrap();
+    f.sql()
+        .execute_batch("DROP TRIGGER publication_admission_failure")
+        .unwrap();
+    let owner = f.open();
+    assert_eq!(
+        f.call(&owner.publication(), "child-failure").unwrap()["kind"],
+        "applied"
+    );
+    owner.shutdown().unwrap();
+
+    let connection = f.sql();
+    connection
+        .pragma_update(None, "foreign_keys", true)
+        .unwrap();
+    assert!(
+        connection
+            .execute(
+                "INSERT INTO plan_apply_admissions SELECT * FROM plan_apply_admissions",
+                []
+            )
+            .is_err()
+    );
+    assert!(connection.execute("INSERT INTO plan_apply_admissions VALUES(999,'plan-apply-request-v1','a','b',0,NULL,0)", []).is_err());
+    assert!(
+        connection
+            .execute("UPDATE plan_apply_admissions SET request_digest='c'", [])
+            .is_err()
+    );
+    assert!(
+        connection
+            .execute("DELETE FROM plan_apply_admissions", [])
+            .is_err()
+    );
+    connection
+        .execute("DELETE FROM build_profiles WHERE id=1", [])
+        .unwrap();
+    assert_eq!(
+        connection
+            .query_row("SELECT COUNT(*) FROM plan_apply_admissions", [], |row| row
+                .get::<_, i64>(
+                0
+            ))
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn legacy_schema36_rows_keep_execution_fallback_without_backfill() {
+    let f = Fixture::new(false);
+    let execution = f.request.clone();
+    let mut admitted = execution.clone();
+    admitted.expected_snapshot_digest =
+        pp_contracts::autosave::Digest::new("f".repeat(64)).unwrap();
+    let owner = f.open();
+    assert!(matches!(
+        owner
+            .publication()
+            .apply(
+                f.normalized_command("legacy", admitted.clone(), execution.clone()),
+                &AtomicBool::new(false),
+                WAIT
+            )
+            .unwrap(),
+        Outcome::Applied { .. }
+    ));
+    owner.shutdown().unwrap();
+    let connection = f.sql();
+    connection.execute_batch("DROP TRIGGER trg_plan_apply_admissions_immutable_delete; DROP TRIGGER trg_plan_apply_admissions_immutable_update; DROP TABLE plan_apply_admissions; UPDATE app_settings SET value='36' WHERE tenant_id='default' AND key='schema_version'; PRAGMA wal_checkpoint(TRUNCATE);").unwrap();
+    drop(connection);
+    let owner = f.open();
+    assert!(matches!(
+        owner
+            .publication()
+            .apply(
+                f.command("legacy", execution.clone(), session()),
+                &AtomicBool::new(false),
+                WAIT
+            )
+            .unwrap(),
+        Outcome::Existing { .. }
+    ));
+    assert!(matches!(
+        owner
+            .publication()
+            .apply(
+                f.normalized_command("legacy", admitted, execution),
+                &AtomicBool::new(false),
+                WAIT
+            )
+            .unwrap(),
+        Outcome::IdempotencyConflict
+    ));
+    assert!(
+        f.graph()["plan_apply_admissions"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    owner.shutdown().unwrap();
+}
+
+#[test]
+fn schema37_and_legacy36_backups_restore_identity_semantics() {
+    let f = Fixture::new(false);
+    let execution = f.request.clone();
+    let mut admitted = execution.clone();
+    admitted.expected_snapshot_digest =
+        pp_contracts::autosave::Digest::new("f".repeat(64)).unwrap();
+    let owner = f.open();
+    let first = owner
+        .publication()
+        .apply(
+            f.normalized_command("backup", admitted.clone(), execution.clone()),
+            &AtomicBool::new(false),
+            WAIT,
+        )
+        .unwrap();
+    let backup37 = std::env::temp_dir().join(format!(
+        "pp-publication-backup37-{}.db",
+        hex::encode(rand::random::<[u8; 8]>())
+    ));
+    owner.backup(&backup37).unwrap();
+    owner.shutdown().unwrap();
+
+    let restore37 = std::env::temp_dir().join(format!(
+        "pp-publication-restore37-{}",
+        hex::encode(rand::random::<[u8; 8]>())
+    ));
+    std::fs::create_dir_all(&restore37).unwrap();
+    std::fs::copy(&backup37, restore37.join("print-partner.db")).unwrap();
+    let restored37 = Fixture {
+        path: restore37,
+        request: execution.clone(),
+        draft: f.draft,
+    };
+    let owner = restored37.open();
+    let replay = owner
+        .publication()
+        .apply(
+            restored37.normalized_command("backup", admitted.clone(), execution.clone()),
+            &AtomicBool::new(false),
+            WAIT,
+        )
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(replay).unwrap()["receipt"],
+        serde_json::to_value(first).unwrap()["receipt"]
+    );
+    owner.shutdown().unwrap();
+
+    let connection = f.sql();
+    connection.execute_batch("DROP TRIGGER trg_plan_apply_admissions_immutable_delete; DROP TRIGGER trg_plan_apply_admissions_immutable_update; DROP TABLE plan_apply_admissions; UPDATE app_settings SET value='36' WHERE tenant_id='default' AND key='schema_version'; PRAGMA wal_checkpoint(TRUNCATE);").unwrap();
+    drop(connection);
+    let (owner, ready) = WriterOwner::open(&f.path, Limits::default()).unwrap();
+    let backup36 = ready.backup.unwrap();
+    owner.shutdown().unwrap();
+    let restore36 = std::env::temp_dir().join(format!(
+        "pp-publication-restore36-{}",
+        hex::encode(rand::random::<[u8; 8]>())
+    ));
+    std::fs::create_dir_all(&restore36).unwrap();
+    std::fs::copy(backup36, restore36.join("print-partner.db")).unwrap();
+    let restored36 = Fixture {
+        path: restore36,
+        request: execution.clone(),
+        draft: f.draft,
+    };
+    let owner = restored36.open();
+    assert!(matches!(
+        owner
+            .publication()
+            .apply(
+                restored36.command("backup", execution.clone(), session()),
+                &AtomicBool::new(false),
+                WAIT
+            )
+            .unwrap(),
+        Outcome::Existing { .. }
+    ));
+    assert!(matches!(
+        owner
+            .publication()
+            .apply(
+                restored36.normalized_command("backup", admitted, execution),
+                &AtomicBool::new(false),
+                WAIT
+            )
+            .unwrap(),
+        Outcome::IdempotencyConflict
+    ));
+    assert!(
+        restored36.graph()["plan_apply_admissions"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    owner.shutdown().unwrap();
+}
+
+#[test]
+fn stored_admission_and_execution_tampering_fail_public_replay_validation() {
+    for update in [
+        "request_digest='ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff'",
+        "request_format='broken'",
+        "expected_snapshot_digest='ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff'",
+        "expected_lifecycle_version=1",
+        "expected_base_revision_id=1",
+        "expected_base_plan_version=1",
+    ] {
+        let f = Fixture::new(false);
+        let owner = f.open();
+        assert_eq!(
+            f.call(&owner.publication(), "tamper-child").unwrap()["kind"],
+            "applied"
+        );
+        let connection = f.sql();
+        connection
+            .execute_batch(
+                "PRAGMA ignore_check_constraints=ON; DROP TRIGGER trg_plan_apply_admissions_immutable_update;",
+            )
+            .unwrap();
+        connection
+            .execute(&format!("UPDATE plan_apply_admissions SET {update}"), [])
+            .unwrap();
+        drop(connection);
+        assert!(f.call(&owner.publication(), "tamper-child").is_err());
+        owner.shutdown().unwrap();
+    }
+
+    let f = Fixture::new(false);
+    let owner = f.open();
+    assert_eq!(
+        f.call(&owner.publication(), "tamper-parent").unwrap()["kind"],
+        "applied"
+    );
+    let connection = f.sql();
+    connection
+        .execute_batch("DROP TRIGGER trg_plan_apply_requests_immutable_update; UPDATE plan_apply_requests SET request_digest='ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff';")
+        .unwrap();
+    drop(connection);
+    assert!(f.call(&owner.publication(), "tamper-parent").is_err());
+    owner.shutdown().unwrap();
+}
+
+#[test]
+fn concurrent_same_key_commands_choose_one_admission_identity() {
+    let f = Fixture::new(false);
+    let owner = f.open();
+    let client = owner.publication();
+    let barrier = Arc::new(std::sync::Barrier::new(3));
+    let results = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..2)
+            .map(|_| {
+                let client = client.clone();
+                let barrier = barrier.clone();
+                let command = f.command("concurrent", f.request.clone(), session());
+                scope.spawn(move || {
+                    barrier.wait();
+                    client
+                        .apply(command, &AtomicBool::new(false), WAIT)
+                        .unwrap()
+                })
+            })
+            .collect();
+        barrier.wait();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(
+        results
+            .iter()
+            .filter(|outcome| matches!(outcome, Outcome::Applied { .. }))
+            .count(),
+        1
+    );
+    assert_eq!(
+        results
+            .iter()
+            .filter(|outcome| matches!(outcome, Outcome::Existing { .. }))
+            .count(),
+        1
+    );
+    let mut changed = f.request.clone();
+    changed.expected_snapshot_digest = pp_contracts::autosave::Digest::new("f".repeat(64)).unwrap();
+    assert!(matches!(
+        client
+            .apply(
+                f.command("concurrent", changed, session()),
+                &AtomicBool::new(false),
+                WAIT
+            )
+            .unwrap(),
+        Outcome::IdempotencyConflict
+    ));
+    assert_eq!(
+        f.graph()["plan_apply_requests"].as_array().unwrap().len(),
+        1
+    );
+    assert_eq!(
+        f.graph()["plan_apply_admissions"].as_array().unwrap().len(),
+        1
+    );
     owner.shutdown().unwrap();
 }
 #[test]

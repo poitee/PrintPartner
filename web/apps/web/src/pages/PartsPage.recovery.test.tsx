@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import PartsPage from "./PartsPage";
@@ -9,8 +9,10 @@ import type { PlanDraftWorkspace } from "@print-partner/contracts";
 const state = vi.hoisted(() => ({
   draftError: "Could not combine these pending edits",
   mergeConflict: false,
+  canDiscardPendingEdits: true,
   saving: false,
   prepare: vi.fn(),
+  retry: vi.fn(),
   discard: vi.fn(),
   edit: vi.fn(),
   workspace: null as PlanDraftWorkspace | null,
@@ -25,9 +27,11 @@ vi.mock("../context/PlanWorkspaceContext", () => ({
     draftWorkspace: state.workspace,
     draftLoading: false,
     preparePlan: state.prepare,
+    retryPlanSave: state.retry,
     saving: state.saving,
     refresh: vi.fn(),
     mergeConflict: state.mergeConflict,
+    canDiscardPendingEdits: state.canDiscardPendingEdits,
     discardPendingEdits: state.discard,
     editActivePlanDraft: state.edit,
   }),
@@ -43,9 +47,11 @@ beforeEach(() => {
   vi.resetAllMocks();
   state.draftError = "Could not combine these pending edits";
   state.mergeConflict = false;
+  state.canDiscardPendingEdits = true;
   state.saving = false;
   state.workspace = null;
   state.prepare.mockResolvedValue(undefined);
+  state.retry.mockResolvedValue(undefined);
   state.discard.mockResolvedValue(undefined);
   state.edit.mockResolvedValue(undefined);
 });
@@ -70,11 +76,27 @@ describe("Plan pending-edit recovery", () => {
     await waitFor(() => expect(state.prepare).toHaveBeenCalledOnce());
     expect(state.discard).not.toHaveBeenCalled();
   });
-  it("does not offer discarding for an ordinary save failure", () => {
+  it("offers discarding for an ordinary save failure", () => {
     renderPlan();
     expect(screen.getByRole("button", { name: "Retry save" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Discard pending edits and use saved Plan" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Discard pending edits and use saved Plan" })).toBeTruthy();
     expect(state.discard).not.toHaveBeenCalled();
+  });
+
+  it("runs the displayed Retry save action and waits for its recovery promise", async () => {
+    const retry = deferred<void>();
+    state.retry.mockReturnValueOnce(retry.promise);
+    renderPlan();
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry save" }));
+    expect(state.retry).toHaveBeenCalledExactlyOnceWith();
+    expect(state.prepare).not.toHaveBeenCalled();
+    expect(state.discard).not.toHaveBeenCalled();
+
+    await act(async () => {
+      retry.resolve();
+      await retry.promise;
+    });
   });
 
   it("offers the destructive choice only for a merge conflict and requires a click", async () => {
@@ -111,3 +133,11 @@ describe("Plan pending-edit recovery", () => {
     expect(state.prepare).not.toHaveBeenCalled();
   });
 });
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
