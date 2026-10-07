@@ -72,6 +72,29 @@ struct Connections {
     tasks: TaskTracker,
     cancelled: CancellationToken,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReadinessFailure {
+    Transport,
+    Timeout,
+    HealthDenied,
+    Body,
+    Json,
+    ReleaseMismatch,
+}
+
+impl ReadinessFailure {
+    fn event(self) -> &'static str {
+        match self {
+            Self::Transport => "compat_readiness_transport",
+            Self::Timeout => "compat_readiness_timeout",
+            Self::HealthDenied => "compat_readiness_health_denied",
+            Self::Body => "compat_readiness_body",
+            Self::Json => "compat_readiness_json",
+            Self::ReleaseMismatch => "compat_readiness_release_mismatch",
+        }
+    }
+}
 impl Connections {
     fn new() -> Self {
         Self {
@@ -166,33 +189,62 @@ impl Endpoint {
         Ok(response.map(Body::new))
     }
 
-    async fn ready(&self, bundle: &Bundle) -> bool {
-        let probe = async {
-            let response = self
-                .forward(Request::builder().uri("/health").body(Body::empty())?)
-                .await?;
-            if !response.status().is_success() {
-                bail!("Health denied");
-            }
-            let bytes = http_body_util::Limited::new(response.into_body(), 65536)
-                .collect()
-                .await
-                .map_err(|_| anyhow::anyhow!("Invalid health response body"))?
-                .to_bytes();
-            let health: serde_json::Value = serde_json::from_slice(&bytes)?;
-            if health["ok"] != true
-                || health["version"] != bundle.runtime_version
-                || health["release"]["commit"] != bundle.commit
-            {
-                bail!("Release or database health mismatch");
-            }
-            Ok::<(), anyhow::Error>(())
-        };
-        matches!(
-            tokio::time::timeout(Duration::from_secs(2), probe).await,
-            Ok(Ok(()))
-        )
+    async fn readiness_probe(&self, bundle: &Bundle) -> Result<(), ReadinessFailure> {
+        let response = self
+            .forward(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .map_err(|_| ReadinessFailure::Transport)?,
+            )
+            .await
+            .map_err(|_| ReadinessFailure::Transport)?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(ReadinessFailure::HealthDenied);
+        }
+        let bytes = http_body_util::Limited::new(response.into_body(), 65536)
+            .collect()
+            .await
+            .map_err(|_| ReadinessFailure::Body)?
+            .to_bytes();
+        validate_health_response(status, &bytes, bundle)
     }
+
+    async fn ready_with_timeout(
+        &self,
+        bundle: &Bundle,
+        duration: Duration,
+    ) -> Result<(), ReadinessFailure> {
+        match tokio::time::timeout(duration, self.readiness_probe(bundle)).await {
+            Ok(result) => result,
+            Err(_) => Err(ReadinessFailure::Timeout),
+        }
+    }
+
+    async fn ready(&self, bundle: &Bundle) -> Result<(), ReadinessFailure> {
+        self.ready_with_timeout(bundle, Duration::from_secs(2))
+            .await
+    }
+}
+
+fn validate_health_response(
+    status: axum::http::StatusCode,
+    bytes: &[u8],
+    bundle: &Bundle,
+) -> Result<(), ReadinessFailure> {
+    if !status.is_success() {
+        return Err(ReadinessFailure::HealthDenied);
+    }
+    let health: serde_json::Value =
+        serde_json::from_slice(bytes).map_err(|_| ReadinessFailure::Json)?;
+    if health["ok"] != true
+        || health["version"] != bundle.runtime_version
+        || health["release"]["commit"] != bundle.commit
+    {
+        return Err(ReadinessFailure::ReleaseMismatch);
+    }
+    Ok(())
 }
 
 #[derive(Clone)]
@@ -487,6 +539,7 @@ impl Supervisor {
                 if let Ok(mut process) = process {
                     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
                     let mut ready = false;
+                    let mut last_readiness_failure = None;
                     let mut observed_exit = None;
                     while tokio::time::Instant::now() < deadline {
                         if cancelled.is_cancelled() {
@@ -498,9 +551,12 @@ impl Supervisor {
                             observed_exit = Some(status);
                             break;
                         }
-                        if process.endpoint.ready(&spec.bundle).await {
-                            ready = true;
-                            break;
+                        match process.endpoint.ready(&spec.bundle).await {
+                            Ok(()) => {
+                                ready = true;
+                                break;
+                            }
+                            Err(failure) => last_readiness_failure = Some(failure),
                         }
                         tokio::select! {
                             biased;
@@ -526,11 +582,13 @@ impl Supervisor {
                                     break;
                                 },
                                 _ = tokio::time::sleep(Duration::from_secs(10)) => {
-                                    if process.endpoint.ready(&spec.bundle).await { failures = 0; } else { failures += 1; }
+                                    if process.endpoint.ready(&spec.bundle).await.is_ok() { failures = 0; } else { failures += 1; }
                                     if failures >= 3 { break; }
                                 }
                             }
                         }
+                    } else if let Some(failure) = last_readiness_failure {
+                        logs.event(failure.event(), 40);
                     }
                     endpoints.send_replace(None);
                     let stop_intent = process.stop(observed_exit, &cancelled).await?;
@@ -593,6 +651,7 @@ impl Drop for Supervisor {
 mod tests {
     use std::{
         os::unix::process::ExitStatusExt,
+        path::PathBuf,
         sync::{
             Arc,
             atomic::{AtomicBool, Ordering},
@@ -606,6 +665,117 @@ mod tests {
         fn drop(&mut self) {
             self.0.store(true, Ordering::SeqCst);
         }
+    }
+
+    fn test_bundle() -> super::Bundle {
+        super::Bundle {
+            node: PathBuf::from("node"),
+            entry: PathBuf::from("desktop.js"),
+            web_root: PathBuf::from("web"),
+            runtime_version: "1.2.3-web".to_owned(),
+            commit: "test-commit".to_owned(),
+        }
+    }
+
+    #[test]
+    fn health_response_validation_preserves_fixed_failure_categories() {
+        let bundle = test_bundle();
+        assert_eq!(
+            super::validate_health_response(
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                br#"{"ok":true}"#,
+                &bundle,
+            ),
+            Err(super::ReadinessFailure::HealthDenied)
+        );
+        assert_eq!(
+            super::validate_health_response(axum::http::StatusCode::OK, b"not-json", &bundle),
+            Err(super::ReadinessFailure::Json)
+        );
+        assert_eq!(
+            super::validate_health_response(
+                axum::http::StatusCode::OK,
+                br#"{"ok":true,"version":"wrong","release":{"commit":"test-commit"}}"#,
+                &bundle,
+            ),
+            Err(super::ReadinessFailure::ReleaseMismatch)
+        );
+        assert_eq!(
+            super::validate_health_response(
+                axum::http::StatusCode::OK,
+                br#"{"ok":true,"version":"1.2.3-web","release":{"commit":"test-commit"}}"#,
+                &bundle,
+            ),
+            Ok(())
+        );
+    }
+
+    #[tokio::test]
+    async fn readiness_probe_separates_transport_from_timeout() {
+        let root = std::env::temp_dir().join(format!(
+            "pp-compat-readiness-categories-{}-{}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let bundle = test_bundle();
+        let missing = super::Endpoint {
+            socket: root.join("missing.sock"),
+            generation: "test-generation".to_owned(),
+            key: [0; 32],
+            connections: std::sync::Arc::new(super::Connections::new()),
+        };
+        assert_eq!(
+            missing
+                .ready_with_timeout(&bundle, Duration::from_millis(20))
+                .await,
+            Err(super::ReadinessFailure::Transport)
+        );
+
+        let socket = root.join("waiting.sock");
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let server = tokio::spawn(async move {
+            let (_stream, _) = listener.accept().await.unwrap();
+            std::future::pending::<()>().await;
+        });
+        let waiting = super::Endpoint {
+            socket,
+            generation: "test-generation".to_owned(),
+            key: [0; 32],
+            connections: std::sync::Arc::new(super::Connections::new()),
+        };
+        assert_eq!(
+            waiting
+                .ready_with_timeout(&bundle, Duration::from_millis(20))
+                .await,
+            Err(super::ReadinessFailure::Timeout)
+        );
+        server.abort();
+        let _ = server.await;
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn readiness_failure_events_are_fixed() {
+        assert_eq!(
+            [
+                super::ReadinessFailure::Transport,
+                super::ReadinessFailure::Timeout,
+                super::ReadinessFailure::HealthDenied,
+                super::ReadinessFailure::Body,
+                super::ReadinessFailure::Json,
+                super::ReadinessFailure::ReleaseMismatch,
+            ]
+            .map(super::ReadinessFailure::event),
+            [
+                "compat_readiness_transport",
+                "compat_readiness_timeout",
+                "compat_readiness_health_denied",
+                "compat_readiness_body",
+                "compat_readiness_json",
+                "compat_readiness_release_mismatch",
+            ]
+        );
     }
 
     #[test]

@@ -56,6 +56,12 @@ impl AttemptLease {
     pub fn job_id(&self) -> &str {
         &self.job_id
     }
+    pub(crate) fn generation(&self) -> i64 {
+        self.generation
+    }
+    pub(crate) fn fence(&self) -> &str {
+        &self.fence
+    }
 }
 #[derive(Clone, PartialEq, Eq)]
 pub struct WorkerAdmission {
@@ -1261,6 +1267,9 @@ fn claim(
             }
             if let Some(AuthorityDecision::Refused(reason)) = authority {
                 let failure = reason.failure();
+                if job_id.is_some() {
+                    crate::uploads::record_targeted_authority_refusal(tx, &job)?;
+                }
                 record_refusal(
                     tx,
                     &mut job,
@@ -1783,7 +1792,7 @@ fn advance(
     )))
 }
 
-fn require_original_authority(
+pub(crate) fn require_original_authority(
     tx: &Transaction<'_>,
     job: &JobRecord,
     policy: AuthPolicy,
@@ -1799,6 +1808,49 @@ fn require_original_authority(
     let (tenant, subject) = auth::authority::resolve(tx, basis, policy)?;
     ensure!(tenant == job.tenant, auth::AuthorityFailure::TenantChanged);
     Ok(ValidatedAuthority { tenant, subject })
+}
+
+pub(crate) fn revalidate_source_authority(
+    tx: &Transaction<'_>,
+    job: &JobRecord,
+    policy: AuthPolicy,
+) -> Result<()> {
+    if job.authority_disposition == AuthorityDisposition::PhysicalOwner {
+        return Ok(());
+    }
+    require_original_authority(tx, job, policy).map(drop)
+}
+
+pub(crate) fn commit_source_authority_refusal(
+    tx: &Transaction<'_>,
+    job: &mut JobRecord,
+    error: &anyhow::Error,
+) -> Result<bool> {
+    let reason = if job.authority_disposition == AuthorityDisposition::LegacyMissing {
+        Some(AuthorityRefusalReason::MissingOriginal)
+    } else {
+        match error.downcast_ref::<auth::AuthorityFailure>() {
+            Some(auth::AuthorityFailure::CredentialInvalid) => {
+                Some(AuthorityRefusalReason::CredentialInvalid)
+            }
+            Some(auth::AuthorityFailure::PolicyChanged) => {
+                Some(AuthorityRefusalReason::PolicyChanged)
+            }
+            Some(auth::AuthorityFailure::TenantChanged) => {
+                Some(AuthorityRefusalReason::TenantChanged)
+            }
+            Some(auth::AuthorityFailure::SubjectChanged) => {
+                Some(AuthorityRefusalReason::SubjectChanged)
+            }
+            _ => None,
+        }
+    };
+    let Some(reason) = reason else {
+        return Ok(false);
+    };
+    record_refusal(tx, job, reason, AuthorityRefusalPhase::SourceWriter, None)?;
+    save(tx, job, "source_authority_refused")?;
+    Ok(true)
 }
 
 pub(crate) fn validate_schema(connection: &Connection, version: u64) -> Result<()> {
@@ -1945,11 +1997,13 @@ impl ServerWorkerClient {
         phase: crate::uploads::Phase,
     ) -> Result<crate::uploads::Operation> {
         ensure!(lease.worker == self.identity, "Foreign worker");
+        let policy = self.policy.ok_or(auth::AuthorityFailure::PolicyRequired)?;
         crate::uploads::submit(
             &self.storage,
             crate::uploads::Command::Phase {
                 lease: lease.clone(),
                 phase,
+                policy,
             },
             &AtomicBool::new(false),
         )

@@ -283,6 +283,8 @@ mod tests {
             artifact: None,
             receipt: None,
             cleanup_settled: false,
+            authority_revision: None,
+            observation_cursor: None,
         }
     }
 

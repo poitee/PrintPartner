@@ -150,6 +150,8 @@ fn legacy_case(key: &str, input: Input, files: Vec<File>) -> Value {
         artifact: None,
         receipt: None,
         cleanup_settled: false,
+        authority_revision: None,
+        observation_cursor: None,
     };
     let payload = Payload::SuppliedSourceImport {
         project_id: 42,

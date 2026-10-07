@@ -29,7 +29,7 @@ fn policy() -> AuthPolicy {
 fn fixture() -> (PathBuf, WriterOwner) {
     let path = directory();
     let (owner, ready) = WriterOwner::open(&path, Limits::default()).unwrap();
-    assert_eq!(ready.version, 37);
+    assert_eq!(ready.version, 38);
     (path, owner)
 }
 fn admission() -> WorkerAdmission {
@@ -1280,7 +1280,7 @@ fn ticket_t_28_claims_list_filters_pagination_and_history() {
 #[test]
 fn ticket_t_28_claims_schema35_corruption_and37_preserve_input_bytes() {
     for corruption in [
-        "UPDATE app_settings SET value='38' WHERE tenant_id='default' AND key='schema_version'",
+        "UPDATE app_settings SET value='39' WHERE tenant_id='default' AND key='schema_version'",
         "ALTER TABLE durable_jobs ADD COLUMN unintended TEXT",
         "UPDATE durable_jobs SET version=version+1",
     ] {

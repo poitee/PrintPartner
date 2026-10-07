@@ -923,7 +923,7 @@ fn patch(tx: &Transaction<'_>, tenant: &str, id: i64, p: SourcePatch) -> Result<
         m.shift_remove("remote_checked_at");
         m.shift_remove("sync_error");
     }
-    tx.execute("UPDATE projects SET name=?1,url=?2,branch=?3,tag=?4,source_kind=?5,source_type=?6,role=?7,metadata_json=?8 WHERE tenant_id=?9 AND id=?10",params![row.name,row.url,row.branch,row.tag,row.source_kind,row.source_type,row.role,if metadata_changed {row.metadata.map(|m|json::metadata(&m)).transpose()?}else{original_metadata},tenant,id])?;
+    tx.execute("UPDATE projects SET name=?1,url=?2,branch=?3,tag=?4,source_kind=?5,source_type=?6,role=?7,metadata_json=?8,source_configuration_version=source_configuration_version+?9 WHERE tenant_id=?10 AND id=?11",params![row.name,row.url,row.branch,row.tag,row.source_kind,row.source_type,row.role,if metadata_changed {row.metadata.map(|m|json::metadata(&m)).transpose()?}else{original_metadata},i64::from(identity),tenant,id])?;
     require(tx, tenant, id)
 }
 fn rules(raw: Option<String>) -> (Vec<String>, bool) {
@@ -1098,9 +1098,15 @@ pub(crate) fn run(
                     out.push(r);
                 }
             }
+            let encoded = serde_json::to_string(&out)?;
+            let prior: Option<String> = tx.query_row(
+                "SELECT imported_paths FROM projects WHERE tenant_id=?1 AND id=?2",
+                params![tenant, id],
+                |row| row.get(0),
+            )?;
             tx.execute(
-                "UPDATE projects SET imported_paths=?1 WHERE tenant_id=?2 AND id=?3",
-                params![serde_json::to_string(&out)?, tenant, id],
+                "UPDATE projects SET imported_paths=?1,source_configuration_version=source_configuration_version+?2 WHERE tenant_id=?3 AND id=?4",
+                params![encoded, i64::from(prior.as_deref() != Some(encoded.as_str())), tenant, id],
             )?;
             tx.execute("UPDATE build_profiles SET config_modified_at=?1 WHERE tenant_id=?2 AND id IN (SELECT profile_id FROM profile_layers WHERE tenant_id=?2 AND project_id=?3)",params![auth::catalog_timestamp(),tenant,id])?;
             Outcome::Data(json!({"rules":out}))
