@@ -1,6 +1,4 @@
 #!/usr/bin/env node
-// Fails CI when tracked source gains workaround markers. The committed baseline
-// may only go down: lower it with --update after removing markers.
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -300,8 +298,6 @@ export function main(argv = process.argv.slice(2), root = REPO_ROOT, baselinePat
   const current = countFiles(root, trackedFiles(root));
   const shownPath = relative(root, baselinePath);
   if (argv.includes("--update")) {
-    // An existing baseline may only go down. Only a missing baseline is
-    // written from scratch.
     if (existsSync(baselinePath)) {
       const { increased } = compare(current, JSON.parse(readFileSync(baselinePath, "utf8")));
       if (increased.length > 0) {
