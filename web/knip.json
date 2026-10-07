@@ -1,5 +1,5 @@
 {
-  "$schema": "https://unpkg.com/knip@5/schema.json",
+  "$schema": "https://unpkg.com/knip@6.5.0/schema.json",
   "ignoreBinaries": [
     "python3"
   ],
@@ -22,8 +22,7 @@
         "*.ts"
       ],
       "ignore": [
-        "src/db/schema.ts",
-        "src/db/schema-pg.ts"
+        "src/db/schema.ts"
       ]
     },
     "apps/web": {

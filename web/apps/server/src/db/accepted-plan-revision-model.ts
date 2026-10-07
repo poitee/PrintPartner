@@ -1,4 +1,4 @@
-export type PlanRevisionIdentityRow = {
+type PlanRevisionIdentityRow = {
   readonly provenanceKind: string;
   readonly inputSetId: number | null;
 };
