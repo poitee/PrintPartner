@@ -5,6 +5,7 @@ use axum::{
     extract::State,
     http::{HeaderValue, Request, Response, StatusCode},
     response::IntoResponse,
+    serve::Listener,
 };
 use pp_compat::CompatHandle;
 use serde::Deserialize;
@@ -22,6 +23,16 @@ pub struct LaunchTarget(String);
 impl LaunchTarget {
     pub fn into_url(self) -> String {
         self.0
+    }
+}
+
+#[derive(Clone)]
+pub struct ShutdownRequested {
+    token: CancellationToken,
+}
+impl ShutdownRequested {
+    pub async fn wait(self) {
+        self.token.cancelled_owned().await;
     }
 }
 
@@ -69,6 +80,7 @@ struct GatewayState {
     denied: Vec<DeniedOperation>,
     relays: TaskTracker,
     cancelled: CancellationToken,
+    shutdown_requested: CancellationToken,
 }
 
 pub struct Gateway {
@@ -131,6 +143,7 @@ impl Gateway {
             denied: manifest.denied,
             relays: TaskTracker::new(),
             cancelled: CancellationToken::new(),
+            shutdown_requested: CancellationToken::new(),
         });
         let stop = CancellationToken::new();
         let stopping = stop.clone();
@@ -138,11 +151,12 @@ impl Gateway {
         let accepted = connections.clone();
         let gateway = state.clone();
         let task = tokio::spawn(async move {
+            let mut listener = listener;
             loop {
                 let (stream, _) = tokio::select! {
                     biased;
                     _ = stopping.cancelled() => break,
-                    next = listener.accept() => next?,
+                    next = Listener::accept(&mut listener) => next,
                 };
                 let state = gateway.clone();
                 let cancelled = stopping.clone();
@@ -184,6 +198,11 @@ impl Gateway {
         self.launch
             .take()
             .context("Launch target already transferred")
+    }
+    pub fn shutdown_requested(&self) -> ShutdownRequested {
+        ShutdownRequested {
+            token: self.state.shutdown_requested.clone(),
+        }
     }
     pub async fn drain(&self) {
         {
@@ -301,6 +320,56 @@ fn matches_path(pattern: &str, path: &str) -> bool {
     actual.next().is_none()
 }
 
+fn is_spa_client_path(path: &str) -> bool {
+    if matches!(
+        path,
+        "/" | "/login"
+            | "/setup"
+            | "/forgot-password"
+            | "/reset-password"
+            | "/sources"
+            | "/build"
+            | "/builds"
+            | "/review"
+            | "/checkoff"
+            | "/settings"
+            | "/help"
+            | "/plan"
+            | "/plans"
+            | "/plate"
+            | "/print"
+            | "/printers"
+            | "/library"
+            | "/parts"
+            | "/progress"
+            | "/export"
+            | "/production"
+            | "/board"
+    ) {
+        return true;
+    }
+    let path_bytes = path.as_bytes();
+    if path_bytes
+        .get(..7)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"/board/"))
+    {
+        let bytes = &path_bytes[7..];
+        return bytes.len() == 36
+            && bytes[8] == b'-'
+            && bytes[13] == b'-'
+            && matches!(bytes[14], b'1'..=b'8')
+            && bytes[18] == b'-'
+            && matches!(bytes[19].to_ascii_lowercase(), b'8' | b'9' | b'a' | b'b')
+            && bytes[23] == b'-'
+            && bytes.iter().enumerate().all(|(index, byte)| {
+                matches!(index, 8 | 13 | 18 | 23) || byte.is_ascii_hexdigit()
+            });
+    }
+    path.strip_prefix("/plans/")
+        .and_then(|value| value.strip_suffix("/studio"))
+        .is_some_and(|id| !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit()))
+}
+
 async fn handle(
     State(state): State<Arc<GatewayState>>,
     mut request: Request<Body>,
@@ -381,6 +450,7 @@ async fn handle(
             .sessions
             .clear();
         state.cancelled.cancel();
+        state.shutdown_requested.cancel();
         return axum::Json(serde_json::json!({"ok":true})).into_response();
     }
     if path == "/mcp" || path == "/api/v1/mcp" {
@@ -392,23 +462,7 @@ async fn handle(
     let document = request.method() == "GET"
         && (header(&request, "sec-fetch-mode") == Some("navigate")
             || header(&request, "accept").is_some_and(|v| v.contains("text/html")));
-    let spa = matches!(
-        path.as_str(),
-        "/" | "/builds"
-            | "/library"
-            | "/sources"
-            | "/plan"
-            | "/production"
-            | "/progress"
-            | "/settings"
-            | "/printers"
-            | "/help"
-            | "/parts"
-            | "/plans"
-            | "/export"
-            | "/login"
-            | "/setup"
-    );
+    let spa = is_spa_client_path(&path);
     if (document && spa)
         || path.starts_with("/assets/")
         || matches!(path.as_str(), "/favicon.ico" | "/logo.png")
@@ -561,6 +615,63 @@ async fn handle(
     }
 }
 
+#[cfg(test)]
+mod spa_tests {
+    use super::is_spa_client_path;
+
+    #[test]
+    fn spa_client_paths_match_the_node_router() {
+        for path in [
+            "/",
+            "/login",
+            "/setup",
+            "/forgot-password",
+            "/reset-password",
+            "/sources",
+            "/build",
+            "/builds",
+            "/review",
+            "/checkoff",
+            "/settings",
+            "/help",
+            "/plan",
+            "/plans",
+            "/plate",
+            "/print",
+            "/printers",
+            "/library",
+            "/parts",
+            "/progress",
+            "/export",
+            "/production",
+            "/board",
+            "/board/123e4567-e89b-42d3-a456-426614174000",
+            "/board/123E4567-E89B-42D3-B456-426614174000",
+            "/BOARD/123e4567-e89b-42d3-a456-426614174000",
+            "/BoArD/123E4567-E89B-42D3-B456-426614174000",
+            "/plans/1/studio",
+            "/plans/000/studio",
+        ] {
+            assert!(is_spa_client_path(path), "expected SPA path: {path}");
+        }
+
+        for path in [
+            "/unknown",
+            "/api/unknown",
+            "/board/not-a-uuid",
+            "/board/123e4567-e89b-02d3-a456-426614174000",
+            "/board/123e4567-e89b-42d3-7456-426614174000",
+            "/board/123e4567-e89b-42d3-a456-426614174000/extra",
+            "/plans/-1/studio",
+            "/plans/1.5/studio",
+            "/plans/abc/studio",
+            "/plans/1/studio/extra",
+        ] {
+            assert!(!is_spa_client_path(path), "unexpected SPA path: {path}");
+        }
+    }
+}
+
 struct TrackedBody {
     body: Body,
     _admission: Admission,
@@ -591,6 +702,8 @@ impl http_body::Body for TrackedBody {
 
 #[cfg(test)]
 mod tests {
+    use tokio_util::sync::CancellationToken;
+
     #[test]
     fn admission_and_drain_share_one_barrier() {
         use super::*;
@@ -643,5 +756,18 @@ mod tests {
         assert!(manifest.routes.iter().any(|r| r.method == "GET"
             && r.path == "/printer-checkoff"
             && r.effect == super::EffectClass::LocalCommit));
+    }
+
+    #[tokio::test]
+    async fn shutdown_request_observation_is_monotonic() {
+        let token = CancellationToken::new();
+        let requested = super::ShutdownRequested {
+            token: token.clone(),
+        };
+        let first = requested.clone();
+        token.cancel();
+        first.wait().await;
+        token.cancel();
+        requested.wait().await;
     }
 }
