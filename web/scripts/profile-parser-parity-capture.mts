@@ -1,0 +1,525 @@
+import {
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, relative } from "node:path";
+import { argv, exit } from "node:process";
+import Fastify from "fastify";
+import { SqliteDatabase, getDb } from "../apps/server/src/db/client.js";
+import { AppRepository } from "../apps/server/src/db/repository.js";
+import {
+  inferMaterialType,
+  parseProfileFile,
+  parseSlicerIni,
+  parseSlicerJson,
+  scalar,
+  startProfileSyncWatcher,
+  type ProfileKind,
+  type ProfileSyncResult,
+} from "../apps/server/src/services/profile-sync.js";
+import { registerProfileLibraryRoutes } from "../apps/server/src/routes/profile-library.js";
+import {
+  filamentProfiles,
+  printerProfiles,
+  processProfiles,
+} from "../apps/server/src/db/schema.js";
+
+type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
+type Observation =
+  { ok: true; json: string } | { ok: false; name: string; message: string };
+type JsonRecord = { [key: string]: Json };
+
+function isJsonRecord(value: unknown): value is JsonRecord {
+  if (value === null || typeof value !== "object" || Array.isArray(value))
+    return false;
+  const prototype = Object.getPrototypeOf(value);
+  return (
+    (prototype === Object.prototype || prototype === null) &&
+    Object.values(value).every(isJson)
+  );
+}
+
+function isJson(value: unknown): value is Json {
+  if (
+    value === null ||
+    typeof value === "boolean" ||
+    typeof value === "string"
+  )
+    return true;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (Array.isArray(value)) return value.every(isJson);
+  return isJsonRecord(value);
+}
+
+function requireJson(value: unknown): Json {
+  if (!isJson(value)) throw new Error("capture value is not JSON");
+  return value;
+}
+
+function requireRouteProfiles(value: unknown): JsonRecord[] {
+  if (
+    !isJsonRecord(value) ||
+    !Array.isArray(value.profiles) ||
+    !value.profiles.every(isJsonRecord)
+  )
+    throw new Error("profile library response has an invalid shape");
+  return value.profiles;
+}
+
+function requiredOut(): string {
+  const position = argv.indexOf("--out");
+  const value = argv[position + 1];
+  if (position < 0 || !value)
+    throw new Error("usage: --out <path>");
+  return value;
+}
+
+function observe(work: () => unknown): Observation {
+  try {
+    const json = JSON.stringify(work());
+    if (json === undefined) throw new Error("observation is not JSON");
+    return { ok: true, json };
+  } catch (error) {
+    return {
+      ok: false,
+      name: error instanceof Error ? error.name : "UnknownError",
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+function utf16(value: string): number[] {
+  return Array.from({ length: value.length }, (_, index) =>
+    value.charCodeAt(index),
+  );
+}
+
+function writeProfile(
+  root: string,
+  relativePath: string,
+  bytes: Uint8Array | string,
+): string {
+  const path = join(root, relativePath);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, bytes);
+  return path;
+}
+
+async function main(): Promise<void> {
+  const out = requiredOut();
+  const temp = mkdtempSync(join(tmpdir(), "pp-profile-parser-"));
+  const root = join(temp, "slicer");
+  const bambuRoot = join(temp, "bambu");
+  const prusaRoot = join(temp, "prusa");
+  const data = join(temp, "data");
+  const processDir = "user/default/process";
+  const printerDir = "user/default/machine";
+  const filamentDir = "user/default/filament";
+  const fixtures = new Map<string, string>();
+  const add = (
+    id: string,
+    base: string,
+    directory: string,
+    filename: string,
+    bytes: Uint8Array | string,
+  ): void => {
+    fixtures.set(id, writeProfile(base, `${directory}/${filename}`, bytes));
+  };
+
+  add(
+    "unicode-parent",
+    root,
+    processDir,
+    "UnicodeParent.json",
+    String.raw`{"name":"Parent \uD800","parent\uD800":"value\uDC00","shared":"parent"}`,
+  );
+  add(
+    "unicode-child",
+    root,
+    processDir,
+    "UnicodeChild.json",
+    String.raw`{"name":"Child \uD800","inherits":"UnicodeParent","type":"process","shared":"child","config\uD800":"value\uDC00","compatible_printers":["Machine \uD800","Ignored"]}`,
+  );
+  add(
+    "unicode-type",
+    root,
+    processDir,
+    "UnicodeType.json",
+    String.raw`{"name":"Type fallback","type":"fil\uD800ament"}`,
+  );
+  add(
+    "astral-name",
+    root,
+    processDir,
+    "Astral.json",
+    String.raw`{"name":"Astral \uD83D\uDE00","astral":"\uD83D\uDE00"}`,
+  );
+  add(
+    "numeric-printer",
+    root,
+    printerDir,
+    "Numeric.json",
+    String.raw`{"name":"Numeric machine","type":"machine","nozzle_diameter":1e21,"extruder_count":9007199254740993,"version":"2.3"}`,
+  );
+  add(
+    "numeric-rejected-filament",
+    root,
+    filamentDir,
+    "Huge.json",
+    String.raw`{"name":"Huge PLA","type":"filament","nozzle_temperature":1e308}`,
+  );
+  add(
+    "ini-filament",
+    root,
+    filamentDir,
+    "PLA.ini",
+    "# generated by PrusaSlicer 2.8.0\nname = Fancy PLA\nnozzle_temperature = -0.5\nbed_temperature = 60.5\nfan_always_on = 1\nfilament_flow_ratio = 0.98\n",
+  );
+  add(
+    "rounding-below-half",
+    root,
+    filamentDir,
+    "BelowHalf.json",
+    String.raw`{"name":"Below Half PLA","type":"filament","nozzle_temperature":0.49999999999999994}`,
+  );
+  add(
+    "rounding-large-integral",
+    root,
+    filamentDir,
+    "LargeIntegral.json",
+    String.raw`{"name":"Large Integral PLA","type":"filament","nozzle_temperature":4503599627370497}`,
+  );
+  add(
+    "utf8-ff",
+    root,
+    processDir,
+    "Utf8Ff.json",
+    new Uint8Array([
+      0x7b, 0x22, 0x6e, 0x61, 0x6d, 0x65, 0x22, 0x3a, 0x22, 0xff, 0x22, 0x7d,
+    ]),
+  );
+  add(
+    "utf8-overlong",
+    root,
+    processDir,
+    "Utf8Overlong.json",
+    new Uint8Array([
+      0x7b, 0x22, 0x6e, 0x61, 0x6d, 0x65, 0x22, 0x3a, 0x22, 0xc0, 0xaf, 0x22,
+      0x7d,
+    ]),
+  );
+  add(
+    "utf8-bad-continuation",
+    root,
+    processDir,
+    "Utf8Continuation.json",
+    new Uint8Array([
+      0x7b, 0x22, 0x6e, 0x61, 0x6d, 0x65, 0x22, 0x3a, 0x22, 0xe2, 0x28, 0xa1,
+      0x22, 0x7d,
+    ]),
+  );
+  add(
+    "bambu-producer-sample",
+    bambuRoot,
+    processDir,
+    "BambuProducer.json",
+    String.raw`{"name":"Bambu producer sample","type":"process","compatible_printers":["Bambu X1 Carbon 0.4 nozzle"],"layer_height":"0.2","sparse_infill_density":"15%","wall_loops":3}`,
+  );
+  add(
+    "prusa-producer-sample",
+    prusaRoot,
+    "print",
+    "PrusaProducer.ini",
+    "# generated by PrusaSlicer 2.8.0\nprint_settings_id = Prusa producer sample\nlayer_height = 0.2\nperimeters = 3\nfill_density = 15%\ncompatible_printers = Original Prusa MK4\n",
+  );
+
+  const sqlite = new SqliteDatabase(data);
+  const app = Fastify();
+  const events: ProfileSyncResult[] = [];
+  let handle: ReturnType<typeof startProfileSyncWatcher> | undefined;
+  try {
+    sqlite.connect();
+    const db = getDb(sqlite);
+    const repo = new AppRepository(db, "default", sqlite.reposDir);
+    handle = startProfileSyncWatcher(
+      repo,
+      {
+        enabled: true,
+        roots: [
+          {
+            kind: "orca",
+            baseDir: root,
+            dirs: {
+              printer: printerDir,
+              process: processDir,
+              filament: filamentDir,
+            },
+          },
+          {
+            kind: "bambu",
+            baseDir: bambuRoot,
+            dirs: { process: processDir },
+          },
+          {
+            kind: "prusa",
+            baseDir: prusaRoot,
+            dirs: { process: "print" },
+          },
+        ],
+      },
+      (event) => events.push(event),
+    );
+    await handle.syncAll();
+
+    const rows = repo.listProfileLibrary().flatMap((row) => {
+      if (!row.sourcePath?.startsWith(temp)) return [];
+      return [
+        {
+          ...row,
+          sourcePath: `<owned-temp>/${relative(temp, row.sourcePath)}`,
+        },
+      ];
+    });
+    const writerTables = {
+      printer: db
+        .select()
+        .from(printerProfiles)
+        .all()
+        .filter((row) => row.sourcePath?.startsWith(temp)),
+      process: db
+        .select()
+        .from(processProfiles)
+        .all()
+        .filter((row) => row.sourcePath?.startsWith(temp)),
+      filament: db
+        .select()
+        .from(filamentProfiles)
+        .all()
+        .filter((row) => row.sourcePath?.startsWith(temp)),
+    };
+    for (const tableRows of Object.values(writerTables)) {
+      for (const row of tableRows) {
+        if (row.sourcePath)
+          row.sourcePath = `<owned-temp>/${relative(temp, row.sourcePath)}`;
+      }
+    }
+    await registerProfileLibraryRoutes(app, { repo });
+    const response = await app.inject({
+      method: "GET",
+      url: "/profile-library",
+    });
+    const names = new Set(rows.map((row) => `${row.kind}\0${row.name}`));
+    const routeProfiles = requireRouteProfiles(response.json()).filter(
+      (row) =>
+        typeof row.kind === "string" &&
+        typeof row.name === "string" &&
+        names.has(`${row.kind}\0${row.name}`),
+    );
+    const fixtureMeasurements = [...fixtures].map(([id, path]) => ({
+      id,
+      path: `<owned-temp>/${relative(temp, path)}`,
+      bytes: readFileSync(path).byteLength,
+      decodedUtf16Units: readFileSync(path, "utf8").length,
+    }));
+    const measurements = {
+      fixtureCount: fixtureMeasurements.length,
+      maxChildBytes: Math.max(
+        ...fixtureMeasurements.map((fixture) => fixture.bytes),
+      ),
+      maxDecodedUtf16Units: Math.max(
+        ...fixtureMeasurements.map((fixture) => fixture.decodedUtf16Units),
+      ),
+      maxFlatEntries: Math.max(
+        ...rows.map(
+          (row) =>
+            Object.keys(JSON.parse(row.resolvedFlatConfig ?? "{}")).length,
+        ),
+      ),
+      maxResolvedBytes: Math.max(
+        ...rows.map((row) => Buffer.byteLength(row.resolvedFlatConfig ?? "{}")),
+      ),
+      representativeProducerSamples: [
+        "numeric-printer",
+        "bambu-producer-sample",
+        "prusa-producer-sample",
+      ],
+    };
+
+    const directJson = [
+      {
+        id: "ordinary-order",
+        raw: String.raw`{"name":"A","2":"two","10":"ten","x":true,"nested":{"value":["first"]},"none":null}`,
+      },
+      {
+        id: "duplicate-proto",
+        raw: String.raw`{"a":"first","a":"second","__proto__":"dropped","constructor":"kept"}`,
+      },
+      { id: "duplicate-to-null", raw: String.raw`{"a":"first","a":null}` },
+      {
+        id: "surrogate-fields",
+        raw: String.raw`{"name":"\uD800","low":"\uDC00","pair":"\uD83D\uDE00","key\uD800":"value\uDC00","type":"pro\uD800cess","inherits":"Parent\uD800","config":{"value":"x\uD800"}}`,
+      },
+      { id: "array-root", raw: String.raw`["array root",null,true]` },
+      { id: "astral-string-root", raw: String.raw`"\uD83D\uDE00"` },
+      { id: "surrogate-string-root", raw: String.raw`"\uD800X\uDC00"` },
+      { id: "number-root", raw: "12.5" },
+      { id: "boolean-root", raw: "true" },
+      { id: "null-root", raw: "null" },
+      {
+        id: "numeric-edges",
+        raw: String.raw`{"unsafe":9007199254740993,"huge":1e308,"overflow":1e400,"small":1e-7,"large":1e21,"negativeZero":-0}`,
+      },
+    ].map(({ id, raw }) => ({
+      id,
+      raw,
+      result: observe(() => parseSlicerJson(raw)),
+    }));
+    const directProfile: Array<{
+      id: string;
+      raw: string;
+      kindHint: ProfileKind;
+    }> = [
+      {
+        id: "bom-json",
+        raw: '\ufeff  {"name":"BOM JSON","version":""}',
+        kindHint: "process",
+      },
+      {
+        id: "ini-version",
+        raw: "# generated by PrusaSlicer 2.8.0\nprint_settings_id = fallback",
+        kindHint: "process",
+      },
+      {
+        id: "ini-version-tabs",
+        raw: "# generated by\tPrusaSlicer\t2.8.1\nname = tabs",
+        kindHint: "process",
+      },
+      {
+        id: "ini-version-line-breaks",
+        raw: "# generated by\nOrcaSlicer\n2.3.2\nname = lines",
+        kindHint: "process",
+      },
+      {
+        id: "ini-version-unicode-whitespace",
+        raw: "# generated by\u00a0BambuStudio\u20281.9\nname = unicode whitespace",
+        kindHint: "process",
+      },
+      {
+        id: "ini-version-attached",
+        raw: "# generated by PrusaSlicer2.8.0\nname = attached",
+        kindHint: "process",
+      },
+      {
+        id: "ini-version-later-valid",
+        raw: "# generated by Unknown 1.0\n# generated by OrcaSlicer 2.4.0\nname = later",
+        kindHint: "process",
+      },
+      { id: "array-as-ini", raw: "[1,2]", kindHint: "process" },
+      { id: "null-as-ini", raw: "null", kindHint: "process" },
+      {
+        id: "surrogate-name",
+        raw: String.raw`{"name":"\uD800","type":"process","inherits":"Parent\uD800"}`,
+        kindHint: "process",
+      },
+    ];
+    const directProfileObservations = directProfile.map(({ id, raw, kindHint }) => ({
+      id,
+      raw,
+      kindHint,
+      result: observe(() => parseProfileFile(raw, kindHint)),
+    }));
+    const scalarInputs: unknown[] = [
+      "text",
+      12.5,
+      true,
+      null,
+      [],
+      ["first", "second"],
+      { value: [false] },
+      { value: null },
+      { ignored: "x" },
+      ["\ud800", "ignored"],
+    ];
+    const direct = {
+      scalar: scalarInputs.map((input, index) => ({
+        index,
+        inputUtf16: typeof input === "string" ? utf16(input) : null,
+        result: observe(() => scalar(input)),
+      })),
+      json: directJson,
+      ini: [
+        "\ufeff key = value \r\n# comment\n; another\nkey = override\nempty=\nnope\n = ignored\n",
+        "generated by OrcaSlicer 2.3.2\nname = Ini name\n",
+      ].map((raw, index) => ({
+        index,
+        raw,
+        result: observe(() => parseSlicerIni(raw)),
+      })),
+      profile: directProfileObservations,
+      materials: [
+        "PLA",
+        "PETG",
+        "ABS",
+        "ASA",
+        "TPU",
+        "PC",
+        "NYLON",
+        "PVA",
+        "HIPS",
+        "PCTG",
+        "abcPLA",
+        "éPLA",
+        "abs asa",
+        "unknown",
+      ].map((name) => ({ name, output: inferMaterialType(name) })),
+    };
+    const document = requireJson({
+      schema: "printpartner.profile-parser-capture.v2",
+      runtime: {
+        node: process.version,
+        v8: process.versions.v8,
+        icu: process.versions.icu,
+        locale: Intl.Collator().resolvedOptions().locale,
+        collator: Intl.Collator().resolvedOptions(),
+      },
+      collation: ["z", "Á", "a", "A", "é", "e\u0301", "10", "2", "Same"].sort(
+        (a, b) => a.localeCompare(b),
+      ),
+      direct,
+      watcher: {
+        fixtures: fixtureMeasurements,
+        events: events.map((event) => ({
+          kind: event.kind,
+          slicer: event.slicer,
+          nameJson: JSON.stringify(event.name),
+          nameUtf16: utf16(event.name),
+          versionJson: JSON.stringify(event.version),
+        })),
+      },
+      repository: { rows, writerTables },
+      route: {
+        status: response.statusCode,
+        profiles: routeProfiles,
+      },
+      measurements,
+    });
+    mkdirSync(dirname(out), { recursive: true });
+    writeFileSync(out, `${JSON.stringify(document, null, 2)}\n`);
+  } finally {
+    if (handle) await handle.stop();
+    await app.close();
+    sqlite.close();
+    rmSync(temp, { recursive: true, force: true });
+  }
+}
+
+main().catch((error) => {
+  process.stderr.write(
+    `${error instanceof Error ? error.stack : String(error)}\n`,
+  );
+  exit(1);
+});

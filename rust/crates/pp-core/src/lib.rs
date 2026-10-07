@@ -1,5 +1,6 @@
 pub mod draft_observations;
 pub mod native_secrets;
+pub mod profile_interpreter;
 pub mod review_observations;
 pub mod source_acquisition;
 pub mod uploads;
