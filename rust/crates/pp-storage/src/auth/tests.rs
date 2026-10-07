@@ -1,5 +1,6 @@
 use super::*;
 use crate::{Limits, Setting, SettingCommand};
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 
 #[test]
 fn bounded_auth_workers_and_cancelled_queue_do_not_write() {
@@ -88,6 +89,86 @@ fn run(client: &AuthClient, request: Request) -> Result<Outcome> {
         .unwrap()
 }
 
+fn legacy_hash(password: &str) -> String {
+    let salt = [7; 16];
+    let params = scrypt::Params::new(14, 8, 1, 64).unwrap();
+    let mut hash = [0; 64];
+    scrypt::scrypt(password.as_bytes(), &salt, &params, &mut hash).unwrap();
+    format!(
+        "scrypt:16384:8:1:{}:{}",
+        URL_SAFE_NO_PAD.encode(salt),
+        URL_SAFE_NO_PAD.encode(hash)
+    )
+}
+
+#[test]
+fn verified_short_legacy_password_logs_in_without_rehashing() {
+    let directory = std::env::temp_dir().join(format!(
+        "pp-auth-short-legacy-{}",
+        hex::encode(rand::random::<[u8; 16]>())
+    ));
+    let (owner, _) = WriterOwner::open(&directory, Limits::default()).unwrap();
+    let client = owner.auth(FirstUserTenant::NewUser);
+    run(
+        &client,
+        Request::Register {
+            email: "legacy@example.com".into(),
+            display_name: "Legacy".into(),
+            password: Secret::new("initial-password".into()),
+        },
+    )
+    .unwrap();
+    owner.shutdown().unwrap();
+
+    let stored = legacy_hash("short");
+    let db = Connection::open(directory.join("print-partner.db")).unwrap();
+    db.execute(
+        "UPDATE users SET password_hash=?1 WHERE email='legacy@example.com'",
+        [&stored],
+    )
+    .unwrap();
+    drop(db);
+
+    let (owner, _) = WriterOwner::open(&directory, Limits::default()).unwrap();
+    let client = owner.auth(FirstUserTenant::NewUser);
+    assert!(
+        run(
+            &client,
+            Request::Login {
+                email: "legacy@example.com".into(),
+                password: Secret::new("wrong".into()),
+            },
+        )
+        .is_err()
+    );
+    assert!(matches!(
+        run(
+            &client,
+            Request::Login {
+                email: "legacy@example.com".into(),
+                password: Secret::new("short".into()),
+            },
+        )
+        .unwrap(),
+        Outcome::Session { .. }
+    ));
+    owner.shutdown().unwrap();
+
+    let db = Connection::open(directory.join("print-partner.db")).unwrap();
+    let current: String = db
+        .query_row(
+            "SELECT password_hash FROM users WHERE email='legacy@example.com'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let sessions: i64 = db
+        .query_row("SELECT count(*) FROM sessions", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(current, stored);
+    assert_eq!(sessions, 2);
+}
+
 #[test]
 fn cheap_auth_progresses_while_two_valid_logins_are_in_kdf() {
     let directory = std::env::temp_dir().join(format!(
@@ -140,10 +221,7 @@ fn cheap_auth_progresses_while_two_valid_logins_are_in_kdf() {
         .unwrap();
     let session = gated
         .submit(
-            Request::ResolveSession {
-                token,
-                provider: Provider::Email,
-            },
+            Request::ResolveSession { token },
             Arc::new(AtomicBool::new(false)),
             Duration::from_secs(5),
         )
@@ -300,14 +378,7 @@ fn ticket_t_17_transaction_cas_rejects_verified_login_after_public_reset() {
         .unwrap();
     assert_eq!(old.err().unwrap().to_string(), "Credential changed");
     assert!(matches!(
-        run(
-            &client,
-            Request::ResolveSession {
-                token: old_session,
-                provider: Provider::Email
-            }
-        )
-        .unwrap(),
+        run(&client, Request::ResolveSession { token: old_session }).unwrap(),
         Outcome::User(None)
     ));
     assert!(matches!(
@@ -315,7 +386,6 @@ fn ticket_t_17_transaction_cas_rejects_verified_login_after_public_reset() {
             &client,
             Request::ResolveSession {
                 token: reset_session,
-                provider: Provider::Email
             }
         )
         .unwrap(),

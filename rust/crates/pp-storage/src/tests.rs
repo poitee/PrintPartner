@@ -199,7 +199,7 @@ fn reader_pool_resets_pragmas_rejects_writes_and_is_bounded() {
 }
 #[test]
 fn ahead_and_old_versions_reject_before_side_effects() {
-    for version in [30, 39] {
+    for version in [30, 40] {
         let path = directory("version");
         let database = path.join("print-partner.db");
         let conn = Connection::open(&database).unwrap();
@@ -286,6 +286,61 @@ fn storage_input_bytes(path: &Path) -> Vec<(String, Vec<u8>)> {
     .collect()
 }
 
+fn database_rows_image(connection: &Connection) -> Vec<(String, Vec<Vec<String>>)> {
+    let mut tables = connection
+        .prepare(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_stat%' ORDER BY name",
+        )
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    if schema_object_exists(connection, "sqlite_sequence")
+        && !tables.iter().any(|t| t == "sqlite_sequence")
+    {
+        tables.push("sqlite_sequence".into());
+        tables.sort();
+    }
+    tables
+        .into_iter()
+        .map(|table| {
+            let quoted = table.replace('"', "\"\"");
+            let mut statement = connection
+                .prepare(&format!("SELECT * FROM \"{quoted}\""))
+                .unwrap();
+            let columns = statement.column_count();
+            let mut rows = statement
+                .query_map([], |row| {
+                    (0..columns)
+                        .map(|column| {
+                            Ok(match row.get_ref(column)? {
+                                rusqlite::types::ValueRef::Null => "null".into(),
+                                rusqlite::types::ValueRef::Integer(value) => {
+                                    format!("integer:{value}")
+                                }
+                                rusqlite::types::ValueRef::Real(value) => {
+                                    format!("real:{:016x}", value.to_bits())
+                                }
+                                rusqlite::types::ValueRef::Text(value) => {
+                                    format!("text:{}", hex::encode(value))
+                                }
+                                rusqlite::types::ValueRef::Blob(value) => {
+                                    format!("blob:{}", hex::encode(value))
+                                }
+                            })
+                        })
+                        .collect::<rusqlite::Result<Vec<_>>>()
+                })
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap();
+            rows.sort();
+            (table, rows)
+        })
+        .collect()
+}
+
 fn remove_schema38(connection: &Connection) {
     connection
         .execute_batch(
@@ -310,6 +365,30 @@ fn remove_schema38(connection: &Connection) {
              ALTER TABLE projects DROP COLUMN source_configuration_version;",
         )
         .unwrap();
+}
+
+fn remove_schema39(connection: &Connection) {
+    connection
+        .execute_batch(
+            "DROP TRIGGER trg_source_revision_observations_preclaim_cursor_insert;
+             DROP TRIGGER trg_source_preclaim_refusals_cursor_insert;
+             DROP TRIGGER trg_source_preclaim_refusals_immutable_delete;
+             DROP TRIGGER trg_source_preclaim_refusals_immutable_update;
+             DROP TABLE source_preclaim_refusals;",
+        )
+        .unwrap();
+}
+
+fn assert_schema39(connection: &Connection, expected: bool) {
+    for name in [
+        "source_preclaim_refusals",
+        "trg_source_preclaim_refusals_immutable_update",
+        "trg_source_preclaim_refusals_immutable_delete",
+        "trg_source_preclaim_refusals_cursor_insert",
+        "trg_source_revision_observations_preclaim_cursor_insert",
+    ] {
+        assert_eq!(schema_object_exists(connection, name), expected, "{name}");
+    }
 }
 
 fn assert_schema38(connection: &Connection, expected: bool) {
@@ -347,13 +426,16 @@ fn assert_schema38(connection: &Connection, expected: bool) {
 }
 
 #[test]
-fn supported_versions_migrate_through_schema38_with_exact_backups_and_reopen() {
-    for version in 31..=37 {
+fn supported_versions_migrate_through_schema39_with_exact_backups_and_reopen() {
+    for version in 31..=38 {
         let path = directory("schema38-version");
         let (owner, _) = WriterOwner::open(&path, Limits::default()).unwrap();
         owner.shutdown().unwrap();
         let connection = Connection::open(path.join("print-partner.db")).unwrap();
-        remove_schema38(&connection);
+        remove_schema39(&connection);
+        if version < 38 {
+            remove_schema38(&connection);
+        }
         if version < 37 {
             remove_schema37(&connection);
         }
@@ -381,16 +463,18 @@ fn supported_versions_migrate_through_schema38_with_exact_backups_and_reopen() {
         drop(connection);
         let (owner, ready) = WriterOwner::open(&path, Limits::default()).unwrap();
         assert_eq!(ready.previous_version, version);
-        assert_eq!(ready.version, 38);
+        assert_eq!(ready.version, 39);
         let backup = ready.backup.unwrap();
         assert!(backup.ends_with(match version {
             31..=35 => "pre-schema36.db",
             36 => "pre-schema37.db",
             37 => "pre-schema38.db",
+            38 => "pre-schema39.db",
             _ => unreachable!(),
         }));
         let migrated = Connection::open(path.join("print-partner.db")).unwrap();
         assert_schema38(&migrated, true);
+        assert_schema39(&migrated, true);
         drop(migrated);
         let original_backup = std::fs::read(&backup).unwrap();
         let backup_connection =
@@ -405,7 +489,8 @@ fn supported_versions_migrate_through_schema38_with_exact_backups_and_reopen() {
                 .unwrap(),
             version.to_string()
         );
-        assert_schema38(&backup_connection, false);
+        assert_schema39(&backup_connection, false);
+        assert_schema38(&backup_connection, version >= 38);
         assert_eq!(
             schema_object_exists(&backup_connection, "plan_apply_admissions"),
             version >= 37
@@ -421,12 +506,13 @@ fn supported_versions_migrate_through_schema38_with_exact_backups_and_reopen() {
         drop(backup_connection);
         owner.shutdown().unwrap();
         let (owner, reopened) = WriterOwner::open(&path, Limits::default()).unwrap();
-        assert_eq!(reopened.previous_version, 38);
-        assert_eq!(reopened.version, 38);
+        assert_eq!(reopened.previous_version, 39);
+        assert_eq!(reopened.version, 39);
         assert!(reopened.backup.is_none());
         assert_eq!(std::fs::read(&backup).unwrap(), original_backup);
         let reopened_connection = Connection::open(path.join("print-partner.db")).unwrap();
         assert_schema38(&reopened_connection, true);
+        assert_schema39(&reopened_connection, true);
         drop(reopened_connection);
         owner.shutdown().unwrap();
     }
@@ -438,6 +524,7 @@ fn schema37_migration_rolls_back_as_one_unit() {
     let (owner, _) = WriterOwner::open(&path, Limits::default()).unwrap();
     owner.shutdown().unwrap();
     let connection = Connection::open(path.join("print-partner.db")).unwrap();
+    remove_schema39(&connection);
     remove_schema38(&connection);
     remove_schema37(&connection);
     connection
@@ -474,7 +561,7 @@ fn schema37_migration_rolls_back_as_one_unit() {
         .unwrap();
     drop(connection);
     let (owner, ready) = WriterOwner::open(&path, Limits::default()).unwrap();
-    assert_eq!(ready.version, 38);
+    assert_eq!(ready.version, 39);
     owner.shutdown().unwrap();
 }
 
@@ -485,6 +572,7 @@ fn schema38_journal_migration_rolls_back_and_preserves_pre_schema38_backup() {
     owner.shutdown().unwrap();
     let database = path.join("print-partner.db");
     let connection = Connection::open(&database).unwrap();
+    remove_schema39(&connection);
     remove_schema38(&connection);
     connection
         .execute_batch(
@@ -531,6 +619,7 @@ fn schema38_journal_migration_rolls_back_and_preserves_pre_schema38_backup() {
             .unwrap()
     };
     let rows_before = rows_image(&connection);
+    let all_rows_before = database_rows_image(&connection);
     let columns_before = schema38_column_presence(&connection);
     drop(connection);
     assert!(WriterOwner::open(&path, Limits::default()).is_err());
@@ -547,6 +636,7 @@ fn schema38_journal_migration_rolls_back_and_preserves_pre_schema38_backup() {
     );
     assert_eq!(schema_image(&connection), schema_before);
     assert_eq!(rows_image(&connection), rows_before);
+    assert_eq!(database_rows_image(&connection), all_rows_before);
     let native_row: (String,String,i64,String,String,i64) = connection.query_row(
         "SELECT tenant_id,purpose,generation,migration_id,state,legacy_rowid FROM native_secret_migrations",
         [], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?))
@@ -597,8 +687,151 @@ fn schema38_journal_migration_rolls_back_and_preserves_pre_schema38_backup() {
     drop(connection);
     let (owner, ready) = WriterOwner::open(&path, Limits::default()).unwrap();
     assert_eq!(ready.previous_version, 37);
-    assert_eq!(ready.version, 38);
+    assert_eq!(ready.version, 39);
     assert!(ready.backup.unwrap().ends_with("pre-schema38.db"));
+    owner.shutdown().unwrap();
+}
+
+#[test]
+fn schema39_preclaim_migration_rolls_back_and_preserves_pre_schema39_backup() {
+    let path = directory("schema39-rollback");
+    let (owner, _) = WriterOwner::open(&path, Limits::default()).unwrap();
+    owner.shutdown().unwrap();
+    let database = path.join("print-partner.db");
+    let connection = Connection::open(&database).unwrap();
+    remove_schema39(&connection);
+    connection
+        .execute_batch(
+            "UPDATE app_settings SET value='38' WHERE tenant_id='default' AND key='schema_version';
+             INSERT INTO app_settings VALUES('default','source39-retained-row','retained');
+             CREATE TRIGGER reject_schema39 BEFORE UPDATE ON app_settings
+             WHEN NEW.key='schema_version' AND NEW.value='39'
+             BEGIN SELECT RAISE(ABORT,'fixture schema39 constraint'); END;",
+        )
+        .unwrap();
+    connection
+        .execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")
+        .unwrap();
+    let schema_image = |connection: &Connection| {
+        connection
+            .prepare("SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name")
+            .unwrap()
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                ))
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap()
+    };
+    let rows_image = |connection: &Connection| {
+        connection
+            .prepare("SELECT tenant_id,key,value FROM app_settings ORDER BY tenant_id,key")
+            .unwrap()
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap()
+    };
+    let schema_before = schema_image(&connection);
+    let rows_before = rows_image(&connection);
+    let bytes_before = std::fs::read(&database).unwrap();
+    drop(connection);
+
+    assert!(WriterOwner::open(&path, Limits::default()).is_err());
+    let connection = Connection::open(&database).unwrap();
+    assert_eq!(schema_image(&connection), schema_before);
+    assert_eq!(rows_image(&connection), rows_before);
+    let bytes_after = std::fs::read(&database).unwrap();
+    let changed_bytes = bytes_before
+        .iter()
+        .zip(&bytes_after)
+        .enumerate()
+        .filter_map(|(offset, (before, after))| {
+            (before != after).then_some((offset, *before, *after))
+        })
+        .collect::<Vec<_>>();
+    let page_size = usize::try_from(
+        connection
+            .pragma_query_value(None, "page_size", |row| row.get::<_, i64>(0))
+            .unwrap(),
+    )
+    .unwrap();
+    let changed_pages = changed_bytes
+        .iter()
+        .map(|(offset, _, _)| offset / page_size + 1)
+        .collect::<std::collections::BTreeSet<_>>();
+    let page_owners = changed_pages
+        .iter()
+        .map(|page| {
+            connection
+                .query_row(
+                    "SELECT name,pagetype,ncell,payload,unused FROM dbstat WHERE pageno=?1",
+                    [i64::try_from(*page).unwrap()],
+                    |row| {
+                        Ok((
+                            *page,
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, i64>(2)?,
+                            row.get::<_, i64>(3)?,
+                            row.get::<_, i64>(4)?,
+                        ))
+                    },
+                )
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    eprintln!(
+        "schema39 failed-open physical byte changes={changed_bytes:?} pages={page_owners:?}; complete schema and row images are unchanged"
+    );
+    assert_schema39(&connection, false);
+    assert_schema38(&connection, true);
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT value FROM app_settings WHERE tenant_id='default' AND key='schema_version'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+        "38"
+    );
+    let backup = path.join("backups/pre-schema39.db");
+    let backup_connection =
+        Connection::open_with_flags(&backup, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+    assert_schema39(&backup_connection, false);
+    assert_schema38(&backup_connection, true);
+    assert_eq!(
+        backup_connection
+            .query_row(
+                "SELECT value FROM app_settings WHERE tenant_id='default' AND key='source39-retained-row'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+        "retained"
+    );
+    drop(backup_connection);
+    connection
+        .execute_batch("DROP TRIGGER reject_schema39")
+        .unwrap();
+    drop(connection);
+
+    let (owner, ready) = WriterOwner::open(&path, Limits::default()).unwrap();
+    assert_eq!(ready.previous_version, 38);
+    assert_eq!(ready.version, 39);
+    assert!(ready.backup.unwrap().ends_with("pre-schema39.db"));
     owner.shutdown().unwrap();
 }
 
@@ -660,6 +893,25 @@ fn schema38_reopen_rejects_noop_immutability_trigger_without_mutation() {
 }
 
 #[test]
+fn schema39_reopen_rejects_dropped_preclaim_trigger_without_mutation() {
+    assert_schema38_corruption_rejected(
+        "preclaim-dropped",
+        "DROP TRIGGER trg_source_preclaim_refusals_immutable_update;",
+    );
+}
+
+#[test]
+fn schema39_reopen_rejects_noop_preclaim_trigger_without_mutation() {
+    assert_schema38_corruption_rejected(
+        "preclaim-noop",
+        "DROP TRIGGER trg_source_preclaim_refusals_immutable_update;
+         CREATE TRIGGER trg_source_preclaim_refusals_immutable_update
+         BEFORE UPDATE ON source_preclaim_refusals
+         BEGIN SELECT 1; END;",
+    );
+}
+
+#[test]
 fn schema38_reopen_rejects_wrong_source_column_shape_without_mutation() {
     assert_schema38_corruption_rejected(
         "wrong-column",
@@ -715,7 +967,7 @@ fn fresh_schema38_failure_leaves_all_source38_definitions_uninstalled() {
         .unwrap();
     drop(connection);
     let (owner, ready) = WriterOwner::open(&path, Limits::default()).unwrap();
-    assert_eq!(ready.version, 38);
+    assert_eq!(ready.version, 39);
     owner.shutdown().unwrap();
 }
 
@@ -725,6 +977,7 @@ fn schema38_migration_keeps_historical_documents_unknown_and_requires_complete_p
     let (owner, _) = WriterOwner::open(&path, Limits::default()).unwrap();
     owner.shutdown().unwrap();
     let connection = Connection::open(path.join("print-partner.db")).unwrap();
+    remove_schema39(&connection);
     remove_schema38(&connection);
     connection.execute_batch(
         "UPDATE app_settings SET value='37' WHERE tenant_id='default' AND key='schema_version';
@@ -769,7 +1022,7 @@ fn schema38_migration_keeps_historical_documents_unknown_and_requires_complete_p
     assert_eq!(known, (102, "0".repeat(64), "fixture-v1".into()));
     drop(connection);
     let (owner, ready) = WriterOwner::open(&path, Limits::default()).unwrap();
-    assert_eq!(ready.previous_version, 38);
+    assert_eq!(ready.previous_version, 39);
     owner.shutdown().unwrap();
 }
 
@@ -831,7 +1084,7 @@ fn schema38_reopen_accepts_canonical_source_sql_formatting_changes() {
     ).unwrap();
     drop(connection);
     let (owner, ready) = WriterOwner::open(&path, Limits::default()).unwrap();
-    assert_eq!(ready.previous_version, 38);
+    assert_eq!(ready.previous_version, 39);
     owner.shutdown().unwrap();
 }
 
@@ -891,6 +1144,8 @@ fn schema37_backup_captures_schema36_wal_and_reopen_keeps_original_backup() {
     owner.shutdown().unwrap();
     let database = path.join("print-partner.db");
     let connection = Connection::open(&database).unwrap();
+    remove_schema39(&connection);
+    remove_schema38(&connection);
     remove_schema37(&connection);
     connection
         .execute_batch("UPDATE app_settings SET value='36' WHERE tenant_id='default' AND key='schema_version'; PRAGMA wal_checkpoint(TRUNCATE); PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;")
@@ -1075,6 +1330,62 @@ fn backup_rejects_managed_trees_aliases_and_existing_files() {
 }
 
 #[test]
+fn backup_survives_missing_runtime_without_relaxing_destination_checks() {
+    use std::os::unix::fs::symlink;
+    let (path, owner, client) = fixture("backup-missing-runtime");
+    let external = directory("backup-missing-runtime-external");
+    owner.backup(&external.join("before.db")).unwrap();
+    set(&client, "wal-only", "committed")
+        .unwrap()
+        .recv()
+        .unwrap()
+        .unwrap();
+    assert!(path.join("print-partner.db-wal").metadata().unwrap().len() > 32);
+    let marker: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(path.join(".desktop-owner.json")).unwrap()).unwrap();
+    let runtime = PathBuf::from(marker["runtime_dir"].as_str().unwrap());
+    assert_eq!(std::fs::read_dir(&runtime).unwrap().count(), 0);
+    std::fs::remove_dir(&runtime).unwrap();
+    let existing = external.join("existing.db");
+    std::fs::write(&existing, b"preserve").unwrap();
+    symlink(&existing, external.join("existing-link.db")).unwrap();
+    symlink(external.join("absent.db"), external.join("dangling.db")).unwrap();
+    symlink(&path, external.join("data-alias")).unwrap();
+    for destination in [
+        path.join("backup.db"),
+        runtime.join("backup.db"),
+        external.join("data-alias/backup.db"),
+        existing.clone(),
+        external.join("existing-link.db"),
+        external.join("dangling.db"),
+    ] {
+        assert!(owner.backup(&destination).is_err());
+    }
+    assert_eq!(std::fs::read(existing).unwrap(), b"preserve");
+    let target = external.join("after.db");
+    let result = owner.backup(&target);
+    assert!(!runtime.exists());
+    owner.shutdown().unwrap();
+    result.unwrap();
+    let backup = Connection::open_with_flags(&target, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+    assert_eq!(
+        snapshot(&backup, "test", "wal-only").unwrap(),
+        SettingSnapshot::Stored {
+            value: "committed".into()
+        }
+    );
+    assert_eq!(
+        backup
+            .query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0))
+            .unwrap(),
+        "ok"
+    );
+    drop(backup);
+    std::fs::remove_dir_all(external).unwrap();
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
 fn failed_cleanup_retains_marker_and_lock_until_explicit_retry() {
     use fs2::FileExt;
     let (path, owner, _) = fixture("retained-release");
@@ -1126,7 +1437,7 @@ fn wal_only_unsupported_versions_preserve_every_input_file() {
         entries.sort();
         entries
     };
-    for version in [30, 39] {
+    for version in [30, 40] {
         for with_shm in [false, true] {
             let source = directory("wal-source");
             let raw = Connection::open(source.join("print-partner.db")).unwrap();
@@ -1179,4 +1490,97 @@ fn unproved_closure_cannot_be_released_by_cleanup_retry() {
             .is_err()
     );
     assert!(lease::StorageLease::acquire(&path).is_err());
+}
+
+#[test]
+fn reopen_preserves_the_pre_upgrade_backup() {
+    let path = directory("upgrade-backup");
+    let database = path.join("print-partner.db");
+    std::fs::write(
+        &database,
+        include_bytes!("../tests/fixtures/accepted-plan-node.db"),
+    )
+    .unwrap();
+    let older_backup = path.join("backups/pre-schema34.db");
+    std::fs::create_dir_all(older_backup.parent().unwrap()).unwrap();
+    std::fs::write(&older_backup, b"retained older recovery copy").unwrap();
+    let raw = Connection::open(&database).unwrap();
+    raw.execute(
+        "UPDATE app_settings SET value='33' WHERE tenant_id='default' AND key='schema_version'",
+        [],
+    )
+    .unwrap();
+    drop(raw);
+
+    let (owner, ready) = WriterOwner::open(&path, Limits::default()).unwrap();
+    let backup = ready.backup.unwrap();
+    owner.shutdown().unwrap();
+    let version = |path: &Path| {
+        Connection::open(path)
+            .unwrap()
+            .query_row(
+                "SELECT value FROM app_settings WHERE tenant_id='default' AND key='schema_version'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap()
+    };
+    assert_eq!(version(&backup), "33");
+
+    let (owner, ready) = WriterOwner::open(&path, Limits::default()).unwrap();
+    assert!(ready.backup.is_none());
+    owner.shutdown().unwrap();
+    assert_eq!(version(&backup), "33");
+    assert_ne!(backup, older_backup);
+    assert_eq!(
+        std::fs::read(older_backup).unwrap(),
+        b"retained older recovery copy"
+    );
+}
+
+#[test]
+fn schema37_backup_preserves_pre36_and_existing_pre37_copies() {
+    for existing in [false, true] {
+        let path = directory("schema37-backup-coexistence");
+        let (owner, _) = WriterOwner::open(&path, Limits::default()).unwrap();
+        owner.shutdown().unwrap();
+        let connection = Connection::open(path.join("print-partner.db")).unwrap();
+        remove_schema39(&connection);
+        remove_schema38(&connection);
+        remove_schema37(&connection);
+        connection.execute_batch("UPDATE app_settings SET value='36' WHERE tenant_id='default' AND key='schema_version'; PRAGMA wal_checkpoint(TRUNCATE);").unwrap();
+        drop(connection);
+        let backups = path.join("backups");
+        std::fs::create_dir_all(&backups).unwrap();
+        let previous = backups.join("pre-schema36.db");
+        std::fs::write(&previous, b"retained schema36 recovery copy").unwrap();
+        let selected = backups.join("pre-schema37.db");
+        if existing {
+            std::fs::write(&selected, b"retained schema37 recovery copy").unwrap();
+        }
+        let (owner, ready) = WriterOwner::open(&path, Limits::default()).unwrap();
+        assert_eq!(ready.previous_version, 36);
+        assert_eq!(ready.version, 39);
+        assert_eq!(ready.backup.as_ref(), Some(&selected));
+        owner.shutdown().unwrap();
+        assert_eq!(
+            std::fs::read(&previous).unwrap(),
+            b"retained schema36 recovery copy"
+        );
+        if existing {
+            assert_eq!(
+                std::fs::read(&selected).unwrap(),
+                b"retained schema37 recovery copy"
+            );
+        } else {
+            let backup =
+                Connection::open_with_flags(&selected, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+            assert_eq!(backup.query_row("SELECT value FROM app_settings WHERE tenant_id='default' AND key='schema_version'", [], |row| row.get::<_, String>(0)).unwrap(), "36");
+        }
+        let before = std::fs::read(&selected).unwrap();
+        let (owner, ready) = WriterOwner::open(&path, Limits::default()).unwrap();
+        assert!(ready.backup.is_none());
+        owner.shutdown().unwrap();
+        assert_eq!(std::fs::read(selected).unwrap(), before);
+    }
 }

@@ -359,6 +359,14 @@ pub(super) enum Reply {
     Lease(u64),
     Released,
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SourceBusy;
+impl std::fmt::Display for SourceBusy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Source work is already active")
+    }
+}
+impl std::error::Error for SourceBusy {}
 #[derive(Default)]
 pub(super) struct State {
     next: u64,
@@ -372,10 +380,35 @@ impl State {
             ..Default::default()
         }
     }
+    pub(crate) fn source_busy(&self, tenant: &str, id: i64) -> bool {
+        self.active
+            .values()
+            .any(|(active_tenant, active_id)| active_tenant == tenant && *active_id == id)
+    }
+    pub(crate) fn next_token(&self) -> Result<u64> {
+        self.next
+            .checked_add(1)
+            .ok_or_else(|| anyhow!("Work lease overflow"))
+    }
+    pub(crate) fn activate(&mut self, token: u64, tenant: String, id: i64) {
+        self.next = token;
+        self.active.insert(token, (tenant, id));
+    }
+    pub(crate) fn reap(&mut self, tokens: Vec<u64>) {
+        for token in tokens {
+            self.active.remove(&token);
+        }
+    }
 }
 pub struct SourceWorkLease {
     client: SettingsClient,
     token: Option<u64>,
+}
+pub(crate) fn lease(client: SettingsClient, token: u64) -> SourceWorkLease {
+    SourceWorkLease {
+        client,
+        token: Some(token),
+    }
 }
 impl WriterOwner {
     pub fn catalog_access(&self, policy: auth::AuthPolicy) -> Result<CatalogAccess> {
@@ -611,13 +644,22 @@ impl SourceWorkLease {
 }
 impl Drop for SourceWorkLease {
     fn drop(&mut self) {
-        if let Some(token) = self.token.take() {
-            let _ = enqueue(
+        if let Some(token) = self.token.take()
+            && enqueue(
                 &self.client,
                 Command::End(token),
                 &AtomicBool::new(false),
                 Duration::ZERO,
-            );
+            )
+            .is_err()
+        {
+            self.client
+                .shared
+                .orphaned_source_leases
+                .lock()
+                .expect("Source lease recovery poisoned")
+                .push(token);
+            self.client.shared.changed.notify_all();
         }
     }
 }
@@ -641,35 +683,29 @@ fn execute_inner(
     state: &mut State,
     command: Command,
 ) -> Result<Reply> {
+    if let Command::End(token) = command {
+        ensure!(state.active.remove(&token).is_some(), "Unknown work lease");
+        return Ok(Reply::Released);
+    }
     let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     match command {
-        Command::End(token) => {
-            ensure!(state.active.remove(&token).is_some(), "Unknown work lease");
-            tx.commit()?;
-            Ok(Reply::Released)
-        }
+        Command::End(_) => unreachable!(),
         Command::BeginJob { lease, source_id } => {
             let (tenant, id) = crate::jobs::claimed_source(&tx, &lease, source_id)?;
             require(&tx, &tenant, id)?;
-            let token = state
-                .next
-                .checked_add(1)
-                .ok_or_else(|| anyhow!("Work lease overflow"))?;
+            ensure!(!state.source_busy(&tenant, id), SourceBusy);
+            let token = state.next_token()?;
             tx.commit()?;
-            state.next = token;
-            state.active.insert(token, (tenant, id));
+            state.activate(token, tenant, id);
             Ok(Reply::Lease(token))
         }
         Command::Begin { authority, id } => {
             let tenant = authority.tenant(&tx)?;
             require(&tx, &tenant, id)?;
-            let token = state
-                .next
-                .checked_add(1)
-                .ok_or_else(|| anyhow!("Work lease overflow"))?;
+            ensure!(!state.source_busy(&tenant, id), SourceBusy);
+            let token = state.next_token()?;
             tx.commit()?;
-            state.next = token;
-            state.active.insert(token, (tenant, id));
+            state.activate(token, tenant, id);
             Ok(Reply::Lease(token))
         }
         Command::Run { authority, request } => {
@@ -758,7 +794,7 @@ fn read_source(row: &rusqlite::Row<'_>) -> rusqlite::Result<SourceSummary> {
     })
 }
 const SELECT: &str = "SELECT p.id,p.name,p.url,p.source_kind,p.source_type,p.role,p.branch,p.tag,p.local_path,p.last_synced_at,p.last_commit_sha,p.current_source_revision_id,p.docs_url,p.manifest_community_slug,(SELECT count(*) FROM source_docs d WHERE d.project_id=p.id AND d.tenant_id=p.tenant_id),p.metadata_json FROM projects p";
-fn get(tx: &Transaction<'_>, tenant: &str, id: i64) -> Result<Option<SourceSummary>> {
+pub(crate) fn get(tx: &Transaction<'_>, tenant: &str, id: i64) -> Result<Option<SourceSummary>> {
     Ok(tx
         .query_row(
             &format!("{SELECT} WHERE p.tenant_id=?1 AND p.id=?2"),
@@ -838,6 +874,10 @@ fn patch(tx: &Transaction<'_>, tenant: &str, id: i64, p: SourcePatch) -> Result<
         });
     if let Some(v) = p.name {
         let name = trim(&v);
+        ensure!(
+            !name.is_empty(),
+            CatalogFailure::Input("Source name is required".into())
+        );
         ensure!(
             name == row.name || !name_referenced(tx, tenant, &row.name)?,
             CatalogFailure::Referenced
@@ -1150,8 +1190,16 @@ mod numeric_category_tests {
     }
 }
 fn name_referenced(tx: &Transaction<'_>, tenant: &str, name: &str) -> Result<bool> {
+    let name = name.to_lowercase();
     for table in ["parts", "plan_revision_parts", "plan_draft_parts"] {
-        if tx.query_row(&format!("SELECT EXISTS(SELECT 1 FROM {table} WHERE tenant_id=?1 AND instr(source_layer, ':')>0 AND substr(source_layer,instr(source_layer, ':')+1)=?2)"),params![tenant,name],|r|r.get::<_,bool>(0))? {return Ok(true)}
+        let mut statement = tx.prepare(&format!(
+            "SELECT substr(source_layer,instr(source_layer, ':')+1) FROM {table} WHERE tenant_id=?1 AND instr(source_layer, ':')>0"
+        ))?;
+        for reference in statement.query_map([tenant], |row| row.get::<_, String>(0))? {
+            if reference?.to_lowercase() == name {
+                return Ok(true);
+            }
+        }
     }
     let mut statement = tx.prepare("SELECT payload_json FROM plan_snapshots WHERE tenant_id=?1")?;
     for raw in statement.query_map([tenant], |r| r.get::<_, String>(0))? {
@@ -1165,7 +1213,7 @@ fn name_referenced(tx: &Transaction<'_>, tenant: &str, name: &str) -> Result<boo
                 layer
                     .get("source_name")
                     .and_then(Value::as_str)
-                    .is_some_and(|reference| reference.to_lowercase() == name.to_lowercase())
+                    .is_some_and(|reference| reference.to_lowercase() == name)
             }) {
                 return Ok(true);
             }

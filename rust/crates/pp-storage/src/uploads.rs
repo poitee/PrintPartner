@@ -651,36 +651,45 @@ impl Phase {
     }
 }
 
-struct SourceObservationContext {
-    job_id: String,
-    attempt_generation: i64,
-    attempt_fence: Option<String>,
-    revision_id: Option<i64>,
-    receipt_activated: Option<bool>,
-    cancel_requested: bool,
+struct PositiveGeneration(i64);
+
+impl PositiveGeneration {
+    fn new(value: i64) -> Result<Self> {
+        ensure!(value > 0, "Source observation requires a claimed attempt");
+        Ok(Self(value))
+    }
+}
+
+enum SourceObservationContext {
+    Preclaim {
+        job_id: String,
+        cancel_requested: bool,
+    },
+    PriorClaim {
+        job_id: String,
+        generation: PositiveGeneration,
+        cancel_requested: bool,
+    },
+    Fenced {
+        job_id: String,
+        generation: PositiveGeneration,
+        fence: String,
+        revision_id: Option<i64>,
+        receipt_activated: Option<bool>,
+        cancel_requested: bool,
+    },
 }
 
 impl SourceObservationContext {
-    fn claimed(job: &jobs::JobRecord, lease: &jobs::AttemptLease, op: &Operation) -> Self {
-        Self {
+    fn fenced(job: &jobs::JobRecord, lease: &jobs::AttemptLease, op: &Operation) -> Result<Self> {
+        Ok(Self::Fenced {
             job_id: job.job_id.clone(),
-            attempt_generation: lease.generation(),
-            attempt_fence: Some(lease.fence().to_owned()),
+            generation: PositiveGeneration::new(lease.generation())?,
+            fence: lease.fence().to_owned(),
             revision_id: op.receipt.as_ref().map(|receipt| receipt.revision_id),
             receipt_activated: op.receipt.as_ref().map(|receipt| receipt.activated),
             cancel_requested: job.cancel_requested,
-        }
-    }
-
-    fn targeted_refusal(job: &jobs::JobRecord) -> Self {
-        Self {
-            job_id: job.job_id.clone(),
-            attempt_generation: job.generation,
-            attempt_fence: None,
-            revision_id: None,
-            receipt_activated: None,
-            cancel_requested: job.cancel_requested,
-        }
+        })
     }
 }
 
@@ -716,6 +725,18 @@ pub(crate) enum Command {
 pub(crate) enum AdmissionAuthority {
     Credential(jobs::Credential),
     Preflighted(Box<PreflightedCapture>),
+}
+impl Command {
+    pub(crate) fn changes_accounting(&self) -> bool {
+        !matches!(
+            self,
+            Self::Get { .. }
+                | Self::Phase {
+                    phase: Phase::Read,
+                    ..
+                }
+        )
+    }
 }
 #[derive(Clone)]
 pub struct ImportClient {
@@ -1211,14 +1232,18 @@ pub(crate) fn validate_resolved_claim(
         job.tenant == operation.tenant
             && job.job_id == operation.job_id
             && matches!(
-                &job.payload,
-                jobs::Payload::SuppliedSourceImport {
-                    project_id,
-                    operation_key,
-                    input_version: 2,
-                } if *project_id as i64 == operation.source_id
-                    && operation_key == &operation.key
+                    &job.payload,
+                    jobs::Payload::SuppliedSourceImport {
+                        project_id,
+                        operation_key,
+                        input_version: 2,
+                    } if *project_id as i64 == operation.source_id
+                        && operation_key == &operation.key
             ),
+        "Captured import requires repair"
+    );
+    ensure!(
+        catalog::get(tx, &operation.tenant, operation.source_id)?.is_some(),
         "Captured import requires repair"
     );
     Ok(claim.job_id.clone())
@@ -1256,24 +1281,18 @@ pub(crate) fn execute(
                 storage.import_epoch.load(Ordering::Acquire) == accounting_epoch,
                 "Import accounting changed; retry admission"
             );
-            let (tenant, actor, original_authority) = match authority {
+            let (tenant, actor, durable_authority) = match authority {
                 AdmissionAuthority::Credential(credential) => {
-                    auth::authority::admit(&tx, credential, policy, &storage)?
+                    jobs::admit_actor(&tx, credential, policy, &storage)?
                 }
                 AdmissionAuthority::Preflighted(preflight) => {
-                    let (preflight_tenant, preflight_actor) =
-                        jobs::actor_ref(&tx, &preflight.credential, policy, &storage)?;
+                    let (tenant, actor, durable_authority) =
+                        jobs::admit_actor(&tx, preflight.credential, policy, &storage)?;
                     ensure!(
-                        preflight_tenant == preflight.tenant && preflight_actor == preflight.actor,
+                        tenant == preflight.tenant && actor == preflight.actor,
                         "Capture authority changed"
                     );
-                    let (tenant, actor, authority) =
-                        auth::authority::admit(&tx, preflight.credential, policy, &storage)?;
-                    ensure!(
-                        tenant == preflight_tenant && actor == preflight_actor,
-                        "Capture authority changed"
-                    );
-                    (tenant, actor, authority)
+                    (tenant, actor, durable_authority)
                 }
             };
             ensure!(
@@ -1371,7 +1390,7 @@ pub(crate) fn execute(
                     &tx,
                     &tenant,
                     &actor,
-                    original_authority,
+                    durable_authority,
                     jobs::UserOperation::Enqueue {
                         key: format!(
                             "source-import:{}",
@@ -1441,7 +1460,7 @@ pub(crate) fn execute(
             );
             let phase_name = phase.observation_name();
             if let Err(error) = jobs::revalidate_source_authority(&tx, &job, policy) {
-                let context = SourceObservationContext::claimed(&job, &lease, &op);
+                let context = SourceObservationContext::fenced(&job, &lease, &op)?;
                 if jobs::commit_source_authority_refusal(&tx, &mut job, &error)? {
                     record_observation(&tx, &mut op, "authority_refused", context)?;
                     store(&tx, &op)?;
@@ -1525,7 +1544,7 @@ pub(crate) fn execute(
                 }
             }
             if !matches!(phase_name, "read") {
-                let context = SourceObservationContext::claimed(&job, &lease, &op);
+                let context = SourceObservationContext::fenced(&job, &lease, &op)?;
                 record_observation(&tx, &mut op, phase_name, context)?;
             }
             store(&tx, &op)?;
@@ -1549,10 +1568,44 @@ fn record_observation(
         .ok_or_else(|| anyhow!("Missing U10 observation cursor"))?
         .checked_add(1)
         .ok_or_else(|| anyhow!("U10 observation cursor overflow"))?;
-    tx.execute(
-        "INSERT INTO source_revision_observations(tenant_id,operation_key,cursor,phase,job_id,attempt_generation,attempt_fence,revision_id,receipt_activated,cancel_requested,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
-        params![op.tenant, op.key, cursor, phase, context.job_id, context.attempt_generation, context.attempt_fence, context.revision_id, context.receipt_activated, context.cancel_requested, auth::catalog_timestamp()],
-    )?;
+    match context {
+        SourceObservationContext::Preclaim {
+            job_id,
+            cancel_requested,
+        } => {
+            ensure!(
+                phase == "authority_refused",
+                "Invalid preclaim Source phase"
+            );
+            tx.execute(
+                "INSERT INTO source_preclaim_refusals(tenant_id,operation_key,cursor,phase,job_id,admitted_generation,cancel_requested,created_at) VALUES(?1,?2,?3,?4,?5,0,?6,?7)",
+                params![op.tenant, op.key, cursor, phase, job_id, cancel_requested, auth::catalog_timestamp()],
+            )?;
+        }
+        SourceObservationContext::PriorClaim {
+            job_id,
+            generation,
+            cancel_requested,
+        } => {
+            tx.execute(
+                "INSERT INTO source_revision_observations(tenant_id,operation_key,cursor,phase,job_id,attempt_generation,attempt_fence,revision_id,receipt_activated,cancel_requested,created_at) VALUES(?1,?2,?3,?4,?5,?6,NULL,NULL,NULL,?7,?8)",
+                params![op.tenant, op.key, cursor, phase, job_id, generation.0, cancel_requested, auth::catalog_timestamp()],
+            )?;
+        }
+        SourceObservationContext::Fenced {
+            job_id,
+            generation,
+            fence,
+            revision_id,
+            receipt_activated,
+            cancel_requested,
+        } => {
+            tx.execute(
+                "INSERT INTO source_revision_observations(tenant_id,operation_key,cursor,phase,job_id,attempt_generation,attempt_fence,revision_id,receipt_activated,cancel_requested,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+                params![op.tenant, op.key, cursor, phase, job_id, generation.0, fence, revision_id, receipt_activated, cancel_requested, auth::catalog_timestamp()],
+            )?;
+        }
+    }
     op.observation_cursor = Some(cursor);
     Ok(())
 }
@@ -1576,12 +1629,42 @@ pub(crate) fn record_targeted_authority_refusal(
         op.job_id == job.job_id && op.source_id == source_id && op.input_version == input_version,
         "Import job binding mismatch"
     );
-    record_observation(
-        tx,
-        &mut op,
-        "authority_refused",
-        SourceObservationContext::targeted_refusal(job),
-    )?;
+    if op.authority_revision.is_none() {
+        return Ok(());
+    }
+    let context = if job.generation == 0 {
+        let has_attempt: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM source_revision_attempts WHERE tenant_id=?1 AND operation_key=?2)",
+            params![op.tenant, op.key],
+            |row| row.get(0),
+        )?;
+        ensure!(
+            job.state == jobs::PersistentState::Queued
+                && job.attempt == 0
+                && job.fence.is_none()
+                && job.worker.is_none()
+                && job.effects.is_empty()
+                && job.result.is_none()
+                && op.state == State::Admitted
+                && op.observation_cursor == Some(0)
+                && op.owned.is_none()
+                && op.artifact.is_none()
+                && op.receipt.is_none()
+                && !has_attempt,
+            "Invalid preclaim Source refusal context"
+        );
+        SourceObservationContext::Preclaim {
+            job_id: job.job_id.clone(),
+            cancel_requested: job.cancel_requested,
+        }
+    } else {
+        SourceObservationContext::PriorClaim {
+            job_id: job.job_id.clone(),
+            generation: PositiveGeneration::new(job.generation)?,
+            cancel_requested: job.cancel_requested,
+        }
+    };
+    record_observation(tx, &mut op, "authority_refused", context)?;
     store(tx, &op)
 }
 fn activate(
@@ -1815,6 +1898,23 @@ fn column_schema_sql(connection: &Connection, table: &str, column: &str) -> Resu
 }
 
 pub(crate) fn validate_schema(conn: &Connection, version: u64) -> Result<()> {
+    let preclaim_names = [
+        "source_preclaim_refusals",
+        "trg_source_preclaim_refusals_immutable_update",
+        "trg_source_preclaim_refusals_immutable_delete",
+        "trg_source_preclaim_refusals_cursor_insert",
+        "trg_source_revision_observations_preclaim_cursor_insert",
+    ];
+    if version < 39 {
+        for name in preclaim_names {
+            let present: bool = conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name=?1)",
+                [name],
+                |row| row.get(0),
+            )?;
+            ensure!(!present, "Unexpected Source preclaim refusal schema");
+        }
+    }
     let names = [
         "source_import_operations",
         "source_import_source",
@@ -1945,6 +2045,37 @@ pub(crate) fn validate_schema(conn: &Connection, version: u64) -> Result<()> {
             !invalid_observation_context,
             "Invalid Source observation context"
         );
+        if version >= 39 {
+            expected.execute_batch(include_str!("remote_sources/preclaim39.sql"))?;
+            for name in preclaim_names {
+                let sql: String = conn.query_row(
+                    "SELECT sql FROM sqlite_master WHERE name=?1",
+                    [name],
+                    |row| row.get(0),
+                )?;
+                let canonical: String = expected.query_row(
+                    "SELECT sql FROM sqlite_master WHERE name=?1",
+                    [name],
+                    |row| row.get(0),
+                )?;
+                ensure!(
+                    normalize_schema_sql(&sql) == normalize_schema_sql(&canonical),
+                    "Source preclaim refusal schema mismatch"
+                );
+            }
+            let invalid_preclaim: bool = conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM source_preclaim_refusals WHERE cursor<=0 OR phase!='authority_refused' OR admitted_generation!=0 OR cancel_requested NOT IN (0,1))",
+                [],
+                |row| row.get(0),
+            )?;
+            ensure!(!invalid_preclaim, "Invalid Source preclaim refusal");
+            let cursor_collision: bool = conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM source_preclaim_refusals p JOIN source_revision_observations o USING(tenant_id,operation_key,cursor))",
+                [],
+                |row| row.get(0),
+            )?;
+            ensure!(!cursor_collision, "Source observation cursor collision");
+        }
     }
     let orphans:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM source_import_quota q LEFT JOIN source_import_operations o USING(tenant,operation_key) WHERE o.tenant IS NULL)",[],|r|r.get(0))?;
     ensure!(!orphans, "Orphan Source quota");
@@ -1981,6 +2112,66 @@ pub(crate) fn validate_schema(conn: &Connection, version: u64) -> Result<()> {
             !op.cleanup_settled || job.state.terminal(),
             "Import completion job mismatch"
         );
+        if version >= 39 {
+            let preclaim = conn
+                .query_row(
+                    "SELECT cursor,job_id,admitted_generation,cancel_requested FROM source_preclaim_refusals WHERE tenant_id=?1 AND operation_key=?2",
+                    params![t, k],
+                    |row| {
+                        Ok((
+                            row.get::<_, i64>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, i64>(2)?,
+                            row.get::<_, bool>(3)?,
+                        ))
+                    },
+                )
+                .optional()?;
+            if let Some((cursor, preclaim_job_id, admitted_generation, cancel_requested)) = preclaim
+            {
+                let document_value: serde_json::Value = serde_json::from_str(&document)?;
+                let source38_rows: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM source_revision_observations WHERE tenant_id=?1 AND operation_key=?2",
+                    params![t, k],
+                    |row| row.get(0),
+                )?;
+                let attempt_rows: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM source_revision_attempts WHERE tenant_id=?1 AND operation_key=?2",
+                    params![t, k],
+                    |row| row.get(0),
+                )?;
+                let union_max: i64 = conn.query_row(
+                    "SELECT MAX(cursor) FROM (SELECT cursor FROM source_preclaim_refusals WHERE tenant_id=?1 AND operation_key=?2 UNION ALL SELECT cursor FROM source_revision_observations WHERE tenant_id=?1 AND operation_key=?2)",
+                    params![t, k],
+                    |row| row.get(0),
+                )?;
+                ensure!(
+                    cursor == 1
+                        && admitted_generation == 0
+                        && preclaim_job_id == j
+                        && op.authority_revision.is_some()
+                        && op.state == State::Admitted
+                        && op.observation_cursor == Some(cursor)
+                        && op.owned.is_none()
+                        && op.artifact.is_none()
+                        && op.receipt.is_none()
+                        && source38_rows == 0
+                        && attempt_rows == 0
+                        && union_max == cursor
+                        && job.state == jobs::PersistentState::Failed
+                        && job.attempt == 0
+                        && job.generation == 1
+                        && job.fence.is_none()
+                        && job.worker.is_none()
+                        && job.cancel_requested == cancel_requested
+                        && document_value.pointer("/_authority_refusal/phase")
+                            == Some(&serde_json::Value::String("targeted_claim".into()))
+                        && document_value.pointer("/_authority_refusal/generation")
+                            == Some(&serde_json::Value::from(0)),
+                    "Invalid Source preclaim refusal binding"
+                );
+            }
+        }
         let retained: i64 = conn.query_row(
             "SELECT retained_bytes FROM source_import_quota WHERE tenant=?1 AND operation_key=?2",
             params![t, k],

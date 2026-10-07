@@ -130,7 +130,7 @@ fn public_progress_selection_claim_and_reopen_preserve_identity() {
         String::from_utf8_lossy(&result.stderr)
     );
     let result: Value = serde_json::from_slice(&result.stdout).unwrap();
-    assert_eq!(result["schema"], 38);
+    assert_eq!(result["schema"], 39);
     assert_eq!(result["restart"], true);
     assert_eq!(result["handler_calls"], 0);
     assert_eq!(result["selection_basis"][0]["completed"], true);

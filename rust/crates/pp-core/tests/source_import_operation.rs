@@ -108,6 +108,33 @@ fn resolved_claim_rechecks_eleven_fields_before_attempt_mutation() {
         CaptureJournalCorrelation::ExactAdmitted(resolved) => resolved,
         _ => panic!("exact manifest did not resolve"),
     };
+    let correlation_before: (String, i64, String, String, String) = read(&root)
+        .query_row(
+            "SELECT j.state,j.version,j.document,o.state,o.document FROM durable_jobs j JOIN source_import_operations o ON o.job_id=j.id WHERE j.id=?1",
+            [&admitted.job_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+        )
+        .unwrap();
+    let write = Connection::open(root.join("print-partner.db")).unwrap();
+    write.busy_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(
+        write
+            .execute(
+                "UPDATE projects SET tenant_id='foreign-retained-claim' WHERE tenant_id='default' AND id=?1",
+                [admitted.source_id],
+            )
+            .unwrap(),
+        1
+    );
+    drop(write);
+    let correlation_after_move: (String, i64, String, String, String) = read(&root)
+        .query_row(
+            "SELECT j.state,j.version,j.document,o.state,o.document FROM durable_jobs j JOIN source_import_operations o ON o.job_id=j.id WHERE j.id=?1",
+            [&admitted.job_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+        )
+        .unwrap();
+    assert_eq!(correlation_after_move, correlation_before);
     let worker = owner
         .job_worker_with_policy(
             policy(),
@@ -119,12 +146,81 @@ fn resolved_claim_rechecks_eleven_fields_before_attempt_mutation() {
             },
         )
         .unwrap();
-    let (claimed, lease) = worker.claim_resolved_import(resolved).unwrap().unwrap();
+    let repair = match worker.claim_resolved_import(resolved) {
+        Err(error) => error,
+        Ok(_) => panic!("resolved claim accepted a Source owned by another tenant"),
+    };
+    assert_eq!(repair.to_string(), "Captured import requires repair");
+    let correlation_after_claim: (String, i64, String, String, String) = read(&root)
+        .query_row(
+            "SELECT j.state,j.version,j.document,o.state,o.document FROM durable_jobs j JOIN source_import_operations o ON o.job_id=j.id WHERE j.id=?1",
+            [&admitted.job_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+        )
+        .unwrap();
+    assert_eq!(correlation_after_claim, correlation_before);
+    let write = Connection::open(root.join("print-partner.db")).unwrap();
+    write.busy_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(
+        write
+            .execute(
+                "UPDATE projects SET tenant_id='default' WHERE tenant_id='foreign-retained-claim' AND id=?1",
+                [admitted.source_id],
+            )
+            .unwrap(),
+        1
+    );
+    drop(write);
+    let resolved = match client
+        .correlate_capture_manifest(manifest.clone(), files.clone())
+        .unwrap()
+    {
+        CaptureJournalCorrelation::ExactAdmitted(resolved) => resolved,
+        _ => panic!("restored manifest did not resolve"),
+    };
+    let claim = worker.claim_resolved_import(resolved).unwrap().unwrap();
+    let claimed = &claim.job;
+    let lease = &claim.lease;
     assert_eq!(claimed.attempt, 1);
     assert_eq!(claimed.generation, 1);
+    assert!(claim.source_work.is_some());
+    assert!(
+        matches!(claimed.payload, jobs::Payload::SuppliedSourceImport { project_id, .. } if project_id as i64 == admitted.source_id)
+    );
+    let busy = match owner.local_source_catalog().begin_work(
+        admitted.source_id,
+        &AtomicBool::new(false),
+        Duration::from_secs(5),
+    ) {
+        Err(error) => error,
+        Ok(_) => panic!("resolved claim must own its Source before core work begins"),
+    };
+    assert!(busy.downcast_ref::<catalog::SourceBusy>().is_some());
+    let catalog::Outcome::Source(Some(unrelated)) = owner
+        .local_source_catalog()
+        .execute(catalog::Request::Create {
+            source: CreateSource {
+                name: "Unrelated retained Source".into(),
+                source_kind: Some("local".into()),
+                ..Default::default()
+            },
+        })
+        .unwrap()
+    else {
+        panic!("unrelated Source")
+    };
+    let mut unrelated_work = owner
+        .local_source_catalog()
+        .begin_work(
+            unrelated.id,
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+    unrelated_work.release().unwrap();
     worker
         .import_phase(
-            &lease,
+            lease,
             Phase::Owned(pp_storage::uploads::OwnedInput {
                 locator: format!(".pp-imports/{}", admitted.job_id),
                 digest: hex::encode(sha2::Sha256::digest(serde_json::to_vec(&files).unwrap())),
@@ -163,10 +259,456 @@ fn resolved_claim_rechecks_eleven_fields_before_attempt_mutation() {
             .unwrap(),
         CaptureJournalCorrelation::Absent
     ));
+    drop(claim);
+    let mut released = owner
+        .local_source_catalog()
+        .begin_work(
+            admitted.source_id,
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+    released.release().unwrap();
     drop(worker);
     drop(client);
     owner.shutdown().unwrap();
 }
+
+#[test]
+fn resolved_revoked_authority_commits_before_busy_source_observation() {
+    struct RefusalSnapshot {
+        state: String,
+        attempt: i64,
+        generation: i64,
+        refusal_generation: i64,
+        fence: Option<String>,
+        cursor: i64,
+        admitted_generation: i64,
+        cancel_requested: i64,
+        operation_cursor: i64,
+        observation_rows: i64,
+        attempt_rows: i64,
+        operation_state: String,
+        preclaim_rows: i64,
+    }
+
+    let (root, files_root, owner) = fixture();
+    let token = match auth_call(
+        &owner,
+        policy(),
+        auth::Request::Register {
+            email: "resolved-busy@example.test".into(),
+            display_name: "Resolved busy".into(),
+            password: Secret::new("ordinary-password".into()),
+        },
+    ) {
+        auth::Outcome::Session { token, .. } => token.expose().to_owned(),
+        _ => panic!("session"),
+    };
+    let client = owner.imports(policy(), 8 * 1024 * 1024 * 1024).unwrap();
+    let bytes = std::fs::read(files_root.join("triangle.stl")).unwrap();
+    let files = vec![File {
+        path: "triangle.stl".into(),
+        size: bytes.len() as u64,
+        sha256: hex::encode(sha2::Sha256::digest(&bytes)),
+        kind: "input".into(),
+    }];
+    let limits = AdmissionLimits {
+        reserved_bytes: 3_506_438_144,
+        max_input_bytes: 268_435_456,
+        max_prepared_bytes: 1_073_741_824,
+    };
+    let credential = || Credential::Session(Secret::new(token.clone()));
+    let prepared = client
+        .preflight_capture(
+            credential(),
+            "resolved-authority-busy".into(),
+            create("Resolved authority busy"),
+            CapturedPayloadV1::files(vec!["triangle.stl".into()]),
+            limits,
+        )
+        .unwrap()
+        .prepare(
+            CaptureId::new("ef".repeat(32)).unwrap(),
+            "resolved-authority-busy".into(),
+            CapturedPayloadV1::files(vec!["triangle.stl".into()]),
+            limits,
+            files.clone(),
+        )
+        .unwrap();
+    let manifest = prepared.manifest().to_vec();
+    let admitted = client
+        .admit_prepared(prepared, 0, client.accounting_epoch())
+        .unwrap();
+    let authority: String = read(&root)
+        .query_row(
+            "SELECT json_type(document,'$._authority') FROM durable_jobs WHERE id=?1",
+            [&admitted.job_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(authority, "object", "original authority expected");
+    let resolved = match client
+        .correlate_capture_manifest(manifest.clone(), files.clone())
+        .unwrap()
+    {
+        CaptureJournalCorrelation::ExactAdmitted(resolved) => resolved,
+        _ => panic!("exact manifest did not resolve"),
+    };
+    let catalog = owner
+        .source_catalog_with_policy(
+            catalog::Credentials::Session(Secret::new(token.clone())),
+            policy(),
+        )
+        .unwrap();
+    let busy = catalog
+        .begin_work(
+            admitted.source_id,
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+    auth_call(
+        &owner,
+        policy(),
+        auth::Request::Logout {
+            token: Secret::new(token),
+        },
+    );
+    let worker = owner
+        .job_worker_with_policy(
+            policy(),
+            WorkerAdmission {
+                kinds: vec![(JobKind::SuppliedSourceImport, 1)],
+                total: 1,
+                per_resource: 1,
+                lease_seconds: 3600,
+            },
+        )
+        .unwrap();
+    let failure = match worker.claim_resolved_import(resolved) {
+        Err(error) => error,
+        Ok(_) => panic!("revoked resolved claim was accepted"),
+    };
+    assert!(
+        matches!(
+            failure.downcast_ref::<auth::AuthorityFailure>(),
+            Some(auth::AuthorityFailure::CredentialInvalid)
+        ),
+        "{failure:?}"
+    );
+    assert!(failure.downcast_ref::<catalog::SourceBusy>().is_none());
+    let refusal = read(&root)
+        .query_row(
+            "SELECT j.state,
+                    json_extract(j.document,'$.attempt'),
+                    json_extract(j.document,'$.generation'),
+                    json_extract(j.document,'$._authority_refusal.generation'),
+                    json_extract(j.document,'$._attempt_fence'),
+                    p.cursor,p.admitted_generation,p.cancel_requested,
+                    json_extract(o.document,'$.observation_cursor'),
+                    (SELECT COUNT(*) FROM source_revision_observations r WHERE r.tenant_id=o.tenant AND r.operation_key=o.operation_key),
+                    (SELECT COUNT(*) FROM source_revision_attempts a WHERE a.tenant_id=o.tenant AND a.operation_key=o.operation_key),
+                    o.state,
+                    (SELECT COUNT(*) FROM source_preclaim_refusals q WHERE q.tenant_id=o.tenant AND q.operation_key=o.operation_key)
+               FROM durable_jobs j
+               JOIN source_import_operations o ON o.job_id=j.id
+               JOIN source_preclaim_refusals p ON p.tenant_id=o.tenant AND p.operation_key=o.operation_key
+              WHERE j.id=?1",
+            [&admitted.job_id],
+            |row| {
+                Ok(RefusalSnapshot {
+                    state: row.get(0)?,
+                    attempt: row.get(1)?,
+                    generation: row.get(2)?,
+                    refusal_generation: row.get(3)?,
+                    fence: row.get(4)?,
+                    cursor: row.get(5)?,
+                    admitted_generation: row.get(6)?,
+                    cancel_requested: row.get(7)?,
+                    operation_cursor: row.get(8)?,
+                    observation_rows: row.get(9)?,
+                    attempt_rows: row.get(10)?,
+                    operation_state: row.get(11)?,
+                    preclaim_rows: row.get(12)?,
+                })
+            },
+        )
+        .unwrap();
+    let RefusalSnapshot {
+        state,
+        attempt,
+        generation,
+        refusal_generation,
+        fence,
+        cursor,
+        admitted_generation,
+        cancel_requested,
+        operation_cursor,
+        observation_rows,
+        attempt_rows,
+        operation_state,
+        preclaim_rows,
+    } = refusal;
+    assert_eq!((state, attempt, generation), ("failed".into(), 0, 1));
+    assert_eq!((refusal_generation, fence), (0, None));
+    assert_eq!((cursor, admitted_generation, cancel_requested), (1, 0, 0));
+    assert_eq!(
+        (operation_cursor, observation_rows, attempt_rows),
+        (1, 0, 0)
+    );
+    assert_eq!((operation_state, preclaim_rows), ("admitted".into(), 1));
+
+    let resolved_again = match client.correlate_capture_manifest(manifest, files).unwrap() {
+        CaptureJournalCorrelation::ExactAdmitted(resolved) => resolved,
+        _ => panic!("terminal preclaim refusal no longer correlated exactly"),
+    };
+    assert!(
+        worker
+            .claim_resolved_import(resolved_again)
+            .unwrap()
+            .is_none()
+    );
+    let repeated: (i64, i64) = read(&root)
+        .query_row(
+            "SELECT json_extract(document,'$.observation_cursor'),
+                    (SELECT COUNT(*) FROM source_preclaim_refusals p WHERE p.tenant_id=o.tenant AND p.operation_key=o.operation_key)
+               FROM source_import_operations o WHERE job_id=?1",
+            [&admitted.job_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(repeated, (1, 1));
+    drop(busy);
+    drop(worker);
+    drop(catalog);
+    drop(client);
+    owner.shutdown().unwrap();
+    let (owner, ready) = WriterOwner::open(&root, Limits::default()).unwrap();
+    assert_eq!(ready.version, 39);
+    let reopened: (i64, i64, i64) = read(&root)
+        .query_row(
+            "SELECT p.cursor,p.admitted_generation,json_extract(j.document,'$.generation')
+               FROM source_preclaim_refusals p
+               JOIN source_import_operations o ON o.tenant=p.tenant_id AND o.operation_key=p.operation_key
+               JOIN durable_jobs j ON j.id=o.job_id
+              WHERE j.id=?1",
+            [&admitted.job_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(reopened, (1, 0, 1));
+    owner.shutdown().unwrap();
+}
+
+#[test]
+fn preclaim_refusal_event_and_terminal_job_commit_atomically() {
+    for fail_late in [false, true] {
+        let (root, files_root, owner) = fixture();
+        let token = match auth_call(
+            &owner,
+            policy(),
+            auth::Request::Register {
+                email: format!("preclaim-atomic-{fail_late}@example.test"),
+                display_name: "Preclaim atomicity".into(),
+                password: Secret::new("ordinary-password".into()),
+            },
+        ) {
+            auth::Outcome::Session { token, .. } => token.expose().to_owned(),
+            _ => panic!("session"),
+        };
+        let client = owner.imports(policy(), 8 * 1024 * 1024 * 1024).unwrap();
+        let bytes = std::fs::read(files_root.join("triangle.stl")).unwrap();
+        let files = vec![File {
+            path: "triangle.stl".into(),
+            size: bytes.len() as u64,
+            sha256: hex::encode(sha2::Sha256::digest(&bytes)),
+            kind: "input".into(),
+        }];
+        let limits = AdmissionLimits {
+            reserved_bytes: 3_506_438_144,
+            max_input_bytes: 268_435_456,
+            max_prepared_bytes: 1_073_741_824,
+        };
+        let prepared = client
+            .preflight_capture(
+                Credential::Session(Secret::new(token.clone())),
+                format!("preclaim-atomic-{fail_late}"),
+                create("Preclaim atomicity"),
+                CapturedPayloadV1::files(vec!["triangle.stl".into()]),
+                limits,
+            )
+            .unwrap()
+            .prepare(
+                CaptureId::new(if fail_late { "12" } else { "34" }.repeat(32)).unwrap(),
+                format!("preclaim-atomic-{fail_late}"),
+                CapturedPayloadV1::files(vec!["triangle.stl".into()]),
+                limits,
+                files.clone(),
+            )
+            .unwrap();
+        let manifest = prepared.manifest().to_vec();
+        let admitted = client
+            .admit_prepared(prepared, 0, client.accounting_epoch())
+            .unwrap();
+        let before: (String, i64, String, String) = read(&root)
+            .query_row(
+                "SELECT j.state,j.version,j.document,o.document
+                   FROM durable_jobs j JOIN source_import_operations o ON o.job_id=j.id
+                  WHERE j.id=?1",
+                [&admitted.job_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        let resolved = match client
+            .correlate_capture_manifest(manifest.clone(), files.clone())
+            .unwrap()
+        {
+            CaptureJournalCorrelation::ExactAdmitted(resolved) => resolved,
+            _ => panic!("exact manifest did not resolve"),
+        };
+        auth_call(
+            &owner,
+            policy(),
+            auth::Request::Logout {
+                token: Secret::new(token),
+            },
+        );
+        let trigger = if fail_late {
+            format!(
+                "CREATE TRIGGER fail_preclaim_atomicity BEFORE UPDATE ON durable_jobs
+                 WHEN OLD.id='{}' AND NEW.generation=1
+                 BEGIN SELECT RAISE(ABORT,'late preclaim fixture'); END;",
+                admitted.job_id
+            )
+        } else {
+            format!(
+                "CREATE TRIGGER fail_preclaim_atomicity BEFORE INSERT ON source_preclaim_refusals
+                 WHEN NEW.job_id='{}'
+                 BEGIN SELECT RAISE(ABORT,'early preclaim fixture'); END;",
+                admitted.job_id
+            )
+        };
+        Connection::open(root.join("print-partner.db"))
+            .unwrap()
+            .execute_batch(&trigger)
+            .unwrap();
+        let worker = owner
+            .job_worker_with_policy(
+                policy(),
+                WorkerAdmission {
+                    kinds: vec![(JobKind::SuppliedSourceImport, 1)],
+                    total: 1,
+                    per_resource: 1,
+                    lease_seconds: 3600,
+                },
+            )
+            .unwrap();
+        assert!(worker.claim_resolved_import(resolved).is_err());
+        let after: (String, i64, String, String, i64, i64) = read(&root)
+            .query_row(
+                "SELECT j.state,j.version,j.document,o.document,
+                        (SELECT COUNT(*) FROM source_preclaim_refusals p WHERE p.job_id=j.id),
+                        (SELECT COUNT(*) FROM source_revision_observations r WHERE r.job_id=j.id)
+                   FROM durable_jobs j JOIN source_import_operations o ON o.job_id=j.id
+                  WHERE j.id=?1",
+                [&admitted.job_id],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!((after.0, after.1, after.2, after.3), before);
+        assert_eq!((after.4, after.5), (0, 0));
+        Connection::open(root.join("print-partner.db"))
+            .unwrap()
+            .execute_batch("DROP TRIGGER fail_preclaim_atomicity")
+            .unwrap();
+        let resolved = match client.correlate_capture_manifest(manifest, files).unwrap() {
+            CaptureJournalCorrelation::ExactAdmitted(resolved) => resolved,
+            _ => panic!("rolled-back preclaim no longer correlated exactly"),
+        };
+        let failure = match worker.claim_resolved_import(resolved) {
+            Err(error) => error,
+            Ok(_) => panic!("rolled-back preclaim refusal was accepted"),
+        };
+        assert!(matches!(
+            failure.downcast_ref::<auth::AuthorityFailure>(),
+            Some(auth::AuthorityFailure::CredentialInvalid)
+        ));
+        let committed: (i64, i64) = read(&root)
+            .query_row(
+                "SELECT
+                    (SELECT COUNT(*) FROM source_preclaim_refusals p WHERE p.job_id=j.id),
+                    json_extract(j.document,'$.generation')
+                   FROM durable_jobs j WHERE j.id=?1",
+                [&admitted.job_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(committed, (1, 1));
+        drop(worker);
+        drop(client);
+        owner.shutdown().unwrap();
+    }
+}
+
+#[test]
+fn targeted_claim_owns_source_before_core_work() {
+    let (_root, files, owner) = fixture();
+    let svc = service(&owner);
+    let admitted = svc
+        .admit(
+            credential(&owner),
+            request("targeted-claim-owner", create("Targeted claim owner")),
+            &files,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+    let worker = owner
+        .job_worker(WorkerAdmission {
+            kinds: vec![(JobKind::SuppliedSourceImport, 1)],
+            total: 1,
+            per_resource: 1,
+            lease_seconds: 3600,
+        })
+        .unwrap();
+    let claim = worker.claim_import(&admitted.job_id).unwrap().unwrap();
+
+    assert!(
+        owner
+            .local_source_catalog()
+            .begin_work(
+                admitted.source_id,
+                &AtomicBool::new(false),
+                Duration::from_secs(5),
+            )
+            .is_err(),
+        "targeted claim must own its Source before core work begins"
+    );
+
+    assert!(claim.source_work.is_some());
+    drop(claim);
+    let mut released = owner
+        .local_source_catalog()
+        .begin_work(
+            admitted.source_id,
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+    released.release().unwrap();
+    drop(svc);
+    owner.shutdown().unwrap();
+}
+
 fn temp() -> PathBuf {
     let p = std::env::temp_dir().join(format!(
         "source-import-{}",
@@ -186,7 +728,7 @@ fn fixture() -> (PathBuf, PathBuf, WriterOwner) {
     .unwrap();
     std::fs::write(files.join("README.md"), "# Ordinary Source\n").unwrap();
     let (owner, ready) = WriterOwner::open(&root, Limits::default()).unwrap();
-    assert_eq!(ready.version, 38);
+    assert_eq!(ready.version, 39);
     (root, files, owner)
 }
 fn request(key: &str, target: Target) -> Admission {
@@ -372,6 +914,24 @@ fn cancel(owner: &WriterOwner, id: String) {
         .unwrap()
         .receive()
         .unwrap();
+}
+fn durable_job(owner: &WriterOwner, id: &str) -> jobs::JobRecord {
+    match owner
+        .jobs(policy())
+        .unwrap()
+        .submit(
+            credential(owner),
+            jobs::UserOperation::Get { job_id: id.into() },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )
+        .unwrap()
+        .receive()
+        .unwrap()
+    {
+        jobs::Outcome::Job(job, _) => job,
+        _ => panic!("job result required"),
+    }
 }
 #[test]
 fn create_update_exact_retry_never_repoints_and_preserves_originals() {
@@ -1271,7 +1831,8 @@ fn stale_attempt_cannot_write_import_phases() {
             },
         )
         .unwrap();
-    let (_, lease) = worker.claim_import(&op.job_id).unwrap().unwrap();
+    let mut claim = worker.claim_import(&op.job_id).unwrap().unwrap();
+    let lease = claim.lease;
     cancel(&owner, op.job_id.clone());
     assert!(worker.import_phase(&lease, Phase::Read).is_err());
     assert!(
@@ -1284,11 +1845,64 @@ fn stale_attempt_cannot_write_import_phases() {
             )
             .is_err()
     );
+    drop(claim.source_work.take());
     let done = svc
         .work_operation(&op.job_id, None, Through::Settled, &AtomicBool::new(false))
         .unwrap()
         .unwrap();
     assert_eq!(done.state, State::Cancelled);
+    drop(svc);
+    owner.shutdown().unwrap();
+}
+#[test]
+fn cancelled_import_cannot_overlap_source_work() {
+    let (root, files, owner) = fixture();
+    let svc = service(&owner);
+    let op = svc
+        .admit(
+            credential(&owner),
+            request("overlap", create("Overlap")),
+            &files,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+    let worker = owner
+        .job_worker(jobs::WorkerAdmission {
+            kinds: vec![(jobs::JobKind::SuppliedSourceImport, 1)],
+            total: 1,
+            per_resource: 1,
+            lease_seconds: 3600,
+        })
+        .unwrap();
+    let first = worker.claim_import(&op.job_id).unwrap().unwrap();
+    let source = first.source_work.unwrap();
+    let owned = root.join("repos/.pp-imports").join(&op.job_id);
+    std::fs::create_dir_all(&owned).unwrap();
+    std::fs::write(owned.join("held.txt"), "held by the fenced attempt").unwrap();
+    cancel(&owner, op.job_id.clone());
+    let before = durable_job(&owner, &op.job_id);
+    let error =
+        match svc.work_operation(&op.job_id, None, Through::Settled, &AtomicBool::new(false)) {
+            Err(error) => error,
+            Ok(_) => panic!("cancelled import reclaimed an active Source"),
+        };
+    assert!(
+        error
+            .downcast_ref::<pp_storage::catalog::SourceBusy>()
+            .is_some()
+    );
+    let after = durable_job(&owner, &op.job_id);
+    assert_eq!(after.state_version, before.state_version);
+    assert_eq!(after.attempt, before.attempt);
+    assert_eq!(after.generation, before.generation);
+    assert!(owned.join("held.txt").exists());
+    drop(source);
+    let cancelled = svc
+        .work_operation(&op.job_id, None, Through::Settled, &AtomicBool::new(false))
+        .unwrap()
+        .unwrap();
+    assert_eq!(cancelled.state, State::Cancelled);
+    assert!(!owned.exists());
     drop(svc);
     owner.shutdown().unwrap();
 }
@@ -1500,7 +2114,7 @@ fn original_session_revocation_after_claim_commits_source_writer_refusal() {
             },
         )
         .unwrap();
-    let (_, lease) = worker.claim_import(&admitted.job_id).unwrap().unwrap();
+    let claim = worker.claim_import(&admitted.job_id).unwrap().unwrap();
     let claimed_context: (i64, String, i64) = read(&root)
         .query_row(
             "SELECT json_extract(document,'$.generation'),json_extract(document,'$._attempt_fence'),json_extract(document,'$.cancel_requested') FROM durable_jobs WHERE id=?1",
@@ -1515,7 +2129,7 @@ fn original_session_revocation_after_claim_commits_source_writer_refusal() {
             token: Secret::new(token),
         },
     );
-    let error = worker.import_phase(&lease, Phase::Read).unwrap_err();
+    let error = worker.import_phase(&claim.lease, Phase::Read).unwrap_err();
     assert_eq!(
         error.downcast_ref::<auth::AuthorityFailure>(),
         Some(&auth::AuthorityFailure::CredentialInvalid)
@@ -1566,6 +2180,7 @@ fn original_session_revocation_after_claim_commits_source_writer_refusal() {
             claimed_context.2,
         )
     );
+    drop(claim.source_work);
     drop(worker);
     drop(service);
     owner.shutdown().unwrap();
@@ -1800,12 +2415,26 @@ fn changed_content_replay_and_changed_during_capture_are_refused() {
     drop(svc);
     owner.shutdown().unwrap();
 }
+
+fn remove_schema39(connection: &Connection) {
+    connection
+        .execute_batch(
+            "DROP TRIGGER trg_source_preclaim_refusals_immutable_update;
+             DROP TRIGGER trg_source_preclaim_refusals_immutable_delete;
+             DROP TRIGGER trg_source_preclaim_refusals_cursor_insert;
+             DROP TRIGGER trg_source_revision_observations_preclaim_cursor_insert;
+             DROP TABLE source_preclaim_refusals;",
+        )
+        .unwrap();
+}
+
 #[test]
 fn schema37_backup_preserves35_and_future_or_corrupt_input_is_unchanged() {
     let (root, _files, owner) = fixture();
     owner.shutdown().unwrap();
     let db = root.join("print-partner.db");
     let conn = Connection::open(&db).unwrap();
+    remove_schema39(&conn);
     conn.execute_batch("DROP TRIGGER trg_plan_apply_admissions_immutable_delete; DROP TRIGGER trg_plan_apply_admissions_immutable_update; DROP TABLE plan_apply_admissions; DROP TABLE source_import_quota; DROP TABLE source_import_operations; UPDATE app_settings SET value='35' WHERE tenant_id='default' AND key='schema_version'; PRAGMA wal_checkpoint(TRUNCATE);").unwrap();
     drop(conn);
     let before =
@@ -1828,7 +2457,7 @@ fn schema37_backup_preserves35_and_future_or_corrupt_input_is_unchanged() {
     std::fs::copy(&db, future.join("print-partner.db")).unwrap();
     let conn = Connection::open(future.join("print-partner.db")).unwrap();
     conn.execute(
-        "UPDATE app_settings SET value='39' WHERE tenant_id='default' AND key='schema_version'",
+        "UPDATE app_settings SET value='40' WHERE tenant_id='default' AND key='schema_version'",
         [],
     )
     .unwrap();
@@ -1930,6 +2559,129 @@ fn settlement_invalidates_stale_physical_usage_observation() {
         )
         .unwrap();
     assert_eq!(count(&root, "projects"), 2);
+    drop(svc);
+    owner.shutdown().unwrap();
+}
+#[test]
+fn import_reads_do_not_invalidate_physical_usage_observation() {
+    let (_root, files, owner) = fixture();
+    let svc = service(&owner);
+    let admitted = svc
+        .admit(
+            credential(&owner),
+            request("read-only", create("Read only")),
+            &files,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+    let client = owner.imports(policy(), 128 * 1024 * 1024).unwrap();
+    let observed = client.accounting_epoch();
+
+    svc.get(credential(&owner), admitted.key.clone()).unwrap();
+    assert_eq!(client.accounting_epoch(), observed);
+
+    let worker = owner
+        .job_worker_with_policy(
+            policy(),
+            WorkerAdmission {
+                kinds: vec![(JobKind::SuppliedSourceImport, 1)],
+                total: 1,
+                per_resource: 1,
+                lease_seconds: 3600,
+            },
+        )
+        .unwrap();
+    let claim = worker.claim_import(&admitted.job_id).unwrap().unwrap();
+    let lease = claim.lease;
+    worker.import_phase(&lease, Phase::Read).unwrap();
+    assert_eq!(client.accounting_epoch(), observed);
+
+    drop(claim.source_work);
+    drop(svc);
+    owner.shutdown().unwrap();
+}
+#[test]
+fn published_import_resumes_after_repaired_error_and_restart() {
+    let (root, files, owner) = fixture();
+    let svc = service(&owner);
+    let admitted = svc
+        .admit(
+            credential(&owner),
+            request("published-retry", create("Published retry")),
+            &files,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+    let published = svc
+        .work_operation(
+            &admitted.job_id,
+            Some(&files),
+            Through::Published,
+            &AtomicBool::new(false),
+        )
+        .unwrap()
+        .unwrap();
+    let artifact = published.artifact.as_ref().unwrap();
+    let file = &artifact.files[0];
+    let path = root.join("repos").join(&artifact.locator).join(&file.path);
+    let contents = std::fs::read(&path).unwrap();
+    drop(svc);
+    owner.shutdown().unwrap();
+    let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
+    let svc = service(&owner);
+    std::fs::write(&path, b"damaged after publication").unwrap();
+
+    assert!(
+        svc.work_operation(
+            &admitted.job_id,
+            None,
+            Through::Settled,
+            &AtomicBool::new(false),
+        )
+        .is_err()
+    );
+    std::fs::write(&path, contents).unwrap();
+    let retained = svc.get(credential(&owner), admitted.key.clone()).unwrap();
+    assert_eq!(retained.state, State::Published);
+    assert!(!retained.cleanup_settled);
+    assert_eq!(count(&root, "source_revisions"), 0);
+    assert_eq!(
+        read(&root)
+            .query_row(
+                "SELECT reserved_bytes FROM source_import_quota WHERE operation_key=?1 AND settled=0",
+                [&admitted.key],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        i64::try_from(admitted.reserved_bytes).unwrap()
+    );
+
+    drop(svc);
+    owner.shutdown().unwrap();
+    let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
+    let svc = service(&owner);
+    let resumed = svc
+        .work_operation(
+            &admitted.job_id,
+            None,
+            Through::Settled,
+            &AtomicBool::new(false),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(resumed.state, State::Activated);
+    assert!(resumed.cleanup_settled);
+    assert_eq!(count(&root, "source_revisions"), 1);
+    assert_eq!(
+        read(&root)
+            .query_row(
+                "SELECT reserved_bytes FROM source_import_quota WHERE operation_key=?1 AND settled=1",
+                [&admitted.key],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        0
+    );
     drop(svc);
     owner.shutdown().unwrap();
 }
@@ -2543,14 +3295,18 @@ fn combined_schema37_backup_preserves_selected_progress_and_jobs35_graph() {
         .receive()
         .unwrap();
     owner.shutdown().unwrap();
+    let preparation_backup = root.join("fixture-preparation-backup.db");
+    std::fs::rename(root.join("backups/pre-schema36.db"), &preparation_backup).unwrap();
+    let preparation_bytes = std::fs::read(&preparation_backup).unwrap();
     let db = root.join("print-partner.db");
     let conn = Connection::open(&db).unwrap();
+    remove_schema39(&conn);
     conn.execute_batch("DROP TRIGGER trg_plan_apply_admissions_immutable_delete; DROP TRIGGER trg_plan_apply_admissions_immutable_update; DROP TABLE plan_apply_admissions; DROP TABLE source_import_quota; DROP TABLE source_import_operations; UPDATE app_settings SET value='35' WHERE tenant_id='default' AND key='schema_version'; PRAGMA wal_checkpoint(TRUNCATE);").unwrap();
     let before = graph(&conn);
     drop(conn);
     let (owner, ready) = WriterOwner::open(&root, Limits::default()).unwrap();
     assert_eq!(ready.previous_version, 35);
-    assert_eq!(ready.version, 38);
+    assert_eq!(ready.version, 39);
     let backup_copy = root.join("backup-copy.db");
     std::fs::copy(ready.backup.unwrap(), &backup_copy).unwrap();
     assert_eq!(graph(&Connection::open(backup_copy).unwrap()), before);
@@ -2565,6 +3321,10 @@ fn combined_schema37_backup_preserves_selected_progress_and_jobs35_graph() {
     assert_eq!(count(&root, "source_import_operations"), 0);
     assert_eq!(count(&root, "durable_jobs"), 1);
     owner.shutdown().unwrap();
+    assert_eq!(
+        std::fs::read(preparation_backup).unwrap(),
+        preparation_bytes
+    );
 }
 #[test]
 fn combined_obsolete_receipt_refuses_without_changing_progress_history() {
@@ -2899,21 +3659,17 @@ fn publication_active_supplied_claim_and_live_lease_remain_exact() {
             },
         )
         .unwrap();
-    let (job, attempt) = worker.claim_import(&pending.job_id).unwrap().unwrap();
-    let mut live = worker
-        .begin_source_work(
-            &attempt,
-            None,
-            &AtomicBool::new(false),
-            Duration::from_secs(5),
-        )
-        .unwrap();
-    let active = worker.import_phase(&attempt, Phase::Read).unwrap();
+    let mut claim = worker.claim_import(&pending.job_id).unwrap().unwrap();
+    let mut live = claim.source_work.take().expect("claimed Source work");
+    let active = worker.import_phase(&claim.lease, Phase::Read).unwrap();
     let before = graph(&read(&root));
-    assert_eq!(job.state, jobs::PersistentState::Running);
+    assert_eq!(claim.job.state, jobs::PersistentState::Running);
     assert_eq!(publish_selected(&owner, &command)["kind"], "applied");
     assert_publication_preserves_source(&root, &before);
-    assert_eq!(worker.import_phase(&attempt, Phase::Read).unwrap(), active);
+    assert_eq!(
+        worker.import_phase(&claim.lease, Phase::Read).unwrap(),
+        active
+    );
     assert!(matches!(
         owner
             .local_source_catalog()
@@ -3004,13 +3760,18 @@ fn publication_then_source_activation_preserves_receipt_progress_and_plate_histo
 fn publication_source_schema37_backup_retains_full35_and_foreign_graph() {
     let (root, files, owner, command) = publication_fixture();
     owner.shutdown().unwrap();
+    let backup = root.join("backups/pre-schema36.db");
+    let preparation_backup = root.join("preparation-pre-schema36.db");
+    let preparation_backup_bytes = std::fs::read(&backup).unwrap();
+    std::fs::rename(&backup, &preparation_backup).unwrap();
     let conn = Connection::open(root.join("print-partner.db")).unwrap();
+    remove_schema39(&conn);
     conn.execute_batch("DROP TRIGGER trg_plan_apply_admissions_immutable_delete; DROP TRIGGER trg_plan_apply_admissions_immutable_update; DROP TABLE plan_apply_admissions; DROP TABLE source_import_quota; DROP TABLE source_import_operations; UPDATE app_settings SET value='35' WHERE tenant_id='default' AND key='schema_version'; PRAGMA wal_checkpoint(TRUNCATE);").unwrap();
     let prior = graph(&conn);
     drop(conn);
     let (owner, ready) = WriterOwner::open(&root, Limits::default()).unwrap();
     assert_eq!(ready.previous_version, 35);
-    assert_eq!(ready.version, 38);
+    assert_eq!(ready.version, 39);
     let backup = root.join("publication-backup-copy.db");
     std::fs::copy(ready.backup.unwrap(), &backup).unwrap();
     assert_eq!(graph(&Connection::open(backup).unwrap()), prior);
@@ -3041,4 +3802,8 @@ fn publication_source_schema37_backup_retains_full35_and_foreign_graph() {
     assert_eq!(publication_foreign(&root), foreign);
     drop(svc);
     owner.shutdown().unwrap();
+    assert_eq!(
+        std::fs::read(preparation_backup).unwrap(),
+        preparation_backup_bytes
+    );
 }

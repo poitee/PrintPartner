@@ -105,8 +105,8 @@ pub(crate) fn preflight(path: &Path, owned: bool) -> Result<u64> {
         }
     };
     ensure!(
-        version <= 38,
-        "Database schema version {version} is newer than supported version 38"
+        version <= 39,
+        "Database schema version {version} is newer than supported version 39"
     );
     ensure!(
         version == 0 || version >= 31,
@@ -192,12 +192,16 @@ pub(crate) fn initialize(
             Some("pre-schema37.db")
         } else if version == 37 {
             Some("pre-schema38.db")
+        } else if version == 38 {
+            Some("pre-schema39.db")
         } else {
             None
         };
         if let Some(name) = name {
             let target = path.parent().unwrap().join("backups").join(name);
-            backup(&conn, &target, true)?;
+            if !target.exists() {
+                backup(&conn, &target, true)?;
+            }
             Some(target)
         } else {
             None
@@ -247,6 +251,20 @@ pub(crate) fn initialize(
     }
     for group in data.seeds {
         let tx = conn.transaction()?;
+        let tenant_index = group
+            .columns
+            .iter()
+            .position(|column| column == "tenant_id")
+            .ok_or_else(|| anyhow::anyhow!("Seed group missing tenant_id"))?;
+        let name_index = group
+            .columns
+            .iter()
+            .position(|column| column == "name")
+            .ok_or_else(|| anyhow::anyhow!("Seed group missing name"))?;
+        let exists_sql = format!(
+            "SELECT EXISTS(SELECT 1 FROM {} WHERE tenant_id=?1 AND name=?2)",
+            group.table
+        );
         let sql = format!(
             "INSERT OR IGNORE INTO {}({}) VALUES({})",
             group.table,
@@ -272,6 +290,14 @@ pub(crate) fn initialize(
                     }
                 })
                 .collect::<Result<Vec<_>>>()?;
+            let exists: bool = tx.query_row(
+                &exists_sql,
+                rusqlite::params![&values[tenant_index], &values[name_index]],
+                |row| row.get(0),
+            )?;
+            if exists {
+                continue;
+            }
             tx.execute(&sql, rusqlite::params_from_iter(values))?;
         }
         tx.commit()?;
@@ -313,13 +339,22 @@ pub(crate) fn initialize(
         )?;
         tx.commit()?;
     }
-    crate::jobs::validate_schema(&conn, 38)?;
-    crate::uploads::validate_schema(&conn, 38)?;
-    crate::plan_publication::validate_schema(&conn, 38)?;
+    if version < 39 {
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute_batch(include_str!("remote_sources/preclaim39.sql"))?;
+        tx.execute(
+            "UPDATE app_settings SET value='39' WHERE tenant_id='default' AND key='schema_version'",
+            [],
+        )?;
+        tx.commit()?;
+    }
+    crate::jobs::validate_schema(&conn, 39)?;
+    crate::uploads::validate_schema(&conn, 39)?;
+    crate::plan_publication::validate_schema(&conn, 39)?;
     Ok((
         conn,
         SchemaReady {
-            version: 38,
+            version: 39,
             previous_version: version,
             backup: backup_path,
         },

@@ -6,8 +6,8 @@ use pp_storage::{
         Secret, SessionTenantPolicy,
     },
     jobs::{
-        Credential, EffectIntent, EffectOperation, JobKind, Outcome, Payload, PersistentState,
-        ResultArtifact, UserOperation, WorkerAdmission, WorkerOperation,
+        ClaimedAttempt, Credential, EffectIntent, EffectOperation, JobKind, Outcome, Payload,
+        PersistentState, ResultArtifact, UserOperation, WorkerAdmission, WorkerOperation,
     },
 };
 use rusqlite::Connection;
@@ -120,29 +120,63 @@ fn enqueue_payload(
     job
 }
 
-fn get_with_session(owner: &WriterOwner, token: &str, job_id: &str) -> pp_storage::jobs::JobRecord {
-    let outcome = owner
-        .jobs(policy())
-        .unwrap()
-        .submit(
-            Credential::Session(Secret::new(token.into())),
-            UserOperation::Get {
-                job_id: job_id.into(),
+fn source(client: &pp_storage::catalog::SourceCatalogClient, name: &str) -> u64 {
+    let pp_storage::catalog::Outcome::Source(Some(source)) = client
+        .execute(pp_storage::catalog::Request::Create {
+            source: pp_storage::catalog::CreateSource {
+                name: name.into(),
+                source_kind: Some("local".into()),
+                ..Default::default()
             },
-            &AtomicBool::new(false),
-            Duration::from_secs(5),
-        )
+        })
         .unwrap()
-        .receive()
-        .unwrap();
+    else {
+        panic!("Source expected")
+    };
+    u64::try_from(source.id).unwrap()
+}
+
+fn local_source(owner: &WriterOwner, name: &str) -> u64 {
+    source(&owner.local_source_catalog(), name)
+}
+
+fn get_with_session(owner: &WriterOwner, token: &str, job_id: &str) -> pp_storage::jobs::JobRecord {
+    let outcome = call_with_session(
+        owner,
+        token,
+        UserOperation::Get {
+            job_id: job_id.into(),
+        },
+    )
+    .unwrap();
     let Outcome::Job(job, _) = outcome else {
         panic!("job expected")
     };
     job
 }
 
+fn call_with_session(
+    owner: &WriterOwner,
+    token: &str,
+    operation: UserOperation,
+) -> Result<Outcome> {
+    owner
+        .jobs(policy())?
+        .submit(
+            Credential::Session(Secret::new(token.into())),
+            operation,
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?
+        .receive()
+}
+
 fn assert_authority(error: &anyhow::Error, expected: AuthorityFailure) {
-    assert_eq!(error.downcast_ref::<AuthorityFailure>(), Some(&expected));
+    assert_eq!(
+        error.downcast_ref::<AuthorityFailure>(),
+        Some(&expected),
+        "{error:?}"
+    );
 }
 
 fn stored_document(path: &Path, job_id: &str) -> String {
@@ -192,7 +226,7 @@ fn set_created(path: &Path, job_id: &str, created: i64) {
     .unwrap();
 }
 
-fn make_supplied_import(path: &Path, job_id: &str) {
+fn make_supplied_import(path: &Path, job_id: &str, source_id: u64) {
     let db = Connection::open(path.join("print-partner.db")).unwrap();
     let document: String = db
         .query_row(
@@ -204,14 +238,18 @@ fn make_supplied_import(path: &Path, job_id: &str) {
     let mut document: serde_json::Value = serde_json::from_str(&document).unwrap();
     document["kind"] = serde_json::json!("supplied-source-import");
     document["payload"] = serde_json::to_value(Payload::SuppliedSourceImport {
-        project_id: 1,
+        project_id: source_id,
         operation_key: "targeted-authority".into(),
         input_version: 1,
     })
     .unwrap();
     db.execute(
-        "UPDATE durable_jobs SET kind='supplied-source-import',resource='source:1',document=?2 WHERE id=?1",
-        [job_id, &serde_json::to_string(&document).unwrap()],
+        "UPDATE durable_jobs SET kind='supplied-source-import',resource=?2,document=?3 WHERE id=?1",
+        rusqlite::params![
+            job_id,
+            format!("source:{source_id}"),
+            serde_json::to_string(&document).unwrap()
+        ],
     )
     .unwrap();
 }
@@ -261,7 +299,11 @@ fn session_authority_reopens_without_raw_secret_and_dies_with_original_session()
     );
     assert_eq!(replay.job_id, queued.job_id);
     let worker = owner.job_worker_with_policy(policy(), admission()).unwrap();
-    let (_, mut lease) = worker.claim().unwrap().unwrap();
+    let ClaimedAttempt {
+        job: _,
+        mut lease,
+        source_work: _source_work,
+    } = worker.claim().unwrap().unwrap();
     let identity = worker.authorize(&lease).unwrap();
     assert_eq!(identity.tenant(), user.tenant_id);
     assert_eq!(identity.subject(), format!("user:{}", user.user_id));
@@ -409,7 +451,11 @@ fn routed_key_authority_reopens_and_revoke_or_rotate_cannot_be_substituted() {
 
     let owner = open(&path);
     let worker = owner.job_worker_with_policy(policy(), admission()).unwrap();
-    let (_, lease) = worker.claim().unwrap().unwrap();
+    let ClaimedAttempt {
+        job: _,
+        lease,
+        source_work: _source_work,
+    } = worker.claim().unwrap().unwrap();
     assert_eq!(worker.authorize(&lease).unwrap().tenant(), user.tenant_id);
     let auth::Outcome::KeyCreated {
         info: replacement_info,
@@ -540,7 +586,11 @@ fn routed_key_expiry_and_stale_attempts_fail_and_legacy_jobs_stay_unupgraded() {
         "legacy-physical",
     );
     let worker = owner.job_worker_with_policy(policy(), admission()).unwrap();
-    let (_, mut lease) = worker.claim().unwrap().unwrap();
+    let ClaimedAttempt {
+        job: _,
+        mut lease,
+        source_work: _source_work,
+    } = worker.claim().unwrap().unwrap();
     let error = worker.authorize(&lease).unwrap_err();
     assert_authority(&error, AuthorityFailure::Missing);
     let stale = lease.clone();
@@ -559,19 +609,45 @@ fn refused_queue_entries_commit_and_do_not_poison_healthy_work() {
     let path = directory();
     let owner = open(&path);
     let (_, token) = register(&owner, "queue-poison@example.com");
-    let healthy = enqueue(
+    let session_catalog = owner
+        .source_catalog_with_policy(
+            pp_storage::catalog::Credentials::Session(Secret::new(token.clone())),
+            policy(),
+        )
+        .unwrap();
+    let refused_source = source(&session_catalog, "Refused busy Source");
+    let healthy_source = local_source(&owner, "Healthy recovered Source");
+    let healthy = enqueue_payload(
         &owner,
         Credential::PhysicalOwner(owner.job_physical_owner()),
         "healthy-same-kind",
+        Payload::ImportScan {
+            project_id: healthy_source,
+        },
     );
     let recovering_worker = owner.job_worker(admission()).unwrap();
-    let (claimed, _) = recovering_worker.claim().unwrap().unwrap();
+    let ClaimedAttempt {
+        job: claimed,
+        lease: _,
+        source_work,
+    } = recovering_worker.claim().unwrap().unwrap();
     assert_eq!(claimed.job_id, healthy.job_id);
-    let refused = enqueue(
+    drop(source_work);
+    let refused = enqueue_payload(
         &owner,
         Credential::Session(Secret::new(token.clone())),
         "refused-same-kind",
+        Payload::ImportScan {
+            project_id: refused_source,
+        },
     );
+    let busy = session_catalog
+        .begin_work(
+            i64::try_from(refused_source).unwrap(),
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )
+        .unwrap();
     auth(
         &owner,
         auth::Request::Logout {
@@ -595,10 +671,17 @@ fn refused_queue_entries_commit_and_do_not_poison_healthy_work() {
         )
         .unwrap();
     let worker = owner.job_worker_with_policy(policy(), admission()).unwrap();
-    let (claimed, _) = worker.claim().unwrap().expect("healthy claim");
+    let ClaimedAttempt {
+        job: claimed,
+        lease: _,
+        source_work,
+    } = worker.claim().unwrap().expect("healthy claim");
     assert_eq!(claimed.job_id, healthy.job_id);
     assert_eq!(claimed.attempt, 2);
     assert_eq!(claimed.state, PersistentState::Running);
+    assert!(source_work.is_some());
+    drop(source_work);
+    drop(busy);
     owner.shutdown().unwrap();
 
     let db = Connection::open(path.join("print-partner.db")).unwrap();
@@ -622,11 +705,14 @@ fn refused_queue_entries_commit_and_do_not_poison_healthy_work() {
         "refused-cross-kind",
         Payload::Sync { project_ids: None },
     );
+    let source_id = local_source(&owner, "Healthy cross-kind Source");
     let healthy = enqueue_payload(
         &owner,
         Credential::PhysicalOwner(owner.job_physical_owner()),
         "healthy-cross-kind",
-        Payload::ImportScan { project_id: 42 },
+        Payload::ImportScan {
+            project_id: source_id,
+        },
     );
     auth(
         &owner,
@@ -640,7 +726,11 @@ fn refused_queue_entries_commit_and_do_not_poison_healthy_work() {
     set_created(&path, &healthy.job_id, 2);
     let owner = open(&path);
     let worker = owner.job_worker_with_policy(policy(), admission()).unwrap();
-    let (claimed, _) = worker.claim().unwrap().expect("cross-kind healthy claim");
+    let ClaimedAttempt {
+        job: claimed,
+        lease: _,
+        source_work: _source_work,
+    } = worker.claim().unwrap().expect("cross-kind healthy claim");
     assert_eq!(claimed.job_id, healthy.job_id);
     assert_ne!(claimed.tenant, refused.tenant);
     owner.shutdown().unwrap();
@@ -743,8 +833,18 @@ fn revoked_attempt_refuses_new_effects_and_success_without_applying_them() {
     let worker = owner
         .job_worker_with_policy(policy(), worker_admission)
         .unwrap();
-    let (first, first_lease) = worker.claim().unwrap().unwrap();
-    let (second, second_lease) = worker.claim().unwrap().unwrap();
+    let ClaimedAttempt {
+        job: first,
+        lease: first_lease,
+        source_work: first_source_work,
+    } = worker.claim().unwrap().unwrap();
+    let ClaimedAttempt {
+        job: second,
+        lease: second_lease,
+        source_work: second_source_work,
+    } = worker.claim().unwrap().unwrap();
+    assert!(first_source_work.is_none());
+    assert!(second_source_work.is_none());
     let (mut effect_lease, mut finish_lease) = if first.job_id == effect_job.job_id {
         assert_eq!(second.job_id, finish_job.job_id);
         (first_lease, second_lease)
@@ -803,7 +903,11 @@ fn authority_loss_fences_the_attempt_and_preserves_only_matching_evidence() {
         Payload::Sync { project_ids: None },
     );
     let worker = owner.job_worker_with_policy(policy(), admission()).unwrap();
-    let (_, mut lease) = worker.claim().unwrap().unwrap();
+    let ClaimedAttempt {
+        job: _,
+        mut lease,
+        source_work: _source_work,
+    } = worker.claim().unwrap().unwrap();
     let authority = worker.authorize(&lease).unwrap();
     assert_eq!(authority.tenant(), user.tenant_id);
     worker
@@ -847,6 +951,62 @@ fn authority_loss_fences_the_attempt_and_preserves_only_matching_evidence() {
     let owner = open(&path);
     let worker = owner.job_worker_with_policy(policy(), admission()).unwrap();
     assert!(worker.claim().unwrap().is_none());
+    let replacement = login(&owner, "effect-refusal@example.com");
+    let observed = get_with_session(&owner, &replacement, &queued.job_id);
+    let matching = observed.effects[0].receipt.clone().unwrap();
+    let before = stored_document(&path, &queued.job_id);
+    let mut changed = matching.clone();
+    changed.receipt_id = "changed-observed-receipt".into();
+    assert!(
+        call_with_session(
+            &owner,
+            &replacement,
+            UserOperation::Reconcile {
+                job_id: observed.job_id.clone(),
+                expected_version: observed.state_version,
+                expected_generation: observed.generation,
+                effect_hash: observed.effects[0].intent.content_hash.clone(),
+                decision: pp_storage::jobs::Decision::ConfirmSucceeded,
+                receipt: Some(changed),
+            },
+        )
+        .is_err()
+    );
+    assert_eq!(stored_document(&path, &queued.job_id), before);
+    assert!(
+        call_with_session(
+            &owner,
+            &replacement,
+            UserOperation::Reconcile {
+                job_id: observed.job_id.clone(),
+                expected_version: observed.state_version,
+                expected_generation: observed.generation,
+                effect_hash: observed.effects[0].intent.content_hash.clone(),
+                decision: pp_storage::jobs::Decision::ConfirmNoEffect,
+                receipt: None,
+            },
+        )
+        .is_err()
+    );
+    assert_eq!(stored_document(&path, &queued.job_id), before);
+    let Outcome::Job(confirmed, _) = call_with_session(
+        &owner,
+        &replacement,
+        UserOperation::Reconcile {
+            job_id: observed.job_id.clone(),
+            expected_version: observed.state_version,
+            expected_generation: observed.generation,
+            effect_hash: observed.effects[0].intent.content_hash.clone(),
+            decision: pp_storage::jobs::Decision::ConfirmSucceeded,
+            receipt: Some(matching.clone()),
+        },
+    )
+    .unwrap() else {
+        panic!("job expected")
+    };
+    assert_eq!(confirmed.state, PersistentState::Succeeded);
+    assert!(confirmed.effects[0].confirmed);
+    assert_eq!(confirmed.effects[0].receipt, Some(matching));
     owner.shutdown().unwrap();
 
     let path = directory();
@@ -859,7 +1019,11 @@ fn authority_loss_fences_the_attempt_and_preserves_only_matching_evidence() {
         Payload::Sync { project_ids: None },
     );
     let worker = owner.job_worker_with_policy(policy(), admission()).unwrap();
-    let (_, mut lease) = worker.claim().unwrap().unwrap();
+    let ClaimedAttempt {
+        job: _,
+        mut lease,
+        source_work: _source_work,
+    } = worker.claim().unwrap().unwrap();
     worker
         .update(
             &mut lease,
@@ -899,7 +1063,7 @@ fn explicit_physical_owner_and_absent_legacy_authority_stay_distinct() {
     assert!(physical_document.get("_authority").unwrap().is_null());
     let owner = open(&physical_path);
     let worker = owner.job_worker(admission()).unwrap();
-    assert_eq!(worker.claim().unwrap().unwrap().0.job_id, physical.job_id);
+    assert_eq!(worker.claim().unwrap().unwrap().job.job_id, physical.job_id);
     owner.shutdown().unwrap();
 
     let legacy_path = directory();
@@ -1066,14 +1230,21 @@ fn policy_and_codec_faults_stay_hard_errors_and_user_auth_errors_keep_their_type
 fn policy_required_commits_prior_recovery_without_mutating_the_authority_job() {
     let path = directory();
     let owner = open(&path);
+    let source_id = local_source(&owner, "Recovery policy Source");
     let recovering = enqueue_payload(
         &owner,
         Credential::PhysicalOwner(owner.job_physical_owner()),
         "recover-before-policy-error",
-        Payload::ImportScan { project_id: 8 },
+        Payload::ImportScan {
+            project_id: source_id,
+        },
     );
     let worker = owner.job_worker(admission()).unwrap();
-    let (_, lease) = worker.claim().unwrap().unwrap();
+    let ClaimedAttempt {
+        job: _,
+        lease,
+        source_work: _source_work,
+    } = worker.claim().unwrap().unwrap();
     assert_eq!(lease.job_id(), recovering.job_id);
     let (_, token) = register(&owner, "recovery-policy@example.com");
     let required = enqueue_payload(
@@ -1128,6 +1299,28 @@ fn targeted_refusal_commits_before_returning_the_typed_error() {
         Credential::Session(Secret::new(token.clone())),
         "targeted-refusal",
     );
+    let catalog = owner
+        .source_catalog_with_policy(
+            pp_storage::catalog::Credentials::Session(Secret::new(token.clone())),
+            policy(),
+        )
+        .unwrap();
+    let pp_storage::catalog::Outcome::Source(Some(source)) = catalog
+        .execute(pp_storage::catalog::Request::Create {
+            source: pp_storage::catalog::CreateSource {
+                name: "Targeted refusal Source".into(),
+                source_kind: Some("local".into()),
+                ..Default::default()
+            },
+        })
+        .unwrap()
+    else {
+        panic!("Source expected")
+    };
+    make_supplied_import(&path, &queued.job_id, u64::try_from(source.id).unwrap());
+    let busy = catalog
+        .begin_work(source.id, &AtomicBool::new(false), Duration::from_secs(5))
+        .unwrap();
     auth(
         &owner,
         auth::Request::Logout {
@@ -1135,16 +1328,13 @@ fn targeted_refusal_commits_before_returning_the_typed_error() {
         },
     )
     .unwrap();
-    owner.shutdown().unwrap();
-    make_supplied_import(&path, &queued.job_id);
-
-    let owner = open(&path);
     let worker = owner.job_worker_with_policy(policy(), admission()).unwrap();
     let error = match worker.claim_import(&queued.job_id) {
         Err(error) => error,
         Ok(_) => panic!("targeted revoked job did not return an error"),
     };
     assert_authority(&error, AuthorityFailure::CredentialInvalid);
+    drop(busy);
     owner.shutdown().unwrap();
     let document: serde_json::Value =
         serde_json::from_str(&stored_document(&path, &queued.job_id)).unwrap();
@@ -1163,7 +1353,11 @@ fn authenticated_live_lease_precedes_stale_and_foreign_rejections() {
         "live-lease",
     );
     let worker = owner.job_worker_with_policy(policy(), admission()).unwrap();
-    let (_, mut live) = worker.claim().unwrap().unwrap();
+    let ClaimedAttempt {
+        job: _,
+        lease: mut live,
+        source_work: _source_work,
+    } = worker.claim().unwrap().unwrap();
     let authority = worker.authorize(&live).unwrap();
     assert_eq!(authority.tenant(), user.tenant_id);
     assert_eq!(authority.subject(), format!("user:{}", user.user_id));

@@ -135,7 +135,7 @@ fn main() -> Result<()> {
     let directory = Path::new(&args[1]);
     let request: ReconciliationRequest = serde_json::from_slice(&std::fs::read(&args[2])?)?;
     let (owner, ready) = WriterOwner::open(directory, Limits::default())?;
-    ensure!(ready.version == 38, "Schema changed");
+    ensure!(ready.version == 39, "Schema changed");
     let before = graph(directory)?;
     let original = snapshot(&owner)?;
     let part = original
@@ -202,10 +202,13 @@ fn main() -> Result<()> {
             lease_seconds: 60,
         },
     )?;
-    let (_, lease) = worker
+    let mut claim = worker
         .claim()?
         .ok_or_else(|| anyhow!("Missing real claim"))?;
-    let mut source_lease = worker.begin_source_work(&lease, None, &AtomicBool::new(false), WAIT)?;
+    let mut source_lease = claim
+        .source_work
+        .take()
+        .ok_or_else(|| anyhow!("Missing Source claim authority"))?;
     source_lease.release()?;
     ensure!(
         matches!(
@@ -259,7 +262,7 @@ fn main() -> Result<()> {
     })?;
     ensure!(
         new_worker
-            .begin_source_work(&lease, None, &AtomicBool::new(false), WAIT)
+            .begin_source_work(&claim.lease, None, &AtomicBool::new(false), WAIT)
             .is_err(),
         "Stale lease accepted"
     );
@@ -299,7 +302,7 @@ fn main() -> Result<()> {
     owner.shutdown()?;
     println!(
         "{}",
-        json!({"schema":38,"progress":response,"selection":selected,"selection_basis":basis,"graph_before":before,"graph_after":final_graph,"restart":true,"stale_claim_refused":true,"source_reservation":true,"handler_calls":0})
+        json!({"schema":ready.version,"progress":response,"selection":selected,"selection_basis":basis,"graph_before":before,"graph_after":final_graph,"restart":true,"stale_claim_refused":true,"source_reservation":true,"handler_calls":0})
     );
     Ok(())
 }

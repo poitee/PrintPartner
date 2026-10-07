@@ -42,8 +42,10 @@ export const postgresPostInitMigrations: string[] = [
   `CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    expires_at TEXT NOT NULL
+    expires_at TEXT NOT NULL,
+    provider TEXT NOT NULL DEFAULT 'email'
   )`,
+  "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS provider TEXT NOT NULL DEFAULT 'email'",
   `CREATE TABLE IF NOT EXISTS plan_shares (
     id TEXT PRIMARY KEY,
     token TEXT NOT NULL UNIQUE,

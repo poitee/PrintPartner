@@ -20,7 +20,6 @@ use sha2::{Digest, Sha256};
 use std::{
     path::{Path, PathBuf},
     sync::atomic::AtomicBool,
-    time::Duration,
 };
 
 pub struct SourceImports {
@@ -242,15 +241,15 @@ impl SourceImports {
             Some(id) => self.worker.claim_import(id)?,
             None => self.worker.claim()?,
         };
-        let Some((job, lease)) = claim else {
+        let Some(claim) = claim else {
             return Ok(None);
         };
-        self.work_claimed((job, lease), supplied, None, through, cancelled)
+        self.work_claimed(claim, supplied, None, through, cancelled)
     }
 
     fn work_claimed(
         &self,
-        (job, lease): (pp_storage::jobs::JobRecord, pp_storage::jobs::AttemptLease),
+        claim: pp_storage::jobs::ClaimedAttempt,
         supplied: Option<&Path>,
         retained: Option<(FrozenCapture, Vec<SourcePath>)>,
         through: Through,
@@ -258,9 +257,13 @@ impl SourceImports {
     ) -> Result<Option<Operation>> {
         let retained_work = retained.is_some();
         let mut retained = retained;
+        let pp_storage::jobs::ClaimedAttempt {
+            job,
+            lease,
+            source_work,
+        } = claim;
         let live =
-            self.worker
-                .begin_source_work(&lease, None, cancelled, Duration::from_secs(5))?;
+            source_work.ok_or_else(|| anyhow!("Supplied import claim missing Source authority"))?;
         let mut op = self.worker.import_phase(&lease, Phase::Read)?;
         let result = (|| -> Result<Operation> {
             if job.cancel_requested && op.receipt.is_none() {
@@ -444,6 +447,7 @@ impl SourceImports {
         if result.is_err()
             && !retained_work
             && op.receipt.is_none()
+            && op.state != State::Published
             && self.worker.import_phase(&lease, Phase::Fail).is_ok()
             && self.cleanup(&op).is_ok()
         {
