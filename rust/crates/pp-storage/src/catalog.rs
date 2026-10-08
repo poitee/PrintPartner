@@ -356,7 +356,7 @@ pub(super) enum Command {
 }
 pub(super) enum Reply {
     Outcome(Outcome),
-    Lease(u64),
+    Lease(SourceWorkProof),
     Released,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -367,47 +367,122 @@ impl std::fmt::Display for SourceBusy {
     }
 }
 impl std::error::Error for SourceBusy {}
-#[derive(Default)]
 pub(super) struct State {
-    next: u64,
-    active: HashMap<u64, (String, i64)>,
+    incarnation: String,
+    issued_high_water: u64,
+    active: HashMap<u64, SourceBinding>,
     pub directory: PathBuf,
+}
+impl Default for State {
+    fn default() -> Self {
+        Self::new(PathBuf::new())
+    }
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SourceBinding {
+    pub(crate) tenant: String,
+    pub(crate) id: i64,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SourceWorkProof {
+    pub(crate) incarnation: String,
+    pub(crate) token: u64,
+}
+pub(crate) enum IssuedTokenState<'a> {
+    Active(&'a SourceBinding),
+    Retired,
+    NeverIssued,
+    WrongIncarnation,
+}
+pub(crate) enum Retirement {
+    RetiredNow,
+    AlreadyRetired,
 }
 impl State {
     pub(super) fn new(directory: PathBuf) -> Self {
+        let incarnation = loop {
+            let bytes = rand::random::<[u8; 32]>();
+            if bytes.iter().any(|byte| *byte != 0) {
+                break hex::encode(bytes);
+            }
+        };
         Self {
+            incarnation,
+            issued_high_water: 0,
+            active: HashMap::new(),
             directory,
-            ..Default::default()
         }
     }
     pub(crate) fn source_busy(&self, tenant: &str, id: i64) -> bool {
         self.active
             .values()
-            .any(|(active_tenant, active_id)| active_tenant == tenant && *active_id == id)
+            .any(|binding| binding.tenant == tenant && binding.id == id)
     }
     pub(crate) fn next_token(&self) -> Result<u64> {
-        self.next
+        self.issued_high_water
             .checked_add(1)
             .ok_or_else(|| anyhow!("Work lease overflow"))
     }
     pub(crate) fn activate(&mut self, token: u64, tenant: String, id: i64) {
-        self.next = token;
-        self.active.insert(token, (tenant, id));
+        debug_assert_eq!(token, self.issued_high_water + 1);
+        self.issued_high_water = token;
+        self.active.insert(token, SourceBinding { tenant, id });
     }
-    pub(crate) fn reap(&mut self, tokens: Vec<u64>) {
+    pub(crate) fn reap(&mut self, tokens: Vec<u64>) -> Result<()> {
         for token in tokens {
+            ensure!(
+                token > 0 && token <= self.issued_high_water,
+                "Unknown work lease"
+            );
             self.active.remove(&token);
+        }
+        Ok(())
+    }
+    pub(crate) fn proof(&self, token: u64) -> Result<SourceWorkProof> {
+        ensure!(self.active.contains_key(&token), "Unknown work lease");
+        Ok(SourceWorkProof {
+            incarnation: self.incarnation.clone(),
+            token,
+        })
+    }
+    pub(crate) fn classify_issued(&self, incarnation: &str, token: u64) -> IssuedTokenState<'_> {
+        if incarnation != self.incarnation {
+            return IssuedTokenState::WrongIncarnation;
+        }
+        if let Some(binding) = self.active.get(&token) {
+            return IssuedTokenState::Active(binding);
+        }
+        if token > 0 && token <= self.issued_high_water {
+            IssuedTokenState::Retired
+        } else {
+            IssuedTokenState::NeverIssued
+        }
+    }
+    pub(crate) fn retire_issued(
+        &mut self,
+        proof: &SourceWorkProof,
+        expected: &SourceBinding,
+    ) -> Result<Retirement> {
+        match self.classify_issued(&proof.incarnation, proof.token) {
+            IssuedTokenState::Active(actual) => {
+                ensure!(actual == expected, "Source reservation binding conflict");
+                self.active.remove(&proof.token);
+                Ok(Retirement::RetiredNow)
+            }
+            IssuedTokenState::Retired => Ok(Retirement::AlreadyRetired),
+            IssuedTokenState::NeverIssued => Err(anyhow!("Never-issued Source reservation")),
+            IssuedTokenState::WrongIncarnation => Err(anyhow!("Wrong Source writer incarnation")),
         }
     }
 }
 pub struct SourceWorkLease {
     client: SettingsClient,
-    token: Option<u64>,
+    proof: Option<SourceWorkProof>,
 }
-pub(crate) fn lease(client: SettingsClient, token: u64) -> SourceWorkLease {
+pub(crate) fn lease(client: SettingsClient, proof: SourceWorkProof) -> SourceWorkLease {
     SourceWorkLease {
         client,
-        token: Some(token),
+        proof: Some(proof),
     }
 }
 impl WriterOwner {
@@ -595,9 +670,9 @@ impl SourceCatalogClient {
         )?
         .recv()??;
         match reply {
-            Reply::Lease(token) => Ok(SourceWorkLease {
+            Reply::Lease(proof) => Ok(SourceWorkLease {
                 client: self.client.clone(),
-                token: Some(token),
+                proof: Some(proof),
             }),
             _ => Err(anyhow!("Unexpected lease reply")),
         }
@@ -618,18 +693,28 @@ pub(crate) fn begin_job_work(
     )?
     .recv()??
     {
-        Reply::Lease(token) => Ok(SourceWorkLease {
+        Reply::Lease(proof) => Ok(SourceWorkLease {
             client: client.clone(),
-            token: Some(token),
+            proof: Some(proof),
         }),
         _ => Err(anyhow!("Unexpected lease reply")),
     }
 }
 impl SourceWorkLease {
+    pub(crate) fn proof(&self) -> Result<SourceWorkProof> {
+        self.proof
+            .clone()
+            .ok_or_else(|| anyhow!("Lease already released"))
+    }
+    pub(crate) fn consume_retired(&mut self) -> Result<()> {
+        ensure!(self.proof.take().is_some(), "Lease already released");
+        Ok(())
+    }
     pub fn release(&mut self) -> Result<()> {
-        let token = *self
-            .token
+        let token = self
+            .proof
             .as_ref()
+            .map(|proof| proof.token)
             .ok_or_else(|| anyhow!("Lease already released"))?;
         let reply = enqueue(
             &self.client,
@@ -637,14 +722,14 @@ impl SourceWorkLease {
             &AtomicBool::new(false),
             Duration::from_secs(5),
         )?;
-        self.token = None;
         reply.recv()??;
+        self.proof = None;
         Ok(())
     }
 }
 impl Drop for SourceWorkLease {
     fn drop(&mut self) {
-        if let Some(token) = self.token.take()
+        if let Some(token) = self.proof.take().map(|proof| proof.token)
             && enqueue(
                 &self.client,
                 Command::End(token),
@@ -684,7 +769,11 @@ fn execute_inner(
     command: Command,
 ) -> Result<Reply> {
     if let Command::End(token) = command {
-        ensure!(state.active.remove(&token).is_some(), "Unknown work lease");
+        ensure!(
+            token > 0 && token <= state.issued_high_water,
+            "Unknown work lease"
+        );
+        state.active.remove(&token);
         return Ok(Reply::Released);
     }
     let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -697,7 +786,7 @@ fn execute_inner(
             let token = state.next_token()?;
             tx.commit()?;
             state.activate(token, tenant, id);
-            Ok(Reply::Lease(token))
+            Ok(Reply::Lease(state.proof(token)?))
         }
         Command::Begin { authority, id } => {
             let tenant = authority.tenant(&tx)?;
@@ -706,7 +795,7 @@ fn execute_inner(
             let token = state.next_token()?;
             tx.commit()?;
             state.activate(token, tenant, id);
-            Ok(Reply::Lease(token))
+            Ok(Reply::Lease(state.proof(token)?))
         }
         Command::Run { authority, request } => {
             let tenant = authority.tenant(&tx)?;
@@ -1226,7 +1315,10 @@ fn delete(tx: &Transaction<'_>, state: &State, tenant: &str, id: i64) -> Result<
     let Some(source) = get(tx, tenant, id)? else {
         return Ok(Deletion::NotFound);
     };
-    if state.active.values().any(|(t, s)| t == tenant && *s == id)
+    if state
+        .active
+        .values()
+        .any(|binding| binding.tenant == tenant && binding.id == id)
         || (crate::jobs::source_reserved(tx, tenant, id)?
             || crate::uploads::source_reserved(tx, tenant, id)?)
     {
