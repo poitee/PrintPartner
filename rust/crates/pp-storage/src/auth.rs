@@ -7,6 +7,42 @@ pub use policy::{
     AuthFailure, AuthInputFailure, AuthPolicy, AuthStatus, RegistrationPolicy, SessionTenantPolicy,
 };
 
+const DEFAULT_SESSION_SECONDS: i64 = 14 * 24 * 60 * 60;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AuthLifetimes {
+    session_seconds: i64,
+    key_seconds: Option<i64>,
+}
+
+impl Default for AuthLifetimes {
+    fn default() -> Self {
+        Self {
+            session_seconds: DEFAULT_SESSION_SECONDS,
+            key_seconds: None,
+        }
+    }
+}
+
+impl AuthLifetimes {
+    pub fn shorter(session: Duration, key: Option<Duration>) -> Result<Self> {
+        let session_seconds = i64::try_from(session.as_secs()).unwrap_or(i64::MAX);
+        ensure!(
+            session_seconds > 0 && session_seconds < DEFAULT_SESSION_SECONDS,
+            AuthFailure::InvalidInput(AuthInputFailure::Policy)
+        );
+        let key_seconds = key.map(|value| i64::try_from(value.as_secs()).unwrap_or(i64::MAX));
+        ensure!(
+            key_seconds.is_none_or(|seconds| seconds > 0),
+            AuthFailure::InvalidInput(AuthInputFailure::Policy)
+        );
+        Ok(Self {
+            session_seconds,
+            key_seconds,
+        })
+    }
+}
+
 use crate::{SettingsClient, WriterOwner};
 use anyhow::{Result, anyhow, bail, ensure};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -30,6 +66,19 @@ impl Secret {
     pub fn expose(&self) -> &str {
         &self.0
     }
+}
+
+pub(crate) struct StreamAuthority {
+    pub(crate) tenant: String,
+    pub(crate) subject: String,
+    pub(crate) identity: StreamAuthorityIdentity,
+    pub(crate) expires_at: Option<i64>,
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub(crate) enum StreamAuthorityIdentity {
+    Session(String),
+    Key { tenant: String, key_id: String },
 }
 #[derive(Clone, Copy)]
 pub enum FirstUserTenant {
@@ -241,6 +290,7 @@ pub struct AuthClient {
     storage: SettingsClient,
     policy: AuthPolicy,
     runtime: Arc<AuthRuntime>,
+    lifetimes: AuthLifetimes,
     #[cfg(test)]
     kdf_gate: Option<Arc<TestKdfGate>>,
 }
@@ -337,6 +387,7 @@ struct AuthFlow {
     storage: SettingsClient,
     policy: AuthPolicy,
     runtime: Arc<AuthRuntime>,
+    lifetimes: AuthLifetimes,
     cancelled: Arc<AtomicBool>,
     completion: Completion,
     _lease: AuthLease,
@@ -561,6 +612,7 @@ impl WriterOwner {
                 first_user,
             },
             runtime: AuthRuntime::global(),
+            lifetimes: AuthLifetimes::default(),
             #[cfg(test)]
             kdf_gate: None,
         }
@@ -571,6 +623,22 @@ impl WriterOwner {
             storage: self.client(),
             policy,
             runtime: AuthRuntime::global(),
+            lifetimes: AuthLifetimes::default(),
+            #[cfg(test)]
+            kdf_gate: None,
+        })
+    }
+    pub fn auth_with_policy_and_lifetimes(
+        &self,
+        policy: AuthPolicy,
+        lifetimes: AuthLifetimes,
+    ) -> Result<AuthClient> {
+        validate_policy(policy)?;
+        Ok(AuthClient {
+            storage: self.client(),
+            policy,
+            runtime: AuthRuntime::global(),
+            lifetimes,
             #[cfg(test)]
             kdf_gate: None,
         })
@@ -596,6 +664,7 @@ impl AuthClient {
             storage: self.storage.clone(),
             policy: self.policy,
             runtime: self.runtime.clone(),
+            lifetimes: self.lifetimes,
             kdf_gate: Some(gate),
         }
     }
@@ -613,6 +682,7 @@ impl AuthClient {
             storage: self.storage.clone(),
             policy: self.policy,
             runtime: self.runtime.clone(),
+            lifetimes: self.lifetimes,
             cancelled,
             completion: Completion { reply: Some(reply) },
             _lease: lease,
@@ -636,6 +706,7 @@ impl AuthClient {
             storage: self.storage.clone(),
             policy: self.policy,
             runtime: self.runtime.clone(),
+            lifetimes: self.lifetimes,
             cancelled,
             completion: Completion { reply: Some(reply) },
             _lease: lease,
@@ -675,22 +746,39 @@ pub(super) fn advance(connection: &mut Connection, work: WriterWork) -> Option<W
         return None;
     }
     match stage {
-        WriterStage::Begin(request) => match prepare(connection, &flow, request) {
-            Ok(Prepared::Complete(outcome)) => {
-                flow.finish(Ok(outcome));
-                None
+        WriterStage::Begin(request) => {
+            match flow.storage.shared.job_subscriptions.authority_change(|| {
+                let prepared = prepare(connection, &flow, request);
+                if prepared.is_ok()
+                    && crate::jobs::revalidate_subscriptions(
+                        connection,
+                        &flow.storage.shared.job_subscriptions,
+                    )
+                    .is_err()
+                {
+                    flow.storage
+                        .shared
+                        .job_subscriptions
+                        .stop_under_authority_gate();
+                }
+                prepared
+            }) {
+                Ok(Prepared::Complete(outcome)) => {
+                    flow.finish(Ok(outcome));
+                    None
+                }
+                Ok(Prepared::Kdf(task, continuation)) => submit_kdf(KdfJob {
+                    flow,
+                    task,
+                    continuation,
+                    writer_ready_since: Instant::now(),
+                }),
+                Err(error) => {
+                    flow.finish(Err(error));
+                    None
+                }
             }
-            Ok(Prepared::Kdf(task, continuation)) => submit_kdf(KdfJob {
-                flow,
-                task,
-                continuation,
-                writer_ready_since: Instant::now(),
-            }),
-            Err(error) => {
-                flow.finish(Err(error));
-                None
-            }
-        },
+        }
         WriterStage::KdfReady { task, continuation } => submit_kdf(KdfJob {
             flow,
             task,
@@ -702,7 +790,25 @@ pub(super) fn advance(connection: &mut Connection, work: WriterWork) -> Option<W
             result,
         } => {
             let policy = flow.policy;
-            flow.finish(result.and_then(|result| resume(connection, policy, continuation, result)));
+            let result = flow.storage.shared.job_subscriptions.authority_change(|| {
+                let result = result.and_then(|result| {
+                    resume(connection, policy, flow.lifetimes, continuation, result)
+                });
+                if result.is_ok()
+                    && crate::jobs::revalidate_subscriptions(
+                        connection,
+                        &flow.storage.shared.job_subscriptions,
+                    )
+                    .is_err()
+                {
+                    flow.storage
+                        .shared
+                        .job_subscriptions
+                        .stop_under_authority_gate();
+                }
+                result
+            });
+            flow.finish(result);
             None
         }
     }
@@ -855,6 +961,7 @@ fn prepare(connection: &mut Connection, flow: &AuthFlow, request: Request) -> Re
                     email: email.map(|email| email.to_lowercase()),
                     display_name,
                     first_user: policy.first_user,
+                    session_seconds: flow.lifetimes.session_seconds,
                 },
                 policy,
             )
@@ -887,7 +994,7 @@ fn prepare(connection: &mut Connection, flow: &AuthFlow, request: Request) -> Re
             connection,
             Command::Keys {
                 session: crypto::digest(session.expose()),
-                action: keys::Action::Create,
+                action: keys::Action::Create(flow.lifetimes.key_seconds),
             },
             policy,
         ),
@@ -903,7 +1010,7 @@ fn prepare(connection: &mut Connection, flow: &AuthFlow, request: Request) -> Re
             connection,
             Command::Keys {
                 session: crypto::digest(session.expose()),
-                action: keys::Action::Rotate(key_id),
+                action: keys::Action::Rotate(key_id, flow.lifetimes.key_seconds),
             },
             policy,
         ),
@@ -938,6 +1045,7 @@ fn execute_credential(
 fn resume(
     connection: &mut Connection,
     policy: AuthPolicy,
+    lifetimes: AuthLifetimes,
     continuation: Continuation,
     result: KdfOutcome,
 ) -> Result<Outcome> {
@@ -953,11 +1061,13 @@ fn resume(
             display_name,
             hash,
             first_user: policy.first_user,
+            session_seconds: lifetimes.session_seconds,
         },
         (Continuation::Login(credential), KdfOutcome::LoginVerified(replacement)) => {
             Command::Login {
                 credential,
                 replacement,
+                session_seconds: lifetimes.session_seconds,
             }
         }
         (
@@ -970,9 +1080,14 @@ fn resume(
             session,
             credential,
             replacement,
+            session_seconds: lifetimes.session_seconds,
         },
         (Continuation::ResetPassword { token }, KdfOutcome::Hash(replacement)) => {
-            Command::ResetPassword { token, replacement }
+            Command::ResetPassword {
+                token,
+                replacement,
+                session_seconds: lifetimes.session_seconds,
+            }
         }
         _ => bail!(AuthFailure::Storage),
     };
@@ -1016,10 +1131,12 @@ pub(super) enum Command {
         display_name: String,
         hash: String,
         first_user: FirstUserTenant,
+        session_seconds: i64,
     },
     Login {
         credential: Credential,
         replacement: Option<String>,
+        session_seconds: i64,
     },
     ResolveSession(String),
     Logout(String),
@@ -1028,11 +1145,13 @@ pub(super) enum Command {
         session: String,
         credential: Credential,
         replacement: String,
+        session_seconds: i64,
     },
     RequestReset(String),
     ResetPassword {
         token: String,
         replacement: String,
+        session_seconds: i64,
     },
     OAuthLogin {
         provider: Provider,
@@ -1040,6 +1159,7 @@ pub(super) enum Command {
         email: Option<String>,
         display_name: String,
         first_user: FirstUserTenant,
+        session_seconds: i64,
     },
     LinkIdentity {
         session: String,
@@ -1174,6 +1294,7 @@ fn create_session(
     mut user: User,
     provider: Provider,
     policy: AuthPolicy,
+    session_seconds: i64,
 ) -> Result<Outcome> {
     user.tenant_id = policy::tenant_for_authenticated_actor(tx, &user, policy)?;
     user.provider = provider;
@@ -1183,7 +1304,7 @@ fn create_session(
         params![
             crypto::digest(token.expose()),
             user.user_id,
-            timestamp(14 * 24 * 60 * 60),
+            timestamp(session_seconds),
             provider.name()
         ],
     )?;
@@ -1243,6 +1364,7 @@ pub(super) fn execute(
             display_name,
             hash,
             first_user,
+            session_seconds,
         } => {
             policy::registration_allowed(&tx, policy)?;
             ensure!(
@@ -1250,11 +1372,12 @@ pub(super) fn execute(
                 AuthFailure::DuplicateEmail
             );
             let user = create_user(&tx, Some(email), display_name, Some(hash), first_user)?;
-            create_session(&tx, user, Provider::Email, policy)?
+            create_session(&tx, user, Provider::Email, policy, session_seconds)?
         }
         Command::Login {
             credential,
             replacement,
+            session_seconds,
         } => {
             let current = by_id(&tx, &credential.user.user_id)?
                 .ok_or_else(|| anyhow!(AuthFailure::CredentialChanged))?;
@@ -1268,7 +1391,7 @@ pub(super) fn execute(
                     params![hash, current.user.user_id],
                 )?;
             }
-            create_session(&tx, current.user, Provider::Email, policy)?
+            create_session(&tx, current.user, Provider::Email, policy, session_seconds)?
         }
         Command::ResolveSession(token) => Outcome::User(
             session_user(&tx, &token)?
@@ -1291,6 +1414,7 @@ pub(super) fn execute(
             session,
             credential,
             replacement,
+            session_seconds,
         } => {
             let user = actor(&tx, &session)?;
             ensure!(
@@ -1303,7 +1427,7 @@ pub(super) fn execute(
             )?;
             ensure!(changed == 1, AuthFailure::CredentialChanged);
             invalidate(&tx, &user.user_id)?;
-            create_session(&tx, user, Provider::Email, policy)?
+            create_session(&tx, user, Provider::Email, policy, session_seconds)?
         }
         Command::RequestReset(email) => {
             if let Some(credential) = by_email(&tx, &email)? {
@@ -1318,7 +1442,11 @@ pub(super) fn execute(
                 Outcome::ResetToken(None)
             }
         }
-        Command::ResetPassword { token, replacement } => {
+        Command::ResetPassword {
+            token,
+            replacement,
+            session_seconds,
+        } => {
             let id: Option<String> = tx
                 .query_row(
                     "SELECT user_id FROM password_reset_tokens WHERE id=?1 AND expires_at>?2",
@@ -1338,7 +1466,7 @@ pub(super) fn execute(
                 let user = by_id(&tx, &id)?
                     .ok_or_else(|| anyhow!("Reset user missing"))?
                     .user;
-                create_session(&tx, user, Provider::Email, policy)?
+                create_session(&tx, user, Provider::Email, policy, session_seconds)?
             } else {
                 Outcome::Changed(false)
             }
@@ -1349,6 +1477,7 @@ pub(super) fn execute(
             email,
             display_name,
             first_user,
+            session_seconds,
         } => {
             let existing = match identity(&tx, provider, &provider_user_id)? {
                 Some(id) => by_id(&tx, &id)?,
@@ -1365,7 +1494,7 @@ pub(super) fn execute(
                 None => create_user(&tx, email, display_name, None, first_user)?,
             };
             link(&tx, &user.user_id, provider, &provider_user_id)?;
-            create_session(&tx, user, provider, policy)?
+            create_session(&tx, user, provider, policy, session_seconds)?
         }
         Command::LinkIdentity {
             session,
@@ -1404,6 +1533,55 @@ pub(crate) fn read_session_tenant(
         &actor(tx, &crypto::digest(secret.expose()))?,
         policy,
     )
+}
+
+pub(crate) fn resolve_stream_authority(
+    tx: &Transaction<'_>,
+    credential: &crate::jobs::Credential,
+    policy: AuthPolicy,
+    touch_key: bool,
+) -> Result<StreamAuthority> {
+    match credential {
+        crate::jobs::Credential::Session(secret) => {
+            ensure!(
+                !secret.expose().is_empty() && secret.expose().len() <= 4096,
+                AuthFailure::SessionRequired
+            );
+            let digest = crypto::digest(secret.expose());
+            let user = actor(tx, &digest)?;
+            let tenant = policy::tenant_for_authenticated_actor(tx, &user, policy)?;
+            let expires: String = tx.query_row(
+                "SELECT expires_at FROM sessions WHERE id=?1 AND expires_at>?2",
+                params![digest, timestamp(0)],
+                |row| row.get(0),
+            )?;
+            let expires_at = time::OffsetDateTime::parse(
+                &expires,
+                &time::format_description::well_known::Rfc3339,
+            )?
+            .unix_timestamp();
+            Ok(StreamAuthority {
+                tenant,
+                subject: format!("user:{}", user.user_id),
+                identity: StreamAuthorityIdentity::Session(digest),
+                expires_at: Some(expires_at),
+            })
+        }
+        crate::jobs::Credential::RoutedKey { tenant, key } => {
+            let authority = keys::stream_authority(tx, tenant, key, touch_key)?
+                .ok_or(AuthFailure::SessionRequired)?;
+            Ok(StreamAuthority {
+                tenant: authority.principal.tenant_id.clone(),
+                subject: format!("key:{}", authority.principal.key_id),
+                identity: StreamAuthorityIdentity::Key {
+                    tenant: authority.principal.tenant_id,
+                    key_id: authority.key_id,
+                },
+                expires_at: authority.expires_at,
+            })
+        }
+        crate::jobs::Credential::PhysicalOwner(_) => Err(anyhow!(AuthFailure::SessionRequired)),
+    }
 }
 pub(crate) fn read_key_tenant(
     tx: &Transaction<'_>,

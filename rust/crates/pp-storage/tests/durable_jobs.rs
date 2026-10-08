@@ -29,7 +29,7 @@ fn policy() -> AuthPolicy {
 fn fixture() -> (PathBuf, WriterOwner) {
     let path = directory();
     let (owner, ready) = WriterOwner::open(&path, Limits::default()).unwrap();
-    assert_eq!(ready.version, 38);
+    assert_eq!(ready.version, 39);
     (path, owner)
 }
 fn admission() -> WorkerAdmission {
@@ -1280,7 +1280,7 @@ fn ticket_t_28_claims_list_filters_pagination_and_history() {
 #[test]
 fn ticket_t_28_claims_schema35_corruption_and37_preserve_input_bytes() {
     for corruption in [
-        "UPDATE app_settings SET value='39' WHERE tenant_id='default' AND key='schema_version'",
+        "UPDATE app_settings SET value='40' WHERE tenant_id='default' AND key='schema_version'",
         "ALTER TABLE durable_jobs ADD COLUMN unintended TEXT",
         "UPDATE durable_jobs SET version=version+1",
     ] {
@@ -1409,7 +1409,7 @@ fn ticket_t_28_claims_schema35_migration_rollback_and_backup_restart() {
     let (path, owner) = fixture();
     owner.shutdown().unwrap();
     let fixture = Connection::open(path.join("print-partner.db")).unwrap();
-    fixture.execute_batch("DROP TRIGGER trg_plan_apply_admissions_immutable_delete; DROP TRIGGER trg_plan_apply_admissions_immutable_update; DROP TABLE plan_apply_admissions; DROP TABLE source_import_quota; DROP TABLE source_import_operations; DROP TABLE durable_job_reconciliations; DROP TABLE durable_job_history; DROP TABLE durable_job_keys; DROP TABLE durable_jobs; UPDATE app_settings SET value='34' WHERE tenant_id='default' AND key='schema_version'; CREATE TRIGGER reject_schema35 BEFORE UPDATE ON app_settings WHEN NEW.key='schema_version' AND NEW.value='35' BEGIN SELECT RAISE(ABORT,'fixture migration constraint'); END;").unwrap();
+    fixture.execute_batch("DROP TRIGGER trg_source_revision_observations_preclaim_cursor_insert; DROP TABLE source_preclaim_refusals; DROP TRIGGER trg_plan_apply_admissions_immutable_delete; DROP TRIGGER trg_plan_apply_admissions_immutable_update; DROP TABLE plan_apply_admissions; DROP TABLE source_import_quota; DROP TABLE source_import_operations; DROP TABLE durable_job_reconciliations; DROP TABLE durable_job_history; DROP TABLE durable_job_keys; DROP TABLE durable_jobs; UPDATE app_settings SET value='34' WHERE tenant_id='default' AND key='schema_version'; CREATE TRIGGER reject_schema35 BEFORE UPDATE ON app_settings WHEN NEW.key='schema_version' AND NEW.value='35' BEGIN SELECT RAISE(ABORT,'fixture migration constraint'); END;").unwrap();
     drop(fixture);
     assert!(WriterOwner::open(&path, Limits::default()).is_err());
     let raw = Connection::open(path.join("print-partner.db")).unwrap();
@@ -3983,6 +3983,68 @@ fn source(catalog: &pp_storage::catalog::SourceCatalogClient, name: &str) -> i64
         Outcome::Source(Some(source)) => source.id,
         _ => panic!("Source required"),
     }
+}
+
+#[test]
+fn rich_completed_result_survives_read_list_and_orderly_reopen() {
+    let (path, owner) = fixture();
+    let project_id = source(&owner.local_source_catalog(), "Rich result source") as u64;
+    let queued = enqueue(
+        &owner,
+        "rich-completed-result",
+        Payload::ExtractSourceDocs { project_id },
+    );
+    let worker = owner.job_worker(admission()).unwrap();
+    let ClaimedAttempt {
+        mut lease,
+        source_work,
+        ..
+    } = worker.claim().unwrap().unwrap();
+    let mut source_work = source_work.expect("Source work lease required");
+    source_work.release().unwrap();
+    let expected = CompletedResult::SourceDocuments(SourceDocumentsResult {
+        project_id,
+        extracted: 1,
+        errors: vec!["x".repeat(160 * 1024)],
+    });
+    worker
+        .update(
+            &mut lease,
+            WorkerOperation::FinishPublic {
+                artifact: None,
+                result: Box::new(expected.clone()),
+            },
+        )
+        .unwrap();
+
+    assert_eq!(
+        get(&owner, &queued.job_id).public_result,
+        Some(expected.clone())
+    );
+    let Outcome::PublicList(listed) =
+        call(&owner, UserOperation::ListRetained(Default::default())).unwrap()
+    else {
+        panic!("retained jobs expected")
+    };
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].job_id, queued.job_id);
+    assert_eq!(listed[0].result, Some(expected.clone()));
+    owner.shutdown().unwrap();
+
+    let owner = WriterOwner::open(&path, Limits::default()).unwrap().0;
+    assert_eq!(
+        get(&owner, &queued.job_id).public_result,
+        Some(expected.clone())
+    );
+    let Outcome::PublicList(listed) =
+        call(&owner, UserOperation::ListRetained(Default::default())).unwrap()
+    else {
+        panic!("retained jobs expected")
+    };
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].job_id, queued.job_id);
+    assert_eq!(listed[0].result, Some(expected));
+    owner.shutdown().unwrap();
 }
 fn deletion(
     catalog: &pp_storage::catalog::SourceCatalogClient,

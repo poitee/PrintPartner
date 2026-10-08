@@ -9,9 +9,9 @@ use subtle::ConstantTimeEq;
 
 pub(crate) enum Action {
     List,
-    Create,
+    Create(Option<i64>),
     Revoke(String),
-    Rotate(String),
+    Rotate(String, Option<i64>),
 }
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -27,6 +27,11 @@ pub(super) struct ResolvedKeyReference {
     pub(super) principal: KeyPrincipal,
     pub(super) id: String,
     pub(super) hash: String,
+}
+pub(super) struct StreamKeyAuthority {
+    pub(super) principal: KeyPrincipal,
+    pub(super) key_id: String,
+    pub(super) expires_at: Option<i64>,
 }
 impl StoredKey {
     fn info(&self) -> KeyInfo {
@@ -100,7 +105,7 @@ fn save(tx: &Transaction<'_>, tenant: &str, keys: &[StoredKey]) -> Result<()> {
     tx.execute("INSERT INTO app_settings(tenant_id,key,value) VALUES(?1,'api_keys_v1',?2) ON CONFLICT(tenant_id,key) DO UPDATE SET value=excluded.value", params![tenant,value])?;
     Ok(())
 }
-fn create(keys: &mut Vec<StoredKey>) -> Result<Outcome> {
+fn create(keys: &mut Vec<StoredKey>, expires_after: Option<i64>) -> Result<Outcome> {
     ensure!(keys.len() < 4096, "API key collection too large");
     let raw = Secret(format!("ppk_{}", hex::encode(crypto::random::<32>()?)));
     let key = StoredKey {
@@ -108,7 +113,7 @@ fn create(keys: &mut Vec<StoredKey>) -> Result<Outcome> {
         key_hash: digest(raw.expose()),
         created_at: timestamp(0),
         last_used_at: None,
-        expires_at: None,
+        expires_at: expires_after.map(timestamp),
         is_active: true,
     };
     let info = key.info();
@@ -126,9 +131,9 @@ pub(super) fn manage(tx: &Transaction<'_>, tenant: &str, action: Action) -> Resu
                 LocalCommit::ReadOnly
             },
         },
-        Action::Create => {
+        Action::Create(expires_after) => {
             changed = true;
-            create(&mut keys)?
+            create(&mut keys, expires_after)?
         }
         Action::Revoke(id) => {
             let found = keys.iter_mut().find(|key| key.id == id);
@@ -146,11 +151,11 @@ pub(super) fn manage(tx: &Transaction<'_>, tenant: &str, action: Action) -> Resu
                 },
             }
         }
-        Action::Rotate(id) => {
+        Action::Rotate(id, expires_after) => {
             if let Some(key) = keys.iter_mut().find(|key| key.id == id) {
                 key.is_active = false;
                 changed = true;
-                create(&mut keys)?
+                create(&mut keys, expires_after)?
             } else {
                 Outcome::KeyChanged {
                     changed: false,
@@ -176,6 +181,56 @@ fn unexpired(expires: &Option<String>) -> bool {
                 .is_ok_and(|expiry| expiry > time::OffsetDateTime::now_utc())
         }
     }
+}
+
+fn expiry_seconds(expires: &Option<String>) -> Result<Option<i64>> {
+    expires
+        .as_ref()
+        .map(|value| {
+            time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339)
+                .map(|value| value.unix_timestamp())
+                .map_err(Into::into)
+        })
+        .transpose()
+}
+
+pub(super) fn stream_authority(
+    tx: &Transaction<'_>,
+    tenant: &str,
+    raw: &Secret,
+    touch: bool,
+) -> Result<Option<StreamKeyAuthority>> {
+    ensure!(
+        !tenant.is_empty() && tenant.len() <= 512 && raw.expose().len() <= 4096,
+        "Invalid key request"
+    );
+    let (mut keys, migrated) = load(tx, tenant)?;
+    let hash = digest(raw.expose());
+    let Some(key) = keys.iter_mut().find(|key| {
+        key.is_active
+            && unexpired(&key.expires_at)
+            && bool::from(key.key_hash.as_bytes().ct_eq(hash.as_bytes()))
+    }) else {
+        if migrated {
+            save(tx, tenant, &keys)?;
+        }
+        return Ok(None);
+    };
+    let authority = StreamKeyAuthority {
+        principal: KeyPrincipal {
+            tenant_id: tenant.to_owned(),
+            key_id: key.id.clone(),
+        },
+        key_id: key.id.clone(),
+        expires_at: expiry_seconds(&key.expires_at)?,
+    };
+    if touch {
+        key.last_used_at = Some(super::timestamp(0));
+    }
+    if migrated || touch {
+        save(tx, tenant, &keys)?;
+    }
+    Ok(Some(authority))
 }
 pub(super) fn resolve(tx: &Transaction<'_>, tenant: &str, raw: Secret) -> Result<Outcome> {
     resolve_ref(tx, tenant, &raw)

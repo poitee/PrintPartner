@@ -17,11 +17,15 @@ sha2.workspace = true
 hex.workspace = true
 base64 = "=0.22.1"
 getrandom = "=0.3.4"
+time = { version = "=0.3.55", features = ["parsing"] }
 reqwest = { version = "=0.13.5", default-features = false, features = ["rustls", "json", "form", "stream"] }
+futures-util = "=0.3.34"
 rustls = { version = "=0.23.45", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
 lettre = { version = "=0.11.23", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls", "aws-lc-rs", "webpki-roots"] }
 
 [dev-dependencies]
 tokio-rustls = { version = "=0.26.6", default-features = false, features = ["aws_lc_rs", "tls12"] }
 rusqlite.workspace = true
+http-body-util.workspace = true
 tower = { version = "=0.5.3", features = ["util"] }
+tokio-tungstenite = "=0.29.0"

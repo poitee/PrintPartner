@@ -22,6 +22,7 @@ fn ticket_t_59_catalog_private_full_queue_retains_unreleased_work() {
         job_admission: Mutex::new(None),
         import_epoch: std::sync::atomic::AtomicU64::new(0),
         import_quota: Mutex::new(None),
+        job_subscriptions: crate::jobs::JobSubscriptions::new(),
     });
     let readers = Arc::new(ReaderPool {
         state: Mutex::new(ReaderState {
@@ -362,7 +363,8 @@ fn captured_claim_validation_and_sql_abort_activate_no_source() {
         }
         let before = fixture.snapshot(&connection);
         let mut state = State::default();
-        let error = match jobs::execute(&mut connection, &mut state, command) {
+        let subscriptions = jobs::JobSubscriptions::new();
+        let error = match jobs::execute(&mut connection, &mut state, command, &subscriptions) {
             Err(error) => error,
             Ok(_) => panic!("invalid captured claim accepted"),
         };
@@ -380,9 +382,13 @@ fn captured_claim_validation_and_sql_abort_activate_no_source() {
             connection
                 .execute_batch("DROP TRIGGER capture_claim_abort")
                 .unwrap();
-            let jobs::Outcome::Claimed(Some(claim)) =
-                jobs::execute(&mut connection, &mut state, fixture.command()).unwrap()
-            else {
+            let jobs::Outcome::Claimed(Some(claim)) = jobs::execute(
+                &mut connection,
+                &mut state,
+                fixture.command(),
+                &subscriptions,
+            )
+            .unwrap() else {
                 panic!("claim after abort")
             };
             assert_eq!(claim.job.attempt, 1);
@@ -399,16 +405,26 @@ fn captured_claim_token_overflow_rolls_back_recovery_and_allows_sourceless_work(
     let fixture = CapturedClaimFixture::new();
     let mut connection = Connection::open(fixture.root.join("print-partner.db")).unwrap();
     let mut state = State::default();
-    let jobs::Outcome::Claimed(Some(old)) =
-        jobs::execute(&mut connection, &mut state, fixture.command()).unwrap()
-    else {
+    let subscriptions = jobs::JobSubscriptions::new();
+    let jobs::Outcome::Claimed(Some(old)) = jobs::execute(
+        &mut connection,
+        &mut state,
+        fixture.command(),
+        &subscriptions,
+    )
+    .unwrap() else {
         panic!("initial claim")
     };
     state.active.clear();
     state.next = u64::MAX;
     connection.execute("UPDATE durable_jobs SET lease_until=0,document=json_set(document,'$.lease_until',0) WHERE id=?1", [&fixture.operation.job_id]).unwrap();
     let before = fixture.snapshot(&connection);
-    let error = match jobs::execute(&mut connection, &mut state, fixture.command()) {
+    let error = match jobs::execute(
+        &mut connection,
+        &mut state,
+        fixture.command(),
+        &subscriptions,
+    ) {
         Err(error) => error,
         Ok(_) => panic!("overflow claim accepted"),
     };
@@ -459,6 +475,7 @@ fn captured_claim_token_overflow_rolls_back_recovery_and_allows_sourceless_work(
             policy: None,
             storage: fixture.owner.client(),
         },
+        &subscriptions,
     )
     .unwrap() else {
         panic!("Source-less claim must remain available")
