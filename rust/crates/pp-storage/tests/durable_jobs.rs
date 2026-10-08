@@ -3837,3 +3837,105 @@ fn integration_individual_uncertain_reservation_survives_restart_and_matching_su
     assert_eq!(deletion(&catalog, id), Deletion::Deleted { source_id: id });
     owner.shutdown().unwrap();
 }
+
+fn filename_payload(grouping: FilenameExport) -> Payload {
+    Payload::ExportStlPack {
+        profile_id: 1,
+        missing_only: false,
+        group_by: GroupBy::ColorDir,
+        unit_tokens: vec![],
+        filename_grouping: Some(grouping),
+    }
+}
+
+fn filename_definition() -> FilenameExport {
+    FilenameExport {
+        definition: FilenameGrouping {
+            name: "Print settings".into(),
+            rules: vec![FilenameRule {
+                suffix: "-A".into(),
+                group: "Aesthetic".into(),
+            }],
+            overrides: [("part.stl".into(), "Unassigned".into())].into(),
+        },
+        arrangement: Arrangement::Group,
+        group: Some("Aesthetic".into()),
+        role: Some("Structural".into()),
+    }
+}
+
+#[test]
+fn filename_grouping_rejects_padded_reserved_labels_before_admission() {
+    let (_path, owner) = fixture();
+    for (index, reserved) in [" conflict ", "\tUnassigned\n", "\u{feff}CONFLICT\u{feff}"]
+        .into_iter()
+        .enumerate()
+    {
+        let mut grouping = filename_definition();
+        grouping.definition.rules[0].group = reserved.into();
+        assert!(call(
+            &owner,
+            UserOperation::Enqueue {
+                key: format!("reserved-rule-{index}"),
+                payload_version: 1,
+                payload: filename_payload(grouping),
+            },
+        )
+        .is_err());
+    }
+    for (index, reserved) in [" conflict ", "\u{feff}Conflict\t"].into_iter().enumerate() {
+        let mut grouping = filename_definition();
+        grouping.definition.overrides.insert("part.stl".into(), reserved.into());
+        assert!(call(
+            &owner,
+            UserOperation::Enqueue {
+                key: format!("reserved-override-{index}"),
+                payload_version: 1,
+                payload: filename_payload(grouping),
+            },
+        )
+        .is_err());
+    }
+    let mut grouping = filename_definition();
+    grouping.definition.rules[0].group = "\u{0085}Aesthetic\u{0085}".into();
+    assert!(call(
+        &owner,
+        UserOperation::Enqueue {
+            key: "non-js-whitespace".into(),
+            payload_version: 1,
+            payload: filename_payload(grouping),
+        },
+    )
+    .is_err());
+    owner.shutdown().unwrap();
+}
+
+#[test]
+fn filename_grouping_normalizes_before_hashing_and_persistence() {
+    let (path, owner) = fixture();
+    let canonical = filename_definition();
+    let mut padded = canonical.clone();
+    padded.definition.name = "\u{feff} Print settings \t".into();
+    padded.definition.rules[0].suffix = "\n -A \r".into();
+    padded.definition.rules[0].group = "\u{00a0} Aesthetic \u{feff}".into();
+    padded.definition.overrides.insert("part.stl".into(), " Unassigned ".into());
+    padded.group = Some(" Aesthetic ".into());
+    padded.role = Some("\tStructural\n".into());
+    let first = enqueue(&owner, "normalized-filename", filename_payload(padded));
+    assert_eq!(first.payload, filename_payload(canonical.clone()));
+    let same = enqueue(&owner, "normalized-filename", filename_payload(canonical.clone()));
+    assert_eq!(first.job_id, same.job_id);
+    assert_eq!(first.state_version, same.state_version);
+    let mut bounded = canonical.clone();
+    bounded.definition.rules[0].group = format!(" {} ", "A".repeat(80));
+    bounded.group = None;
+    let bounded = enqueue(&owner, "trim-before-length", filename_payload(bounded));
+    let Payload::ExportStlPack { filename_grouping: Some(grouping), .. } = bounded.payload else {
+        panic!("Expected filename grouping");
+    };
+    assert_eq!(grouping.definition.rules[0].group, "A".repeat(80));
+    owner.shutdown().unwrap();
+    let (owner, _) = WriterOwner::open(&path, Limits::default()).unwrap();
+    assert_eq!(get(&owner, &first.job_id).payload, filename_payload(canonical));
+    owner.shutdown().unwrap();
+}

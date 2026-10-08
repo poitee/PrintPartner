@@ -265,7 +265,7 @@ impl AtomicJobClient {
     pub fn submit(
         &self,
         credential: Credential,
-        operation: UserOperation,
+        mut operation: UserOperation,
         cancelled: &AtomicBool,
         wait: Duration,
     ) -> Result<Pending> {
@@ -273,10 +273,17 @@ impl AtomicJobClient {
             key,
             payload_version,
             payload,
-        } = &operation
+        } = &mut operation
         {
             model::text(key, 128)?;
             ensure!(*payload_version == 1, "Unsupported payload version");
+            if let Payload::ExportStlPack {
+                filename_grouping: Some(grouping),
+                ..
+            } = payload
+            {
+                grouping.normalize();
+            }
             payload.validate()?;
         }
         submit(
