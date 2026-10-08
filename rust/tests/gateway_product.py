@@ -1,5 +1,6 @@
 import hashlib
 import http.client
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -251,12 +252,26 @@ def main():
                        "drain_write_status": 503, "node_reaped": True}
         else:
             live_ws = hold_websocket()
+            marker = json.loads((fixture / "data/.desktop-owner.json").read_text())
+            runtime_dir = Path(marker["runtime_dir"])
+            child_pid = state["compat"]["pid"]
             request("/auth/logout", "POST", allowed=(200,))
             assert live_ws.wait(timeout=3) == 0, live_ws.stderr.read()
             assert json.loads(live_ws.stdout.readline())["closed"] is True
-            request("/printers", allowed=(401,))
+            process.wait(timeout=17)
+            assert process.returncode == 0, process.stderr.read()
+            assert not Path(f"/proc/{child_pid}").exists(), "Node child was not reaped"
+            assert not (fixture / "data/.desktop-owner.json").exists(), "owner marker survived shutdown"
+            assert not runtime_dir.exists(), "runtime directory survived shutdown"
+            with (fixture / "data/.desktop.lock").open("rb") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(lock, fcntl.LOCK_UN)
             websocket["logout_closed_active_upgrade"] = True
-            websocket["revoked_session_status"] = 401
+            websocket["logout_runtime_exit"] = 0
+            websocket["logout_node_reaped"] = True
+            websocket["logout_marker_removed"] = True
+            websocket["logout_runtime_removed"] = True
+            websocket["logout_storage_lock_reacquired"] = True
         result = {"proof_class": "headless_unsigned", "case": "gateway_product_coverage", "origin": origin,
                   "websocket": websocket, "streams": streams, "providers": provider_receipts, "aliases": aliases, "encoded_source": {"original_uri": original_uri, "canonical_target": encoded_path.replace("%c3%a8", "%C3%A8") + "?proof=%2f", "decoded_path": "pièce test.stl", "mesh_sha256": hashlib.sha256(mesh).hexdigest(), "preview_sha256": hashlib.sha256(preview).hexdigest(), "rejected_targets": rejected_targets},
                   "fixture": str(fixture), "source_id": source["id"], "build_id": build, "part_id": accepted_part["id"],
