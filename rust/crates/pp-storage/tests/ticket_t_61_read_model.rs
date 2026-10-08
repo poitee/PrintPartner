@@ -578,3 +578,119 @@ fn ticket_t_61_read_model_workflow_rejects_unsafe_numbers() {
     facts.production.sending_jobs = 1;
     assert!(workflow::resolve(&facts).is_err());
 }
+
+#[test]
+fn read_model_folder_rule_without_functional_class_matches_catalog_digest() {
+    use pp_storage::catalog::{FolderRule, NamingCommand, NamingProfile, Outcome, Request, RoleId};
+    let f = Fixture::new();
+    let catalog = f.owner.as_ref().unwrap().local_source_catalog();
+    let mut profile = NamingProfile::default();
+    profile.folder_rules.push(FolderRule {
+        path_contains: "frame".into(),
+        role_id: RoleId::Primary,
+        functional_class: None,
+    });
+    catalog.execute(Request::SaveGlobalNaming { profile }).unwrap();
+    catalog
+        .execute(Request::SaveNaming {
+            id: 1,
+            settings: NamingCommand::UseDefaults,
+        })
+        .unwrap();
+    let db = f.raw();
+    let set: i64 = db
+        .query_row(
+            "SELECT input_set_id FROM plan_accepted_input_sets WHERE profile_id=1 AND tenant_id='default'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let sources = db
+        .prepare("SELECT source_id FROM plan_revision_inputs WHERE input_set_id=?1 ORDER BY source_id")
+        .unwrap()
+        .query_map([set], |r| r.get::<_, i64>(0))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    drop(db);
+    let naming = sources
+        .into_iter()
+        .map(|id| {
+            let Outcome::Data(value) = catalog.execute(Request::GetNaming { id }).unwrap() else {
+                panic!("naming")
+            };
+            if id == 1 {
+                assert!(value["effective"]["folder_rules"][0].get("functional_class").is_none());
+            }
+            (id, value["effective_digest"].as_str().unwrap().to_owned())
+        })
+        .collect::<Vec<_>>();
+    let mut db = f.raw();
+    let tx = db.transaction().unwrap();
+    for (source, digest) in naming {
+        assert_eq!(
+            tx.execute(
+                "UPDATE plan_revision_inputs SET effective_naming_digest=?1 WHERE input_set_id=?2 AND source_id=?3",
+                params![digest, set, source],
+            )
+            .unwrap(),
+            1
+        );
+    }
+    let inputs = tx
+        .prepare("SELECT source_id,source_layer,layer_order,tracking_kind,source_revision_id,manifest_digest,effective_naming_digest FROM plan_revision_inputs WHERE input_set_id=?1 ORDER BY source_id")
+        .unwrap()
+        .query_map([set], |r| {
+            Ok(json!({
+                "source_id": r.get::<_, i64>(0)?,
+                "source_layer": r.get::<_, String>(1)?,
+                "layer_order": r.get::<_, i64>(2)?,
+                "tracking_kind": r.get::<_, String>(3)?,
+                "source_revision_id": r.get::<_, Option<i64>>(4)?,
+                "manifest_digest": r.get::<_, Option<String>>(5)?,
+                "effective_naming_digest": r.get::<_, String>(6)?,
+            }))
+        })
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    let canonical = json!({"version": 2, "inputs": inputs}).to_string();
+    tx.execute(
+        "UPDATE plan_revision_input_sets SET input_set_digest=?1 WHERE id=?2",
+        params![hex::encode(Sha256::digest(canonical.as_bytes())), set],
+    )
+    .unwrap();
+    tx.commit().unwrap();
+    drop(db);
+    let before = f.dump();
+    let read = f.read();
+    assert!(matches!(read.builds[0].accepted, AcceptedRead::Ready { .. }));
+    let context = read.builds[0].context.as_ref().unwrap();
+    assert_eq!(context.profile_summary["summary"]["header"]["freshness"]["status"], "current");
+    assert_eq!(before, f.dump());
+}
+
+#[test]
+fn read_model_plan_configuration_freshness_does_not_make_sources_stale() {
+    use pp_storage::catalog::Request;
+    let f = Fixture::new();
+    f.owner
+        .as_ref()
+        .unwrap()
+        .local_source_catalog()
+        .execute(Request::SaveImportRules {
+            id: 1,
+            rules: vec!["STLs".into()],
+        })
+        .unwrap();
+    let read = f.read();
+    assert!(matches!(read.builds[0].accepted, AcceptedRead::Ready { .. }));
+    let context = read.builds[0].context.as_ref().unwrap();
+    let freshness = &context.profile_summary["summary"]["header"]["freshness"];
+    assert_eq!(freshness["status"], "stale");
+    assert!(freshness["reasons"].as_array().unwrap().iter().any(|r| r["kind"] == "plan_configuration_changed"));
+    let workspace = &context.workflow["workspace"];
+    assert_eq!(workspace["sources"]["kind"], "ready");
+    assert!(workspace["sources"]["attached_count"].as_u64().unwrap() > 0);
+    assert_eq!(workspace["stages"][0]["status"]["kind"], "complete");
+}

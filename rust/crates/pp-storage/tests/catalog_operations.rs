@@ -865,3 +865,111 @@ fn ticket_t_59_catalog_regex_complexity_rejection_preserves_writer_and_settings(
     assert_eq!(database_bytes(&fixture.0), bytes);
     owner.shutdown().unwrap();
 }
+
+#[test]
+fn catalog_key_audit_commits_protected_deletion_outcomes_and_rolls_back_errors() {
+    for case in [
+        "not_found",
+        "active_work",
+        "retained_history",
+        "referenced",
+        "invalid_update",
+    ] {
+        let fixture = Fixture::new();
+        let owner = fixture.open();
+        let (tenant, token) = actor(&owner, "audit@example.test");
+        let client = session(&owner, &token);
+        let id = create(&client, "Protected");
+        let before = value(&client, Request::Get { id });
+        let mut lease = None;
+        match case {
+            "active_work" => {
+                lease = Some(
+                    client
+                        .begin_work(id, &AtomicBool::new(false), Duration::from_secs(5))
+                        .unwrap(),
+                );
+            }
+            "retained_history" => {
+                fixture.sql().execute(
+                    "INSERT INTO source_revisions(tenant_id,project_id,upstream_revision_key,manifest_digest,snapshot_locator,synced_at) VALUES(?1,?2,'audit-revision',?3,?4,'2026-01-01T00:00:00.000Z')",
+                    rusqlite::params![tenant, id, "a".repeat(64), format!("{id}/revisions/audit")],
+                ).unwrap();
+            }
+            "referenced" => {
+                let db = fixture.sql();
+                db.execute(
+                    "INSERT INTO build_profiles(tenant_id,name) VALUES(?1,'References Source')",
+                    [&tenant],
+                )
+                .unwrap();
+                let profile = db.last_insert_rowid();
+                db.execute(
+                    "INSERT INTO profile_layers(tenant_id,profile_id,layer_type,project_id) VALUES(?1,?2,'base',?3)",
+                    rusqlite::params![tenant, profile, id],
+                )
+                .unwrap();
+            }
+            _ => {}
+        }
+        let auth = owner.auth(FirstUserTenant::NewUser);
+        let AuthOutcome::KeyCreated { info, key } = auth
+            .submit(
+                AuthRequest::CreateKey {
+                    session: Secret::new(token.clone()),
+                },
+                Arc::new(AtomicBool::new(false)),
+                Duration::from_secs(5),
+            )
+            .unwrap()
+            .recv()
+            .unwrap()
+            .unwrap()
+        else {
+            panic!("key")
+        };
+        assert!(info.last_used_at.is_none());
+        let keyed = owner.source_catalog(Credentials::Key {
+            tenant_id: tenant,
+            key,
+        });
+        if case == "invalid_update" {
+            assert!(
+                keyed
+                    .execute(Request::Update {
+                        id,
+                        patch: SourcePatch {
+                            name: Some(" ".into()),
+                            ..Default::default()
+                        },
+                    })
+                    .is_err()
+            );
+        } else {
+            let target = if case == "not_found" { id + 1000 } else { id };
+            assert_eq!(value(&keyed, Request::Delete { id: target })["kind"], case);
+        }
+        assert_eq!(value(&client, Request::Get { id }), before);
+        let AuthOutcome::Keys { keys } = auth
+            .submit(
+                AuthRequest::ListKeys {
+                    session: Secret::new(token),
+                },
+                Arc::new(AtomicBool::new(false)),
+                Duration::from_secs(5),
+            )
+            .unwrap()
+            .recv()
+            .unwrap()
+            .unwrap()
+        else {
+            panic!("keys")
+        };
+        let used = keys.into_iter().find(|key| key.id == info.id).unwrap();
+        assert_eq!(used.last_used_at.is_some(), case != "invalid_update", "{case}");
+        if let Some(lease) = &mut lease {
+            lease.release().unwrap();
+        }
+        owner.shutdown().unwrap();
+    }
+}

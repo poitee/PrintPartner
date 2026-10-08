@@ -72,7 +72,6 @@ struct Slug {
 struct Folder {
     path_contains: String,
     role_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
     functional_class: Option<String>,
 }
 #[derive(Deserialize, Serialize, Clone)]
@@ -599,15 +598,6 @@ pub(super) fn capture(
         .remove("profileId");
     let sources = if attached == 0 {
         Sources::Empty
-    } else if freshness["status"] == "stale" {
-        Sources::Stale {
-            attached_count: attached,
-            issue_count: (freshness["reasons"].as_array().map_or(0, Vec::len)
-                + freshness["untracked_sources"]
-                    .as_array()
-                    .map_or(0, Vec::len))
-            .max(1) as u64,
-        }
     } else {
         Sources::Ready {
             attached_count: attached,

@@ -408,17 +408,7 @@ pub(super) fn execute(
         Command::Run { authority, request } => {
             let tenant = authority.tenant(&tx)?;
             let outcome = run(&tx, state, &tenant, *request)?;
-            if !matches!(
-                &outcome,
-                Outcome::Deletion(
-                    Deletion::NotFound
-                        | Deletion::RetainedHistory
-                        | Deletion::Referenced
-                        | Deletion::ActiveWork
-                )
-            ) {
-                tx.commit()?;
-            }
+            tx.commit()?;
             Ok(Reply::Outcome(outcome))
         }
     }
