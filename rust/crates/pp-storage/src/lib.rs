@@ -147,6 +147,7 @@ struct Shared {
     job_admission: Mutex<Option<Arc<jobs::WorkerAdmission>>>,
     import_epoch: AtomicU64,
     import_quota: Mutex<Option<u64>>,
+    job_subscriptions: jobs::JobSubscriptions,
 }
 fn push_auth_ready(pending: &mut VecDeque<Envelope>, work: auth::WriterWork) {
     if let Some(Envelope::AuthReady { ready, .. }) = pending
@@ -489,6 +490,7 @@ impl WriterOwner {
             job_admission: Mutex::new(None),
             import_epoch: AtomicU64::new(0),
             import_quota: Mutex::new(None),
+            job_subscriptions: jobs::JobSubscriptions::new(),
         });
         let worker = shared.clone();
         let mut catalog_state = catalog::State::new(lease.data_dir().to_owned());
@@ -569,7 +571,11 @@ impl WriterOwner {
                     }
                     Envelope::Uploads { command, reply } => {
                         let changes_accounting = command.changes_accounting();
+                        jobs::begin_observation_collection();
                         let result = uploads::execute(&mut connection, &catalog_state, command);
+                        worker
+                            .job_subscriptions
+                            .publish(jobs::finish_observation_collection());
                         if result.is_ok() && changes_accounting {
                             worker.import_epoch.fetch_add(1, Ordering::AcqRel);
                         }
@@ -594,8 +600,12 @@ impl WriterOwner {
                         let _ = reply.send(result);
                     }
                     Envelope::Jobs { command, reply } => {
-                        let _ =
-                            reply.send(jobs::execute(&mut connection, &mut catalog_state, command));
+                        let _ = reply.send(jobs::execute(
+                            &mut connection,
+                            &mut catalog_state,
+                            command,
+                            &worker.job_subscriptions,
+                        ));
                     }
                     Envelope::NativeSecrets { command, reply } => {
                         let _ =
@@ -660,6 +670,7 @@ impl WriterOwner {
         Ok(())
     }
     fn close(&mut self) -> Result<()> {
+        self.client.shared.job_subscriptions.stop_owner();
         {
             let mut queue = self
                 .client

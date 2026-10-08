@@ -1,3 +1,4 @@
+pub mod application_host;
 pub mod draft_observations;
 pub mod native_secrets;
 pub mod profile_interpreter;

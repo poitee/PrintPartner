@@ -1,5 +1,6 @@
 mod filename;
 mod model;
+mod subscriptions;
 use crate::{
     Envelope, SettingsClient, WriterOwner,
     auth::{self, AuthPolicy, Secret},
@@ -17,6 +18,10 @@ use std::{
     },
     time::{Duration, Instant},
 };
+pub(crate) use subscriptions::JobSubscriptions;
+pub use subscriptions::{
+    FrameAdmission, JobSubscription, NonblockingSend, PreparedEvent, PreparedFrame, StreamClose,
+};
 
 pub struct PhysicalOwner {
     pub(crate) storage: Arc<crate::Shared>,
@@ -30,6 +35,22 @@ pub enum Credential {
 pub struct AtomicJobClient {
     storage: SettingsClient,
     policy: AuthPolicy,
+}
+#[derive(Clone)]
+pub struct RetainedJobs {
+    snapshots: Arc<[JobSnapshot]>,
+}
+impl RetainedJobs {
+    pub fn iter(&self) -> std::slice::Iter<'_, JobSnapshot> {
+        self.snapshots.iter()
+    }
+}
+impl std::ops::Deref for RetainedJobs {
+    type Target = [JobSnapshot];
+
+    fn deref(&self) -> &Self::Target {
+        &self.snapshots
+    }
 }
 #[derive(Clone)]
 pub struct ServerWorkerClient {
@@ -99,7 +120,11 @@ pub enum UserOperation {
     Get {
         job_id: String,
     },
+    GetPublic {
+        job_id: String,
+    },
     List(JobListQuery),
+    ListRetained(LegacyListFilter),
     History {
         job_id: String,
         before_version: Option<i64>,
@@ -129,11 +154,18 @@ pub enum WorkerOperation {
     BeginEffect(EffectIntent),
     ConfirmEffect(ResultArtifact),
     Finish(Option<ResultArtifact>),
+    FinishPublic {
+        artifact: Option<ResultArtifact>,
+        result: Box<CompletedResult>,
+    },
     Fail,
 }
 pub enum Outcome {
     Job(JobRecord, LocalCommit),
     List(Vec<JobRecord>),
+    PublicList(RetainedJobs),
+    PublicJob(JobSnapshot),
+    Observed(JobSubscription),
     History(Vec<HistoryEntry>),
     Reconciliations(Vec<ReconciliationRecord>),
     Claimed(Option<ClaimedAttempt>),
@@ -151,6 +183,12 @@ enum TransactionDecision {
     },
     Refused(CommittedRefusal),
     ErrorAfterCommit(anyhow::Error),
+    Observation {
+        credential: Credential,
+        authority: auth::StreamAuthority,
+        policy: AuthPolicy,
+        snapshot: JobSnapshot,
+    },
 }
 
 struct CommittedRefusal {
@@ -220,6 +258,11 @@ pub(crate) enum Command {
         policy: AuthPolicy,
         reply: mpsc::Sender<ValidatedAuthority>,
     },
+    Observe {
+        credential: Credential,
+        policy: AuthPolicy,
+        job_id: String,
+    },
     Retain {
         per_tenant: usize,
         global: usize,
@@ -237,6 +280,26 @@ pub(crate) struct CapturePreflightRequest {
 pub enum JobFailure {
     CommitUnknown,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JobAccessFailure {
+    NotFound,
+    InternalOnly,
+    Capacity,
+    Stopped,
+}
+
+impl std::fmt::Display for JobAccessFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::NotFound | Self::InternalOnly => "Job not found",
+            Self::Capacity => "Job stream capacity reached",
+            Self::Stopped => "Jobs owner stopped",
+        })
+    }
+}
+
+impl std::error::Error for JobAccessFailure {}
 impl std::fmt::Display for JobFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("Job commit outcome unknown")
@@ -397,6 +460,72 @@ impl AtomicJobClient {
             wait,
         )
     }
+
+    pub fn read_public(
+        &self,
+        credential: Credential,
+        job_id: String,
+        cancelled: &AtomicBool,
+        wait: Duration,
+    ) -> Result<JobSnapshot> {
+        match self
+            .submit(
+                credential,
+                UserOperation::GetPublic { job_id },
+                cancelled,
+                wait,
+            )?
+            .receive()?
+        {
+            Outcome::PublicJob(snapshot) => Ok(snapshot),
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn list_retained(
+        &self,
+        credential: Credential,
+        filter: LegacyListFilter,
+        cancelled: &AtomicBool,
+        wait: Duration,
+    ) -> Result<RetainedJobs> {
+        match self
+            .submit(
+                credential,
+                UserOperation::ListRetained(filter),
+                cancelled,
+                wait,
+            )?
+            .receive()?
+        {
+            Outcome::PublicList(snapshots) => Ok(snapshots),
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn subscribe(
+        &self,
+        credential: Credential,
+        job_id: String,
+        cancelled: &AtomicBool,
+        wait: Duration,
+    ) -> Result<JobSubscription> {
+        match submit(
+            &self.storage,
+            Command::Observe {
+                credential,
+                policy: self.policy,
+                job_id,
+            },
+            cancelled,
+            wait,
+        )?
+        .receive()?
+        {
+            Outcome::Observed(subscription) => Ok(subscription),
+            _ => unreachable!(),
+        }
+    }
 }
 impl ServerWorkerClient {
     pub fn begin_source_work(
@@ -481,6 +610,24 @@ fn random() -> String {
 fn now() -> i64 {
     time::OffsetDateTime::now_utc().unix_timestamp()
 }
+pub(crate) fn begin_observation_collection() {
+    subscriptions::begin_collection();
+}
+
+pub(crate) fn mark_observation_committed() {
+    subscriptions::mark_committed();
+}
+
+pub(crate) fn finish_observation_collection() -> Vec<subscriptions::CommittedJobView> {
+    subscriptions::finish_collection()
+}
+
+pub(crate) fn revalidate_subscriptions(
+    connection: &mut Connection,
+    subscriptions: &subscriptions::JobSubscriptions,
+) -> Result<()> {
+    subscriptions.revalidate(connection)
+}
 fn encode(job: &JobRecord) -> Result<String> {
     let mut document = serde_json::to_value(job)?;
     document["_attempt_worker"] = serde_json::to_value(&job.worker)?;
@@ -509,7 +656,6 @@ fn encode(job: &JobRecord) -> Result<String> {
     Ok(serde_json::to_string(&document)?)
 }
 fn decode(document: &str) -> Result<JobRecord> {
-    ensure!(document.len() <= 131072, "Durable job document too large");
     let value: serde_json::Value = serde_json::from_str(document)?;
     let mut job: JobRecord = serde_json::from_value(value.clone())?;
     job.fence = serde_json::from_value(
@@ -574,8 +720,8 @@ pub(crate) fn load_for_capture_claim(tx: &Transaction<'_>, id: &str) -> Result<J
     load(tx, id)?.ok_or_else(|| anyhow!("Captured import job requires repair"))
 }
 fn owned(tx: &Transaction<'_>, id: &str, tenant: &str) -> Result<JobRecord> {
-    let record = load(tx, id)?.ok_or_else(|| anyhow!("Job not found"))?;
-    ensure!(record.tenant == tenant, "Job not found");
+    let record = load(tx, id)?.ok_or_else(|| anyhow!(JobAccessFailure::NotFound))?;
+    ensure!(record.tenant == tenant, JobAccessFailure::NotFound);
     Ok(record)
 }
 fn retained_owned(tx: &Transaction<'_>, id: &str, tenant: &str) -> Result<JobRecord> {
@@ -667,6 +813,7 @@ pub(crate) fn save(tx: &Transaction<'_>, job: &mut JobRecord, event: &str) -> Re
             event
         ],
     )?;
+    subscriptions::record(job);
     Ok(())
 }
 fn recover_in(tx: &Transaction<'_>, all: bool) -> Result<()> {
@@ -706,7 +853,9 @@ pub(crate) fn execute(
     connection: &mut Connection,
     catalog_state: &mut crate::catalog::State,
     command: Command,
+    subscriptions: &subscriptions::JobSubscriptions,
 ) -> Result<Outcome> {
+    subscriptions::begin_collection();
     let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let decision = match command {
         Command::User {
@@ -817,6 +966,21 @@ pub(crate) fn execute(
                 reply,
             }
         }
+        Command::Observe {
+            credential,
+            policy,
+            job_id,
+        } => {
+            let authority = auth::resolve_stream_authority(&tx, &credential, policy, true)?;
+            let job = owned(&tx, &job_id, &authority.tenant)?;
+            ensure!(!job.internal_only(), JobAccessFailure::NotFound);
+            TransactionDecision::Observation {
+                credential,
+                authority,
+                policy,
+                snapshot: job.snapshot(),
+            }
+        }
         Command::Retain { per_tenant, global } => {
             TransactionDecision::Outcome(Outcome::Retained(prune(&tx, per_tenant, global)?))
         }
@@ -826,8 +990,13 @@ pub(crate) fn execute(
     {
         prune(&tx, 1000, 10000)?;
     }
-    tx.commit()
-        .map_err(|_| anyhow!(JobFailure::CommitUnknown))?;
+    if tx.commit().is_err() {
+        subscriptions::finish_collection();
+        subscriptions.stop();
+        return Err(anyhow!(JobFailure::CommitUnknown));
+    }
+    subscriptions::mark_committed();
+    subscriptions.publish(subscriptions::finish_collection());
     match decision {
         TransactionDecision::Outcome(outcome) => Ok(outcome),
         TransactionDecision::Claimed(plan) => {
@@ -844,6 +1013,14 @@ pub(crate) fn execute(
             Err(failure.into())
         }
         TransactionDecision::ErrorAfterCommit(error) => Err(error),
+        TransactionDecision::Observation {
+            credential,
+            authority,
+            policy,
+            snapshot,
+        } => subscriptions
+            .register(credential, authority, policy, snapshot)
+            .map(Outcome::Observed),
     }
 }
 fn prune(tx: &Transaction<'_>, per_tenant: usize, global: usize) -> Result<usize> {
@@ -941,6 +1118,7 @@ pub(crate) fn user_with_authority(
                 progress: None,
                 effects: vec![],
                 result: None,
+                public_result: None,
                 recovery: None,
                 authority_disposition: if authority.is_some() {
                     AuthorityDisposition::Original
@@ -963,6 +1141,11 @@ pub(crate) fn user_with_authority(
             owned(tx, &job_id, tenant)?,
             LocalCommit::ReadOnly,
         )),
+        UserOperation::GetPublic { job_id } => {
+            let job = owned(tx, &job_id, tenant)?;
+            ensure!(!job.internal_only(), JobAccessFailure::NotFound);
+            Ok(Outcome::PublicJob(job.snapshot()))
+        }
         UserOperation::List(query) => {
             prune(tx, 1000, 10000)?;
             ensure!((1..=200).contains(&query.limit), "Invalid list limit");
@@ -985,6 +1168,58 @@ pub(crate) fn user_with_authority(
             Ok(Outcome::List(
                 documents.iter().map(|s| decode(s)).collect::<Result<_>>()?,
             ))
+        }
+        UserOperation::ListRetained(filter) => {
+            prune(tx, 1000, 10000)?;
+            let rows = tx
+                .prepare("SELECT rowid,document FROM durable_jobs WHERE tenant=?1")?
+                .query_map([tenant], |row| {
+                    Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            let mut jobs = rows
+                .into_iter()
+                .map(|(sequence, document)| Ok((sequence, decode(&document)?)))
+                .collect::<Result<Vec<_>>>()?;
+            jobs.retain(|(_, job)| {
+                if job.internal_only() {
+                    return false;
+                }
+                let snapshot = job.snapshot();
+                let status_matches = match &filter.status {
+                    LegacyStatusFilter::Any => true,
+                    LegacyStatusFilter::Exact(status) => snapshot.status == status,
+                    LegacyStatusFilter::NoMatch => false,
+                };
+                let since_matches = filter.since_millis.is_none_or(|cutoff| {
+                    job.finished_at
+                        .unwrap_or(job.updated_at)
+                        .saturating_mul(1000)
+                        >= cutoff
+                });
+                let profile_matches = match filter.profile {
+                    LegacyProfileFilter::Any => true,
+                    LegacyProfileFilter::Exact(profile) => {
+                        job.payload.profile_id() == Some(profile)
+                    }
+                    LegacyProfileFilter::NoMatch => false,
+                };
+                status_matches && since_matches && profile_matches
+            });
+            jobs.sort_by(|left, right| {
+                let left_time = left.1.finished_at.unwrap_or(left.1.updated_at);
+                let right_time = right.1.finished_at.unwrap_or(right.1.updated_at);
+                right_time
+                    .cmp(&left_time)
+                    .then_with(|| left.0.cmp(&right.0))
+            });
+            Ok(Outcome::PublicList(RetainedJobs {
+                snapshots: jobs
+                    .into_iter()
+                    .map(|(_, job)| job.snapshot())
+                    .collect::<Vec<_>>()
+                    .into(),
+            }))
         }
         UserOperation::History {
             job_id,
@@ -1760,6 +1995,31 @@ fn advance(
             job.state = PersistentState::Succeeded;
             "finished"
         }
+        WorkerOperation::FinishPublic { artifact, result } => {
+            ensure!(
+                job.state == PersistentState::Running && !job.cancel_requested,
+                "Job cannot finish"
+            );
+            ensure!(result.kind() == job.kind, "Completed result kind mismatch");
+            if let Some(artifact) = &artifact {
+                artifact.validate()?;
+                ensure!(
+                    job.effects
+                        .iter()
+                        .any(|effect| effect.confirmed && effect.receipt.as_ref() == Some(artifact)),
+                    "Result requires confirmed artifact receipt"
+                );
+            }
+            ensure!(
+                completion_proven(&job, artifact.as_ref()),
+                "Completion requires effect receipts"
+            );
+            job.result = artifact;
+            job.public_result = Some(*result);
+            job.progress = Some(100);
+            job.state = PersistentState::Succeeded;
+            "finished"
+        }
         WorkerOperation::Fail => {
             if job.state == PersistentState::EffectAdmitted {
                 job.state = PersistentState::ReconciliationRequired;
@@ -2202,6 +2462,93 @@ mod authority_lease_tests {
             per_resource: 2,
             lease_seconds: 60,
         }
+    }
+
+    #[test]
+    fn rich_completed_result_round_trips_through_durable_codec() {
+        let mut job = JobRecord {
+            job_id: "rich-result".into(),
+            tenant: "default".into(),
+            kind: JobKind::ExtractSourceDocs,
+            payload_version: 1,
+            payload: Payload::ExtractSourceDocs { project_id: 1 },
+            state: PersistentState::Succeeded,
+            state_version: 1,
+            attempt: 1,
+            generation: 1,
+            lease_until: None,
+            created_at: 1,
+            updated_at: 2,
+            finished_at: Some(2),
+            cancel_requested: false,
+            progress: Some(100),
+            effects: vec![],
+            result: None,
+            public_result: None,
+            recovery: None,
+            authority: None,
+            authority_disposition: AuthorityDisposition::PhysicalOwner,
+            authority_refusal: None,
+            fence: None,
+            worker: None,
+        };
+        job.public_result = Some(CompletedResult::SourceDocuments(SourceDocumentsResult {
+            project_id: 1,
+            extracted: 1,
+            errors: vec!["x".repeat(160 * 1024)],
+        }));
+        job.validate_state().unwrap();
+
+        let document = encode(&job).unwrap();
+        assert!(document.len() > 131_072 && document.len() < 200 * 1024);
+        let decoded = decode(&document).unwrap();
+        assert_eq!(decoded.public_result, job.public_result);
+    }
+
+    #[test]
+    fn snapshot_defaults_progress_only_for_queued_jobs() {
+        let mut job = JobRecord {
+            job_id: "progress-projection".into(),
+            tenant: "default".into(),
+            kind: JobKind::CheckSourceUpdates,
+            payload_version: 1,
+            payload: Payload::CheckSourceUpdates {},
+            state: PersistentState::Queued,
+            state_version: 1,
+            attempt: 0,
+            generation: 0,
+            lease_until: None,
+            created_at: 1,
+            updated_at: 1,
+            finished_at: None,
+            cancel_requested: false,
+            progress: None,
+            effects: vec![],
+            result: None,
+            public_result: None,
+            recovery: None,
+            authority: None,
+            authority_disposition: AuthorityDisposition::PhysicalOwner,
+            authority_refusal: None,
+            fence: None,
+            worker: None,
+        };
+
+        assert_eq!(job.snapshot().progress, Some(0));
+        for state in [
+            PersistentState::Running,
+            PersistentState::Failed,
+            PersistentState::Cancelled,
+        ] {
+            job.state = state;
+            assert_eq!(job.snapshot().progress, None, "{state:?}");
+        }
+        job.state = PersistentState::Running;
+        job.progress = Some(37);
+        assert_eq!(job.snapshot().progress, Some(37));
+        job.state = PersistentState::Succeeded;
+        job.progress = Some(100);
+        assert_eq!(job.snapshot().progress, Some(100));
     }
 
     #[test]

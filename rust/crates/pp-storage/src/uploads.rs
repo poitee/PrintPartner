@@ -1466,6 +1466,7 @@ pub(crate) fn execute(
                     store(&tx, &op)?;
                     tx.commit()
                         .map_err(|_| anyhow!(jobs::JobFailure::CommitUnknown))?;
+                    jobs::mark_observation_committed();
                 }
                 return Err(error);
             }
@@ -1552,6 +1553,7 @@ pub(crate) fn execute(
         }
     };
     tx.commit()?;
+    jobs::mark_observation_committed();
     Ok(operation)
 }
 fn record_observation(
