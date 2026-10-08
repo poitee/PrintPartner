@@ -152,6 +152,7 @@ pub struct CoreRuntime {
     origin: String,
     handle: CoreHandle,
     launch: Option<LaunchTarget>,
+    shutdown_requested: pp_gateway::ShutdownRequested,
 }
 struct Resources {
     gateway: Gateway,
@@ -275,6 +276,8 @@ impl CoreRuntime {
                             return;
                         }
                     };
+                    let requested_by_gateway = resources.gateway.shutdown_requested();
+                    let requested_by_adapter = requested_by_gateway.clone();
                     let public = resources.gateway.take_launch_target().map(|launch| {
                         (
                             resources.gateway.origin().to_owned(),
@@ -282,17 +285,22 @@ impl CoreRuntime {
                                 compat: resources.supervisor.handle.clone(),
                             },
                             launch,
+                            requested_by_adapter,
                         )
                     });
                     if started.send(public).is_ok() {
-                        let _ = stopped.await;
+                        tokio::select! {
+                            _ = stopped => {}
+                            _ = requested_by_gateway.wait() => {}
+                        }
                     }
                     let receipt = stop_resources(resources).await;
                     let _ = completed.send(receipt);
                 });
             })
             .context("Core owner thread unavailable")?;
-        let (origin, handle, launch) = startup.await.context("Core owner startup failed")??;
+        let (origin, handle, launch, shutdown_requested) =
+            startup.await.context("Core owner startup failed")??;
         Ok(Self {
             stop: Some(stop),
             completion: Some(completion),
@@ -300,6 +308,7 @@ impl CoreRuntime {
             origin,
             handle,
             launch: Some(launch),
+            shutdown_requested,
         })
     }
     pub fn origin(&self) -> &str {
@@ -312,6 +321,10 @@ impl CoreRuntime {
         self.launch
             .take()
             .context("Launch target already transferred")
+    }
+    pub fn shutdown_requested(&self) -> impl std::future::Future<Output = ()> + Send + 'static {
+        let requested = self.shutdown_requested.clone();
+        async move { requested.wait().await }
     }
     pub async fn shutdown(mut self) -> ShutdownReceipt {
         if let Some(stop) = self.stop.take() {
