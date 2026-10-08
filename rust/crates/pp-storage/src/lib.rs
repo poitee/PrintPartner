@@ -6,6 +6,7 @@ pub mod jobs;
 pub mod lease;
 pub mod native_secrets;
 pub mod plan_publication;
+pub mod profiles;
 pub use working_drafts::save as plan_save;
 pub mod read_model;
 pub mod required_units;

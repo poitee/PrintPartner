@@ -1,0 +1,64 @@
+{
+  "profiles": [
+    {
+      "id": 105,
+      "kind": "printer",
+      "name": "10",
+      "slicerFormat": "bambu",
+      "materialType": null,
+      "syncedFromSlicerVersion": null,
+      "lastSyncedAt": "2026-10-05T17:00:05.000Z",
+      "importedAt": "2026-10-05T16:00:05.000Z"
+    },
+    {
+      "id": 306,
+      "kind": "filament",
+      "name": "2",
+      "slicerFormat": null,
+      "materialType": "PETG",
+      "syncedFromSlicerVersion": "2.1",
+      "lastSyncedAt": null,
+      "importedAt": "2026-10-05T16:00:06.000Z"
+    },
+    {
+      "id": 204,
+      "kind": "process",
+      "name": "a",
+      "slicerFormat": "orca",
+      "materialType": null,
+      "syncedFromSlicerVersion": null,
+      "lastSyncedAt": null,
+      "importedAt": "2026-10-05T16:00:04.000Z"
+    },
+    {
+      "id": 303,
+      "kind": "filament",
+      "name": "Á",
+      "slicerFormat": null,
+      "materialType": "PLA",
+      "syncedFromSlicerVersion": "2.0",
+      "lastSyncedAt": "2026-10-05T17:00:03.000Z",
+      "importedAt": "2026-10-05T16:00:03.000Z"
+    },
+    {
+      "id": 101,
+      "kind": "printer",
+      "name": "Same",
+      "slicerFormat": "orca",
+      "materialType": null,
+      "syncedFromSlicerVersion": "1.9",
+      "lastSyncedAt": "2026-10-05T17:00:01.000Z",
+      "importedAt": "2026-10-05T16:00:01.000Z"
+    },
+    {
+      "id": 202,
+      "kind": "process",
+      "name": "Same",
+      "slicerFormat": "prusa",
+      "materialType": null,
+      "syncedFromSlicerVersion": null,
+      "lastSyncedAt": null,
+      "importedAt": "2026-10-05T16:00:02.000Z"
+    }
+  ]
+}

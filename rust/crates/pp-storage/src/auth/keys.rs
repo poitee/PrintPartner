@@ -1,4 +1,4 @@
-use super::{KeyInfo, KeyPrincipal, LocalCommit, Outcome, Secret, crypto, timestamp};
+use super::{AuthFailure, KeyInfo, KeyPrincipal, LocalCommit, Outcome, Secret, crypto, timestamp};
 use anyhow::{Result, anyhow, ensure};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use hmac::{Hmac, Mac};
@@ -278,7 +278,7 @@ pub(super) fn read_tenant(tx: &Transaction<'_>, tenant: &str, secret: &Secret) -
             && tenant.len() <= 512
             && !secret.expose().is_empty()
             && secret.expose().len() <= 4096,
-        "Authentication required"
+        AuthFailure::SessionRequired
     );
     let bytes: i64 = tx.query_row("SELECT coalesce(sum(length(cast(value AS blob))),0) FROM app_settings WHERE key='api_keys_v1' AND tenant_id=?1", [tenant], |r| r.get(0))?;
     ensure!(bytes <= 1024 * 1024, "API key collection too large");
@@ -288,7 +288,7 @@ pub(super) fn read_tenant(tx: &Transaction<'_>, tenant: &str, secret: &Secret) -
         keys.iter().any(|key| key.is_active
             && unexpired(&key.expires_at)
             && bool::from(key.key_hash.as_bytes().ct_eq(hash.as_bytes()))),
-        "Authentication required"
+        AuthFailure::SessionRequired
     );
     Ok(tenant.to_owned())
 }
