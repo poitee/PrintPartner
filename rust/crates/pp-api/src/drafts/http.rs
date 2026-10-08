@@ -2,9 +2,9 @@ use super::ReviewObservationPort;
 use anyhow::{Result, ensure};
 use axum::{
     Json, Router,
-    body::to_bytes,
+    body::{Body, to_bytes},
     extract::{ConnectInfo, State},
-    http::{HeaderMap, Method, StatusCode},
+    http::{HeaderMap, Method, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, patch, post, put},
@@ -13,10 +13,7 @@ use pp_contracts::{
     autosave::{PositiveId, SavePlanChoicesRequest, WireInteger},
     publication::{ApplyRequest, Outcome as PublicationOutcome},
     reconciliation::{Outcome as ReconciliationOutcome, ReconciliationRequest},
-    working_drafts::{
-        ExpectedDraft, Outcome as DraftOutcome, RebaseRequest, RecomputeOptions, Request,
-        Transition,
-    },
+    working_drafts::{ExpectedDraft, RebaseRequest, RecomputeOptions, Request, Transition},
 };
 use pp_storage::{
     auth::AuthFailure,
@@ -27,7 +24,9 @@ use pp_storage::{
     },
     read_model::{AcceptedRead, Credential, ReadClient, views},
     required_units::AdmissionFailure,
-    working_drafts::{Failure as DraftFailure, WorkingDraftClient},
+    working_drafts::{
+        DraftIdentity, Failure as DraftFailure, Outcome as DraftOutcome, WorkingDraftClient,
+    },
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -738,7 +737,7 @@ async fn save_call(
         }
     };
     let read = AcceptedRead::Ready { snapshot };
-    let review = match views::review(&read, true, &observations, filament.as_ref()) {
+    let review = match views::review_json(&read, true, &observations, filament.as_ref()) {
         Ok(value) => present_review(ReviewContract::Current, value),
         Err(_) => {
             return save_uncertain(
@@ -749,10 +748,7 @@ async fn save_call(
             );
         }
     };
-    json_response(
-        200,
-        &json!({"receipt":receipt,"review":review,"profile":profile_summary,"closed_draft_ids":closed_draft_ids}),
-    )
+    save_success_response(&receipt, review, &profile_summary, &closed_draft_ids)
 }
 
 fn save_uncertain(
@@ -840,8 +836,8 @@ async fn review_call(
                 available_input_roots: Default::default(),
                 media_by_part_id: Default::default(),
             };
-            match views::review(&read, include_excluded, &observations, &views::CatalogOnly) {
-                Ok(value) => json_response(200, &present_review(contract, value)),
+            match views::review_json(&read, include_excluded, &observations, &views::CatalogOnly) {
+                Ok(value) => json_bytes_response(200, present_review(contract, value).into_bytes()),
                 Err(_) => failure(500, "Accepted Plan data is inconsistent"),
             }
         }
@@ -864,15 +860,18 @@ async fn review_call(
                 Err(_) => return failure(500, "Accepted Plan review observation failed"),
             };
             let read = AcceptedRead::Ready { snapshot };
-            match views::review(&read, include_excluded, &observations, filament.as_ref()) {
-                Ok(value) => json_response(200, &present_review(contract, value)),
+            match views::review_json(&read, include_excluded, &observations, filament.as_ref()) {
+                Ok(value) => json_bytes_response(200, present_review(contract, value).into_bytes()),
                 Err(_) => failure(500, "Accepted Plan data is inconsistent"),
             }
         }
     }
 }
 
-fn present_review(contract: ReviewContract, value: Value) -> Value {
+fn present_review(
+    contract: ReviewContract,
+    value: views::ProjectReviewJsonBody,
+) -> views::ProjectReviewJsonBody {
     match contract {
         ReviewContract::Current | ReviewContract::LegacyV1 => value,
     }
@@ -1059,13 +1058,7 @@ fn draft_outcome(
     match outcome {
         DraftOutcome::Service { outcome, .. } => reconciliation_failure(outcome, None),
         DraftOutcome::Listed { drafts } if matches!(presentation, DraftPresentation::List) => {
-            let Some(drafts) = drafts
-                .iter()
-                .map(draft_identity)
-                .collect::<Option<Vec<_>>>()
-            else {
-                return failure(500, "Plan draft data is inconsistent");
-            };
+            let drafts = drafts.iter().map(draft_identity).collect::<Vec<_>>();
             json_response(200, &json!({"profile_id":profile,"drafts":drafts}))
         }
         DraftOutcome::Workspace { workspace }
@@ -1076,10 +1069,7 @@ fn draft_outcome(
         DraftOutcome::Transitioned { draft }
             if matches!(presentation, DraftPresentation::Transition) =>
         {
-            match draft_identity(&draft) {
-                Some(value) => json_response(200, &value),
-                None => failure(500, "Plan draft data is inconsistent"),
-            }
+            json_response(200, &draft_identity(draft.identity()))
         }
         DraftOutcome::NotFound => match presentation {
             DraftPresentation::List => {
@@ -1108,12 +1098,14 @@ fn draft_outcome(
         DraftOutcome::BaseUnchanged => {
             coded_failure(409, "Plan draft update failed", "base_unchanged", json!({}))
         }
-        DraftOutcome::MergeConflicts { conflicts } => coded_failure(
-            422,
-            "Plan draft update failed",
-            "merge_conflicts",
-            json!({"conflicts":conflicts}),
-        ),
+        DraftOutcome::MergeConflicts { conflicts } => {
+            let mut bytes = b"{\"conflicts\":".to_vec();
+            bytes.extend_from_slice(&conflicts.into_json_body().into_bytes());
+            bytes.extend_from_slice(
+                b",\"detail\":\"Plan draft update failed\",\"code\":\"merge_conflicts\"}",
+            );
+            json_bytes_response(422, bytes)
+        }
         DraftOutcome::NotAbandoned { .. } | DraftOutcome::NotAllowed { .. } => {
             coded_failure(409, "Plan draft update failed", "not_open", json!({}))
         }
@@ -1130,28 +1122,8 @@ fn draft_outcome(
     }
 }
 
-fn draft_identity(draft: &Value) -> Option<Value> {
-    let id = draft.get("id")?.as_u64()?;
-    let state = draft.get("state")?.as_str()?;
-    let lifecycle = draft.get("lifecycleVersion")?.as_u64()?;
-    let digest = draft.get("snapshotDigest")?.as_str()?;
-    let base_revision = draft.get("baseRevisionId")?;
-    let base_version = draft.get("basePlanVersion")?.as_u64()?;
-    if id == 0
-        || !matches!(state, "open" | "abandoned" | "consumed")
-        || digest.len() != 64
-        || !digest.bytes().all(|byte| byte.is_ascii_hexdigit())
-        || !(base_revision.is_null() || base_revision.as_u64().is_some_and(|value| value > 0))
-    {
-        return None;
-    }
-    Some(json!({
-        "draft_id":id,
-        "state":state,
-        "lifecycle_version":lifecycle,
-        "snapshot_digest":digest,
-        "base":{"revision_id":base_revision,"plan_version":base_version},
-    }))
+fn draft_identity(identity: &DraftIdentity) -> Value {
+    json!({"draft_id":identity.draft_id(),"state":identity.state().as_str(),"lifecycle_version":identity.lifecycle_version(),"snapshot_digest":identity.snapshot_digest(),"base":{"revision_id":identity.base().revision_id(),"plan_version":identity.base().plan_version()}})
 }
 
 fn reconciliation_failure(outcome: ReconciliationOutcome, save_detail: Option<&str>) -> Response {
@@ -1372,6 +1344,32 @@ fn coded_failure(status: u16, detail: &str, code: &str, extra: Value) -> Respons
     body.insert("code".into(), json!(code));
     json_response(status, &Value::Object(body))
 }
+fn json_bytes_response(status: u16, bytes: Vec<u8>) -> Response {
+    Response::builder()
+        .status(StatusCode::from_u16(status).expect("status"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(bytes))
+        .expect("review response")
+}
+
+fn save_success_response(
+    receipt: &impl serde::Serialize,
+    review: views::ProjectReviewJsonBody,
+    profile: &Value,
+    closed_draft_ids: &[PositiveId],
+) -> Response {
+    let mut output = b"{\"receipt\":".to_vec();
+    output.extend_from_slice(&serde_json::to_vec(receipt).expect("Save receipt"));
+    output.extend_from_slice(b",\"review\":");
+    output.extend_from_slice(&review.into_bytes());
+    output.extend_from_slice(b",\"profile\":");
+    output.extend_from_slice(&serde_json::to_vec(profile).expect("profile summary"));
+    output.extend_from_slice(b",\"closed_draft_ids\":");
+    output.extend_from_slice(&serde_json::to_vec(closed_draft_ids).expect("closed Draft IDs"));
+    output.push(b'}');
+    json_bytes_response(200, output)
+}
+
 fn json_response(status: u16, value: &impl serde::Serialize) -> Response {
     (StatusCode::from_u16(status).expect("status"), Json(value)).into_response()
 }

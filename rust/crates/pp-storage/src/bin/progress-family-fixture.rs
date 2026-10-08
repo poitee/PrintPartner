@@ -238,7 +238,7 @@ fn main() -> Result<()> {
     owner.shutdown()?;
     let (owner, _) = WriterOwner::open(directory, Limits::default())?;
     ensure!(
-        serde_json::to_value(snapshot(&owner)?)? == serde_json::to_value(&progressed)?,
+        snapshot(&owner)?.into_json_body().into_bytes() == progressed.into_json_body().into_bytes(),
         "Progress changed on reopen"
     );
     ensure!(

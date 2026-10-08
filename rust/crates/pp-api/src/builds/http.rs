@@ -1,9 +1,9 @@
 use anyhow::{Result, ensure};
 use axum::{
     Json, Router,
-    body::to_bytes,
+    body::{Body, to_bytes},
     extract::{ConnectInfo, State},
-    http::{HeaderMap, Method, StatusCode},
+    http::{HeaderMap, Method, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post, put},
@@ -21,9 +21,10 @@ use pp_storage::{
     build_graph::{
         AcceptedProgress as DomainProgress,
         AcceptedProgressUnavailable as DomainProgressUnavailable, BuildCommand, BuildGraphClient,
-        BuildOutcome, Failure as BuildFailure, PlanFreshness as DomainFreshness,
-        PlanStaleReason as DomainStaleReason, PlanUntrackedReason as DomainUntrackedReason,
-        ProfileLayer as DomainLayer, ProfileSummary as DomainSummary,
+        BuildOutcome, Failure as BuildFailure, ManifestOptionsCommand,
+        PlanFreshness as DomainFreshness, PlanStaleReason as DomainStaleReason,
+        PlanUntrackedReason as DomainUntrackedReason, ProfileLayer as DomainLayer,
+        ProfileSummary as DomainSummary,
     },
     read_model::Credential,
 };
@@ -143,16 +144,27 @@ pub fn build_router(config: BuildHttpConfig, client: BuildGraphClient) -> Router
         admission: Arc::new(tokio::sync::Semaphore::new(64)),
         waiters: Arc::new(tokio::sync::Semaphore::new(64)),
     };
+    let manifest_routes = Router::new()
+        .route(
+            "/plans/{id}/kit-manifest",
+            get(handle).head(handle).put(handle),
+        )
+        .route(
+            "/plans/{id}/plan-manifest-builder",
+            get(handle).head(handle),
+        );
     let routes = Router::new()
         .route("/plans", get(handle).head(handle).post(handle))
         .route("/plans/{id}", get(handle).head(handle).delete(handle))
         .route("/plans/{id}/touch", post(handle))
         .route("/plans/{id}/layers", get(handle).head(handle).post(handle))
         .route("/plans/{id}/layers/base", put(handle))
-        .route("/plans/{id}/layers/{layer_id}", put(handle).delete(handle));
+        .route("/plans/{id}/layers/{layer_id}", put(handle).delete(handle))
+        .merge(manifest_routes.clone());
     Router::new()
         .merge(routes.clone())
         .nest("/api/v2", routes)
+        .nest("/api/v1", manifest_routes)
         .layer(middleware::from_fn_with_state(app.clone(), guard))
         .with_state(app)
 }
@@ -205,9 +217,15 @@ async fn handle(State(app): State<App>, request: axum::extract::Request) -> Resp
         .uri()
         .path()
         .strip_prefix("/api/v2")
+        .or_else(|| request.uri().path().strip_prefix("/api/v1"))
         .unwrap_or(request.uri().path())
         .to_owned();
-    let bytes = match to_bytes(request.into_body(), app.config.body_limit).await {
+    let body_limit = if path.ends_with("/kit-manifest") {
+        8 * 1024 * 1024
+    } else {
+        app.config.body_limit
+    };
+    let bytes = match to_bytes(request.into_body(), body_limit).await {
         Ok(bytes) => bytes,
         Err(_) => return failure(413, "Request body too large"),
     };
@@ -269,6 +287,20 @@ fn command(
         return Err(Box::new(failure(400, "Request is invalid")));
     };
     match (method, parts.as_slice()) {
+        (&Method::GET | &Method::HEAD, ["plans", _, "kit-manifest"]) => {
+            Ok(BuildCommand::Manifest(ManifestOptionsCommand::ReadKit {
+                build,
+            }))
+        }
+        (&Method::PUT, ["plans", _, "kit-manifest"]) => {
+            Ok(BuildCommand::Manifest(ManifestOptionsCommand::SaveKit {
+                build,
+                request: bytes.to_vec(),
+            }))
+        }
+        (&Method::GET | &Method::HEAD, ["plans", _, "plan-manifest-builder"]) => Ok(
+            BuildCommand::Manifest(ManifestOptionsCommand::ReadBuilder { build }),
+        ),
         (&Method::GET | &Method::HEAD, ["plans", _]) => Ok(BuildCommand::Read { build }),
         (&Method::DELETE, ["plans", _]) => Ok(BuildCommand::Delete { build }),
         (&Method::POST, ["plans", _, "touch"]) => Ok(BuildCommand::Touch { build }),
@@ -361,6 +393,10 @@ fn principal(headers: &HeaderMap, tenant: &str) -> Option<Principal> {
 
 fn present(method: &Method, path: &str, outcome: BuildOutcome) -> Response {
     match outcome {
+        BuildOutcome::Manifest(outcome) => {
+            let (status, body) = super::manifest_options::present(outcome);
+            manifest_json_response(status, body, *method == Method::HEAD)
+        }
         BuildOutcome::Listed { profiles } => json_response(
             200,
             &json!({"profiles":profiles.into_iter().map(profile).collect::<Vec<_>>() }),
@@ -566,6 +602,17 @@ fn coded_failure(status: u16, detail: &str, code: &str) -> Response {
 
 fn json_response(status: u16, value: &impl serde::Serialize) -> Response {
     (StatusCode::from_u16(status).expect("status"), Json(value)).into_response()
+}
+
+fn manifest_json_response(status: u16, body: Vec<u8>, head: bool) -> Response {
+    let length = body.len();
+    Response::builder()
+        .status(StatusCode::from_u16(status).expect("status"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::CONTENT_LENGTH, length)
+        .header(header::CACHE_CONTROL, "private, no-store")
+        .body(Body::from(if head { Vec::new() } else { body }))
+        .expect("manifest response")
 }
 
 fn failure(status: u16, detail: &str) -> Response {

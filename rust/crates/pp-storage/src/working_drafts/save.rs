@@ -56,7 +56,7 @@ pub(crate) struct Command {
     repos: std::path::PathBuf,
     cancelled: Arc<AtomicBool>,
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug)]
 pub struct SavedAuthority {
     pub snapshot: Box<crate::read_model::Snapshot>,
     pub context: crate::read_model::CapturedContext,
@@ -83,8 +83,7 @@ pub enum Refusal {
         outcome: pp_contracts::publication::Outcome,
     },
 }
-#[derive(Debug, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[derive(Debug)]
 pub enum Outcome {
     Saved {
         receipt: ApplyPlanDraftReceipt,
@@ -94,6 +93,42 @@ pub enum Outcome {
     Refused {
         reason: Refusal,
     },
+}
+pub struct SaveOutcomeJsonBody(Vec<u8>);
+impl SaveOutcomeJsonBody {
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.0
+    }
+}
+impl Outcome {
+    pub fn into_json_body(self) -> SaveOutcomeJsonBody {
+        let bytes = match self {
+            Self::Saved {
+                receipt,
+                closed_draft_ids,
+                authority,
+            } => {
+                let mut output = b"{\"kind\":\"saved\",\"receipt\":".to_vec();
+                output.extend_from_slice(&serde_json::to_vec(&receipt).expect("scalar receipt"));
+                output.extend_from_slice(b",\"closed_draft_ids\":");
+                output
+                    .extend_from_slice(&serde_json::to_vec(&closed_draft_ids).expect("scalar IDs"));
+                output.extend_from_slice(b",\"authority\":{\"snapshot\":");
+                output.extend_from_slice(&authority.snapshot.into_json_body().into_bytes());
+                output.extend_from_slice(b",\"context\":");
+                output.extend_from_slice(
+                    &serde_json::to_vec(&authority.context).expect("scalar context"),
+                );
+                output.extend_from_slice(b"}}");
+                output
+            }
+            Self::Refused { reason } => {
+                serde_json::to_vec(&serde_json::json!({"kind":"refused","reason":reason}))
+                    .expect("scalar refusal")
+            }
+        };
+        SaveOutcomeJsonBody(bytes)
+    }
 }
 #[derive(Debug)]
 pub struct CommittedSaveCaptureFailure {
@@ -255,7 +290,10 @@ fn normalized(value: &str) -> String {
         .trim_matches('/')
         .into()
 }
-fn choices(parts: &mut [Value], changes: &[PlanChoice]) -> Result<Option<Refusal>> {
+fn choices(
+    parts: &mut [crate::manifest_text::DraftPart],
+    changes: &[PlanChoice],
+) -> Result<Option<Refusal>> {
     let mut by_key: HashMap<String, Vec<usize>> = HashMap::new();
     let mut by_layer: HashMap<(Option<String>, String), Vec<usize>> = HashMap::new();
     let mut by_path: HashMap<String, Vec<usize>> = HashMap::new();

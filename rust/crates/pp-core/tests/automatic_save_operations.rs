@@ -6,6 +6,7 @@ use pp_storage::{
     Limits, WriterOwner,
     auth::{self, Secret},
     jobs,
+    plan_publication::Outcome as PublicationOutcome,
     plan_save::{Outcome, PlanSaveClient, SaveCommand},
     read_model::Credential,
     working_drafts::{Outcome as DraftOutcome, Request},
@@ -167,8 +168,13 @@ fn fixture() -> (PathBuf, WriterOwner, String, Value) {
     else {
         panic!("draft")
     };
-    let p = &draft["parts"][0];
-    let request = json!({"expected_base":{"revision_id":null,"plan_version":0},"expected_draft":{"draft_id":1,"state":"open","lifecycle_version":draft["lifecycleVersion"],"snapshot_digest":draft["snapshotDigest"],"base":{"revision_id":null,"plan_version":0}},"remap_checkoff_links":false,"decisions":[{"kind":"set_quantity_override","target":{"part_key":p["partKey"],"relative_path":p["relativePath"],"source_layer":p["sourceLayer"]},"value":2}]});
+    let setup = rusqlite::Connection::open_with_flags(
+        root.join("print-partner.db"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    let (part_key,relative_path,source_layer):(String,String,Option<String>)=setup.query_row("SELECT part_key,relative_path,source_layer FROM plan_draft_parts WHERE draft_id=? ORDER BY id LIMIT 1",[draft.identity().draft_id().get() as i64],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?))).unwrap();
+    let request = json!({"expected_base":{"revision_id":null,"plan_version":0},"expected_draft":{"draft_id":1,"state":"open","lifecycle_version":draft.identity().lifecycle_version(),"snapshot_digest":draft.identity().snapshot_digest(),"base":{"revision_id":null,"plan_version":0}},"remap_checkoff_links":false,"decisions":[{"kind":"set_quantity_override","target":{"part_key":part_key,"relative_path":relative_path,"source_layer":source_layer},"value":2}]});
     (root, owner, token.expose().into(), request)
 }
 #[test]
@@ -333,10 +339,15 @@ fn save_issued_auth_replay_reopen_key_audit_and_job_refusal_preserve_graphs() {
     let mut blocked = second.clone();
     blocked["expected_base"] = json!({"revision_id":2,"plan_version":2});
     let before = graph(&root);
-    let refused =
-        serde_json::to_value(save(&client, session(&token), "blocked-job", &blocked).unwrap())
-            .unwrap();
-    assert_eq!(refused["reason"]["outcome"]["kind"], "execution_conflict");
+    let refused = save(&client, session(&token), "blocked-job", &blocked).unwrap();
+    assert!(matches!(
+        refused,
+        Outcome::Refused {
+            reason: pp_storage::plan_save::Refusal::Publication {
+                outcome: PublicationOutcome::ExecutionConflict { .. }
+            }
+        }
+    ));
     assert_eq!(graph(&root), before);
     auth_call(
         &owner,

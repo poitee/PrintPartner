@@ -1,4 +1,6 @@
 use super::*;
+use crate::manifest_text::DraftPart;
+use crate::required_units::part_rows;
 use required_units::model::{INPUT_FIELDS, PART_FIELDS, js_cmp, project};
 use std::collections::HashSet;
 
@@ -7,7 +9,7 @@ pub(super) fn read(
     tenant: &str,
     profile: &Value,
     d: &Draft,
-) -> Result<Value> {
+) -> Result<DraftDiff> {
     let saved = snapshot(d)?;
     let mut inputs = Vec::new();
     let mut parts = Vec::new();
@@ -34,7 +36,7 @@ pub(super) fn read(
             })
             .collect();
         }
-        parts = rows(
+        parts = part_rows(
             tx,
             "SELECT * FROM plan_revision_parts WHERE tenant_id=? AND revision_id=?",
             &[&tenant, &id],
@@ -42,16 +44,10 @@ pub(super) fn read(
         required_units::normalize_parts(&mut parts)?;
         parts = parts
             .iter()
-            .map(|row| {
-                let mut p = project(row, &["id"]);
-                for f in PART_FIELDS {
-                    p[*f] = row[*f].clone();
-                }
-                p
-            })
+            .map(|part| part.projected(&[vec!["id"], PART_FIELDS.to_vec()].concat()))
             .collect();
     }
-    let after_inputs = saved["inputs"]
+    let after_inputs = saved.model.ordinary["inputs"]
         .as_array()
         .ok_or_else(|| anyhow!("Invalid inputs"))?;
     let mut added_inputs: Vec<_> = after_inputs
@@ -94,10 +90,7 @@ pub(super) fn read(
     let mut linked = HashSet::new();
     let mut added = Vec::new();
     let mut changed = Vec::new();
-    for after in saved["parts"]
-        .as_array()
-        .ok_or_else(|| anyhow!("Invalid Parts"))?
-    {
+    for after in &saved.model.parts {
         let before = parts.iter().find(|before| {
             !after["baseRevisionPartId"].is_null() && before["id"] == after["baseRevisionPartId"]
         });
@@ -105,25 +98,118 @@ pub(super) fn read(
             linked.insert(num(before, "id")?);
             let fields: Vec<_> = PART_FIELDS
                 .iter()
-                .filter(|f| before[**f] != after[**f])
+                .filter(|f| !before.same_field(after, f))
                 .copied()
                 .collect();
             if !fields.is_empty() {
-                changed.push(json!({"before":before,"after":after,"fields":fields}));
+                changed.push(ChangedPart {
+                    before: before.clone(),
+                    after: after.clone(),
+                    fields,
+                });
             }
         } else {
-            added.push(json!({"after":after}));
+            added.push(after.clone());
         }
     }
     let mut removed: Vec<_> = parts
         .into_iter()
         .filter(|before| !linked.contains(&before["id"].as_i64().unwrap_or_default()))
-        .map(|before| json!({"before":before}))
         .collect();
-    added.sort_by(|a, b| js_cmp(&a["after"], &b["after"]));
-    changed.sort_by(|a, b| js_cmp(&a["after"], &b["after"]));
-    removed.sort_by(|a, b| js_cmp(&a["before"], &b["before"]));
-    Ok(
-        json!({"baseRevisionId":d.header["baseRevisionId"],"basePlanVersion":d.header["basePlanVersion"],"baseIsCurrent":profile["acceptedPlanRevisionId"] == d.header["baseRevisionId"] && profile["acceptedPlanVersion"] == d.header["basePlanVersion"],"inputs":{"added":added_inputs,"removed":removed_inputs,"changed":changed_inputs},"parts":{"added":added,"removed":removed,"changed":changed}}),
-    )
+    added.sort_by(|a, b| {
+        crate::manifest_text::compare_json_bytes(
+            &a.json_fields(&snapshot_part_fields(), false),
+            &b.json_fields(&snapshot_part_fields(), false),
+        )
+    });
+    changed.sort_by(|a, b| {
+        crate::manifest_text::compare_json_bytes(
+            &a.after.json_fields(&snapshot_part_fields(), false),
+            &b.after.json_fields(&snapshot_part_fields(), false),
+        )
+    });
+    removed
+        .sort_by(|a, b| crate::manifest_text::compare_json_bytes(&before_json(a), &before_json(b)));
+    let ordinary = json!({"baseRevisionId":d.header["baseRevisionId"],"basePlanVersion":d.header["basePlanVersion"],"baseIsCurrent":profile["acceptedPlanRevisionId"] == d.header["baseRevisionId"] && profile["acceptedPlanVersion"] == d.header["basePlanVersion"],"inputs":{"added":added_inputs,"removed":removed_inputs,"changed":changed_inputs}});
+    Ok(DraftDiff(DraftDiffModel {
+        ordinary,
+        added,
+        removed,
+        changed,
+    }))
+}
+
+#[derive(Debug)]
+struct ChangedPart {
+    before: DraftPart,
+    after: DraftPart,
+    fields: Vec<&'static str>,
+}
+#[derive(Debug)]
+pub(super) struct DraftDiffModel {
+    ordinary: Value,
+    added: Vec<DraftPart>,
+    removed: Vec<DraftPart>,
+    changed: Vec<ChangedPart>,
+}
+fn before_json(part: &DraftPart) -> Vec<u8> {
+    part.json_fields(&[vec!["id"], PART_FIELDS.to_vec()].concat(), false)
+}
+fn array<T>(values: &[T], output: &mut Vec<u8>, write: impl Fn(&T, &mut Vec<u8>)) {
+    output.push(b'[');
+    for (i, value) in values.iter().enumerate() {
+        if i > 0 {
+            output.push(b',');
+        }
+        write(value, output);
+    }
+    output.push(b']');
+}
+impl DraftDiffModel {
+    pub(super) fn write_json(&self) -> Vec<u8> {
+        let object = self.ordinary.as_object().expect("scalar diff fields");
+        let mut keys = object.keys().map(String::as_str).collect::<Vec<_>>();
+        keys.push("parts");
+        let mut output = vec![b'{'];
+        for (i, key) in keys.iter().enumerate() {
+            if i > 0 {
+                output.push(b',');
+            }
+            crate::manifest_text::JsText::scalar(key).write_json(&mut output);
+            output.push(b':');
+            if *key != "parts" {
+                output.extend_from_slice(
+                    &serde_json::to_vec(&object[*key]).expect("scalar diff field"),
+                );
+                continue;
+            }
+            output.extend_from_slice(b"{\"added\":");
+            array(&self.added, &mut output, |part, output| {
+                output.extend_from_slice(b"{\"after\":");
+                output.extend_from_slice(&part.json_fields(&snapshot_part_fields(), false));
+                output.push(b'}');
+            });
+            output.extend_from_slice(b",\"removed\":");
+            array(&self.removed, &mut output, |part, output| {
+                output.extend_from_slice(b"{\"before\":");
+                output.extend_from_slice(&before_json(part));
+                output.push(b'}');
+            });
+            output.extend_from_slice(b",\"changed\":");
+            array(&self.changed, &mut output, |part, output| {
+                output.extend_from_slice(b"{\"before\":");
+                output.extend_from_slice(&before_json(&part.before));
+                output.extend_from_slice(b",\"after\":");
+                output.extend_from_slice(&part.after.json_fields(&snapshot_part_fields(), false));
+                output.extend_from_slice(b",\"fields\":");
+                output.extend_from_slice(
+                    &serde_json::to_vec(&part.fields).expect("static field names"),
+                );
+                output.push(b'}');
+            });
+            output.push(b'}');
+        }
+        output.push(b'}');
+        output
+    }
 }

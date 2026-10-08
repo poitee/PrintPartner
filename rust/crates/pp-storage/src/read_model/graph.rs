@@ -3,6 +3,9 @@ pub(crate) use super::context::{
     AcceptedProgressFacts, BuildSummaryFacts, FreshnessFacts, StaleReasonFacts,
     UntrackedReasonFacts,
 };
+use crate::manifest_text::{
+    DraftPart, ManifestText, OptionGroupId, PartManifestMetadata, read_manifest_text,
+};
 use anyhow::{Result, anyhow};
 use rusqlite::{Transaction, types::ValueRef};
 use serde::Serialize;
@@ -74,8 +77,7 @@ pub struct Profile {
     pub special_request: Option<String>,
     pub archived_at: Option<String>,
 }
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone)]
 pub struct Snapshot {
     pub format: &'static str,
     pub profile: Profile,
@@ -143,8 +145,7 @@ pub struct Unit {
     pub completed: bool,
     pub assembled: bool,
 }
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone)]
 pub struct Part {
     pub revision_part_id: i64,
     pub projection_part_id: i64,
@@ -166,15 +167,79 @@ pub struct Part {
     pub notes: String,
     pub github_blob_url: Option<String>,
     pub geometry_same: Option<bool>,
-    pub requirement: Option<String>,
-    pub option_group_id: Option<String>,
-    pub manifest_source: Option<String>,
+    pub(crate) manifest: PartManifestMetadata,
     pub artifact: Artifact,
     pub units: Vec<Unit>,
 }
+impl Part {
+    fn json_bytes(&self) -> Vec<u8> {
+        let ordinary = json!({"revisionPartId":self.revision_part_id,"projectionPartId":self.projection_part_id,"partKey":self.part_key,"relativePath":self.relative_path,"filename":self.filename,"sourceLayer":self.source_layer,"status":self.status,"roleInferred":self.role_inferred,"roleOverride":self.role_override,"effectiveRole":self.effective_role,"filamentColorId":self.filament_color_id,"filamentCustomHex":self.filament_custom_hex,"spoolmanSpoolId":self.spoolman_spool_id,"quantityInferred":self.quantity_inferred,"quantityOverride":self.quantity_override,"quantityEffective":self.quantity_effective,"included":self.included,"notes":self.notes,"githubBlobUrl":self.github_blob_url,"geometrySame":self.geometry_same,"artifact":self.artifact,"units":self.units});
+        let part = DraftPart::new(ordinary, self.manifest.clone());
+        let mut fields = part
+            .scalar
+            .as_object()
+            .expect("ordinary accepted part")
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        let insertion = fields
+            .iter()
+            .position(|field| *field == "artifact")
+            .expect("artifact");
+        fields.splice(
+            insertion..insertion,
+            ["requirement", "optionGroupId", "manifestSource"],
+        );
+        part.json_fields(&fields, false)
+    }
+}
+impl Snapshot {
+    pub(super) fn json_bytes(&self) -> Vec<u8> {
+        let ordinary = json!({"format":self.format,"profile":self.profile,"planVersion":self.plan_version,"revisionId":self.revision_id,"revisionNumber":self.revision_number,"revisionDigest":self.revision_digest,"acceptedAt":self.accepted_at,"provenance":self.provenance,"requiredUnitMappingDigest":self.required_unit_mapping_digest});
+        let object = ordinary.as_object().expect("ordinary accepted snapshot");
+        let mut keys = object.keys().map(String::as_str).collect::<Vec<_>>();
+        keys.push("parts");
+        let mut output = vec![b'{'];
+        for (i, key) in keys.iter().enumerate() {
+            if i > 0 {
+                output.push(b',');
+            }
+            crate::manifest_text::JsText::scalar(key).write_json(&mut output);
+            output.push(b':');
+            if *key == "parts" {
+                output.push(b'[');
+                for (i, part) in self.parts.iter().enumerate() {
+                    if i > 0 {
+                        output.push(b',');
+                    }
+                    output.extend_from_slice(&part.json_bytes());
+                }
+                output.push(b']');
+            } else {
+                output.extend_from_slice(
+                    &serde_json::to_vec(&object[*key]).expect("ordinary snapshot field"),
+                );
+            }
+        }
+        output.push(b'}');
+        output
+    }
+    pub fn into_json_body(self) -> super::AcceptedSnapshotJsonBody {
+        super::AcceptedSnapshotJsonBody(self.json_bytes())
+    }
+}
 #[derive(Clone)]
-pub(super) struct Row(BTreeMap<String, Value>, &'static str);
+pub(super) struct Row(BTreeMap<String, Value>, &'static str, PartManifestMetadata);
 impl Row {
+    pub(super) fn same_field(&self, other: &Self, key: &str) -> bool {
+        match key {
+            "requirement" => self.2.requirement == other.2.requirement,
+            "option_group_id" => self.2.option_group_id == other.2.option_group_id,
+            "manifest_source" => self.2.manifest_source == other.2.manifest_source,
+            _ => self.v(key) == other.v(key),
+        }
+    }
+
     pub(super) fn v(&self, k: &str) -> &Value {
         self.0.get(k).unwrap_or(&Value::Null)
     }
@@ -244,7 +309,7 @@ pub(super) fn rows(
         .iter()
         .map(|c| {
             format!(
-                "CASE WHEN typeof(\"{c}\")='text' THEN length(cast(\"{c}\" AS blob)) ELSE 0 END"
+                "CASE WHEN typeof(\"{c}\") IN ('text','blob') THEN length(cast(\"{c}\" AS blob)) ELSE 0 END"
             )
         })
         .collect::<Vec<_>>()
@@ -271,7 +336,33 @@ pub(super) fn rows(
     let result = stmt
         .query_map(args, |r| {
             let mut values = BTreeMap::new();
+            let mut manifest = PartManifestMetadata::default();
             for (i, name) in names.iter().enumerate() {
+                if matches!(table, "parts" | "plan_revision_parts" | "plan_draft_parts") {
+                    match name.as_str() {
+                        "requirement" => {
+                            manifest.requirement = read_manifest_text(r.get_ref(i)?)
+                                .map_err(|error| {
+                                    rusqlite::Error::ToSqlConversionFailure(error.into())
+                                })?
+                                .map(ManifestText);
+                            continue;
+                        }
+                        "option_group_id" => {
+                            manifest.option_group_id = read_manifest_text(r.get_ref(i)?)
+                                .map_err(|error| {
+                                    rusqlite::Error::ToSqlConversionFailure(error.into())
+                                })?
+                                .map(OptionGroupId);
+                            continue;
+                        }
+                        "manifest_source" => {
+                            manifest.manifest_source = r.get::<_, Option<String>>(i)?;
+                            continue;
+                        }
+                        _ => {}
+                    }
+                }
                 let value = match r.get_ref(i)? {
                     ValueRef::Null => Value::Null,
                     ValueRef::Integer(v) => json!(v),
@@ -295,7 +386,7 @@ pub(super) fn rows(
                 };
                 values.insert(name.clone(), value);
             }
-            Ok(Row(values, code))
+            Ok(Row(values, code, manifest))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(result)
@@ -452,18 +543,22 @@ fn canonical_part(r: &Row) -> Result<String> {
         "manifest_source",
         "artifact_digest",
     ];
-    let mut values = Vec::new();
-    for k in fields {
-        values.push((
-            k,
-            match k {
-                "included" => json!(r.b(k)?),
-                "geometry_same" => json!(r.ob(k)?),
-                _ => r.v(k).clone(),
+    let mut scalar = serde_json::Map::new();
+    for key in fields {
+        if matches!(key, "requirement" | "option_group_id" | "manifest_source") {
+            continue;
+        }
+        scalar.insert(
+            key.into(),
+            match key {
+                "included" => json!(r.b(key)?),
+                "geometry_same" => json!(r.ob(key)?),
+                _ => r.v(key).clone(),
             },
-        ));
+        );
     }
-    Ok(object(values))
+    let part = DraftPart::new(Value::Object(scalar), r.2.clone());
+    Ok(String::from_utf8(part.json_fields(&fields, false)).expect("canonical part JSON"))
 }
 pub(crate) fn read(
     tx: &Transaction<'_>,
@@ -859,7 +954,7 @@ pub(crate) fn read(
             "manifest_source",
         ] {
             check(
-                p.v(k) == r.v(k),
+                p.same_field(&r, k),
                 "projection",
                 "Accepted Plan projection differs from its revision",
             )?;
@@ -919,9 +1014,7 @@ pub(crate) fn read(
             notes: r.s("notes")?.into(),
             github_blob_url: r.os("github_blob_url")?,
             geometry_same: r.ob("geometry_same")?,
-            requirement: r.os("requirement")?,
-            option_group_id: r.os("option_group_id")?,
-            manifest_source: r.os("manifest_source")?,
+            manifest: r.2.clone(),
             artifact,
             units: Vec::new(),
         });

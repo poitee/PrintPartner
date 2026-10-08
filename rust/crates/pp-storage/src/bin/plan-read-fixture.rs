@@ -55,13 +55,17 @@ fn main() -> Result<()> {
     )?;
     let after: i64 = witness.query_row("PRAGMA data_version", [], |r| r.get(0))?;
     ensure!(before == after, "Read operation changed database");
-    let mut output = serde_json::to_value(&result)?;
-    output["readOnly"] =
-        json!({"dataVersionBefore":before,"dataVersionAfter":after,"unchanged":before==after});
-    for (i, build) in result.builds.iter().enumerate() {
-        output["builds"][i]["checkoff"] =
-            views::checkoff(build.profile_id, &build.accepted, &CatalogOnly)?;
-        output["builds"][i]["progress"] = views::progress(build.profile_id, &build.accepted);
+    let output = json!({"readOnly":{"dataVersionBefore":before,"dataVersionAfter":after,"unchanged":before==after}});
+    let mut build_rows = Vec::new();
+    let mut accepted_bodies = Vec::new();
+    let mut review_bodies = Vec::new();
+    for build in &result.builds {
+        let mut row = json!({"profileId":build.profile_id,"context":build.context});
+        if let Some(error) = &build.context_error {
+            row["contextError"] = json!(error);
+        }
+        row["checkoff"] = views::checkoff(build.profile_id, &build.accepted, &CatalogOnly)?;
+        row["progress"] = views::progress(build.profile_id, &build.accepted);
         let ids = if let AcceptedRead::Ready { snapshot } = &build.accepted {
             snapshot
                 .parts
@@ -71,23 +75,70 @@ fn main() -> Result<()> {
         } else {
             Vec::new()
         };
-        output["builds"][i]["assembled"] = Value::Array(
+        row["assembled"] = Value::Array(
             ids.into_iter()
                 .map(|id| views::assembled(id, &build.accepted))
                 .collect(),
         );
+        build_rows.push(row);
+        accepted_bodies.push(build.accepted.clone().into_json_body());
         if let Some(obs) = &observations {
-            output["builds"][i]["review"] =
-                views::review(&build.accepted, false, obs, &CatalogOnly)?;
-            output["builds"][i]["reviewAll"] =
-                views::review(&build.accepted, true, obs, &CatalogOnly)?;
-            if output["builds"][i]["review"]["body"].is_object() {
-                output["builds"][i]["reviewSummary"] =
-                    views::summarize_review(&output["builds"][i]["review"]["body"])?;
-            }
+            let review = views::review_json(&build.accepted, false, obs, &CatalogOnly)?;
+            let review_all = views::review_json(&build.accepted, true, obs, &CatalogOnly)?;
+            review_bodies.push(Some((
+                review.summary_json(),
+                review_all.summary_json(),
+                review.into_bytes(),
+                review_all.into_bytes(),
+            )));
+        } else {
+            review_bodies.push(None);
         }
     }
-    println!("{}", json!(output));
+    let mut bytes = serde_json::to_vec(&output)?;
+    bytes.pop();
+    if bytes.len() > 1 {
+        bytes.push(b',');
+    }
+    bytes.extend_from_slice(b"\"builds\":[");
+    for (index, ((build, accepted), reviews)) in build_rows
+        .iter()
+        .zip(accepted_bodies)
+        .zip(review_bodies)
+        .enumerate()
+    {
+        if index > 0 {
+            bytes.push(b',');
+        }
+        let mut row = b"{\"accepted\":".to_vec();
+        row.extend_from_slice(&accepted.into_bytes());
+        let ordinary = serde_json::to_vec(build)?;
+        if ordinary.len() > 2 {
+            row.push(b',');
+            row.extend_from_slice(&ordinary[1..]);
+        } else {
+            row.push(b'}');
+        }
+        if let Some((summary, summary_all, review, review_all)) = reviews {
+            row.pop();
+            row.extend_from_slice(b",\"review\":");
+            row.extend_from_slice(&review);
+            row.extend_from_slice(b",\"reviewAll\":");
+            row.extend_from_slice(&review_all);
+            if let Some(summary) = summary {
+                row.extend_from_slice(b",\"reviewSummary\":");
+                row.extend_from_slice(&summary.into_bytes());
+            }
+            if let Some(summary) = summary_all {
+                row.extend_from_slice(b",\"reviewSummaryAll\":");
+                row.extend_from_slice(&summary.into_bytes());
+            }
+            row.push(b'}');
+        }
+        bytes.extend_from_slice(&row);
+    }
+    bytes.extend_from_slice(b"]}");
+    println!("{}", std::str::from_utf8(&bytes)?);
     owner.shutdown()?;
     Ok(())
 }

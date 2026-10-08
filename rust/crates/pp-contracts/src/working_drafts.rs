@@ -1,6 +1,5 @@
 use crate::autosave::PositiveId;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -48,71 +47,6 @@ pub enum Request {
         transition: Transition,
         expected_lifecycle_version: u32,
     },
-}
-#[derive(Debug, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum Outcome {
-    Service {
-        outcome: crate::reconciliation::Outcome,
-        committed_draft: Option<Value>,
-    },
-    Rebased {
-        draft: Value,
-    },
-    SourceConflict {
-        draft: Value,
-    },
-    NotAbandoned {
-        state: String,
-    },
-    BaseUnchanged,
-    MergeConflicts {
-        conflicts: Vec<Value>,
-    },
-    Updated {
-        draft: Value,
-    },
-    Created {
-        draft: Value,
-    },
-    Existing {
-        draft: Value,
-    },
-    InputsChanged,
-    AcceptedBaseChanged,
-    IdempotencyConflict,
-    NoLayers,
-    NoStls,
-    WouldWipe,
-    Diff {
-        diff: Value,
-    },
-    Listed {
-        drafts: Vec<Value>,
-    },
-    Read {
-        draft: Value,
-    },
-    Workspace {
-        workspace: Box<crate::reconciliation::Workspace>,
-    },
-    Transitioned {
-        draft: Value,
-    },
-    Unchanged {
-        draft: Value,
-    },
-    Conflict {
-        draft: Value,
-    },
-    BaseChanged {
-        draft: Value,
-    },
-    NotAllowed {
-        state: String,
-    },
-    NotFound,
-    AcceptedBaselineRequired,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

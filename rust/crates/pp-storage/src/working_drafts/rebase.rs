@@ -1,7 +1,14 @@
 use super::*;
+use crate::manifest_text::DraftPart;
+use crate::required_units::part_rows;
 use pp_contracts::working_drafts::{RebaseRequest, SourceState};
 use std::collections::{HashMap, HashSet};
-fn base_parts(tx: &Transaction<'_>, tenant: &str, profile: i64, id: &Value) -> Result<Vec<Value>> {
+fn base_parts(
+    tx: &Transaction<'_>,
+    tenant: &str,
+    profile: i64,
+    id: &Value,
+) -> Result<Vec<DraftPart>> {
     let Some(id) = id.as_i64() else {
         return Ok(Vec::new());
     };
@@ -14,7 +21,7 @@ fn base_parts(tx: &Transaction<'_>, tenant: &str, profile: i64, id: &Value) -> R
         .is_some(),
         "Missing rebase accepted ancestor"
     );
-    let mut p = rows(
+    let mut p = part_rows(
         tx,
         "SELECT * FROM plan_revision_parts WHERE tenant_id=? AND revision_id=? ORDER BY id",
         &[&tenant, &id],
@@ -37,7 +44,7 @@ fn tracked(inputs: &[Value], source: i64) -> bool {
         .any(|i| i["sourceId"] == source && i["trackingKind"] == "revision")
 }
 fn evidence(
-    parts: &[Value],
+    parts: &[DraftPart],
     inputs: &[Value],
     source: i64,
     key: &str,
@@ -70,9 +77,9 @@ fn sort(conflicts: &mut [Value]) {
 }
 fn merge(
     source: &Draft,
-    old: &[Value],
+    old: &[DraftPart],
     fresh: &mut preparation::PreparedDraftSnapshot,
-    current: &[Value],
+    current: &[DraftPart],
 ) -> Result<Vec<Value>> {
     let baseline = |part: &Value| -> Result<Value> {
         if part["baseRevisionPartId"].is_null() {
@@ -80,7 +87,7 @@ fn merge(
         } else {
             old.iter()
                 .find(|b| b["id"] == part["baseRevisionPartId"])
-                .cloned()
+                .map(|part| part.scalar.clone())
                 .ok_or_else(|| anyhow!("Rebase predecessor missing"))
         }
     };
@@ -420,7 +427,9 @@ pub(super) fn run(
         tx.commit()?;
         let conflicts = merge(&source, &old, &mut p, &current)?;
         if !conflicts.is_empty() {
-            return Ok(Outcome::MergeConflicts { conflicts });
+            return Ok(Outcome::MergeConflicts {
+                conflicts: MergeConflicts(conflicts),
+            });
         }
         Some(p)
     };

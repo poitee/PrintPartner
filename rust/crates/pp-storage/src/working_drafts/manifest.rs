@@ -1,40 +1,41 @@
 use super::{
     observation::*,
-    yaml::{Document, Node, js_keys},
+    yaml::{Document, Node},
 };
-use serde_json::Value;
+use crate::manifest_text::{DraftPart, JsText, ManifestText, OptionGroupId, VariantId};
 
 #[derive(Clone, Default)]
-pub(super) struct Manifest {
-    pub project: Option<String>,
+pub(crate) struct Manifest {
+    pub project: Option<ManifestText>,
     pub rules: Vec<PartRule>,
     pub groups: Groups,
     pub selections: Selections,
+    pub selection_shapes: Vec<(OptionGroupId, bool)>,
 }
 #[derive(Clone)]
-pub(super) struct PartRule {
-    pub pattern: String,
-    pub requirement: Option<String>,
-    pub group: Option<String>,
+pub(crate) struct PartRule {
+    pub pattern: ManifestText,
+    pub requirement: Option<ManifestText>,
+    pub group: Option<OptionGroupId>,
 }
 #[derive(Clone)]
-pub(super) struct Variant {
-    pub id: String,
-    pub label: Option<String>,
-    pub parts: Vec<String>,
-    pub excludes: Vec<String>,
+pub(crate) struct Variant {
+    pub id: VariantId,
+    pub label: Option<ManifestText>,
+    pub parts: Vec<ManifestText>,
+    pub excludes: Vec<ManifestText>,
 }
 #[derive(Clone)]
-pub(super) struct Group {
+pub(crate) struct Group {
     pub rule: String,
-    pub label: Option<String>,
-    pub parts: Vec<String>,
+    pub label: Option<ManifestText>,
+    pub parts: Vec<ManifestText>,
     pub variants: Vec<Variant>,
     pub min: Option<u64>,
     pub max: Option<u64>,
 }
-pub(super) type Groups = Vec<(String, Group)>;
-pub(super) type Selections = Vec<(String, Vec<String>)>;
+pub(crate) type Groups = Vec<(OptionGroupId, Group)>;
+pub(crate) type Selections = Vec<(OptionGroupId, Vec<VariantId>)>;
 fn invalid<T>() -> ReadResult<T> {
     Err(ReadFailure::InvalidDocument)
 }
@@ -42,10 +43,10 @@ fn mapping(
     d: &Document,
     id: usize,
     b: &mut PreparationBudget<'_>,
-) -> ReadResult<Vec<(String, usize)>> {
+) -> ReadResult<Vec<(JsText, usize)>> {
     match d.node(id, b)? {
         Node::Mapping(v) => {
-            b.expansion(v.iter().map(|(key, _)| key.len()).sum())?;
+            b.expansion(v.iter().map(|(key, _)| key.units().len() * 2).sum())?;
             Ok(v.clone())
         }
         _ => invalid(),
@@ -61,12 +62,12 @@ fn strings(
     d: &Document,
     id: Option<usize>,
     b: &mut PreparationBudget<'_>,
-) -> ReadResult<Vec<String>> {
+) -> ReadResult<Vec<ManifestText>> {
     let Some(id) = id else { return Ok(Vec::new()) };
     let Node::Sequence(v) = d.node(id, b)? else {
         return Ok(Vec::new());
     };
-    v.iter().map(|i| d.string(*i, b)).collect()
+    v.iter().map(|i| d.text(*i, b).map(ManifestText)).collect()
 }
 fn bound(
     d: &Document,
@@ -84,30 +85,36 @@ fn bound(
         _ => invalid(),
     }
 }
-fn selections(d: &Document, id: usize, b: &mut PreparationBudget<'_>) -> ReadResult<Selections> {
+fn selections(
+    d: &Document,
+    id: usize,
+    b: &mut PreparationBudget<'_>,
+) -> ReadResult<(Selections, Vec<(OptionGroupId, bool)>)> {
     let mut out = Vec::new();
+    let mut shapes = Vec::new();
     for (key, id) in mapping(d, id, b)? {
-        if key.trim().is_empty() {
+        if key.is_ecmascript_blank() {
             return invalid();
         }
-        let ids = match d.node(id, b)? {
-            Node::Sequence(v) => v.clone(),
-            _ => vec![id],
+        let (ids, scalar) = match d.node(id, b)? {
+            Node::Sequence(v) => (v.clone(), false),
+            _ => (vec![id], true),
         };
         let mut values = Vec::new();
         for id in ids {
             let Node::String(s) = d.node(id, b)? else {
                 return invalid();
             };
-            let s = s.trim();
-            if s.is_empty() || values.iter().any(|v| v == s) {
+            let s = s.clone().trim_ecmascript();
+            if s.is_empty() || values.iter().any(|v: &VariantId| v.0 == s) {
                 return invalid();
             }
-            values.push(s.into());
+            values.push(VariantId(s));
         }
-        out.push((key, values));
+        shapes.push((OptionGroupId(key.clone()), scalar));
+        out.push((OptionGroupId(key), values));
     }
-    Ok(out)
+    Ok((out, shapes))
 }
 fn groups(d: &Document, id: usize, b: &mut PreparationBudget<'_>) -> ReadResult<Groups> {
     let mut out = Vec::new();
@@ -119,8 +126,13 @@ fn groups(d: &Document, id: usize, b: &mut PreparationBudget<'_>) -> ReadResult<
         let rule = if let Some(id) = d.get(row, "rule", b)? {
             match d.node(id, b)? {
                 Node::Null => "pick_one".into(),
-                Node::String(s) if matches!(s.as_str(), "pick_one" | "pick_any" | "pick_n") => {
-                    s.clone()
+                Node::String(s)
+                    if matches!(
+                        s.as_scalar().as_deref(),
+                        Some("pick_one" | "pick_any" | "pick_n")
+                    ) =>
+                {
+                    s.as_scalar().expect("validated scalar rule")
                 }
                 _ => return invalid(),
             }
@@ -141,27 +153,26 @@ fn groups(d: &Document, id: usize, b: &mut PreparationBudget<'_>) -> ReadResult<
                     continue;
                 }
                 let name = d
-                    .optional_string(*id, "id", b)?
-                    .unwrap_or_default()
-                    .trim()
-                    .to_owned();
+                    .optional_text(*id, "id", b)?
+                    .unwrap_or_else(|| JsText::scalar(""))
+                    .trim_ecmascript();
                 if name.is_empty() {
                     continue;
                 }
                 b.rule()?;
                 variants.push(Variant {
-                    id: name,
-                    label: d.optional_string(*id, "label", b)?,
+                    id: VariantId(name),
+                    label: d.optional_text(*id, "label", b)?.map(ManifestText),
                     parts: strings(d, d.get(*id, "parts", b)?, b)?,
                     excludes: strings(d, d.get(*id, "excludes", b)?, b)?,
                 });
             }
         }
         out.push((
-            key,
+            OptionGroupId(key),
             Group {
                 rule,
-                label: d.optional_string(row, "label", b)?,
+                label: d.optional_text(row, "label", b)?.map(ManifestText),
                 parts: strings(d, d.get(row, "parts", b)?, b)?,
                 variants,
                 min,
@@ -186,7 +197,7 @@ fn rules(
             Node::String(s) => {
                 b.rule()?;
                 out.push(PartRule {
-                    pattern: s.clone(),
+                    pattern: ManifestText(s.clone()),
                     requirement: None,
                     group: None,
                 });
@@ -198,9 +209,9 @@ fn rules(
                         d.truthy(v, b)?;
                     }
                     out.push(PartRule {
-                        pattern: d.string(m, b)?,
-                        requirement: d.optional_string(*id, "requirement", b)?,
-                        group: d.optional_string(*id, "option_group", b)?,
+                        pattern: ManifestText(d.text(m, b)?),
+                        requirement: d.optional_text(*id, "requirement", b)?.map(ManifestText),
+                        group: d.optional_text(*id, "option_group", b)?.map(OptionGroupId),
                     });
                 }
             }
@@ -209,25 +220,27 @@ fn rules(
     }
     Ok(out)
 }
-pub(super) fn parse(bytes: &[u8], b: &mut PreparationBudget<'_>) -> ReadResult<Manifest> {
+pub(crate) fn parse(bytes: &[u8], b: &mut PreparationBudget<'_>) -> ReadResult<Manifest> {
     if String::from_utf8_lossy(bytes).trim().is_empty() {
         return Ok(Manifest::default());
     }
     let d = Document::parse(bytes, b)?;
     mapping(&d, d.root, b)?;
+    let (selections, selection_shapes) = if let Some(id) = d.get(d.root, "selections", b)? {
+        selections(&d, id, b)?
+    } else {
+        (Vec::new(), Vec::new())
+    };
     let mut out = Manifest {
-        project: d.optional_string(d.root, "project", b)?,
+        project: d.optional_text(d.root, "project", b)?.map(ManifestText),
         rules: rules(&d, d.get(d.root, "parts", b)?, b)?,
         groups: if let Some(id) = d.get(d.root, "option_groups", b)? {
             groups(&d, id, b)?
         } else {
             Vec::new()
         },
-        selections: if let Some(id) = d.get(d.root, "selections", b)? {
-            selections(&d, id, b)?
-        } else {
-            Vec::new()
-        },
+        selections,
+        selection_shapes,
     };
     if let Some(id) = d.get(d.root, "addons", b)?
         && let Node::Sequence(v) = d.node(id, b)?
@@ -236,8 +249,8 @@ pub(super) fn parse(bytes: &[u8], b: &mut PreparationBudget<'_>) -> ReadResult<M
             if matches!(d.node(*a, b)?, Node::Null) {
                 return invalid();
             }
-            d.optional_string(*a, "project", b)?;
-            d.optional_string(*a, "source_id", b)?;
+            d.optional_text(*a, "project", b)?;
+            d.optional_text(*a, "source_id", b)?;
             out.rules.extend(rules(&d, d.get(*a, "parts", b)?, b)?);
         }
     }
@@ -271,14 +284,14 @@ pub(super) fn optional_document(
         _ => Ok(None),
     }
 }
-fn union(left: &mut Vec<String>, right: &[String]) {
+fn union(left: &mut Vec<ManifestText>, right: &[ManifestText]) {
     for s in right {
         if !left.contains(s) {
             left.push(s.clone());
         }
     }
 }
-pub(super) fn merge(target: &mut Groups, incoming: Groups) {
+pub(crate) fn merge(target: &mut Groups, incoming: Groups) {
     for (key, g) in incoming {
         if let Some((_, prior)) = target.iter_mut().find(|(k, _)| *k == key) {
             let mut variants: Vec<Variant> = Vec::new();
@@ -314,9 +327,19 @@ pub(super) fn merge(target: &mut Groups, incoming: Groups) {
             target.push((key, g));
         }
     }
-    js_keys(target)
+    target.sort_by(
+        |(a, _), (b, _)| match (a.0.array_index(), b.0.array_index()) {
+            (Some(a), Some(b)) => a.cmp(&b),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            _ => std::cmp::Ordering::Equal,
+        },
+    )
 }
-pub(super) fn matches(pattern: &str, key: &str) -> bool {
+pub(crate) fn matches(pattern: &ManifestText, key: &str) -> bool {
+    let Some(pattern) = pattern.as_scalar() else {
+        return false;
+    };
     let pat = pattern.replace('\\', "/").to_lowercase().trim().to_owned();
     let key = key.replace('\\', "/").to_lowercase().trim().to_owned();
     if pat == key {
@@ -341,7 +364,7 @@ pub(super) fn matches(pattern: &str, key: &str) -> bool {
     })
 }
 pub(super) fn apply(
-    parts: &mut [Value],
+    parts: &mut [DraftPart],
     docs: &[(String, String, Manifest)],
     mut groups: Groups,
     mut selections: Selections,
@@ -367,33 +390,36 @@ pub(super) fn apply(
             .nth(1);
         for (name, source, d) in docs {
             if d.project.as_ref().is_some_and(|p| {
-                !p.is_empty() && label.is_some_and(|l| !l.is_empty() && p != l && name != l)
+                !p.is_empty()
+                    && label.is_some_and(|l| {
+                        !l.is_empty() && p.as_scalar().as_deref() != Some(l) && name != l
+                    })
             }) {
                 continue;
             }
             if let Some(rule) = d.rules.iter().find(|r| matches(&r.pattern, &key)) {
                 if let Some(v) = &rule.requirement {
-                    part["requirement"] = v.clone().into()
+                    part.manifest.requirement = Some(v.clone())
                 }
                 if let Some(v) = &rule.group {
-                    part["optionGroupId"] = v.clone().into()
+                    part.manifest.option_group_id = Some(v.clone())
                 }
-                part["manifestSource"] = source.clone().into();
+                part.manifest.manifest_source = Some(source.clone());
                 break;
             }
         }
-        let explicit = part["optionGroupId"].as_str();
+        let explicit = part.manifest.option_group_id.as_ref();
         let mut member = false;
         let mut included = false;
         let mut excluded = false;
         for (id, g) in &groups {
-            let ids: Vec<&String> = selections
+            let ids: Vec<&VariantId> = selections
                 .iter()
                 .find(|(k, _)| k == id)
                 .map(|(_, v)| {
                     v.iter()
                         .filter(|id| {
-                            g.variants.is_empty() || g.variants.iter().any(|v| v.id == ***id)
+                            g.variants.is_empty() || g.variants.iter().any(|v| v.id == **id)
                         })
                         .collect()
                 })
@@ -417,8 +443,8 @@ pub(super) fn apply(
                 member = true;
                 if complete {
                     included |= ids.iter().any(|id| {
-                        g.variants.iter().find(|v| v.id == ***id).map_or_else(
-                            || matches(id, &key),
+                        g.variants.iter().find(|v| v.id == **id).map_or_else(
+                            || matches(&ManifestText(id.0.clone()), &key),
                             |v| v.parts.iter().any(|p| matches(p, &key)),
                         )
                     });
@@ -428,7 +454,7 @@ pub(super) fn apply(
                 excluded |= ids.iter().any(|id| {
                     g.variants
                         .iter()
-                        .find(|v| v.id == ***id)
+                        .find(|v| v.id == **id)
                         .is_some_and(|v| v.excludes.iter().any(|p| matches(p, &key)))
                 });
             }
@@ -442,67 +468,14 @@ pub(super) fn apply(
     }
 }
 pub(super) fn kit(raw: Option<String>) -> Selections {
-    let parse = || -> Option<Selections> {
-        let data: Value = serde_json::from_str(raw.as_deref()?).ok()?;
-        let map = data.as_object()?;
-        for key in ["name", "base_source_id"] {
-            if let Some(v) = map.get(key)
-                && !v.is_null()
-                && !v.is_string()
-            {
-                return None;
-            }
-        }
-        for key in ["layers", "addon_source_ids", "include", "exclude"] {
-            if let Some(v) = map.get(key)
-                && !v.as_array()?.iter().all(Value::is_string)
-            {
-                return None;
-            }
-        }
-        if let Some(v) = map.get("replacements")
-            && !v.as_object()?.values().all(Value::is_string)
-        {
-            return None;
-        }
-        for key in ["choice_tree", "category_links"] {
-            if let Some(v) = map.get(key) {
-                v.as_array()?;
-            }
-        }
-        let Some(v) = map.get("selections") else {
-            return Some(Vec::new());
-        };
-        let mut out = Vec::new();
-        for (key, v) in v.as_object()? {
-            if key.trim().is_empty() {
-                return None;
-            }
-            let values = if let Some(a) = v.as_array() {
-                a.iter().collect()
-            } else {
-                vec![v]
-            };
-            let mut ids = Vec::new();
-            for v in values {
-                let s = v.as_str()?.trim();
-                if s.is_empty() || ids.iter().any(|v| v == s) {
-                    return None;
-                }
-                ids.push(s.into());
-            }
-            out.push((key.clone(), ids));
-        }
-        Some(out)
-    };
-    parse().unwrap_or_default()
+    crate::build_graph::manifest_options::stored_selection_projection(raw)
 }
-pub(super) fn hints(bytes: &[u8], b: &mut PreparationBudget<'_>) -> ReadResult<Vec<HintRule>> {
+pub(crate) fn hints(bytes: &[u8], b: &mut PreparationBudget<'_>) -> ReadResult<Vec<HintRule>> {
     let d = Document::parse(bytes, b)?;
     let root = mapping(&d, d.root, b)?;
     if root
         .iter()
-        .any(|(k, _)| !matches!(k.as_str(), "version" | "rules"))
+        .any(|(k, _)| !matches!(k.as_scalar().as_deref(), Some("version" | "rules")))
     {
         return invalid();
     }
@@ -519,17 +492,21 @@ pub(super) fn hints(bytes: &[u8], b: &mut PreparationBudget<'_>) -> ReadResult<V
     for id in sequence(&d, rules, b)? {
         b.rule()?;
         let map = mapping(&d, id, b)?;
-        if map
-            .iter()
-            .any(|(k, _)| !matches!(k.as_str(), "path" | "option_group" | "variant_id" | "label"))
-        {
+        if map.iter().any(|(k, _)| {
+            !matches!(
+                k.as_scalar().as_deref(),
+                Some("path" | "option_group" | "variant_id" | "label")
+            )
+        }) {
             return invalid();
         }
         let mut values = Vec::new();
         for key in ["path", "option_group", "variant_id", "label"] {
             let val = if let Some(id) = d.get(id, key, b)? {
                 match d.node(id, b)? {
-                    Node::String(s) if !s.trim().is_empty() => Some(s.trim().to_owned()),
+                    Node::String(s) if !s.is_ecmascript_blank() => {
+                        Some(s.clone().trim_ecmascript())
+                    }
                     _ => return invalid(),
                 }
             } else if key == "label" {
@@ -540,13 +517,17 @@ pub(super) fn hints(bytes: &[u8], b: &mut PreparationBudget<'_>) -> ReadResult<V
             values.push(val);
         }
         out.push((
-            values[0].take().unwrap(),
-            values[1].take().unwrap(),
-            values[2].take().unwrap(),
-            values[3].take(),
+            ManifestText(values[0].take().unwrap()),
+            OptionGroupId(values[1].take().unwrap()),
+            VariantId(values[2].take().unwrap()),
+            values[3].take().map(ManifestText),
         ));
     }
     Ok(out)
 }
 
-type HintRule = (String, String, String, Option<String>);
+pub(crate) type HintRule = (ManifestText, OptionGroupId, VariantId, Option<ManifestText>);
+
+pub(crate) fn infer_siblings(paths: &[String]) -> Groups {
+    super::siblings::infer(paths)
+}

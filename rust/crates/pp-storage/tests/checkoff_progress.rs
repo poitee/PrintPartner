@@ -213,9 +213,9 @@ fn public_prefix_assembly_import_replay_and_reopen_preserve_history() {
             assert_eq!(*rows, f.graph()[table], "{table}");
         }
     }
-    let read = serde_json::to_value(f.snapshot()).unwrap();
+    let read = f.snapshot().into_json_body().into_bytes();
     f.reopen();
-    assert_eq!(read, serde_json::to_value(f.snapshot()).unwrap());
+    assert_eq!(read, f.snapshot().into_json_body().into_bytes());
     assert_eq!(f.apply(f.command(0, false)).status, 200);
 }
 

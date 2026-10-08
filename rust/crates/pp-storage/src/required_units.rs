@@ -1,3 +1,6 @@
+use crate::manifest_text::{
+    DraftPart, ManifestText, OptionGroupId, PartManifestMetadata, read_manifest_text,
+};
 pub(crate) mod model;
 use crate::{Envelope, Shared, WriterOwner, auth, read_model::Credential};
 use anyhow::{Result, anyhow, bail, ensure};
@@ -195,6 +198,84 @@ pub(crate) fn rows(
     }
     Ok(out)
 }
+pub(crate) fn part_rows(
+    tx: &Transaction<'_>,
+    sql: &str,
+    args: &[&dyn rusqlite::ToSql],
+) -> Result<Vec<DraftPart>> {
+    let mut statement = tx.prepare(sql)?;
+    let names = statement
+        .column_names()
+        .iter()
+        .map(|name| camel(name))
+        .collect::<Vec<_>>();
+    let mut query = statement.query(args)?;
+    let mut parts = Vec::new();
+    let mut total = 0_usize;
+    while let Some(row) = query.next()? {
+        ensure!(parts.len() < 200_000, "Reconciliation row limit exceeded");
+        let mut scalar = serde_json::Map::new();
+        let mut manifest = PartManifestMetadata::default();
+        for (index, name) in names.iter().enumerate() {
+            let value = row.get_ref(index)?;
+            let bytes = match value {
+                ValueRef::Text(bytes) => {
+                    ensure!(bytes.len() <= 65_536, "Reconciliation text limit exceeded");
+                    Some(bytes.len())
+                }
+                ValueRef::Blob(bytes)
+                    if matches!(name.as_str(), "requirement" | "optionGroupId") =>
+                {
+                    Some(bytes.len())
+                }
+                _ => None,
+            };
+            if let Some(bytes) = bytes {
+                total = total
+                    .checked_add(bytes)
+                    .ok_or_else(|| anyhow!("Reconciliation text limit exceeded"))?;
+                ensure!(
+                    total <= 64 * 1024 * 1024,
+                    "Reconciliation text limit exceeded"
+                );
+            }
+            match name.as_str() {
+                "requirement" => {
+                    manifest.requirement = read_manifest_text(value)?.map(ManifestText);
+                    continue;
+                }
+                "optionGroupId" => {
+                    manifest.option_group_id = read_manifest_text(value)?.map(OptionGroupId);
+                    continue;
+                }
+                "manifestSource" => {
+                    manifest.manifest_source = match value {
+                        ValueRef::Null => None,
+                        ValueRef::Text(bytes) => Some(std::str::from_utf8(bytes)?.to_owned()),
+                        _ => bail!("Invalid manifest source"),
+                    };
+                    continue;
+                }
+                _ => {}
+            }
+            let value = match value {
+                ValueRef::Null => Value::Null,
+                ValueRef::Integer(value) => {
+                    ensure!(
+                        value.unsigned_abs() <= 9_007_199_254_740_991,
+                        "Invalid stored integer"
+                    );
+                    json!(value)
+                }
+                ValueRef::Text(bytes) => json!(std::str::from_utf8(bytes)?),
+                _ => bail!("Invalid stored reconciliation value"),
+            };
+            scalar.insert(name.clone(), value);
+        }
+        parts.push(DraftPart::new(Value::Object(scalar), manifest));
+    }
+    Ok(parts)
+}
 pub(crate) fn one(
     tx: &Transaction<'_>,
     sql: &str,
@@ -208,7 +289,7 @@ pub(crate) fn text<'a>(v: &'a Value, k: &str) -> Result<&'a str> {
 pub(crate) fn num(v: &Value, k: &str) -> Result<i64> {
     v[k].as_i64().ok_or_else(|| anyhow!("Invalid stored {k}"))
 }
-pub(crate) fn normalize_parts(rows: &mut [Value]) -> Result<()> {
+pub(crate) fn normalize_parts(rows: &mut [DraftPart]) -> Result<()> {
     for p in rows {
         for k in ["included", "geometrySame"] {
             if !p[k].is_null() {
@@ -223,7 +304,7 @@ pub(crate) fn normalize_parts(rows: &mut [Value]) -> Result<()> {
 pub(crate) struct Draft {
     pub(crate) header: Value,
     pub(crate) inputs: Vec<Value>,
-    pub(crate) parts: Vec<Value>,
+    pub(crate) parts: Vec<DraftPart>,
     pub(crate) planning: String,
     pub(crate) selected: Option<Saved>,
 }
@@ -471,7 +552,7 @@ pub(crate) fn draft(
         "SELECT * FROM plan_draft_inputs WHERE tenant_id=? AND draft_id=? ORDER BY layer_order,source_id",
         &[&tenant, &id],
     )?;
-    let mut parts = rows(
+    let mut parts = part_rows(
         tx,
         "SELECT * FROM plan_draft_parts WHERE tenant_id=? AND draft_id=? ORDER BY id",
         &[&tenant, &id],
@@ -508,10 +589,10 @@ pub(crate) fn draft(
         selected,
     }))
 }
-fn part_view(p: &Value) -> Value {
+fn part_view(p: &DraftPart) -> Value {
     json!({"draft_part_id":p["id"],"base_revision_part_id":p["baseRevisionPartId"],"part_key":p["partKey"],"filename":p["filename"],"relative_path":p["relativePath"],"source_layer":p["sourceLayer"],"role":model::role(p),"quantity_inferred":p["quantityInferred"],"quantity_override":p["quantityOverride"],"quantity_effective":p["quantityEffective"],"included":p["included"]})
 }
-fn reference(p: &Value) -> Value {
+fn reference(p: &DraftPart) -> Value {
     json!({"revision_part_id":p["id"],"filename":p["filename"],"relative_path":p["relativePath"],"source_layer":p["sourceLayer"]})
 }
 pub(crate) fn workspace(
@@ -532,7 +613,7 @@ pub(crate) fn workspace(
             .is_some(),
             "Missing draft base revision"
         );
-        rows(
+        part_rows(
             tx,
             "SELECT * FROM plan_revision_parts WHERE tenant_id=? AND revision_id=?",
             &[&tenant, &id],
@@ -551,7 +632,7 @@ pub(crate) fn workspace(
             linked.insert(num(before, "id")?);
             let fields: Vec<_> = model::PART_FIELDS
                 .iter()
-                .filter(|k| before[**k] != p[**k])
+                .filter(|k| !before.same_field(p, k))
                 .copied()
                 .collect();
             if !fields.is_empty() {
@@ -652,7 +733,7 @@ pub(crate) fn base(
         };
         sources.insert(name, id);
     }
-    let parts = rows(
+    let parts = part_rows(
         tx,
         "SELECT * FROM plan_revision_parts WHERE tenant_id=? AND revision_id=? ORDER BY id",
         &[&tenant, &revision],
@@ -933,4 +1014,96 @@ pub(crate) fn reconcile_in_transaction(
     Ok(Outcome::Ready {
         workspace: workspace(tx, &tenant, &profile_row, &selected)?,
     })
+}
+
+#[cfg(test)]
+mod metadata_reader_tests {
+    use super::*;
+
+    #[test]
+    fn r7_reader_metadata_scalar_fields_retain_65536_byte_limit() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        let tx = connection.transaction().unwrap();
+        let accepted = "x".repeat(65_536);
+        let refused = "x".repeat(65_537);
+        let mut refusals = Vec::new();
+        for column in ["requirement", "option_group_id", "manifest_source"] {
+            let sql = format!("SELECT ?1 AS {column}");
+            assert_eq!(part_rows(&tx, &sql, &[&accepted]).unwrap().len(), 1);
+            let result = part_rows(&tx, &sql, &[&refused]);
+            let error = result.err().map(|error| error.to_string());
+            println!(
+                "{}",
+                json!({"case":"metadata_scalar_field_limit","column":column,"accepted_bytes":65536,"refused_bytes":65537,"error":error})
+            );
+            refusals.push(
+                error.is_some_and(|error| error.contains("Reconciliation text limit exceeded")),
+            );
+        }
+        assert_eq!(refusals, [true, true, true]);
+    }
+
+    #[test]
+    fn r7_reader_metadata_text_counts_toward_64mib_aggregate() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        let tx = connection.transaction().unwrap();
+        let text = "x".repeat(65_536);
+        let mut refusals = Vec::new();
+        for column in ["requirement", "option_group_id", "manifest_source"] {
+            let accepted = format!(
+                "WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<1024) SELECT ?1 AS {column} FROM n"
+            );
+            assert_eq!(part_rows(&tx, &accepted, &[&text]).unwrap().len(), 1024);
+            let sql = format!("{accepted} UNION ALL SELECT 'x' AS {column}");
+            let error = part_rows(&tx, &sql, &[&text])
+                .err()
+                .map(|error| error.to_string());
+            println!(
+                "{}",
+                json!({"case":"metadata_text_aggregate_limit","column":column,"accepted_bytes":67108864,"refused_bytes":67108865,"error":error})
+            );
+            refusals.push(
+                error.is_some_and(|error| error.contains("Reconciliation text limit exceeded")),
+            );
+        }
+        assert_eq!(refusals, [true, true, true]);
+    }
+
+    #[test]
+    fn r7_reader_ppjs_bytes_count_toward_64mib_aggregate_before_decode() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        let tx = connection.transaction().unwrap();
+        let text = "x".repeat(65_536);
+        let blob = b"PPJS\x01\0\0\0\x01\xd8\0".as_slice();
+        for column in ["requirement", "option_group_id"] {
+            let simple = format!("SELECT ?1 AS {column}");
+            let accepted = part_rows(&tx, &simple, &[&blob]).unwrap();
+            assert_eq!(accepted.len(), 1);
+            let actual = if column == "requirement" {
+                accepted[0].manifest.requirement.as_ref().unwrap().0.units()
+            } else {
+                accepted[0]
+                    .manifest
+                    .option_group_id
+                    .as_ref()
+                    .unwrap()
+                    .0
+                    .units()
+            };
+            assert_eq!(actual, [0xd800]);
+            let sql = format!(
+                "WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<1024) SELECT ?1 AS notes,NULL AS {column} FROM n UNION ALL SELECT NULL,?2"
+            );
+            let error = part_rows(&tx, &sql, &[&text, &blob])
+                .err()
+                .map(|error| error.to_string());
+            println!(
+                "{}",
+                json!({"case":"metadata_ppjs_aggregate_limit","column":column,"preceding_text_bytes":67108864,"ppjs_bytes":11,"error":error})
+            );
+            assert!(
+                error.is_some_and(|error| error.contains("Reconciliation text limit exceeded"))
+            );
+        }
+    }
 }

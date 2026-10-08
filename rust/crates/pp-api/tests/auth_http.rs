@@ -1113,7 +1113,7 @@ async fn public_cookie_catalog_and_accepted_reads_share_default_tenant() {
     let AcceptedRead::Ready { snapshot } = &before.builds[0].accepted else {
         panic!("existing accepted graph is ready")
     };
-    let accepted_before = serde_json::to_value(snapshot).unwrap();
+    let accepted_before = snapshot.clone().into_json_body().into_bytes();
     let CatalogOutcome::Sources(existing) = catalog.execute(CatalogRequest::List {}).unwrap()
     else {
         panic!()
@@ -1247,7 +1247,10 @@ async fn public_cookie_catalog_and_accepted_reads_share_default_tenant() {
     let AcceptedRead::Ready { snapshot } = &after.builds[0].accepted else {
         panic!()
     };
-    assert_eq!(serde_json::to_value(snapshot).unwrap(), accepted_before);
+    assert_eq!(
+        snapshot.clone().into_json_body().into_bytes(),
+        accepted_before
+    );
     let logout = server
         .request(
             Method::POST,
@@ -1299,7 +1302,10 @@ async fn public_cookie_catalog_and_accepted_reads_share_default_tenant() {
     let AcceptedRead::Ready { snapshot } = &restarted.builds[0].accepted else {
         panic!()
     };
-    assert_eq!(serde_json::to_value(snapshot).unwrap(), accepted_before);
+    assert_eq!(
+        snapshot.clone().into_json_body().into_bytes(),
+        accepted_before
+    );
     let CatalogOutcome::Source(Some(persisted)) = domain_catalog(&server.owner, restarted_token)
         .execute(CatalogRequest::Get { id: created.id })
         .unwrap()

@@ -8,6 +8,7 @@ pub mod native_secrets;
 pub mod plan_publication;
 pub mod profiles;
 pub use working_drafts::save as plan_save;
+mod manifest_text;
 pub mod read_model;
 pub mod required_units;
 mod schema;
@@ -80,7 +81,7 @@ enum Envelope {
     },
     WorkingDraft {
         command: working_drafts::Command,
-        reply: mpsc::Sender<Result<pp_contracts::working_drafts::Outcome>>,
+        reply: mpsc::Sender<Result<working_drafts::Outcome>>,
     },
     Publication {
         command: plan_publication::Command,

@@ -343,7 +343,7 @@ fn ticket_t_61_read_model_missing_observations_are_errors() {
         available_input_roots: Default::default(),
         media_by_part_id: Default::default(),
     };
-    assert!(views::review(&b.builds[0].accepted, false, &obs, &CatalogOnly).is_err());
+    assert!(views::review_json(&b.builds[0].accepted, false, &obs, &CatalogOnly).is_err());
 }
 #[test]
 fn ticket_t_61_read_model_key_route_is_authorized_by_secret_only() {

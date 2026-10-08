@@ -74,8 +74,8 @@ pub(crate) fn preflight(path: &Path, owned: bool) -> Result<u64> {
     let conn = Connection::open(copy.0.join("print-partner.db"))?;
     let version = discover_version(&conn)?;
     ensure!(
-        version <= 40,
-        "Database schema version {version} is newer than supported version 40"
+        version <= 41,
+        "Database schema version {version} is newer than supported version 41"
     );
     ensure!(
         version == 0 || version >= 31,
@@ -90,6 +90,7 @@ pub(crate) fn preflight(path: &Path, owned: bool) -> Result<u64> {
     crate::uploads::validate_schema(&conn, version)?;
     crate::plan_publication::validate_schema(&conn, version)?;
     crate::source_scan::validate_schema(&conn, version)?;
+    validate_manifest_columns(&conn, version)?;
     Ok(version)
 }
 
@@ -368,12 +369,30 @@ pub(crate) fn initialize(
     crate::uploads::validate_schema(&conn, 40)?;
     crate::plan_publication::validate_schema(&conn, 40)?;
     crate::source_scan::validate_schema(&conn, 40)?;
+    let manifest_backup = if version < 41 {
+        let target = path.parent().unwrap().join("backups/pre-schema41.db");
+        if !target.exists() {
+            backup(&conn, &target, false)?;
+        }
+        validate_generation40_backup(&target)?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        validate_manifest_columns(&tx, 40)?;
+        tx.execute(
+            "UPDATE app_settings SET value='41' WHERE tenant_id='default' AND key='schema_version'",
+            [],
+        )?;
+        tx.commit()?;
+        Some(target)
+    } else {
+        None
+    };
+    validate_manifest_columns(&conn, 41)?;
     Ok((
         conn,
         SchemaReady {
-            version: 40,
+            version: 41,
             previous_version: version,
-            backup: backup_path,
+            backup: backup_path.or(manifest_backup),
         },
     ))
 }
@@ -433,6 +452,66 @@ fn add_column(conn: &Connection, table: &str, column: &str, sql: &str) -> Result
         .collect::<rusqlite::Result<Vec<_>>>()?;
     if !columns.iter().any(|name| name == column) {
         conn.execute_batch(sql)?;
+    }
+    Ok(())
+}
+
+fn validate_generation40_backup(path: &Path) -> Result<()> {
+    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    ensure!(
+        discover_version(&conn)? == 40,
+        "Manifest backup must contain committed schema 40"
+    );
+    let integrity: String = conn.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
+    ensure!(integrity == "ok", "Manifest backup integrity failed");
+    crate::jobs::validate_schema(&conn, 40)?;
+    crate::uploads::validate_schema(&conn, 40)?;
+    crate::plan_publication::validate_schema(&conn, 40)?;
+    crate::source_scan::validate_schema(&conn, 40)?;
+    validate_manifest_columns(&conn, 40)
+}
+
+fn validate_manifest_columns(conn: &Connection, version: u64) -> Result<()> {
+    for table in ["plan_draft_parts", "plan_revision_parts", "parts"] {
+        let exists: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)",
+            [table],
+            |row| row.get(0),
+        )?;
+        if !exists {
+            ensure!(version < 40, "Manifest part table {table} is missing");
+            continue;
+        }
+        let mut statement = conn.prepare(&format!("SELECT * FROM {table}"))?;
+        let names: Vec<_> = statement
+            .column_names()
+            .iter()
+            .map(|name| (*name).to_owned())
+            .collect();
+        let mut rows = statement.query([])?;
+        while let Some(row) = rows.next()? {
+            for (index, column) in names.iter().enumerate() {
+                let value = row.get_ref(index)?;
+                if matches!(column.as_str(), "requirement" | "option_group_id") {
+                    if version < 41 {
+                        ensure!(
+                            matches!(
+                                value,
+                                rusqlite::types::ValueRef::Null
+                                    | rusqlite::types::ValueRef::Text(_)
+                            ),
+                            "Pre41 manifest metadata {table}.{column} must be NULL or TEXT"
+                        );
+                    }
+                    crate::manifest_text::read_manifest_text(value)?;
+                } else {
+                    ensure!(
+                        !matches!(value, rusqlite::types::ValueRef::Blob(_)),
+                        "BLOB is not admitted in {table}.{column}"
+                    );
+                }
+            }
+        }
     }
     Ok(())
 }

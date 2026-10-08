@@ -125,7 +125,7 @@ fn main() -> Result<()> {
             &AtomicBool::new(false),
             Duration::from_secs(5),
         )?;
-        accepted_reads.push(serde_json::to_value(view)?);
+        accepted_reads.push(view.into_json_body().into_bytes());
         owner.shutdown()?;
         results.push(match result {
             Ok(value) => serde_json::to_value(value)?,
@@ -138,10 +138,25 @@ fn main() -> Result<()> {
             break;
         }
     }
-    println!(
-        "{}",
-        json!({"first":results[0],"restart":results.get(1),"accepted_reads":accepted_reads,"consumed_tokens":*consumed.lock().expect("transcript"),"graph_before":before,"graph_after":graph(directory)?})
-    );
+    let mut output = b"{\"first\":".to_vec();
+    output.extend_from_slice(&serde_json::to_vec(&results[0])?);
+    output.extend_from_slice(b",\"restart\":");
+    output.extend_from_slice(&serde_json::to_vec(&results.get(1))?);
+    output.extend_from_slice(b",\"accepted_reads\":[");
+    for (i, body) in accepted_reads.into_iter().enumerate() {
+        if i > 0 {
+            output.push(b',');
+        }
+        output.extend_from_slice(&body);
+    }
+    output.extend_from_slice(b"],\"consumed_tokens\":");
+    output.extend_from_slice(&serde_json::to_vec(&*consumed.lock().expect("transcript"))?);
+    output.extend_from_slice(b",\"graph_before\":");
+    output.extend_from_slice(&serde_json::to_vec(&before)?);
+    output.extend_from_slice(b",\"graph_after\":");
+    output.extend_from_slice(&serde_json::to_vec(&graph(directory)?)?);
+    output.push(b'}');
+    println!("{}", String::from_utf8(output)?);
     ensure!(!failed, "Publication fixture operation failed");
     Ok(())
 }
