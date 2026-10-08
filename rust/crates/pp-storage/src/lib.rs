@@ -13,6 +13,7 @@ pub mod read_model;
 pub mod required_units;
 mod schema;
 pub mod source_scan;
+pub mod source_sync;
 pub mod uploads;
 pub mod working_drafts;
 

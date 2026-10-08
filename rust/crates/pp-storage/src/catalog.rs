@@ -352,6 +352,10 @@ pub(super) enum Command {
         lease: crate::jobs::AttemptLease,
         source_id: Option<i64>,
     },
+    BeginSyncTarget {
+        lease: crate::jobs::AttemptLease,
+        key: crate::source_sync::SyncTargetKey,
+    },
     End(u64),
 }
 pub(super) enum Reply {
@@ -700,6 +704,28 @@ pub(crate) fn begin_job_work(
         _ => Err(anyhow!("Unexpected lease reply")),
     }
 }
+pub(crate) fn begin_sync_target_work(
+    client: &SettingsClient,
+    lease: crate::jobs::AttemptLease,
+    key: crate::source_sync::SyncTargetKey,
+    cancelled: &AtomicBool,
+    wait: Duration,
+) -> Result<SourceWorkLease> {
+    match enqueue(
+        client,
+        Command::BeginSyncTarget { lease, key },
+        cancelled,
+        wait,
+    )?
+    .recv()??
+    {
+        Reply::Lease(proof) => Ok(SourceWorkLease {
+            client: client.clone(),
+            proof: Some(proof),
+        }),
+        _ => Err(anyhow!("Unexpected lease reply")),
+    }
+}
 impl SourceWorkLease {
     pub(crate) fn proof(&self) -> Result<SourceWorkProof> {
         self.proof
@@ -781,6 +807,15 @@ fn execute_inner(
         Command::End(_) => unreachable!(),
         Command::BeginJob { lease, source_id } => {
             let (tenant, id) = crate::jobs::claimed_source(&tx, &lease, source_id)?;
+            require(&tx, &tenant, id)?;
+            ensure!(!state.source_busy(&tenant, id), SourceBusy);
+            let token = state.next_token()?;
+            tx.commit()?;
+            state.activate(token, tenant, id);
+            Ok(Reply::Lease(state.proof(token)?))
+        }
+        Command::BeginSyncTarget { lease, key } => {
+            let (tenant, id) = crate::source_sync::candidate_binding(&tx, &lease, &key)?;
             require(&tx, &tenant, id)?;
             ensure!(!state.source_busy(&tenant, id), SourceBusy);
             let token = state.next_token()?;

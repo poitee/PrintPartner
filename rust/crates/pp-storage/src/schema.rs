@@ -74,8 +74,8 @@ pub(crate) fn preflight(path: &Path, owned: bool) -> Result<u64> {
     let conn = Connection::open(copy.0.join("print-partner.db"))?;
     let version = discover_version(&conn)?;
     ensure!(
-        version <= 41,
-        "Database schema version {version} is newer than supported version 41"
+        version <= 42,
+        "Database schema version {version} is newer than supported version 42"
     );
     ensure!(
         version == 0 || version >= 31,
@@ -90,6 +90,7 @@ pub(crate) fn preflight(path: &Path, owned: bool) -> Result<u64> {
     crate::uploads::validate_schema(&conn, version)?;
     crate::plan_publication::validate_schema(&conn, version)?;
     crate::source_scan::validate_schema(&conn, version)?;
+    crate::source_sync::validate_schema(&conn, version)?;
     validate_manifest_columns(&conn, version)?;
     Ok(version)
 }
@@ -387,10 +388,20 @@ pub(crate) fn initialize(
         None
     };
     validate_manifest_columns(&conn, 41)?;
+    if version < 42 {
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute_batch(include_str!("source_sync/schema.sql"))?;
+        tx.execute(
+            "UPDATE app_settings SET value='42' WHERE tenant_id='default' AND key='schema_version'",
+            [],
+        )?;
+        tx.commit()?;
+    }
+    crate::source_sync::validate_schema(&conn, 42)?;
     Ok((
         conn,
         SchemaReady {
-            version: 41,
+            version: 42,
             previous_version: version,
             backup: backup_path.or(manifest_backup),
         },

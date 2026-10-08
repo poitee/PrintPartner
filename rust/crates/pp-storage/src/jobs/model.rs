@@ -408,7 +408,8 @@ impl Payload {
             | Self::SuppliedSourceImport { project_id, .. } => {
                 format!("source:{project_id}")
             }
-            Self::Sync { .. } | Self::CheckSourceUpdates {} => "source:*".into(),
+            Self::CheckSourceUpdates {} => "source:*".into(),
+            Self::Sync { .. } => String::new(),
             _ => String::new(),
         }
     }
@@ -718,7 +719,7 @@ pub struct PrinterUploadResult {
     pub checkoff_units: u64,
 }
 impl ResultArtifact {
-    pub(super) fn validate(&self) -> Result<()> {
+    pub(crate) fn validate(&self) -> Result<()> {
         text(&self.receipt_id, 128)?;
         digest(&self.content_hash)?;
         text(&self.target, 1024)

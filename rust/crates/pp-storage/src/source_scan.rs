@@ -59,6 +59,26 @@ impl LocalScanObservation {
         self.local_path.as_deref()
     }
 
+    pub(crate) fn configuration_version(&self) -> i64 {
+        self.configuration_version
+    }
+
+    pub(crate) fn authority_actor(&self) -> &str {
+        &self.authority_actor
+    }
+
+    pub(crate) fn authority_basis_digest(&self) -> &str {
+        &self.authority_basis_digest
+    }
+
+    pub(crate) fn activation_observation_digest(&self) -> &str {
+        &self.activation_observation_digest
+    }
+
+    pub(crate) fn path_observation_digest(&self) -> &str {
+        &self.path_observation_digest
+    }
+
     pub fn settlement(self, documents: Vec<LocalDocumentRecord>) -> LocalScanSettlement {
         LocalScanSettlement {
             observation: self,
@@ -70,6 +90,16 @@ impl LocalScanObservation {
 pub struct LocalScanSettlement {
     observation: LocalScanObservation,
     documents: Vec<LocalDocumentRecord>,
+}
+
+impl LocalScanSettlement {
+    pub(crate) fn source_id(&self) -> i64 {
+        self.observation.source_id
+    }
+
+    pub(crate) fn observation(&self) -> &LocalScanObservation {
+        &self.observation
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -92,6 +122,10 @@ impl LocalScanApplied {
             pdf_extract_job_id: None,
             postprocess_warning: None,
         })
+    }
+
+    pub(crate) fn receipt(&self) -> &ResultArtifact {
+        &self.receipt
     }
 
     #[cfg(test)]
@@ -210,7 +244,7 @@ fn require_live_reservation(
     Ok(())
 }
 
-fn project_observation(
+pub(crate) fn project_observation(
     tx: &Transaction<'_>,
     tenant: &str,
     source_id: i64,
@@ -280,6 +314,33 @@ fn mark_source_synced(
             params![tenant, source_id, synced_at, metadata, configuration_version, local_path],
         )? == 1,
         "Local Source changed while marking it synced"
+    );
+    Ok(())
+}
+
+pub(crate) fn mark_local_failure(
+    tx: &Transaction<'_>,
+    tenant: &str,
+    source_id: i64,
+    detail: &str,
+) -> Result<()> {
+    let raw: Option<String> = tx.query_row(
+        "SELECT metadata_json FROM projects WHERE tenant_id=?1 AND id=?2",
+        params![tenant, source_id],
+        |row| row.get(0),
+    )?;
+    let mut metadata = raw
+        .map(|raw| serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&raw))
+        .transpose()?
+        .unwrap_or_default();
+    metadata.insert("sync_error".into(), detail.into());
+    metadata.insert("sync_required".into(), true.into());
+    ensure!(
+        tx.execute(
+            "UPDATE projects SET metadata_json=?3 WHERE tenant_id=?1 AND id=?2",
+            params![tenant, source_id, serde_json::to_string(&metadata)?],
+        )? == 1,
+        "Local Source disappeared while recording failure"
     );
     Ok(())
 }
@@ -378,21 +439,18 @@ fn index_digest(documents: &[LocalDocumentRecord]) -> Result<String> {
     Ok(hex::encode(hash.finalize()))
 }
 
-pub(crate) fn settle(
+pub(crate) fn apply_local_documents(
     tx: &Transaction<'_>,
-    state: &State,
-    lease: &AttemptLease,
-    proof: &SourceWorkProof,
-    policy: crate::auth::AuthPolicy,
+    tenant: &str,
     settlement: LocalScanSettlement,
-) -> Result<(JobRecord, LocalScanApplied)> {
+) -> Result<LocalScanApplied> {
     validate_documents(&settlement.documents)?;
-    let mut job = crate::jobs::claimed_job(tx, lease)?;
-    ensure!(!job.cancel_requested, "ImportScan was cancelled");
-    let authority = crate::jobs::require_original_authority(tx, &job, policy)?;
-    let binding = expected_binding(&job)?;
-    require_live_reservation(state, proof, &binding)?;
-    let current = project_observation(tx, &job.tenant, binding.id, authority.subject())?;
+    let current = project_observation(
+        tx,
+        tenant,
+        settlement.observation.source_id,
+        &settlement.observation.authority_actor,
+    )?;
     ensure!(
         current.source_id == settlement.observation.source_id
             && current.local_path == settlement.observation.local_path
@@ -404,26 +462,20 @@ pub(crate) fn settle(
             && current.path_observation_digest == settlement.observation.path_observation_digest,
         "Local Source observation changed"
     );
-    let phase: String = tx.query_row(
-        "SELECT phase FROM source_scan_executions WHERE job_id=?1 AND generation=?2 AND attempt_worker=?3 AND attempt_fence_digest=?4",
-        params![job.job_id, job.generation, lease.worker(), digest_bytes(lease.fence())],
-        |row| row.get(0),
-    )?;
-    ensure!(phase == "observed", "Local scan is not observed");
     let inventory_digest = inventory_digest(&settlement.documents)?;
     let index_digest = index_digest(&settlement.documents)?;
     let now = time::OffsetDateTime::now_utc().unix_timestamp();
     tx.execute(
         "DELETE FROM source_docs WHERE tenant_id=?1 AND project_id=?2",
-        params![job.tenant, binding.id],
+        params![tenant, current.source_id],
     )?;
     for document in &settlement.documents {
         tx.execute(
             "INSERT INTO source_docs(tenant_id,project_id,path,kind,size_bytes,content_hash,extract_status,extract_error,page_count,updated_at,source_revision_id,input_digest,producer_version)
              VALUES(?1,?2,?3,?4,?5,?6,?7,NULL,NULL,?8,NULL,NULL,NULL)",
             params![
-                job.tenant,
-                binding.id,
+                tenant,
+                current.source_id,
                 document.relative_path,
                 document.kind.stored(),
                 i64::try_from(document.size_bytes)?,
@@ -435,46 +487,76 @@ pub(crate) fn settle(
     }
     mark_source_synced(
         tx,
-        &job.tenant,
-        binding.id,
+        tenant,
+        current.source_id,
         current.configuration_version,
         current.local_path.as_deref(),
         &now.to_string(),
     )?;
-    let target = format!("source:{}", binding.id);
+    let target = format!("source:{}", current.source_id);
     let receipt = ResultArtifact {
         receipt_id: format!("local-scan-{}", hex::encode(rand::random::<[u8; 16]>())),
         content_hash: index_digest.clone(),
-        target: target.clone(),
+        target,
     };
+    Ok(LocalScanApplied {
+        source_id: current.source_id,
+        receipt,
+        inventory_digest,
+        index_digest,
+        doc_count: settlement.documents.len() as u64,
+    })
+}
+
+pub(crate) fn settle(
+    tx: &Transaction<'_>,
+    state: &State,
+    lease: &AttemptLease,
+    proof: &SourceWorkProof,
+    policy: crate::auth::AuthPolicy,
+    settlement: LocalScanSettlement,
+) -> Result<(JobRecord, LocalScanApplied)> {
+    let mut job = crate::jobs::claimed_job(tx, lease)?;
+    ensure!(!job.cancel_requested, "ImportScan was cancelled");
+    let authority = crate::jobs::require_original_authority(tx, &job, policy)?;
+    let binding = expected_binding(&job)?;
+    require_live_reservation(state, proof, &binding)?;
+    ensure!(
+        settlement.observation.source_id == binding.id,
+        "Local scan settlement Source mismatch"
+    );
+    ensure!(
+        settlement.observation.authority_actor == authority.subject(),
+        "Local Source authority changed"
+    );
+    let basis_hash = settlement.observation.activation_observation_digest.clone();
+    let phase: String = tx.query_row(
+        "SELECT phase FROM source_scan_executions WHERE job_id=?1 AND generation=?2 AND attempt_worker=?3 AND attempt_fence_digest=?4",
+        params![job.job_id, job.generation, lease.worker(), digest_bytes(lease.fence())],
+        |row| row.get(0),
+    )?;
+    ensure!(phase == "observed", "Local scan is not observed");
+    let applied = apply_local_documents(tx, &job.tenant, settlement)?;
+    let now = time::OffsetDateTime::now_utc().unix_timestamp();
     job.effects.push(EffectReceipt {
         intent: EffectIntent {
             operation: EffectOperation::SourceRefresh,
-            basis_hash: settlement.observation.activation_observation_digest,
-            content_hash: index_digest.clone(),
-            target,
+            basis_hash,
+            content_hash: applied.index_digest.clone(),
+            target: applied.receipt.target.clone(),
         },
         attempt: job.attempt,
         generation: job.generation,
         confirmed: true,
         no_effect: false,
-        receipt: Some(receipt.clone()),
+        receipt: Some(applied.receipt.clone()),
     });
     crate::jobs::save(tx, &mut job, "local_scan_settled")?;
     tx.execute(
         "UPDATE source_scan_executions SET phase='local_settled',effect_applied=1,inventory_digest=?3,index_digest=?4,receipt_id=?5,receipt_hash=?6,receipt_target=?7,updated_at=?8 WHERE job_id=?1 AND generation=?2 AND phase='observed'",
-        params![job.job_id, job.generation, inventory_digest, index_digest, receipt.receipt_id, receipt.content_hash, receipt.target, now],
+        params![job.job_id, job.generation, applied.inventory_digest, applied.index_digest, applied.receipt.receipt_id, applied.receipt.content_hash, applied.receipt.target, now],
     )?;
-    Ok((
-        job,
-        LocalScanApplied {
-            source_id: binding.id,
-            receipt,
-            inventory_digest,
-            index_digest,
-            doc_count: settlement.documents.len() as u64,
-        },
-    ))
+    Ok((job, applied))
 }
 
 pub(crate) fn complete(
