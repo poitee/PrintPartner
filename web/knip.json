@@ -27,8 +27,7 @@
         "*.ts"
       ],
       "ignore": [
-        "src/db/schema.ts",
-        "src/db/schema-pg.ts"
+        "src/db/schema.ts"
       ]
     },
     "apps/web": {

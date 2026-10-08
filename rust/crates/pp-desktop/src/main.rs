@@ -105,10 +105,12 @@ fn run() -> Result<u8> {
             return Err(error);
         }
     };
+    let shutdown_requested = core.shutdown_requested();
     let app_handle = app.handle().clone();
     let stop_signal = runtime.spawn(async move {
         let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).ok();
         tokio::select! {
+            _ = shutdown_requested => {},
             _ = tokio::signal::ctrl_c() => {},
             _ = async { if let Some(signal) = terminate.as_mut() { signal.recv().await; } else { std::future::pending::<()>().await; } } => {},
             _ = async { if let Some(seconds) = test_exit { tokio::time::sleep(std::time::Duration::from_secs(seconds)).await; } else { std::future::pending::<()>().await; } } => {},
