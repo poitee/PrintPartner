@@ -303,7 +303,7 @@ fn ordered_absence_and_owned_or_later_cleanup_converge() {
         .job_worker_with_policy(
             policy(),
             WorkerAdmission {
-                kinds: vec![(JobKind::SuppliedSourceImport, 1)],
+                kinds: vec![(JobKind::SuppliedSourceImport, 1), (JobKind::ImportScan, 1)],
                 total: 1,
                 per_resource: 1,
                 lease_seconds: 3600,

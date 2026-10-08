@@ -11,6 +11,7 @@ pub use working_drafts::save as plan_save;
 pub mod read_model;
 pub mod required_units;
 mod schema;
+pub mod source_scan;
 pub mod uploads;
 pub mod working_drafts;
 
@@ -541,7 +542,9 @@ impl WriterOwner {
                         .lock()
                         .expect("Source lease recovery poisoned"),
                 );
-                catalog_state.reap(orphaned);
+                catalog_state
+                    .reap(orphaned)
+                    .expect("Invalid orphaned Source lease");
                 match envelope {
                     Envelope::BuildGraph { command, reply } => {
                         reply.send(build_graph::execute(&mut connection, command));

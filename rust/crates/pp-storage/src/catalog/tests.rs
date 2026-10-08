@@ -38,7 +38,10 @@ fn ticket_t_59_catalog_private_full_queue_retains_unreleased_work() {
     };
     let lease = SourceWorkLease {
         client: client.clone(),
-        token: Some(17),
+        proof: Some(SourceWorkProof {
+            incarnation: "a".repeat(64),
+            token: 17,
+        }),
     };
     assert!(
         enqueue(
@@ -54,10 +57,19 @@ fn ticket_t_59_catalog_private_full_queue_retains_unreleased_work() {
         shared.orphaned_source_leases.lock().unwrap().as_slice(),
         &[17]
     );
-    let mut state = State::default();
-    state.active.insert(17, ("default".into(), 1));
+    let mut state = State {
+        issued_high_water: 17,
+        ..Default::default()
+    };
+    state.active.insert(
+        17,
+        SourceBinding {
+            tenant: "default".into(),
+            id: 1,
+        },
+    );
     let orphaned = std::mem::take(&mut *shared.orphaned_source_leases.lock().unwrap());
-    state.reap(orphaned);
+    state.reap(orphaned).unwrap();
     assert!(!state.active.contains_key(&17));
     let mut queue = shared.queue.lock().unwrap();
     assert_eq!(queue.pending.len(), 1);
@@ -72,7 +84,10 @@ fn ticket_t_59_catalog_private_full_queue_retains_unreleased_work() {
     drop(queue);
     let lease = SourceWorkLease {
         client,
-        token: Some(17),
+        proof: Some(SourceWorkProof {
+            incarnation: "a".repeat(64),
+            token: 17,
+        }),
     };
     drop(lease);
     let Envelope::Catalog {
@@ -83,6 +98,371 @@ fn ticket_t_59_catalog_private_full_queue_retains_unreleased_work() {
         panic!("release must be serialized")
     };
     assert_eq!(token, 17);
+}
+
+#[test]
+fn issued_source_tokens_cover_full_u64_bounds_and_retire_idempotently() {
+    let mut state = State {
+        issued_high_water: u64::MAX - 1,
+        ..Default::default()
+    };
+    assert_eq!(state.next_token().unwrap(), u64::MAX);
+    state.activate(u64::MAX, "tenant".into(), 9);
+    assert!(state.next_token().is_err());
+    let proof = state.proof(u64::MAX).unwrap();
+    let binding = SourceBinding {
+        tenant: "tenant".into(),
+        id: 9,
+    };
+    assert!(matches!(
+        state.retire_issued(&proof, &binding).unwrap(),
+        Retirement::RetiredNow
+    ));
+    assert!(matches!(
+        state.retire_issued(&proof, &binding).unwrap(),
+        Retirement::AlreadyRetired
+    ));
+    assert!(matches!(
+        state.classify_issued(&proof.incarnation, 0),
+        IssuedTokenState::NeverIssued
+    ));
+}
+
+#[test]
+fn repeated_local_scan_completion_adopts_the_exact_terminal_result() {
+    let root = std::env::temp_dir().join(format!(
+        "pp-repeat-local-completion-{}",
+        rand::random::<u64>()
+    ));
+    let (owner, _) = WriterOwner::open(&root, crate::Limits::default()).unwrap();
+    let policy = auth::AuthPolicy {
+        registration: auth::RegistrationPolicy::Open,
+        session_tenant: auth::SessionTenantPolicy::AccountTenant,
+        first_user: auth::FirstUserTenant::NewUser,
+    };
+    let auth::Outcome::Session { token, .. } = owner
+        .auth(auth::FirstUserTenant::NewUser)
+        .submit(
+            auth::Request::Register {
+                email: "repeat-local-completion@example.com".into(),
+                display_name: "Repeat completion".into(),
+                password: auth::Secret::new("long-repeat-completion-password".into()),
+            },
+            Arc::new(AtomicBool::new(false)),
+            Duration::from_secs(5),
+        )
+        .unwrap()
+        .recv()
+        .unwrap()
+        .unwrap()
+    else {
+        panic!("session expected")
+    };
+    let Outcome::Source(Some(source)) = owner
+        .source_catalog_with_policy(
+            Credentials::Session(auth::Secret::new(token.expose().to_owned())),
+            policy,
+        )
+        .unwrap()
+        .execute(Request::Create {
+            source: CreateSource {
+                name: "Repeat completion source".into(),
+                source_kind: Some("local".into()),
+                source_type: Some("local".into()),
+                ..Default::default()
+            },
+        })
+        .unwrap()
+    else {
+        panic!("Source expected")
+    };
+    owner
+        .jobs(policy)
+        .unwrap()
+        .submit(
+            jobs::Credential::Session(auth::Secret::new(token.expose().to_owned())),
+            jobs::UserOperation::Enqueue {
+                key: "repeat-local-completion".into(),
+                payload_version: 1,
+                payload: jobs::Payload::ImportScan {
+                    project_id: source.id.try_into().unwrap(),
+                },
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )
+        .unwrap()
+        .receive()
+        .unwrap();
+    let worker = owner
+        .job_worker_with_policy(
+            policy,
+            jobs::WorkerAdmission {
+                kinds: vec![(jobs::JobKind::ImportScan, 1)],
+                total: 1,
+                per_resource: 1,
+                lease_seconds: 60,
+            },
+        )
+        .unwrap();
+    let jobs::ClaimedAttempt {
+        mut lease,
+        source_work,
+        ..
+    } = worker
+        .claim_kind(jobs::JobKind::ImportScan)
+        .unwrap()
+        .unwrap();
+    let mut source_work = source_work.unwrap();
+    let mut repeated_work = SourceWorkLease {
+        client: source_work.client.clone(),
+        proof: source_work.proof.clone(),
+    };
+    let mut wrong_result_work = SourceWorkLease {
+        client: source_work.client.clone(),
+        proof: source_work.proof.clone(),
+    };
+    let mut wrong_receipt_work = SourceWorkLease {
+        client: source_work.client.clone(),
+        proof: source_work.proof.clone(),
+    };
+    let mut wrong_reservation_work = SourceWorkLease {
+        client: source_work.client.clone(),
+        proof: source_work.proof.clone(),
+    };
+    let mut mismatched_job_work = SourceWorkLease {
+        client: source_work.client.clone(),
+        proof: source_work.proof.clone(),
+    };
+    wrong_reservation_work.proof.as_mut().unwrap().token += 1;
+    let observation = worker.observe_local_scan(&lease, &source_work).unwrap();
+    let applied = worker
+        .settle_local_scan(&mut lease, &source_work, observation.settlement(Vec::new()))
+        .unwrap();
+    let result = applied.local_source_scan_result().unwrap();
+    let crate::source_scan::LocalCompletionInspection::Completed(first) = worker
+        .complete_local_scan(
+            &mut lease,
+            &mut source_work,
+            applied.clone(),
+            result.clone(),
+        )
+        .unwrap()
+    else {
+        panic!("first completion expected")
+    };
+    let history_before: i64 = Connection::open(root.join("print-partner.db"))
+        .unwrap()
+        .query_row(
+            "SELECT count(*) FROM durable_job_history WHERE job_id=?1",
+            [&first.job.job_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let document_before: String = Connection::open(root.join("print-partner.db"))
+        .unwrap()
+        .query_row(
+            "SELECT document FROM durable_jobs WHERE id=?1",
+            [&first.job.job_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let source_facts_before: (i64, i64, String, String, String, String) =
+        Connection::open(root.join("print-partner.db"))
+            .unwrap()
+            .query_row(
+                "SELECT (SELECT count(*) FROM source_docs WHERE project_id=?1),source_id,phase,inventory_digest,index_digest,result_digest FROM source_scan_executions WHERE job_id=?2 AND generation=?3",
+                params![source.id, first.job.job_id, first.job.generation],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                    ))
+                },
+            )
+            .unwrap();
+    let crate::source_scan::LocalCompletionInspection::Completed(repeated) = worker
+        .complete_local_scan(
+            &mut lease,
+            &mut repeated_work,
+            applied.clone(),
+            result.clone(),
+        )
+        .unwrap()
+    else {
+        panic!("repeated completion expected")
+    };
+    assert_eq!(repeated.job.state_version, first.job.state_version);
+    assert_eq!(repeated.result_digest, first.result_digest);
+    let mut wrong_result = result.clone();
+    wrong_result.doc_count += 1;
+    assert!(
+        worker
+            .complete_local_scan(
+                &mut lease,
+                &mut wrong_result_work,
+                applied.clone(),
+                wrong_result,
+            )
+            .is_err()
+    );
+    let wrong_receipt = applied.with_receipt_id_for_test("wrong-receipt".into());
+    assert!(
+        worker
+            .complete_local_scan(
+                &mut lease,
+                &mut wrong_receipt_work,
+                wrong_receipt,
+                result.clone(),
+            )
+            .is_err()
+    );
+    assert!(
+        worker
+            .complete_local_scan(
+                &mut lease,
+                &mut wrong_reservation_work,
+                applied.clone(),
+                result.clone(),
+            )
+            .is_err()
+    );
+    wrong_reservation_work.proof = None;
+    let history_after: i64 = Connection::open(root.join("print-partner.db"))
+        .unwrap()
+        .query_row(
+            "SELECT count(*) FROM durable_job_history WHERE job_id=?1",
+            [&first.job.job_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(history_after, history_before);
+    let document_after: String = Connection::open(root.join("print-partner.db"))
+        .unwrap()
+        .query_row(
+            "SELECT document FROM durable_jobs WHERE id=?1",
+            [&first.job.job_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(document_after, document_before);
+    let mut mismatched_document: serde_json::Value =
+        serde_json::from_str(&document_before).unwrap();
+    mismatched_document["job_id"] = serde_json::Value::String("stored-other-job".into());
+    let mismatched_document = serde_json::to_string(&mismatched_document).unwrap();
+    Connection::open(root.join("print-partner.db"))
+        .unwrap()
+        .execute(
+            "UPDATE durable_jobs SET document=?2 WHERE id=?1",
+            params![first.job.job_id, &mismatched_document],
+        )
+        .unwrap();
+    assert!(
+        worker
+            .complete_local_scan(
+                &mut lease,
+                &mut mismatched_job_work,
+                applied.clone(),
+                result.clone(),
+            )
+            .is_err()
+    );
+    assert!(worker.inspect_local_scan_completion(&lease).is_err());
+    mismatched_job_work.release().unwrap();
+    assert!(mismatched_job_work.proof.is_none());
+    let (history_after_mismatch, document_after_mismatch, source_facts_after): (
+        i64,
+        String,
+        (i64, i64, String, String, String, String),
+    ) =
+        Connection::open(root.join("print-partner.db"))
+            .unwrap()
+            .query_row(
+                "SELECT (SELECT count(*) FROM durable_job_history WHERE job_id=?2),(SELECT document FROM durable_jobs WHERE id=?2),(SELECT count(*) FROM source_docs WHERE project_id=?1),source_id,phase,inventory_digest,index_digest,result_digest FROM source_scan_executions WHERE job_id=?2 AND generation=?3",
+                params![source.id, first.job.job_id, first.job.generation],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        (
+                            row.get(2)?,
+                            row.get(3)?,
+                            row.get(4)?,
+                            row.get(5)?,
+                            row.get(6)?,
+                            row.get(7)?,
+                        ),
+                    ))
+                },
+            )
+            .unwrap();
+    assert_eq!(history_after_mismatch, history_before);
+    assert_eq!(document_after_mismatch, mismatched_document);
+    assert_eq!(source_facts_after, source_facts_before);
+    drop(worker);
+    owner.shutdown().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn source_token_incarnation_prevents_restart_aliasing() {
+    let mut first = State::default();
+    let token = first.next_token().unwrap();
+    first.activate(token, "tenant".into(), 9);
+    let proof = first.proof(token).unwrap();
+    let mut restarted = State::default();
+    let reused = restarted.next_token().unwrap();
+    restarted.activate(reused, "tenant".into(), 9);
+    assert_eq!(token, reused);
+    assert!(matches!(
+        restarted.classify_issued(&proof.incarnation, proof.token),
+        IssuedTokenState::WrongIncarnation
+    ));
+}
+
+#[test]
+fn source_work_release_acknowledges_idempotent_retirement_and_preserves_stopped_proof() {
+    let root =
+        std::env::temp_dir().join(format!("pp-source-release-ack-{}", rand::random::<u64>()));
+    let (owner, _) = WriterOwner::open(&root, crate::Limits::default()).unwrap();
+    let catalog = owner.local_source_catalog();
+    let Outcome::Source(Some(source)) = catalog
+        .execute(Request::Create {
+            source: CreateSource {
+                name: "Release acknowledgement".into(),
+                source_kind: Some("local".into()),
+                ..Default::default()
+            },
+        })
+        .unwrap()
+    else {
+        panic!("Source expected")
+    };
+    let mut first = catalog
+        .begin_work(source.id, &AtomicBool::new(false), Duration::from_secs(5))
+        .unwrap();
+    let mut repeated = SourceWorkLease {
+        client: first.client.clone(),
+        proof: first.proof.clone(),
+    };
+    first.release().unwrap();
+    assert!(first.proof.is_none());
+    repeated.release().unwrap();
+    assert!(repeated.proof.is_none());
+    let mut stopped = catalog
+        .begin_work(source.id, &AtomicBool::new(false), Duration::from_secs(5))
+        .unwrap();
+    owner.shutdown().unwrap();
+    assert!(stopped.release().is_err());
+    assert!(stopped.proof.is_some());
+    assert!(stopped.release().is_err());
+    assert!(stopped.proof.is_some());
+    stopped.proof = None;
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -132,7 +512,7 @@ fn build_graph_envelope_reaps_orphaned_source_work_before_dispatch() {
         Err(error) => error,
     };
     assert!(busy.downcast_ref::<SourceBusy>().is_some());
-    let token = lease.token.take().unwrap();
+    let token = lease.proof.take().unwrap().token;
     let shared = lease.client.shared.clone();
     drop(lease);
     shared.orphaned_source_leases.lock().unwrap().push(token);
@@ -192,7 +572,7 @@ fn native_secrets_envelope_reaps_orphaned_source_work_before_dispatch() {
     let mut lease = catalog
         .begin_work(source.id, &AtomicBool::new(false), Duration::from_secs(2))
         .unwrap();
-    let token = lease.token.take().unwrap();
+    let token = lease.proof.take().unwrap().token;
     let shared = lease.client.shared.clone();
     drop(lease);
     shared.orphaned_source_leases.lock().unwrap().push(token);
@@ -377,7 +757,7 @@ fn captured_claim_validation_and_sql_abort_activate_no_source() {
             "{failure} changed journals"
         );
         assert!(state.active.is_empty(), "{failure} activated Source");
-        assert_eq!(state.next, 0);
+        assert_eq!(state.issued_high_water, 0);
         if failure == "sql-abort" {
             connection
                 .execute_batch("DROP TRIGGER capture_claim_abort")
@@ -416,7 +796,7 @@ fn captured_claim_token_overflow_rolls_back_recovery_and_allows_sourceless_work(
         panic!("initial claim")
     };
     state.active.clear();
-    state.next = u64::MAX;
+    state.issued_high_water = u64::MAX;
     connection.execute("UPDATE durable_jobs SET lease_until=0,document=json_set(document,'$.lease_until',0) WHERE id=?1", [&fixture.operation.job_id]).unwrap();
     let before = fixture.snapshot(&connection);
     let error = match jobs::execute(
@@ -431,7 +811,7 @@ fn captured_claim_token_overflow_rolls_back_recovery_and_allows_sourceless_work(
     assert_eq!(error.to_string(), "Work lease overflow");
     assert_eq!(fixture.snapshot(&connection), before);
     assert!(state.active.is_empty());
-    assert_eq!(state.next, u64::MAX);
+    assert_eq!(state.issued_high_water, u64::MAX);
     let queued = fixture
         .owner
         .jobs(auth::AuthPolicy {
@@ -470,6 +850,7 @@ fn captured_claim_token_overflow_rolls_back_recovery_and_allows_sourceless_work(
         &mut state,
         jobs::Command::Claim {
             job_id: None,
+            kind: None,
             worker: "no-source-worker".into(),
             admission: CapturedClaimFixture::admission(),
             policy: None,

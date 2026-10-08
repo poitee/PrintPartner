@@ -80,6 +80,12 @@ impl AttemptLease {
     pub(crate) fn generation(&self) -> i64 {
         self.generation
     }
+    pub(crate) fn tenant(&self) -> &str {
+        &self.tenant
+    }
+    pub(crate) fn worker(&self) -> &str {
+        &self.worker
+    }
     pub(crate) fn fence(&self) -> &str {
         &self.fence
     }
@@ -172,6 +178,11 @@ pub enum Outcome {
     Retained(usize),
     CapturePreflighted(Box<crate::uploads::PreflightedCapture>),
     CaptureCorrelation(crate::uploads::CaptureJournalCorrelation),
+    LocalScanObservation(crate::source_scan::LocalScanObservation),
+    LocalScanSettled(JobRecord, crate::source_scan::LocalScanApplied),
+    LocalScanCompletion(crate::source_scan::LocalCompletionInspection),
+    HeldLocalScan(crate::source_scan::HeldLocalScanInspection),
+    LocalScanReconciled(JobRecord),
 }
 
 enum TransactionDecision {
@@ -189,6 +200,8 @@ enum TransactionDecision {
         policy: AuthPolicy,
         snapshot: JobSnapshot,
     },
+    LocalScanCompleted(crate::source_scan::PendingLocalCompletion),
+    LocalScanReconciled(crate::source_scan::PendingLocalReconciliation),
 }
 
 struct CommittedRefusal {
@@ -222,6 +235,7 @@ pub(crate) enum Command {
     },
     Claim {
         job_id: Option<String>,
+        kind: Option<JobKind>,
         worker: String,
         admission: Arc<WorkerAdmission>,
         policy: Option<AuthPolicy>,
@@ -257,6 +271,39 @@ pub(crate) enum Command {
         lease: AttemptLease,
         policy: AuthPolicy,
         reply: mpsc::Sender<ValidatedAuthority>,
+    },
+    ObserveLocalScan {
+        lease: AttemptLease,
+        source_work: crate::catalog::SourceWorkProof,
+        policy: AuthPolicy,
+    },
+    SettleLocalScan {
+        lease: AttemptLease,
+        source_work: crate::catalog::SourceWorkProof,
+        policy: AuthPolicy,
+        settlement: crate::source_scan::LocalScanSettlement,
+    },
+    CompleteLocalScan {
+        lease: AttemptLease,
+        source_work: crate::catalog::SourceWorkProof,
+        policy: AuthPolicy,
+        applied: crate::source_scan::LocalScanApplied,
+        result: SourceScanResult,
+    },
+    InspectLocalScan {
+        lease: AttemptLease,
+        worker: String,
+    },
+    InspectHeldLocalScan {
+        lease: AttemptLease,
+        source_work: crate::catalog::SourceWorkProof,
+        worker: String,
+    },
+    ReconcileLocalScan {
+        lease: AttemptLease,
+        source_work: crate::catalog::SourceWorkProof,
+        applied: crate::source_scan::LocalScanApplied,
+        reason: String,
     },
     Observe {
         credential: Credential,
@@ -528,6 +575,171 @@ impl AtomicJobClient {
     }
 }
 impl ServerWorkerClient {
+    pub fn observe_local_scan(
+        &self,
+        lease: &AttemptLease,
+        source_work: &crate::catalog::SourceWorkLease,
+    ) -> Result<crate::source_scan::LocalScanObservation> {
+        ensure!(lease.worker == self.identity, "Foreign worker lease");
+        let policy = self.policy.ok_or(auth::AuthorityFailure::PolicyRequired)?;
+        match submit(
+            &self.storage,
+            Command::ObserveLocalScan {
+                lease: lease.clone(),
+                source_work: source_work.proof()?,
+                policy,
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?
+        .receive()?
+        {
+            Outcome::LocalScanObservation(observation) => Ok(observation),
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn settle_local_scan(
+        &self,
+        lease: &mut AttemptLease,
+        source_work: &crate::catalog::SourceWorkLease,
+        settlement: crate::source_scan::LocalScanSettlement,
+    ) -> Result<crate::source_scan::LocalScanApplied> {
+        ensure!(lease.worker == self.identity, "Foreign worker lease");
+        let policy = self.policy.ok_or(auth::AuthorityFailure::PolicyRequired)?;
+        match submit(
+            &self.storage,
+            Command::SettleLocalScan {
+                lease: lease.clone(),
+                source_work: source_work.proof()?,
+                policy,
+                settlement,
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?
+        .receive()?
+        {
+            Outcome::LocalScanSettled(job, applied) => {
+                lease.version = job.state_version;
+                Ok(applied)
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn complete_local_scan(
+        &self,
+        lease: &mut AttemptLease,
+        source_work: &mut crate::catalog::SourceWorkLease,
+        applied: crate::source_scan::LocalScanApplied,
+        result: SourceScanResult,
+    ) -> Result<crate::source_scan::LocalCompletionInspection> {
+        ensure!(lease.worker == self.identity, "Foreign worker lease");
+        let policy = self.policy.ok_or(auth::AuthorityFailure::PolicyRequired)?;
+        let outcome = match submit(
+            &self.storage,
+            Command::CompleteLocalScan {
+                lease: lease.clone(),
+                source_work: source_work.proof()?,
+                policy,
+                applied,
+                result,
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?
+        .receive()?
+        {
+            Outcome::LocalScanCompletion(outcome) => outcome,
+            _ => unreachable!(),
+        };
+        if matches!(
+            outcome,
+            crate::source_scan::LocalCompletionInspection::Completed(_)
+        ) {
+            source_work.consume_retired()?;
+        }
+        Ok(outcome)
+    }
+
+    pub fn inspect_local_scan_completion(
+        &self,
+        lease: &AttemptLease,
+    ) -> Result<crate::source_scan::LocalCompletionInspection> {
+        ensure!(lease.worker == self.identity, "Foreign worker lease");
+        match submit(
+            &self.storage,
+            Command::InspectLocalScan {
+                lease: lease.clone(),
+                worker: self.identity.clone(),
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?
+        .receive()?
+        {
+            Outcome::LocalScanCompletion(outcome) => Ok(outcome),
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn inspect_local_scan_while_held(
+        &self,
+        lease: &mut AttemptLease,
+        source_work: &crate::catalog::SourceWorkLease,
+    ) -> Result<crate::source_scan::HeldLocalScanInspection> {
+        ensure!(lease.worker == self.identity, "Foreign worker lease");
+        let outcome = match submit(
+            &self.storage,
+            Command::InspectHeldLocalScan {
+                lease: lease.clone(),
+                source_work: source_work.proof()?,
+                worker: self.identity.clone(),
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?
+        .receive()?
+        {
+            Outcome::HeldLocalScan(outcome) => outcome,
+            _ => unreachable!(),
+        };
+        lease.version = match &outcome {
+            crate::source_scan::HeldLocalScanInspection::NotApplied(job)
+            | crate::source_scan::HeldLocalScanInspection::Applied(job, _) => job.state_version,
+        };
+        Ok(outcome)
+    }
+
+    pub fn record_local_scan_reconciliation(
+        &self,
+        lease: &AttemptLease,
+        source_work: &mut crate::catalog::SourceWorkLease,
+        applied: crate::source_scan::LocalScanApplied,
+        reason: String,
+    ) -> Result<JobRecord> {
+        ensure!(lease.worker == self.identity, "Foreign worker lease");
+        let job = match submit(
+            &self.storage,
+            Command::ReconcileLocalScan {
+                lease: lease.clone(),
+                source_work: source_work.proof()?,
+                applied,
+                reason,
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?
+        .receive()?
+        {
+            Outcome::LocalScanReconciled(job) => job,
+            _ => unreachable!(),
+        };
+        source_work.consume_retired()?;
+        Ok(job)
+    }
+
     pub fn begin_source_work(
         &self,
         lease: &AttemptLease,
@@ -544,6 +756,7 @@ impl ServerWorkerClient {
             &self.storage,
             Command::Claim {
                 job_id: None,
+                kind: None,
                 worker: self.identity.clone(),
                 admission: self.admission.clone(),
                 policy: self.policy,
@@ -556,6 +769,33 @@ impl ServerWorkerClient {
     pub fn claim(&self) -> Result<Option<ClaimedAttempt>> {
         self.claim_pending(&AtomicBool::new(false), Duration::from_secs(5))?
             .receive()
+    }
+    pub fn claim_kind(&self, kind: JobKind) -> Result<Option<ClaimedAttempt>> {
+        ensure!(
+            self.admission
+                .kinds
+                .iter()
+                .any(|(admitted, _)| *admitted == kind),
+            "Job kind is not admitted"
+        );
+        match submit(
+            &self.storage,
+            Command::Claim {
+                job_id: None,
+                kind: Some(kind),
+                worker: self.identity.clone(),
+                admission: self.admission.clone(),
+                policy: self.policy,
+                storage: self.storage.clone(),
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?
+        .receive()?
+        {
+            Outcome::Claimed(claim) => Ok(claim),
+            _ => unreachable!(),
+        }
     }
     pub fn update(
         &self,
@@ -707,13 +947,19 @@ fn decode(document: &str) -> Result<JobRecord> {
     job.validate_state()?;
     Ok(job)
 }
-fn load(tx: &Transaction<'_>, id: &str) -> Result<Option<JobRecord>> {
+pub(crate) fn load(tx: &Transaction<'_>, id: &str) -> Result<Option<JobRecord>> {
     let document: Option<String> = tx
         .query_row("SELECT document FROM durable_jobs WHERE id=?1", [id], |r| {
             r.get(0)
         })
         .optional()?;
-    document.map(|v| decode(&v)).transpose()
+    document
+        .map(|document| {
+            let job = decode(&document)?;
+            ensure!(job.job_id == id, "Stored Job identity mismatch");
+            Ok(job)
+        })
+        .transpose()
 }
 
 pub(crate) fn load_for_capture_claim(tx: &Transaction<'_>, id: &str) -> Result<JobRecord> {
@@ -885,6 +1131,7 @@ pub(crate) fn execute(
             worker,
             admission,
             job_id,
+            kind,
             policy,
             storage,
         } => claim(
@@ -893,7 +1140,10 @@ pub(crate) fn execute(
             &worker,
             &admission,
             policy,
-            job_id.as_deref(),
+            ClaimFilter {
+                job_id: job_id.as_deref(),
+                kind,
+            },
             storage,
         )?,
         Command::ClaimResolved {
@@ -910,7 +1160,10 @@ pub(crate) fn execute(
                 &worker,
                 &admission,
                 policy,
-                Some(&job_id),
+                ClaimFilter {
+                    job_id: Some(&job_id),
+                    kind: Some(JobKind::SuppliedSourceImport),
+                },
                 storage,
             )?
         }
@@ -966,6 +1219,72 @@ pub(crate) fn execute(
                 reply,
             }
         }
+        Command::ObserveLocalScan {
+            lease,
+            source_work,
+            policy,
+        } => TransactionDecision::Outcome(Outcome::LocalScanObservation(
+            crate::source_scan::observe(&tx, catalog_state, &lease, &source_work, policy)?,
+        )),
+        Command::SettleLocalScan {
+            lease,
+            source_work,
+            policy,
+            settlement,
+        } => {
+            let (job, applied) = crate::source_scan::settle(
+                &tx,
+                catalog_state,
+                &lease,
+                &source_work,
+                policy,
+                settlement,
+            )?;
+            TransactionDecision::Outcome(Outcome::LocalScanSettled(job, applied))
+        }
+        Command::CompleteLocalScan {
+            lease,
+            source_work,
+            policy,
+            applied,
+            result,
+        } => TransactionDecision::LocalScanCompleted(crate::source_scan::complete(
+            &tx,
+            catalog_state,
+            &lease,
+            source_work,
+            policy,
+            applied,
+            result,
+        )?),
+        Command::InspectLocalScan { lease, worker } => {
+            TransactionDecision::Outcome(Outcome::LocalScanCompletion(crate::source_scan::inspect(
+                &tx,
+                catalog_state,
+                &worker,
+                &lease,
+            )?))
+        }
+        Command::InspectHeldLocalScan {
+            lease,
+            source_work,
+            worker,
+        } => TransactionDecision::Outcome(Outcome::HeldLocalScan(
+            crate::source_scan::inspect_held(&tx, catalog_state, &worker, &lease, &source_work)?,
+        )),
+        Command::ReconcileLocalScan {
+            lease,
+            source_work,
+            applied,
+            reason,
+        } => TransactionDecision::LocalScanReconciled(crate::source_scan::reconcile(
+            &tx,
+            catalog_state,
+            &lease,
+            source_work,
+            &applied,
+            &reason,
+        )?),
         Command::Observe {
             credential,
             policy,
@@ -987,6 +1306,7 @@ pub(crate) fn execute(
     };
     if matches!(&decision,TransactionDecision::Outcome(Outcome::Job(job,LocalCommit::Committed)) if job.state.terminal())
         || matches!(&decision, TransactionDecision::Refused(CommittedRefusal { job, .. }) if job.state.terminal())
+        || matches!(&decision, TransactionDecision::LocalScanCompleted(_))
     {
         prune(&tx, 1000, 10000)?;
     }
@@ -1013,6 +1333,51 @@ pub(crate) fn execute(
             Err(failure.into())
         }
         TransactionDecision::ErrorAfterCommit(error) => Err(error),
+        TransactionDecision::LocalScanCompleted(pending) => {
+            use crate::catalog::IssuedTokenState;
+            let outcome = match catalog_state
+                .classify_issued(&pending.proof.incarnation, pending.proof.token)
+            {
+                IssuedTokenState::Active(actual) if actual == &pending.binding => {
+                    catalog_state.retire_issued(&pending.proof, &pending.binding)?;
+                    crate::source_scan::LocalCompletionInspection::Completed(pending.completion)
+                }
+                IssuedTokenState::Retired => {
+                    crate::source_scan::LocalCompletionInspection::Completed(pending.completion)
+                }
+                IssuedTokenState::Active(_) => {
+                    crate::source_scan::LocalCompletionInspection::CommittedReservationConflict(
+                        pending.completion,
+                    )
+                }
+                IssuedTokenState::NeverIssued | IssuedTokenState::WrongIncarnation => {
+                    crate::source_scan::LocalCompletionInspection::CommittedReservationCorrupt(
+                        pending.completion,
+                    )
+                }
+            };
+            Ok(Outcome::LocalScanCompletion(outcome))
+        }
+        TransactionDecision::LocalScanReconciled(pending) => {
+            use crate::catalog::IssuedTokenState;
+            match catalog_state.classify_issued(&pending.proof.incarnation, pending.proof.token) {
+                IssuedTokenState::Active(actual) if actual == &pending.binding => {
+                    catalog_state.retire_issued(&pending.proof, &pending.binding)?;
+                }
+                IssuedTokenState::Retired => {}
+                IssuedTokenState::Active(_) => {
+                    return Err(anyhow!(
+                        "Committed Local scan reconciliation has a Source reservation conflict"
+                    ));
+                }
+                IssuedTokenState::NeverIssued | IssuedTokenState::WrongIncarnation => {
+                    return Err(anyhow!(
+                        "Committed Local scan reconciliation has a corrupt Source reservation"
+                    ));
+                }
+            }
+            Ok(Outcome::LocalScanReconciled(pending.job))
+        }
         TransactionDecision::Observation {
             credential,
             authority,
@@ -1401,7 +1766,8 @@ impl ClaimPlan {
     fn into_claimed(self, state: &mut crate::catalog::State) -> ClaimedAttempt {
         let source_work = self.source.map(|source| {
             state.activate(source.token, source.tenant, source.id);
-            crate::catalog::lease(source.client, source.token)
+            let proof = state.proof(source.token).expect("activated Source lease");
+            crate::catalog::lease(source.client, proof)
         });
         ClaimedAttempt {
             job: self.job,
@@ -1426,13 +1792,18 @@ fn source_binding(payload: &Payload) -> Result<SourceBinding> {
         _ => SourceBinding::None,
     })
 }
+struct ClaimFilter<'a> {
+    job_id: Option<&'a str>,
+    kind: Option<JobKind>,
+}
+
 fn claim(
     tx: &Transaction<'_>,
     catalog_state: &crate::catalog::State,
     worker: &str,
     admission: &WorkerAdmission,
     policy: Option<AuthPolicy>,
-    job_id: Option<&str>,
+    filter: ClaimFilter<'_>,
     storage: SettingsClient,
 ) -> Result<TransactionDecision> {
     recover_in(tx, false)?;
@@ -1446,6 +1817,9 @@ fn claim(
         return Ok(TransactionDecision::Outcome(Outcome::Claimed(None)));
     }
     for (kind, capacity) in &admission.kinds {
+        if filter.kind.is_some_and(|requested| requested != *kind) {
+            continue;
+        }
         let count:i64=tx.query_row("SELECT COUNT(*) FROM durable_jobs WHERE kind=?1 AND state IN ('running','effect_admitted')",[kind.name()],|r|r.get(0))?;
         if count >= *capacity as i64 {
             continue;
@@ -1453,7 +1827,7 @@ fn claim(
         let documents=tx.prepare("SELECT document FROM durable_jobs WHERE state='queued' AND kind=?1 ORDER BY created,id")?.query_map([kind.name()],|r|r.get::<_,String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
         for document in documents {
             let mut job: JobRecord = decode(&document)?;
-            if job_id.is_none()
+            if filter.job_id.is_none()
                 && job.kind == JobKind::SuppliedSourceImport
                 && tx.query_row(
                     "SELECT EXISTS(SELECT 1 FROM source_import_operations WHERE tenant=?1 AND job_id=?2 AND state='admitted')",
@@ -1463,7 +1837,7 @@ fn claim(
             {
                 continue;
             }
-            if let Some(id) = job_id {
+            if let Some(id) = filter.job_id {
                 if job.job_id != id {
                     continue;
                 }
@@ -1502,14 +1876,14 @@ fn claim(
             }
             if let Some(AuthorityDecision::Refused(reason)) = authority {
                 let failure = reason.failure();
-                if job_id.is_some() {
+                if filter.job_id.is_some() {
                     crate::uploads::record_targeted_authority_refusal(tx, &job)?;
                 }
                 record_refusal(
                     tx,
                     &mut job,
                     reason,
-                    if job_id.is_some() {
+                    if filter.job_id.is_some() {
                         AuthorityRefusalPhase::TargetedClaim
                     } else {
                         AuthorityRefusalPhase::Claim
@@ -1517,7 +1891,7 @@ fn claim(
                     None,
                 )?;
                 terminalized_refusal |= job.state.terminal();
-                if job_id.is_some() {
+                if filter.job_id.is_some() {
                     if terminalized_refusal {
                         prune(tx, 1000, 10000)?;
                     }
@@ -1534,13 +1908,13 @@ fn claim(
                         job.state = PersistentState::Failed;
                         job.recovery = Some("Source is unavailable for this job".into());
                         save(tx, &mut job, "source_unavailable")?;
-                        if job_id.is_some() {
+                        if filter.job_id.is_some() {
                             return Ok(TransactionDecision::Outcome(Outcome::Claimed(None)));
                         }
                         continue;
                     }
                     if catalog_state.source_busy(&job.tenant, id) {
-                        if job_id.is_some() {
+                        if filter.job_id.is_some() {
                             return Ok(TransactionDecision::ErrorAfterCommit(anyhow!(
                                 crate::catalog::SourceBusy
                             )));
@@ -2237,6 +2611,7 @@ impl ServerWorkerClient {
             &self.storage,
             Command::Claim {
                 job_id: Some(job_id.into()),
+                kind: Some(JobKind::SuppliedSourceImport),
                 worker: self.identity.clone(),
                 admission: self.admission.clone(),
                 policy: self.policy,

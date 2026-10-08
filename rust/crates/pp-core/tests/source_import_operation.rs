@@ -485,7 +485,7 @@ fn resolved_revoked_authority_commits_before_busy_source_observation() {
     drop(client);
     owner.shutdown().unwrap();
     let (owner, ready) = WriterOwner::open(&root, Limits::default()).unwrap();
-    assert_eq!(ready.version, 39);
+    assert_eq!(ready.version, 40);
     let reopened: (i64, i64, i64) = read(&root)
         .query_row(
             "SELECT p.cursor,p.admitted_generation,json_extract(j.document,'$.generation')
@@ -674,7 +674,7 @@ fn targeted_claim_owns_source_before_core_work() {
         .unwrap();
     let worker = owner
         .job_worker(WorkerAdmission {
-            kinds: vec![(JobKind::SuppliedSourceImport, 1)],
+            kinds: vec![(JobKind::SuppliedSourceImport, 1), (JobKind::ImportScan, 1)],
             total: 1,
             per_resource: 1,
             lease_seconds: 3600,
@@ -728,7 +728,7 @@ fn fixture() -> (PathBuf, PathBuf, WriterOwner) {
     .unwrap();
     std::fs::write(files.join("README.md"), "# Ordinary Source\n").unwrap();
     let (owner, ready) = WriterOwner::open(&root, Limits::default()).unwrap();
-    assert_eq!(ready.version, 39);
+    assert_eq!(ready.version, 40);
     (root, files, owner)
 }
 fn request(key: &str, target: Target) -> Admission {
@@ -1284,7 +1284,10 @@ fn captured_zip_has_explicit_ready_only_ownership_and_nfc_replay() {
         .job_worker_with_policy(
             policy(),
             jobs::WorkerAdmission {
-                kinds: vec![(jobs::JobKind::SuppliedSourceImport, 1)],
+                kinds: vec![
+                    (jobs::JobKind::SuppliedSourceImport, 1),
+                    (jobs::JobKind::ImportScan, 1),
+                ],
                 total: 1,
                 per_resource: 1,
                 lease_seconds: 3600,
@@ -1824,7 +1827,10 @@ fn stale_attempt_cannot_write_import_phases() {
         .job_worker_with_policy(
             policy(),
             jobs::WorkerAdmission {
-                kinds: vec![(jobs::JobKind::SuppliedSourceImport, 1)],
+                kinds: vec![
+                    (jobs::JobKind::SuppliedSourceImport, 1),
+                    (jobs::JobKind::ImportScan, 1),
+                ],
                 total: 1,
                 per_resource: 1,
                 lease_seconds: 3600,
@@ -1868,7 +1874,10 @@ fn cancelled_import_cannot_overlap_source_work() {
         .unwrap();
     let worker = owner
         .job_worker(jobs::WorkerAdmission {
-            kinds: vec![(jobs::JobKind::SuppliedSourceImport, 1)],
+            kinds: vec![
+                (jobs::JobKind::SuppliedSourceImport, 1),
+                (jobs::JobKind::ImportScan, 1),
+            ],
             total: 1,
             per_resource: 1,
             lease_seconds: 3600,
@@ -2107,7 +2116,7 @@ fn original_session_revocation_after_claim_commits_source_writer_refusal() {
         .job_worker_with_policy(
             strict,
             WorkerAdmission {
-                kinds: vec![(JobKind::SuppliedSourceImport, 1)],
+                kinds: vec![(JobKind::SuppliedSourceImport, 1), (JobKind::ImportScan, 1)],
                 total: 1,
                 per_resource: 1,
                 lease_seconds: 3600,
@@ -2416,10 +2425,12 @@ fn changed_content_replay_and_changed_during_capture_are_refused() {
     owner.shutdown().unwrap();
 }
 
-fn remove_schema39(connection: &Connection) {
+fn remove_schema40_and_39(connection: &Connection) {
     connection
         .execute_batch(
-            "DROP TRIGGER trg_source_preclaim_refusals_immutable_update;
+            "DROP INDEX source_scan_execution_receipt;
+             DROP TABLE source_scan_executions;
+             DROP TRIGGER trg_source_preclaim_refusals_immutable_update;
              DROP TRIGGER trg_source_preclaim_refusals_immutable_delete;
              DROP TRIGGER trg_source_preclaim_refusals_cursor_insert;
              DROP TRIGGER trg_source_revision_observations_preclaim_cursor_insert;
@@ -2434,7 +2445,7 @@ fn schema37_backup_preserves35_and_future_or_corrupt_input_is_unchanged() {
     owner.shutdown().unwrap();
     let db = root.join("print-partner.db");
     let conn = Connection::open(&db).unwrap();
-    remove_schema39(&conn);
+    remove_schema40_and_39(&conn);
     conn.execute_batch("DROP TRIGGER trg_plan_apply_admissions_immutable_delete; DROP TRIGGER trg_plan_apply_admissions_immutable_update; DROP TABLE plan_apply_admissions; DROP TABLE source_import_quota; DROP TABLE source_import_operations; UPDATE app_settings SET value='35' WHERE tenant_id='default' AND key='schema_version'; PRAGMA wal_checkpoint(TRUNCATE);").unwrap();
     drop(conn);
     let before =
@@ -2457,7 +2468,7 @@ fn schema37_backup_preserves35_and_future_or_corrupt_input_is_unchanged() {
     std::fs::copy(&db, future.join("print-partner.db")).unwrap();
     let conn = Connection::open(future.join("print-partner.db")).unwrap();
     conn.execute(
-        "UPDATE app_settings SET value='40' WHERE tenant_id='default' AND key='schema_version'",
+        "UPDATE app_settings SET value='41' WHERE tenant_id='default' AND key='schema_version'",
         [],
     )
     .unwrap();
@@ -2584,7 +2595,7 @@ fn import_reads_do_not_invalidate_physical_usage_observation() {
         .job_worker_with_policy(
             policy(),
             WorkerAdmission {
-                kinds: vec![(JobKind::SuppliedSourceImport, 1)],
+                kinds: vec![(JobKind::SuppliedSourceImport, 1), (JobKind::ImportScan, 1)],
                 total: 1,
                 per_resource: 1,
                 lease_seconds: 3600,
@@ -3300,13 +3311,13 @@ fn combined_schema37_backup_preserves_selected_progress_and_jobs35_graph() {
     let preparation_bytes = std::fs::read(&preparation_backup).unwrap();
     let db = root.join("print-partner.db");
     let conn = Connection::open(&db).unwrap();
-    remove_schema39(&conn);
+    remove_schema40_and_39(&conn);
     conn.execute_batch("DROP TRIGGER trg_plan_apply_admissions_immutable_delete; DROP TRIGGER trg_plan_apply_admissions_immutable_update; DROP TABLE plan_apply_admissions; DROP TABLE source_import_quota; DROP TABLE source_import_operations; UPDATE app_settings SET value='35' WHERE tenant_id='default' AND key='schema_version'; PRAGMA wal_checkpoint(TRUNCATE);").unwrap();
     let before = graph(&conn);
     drop(conn);
     let (owner, ready) = WriterOwner::open(&root, Limits::default()).unwrap();
     assert_eq!(ready.previous_version, 35);
-    assert_eq!(ready.version, 39);
+    assert_eq!(ready.version, 40);
     let backup_copy = root.join("backup-copy.db");
     std::fs::copy(ready.backup.unwrap(), &backup_copy).unwrap();
     assert_eq!(graph(&Connection::open(backup_copy).unwrap()), before);
@@ -3652,7 +3663,10 @@ fn publication_active_supplied_claim_and_live_lease_remain_exact() {
         .job_worker_with_policy(
             policy(),
             jobs::WorkerAdmission {
-                kinds: vec![(jobs::JobKind::SuppliedSourceImport, 1)],
+                kinds: vec![
+                    (jobs::JobKind::SuppliedSourceImport, 1),
+                    (jobs::JobKind::ImportScan, 1),
+                ],
                 total: 1,
                 per_resource: 1,
                 lease_seconds: 3600,
@@ -3765,13 +3779,13 @@ fn publication_source_schema37_backup_retains_full35_and_foreign_graph() {
     let preparation_backup_bytes = std::fs::read(&backup).unwrap();
     std::fs::rename(&backup, &preparation_backup).unwrap();
     let conn = Connection::open(root.join("print-partner.db")).unwrap();
-    remove_schema39(&conn);
+    remove_schema40_and_39(&conn);
     conn.execute_batch("DROP TRIGGER trg_plan_apply_admissions_immutable_delete; DROP TRIGGER trg_plan_apply_admissions_immutable_update; DROP TABLE plan_apply_admissions; DROP TABLE source_import_quota; DROP TABLE source_import_operations; UPDATE app_settings SET value='35' WHERE tenant_id='default' AND key='schema_version'; PRAGMA wal_checkpoint(TRUNCATE);").unwrap();
     let prior = graph(&conn);
     drop(conn);
     let (owner, ready) = WriterOwner::open(&root, Limits::default()).unwrap();
     assert_eq!(ready.previous_version, 35);
-    assert_eq!(ready.version, 39);
+    assert_eq!(ready.version, 40);
     let backup = root.join("publication-backup-copy.db");
     std::fs::copy(ready.backup.unwrap(), &backup).unwrap();
     assert_eq!(graph(&Connection::open(backup).unwrap()), prior);

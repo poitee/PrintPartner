@@ -83,6 +83,17 @@ impl LocalFiles {
         }
         Ok(result)
     }
+    pub fn validated_inventory(
+        &self,
+        paths: &[SourcePath],
+        max_bytes: u64,
+    ) -> Result<Vec<InputFile>> {
+        let mut collisions = crate::PathCollisions::default();
+        for path in paths {
+            collisions.insert(path, false)?;
+        }
+        self.inventory(paths, max_bytes)
+    }
     pub fn capture(
         &self,
         paths: &[SourcePath],

@@ -72,11 +72,28 @@ pub(crate) fn preflight(path: &Path, owned: bool) -> Result<u64> {
     );
     ensure!(owned || !marker.exists(), "Data directory already owned");
     let conn = Connection::open(copy.0.join("print-partner.db"))?;
+    let version = discover_version(&conn)?;
+    ensure!(
+        version <= 40,
+        "Database schema version {version} is newer than supported version 40"
+    );
+    ensure!(
+        version == 0 || version >= 31,
+        "Cannot upgrade database schema version {version}; install Print Partner v3.3.0 first"
+    );
     let integrity: String = conn.query_row("PRAGMA integrity_check", [], |r| r.get(0))?;
     ensure!(
         integrity == "ok",
         "SQLite integrity_check failed: {integrity}"
     );
+    crate::jobs::validate_schema(&conn, version)?;
+    crate::uploads::validate_schema(&conn, version)?;
+    crate::plan_publication::validate_schema(&conn, version)?;
+    crate::source_scan::validate_schema(&conn, version)?;
+    Ok(version)
+}
+
+fn discover_version(conn: &Connection) -> Result<u64> {
     let has_settings: bool = conn.query_row(
         "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='app_settings')",
         [],
@@ -92,7 +109,7 @@ pub(crate) fn preflight(path: &Path, owned: bool) -> Result<u64> {
     } else {
         None
     };
-    let version = match value {
+    Ok(match value {
         None => 0,
         Some(value) => {
             ensure!(
@@ -103,19 +120,7 @@ pub(crate) fn preflight(path: &Path, owned: bool) -> Result<u64> {
                 .parse::<u64>()
                 .map_err(|_| anyhow::anyhow!("Database schema version exceeds supported range"))?
         }
-    };
-    ensure!(
-        version <= 39,
-        "Database schema version {version} is newer than supported version 39"
-    );
-    ensure!(
-        version == 0 || version >= 31,
-        "Cannot upgrade database schema version {version}; install Print Partner v3.3.0 first"
-    );
-    crate::jobs::validate_schema(&conn, version)?;
-    crate::uploads::validate_schema(&conn, version)?;
-    crate::plan_publication::validate_schema(&conn, version)?;
-    Ok(version)
+    })
 }
 
 pub(crate) fn configure(conn: &Connection, read_only: bool) -> Result<()> {
@@ -194,6 +199,8 @@ pub(crate) fn initialize(
             Some("pre-schema38.db")
         } else if version == 38 {
             Some("pre-schema39.db")
+        } else if version == 39 {
+            Some("pre-schema40.db")
         } else {
             None
         };
@@ -348,13 +355,23 @@ pub(crate) fn initialize(
         )?;
         tx.commit()?;
     }
-    crate::jobs::validate_schema(&conn, 39)?;
-    crate::uploads::validate_schema(&conn, 39)?;
-    crate::plan_publication::validate_schema(&conn, 39)?;
+    if version < 40 {
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute_batch(include_str!("source_scan/schema.sql"))?;
+        tx.execute(
+            "UPDATE app_settings SET value='40' WHERE tenant_id='default' AND key='schema_version'",
+            [],
+        )?;
+        tx.commit()?;
+    }
+    crate::jobs::validate_schema(&conn, 40)?;
+    crate::uploads::validate_schema(&conn, 40)?;
+    crate::plan_publication::validate_schema(&conn, 40)?;
+    crate::source_scan::validate_schema(&conn, 40)?;
     Ok((
         conn,
         SchemaReady {
-            version: 39,
+            version: 40,
             previous_version: version,
             backup: backup_path,
         },
