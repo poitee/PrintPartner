@@ -1,4 +1,3 @@
-use pp_contracts::{PositiveId, build_identity::BuildName};
 use pp_core::draft_observations::{DraftReadConfiguration, FilesystemPolicy, issue_build_graph};
 use pp_storage::{
     Limits, WriterOwner,
@@ -6,9 +5,12 @@ use pp_storage::{
         AuthPolicy, FirstUserTenant, Outcome as AuthOutcome, RegistrationPolicy, Request, Secret,
         SessionTenantPolicy,
     },
-    build_graph::{BuildCommand, BuildOutcome, ManifestOptionsCommand, ManifestOptionsOutcome},
+    build_graph::{
+        BuildCommand, BuildName, BuildOutcome, ManifestOptionsCommand, ManifestOptionsOutcome,
+    },
     catalog::{CreateSource, Credentials, Outcome as CatalogOutcome, Request as CatalogRequest},
     read_model::Credential,
+    working_drafts::PositiveId,
 };
 use std::{
     collections::BTreeMap,

@@ -8,9 +8,10 @@ use crate::{
 };
 use anyhow::{Result, anyhow, ensure};
 use model::{Assignment, Prepared};
+pub use pp_contracts::publication::Outcome;
 use pp_contracts::{
     autosave::{ApplyPlanDraftReceipt, PositiveId},
-    publication::{ApplyRequest, Outcome, ReconciliationReason, UnmappableLink},
+    publication::{ApplyRequest, ReconciliationReason, UnmappableLink},
 };
 use rusqlite::{Connection, Transaction, TransactionBehavior, params};
 use serde_json::{Value, json};

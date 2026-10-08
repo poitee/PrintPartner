@@ -6,6 +6,7 @@ use pp_storage::{
     Limits, WriterOwner,
     auth::{self, Secret},
     jobs,
+    plan_publication::Outcome as PublicationOutcome,
     plan_save::{Outcome, PlanSaveClient, SaveCommand},
     read_model::Credential,
     working_drafts::{Outcome as DraftOutcome, Request},
@@ -343,7 +344,7 @@ fn save_issued_auth_replay_reopen_key_audit_and_job_refusal_preserve_graphs() {
         refused,
         Outcome::Refused {
             reason: pp_storage::plan_save::Refusal::Publication {
-                outcome: pp_contracts::publication::Outcome::ExecutionConflict { .. }
+                outcome: PublicationOutcome::ExecutionConflict { .. }
             }
         }
     ));

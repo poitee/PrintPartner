@@ -3,6 +3,7 @@ mod model;
 pub(crate) mod projection;
 
 pub use manifest_options::{ManifestOptionsCommand, ManifestOptionsOutcome};
+pub use pp_contracts::build_identity::BuildName;
 pub use model::{
     AcceptedProgress, AcceptedProgressUnavailable, PlanFreshness, PlanStaleReason,
     PlanUntrackedReason, ProfileLayer, ProfileSummary,
@@ -11,7 +12,6 @@ pub use model::{
 use crate::{Envelope, SettingsClient, Shared, WriterOwner, auth, read_model};
 use anyhow::{Result, anyhow, ensure};
 use pp_contracts::PositiveId;
-use pp_contracts::build_identity::BuildName;
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use std::{
     path::PathBuf,

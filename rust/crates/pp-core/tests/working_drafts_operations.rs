@@ -445,13 +445,15 @@ fn assert_response_parts(draft: &pp_storage::working_drafts::DraftDocument, coun
 
 #[test]
 fn utf16_manifest_draft_selection_diff_publication_and_reopen() {
-    use pp_contracts::{build_identity::BuildName, working_drafts::RecomputeOptions};
     use pp_storage::{
-        build_graph::{BuildCommand, BuildOutcome, ManifestOptionsCommand},
+        build_graph::{BuildCommand, BuildName, BuildOutcome, ManifestOptionsCommand},
         catalog::{
             CreateSource, Credentials, Outcome as CatalogOutcome, Request as CatalogRequest,
         },
-        plan_publication::{PublicationClient, PublicationCommand},
+        plan_publication::{Outcome as PublicationOutcome, PublicationClient, PublicationCommand},
+        working_drafts::{
+            RebaseRequest, RecomputeOptions, ReconciliationOutcome, SourceState,
+        },
     };
     let root = std::env::temp_dir().join(format!("pp-u15-flow-{:016x}", rand::random::<u64>()));
     println!(
@@ -550,11 +552,11 @@ option_groups:
     };
     let BuildOutcome::Created { profile, .. } = build_call(BuildCommand::Create {
         name: BuildName::parse("UTF16 draft build".into()).unwrap(),
-        base_source: Some(pp_contracts::PositiveId::new(source.id as u64).unwrap()),
+        base_source: Some(PositiveId::new(source.id as u64).unwrap()),
     }) else {
         panic!("build")
     };
-    let build = pp_contracts::PositiveId::new(profile.id as u64).unwrap();
+    let build = PositiveId::new(profile.id as u64).unwrap();
     let BuildOutcome::Manifest(builder) = build_call(BuildCommand::Manifest(
         ManifestOptionsCommand::ReadBuilder { build },
     )) else {
@@ -614,7 +616,7 @@ option_groups:
     assert!(has(&diff, br#""optionGroupId":"\ud800""#));
     assert!(has(&diff, br#""requirement":"\ud801""#));
     let Outcome::Service {
-        outcome: pp_contracts::reconciliation::Outcome::Ready { .. },
+        outcome: ReconciliationOutcome::Ready { .. },
         ..
     } = client
         .service(
@@ -645,7 +647,7 @@ option_groups:
         )
         .unwrap();
     assert!(
-        matches!(applied, pp_contracts::publication::Outcome::Applied { .. }),
+        matches!(applied, PublicationOutcome::Applied { .. }),
         "{applied:?}"
     );
     let batch = owner
@@ -706,7 +708,7 @@ option_groups:
     let source_id = rebase_source.identity().draft_id();
     let Outcome::Transitioned { draft: abandoned } = call(Request::Transition {
         draft_id: source_id,
-        transition: pp_contracts::working_drafts::Transition::Abandon,
+        transition: Transition::Abandon,
         expected_lifecycle_version: rebase_source.identity().lifecycle_version(),
     }) else {
         panic!("abandon")
@@ -738,7 +740,7 @@ option_groups:
         refused,
         pp_storage::plan_save::Outcome::Refused {
             reason: pp_storage::plan_save::Refusal::Publication {
-                outcome: pp_contracts::publication::Outcome::ReconciliationRequired { .. }
+                outcome: PublicationOutcome::ReconciliationRequired { .. }
             }
         }
     ));
@@ -778,7 +780,7 @@ option_groups:
             matches!(
                 result,
                 Outcome::Service {
-                    outcome: pp_contracts::reconciliation::Outcome::Ready { .. },
+                    outcome: ReconciliationOutcome::Ready { .. },
                     ..
                 }
             ),
@@ -818,9 +820,9 @@ option_groups:
     assert!(has(&saved_body, br#""optionGroupId":"\ud800""#));
     let rebased = call(Request::Rebase {
         idempotency_key: "utf16-rebase".into(),
-        request: pp_contracts::working_drafts::RebaseRequest {
+        request: RebaseRequest {
             source_draft_id: source_id,
-            expected_source_state: pp_contracts::working_drafts::SourceState::Abandoned,
+            expected_source_state: SourceState::Abandoned,
             expected_source_lifecycle_version: abandoned.identity().lifecycle_version(),
             expected_source_snapshot_digest: abandoned.identity().snapshot_digest().clone(),
         },

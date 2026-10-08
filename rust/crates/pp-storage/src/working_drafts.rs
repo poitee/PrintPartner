@@ -15,7 +15,8 @@ use crate::{
 use anyhow::{Result, anyhow, ensure};
 pub use pp_contracts::{
     autosave::PositiveId,
-    working_drafts::{Request, Transition},
+    reconciliation::Outcome as ReconciliationOutcome,
+    working_drafts::{RebaseRequest, RecomputeOptions, Request, SourceState, Transition},
 };
 use rusqlite::{Connection, Transaction, TransactionBehavior, params};
 use serde_json::{Value, json};
@@ -31,7 +32,7 @@ use std::{
 #[derive(Debug)]
 pub enum Outcome {
     Service {
-        outcome: pp_contracts::reconciliation::Outcome,
+        outcome: ReconciliationOutcome,
         committed_draft: Option<DraftDocument>,
     },
     Rebased {

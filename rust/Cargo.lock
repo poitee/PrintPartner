@@ -2882,7 +2882,6 @@ dependencies = [
  "libc",
  "pp-api",
  "pp-compat",
- "pp-contracts",
  "pp-gateway",
  "pp-source",
  "pp-storage",
