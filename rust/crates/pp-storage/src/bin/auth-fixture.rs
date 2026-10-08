@@ -45,7 +45,6 @@ fn request(v: &Value) -> Result<Request> {
             },
             "resolve_session" => Request::ResolveSession {
                 token: secret(v, "token")?,
-                provider: provider(v)?,
             },
             "logout" => Request::Logout {
                 token: secret(v, "token")?,
