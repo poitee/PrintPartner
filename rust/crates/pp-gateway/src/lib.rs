@@ -107,20 +107,7 @@ impl Gateway {
                 "Invalid operation ownership manifest"
             );
         }
-        manifest.routes.sort_by(|a, b| {
-            fn rank(path: &str) -> impl Iterator<Item = u8> + '_ {
-                path.split('/').map(|part| {
-                    if part == "*" {
-                        0
-                    } else if part.starts_with(':') {
-                        1
-                    } else {
-                        2
-                    }
-                })
-            }
-            rank(&b.path).cmp(rank(&a.path))
-        });
+        sort_routes(&mut manifest.routes);
         let launch = Some(LaunchTarget(format!(
             "{origin}/__desktop/bootstrap?token={token}"
         )));
@@ -300,11 +287,28 @@ fn error(status: StatusCode, detail: &'static str) -> Response<Body> {
 fn header<'a>(request: &'a Request<Body>, name: &str) -> Option<&'a str> {
     request.headers().get(name)?.to_str().ok()
 }
+fn sort_routes(routes: &mut [Operation]) {
+    fn rank(path: &str) -> impl Iterator<Item = u8> + '_ {
+        path.split('/')
+            .map(|part| {
+                if part == "*" {
+                    0
+                } else if part.starts_with(':') {
+                    1
+                } else {
+                    2
+                }
+            })
+            .chain(std::iter::once(3))
+    }
+    routes.sort_by(|a, b| rank(&b.path).cmp(rank(&a.path)));
+}
+
 fn matches_path(pattern: &str, path: &str) -> bool {
     let mut actual = path.split('/');
     for segment in pattern.split('/') {
         if segment == "*" {
-            return true;
+            return actual.next().is_some();
         }
         let Some(value) = actual.next() else {
             return false;
@@ -749,6 +753,120 @@ mod tests {
             assert_eq!(access.lock().unwrap().active, 0);
         }
     }
+
+    #[test]
+    fn wildcard_requires_its_slash_boundary() {
+        for (pattern, prefix) in [
+            ("/exports/*", "/exports"),
+            ("/sources/:id/stl/*", "/sources/1/stl"),
+            ("/sources/:id/docs/*", "/sources/1/docs"),
+        ] {
+            assert!(!super::matches_path(pattern, prefix));
+            for tail in ["/", "/file", "/nested/file"] {
+                assert!(super::matches_path(pattern, &format!("{prefix}{tail}")));
+            }
+        }
+        assert!(!super::matches_path(
+            "/sources/:id/stl/*",
+            "/sources//stl/file"
+        ));
+    }
+
+    #[test]
+    fn manifest_wildcards_preserve_methods_and_aliases() {
+        let mut manifest: super::Manifest =
+            serde_json::from_str(include_str!("../operations.json")).unwrap();
+        super::sort_routes(&mut manifest.routes);
+        for method in ["GET", "HEAD"] {
+            for alias in ["", "/api/v1"] {
+                for (pattern, prefix) in [
+                    ("/exports/*", "/exports"),
+                    ("/sources/:id/stl/*", "/sources/1/stl"),
+                ] {
+                    let pattern = format!("{alias}{pattern}");
+                    let prefix = format!("{alias}{prefix}");
+                    let selected = |path: &str| {
+                        manifest.routes.iter().find(|route| {
+                            route.method == method && super::matches_path(&route.path, path)
+                        })
+                    };
+                    assert!(selected(&prefix).is_none());
+                    for tail in ["/", "/file", "/nested/file"] {
+                        assert_eq!(selected(&format!("{prefix}{tail}")).unwrap().path, pattern);
+                    }
+                }
+                let exact = format!("{alias}/sources/:id/docs");
+                let wildcard = format!("{exact}/*");
+                let exact_index = manifest
+                    .routes
+                    .iter()
+                    .position(|route| route.method == method && route.path == exact)
+                    .unwrap();
+                let wildcard_index = manifest
+                    .routes
+                    .iter()
+                    .position(|route| route.method == method && route.path == wildcard)
+                    .unwrap();
+                assert!(exact_index < wildcard_index);
+                let selected = manifest
+                    .routes
+                    .iter()
+                    .find(|route| {
+                        route.method == method
+                            && super::matches_path(&route.path, &format!("{alias}/sources/1/docs"))
+                    })
+                    .unwrap();
+                assert_eq!(selected.path, exact);
+            }
+        }
+    }
+
+    #[test]
+    fn operation_sort_preserves_exact_static_parameter_and_wildcard_priority() {
+        let mut routes: Vec<_> = ["/files/*", "/files/:id", "/files/settings", "/files"]
+            .into_iter()
+            .map(|path| super::Operation {
+                method: "GET".into(),
+                path: path.into(),
+                owner: "compat".into(),
+                effect: super::EffectClass::Observation,
+            })
+            .collect();
+        super::sort_routes(&mut routes);
+        for (path, expected) in [
+            ("/files", "/files"),
+            ("/files/settings", "/files/settings"),
+            ("/files/42", "/files/:id"),
+            ("/files/42/nested", "/files/*"),
+            ("/files/", "/files/*"),
+        ] {
+            let selected = routes
+                .iter()
+                .find(|route| super::matches_path(&route.path, path))
+                .unwrap();
+            assert_eq!(selected.path, expected);
+        }
+    }
+
+    #[test]
+    fn global_options_denial_remains_universal() {
+        let manifest: super::Manifest =
+            serde_json::from_str(include_str!("../operations.json")).unwrap();
+        let denied = manifest
+            .denied
+            .iter()
+            .find(|route| route.method == "OPTIONS" && route.path == "*")
+            .unwrap();
+        for path in [
+            "/",
+            "/exports",
+            "/exports/",
+            "/sources/1/stl/nested/file.stl/mesh",
+        ] {
+            assert!(super::matches_path(&denied.path, path));
+        }
+    }
+
     #[test]
     fn effectful_get_is_explicit() {
         let manifest: super::Manifest =
