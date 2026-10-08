@@ -1,4 +1,21 @@
-use super::manifest::{Group, Groups, Variant};
+use super::manifest::{Group as DomainGroup, Groups as DomainGroups, Variant as DomainVariant};
+use crate::manifest_text::{ManifestText, OptionGroupId, VariantId};
+#[derive(Clone)]
+struct Variant {
+    id: String,
+    label: Option<String>,
+    parts: Vec<String>,
+    excludes: Vec<String>,
+}
+struct Group {
+    rule: String,
+    label: Option<String>,
+    parts: Vec<String>,
+    variants: Vec<Variant>,
+    min: Option<u64>,
+    max: Option<u64>,
+}
+type Groups = Vec<(String, Group)>;
 use std::collections::{HashMap, HashSet};
 #[derive(Default)]
 struct Directory {
@@ -87,7 +104,7 @@ fn push(candidates: &mut Vec<Candidate>, consumed: &mut HashSet<usize>, mut c: C
     }
     candidates.push(c)
 }
-pub(super) fn infer(paths: &[String]) -> Groups {
+fn infer_scalar(paths: &[String]) -> Groups {
     let paths: Vec<_> = paths
         .iter()
         .map(|p| {
@@ -378,7 +395,12 @@ pub(super) fn infer(paths: &[String]) -> Groups {
             ));
         }
     }
-    super::yaml::js_keys(&mut groups);
+    groups.sort_by_key(|(key, _)| {
+        crate::manifest_text::JsText::scalar(key)
+            .array_index()
+            .map(|index| (0, index))
+            .unwrap_or((1, 0))
+    });
     groups
 }
 fn optional_group(name: &str, path: &str, modification: bool) -> Group {
@@ -410,4 +432,32 @@ fn optional_group(name: &str, path: &str, modification: bool) -> Group {
         min: None,
         max: None,
     }
+}
+
+pub(super) fn infer(paths: &[String]) -> DomainGroups {
+    infer_scalar(paths)
+        .into_iter()
+        .map(|(id, g)| {
+            (
+                OptionGroupId::from(id),
+                DomainGroup {
+                    rule: g.rule,
+                    label: g.label.map(ManifestText::from),
+                    parts: g.parts.into_iter().map(ManifestText::from).collect(),
+                    min: g.min,
+                    max: g.max,
+                    variants: g
+                        .variants
+                        .into_iter()
+                        .map(|v| DomainVariant {
+                            id: VariantId::from(v.id),
+                            label: v.label.map(ManifestText::from),
+                            parts: v.parts.into_iter().map(ManifestText::from).collect(),
+                            excludes: v.excludes.into_iter().map(ManifestText::from).collect(),
+                        })
+                        .collect(),
+                },
+            )
+        })
+        .collect()
 }

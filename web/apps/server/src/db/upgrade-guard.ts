@@ -22,6 +22,15 @@ type PrepareSqliteUpgradeOptions = Readonly<{
 /** Schema shipped by Print Partner v3.3.0, the oldest release this one upgrades in place. */
 export const minimumUpgradeSchemaVersion = 31;
 
+export function assertSupportedSchemaVersion(version: number): void {
+  if (version > currentSchemaVersion) {
+    throw new Error(
+      `Database schema version ${version} is newer than supported version ${currentSchemaVersion}`,
+    );
+  }
+  assertUpgradableSchemaVersion(version);
+}
+
 export function assertUpgradableSchemaVersion(version: number): void {
   if (version === 0 || version >= minimumUpgradeSchemaVersion) return;
   throw new Error(
@@ -60,11 +69,6 @@ export async function prepareSqliteUpgrade(
 
   const sqlite = new Database(dbPath, { readonly: true, fileMustExist: true });
   try {
-    const integrity = sqlite.pragma("integrity_check", { simple: true });
-    if (integrity !== "ok") {
-      throw new Error(`Cannot upgrade database: SQLite integrity_check returned ${String(integrity)}`);
-    }
-
     const fromVersion = readSchemaVersion(sqlite);
     if (fromVersion > targetVersion) {
       throw new Error(
@@ -73,6 +77,10 @@ export async function prepareSqliteUpgrade(
       );
     }
     assertUpgradableSchemaVersion(fromVersion);
+    const integrity = sqlite.pragma("integrity_check", { simple: true });
+    if (integrity !== "ok") {
+      throw new Error(`Cannot upgrade database: SQLite integrity_check returned ${String(integrity)}`);
+    }
     const backupsDir = join(options.dataDir, "backups");
     mkdirSync(backupsDir, { recursive: true });
     const backupPath = join(

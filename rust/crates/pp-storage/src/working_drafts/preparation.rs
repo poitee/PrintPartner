@@ -3,6 +3,8 @@ use super::{
     manifest::{self, Group, Variant},
     observation::*,
 };
+use crate::manifest_text::{DraftPart, PartManifestMetadata};
+use crate::required_units::part_rows;
 use crate::{
     catalog::naming::NamingProfile,
     required_units::{self, num, one, rows, text},
@@ -48,7 +50,7 @@ struct Layer {
 pub(super) struct PreparedDraftSnapshot {
     pub base: Value,
     pub capture: Capture,
-    pub parts: Vec<Value>,
+    pub parts: Vec<DraftPart>,
     pub digest: String,
 }
 #[derive(Clone)]
@@ -320,7 +322,7 @@ fn parse(path: &str, profile: &NamingProfile) -> Result<(String, String, String,
         quantity,
     ))
 }
-fn merge(scans: &[Vec<Scanned>], prior: &HashMap<String, Value>) -> Vec<Scanned> {
+fn merge(scans: &[Vec<Scanned>], prior: &HashMap<String, DraftPart>) -> Vec<Scanned> {
     let mut parts: Vec<Scanned> = Vec::new();
     let mut index = HashMap::new();
     let mut slugs: HashMap<String, String> = HashMap::new();
@@ -429,11 +431,11 @@ fn inferred(
                     group.clone(),
                     Group {
                         rule: "pick_one".into(),
-                        label: Some(label.clone().unwrap_or_else(|| group.replace('_', " "))),
+                        label: Some(label.clone().unwrap_or_else(|| group.0.identifier_label())),
                         parts: Vec::new(),
                         variants: vec![Variant {
                             id: id.clone(),
-                            label: Some(label.unwrap_or_else(|| id.replace('_', " "))),
+                            label: Some(label.unwrap_or_else(|| id.0.identifier_label())),
                             parts: vec![path],
                             excludes: Vec::new(),
                         }],
@@ -468,7 +470,7 @@ pub(super) fn prepare(
                 .is_some(),
                 "Missing accepted base"
             );
-            rows(
+            part_rows(
                 tx,
                 "SELECT * FROM plan_revision_parts WHERE tenant_id=? AND revision_id=? ORDER BY id",
                 &[&tenant, &id],
@@ -497,11 +499,10 @@ pub(super) fn prepare(
         let parts: Vec<_> = previous
             .into_iter()
             .map(|p| {
-                let mut row = json!({"baseRevisionPartId":p["id"]});
-                for f in required_units::model::PART_FIELDS {
-                    row[*f] = p[*f].clone()
-                }
-                row
+                let row = json!({"baseRevisionPartId":p["id"]});
+                let mut part = p.projected(required_units::model::PART_FIELDS);
+                part["baseRevisionPartId"] = row["baseRevisionPartId"].clone();
+                part
             })
             .collect();
         let digest = required_units::model::planning(&base, &captured.inputs, &parts);
@@ -620,7 +621,7 @@ pub(super) fn prepare(
         } else {
             None
         };
-        parts.push(json!({"baseRevisionPartId":old.map(|v|v["id"].clone()),"partKey":p.key,"relativePath":p.path,"filename":p.filename,"sourceLayer":p.layer,"status":p.status,"roleInferred":p.role,"roleOverride":old.map(|v|v["roleOverride"].clone()),"filamentColorId":nullable("filamentColorId","filament_color_id"),"filamentCustomHex":nullable("filamentCustomHex","filament_custom_hex"),"spoolmanSpoolId":nullable("spoolmanSpoolId","spoolman_spool_id"),"quantityInferred":quantity_value(p.quantity),"quantityOverride":quantity_override,"quantityEffective":if quantity_override.is_null(){quantity_value(p.quantity)}else{quantity_override},"included":old.map(|v|v["included"].clone()).unwrap_or(json!(selected.contains(&p.key))),"notes":old.map(|v|v["notes"].clone()).unwrap_or(json!("")),"githubBlobUrl":old.map(|v|v["githubBlobUrl"].clone()),"geometrySame":old.map(|v|v["geometrySame"].clone()),"requirement":old.map(|v|v["requirement"].clone()),"optionGroupId":old.map(|v|v["optionGroupId"].clone()),"manifestSource":old.map(|v|v["manifestSource"].clone()),"artifactDigest":artifact}));
+        parts.push(DraftPart::new(json!({"baseRevisionPartId":old.map(|v|v["id"].clone()),"partKey":p.key,"relativePath":p.path,"filename":p.filename,"sourceLayer":p.layer,"status":p.status,"roleInferred":p.role,"roleOverride":old.map(|v|v["roleOverride"].clone()),"filamentColorId":nullable("filamentColorId","filament_color_id"),"filamentCustomHex":nullable("filamentCustomHex","filament_custom_hex"),"spoolmanSpoolId":nullable("spoolmanSpoolId","spoolman_spool_id"),"quantityInferred":quantity_value(p.quantity),"quantityOverride":quantity_override,"quantityEffective":if quantity_override.is_null(){quantity_value(p.quantity)}else{quantity_override},"included":old.map(|v|v["included"].clone()).unwrap_or(json!(selected.contains(&p.key))),"notes":old.map(|v|v["notes"].clone()).unwrap_or(json!("")),"githubBlobUrl":old.map(|v|v["githubBlobUrl"].clone()),"geometrySame":old.map(|v|v["geometrySame"].clone()),"artifactDigest":artifact}),old.map(|part| part.manifest.clone()).unwrap_or_else(PartManifestMetadata::default)));
     }
     captured.observations.option_sources =
         connection.read(|tx| source_rows(tx, tenant, profile))?;

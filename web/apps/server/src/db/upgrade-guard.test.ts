@@ -7,7 +7,7 @@ import { validateBackup } from "../services/backup-restore.js";
 import { SqliteDatabase } from "./client.js";
 import { PostgresDatabase } from "./client-postgres.js";
 import { currentSchemaVersion } from "./schema.js";
-import { minimumUpgradeSchemaVersion, prepareSqliteUpgrade } from "./upgrade-guard.js";
+import { assertSupportedSchemaVersion, minimumUpgradeSchemaVersion, prepareSqliteUpgrade } from "./upgrade-guard.js";
 
 function createVersionedDatabase(dataDir: string, schemaVersion: number): void {
   const sqlite = new Database(join(dataDir, "print-partner.db"));
@@ -28,6 +28,23 @@ function createVersionedDatabase(dataDir: string, schemaVersion: number): void {
 }
 
 describe("SQLite upgrade guard", () => {
+  it.each([35, 40, 41, 42])("refuses schema %i before opening native part tables", (version) => {
+    expect(() => assertSupportedSchemaVersion(version)).toThrow(
+      `Database schema version ${version} is newer than supported version ${currentSchemaVersion}`,
+    );
+    const dataDir = mkdtempSync(join(tmpdir(), "pp-native-schema-guard-"));
+    createVersionedDatabase(dataDir, version);
+    const path = join(dataDir, "print-partner.db");
+    const before = readFileSync(path);
+    const database = new SqliteDatabase(dataDir);
+    expect(() => database.connect()).toThrow("newer than supported version");
+    expect(readFileSync(path)).toEqual(before);
+    for (const name of ["repos", "sources", "exports", "thumbs", "covers", "backups"]) {
+      expect(existsSync(join(dataDir, name))).toBe(false);
+    }
+    expect(existsSync(`${path}-wal`)).toBe(false);
+    expect(existsSync(`${path}-shm`)).toBe(false);
+  });
   it("creates and validates one durable backup for a schema transition", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "pp-upgrade-guard-"));
     createVersionedDatabase(dataDir, 32);

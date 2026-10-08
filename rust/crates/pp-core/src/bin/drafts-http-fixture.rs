@@ -6,7 +6,9 @@ use pp_api::{
     drafts::{DraftHttpClients, DraftHttpConfig, draft_router},
 };
 use pp_core::{
-    draft_observations::{DraftReadConfiguration, FilesystemPolicy, issue_working_drafts},
+    draft_observations::{
+        DraftReadConfiguration, FilesystemPolicy, issue_build_graph, issue_working_drafts,
+    },
     review_observations::SnapshotReviewObserver,
 };
 use pp_storage::{
@@ -52,6 +54,7 @@ async fn main() -> Result<()> {
     std::fs::create_dir_all(&repos)?;
     let policy = policy();
     let drafts = issue_working_drafts(&owner, policy, draft_configuration(repos.clone()))?;
+    let builds = issue_build_graph(&owner, policy, draft_configuration(repos.clone()))?;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let origin = format!("http://{}", listener.local_addr()?);
     let router = auth_router(
@@ -67,7 +70,7 @@ async fn main() -> Result<()> {
     ))
     .merge(build_router(
         BuildHttpConfig::new(&origin, "default")?,
-        owner.build_graph_with_policy(policy)?,
+        builds,
     ))
     .merge(draft_router(
         DraftHttpConfig::new(&origin, "default")?,

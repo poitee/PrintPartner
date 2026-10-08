@@ -1,3 +1,4 @@
+use crate::manifest_text::{DraftPart, compare_json_bytes, digest_json_bytes};
 use anyhow::{Result, bail, ensure};
 use pp_contracts::reconciliation::Decision;
 use serde_json::{Value, json};
@@ -52,7 +53,7 @@ pub(crate) fn project(row: &Value, fields: &[&str]) -> Value {
     }
     Value::Object(out)
 }
-pub(crate) fn planning(draft: &Value, inputs: &[Value], parts: &[Value]) -> String {
+pub(crate) fn planning(draft: &Value, inputs: &[Value], parts: &[DraftPart]) -> String {
     let mut inputs: Vec<_> = inputs.iter().map(|r| project(r, INPUT_FIELDS)).collect();
     inputs.sort_by(|a, b| {
         a["layerOrder"]
@@ -61,20 +62,27 @@ pub(crate) fn planning(draft: &Value, inputs: &[Value], parts: &[Value]) -> Stri
             .then(a["sourceId"].as_i64().cmp(&b["sourceId"].as_i64()))
             .then_with(|| js_cmp(a, b))
     });
-    let mut parts: Vec<_> = parts
+    let fields = [vec!["baseRevisionPartId"], PART_FIELDS.to_vec()].concat();
+    let mut parts = parts
         .iter()
-        .map(|r| {
-            let mut p = json!({"baseRevisionPartId":r["baseRevisionPartId"]});
-            for f in PART_FIELDS {
-                p[*f] = r[*f].clone();
-            }
-            p
-        })
-        .collect();
-    parts.sort_by(js_cmp);
-    digest(
-        &json!({"format":"plan-draft-v1","base_revision_id":draft["baseRevisionId"],"base_plan_version":draft["basePlanVersion"],"inputs":inputs,"parts":parts}),
-    )
+        .map(|p| p.json_fields(&fields, false))
+        .collect::<Vec<_>>();
+    parts.sort_by(|a, b| compare_json_bytes(a, b));
+    let mut bytes = b"{\"format\":\"plan-draft-v1\",\"base_revision_id\":".to_vec();
+    bytes.extend_from_slice(&serde_json::to_vec(&draft["baseRevisionId"]).expect("base revision"));
+    bytes.extend_from_slice(b",\"base_plan_version\":");
+    bytes.extend_from_slice(&serde_json::to_vec(&draft["basePlanVersion"]).expect("plan version"));
+    bytes.extend_from_slice(b",\"inputs\":");
+    bytes.extend_from_slice(&serde_json::to_vec(&inputs).expect("scalar inputs"));
+    bytes.extend_from_slice(b",\"parts\":[");
+    for (i, p) in parts.iter().enumerate() {
+        if i > 0 {
+            bytes.push(b',');
+        }
+        bytes.extend_from_slice(p);
+    }
+    bytes.extend_from_slice(b"]}");
+    digest_json_bytes(&bytes)
 }
 pub(crate) fn selection(planning: &str, reconciliation: Option<&str>) -> String {
     digest(
@@ -225,14 +233,14 @@ fn basis(part: &BasePart) -> Vec<BasisRow> {
         .collect()
 }
 pub(super) fn reconcile(
-    parts: &[Value],
+    parts: &[DraftPart],
     inputs: &[Value],
     base: &[BasePart],
     decisions: &[Decision],
 ) -> Result<Reconciled> {
     let mut targets = parts
         .iter()
-        .cloned()
+        .map(|part| part.scalar.clone())
         .map(serde_json::from_value::<Target>)
         .collect::<serde_json::Result<Vec<_>>>()?;
     targets.sort_by_key(|p| p.id);

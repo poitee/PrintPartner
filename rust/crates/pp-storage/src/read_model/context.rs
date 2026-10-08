@@ -719,7 +719,7 @@ fn working(
                 "artifact_digest",
             ]
             .iter()
-            .any(|k| original.v(k) != r.v(k))
+            .any(|k| !original.same_field(&r, k))
             {
                 changes += 1;
             }

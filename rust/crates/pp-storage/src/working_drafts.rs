@@ -1,3 +1,4 @@
+use crate::manifest_text::DraftPart;
 mod diff;
 mod manifest;
 pub mod observation;
@@ -14,7 +15,7 @@ use crate::{
 use anyhow::{Result, anyhow, ensure};
 pub use pp_contracts::{
     autosave::PositiveId,
-    working_drafts::{Outcome, Request, Transition},
+    working_drafts::{Request, Transition},
 };
 use rusqlite::{Connection, Transaction, TransactionBehavior, params};
 use serde_json::{Value, json};
@@ -26,6 +27,265 @@ use std::{
     },
     time::{Duration, Instant},
 };
+
+#[derive(Debug)]
+pub enum Outcome {
+    Service {
+        outcome: pp_contracts::reconciliation::Outcome,
+        committed_draft: Option<DraftDocument>,
+    },
+    Rebased {
+        draft: DraftDocument,
+    },
+    SourceConflict {
+        draft: DraftDocument,
+    },
+    NotAbandoned {
+        state: String,
+    },
+    BaseUnchanged,
+    MergeConflicts {
+        conflicts: MergeConflicts,
+    },
+    Updated {
+        draft: DraftDocument,
+    },
+    Created {
+        draft: DraftDocument,
+    },
+    Existing {
+        draft: DraftDocument,
+    },
+    InputsChanged,
+    AcceptedBaseChanged,
+    IdempotencyConflict,
+    NoLayers,
+    NoStls,
+    WouldWipe,
+    Diff {
+        diff: DraftDiff,
+    },
+    Listed {
+        drafts: DraftList,
+    },
+    Read {
+        draft: DraftDocument,
+    },
+    Workspace {
+        workspace: Box<pp_contracts::reconciliation::Workspace>,
+    },
+    Transitioned {
+        draft: DraftDocument,
+    },
+    Unchanged {
+        draft: DraftDocument,
+    },
+    Conflict {
+        draft: DraftDocument,
+    },
+    BaseChanged {
+        draft: DraftDocument,
+    },
+    NotAllowed {
+        state: String,
+    },
+    NotFound,
+    AcceptedBaselineRequired,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DraftState {
+    Open,
+    Abandoned,
+    Consumed,
+}
+impl DraftState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::Abandoned => "abandoned",
+            Self::Consumed => "consumed",
+        }
+    }
+}
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DraftIdentity {
+    draft_id: PositiveId,
+    state: DraftState,
+    lifecycle_version: u32,
+    snapshot_digest: pp_contracts::autosave::Digest,
+    base: pp_contracts::autosave::PlanDraftBasis,
+}
+impl DraftIdentity {
+    fn from_header(header: &Value) -> Result<Self> {
+        let draft_id = PositiveId::new(
+            header["id"]
+                .as_u64()
+                .ok_or_else(|| anyhow!("Invalid draft id"))?,
+        )
+        .map_err(|e| anyhow!(e))?;
+        let state = match header["state"].as_str() {
+            Some("open") => DraftState::Open,
+            Some("abandoned") => DraftState::Abandoned,
+            Some("consumed") => DraftState::Consumed,
+            _ => return Err(anyhow!("Invalid draft state")),
+        };
+        let lifecycle_version = u32::try_from(num(header, "lifecycleVersion")?)?;
+        let snapshot_digest =
+            pp_contracts::autosave::Digest::new(text(header, "snapshotDigest")?.into())
+                .map_err(|e| anyhow!(e))?;
+        let revision_id = if header["baseRevisionId"].is_null() {
+            None
+        } else {
+            Some(
+                PositiveId::new(
+                    header["baseRevisionId"]
+                        .as_u64()
+                        .ok_or_else(|| anyhow!("Invalid base revision"))?,
+                )
+                .map_err(|e| anyhow!(e))?,
+            )
+        };
+        let version = pp_contracts::autosave::Version::new(
+            header["basePlanVersion"]
+                .as_u64()
+                .ok_or_else(|| anyhow!("Invalid base version"))?,
+        )
+        .map_err(|e| anyhow!(e))?;
+        let base = pp_contracts::autosave::PlanDraftBasis::new(revision_id, version)
+            .map_err(|e| anyhow!(e))?;
+        Ok(Self {
+            draft_id,
+            state,
+            lifecycle_version,
+            snapshot_digest,
+            base,
+        })
+    }
+    pub fn draft_id(&self) -> PositiveId {
+        self.draft_id
+    }
+    pub fn state(&self) -> DraftState {
+        self.state
+    }
+    pub fn lifecycle_version(&self) -> u32 {
+        self.lifecycle_version
+    }
+    pub fn snapshot_digest(&self) -> &pp_contracts::autosave::Digest {
+        &self.snapshot_digest
+    }
+    pub fn base(&self) -> &pp_contracts::autosave::PlanDraftBasis {
+        &self.base
+    }
+    fn list_fields(&self) -> Value {
+        json!({"id":self.draft_id,"state":self.state.as_str(),"lifecycleVersion":self.lifecycle_version,"snapshotDigest":self.snapshot_digest,"baseRevisionId":self.base.revision_id(),"basePlanVersion":self.base.plan_version()})
+    }
+}
+#[derive(Clone, Debug, PartialEq)]
+struct DraftSnapshotModel {
+    ordinary: Value,
+    parts: Vec<DraftPart>,
+}
+#[derive(Clone, Debug, PartialEq)]
+pub struct DraftDocument {
+    model: DraftSnapshotModel,
+    identity: DraftIdentity,
+}
+impl DraftDocument {
+    pub fn identity(&self) -> &DraftIdentity {
+        &self.identity
+    }
+    pub fn into_json_body(self) -> DraftJsonBody {
+        DraftJsonBody(self.write_json())
+    }
+    fn write_json(&self) -> Vec<u8> {
+        write_snapshot(&self.model)
+    }
+    fn is_recompute(&self) -> bool {
+        self.model.ordinary["origin"]["kind"] == "recompute"
+    }
+}
+#[derive(Debug)]
+pub struct DraftList(Vec<DraftIdentity>);
+impl DraftList {
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = &DraftIdentity> {
+        self.0.iter()
+    }
+}
+#[derive(Debug)]
+pub struct DraftDiff(diff::DraftDiffModel);
+impl DraftDiff {
+    pub fn into_json_body(self) -> DraftDiffJsonBody {
+        DraftDiffJsonBody(self.0.write_json())
+    }
+}
+#[derive(Debug)]
+pub struct MergeConflicts(Vec<Value>);
+impl MergeConflicts {
+    pub fn into_json_body(self) -> MergeConflictsJsonBody {
+        MergeConflictsJsonBody(serde_json::to_vec(&self.0).expect("scalar merge conflicts"))
+    }
+}
+pub struct DraftJsonBody(Vec<u8>);
+pub struct DraftDiffJsonBody(Vec<u8>);
+pub struct MergeConflictsJsonBody(Vec<u8>);
+pub struct DraftOutcomeJsonBody(Vec<u8>);
+impl DraftJsonBody {
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.0
+    }
+}
+impl DraftDiffJsonBody {
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.0
+    }
+}
+impl MergeConflictsJsonBody {
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.0
+    }
+}
+impl DraftOutcomeJsonBody {
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.0
+    }
+}
+fn snapshot_part_fields() -> Vec<&'static str> {
+    [
+        vec!["id", "draftId", "baseRevisionPartId"],
+        required_units::model::PART_FIELDS.to_vec(),
+    ]
+    .concat()
+}
+fn write_snapshot(model: &DraftSnapshotModel) -> Vec<u8> {
+    let object = model.ordinary.as_object().expect("scalar snapshot fields");
+    let mut keys = object.keys().map(String::as_str).collect::<Vec<_>>();
+    keys.push("parts");
+    let mut output = vec![b'{'];
+    for (i, key) in keys.iter().enumerate() {
+        if i > 0 {
+            output.push(b',');
+        }
+        crate::manifest_text::JsText::scalar(key).write_json(&mut output);
+        output.push(b':');
+        if *key == "parts" {
+            output.push(b'[');
+            for (i, part) in model.parts.iter().enumerate() {
+                if i > 0 {
+                    output.push(b',');
+                }
+                output.extend_from_slice(&part.json_fields(&snapshot_part_fields(), false));
+            }
+            output.push(b']');
+        } else {
+            output.extend_from_slice(
+                &serde_json::to_vec(&object[*key]).expect("scalar snapshot field"),
+            );
+        }
+    }
+    output.push(b'}');
+    output
+}
 
 #[derive(Debug)]
 pub enum Failure {
@@ -46,7 +306,7 @@ impl std::fmt::Display for Failure {
 impl std::error::Error for Failure {}
 #[derive(Debug)]
 pub struct CommittedDraftSelectionFailure {
-    pub committed_draft: Value,
+    pub committed_draft: DraftDocument,
     pub selection_failure: anyhow::Error,
 }
 impl std::fmt::Display for CommittedDraftSelectionFailure {
@@ -205,7 +465,7 @@ impl WorkingDraftClient {
             .map_err(|_| anyhow!(Failure::OutcomeUnknown))?
     }
 }
-fn snapshot(d: &Draft) -> Result<Value> {
+fn snapshot(d: &Draft) -> Result<DraftDocument> {
     let h = &d.header;
     let origin = if [
         "rebasedFromDraftId",
@@ -260,20 +520,18 @@ fn snapshot(d: &Draft) -> Result<Value> {
             })
             .collect::<Vec<_>>()
     );
-    result["parts"] = json!(
-        d.parts
-            .iter()
-            .map(|p| {
-                let mut row =
-                    required_units::model::project(p, &["id", "draftId", "baseRevisionPartId"]);
-                for f in required_units::model::PART_FIELDS {
-                    row[*f] = p[*f].clone();
-                }
-                row
-            })
-            .collect::<Vec<_>>()
-    );
-    Ok(result)
+    let parts = d
+        .parts
+        .iter()
+        .map(|part| part.projected(&snapshot_part_fields()))
+        .collect();
+    Ok(DraftDocument {
+        identity: DraftIdentity::from_header(h)?,
+        model: DraftSnapshotModel {
+            ordinary: result,
+            parts,
+        },
+    })
 }
 fn baseline_required(tx: &Transaction<'_>, tenant: &str, p: &Value) -> Result<bool> {
     let version = num(p, "acceptedPlanVersion")?;
@@ -304,12 +562,7 @@ pub(super) fn execute(connection: &mut Connection, command: Command) -> Result<O
             return auto_select(
                 connection,
                 &command,
-                PositiveId::new(
-                    draft["id"]
-                        .as_u64()
-                        .ok_or_else(|| anyhow!("Invalid draft id"))?,
-                )
-                .map_err(|e| anyhow!(e))?,
+                draft.identity().draft_id(),
                 Some(draft.clone()),
                 None,
             )
@@ -395,11 +648,11 @@ fn execute_domain(connection: &mut Connection, command: &Command) -> Result<Outc
     };
     let result = match command.request.clone() {
         Request::List => Outcome::Listed {
-            drafts: rows(
+            drafts: DraftList(rows(
                 &tx,
                 "SELECT id,state,lifecycle_version,snapshot_digest,base_revision_id,base_plan_version FROM plan_drafts WHERE tenant_id=? AND profile_id=? ORDER BY created_at,id",
                 &[&tenant, &profile],
-            )?,
+            )?.iter().map(DraftIdentity::from_header).collect::<Result<Vec<_>>>()?),
         },
         request => {
             let id = match request {
@@ -526,7 +779,7 @@ fn winner(
     let d = required_units::draft(tx, tenant, profile, num(&h, "id")?)?
         .ok_or_else(|| anyhow!("Saved draft missing"))?;
     let draft = snapshot(&d)?;
-    Ok(Some(if draft["origin"]["kind"] == "recompute" {
+    Ok(Some(if draft.is_recompute() {
         Outcome::Existing { draft }
     } else {
         Outcome::IdempotencyConflict
@@ -573,6 +826,29 @@ fn insert(tx: &Transaction<'_>, table: &str, row: Value) -> Result<i64> {
     )?;
     Ok(tx.last_insert_rowid())
 }
+fn insert_part(tx: &Transaction<'_>, table: &str, part: &DraftPart) -> Result<i64> {
+    let mut fields = part
+        .scalar
+        .as_object()
+        .ok_or_else(|| anyhow!("Invalid part insert"))?
+        .keys()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    fields.extend(["requirement", "optionGroupId", "manifestSource"]);
+    fields.sort_unstable();
+    let bound = part.sql_fields(&fields)?;
+    let columns = fields.iter().map(|field| snake(field)).collect::<Vec<_>>();
+    let sql = format!(
+        "INSERT INTO {table} ({}) VALUES ({})",
+        columns.join(","),
+        vec!["?"; fields.len()].join(",")
+    );
+    tx.execute(
+        &sql,
+        rusqlite::params_from_iter(bound.into_iter().map(|(_, value)| value)),
+    )?;
+    Ok(tx.last_insert_rowid())
+}
 struct RebaseOrigin<'a> {
     source_id: i64,
     generation: i64,
@@ -605,7 +881,7 @@ fn insert_prepared(
 struct SnapshotContent<'a> {
     base: &'a Value,
     inputs: &'a [Value],
-    parts: &'a [Value],
+    parts: &'a [DraftPart],
     digest: &'a str,
 }
 fn insert_snapshot(
@@ -630,12 +906,11 @@ fn insert_snapshot(
         insert(tx, "plan_draft_inputs", row)?;
     }
     for part in p.parts {
-        let mut row =
-            json!({"tenantId":tenant,"draftId":id,"baseRevisionPartId":part["baseRevisionPartId"]});
-        for f in required_units::model::PART_FIELDS {
-            row[*f] = part[*f].clone()
-        }
-        insert(tx, "plan_draft_parts", row)?;
+        let mut row = part.projected(required_units::model::PART_FIELDS);
+        row["tenantId"] = json!(tenant);
+        row["draftId"] = json!(id);
+        row["baseRevisionPartId"] = part["baseRevisionPartId"].clone();
+        insert_part(tx, "plan_draft_parts", &row)?;
     }
     Ok(id)
 }
@@ -736,7 +1011,7 @@ fn auto_select(
     connection: &mut Connection,
     c: &Command,
     id: PositiveId,
-    committed: Option<Value>,
+    committed: Option<DraftDocument>,
     expected: Option<&pp_contracts::working_drafts::ExpectedDraft>,
 ) -> Result<Outcome> {
     let tx = connection.transaction()?;
@@ -897,4 +1172,124 @@ fn edit(
 
 fn js_trim(value: &str) -> &str {
     value.trim_matches(|c: char| matches!(c, '\u{0009}'..='\u{000d}' | ' ' | '\u{00a0}' | '\u{1680}' | '\u{2000}'..='\u{200a}' | '\u{2028}' | '\u{2029}' | '\u{202f}' | '\u{205f}' | '\u{3000}' | '\u{feff}'))
+}
+
+impl Outcome {
+    pub fn into_json_body(self) -> DraftOutcomeJsonBody {
+        let (kind, field, body) = match self {
+            Self::Rebased { draft } => (
+                "rebased",
+                Some("draft"),
+                draft.into_json_body().into_bytes(),
+            ),
+            Self::SourceConflict { draft } => (
+                "source_conflict",
+                Some("draft"),
+                draft.into_json_body().into_bytes(),
+            ),
+            Self::Updated { draft } => (
+                "updated",
+                Some("draft"),
+                draft.into_json_body().into_bytes(),
+            ),
+            Self::Created { draft } => (
+                "created",
+                Some("draft"),
+                draft.into_json_body().into_bytes(),
+            ),
+            Self::Existing { draft } => (
+                "existing",
+                Some("draft"),
+                draft.into_json_body().into_bytes(),
+            ),
+            Self::Read { draft } => ("read", Some("draft"), draft.into_json_body().into_bytes()),
+            Self::Transitioned { draft } => (
+                "transitioned",
+                Some("draft"),
+                draft.into_json_body().into_bytes(),
+            ),
+            Self::Unchanged { draft } => (
+                "unchanged",
+                Some("draft"),
+                draft.into_json_body().into_bytes(),
+            ),
+            Self::Conflict { draft } => (
+                "conflict",
+                Some("draft"),
+                draft.into_json_body().into_bytes(),
+            ),
+            Self::BaseChanged { draft } => (
+                "base_changed",
+                Some("draft"),
+                draft.into_json_body().into_bytes(),
+            ),
+            Self::Diff { diff } => ("diff", Some("diff"), diff.into_json_body().into_bytes()),
+            Self::MergeConflicts { conflicts } => (
+                "merge_conflicts",
+                Some("conflicts"),
+                conflicts.into_json_body().into_bytes(),
+            ),
+            Self::Listed { drafts } => (
+                "listed",
+                Some("drafts"),
+                serde_json::to_vec(
+                    &drafts
+                        .iter()
+                        .map(DraftIdentity::list_fields)
+                        .collect::<Vec<_>>(),
+                )
+                .expect("scalar list"),
+            ),
+            Self::Workspace { workspace } => (
+                "workspace",
+                Some("workspace"),
+                serde_json::to_vec(&workspace).expect("scalar workspace"),
+            ),
+            Self::NotAllowed { state } => (
+                "not_allowed",
+                Some("state"),
+                serde_json::to_vec(&state).expect("state"),
+            ),
+            Self::NotAbandoned { state } => (
+                "not_abandoned",
+                Some("state"),
+                serde_json::to_vec(&state).expect("state"),
+            ),
+            Self::Service {
+                outcome,
+                committed_draft,
+            } => {
+                let mut output = b"{\"kind\":\"service\",\"outcome\":".to_vec();
+                output.extend_from_slice(
+                    &serde_json::to_vec(&outcome).expect("scalar reconciliation"),
+                );
+                output.extend_from_slice(b",\"committed_draft\":");
+                match committed_draft {
+                    Some(draft) => output.extend_from_slice(&draft.into_json_body().into_bytes()),
+                    None => output.extend_from_slice(b"null"),
+                };
+                output.push(b'}');
+                return DraftOutcomeJsonBody(output);
+            }
+            Self::BaseUnchanged => ("base_unchanged", None, Vec::new()),
+            Self::InputsChanged => ("inputs_changed", None, Vec::new()),
+            Self::AcceptedBaseChanged => ("accepted_base_changed", None, Vec::new()),
+            Self::IdempotencyConflict => ("idempotency_conflict", None, Vec::new()),
+            Self::NoLayers => ("no_layers", None, Vec::new()),
+            Self::NoStls => ("no_stls", None, Vec::new()),
+            Self::WouldWipe => ("would_wipe", None, Vec::new()),
+            Self::NotFound => ("not_found", None, Vec::new()),
+            Self::AcceptedBaselineRequired => ("accepted_baseline_required", None, Vec::new()),
+        };
+        let mut output = b"{\"kind\":".to_vec();
+        crate::manifest_text::JsText::scalar(kind).write_json(&mut output);
+        if let Some(field) = field {
+            output.push(b',');
+            crate::manifest_text::JsText::scalar(field).write_json(&mut output);
+            output.push(b':');
+            output.extend_from_slice(&body);
+        }
+        output.push(b'}');
+        DraftOutcomeJsonBody(output)
+    }
 }

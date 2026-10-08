@@ -3147,7 +3147,7 @@ fn complete_progress(owner: &WriterOwner) {
         .unwrap();
     assert_eq!(response.status, 200);
 }
-fn pinned_accepted(owner: &WriterOwner) -> serde_json::Value {
+fn pinned_accepted(owner: &WriterOwner) -> Vec<u8> {
     let batch = owner
         .accepted_reads()
         .read(
@@ -3157,9 +3157,18 @@ fn pinned_accepted(owner: &WriterOwner) -> serde_json::Value {
             Duration::from_secs(5),
         )
         .unwrap();
-    let accepted = serde_json::to_value(&batch.builds[0].accepted).unwrap();
-    assert_eq!(accepted["kind"], "ready");
-    accepted
+    assert!(matches!(
+        batch.builds[0].accepted,
+        pp_storage::read_model::AcceptedRead::Ready { .. }
+    ));
+    batch
+        .builds
+        .into_iter()
+        .next()
+        .unwrap()
+        .accepted
+        .into_json_body()
+        .into_bytes()
 }
 #[test]
 fn combined_pending_import_allows_progress_and_selection_then_preserves_pinned_history() {
@@ -3723,8 +3732,18 @@ fn publication_then_source_activation_preserves_receipt_progress_and_plate_histo
             Duration::from_secs(5),
         )
         .unwrap();
-    let accepted = serde_json::to_value(&accepted.builds[0].accepted).unwrap();
-    assert_eq!(accepted["kind"], "ready");
+    assert!(matches!(
+        accepted.builds[0].accepted,
+        pp_storage::read_model::AcceptedRead::Ready { .. }
+    ));
+    let accepted = accepted
+        .builds
+        .into_iter()
+        .next()
+        .unwrap()
+        .accepted
+        .into_json_body()
+        .into_bytes();
     let completed = svc
         .work_operation(
             &pending.job_id,
@@ -3761,7 +3780,13 @@ fn publication_then_source_activation_preserves_receipt_progress_and_plate_histo
         )
         .unwrap();
     assert_eq!(
-        serde_json::to_value(&read.builds[0].accepted).unwrap(),
+        read.builds
+            .into_iter()
+            .next()
+            .unwrap()
+            .accepted
+            .into_json_body()
+            .into_bytes(),
         accepted
     );
     let svc = service(&owner);

@@ -36,6 +36,18 @@ pub fn issue_working_drafts(
     let repos = configuration.repos.clone();
     owner.working_drafts_with_policy(policy, Arc::new(Reader { configuration }), limits, repos)
 }
+pub fn issue_build_graph(
+    owner: &WriterOwner,
+    policy: AuthPolicy,
+    configuration: DraftReadConfiguration,
+) -> anyhow::Result<pp_storage::build_graph::BuildGraphClient> {
+    anyhow::ensure!(
+        configuration.repos.is_absolute() && configuration.relative_base.is_absolute(),
+        "Manifest roots must be absolute"
+    );
+    let limits = configuration.limits;
+    owner.build_graph_with_observations(policy, Arc::new(Reader { configuration }), limits)
+}
 pub fn issue_plan_save(
     owner: &WriterOwner,
     policy: AuthPolicy,

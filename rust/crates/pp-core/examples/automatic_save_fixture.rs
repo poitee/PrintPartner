@@ -111,7 +111,7 @@ fn main() -> Result<()> {
     io::stdout().flush()?;
     for line in io::stdin().lock().lines() {
         let line = line?;
-        let result = (|| -> Result<Value> {
+        let result = (|| -> Result<Vec<u8>> {
             let c: Value = serde_json::from_str(&line)?;
             let profile = PositiveId::new(
                 c["profile"]
@@ -131,14 +131,14 @@ fn main() -> Result<()> {
                         .into(),
                 )?;
                 return match client.plan_save().save(command, cancelled.clone(), wait) {
-                    Ok(outcome) => Ok(serde_json::to_value(outcome)?),
+                    Ok(outcome) => Ok(ok_body(outcome.into_json_body().into_bytes())),
                     Err(error) => {
                         if let Some(committed) = error
                             .downcast_ref::<pp_storage::plan_save::CommittedSaveCaptureFailure>(
                         ) {
-                            Ok(
+                            Ok(ok_scalar(
                                 json!({"committed_capture_failure": {"receipt":committed.receipt,"closed_draft_ids":committed.closed_draft_ids,"error":committed.capture_failure.to_string()}}),
-                            )
+                            ))
                         } else {
                             Err(error)
                         }
@@ -162,7 +162,7 @@ fn main() -> Result<()> {
                 else {
                     return Err(anyhow!("Draft missing"));
                 };
-                return Ok(draft);
+                return Ok(ok_draft(draft.into_json_body()));
             }
             if c["action"] == "publish" {
                 let draft_id = PositiveId::new(
@@ -182,9 +182,9 @@ fn main() -> Result<()> {
                     return Err(anyhow!("Draft missing"));
                 };
                 let request = serde_json::from_value(
-                    json!({"expected_snapshot_digest":draft["snapshotDigest"],"expected_lifecycle_version":draft["lifecycleVersion"],"expected_base":{"revision_id":draft["baseRevisionId"],"plan_version":draft["basePlanVersion"]}}),
+                    json!({"expected_snapshot_digest":draft.identity().snapshot_digest(),"expected_lifecycle_version":draft.identity().lifecycle_version(),"expected_base":{"revision_id":draft.identity().base().revision_id(),"plan_version":draft.identity().base().plan_version()}}),
                 )?;
-                return Ok(serde_json::to_value(
+                return Ok(ok_scalar(serde_json::to_value(
                     owner.publication_with_policy(policy)?.apply(
                         PublicationCommand::new(
                             profile,
@@ -199,7 +199,7 @@ fn main() -> Result<()> {
                         &cancelled,
                         wait,
                     )?,
-                )?);
+                )?));
             }
             let request: Request = serde_json::from_value(c["request"].clone())?;
             let outcome = if c["service"] == true {
@@ -207,13 +207,13 @@ fn main() -> Result<()> {
             } else {
                 client.execute(credential(), profile, request, cancelled.clone(), wait)?
             };
-            Ok(serde_json::to_value(outcome)?)
+            Ok(ok_outcome(outcome.into_json_body()))
         })();
         println!(
             "{}",
             match result {
-                Ok(v) => json!({"ok":v}),
-                Err(e) => json!({"error":e.to_string()}),
+                Ok(v) => String::from_utf8(v).expect("validated fixture JSON"),
+                Err(e) => json!({"error":e.to_string()}).to_string(),
             }
         );
         io::stdout().flush()?;
@@ -224,4 +224,27 @@ fn main() -> Result<()> {
         serde_json::to_vec(&*emitted.lock().unwrap())?,
     )?;
     Ok(())
+}
+
+fn ok_scalar(value: Value) -> Vec<u8> {
+    serde_json::to_vec(&json!({"ok":value})).expect("scalar fixture output")
+}
+fn ok_draft(body: pp_storage::working_drafts::DraftJsonBody) -> Vec<u8> {
+    let mut output = b"{\"ok\":".to_vec();
+    output.extend_from_slice(&body.into_bytes());
+    output.push(b'}');
+    output
+}
+fn ok_outcome(body: pp_storage::working_drafts::DraftOutcomeJsonBody) -> Vec<u8> {
+    let mut output = b"{\"ok\":".to_vec();
+    output.extend_from_slice(&body.into_bytes());
+    output.push(b'}');
+    output
+}
+
+fn ok_body(body: Vec<u8>) -> Vec<u8> {
+    let mut output = b"{\"ok\":".to_vec();
+    output.extend_from_slice(&body);
+    output.push(b'}');
+    output
 }

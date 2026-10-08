@@ -10,7 +10,7 @@ use crate::{
 };
 use anyhow::{Result, anyhow, ensure};
 use rusqlite::{Connection, TransactionBehavior};
-use serde::Serialize;
+
 use std::{
     collections::HashSet,
     path::PathBuf,
@@ -32,36 +32,90 @@ pub enum Credential {
     },
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[derive(Debug, Clone)]
 pub enum AcceptedRead {
-    Ready {
-        snapshot: Box<Snapshot>,
-    },
-    Empty {
-        #[serde(skip)]
-        profile: Profile,
-    },
+    Ready { snapshot: Box<Snapshot> },
+    Empty { profile: Profile },
     Missing,
     CompatibilityDirty,
     Uninitialized,
-    IntegrityFailure {
-        code: String,
-        message: String,
-    },
+    IntegrityFailure { code: String, message: String },
 }
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug)]
 pub struct BuildRead {
     pub profile_id: i64,
     pub accepted: AcceptedRead,
     pub context: Option<CapturedContext>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub context_error: Option<String>,
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug)]
 pub struct Batch {
     pub builds: Vec<BuildRead>,
+}
+
+pub struct AcceptedReadJsonBody(Vec<u8>);
+pub struct AcceptedSnapshotJsonBody(Vec<u8>);
+pub struct AcceptedBatchJsonBody(Vec<u8>);
+impl AcceptedReadJsonBody {
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.0
+    }
+}
+impl AcceptedSnapshotJsonBody {
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.0
+    }
+}
+impl AcceptedBatchJsonBody {
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.0
+    }
+}
+impl AcceptedRead {
+    fn json_bytes(&self) -> Vec<u8> {
+        match self {
+            Self::Ready { snapshot } => {
+                let mut bytes = b"{\"kind\":\"ready\",\"snapshot\":".to_vec();
+                bytes.extend_from_slice(&snapshot.json_bytes());
+                bytes.push(b'}');
+                bytes
+            }
+            Self::Empty { .. } => b"{\"kind\":\"empty\"}".to_vec(),
+            Self::Missing => b"{\"kind\":\"missing\"}".to_vec(),
+            Self::CompatibilityDirty => b"{\"kind\":\"compatibility_dirty\"}".to_vec(),
+            Self::Uninitialized => b"{\"kind\":\"uninitialized\"}".to_vec(),
+            Self::IntegrityFailure { code, message } => serde_json::to_vec(
+                &serde_json::json!({"kind":"integrity_failure","code":code,"message":message}),
+            )
+            .expect("scalar integrity failure"),
+        }
+    }
+    pub fn into_json_body(self) -> AcceptedReadJsonBody {
+        AcceptedReadJsonBody(self.json_bytes())
+    }
+}
+impl Batch {
+    pub fn into_json_body(self) -> AcceptedBatchJsonBody {
+        let mut output = b"{\"builds\":[".to_vec();
+        for (i, build) in self.builds.iter().enumerate() {
+            if i > 0 {
+                output.push(b',');
+            }
+            output.extend_from_slice(b"{\"profileId\":");
+            output.extend_from_slice(build.profile_id.to_string().as_bytes());
+            output.extend_from_slice(b",\"accepted\":");
+            output.extend_from_slice(&build.accepted.json_bytes());
+            output.extend_from_slice(b",\"context\":");
+            output.extend_from_slice(&serde_json::to_vec(&build.context).expect("scalar context"));
+            if let Some(error) = &build.context_error {
+                output.extend_from_slice(b",\"contextError\":");
+                output.extend_from_slice(&serde_json::to_vec(error).expect("context error"));
+            }
+            output.push(b'}');
+        }
+        output.extend_from_slice(b"]}");
+        AcceptedBatchJsonBody(output)
+    }
 }
 
 #[derive(Clone)]

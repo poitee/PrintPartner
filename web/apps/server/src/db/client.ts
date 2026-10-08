@@ -7,7 +7,7 @@ import { currentSchemaVersion, schemaVersionKey } from "./schema.js";
 import { schemaMigrations } from "./migrations-sqlite.js";
 import { seedStarterProfiles } from "./seed-starter-profiles.js";
 import { repairSourceRevisionTenantOwnershipSqlite } from "./source-revision-tenant-repair.js";
-import { assertUpgradableSchemaVersion, readSchemaVersion } from "./upgrade-guard.js";
+import { assertSupportedSchemaVersion, readSchemaVersion } from "./upgrade-guard.js";
 
 export type DrizzleDb = BetterSQLite3Database<typeof schema>;
 
@@ -31,7 +31,7 @@ export class SqliteDatabase {
     mkdirSync(dirname(this.dbPath), { recursive: true });
     const sqlite = new Database(this.dbPath);
     try {
-      assertUpgradableSchemaVersion(readSchemaVersion(sqlite));
+      assertSupportedSchemaVersion(readSchemaVersion(sqlite));
     } catch (error) {
       sqlite.close();
       throw error;

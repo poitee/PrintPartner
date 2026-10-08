@@ -28,6 +28,7 @@ pp-gateway = { path = "../pp-gateway" }
 
 [dev-dependencies]
 getrandom = "=0.3.4"
+pp-contracts = { path = "../pp-contracts" }
 rusqlite.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 hyper.workspace = true

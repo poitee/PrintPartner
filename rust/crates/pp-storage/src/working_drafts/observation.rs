@@ -1,5 +1,41 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
+pub(crate) use super::manifest::{
+    Group as BuilderGroup, Groups as BuilderGroups, Manifest as BuilderManifest,
+    Variant as BuilderVariant,
+};
+
+pub(crate) fn parse_builder_manifest(
+    bytes: &[u8],
+    budget: &mut PreparationBudget<'_>,
+) -> ReadResult<BuilderManifest> {
+    super::manifest::parse(bytes, budget)
+}
+
+pub(crate) fn merge_builder_groups(target: &mut BuilderGroups, incoming: BuilderGroups) {
+    super::manifest::merge(target, incoming)
+}
+
+pub(crate) fn builder_path_matches(
+    pattern: &crate::manifest_text::ManifestText,
+    path: &str,
+) -> bool {
+    super::manifest::matches(pattern, path)
+}
+
+pub(crate) type BuilderHint = super::manifest::HintRule;
+
+pub(crate) fn parse_builder_hints(
+    bytes: &[u8],
+    budget: &mut PreparationBudget<'_>,
+) -> ReadResult<Vec<BuilderHint>> {
+    super::manifest::hints(bytes, budget)
+}
+
+pub(crate) fn infer_builder_siblings(paths: &[String]) -> BuilderGroups {
+    super::manifest::infer_siblings(paths)
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum Resource {
     Entries,

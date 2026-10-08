@@ -41,19 +41,38 @@ fn read_credential() -> Result<Credential> {
         },
     })
 }
-fn projection(owner: &WriterOwner, profiles: &[i64]) -> Result<Value> {
+fn projection(owner: &WriterOwner, profiles: &[i64]) -> Result<Vec<u8>> {
     let batch = owner.accepted_reads_with_policy(policy())?.read(
         read_credential()?,
         profiles,
         &AtomicBool::new(false),
         Duration::from_secs(5),
     )?;
-    let mut output = serde_json::to_value(&batch)?;
-    for (i, build) in batch.builds.iter().enumerate() {
-        output["builds"][i]["checkoff"] =
-            views::checkoff(build.profile_id, &build.accepted, &CatalogOnly)?;
-        output["builds"][i]["progress"] = views::progress(build.profile_id, &build.accepted);
+    let mut output = b"{\"builds\":[".to_vec();
+    for (i, build) in batch.builds.into_iter().enumerate() {
+        if i > 0 {
+            output.push(b',');
+        }
+        let ordinary = json!({"profileId":build.profile_id,"context":build.context});
+        output.extend_from_slice(b"{\"profileId\":");
+        output.extend_from_slice(&serde_json::to_vec(&ordinary["profileId"])?);
+        output.extend_from_slice(b",\"accepted\":");
+        let checkoff = views::checkoff(build.profile_id, &build.accepted, &CatalogOnly)?;
+        let progress = views::progress(build.profile_id, &build.accepted);
+        output.extend_from_slice(&build.accepted.into_json_body().into_bytes());
+        output.extend_from_slice(b",\"context\":");
+        output.extend_from_slice(&serde_json::to_vec(&ordinary["context"])?);
+        if let Some(error) = build.context_error {
+            output.extend_from_slice(b",\"contextError\":");
+            output.extend_from_slice(&serde_json::to_vec(&error)?);
+        }
+        output.extend_from_slice(b",\"checkoff\":");
+        output.extend_from_slice(&serde_json::to_vec(&checkoff)?);
+        output.extend_from_slice(b",\"progress\":");
+        output.extend_from_slice(&serde_json::to_vec(&progress)?);
+        output.push(b'}');
     }
+    output.extend_from_slice(b"]}");
     Ok(output)
 }
 fn main() -> Result<()> {
@@ -78,7 +97,12 @@ fn main() -> Result<()> {
             )?,
             Err(response) => response,
         };
-        results.push(json!({"response":result,"read":projection(&owner,&profiles)?}));
+        let mut row = b"{\"response\":".to_vec();
+        row.extend_from_slice(&serde_json::to_vec(&result)?);
+        row.extend_from_slice(b",\"read\":");
+        row.extend_from_slice(&projection(&owner, &profiles)?);
+        row.push(b'}');
+        results.push(row);
     }
     let before = projection(&owner, &profiles)?;
     owner.shutdown()?;
@@ -86,9 +110,18 @@ fn main() -> Result<()> {
     let reopened = projection(&owner, &profiles)?;
     ensure!(before == reopened, "Orderly reopen changed public progress");
     owner.shutdown()?;
-    println!(
-        "{}",
-        json!({"schema":schema,"results":results,"reopened":reopened})
-    );
+    let mut output = b"{\"schema\":".to_vec();
+    output.extend_from_slice(&serde_json::to_vec(&schema)?);
+    output.extend_from_slice(b",\"results\":[");
+    for (i, row) in results.into_iter().enumerate() {
+        if i > 0 {
+            output.push(b',');
+        }
+        output.extend_from_slice(&row);
+    }
+    output.extend_from_slice(b"],\"reopened\":");
+    output.extend_from_slice(&reopened);
+    output.push(b'}');
+    println!("{}", String::from_utf8(output)?);
     Ok(())
 }

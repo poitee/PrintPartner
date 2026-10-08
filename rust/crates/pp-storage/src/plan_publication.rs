@@ -1,3 +1,5 @@
+use crate::manifest_text::DraftPart;
+use crate::required_units::part_rows;
 mod model;
 use crate::{
     Envelope, Shared, WriterOwner, auth,
@@ -345,6 +347,33 @@ fn insert(tx: &Transaction<'_>, table: &str, row: &Value, ignore: bool) -> Resul
         .execute(rusqlite::params_from_iter(values))?;
     Ok(tx.last_insert_rowid())
 }
+fn insert_part(tx: &Transaction<'_>, table: &str, part: &DraftPart) -> Result<i64> {
+    validate_text(&part.scalar)?;
+    let mut fields = part
+        .scalar
+        .as_object()
+        .ok_or_else(|| anyhow!("Invalid part insert"))?
+        .keys()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    fields.extend(["requirement", "optionGroupId", "manifestSource"]);
+    fields.sort_unstable();
+    let values = part.sql_fields(&fields)?;
+    let columns = fields
+        .iter()
+        .map(|field| model::snake(field))
+        .collect::<Vec<_>>();
+    let sql = format!(
+        "INSERT INTO {table}({}) VALUES({})",
+        columns.join(","),
+        vec!["?"; fields.len()].join(",")
+    );
+    tx.prepare_cached(&sql)?
+        .execute(rusqlite::params_from_iter(
+            values.into_iter().map(|(_, value)| value),
+        ))?;
+    Ok(tx.last_insert_rowid())
+}
 fn historical_mapping(
     tx: &Transaction<'_>,
     tenant: &str,
@@ -526,8 +555,8 @@ fn publish_inputs(
     tx.execute("UPDATE plan_revision_input_sets SET published_at=? WHERE tenant_id=? AND id=? AND published_at IS NULL",params![at,tenant,id])?;
     Ok(id)
 }
-fn projection(p: &Value) -> Value {
-    let mut row = ru::model::project(p, ru::model::PART_FIELDS);
+fn projection(p: &DraftPart) -> DraftPart {
+    let mut row = p.projected(ru::model::PART_FIELDS);
     let o = row.as_object_mut().expect("project object");
     o.remove("artifactDigest");
     o.remove("roleInferred");
@@ -544,14 +573,14 @@ fn validate_projection(
     tenant: &str,
     profile: i64,
     revision: i64,
-) -> Result<Vec<Value>> {
+) -> Result<Vec<DraftPart>> {
     let header = one(
         tx,
         "SELECT * FROM plan_revisions WHERE tenant_id=? AND profile_id=? AND id=?",
         &[&tenant, &profile, &revision],
     )?
     .ok_or_else(|| anyhow!("Missing accepted revision"))?;
-    let mut immutable = rows(
+    let mut immutable = part_rows(
         tx,
         "SELECT * FROM plan_revision_parts WHERE tenant_id=? AND revision_id=? ORDER BY id",
         &[&tenant, &revision],
@@ -562,7 +591,7 @@ fn validate_projection(
             && model::revision_digest(&immutable) == header["snapshotDigest"],
         "Accepted revision digest mismatch"
     );
-    let mut current = rows(
+    let mut current = part_rows(
         tx,
         "SELECT * FROM parts WHERE tenant_id=? AND profile_id=? ORDER BY id",
         &[&tenant, &profile],
@@ -583,6 +612,10 @@ fn validate_projection(
                 ensure!(actual[key] == *value, "Accepted projection mismatch {key}");
             }
         }
+        ensure!(
+            actual.manifest == part.manifest,
+            "Accepted manifest projection mismatch"
+        );
         let progress = rows(
             tx,
             "SELECT unit_index,completed,assembled FROM print_progress WHERE tenant_id=? AND part_id=? ORDER BY unit_index",
@@ -1160,14 +1193,14 @@ pub(crate) fn publish_in_transaction(
         let mut projected = projection(p);
         projected["tenantId"] = json!(tenant);
         projected["profileId"] = json!(profile);
-        let new_id = insert(tx, "parts", &projected, false)?;
+        let new_id = insert_part(tx, "parts", &projected)?;
         ensure!(!old_ids.contains(&new_id), "Projection identifier reused");
         projection_ids.insert(id, new_id);
-        let mut immutable = ru::model::project(p, ru::model::PART_FIELDS);
+        let mut immutable = p.projected(ru::model::PART_FIELDS);
         immutable["tenantId"] = json!(tenant);
         immutable["revisionId"] = json!(revision);
         immutable["projectionPartId"] = json!(new_id);
-        revision_ids.insert(id, insert(tx, "plan_revision_parts", &immutable, false)?);
+        revision_ids.insert(id, insert_part(tx, "plan_revision_parts", &immutable)?);
     }
     write_remap(tx, tenant, production, &remapping, &projection_ids)?;
     for a in &prepared.assignments {

@@ -1,0 +1,190 @@
+{
+  "node": "v24.21.0",
+  "modules": {
+    "kitManifestStore": "/home/poitee/PrintPartner/.conversion-worktrees/u15-current-parent-review-repair-20261007/web/apps/server/src/services/kit-manifest-store.ts",
+    "manifestSelections": "/home/poitee/PrintPartner/.conversion-worktrees/u15-current-parent-review-repair-20261007/web/apps/server/src/services/manifest-selections.ts"
+  },
+  "numbers": [
+    {
+      "token": "100000000000000000000",
+      "finite": true,
+      "negativeZero": false,
+      "stringified": "100000000000000000000"
+    },
+    {
+      "token": "-100000000000000000000",
+      "finite": true,
+      "negativeZero": false,
+      "stringified": "-100000000000000000000"
+    },
+    {
+      "token": "100000000000000000001",
+      "finite": true,
+      "negativeZero": false,
+      "stringified": "100000000000000000000"
+    },
+    {
+      "token": "99999999999999999999",
+      "finite": true,
+      "negativeZero": false,
+      "stringified": "100000000000000000000"
+    },
+    {
+      "token": "1e21",
+      "finite": true,
+      "negativeZero": false,
+      "stringified": "1e+21"
+    },
+    {
+      "token": "-1e21",
+      "finite": true,
+      "negativeZero": false,
+      "stringified": "-1e+21"
+    },
+    {
+      "token": "0.000001",
+      "finite": true,
+      "negativeZero": false,
+      "stringified": "0.000001"
+    },
+    {
+      "token": "0.0000001",
+      "finite": true,
+      "negativeZero": false,
+      "stringified": "1e-7"
+    },
+    {
+      "token": "9007199254740991",
+      "finite": true,
+      "negativeZero": false,
+      "stringified": "9007199254740991"
+    },
+    {
+      "token": "9007199254740992",
+      "finite": true,
+      "negativeZero": false,
+      "stringified": "9007199254740992"
+    },
+    {
+      "token": "9007199254740993",
+      "finite": true,
+      "negativeZero": false,
+      "stringified": "9007199254740992"
+    },
+    {
+      "token": "1000000000000000128",
+      "finite": true,
+      "negativeZero": false,
+      "stringified": "1000000000000000100"
+    },
+    {
+      "token": "5e-324",
+      "finite": true,
+      "negativeZero": false,
+      "stringified": "5e-324"
+    },
+    {
+      "token": "2.2250738585072014e-308",
+      "finite": true,
+      "negativeZero": false,
+      "stringified": "2.2250738585072014e-308"
+    },
+    {
+      "token": "1.7976931348623157e308",
+      "finite": true,
+      "negativeZero": false,
+      "stringified": "1.7976931348623157e+308"
+    },
+    {
+      "token": "0",
+      "finite": true,
+      "negativeZero": false,
+      "stringified": "0"
+    },
+    {
+      "token": "-0",
+      "finite": true,
+      "negativeZero": true,
+      "stringified": "0"
+    },
+    {
+      "token": "1e400",
+      "finite": false,
+      "negativeZero": false,
+      "stringified": "null"
+    },
+    {
+      "token": "-1e400",
+      "finite": false,
+      "negativeZero": false,
+      "stringified": "null"
+    }
+  ],
+  "objectOrder": {
+    "raw": "{\"b\":1,\"2\":\"two\",\"a\":3,\"1\":\"one\",\"b\":4,\"01\":\"leading\",\"4294967294\":\"max\",\"4294967295\":\"ordinary\",\"3\":3}",
+    "stringified": "{\"1\":\"one\",\"2\":\"two\",\"3\":3,\"4294967294\":\"max\",\"b\":4,\"a\":3,\"01\":\"leading\",\"4294967295\":\"ordinary\"}"
+  },
+  "selections": {
+    "scalar": {
+      " group ": "stock"
+    },
+    "array": {
+      "group": [
+        "a",
+        "b"
+      ]
+    },
+    "blankGroupAccepted": false,
+    "duplicateError": "selections.toolhead must not contain duplicate variant ids"
+  },
+  "manifest": {
+    "raw": "{\"name\":\"\\ud800\",\"layers\":[\"\\udc00\"],\"base_source_id\":\"x\\ud800\",\"addon_source_ids\":[\"\\ud800x\"],\"selections\":{\" group \":\" \\ufeffstock\\ufeff \",\"\\ud800\":[\"\\udc00\"]},\"include\":[\"\\ud800\"],\"exclude\":[\"\\udc00\"],\"replacements\":{\"\\ud800\":\"\\udc00\"},\"choice_tree\":[{\"\\ud800\":\"\\udc00\"}],\"category_links\":[\"\\ud800\"]}",
+    "stringified": "{\"name\":\"\\ud800\",\"layers\":[\"\\udc00\"],\"base_source_id\":\"x\\ud800\",\"addon_source_ids\":[\"\\ud800x\"],\"selections\":{\" group \":\"stock\",\"\\ud800\":[\"\\udc00\"]},\"include\":[\"\\ud800\"],\"exclude\":[\"\\udc00\"],\"replacements\":{\"\\ud800\":\"\\udc00\"},\"choice_tree\":[{\"\\ud800\":\"\\udc00\"}],\"category_links\":[\"\\ud800\"]}",
+    "stored": "{\"name\":\"\\ud800\",\"layers\":[\"\\udc00\"],\"base_source_id\":\"x\\ud800\",\"addon_source_ids\":[\"\\ud800x\"],\"selections\":{\" group \":\"stock\",\"\\ud800\":[\"\\udc00\"]},\"include\":[\"\\ud800\"],\"exclude\":[\"\\udc00\"],\"replacements\":{\"\\ud800\":\"\\udc00\"},\"choice_tree\":[{\"\\ud800\":\"\\udc00\"}],\"category_links\":[\"\\ud800\"]}",
+    "freshnessMarks": 1,
+    "codeUnits": {
+      "name": [
+        55296
+      ],
+      "layer": [
+        56320
+      ],
+      "baseSourceId": [
+        120,
+        55296
+      ],
+      "addonSourceId": [
+        55296,
+        120
+      ],
+      "selectionGroups": [
+        [
+          32,
+          103,
+          114,
+          111,
+          117,
+          112,
+          32
+        ],
+        [
+          55296
+        ]
+      ],
+      "replacementKeys": [
+        [
+          55296
+        ]
+      ],
+      "replacementValue": [
+        56320
+      ],
+      "dynamicKey": [
+        55296
+      ],
+      "dynamicValue": [
+        56320
+      ]
+    }
+  }
+}
