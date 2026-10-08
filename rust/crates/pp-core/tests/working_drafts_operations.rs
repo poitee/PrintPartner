@@ -451,9 +451,7 @@ fn utf16_manifest_draft_selection_diff_publication_and_reopen() {
             CreateSource, Credentials, Outcome as CatalogOutcome, Request as CatalogRequest,
         },
         plan_publication::{Outcome as PublicationOutcome, PublicationClient, PublicationCommand},
-        working_drafts::{
-            RebaseRequest, RecomputeOptions, ReconciliationOutcome, SourceState,
-        },
+        working_drafts::{RebaseRequest, RecomputeOptions, ReconciliationOutcome, SourceState},
     };
     let root = std::env::temp_dir().join(format!("pp-u15-flow-{:016x}", rand::random::<u64>()));
     println!(

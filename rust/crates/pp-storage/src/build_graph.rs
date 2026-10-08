@@ -3,11 +3,11 @@ mod model;
 pub(crate) mod projection;
 
 pub use manifest_options::{ManifestOptionsCommand, ManifestOptionsOutcome};
-pub use pp_contracts::build_identity::BuildName;
 pub use model::{
     AcceptedProgress, AcceptedProgressUnavailable, PlanFreshness, PlanStaleReason,
     PlanUntrackedReason, ProfileLayer, ProfileSummary,
 };
+pub use pp_contracts::build_identity::BuildName;
 
 use crate::{Envelope, SettingsClient, Shared, WriterOwner, auth, read_model};
 use anyhow::{Result, anyhow, ensure};
