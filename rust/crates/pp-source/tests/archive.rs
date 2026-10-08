@@ -145,7 +145,10 @@ fn cli_invalid_revision_cleans_extraction_and_preserves_published_snapshot() {
         published_files.map(|name| fs::read(published.join(name)).unwrap()),
         retained
     );
-    assert_eq!(fs::read_dir(&published).unwrap().count(), published_files.len());
+    assert_eq!(
+        fs::read_dir(&published).unwrap().count(),
+        published_files.len()
+    );
     assert_eq!(revision_names(), revisions);
     assert_eq!(fs::read(fixture.0.join("input/upload.zip")).unwrap(), input);
 }
