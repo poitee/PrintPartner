@@ -90,6 +90,10 @@ enum Envelope {
         command: required_units::Command,
         reply: mpsc::Sender<Result<pp_contracts::reconciliation::Outcome>>,
     },
+    ProfileImport {
+        command: profiles::import::Command,
+        reply: profiles::import::Reply,
+    },
     Checkoff {
         command: checkoff_progress::Command,
         reply: mpsc::Sender<Result<checkoff_progress::Response>>,
@@ -568,6 +572,9 @@ impl WriterOwner {
                     }
                     Envelope::RequiredUnits { command, reply } => {
                         let _ = reply.send(required_units::execute(&mut connection, command));
+                    }
+                    Envelope::ProfileImport { command, reply } => {
+                        let _ = reply.send(profiles::import::execute(&mut connection, command));
                     }
                     Envelope::Checkoff { command, reply } => {
                         let _ = reply.send(checkoff_progress::execute(&mut connection, command));
