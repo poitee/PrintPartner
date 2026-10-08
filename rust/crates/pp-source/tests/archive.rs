@@ -99,6 +99,92 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn cli_invalid_revision_cleans_extraction_and_preserves_published_snapshot() {
+    use fs2::FileExt;
+    use std::process::{Command, Stdio};
+
+    let fixture = Fixture::new();
+    let mut zip = ZipWriter::new(File::create(fixture.0.join("input/upload.zip")).unwrap());
+    zip.start_file(
+        "part.stl",
+        SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+    )
+    .unwrap();
+    zip.write_all(b"solid tiny\nendsolid tiny\n").unwrap();
+    zip.finish().unwrap();
+    let run = |revision_key: &str| {
+        let command = serde_json::json!({
+            "tenantId": "fixture-tenant",
+            "sourceId": 42,
+            "reposDir": fixture.0.join("repos"),
+            "inputDir": fixture.0.join("input"),
+            "zipPath": "upload.zip",
+            "revisionKey": revision_key,
+        });
+        let mut child = Command::new(env!("CARGO_BIN_EXE_pp-source-archive"))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(&serde_json::to_vec(&command).unwrap())
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        println!(
+            "{}",
+            serde_json::json!({
+                "case": "cli_invalid_revision_cleanup",
+                "binary": env!("CARGO_BIN_EXE_pp-source-archive"),
+                "pid": pid,
+                "command": command,
+                "revisionKey": revision_key,
+                "exitCode": output.status.code(),
+                "stdout": &output.stdout,
+                "stderr": &output.stderr,
+            })
+        );
+        output
+    };
+    let accepted = run("accepted");
+    assert!(accepted.status.success(), "{accepted:?}");
+    let published = fixture.0.join("repos/42/revisions/accepted");
+    let published_files = ["part.stl", pp_source::MANIFEST];
+    let retained = published_files.map(|name| fs::read(published.join(name)).unwrap());
+    assert_eq!(retained[0].as_slice(), b"solid tiny\nendsolid tiny\n");
+    let revision_names = || {
+        let mut names: Vec<_> = fs::read_dir(published.parent().unwrap())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        names.sort();
+        names
+    };
+    let revisions = revision_names();
+    let input = fs::read(fixture.0.join("input/upload.zip")).unwrap();
+    let rejected = run("");
+    assert_eq!(rejected.status.code(), Some(1), "{rejected:?}");
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&rejected.stdout).unwrap(),
+        serde_json::json!({"error": "invalid-identity"})
+    );
+    assert!(!fixture.candidate().exists());
+    let archive_parent = File::open(fixture.candidate().parent().unwrap()).unwrap();
+    archive_parent.try_lock_exclusive().unwrap();
+    assert_eq!(
+        published_files.map(|name| fs::read(published.join(name)).unwrap()),
+        retained
+    );
+    assert_eq!(fs::read_dir(&published).unwrap().count(), published_files.len());
+    assert_eq!(revision_names(), revisions);
+    assert_eq!(fs::read(fixture.0.join("input/upload.zip")).unwrap(), input);
+}
+
+#[test]
 fn owned_extraction_feeds_snapshot_and_cleanup_preserves_published_bytes() {
     let fixture = Fixture::new();
     fixture.zip(1);

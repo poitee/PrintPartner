@@ -61,7 +61,6 @@ fn resolve(client: &AuthClient, token: &str) -> Option<pp_storage::auth::User> {
         client,
         Request::ResolveSession {
             token: secret(token),
-            provider: Provider::Email,
         },
     )
     .unwrap() else {
@@ -293,6 +292,50 @@ fn ticket_t_17_sessions() {
     )
     .unwrap();
     assert!(resolve(&client, token.expose()).is_none());
+    owner.shutdown().unwrap();
+}
+#[test]
+fn resolved_oauth_session_returns_account_row_after_reopen() {
+    let path = directory();
+    let owner = open(&path);
+    let client = owner.auth(FirstUserTenant::NewUser);
+    let Outcome::Session { user, token } = call(
+        &client,
+        Request::OAuthLogin {
+            provider: Provider::Github,
+            provider_user_id: "session-account".into(),
+            email: Some("session-account@example.com".into()),
+            display_name: "Session Account".into(),
+        },
+    )
+    .unwrap() else {
+        panic!("session expected")
+    };
+    assert_eq!(user.provider, Provider::Github);
+    let mut account = user;
+    account.provider = Provider::Email;
+    assert_eq!(resolve(&client, token.expose()), Some(account.clone()));
+    owner.shutdown().unwrap();
+
+    let owner = open(&path);
+    let client = owner.auth(FirstUserTenant::NewUser);
+    assert_eq!(resolve(&client, token.expose()), Some(account.clone()));
+    let Outcome::Session { user: linked, .. } = call(
+        &client,
+        Request::OAuthLogin {
+            provider: Provider::Github,
+            provider_user_id: "session-account".into(),
+            email: Some("different-account@example.com".into()),
+            display_name: "Different Account".into(),
+        },
+    )
+    .unwrap() else {
+        panic!("linked session expected")
+    };
+    account.provider = Provider::Github;
+    assert_eq!(linked, account);
+    account.provider = Provider::Email;
+    assert_eq!(resolve(&client, token.expose()), Some(account));
     owner.shutdown().unwrap();
 }
 #[test]

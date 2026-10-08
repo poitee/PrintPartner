@@ -112,7 +112,6 @@ pub enum Request {
     },
     ResolveSession {
         token: Secret,
-        provider: Provider,
     },
     Logout {
         token: Secret,
@@ -171,7 +170,7 @@ impl Request {
                 password,
             } => vec![email, display_name, password.expose()],
             Self::Login { email, password } => vec![email, password.expose()],
-            Self::ResolveSession { token, .. } | Self::Logout { token } => vec![token.expose()],
+            Self::ResolveSession { token } | Self::Logout { token } => vec![token.expose()],
             Self::LogoutAll { session }
             | Self::ListKeys { session }
             | Self::CreateKey { session } => vec![session.expose()],
@@ -393,9 +392,8 @@ impl AuthClient {
                 token: crypto::digest(token.expose()),
                 replacement: crypto::hash(&replacement)?,
             },
-            Request::ResolveSession { token, provider } => Command::ResolveSession {
+            Request::ResolveSession { token } => Command::ResolveSession {
                 token: crypto::digest(token.expose()),
-                provider,
             },
             Request::Logout { token } => Command::Logout(crypto::digest(token.expose())),
             Request::LogoutAll { session } => Command::LogoutAll(crypto::digest(session.expose())),
@@ -491,7 +489,6 @@ pub(super) enum Command {
     },
     ResolveSession {
         token: String,
-        provider: Provider,
     },
     Logout(String),
     LogoutAll(String),
@@ -699,12 +696,8 @@ pub(super) fn execute(connection: &mut Connection, command: Command) -> Result<R
             }
             create_session(&tx, current.user)?
         }
-        Command::ResolveSession { token, provider } => {
-            Outcome::User(session_user(&tx, &token)?.map(|c| {
-                let mut user = c.user;
-                user.provider = provider;
-                user
-            }))
+        Command::ResolveSession { token } => {
+            Outcome::User(session_user(&tx, &token)?.map(|credential| credential.user))
         }
         Command::Logout(token) => {
             Outcome::Changed(tx.execute("DELETE FROM sessions WHERE id=?1", [token])? > 0)

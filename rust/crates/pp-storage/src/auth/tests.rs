@@ -252,14 +252,7 @@ fn ticket_t_17_transaction_cas_rejects_verified_login_after_public_reset() {
     };
     assert_eq!(after_rejected_login.hash, after_reset.hash);
     assert!(matches!(
-        run(
-            &client,
-            Request::ResolveSession {
-                token: old_session,
-                provider: Provider::Email
-            }
-        )
-        .unwrap(),
+        run(&client, Request::ResolveSession { token: old_session }).unwrap(),
         Outcome::User(None)
     ));
     assert!(matches!(
@@ -267,7 +260,6 @@ fn ticket_t_17_transaction_cas_rejects_verified_login_after_public_reset() {
             &client,
             Request::ResolveSession {
                 token: reset_session,
-                provider: Provider::Email
             }
         )
         .unwrap(),
