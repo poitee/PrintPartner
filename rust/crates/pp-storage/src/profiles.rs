@@ -5,7 +5,9 @@ use serde_json::value::RawValue;
 use std::fmt::Write;
 use std::sync::OnceLock;
 
+pub(crate) mod import;
 mod library;
+pub use import::{LocalProfileImporter, ProfileImportFailure, ProfileImportReceipt};
 pub use library::{
     ProfileLibraryAccess, ProfileLibraryClient, ProfileLibraryFailure, ProfileLibraryKeyAccess,
     ProfileLibraryRequest, ProfileLibraryResult,
