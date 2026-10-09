@@ -937,7 +937,9 @@ fn proven_primary_printer_receipt(job: &JobRecord) -> Option<&ResultArtifact> {
 }
 fn completion_proven(job: &JobRecord, result: Option<&ResultArtifact>) -> bool {
     match &job.payload {
-        Payload::PrinterUpload { .. } => proven_primary_printer_receipt(job).is_some(),
+        Payload::PrinterUpload { .. } => {
+            proven_primary_printer_receipt(job).is_some_and(|primary| result == Some(primary))
+        }
         Payload::PrinterStart(request) => request.upload_effect().is_some_and(|upload| {
             job.effects.iter().any(|effect| {
                 effect.intent.operation == EffectOperation::PrinterStart

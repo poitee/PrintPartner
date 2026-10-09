@@ -1900,6 +1900,77 @@ fn confirmed_combined_receipt_cannot_be_rewritten() {
     owner.shutdown().unwrap();
 }
 #[test]
+fn printer_finish_rejects_ancillary_result_then_accepts_primary_receipt() {
+    let (_, owner) = fixture();
+    let worker = owner.job_worker(admission()).unwrap();
+    for (index, start) in [false, true].into_iter().enumerate() {
+        let printer_id = format!("finish-primary-printer-{index}");
+        let mut payload = printer(&printer_id);
+        let Payload::PrinterUpload {
+            start: requested_start,
+            ..
+        } = &mut payload
+        else {
+            unreachable!()
+        };
+        *requested_start = start;
+        let queued = enqueue(&owner, &format!("finish-primary-{index}"), payload);
+        let (claimed, mut lease) = worker.claim().unwrap().unwrap();
+        assert_eq!(claimed.job_id, queued.job_id);
+        assert!(
+            worker
+                .update(&mut lease, WorkerOperation::Finish(None))
+                .is_err()
+        );
+        let upload = distinct_intent(
+            EffectOperation::PrinterUpload,
+            &printer_id,
+            600 + index as u64,
+        );
+        let upload_receipt = begin_and_confirm(
+            &worker,
+            &mut lease,
+            upload,
+            &format!("finish-upload-{index}"),
+        );
+        let primary_receipt = if start {
+            let start = distinct_intent(
+                EffectOperation::PrinterStart,
+                &printer_id,
+                610 + index as u64,
+            );
+            begin_and_confirm(&worker, &mut lease, start, &format!("finish-start-{index}"))
+        } else {
+            upload_receipt
+        };
+        let spoolman = distinct_intent(
+            EffectOperation::SpoolmanDeduction,
+            &format!("spoolman:finish:{index}"),
+            620 + index as u64,
+        );
+        let spoolman_receipt = begin_and_confirm(
+            &worker,
+            &mut lease,
+            spoolman,
+            &format!("finish-spoolman-{index}"),
+        );
+        assert!(
+            worker
+                .update(&mut lease, WorkerOperation::Finish(Some(spoolman_receipt)),)
+                .is_err()
+        );
+        let succeeded = worker
+            .update(
+                &mut lease,
+                WorkerOperation::Finish(Some(primary_receipt.clone())),
+            )
+            .unwrap();
+        assert_eq!(succeeded.state, PersistentState::Succeeded);
+        assert_eq!(succeeded.result, Some(primary_receipt));
+    }
+    owner.shutdown().unwrap();
+}
+#[test]
 fn active_and_failed_parents_cannot_authorize_start() {
     let (_, owner) = fixture();
     let queued = enqueue(&owner, "wrong-state-parent", printer("wrong-state-printer"));
