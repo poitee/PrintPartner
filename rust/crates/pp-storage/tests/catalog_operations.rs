@@ -966,7 +966,11 @@ fn catalog_key_audit_commits_protected_deletion_outcomes_and_rolls_back_errors()
             panic!("keys")
         };
         let used = keys.into_iter().find(|key| key.id == info.id).unwrap();
-        assert_eq!(used.last_used_at.is_some(), case != "invalid_update", "{case}");
+        assert_eq!(
+            used.last_used_at.is_some(),
+            case != "invalid_update",
+            "{case}"
+        );
         if let Some(lease) = &mut lease {
             lease.release().unwrap();
         }

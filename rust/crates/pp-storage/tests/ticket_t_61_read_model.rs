@@ -590,7 +590,9 @@ fn read_model_folder_rule_without_functional_class_matches_catalog_digest() {
         role_id: RoleId::Primary,
         functional_class: None,
     });
-    catalog.execute(Request::SaveGlobalNaming { profile }).unwrap();
+    catalog
+        .execute(Request::SaveGlobalNaming { profile })
+        .unwrap();
     catalog
         .execute(Request::SaveNaming {
             id: 1,
@@ -606,7 +608,9 @@ fn read_model_folder_rule_without_functional_class_matches_catalog_digest() {
         )
         .unwrap();
     let sources = db
-        .prepare("SELECT source_id FROM plan_revision_inputs WHERE input_set_id=?1 ORDER BY source_id")
+        .prepare(
+            "SELECT source_id FROM plan_revision_inputs WHERE input_set_id=?1 ORDER BY source_id",
+        )
         .unwrap()
         .query_map([set], |r| r.get::<_, i64>(0))
         .unwrap()
@@ -620,7 +624,11 @@ fn read_model_folder_rule_without_functional_class_matches_catalog_digest() {
                 panic!("naming")
             };
             if id == 1 {
-                assert!(value["effective"]["folder_rules"][0].get("functional_class").is_none());
+                assert!(
+                    value["effective"]["folder_rules"][0]
+                        .get("functional_class")
+                        .is_none()
+                );
             }
             (id, value["effective_digest"].as_str().unwrap().to_owned())
         })
@@ -664,9 +672,15 @@ fn read_model_folder_rule_without_functional_class_matches_catalog_digest() {
     drop(db);
     let before = f.dump();
     let read = f.read();
-    assert!(matches!(read.builds[0].accepted, AcceptedRead::Ready { .. }));
+    assert!(matches!(
+        read.builds[0].accepted,
+        AcceptedRead::Ready { .. }
+    ));
     let context = read.builds[0].context.as_ref().unwrap();
-    assert_eq!(context.profile_summary["summary"]["header"]["freshness"]["status"], "current");
+    assert_eq!(
+        context.profile_summary["summary"]["header"]["freshness"]["status"],
+        "current"
+    );
     assert_eq!(before, f.dump());
 }
 
@@ -684,11 +698,20 @@ fn read_model_plan_configuration_freshness_does_not_make_sources_stale() {
         })
         .unwrap();
     let read = f.read();
-    assert!(matches!(read.builds[0].accepted, AcceptedRead::Ready { .. }));
+    assert!(matches!(
+        read.builds[0].accepted,
+        AcceptedRead::Ready { .. }
+    ));
     let context = read.builds[0].context.as_ref().unwrap();
     let freshness = &context.profile_summary["summary"]["header"]["freshness"];
     assert_eq!(freshness["status"], "stale");
-    assert!(freshness["reasons"].as_array().unwrap().iter().any(|r| r["kind"] == "plan_configuration_changed"));
+    assert!(
+        freshness["reasons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["kind"] == "plan_configuration_changed")
+    );
     let workspace = &context.workflow["workspace"];
     assert_eq!(workspace["sources"]["kind"], "ready");
     assert!(workspace["sources"]["attached_count"].as_u64().unwrap() > 0);
