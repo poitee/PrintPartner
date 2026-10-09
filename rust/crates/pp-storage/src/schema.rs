@@ -263,13 +263,18 @@ pub(crate) fn initialize(
         }
         tx.commit()?;
     }
-    if version < 35 {
+    {
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        tx.execute_batch(include_str!("jobs/schema.sql"))?;
-        tx.execute(
-            "UPDATE app_settings SET value='35' WHERE tenant_id='default' AND key='schema_version'",
-            [],
-        )?;
+        if version < 35 {
+            tx.execute_batch(include_str!("jobs/schema.sql"))?;
+        }
+        tx.execute_batch(include_str!("jobs/printer-start-indexes.sql"))?;
+        if version < 35 {
+            tx.execute(
+                "UPDATE app_settings SET value='35' WHERE tenant_id='default' AND key='schema_version'",
+                [],
+            )?;
+        }
         tx.commit()?;
     }
     Ok((

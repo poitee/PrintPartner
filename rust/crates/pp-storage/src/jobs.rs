@@ -625,22 +625,17 @@ fn user(
                 payload_version,
                 &payload,
             ))?));
-            let prior: Option<(String, String, Option<String>)> = tx
+            let prior: Option<(String, String)> = tx
                 .query_row(
-                    "SELECT intent,job_id,archived_document FROM durable_job_keys WHERE tenant=?1 AND key=?2",
+                    "SELECT intent,job_id FROM durable_job_keys WHERE tenant=?1 AND key=?2",
                     params![tenant, key],
-                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                    |r| Ok((r.get(0)?, r.get(1)?)),
                 )
                 .optional()?;
-            if let Some((hash, id, archived)) = prior {
+            if let Some((hash, id)) = prior {
                 ensure!(hash == intent, "Idempotency conflict");
                 return Ok(Outcome::Job(
-                    match load(tx, &id)? {
-                        Some(job) => job,
-                        None => {
-                            decode(&archived.ok_or_else(|| anyhow!("Missing retained receipt"))?)?
-                        }
-                    },
+                    retained_owned(tx, &id, tenant)?,
                     LocalCommit::ReadOnly,
                 ));
             }
@@ -820,7 +815,10 @@ fn user(
                     }
                     subject_receipt = Some(receipt.clone());
                     job.result = Some(receipt);
-                    if completion_proven(&job, job.result.as_ref()) {
+                    if let Some(primary) = proven_primary_printer_receipt(&job).cloned() {
+                        job.result = Some(primary);
+                        job.state = PersistentState::Succeeded;
+                    } else if completion_proven(&job, job.result.as_ref()) {
                         job.state = PersistentState::Succeeded;
                     } else if !settle_uploaded_only(&mut job) {
                         if resolved_printer_failure(&job) {
@@ -836,7 +834,10 @@ fn user(
                 Decision::ConfirmNoEffect => {
                     ensure!(receipt.is_none(), "No-effect decision cannot carry receipt");
                     job.effects[effect_index].deny()?;
-                    if !settle_uploaded_only(&mut job) {
+                    if let Some(primary) = proven_primary_printer_receipt(&job).cloned() {
+                        job.result = Some(primary);
+                        job.state = PersistentState::Succeeded;
+                    } else if !settle_uploaded_only(&mut job) {
                         job.result = prior_result;
                         job.state = PersistentState::Failed;
                     }
@@ -906,20 +907,37 @@ fn claim(tx: &Transaction<'_>, worker: &str, admission: &WorkerAdmission) -> Res
     }
     Ok(Outcome::Claimed(None))
 }
+fn proven_primary_printer_receipt(job: &JobRecord) -> Option<&ResultArtifact> {
+    let Payload::PrinterUpload {
+        printer_id, start, ..
+    } = &job.payload
+    else {
+        return None;
+    };
+    let confirmed = |operation| {
+        job.effects.iter().find_map(|effect| {
+            if effect.intent.operation != operation || effect.intent.target != *printer_id {
+                return None;
+            }
+            match effect.outcome().ok()? {
+                EffectOutcome::Confirmed(receipt) => Some(receipt),
+                EffectOutcome::Unresolved | EffectOutcome::Denied => None,
+            }
+        })
+    };
+    if let Some(receipt) = confirmed(EffectOperation::PrinterUploadAndStart) {
+        return Some(receipt);
+    }
+    let upload = confirmed(EffectOperation::PrinterUpload)?;
+    if *start {
+        confirmed(EffectOperation::PrinterStart)
+    } else {
+        Some(upload)
+    }
+}
 fn completion_proven(job: &JobRecord, result: Option<&ResultArtifact>) -> bool {
     match &job.payload {
-        Payload::PrinterUpload {
-            printer_id, start, ..
-        } => {
-            let confirmed = |op| {
-                job.effects.iter().any(|e| {
-                    e.intent.operation == op && e.intent.target == *printer_id && e.confirmed
-                })
-            };
-            confirmed(EffectOperation::PrinterUploadAndStart)
-                || (confirmed(EffectOperation::PrinterUpload)
-                    && (!*start || confirmed(EffectOperation::PrinterStart)))
-        }
+        Payload::PrinterUpload { .. } => proven_primary_printer_receipt(job).is_some(),
         Payload::PrinterStart(request) => request.upload_effect().is_some_and(|upload| {
             job.effects.iter().any(|effect| {
                 effect.intent.operation == EffectOperation::PrinterStart
@@ -1213,9 +1231,15 @@ pub(crate) fn validate_schema(connection: &Connection, version: u64) -> Result<(
         ensure!(actual.is_empty(), "Unversioned durable job objects");
         return Ok(());
     }
-    let expected = Connection::open_in_memory()?;
-    expected.execute_batch(include_str!("jobs/schema.sql"))?;
-    ensure!(actual == objects(&expected)?, "Durable job schema mismatch");
+    let legacy = Connection::open_in_memory()?;
+    legacy.execute_batch(include_str!("jobs/schema.sql"))?;
+    let indexed = Connection::open_in_memory()?;
+    indexed.execute_batch(include_str!("jobs/schema.sql"))?;
+    indexed.execute_batch(include_str!("jobs/printer-start-indexes.sql"))?;
+    ensure!(
+        actual == objects(&legacy)? || actual == objects(&indexed)?,
+        "Durable job schema mismatch"
+    );
     let mut query=connection.prepare("SELECT id,tenant,kind,state,resource,version,generation,lease_until,created,updated,document FROM durable_jobs")?;
     let mut rows = query.query([])?;
     while let Some(row) = rows.next()? {

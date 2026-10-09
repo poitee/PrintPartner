@@ -1203,6 +1203,51 @@ fn ticket_t_28_claims_schema35_corruption_and36_preserve_input_bytes() {
     }
 }
 #[test]
+fn schema35_auxiliary_indexes_install_and_reopen() {
+    let (path, owner) = fixture();
+    owner.shutdown().unwrap();
+    let raw = Connection::open(path.join("print-partner.db")).unwrap();
+    raw.execute_batch(
+        "DROP INDEX durable_jobs_printer_start_parent;
+         DROP INDEX durable_job_keys_archived_printer_start_parent;",
+    )
+    .unwrap();
+    drop(raw);
+    let (owner, ready) = WriterOwner::open(&path, Limits::default()).unwrap();
+    assert_eq!(ready.version, 35);
+    assert_eq!(ready.previous_version, 35);
+    owner.shutdown().unwrap();
+    let raw = readonly(&path);
+    let indexes = raw
+        .prepare("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'durable_%_printer_start_parent' ORDER BY name")
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    assert_eq!(
+        indexes,
+        [
+            "durable_job_keys_archived_printer_start_parent",
+            "durable_jobs_printer_start_parent",
+        ]
+    );
+    assert_eq!(
+        raw.query_row(
+            "SELECT value FROM app_settings WHERE tenant_id='default' AND key='schema_version'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .unwrap(),
+        "35"
+    );
+    drop(raw);
+    let (owner, ready) = WriterOwner::open(&path, Limits::default()).unwrap();
+    assert_eq!(ready.version, 35);
+    assert_eq!(ready.previous_version, 35);
+    owner.shutdown().unwrap();
+}
+#[test]
 fn ticket_t_28_claims_wire_job_kinds_match_existing_contract() {
     assert_eq!(
         JobKind::ALL.map(JobKind::name),
@@ -2028,6 +2073,29 @@ fn archived_started_child_blocks_new_key_and_replays_original_key() {
         job(enqueue_start(&owner, "archive-child", &parent.job_id).unwrap()).job_id,
         child.job_id
     );
+    let raw = readonly(&path);
+    for (sql, expected) in [
+        (
+            "EXPLAIN QUERY PLAN SELECT document FROM durable_jobs WHERE tenant=?1 AND json_extract(document,'$.payload.payload.uploaded_job_id')=?2",
+            "durable_jobs_printer_start_parent",
+        ),
+        (
+            "EXPLAIN QUERY PLAN SELECT archived_document FROM durable_job_keys WHERE tenant=?1 AND archived_document IS NOT NULL AND json_extract(archived_document,'$.payload.payload.uploaded_job_id')=?2",
+            "durable_job_keys_archived_printer_start_parent",
+        ),
+    ] {
+        let details = raw
+            .prepare(sql)
+            .unwrap()
+            .query_map(rusqlite::params!["default", parent.job_id], |row| {
+                row.get::<_, String>(3)
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        assert!(details.iter().any(|detail| detail.contains(expected)));
+    }
+    drop(raw);
     owner.shutdown().unwrap();
 }
 #[test]
@@ -2296,8 +2364,13 @@ fn confirmed_spoolman_rejects_changed_or_denied_outcome() {
 fn unresolved_spoolman_settles_by_either_explicit_decision() {
     let (_, owner) = fixture();
     let worker = owner.job_worker(admission()).unwrap();
-    for (index, decision) in [Decision::ConfirmNoEffect, Decision::ConfirmSucceeded]
+    for (index, (start_confirmed, decision)) in [false, true]
         .into_iter()
+        .flat_map(|start_confirmed| {
+            [Decision::ConfirmNoEffect, Decision::ConfirmSucceeded]
+                .into_iter()
+                .map(move |decision| (start_confirmed, decision))
+        })
         .enumerate()
     {
         let printer_id = format!("unresolved-spoolman-printer-{index}");
@@ -2318,6 +2391,21 @@ fn unresolved_spoolman_settles_by_either_explicit_decision() {
             upload,
             &format!("upload-receipt-3{index}"),
         );
+        let primary_receipt = if start_confirmed {
+            let start = distinct_intent(
+                EffectOperation::PrinterStart,
+                &printer_id,
+                35 + index as u64,
+            );
+            begin_and_confirm(
+                &worker,
+                &mut lease,
+                start,
+                &format!("start-receipt-3{index}"),
+            )
+        } else {
+            upload_receipt
+        };
         let spoolman = distinct_intent(
             EffectOperation::SpoolmanDeduction,
             &format!("spoolman:3{index}"),
@@ -2330,14 +2418,29 @@ fn unresolved_spoolman_settles_by_either_explicit_decision() {
         let uncertain = worker.update(&mut lease, WorkerOperation::Fail).unwrap();
         let supplied = (decision == Decision::ConfirmSucceeded).then_some(spoolman_receipt.clone());
         let settled = job(reconcile(&owner, &uncertain, decision, supplied).unwrap());
-        assert_eq!(settled.state, PersistentState::UploadedOnly);
-        assert_eq!(settled.result, Some(upload_receipt));
         assert_eq!(
-            settled.effects[1].no_effect,
+            settled.state,
+            if start_confirmed {
+                PersistentState::Succeeded
+            } else {
+                PersistentState::UploadedOnly
+            }
+        );
+        assert_eq!(settled.result, Some(primary_receipt));
+        let spoolman_effect = settled.effects.last().unwrap();
+        assert_eq!(
+            spoolman_effect.no_effect,
             decision == Decision::ConfirmNoEffect
         );
         assert_eq!(
-            settled.effects[1].receipt,
+            spoolman_effect.receipt,
+            (decision == Decision::ConfirmSucceeded).then_some(spoolman_receipt.clone())
+        );
+        let audit = reconciliations(&owner, &settled.job_id);
+        assert_eq!(audit.len(), 1);
+        assert_eq!(audit[0].decision, format!("{decision:?}"));
+        assert_eq!(
+            audit[0].receipt,
             (decision == Decision::ConfirmSucceeded).then_some(spoolman_receipt)
         );
     }
@@ -3288,6 +3391,7 @@ fn reachable_printer_reconciliation_truth_table_has_no_stranded_shape() {
                 );
                 let (_, mut lease) = worker.claim().unwrap().unwrap();
                 let mut last_receipt = None;
+                let mut scenario_receipts = Vec::new();
                 let mut valid = true;
                 for (index, operation) in operations.iter().copied().enumerate() {
                     let target = if operation == EffectOperation::SpoolmanDeduction {
@@ -3321,6 +3425,7 @@ fn reachable_printer_reconciliation_truth_table_has_no_stranded_shape() {
                             )
                             .unwrap();
                     }
+                    scenario_receipts.push((operation, effect_receipt.clone()));
                     last_receipt = Some(effect_receipt);
                 }
                 if !valid {
@@ -3384,6 +3489,21 @@ fn reachable_printer_reconciliation_truth_table_has_no_stranded_shape() {
                         PersistentState::Failed
                     }
                 );
+                if ordinary_success {
+                    let expected_operation =
+                        if operations.contains(&EffectOperation::PrinterUploadAndStart) {
+                            EffectOperation::PrinterUploadAndStart
+                        } else if start {
+                            EffectOperation::PrinterStart
+                        } else {
+                            EffectOperation::PrinterUpload
+                        };
+                    let expected = scenario_receipts
+                        .iter()
+                        .find(|(operation, _)| *operation == expected_operation)
+                        .map(|(_, receipt)| receipt.clone());
+                    assert_eq!(terminal.result, expected);
+                }
                 if operations == &[EffectOperation::SpoolmanDeduction] {
                     saw_spoolman_only[usize::from(start)] = true;
                     assert_eq!(terminal.state, PersistentState::Failed);
@@ -3873,40 +3993,49 @@ fn filename_grouping_rejects_padded_reserved_labels_before_admission() {
     {
         let mut grouping = filename_definition();
         grouping.definition.rules[0].group = reserved.into();
-        assert!(call(
-            &owner,
-            UserOperation::Enqueue {
-                key: format!("reserved-rule-{index}"),
-                payload_version: 1,
-                payload: filename_payload(grouping),
-            },
-        )
-        .is_err());
+        assert!(
+            call(
+                &owner,
+                UserOperation::Enqueue {
+                    key: format!("reserved-rule-{index}"),
+                    payload_version: 1,
+                    payload: filename_payload(grouping),
+                },
+            )
+            .is_err()
+        );
     }
     for (index, reserved) in [" conflict ", "\u{feff}Conflict\t"].into_iter().enumerate() {
         let mut grouping = filename_definition();
-        grouping.definition.overrides.insert("part.stl".into(), reserved.into());
-        assert!(call(
+        grouping
+            .definition
+            .overrides
+            .insert("part.stl".into(), reserved.into());
+        assert!(
+            call(
+                &owner,
+                UserOperation::Enqueue {
+                    key: format!("reserved-override-{index}"),
+                    payload_version: 1,
+                    payload: filename_payload(grouping),
+                },
+            )
+            .is_err()
+        );
+    }
+    let mut grouping = filename_definition();
+    grouping.definition.rules[0].group = "\u{0085}Aesthetic\u{0085}".into();
+    assert!(
+        call(
             &owner,
             UserOperation::Enqueue {
-                key: format!("reserved-override-{index}"),
+                key: "non-js-whitespace".into(),
                 payload_version: 1,
                 payload: filename_payload(grouping),
             },
         )
-        .is_err());
-    }
-    let mut grouping = filename_definition();
-    grouping.definition.rules[0].group = "\u{0085}Aesthetic\u{0085}".into();
-    assert!(call(
-        &owner,
-        UserOperation::Enqueue {
-            key: "non-js-whitespace".into(),
-            payload_version: 1,
-            payload: filename_payload(grouping),
-        },
-    )
-    .is_err());
+        .is_err()
+    );
     owner.shutdown().unwrap();
 }
 
@@ -3918,24 +4047,38 @@ fn filename_grouping_normalizes_before_hashing_and_persistence() {
     padded.definition.name = "\u{feff} Print settings \t".into();
     padded.definition.rules[0].suffix = "\n -A \r".into();
     padded.definition.rules[0].group = "\u{00a0} Aesthetic \u{feff}".into();
-    padded.definition.overrides.insert("part.stl".into(), " Unassigned ".into());
+    padded
+        .definition
+        .overrides
+        .insert("part.stl".into(), " Unassigned ".into());
     padded.group = Some(" Aesthetic ".into());
     padded.role = Some("\tStructural\n".into());
     let first = enqueue(&owner, "normalized-filename", filename_payload(padded));
     assert_eq!(first.payload, filename_payload(canonical.clone()));
-    let same = enqueue(&owner, "normalized-filename", filename_payload(canonical.clone()));
+    let same = enqueue(
+        &owner,
+        "normalized-filename",
+        filename_payload(canonical.clone()),
+    );
     assert_eq!(first.job_id, same.job_id);
     assert_eq!(first.state_version, same.state_version);
     let mut bounded = canonical.clone();
     bounded.definition.rules[0].group = format!(" {} ", "A".repeat(80));
     bounded.group = None;
     let bounded = enqueue(&owner, "trim-before-length", filename_payload(bounded));
-    let Payload::ExportStlPack { filename_grouping: Some(grouping), .. } = bounded.payload else {
+    let Payload::ExportStlPack {
+        filename_grouping: Some(grouping),
+        ..
+    } = bounded.payload
+    else {
         panic!("Expected filename grouping");
     };
     assert_eq!(grouping.definition.rules[0].group, "A".repeat(80));
     owner.shutdown().unwrap();
     let (owner, _) = WriterOwner::open(&path, Limits::default()).unwrap();
-    assert_eq!(get(&owner, &first.job_id).payload, filename_payload(canonical));
+    assert_eq!(
+        get(&owner, &first.job_id).payload,
+        filename_payload(canonical)
+    );
     owner.shutdown().unwrap();
 }
