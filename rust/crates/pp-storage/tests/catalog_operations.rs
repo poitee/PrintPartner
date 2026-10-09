@@ -950,7 +950,7 @@ fn catalog_key_audit_commits_protected_deletion_outcomes_and_rolls_back_errors()
             assert_eq!(value(&keyed, Request::Delete { id: target })["kind"], case);
         }
         assert_eq!(value(&client, Request::Get { id }), before);
-        let AuthOutcome::Keys { keys } = auth
+        let AuthOutcome::Keys { keys, .. } = auth
             .submit(
                 AuthRequest::ListKeys {
                     session: Secret::new(token),
