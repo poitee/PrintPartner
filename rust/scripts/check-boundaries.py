@@ -4,7 +4,7 @@ import shutil
 import subprocess
 import sys
 
-ALLOWED = {"pp-core": {"pp-gateway", "pp-compat"}, "pp-gateway": {"pp-compat"}, "pp-compat": set(), "pp-server": {"pp-core"}}
+ALLOWED = {"pp-core": {"pp-gateway", "pp-compat"}, "pp-gateway": {"pp-compat"}, "pp-compat": set(), "pp-server": {"pp-core"}, "pp-contracts": set()}
 
 
 def violations(packages):
@@ -22,4 +22,5 @@ assert not violations(metadata["packages"]), violations(metadata["packages"])
 if "--self-test" in sys.argv:
     invalid = [{"name": "pp-compat", "dependencies": [{"name": "pp-gateway"}]}]
     assert violations(invalid) == [("pp-compat", "pp-gateway")]
+    assert violations([{ "name": "pp-contracts", "dependencies": [{ "name": "pp-gateway" }] }]) == [("pp-contracts", "pp-gateway")]
 print(json.dumps({"packages": len(metadata["packages"]), "allowed_edges": True, "intentional_violation_rejected": "--self-test" in sys.argv}))

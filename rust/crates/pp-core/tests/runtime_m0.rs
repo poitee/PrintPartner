@@ -212,7 +212,12 @@ async fn protected_real_node_lifecycle() {
     assert_eq!(marker["pid"], std::process::id());
     let child_pid = match runtime.handle().subscribe().borrow().clone() {
         CoreStatus::Ready { pid, .. } => pid,
-        _ => panic!("not ready"),
+        CoreStatus::Starting
+        | CoreStatus::Backoff { .. }
+        | CoreStatus::Guarded
+        | CoreStatus::Stopping
+        | CoreStatus::Stopped
+        | CoreStatus::Failed => panic!("not ready"),
     };
     let receipt = tokio::time::timeout(Duration::from_secs(16), runtime.shutdown())
         .await
@@ -287,7 +292,12 @@ async fn authenticated_logout_requests_complete_shutdown() {
     let runtime_dir = PathBuf::from(marker["runtime_dir"].as_str().unwrap());
     let child_pid = match runtime.handle().subscribe().borrow().clone() {
         CoreStatus::Ready { pid, .. } => pid,
-        _ => panic!("not ready"),
+        CoreStatus::Starting
+        | CoreStatus::Backoff { .. }
+        | CoreStatus::Guarded
+        | CoreStatus::Stopping
+        | CoreStatus::Stopped
+        | CoreStatus::Failed => panic!("not ready"),
     };
     let first = runtime.shutdown_requested();
     let second = runtime.shutdown_requested();
@@ -544,7 +554,12 @@ async fn cleanup_error_publishes_failed_and_preserves_failure() {
     let mut state = handle.subscribe();
     let pid = match *state.borrow() {
         CoreStatus::Ready { pid, .. } => pid,
-        _ => panic!("Runtime was not ready"),
+        CoreStatus::Starting
+        | CoreStatus::Backoff { .. }
+        | CoreStatus::Guarded
+        | CoreStatus::Stopping
+        | CoreStatus::Stopped
+        | CoreStatus::Failed => panic!("Runtime was not ready"),
     };
     let marker: serde_json::Value =
         serde_json::from_slice(&std::fs::read(data.join(".desktop-owner.json")).unwrap()).unwrap();
@@ -656,7 +671,12 @@ fn drop_after_caller_runtime_teardown_reaps_writer_and_descendant() {
         .unwrap();
     let pid = match *runtime.handle().subscribe().borrow() {
         CoreStatus::Ready { pid, .. } => pid,
-        _ => panic!("not ready"),
+        CoreStatus::Starting
+        | CoreStatus::Backoff { .. }
+        | CoreStatus::Guarded
+        | CoreStatus::Stopping
+        | CoreStatus::Stopped
+        | CoreStatus::Failed => panic!("not ready"),
     };
     let marker: serde_json::Value =
         serde_json::from_slice(&std::fs::read(data.join(".desktop-owner.json")).unwrap()).unwrap();
