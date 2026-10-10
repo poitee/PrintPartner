@@ -1,0 +1,695 @@
+{
+  "trace": [
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:24:57.045Z",
+      "ms": 98232,
+      "path": "/jobs/check-source-updates",
+      "status": 200
+    },
+    {
+      "kind": "socket-created",
+      "at": "2026-10-10T18:24:57.048Z",
+      "ms": 98236,
+      "path": "/ws/jobs/c934583e-021b-4894-bb71-0fd95188a280"
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:24:57.308Z",
+      "ms": 98496,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "socket-open",
+      "at": "2026-10-10T18:24:57.344Z",
+      "ms": 98532,
+      "path": "/ws/jobs/c934583e-021b-4894-bb71-0fd95188a280"
+    },
+    {
+      "kind": "job-event",
+      "at": "2026-10-10T18:24:57.346Z",
+      "ms": 98534,
+      "path": "/ws/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": "running",
+      "message": "Running…",
+      "progress": 10
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:24:57.759Z",
+      "ms": 98947,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "socket-close",
+      "at": "2026-10-10T18:24:58.000Z",
+      "ms": 99188,
+      "path": "/ws/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "code": 1005,
+      "reason": ""
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:24:58.172Z",
+      "ms": 99360,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 502
+    },
+    {
+      "kind": "socket-created",
+      "at": "2026-10-10T18:24:58.431Z",
+      "ms": 99619,
+      "path": "/ws/jobs/c934583e-021b-4894-bb71-0fd95188a280"
+    },
+    {
+      "kind": "socket-close",
+      "at": "2026-10-10T18:24:58.454Z",
+      "ms": 99642,
+      "path": "/ws/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "code": 1006,
+      "reason": ""
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:24:58.595Z",
+      "ms": 99783,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 502
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:24:59.008Z",
+      "ms": 100196,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 502
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:24:59.423Z",
+      "ms": 100611,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 502
+    },
+    {
+      "kind": "socket-created",
+      "at": "2026-10-10T18:24:59.579Z",
+      "ms": 100771,
+      "path": "/ws/jobs/c934583e-021b-4894-bb71-0fd95188a280"
+    },
+    {
+      "kind": "socket-close",
+      "at": "2026-10-10T18:24:59.594Z",
+      "ms": 100782,
+      "path": "/ws/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "code": 1006,
+      "reason": ""
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:24:59.836Z",
+      "ms": 101023,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 502
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:00.250Z",
+      "ms": 101438,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 502
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:00.665Z",
+      "ms": 101853,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 502
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:01.078Z",
+      "ms": 102265,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 502
+    },
+    {
+      "kind": "socket-created",
+      "at": "2026-10-10T18:25:01.303Z",
+      "ms": 102491,
+      "path": "/ws/jobs/c934583e-021b-4894-bb71-0fd95188a280"
+    },
+    {
+      "kind": "socket-close",
+      "at": "2026-10-10T18:25:01.311Z",
+      "ms": 102499,
+      "path": "/ws/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "code": 1006,
+      "reason": ""
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:01.489Z",
+      "ms": 102677,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 502
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:01.898Z",
+      "ms": 103086,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 502
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:02.320Z",
+      "ms": 103507,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:02.733Z",
+      "ms": 103921,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:03.149Z",
+      "ms": 104337,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:03.570Z",
+      "ms": 104758,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:03.985Z",
+      "ms": 105173,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:04.401Z",
+      "ms": 105589,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "socket-created",
+      "at": "2026-10-10T18:25:04.899Z",
+      "ms": 106086,
+      "path": "/ws/jobs/c934583e-021b-4894-bb71-0fd95188a280"
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:05.101Z",
+      "ms": 106289,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "socket-open",
+      "at": "2026-10-10T18:25:05.102Z",
+      "ms": 106290,
+      "path": "/ws/jobs/c934583e-021b-4894-bb71-0fd95188a280"
+    },
+    {
+      "kind": "job-event",
+      "at": "2026-10-10T18:25:05.103Z",
+      "ms": 106290,
+      "path": "/ws/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": "running",
+      "message": "Running…",
+      "progress": 10
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:05.520Z",
+      "ms": 106708,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:05.947Z",
+      "ms": 107135,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:06.358Z",
+      "ms": 107546,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:06.772Z",
+      "ms": 107960,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:07.192Z",
+      "ms": 108379,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:07.604Z",
+      "ms": 108792,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:08.026Z",
+      "ms": 109214,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:08.446Z",
+      "ms": 109633,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:08.865Z",
+      "ms": 110053,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:09.281Z",
+      "ms": 110469,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:09.704Z",
+      "ms": 110891,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:10.124Z",
+      "ms": 111312,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:10.538Z",
+      "ms": 111725,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:10.966Z",
+      "ms": 112154,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:11.386Z",
+      "ms": 112574,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:11.802Z",
+      "ms": 112990,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:12.236Z",
+      "ms": 113424,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:12.653Z",
+      "ms": 113841,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:13.359Z",
+      "ms": 114547,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:13.777Z",
+      "ms": 114965,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:14.191Z",
+      "ms": 115379,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:14.605Z",
+      "ms": 115792,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:15.015Z",
+      "ms": 116203,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:15.429Z",
+      "ms": 116617,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:15.846Z",
+      "ms": 117034,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:16.262Z",
+      "ms": 117449,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:16.673Z",
+      "ms": 117861,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:17.087Z",
+      "ms": 118274,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:17.505Z",
+      "ms": 118693,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:17.922Z",
+      "ms": 119110,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:18.340Z",
+      "ms": 119528,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:18.753Z",
+      "ms": 119941,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:19.169Z",
+      "ms": 120357,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:19.580Z",
+      "ms": 120768,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:20.001Z",
+      "ms": 121188,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:20.416Z",
+      "ms": 121604,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:20.828Z",
+      "ms": 122016,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:21.587Z",
+      "ms": 122775,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:22.003Z",
+      "ms": 123191,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:22.413Z",
+      "ms": 123601,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:22.824Z",
+      "ms": 124011,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:23.241Z",
+      "ms": 124429,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:23.654Z",
+      "ms": 124841,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:24.064Z",
+      "ms": 125252,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:24.479Z",
+      "ms": 125667,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:24.891Z",
+      "ms": 126079,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:25.303Z",
+      "ms": 126491,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:25.718Z",
+      "ms": 126906,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:26.128Z",
+      "ms": 127316,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:26.549Z",
+      "ms": 127736,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:26.959Z",
+      "ms": 128146,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:27.367Z",
+      "ms": 128555,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:27.779Z",
+      "ms": 128967,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:28.190Z",
+      "ms": 129378,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:28.602Z",
+      "ms": 129790,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:29.016Z",
+      "ms": 130204,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:29.895Z",
+      "ms": 131082,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:30.308Z",
+      "ms": 131496,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:30.722Z",
+      "ms": 131909,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:31.131Z",
+      "ms": 132319,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:31.542Z",
+      "ms": 132730,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:31.953Z",
+      "ms": 133141,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T18:25:32.362Z",
+      "ms": 133550,
+      "path": "/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": 200
+    },
+    {
+      "kind": "job-event",
+      "at": "2026-10-10T18:25:32.598Z",
+      "ms": 133785,
+      "path": "/ws/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "status": "done",
+      "message": "Complete",
+      "progress": 100
+    },
+    {
+      "kind": "socket-close",
+      "at": "2026-10-10T18:25:32.911Z",
+      "ms": 134098,
+      "path": "/ws/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+      "code": 1005,
+      "reason": ""
+    }
+  ],
+  "text": "ngle STL\nPlan bundle\nAnother instance\nFilters\nCategories\nReconnect evidence\npoitee/PrintPartner\nUncategorised\nGitHub\nSynced Oct 10, 2026, 6:24 PM\nnot attached\nCHECK SOURCE UPDATES\nComplete\n100%\nDone\nUpdate check finished"
+}

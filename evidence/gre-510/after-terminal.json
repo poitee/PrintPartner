@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-10T18:26:49.789Z",
+  "socketCount": 5,
+  "lastEvent": {
+    "kind": "socket-close",
+    "at": "2026-10-10T18:25:32.911Z",
+    "ms": 134098,
+    "path": "/ws/jobs/c934583e-021b-4894-bb71-0fd95188a280",
+    "code": 1005,
+    "reason": ""
+  },
+  "pollCount": 83
+}
