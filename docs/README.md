@@ -54,7 +54,7 @@ Use this index to find the guide for your task. The in-app Help page covers the 
 
 ## Agent workflows
 
-These describe how coding agents work in this repo. `AGENTS.md` points at them too, but it is gitignored, so this is the index that ships.
+These describe how coding agents work in this repo. Root [`AGENTS.md`](../AGENTS.md) covers Gate and verification evidence; this index ships the longer guides.
 
 - [Autopilot](agents/autopilot.md)
 - [Domain docs](agents/domain.md)

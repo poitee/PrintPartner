@@ -13,7 +13,6 @@ build/
 !.cursor/skills/**
 .vscode/
 .idea/
-AGENTS.md
 *.db
 .env
 .env.*
