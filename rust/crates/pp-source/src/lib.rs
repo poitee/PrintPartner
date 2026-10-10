@@ -361,17 +361,24 @@ fn tree_paths(
         if result.len() >= MAX_ENTRIES {
             return Err(Error::Limit);
         }
-        let path = format!("{prefix}{name}");
+        // HFS+ may enumerate decomposed names even though the manifest uses
+        // NFC. Normalize only the comparison path; open the original entry
+        // relative to the pinned directory with NOFOLLOW below.
+        let path = format!("{prefix}{}", name.nfc().collect::<String>());
         SourcePath::try_from(path.clone())?;
         match dir.child(&name, false) {
             Ok(child) => {
-                result.insert(format!("{path}/"));
+                if !result.insert(format!("{path}/")) {
+                    return Err(Error::CorruptSnapshot);
+                }
                 tree_paths(&child, &format!("{path}/"), result, depth + 1)?;
                 child.sync()?;
             }
             Err(_) => {
                 dir.file(&name, false)?;
-                result.insert(path);
+                if !result.insert(path) {
+                    return Err(Error::CorruptSnapshot);
+                }
             }
         }
     }
@@ -623,6 +630,89 @@ impl SourceRoot {
             selection: manifest.selection,
             publication,
             stored_bytes,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        fs,
+        sync::atomic::{AtomicU64, Ordering},
+    };
+
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    struct Tree(std::path::PathBuf);
+    impl Tree {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "pp-source-tree-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            fs::create_dir(&path).unwrap();
+            Self(fs::canonicalize(path).unwrap())
+        }
+        fn paths(&self) -> Result<BTreeSet<String>> {
+            let mut paths = BTreeSet::new();
+            tree_paths(&Directory::open_root(&self.0)?, "", &mut paths, 0)?;
+            Ok(paths)
+        }
+    }
+    impl Drop for Tree {
+        fn drop(&mut self) {
+            fs::remove_dir_all(&self.0).unwrap();
+        }
+    }
+
+    #[test]
+    fn decomposed_listing_names_compare_as_nfc_with_original_names_for_io() {
+        let tree = Tree::new();
+        // Real NFD names exercise HFS+ listings on Linux too. Opening their
+        // NFC replacements would fail on Linux, proving raw-name I/O here.
+        fs::create_dir(tree.0.join("pie\u{300}ces")).unwrap();
+        fs::write(tree.0.join("pie\u{300}ces/cafe\u{301}.stl"), b"solid").unwrap();
+        fs::write(tree.0.join("re\u{301}sume\u{301}.md"), b"notes").unwrap();
+        assert_eq!(
+            tree.paths().unwrap(),
+            BTreeSet::from([
+                "pièces/".into(),
+                "pièces/café.stl".into(),
+                "résumé.md".into(),
+            ])
+        );
+    }
+
+    #[test]
+    fn normalized_listing_names_do_not_hide_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let tree = Tree::new();
+        fs::write(tree.0.join("target.stl"), b"solid").unwrap();
+        symlink("target.stl", tree.0.join("cafe\u{301}.stl")).unwrap();
+        assert!(tree.paths().is_err());
+        fs::remove_file(tree.0.join("cafe\u{301}.stl")).unwrap();
+        symlink("..", tree.0.join("pie\u{300}ces")).unwrap();
+        assert!(tree.paths().is_err());
+    }
+
+    #[test]
+    fn normalization_collisions_cannot_hide_extra_entries() {
+        use std::io::ErrorKind;
+
+        let tree = Tree::new();
+        fs::write(tree.0.join("café.stl"), b"first").unwrap();
+        // On normalization-insensitive volumes the second spelling cannot be
+        // created separately; the NFD regression above still runs there.
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(tree.0.join("cafe\u{301}.stl"))
+        {
+            Ok(_) => assert!(matches!(tree.paths(), Err(Error::CorruptSnapshot))),
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => {}
+            Err(error) => panic!("{error}"),
         }
     }
 }
