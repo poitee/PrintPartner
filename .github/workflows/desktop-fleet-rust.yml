@@ -32,13 +32,15 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  rust:
+  rust-partition-1:
+    name: Rust partition (1/2)
     if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
       CARGO_BUILD_JOBS: ${{ inputs.build_jobs || vars.CARGO_BUILD_JOBS || '6' }}
-    steps:
+      PARTITION: '1'
+    steps: &rust-steps
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
@@ -106,9 +108,31 @@ jobs:
         run: |
           set -euo pipefail
           start=$SECONDS
-          cargo nextest run --workspace --locked --manifest-path "$MANIFEST"
+          cargo nextest run --workspace --locked --manifest-path "$MANIFEST" --partition "count:${PARTITION}/2"
           elapsed=$((SECONDS - start))
           {
-            echo "Rust nextest: ${elapsed}s"
-            echo 'For proof, compare the same commit and inputs: a cache miss (cold), then a cache hit (warm). Warm build + test must take <=50% of cold.'
+            echo "Rust nextest partition ${PARTITION}/2: ${elapsed}s"
+            echo 'Target: warm Rust build + nextest <=90s per partition. Compare a cold run and warm rerun of the same commit and inputs.'
           } | tee -a "$GITHUB_STEP_SUMMARY"
+
+  rust-partition-2:
+    name: Rust partition (2/2)
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CARGO_BUILD_JOBS: ${{ inputs.build_jobs || vars.CARGO_BUILD_JOBS || '6' }}
+      PARTITION: '2'
+    steps: *rust-steps
+
+  # Explicit dependencies preserve each result when only one partition is rerun.
+  rust:
+    needs: [rust-partition-1, rust-partition-2]
+    if: always() && (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require both Rust partitions
+        env:
+          PARTITION_1_RESULT: ${{ needs.rust-partition-1.result }}
+          PARTITION_2_RESULT: ${{ needs.rust-partition-2.result }}
+        run: test "$PARTITION_1_RESULT" = success && test "$PARTITION_2_RESULT" = success
