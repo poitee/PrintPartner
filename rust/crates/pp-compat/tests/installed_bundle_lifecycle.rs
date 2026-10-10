@@ -193,6 +193,7 @@ fn write_receipt(path: &Path, receipt: &LifecycleReceipt<'_>) -> Result<()> {
 }
 
 #[tokio::test]
+#[ignore = "requires a packaged macOS app and PP_COMPAT_* paths"]
 async fn installed_bundle_start_health_shutdown() -> Result<()> {
     ensure!(
         env::var_os("LD_PRELOAD").is_none(),
@@ -226,6 +227,7 @@ async fn installed_bundle_start_health_shutdown() -> Result<()> {
         runtime_dir: ownership.runtime_dir.clone(),
         lease: ownership.lease.clone(),
         lease_file: ownership.lock.try_clone()?,
+        record_child: |_, _| Ok(()),
         port,
         record_child: TestOwnership::record_child,
     })?;

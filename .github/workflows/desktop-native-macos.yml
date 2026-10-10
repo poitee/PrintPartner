@@ -119,7 +119,7 @@ jobs:
           PP_COMPAT_TEST_RECEIPT="$PP_EVIDENCE/compat-lifecycle.json" \
           CARGO_NET_OFFLINE=true cargo test --manifest-path rust/Cargo.toml \
             -p pp-compat --test installed_bundle_lifecycle \
-            -- --exact installed_bundle_start_health_shutdown --nocapture \
+            -- --ignored --exact installed_bundle_start_health_shutdown --nocapture \
             2>&1 | tee "$PP_EVIDENCE/compat-lifecycle.log"
           python3 - "$PP_EVIDENCE/compat-lifecycle.json" "$GITHUB_SHA" <<'PY'
           import json

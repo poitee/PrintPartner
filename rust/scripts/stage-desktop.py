@@ -33,7 +33,7 @@ node.parent.mkdir(parents=True)
 shutil.copy2(args.node, node)
 for path in ['apps/server/dist/current', 'apps/web/dist', 'packages/contracts/dist/current', 'packages/domain/dist/current']:
     shutil.copytree(source / path, web / path)
-for path in ['package.json', 'package-lock.json', 'apps/server/package.json', 'apps/web/package.json',
+for path in ['package.json', 'package-lock.json', 'apps/server/package.json',
              'packages/contracts/package.json', 'packages/domain/package.json']:
     target = web / path
     target.parent.mkdir(parents=True, exist_ok=True)
