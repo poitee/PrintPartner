@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'rust/**'
+      - 'web/**'
       - '.github/workflows/desktop-fleet-rust.yml'
   workflow_dispatch:
     inputs:
