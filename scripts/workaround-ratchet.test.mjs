@@ -239,6 +239,24 @@ test("ignores marker spellings in Rust raw strings", () => {
   assert.deepEqual(counts, { todoComments: 0, eslintDisable: 0, rustAllow: 0 });
 });
 
+for (const hashCount of [0, 1, 3, 255]) {
+  const hashes = "#".repeat(hashCount);
+  const body = hashCount === 0 ? '// TODO \\' : 'embedded " // TODO';
+  const source = `let text = cr${hashes}"${body}"${hashes};`;
+
+  test(`ignores TODO inside Rust raw C strings with ${hashCount} hashes`, () => {
+    assert.deepEqual(countText(source, "a.rs"), {
+      todoComments: 0, eslintDisable: 0, rustAllow: 0,
+    });
+  });
+
+  test(`counts TODO comments after Rust raw C strings with ${hashCount} hashes`, () => {
+    assert.deepEqual(countText(`${source} // TODO: real`, "a.rs"), {
+      todoComments: 1, eslintDisable: 0, rustAllow: 0,
+    });
+  });
+}
+
 test("keeps Rust character literals separate from strings and lifetimes", () => {
   const fixtures = {
     quote: ["let quote = '\"'; // TODO: real", "#[allow(dead_code)]"].join("\n"),

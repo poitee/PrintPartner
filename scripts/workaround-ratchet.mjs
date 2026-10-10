@@ -149,7 +149,7 @@ function lineCommentLength(line, index, syntax) {
 
 function rustRawQuoteAt(line, index) {
   if (index > 0 && /[A-Za-z0-9_]/.test(line[index - 1])) return null;
-  const match = /^(?:br|r)(#{0,255})"/.exec(line.slice(index));
+  const match = /^(?:br|cr|r)(#{0,255})"/.exec(line.slice(index));
   if (!match) return null;
   return { open: match[0], close: `"${match[1]}`, escape: false, multiline: true };
 }
