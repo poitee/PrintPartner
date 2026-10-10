@@ -7,6 +7,7 @@ import * as sqliteSchema from "../db/schema.js";
 import * as pgSchema from "../db/schema-pg.js";
 
 type AuthSchemaBundle = typeof sqliteSchema | typeof pgSchema;
+type PersistedSessionProvider = AuthIdentityProvider | "email";
 
 type DbUser = {
   id: string;
@@ -52,7 +53,7 @@ function mapUser(row: {
   return row;
 }
 
-function rowToSessionUser(user: DbUser, provider: SessionUser["provider"]): SessionUser {
+function rowToSessionUser(user: DbUser, provider: PersistedSessionProvider): SessionUser {
   return {
     user_id: user.id,
     tenant_id: user.id,
@@ -60,8 +61,13 @@ function rowToSessionUser(user: DbUser, provider: SessionUser["provider"]): Sess
     display_name: user.displayName,
     email: user.email,
     provider,
+    hasPassword: Boolean(user.passwordHash),
     is_admin: user.isAdmin,
   };
+}
+
+function persistedSessionProvider(value: unknown): PersistedSessionProvider | null {
+  return value === "email" || value === "github" || value === "discord" ? value : null;
 }
 
 export class AuthStore {
@@ -197,25 +203,27 @@ export class AuthStore {
     return user;
   }
 
-  createSession(userId: string): string {
+  createSession(userId: string, provider: PersistedSessionProvider): string {
     const raw = randomBytes(32).toString("hex");
     const id = hashSessionToken(raw);
     this.db
       .insert(this.schema.sessions)
-      .values({ id, userId, expiresAt: sessionExpiryIso() })
+      .values({ id, userId, expiresAt: sessionExpiryIso(), provider })
       .run();
     return raw;
   }
 
-  resolveSession(rawToken: string, provider: SessionUser["provider"] = "email"): SessionUser | null {
+  resolveSession(rawToken: string): SessionUser | null {
     const id = hashSessionToken(rawToken);
     const now = new Date().toISOString();
     const row = this.db
       .select()
       .from(this.schema.sessions)
       .where(and(eq(this.schema.sessions.id, id), gt(this.schema.sessions.expiresAt, now)))
-      .get() as { userId: string } | undefined;
+      .get() as { userId: string; provider: unknown } | undefined;
     if (!row) return null;
+    const provider = persistedSessionProvider(row.provider);
+    if (!provider) return null;
     const user = this.findUserById(row.userId);
     if (!user) return null;
     return rowToSessionUser(user, provider);

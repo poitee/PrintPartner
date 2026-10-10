@@ -1,5 +1,9 @@
 mod crypto;
 mod keys;
+mod policy;
+pub use policy::{
+    AuthFailure, AuthInputFailure, AuthPolicy, AuthStatus, RegistrationPolicy, SessionTenantPolicy,
+};
 
 use crate::{Envelope, SettingsClient, WriterOwner};
 use anyhow::{Result, anyhow, bail, ensure};
@@ -45,6 +49,14 @@ impl Provider {
             Self::Discord => "discord",
         }
     }
+    fn from_name(value: &str) -> Result<Self> {
+        match value {
+            "email" => Ok(Self::Email),
+            "github" => Ok(Self::Github),
+            "discord" => Ok(Self::Discord),
+            _ => Err(AuthFailure::Storage.into()),
+        }
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct User {
@@ -55,6 +67,7 @@ pub struct User {
     pub email: Option<String>,
     pub provider: Provider,
     pub is_admin: bool,
+    pub has_password: bool,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -76,6 +89,8 @@ pub enum LocalCommit {
     Committed,
 }
 pub enum Outcome {
+    Status(AuthStatus),
+    IdentityExists(bool),
     Session {
         user: User,
         token: Secret,
@@ -101,6 +116,11 @@ pub enum Outcome {
     },
 }
 pub enum Request {
+    Status,
+    IdentityExists {
+        provider: Provider,
+        provider_user_id: String,
+    },
     Register {
         email: String,
         display_name: String,
@@ -164,6 +184,10 @@ pub enum Request {
 impl Request {
     fn validate(&self) -> Result<()> {
         let fields: Vec<&str> = match self {
+            Self::Status => vec![],
+            Self::IdentityExists {
+                provider_user_id, ..
+            } => vec![provider_user_id],
             Self::Register {
                 email,
                 display_name,
@@ -205,7 +229,7 @@ impl Request {
         };
         ensure!(
             fields.iter().all(|value| value.len() <= 4096),
-            "Authentication input too long"
+            AuthFailure::InvalidInput(AuthInputFailure::TooLong)
         );
         Ok(())
     }
@@ -214,7 +238,7 @@ pub type AuthReply = mpsc::Receiver<Result<Outcome>>;
 #[derive(Clone)]
 pub struct AuthClient {
     storage: SettingsClient,
-    first_user: FirstUserTenant,
+    policy: AuthPolicy,
 }
 struct Job {
     client: AuthClient,
@@ -244,6 +268,13 @@ impl Pool {
                         } else {
                             job.client.perform(job.request, &job.cancelled)
                         };
+                        let result = result.map_err(|error| {
+                            if error.downcast_ref::<AuthFailure>().is_some() {
+                                error
+                            } else {
+                                error.context(AuthFailure::Storage)
+                            }
+                        });
                         let _ = job.reply.send(result);
                     }
                 });
@@ -256,8 +287,28 @@ impl WriterOwner {
     pub fn auth(&self, first_user: FirstUserTenant) -> AuthClient {
         AuthClient {
             storage: self.client(),
-            first_user,
+            policy: AuthPolicy {
+                registration: RegistrationPolicy::Open,
+                session_tenant: SessionTenantPolicy::AccountTenant,
+                first_user,
+            },
         }
+    }
+    pub fn auth_with_policy(&self, policy: AuthPolicy) -> Result<AuthClient> {
+        ensure!(
+            !matches!(
+                (policy.session_tenant, policy.first_user),
+                (
+                    SessionTenantPolicy::SingleAccountDefault,
+                    FirstUserTenant::ClaimDefault
+                )
+            ),
+            AuthFailure::InvalidInput(AuthInputFailure::Policy)
+        );
+        Ok(AuthClient {
+            storage: self.client(),
+            policy,
+        })
     }
 }
 impl AuthClient {
@@ -283,10 +334,10 @@ impl AuthClient {
             );
             match Pool::global().sender.try_send(job) {
                 Ok(()) => return Ok(receiver),
-                Err(mpsc::TrySendError::Disconnected(_)) => bail!("Authentication workers stopped"),
+                Err(mpsc::TrySendError::Disconnected(_)) => bail!(AuthFailure::Stopped),
                 Err(mpsc::TrySendError::Full(returned)) => job = returned,
             }
-            ensure!(Instant::now() < deadline, "Authentication queue full");
+            ensure!(Instant::now() < deadline, AuthFailure::QueueFull);
             thread::sleep(Duration::from_millis(2));
         }
     }
@@ -298,7 +349,7 @@ impl AuthClient {
             .lock()
             .map_err(|_| anyhow!("Writer admission poisoned"))?;
         loop {
-            ensure!(!queue.closed, "Storage stopped");
+            ensure!(!queue.closed, AuthFailure::Stopped);
             ensure!(
                 !cancelled.load(Ordering::Acquire),
                 "Cancelled before write admission"
@@ -306,7 +357,7 @@ impl AuthClient {
             if queue.pending.len() < shared.capacity {
                 break;
             }
-            ensure!(Instant::now() < deadline, "Writer queue full");
+            ensure!(Instant::now() < deadline, AuthFailure::QueueFull);
             queue = shared
                 .changed
                 .wait_timeout(queue, Duration::from_millis(5))
@@ -314,15 +365,30 @@ impl AuthClient {
                 .0;
         }
         let (reply, receiver) = mpsc::channel();
-        queue.pending.push_back(Envelope::Auth { command, reply });
+        queue.pending.push_back(Envelope::Auth {
+            command,
+            policy: self.policy,
+            reply,
+        });
         shared.changed.notify_all();
         drop(queue);
         receiver
             .recv()
-            .map_err(|_| anyhow!("Writer stopped without result; commit unknown"))?
+            .map_err(|_| anyhow!(AuthFailure::CommitUnknown))?
     }
     fn perform(&self, request: Request, cancelled: &AtomicBool) -> Result<Outcome> {
         let command = match request {
+            Request::Status => Command::Status,
+            Request::IdentityExists {
+                provider,
+                provider_user_id,
+            } => {
+                validate_identity(provider, &provider_user_id)?;
+                Command::IdentityExists {
+                    provider,
+                    provider_user_id,
+                }
+            }
             Request::Register {
                 email,
                 display_name,
@@ -333,21 +399,21 @@ impl AuthClient {
                     email: email.to_lowercase(),
                     display_name,
                     hash: crypto::hash(&password)?,
-                    first_user: self.first_user,
+                    first_user: self.policy.first_user,
                 }
             }
             Request::Login { email, password } => {
                 let Reply::Credential(Some(credential)) =
                     self.command(Command::CredentialByEmail(email.to_lowercase()), cancelled)?
                 else {
-                    bail!("Invalid email or password");
+                    bail!(AuthFailure::InvalidCredentials);
                 };
                 ensure!(
                     credential
                         .hash
                         .as_ref()
                         .is_some_and(|hash| crypto::verify(&password, hash)),
-                    "Invalid email or password"
+                    AuthFailure::InvalidCredentials
                 );
                 let replacement = if credential
                     .hash
@@ -373,14 +439,15 @@ impl AuthClient {
                     cancelled,
                 )?
                 else {
-                    bail!("Authentication required");
+                    bail!(AuthFailure::SessionRequired);
                 };
+                ensure!(credential.hash.is_some(), AuthFailure::OAuthOnlyAccount);
                 ensure!(
                     credential
                         .hash
                         .as_ref()
                         .is_some_and(|hash| crypto::verify(&current, hash)),
-                    "Current password is incorrect"
+                    AuthFailure::CurrentPasswordIncorrect
                 );
                 Command::ChangePassword {
                     session: crypto::digest(session.expose()),
@@ -392,9 +459,9 @@ impl AuthClient {
                 token: crypto::digest(token.expose()),
                 replacement: crypto::hash(&replacement)?,
             },
-            Request::ResolveSession { token } => Command::ResolveSession {
-                token: crypto::digest(token.expose()),
-            },
+            Request::ResolveSession { token } => {
+                Command::ResolveSession(crypto::digest(token.expose()))
+            }
             Request::Logout { token } => Command::Logout(crypto::digest(token.expose())),
             Request::LogoutAll { session } => Command::LogoutAll(crypto::digest(session.expose())),
             Request::RequestReset { email } => Command::RequestReset(email.to_lowercase()),
@@ -413,7 +480,7 @@ impl AuthClient {
                     provider_user_id,
                     email: email.map(|email| email.to_lowercase()),
                     display_name,
-                    first_user: self.first_user,
+                    first_user: self.policy.first_user,
                 }
             }
             Request::LinkIdentity {
@@ -455,14 +522,14 @@ impl AuthClient {
 fn validate_email(email: &str) -> Result<()> {
     ensure!(
         !email.is_empty() && email.len() <= 320 && email.contains('@'),
-        "Invalid email"
+        AuthFailure::InvalidInput(AuthInputFailure::Email)
     );
     Ok(())
 }
 fn validate_identity(provider: Provider, id: &str) -> Result<()> {
     ensure!(
         provider != Provider::Email && !id.is_empty() && id.len() <= 512,
-        "Invalid provider identity"
+        AuthFailure::InvalidInput(AuthInputFailure::ProviderIdentity)
     );
     Ok(())
 }
@@ -475,6 +542,11 @@ pub(super) enum Reply {
     Outcome(Outcome),
 }
 pub(super) enum Command {
+    Status,
+    IdentityExists {
+        provider: Provider,
+        provider_user_id: String,
+    },
     CredentialByEmail(String),
     CredentialBySession(String),
     Register {
@@ -487,9 +559,7 @@ pub(super) enum Command {
         credential: Credential,
         replacement: Option<String>,
     },
-    ResolveSession {
-        token: String,
-    },
+    ResolveSession(String),
     Logout(String),
     LogoutAll(String),
     ChangePassword {
@@ -549,6 +619,7 @@ fn read_user(row: &rusqlite::Row<'_>) -> rusqlite::Result<Credential> {
             email,
             provider: Provider::Email,
             is_admin: row.get(4)?,
+            has_password: row.get::<_, Option<String>>(3)?.is_some(),
         },
         hash: row.get(3)?,
     })
@@ -572,22 +643,29 @@ fn by_email(tx: &Transaction<'_>, email: &str) -> Result<Option<Credential>> {
         .optional()?)
 }
 fn session_user(tx: &Transaction<'_>, token: &str) -> Result<Option<Credential>> {
-    let id: Option<String> = tx
+    let session: Option<(String, String)> = tx
         .query_row(
-            "SELECT user_id FROM sessions WHERE id=?1 AND expires_at>?2",
+            "SELECT user_id,provider FROM sessions WHERE id=?1 AND expires_at>?2",
             params![token, timestamp(0)],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()?;
-    match id {
-        Some(id) => by_id(tx, &id),
+    match session {
+        Some((id, provider)) => {
+            let provider = Provider::from_name(&provider)?;
+            let mut credential = by_id(tx, &id)?;
+            if let Some(credential) = &mut credential {
+                credential.user.provider = provider;
+            }
+            Ok(credential)
+        }
         None => Ok(None),
     }
 }
 fn actor(tx: &Transaction<'_>, token: &str) -> Result<User> {
     session_user(tx, token)?
         .map(|c| c.user)
-        .ok_or_else(|| anyhow!("Authentication required"))
+        .ok_or_else(|| anyhow!(AuthFailure::SessionRequired))
 }
 fn create_user(
     tx: &Transaction<'_>,
@@ -596,7 +674,10 @@ fn create_user(
     hash: Option<String>,
     first_user: FirstUserTenant,
 ) -> Result<User> {
-    ensure!(display_name.len() <= 512, "Display name too long");
+    ensure!(
+        display_name.len() <= 512,
+        AuthFailure::InvalidInput(AuthInputFailure::TooLong)
+    );
     let first: bool = tx.query_row("SELECT NOT EXISTS(SELECT 1 FROM users)", [], |row| {
         row.get(0)
     })?;
@@ -627,14 +708,22 @@ fn create_user(
         .ok_or_else(|| anyhow!("User insert failed"))?
         .user)
 }
-fn create_session(tx: &Transaction<'_>, user: User) -> Result<Outcome> {
+fn create_session(
+    tx: &Transaction<'_>,
+    mut user: User,
+    provider: Provider,
+    policy: AuthPolicy,
+) -> Result<Outcome> {
+    user.tenant_id = policy::tenant_for_authenticated_actor(tx, &user, policy)?;
+    user.provider = provider;
     let token = crypto::token()?;
     tx.execute(
-        "INSERT INTO sessions(id,user_id,expires_at) VALUES(?1,?2,?3)",
+        "INSERT INTO sessions(id,user_id,expires_at,provider) VALUES(?1,?2,?3,?4)",
         params![
             crypto::digest(token.expose()),
             user.user_id,
-            timestamp(14 * 24 * 60 * 60)
+            timestamp(14 * 24 * 60 * 60),
+            provider.name()
         ],
     )?;
     Ok(Outcome::Session { user, token })
@@ -664,9 +753,26 @@ fn link(tx: &Transaction<'_>, user: &str, provider: Provider, provider_id: &str)
     }
     Ok(())
 }
-pub(super) fn execute(connection: &mut Connection, command: Command) -> Result<Reply> {
+pub(super) fn execute(
+    connection: &mut Connection,
+    command: Command,
+    policy: AuthPolicy,
+) -> Result<Reply> {
     let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let outcome = match command {
+        Command::Status => {
+            return Ok(Reply::Outcome(Outcome::Status(policy::status(
+                &tx, policy,
+            )?)));
+        }
+        Command::IdentityExists {
+            provider,
+            provider_user_id,
+        } => {
+            return Ok(Reply::Outcome(Outcome::IdentityExists(
+                identity(&tx, provider, &provider_user_id)?.is_some(),
+            )));
+        }
         Command::CredentialByEmail(email) => return Ok(Reply::Credential(by_email(&tx, &email)?)),
         Command::CredentialBySession(token) => {
             return Ok(Reply::Credential(session_user(&tx, &token)?));
@@ -677,28 +783,41 @@ pub(super) fn execute(connection: &mut Connection, command: Command) -> Result<R
             hash,
             first_user,
         } => {
-            ensure!(by_email(&tx, &email)?.is_none(), "Email already registered");
+            policy::registration_allowed(&tx, policy)?;
+            ensure!(
+                by_email(&tx, &email)?.is_none(),
+                AuthFailure::DuplicateEmail
+            );
             let user = create_user(&tx, Some(email), display_name, Some(hash), first_user)?;
-            create_session(&tx, user)?
+            create_session(&tx, user, Provider::Email, policy)?
         }
         Command::Login {
             credential,
             replacement,
         } => {
             let current = by_id(&tx, &credential.user.user_id)?
-                .ok_or_else(|| anyhow!("Credential changed"))?;
-            ensure!(current.hash == credential.hash, "Credential changed");
+                .ok_or_else(|| anyhow!(AuthFailure::CredentialChanged))?;
+            ensure!(
+                current.hash == credential.hash,
+                AuthFailure::CredentialChanged
+            );
             if let Some(hash) = replacement {
                 tx.execute(
                     "UPDATE users SET password_hash=?1 WHERE id=?2",
                     params![hash, current.user.user_id],
                 )?;
             }
-            create_session(&tx, current.user)?
+            create_session(&tx, current.user, Provider::Email, policy)?
         }
-        Command::ResolveSession { token } => {
-            Outcome::User(session_user(&tx, &token)?.map(|credential| credential.user))
-        }
+        Command::ResolveSession(token) => Outcome::User(
+            session_user(&tx, &token)?
+                .map(|credential| {
+                    let mut user = credential.user;
+                    user.tenant_id = policy::tenant_for_authenticated_actor(&tx, &user, policy)?;
+                    Ok::<_, anyhow::Error>(user)
+                })
+                .transpose()?,
+        ),
         Command::Logout(token) => {
             Outcome::Changed(tx.execute("DELETE FROM sessions WHERE id=?1", [token])? > 0)
         }
@@ -715,18 +834,18 @@ pub(super) fn execute(connection: &mut Connection, command: Command) -> Result<R
             let user = actor(&tx, &session)?;
             ensure!(
                 user.user_id == credential.user.user_id,
-                "Credential changed"
+                AuthFailure::CredentialChanged
             );
             let changed = tx.execute(
                 "UPDATE users SET password_hash=?1 WHERE id=?2 AND password_hash IS ?3",
                 params![replacement, user.user_id, credential.hash],
             )?;
-            ensure!(changed == 1, "Credential changed");
+            ensure!(changed == 1, AuthFailure::CredentialChanged);
             invalidate(&tx, &user.user_id)?;
-            create_session(&tx, user)?
+            create_session(&tx, user, Provider::Email, policy)?
         }
         Command::RequestReset(email) => {
-            if let Some(credential) = by_email(&tx, &email)?.filter(|c| c.hash.is_some()) {
+            if let Some(credential) = by_email(&tx, &email)? {
                 let token = Secret(URL_SAFE_NO_PAD.encode(crypto::random::<32>()?));
                 tx.execute(
                     "DELETE FROM password_reset_tokens WHERE user_id=?1",
@@ -758,7 +877,7 @@ pub(super) fn execute(connection: &mut Connection, command: Command) -> Result<R
                 let user = by_id(&tx, &id)?
                     .ok_or_else(|| anyhow!("Reset user missing"))?
                     .user;
-                create_session(&tx, user)?
+                create_session(&tx, user, Provider::Email, policy)?
             } else {
                 Outcome::Changed(false)
             }
@@ -772,18 +891,20 @@ pub(super) fn execute(connection: &mut Connection, command: Command) -> Result<R
         } => {
             let existing = match identity(&tx, provider, &provider_user_id)? {
                 Some(id) => by_id(&tx, &id)?,
-                None => match &email {
-                    Some(email) => by_email(&tx, email)?,
-                    None => None,
-                },
+                None => {
+                    policy::registration_allowed(&tx, policy)?;
+                    match &email {
+                        Some(email) => by_email(&tx, email)?,
+                        None => None,
+                    }
+                }
             };
-            let mut user = match existing {
+            let user = match existing {
                 Some(c) => c.user,
                 None => create_user(&tx, email, display_name, None, first_user)?,
             };
             link(&tx, &user.user_id, provider, &provider_user_id)?;
-            user.provider = provider;
-            create_session(&tx, user)?
+            create_session(&tx, user, provider, policy)?
         }
         Command::LinkIdentity {
             session,
@@ -796,7 +917,8 @@ pub(super) fn execute(connection: &mut Connection, command: Command) -> Result<R
         }
         Command::Keys { session, action } => {
             let user = actor(&tx, &session)?;
-            keys::manage(&tx, &user.tenant_id, action)?
+            let tenant = policy::tenant_for_authenticated_actor(&tx, &user, policy)?;
+            keys::manage(&tx, &tenant, action)?
         }
         Command::ResolveKey { tenant_id, key } => keys::resolve(&tx, &tenant_id, key)?,
     };

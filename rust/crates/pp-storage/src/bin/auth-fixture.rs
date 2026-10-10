@@ -99,6 +99,8 @@ fn request(v: &Value) -> Result<Request> {
 }
 fn output(outcome: Outcome) -> Value {
     match outcome {
+        Outcome::Status(status) => json!({"status":status}),
+        Outcome::IdentityExists(exists) => json!({"exists":exists}),
         Outcome::Session { user, token } => json!({"user":user,"token":token.expose()}),
         Outcome::User(user) => json!({"user":user}),
         Outcome::ResetToken(token) => json!({"token":token.as_ref().map(Secret::expose)}),
