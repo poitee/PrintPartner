@@ -331,7 +331,7 @@ function countNonJavaScriptText(text, path) {
   return counts;
 }
 
-// Shell and YAML text are deliberately counted without interpreting quotes or syntax.
+// Shell, YAML, and HTML text are deliberately counted without interpreting quotes or syntax.
 function countMarkerLines(lines) {
   const counts = Object.fromEntries(Object.keys(MARKERS).map((key) => [key, 0]));
   for (const line of lines) {
@@ -344,7 +344,7 @@ function countMarkerLines(lines) {
 
 export function countText(text, path = "") {
   const extension = extensionOf(path);
-  if (extension === ".sh" || extension === ".yml" || extension === ".yaml") {
+  if (extension === ".sh" || extension === ".yml" || extension === ".yaml" || extension === ".html") {
     return countMarkerLines(text.split("\n"));
   }
   if (JAVASCRIPT_EXTENSIONS.has(extensionOf(path))) return countJavaScriptComments(text, path);
