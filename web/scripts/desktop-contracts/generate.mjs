@@ -1,4 +1,5 @@
 import process from "node:process";
+import { auditRefinements } from "./refinements.mjs";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -15,6 +16,8 @@ mkdirSync(output, { recursive: true });
 const require = createRequire(join(web, "package.json"));
 const { z } = await import(pathToFileURL(join(web, "node_modules/zod/index.js")).href);
 const parsers = await import(pathToFileURL(join(web, "packages/contracts/src/plan-drafts.ts")).href);
+const { semanticFixtureSchema } = await import(pathToFileURL(join(web, "packages/contracts/test-fixtures/t9/schema.ts")).href);
+const adapters = JSON.parse(readFileSync(join(web, "scripts/desktop-contracts/boundary-adapters.json"), "utf8"));
 const Ajv = require("ajv");
 const goldenPath = join(web, "packages/contracts/test-fixtures/desktop/autosave-v1.json");
 const goldenBytes = readFileSync(goldenPath);
@@ -45,8 +48,9 @@ for (const item of inputCases) {
   if (result.success) assert.deepEqual(result.data, item.outcome.parsed, item.name);
 }
 const generated = new Map();
-for (const [parser, schema] of [...exportedSchemas, ["planDraftBasisSchema", parsers.planDraftBasisSchema]]) {
-  const name = sources[parser] ?? "accepted-base";
+for (const [parser, schema] of [...exportedSchemas, ["planDraftBasisSchema", parsers.planDraftBasisSchema], ["semanticFixtureSchema", semanticFixtureSchema]]) {
+  const name = sources[parser] ?? (parser === "semanticFixtureSchema" ? "semantic-fixture" : "accepted-base");
+  auditRefinements(schema, adapters);
   for (const io of ["input", "output"]) {
     const schemaJson = z.toJSONSchema(schema, { io, target: "draft-7", unrepresentable: "throw" });
     schemaArtifact(`${name}.${io}.schema.json`, schemaJson);

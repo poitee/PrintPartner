@@ -19,7 +19,7 @@ function detects(change) {
   try {
     const path = join(temporary, "cases.json");
     writeFileSync(path, JSON.stringify(input));
-    const result = spawnSync(process.env.CARGO ?? "cargo", ["+1.99.0", "run", "--manifest-path", join(repo, "rust/crates/pp-contracts/Cargo.toml"), "--locked", "--bin", "contract-parity", "--", path, join(temporary, "result.json")], { cwd: repo, encoding: "utf8" });
+    const result = spawnSync(process.env.CARGO ?? "cargo", ["run", "--manifest-path", join(repo, "rust/crates/pp-contracts/Cargo.toml"), "--locked", "--bin", "contract-parity", "--", path, join(temporary, "result.json")], { cwd: repo, encoding: "utf8" });
     assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
     assert(JSON.parse(readFileSync(join(temporary, "result.json"), "utf8")).mismatches.length > 0);
   } finally {
@@ -59,7 +59,7 @@ test("actual schema check rejects committed schema drift without refreshing it",
     const web = join(repo, "web");
     const scripts = join(temporary, "scripts/desktop-contracts");
     mkdirSync(scripts, { recursive: true });
-    cpSync(join(web, "scripts/desktop-contracts/generate.mjs"), join(scripts, "generate.mjs"));
+    for (const name of ["generate.mjs", "refinements.mjs", "boundary-adapters.json"]) cpSync(join(web, "scripts/desktop-contracts", name), join(scripts, name));
     cpSync(join(web, "scripts/desktop-contracts/schemas"), join(scripts, "schemas"), { recursive: true });
     cpSync(join(web, "package.json"), join(temporary, "package.json"));
     symlinkSync(join(web, "node_modules"), join(temporary, "node_modules"), "dir");
