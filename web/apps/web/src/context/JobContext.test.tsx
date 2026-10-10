@@ -160,6 +160,39 @@ describe("JobProvider terminal retention", () => {
     expect(disconnect).toHaveBeenCalledOnce();
   });
 
+  it("backs off sustained poll failures to 10 seconds and resets after recovery", async () => {
+    vi.useFakeTimers();
+    const running = { job_id: "download", kind: "export-stl-pack", status: "running", message: "Creating ZIP", progress: null, result: null, error: null };
+    const completed = { ...running, status: "done", message: "Complete", progress: 100, result: {} };
+    vi.mocked(fetchJob).mockRejectedValue(new EngineHttpError("API restarting", 502));
+    const disconnect = vi.fn();
+    vi.mocked(connectJobWebSocket).mockReturnValue(disconnect);
+    const queryClient = new QueryClient();
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}><JobProvider>{children}</JobProvider></QueryClientProvider>
+    );
+    const { result } = renderHook(useJobContext, { wrapper });
+    const onDone = vi.fn();
+    await act(async () => { await result.current.runJob("stl-export", () => Promise.resolve("download"), onDone); });
+    let calls = 1;
+    for (const delay of [400, 800, 1600, 3200, 6400, 10_000, 10_000]) {
+      await act(async () => { await vi.advanceTimersByTimeAsync(delay - 1); });
+      expect(fetchJob).toHaveBeenCalledTimes(calls);
+      await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+      expect(fetchJob).toHaveBeenCalledTimes(++calls);
+    }
+    expect(onDone).not.toHaveBeenCalled();
+    expect(disconnect).not.toHaveBeenCalled();
+    vi.mocked(fetchJob).mockResolvedValueOnce(running).mockResolvedValue(completed);
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+    expect(result.current.activeJobs[0]?.status).toBe("running");
+    await act(async () => { await vi.advanceTimersByTimeAsync(399); });
+    expect(onDone).not.toHaveBeenCalled();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(onDone).toHaveBeenCalledExactlyOnceWith(completed);
+    expect(disconnect).toHaveBeenCalledOnce();
+  });
+
   it("settles the download panel when job observation fails", async () => {
     vi.mocked(fetchJob).mockRejectedValue(new Error("Connection lost"));
     const queryClient = new QueryClient();

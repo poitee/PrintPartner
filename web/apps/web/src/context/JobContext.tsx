@@ -75,11 +75,14 @@ async function pollJobUntilTerminal(
   maxAttempts = 150,
 ): Promise<void> {
   let lastSnap: JobSnapshot | null = null;
+  let retryDelay = intervalMs;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     if (signal.aborted) return;
+    let waitMs = intervalMs;
     try {
       const snap = await fetchJob(jobId, signal);
       if (signal.aborted) return;
+      retryDelay = intervalMs;
       lastSnap = snap;
       onProgress(snap);
       if (JOB_TERMINAL.has(snap.status)) return;
@@ -89,6 +92,8 @@ async function pollJobUntilTerminal(
       // fetch rejects network failures with TypeError; the dev proxy uses 5xx.
       if (!(error instanceof TypeError) &&
           !(error instanceof EngineHttpError && error.status >= 500)) throw error;
+      waitMs = retryDelay;
+      retryDelay = Math.min(retryDelay * 2, 10_000);
     }
     await new Promise<void>((resolve) => {
       const done = () => {
@@ -96,7 +101,7 @@ async function pollJobUntilTerminal(
         signal.removeEventListener("abort", done);
         resolve();
       };
-      const timer = setTimeout(done, intervalMs);
+      const timer = setTimeout(done, waitMs);
       signal.addEventListener("abort", done, { once: true });
       if (signal.aborted) done();
     });
