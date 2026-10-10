@@ -31,6 +31,11 @@ type RunJobOptions = {
   sourceIds?: number[];
 };
 
+type ExistingExtractionJob = Readonly<{
+  jobId: string;
+  sourceIds?: number[];
+}>;
+
 type JobContextValue = {
   /** All in-flight or recently finished jobs (most recent last). */
   activeJobs: ActiveJob[];
@@ -121,10 +126,50 @@ function upsertJob(jobs: ActiveJob[], next: ActiveJob): ActiveJob[] {
   return [...jobs, next];
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function sourceIdsFrom(values: readonly unknown[]): number[] {
+  return [...new Set(values.filter((value): value is number =>
+    typeof value === "number" && Number.isSafeInteger(value) && value > 0))];
+}
+
+function extractionJobsFrom(
+  snapshot: JobSnapshot,
+  parentSourceIds?: number[],
+): ExistingExtractionJob[] {
+  if (snapshot.status !== "done" || !isRecord(snapshot.result)) return [];
+  const jobs = new Map<string, number[]>();
+  const add = (value: unknown, sourceIds: number[]) => {
+    if (typeof value !== "string" || value.trim().length === 0) return;
+    const jobId = value.trim();
+    jobs.set(jobId, sourceIdsFrom([...(jobs.get(jobId) ?? []), ...sourceIds]));
+  };
+
+  if (snapshot.kind === "sync") {
+    const results = snapshot.result.results;
+    if (Array.isArray(results)) {
+      for (const result of results) {
+        if (!isRecord(result)) continue;
+        add(result.pdf_extract_job_id, sourceIdsFrom([result.project_id]));
+      }
+    }
+  } else if (snapshot.kind === "import-scan") {
+    add(snapshot.result.pdf_extract_job_id, sourceIdsFrom(parentSourceIds ?? []));
+  }
+
+  return [...jobs].map(([jobId, sourceIds]) => ({
+    jobId,
+    ...(sourceIds.length > 0 ? { sourceIds } : {}),
+  }));
+}
+
 export function JobProvider({ children }: { children: ReactNode }) {
   const qc = useQueryClient();
   const [activeJobs, setActiveJobs] = useState<ActiveJob[]>([]);
   const observers = useRef(new Set<AbortController>());
+  const observedExtractionJobs = useRef(new Set<string>());
   useEffect(() => {
     const active = observers.current;
     return () => {
@@ -165,6 +210,114 @@ export function JobProvider({ children }: { children: ReactNode }) {
     [activeJobs],
   );
 
+  const observeJob = useCallback(({
+    observer,
+    jobId,
+    kind,
+    profileId,
+    sourceIds,
+    onDone,
+    onTerminal,
+    onObservationError,
+  }: {
+    observer: AbortController;
+    jobId: string;
+    kind: string;
+    profileId: number | null;
+    sourceIds?: number[];
+    onDone?: (snapshot: JobSnapshot) => void;
+    onTerminal?: (snapshot: JobSnapshot) => void;
+    onObservationError?: () => void;
+  }) => {
+    let disconnect: (() => void) | null = null;
+    let finished = false;
+    observer.signal.addEventListener("abort", () => {
+      finished = true;
+      disconnect?.();
+      observers.current.delete(observer);
+    }, { once: true });
+    if (observer.signal.aborted) return;
+
+    const removeAfterTerminalDisplay = () => {
+      setTimeout(() => {
+        setActiveJobs((prev) => prev.filter((job) => job.jobId !== jobId));
+      }, 2500);
+    };
+    const finish = (snapshot: JobSnapshot) => {
+      if (finished) return;
+      finished = true;
+      observer.abort();
+      onDone?.(snapshot);
+      invalidateAfterJob(qc, kind, snapshot, profileId);
+      setActiveJobs((prev) =>
+        upsertJob(prev, {
+          jobId,
+          kind,
+          status: snapshot.status,
+          message: snapshot.message,
+          progress: snapshot.progress,
+          profileId,
+          sourceIds,
+        }),
+      );
+      onTerminal?.(snapshot);
+      removeAfterTerminalDisplay();
+    };
+    const onProgress = (event: JobEvent | JobSnapshot) => {
+      if (finished) return;
+      setActiveJobs((prev) =>
+        upsertJob(prev, {
+          jobId,
+          kind,
+          status: event.status,
+          message: event.message,
+          progress: event.progress,
+          profileId,
+          sourceIds,
+        }),
+      );
+      if (!JOB_TERMINAL.has(event.status)) return;
+      if ("job_id" in event) {
+        finish(event);
+        return;
+      }
+      void fetchJob(jobId, observer.signal).then(finish).catch(() => undefined);
+    };
+
+    setActiveJobs((prev) =>
+      upsertJob(prev, {
+        jobId,
+        kind,
+        status: "pending",
+        message: "Starting…",
+        progress: null,
+        profileId,
+        sourceIds,
+      }),
+    );
+    disconnect = connectJobWebSocket(jobId, onProgress, () => undefined);
+    void pollJobUntilTerminal(
+      jobId,
+      onProgress,
+      observer.signal,
+      400,
+      pollAttemptsForKind(kind),
+    ).catch((error) => {
+      if (finished) return;
+      onObservationError?.();
+      const message = `Lost contact with the job. It may still be running on the server. ${error instanceof Error ? error.message : String(error)}`;
+      finish({
+        job_id: jobId,
+        kind,
+        status: "error",
+        message,
+        error: message,
+        progress: null,
+        result: null,
+      });
+    });
+  }, [qc]);
+
   const runJob = useCallback(
     async (
       kind: string,
@@ -172,22 +325,10 @@ export function JobProvider({ children }: { children: ReactNode }) {
       onDone?: (snapshot: JobSnapshot) => void,
       options?: RunJobOptions,
     ) => {
-      let disconnect: (() => void) | null = null;
-      let finished = false;
       const observer = new AbortController();
       observers.current.add(observer);
-      observer.signal.addEventListener("abort", () => {
-        finished = true;
-        disconnect?.();
-        observers.current.delete(observer);
-      }, { once: true });
       const sourceIds = options?.sourceIds;
       const profileId = options?.profileId ?? null;
-      const removeAfterTerminalDisplay = (jobId: string) => {
-        setTimeout(() => {
-          setActiveJobs((prev) => prev.filter((job) => job.jobId !== jobId));
-        }, 2500);
-      };
       const refreshAcceptedExportHistory = () => {
         if (kind === "export-accepted-plate-3mf" && profileId != null) {
           void invalidateAcceptedPlateExportJobs(qc, profileId);
@@ -197,73 +338,36 @@ export function JobProvider({ children }: { children: ReactNode }) {
         const jobId = await start();
         if (observer.signal.aborted) return;
         refreshAcceptedExportHistory();
-        const initial: ActiveJob = {
+        observeJob({
+          observer,
           jobId,
           kind,
-          status: "pending",
-          message: "Starting…",
-          progress: null,
           profileId,
           sourceIds,
-        };
-        setActiveJobs((prev) => upsertJob(prev, initial));
-
-        const finish = (snap: JobSnapshot) => {
-          if (finished) return;
-          finished = true;
-          observer.abort();
-          onDone?.(snap);
-          invalidateAfterJob(qc, kind, snap, options?.profileId);
-          setActiveJobs((prev) =>
-            upsertJob(prev, {
-              jobId,
-              kind,
-              status: snap.status,
-              message: snap.message,
-              progress: snap.progress,
-              profileId,
-              sourceIds,
-            }),
-          );
-          removeAfterTerminalDisplay(jobId);
-        };
-
-        const onProgress = (ev: JobEvent | JobSnapshot) => {
-          if (finished) return;
-          setActiveJobs((prev) =>
-            upsertJob(prev, {
-              jobId,
-              kind,
-              status: ev.status,
-              message: ev.message,
-              progress: ev.progress,
-              profileId,
-              sourceIds,
-            }),
-          );
-          if (JOB_TERMINAL.has(ev.status)) {
-            if ("job_id" in ev) finish(ev);
-            else void fetchJob(jobId, observer.signal).then(finish).catch(() => finish({ ...ev, job_id: jobId, kind }));
-          }
-        };
-
-        disconnect = connectJobWebSocket(
-          jobId,
-          onProgress,
-          () => {
-            /* WebSocket unavailable — HTTP polling fallback handles completion */
+          onDone,
+          onTerminal: (snapshot) => {
+            for (const child of extractionJobsFrom(snapshot, sourceIds)) {
+              if (observedExtractionJobs.current.has(child.jobId)) continue;
+              observedExtractionJobs.current.add(child.jobId);
+              const childObserver = new AbortController();
+              observers.current.add(childObserver);
+              observeJob({
+                observer: childObserver,
+                jobId: child.jobId,
+                kind: "extract-source-docs",
+                profileId,
+                sourceIds: child.sourceIds,
+                onObservationError: () => {
+                  observedExtractionJobs.current.delete(child.jobId);
+                },
+              });
+            }
           },
-        );
-
-        void pollJobUntilTerminal(jobId, onProgress, observer.signal, 400, pollAttemptsForKind(kind)).catch((e) => {
-          if (finished) return;
-          const message = `Lost contact with the job. It may still be running on the server. ${e instanceof Error ? e.message : String(e)}`;
-          finish({ job_id: jobId, kind, status: "error", message, error: message, progress: null, result: null });
-          refreshAcceptedExportHistory();
         });
       } catch (e) {
         if (observer.signal.aborted) return;
         observer.abort();
+        observers.current.delete(observer);
         localFailureSequence += 1;
         const failureJobId = `local-failure-${localFailureSequence}`;
         const message = e instanceof Error ? e.message : String(e);
@@ -280,10 +384,12 @@ export function JobProvider({ children }: { children: ReactNode }) {
             sourceIds,
           }),
         );
-        removeAfterTerminalDisplay(failureJobId);
+        setTimeout(() => {
+          setActiveJobs((prev) => prev.filter((job) => job.jobId !== failureJobId));
+        }, 2500);
       }
     },
-    [qc],
+    [observeJob, qc],
   );
 
   const value = useMemo(

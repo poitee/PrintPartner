@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, renderHook } from "@testing-library/react";
+import { QueryClient, QueryClientProvider, QueryObserver } from "@tanstack/react-query";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
+import type { JobEvent, JobSnapshot } from "@print-partner/contracts";
 import { fetchJob } from "../api/endpoints/jobs";
 import { connectJobWebSocket } from "../api/jobWebSocket";
 import { queryKeys } from "../queries/keys";
@@ -16,6 +17,44 @@ vi.mock("../api/endpoints/jobs", () => ({
 vi.mock("../api/jobWebSocket", () => ({
   connectJobWebSocket: vi.fn(() => vi.fn()),
 }));
+
+function snapshot(
+  jobId: string,
+  kind: string,
+  overrides: Partial<JobSnapshot> = {},
+): JobSnapshot {
+  return {
+    job_id: jobId,
+    kind,
+    status: "done",
+    message: "Complete",
+    progress: 100,
+    result: {},
+    error: null,
+    ...overrides,
+  };
+}
+
+function stalledJob(signal?: AbortSignal): Promise<JobSnapshot> {
+  return new Promise((_resolve, reject) => {
+    signal?.addEventListener("abort", () => reject(new Error("Aborted")), { once: true });
+  });
+}
+
+function sendJobEvent(jobId: string, event: JobEvent | JobSnapshot): void {
+  const connection = vi.mocked(connectJobWebSocket).mock.calls.find(([connectedId]) =>
+    connectedId === jobId);
+  expect(connection).toBeDefined();
+  connection?.[1](event);
+}
+
+function providerWrapper(queryClient: QueryClient) {
+  return ({ children }: { children: ReactNode }) => (
+    <QueryClientProvider client={queryClient}>
+      <JobProvider>{children}</JobProvider>
+    </QueryClientProvider>
+  );
+}
 
 afterEach(() => {
   cleanup();
@@ -177,4 +216,284 @@ it("reports a job-start rejection once with the same local failure identity", as
   expect(job).toMatchObject({ status: "error", message: "Printer request offline", profileId: 7, sourceIds: [3] });
   expect(onDone).toHaveBeenCalledExactlyOnceWith({ job_id: job?.jobId, kind: "printer-upload", status: "error", message: "Printer request offline", error: "Printer request offline", progress: null, result: null });
   expect(connectJobWebSocket).toHaveBeenCalledTimes(websocketCalls);
+});
+
+it("observes a sync extraction child and refreshes mounted Source content", async () => {
+  const queryClient = new QueryClient();
+  const docsKey = ["sourceContent", 17, "docs"] as const;
+  const documentKey = ["sourceContent", 17, "document", "manual.pdf"] as const;
+  queryClient.setQueryData(docsKey, ["cached-manual"]);
+  queryClient.setQueryData(documentKey, "cached text");
+  const fetchDocs = vi.fn().mockResolvedValue(["refreshed-manual"]);
+  const fetchDocument = vi.fn().mockResolvedValue("refreshed text");
+  const docsObserver = new QueryObserver(queryClient, {
+    queryKey: docsKey,
+    queryFn: fetchDocs,
+    staleTime: Number.POSITIVE_INFINITY,
+  });
+  const documentObserver = new QueryObserver(queryClient, {
+    queryKey: documentKey,
+    queryFn: fetchDocument,
+    staleTime: Number.POSITIVE_INFINITY,
+  });
+  const unsubscribeDocs = docsObserver.subscribe(() => {});
+  const unsubscribeDocument = documentObserver.subscribe(() => {});
+  vi.mocked(fetchJob).mockImplementation((_jobId, signal) => stalledJob(signal));
+  const { result } = renderHook(useJobContext, { wrapper: providerWrapper(queryClient) });
+  await act(async () => {
+    await result.current.runJob("sync", () => Promise.resolve("sync-parent"));
+  });
+  const parentDone = snapshot("sync-parent", "sync", {
+    result: {
+      synced: 1,
+      failed: 0,
+      results: [{ project_id: 17, pdf_extract_job_id: "extract-child" }],
+      failures: [],
+    },
+  });
+  await act(async () => {
+    sendJobEvent("sync-parent", parentDone);
+  });
+
+  expect(connectJobWebSocket).toHaveBeenCalledWith(
+    "extract-child",
+    expect.any(Function),
+    expect.any(Function),
+  );
+
+  const childDone = snapshot("extract-child", "extract-source-docs", {
+    result: { project_id: 17, extracted: 1 },
+  });
+  await act(async () => {
+    sendJobEvent("extract-child", childDone);
+  });
+
+  await waitFor(() => {
+    expect(docsObserver.getCurrentResult().data).toEqual(["refreshed-manual"]);
+    expect(documentObserver.getCurrentResult().data).toBe("refreshed text");
+  });
+  expect(fetchDocs).toHaveBeenCalledOnce();
+  expect(fetchDocument).toHaveBeenCalledOnce();
+
+  unsubscribeDocs();
+  unsubscribeDocument();
+  queryClient.clear();
+});
+
+it("scopes sync extraction progress and observes each child once", async () => {
+  const queryClient = new QueryClient();
+  vi.mocked(fetchJob).mockImplementation((_jobId, signal) => stalledJob(signal));
+  const { result } = renderHook(useJobContext, { wrapper: providerWrapper(queryClient) });
+  await act(async () => {
+    await result.current.runJob("sync", () => Promise.resolve("sync-many"));
+    sendJobEvent("sync-many", snapshot("sync-many", "sync", {
+      result: {
+        results: [
+          { project_id: 17, pdf_extract_job_id: "extract-17" },
+          { project_id: 17, pdf_extract_job_id: "extract-17" },
+          { project_id: 18, pdf_extract_job_id: "extract-18" },
+        ],
+      },
+    }));
+  });
+
+  expect(vi.mocked(connectJobWebSocket).mock.calls.filter(([jobId]) =>
+    jobId === "extract-17")).toHaveLength(1);
+  expect(vi.mocked(connectJobWebSocket).mock.calls.filter(([jobId]) =>
+    jobId === "extract-18")).toHaveLength(1);
+
+  await act(async () => {
+    sendJobEvent("extract-17", {
+      status: "running",
+      message: "Extracting PDF text",
+      progress: 10,
+      result: null,
+      error: null,
+    });
+  });
+  expect(result.current.activeJobs).toContainEqual(expect.objectContaining({
+    jobId: "extract-17",
+    kind: "extract-source-docs",
+    status: "running",
+    progress: 10,
+    sourceIds: [17],
+  }));
+  expect(result.current.isJobKindRunning("extract-source-docs", 17)).toBe(true);
+  expect(result.current.isJobKindRunning("extract-source-docs", 19)).toBe(false);
+
+  const childDone = snapshot("extract-17", "extract-source-docs", {
+    result: { project_id: 17, extracted: 1 },
+  });
+  await act(async () => {
+    sendJobEvent("extract-17", childDone);
+    sendJobEvent("extract-17", childDone);
+  });
+  expect(result.current.activeJobs.filter((job) => job.jobId === "extract-17")).toHaveLength(1);
+});
+
+it("uses import-scan source scope and polling when its extraction child is already done", async () => {
+  const queryClient = new QueryClient();
+  vi.mocked(fetchJob).mockImplementation((jobId, signal) =>
+    jobId === "extract-import"
+      ? Promise.resolve(snapshot("extract-import", "extract-source-docs", {
+        result: { project_id: 22, extracted: 1 },
+      }))
+      : stalledJob(signal));
+  vi.mocked(connectJobWebSocket).mockImplementation((jobId, _onEvent, onError) => {
+    if (jobId === "extract-import") onError(new Error("WebSocket unavailable"));
+    return vi.fn();
+  });
+  const { result } = renderHook(useJobContext, { wrapper: providerWrapper(queryClient) });
+  await act(async () => {
+    await result.current.runJob(
+      "sync",
+      () => Promise.resolve("import-parent"),
+      undefined,
+      { sourceIds: [22, 22] },
+    );
+    sendJobEvent("import-parent", snapshot("import-parent", "import-scan", {
+      result: { pdf_extract_job_id: "extract-import" },
+    }));
+    await Promise.resolve();
+  });
+
+  await waitFor(() => {
+    expect(result.current.activeJobs).toContainEqual(expect.objectContaining({
+      jobId: "extract-import",
+      status: "done",
+      sourceIds: [22],
+    }));
+  });
+  expect(fetchJob).toHaveBeenCalledWith("extract-import", expect.any(AbortSignal));
+});
+
+it.each(["error", "cancelled"] as const)(
+  "does not refresh mounted Source content when an observed extraction child is %s",
+  async (status) => {
+    const queryClient = new QueryClient();
+    const docsKey = ["sourceContent", 31, "docs"] as const;
+    queryClient.setQueryData(docsKey, ["cached"]);
+    const fetchDocs = vi.fn().mockResolvedValue(["refreshed"]);
+    const docsObserver = new QueryObserver(queryClient, {
+      queryKey: docsKey,
+      queryFn: fetchDocs,
+      staleTime: Number.POSITIVE_INFINITY,
+    });
+    const unsubscribe = docsObserver.subscribe(() => {});
+    vi.mocked(fetchJob).mockImplementation((_jobId, signal) => stalledJob(signal));
+    const { result } = renderHook(useJobContext, { wrapper: providerWrapper(queryClient) });
+    await act(async () => {
+      await result.current.runJob(
+        "import-scan",
+        () => Promise.resolve(`import-${status}`),
+        undefined,
+        { sourceIds: [31] },
+      );
+      sendJobEvent(`import-${status}`, snapshot(`import-${status}`, "import-scan", {
+        result: { pdf_extract_job_id: `extract-${status}` },
+      }));
+      sendJobEvent(`extract-${status}`, snapshot(`extract-${status}`, "extract-source-docs", {
+        status,
+        progress: status === "error" ? 100 : 10,
+        result: null,
+        error: status === "error" ? "Extraction failed" : null,
+      }));
+      await Promise.resolve();
+    });
+
+    expect(docsObserver.getCurrentResult().data).toEqual(["cached"]);
+    expect(fetchDocs).not.toHaveBeenCalled();
+    unsubscribe();
+    queryClient.clear();
+  },
+);
+
+it("ignores malformed and absent extraction receipts", async () => {
+  const queryClient = new QueryClient();
+  vi.mocked(fetchJob).mockImplementation((_jobId, signal) => stalledJob(signal));
+  const { result } = renderHook(useJobContext, { wrapper: providerWrapper(queryClient) });
+  await act(async () => {
+    await result.current.runJob("sync", () => Promise.resolve("missing-receipt"));
+    sendJobEvent("missing-receipt", snapshot("missing-receipt", "sync", {
+      result: { results: [{ project_id: 17 }] },
+    }));
+    await result.current.runJob("import-scan", () => Promise.resolve("malformed-receipt"));
+    sendJobEvent("malformed-receipt", snapshot("malformed-receipt", "import-scan", {
+      result: { pdf_extract_job_id: 42 },
+    }));
+  });
+
+  expect(vi.mocked(connectJobWebSocket).mock.calls.map(([jobId]) => jobId)).toEqual([
+    "missing-receipt",
+    "malformed-receipt",
+  ]);
+});
+
+it("retries receipt discovery after a terminal snapshot fetch fails", async () => {
+  const queryClient = new QueryClient();
+  let parentFetches = 0;
+  vi.mocked(fetchJob).mockImplementation((jobId, signal) => {
+    if (jobId !== "retry-parent") return stalledJob(signal);
+    parentFetches += 1;
+    if (parentFetches === 1) return stalledJob(signal);
+    if (parentFetches === 2) return Promise.reject(new Error("Temporary fetch failure"));
+    return Promise.resolve(snapshot("retry-parent", "import-scan", {
+      result: { pdf_extract_job_id: "retry-child" },
+    }));
+  });
+  const { result } = renderHook(useJobContext, { wrapper: providerWrapper(queryClient) });
+  const terminalEvent: JobEvent = {
+    status: "done",
+    message: "Complete",
+    progress: 100,
+    result: null,
+    error: null,
+  };
+  await act(async () => {
+    await result.current.runJob(
+      "import-scan",
+      () => Promise.resolve("retry-parent"),
+      undefined,
+      { sourceIds: [41] },
+    );
+    sendJobEvent("retry-parent", terminalEvent);
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+  expect(vi.mocked(connectJobWebSocket).mock.calls.some(([jobId]) =>
+    jobId === "retry-child")).toBe(false);
+
+  await act(async () => {
+    sendJobEvent("retry-parent", terminalEvent);
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+  expect(vi.mocked(connectJobWebSocket).mock.calls.filter(([jobId]) =>
+    jobId === "retry-child")).toHaveLength(1);
+});
+
+it("stops an extraction child observer on unmount without reporting a failure", async () => {
+  const queryClient = new QueryClient();
+  let childSignal: AbortSignal | undefined;
+  const childDisconnect = vi.fn();
+  vi.mocked(fetchJob).mockImplementation((jobId, signal) => {
+    if (jobId === "unmount-child") childSignal = signal;
+    return stalledJob(signal);
+  });
+  vi.mocked(connectJobWebSocket).mockImplementation((jobId) =>
+    jobId === "unmount-child" ? childDisconnect : vi.fn());
+  const { result, unmount } = renderHook(useJobContext, { wrapper: providerWrapper(queryClient) });
+  await act(async () => {
+    await result.current.runJob("sync", () => Promise.resolve("unmount-parent"));
+    sendJobEvent("unmount-parent", snapshot("unmount-parent", "sync", {
+      result: {
+        results: [{ project_id: 51, pdf_extract_job_id: "unmount-child" }],
+      },
+    }));
+  });
+  expect(childSignal?.aborted).toBe(false);
+
+  await act(async () => unmount());
+  expect(childSignal?.aborted).toBe(true);
+  expect(childDisconnect).toHaveBeenCalledOnce();
 });

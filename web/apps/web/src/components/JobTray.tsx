@@ -71,7 +71,7 @@ export default function JobTray({ sidebarCollapsed = false }: Props) {
         {activeJobs.map((job) => {
           const pct =
             job.progress != null
-              ? Math.round(Math.min(100, Math.max(0, job.progress * 100)))
+              ? Math.round(Math.min(100, Math.max(0, job.progress)))
               : null;
           const isActive = job.status === "pending" || job.status === "running";
           const statusClass = STATUS_STYLES[job.status] ?? "text-muted-foreground";

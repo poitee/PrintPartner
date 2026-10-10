@@ -1532,6 +1532,7 @@ export default function SourcesPage() {
           void runJob(
             () => startImportScan(sourceId),
             () => {},
+            { sourceIds: [sourceId] },
           );
         }}
       />

@@ -167,6 +167,55 @@ fn build_graph_envelope_reaps_orphaned_source_work_before_dispatch() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
+#[test]
+fn native_secrets_envelope_reaps_orphaned_source_work_before_dispatch() {
+    let root = std::env::temp_dir().join(format!(
+        "pp-native-secrets-source-orphan-{}-{}",
+        std::process::id(),
+        rand::random::<u64>()
+    ));
+    let (owner, _) = WriterOwner::open(&root, crate::Limits::default()).unwrap();
+    let catalog = owner.local_source_catalog();
+    let Outcome::Source(Some(source)) = catalog
+        .execute(Request::Create {
+            source: CreateSource {
+                name: "Native secret orphan control".into(),
+                source_kind: Some("local".into()),
+                ..Default::default()
+            },
+        })
+        .unwrap()
+    else {
+        panic!("Source expected")
+    };
+    let mut lease = catalog
+        .begin_work(source.id, &AtomicBool::new(false), Duration::from_secs(2))
+        .unwrap();
+    let token = lease.token.take().unwrap();
+    let shared = lease.client.shared.clone();
+    drop(lease);
+    shared.orphaned_source_leases.lock().unwrap().push(token);
+    assert_eq!(
+        shared.orphaned_source_leases.lock().unwrap().as_slice(),
+        &[token]
+    );
+    let preparation = owner
+        .native_secret_migration()
+        .prepare(&AtomicBool::new(false), Duration::from_secs(2))
+        .unwrap();
+    assert!(matches!(
+        preparation,
+        crate::native_secrets::MigrationPreparation::Absent
+    ));
+    assert!(shared.orphaned_source_leases.lock().unwrap().is_empty());
+    let mut acquired = catalog
+        .begin_work(source.id, &AtomicBool::new(false), Duration::from_secs(2))
+        .unwrap();
+    acquired.release().unwrap();
+    owner.shutdown().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 struct CapturedClaimFixture {
     root: PathBuf,
     owner: WriterOwner,
