@@ -9,6 +9,13 @@ edition = "2024"
 rust-version = "1.99"
 license = "AGPL-3.0-only"
 
+[workspace.lints.clippy]
+correctness = { level = "deny", priority = -1 }
+suspicious = { level = "warn", priority = -1 }
+style = { level = "warn", priority = -1 }
+complexity = { level = "warn", priority = -1 }
+perf = { level = "warn", priority = -1 }
+
 [workspace.dependencies]
 rusqlite = { version = "=0.40.2", features = ["bundled", "backup"] }
 anyhow = "=1.0.100"
