@@ -233,7 +233,7 @@ function countRustAllowMeta(meta) {
   return args.slice(1).reduce((count, arg) => count + countRustAllowMeta(arg), 0);
 }
 
-function scanLine(line, syntax, initialState, lineIndex, codeFrom) {
+function scanLine(line, syntax, initialState, lineIndex, codeFrom, ignoredBlocks) {
   const commentText = Array(line.length).fill(" ");
   const unquotedCodeText = Array(line.length).fill(" ");
   let state = initialState;
@@ -274,9 +274,14 @@ function scanLine(line, syntax, initialState, lineIndex, codeFrom) {
     const blockOpen = syntax.block?.[0];
     if (blockOpen && line.startsWith(blockOpen, index)) {
       const [open, close] = syntax.block;
+      if (ignoredBlocks.has(`${lineIndex}:${index}`)) {
+        index += open.length;
+        continue;
+      }
+      const opening = { line: lineIndex, index };
       for (let offset = 0; offset < open.length; offset += 1) commentText[index + offset] = line[index + offset];
       index += open.length;
-      state = { kind: "blockComment", close, resume: state, depth: 1 };
+      state = { kind: "blockComment", opening, close, resume: state, depth: 1 };
       continue;
     }
 
@@ -323,25 +328,41 @@ function scanLine(line, syntax, initialState, lineIndex, codeFrom) {
   return { commentText: commentText.join(""), unquotedCodeText: unquotedCodeText.join(""), state };
 }
 
-function countNonJavaScriptText(text, path, codeFrom = null) {
-  const counts = Object.fromEntries(Object.keys(MARKERS).map((key) => [key, 0]));
+function countNonJavaScriptText(text, path) {
   const syntax = syntaxFor(path);
-  let state = CODE_STATE;
-  const unquotedLines = [];
-  for (const [lineIndex, line] of text.split("\n").entries()) {
-    const scanned = scanLine(line, syntax, state, lineIndex, codeFrom);
-    state = scanned.state;
-    unquotedLines.push(scanned.unquotedCodeText);
-    if (MARKERS.todoComments.test(scanned.commentText)) counts.todoComments += 1;
-    if (MARKERS.eslintDisable.test(scanned.commentText)) counts.eslintDisable += 1;
+  const lines = text.split("\n");
+  const todoLines = new Set();
+  const eslintLines = new Set();
+  const ignoredBlocks = new Set();
+  let codeFrom = null;
+  while (true) {
+    let state = CODE_STATE;
+    const unquotedLines = [];
+    for (const [lineIndex, line] of lines.entries()) {
+      const scanned = scanLine(line, syntax, state, lineIndex, codeFrom, ignoredBlocks);
+      state = scanned.state;
+      unquotedLines.push(scanned.unquotedCodeText);
+      if (MARKERS.todoComments.test(scanned.commentText)) todoLines.add(lineIndex);
+      if (MARKERS.eslintDisable.test(scanned.commentText)) eslintLines.add(lineIndex);
+    }
+    if (state.kind === "blockComment") {
+      // Keep its comment markers, but rescan after the unfinished opener as code.
+      // Skip only this opener so closed nested comments retain their meaning.
+      ignoredBlocks.add(`${state.opening.line}:${state.opening.index}`);
+      continue;
+    }
+    if (syntax.rustRawStrings && state.kind === "quote" && !codeFrom) {
+      // An unfinished Rust string must not hide the remaining markers. Rewind
+      // to its opening and treat the rest as code, conservatively ignoring quotes.
+      codeFrom = state.opening;
+      continue;
+    }
+    return {
+      todoComments: todoLines.size,
+      eslintDisable: eslintLines.size,
+      rustAllow: syntax.rustAllow ? countRustAllowMarkers(unquotedLines.join("\n")) : 0,
+    };
   }
-  if (syntax.rustRawStrings && state.kind === "quote" && !codeFrom) {
-    // An unfinished Rust string must not hide the remaining markers. Rewind
-    // to its opening and treat the rest as code, conservatively ignoring quotes.
-    return countNonJavaScriptText(text, path, state.opening);
-  }
-  if (syntax.rustAllow) counts.rustAllow = countRustAllowMarkers(unquotedLines.join("\n"));
-  return counts;
 }
 
 // Shell, YAML, and HTML text are counted without interpreting syntax.

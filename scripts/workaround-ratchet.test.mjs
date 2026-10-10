@@ -306,6 +306,74 @@ test("rewinds an unterminated Rust string ending in an escaped quote", () => {
   });
 });
 
+test("counts markers on the same line after an unterminated Rust block comment", () => {
+  assert.deepEqual(countText("/* TODO eslint-disable #[allow(dead_code)]", "a.rs"), {
+    todoComments: 1, eslintDisable: 1, rustAllow: 1,
+  });
+});
+
+test("counts markers on later lines after an unterminated Rust block comment", () => {
+  for (const suffix of ["", "\n"]) {
+    const source = "/* unfinished\nTODO eslint-disable\n// FIXME eslint-disable\n#[\nallow(dead_code)\n]" + suffix;
+    assert.deepEqual(countText(source, "a.rs"), {
+      todoComments: 2, eslintDisable: 2, rustAllow: 1,
+    });
+  }
+});
+
+test("does not double-count markers before an unterminated block comment", () => {
+  const source = [
+    "// TODO eslint-disable",
+    '#[allow(unused)] let valid = "// TODO #[allow(ignored)]"; /* TODO eslint-disable #[allow(dead_code)]',
+    "// FIXME eslint-disable",
+    "#![allow(unused_variables)]",
+  ].join("\n");
+  assert.deepEqual(countText(source, "a.rs"), {
+    todoComments: 3, eslintDisable: 3, rustAllow: 3,
+  });
+});
+
+test("keeps closed nested comments protected when recovering an unfinished outer comment", () => {
+  const source = [
+    "/* outer TODO",
+    "/* inner FIXME eslint-disable #[allow(ignored)] */",
+    "#[allow(dead_code)]",
+  ].join("\n");
+  assert.deepEqual(countText(source, "a.rs"), {
+    todoComments: 2, eslintDisable: 1, rustAllow: 1,
+  });
+});
+
+test("recovers each unfinished nested Rust block comment", () => {
+  const source = "/* outer TODO #[allow(unused)]\n/* inner FIXME eslint-disable #[allow(dead_code)]";
+  assert.deepEqual(countText(source, "a.rs"), {
+    todoComments: 2, eslintDisable: 1, rustAllow: 2,
+  });
+});
+
+test("keeps allow attributes inside closed Rust block comments hidden", () => {
+  for (const source of [
+    "/* #[allow(ignored)] */",
+    "/*\n#[allow(ignored)]\n*/",
+    "/* outer /* #[allow(ignored)] */ #[allow(also_ignored)] */",
+  ]) {
+    assert.deepEqual(countText(source, "a.rs"), {
+      todoComments: 0, eslintDisable: 0, rustAllow: 0,
+    }, source);
+  }
+});
+
+test("recovers unfinished strings and block comments together", () => {
+  for (const source of [
+    'let broken = "text\n/* TODO eslint-disable\n#[allow(dead_code)]',
+    '/* TODO eslint-disable\nlet broken = "text\n#[allow(dead_code)]',
+  ]) {
+    assert.deepEqual(countText(source, "a.rs"), {
+      todoComments: 1, eslintDisable: 1, rustAllow: 1,
+    }, source);
+  }
+});
+
 test("keeps Rust character literals separate from strings and lifetimes", () => {
   const fixtures = {
     quote: ["let quote = '\"'; // TODO: real", "#[allow(dead_code)]"].join("\n"),
