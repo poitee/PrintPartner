@@ -32,10 +32,15 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  rust:
+  rust-partition:
+    name: Rust partition (${{ matrix.partition }}/2)
     if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        partition: [1, 2]
     env:
       CARGO_BUILD_JOBS: ${{ inputs.build_jobs || vars.CARGO_BUILD_JOBS || '6' }}
     steps:
@@ -106,9 +111,20 @@ jobs:
         run: |
           set -euo pipefail
           start=$SECONDS
-          cargo nextest run --workspace --locked --manifest-path "$MANIFEST"
+          cargo nextest run --workspace --locked --manifest-path "$MANIFEST" --partition count:${{ matrix.partition }}/2
           elapsed=$((SECONDS - start))
           {
-            echo "Rust nextest: ${elapsed}s"
-            echo 'For proof, compare the same commit and inputs: a cache miss (cold), then a cache hit (warm). Warm build + test must take <=50% of cold.'
+            echo "Rust nextest partition ${{ matrix.partition }}/2: ${elapsed}s"
+            echo 'Target: warm Rust build + nextest <=90s per partition. Compare a cold run and warm rerun of the same commit and inputs.'
           } | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # Preserve the original check name; neither partition may fail or be cancelled.
+  rust:
+    needs: rust-partition
+    if: always() && (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require both Rust partitions
+        env:
+          PARTITIONS_RESULT: ${{ needs.rust-partition.result }}
+        run: test "$PARTITIONS_RESULT" = success
