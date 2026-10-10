@@ -831,3 +831,84 @@ fn ticket_t_17_key_collection_growth_rejects_atomically() {
     drop(reader);
     owner.shutdown().unwrap();
 }
+
+#[test]
+fn legacy_base64_key_migration_preserves_access_after_reopen() {
+    const RAW: &str = "ppk_1212121212121212121212121212121212121212121212121212121212121212";
+    const ENCODED: &str = "cHBrXzEyMTIxMjEyMTIxMjEyMTIxMjEyMTIxMjEyMTIxMjEyMTIxMjEyMTIxMjEyMTIxMjEyMTIxMjEyMTIxMjEyMTI=";
+    const EXPECTED_HASH: &str = "02ea6a27919f5a598dfab53b246d464dde14dcb5233309302dfbfb19d21a1d7a";
+    let path = directory();
+    let owner = open(&path);
+    let client = owner.auth(FirstUserTenant::NewUser);
+    let (user, _) = register(&client, "legacy-key@example.com");
+    let collection = serde_json::json!([{
+        "id": "legacy-key", "keyHash": ENCODED,
+        "createdAt": "2020-01-01T00:00:00.000Z", "lastUsedAt": null,
+        "expiresAt": null, "isActive": true
+    }]);
+    owner
+        .client()
+        .submit(
+            SettingCommand::Set(Setting {
+                tenant: user.tenant_id.clone(),
+                key: "api_keys_v1".into(),
+                value: collection.to_string(),
+            }),
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )
+        .unwrap()
+        .recv()
+        .unwrap()
+        .unwrap();
+    let resolve_key = |client: &AuthClient, raw: &str| {
+        call(
+            client,
+            Request::ResolveKey {
+                tenant_id: user.tenant_id.clone(),
+                key: secret(raw),
+            },
+        )
+        .unwrap()
+    };
+    let assert_access = |outcome| {
+        let Outcome::KeyResolved {
+            principal: Some(principal),
+            commit,
+        } = outcome
+        else {
+            panic!("legacy key must remain authorized")
+        };
+        assert_eq!(principal.tenant_id, user.tenant_id);
+        assert_eq!(principal.key_id, "legacy-key");
+        assert!(matches!(commit, pp_storage::auth::LocalCommit::Committed));
+    };
+    let saved = |owner: &WriterOwner| {
+        let reader = owner.client().reader(Duration::from_secs(5)).unwrap();
+        let value = reader
+            .get_setting(&user.tenant_id, "api_keys_v1", None)
+            .unwrap()
+            .unwrap();
+        serde_json::from_str::<serde_json::Value>(&value).unwrap()
+    };
+    assert_access(resolve_key(&client, RAW));
+    let migrated = saved(&owner);
+    assert_eq!(migrated[0]["keyHash"], EXPECTED_HASH);
+    assert!(migrated[0]["lastUsedAt"].is_string());
+    owner.shutdown().unwrap();
+    let owner = open(&path);
+    let client = owner.auth(FirstUserTenant::NewUser);
+    assert_eq!(saved(&owner), migrated);
+    assert_access(resolve_key(&client, RAW));
+    assert_eq!(saved(&owner)[0]["keyHash"], EXPECTED_HASH);
+    for wrong in [ENCODED, "ppk_wrong"] {
+        assert!(matches!(
+            resolve_key(&client, wrong),
+            Outcome::KeyResolved {
+                principal: None,
+                ..
+            }
+        ));
+    }
+    owner.shutdown().unwrap();
+}
