@@ -2,7 +2,7 @@ import process from "node:process";
 import { auditRefinements } from "./refinements.mjs";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import { URL, fileURLToPath, pathToFileURL } from "node:url";
@@ -24,7 +24,9 @@ const goldenBytes = readFileSync(goldenPath);
 const golden = JSON.parse(goldenBytes);
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const save = (name, value) => writeFileSync(join(output, name), `${JSON.stringify(value, null, 2)}\n`);
+const artifactNames = new Set();
 function schemaArtifact(name, value) {
+  artifactNames.add(name);
   const bytes = `${JSON.stringify(value, null, 2)}\n`;
   const path = join(committed, name);
   if (mode === "--write") { mkdirSync(committed, { recursive: true }); writeFileSync(path, bytes); }
@@ -162,4 +164,10 @@ const semanticRules = {
 };
 schemaArtifact("semantic-constraints.json", semanticRules);
 save("semantic-constraints.json", semanticRules);
+for (const name of readdirSync(committed).filter((name) => name.endsWith(".schema.json"))) {
+  if (!artifactNames.has(name)) {
+    assert.equal(mode, "--write", `Obsolete schema artifact: ${name}; regenerate deliberately with --write`);
+    rmSync(join(committed, name));
+  }
+}
 process.stdout.write(`PASS: 41 original cases; ${generated.size} exported Zod input/output schemas; ${supplemental.length} separate measured supplemental cases; deterministic ${mode}\n`);

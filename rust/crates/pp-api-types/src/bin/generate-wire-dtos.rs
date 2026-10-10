@@ -5,7 +5,104 @@ use std::{
     path::Path,
     process::{Command, Stdio},
 };
+use syn::visit::Visit;
 use typify::{TypeSpace, TypeSpaceSettings};
+
+// typify 0.5.0 uses Clone even for its Copy enum reference conversions.
+// Normalize that specific AST shape so checked-in DTOs pass Clippy directly.
+fn normalize_copy_conversions(file: &mut syn::File) -> Result<(), syn::Error> {
+    let mut copy_enums = std::collections::HashSet::new();
+    for item in &file.items {
+        if let syn::Item::Enum(item) = item {
+            for attr in &item.attrs {
+                if attr.path().is_ident("derive") {
+                    let derives = attr.parse_args_with(
+                        syn::punctuated::Punctuated::<syn::Path, syn::Token![,]>::parse_terminated,
+                    )?;
+                    if derives.iter().any(|path| path.is_ident("Copy")) {
+                        copy_enums.insert(item.ident.to_string());
+                    }
+                }
+            }
+        }
+    }
+    for item in &mut file.items {
+        let syn::Item::Impl(item) = item else {
+            continue;
+        };
+        let syn::Type::Path(target) = &*item.self_ty else {
+            continue;
+        };
+        if !target
+            .path
+            .get_ident()
+            .is_some_and(|ident| copy_enums.contains(&ident.to_string()))
+        {
+            continue;
+        }
+        let Some((_, trait_path, _)) = &item.trait_ else {
+            continue;
+        };
+        let Some(segment) = trait_path.segments.last() else {
+            continue;
+        };
+        if segment.ident != "From" {
+            continue;
+        }
+        let syn::PathArguments::AngleBracketed(arguments) = &segment.arguments else {
+            continue;
+        };
+        if arguments.args.len() != 1 {
+            continue;
+        }
+        let Some(syn::GenericArgument::Type(syn::Type::Reference(reference))) =
+            arguments.args.first()
+        else {
+            continue;
+        };
+        if reference.mutability.is_some() {
+            continue;
+        }
+        let syn::Type::Path(source) = &*reference.elem else {
+            continue;
+        };
+        if !source.path.is_ident("Self") {
+            continue;
+        }
+        for member in &mut item.items {
+            if let syn::ImplItem::Fn(method) = member
+                && method.sig.ident == "from"
+            {
+                method.block = syn::parse_quote!({ *value });
+            }
+        }
+    }
+    Ok(())
+}
+
+// Primitive-only schemas do not need typify's unconditional error module.
+fn remove_unused_error_module(file: &mut syn::File) {
+    struct ErrorReferences(bool);
+    impl<'ast> Visit<'ast> for ErrorReferences {
+        fn visit_path(&mut self, path: &'ast syn::Path) {
+            if path.segments.iter().any(|segment| segment.ident == "error") {
+                self.0 = true;
+            }
+            syn::visit::visit_path(self, path);
+        }
+    }
+    let is_error_module =
+        |item: &syn::Item| matches!(item, syn::Item::Mod(module) if module.ident == "error");
+    let mut references = ErrorReferences(false);
+    for item in &file.items {
+        if !is_error_module(item) {
+            references.visit_item(item);
+        }
+    }
+    if !references.0 {
+        file.items.retain(|item| !is_error_module(item));
+    }
+}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
@@ -39,7 +136,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         schema.schema.metadata().title = Some("Dto".to_owned());
         let mut types = TypeSpace::new(&TypeSpaceSettings::default());
         types.add_root_schema(schema)?;
-        let source = prettyplease::unparse(&syn::parse2(types.to_stream())?);
+        let mut syntax = syn::parse2(types.to_stream())?;
+        normalize_copy_conversions(&mut syntax)?;
+        remove_unused_error_module(&mut syntax);
+        let source = prettyplease::unparse(&syntax);
         code.push_str(&format!("pub(crate) mod {module} {{\n{source}\n}}\n"));
     }
     let formatted = prettyplease::unparse(&syn::parse_file(&code)?);

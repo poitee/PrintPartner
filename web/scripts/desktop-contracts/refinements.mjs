@@ -3,7 +3,7 @@ const boundaryAdapter = Symbol.for("print-partner.wire-boundary-adapter");
 
 // Zod's JSON Schema exporter silently omits custom refinements. Audit every
 // custom check: an unannotated check needs a reviewed boundary adapter.
-export function refinementAdapters(schema) {
+function refinementAdapters(schema) {
   const names = new Set();
   const seen = new WeakSet();
   function visit(value) {

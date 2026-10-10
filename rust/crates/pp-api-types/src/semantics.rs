@@ -21,8 +21,13 @@ macro_rules! schema_validator {
     };
 }
 schema_validator!(REQUEST, "save-request.input.schema.json");
+schema_validator!(REQUEST_OUTPUT, "save-request.output.schema.json");
+schema_validator!(BASIS_INPUT, "accepted-base.input.schema.json");
+schema_validator!(BASIS_OUTPUT, "accepted-base.output.schema.json");
 schema_validator!(RECEIPT, "apply-receipt.output.schema.json");
+schema_validator!(RECEIPT_INPUT, "apply-receipt.input.schema.json");
 schema_validator!(IDENTITY, "draft-identity.output.schema.json");
+schema_validator!(IDENTITY_INPUT, "draft-identity.input.schema.json");
 schema_validator!(PROBE_INPUT, "semantic-fixture.input.schema.json");
 schema_validator!(PROBE_OUTPUT, "semantic-fixture.output.schema.json");
 
@@ -34,21 +39,35 @@ fn error(category: &str, detail: impl ToString) -> BoundaryError {
     }
 }
 
-fn validate_dto<T: DeserializeOwned>(
+fn validate_dto<I: DeserializeOwned, O: DeserializeOwned + Serialize>(
     text: &str,
     normalized: impl Serialize,
-    schema: &jsonschema::Validator,
+    input_schema: &jsonschema::Validator,
+    output_schema: &jsonschema::Validator,
 ) -> Result<(), BoundaryError> {
     let input: Value = serde_json::from_str(text).map_err(|e| error("invalid_json", e))?;
-    schema
+    input_schema
         .validate(&input)
         .map_err(|e| error("wire_schema", e))?;
     // Zod accepts integral float lexemes; the validated native boundary has
     // already normalized these to integer JSON before typify deserialization.
-    let _: T = serde_json::from_value(
-        serde_json::to_value(normalized).map_err(|e| error("generated_dto", e))?,
-    )
-    .map_err(|e| error("generated_dto", e))?;
+    let normalized = serde_json::to_value(normalized).map_err(|e| error("generated_dto", e))?;
+    output_schema
+        .validate(&normalized)
+        .map_err(|e| error("wire_schema", e))?;
+    let _: I = serde_json::from_value(normalized.clone()).map_err(|e| error("generated_dto", e))?;
+    let dto: O =
+        serde_json::from_value(normalized.clone()).map_err(|e| error("generated_dto", e))?;
+    let serialized = serde_json::to_value(dto).map_err(|e| error("generated_dto", e))?;
+    output_schema
+        .validate(&serialized)
+        .map_err(|e| error("wire_schema", e))?;
+    if serialized != normalized {
+        return Err(error(
+            "generated_dto",
+            "generated output changed the validated wire value",
+        ));
+    }
     Ok(())
 }
 
@@ -56,16 +75,43 @@ pub(crate) fn request(
     text: &str,
     value: &crate::SavePlanChoicesRequest,
 ) -> Result<(), BoundaryError> {
-    validate_dto::<generated::save_request_input::Dto>(text, value, &REQUEST)
+    basis(value.expected_base())?;
+    validate_dto::<generated::save_request_input::Dto, generated::save_request_output::Dto>(
+        text,
+        value,
+        &REQUEST,
+        &REQUEST_OUTPUT,
+    )
 }
 pub(crate) fn receipt(
     text: &str,
     value: &crate::ApplyPlanDraftReceipt,
 ) -> Result<(), BoundaryError> {
-    validate_dto::<generated::apply_receipt_output::Dto>(text, value, &RECEIPT)
+    validate_dto::<generated::apply_receipt_input::Dto, generated::apply_receipt_output::Dto>(
+        text,
+        value,
+        &RECEIPT_INPUT,
+        &RECEIPT,
+    )
 }
 pub(crate) fn identity(text: &str, value: &crate::PlanDraftIdentity) -> Result<(), BoundaryError> {
-    validate_dto::<generated::draft_identity_output::Dto>(text, value, &IDENTITY)
+    basis(value.base())?;
+    validate_dto::<generated::draft_identity_input::Dto, generated::draft_identity_output::Dto>(
+        text,
+        value,
+        &IDENTITY_INPUT,
+        &IDENTITY,
+    )
+}
+
+fn basis(value: &crate::PlanDraftBasis) -> Result<(), BoundaryError> {
+    let text = serde_json::to_string(value).map_err(|e| error("generated_dto", e))?;
+    validate_dto::<generated::accepted_base_input::Dto, generated::accepted_base_output::Dto>(
+        &text,
+        value,
+        &BASIS_INPUT,
+        &BASIS_OUTPUT,
+    )
 }
 
 /// Conformance probe only (no route): parse input, strip unknown keys, apply
@@ -102,7 +148,13 @@ pub fn parse_semantic_fixture(text: &str) -> Result<Value, BoundaryError> {
     PROBE_OUTPUT
         .validate(&input)
         .map_err(|e| error("wire_schema", e))?;
-    let _: generated::semantic_fixture_output::Dto =
+    let _: generated::semantic_fixture_input::Dto =
         serde_json::from_value(input.clone()).map_err(|e| error("generated_dto", e))?;
-    Ok(input)
+    let dto: generated::semantic_fixture_output::Dto =
+        serde_json::from_value(input).map_err(|e| error("generated_dto", e))?;
+    let output = serde_json::to_value(dto).map_err(|e| error("generated_dto", e))?;
+    PROBE_OUTPUT
+        .validate(&output)
+        .map_err(|e| error("wire_schema", e))?;
+    Ok(output)
 }
