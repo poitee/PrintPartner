@@ -366,6 +366,61 @@ test("scans YAML run scalars and blocks while excluding unrelated metadata", () 
   }
 });
 
+for (const header of ["|", "|-", "|+", ">", ">-", ">+", "|2", "|2-", "|2+", "|-2", "|+2", ">2", ">2-", ">2+", ">-2", ">+2"]) {
+  test(`extracts only YAML run content for block scalar ${header}`, () => {
+    for (const prefix of ["run:", "- run:", "  - run:"]) {
+      const indent = prefix.indexOf("run");
+      const source = [
+        `${prefix} ${header} # TODO header is metadata`,
+        `${" ".repeat(indent + 2)}echo TODO`,
+        "",
+        `${" ".repeat(indent + 2)}echo FIXME`,
+        `${" ".repeat(indent)}# HACK after block`,
+        `${" ".repeat(indent)}description: |`,
+        `${" ".repeat(indent + 2)}run: echo TODO not executed`,
+      ].join("\n");
+      for (const path of ["workflow.yml", "workflow.yaml"]) {
+        assert.deepEqual(countText(source, path), { todoComments: 2, eslintDisable: 0, rustAllow: 0 }, prefix);
+      }
+    }
+  });
+}
+
+test("extracts YAML run plain scalars starting on the next line", () => {
+  for (const source of ["run:\n  echo TODO", "- run:\n    echo TODO", "run: # FIXME metadata\n  echo TODO"]) {
+    assert.equal(countText(source, "workflow.yml").todoComments, 1);
+  }
+});
+
+test("extracts single-line YAML run commands without adjacent keys or comments", () => {
+  const source = 'steps:\n  - run: echo "TODO" # FIXME metadata\n    name: HACK metadata\n    env:\n      NOTE: TODO metadata';
+  assert.deepEqual(countText(source, "workflow.yml"), { todoComments: 1, eslintDisable: 0, rustAllow: 0 });
+});
+
+test("ignores run-like text inside other YAML scalar values", () => {
+  for (const source of [
+    "description: |\n  run: echo TODO",
+    "description: >-\n  run: echo TODO",
+    "description: |2-\n  run: echo TODO",
+    'description: "text\n  run: echo TODO"',
+    "# run: echo TODO\nother: FIXME",
+    "defaults:\n  run:\n    working-directory: TODO-folder",
+  ]) {
+    assert.deepEqual(countText(source, "workflow.yaml"), { todoComments: 0, eslintDisable: 0, rustAllow: 0 });
+  }
+});
+
+test("counts aliased YAML run scalars and multiple documents", () => {
+  const source = "command: &command |\n  echo TODO\nsteps:\n  - run: *command\n---\nrun: echo FIXME";
+  assert.equal(countText(source, "workflow.yml").todoComments, 2);
+});
+
+test("counts malformed YAML conservatively without throwing", () => {
+  assert.doesNotThrow(() => {
+    assert.equal(countText("run: [echo TODO", "workflow.yml").todoComments, 1);
+  });
+});
+
 test("restricts Rust allow counts to emitted lint attributes", () => {
   const source = [
     "#[some_proc_macro(option(allow(foo)))]",

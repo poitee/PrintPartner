@@ -346,29 +346,13 @@ function countMarkerLines(lines) {
   return counts;
 }
 
-function yamlRunLines(text) {
-  const lines = [];
-  let runIndent = null;
-  for (const line of text.split("\n")) {
-    const indent = /^\s*/.exec(line)[0].length;
-    if (runIndent !== null && (line.trim() === "" || indent > runIndent)) {
-      lines.push(line);
-      continue;
-    }
-    runIndent = null;
-    const run = /^(\s*(?:-\s+)?)(?:run|"run"|'run')\s*:\s*(.*)$/.exec(line);
-    if (!run || !run[2] || run[2].startsWith("#")) continue;
-    lines.push(run[2]);
-    // Include indented scalar continuations, literal and folded blocks alike.
-    runIndent = run[1].length;
-  }
-  return lines;
-}
-
 export function countText(text, path = "") {
   const extension = extensionOf(path);
   if (extension === ".sh") return countMarkerLines(text.split("\n"));
-  if (extension === ".yml" || extension === ".yaml") return countMarkerLines(yamlRunLines(text));
+  if (extension === ".yml" || extension === ".yaml") {
+    const { yamlRunLines } = requireWeb("./scripts/workaround-yaml.mjs");
+    return countMarkerLines(yamlRunLines(text));
+  }
   if (JAVASCRIPT_EXTENSIONS.has(extensionOf(path))) return countJavaScriptComments(text, path);
   return countNonJavaScriptText(text, path);
 }
