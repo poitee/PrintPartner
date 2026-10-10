@@ -366,12 +366,27 @@ test("preserves multiline closed nested spans during EOF recovery", () => {
   }
 });
 
-test("recovers many unfinished nested openers together", () => {
+test("recovers many unfinished Rust and CSS openers together", (t) => {
   const source = "/* TODO #[allow(unused)]\n".repeat(10_000) +
     '" /* closed #[allow(ignored)] */ "\n#[allow(dead_code)]';
   assert.deepEqual(countText(source, "a.rs"), {
     todoComments: 10_000, eslintDisable: 0, rustAllow: 10_001,
   });
+
+  const css = "/* TODO\n".repeat(2000);
+  const started = performance.now();
+  const counts = countText(css, "a.css");
+  const elapsed = performance.now() - started;
+  assert.deepEqual(counts, { todoComments: 2000, eslintDisable: 0, rustAllow: 0 });
+  assert.ok(elapsed < 200, `2000 unclosed CSS openers took ${elapsed.toFixed(2)} ms (limit 200 ms)`);
+  t.diagnostic(`2000 unclosed CSS openers: ${elapsed.toFixed(2)} ms (limit 200 ms)`);
+
+  // CSS closes at the first terminator, regardless of additional openers.
+  for (const css of ["/* outer\n/* inner */\nTODO\n/* FIXME */", "/* outer /*/ TODO\n/* FIXME */"]) {
+    assert.deepEqual(countText(css, "a.css"), {
+      todoComments: 1, eslintDisable: 0, rustAllow: 0,
+    });
+  }
 });
 
 test("recovers each unfinished nested Rust block comment", () => {

@@ -242,14 +242,20 @@ function scanLine(line, syntax, initialState, lineIndex, codeFrom) {
   while (index < line.length) {
     if (state.kind === "blockComment") {
       const [blockOpen] = syntax.block ?? [];
-      if (syntax.nestedBlockComments && blockOpen && line.startsWith(blockOpen, index)) {
+      if (blockOpen && line.startsWith(blockOpen, index)) {
         const opening = { line: lineIndex, index };
-        for (let offset = 0; offset < blockOpen.length; offset += 1) {
-          commentText[index + offset] = line[index + offset];
+        if (syntax.nestedBlockComments) {
+          for (let offset = 0; offset < blockOpen.length; offset += 1) {
+            commentText[index + offset] = line[index + offset];
+          }
+          index += blockOpen.length;
+          state = { kind: "blockComment", openings: [opening], close: state.close, resume: state, closedRanges: [] };
+          continue;
+        } else {
+          // CSS openers are comment text, not nested comments. Remember all of
+          // them so EOF recovery cannot expose one new opener per full rescan.
+          state.openings.push(opening);
         }
-        index += blockOpen.length;
-        state = { kind: "blockComment", opening, close: state.close, resume: state, closedRanges: [] };
-        continue;
       }
       const closes = line.startsWith(state.close, index);
       const length = closes ? state.close.length : 1;
@@ -258,7 +264,7 @@ function scanLine(line, syntax, initialState, lineIndex, codeFrom) {
       if (closes) {
         if (state.resume.kind === "blockComment") {
           // Keep only the whole closed child span; its descendants are covered.
-          state.resume.closedRanges.push({ start: state.opening, end: { line: lineIndex, index } });
+          state.resume.closedRanges.push({ start: state.openings[0], end: { line: lineIndex, index } });
         }
         state = state.resume;
       }
@@ -281,7 +287,7 @@ function scanLine(line, syntax, initialState, lineIndex, codeFrom) {
       const opening = { line: lineIndex, index };
       for (let offset = 0; offset < open.length; offset += 1) commentText[index + offset] = line[index + offset];
       index += open.length;
-      state = { kind: "blockComment", opening, close, resume: state, closedRanges: [] };
+      state = { kind: "blockComment", openings: [opening], close, resume: state, closedRanges: [] };
       continue;
     }
 
@@ -356,7 +362,9 @@ function countNonJavaScriptText(text, path) {
         }
       };
       while (state.kind === "blockComment") {
-        mask(state.opening, { ...state.opening, index: state.opening.index + syntax.block[0].length });
+        for (const opening of state.openings) {
+          mask(opening, { ...opening, index: opening.index + syntax.block[0].length });
+        }
         for (const { start, end } of state.closedRanges) mask(start, end);
         state = state.resume;
       }
