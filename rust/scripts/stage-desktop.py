@@ -40,7 +40,7 @@ for path in ['package.json', 'package-lock.json', 'apps/server/package.json', 'a
     shutil.copy2(source / path, target)
 lock = json.loads((source / 'package-lock.json').read_text())
 for name, package in lock['packages'].items():
-    if 'node_modules/' not in name or package.get('dev') or package.get('devOptional'):
+    if 'node_modules/' not in name or package.get('dev'):
         continue
     original = source / name
     target = web / name
