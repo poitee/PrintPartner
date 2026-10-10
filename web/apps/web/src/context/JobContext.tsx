@@ -11,7 +11,7 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import type { JobEvent, JobSnapshot } from "@print-partner/contracts";
 import { fetchJob } from "../api/endpoints/jobs";
-import { connectJobWebSocket } from "../api/jobWebSocket";
+import { connectJobWebSocket, JobNotFoundError } from "../api/jobWebSocket";
 import { invalidateAfterJob } from "../queries/invalidation";
 import { invalidateAcceptedPlateExportJobs } from "../queries/acceptedPlates";
 
@@ -250,8 +250,12 @@ export function JobProvider({ children }: { children: ReactNode }) {
         disconnect = connectJobWebSocket(
           jobId,
           onProgress,
-          () => {
-            /* WebSocket unavailable — HTTP polling fallback handles completion */
+          (error) => {
+            if (error instanceof JobNotFoundError) {
+              finish({ job_id: jobId, kind, status: "error", message: error.message,
+                error: error.message, progress: null, result: null });
+            }
+            /* Other WebSocket errors leave HTTP polling to handle completion. */
           },
         );
 
