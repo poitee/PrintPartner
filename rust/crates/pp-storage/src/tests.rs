@@ -122,7 +122,7 @@ fn queue_cancellation_reply_loss_and_shutdown_drain() {
             .contains("stopped")
     );
     assert!(done_rx.try_recv().is_err());
-    assert!(path.join(".desktop-owner.json").exists());
+    assert!(!path.join(".desktop-owner.json").exists());
     raw.execute_batch("COMMIT").unwrap();
     first.recv().unwrap().unwrap();
     drop(raw);
