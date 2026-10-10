@@ -1,0 +1,80 @@
+name: Desktop WebKitGTK WebGL smoke
+
+on:
+  pull_request:
+    paths:
+      - 'rust/**'
+      - 'rust-toolchain.toml'
+      - 'web/apps/**'
+      - 'web/packages/**'
+      - 'web/package*.json'
+      - 'web/tsconfig.base.json'
+      - 'web/scripts/atomic-package-build.mjs'
+      - '.github/workflows/desktop-webkit.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-webkit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  webkit-stl:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      CARGO_BUILD_JOBS: '4'
+      VITE_PRINT_PARTNER_DESKTOP: '1'
+      # GitHub-hosted runners have no GPU; Mesa llvmpipe supplies real WebGL.
+      LIBGL_ALWAYS_SOFTWARE: '1'
+      WEBKIT_DISABLE_DMABUF_RENDERER: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install WebKitGTK, WebDriver, Mesa and virtual display
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev \
+            libayatana-appindicator3-dev librsvg2-dev pkg-config \
+            webkit2gtk-driver xvfb xauth dbus-x11 libgl1-mesa-dri libegl1 mesa-utils
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.21.0'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust -> target
+      - name: Build and stage the production desktop assets
+        run: |
+          npm --prefix web ci
+          npm --prefix web run build
+          python3 rust/scripts/stage-desktop.py --web web --node "$(command -v node)" \
+            --output "$RUNNER_TEMP/webkit-stage" --commit "$GITHUB_SHA"
+      - name: Build pp-desktop
+        env:
+          PP_DESKTOP_RELEASE_MANIFEST: ${{ runner.temp }}/webkit-stage/bundle-manifest.json
+        run: cargo build --locked --manifest-path rust/Cargo.toml -p pp-desktop
+      - name: Launch native desktop and prove the STL viewer renders
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/webkit-proof"
+          dbus-run-session -- xvfb-run -a -s '-screen 0 1280x1024x24' \
+            python3 rust/tests/webkit_stl_smoke.py --stage "$RUNNER_TEMP/webkit-stage" \
+            --output "$RUNNER_TEMP/webkit-proof" | tee "$RUNNER_TEMP/webkit-proof/verify.log"
+          cat "$RUNNER_TEMP/webkit-proof/receipt.json" >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload native screenshot and WebGL proof
+        if: always()
+        id: proof
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-webkit-stl-proof
+          path: ${{ runner.temp }}/webkit-proof/
+          if-no-files-found: error
+      - name: Link proof artifact
+        if: always() && steps.proof.outputs.artifact-url != ''
+        run: echo 'Screenshot and WebGL receipt — ${{ steps.proof.outputs.artifact-url }}' >> "$GITHUB_STEP_SUMMARY"

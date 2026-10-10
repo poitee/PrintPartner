@@ -233,13 +233,21 @@ function countRustAllowMeta(meta) {
   return args.slice(1).reduce((count, arg) => count + countRustAllowMeta(arg), 0);
 }
 
-function scanLine(line, syntax, initialState, lineIndex, codeFrom) {
+function scanLine(line, syntax, initialState, lineIndex, codeFrom, recoveredCommentFrom) {
   const commentText = Array(line.length).fill(" ");
   const unquotedCodeText = Array(line.length).fill(" ");
   let state = initialState;
   let index = 0;
 
   while (index < line.length) {
+    if (recoveredCommentFrom && (lineIndex > recoveredCommentFrom.line ||
+      (lineIndex === recoveredCommentFrom.line && index >= recoveredCommentFrom.index))) {
+      // EOF recovery exposes lint attributes, but comment contents must never
+      // acquire string or line-comment semantics on the second scan.
+      unquotedCodeText[index] = line[index];
+      index += 1;
+      continue;
+    }
     if (state.kind === "blockComment") {
       const [blockOpen] = syntax.block ?? [];
       if (blockOpen && line.startsWith(blockOpen, index)) {
@@ -340,11 +348,12 @@ function countNonJavaScriptText(text, path) {
   const todoLines = new Set();
   const eslintLines = new Set();
   let codeFrom = null;
+  let recoveredCommentFrom = null;
   while (true) {
     let state = CODE_STATE;
     const unquotedLines = [];
     for (const [lineIndex, line] of lines.entries()) {
-      const scanned = scanLine(line, syntax, state, lineIndex, codeFrom);
+      const scanned = scanLine(line, syntax, state, lineIndex, codeFrom, recoveredCommentFrom);
       state = scanned.state;
       unquotedLines.push(scanned.unquotedCodeText);
       if (MARKERS.todoComments.test(scanned.commentText)) todoLines.add(lineIndex);
@@ -352,8 +361,8 @@ function countNonJavaScriptText(text, path) {
     }
     if (state.kind === "blockComment") {
       // Preserve comment counts from this pass. Mask every unfinished opener
-      // and every closed child span before rescanning, so exposed quotes or line
-      // comments cannot change the original nested comment boundaries.
+      // and every closed child span before rescanning the unfinished contents
+      // as plain text, preserving the original nested comment boundaries.
       const recovered = lines.map((line) => line.split(""));
       const mask = (start, end) => {
         for (let line = start.line; line <= end.line; line += 1) {
@@ -362,6 +371,7 @@ function countNonJavaScriptText(text, path) {
         }
       };
       while (state.kind === "blockComment") {
+        recoveredCommentFrom = state.openings[0];
         for (const opening of state.openings) {
           mask(opening, { ...opening, index: opening.index + syntax.block[0].length });
         }

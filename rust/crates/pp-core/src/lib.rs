@@ -19,6 +19,7 @@ pub struct DesktopLaunch {
     pub assets: PathBuf,
 }
 
+pub use pp_compat::SupervisorConfig;
 pub use pp_compat::{Bundle as VerifiedBundle, Status as CoreStatus};
 pub use pp_gateway::LaunchTarget as DesktopLaunchTarget;
 
@@ -122,7 +123,10 @@ impl ShutdownReceipt {
     }
 }
 
-async fn start_resources(input: DesktopLaunch) -> Result<Resources> {
+async fn start_resources(
+    input: DesktopLaunch,
+    compat_config: SupervisorConfig,
+) -> Result<Resources> {
     let assets = input
         .assets
         .canonicalize()
@@ -130,14 +134,18 @@ async fn start_resources(input: DesktopLaunch) -> Result<Resources> {
     pp_compat::verify_bundle(&input.bundle, &assets)?;
     let mut owner = StorageLease::acquire(&input.data_dir)?;
     let listener = bind_origin(&owner).await?;
-    let supervisor = Supervisor::start(SpawnSpec {
-        bundle: input.bundle,
-        data_dir: owner.data_dir().to_owned(),
-        runtime_dir: owner.runtime_dir().to_owned(),
-        lease: owner.secret().to_owned(),
-        lease_file: owner.clone_file()?,
-        port: listener.local_addr()?.port(),
-    })?;
+    let supervisor = Supervisor::start_with_config(
+        SpawnSpec {
+            bundle: input.bundle,
+            data_dir: owner.data_dir().to_owned(),
+            runtime_dir: owner.runtime_dir().to_owned(),
+            lease: owner.secret().to_owned(),
+            lease_file: owner.clone_file()?,
+            port: listener.local_addr()?.port(),
+            record_child: pp_storage::lease::record_child,
+        },
+        compat_config,
+    )?;
     owner.retain_on_drop();
     let mut status = supervisor.handle.status.clone();
     let ready = tokio::time::timeout(Duration::from_secs(32), async {
@@ -184,6 +192,14 @@ async fn start_resources(input: DesktopLaunch) -> Result<Resources> {
 
 impl CoreRuntime {
     pub async fn start(input: DesktopLaunch) -> Result<Self> {
+        Self::start_with_compat_config(input, SupervisorConfig::default()).await
+    }
+
+    /// Start with a per-instance compatibility timing policy.
+    pub async fn start_with_compat_config(
+        input: DesktopLaunch,
+        compat_config: SupervisorConfig,
+    ) -> Result<Self> {
         let (started, startup) = tokio::sync::oneshot::channel();
         let (stop, stopped) = tokio::sync::oneshot::channel();
         let (completed, completion) = tokio::sync::oneshot::channel();
@@ -201,7 +217,7 @@ impl CoreRuntime {
                     }
                 };
                 runtime.block_on(async move {
-                    let mut resources = match start_resources(input).await {
+                    let mut resources = match start_resources(input, compat_config).await {
                         Ok(resources) => resources,
                         Err(error) => {
                             let _ = started.send(Err(error));
