@@ -408,8 +408,16 @@ async fn forgot(
         let mut url =
             reqwest::Url::parse(&format!("{origin}/reset-password")).expect("validated origin");
         url.query_pairs_mut().append_pair("token", token.expose());
-        let delivery = app.mail.deliver(&email, url.as_str()).await;
-        if matches!(delivery, super::Delivery::Unsent) && app.config.dev_reset_exposure {
+        // Never await SMTP on this path: delivery can block for the transport
+        // timeout and would otherwise let clients time known vs unknown emails.
+        if app.mail.configured() {
+            let mail = app.mail.clone();
+            let to = email;
+            let link = url.to_string();
+            tokio::spawn(async move {
+                let _ = mail.deliver(&to, &link).await;
+            });
+        } else if app.config.dev_reset_exposure {
             result["dev_reset_url"] = json!(url.as_str());
         }
     }

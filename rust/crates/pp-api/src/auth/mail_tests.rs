@@ -279,11 +279,27 @@ async fn smtp_http_failure_keeps_committed_token_without_enumeration_or_retry() 
                 .get("dev_reset_url")
                 .is_none()
         );
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        while fake.messages.lock().unwrap().is_empty() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "timed out waiting for async reset mail delivery"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
         if matches!(mode, Mode::Reject) {
+            while !LOGS.0.lock().unwrap().iter().any(|line| {
+                line.contains(
+                    "WARN Password reset mail delivery failed; provider=smtp error_class=smtp_permanent",
+                )
+            }) {
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "timed out waiting for smtp failure log"
+                );
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
             let logs = LOGS.0.lock().unwrap();
-            assert!(logs.iter().any(|line| line.contains(
-                "WARN Password reset mail delivery failed; provider=smtp error_class=smtp_permanent"
-            )));
             assert!(logs.iter().all(|line| !line.contains('@')
                 && !line.contains("token=")
                 && !line.contains("canonical.example")));
