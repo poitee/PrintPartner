@@ -149,6 +149,21 @@ fn reconciliations(owner: &WriterOwner, id: &str) -> Vec<ReconciliationRecord> {
         _ => panic!("reconciliations"),
     }
 }
+fn history(owner: &WriterOwner, id: &str) -> Vec<HistoryEntry> {
+    match call(
+        owner,
+        UserOperation::History {
+            job_id: id.into(),
+            before_version: None,
+            limit: 200,
+        },
+    )
+    .unwrap()
+    {
+        Outcome::History(entries) => entries,
+        _ => panic!("history"),
+    }
+}
 fn reconcile(
     owner: &WriterOwner,
     record: &JobRecord,
@@ -972,7 +987,6 @@ fn ticket_t_28_recovery_every_existing_kind_has_incomplete_intent_policy() {
             unit_tokens: vec![token.clone()],
             filename_grouping: None,
         },
-        Payload::ExportChecklistHtml { profile_id: 1 },
         Payload::ExportKitBundle {
             profile_id: 1,
             include_print_progress: true,
@@ -989,7 +1003,12 @@ fn ticket_t_28_recovery_every_existing_kind_has_incomplete_intent_policy() {
     ];
     let existing = JobKind::ALL
         .into_iter()
-        .filter(|kind| *kind != JobKind::SuppliedSourceImport)
+        .filter(|kind| {
+            !matches!(
+                kind,
+                JobKind::SuppliedSourceImport | JobKind::ExportChecklistHtml
+            )
+        })
         .collect::<Vec<_>>();
     assert_eq!(payloads.len(), existing.len());
     for (payload, kind) in payloads.into_iter().zip(existing) {
@@ -1053,7 +1072,10 @@ fn ticket_t_28_recovery_confirmed_local_candidate_requires_exact_receipt() {
     let queued = enqueue(
         &owner,
         "local-artifact",
-        Payload::ExportChecklistHtml { profile_id: 1 },
+        Payload::ExportKitBundle {
+            profile_id: 1,
+            include_print_progress: false,
+        },
     );
     let worker = owner.job_worker(admission()).unwrap();
     let mut lease = worker.claim().unwrap().unwrap().lease;
@@ -1372,7 +1394,10 @@ fn ticket_t_28_recovery_success_requires_effect_receipts() {
     enqueue(
         &owner,
         "no-fake-export",
-        Payload::ExportChecklistHtml { profile_id: 1 },
+        Payload::ExportKitBundle {
+            profile_id: 1,
+            include_print_progress: false,
+        },
     );
     let mut lease = worker.claim().unwrap().unwrap().lease;
     assert!(
@@ -4044,6 +4069,222 @@ fn rich_completed_result_survives_read_list_and_orderly_reopen() {
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].job_id, queued.job_id);
     assert_eq!(listed[0].result, Some(expected));
+    owner.shutdown().unwrap();
+}
+
+#[test]
+fn checklist_generic_effect_and_success_operations_refuse_without_mutation() {
+    let (path, owner) = fixture();
+    let queued = enqueue(
+        &owner,
+        "checklist-generic-refusal",
+        Payload::ExportChecklistHtml { profile_id: 7 },
+    );
+    let worker = owner.job_worker(admission()).unwrap();
+    let mut lease = worker.claim().unwrap().unwrap().lease;
+    let running = get(&owner, &queued.job_id);
+    let running_history = history(&owner, &queued.job_id);
+
+    let begin = worker
+        .update(
+            &mut lease,
+            WorkerOperation::BeginEffect(intent(
+                EffectOperation::LocalArtifact,
+                "checklists/7/result.html",
+            )),
+        )
+        .unwrap_err();
+    assert!(begin.to_string().contains("owning admission"));
+    let finish = worker
+        .update(&mut lease, WorkerOperation::Finish(None))
+        .unwrap_err();
+    assert!(finish.to_string().contains("owning finalizer"));
+    let finish_public = worker
+        .update(
+            &mut lease,
+            WorkerOperation::FinishPublic {
+                artifact: None,
+                result: Box::new(CompletedResult::ChecklistHtml(ChecklistHtmlResult {
+                    path: "checklists/7/result.html".into(),
+                    download_url: None,
+                    part_count: 0,
+                    thumb_count: 0,
+                    plan_version: None,
+                    revision_id: None,
+                })),
+            },
+        )
+        .unwrap_err();
+    assert!(finish_public.to_string().contains("owning finalizer"));
+    let confirm = call(
+        &owner,
+        UserOperation::Reconcile {
+            job_id: queued.job_id.clone(),
+            expected_version: running.state_version,
+            expected_generation: running.generation,
+            effect_hash: "b".repeat(64),
+            decision: Decision::ConfirmSucceeded,
+            receipt: Some(receipt("checklists/7/result.html")),
+        },
+    )
+    .unwrap_err();
+    assert!(confirm.to_string().contains("owning reconciler"));
+    let after_refusals = get(&owner, &queued.job_id);
+    assert_eq!(after_refusals.state, running.state);
+    assert_eq!(after_refusals.state_version, running.state_version);
+    assert_eq!(after_refusals.effects, running.effects);
+    assert_eq!(after_refusals.result, running.result);
+    assert_eq!(after_refusals.public_result, running.public_result);
+    assert_eq!(
+        serde_json::to_value(history(&owner, &queued.job_id)).unwrap(),
+        serde_json::to_value(&running_history).unwrap()
+    );
+    owner.shutdown().unwrap();
+
+    let owner = WriterOwner::open(&path, Limits::default()).unwrap().0;
+    let reopened = get(&owner, &queued.job_id);
+    assert_eq!(reopened.state, PersistentState::Queued);
+    assert_eq!(reopened.state_version, running.state_version + 1);
+    assert_eq!(reopened.generation, running.generation + 1);
+    assert_eq!(reopened.effects, running.effects);
+    assert_eq!(reopened.result, running.result);
+    assert_eq!(reopened.public_result, running.public_result);
+    let reopened_history = history(&owner, &queued.job_id);
+    assert_eq!(reopened_history.len(), running_history.len() + 1);
+    assert_eq!(reopened_history[0].event, "attempt_recovered");
+    assert_eq!(reopened_history[0].version, reopened.state_version);
+    assert_eq!(
+        serde_json::to_value(&reopened_history[1..]).unwrap(),
+        serde_json::to_value(&running_history).unwrap()
+    );
+    owner.shutdown().unwrap();
+}
+
+#[test]
+fn checklist_legacy_claimless_reconciliation_refuses_without_mutation() {
+    let (path, owner) = fixture();
+    let (_, token) = register(&owner, "legacy-checklist@example.com");
+    let queued = job(
+        session_call(
+            &owner,
+            policy(),
+            &token,
+            UserOperation::Enqueue {
+                key: "legacy-checklist-reconciliation".into(),
+                payload_version: 1,
+                payload: Payload::ExportChecklistHtml { profile_id: 7 },
+            },
+        )
+        .unwrap(),
+    );
+    let worker = owner.job_worker_with_policy(policy(), admission()).unwrap();
+    let claimed = worker.claim().unwrap().unwrap().job;
+    assert_eq!(claimed.job_id, queued.job_id);
+    owner.shutdown().unwrap();
+
+    let mut raw = Connection::open(path.join("print-partner.db")).unwrap();
+    let stored: String = raw
+        .query_row(
+            "SELECT document FROM durable_jobs WHERE id=?1",
+            [&queued.job_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let mut document: serde_json::Value = serde_json::from_str(&stored).unwrap();
+    let state_version = document["state_version"].as_i64().unwrap() + 1;
+    let updated_at = document["updated_at"].as_i64().unwrap() + 1;
+    let generation = document["generation"].as_i64().unwrap();
+    let attempt = document["attempt"].as_i64().unwrap();
+    document["state"] = "reconciliation_required".into();
+    document["state_version"] = state_version.into();
+    document["updated_at"] = updated_at.into();
+    document["lease_until"] = serde_json::Value::Null;
+    document["recovery"] = "Legacy claimless effect requires inspection".into();
+    document["_attempt_worker"] = serde_json::Value::Null;
+    document["_attempt_fence"] = serde_json::Value::Null;
+    document["effects"] = serde_json::json!([{
+        "intent": {
+            "operation": "local_artifact",
+            "basis_hash": "a".repeat(64),
+            "content_hash": "b".repeat(64),
+            "target": "checklists/7/legacy.html"
+        },
+        "attempt": attempt,
+        "generation": generation,
+        "confirmed": false,
+        "receipt": null
+    }]);
+    assert!(document["effects"][0].get("checklist_completion").is_none());
+    let tx = raw.transaction().unwrap();
+    tx.execute(
+        "UPDATE durable_jobs SET state='reconciliation_required',version=?2,lease_until=NULL,updated=?3,document=?4 WHERE id=?1",
+        rusqlite::params![queued.job_id, state_version, updated_at, document.to_string()],
+    )
+    .unwrap();
+    tx.execute(
+        "INSERT INTO durable_job_history(job_id,version,at,state,event) VALUES(?1,?2,?3,'reconciliation_required','legacy_effect_retained')",
+        rusqlite::params![queued.job_id, state_version, updated_at],
+    )
+    .unwrap();
+    tx.commit().unwrap();
+    drop(raw);
+
+    let owner = WriterOwner::open(&path, Limits::default()).unwrap().0;
+    let before = job(
+        session_call(
+            &owner,
+            policy(),
+            &token,
+            UserOperation::Get {
+                job_id: queued.job_id.clone(),
+            },
+        )
+        .unwrap(),
+    );
+    assert_eq!(before.state, PersistentState::ReconciliationRequired);
+    assert_eq!(before.effects.len(), 1);
+    let before_history = history(&owner, &queued.job_id);
+    let error = session_call(
+        &owner,
+        policy(),
+        &token,
+        UserOperation::Reconcile {
+            job_id: queued.job_id.clone(),
+            expected_version: before.state_version,
+            expected_generation: before.generation,
+            effect_hash: before.effects[0].intent.content_hash.clone(),
+            decision: Decision::ConfirmSucceeded,
+            receipt: Some(ResultArtifact {
+                receipt_id: "legacy-receipt".into(),
+                content_hash: before.effects[0].intent.content_hash.clone(),
+                target: before.effects[0].intent.target.clone(),
+            }),
+        },
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("owning reconciler"));
+    let after = job(
+        session_call(
+            &owner,
+            policy(),
+            &token,
+            UserOperation::Get {
+                job_id: queued.job_id.clone(),
+            },
+        )
+        .unwrap(),
+    );
+    assert_eq!(after.state, before.state);
+    assert_eq!(after.state_version, before.state_version);
+    assert_eq!(after.generation, before.generation);
+    assert_eq!(after.effects, before.effects);
+    assert_eq!(after.result, before.result);
+    assert_eq!(after.public_result, before.public_result);
+    assert_eq!(after.recovery, before.recovery);
+    assert_eq!(
+        serde_json::to_value(history(&owner, &queued.job_id)).unwrap(),
+        serde_json::to_value(before_history).unwrap()
+    );
     owner.shutdown().unwrap();
 }
 fn deletion(

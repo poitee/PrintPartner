@@ -550,6 +550,7 @@ pub(crate) fn settle(
         confirmed: true,
         no_effect: false,
         receipt: Some(applied.receipt.clone()),
+        checklist_completion: None,
     });
     crate::jobs::save(tx, &mut job, "local_scan_settled")?;
     tx.execute(
