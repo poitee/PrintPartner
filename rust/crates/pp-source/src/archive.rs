@@ -301,14 +301,14 @@ impl SourceRoot {
     }
 }
 
-fn check_cancel(cancelled: &AtomicBool) -> Result<()> {
+pub(crate) fn check_cancel(cancelled: &AtomicBool) -> Result<()> {
     if cancelled.load(Ordering::Relaxed) {
         Err(ArchiveError::Cancelled)
     } else {
         Ok(())
     }
 }
-fn transfer(
+pub(crate) fn transfer(
     mut input: impl Read,
     mut output: impl Write,
     limit: u64,
@@ -332,10 +332,13 @@ fn transfer(
     }
     Ok((bytes, hex::encode(hash.finalize())))
 }
-struct Entry {
-    raw_name: String,
+pub(crate) struct Entry {
+    pub(crate) raw_name: String,
     path: SourcePath,
     directory: bool,
+    pub(crate) local_offset: u64,
+    pub(crate) uncompressed_size: u64,
+    physical_end: u64,
 }
 fn u16_at(bytes: &[u8], offset: usize) -> u16 {
     u16::from_le_bytes(
@@ -351,8 +354,8 @@ fn u32_at(bytes: &[u8], offset: usize) -> u32 {
             .expect("fixed header field"),
     )
 }
-fn inspect_index(
-    file: &mut File,
+pub(crate) fn inspect_index(
+    file: &mut (impl Read + Seek),
     length: u64,
     limits: ArchiveLimits,
     cancelled: &AtomicBool,
@@ -368,24 +371,79 @@ fn inspect_index(
         })
         .ok_or(ArchiveError::InvalidArchive)?;
     let footer = &tail[end..];
-    let count = u16_at(footer, 10) as usize;
-    let central_size = u32_at(footer, 12) as u64;
-    let central_offset = u32_at(footer, 16) as u64;
-    if u16_at(footer, 4) != 0
-        || u16_at(footer, 6) != 0
-        || u16_at(footer, 8) as usize != count
-        || count == 65_535
-        || central_size == u32::MAX as u64
-        || central_offset == u32::MAX as u64
+    let end_offset = length - tail_size as u64 + end as u64;
+    let mut count = u16_at(footer, 10) as u64;
+    let mut central_size = u32_at(footer, 12) as u64;
+    let mut central_offset = u32_at(footer, 16) as u64;
+    let disk = u16_at(footer, 4);
+    let start_disk = u16_at(footer, 6);
+    if ![0, u16::MAX].contains(&disk)
+        || ![0, u16::MAX].contains(&start_disk)
+        || u16_at(footer, 8) as u64 != count
     {
         return Err(ArchiveError::Unsupported);
     }
-    if count > limits.max_entries || central_size > MAX_METADATA_BYTES {
+    let mut central_end = end_offset;
+    let mut zip64_eocd = false;
+    if end_offset >= 20 {
+        file.seek(SeekFrom::Start(end_offset - 20))?;
+        let mut locator = [0; 20];
+        file.read_exact(&mut locator)?;
+        if locator[..4] == *b"PK\x06\x07" {
+            if u32_at(&locator, 4) != 0 || u32_at(&locator, 16) != 1 {
+                return Err(ArchiveError::Unsupported);
+            }
+            central_end = u64_at(&locator, 8);
+            if central_end
+                .checked_add(56)
+                .is_none_or(|end| end > end_offset - 20)
+            {
+                return Err(ArchiveError::InvalidArchive);
+            }
+            file.seek(SeekFrom::Start(central_end))?;
+            let mut record = [0; 56];
+            file.read_exact(&mut record)?;
+            let size = u64_at(&record, 4);
+            if record[..4] != *b"PK\x06\x06"
+                || !(44..=MAX_METADATA_BYTES).contains(&size)
+                || central_end
+                    .checked_add(12)
+                    .and_then(|n| n.checked_add(size))
+                    != Some(end_offset - 20)
+            {
+                return Err(ArchiveError::InvalidArchive);
+            }
+            if u32_at(&record, 16) != 0
+                || u32_at(&record, 20) != 0
+                || u64_at(&record, 24) != u64_at(&record, 32)
+            {
+                return Err(ArchiveError::Unsupported);
+            }
+            for (old, sentinel, new) in [
+                (count, u16::MAX as u64, u64_at(&record, 32)),
+                (central_size, u32::MAX as u64, u64_at(&record, 40)),
+                (central_offset, u32::MAX as u64, u64_at(&record, 48)),
+            ] {
+                if old != sentinel && old != new {
+                    return Err(ArchiveError::InvalidArchive);
+                }
+            }
+            count = u64_at(&record, 32);
+            central_size = u64_at(&record, 40);
+            central_offset = u64_at(&record, 48);
+            zip64_eocd = true;
+        }
+    }
+    if (disk == u16::MAX || start_disk == u16::MAX) && !zip64_eocd {
+        return Err(ArchiveError::Unsupported);
+    }
+    if count > limits.max_entries as u64 || central_size > MAX_METADATA_BYTES {
         return Err(ArchiveError::Limit);
     }
-    if central_offset + central_size != length - tail_size as u64 + end as u64 {
+    if central_offset.checked_add(central_size) != Some(central_end) {
         return Err(ArchiveError::InvalidArchive);
     }
+    let count = count as usize;
     file.seek(SeekFrom::Start(central_offset))?;
     let mut entries = Vec::with_capacity(count);
     let mut paths = PathCollisions::default();
@@ -401,7 +459,7 @@ fn inspect_index(
         let mode = u32_at(&header, 38) >> 16;
         if flags & (1 | 0x40 | 0x2000) != 0
             || ![0, 8].contains(&compression)
-            || u16_at(&header, 34) != 0
+            || ![0, u16::MAX].contains(&u16_at(&header, 34))
             || (mode & 0o170000 != 0 && ![0o100000, 0o040000].contains(&(mode & 0o170000)))
         {
             return Err(ArchiveError::Unsupported);
@@ -430,9 +488,34 @@ fn inspect_index(
                 crate::Error::Limit => ArchiveError::Limit,
                 other => ArchiveError::Source(other),
             })?;
-        validate_local_header(file, &header, &raw_name, central_offset)?;
-        let skip = u16_at(&header, 30) as i64 + u16_at(&header, 32) as i64;
-        file.seek(SeekFrom::Current(skip))?;
+        let mut extra = vec![0; u16_at(&header, 30) as usize];
+        file.read_exact(&mut extra)?;
+        let values = resolve_zip64(
+            &extra,
+            &[
+                (u32_at(&header, 24) as u64, u32::MAX as u64),
+                (u32_at(&header, 20) as u64, u32::MAX as u64),
+                (u32_at(&header, 42) as u64, u32::MAX as u64),
+                (u16_at(&header, 34) as u64, u16::MAX as u64),
+            ],
+        )?;
+        let [uncompressed_size, compressed_size, local_offset, disk] = values;
+        if disk != 0 {
+            return Err(ArchiveError::Unsupported);
+        }
+        if compressed_size > limits.max_compressed_bytes
+            || uncompressed_size > limits.max_inflated_bytes
+        {
+            return Err(ArchiveError::Limit);
+        }
+        let physical_end = validate_local_header(
+            file,
+            &header,
+            &raw_name,
+            central_offset,
+            [uncompressed_size, compressed_size, local_offset],
+        )?;
+        file.seek(SeekFrom::Current(u16_at(&header, 32) as i64))?;
         if file.stream_position()? > central_offset + central_size {
             return Err(ArchiveError::InvalidArchive);
         }
@@ -440,9 +523,24 @@ fn inspect_index(
             raw_name,
             path,
             directory,
+            local_offset,
+            uncompressed_size,
+            physical_end,
         });
     }
     if file.stream_position()? != central_offset + central_size {
+        return Err(ArchiveError::InvalidArchive);
+    }
+    let mut physical = entries.iter().collect::<Vec<_>>();
+    physical.sort_by_key(|entry| entry.local_offset);
+    let mut end = 0;
+    for entry in physical {
+        if entry.local_offset != end {
+            return Err(ArchiveError::InvalidArchive);
+        }
+        end = entry.physical_end;
+    }
+    if end != central_offset {
         return Err(ArchiveError::InvalidArchive);
     }
     file.seek(SeekFrom::Start(0))?;
@@ -450,13 +548,14 @@ fn inspect_index(
 }
 
 fn validate_local_header(
-    file: &mut File,
+    file: &mut (impl Read + Seek),
     central: &[u8; 46],
     name: &str,
     central_offset: u64,
-) -> Result<()> {
+    sizes: [u64; 3],
+) -> Result<u64> {
     let next = file.stream_position()?;
-    let local_offset = u32_at(central, 42) as u64;
+    let [uncompressed_size, compressed_size, local_offset] = sizes;
     if local_offset >= central_offset {
         return Err(ArchiveError::InvalidArchive);
     }
@@ -470,18 +569,10 @@ fn validate_local_header(
     {
         return Err(ArchiveError::InvalidArchive);
     }
-    if u16_at(&local, 6) & 8 == 0
-        && (u32_at(&local, 14) != u32_at(central, 16)
-            || u32_at(&local, 18) != u32_at(central, 20)
-            || u32_at(&local, 22) != u32_at(central, 24))
-    {
-        return Err(ArchiveError::InvalidArchive);
-    }
     let payload_end = local_offset
-        + 30
-        + name.len() as u64
-        + u16_at(&local, 28) as u64
-        + u32_at(central, 20) as u64;
+        .checked_add(30 + name.len() as u64 + u16_at(&local, 28) as u64)
+        .and_then(|n| n.checked_add(compressed_size))
+        .ok_or(ArchiveError::InvalidArchive)?;
     if payload_end > central_offset {
         return Err(ArchiveError::InvalidArchive);
     }
@@ -490,6 +581,98 @@ fn validate_local_header(
     if local_name != name.as_bytes() {
         return Err(ArchiveError::InvalidArchive);
     }
+    let mut extra = vec![0; u16_at(&local, 28) as usize];
+    file.read_exact(&mut extra)?;
+    let local_sizes = resolve_zip64(
+        &extra,
+        &[
+            (u32_at(&local, 22) as u64, u32::MAX as u64),
+            (u32_at(&local, 18) as u64, u32::MAX as u64),
+        ],
+    )?;
+    if u16_at(&local, 6) & 8 == 0
+        && (u32_at(&local, 14) != u32_at(central, 16)
+            || local_sizes != [uncompressed_size, compressed_size])
+    {
+        return Err(ArchiveError::InvalidArchive);
+    }
+    let mut physical_end = payload_end;
+    if u16_at(&local, 6) & 8 != 0 {
+        file.seek(SeekFrom::Start(payload_end))?;
+        let wide = u32_at(&local, 18) == u32::MAX || u32_at(&local, 22) == u32::MAX;
+        let width = if wide { 16 } else { 8 };
+        let available = (central_offset - payload_end).min(8 + width) as usize;
+        let mut descriptor = [0; 24];
+        file.read_exact(&mut descriptor[..available])?;
+        physical_end = [4, 0]
+            .into_iter()
+            .find_map(|prefix| {
+                let length = prefix + 4 + width as usize;
+                if length > available || (prefix == 4 && descriptor[..4] != *b"PK\x07\x08") {
+                    return None;
+                }
+                let crc = u32_at(&descriptor, prefix);
+                let sizes = &descriptor[prefix + 4..];
+                let (compressed, uncompressed) = if wide {
+                    (u64_at(sizes, 0), u64_at(sizes, 8))
+                } else {
+                    (u32_at(sizes, 0) as u64, u32_at(sizes, 4) as u64)
+                };
+                (crc == u32_at(central, 16)
+                    && compressed == compressed_size
+                    && uncompressed == uncompressed_size)
+                    .then_some(payload_end + length as u64)
+            })
+            .ok_or(ArchiveError::InvalidArchive)?;
+    }
     file.seek(SeekFrom::Start(next))?;
-    Ok(())
+    Ok(physical_end)
+}
+
+fn u64_at(bytes: &[u8], offset: usize) -> u64 {
+    u64::from_le_bytes(
+        bytes[offset..offset + 8]
+            .try_into()
+            .expect("fixed header field"),
+    )
+}
+fn resolve_zip64<const N: usize>(extra: &[u8], fields: &[(u64, u64); N]) -> Result<[u64; N]> {
+    let mut remainder = extra;
+    let mut zip64 = None;
+    while !remainder.is_empty() {
+        if remainder.len() < 4 {
+            return Err(ArchiveError::InvalidArchive);
+        }
+        let size = u16_at(remainder, 2) as usize;
+        if remainder.len() < 4 + size {
+            return Err(ArchiveError::InvalidArchive);
+        }
+        if u16_at(remainder, 0) == 1 {
+            if zip64.is_some() {
+                return Err(ArchiveError::InvalidArchive);
+            }
+            zip64 = Some(&remainder[4..4 + size]);
+        }
+        remainder = &remainder[4 + size..];
+    }
+    let mut result = [0; N];
+    let mut bytes = zip64.unwrap_or_default();
+    for (index, &(value, sentinel)) in fields.iter().enumerate() {
+        result[index] = if value == sentinel {
+            let width = if sentinel == u16::MAX as u64 { 4 } else { 8 };
+            if bytes.len() < width {
+                return Err(ArchiveError::InvalidArchive);
+            }
+            let resolved = if width == 4 {
+                u32_at(bytes, 0) as u64
+            } else {
+                u64_at(bytes, 0)
+            };
+            bytes = &bytes[width..];
+            resolved
+        } else {
+            value
+        };
+    }
+    Ok(result)
 }
