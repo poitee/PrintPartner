@@ -241,22 +241,32 @@ function scanLine(line, syntax, initialState, lineIndex, codeFrom) {
 
   while (index < line.length) {
     if (state.kind === "blockComment") {
-      const [blockOpen, blockClose] = syntax.block ?? [];
-      if (syntax.nestedBlockComments && blockOpen && line.startsWith(blockOpen, index)) {
-        for (let offset = 0; offset < blockOpen.length; offset += 1) {
-          commentText[index + offset] = line[index + offset];
+      const [blockOpen] = syntax.block ?? [];
+      if (blockOpen && line.startsWith(blockOpen, index)) {
+        const opening = { line: lineIndex, index };
+        if (syntax.nestedBlockComments) {
+          for (let offset = 0; offset < blockOpen.length; offset += 1) {
+            commentText[index + offset] = line[index + offset];
+          }
+          index += blockOpen.length;
+          state = { kind: "blockComment", openings: [opening], close: state.close, resume: state, closedRanges: [] };
+          continue;
+        } else {
+          // CSS openers are comment text, not nested comments. Remember all of
+          // them so EOF recovery cannot expose one new opener per full rescan.
+          state.openings.push(opening);
         }
-        index += blockOpen.length;
-        state = { ...state, depth: state.depth + 1 };
-        continue;
       }
       const closes = line.startsWith(state.close, index);
       const length = closes ? state.close.length : 1;
       for (let offset = 0; offset < length; offset += 1) commentText[index + offset] = line[index + offset];
       index += length;
       if (closes) {
-        const depth = (state.depth ?? 1) - 1;
-        state = depth === 0 ? state.resume : { ...state, depth };
+        if (state.resume.kind === "blockComment") {
+          // Keep only the whole closed child span; its descendants are covered.
+          state.resume.closedRanges.push({ start: state.openings[0], end: { line: lineIndex, index } });
+        }
+        state = state.resume;
       }
       continue;
     }
@@ -274,9 +284,10 @@ function scanLine(line, syntax, initialState, lineIndex, codeFrom) {
     const blockOpen = syntax.block?.[0];
     if (blockOpen && line.startsWith(blockOpen, index)) {
       const [open, close] = syntax.block;
+      const opening = { line: lineIndex, index };
       for (let offset = 0; offset < open.length; offset += 1) commentText[index + offset] = line[index + offset];
       index += open.length;
-      state = { kind: "blockComment", close, resume: state, depth: 1 };
+      state = { kind: "blockComment", openings: [opening], close, resume: state, closedRanges: [] };
       continue;
     }
 
@@ -323,25 +334,55 @@ function scanLine(line, syntax, initialState, lineIndex, codeFrom) {
   return { commentText: commentText.join(""), unquotedCodeText: unquotedCodeText.join(""), state };
 }
 
-function countNonJavaScriptText(text, path, codeFrom = null) {
-  const counts = Object.fromEntries(Object.keys(MARKERS).map((key) => [key, 0]));
+function countNonJavaScriptText(text, path) {
   const syntax = syntaxFor(path);
-  let state = CODE_STATE;
-  const unquotedLines = [];
-  for (const [lineIndex, line] of text.split("\n").entries()) {
-    const scanned = scanLine(line, syntax, state, lineIndex, codeFrom);
-    state = scanned.state;
-    unquotedLines.push(scanned.unquotedCodeText);
-    if (MARKERS.todoComments.test(scanned.commentText)) counts.todoComments += 1;
-    if (MARKERS.eslintDisable.test(scanned.commentText)) counts.eslintDisable += 1;
+  let lines = text.split("\n");
+  const todoLines = new Set();
+  const eslintLines = new Set();
+  let codeFrom = null;
+  while (true) {
+    let state = CODE_STATE;
+    const unquotedLines = [];
+    for (const [lineIndex, line] of lines.entries()) {
+      const scanned = scanLine(line, syntax, state, lineIndex, codeFrom);
+      state = scanned.state;
+      unquotedLines.push(scanned.unquotedCodeText);
+      if (MARKERS.todoComments.test(scanned.commentText)) todoLines.add(lineIndex);
+      if (MARKERS.eslintDisable.test(scanned.commentText)) eslintLines.add(lineIndex);
+    }
+    if (state.kind === "blockComment") {
+      // Preserve comment counts from this pass. Mask every unfinished opener
+      // and every closed child span before rescanning, so exposed quotes or line
+      // comments cannot change the original nested comment boundaries.
+      const recovered = lines.map((line) => line.split(""));
+      const mask = (start, end) => {
+        for (let line = start.line; line <= end.line; line += 1) {
+          recovered[line].fill(" ", line === start.line ? start.index : 0,
+            line === end.line ? end.index : recovered[line].length);
+        }
+      };
+      while (state.kind === "blockComment") {
+        for (const opening of state.openings) {
+          mask(opening, { ...opening, index: opening.index + syntax.block[0].length });
+        }
+        for (const { start, end } of state.closedRanges) mask(start, end);
+        state = state.resume;
+      }
+      lines = recovered.map((line) => line.join(""));
+      continue;
+    }
+    if (syntax.rustRawStrings && state.kind === "quote" && !codeFrom) {
+      // An unfinished Rust string must not hide the remaining markers. Rewind
+      // to its opening and treat the rest as code, conservatively ignoring quotes.
+      codeFrom = state.opening;
+      continue;
+    }
+    return {
+      todoComments: todoLines.size,
+      eslintDisable: eslintLines.size,
+      rustAllow: syntax.rustAllow ? countRustAllowMarkers(unquotedLines.join("\n")) : 0,
+    };
   }
-  if (syntax.rustRawStrings && state.kind === "quote" && !codeFrom) {
-    // An unfinished Rust string must not hide the remaining markers. Rewind
-    // to its opening and treat the rest as code, conservatively ignoring quotes.
-    return countNonJavaScriptText(text, path, state.opening);
-  }
-  if (syntax.rustAllow) counts.rustAllow = countRustAllowMarkers(unquotedLines.join("\n"));
-  return counts;
 }
 
 // Shell, YAML, and HTML text are counted without interpreting syntax.
