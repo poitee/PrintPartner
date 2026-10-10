@@ -71,7 +71,10 @@ pub(crate) fn record_child(directory: &Path, pid: u32) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn child_is_stale(marker: &serde_json::Value) -> bool {
+/// True only when the marker names a child that still appears alive.
+/// Missing or incomplete child fields mean ownership was never established
+/// (for example a crash before `record_child`), so recovery must not block.
+pub(crate) fn child_is_live(marker: &serde_json::Value) -> bool {
     let Some(pid) = marker["child_pid"]
         .as_u64()
         .filter(|pid| *pid > 0 && *pid <= i32::MAX as u64)
@@ -84,7 +87,7 @@ pub(crate) fn child_is_stale(marker: &serde_json::Value) -> bool {
     else {
         return false;
     };
-    owner_is_stale(pid as u32, Some(identity))
+    !owner_is_stale(pid as u32, Some(identity))
 }
 
 #[derive(Deserialize, Serialize)]
@@ -232,27 +235,27 @@ mod tests {
     }
 
     #[test]
-    fn child_marker_requires_complete_info_and_a_stale_child() {
+    fn child_is_live_only_when_complete_identity_matches_a_running_process() {
         use serde_json::json;
-        assert!(!super::child_is_stale(&json!({})));
-        assert!(!super::child_is_stale(
+        assert!(!super::child_is_live(&json!({})));
+        assert!(!super::child_is_live(
             &json!({"child_pid": 0, "child_process_identity": "prior"})
         ));
-        assert!(!super::child_is_stale(
+        assert!(!super::child_is_live(
             &json!({"child_pid": std::process::id()})
         ));
-        assert!(!super::child_is_stale(
+        assert!(!super::child_is_live(
             &json!({"child_pid": std::process::id(), "child_process_identity": ""})
-        ));
-        let identity = super::process_identity(std::process::id()).unwrap();
-        assert!(!super::child_is_stale(
-            &json!({"child_pid": std::process::id(), "child_process_identity": identity})
         ));
         let mut dead = std::process::Command::new("/bin/true").spawn().unwrap();
         let pid = dead.id();
         dead.wait().unwrap();
-        assert!(super::child_is_stale(
+        assert!(!super::child_is_live(
             &json!({"child_pid": pid, "child_process_identity": "prior"})
+        ));
+        let identity = super::process_identity(std::process::id()).unwrap();
+        assert!(super::child_is_live(
+            &json!({"child_pid": std::process::id(), "child_process_identity": identity})
         ));
     }
 

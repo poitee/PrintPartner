@@ -130,5 +130,5 @@ jobs:
           set -euo pipefail
           cargo test --locked --manifest-path rust/Cargo.toml -p pp-core --lib
           cargo test --locked --manifest-path rust/Cargo.toml -p pp-core --test runtime_m0 core_death_with_live_child_refuses_standalone_node -- --exact --nocapture
-          cargo test --locked --manifest-path rust/Cargo.toml -p pp-core --test runtime_m0 dead_core_marker_without_child_info_refuses_start -- --exact
+          cargo test --locked --manifest-path rust/Cargo.toml -p pp-core --test runtime_m0 dead_core_marker_without_child_info_allows_start -- --exact
           npm --prefix web run test -w @print-partner/server -- src/desktop-context.test.ts

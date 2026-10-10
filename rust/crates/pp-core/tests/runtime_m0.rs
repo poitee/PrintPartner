@@ -1015,19 +1015,21 @@ fn core_death_with_live_child_refuses_standalone_node() {
 }
 
 #[tokio::test]
-async fn dead_core_marker_without_child_info_refuses_start() {
+async fn dead_core_marker_without_child_info_allows_start() {
     let data = temporary("missing-child-info");
     std::fs::create_dir_all(&data).unwrap();
     let mut dead = std::process::Command::new("/bin/true").spawn().unwrap();
     let pid = dead.id();
     dead.wait().unwrap();
-    let marker = data.join(".desktop-owner.json");
-    let contents =
+    std::fs::write(
+        data.join(".desktop-owner.json"),
         serde_json::json!({"pid": pid, "process_identity": "prior", "lease_hash": "cd".repeat(32)})
-            .to_string();
-    std::fs::write(&marker, &contents).unwrap();
-    assert!(CoreRuntime::start(launch(data.clone())).await.is_err());
-    assert_eq!(std::fs::read_to_string(marker).unwrap(), contents);
+            .to_string(),
+    )
+    .unwrap();
+    // Crash before record_child leaves no child fields; recover so startup is not bricked.
+    let runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
+    assert!(runtime.shutdown().await.complete());
     std::fs::remove_dir_all(data).unwrap();
 }
 

@@ -58,7 +58,7 @@ impl StorageOwner {
                 .context("Invalid prior writer PID")? as i32;
             anyhow::ensure!(
                 storage_lease::owner_is_stale(pid as u32, marker["process_identity"].as_str())
-                    && (marker["kind"] == "standalone" || storage_lease::child_is_stale(&marker)),
+                    && (marker["kind"] == "standalone" || !storage_lease::child_is_live(&marker)),
                 "A prior writer may still be alive"
             );
             std::fs::rename(
