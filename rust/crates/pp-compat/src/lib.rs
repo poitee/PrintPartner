@@ -46,6 +46,7 @@ pub struct SpawnSpec {
     pub lease: String,
     pub lease_file: std::fs::File,
     pub port: u16,
+    pub record_child: fn(&std::path::Path, u32) -> Result<()>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -232,6 +233,17 @@ struct Process {
 impl Process {
     async fn spawn(spec: &SpawnSpec, capture: &logs::Logs) -> Result<Self> {
         release::verify_backend(&spec.bundle)?;
+        let package_root = release::package_root(&spec.bundle)?;
+        let preload = spec
+            .bundle
+            .entry
+            .parent()
+            .context("Missing backend root")?
+            .join("desktop-resolution.js")
+            .canonicalize()
+            .context("Measured desktop preload unavailable")?;
+        let mut root_argument = std::ffi::OsString::from("--pp-desktop-package-root=");
+        root_argument.push(package_root);
         let generation = hex::encode(rand::random::<[u8; 16]>());
         let key = rand::random::<[u8; 32]>();
         let socket = spec.runtime_dir.join(format!("{}.sock", &generation[..12]));
@@ -244,7 +256,12 @@ impl Process {
         let mut command = Command::new(&spec.bundle.node);
         command
             .arg("--no-global-search-paths")
+            .arg("--import")
+            .arg(preload)
             .arg(&spec.bundle.entry)
+            .arg(root_argument)
+            .env_remove("NODE_OPTIONS")
+            .env_remove("NODE_PATH")
             .current_dir(&spec.bundle.web_root)
             .env_clear()
             .envs(
@@ -272,6 +289,14 @@ impl Process {
             });
         }
         let mut child = command.spawn().context("Could not start bundled Node")?;
+        // Persist ownership before the child can receive setup or open storage.
+        if let Err(error) =
+            (spec.record_child)(&spec.data_dir, child.id().context("Missing child PID")?)
+        {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            return Err(error.context("Could not record child ownership"));
+        }
         let mut stdin = child.stdin.take().context("Missing parent-liveness pipe")?;
         let setup = serde_json::json!({ "version":1, "data_dir":spec.data_dir, "socket_path":endpoint.socket,
             "generation":endpoint.generation, "key":hex::encode(key), "lease":spec.lease, "parent_pid":std::process::id(), "port":spec.port });
