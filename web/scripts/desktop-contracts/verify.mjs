@@ -32,7 +32,7 @@ function run(name, executable, args, cwd) {
 try {
   run("schemas", process.execPath, ["--conditions=development", "--import", "tsx", "scripts/desktop-contracts/generate.mjs", "--check", output], web);
   run("node-text-tests", process.execPath, ["--conditions=development", "--import", "tsx", "--test", "scripts/desktop-contracts/text.test.mjs"], web);
-  run("rust-test", cargo, ["+1.99.0", "test", "--manifest-path", manifest, "--locked"], repo);
+  run("rust-test", cargo, ["+1.99.0", "test", "--manifest-path", manifest, "--locked", "-p", "pp-contracts", "-p", "pp-api-types"], repo);
   run("rust-parity", cargo, ["+1.99.0", "run", "--manifest-path", manifest, "--locked", "--bin", "contract-parity", "--", join(output, "node-cases.json"), join(output, "rust-cases.json")], repo);
   run("boundary", "python3", ["rust/scripts/check-boundaries.py", "--self-test"], repo);
   run("rust-fmt", cargo, ["+1.99.0", "fmt", "--manifest-path", manifest, "--check"], repo);
