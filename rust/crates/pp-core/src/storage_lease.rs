@@ -1,4 +1,6 @@
-use anyhow::{Context, Result, bail};
+#[cfg(target_os = "linux")]
+use anyhow::Context;
+use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 use std::{
     io::Write,
@@ -6,6 +8,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[cfg(target_os = "linux")]
 pub(crate) fn process_identity(pid: u32) -> Result<String> {
     let boot = std::fs::read_to_string("/proc/sys/kernel/random/boot_id")?;
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat"))?;
@@ -19,6 +22,18 @@ pub(crate) fn process_identity(pid: u32) -> Result<String> {
         "Invalid process start time"
     );
     Ok(format!("{}:{start}", boot.trim()))
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn process_identity(pid: u32) -> Result<String> {
+    anyhow::ensure!(
+        pid == std::process::id(),
+        "Other process identity unavailable"
+    );
+    static IDENTITY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    Ok(IDENTITY
+        .get_or_init(|| format!("instance:{}", hex::encode(rand::random::<[u8; 16]>())))
+        .clone())
 }
 
 pub(crate) fn owner_is_stale(pid: u32, identity: Option<&str>) -> bool {
@@ -129,6 +144,50 @@ impl Drop for StorageLease {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn own_instance_identity_is_stable_and_lease_can_restart() {
+        let directory = std::env::temp_dir().join(format!(
+            "pp-macos-lease-{}",
+            hex::encode(rand::random::<[u8; 16]>())
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let identity = super::process_identity(std::process::id()).unwrap();
+        assert!(identity.starts_with("instance:"));
+        assert_eq!(
+            identity,
+            super::process_identity(std::process::id()).unwrap()
+        );
+        let lease = super::StorageLease::acquire(&directory).unwrap();
+        assert_eq!(lease.identity, identity);
+        assert!(super::StorageLease::acquire(&directory).is_err());
+        drop(lease);
+        let stale = directory.join(".desktop-lease");
+        std::fs::create_dir(&stale).unwrap();
+        std::fs::write(
+            stale.join("owner.json"),
+            serde_json::to_vec(&super::Owner {
+                pid: std::process::id(),
+                process_identity: "instance:prior-process".into(),
+                instance: hex::encode(rand::random::<[u8; 16]>()),
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        drop(super::StorageLease::acquire(&directory).unwrap());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn unidentified_live_process_is_not_stale() {
+        let pid = unsafe { libc::getppid() } as u32;
+        assert_ne!(pid, std::process::id());
+        assert!(super::process_identity(pid).is_err());
+        assert!(!super::owner_is_stale(pid, Some("different-instance")));
+        assert!(!super::owner_is_stale(pid, None));
+    }
+
     #[test]
     fn matching_process_identity_remains_live() {
         let pid = std::process::id();
