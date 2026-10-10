@@ -1,34 +1,47 @@
-import { isAlias, isScalar, parseAllDocuments, visit } from "yaml";
+import { isAlias, isScalar, LineCounter, parseAllDocuments, visit } from "yaml";
 
 export function yamlRunLines(text) {
-  const lines = [];
-  const documents = parseAllDocuments(text, { keepSourceTokens: true });
+  const lineCounter = new LineCounter();
+  const documents = parseAllDocuments(text, { lineCounter });
   // Malformed YAML still gets a conservative count, without parsing shell text.
   if (documents.some((document) => document.errors.length > 0)) return text.split("\n");
+  const selected = new Set();
+  const flowFields = [];
+  const aliasValues = [];
+  const selectLines = (start, end) => {
+    const first = lineCounter.linePos(start).line - 1;
+    const last = lineCounter.linePos(Math.max(start, end - 1)).line - 1;
+    for (let line = first; line <= last; line += 1) selected.add(line);
+  };
   for (const document of documents) {
     visit(document, {
-      Pair(_key, pair) {
-        if (!isScalar(pair.key) || pair.key.value !== "run") return;
+      Pair(_key, pair, path) {
+        if (!isScalar(pair.key) || pair.key.value !== "run") {
+          if (path.at(-1)?.flow && pair.key?.range && pair.value?.range) {
+            flowFields.push([pair.key.range[0], pair.value.range[1]]);
+          }
+          return;
+        }
         const value = isAlias(pair.value) ? pair.value.resolve(document) : pair.value;
         if (!isScalar(value) || typeof value.value !== "string" || !value.range) return;
-        // Block tokens exclude their YAML header and preserve physical lines.
-        // Inline commands include their whole run line, including YAML comments.
-        let source = value.srcToken?.type === "block-scalar"
-          ? value.srcToken.source
-          : text.slice(value.range[0], value.range[1]);
-        const keyStart = pair.key.range[0];
-        const lineStart = text.lastIndexOf("\n", keyStart - 1) + 1;
-        const newline = text.indexOf("\n", keyStart);
-        const lineEnd = newline === -1 ? text.length : newline;
-        if (isAlias(pair.value)) lines.push(text.slice(lineStart, lineEnd));
-        if (value.srcToken?.type !== "block-scalar" &&
-            value.range[0] >= keyStart && value.range[0] < lineEnd) {
-          const end = text.indexOf("\n", value.range[1]);
-          source = text.slice(lineStart, end === -1 ? text.length : end);
+        // Select complete physical lines, including key-line and end-line comments.
+        selectLines(pair.key.range[0], pair.value.range[1]);
+        if (isAlias(pair.value)) {
+          selectLines(value.range[0], value.range[1]);
+          aliasValues.push([value.range[0], value.range[1]]);
         }
-        lines.push(...source.split("\n"));
       },
     });
   }
-  return lines;
+  const physicalLines = text.split("\n");
+  return [...selected].sort((a, b) => a - b).map((line) => {
+    // Flow mappings can put unrelated fields on a selected run line. Mask only
+    // those fields, retaining comments and scalar content referenced by aliases.
+    const offset = lineCounter.lineStarts[line];
+    return physicalLines[line].split("").map((char, column) => {
+      const index = offset + column;
+      const contains = ([start, end]) => index >= start && index < end;
+      return flowFields.some(contains) && !aliasValues.some(contains) ? " " : char;
+    }).join("");
+  });
 }

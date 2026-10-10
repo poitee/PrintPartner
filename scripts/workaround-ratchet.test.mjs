@@ -371,7 +371,7 @@ for (const header of ["|", "|-", "|+", ">", ">-", ">+", "|2", "|2-", "|2+", "|-2
     for (const prefix of ["run:", "- run:", "  - run:"]) {
       const indent = prefix.indexOf("run");
       const source = [
-        `${prefix} ${header} # TODO header is metadata`,
+        `${prefix} ${header} # TODO key line`,
         `${" ".repeat(indent + 2)}echo TODO`,
         "",
         `${" ".repeat(indent + 2)}echo FIXME`,
@@ -380,7 +380,7 @@ for (const header of ["|", "|-", "|+", ">", ">-", ">+", "|2", "|2-", "|2+", "|-2
         `${" ".repeat(indent + 2)}run: echo TODO not executed`,
       ].join("\n");
       for (const path of ["workflow.yml", "workflow.yaml"]) {
-        assert.deepEqual(countText(source, path), { todoComments: 2, eslintDisable: 0, rustAllow: 0 }, prefix);
+        assert.deepEqual(countText(source, path), { todoComments: 3, eslintDisable: 0, rustAllow: 0 }, prefix);
       }
     }
   });
@@ -388,7 +388,7 @@ for (const header of ["|", "|-", "|+", ">", ">-", ">+", "|2", "|2-", "|2+", "|-2
 
 test("extracts YAML run plain scalars starting on the next line", () => {
   for (const source of ["run:\n  echo TODO", "- run:\n    echo TODO", "run: # FIXME metadata\n  echo TODO"]) {
-    assert.equal(countText(source, "workflow.yml").todoComments, 1);
+    assert.equal(countText(source, "workflow.yml").todoComments, source.startsWith("run: #") ? 2 : 1);
   }
 });
 
@@ -401,6 +401,35 @@ test("counts YAML comments on the whole physical inline run line", () => {
   for (const source of ["run: echo x # TODO a", "- run: echo x # TODO a", 'run: "echo x" # TODO a', "command: &command echo x\nrun: *command # TODO a"]) {
     assert.deepEqual(countText(source, "workflow.yml"), { todoComments: 1, eslintDisable: 0, rustAllow: 0 });
   }
+});
+
+test("counts trailing comments on next-line YAML run values", () => {
+  for (const path of ["workflow.yml", "workflow.yaml"]) {
+    assert.deepEqual(countText("run:\n  echo ok # TODO", path), {
+      todoComments: 1, eslintDisable: 0, rustAllow: 0,
+    });
+  }
+});
+
+test("counts trailing comments on the alias node's own line", () => {
+  for (const run of ["run: *command # TODO", "run:\n  *command # TODO"]) {
+    assert.deepEqual(countText(`command: &command echo ok\n${run}`, "workflow.yml"), {
+      todoComments: 1, eslintDisable: 0, rustAllow: 0,
+    });
+  }
+});
+
+test("counts each physical run line through the value end with comments", () => {
+  const source = ["run: # TODO key", '  "echo ok', "  # FIXME middle", '  ok" # HACK end', "# TODO outside", "name: TODO outside"].join("\n");
+  assert.deepEqual(countText(source, "workflow.yml"), { todoComments: 3, eslintDisable: 0, rustAllow: 0 });
+});
+
+test("excludes non-run fields in flow mappings without dropping comments or aliases", () => {
+  for (const source of ["{ name: TODO, run: echo ok }", "{ run: echo ok, name: TODO }"]) {
+    assert.equal(countText(source, "workflow.yml").todoComments, 0);
+  }
+  assert.equal(countText("{ name: FIXME, run: echo TODO } # HACK", "workflow.yml").todoComments, 1);
+  assert.equal(countText("{ command: &command echo TODO, name: FIXME, run: *command }", "workflow.yml").todoComments, 1);
 });
 
 test("ignores run-like text inside other YAML scalar values", () => {

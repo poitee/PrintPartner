@@ -24,6 +24,7 @@ on:
       - "slicer-sidecar/**"
       - ".github/dependabot.yml"
       - ".github/workflows/**"
+      - ".github/actions/**"
   pull_request:
     paths:
       - "web/**"
@@ -44,6 +45,7 @@ on:
       - "slicer-sidecar/**"
       - ".github/dependabot.yml"
       - ".github/workflows/**"
+      - ".github/actions/**"
 
 permissions:
   contents: read
