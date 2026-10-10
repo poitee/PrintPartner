@@ -54,7 +54,7 @@ Use this index to find the guide for your task. The in-app Help page covers the 
 
 ## Agent workflows
 
-These describe how coding agents work in this repo. Root [`AGENTS.md`](../AGENTS.md) covers Gate and verification evidence; this index ships the longer guides.
+These describe how coding agents work in this repo. [Gate evidence](contributing/gate-evidence.md) covers the PR evidence rule; this index ships the longer guides.
 
 - [Autopilot](agents/autopilot.md)
 - [Domain docs](agents/domain.md)
