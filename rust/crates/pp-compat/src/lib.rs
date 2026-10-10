@@ -195,14 +195,17 @@ impl Process {
         command
             .arg(&spec.bundle.entry)
             .current_dir(&spec.bundle.web_root)
+            .env_clear()
+            .envs(
+                ["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "TZ"]
+                    .iter()
+                    .filter_map(|name| std::env::var_os(name).map(|value| (*name, value))),
+            )
             .env("PP_COMMIT", release::manifest()?.commit)
             .env("PRINT_PARTNER_UPDATE_CHECK", "0")
             .env("AI_ENABLED", "0")
             .env("HOST", "127.0.0.1")
             .env("DEPLOY_MODE", "self-host")
-            .env_remove("DATABASE_URL")
-            .env_remove("MULTI_USER")
-            .env_remove("PRINT_PARTNER_DATA_DIR")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -350,6 +353,7 @@ impl Supervisor {
                             generation: process.endpoint.generation.clone(),
                             pid,
                         });
+                        let ready_since = tokio::time::Instant::now();
                         let mut failures = 0;
                         loop {
                             tokio::select! {
@@ -361,9 +365,17 @@ impl Supervisor {
                                 }
                             }
                         }
+                        // Preserve escalation for repeated crashes, but forget old failures
+                        // once the child has stayed ready for the crash-guard window.
+                        if ready_since.elapsed() >= Duration::from_secs(120) {
+                            attempt = 0;
+                        }
                     }
                     endpoints.send_replace(None);
-                    process.stop().await?;
+                    if let Err(error) = process.stop().await {
+                        states.send_replace(Status::Stopped);
+                        return Err(error);
+                    }
                     logs.event("compat_reaped", 30);
                 }
                 if cancelled.is_cancelled() {

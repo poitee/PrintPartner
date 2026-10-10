@@ -27,7 +27,7 @@ fn launch(data: PathBuf) -> DesktopLaunch {
                 .unwrap_or_else(|| PathBuf::from("/usr/bin/node")),
             entry: web.join("apps/server/dist/current/desktop.js"),
             web_root: web,
-            runtime_version: "3.3.0-web".into(),
+            runtime_version: release["runtime_version"].as_str().unwrap().into(),
             commit: release["commit"].as_str().unwrap().into(),
         },
     }
@@ -140,7 +140,10 @@ async fn protected_real_node_lifecycle() {
     let health: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(health["authenticated"], true);
     assert_eq!(health["authentication_required"], true);
-    assert_eq!(health["version"], "3.3.0-web");
+    assert_eq!(
+        health["version"],
+        launch(data.clone()).bundle.runtime_version
+    );
     let (status, _, bytes) =
         request(&origin, "/auth/me", "GET", Some(cookie), None, None, None).await;
     assert_eq!(status, StatusCode::OK);
@@ -530,6 +533,94 @@ async fn changed_or_missing_built_artifacts_are_rejected() {
     println!(
         "{}",
         serde_json::json!({"case":"measured_release_negatives","changed_frontend_denied":true,"missing_frontend_denied":true,"changed_backend_denied":true,"missing_backend_denied":true,"changed_node_denied":true})
+    );
+}
+
+#[tokio::test]
+async fn cleanup_error_publishes_stopped_and_preserves_failure() {
+    let data = temporary("compat-cleanup-status");
+    let runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
+    let handle = runtime.handle();
+    let mut state = handle.subscribe();
+    let pid = match *state.borrow() {
+        CoreStatus::Ready { pid, .. } => pid,
+        _ => panic!("Runtime was not ready"),
+    };
+    let marker: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(data.join(".desktop-owner.json")).unwrap()).unwrap();
+    let directory = PathBuf::from(marker["runtime_dir"].as_str().unwrap());
+    let socket = std::fs::read_dir(&directory)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "sock")
+        })
+        .unwrap();
+    std::fs::rename(&socket, directory.join("retained-socket")).unwrap();
+    std::fs::create_dir(&socket).unwrap();
+    assert_eq!(unsafe { libc::kill(pid as i32, libc::SIGKILL) }, 0);
+    tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            if matches!(*state.borrow(), CoreStatus::Stopped) {
+                break;
+            }
+            state.changed().await.unwrap();
+        }
+    })
+    .await
+    .unwrap();
+    assert!(handle.recover_compat().await.is_err());
+    let receipt = runtime.shutdown().await;
+    assert!(!receipt.complete());
+    assert!(receipt.errors.contains(&"compat_cleanup_unproved"));
+    assert!(socket.is_dir());
+    println!(
+        "{}",
+        serde_json::json!({"case":"compat_cleanup_terminal_status", "stopped":true, "receipt":receipt})
+    );
+}
+
+#[tokio::test]
+async fn stable_child_resets_backoff_without_erasing_rapid_crash_escalation() {
+    let runtime = CoreRuntime::start(launch(temporary("stable-backoff")))
+        .await
+        .unwrap();
+    let mut state = runtime.handle().subscribe();
+    let mut prior_pid = 0;
+    for (index, expected) in [0, 1, 0].into_iter().enumerate() {
+        let pid = loop {
+            if let CoreStatus::Ready { pid, .. } = *state.borrow()
+                && pid != prior_pid
+            {
+                break pid;
+            }
+            tokio::time::timeout(Duration::from_secs(20), state.changed())
+                .await
+                .unwrap()
+                .unwrap();
+        };
+        prior_pid = pid;
+        if index == 2 {
+            tokio::time::sleep(Duration::from_secs(121)).await;
+        }
+        assert_eq!(unsafe { libc::kill(pid as i32, libc::SIGKILL) }, 0);
+        let attempt = loop {
+            if let CoreStatus::Backoff { attempt } = *state.borrow() {
+                break attempt;
+            }
+            tokio::time::timeout(Duration::from_secs(20), state.changed())
+                .await
+                .unwrap()
+                .unwrap();
+        };
+        assert_eq!(attempt, expected);
+    }
+    let receipt = runtime.shutdown().await;
+    assert!(receipt.complete());
+    println!(
+        "{}",
+        serde_json::json!({"case":"stable_backoff_reset", "observed_attempts":[0,1,0], "stable_seconds":121, "receipt":receipt})
     );
 }
 
