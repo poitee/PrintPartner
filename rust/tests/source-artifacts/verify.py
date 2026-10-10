@@ -72,6 +72,16 @@ def compare(case, command=base, expect=True):
     rows.append({'case': case, 'expectation': 'parity-success' if expect else 'both-reject', 'passed': True})
     return node, rust
 
+command = copy.deepcopy(base)
+command['snapshot']['selection']['omittedFiles'] = [{'path': 'readme.md', 'kind': 'md', 'sizeHintBytes': None, 'reason': 'unknown-document-size'}]
+compare('selected-omitted-case-pair', command)
+command['snapshot']['selection']['omittedFiles'][0]['path'] = 'README.md'
+compare('selected-omitted-exact-duplicate', command, False)
+command['snapshot']['selection']['omittedFiles'] = [
+    {'path': path, 'kind': 'md', 'sizeHintBytes': None, 'reason': 'unknown-document-size'}
+    for path in ['omitted.md', 'OMITTED.md']]
+compare('omitted-case-collision', command, False)
+
 node, rust = compare('nested-unicode-archive-bytes')
 for engine, other in [('rust', 'node'), ('node', 'rust')]:
     command = copy.deepcopy(base)

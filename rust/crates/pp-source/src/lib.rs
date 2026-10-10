@@ -305,13 +305,21 @@ fn validate_request(request: &mut SnapshotRequest) -> Result<()> {
             parent = prefix;
         }
     }
+    let selected_paths: BTreeSet<_> = request
+        .files
+        .iter()
+        .map(|file| file.path.as_str())
+        .collect();
+    let mut omitted_paths = BTreeSet::new();
     for file in &request.selection.omitted_files {
         if matches!(file.kind, FileKind::Stl | FileKind::Artifact)
             || file.size_hint_bytes.is_some_and(|n| n > MAX_SAFE_INTEGER)
         {
             return Err(Error::CorruptSnapshot);
         }
-        if !paths.insert(file.path.0.to_lowercase()) {
+        if selected_paths.contains(file.path.as_str())
+            || !omitted_paths.insert(file.path.0.to_lowercase())
+        {
             return Err(Error::DuplicatePath);
         }
     }
