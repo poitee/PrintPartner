@@ -1,0 +1,9 @@
+---
+source: crates/pp-api-types/tests/autosave_snapshots.rs
+expression: value
+---
+{
+  "category": "invalid_shape",
+  "detail": "invalid type: string \"1\", expected a JSON integer in 1..=10000 at line 1 column 135",
+  "field": "decisions[0]"
+}

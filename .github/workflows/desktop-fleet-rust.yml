@@ -105,6 +105,8 @@ jobs:
         shell: bash
         env:
           MANIFEST: ${{ steps.workspace.outputs.manifest }}
+          # Snapshots are reviewed and committed locally; CI must never accept them.
+          INSTA_UPDATE: 'no'
         run: |
           set -euo pipefail
           start=$SECONDS
