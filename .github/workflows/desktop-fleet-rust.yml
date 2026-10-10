@@ -1,0 +1,101 @@
+name: Desktop Rust (hosted)
+
+on:
+  pull_request:
+    paths:
+      - 'rust/**'
+      - 'web/**'
+      - '.github/workflows/desktop-fleet-rust.yml'
+  workflow_dispatch:
+    inputs:
+      build_jobs:
+        description: Cargo build jobs (repository variable or default 6)
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fleet-rust-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  rust:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CARGO_BUILD_JOBS: ${{ inputs.build_jobs || vars.CARGO_BUILD_JOBS || '6' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Find Rust workspace
+        id: workspace
+        shell: bash
+        run: |
+          if [[ -f rust/Cargo.toml ]]; then
+            echo 'manifest=rust/Cargo.toml' >> "$GITHUB_OUTPUT"
+          else
+            echo 'No Rust workspace (rust/Cargo.toml); skipping.' | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: Swatinem/rust-cache@v2
+        if: steps.workspace.outputs.manifest != ''
+        with:
+          workspaces: rust -> target
+      - uses: taiki-e/install-action@v2
+        if: steps.workspace.outputs.manifest != ''
+        with:
+          tool: nextest
+      - name: Install Linux desktop dependencies
+        if: steps.workspace.outputs.manifest != ''
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev \
+            libayatana-appindicator3-dev librsvg2-dev pkg-config
+      - uses: actions/setup-node@v4
+        if: steps.workspace.outputs.manifest != ''
+        with:
+          node-version: '24.21.0'
+      - name: Build desktop assets and generate measured manifest
+        if: steps.workspace.outputs.manifest != ''
+        shell: bash
+        env:
+          VITE_PRINT_PARTNER_DESKTOP: '1'
+        run: |
+          set -euo pipefail
+          sudo ln -sf "$(command -v node)" /usr/bin/node
+          test "$(/usr/bin/node --version)" = v24.21.0
+          npm --prefix web ci
+          npm --prefix web run build
+          python3 rust/scripts/build-desktop-manifest.py --web web --node /usr/bin/node --output rust/bundle-manifest.json --commit "$GITHUB_SHA"
+      - name: Build Rust
+        if: steps.workspace.outputs.manifest != ''
+        shell: bash
+        env:
+          MANIFEST: ${{ steps.workspace.outputs.manifest }}
+        run: |
+          set -euo pipefail
+          [[ "$CARGO_BUILD_JOBS" =~ ^[1-9][0-9]*$ ]] || { echo 'build_jobs must be a positive integer'; exit 1; }
+          start=$SECONDS
+          cargo build --workspace --locked --manifest-path "$MANIFEST"
+          elapsed=$((SECONDS - start))
+          {
+            echo "Rust build: ${elapsed}s"
+            echo "Runner: $RUNNER_NAME; jobs: $CARGO_BUILD_JOBS"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Test Rust with nextest
+        if: steps.workspace.outputs.manifest != ''
+        shell: bash
+        env:
+          MANIFEST: ${{ steps.workspace.outputs.manifest }}
+        run: |
+          set -euo pipefail
+          start=$SECONDS
+          cargo nextest run --workspace --locked --manifest-path "$MANIFEST"
+          elapsed=$((SECONDS - start))
+          {
+            echo "Rust nextest: ${elapsed}s"
+            echo 'For proof, compare the same commit and inputs: a cache miss (cold), then a cache hit (warm). Warm build + test must take <=50% of cold.'
+          } | tee -a "$GITHUB_STEP_SUMMARY"

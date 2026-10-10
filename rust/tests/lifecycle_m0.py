@@ -20,7 +20,9 @@ def main():
     credentials = fixture / "credentials.json"
     runtime = subprocess.Popen([str(ROOT / "rust/target/debug/pp-server"), "--data", str(fixture / "data"),
                                "--web", str(ROOT / "web"), "--node", "/usr/bin/node", "--commit", COMMIT,
-                               "--test-credential-file", str(credentials)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                               "--test-credential-file", str(credentials)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                               env=dict(os.environ, NODE_OPTIONS="--require=/nonexistent-pp-parent-injection.cjs",
+                                        NODE_PATH="/nonexistent-pp-parent-modules", PP_PARENT_ONLY_SECRET="synthetic-test-value"))
     descendant = None
     try:
         assert select.select([runtime.stdout], [], [], 40)[0]
@@ -46,8 +48,11 @@ def main():
             env = dict(os.environ, PRINT_PARTNER_DATA_DIR=str(fixture / "data"), HOST="127.0.0.1", PORT="0")
             child = subprocess.run(["/usr/bin/node", str(ROOT / "web/apps/server/dist/current" / entry)], env=env, cwd=ROOT / "web", capture_output=True, timeout=15)
             assert child.returncode != 0, entry
-            assert b"owned by the desktop runtime" in child.stderr, (entry, child.stderr[:200])
+            assert b"already owned" in child.stderr or b"owned by the desktop runtime" in child.stderr, (entry, child.stderr[:200])
         child_pid = int(subprocess.check_output(["ps", "--no-headers", "-o", "pid", "--ppid", str(runtime.pid)], text=True).strip())
+        child_environment = Path(f"/proc/{child_pid}/environ").read_bytes().split(b"\0")
+        for name in (b"NODE_OPTIONS", b"NODE_PATH", b"PP_PARENT_ONLY_SECRET"):
+            assert not any(entry.startswith(name + b"=") for entry in child_environment), name
         descendant = subprocess.Popen(["sleep", "120"], process_group=child_pid)
         os.kill(runtime.pid, signal.SIGKILL)
         runtime.wait(timeout=5)
@@ -79,7 +84,7 @@ def main():
                           "parent_pid": runtime.pid, "child_pid": child_pid, "descendant_pid": descendant.pid,
                           "direct_uds_denied": True, "forged_principal_denied": True, "standalone_writers_denied": 3,
                           "child_terminated": child_dead, "descendant_reaped": descendant.poll() is not None, "lock_reacquired": True,
-                          "bootstrap_absent_from_logs": True}))
+                          "bootstrap_absent_from_logs": True, "parent_environment_injection_denied": True}))
     finally:
         if runtime.poll() is None:
             runtime.terminate()

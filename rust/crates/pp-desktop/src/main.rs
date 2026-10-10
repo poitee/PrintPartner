@@ -202,7 +202,9 @@ fn build_tray(
                 CoreStatus::Ready { .. } => "Service ready",
                 CoreStatus::Backoff { .. } => "Service reconnecting",
                 CoreStatus::Guarded => "Service stopped after repeated failures",
+                CoreStatus::Stopping => "Service stopping",
                 CoreStatus::Stopped => "Service stopped",
+                CoreStatus::Failed => "Service failed",
             };
             let guarded = matches!(state, CoreStatus::Guarded);
             let (status, recover) = (status.clone(), recover.clone());
