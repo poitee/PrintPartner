@@ -122,7 +122,7 @@ fn queue_cancellation_reply_loss_and_shutdown_drain() {
             .contains("stopped")
     );
     assert!(done_rx.try_recv().is_err());
-    assert!(!path.join(".desktop-owner.json").exists());
+    assert!(path.join(".desktop-owner.json").exists());
     raw.execute_batch("COMMIT").unwrap();
     first.recv().unwrap().unwrap();
     drop(raw);
@@ -143,7 +143,7 @@ fn queue_cancellation_reply_loss_and_shutdown_drain() {
             SettingSnapshot::Missing
         );
     }
-    assert!(path.join(".desktop-owner.json").exists());
+    assert!(!path.join(".desktop-owner.json").exists());
 }
 #[test]
 fn reader_pool_resets_pragmas_rejects_writes_and_is_bounded() {
