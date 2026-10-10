@@ -82,7 +82,8 @@ try {
   assert.equal(await page.evaluate(() => globalThis.document.documentElement.scrollWidth > globalThis.innerWidth), false);
   assert.deepEqual(errors, []);
   const recoveryPage = await browser.newPage();
-  await recoveryPage.routeWebSocket(/\/jobs\/[^/]+\/events/, (socket) => socket.close());
+  // Disable the actual job stream so WebSocket completion cannot race the failed HTTP poll.
+  await recoveryPage.routeWebSocket(/\/ws\/jobs\/[^/?]+$/, (socket) => socket.close());
   const jobStatus = /\/jobs\/[^/?]+$/;
   await recoveryPage.route(jobStatus, (route) => route.request().method() === "GET"
     ? route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "Test connection interrupted" }) })
