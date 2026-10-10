@@ -1,0 +1,54 @@
+{
+  "commit": "6e8be0bb3ff71fd15e33c1242523705d35129c6f",
+  "initial": {
+    "evidence": {
+      "started": "2026-10-10T13:04:24.657Z",
+      "sockets": [
+        {
+          "url": "ws://localhost:5173/ws/jobs/gre510-missing-evidence",
+          "created": "2026-10-10T13:04:26.839Z",
+          "open": "2026-10-10T13:04:27.055Z",
+          "code": 1008,
+          "reason": "Job not found",
+          "closed": "2026-10-10T13:04:27.065Z"
+        }
+      ],
+      "polls": [
+        {
+          "url": "http://localhost:5173/jobs/gre510-missing-evidence",
+          "at": "2026-10-10T13:04:26.839Z",
+          "aborted": "2026-10-10T13:04:27.065Z"
+        }
+      ],
+      "startInjection": "Only the start response is replaced with an unknown id; the WebSocket reaches the real local server."
+    },
+    "visible": true,
+    "observed": "2026-10-10T13:04:27.996Z"
+  },
+  "afterObservation": {
+    "evidence": {
+      "started": "2026-10-10T13:04:24.657Z",
+      "sockets": [
+        {
+          "url": "ws://localhost:5173/ws/jobs/gre510-missing-evidence",
+          "created": "2026-10-10T13:04:26.839Z",
+          "open": "2026-10-10T13:04:27.055Z",
+          "code": 1008,
+          "reason": "Job not found",
+          "closed": "2026-10-10T13:04:27.065Z"
+        }
+      ],
+      "polls": [
+        {
+          "url": "http://localhost:5173/jobs/gre510-missing-evidence",
+          "at": "2026-10-10T13:04:26.839Z",
+          "aborted": "2026-10-10T13:04:27.065Z"
+        }
+      ],
+      "startInjection": "Only the start response is replaced with an unknown id; the WebSocket reaches the real local server."
+    },
+    "observed": "2026-10-10T13:05:42.937Z",
+    "jobSocketCount": 1,
+    "pollCount": 1
+  }
+}
