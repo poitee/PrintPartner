@@ -486,7 +486,7 @@ pub struct EffectReceipt {
     pub no_effect: bool,
     pub receipt: Option<ResultArtifact>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) checklist_completion: Option<ChecklistCompletionClaim>,
+    pub(crate) checklist_completion: Option<Box<ChecklistCompletionClaim>>,
 }
 fn is_false(value: &bool) -> bool {
     !*value

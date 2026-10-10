@@ -2311,7 +2311,10 @@ pub(crate) fn user_with_authority(
             );
             ensure!(
                 decision != Decision::ConfirmSucceeded
-                    || job.kind != JobKind::ExportChecklistHtml,
+                    || job
+                        .effects
+                        .iter()
+                        .all(|effect| effect.checklist_completion.is_none()),
                 "Checklist completion requires its owning reconciler"
             );
             ensure!(
@@ -2935,10 +2938,6 @@ fn advance(
         }
         WorkerOperation::BeginEffect(intent) => {
             ensure!(
-                job.kind != JobKind::ExportChecklistHtml,
-                "Checklist effects require owning admission"
-            );
-            ensure!(
                 !job.cancel_requested
                     && job.state == PersistentState::Running
                     && job.effects.len() < 16,
@@ -3060,7 +3059,11 @@ fn advance(
         }
         WorkerOperation::Finish(result) => {
             ensure!(
-                !matches!(job.kind, JobKind::Sync | JobKind::ExportChecklistHtml),
+                job.kind != JobKind::Sync
+                    && job
+                        .effects
+                        .iter()
+                        .all(|effect| effect.checklist_completion.is_none()),
                 "Job requires its owning finalizer"
             );
             ensure!(
@@ -3087,7 +3090,11 @@ fn advance(
         }
         WorkerOperation::FinishPublic { artifact, result } => {
             ensure!(
-                !matches!(job.kind, JobKind::Sync | JobKind::ExportChecklistHtml),
+                job.kind != JobKind::Sync
+                    && job
+                        .effects
+                        .iter()
+                        .all(|effect| effect.checklist_completion.is_none()),
                 "Job requires its owning finalizer"
             );
             ensure!(

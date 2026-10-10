@@ -149,21 +149,6 @@ fn reconciliations(owner: &WriterOwner, id: &str) -> Vec<ReconciliationRecord> {
         _ => panic!("reconciliations"),
     }
 }
-fn history(owner: &WriterOwner, id: &str) -> Vec<HistoryEntry> {
-    match call(
-        owner,
-        UserOperation::History {
-            job_id: id.into(),
-            before_version: None,
-            limit: 200,
-        },
-    )
-    .unwrap()
-    {
-        Outcome::History(entries) => entries,
-        _ => panic!("history"),
-    }
-}
 fn reconcile(
     owner: &WriterOwner,
     record: &JobRecord,
@@ -4073,111 +4058,93 @@ fn rich_completed_result_survives_read_list_and_orderly_reopen() {
 }
 
 #[test]
-fn checklist_generic_effect_and_success_operations_refuse_without_mutation() {
-    let (path, owner) = fixture();
-    let queued = enqueue(
-        &owner,
-        "checklist-generic-refusal",
-        Payload::ExportChecklistHtml { profile_id: 7 },
-    );
-    let worker = owner.job_worker(admission()).unwrap();
-    let mut lease = worker.claim().unwrap().unwrap().lease;
-    let running = get(&owner, &queued.job_id);
-    let running_history = history(&owner, &queued.job_id);
-
-    let begin = worker
-        .update(
-            &mut lease,
-            WorkerOperation::BeginEffect(intent(
-                EffectOperation::LocalArtifact,
-                "checklists/7/result.html",
-            )),
-        )
-        .unwrap_err();
-    assert!(begin.to_string().contains("owning admission"));
-    let finish = worker
-        .update(&mut lease, WorkerOperation::Finish(None))
-        .unwrap_err();
-    assert!(finish.to_string().contains("owning finalizer"));
-    let finish_public = worker
-        .update(
-            &mut lease,
-            WorkerOperation::FinishPublic {
-                artifact: None,
-                result: Box::new(CompletedResult::ChecklistHtml(ChecklistHtmlResult {
-                    path: "checklists/7/result.html".into(),
-                    download_url: None,
-                    part_count: 0,
-                    thumb_count: 0,
-                    plan_version: None,
-                    revision_id: None,
-                })),
-            },
-        )
-        .unwrap_err();
-    assert!(finish_public.to_string().contains("owning finalizer"));
-    let confirm = call(
-        &owner,
-        UserOperation::Reconcile {
-            job_id: queued.job_id.clone(),
-            expected_version: running.state_version,
-            expected_generation: running.generation,
-            effect_hash: "b".repeat(64),
-            decision: Decision::ConfirmSucceeded,
-            receipt: Some(receipt("checklists/7/result.html")),
-        },
-    )
-    .err()
-    .expect("checklist reconciliation should refuse without owning reconciler");
-    assert!(confirm.to_string().contains("owning reconciler"));
-    let after_refusals = get(&owner, &queued.job_id);
-    assert_eq!(after_refusals.state, running.state);
-    assert_eq!(after_refusals.state_version, running.state_version);
-    assert_eq!(after_refusals.effects, running.effects);
-    assert_eq!(after_refusals.result, running.result);
-    assert_eq!(after_refusals.public_result, running.public_result);
-    assert_eq!(
-        serde_json::to_value(history(&owner, &queued.job_id)).unwrap(),
-        serde_json::to_value(&running_history).unwrap()
-    );
-    owner.shutdown().unwrap();
-
-    let owner = WriterOwner::open(&path, Limits::default()).unwrap().0;
-    let reopened = get(&owner, &queued.job_id);
-    assert_eq!(reopened.state, PersistentState::Queued);
-    assert_eq!(reopened.state_version, running.state_version + 1);
-    assert_eq!(reopened.generation, running.generation + 1);
-    assert_eq!(reopened.effects, running.effects);
-    assert_eq!(reopened.result, running.result);
-    assert_eq!(reopened.public_result, running.public_result);
-    let reopened_history = history(&owner, &queued.job_id);
-    assert_eq!(reopened_history.len(), running_history.len() + 1);
-    assert_eq!(reopened_history[0].event, "attempt_recovered");
-    assert_eq!(reopened_history[0].version, reopened.state_version);
-    assert_eq!(
-        serde_json::to_value(&reopened_history[1..]).unwrap(),
-        serde_json::to_value(&running_history).unwrap()
-    );
-    owner.shutdown().unwrap();
-}
-
-#[test]
-fn checklist_legacy_claimless_reconciliation_refuses_without_mutation() {
-    let (path, owner) = fixture();
-    let (_, token) = register(&owner, "legacy-checklist@example.com");
-    let queued = job(
-        session_call(
+fn checklist_claimless_job_completes_through_generic_effect_and_finalizers() {
+    for public in [false, true] {
+        let (path, owner) = fixture();
+        let (_, token) = register(&owner, "checklist-worker@example.com");
+        let queued = job(session_call(
             &owner,
             policy(),
             &token,
             UserOperation::Enqueue {
-                key: "legacy-checklist-reconciliation".into(),
+                key: "checklist-generic-completion".into(),
                 payload_version: 1,
                 payload: Payload::ExportChecklistHtml { profile_id: 7 },
             },
         )
-        .unwrap(),
-    );
+        .unwrap());
+        let worker = owner.job_worker_with_policy(policy(), admission()).unwrap();
+        let mut lease = worker.claim().unwrap().unwrap().lease;
+        let target = "checklists/7/result.html";
+        let admitted = worker
+            .update(
+                &mut lease,
+                WorkerOperation::BeginEffect(intent(EffectOperation::LocalArtifact, target)),
+            )
+            .unwrap();
+        assert_eq!(admitted.state, PersistentState::EffectAdmitted);
+        assert!(
+            serde_json::to_value(&admitted.effects[0])
+                .unwrap()
+                .get("checklist_completion")
+                .is_none()
+        );
+        worker
+            .update(&mut lease, WorkerOperation::ConfirmEffect(receipt(target)))
+            .unwrap();
+        let result = CompletedResult::ChecklistHtml(ChecklistHtmlResult {
+            path: target.into(),
+            download_url: None,
+            part_count: 4,
+            thumb_count: 2,
+            plan_version: None,
+            revision_id: None,
+        });
+        let operation = if public {
+            WorkerOperation::FinishPublic {
+                artifact: Some(receipt(target)),
+                result: Box::new(result.clone()),
+            }
+        } else {
+            WorkerOperation::Finish(Some(receipt(target)))
+        };
+        let finished = worker.update(&mut lease, operation).unwrap();
+        assert_eq!(finished.state, PersistentState::Succeeded);
+        assert_eq!(finished.result, Some(receipt(target)));
+        assert_eq!(finished.public_result, public.then_some(result));
+        owner.shutdown().unwrap();
+        let owner = WriterOwner::open(&path, Limits::default()).unwrap().0;
+        let reopened = job(session_call(
+            &owner,
+            policy(),
+            &token,
+            UserOperation::Get {
+                job_id: queued.job_id,
+            },
+        )
+        .unwrap());
+        assert_eq!(reopened.state, PersistentState::Succeeded);
+        assert_eq!(reopened.effects, finished.effects);
+        assert_eq!(reopened.public_result, finished.public_result);
+        owner.shutdown().unwrap();
+    }
+}
+
+#[test]
+fn checklist_legacy_claimless_reconciliation_completes() {
+    let (path, owner) = fixture();
+    let (_, token) = register(&owner, "legacy-checklist@example.com");
+    let queued = job(session_call(
+        &owner,
+        policy(),
+        &token,
+        UserOperation::Enqueue {
+            key: "legacy-checklist-reconciliation".into(),
+            payload_version: 1,
+            payload: Payload::ExportChecklistHtml { profile_id: 7 },
+        },
+    )
+    .unwrap());
     let worker = owner.job_worker_with_policy(policy(), admission()).unwrap();
     let claimed = worker.claim().unwrap().unwrap().job;
     assert_eq!(claimed.job_id, queued.job_id);
@@ -4231,17 +4198,15 @@ fn checklist_legacy_claimless_reconciliation_refuses_without_mutation() {
     drop(raw);
 
     let owner = WriterOwner::open(&path, Limits::default()).unwrap().0;
-    let before = job(
-        session_call(
-            &owner,
-            policy(),
-            &token,
-            UserOperation::Get {
-                job_id: queued.job_id.clone(),
-            },
-        )
-        .unwrap(),
-    );
+    let before = job(session_call(
+        &owner,
+        policy(),
+        &token,
+        UserOperation::Get {
+            job_id: queued.job_id.clone(),
+        },
+    )
+    .unwrap());
     assert_eq!(before.state, PersistentState::ReconciliationRequired);
     assert_eq!(before.effects.len(), 1);
     let read_history = || match session_call(
@@ -4260,7 +4225,7 @@ fn checklist_legacy_claimless_reconciliation_refuses_without_mutation() {
         _ => panic!("history"),
     };
     let before_history = read_history();
-    let error = session_call(
+    session_call(
         &owner,
         policy(),
         &token,
@@ -4277,31 +4242,23 @@ fn checklist_legacy_claimless_reconciliation_refuses_without_mutation() {
             }),
         },
     )
-    .err()
-    .expect("legacy checklist reconciliation should refuse without owning reconciler");
-    assert!(error.to_string().contains("owning reconciler"));
-    let after = job(
-        session_call(
-            &owner,
-            policy(),
-            &token,
-            UserOperation::Get {
-                job_id: queued.job_id.clone(),
-            },
-        )
-        .unwrap(),
-    );
-    assert_eq!(after.state, before.state);
-    assert_eq!(after.state_version, before.state_version);
+    .unwrap();
+    let after = job(session_call(
+        &owner,
+        policy(),
+        &token,
+        UserOperation::Get {
+            job_id: queued.job_id.clone(),
+        },
+    )
+    .unwrap());
+    assert_eq!(after.state, PersistentState::Succeeded);
+    assert_eq!(after.state_version, before.state_version + 1);
     assert_eq!(after.generation, before.generation);
-    assert_eq!(after.effects, before.effects);
-    assert_eq!(after.result, before.result);
-    assert_eq!(after.public_result, before.public_result);
-    assert_eq!(after.recovery, before.recovery);
-    assert_eq!(
-        serde_json::to_value(read_history()).unwrap(),
-        serde_json::to_value(before_history).unwrap()
-    );
+    assert!(after.effects[0].confirmed);
+    assert_eq!(after.result.as_ref(), after.effects[0].receipt.as_ref());
+    assert!(after.public_result.is_none());
+    assert_eq!(read_history().len(), before_history.len() + 1);
     owner.shutdown().unwrap();
 }
 fn deletion(

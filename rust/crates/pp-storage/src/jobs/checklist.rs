@@ -26,7 +26,9 @@ fn validate_claim(
     claim: &ChecklistCompletionClaim,
 ) -> Result<()> {
     let Payload::ExportChecklistHtml { profile_id } = &job.payload else {
-        return Err(anyhow::anyhow!("Checklist claim requires checklist payload"));
+        return Err(anyhow::anyhow!(
+            "Checklist claim requires checklist payload"
+        ));
     };
     ensure!(
         job.kind == JobKind::ExportChecklistHtml && claim.version == 1,
@@ -69,7 +71,10 @@ fn validate_claim(
             digest(&basis.required_unit_mapping_digest)?;
         }
         None => ensure!(
-            claim.result.plan_version.is_none() && claim.result.revision_id.is_none(),
+            claim.result.plan_version.is_none()
+                && claim.result.revision_id.is_none()
+                && claim.result.part_count == 0
+                && claim.result.thumb_count == 0,
             "Checklist Empty basis mismatch"
         ),
     }
@@ -82,7 +87,9 @@ fn validate_claim(
     }
     if job.state == PersistentState::Succeeded {
         let EffectOutcome::Confirmed(receipt) = effect.outcome()? else {
-            return Err(anyhow::anyhow!("Succeeded checklist claim requires confirmed receipt"));
+            return Err(anyhow::anyhow!(
+                "Succeeded checklist claim requires confirmed receipt"
+            ));
         };
         ensure!(
             job.result.as_ref() == Some(receipt)
@@ -139,12 +146,10 @@ mod tests {
         let result = super::super::ChecklistHtmlResult {
             path: target.clone(),
             download_url: None,
-            part_count: 4,
-            thumb_count: 2,
+            part_count: if accepted_basis.is_some() { 4 } else { 0 },
+            thumb_count: if accepted_basis.is_some() { 2 } else { 0 },
             plan_version: accepted_basis.as_ref().map(|value| value.plan_version),
-            revision_id: accepted_basis
-                .as_ref()
-                .map(|value| value.plan_revision_id),
+            revision_id: accepted_basis.as_ref().map(|value| value.plan_revision_id),
         };
         JobRecord {
             job_id: "checklist-claim".into(),
@@ -174,13 +179,12 @@ mod tests {
                 confirmed: false,
                 no_effect: false,
                 receipt: None,
-                checklist_completion: Some(ChecklistCompletionClaim {
+                checklist_completion: Some(Box::new(ChecklistCompletionClaim {
                     version: 1,
                     attempt: 1,
                     generation: 1,
                     tenant_binding:
-                        "e6af687dc0430653124c67740afc9f0f6ea2a32dd24fe328f2680145a08ee5d4"
-                            .into(),
+                        "e6af687dc0430653124c67740afc9f0f6ea2a32dd24fe328f2680145a08ee5d4".into(),
                     capture: ChecklistCaptureSeal {
                         capture_id,
                         accepted_basis,
@@ -188,7 +192,7 @@ mod tests {
                     content_sha256: content,
                     tenant_relative_target: target,
                     result,
-                }),
+                })),
             }],
             result: None,
             public_result: None,
@@ -238,6 +242,18 @@ mod tests {
             });
             assert!(decode_result(&job).is_ok());
         }
+    }
+
+    #[test]
+    fn empty_claim_rejects_nonzero_part_or_thumb_counts() {
+        for (part_count, thumb_count) in [(1, 0), (0, 1), (1, 1)] {
+            let mut job = claimed_job(None);
+            let result = &mut job.effects[0].checklist_completion.as_mut().unwrap().result;
+            result.part_count = part_count;
+            result.thumb_count = thumb_count;
+            assert!(decode_result(&job).is_err());
+        }
+        assert!(decode_result(&claimed_job(None)).is_ok());
     }
 
     #[test]
