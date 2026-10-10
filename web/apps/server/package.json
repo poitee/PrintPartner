@@ -23,7 +23,7 @@
     "@fastify/swagger": "^9.7.0",
     "@fastify/swagger-ui": "^6.1.1",
     "@fastify/websocket": "^11.2.0",
-    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@modelcontextprotocol/sdk": "^1.31.0",
     "@octokit/rest": "^22.0.1",
     "@print-partner/contracts": "*",
     "@print-partner/domain": "*",
@@ -55,7 +55,8 @@
     "tsx": "^4.23.13",
     "typescript": "^6.0.3",
     "vite": "^8.2.2",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.11",
+    "ws": "8.21.3"
   },
   "description": "Print Partner Fastify API — SQLite/Postgres, jobs, MCP attach, printer/Spoolman/slicer integrations."
 }

@@ -139,12 +139,14 @@ function descriptorStayedStable(
   opened: Stats,
 ): boolean {
   const afterRead = fstatSync(descriptor);
+  // Atomic replacement unlinks the opened inode, changing ctime but not bytes.
+  const unlinkedByReplacement = opened.nlink > 0 && afterRead.nlink === 0;
   return (
     afterRead.dev === opened.dev &&
     afterRead.ino === opened.ino &&
     afterRead.size === opened.size &&
     afterRead.mtimeMs === opened.mtimeMs &&
-    afterRead.ctimeMs === opened.ctimeMs
+    (afterRead.ctimeMs === opened.ctimeMs || unlinkedByReplacement)
   );
 }
 
