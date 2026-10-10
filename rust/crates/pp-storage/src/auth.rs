@@ -294,21 +294,25 @@ impl WriterOwner {
         }
     }
     pub fn auth_with_policy(&self, policy: AuthPolicy) -> Result<AuthClient> {
-        ensure!(
-            !matches!(
-                (policy.session_tenant, policy.first_user),
-                (
-                    SessionTenantPolicy::SingleAccountDefault,
-                    FirstUserTenant::ClaimDefault
-                )
-            ),
-            AuthFailure::InvalidInput(AuthInputFailure::Policy)
-        );
+        validate_policy(policy)?;
         Ok(AuthClient {
             storage: self.client(),
             policy,
         })
     }
+}
+pub(crate) fn validate_policy(policy: AuthPolicy) -> Result<()> {
+    ensure!(
+        !matches!(
+            (policy.session_tenant, policy.first_user),
+            (
+                SessionTenantPolicy::SingleAccountDefault,
+                FirstUserTenant::ClaimDefault
+            )
+        ),
+        AuthFailure::InvalidInput(AuthInputFailure::Policy)
+    );
+    Ok(())
 }
 impl AuthClient {
     pub fn submit(
@@ -926,3 +930,50 @@ pub(super) fn execute(
 
 #[cfg(test)]
 mod tests;
+
+pub(crate) fn read_session_tenant(
+    tx: &Transaction<'_>,
+    secret: &Secret,
+    policy: AuthPolicy,
+) -> Result<String> {
+    ensure!(
+        !secret.expose().is_empty() && secret.expose().len() <= 4096,
+        "Authentication required"
+    );
+    policy::tenant_for_authenticated_actor(
+        tx,
+        &actor(tx, &crypto::digest(secret.expose()))?,
+        policy,
+    )
+}
+pub(crate) fn read_key_tenant(
+    tx: &Transaction<'_>,
+    routed_tenant: &str,
+    secret: &Secret,
+) -> Result<String> {
+    keys::read_tenant(tx, routed_tenant, secret)
+}
+pub(crate) fn catalog_timestamp() -> String {
+    timestamp(0)
+}
+pub(crate) fn catalog_tenant(
+    tx: &Transaction<'_>,
+    credentials: crate::catalog::Credentials,
+    policy: AuthPolicy,
+) -> Result<String> {
+    match credentials {
+        crate::catalog::Credentials::Session(token) => {
+            ensure!(token.expose().len() <= 4096, "Invalid session");
+            read_session_tenant(tx, &token, policy)
+        }
+        crate::catalog::Credentials::Key { tenant_id, key } => {
+            match keys::resolve(tx, &tenant_id, key)? {
+                Outcome::KeyResolved {
+                    principal: Some(principal),
+                    ..
+                } => Ok(principal.tenant_id),
+                _ => bail!("Authentication required"),
+            }
+        }
+    }
+}

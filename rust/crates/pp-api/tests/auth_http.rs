@@ -964,3 +964,347 @@ async fn stopped_writer_is_service_unavailable() {
     task.await.unwrap();
     std::fs::remove_dir_all(directory).unwrap();
 }
+
+fn domain_policy() -> AuthPolicy {
+    AuthPolicy {
+        registration: RegistrationPolicy::FirstAccountOnly,
+        session_tenant: SessionTenantPolicy::SingleAccountDefault,
+        first_user: FirstUserTenant::NewUser,
+    }
+}
+fn domain_catalog(owner: &WriterOwner, token: &str) -> pp_storage::catalog::SourceCatalogClient {
+    owner
+        .source_catalog_with_policy(
+            pp_storage::catalog::Credentials::Session(secret(token)),
+            domain_policy(),
+        )
+        .unwrap()
+}
+fn domain_read(
+    client: &pp_storage::read_model::ReadClient,
+    token: &str,
+) -> anyhow::Result<pp_storage::read_model::Batch> {
+    client.read(
+        pp_storage::read_model::Credential::Session(secret(token)),
+        &[1],
+        &AtomicBool::new(false),
+        Duration::from_secs(1),
+    )
+}
+fn domain_key_read(
+    client: &pp_storage::read_model::ReadClient,
+    tenant: &str,
+    key: &str,
+) -> anyhow::Result<pp_storage::read_model::Batch> {
+    client.read(
+        pp_storage::read_model::Credential::ApiKey {
+            routed_tenant: tenant.into(),
+            secret: secret(key),
+        },
+        &[1],
+        &AtomicBool::new(false),
+        Duration::from_secs(1),
+    )
+}
+fn domain_key_catalog(
+    owner: &WriterOwner,
+    tenant: &str,
+    key: &str,
+) -> pp_storage::catalog::SourceCatalogClient {
+    owner
+        .source_catalog_with_policy(
+            pp_storage::catalog::Credentials::Key {
+                tenant_id: tenant.into(),
+                key: secret(key),
+            },
+            domain_policy(),
+        )
+        .unwrap()
+}
+async fn domain_server() -> Server {
+    let directory = std::env::temp_dir().join(format!("pp-domain-test-{}", random()));
+    std::fs::create_dir_all(directory.join("repos/1/revisions/accepted")).unwrap();
+    std::fs::write(
+        directory.join("print-partner.db"),
+        include_bytes!("../../pp-storage/tests/fixtures/accepted-plan-node.db"),
+    )
+    .unwrap();
+    {
+        let db = rusqlite::Connection::open(directory.join("print-partner.db")).unwrap();
+        db.execute_batch("DELETE FROM sessions; DELETE FROM users;")
+            .unwrap();
+    }
+    let owner = WriterOwner::open(&directory, Limits::default()).unwrap().0;
+    Server::from_owner(
+        owner,
+        directory,
+        RegistrationPolicy::FirstAccountOnly,
+        true,
+        false,
+        None,
+    )
+    .await
+}
+#[tokio::test]
+async fn public_cookie_catalog_and_accepted_reads_share_default_tenant() {
+    use pp_storage::{
+        catalog::{CreateSource, Outcome as CatalogOutcome, Request as CatalogRequest},
+        read_model::AcceptedRead,
+    };
+    let server = domain_server().await;
+    let registered = server.register("domain@example.test").await;
+    assert_eq!(registered.status(), 200);
+    let registered: Value = registered.json().await.unwrap();
+    let account = registered["user"]["user_id"].as_str().unwrap();
+    assert_eq!(account.len(), 36);
+    assert_ne!(account, "default");
+    let login = server
+        .request(
+            Method::POST,
+            "/auth/login",
+            Some(json!({"email":"domain@example.test", "password":"password-1234"})),
+            None,
+        )
+        .await;
+    assert_eq!(login.status(), 200);
+    let browser_cookie = cookie(&login);
+    let token = browser_cookie.strip_prefix("pp_session=").unwrap();
+    let catalog = domain_catalog(&server.owner, token);
+    let reader = server
+        .owner
+        .accepted_reads_with_policy(domain_policy())
+        .unwrap();
+    let before = domain_read(&reader, token).unwrap();
+    let AcceptedRead::Ready { snapshot } = &before.builds[0].accepted else {
+        panic!("existing accepted graph is ready")
+    };
+    let accepted_before = serde_json::to_value(snapshot).unwrap();
+    let CatalogOutcome::Sources(existing) = catalog.execute(CatalogRequest::List {}).unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(existing[0].id, 1);
+    let CatalogOutcome::Source(Some(created)) = catalog
+        .execute(CatalogRequest::Create {
+            source: CreateSource {
+                name: "Authenticated source".into(),
+                ..Default::default()
+            },
+        })
+        .unwrap()
+    else {
+        panic!()
+    };
+    assert_ne!(created.id, 1);
+    assert!(
+        domain_catalog(&server.owner, "invalid")
+            .execute(CatalogRequest::List {})
+            .is_err()
+    );
+    assert!(domain_read(&reader, "invalid").is_err());
+    let neutral = server.owner.accepted_reads();
+    assert!(matches!(
+        domain_read(&neutral, token).unwrap().builds[0].accepted,
+        AcceptedRead::Missing
+    ));
+    let CatalogOutcome::Sources(neutral_sources) = server
+        .owner
+        .source_catalog(pp_storage::catalog::Credentials::Session(secret(token)))
+        .execute(CatalogRequest::List {})
+        .unwrap()
+    else {
+        panic!()
+    };
+    assert!(neutral_sources.is_empty());
+    assert!(matches!(
+        domain_read(&reader, token).unwrap().builds[0].accepted,
+        AcceptedRead::Ready { .. }
+    ));
+    let key = server
+        .request(
+            Method::POST,
+            "/settings/api-keys",
+            Some(json!({})),
+            Some(&browser_cookie),
+        )
+        .await;
+    assert_eq!(key.status(), 201);
+    let key: Value = key.json().await.unwrap();
+    let raw = key["key"].as_str().unwrap();
+    let key_catalog = domain_key_catalog(&server.owner, "default", raw);
+    assert!(matches!(
+        domain_key_read(&reader, "default", raw).unwrap().builds[0].accepted,
+        AcceptedRead::Ready { .. }
+    ));
+    key_catalog
+        .execute(CatalogRequest::Update {
+            id: created.id,
+            patch: pp_storage::catalog::SourcePatch {
+                name: Some("Key source".into()),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    assert!(domain_key_read(&reader, account, raw).is_err());
+    assert!(
+        domain_key_catalog(&server.owner, account, raw)
+            .execute(CatalogRequest::List {})
+            .is_err()
+    );
+    let revoked = server
+        .request(
+            Method::DELETE,
+            &format!("/settings/api-keys/{}", key["id"].as_str().unwrap()),
+            None,
+            Some(&browser_cookie),
+        )
+        .await;
+    assert_eq!(revoked.status(), 200);
+    assert!(domain_key_read(&reader, "default", raw).is_err());
+    assert!(key_catalog.execute(CatalogRequest::List {}).is_err());
+    let changed = server
+        .request(
+            Method::POST,
+            "/auth/change-password",
+            Some(json!({"current_password":"password-1234","new_password":"password-5678"})),
+            Some(&browser_cookie),
+        )
+        .await;
+    assert_eq!(changed.status(), 200);
+    let changed_cookie = cookie(&changed);
+    let new_token = changed_cookie.strip_prefix("pp_session=").unwrap();
+    assert!(domain_read(&reader, token).is_err());
+    assert!(catalog.execute(CatalogRequest::List {}).is_err());
+    let new_catalog = domain_catalog(&server.owner, new_token);
+    new_catalog.execute(CatalogRequest::List {}).unwrap();
+    let after = domain_read(&reader, new_token).unwrap();
+    let AcceptedRead::Ready { snapshot } = &after.builds[0].accepted else {
+        panic!()
+    };
+    assert_eq!(serde_json::to_value(snapshot).unwrap(), accepted_before);
+    let logout = server
+        .request(
+            Method::POST,
+            "/auth/logout",
+            Some(json!({})),
+            Some(&changed_cookie),
+        )
+        .await;
+    assert_eq!(logout.status(), 200);
+    assert!(domain_read(&reader, new_token).is_err());
+    assert!(new_catalog.execute(CatalogRequest::List {}).is_err());
+    let directory = server.stop().await;
+    let owner = WriterOwner::open(&directory, Limits::default()).unwrap().0;
+    let server = Server::from_owner(
+        owner,
+        directory,
+        RegistrationPolicy::FirstAccountOnly,
+        true,
+        false,
+        None,
+    )
+    .await;
+    let login = server
+        .request(
+            Method::POST,
+            "/auth/login",
+            Some(json!({"email":"domain@example.test", "password":"password-5678"})),
+            None,
+        )
+        .await;
+    assert_eq!(login.status(), 200);
+    let restarted_cookie = cookie(&login);
+    let restarted_token = restarted_cookie.strip_prefix("pp_session=").unwrap();
+    let restarted_reader = server
+        .owner
+        .accepted_reads_with_policy(domain_policy())
+        .unwrap();
+    let restarted = domain_read(&restarted_reader, restarted_token).unwrap();
+    let AcceptedRead::Ready { snapshot } = &restarted.builds[0].accepted else {
+        panic!()
+    };
+    assert_eq!(serde_json::to_value(snapshot).unwrap(), accepted_before);
+    let CatalogOutcome::Source(Some(persisted)) = domain_catalog(&server.owner, restarted_token)
+        .execute(CatalogRequest::Get { id: created.id })
+        .unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(persisted.name, "Key source");
+    assert!(domain_key_read(&restarted_reader, "default", raw).is_err());
+    assert!(domain_read(&restarted_reader, new_token).is_err());
+    let directory = server.stop().await;
+    {
+        let db = rusqlite::Connection::open(directory.join("print-partner.db")).unwrap();
+        let build_tenant: String = db
+            .query_row("SELECT tenant_id FROM build_profiles WHERE id=1", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(build_tenant, "default");
+        let sources: Vec<String> = db
+            .prepare("SELECT tenant_id FROM projects ORDER BY id")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert!(sources.iter().all(|tenant| tenant == "default"));
+        let stored: String = db
+            .query_row("SELECT id FROM users", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(stored, account);
+    }
+    std::fs::remove_dir_all(directory).unwrap();
+}
+#[tokio::test]
+async fn imported_multiple_accounts_close_all_session_domain_clients() {
+    use pp_storage::catalog::Request as CatalogRequest;
+    let server = domain_server().await;
+    let registered = server.register("domain@example.test").await;
+    let browser_cookie = cookie(&registered);
+    let token = browser_cookie.strip_prefix("pp_session=").unwrap();
+    let catalog = domain_catalog(&server.owner, token);
+    let reader = server
+        .owner
+        .accepted_reads_with_policy(domain_policy())
+        .unwrap();
+    domain_read(&reader, token).unwrap();
+    let neutral = server.owner.auth(FirstUserTenant::NewUser);
+    call(
+        &neutral,
+        Request::Register {
+            email: "imported@example.test".into(),
+            display_name: "Imported".into(),
+            password: secret("password-1234"),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        server
+            .request(Method::GET, "/auth/me", None, Some(&browser_cookie))
+            .await
+            .status(),
+        403
+    );
+    assert!(
+        domain_read(&reader, token)
+            .unwrap_err()
+            .to_string()
+            .contains("owner mapping")
+    );
+    assert!(
+        catalog
+            .execute(CatalogRequest::List {})
+            .unwrap_err()
+            .to_string()
+            .contains("owner mapping")
+    );
+    server
+        .owner
+        .local_source_catalog()
+        .execute(CatalogRequest::List {})
+        .unwrap();
+    server.close().await;
+}
