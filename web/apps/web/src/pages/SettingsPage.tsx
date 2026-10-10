@@ -364,7 +364,7 @@ export default function SettingsPage() {
             { id: "library", label: "Library" },
             { id: "build-tracking", label: "Build Tracking" },
             { id: "appearance", label: "Appearance" },
-            ...(authRequired && user?.provider === "email"
+            ...(authRequired && user?.hasPassword
               ? [{ id: "account", label: "Account" }]
               : []),
             ...(!hostedPlanning && recoveryToolsReady ? [{ id: "data", label: "Data & System" }] : []),
@@ -905,7 +905,7 @@ export default function SettingsPage() {
         </Card>
       </SettingsSection>
 
-      {authRequired && user?.provider === "email" ? (
+      {authRequired && user?.hasPassword ? (
         <SettingsSection id="account" title="Account">
           <AccountPasswordCard />
         </SettingsSection>

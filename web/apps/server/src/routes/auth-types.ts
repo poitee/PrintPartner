@@ -7,6 +7,7 @@ export type SessionUser = {
   display_name: string;
   email: string | null;
   provider: "github" | "discord" | "email" | "basic" | "anonymous" | "desktop";
+  hasPassword?: boolean;
   is_admin: boolean;
 };
 
@@ -16,6 +17,7 @@ type PublicUser = {
   display_name: string;
   email: string | null;
   provider: SessionUser["provider"];
+  hasPassword: boolean;
   is_admin: boolean;
 };
 
@@ -36,6 +38,7 @@ export function toPublicUser(user: SessionUser): PublicUser {
     display_name: user.display_name,
     email: user.email,
     provider: user.provider,
+    hasPassword: user.hasPassword ?? false,
     is_admin: user.is_admin,
   };
 }
