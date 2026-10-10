@@ -374,12 +374,55 @@ fn is_spa_client_path(path: &str) -> bool {
         .is_some_and(|id| !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
+// Validate decoded segments without changing the target forwarded and signed for Node.
+// Nested escapes are refused because compatibility routes may decode a second time.
+fn valid_request_path(path: &str) -> bool {
+    if path.contains("//") {
+        return false;
+    }
+    for segment in path.split('/') {
+        let raw = segment.as_bytes();
+        let mut decoded = Vec::with_capacity(raw.len());
+        let mut index = 0;
+        while index < raw.len() {
+            if raw[index] == b'%' {
+                if index + 2 >= raw.len() {
+                    return false;
+                }
+                let Ok(byte) = hex::decode(&raw[index + 1..index + 3]) else {
+                    return false;
+                };
+                decoded.push(byte[0]);
+                index += 3;
+            } else {
+                decoded.push(raw[index]);
+                index += 1;
+            }
+        }
+        let Ok(segment) = std::str::from_utf8(&decoded) else {
+            return false;
+        };
+        if matches!(segment, "." | "..")
+            || segment
+                .chars()
+                .any(|c| c.is_control() || matches!(c, '/' | '\\' | '%'))
+        {
+            return false;
+        }
+    }
+    true
+}
+
 async fn handle(
     State(state): State<Arc<GatewayState>>,
     mut request: Request<Body>,
 ) -> Response<Body> {
     if header(&request, "host") != Some(state.host.as_str()) {
         return error(StatusCode::BAD_REQUEST, "Invalid Host");
+    }
+    let raw_path = request.uri().path();
+    if !valid_request_path(raw_path) {
+        return error(StatusCode::BAD_REQUEST, "Invalid request target");
     }
     let target = match target::CanonicalTarget::parse(request.uri()) {
         Ok(target) => target,
@@ -712,6 +755,38 @@ impl http_body::Body for TrackedBody {
 #[cfg(test)]
 mod tests {
     use tokio_util::sync::CancellationToken;
+
+    #[test]
+    fn encoded_artifact_segments_preserve_safe_names_and_reject_ambiguity() {
+        for path in [
+            "/sources/1/stl/caf%C3%A9%20%28sample%29.stl/mesh",
+            "/exports/a%20b.zip",
+            "/sources/1/stl/folder/model.stl/mesh",
+            "/",
+        ] {
+            assert!(super::valid_request_path(path), "{path}");
+        }
+        for path in [
+            "/sources/1/stl/%2e%2e/mesh",
+            "/a/./b",
+            "/a/../b",
+            "/a//b",
+            "/a%2Fb",
+            "/a%2fb",
+            "/a%5Cb",
+            "/a\\b",
+            "/a%00b",
+            "/a%0Ab",
+            "/a%252fb",
+            "/a%252e%252eb",
+            "/a%",
+            "/a%2",
+            "/a%zz",
+            "/a%ff",
+        ] {
+            assert!(!super::valid_request_path(path), "{path}");
+        }
+    }
 
     #[test]
     fn admission_and_drain_share_one_barrier() {
