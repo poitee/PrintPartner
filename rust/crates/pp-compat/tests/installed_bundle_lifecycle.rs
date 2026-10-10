@@ -37,6 +37,29 @@ struct TestOwnership {
 }
 
 impl TestOwnership {
+    fn record_child(directory: &Path, pid: u32) -> Result<()> {
+        let path = directory.join(".desktop-owner.json");
+        let mut marker: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)?;
+        marker["child_pid"] = pid.into();
+        // macOS cannot query a foreign process identity; retain a per-child instance token.
+        marker["child_process_identity"] =
+            format!("instance:{}", hex::encode(rand::random::<[u8; 16]>())).into();
+        let temporary = directory.join(format!(
+            ".desktop-owner-{}.json.new",
+            hex::encode(rand::random::<[u8; 16]>())
+        ));
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&temporary)?;
+        file.write_all(&serde_json::to_vec(&marker)?)?;
+        file.sync_all()?;
+        std::fs::rename(temporary, path)?;
+        File::open(directory)?.sync_all()?;
+        Ok(())
+    }
+
     fn create(data_dir: PathBuf, runtime_dir: PathBuf) -> Result<Self> {
         ensure!(
             data_dir.is_absolute(),
@@ -133,7 +156,10 @@ async fn wait_for_ready(
                     bail!("Compatibility child entered backoff {attempt}")
                 }
                 Status::Guarded => bail!("Compatibility child entered crash guard"),
-                Status::Stopped => bail!("Compatibility child stopped before readiness"),
+                Status::Stopping | Status::Stopped => {
+                    bail!("Compatibility child stopped before readiness")
+                }
+                Status::Failed => bail!("Compatibility child cleanup failed before readiness"),
             }
             status
                 .changed()
@@ -201,10 +227,24 @@ async fn installed_bundle_start_health_shutdown() -> Result<()> {
         lease: ownership.lease.clone(),
         lease_file: ownership.lock.try_clone()?,
         port,
+        record_child: TestOwnership::record_child,
     })?;
     let mut status = supervisor.handle.status.clone();
     let (generation, ready_pid) = wait_for_ready(&mut status).await?;
     ensure!(process_exists(ready_pid)?, "Ready child PID is absent");
+    let marker: serde_json::Value = serde_json::from_slice(&std::fs::read(
+        ownership.data_dir.join(".desktop-owner.json"),
+    )?)?;
+    ensure!(
+        marker["child_pid"] == ready_pid,
+        "Ready child ownership was not recorded"
+    );
+    ensure!(
+        marker["child_process_identity"]
+            .as_str()
+            .is_some_and(|identity| identity.starts_with("instance:")),
+        "Ready child instance identity was not recorded"
+    );
     let socket = ownership
         .runtime_dir
         .join(format!("{}.sock", &generation[..12]));
