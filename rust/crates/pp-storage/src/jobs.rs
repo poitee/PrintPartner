@@ -1,3 +1,4 @@
+mod checklist;
 mod filename;
 mod model;
 mod subscriptions;
@@ -2309,6 +2310,14 @@ pub(crate) fn user_with_authority(
                 "Sync cannot use generic effect reconciliation"
             );
             ensure!(
+                decision != Decision::ConfirmSucceeded
+                    || job
+                        .effects
+                        .iter()
+                        .all(|effect| effect.checklist_completion.is_none()),
+                "Checklist completion requires its owning reconciler"
+            );
+            ensure!(
                 job.state == PersistentState::ReconciliationRequired
                     && job.state_version == expected_version
                     && job.generation == expected_generation,
@@ -3023,6 +3032,7 @@ fn advance(
                 confirmed: false,
                 no_effect: false,
                 receipt: None,
+                checklist_completion: None,
             });
             job.state = PersistentState::EffectAdmitted;
             "effect_intent"
@@ -3049,8 +3059,12 @@ fn advance(
         }
         WorkerOperation::Finish(result) => {
             ensure!(
-                job.kind != JobKind::Sync,
-                "Sync requires its owning finalizer"
+                job.kind != JobKind::Sync
+                    && job
+                        .effects
+                        .iter()
+                        .all(|effect| effect.checklist_completion.is_none()),
+                "Job requires its owning finalizer"
             );
             ensure!(
                 job.state == PersistentState::Running && !job.cancel_requested,
@@ -3076,8 +3090,12 @@ fn advance(
         }
         WorkerOperation::FinishPublic { artifact, result } => {
             ensure!(
-                job.kind != JobKind::Sync,
-                "Sync requires its owning finalizer"
+                job.kind != JobKind::Sync
+                    && job
+                        .effects
+                        .iter()
+                        .all(|effect| effect.checklist_completion.is_none()),
+                "Job requires its owning finalizer"
             );
             ensure!(
                 job.state == PersistentState::Running && !job.cancel_requested,

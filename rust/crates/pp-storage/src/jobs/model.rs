@@ -485,6 +485,8 @@ pub struct EffectReceipt {
     #[serde(default, skip_serializing_if = "is_false")]
     pub no_effect: bool,
     pub receipt: Option<ResultArtifact>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) checklist_completion: Option<Box<ChecklistCompletionClaim>>,
 }
 fn is_false(value: &bool) -> bool {
     !*value
@@ -648,6 +650,26 @@ pub struct ChecklistHtmlResult {
     pub plan_version: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub revision_id: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ChecklistCompletionClaim {
+    pub(super) version: u8,
+    pub(super) attempt: i64,
+    pub(super) generation: i64,
+    pub(super) tenant_binding: String,
+    pub(super) capture: ChecklistCaptureSeal,
+    pub(super) content_sha256: String,
+    pub(super) tenant_relative_target: String,
+    pub(super) result: ChecklistHtmlResult,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ChecklistCaptureSeal {
+    pub(super) capture_id: String,
+    pub(super) accepted_basis: Option<ExportBasis>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -847,6 +869,7 @@ impl JobRecord {
                 "Denied effect requires terminal job"
             );
         }
+        super::checklist::validate_claims(self)?;
         ensure!(
             self.state != PersistentState::UploadedOnly || self.uploaded_only_proof().is_some(),
             "Invalid uploaded-only job"
