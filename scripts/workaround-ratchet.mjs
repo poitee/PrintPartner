@@ -331,7 +331,7 @@ function countNonJavaScriptText(text, path) {
   return counts;
 }
 
-// Shell text is deliberately counted without interpreting quotes or syntax.
+// Shell and YAML text are deliberately counted without interpreting quotes or syntax.
 function countMarkerLines(lines) {
   const counts = Object.fromEntries(Object.keys(MARKERS).map((key) => [key, 0]));
   for (const line of lines) {
@@ -342,33 +342,11 @@ function countMarkerLines(lines) {
   return counts;
 }
 
-// Physical source lines of every `run` scalar value. Source tokens exclude block
-// headers, trailing comments, and adjacent keys, and handle every chomping/indent indicator.
-function yamlRunLines(text) {
-  const { isAlias, isScalar, parseAllDocuments, visit } = requireWeb("yaml");
-  const lines = [];
-  const documents = parseAllDocuments(text, { keepSourceTokens: true });
-  // Malformed YAML still gets a conservative count instead of throwing.
-  if (documents.some((document) => document.errors.length > 0)) return text.split("\n");
-  for (const document of documents) {
-    visit(document, {
-      Pair(_key, pair) {
-        if (!isScalar(pair.key) || pair.key.value !== "run") return;
-        const value = isAlias(pair.value) ? pair.value.resolve(document) : pair.value;
-        if (!isScalar(value) || typeof value.value !== "string" || !value.range) return;
-        const source =
-          value.srcToken?.type === "block-scalar" ? value.srcToken.source : text.slice(value.range[0], value.range[1]);
-        lines.push(...source.split("\n"));
-      },
-    });
-  }
-  return lines;
-}
-
 export function countText(text, path = "") {
   const extension = extensionOf(path);
-  if (extension === ".sh") return countMarkerLines(text.split("\n"));
-  if (extension === ".yml" || extension === ".yaml") return countMarkerLines(yamlRunLines(text));
+  if (extension === ".sh" || extension === ".yml" || extension === ".yaml") {
+    return countMarkerLines(text.split("\n"));
+  }
   if (JAVASCRIPT_EXTENSIONS.has(extensionOf(path))) return countJavaScriptComments(text, path);
   return countNonJavaScriptText(text, path);
 }
