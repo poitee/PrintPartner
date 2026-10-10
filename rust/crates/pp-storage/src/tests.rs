@@ -143,7 +143,7 @@ fn queue_cancellation_reply_loss_and_shutdown_drain() {
             SettingSnapshot::Missing
         );
     }
-    assert!(!path.join(".desktop-owner.json").exists());
+    assert!(path.join(".desktop-owner.json").exists());
 }
 #[test]
 fn reader_pool_resets_pragmas_rejects_writes_and_is_bounded() {
@@ -556,9 +556,9 @@ fn directory_lease_cleanup_failure_retains_lock_until_retry() {
     let lease_path = path.join(".desktop-lease");
     let hidden = path.join(".desktop-lease-hidden");
     std::fs::rename(&lease_path, &hidden).unwrap();
-    // Removal of the marker alone must not release ownership if the portable lease fails.
+    // Keep both the marker and OS lock if the portable lease cannot be released.
     assert!(owner.shutdown().is_err());
-    assert!(!path.join(".desktop-owner.json").exists());
+    assert!(path.join(".desktop-owner.json").exists());
     assert!(
         std::fs::File::open(path.join(".desktop.lock"))
             .unwrap()

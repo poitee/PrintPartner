@@ -2931,6 +2931,7 @@ dependencies = [
  "caseless",
  "fs2",
  "hex",
+ "libc",
  "regex",
  "rustix",
  "ryu-js",

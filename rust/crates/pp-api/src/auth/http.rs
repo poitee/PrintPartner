@@ -104,6 +104,7 @@ pub(super) struct App {
     mail: ResetMailer,
     rates: Arc<Mutex<RateSources>>,
     admission: Arc<tokio::sync::Semaphore>,
+    reset_delivery: Arc<tokio::sync::Semaphore>,
 }
 pub fn auth_router(
     config: AuthHttpConfig,
@@ -119,6 +120,7 @@ pub fn auth_router(
         mail,
         rates: Arc::default(),
         admission: Arc::new(tokio::sync::Semaphore::new(64)),
+        reset_delivery: Arc::new(tokio::sync::Semaphore::new(16)),
     };
     let mut router = Router::new()
         .route("/auth/me", get(me))
@@ -396,6 +398,23 @@ async fn forgot(
         (app.config.dev_reset_exposure && !app.mail.configured())
             .then_some(app.config.origin.as_str())
     });
+    // Reserve delivery capacity before looking up the account, so overload is
+    // independent of whether the address exists. SMTP must not delay the reply.
+    let delivery_permit = if origin.is_some() && app.mail.configured() {
+        Some(
+            app.reset_delivery
+                .clone()
+                .try_acquire_owned()
+                .map_err(|_| {
+                    Failure(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "Authentication temporarily unavailable",
+                    )
+                })?,
+        )
+    } else {
+        None
+    };
     if let Some(origin) = origin
         && let Outcome::ResetToken(Some(token)) = invoke(
             &app.auth,
@@ -408,8 +427,13 @@ async fn forgot(
         let mut url =
             reqwest::Url::parse(&format!("{origin}/reset-password")).expect("validated origin");
         url.query_pairs_mut().append_pair("token", token.expose());
-        let delivery = app.mail.deliver(&email, url.as_str()).await;
-        if matches!(delivery, super::Delivery::Unsent) && app.config.dev_reset_exposure {
+        if let Some(permit) = delivery_permit {
+            let mail = app.mail.clone();
+            tokio::spawn(async move {
+                let _permit = permit;
+                mail.deliver(&email, url.as_str()).await;
+            });
+        } else if app.config.dev_reset_exposure {
             result["dev_reset_url"] = json!(url.as_str());
         }
     }
