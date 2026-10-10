@@ -54,12 +54,13 @@ function assertDataDirectoryAvailable(dataDir: string): void {
   if (context?.data_dir === canonical) return;
   // Under the shared storage lease, recover stale markers from either runtime.
   const owner = z.object({ pid: z.number().int().positive().max(2147483647), process_identity: z.string().optional(),
-    kind: z.string().optional(), child_pid: z.number().int().positive().max(2147483647).optional(),
+    kind: z.string().optional(), storage_protocol_version: z.unknown().optional(), child_pid: z.number().int().positive().max(2147483647).optional(),
     child_process_identity: z.string().min(1).optional() })
     .safeParse(JSON.parse(readFileSync(join(canonical, ".desktop-owner.json"), "utf8")));
   if (owner.success && ownerIsStale(owner.data) && (owner.data.kind === "standalone" ||
-      // Spawn records the child before setup permits it to open storage.
-      (owner.data.child_pid === undefined && owner.data.child_process_identity === undefined) ||
+      // Version 1 guarantees recording the child before setup opens storage.
+      (owner.data.storage_protocol_version === 1 &&
+       owner.data.child_pid === undefined && owner.data.child_process_identity === undefined) ||
       (owner.data.child_pid !== undefined && owner.data.child_process_identity !== undefined &&
        ownerIsStale({ pid: owner.data.child_pid, process_identity: owner.data.child_process_identity })))) {
     renameSync(join(canonical, ".desktop-owner.json"), join(canonical, ".desktop-lease", "previous-marker.json"));

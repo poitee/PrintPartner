@@ -48,7 +48,7 @@ describe("Rust-written storage markers", () => {
     const directory = mkdtempSync(join(tmpdir(), "pp-rust-no-child-"));
     const dead = spawnSync(process.execPath, ["-e", ""]);
     expect(dead.status).toBe(0);
-    const marker = JSON.stringify({ pid: dead.pid, process_identity: "prior", lease_hash: "cd".repeat(32) });
+    const marker = JSON.stringify({ storage_protocol_version: 1, pid: dead.pid, process_identity: "prior", lease_hash: "cd".repeat(32) });
     try {
       writeFileSync(join(directory, ".desktop-owner.json"), marker);
       const release = acquireDataDirectory(directory);
@@ -57,6 +57,20 @@ describe("Rust-written storage markers", () => {
         expect(() => acquireDataDirectory(directory)).toThrow("already owned");
       } finally { release(); }
       acquireDataDirectory(directory)();
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  it.each([undefined, 0, 2, "1", null])("refuses a childless core marker without protocol version 1 (%j)", (version) => {
+    const directory = mkdtempSync(join(tmpdir(), "pp-rust-legacy-no-child-"));
+    const dead = spawnSync(process.execPath, ["-e", ""]);
+    expect(dead.status).toBe(0);
+    const marker = JSON.stringify({ pid: dead.pid, process_identity: "prior", lease_hash: "cd".repeat(32),
+      storage_protocol_version: version });
+    const path = join(directory, ".desktop-owner.json");
+    try {
+      writeFileSync(path, marker);
+      expect(() => acquireDataDirectory(directory)).toThrow("already owned");
+      expect(readFileSync(path, "utf8")).toBe(marker);
     } finally { rmSync(directory, { recursive: true, force: true }); }
   });
 
@@ -70,7 +84,7 @@ describe("Rust-written storage markers", () => {
       const dead = spawnSync(process.execPath, ["-e", ""]);
       expect(dead.status).toBe(0);
       const marker = JSON.stringify({ pid: dead.pid, process_identity: "prior",
-        lease_hash: "cd".repeat(32), ...child });
+        storage_protocol_version: 1, lease_hash: "cd".repeat(32), ...child });
       const path = join(directory, ".desktop-owner.json");
       try {
         writeFileSync(path, marker);
