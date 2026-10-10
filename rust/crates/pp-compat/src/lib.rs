@@ -47,6 +47,7 @@ pub struct SpawnSpec {
     pub lease: String,
     pub lease_file: std::fs::File,
     pub port: u16,
+    pub record_child: fn(&std::path::Path, u32) -> Result<()>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -361,6 +362,14 @@ impl Process {
             });
         }
         let mut child = command.spawn().context("Could not start bundled Node")?;
+        // Persist ownership before the child can receive setup or open storage.
+        if let Err(error) =
+            (spec.record_child)(&spec.data_dir, child.id().context("Missing child PID")?)
+        {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            return Err(error.context("Could not record child ownership"));
+        }
         let mut stdin = child.stdin.take().context("Missing parent-liveness pipe")?;
         let setup = serde_json::json!({ "version":1, "data_dir":spec.data_dir, "socket_path":endpoint.socket,
             "generation":endpoint.generation, "key":hex::encode(key), "lease":spec.lease, "parent_pid":std::process::id(), "port":spec.port });
@@ -475,8 +484,28 @@ pub fn backoff(attempt: usize) -> Duration {
     Duration::from_millis([500, 1000, 2000, 4000, 8000, 30_000][attempt.min(5)])
 }
 
+/// Timing policy owned by an individual compatibility supervisor.
+#[derive(Clone, Copy, Debug)]
+pub struct SupervisorConfig {
+    /// Ready time required to reset backoff, and age beyond which crashes expire.
+    pub crash_guard_window: Duration,
+}
+
+impl Default for SupervisorConfig {
+    fn default() -> Self {
+        Self {
+            crash_guard_window: Duration::from_secs(120),
+        }
+    }
+}
+
 impl Supervisor {
     pub fn start(spec: SpawnSpec) -> Result<Self> {
+        Self::start_with_config(spec, SupervisorConfig::default())
+    }
+
+    /// Start with a per-instance timing policy; `start` uses production defaults.
+    pub fn start_with_config(spec: SpawnSpec, config: SupervisorConfig) -> Result<Self> {
         let logs = logs::Logs::open(spec.data_dir.join("logs"))?;
         let (endpoints, endpoint) = watch::channel(None);
         let (states, status) = watch::channel(Status::Starting);
@@ -543,7 +572,7 @@ impl Supervisor {
                         }
                         // Preserve escalation for repeated crashes, but forget old failures
                         // once the child has stayed ready for the crash-guard window.
-                        if ready_since.elapsed() >= Duration::from_secs(120) {
+                        if ready_since.elapsed() >= config.crash_guard_window {
                             attempt = 0;
                         }
                     }
@@ -567,7 +596,7 @@ impl Supervisor {
                 crashes.push_back(now);
                 while crashes
                     .front()
-                    .is_some_and(|t| now.duration_since(*t) > Duration::from_secs(120))
+                    .is_some_and(|t| now.duration_since(*t) > config.crash_guard_window)
                 {
                     crashes.pop_front();
                 }
@@ -826,6 +855,14 @@ mod tests {
                 super::StopIntent::Restart,
             )
             .is_ok()
+        );
+    }
+
+    #[test]
+    fn production_crash_guard_window() {
+        assert_eq!(
+            super::SupervisorConfig::default().crash_guard_window,
+            std::time::Duration::from_secs(120)
         );
     }
 

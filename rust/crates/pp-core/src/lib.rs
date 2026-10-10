@@ -21,6 +21,7 @@ pub struct DesktopLaunch {
     pub assets: PathBuf,
 }
 
+pub use pp_compat::SupervisorConfig;
 pub use pp_compat::{Bundle as VerifiedBundle, Status as CoreStatus};
 pub use pp_gateway::LaunchTarget as DesktopLaunchTarget;
 
@@ -57,7 +58,13 @@ impl StorageOwner {
                 .filter(|pid| *pid > 0 && *pid <= i32::MAX as u64)
                 .context("Invalid prior writer PID")? as i32;
             anyhow::ensure!(
-                storage_lease::owner_is_stale(pid as u32, marker["process_identity"].as_str()),
+                storage_lease::owner_is_stale(pid as u32, marker["process_identity"].as_str())
+                    && (marker["kind"] == "standalone"
+                        // Version 1 guarantees recording the child before setup opens storage.
+                        || (marker["storage_protocol_version"].as_u64() == Some(1)
+                            && marker.get("child_pid").is_none()
+                            && marker.get("child_process_identity").is_none())
+                        || storage_lease::child_is_stale(&marker)),
                 "A prior writer may still be alive"
             );
             std::fs::rename(
@@ -73,7 +80,7 @@ impl StorageOwner {
         ));
         std::fs::create_dir(&runtime_dir)?;
         std::fs::set_permissions(&runtime_dir, std::fs::Permissions::from_mode(0o700))?;
-        let marker = serde_json::json!({"pid":std::process::id(),"process_identity":lease_guard.identity,"lease_hash":hex::encode(Sha256::digest(lease.as_bytes())),"runtime_dir":runtime_dir});
+        let marker = serde_json::json!({"storage_protocol_version":1,"pid":std::process::id(),"process_identity":lease_guard.identity,"lease_hash":hex::encode(Sha256::digest(lease.as_bytes())),"runtime_dir":runtime_dir});
         let result = (|| -> Result<()> {
             let mut file = OpenOptions::new()
                 .write(true)
@@ -209,7 +216,10 @@ impl ShutdownReceipt {
     }
 }
 
-async fn start_resources(input: DesktopLaunch) -> Result<Resources> {
+async fn start_resources(
+    input: DesktopLaunch,
+    compat_config: SupervisorConfig,
+) -> Result<Resources> {
     let assets = input
         .assets
         .canonicalize()
@@ -217,14 +227,18 @@ async fn start_resources(input: DesktopLaunch) -> Result<Resources> {
     pp_compat::verify_bundle(&input.bundle, &assets)?;
     let mut owner = StorageOwner::acquire(&input.data_dir)?;
     let listener = bind_origin(&owner).await?;
-    let supervisor = Supervisor::start(SpawnSpec {
-        bundle: input.bundle,
-        data_dir: owner.data_dir.clone(),
-        runtime_dir: owner.runtime_dir.clone(),
-        lease: owner.lease.clone(),
-        lease_file: owner.lock.try_clone()?,
-        port: listener.local_addr()?.port(),
-    })?;
+    let supervisor = Supervisor::start_with_config(
+        SpawnSpec {
+            bundle: input.bundle,
+            data_dir: owner.data_dir.clone(),
+            runtime_dir: owner.runtime_dir.clone(),
+            lease: owner.lease.clone(),
+            lease_file: owner.lock.try_clone()?,
+            port: listener.local_addr()?.port(),
+            record_child: storage_lease::record_child,
+        },
+        compat_config,
+    )?;
     owner.release_allowed = false;
     let mut status = supervisor.handle.status.clone();
     let ready = tokio::time::timeout(Duration::from_secs(32), async {
@@ -271,6 +285,14 @@ async fn start_resources(input: DesktopLaunch) -> Result<Resources> {
 
 impl CoreRuntime {
     pub async fn start(input: DesktopLaunch) -> Result<Self> {
+        Self::start_with_compat_config(input, SupervisorConfig::default()).await
+    }
+
+    /// Start with a per-instance compatibility timing policy.
+    pub async fn start_with_compat_config(
+        input: DesktopLaunch,
+        compat_config: SupervisorConfig,
+    ) -> Result<Self> {
         let (started, startup) = tokio::sync::oneshot::channel();
         let (stop, stopped) = tokio::sync::oneshot::channel();
         let (completed, completion) = tokio::sync::oneshot::channel();
@@ -288,7 +310,7 @@ impl CoreRuntime {
                     }
                 };
                 runtime.block_on(async move {
-                    let mut resources = match start_resources(input).await {
+                    let mut resources = match start_resources(input, compat_config).await {
                         Ok(resources) => resources,
                         Err(error) => {
                             let _ = started.send(Err(error));
