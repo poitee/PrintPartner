@@ -8,6 +8,7 @@ from pathlib import Path
 import select
 import shutil
 import subprocess
+import sys
 import tempfile
 import urllib.error
 import urllib.parse
@@ -31,22 +32,37 @@ def main():
     if not (root / "rust").is_dir():
         raise SystemExit("rust/ not found; check out the desktop chain")
     check((root / "rust/crates/pp-server/Cargo.toml").is_file(), "Rust pp-server checkout required")
-    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True, timeout=15).strip()
     print(f"Rust verification checkout: {root}\nCommit: {commit}", flush=True)
-    node = str(Path(shutil.which("node")).resolve())
+    node_path = shutil.which("node")
+    check(node_path is not None, "node not found; install the Node version documented in rust/README.md")
+    node = str(Path(node_path).resolve())
 
-    def run(*args, env=None):
+    def run(*args, env=None, stdout=None):
         print("BUILD:", " ".join(args), flush=True)
-        subprocess.run(args, cwd=root, env=env, check=True)
+        try:
+            return subprocess.run(args, cwd=root, env=env, stdout=stdout, text=True, check=True, timeout=600)
+        except subprocess.CalledProcessError as error:
+            if error.stdout:
+                print(error.stdout, end="", flush=True)
+            raise
 
     run("npm", "--prefix", "web", "ci")
     run("npm", "--prefix", "web", "run", "build", env=dict(os.environ, VITE_PRINT_PARTNER_DESKTOP="1"))
-    run("python3", "rust/scripts/build-desktop-manifest.py", "--web", "web", "--node", node,
+    run(sys.executable, "rust/scripts/build-desktop-manifest.py", "--web", "web", "--node", node,
         "--output", "rust/bundle-manifest.json", "--commit", commit)
-    run("cargo", "build", "--manifest-path", "rust/Cargo.toml", "--locked", "-p", "pp-server")
-    metadata = json.loads(subprocess.check_output(
-        ["cargo", "metadata", "--manifest-path", "rust/Cargo.toml", "--no-deps", "--format-version", "1"], cwd=root))
-    binary = Path(metadata["target_directory"]) / "debug/pp-server"
+    build = run("cargo", "build", "--manifest-path", "rust/Cargo.toml", "--locked", "-p", "pp-server",
+                "--message-format=json", stdout=subprocess.PIPE)
+    binary = None
+    for line in build.stdout.splitlines():
+        artifact = json.loads(line)
+        if artifact["reason"] == "compiler-message":
+            print(artifact["message"].get("rendered", ""), end="", flush=True)
+        if (artifact["reason"] == "compiler-artifact" and artifact["target"]["name"] == "pp-server"
+                and artifact.get("executable")):
+            binary = Path(artifact["executable"])
+    check(binary is not None, "Cargo did not report a pp-server executable")
+    print(f"EXECUTABLE: {binary}", flush=True)
     with tempfile.TemporaryDirectory(prefix="pp-verify-rust-") as temporary:
         fixture = Path(temporary)
         credentials = fixture / "credentials.json"
@@ -59,6 +75,10 @@ def main():
             try:
                 check(select.select([process.stdout], [], [], 60)[0], "Rust startup timed out")
                 origin = process.stdout.readline().strip()
+                if not origin:
+                    process.wait(timeout=5)
+                    errors.seek(0)
+                    raise RuntimeError(f"Rust startup failed (exit={process.returncode}): {errors.read().strip()}")
                 parsed = urllib.parse.urlsplit(origin)
                 check(parsed.scheme == "http" and parsed.hostname == "127.0.0.1" and parsed.port,
                       "Rust did not emit a loopback origin")
@@ -109,25 +129,34 @@ def main():
                 check(saved["id"] == source["id"] and saved["name"] == "Rust verification source",
                       "Source did not persist")
             finally:
-                if process.poll() is None:
-                    process.terminate()
+                failed = sys.exc_info()[0] is not None
                 try:
-                    process.wait(timeout=25)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait()
-                    raise RuntimeError("Rust shutdown timed out")
-                finally:
+                    if process.poll() is None:
+                        process.terminate()
+                    try:
+                        process.wait(timeout=25)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait(timeout=5)
+                        raise RuntimeError("Rust shutdown timed out")
                     credentials.unlink(missing_ok=True)
+                except Exception as error:
+                    if not failed:
+                        raise
+                    print(f"CLEANUP ERROR (original failure preserved): {error}", flush=True)
+                finally:
                     process.stdout.close()
                     errors.seek(0)
                     print("SERVER STDERR:\n" + errors.read(), flush=True)
-                check(process.returncode == 0, f"Rust exited {process.returncode}")
-                check(not (fixture / "data/.desktop-owner.json").exists(), "Owner marker survived")
-                check(runtime_dir is not None and not runtime_dir.exists(), "Private runtime directory survived")
+            check(process.returncode == 0, f"Rust exited {process.returncode}")
+            check(not (fixture / "data/.desktop-owner.json").exists(), "Owner marker survived")
+            check(runtime_dir is not None and not runtime_dir.exists(), "Private runtime directory survived")
+            try:
                 with (fixture / "data/.desktop.lock").open("rb") as lock:
                     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                print("STOP: exit=0; owner marker removed; private sockets removed; data lock reacquired", flush=True)
+            except FileNotFoundError:
+                raise RuntimeError("Rust shutdown verification failed: data lock file missing") from None
+            print("STOP: exit=0; owner marker removed; private sockets removed; data lock reacquired", flush=True)
     print("PASS: Rust build, gateway endpoints, persisted Source and shutdown", flush=True)
 
 
