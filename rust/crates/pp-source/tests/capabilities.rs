@@ -414,3 +414,52 @@ fn accented_shared_folder_case_publishes_and_reuses_with_stable_manifest() {
     assert_eq!(second.files, first.files);
     assert_eq!(second.manifest_digest, first.manifest_digest);
 }
+
+#[test]
+fn canonical_folder_overlap_is_rejected_without_publishing_and_retry_can_recover() {
+    let fixture = Fixture::new();
+    let paths = ["Parts/a.stl", "parts/notes.md"];
+    for path in paths {
+        let full = fixture.0.join("input").join(path);
+        fs::create_dir_all(full.parent().unwrap()).unwrap();
+        fs::write(full, b"content").unwrap();
+    }
+    let mut selected = request();
+    selected.files = paths
+        .into_iter()
+        .map(|path| SelectedFile {
+            path: SourcePath::try_from(path.to_owned()).unwrap(),
+            kind: if path.ends_with(".stl") {
+                FileKind::Stl
+            } else {
+                FileKind::Md
+            },
+            size_hint_bytes: None,
+        })
+        .collect();
+    selected.selection.omitted_files = vec![pp_source::OmittedFile {
+        path: SourcePath::try_from("Parts/notes.md".to_owned()).unwrap(),
+        kind: FileKind::Md,
+        size_hint_bytes: None,
+        reason: pp_source::OmissionReason::UnknownDocumentSize,
+    }];
+    let input = LocalFiles::open(&fixture.0.join("input")).unwrap();
+    let mut source = fixture.repos().source(42).unwrap();
+    assert!(matches!(
+        source.materialize(selected.clone(), &input, budget()),
+        Err(pp_source::Error::DuplicatePath)
+    ));
+    let revisions = fixture.0.join("repos/42/revisions");
+    assert!(!revisions.join("caller-uuid").exists());
+    assert!(!revisions.join(".pp-source-candidate").exists());
+    selected.selection.omitted_files[0].path =
+        SourcePath::try_from("Parts/other.md".to_owned()).unwrap();
+    let first = source
+        .materialize(selected.clone(), &input, budget())
+        .unwrap();
+    assert_eq!(first.publication, Publication::Created);
+    let second = source.materialize(selected, &input, budget()).unwrap();
+    assert_eq!(second.publication, Publication::Reused);
+    assert_eq!(second.files, first.files);
+    assert_eq!(second.manifest_digest, first.manifest_digest);
+}

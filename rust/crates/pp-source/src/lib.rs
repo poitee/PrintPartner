@@ -504,12 +504,23 @@ impl SourceRoot {
         let mut stls = 0;
         let mut files = Vec::new();
         let mut directories = BTreeMap::new();
+        let omitted_paths: BTreeSet<_> = request
+            .selection
+            .omitted_files
+            .iter()
+            .map(|file| file.path.as_str())
+            .collect();
         for selected in request.files {
             let source = input.root.file(selected.path.as_str(), false)?;
             let length = source.metadata()?.len();
             // Keep the original spelling for reading case-sensitive inputs, but
             // share one deterministic spelling for destination directories.
             let path = canonical_destination(&selected.path, &mut directories)?;
+            // Folder canonicalization can introduce an exact omission overlap
+            // that was absent from the original case-sensitive input paths.
+            if omitted_paths.contains(path.as_str()) {
+                return Err(Error::DuplicatePath);
+            }
             let mut destination = candidate.file(path.as_str(), true)?;
             let (size_bytes, sha256) = copy_hash(
                 source,
