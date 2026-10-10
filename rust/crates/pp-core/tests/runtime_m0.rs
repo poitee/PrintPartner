@@ -577,7 +577,7 @@ async fn cleanup_error_publishes_failed_and_preserves_failure() {
     assert!(socket.is_dir());
     println!(
         "{}",
-        serde_json::json!({"case":"compat_cleanup_terminal_status", "stopped":true, "receipt":receipt})
+        serde_json::json!({"case":"compat_cleanup_terminal_status", "failed":true, "receipt":receipt})
     );
 }
 
