@@ -390,8 +390,28 @@ pub fn backoff(attempt: usize) -> Duration {
     Duration::from_millis([500, 1000, 2000, 4000, 8000, 30_000][attempt.min(5)])
 }
 
+/// Timing policy owned by an individual compatibility supervisor.
+#[derive(Clone, Copy, Debug)]
+pub struct SupervisorConfig {
+    /// Ready time required to reset backoff, and age beyond which crashes expire.
+    pub crash_guard_window: Duration,
+}
+
+impl Default for SupervisorConfig {
+    fn default() -> Self {
+        Self {
+            crash_guard_window: Duration::from_secs(120),
+        }
+    }
+}
+
 impl Supervisor {
     pub fn start(spec: SpawnSpec) -> Result<Self> {
+        Self::start_with_config(spec, SupervisorConfig::default())
+    }
+
+    /// Start with a per-instance timing policy; `start` uses production defaults.
+    pub fn start_with_config(spec: SpawnSpec, config: SupervisorConfig) -> Result<Self> {
         let logs = logs::Logs::open(spec.data_dir.join("logs"))?;
         let (endpoints, endpoint) = watch::channel(None);
         let (states, status) = watch::channel(Status::Starting);
@@ -445,7 +465,7 @@ impl Supervisor {
                         }
                         // Preserve escalation for repeated crashes, but forget old failures
                         // once the child has stayed ready for the crash-guard window.
-                        if ready_since.elapsed() >= Duration::from_secs(120) {
+                        if ready_since.elapsed() >= config.crash_guard_window {
                             attempt = 0;
                         }
                     }
@@ -464,7 +484,7 @@ impl Supervisor {
                 crashes.push_back(now);
                 while crashes
                     .front()
-                    .is_some_and(|t| now.duration_since(*t) > Duration::from_secs(120))
+                    .is_some_and(|t| now.duration_since(*t) > config.crash_guard_window)
                 {
                     crashes.pop_front();
                 }
@@ -510,6 +530,14 @@ impl Drop for Supervisor {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn production_crash_guard_window() {
+        assert_eq!(
+            super::SupervisorConfig::default().crash_guard_window,
+            std::time::Duration::from_secs(120)
+        );
+    }
+
     #[test]
     fn product_backoff_schedule() {
         assert_eq!(
