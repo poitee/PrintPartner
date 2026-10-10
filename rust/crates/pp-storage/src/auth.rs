@@ -321,6 +321,64 @@ impl AuthClient {
             .recv()
             .map_err(|_| anyhow!("Writer stopped without result; commit unknown"))?
     }
+    fn login(
+        &self,
+        mut credential: Credential,
+        password: &Secret,
+        cancelled: &AtomicBool,
+    ) -> Result<Outcome> {
+        let user_id = credential.user.user_id.clone();
+        let email = credential
+            .user
+            .email
+            .clone()
+            .ok_or_else(|| anyhow!("Invalid email or password"))?;
+        for attempt in 0..2 {
+            ensure!(
+                !cancelled.load(Ordering::Acquire),
+                "Cancelled before verification"
+            );
+            ensure!(
+                credential.user.user_id == user_id
+                    && credential
+                        .hash
+                        .as_ref()
+                        .is_some_and(|hash| crypto::verify(password, hash)),
+                "Invalid email or password"
+            );
+            let replacement = if credential
+                .hash
+                .as_ref()
+                .is_some_and(|hash| hash.starts_with("scrypt:"))
+            {
+                crypto::hash(password).ok()
+            } else {
+                None
+            };
+            match self.command(
+                Command::Login {
+                    credential,
+                    replacement,
+                },
+                cancelled,
+            ) {
+                Ok(Reply::Outcome(outcome)) => return Ok(outcome),
+                Ok(_) => bail!("Unexpected authentication reply"),
+                Err(error) if attempt == 0 && error.is::<LoginCredentialChanged>() => {
+                    // A concurrent upgrade may preserve the password. Reverify the
+                    // current hash outside the writer, then retain the transaction CAS.
+                    let Reply::Credential(Some(current)) =
+                        self.command(Command::CredentialByEmail(email.clone()), cancelled)?
+                    else {
+                        bail!("Invalid email or password");
+                    };
+                    credential = current;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        unreachable!("login returns after its bounded retry")
+    }
     fn perform(&self, request: Request, cancelled: &AtomicBool) -> Result<Outcome> {
         let command = match request {
             Request::Register {
@@ -342,26 +400,7 @@ impl AuthClient {
                 else {
                     bail!("Invalid email or password");
                 };
-                ensure!(
-                    credential
-                        .hash
-                        .as_ref()
-                        .is_some_and(|hash| crypto::verify(&password, hash)),
-                    "Invalid email or password"
-                );
-                let replacement = if credential
-                    .hash
-                    .as_ref()
-                    .is_some_and(|hash| hash.starts_with("scrypt:"))
-                {
-                    crypto::hash(&password).ok()
-                } else {
-                    None
-                };
-                Command::Login {
-                    credential,
-                    replacement,
-                }
+                return self.login(credential, &password, cancelled);
             }
             Request::ChangePassword {
                 session,
@@ -466,6 +505,15 @@ fn validate_identity(provider: Provider, id: &str) -> Result<()> {
     );
     Ok(())
 }
+#[derive(Debug)]
+struct LoginCredentialChanged;
+impl std::fmt::Display for LoginCredentialChanged {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("Credential changed")
+    }
+}
+impl std::error::Error for LoginCredentialChanged {}
+
 pub(super) struct Credential {
     user: User,
     hash: Option<String>,
@@ -687,7 +735,7 @@ pub(super) fn execute(connection: &mut Connection, command: Command) -> Result<R
         } => {
             let current = by_id(&tx, &credential.user.user_id)?
                 .ok_or_else(|| anyhow!("Credential changed"))?;
-            ensure!(current.hash == credential.hash, "Credential changed");
+            ensure!(current.hash == credential.hash, LoginCredentialChanged);
             if let Some(hash) = replacement {
                 tx.execute(
                     "UPDATE users SET password_hash=?1 WHERE id=?2",

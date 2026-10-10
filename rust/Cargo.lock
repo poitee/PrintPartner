@@ -2589,6 +2589,7 @@ name = "pp-desktop"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "gtk",
  "pp-core",
  "rfd",
  "serde",
@@ -2636,6 +2637,7 @@ dependencies = [
  "fs2",
  "hex",
  "regex",
+ "libc",
  "rustix",
  "ryu-js",
  "serde",
@@ -2656,6 +2658,7 @@ dependencies = [
  "getrandom 0.3.4",
  "hex",
  "hmac",
+ "libc",
  "rand",
  "rusqlite",
  "scrypt",

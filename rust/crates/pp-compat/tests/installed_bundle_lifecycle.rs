@@ -133,7 +133,9 @@ async fn wait_for_ready(
                     bail!("Compatibility child entered backoff {attempt}")
                 }
                 Status::Guarded => bail!("Compatibility child entered crash guard"),
+                Status::Stopping => bail!("Compatibility child stopping before readiness"),
                 Status::Stopped => bail!("Compatibility child stopped before readiness"),
+                Status::Failed => bail!("Compatibility child failed before readiness"),
             }
             status
                 .changed()

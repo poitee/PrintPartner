@@ -146,6 +146,82 @@ fn verified_short_legacy_password_logs_in_without_rehashing() {
     assert_eq!(sessions, 2);
 }
 #[test]
+fn concurrent_legacy_logins_reverify_after_upgrade_without_losing_sessions() {
+    let directory = std::env::temp_dir().join(format!(
+        "pp-auth-upgrade-race-{}",
+        hex::encode(rand::random::<[u8; 16]>())
+    ));
+    let (owner, _) = WriterOwner::open(&directory, Limits::default()).unwrap();
+    let client = owner.auth(FirstUserTenant::NewUser);
+    run(
+        &client,
+        Request::Register {
+            email: "upgrade@example.com".into(),
+            display_name: "Upgrade".into(),
+            password: Secret::new("initial-password".into()),
+        },
+    )
+    .unwrap();
+    owner.shutdown().unwrap();
+    let db = Connection::open(directory.join("print-partner.db")).unwrap();
+    db.execute(
+        "UPDATE users SET password_hash=?1",
+        [include_str!("../../tests/node-scrypt.txt").trim()],
+    )
+    .unwrap();
+    drop(db);
+    let (owner, _) = WriterOwner::open(&directory, Limits::default()).unwrap();
+    let client = owner.auth(FirstUserTenant::NewUser);
+    let cancelled = AtomicBool::new(false);
+    let read = || {
+        let Reply::Credential(Some(credential)) = client
+            .command(
+                Command::CredentialByEmail("upgrade@example.com".into()),
+                &cancelled,
+            )
+            .unwrap()
+        else {
+            panic!("credential expected")
+        };
+        credential
+    };
+    // Both workers read the legacy hash before either submits its login write.
+    let first = read();
+    let second = read();
+    assert_eq!(first.hash, second.hash);
+    let password = Secret::new("legacy-🖨️-password".into());
+    let Outcome::Session {
+        token: first_token, ..
+    } = client.login(first, &password, &cancelled).unwrap()
+    else {
+        panic!("session expected")
+    };
+    let upgraded = read().hash.unwrap();
+    assert!(upgraded.starts_with("$argon2id$"));
+    let Outcome::Session {
+        token: second_token,
+        ..
+    } = client.login(second, &password, &cancelled).unwrap()
+    else {
+        panic!("session expected")
+    };
+    assert_ne!(first_token.expose(), second_token.expose());
+    assert_eq!(read().hash.as_ref(), Some(&upgraded));
+    for token in [first_token, second_token] {
+        assert!(matches!(
+            run(&client, Request::ResolveSession { token }).unwrap(),
+            Outcome::User(Some(_))
+        ));
+    }
+    owner.shutdown().unwrap();
+    let db = Connection::open(directory.join("print-partner.db")).unwrap();
+    let sessions: i64 = db
+        .query_row("SELECT count(*) FROM sessions", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(sessions, 3);
+}
+
+#[test]
 fn ticket_t_17_transaction_cas_rejects_verified_login_after_public_reset() {
     let directory = std::env::temp_dir().join(format!(
         "pp-auth-cas-{}",
@@ -188,6 +264,15 @@ fn ticket_t_17_transaction_cas_rejects_verified_login_after_public_reset() {
     let client = owner.auth(FirstUserTenant::NewUser);
     let cancelled = AtomicBool::new(false);
     let Reply::Credential(Some(credential)) = client
+        .command(
+            Command::CredentialByEmail("race@example.com".into()),
+            &cancelled,
+        )
+        .unwrap()
+    else {
+        panic!("credential expected")
+    };
+    let Reply::Credential(Some(retry_credential)) = client
         .command(
             Command::CredentialByEmail("race@example.com".into()),
             &cancelled,
@@ -240,6 +325,14 @@ fn ticket_t_17_transaction_cas_rejects_verified_login_after_public_reset() {
     assert_eq!(
         old.err().map(|error| error.to_string()).unwrap(),
         "Credential changed"
+    );
+    assert_eq!(
+        client
+            .login(retry_credential, &old_password, &cancelled)
+            .err()
+            .unwrap()
+            .to_string(),
+        "Invalid email or password"
     );
     let Reply::Credential(Some(after_rejected_login)) = client
         .command(
