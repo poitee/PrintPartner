@@ -1,7 +1,7 @@
-mod protocol;
+use crate::storage_lease;
+pub use crate::storage_lease::record_child;
 use anyhow::{Context, Result, ensure};
 use fs2::FileExt;
-pub use protocol::record_child;
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
@@ -21,7 +21,7 @@ pub struct LeaseRelease {
 
 pub struct StorageLease {
     lock: Option<File>,
-    protocol: Option<protocol::StorageLease>,
+    lease_guard: Option<storage_lease::StorageLease>,
     data_dir: PathBuf,
     runtime_dir: PathBuf,
     lease: String,
@@ -41,7 +41,7 @@ impl StorageLease {
             .open(data_dir.join(".desktop.lock"))?;
         lock.try_lock_exclusive()
             .context("Data directory already owned")?;
-        let lease_guard = protocol::StorageLease::acquire(&data_dir)?;
+        let lease_guard = storage_lease::StorageLease::acquire(&data_dir)?;
         let marker_path = data_dir.join(".desktop-owner.json");
         if marker_path.exists() {
             let marker: serde_json::Value = serde_json::from_slice(&std::fs::read(&marker_path)?)?;
@@ -50,12 +50,12 @@ impl StorageLease {
                 .filter(|pid| *pid > 0 && *pid <= i32::MAX as u64)
                 .context("Invalid prior writer PID")? as u32;
             ensure!(
-                protocol::owner_is_stale(pid, marker["process_identity"].as_str())
+                storage_lease::owner_is_stale(pid, marker["process_identity"].as_str())
                     && (marker["kind"] == "standalone"
                         || (marker["storage_protocol_version"].as_u64() == Some(1)
                             && marker.get("child_pid").is_none()
                             && marker.get("child_process_identity").is_none())
-                        || protocol::child_is_stale(&marker)),
+                        || storage_lease::child_is_stale(&marker)),
                 "A prior writer may still be alive"
             );
             std::fs::rename(
@@ -71,7 +71,7 @@ impl StorageLease {
         ));
         std::fs::create_dir(&runtime_dir)?;
         std::fs::set_permissions(&runtime_dir, std::fs::Permissions::from_mode(0o700))?;
-        let marker = serde_json::json!({"storage_protocol_version":1,"process_identity":lease_guard.identity,"pid":std::process::id(),"lease_hash":hex::encode(Sha256::digest(lease.as_bytes())),"runtime_dir":runtime_dir});
+        let marker = serde_json::json!({"storage_protocol_version":1,"pid":std::process::id(),"process_identity":lease_guard.identity,"lease_hash":hex::encode(Sha256::digest(lease.as_bytes())),"runtime_dir":runtime_dir});
         let result = (|| -> Result<()> {
             let mut file = OpenOptions::new()
                 .write(true)
@@ -88,7 +88,7 @@ impl StorageLease {
         }
         Ok(Self {
             lock: Some(lock),
-            protocol: Some(lease_guard),
+            lease_guard: Some(lease_guard),
             data_dir,
             runtime_dir,
             lease,
@@ -154,16 +154,18 @@ impl StorageLease {
         let runtime_removed =
             !self.runtime_dir.exists() || std::fs::remove_dir(&self.runtime_dir).is_ok();
         let marker = self.data_dir.join(".desktop-owner.json");
-        let protocol_removed = runtime_removed
+        let marker_removed =
+            runtime_removed && (!marker.exists() || std::fs::remove_file(&marker).is_ok());
+        let lease_removed = runtime_removed
+            && marker_removed
             && self
-                .protocol
+                .lease_guard
                 .as_mut()
-                .is_none_or(|lease| lease.release().is_ok());
-        let marker_removed = protocol_removed && std::fs::remove_file(&marker).is_ok();
-        if !runtime_removed || !marker_removed {
+                .is_none_or(|guard| guard.release().is_ok());
+        if !lease_removed {
             let retained = Self {
                 lock: self.lock.take(),
-                protocol: self.protocol.take(),
+                lease_guard: self.lease_guard.take(),
                 data_dir: self.data_dir.clone(),
                 runtime_dir: self.runtime_dir.clone(),
                 lease: self.lease.clone(),

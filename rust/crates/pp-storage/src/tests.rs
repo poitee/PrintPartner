@@ -558,3 +558,29 @@ fn unproved_closure_cannot_be_released_by_cleanup_retry() {
     );
     assert!(lease::StorageLease::acquire(&path).is_err());
 }
+
+#[test]
+fn directory_lease_cleanup_failure_retains_lock_until_retry() {
+    use fs2::FileExt;
+    let (path, owner, _) = fixture("retained-directory-lease");
+    let lease_path = path.join(".desktop-lease");
+    let hidden = path.join(".desktop-lease-hidden");
+    std::fs::rename(&lease_path, &hidden).unwrap();
+    // Removal of the marker alone must not release ownership if the portable lease fails.
+    assert!(owner.shutdown().is_err());
+    assert!(!path.join(".desktop-owner.json").exists());
+    assert!(
+        std::fs::File::open(path.join(".desktop.lock"))
+            .unwrap()
+            .try_lock_exclusive()
+            .is_err()
+    );
+    std::fs::rename(hidden, &lease_path).unwrap();
+    let released = lease::StorageLease::retry_failed_release(&path).unwrap();
+    assert!(released.marker_removed && released.runtime_removed && released.lock_released);
+    assert!(!released.ownership_retained);
+    assert!(!lease_path.exists());
+    let next = lease::StorageLease::acquire(&path).unwrap().release();
+    assert!(next.lock_released);
+    std::fs::remove_dir_all(path).unwrap();
+}

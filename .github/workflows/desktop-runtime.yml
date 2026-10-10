@@ -69,7 +69,7 @@ jobs:
           cp rust/bundle-manifest.json "$PP_EVIDENCE/bundle-manifest.json"
       - name: Build real server and check crate boundaries
         run: |
-          cargo build --manifest-path rust/Cargo.toml --locked -p pp-server 2>&1 | tee "$PP_EVIDENCE/server-build.log"
+          cargo build --manifest-path rust/Cargo.toml --locked -p pp-api -p pp-server 2>&1 | tee "$PP_EVIDENCE/server-build.log"
           python3 rust/scripts/check-boundaries.py --self-test 2>&1 | tee "$PP_EVIDENCE/boundaries.log"
           cargo fmt --manifest-path rust/Cargo.toml --all --check 2>&1 | tee "$PP_EVIDENCE/fmt.log"
           git diff --exit-code -- rust/Cargo.lock web/package-lock.json
@@ -78,8 +78,9 @@ jobs:
           cargo test --manifest-path rust/Cargo.toml --locked -p pp-core --test runtime_m0 -- --nocapture --test-threads=1 2>&1 | tee "$PP_EVIDENCE/core-runtime.log"
       - name: Run backend units and lint
         run: |
-          cargo test --manifest-path rust/Cargo.toml --locked -p pp-core -p pp-compat -p pp-gateway -p pp-server --lib --bins 2>&1 | tee "$PP_EVIDENCE/backend-units.log"
-          cargo clippy --manifest-path rust/Cargo.toml --locked -p pp-core -p pp-compat -p pp-gateway -p pp-server --all-targets -- -D warnings 2>&1 | tee "$PP_EVIDENCE/backend-clippy.log"
+          cargo test --manifest-path rust/Cargo.toml --locked -p pp-api -p pp-core -p pp-compat -p pp-gateway -p pp-server --lib --bins 2>&1 | tee "$PP_EVIDENCE/backend-units.log"
+          cargo test --manifest-path rust/Cargo.toml --locked -p pp-api --test auth_http 2>&1 | tee "$PP_EVIDENCE/pp-api-http.log"
+          cargo clippy --manifest-path rust/Cargo.toml --locked -p pp-api -p pp-core -p pp-compat -p pp-gateway -p pp-server --all-targets -- -D warnings 2>&1 | tee "$PP_EVIDENCE/backend-clippy.log"
       - name: Verify authenticated workflow and process cleanup
         run: |
           python3 rust/tests/workflow_m0.py 2>&1 | tee "$PP_EVIDENCE/workflow.log"

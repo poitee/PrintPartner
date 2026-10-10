@@ -61,6 +61,7 @@ function rowToSessionUser(user: DbUser, provider: PersistedSessionProvider): Ses
     display_name: user.displayName,
     email: user.email,
     provider,
+    hasPassword: Boolean(user.passwordHash),
     is_admin: user.isAdmin,
   };
 }
