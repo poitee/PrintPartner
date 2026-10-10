@@ -53,6 +53,22 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev \
             libayatana-appindicator3-dev librsvg2-dev pkg-config
+      - uses: actions/setup-node@v4
+        if: steps.workspace.outputs.manifest != ''
+        with:
+          node-version: '24.21.0'
+      - name: Build desktop assets and generate measured manifest
+        if: steps.workspace.outputs.manifest != ''
+        shell: bash
+        env:
+          VITE_PRINT_PARTNER_DESKTOP: '1'
+        run: |
+          set -euo pipefail
+          sudo ln -sf "$(command -v node)" /usr/bin/node
+          test "$(/usr/bin/node --version)" = v24.21.0
+          npm --prefix web ci
+          npm --prefix web run build
+          python3 rust/scripts/build-desktop-manifest.py --web web --node /usr/bin/node --output rust/bundle-manifest.json --commit "$GITHUB_SHA"
       - name: Build Rust
         if: steps.workspace.outputs.manifest != ''
         shell: bash
