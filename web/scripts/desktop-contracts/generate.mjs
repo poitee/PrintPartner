@@ -78,7 +78,18 @@ capture("receipt-time-is-bounded-text", "parseApplyPlanDraftReceipt", { ...recei
 capture("receipt-safe-integer-limit", "parseApplyPlanDraftReceipt", { ...receipt, profile_id: Number.MAX_SAFE_INTEGER });
 capture("receipt-unsafe-integer-rejected", "parseApplyPlanDraftReceipt", { ...receipt, profile_id: Number.MAX_SAFE_INTEGER + 1 });
 for (const [field, parser] of [["part_key", "parseSavePlanChoicesRequest"], ["relative_path", "parseSavePlanChoicesRequest"], ["source_layer", "parseSavePlanChoicesRequest"], ["applied_at", "parseApplyPlanDraftReceipt"]]) {
-  for (const [label, rawText, accepted] of [["lone-high", "\\ud800", false], ["lone-low", "\\udfff", false], ["reversed-pair", "\\udfff\\ud800", false], ["valid-pair", "\\ud83d\\ude42", true], ["mixed-scalars", "a\\ud83d\\ude42é", true]]) {
+  for (const [label, rawText, accepted] of [
+    ["lone-high", "\\ud800", false],
+    ["lone-low", "\\udfff", false],
+    ["reversed-pair", "\\udfff\\ud800", false],
+    ["valid-pair", "\\ud83d\\ude42", true],
+    ["mixed-scalars", "a\\ud83d\\ude42é", true],
+    ["cjk", "中文 日本語 한국어", true],
+    // Keep decomposed accents and stacked marks unchanged, without normalization.
+    ["combining-marks", "e\\u0301 a\\u0308\\u0323", true],
+    ["zwj-emoji", "👩🏽‍💻 👨‍👩‍👧‍👦", true],
+    ["regional-indicator-flags", "🇯🇵 🇰🇷 🇨🇳", true],
+  ]) {
     const input = globalThis.structuredClone(parser === "parseSavePlanChoicesRequest" ? baseline : receipt);
     if (parser === "parseSavePlanChoicesRequest") input.decisions[0].target[field] = "TEXT_SLOT";
     else input[field] = "TEXT_SLOT";
@@ -89,7 +100,8 @@ for (const [field, parser] of [["part_key", "parseSavePlanChoicesRequest"], ["re
     capture(`${field}-${label}`, parser, value, raw);
     const outcome = supplemental.at(-1).outcome;
     assert.equal(outcome.kind === "accepted", accepted, `${field}-${label}`);
-    if (!accepted) assert(outcome.issues.some((issue) => issue.message === "invalid_unicode_scalar_text"));
+    if (accepted) assert.deepEqual(outcome.parsed, value, `${field}-${label} exact round-trip`);
+    else assert(outcome.issues.some((issue) => issue.message === "invalid_unicode_scalar_text"));
   }
 }
 const schemaResults = [];
