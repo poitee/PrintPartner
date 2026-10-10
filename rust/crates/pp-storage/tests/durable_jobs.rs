@@ -1881,11 +1881,11 @@ fn start_child_cannot_finish_without_confirmed_start() {
             WorkerOperation::ConfirmEffect(receipt("finish-printer")),
         )
         .unwrap();
-    assert!(
-        worker
-            .update(&mut lease, WorkerOperation::Finish(None))
-            .is_err()
-    );
+    let finished = worker
+        .update(&mut lease, WorkerOperation::Finish(None))
+        .unwrap();
+    assert_eq!(finished.state, PersistentState::Succeeded);
+    assert_eq!(finished.result, Some(receipt("finish-printer")));
     owner.shutdown().unwrap();
 }
 #[test]

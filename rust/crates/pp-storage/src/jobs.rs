@@ -947,31 +947,48 @@ fn claim(tx: &Transaction<'_>, worker: &str, admission: &WorkerAdmission) -> Res
     Ok(Outcome::Claimed(None))
 }
 fn proven_primary_printer_receipt(job: &JobRecord) -> Option<&ResultArtifact> {
-    let Payload::PrinterUpload {
-        printer_id, start, ..
-    } = &job.payload
-    else {
-        return None;
-    };
-    let confirmed = |operation| {
-        job.effects.iter().find_map(|effect| {
-            if effect.intent.operation != operation || effect.intent.target != *printer_id {
-                return None;
+    match &job.payload {
+        Payload::PrinterUpload {
+            printer_id, start, ..
+        } => {
+            let confirmed = |operation| {
+                job.effects.iter().find_map(|effect| {
+                    if effect.intent.operation != operation || effect.intent.target != *printer_id {
+                        return None;
+                    }
+                    match effect.outcome().ok()? {
+                        EffectOutcome::Confirmed(receipt) => Some(receipt),
+                        EffectOutcome::Unresolved | EffectOutcome::Denied => None,
+                    }
+                })
+            };
+            if let Some(receipt) = confirmed(EffectOperation::PrinterUploadAndStart) {
+                return Some(receipt);
             }
-            match effect.outcome().ok()? {
-                EffectOutcome::Confirmed(receipt) => Some(receipt),
-                EffectOutcome::Unresolved | EffectOutcome::Denied => None,
+            let upload = confirmed(EffectOperation::PrinterUpload)?;
+            if *start {
+                confirmed(EffectOperation::PrinterStart)
+            } else {
+                Some(upload)
             }
-        })
-    };
-    if let Some(receipt) = confirmed(EffectOperation::PrinterUploadAndStart) {
-        return Some(receipt);
-    }
-    let upload = confirmed(EffectOperation::PrinterUpload)?;
-    if *start {
-        confirmed(EffectOperation::PrinterStart)
-    } else {
-        Some(upload)
+        }
+        Payload::PrinterStart(request) => {
+            let upload = request.upload_effect()?;
+            job.effects.iter().find_map(|effect| {
+                if effect.intent.operation != EffectOperation::PrinterStart
+                    || effect.intent.basis_hash != upload.intent.basis_hash
+                    || effect.intent.content_hash != upload.intent.content_hash
+                    || effect.intent.target != upload.intent.target
+                {
+                    return None;
+                }
+                match effect.outcome().ok()? {
+                    EffectOutcome::Confirmed(receipt) => Some(receipt),
+                    EffectOutcome::Unresolved | EffectOutcome::Denied => None,
+                }
+            })
+        }
+        _ => None,
     }
 }
 fn completion_proven(job: &JobRecord, result: Option<&ResultArtifact>) -> bool {
@@ -1067,7 +1084,18 @@ pub(crate) fn claimed_source(
             );
             i64::try_from(project_id)?
         }
-        Payload::Sync { .. } | Payload::CheckSourceUpdates {} => {
+        Payload::Sync { project_ids } => {
+            let id = source_id.ok_or_else(|| anyhow!("Wildcard Source attempt requires Source"))?;
+            if let Some(ids) = project_ids {
+                ensure!(
+                    ids.iter()
+                        .any(|project_id| i64::try_from(*project_id).ok() == Some(id)),
+                    "Source is outside Sync scope"
+                );
+            }
+            id
+        }
+        Payload::CheckSourceUpdates {} => {
             source_id.ok_or_else(|| anyhow!("Wildcard Source attempt requires Source"))?
         }
         _ => return Err(anyhow!("Attempt is not Source work")),
@@ -1075,7 +1103,33 @@ pub(crate) fn claimed_source(
     Ok((job.tenant, id))
 }
 pub(crate) fn source_reserved(tx: &Transaction<'_>, tenant: &str, id: i64) -> Result<bool> {
-    Ok(tx.query_row("SELECT EXISTS(SELECT 1 FROM durable_jobs WHERE tenant=?1 AND resource IN (?2,'source:*') AND state IN ('queued','running','effect_admitted','reconciliation_required'))", params![tenant, format!("source:{id}")], |row| row.get(0))?)
+    let documents = tx
+        .prepare(
+            "SELECT id,document FROM durable_jobs WHERE tenant=?1 AND resource IN (?2,'source:*') AND state IN ('queued','running','effect_admitted','reconciliation_required')",
+        )?
+        .query_map(params![tenant, format!("source:{id}")], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    for (job_id, document) in documents {
+        let Some(job) = decode_row(&job_id, &document) else {
+            continue;
+        };
+        match &job.payload {
+            Payload::Sync {
+                project_ids: Some(ids),
+            } => {
+                if ids
+                    .iter()
+                    .any(|project_id| i64::try_from(*project_id).ok() == Some(id))
+                {
+                    return Ok(true);
+                }
+            }
+            _ => return Ok(true),
+        }
+    }
+    Ok(false)
 }
 fn advance(
     tx: &Transaction<'_>,

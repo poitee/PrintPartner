@@ -385,6 +385,9 @@ impl Payload {
             Self::ImportScan { project_id } | Self::ExtractSourceDocs { project_id } => {
                 format!("source:{project_id}")
             }
+            Self::Sync {
+                project_ids: Some(ids),
+            } if ids.len() == 1 => format!("source:{}", ids[0]),
             Self::Sync { .. } | Self::CheckSourceUpdates {} => "source:*".into(),
             _ => String::new(),
         }
