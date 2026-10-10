@@ -45,7 +45,15 @@ jobs:
         if: steps.workspace.outputs.manifest != ''
         with:
           tool: nextest
-      - name: Build and test Rust
+      - name: Install Linux desktop dependencies
+        if: steps.workspace.outputs.manifest != ''
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev \
+            libayatana-appindicator3-dev librsvg2-dev pkg-config
+      - name: Build Rust
         if: steps.workspace.outputs.manifest != ''
         shell: bash
         env:
@@ -55,10 +63,22 @@ jobs:
           [[ "$CARGO_BUILD_JOBS" =~ ^[1-9][0-9]*$ ]] || { echo 'build_jobs must be a positive integer'; exit 1; }
           start=$SECONDS
           cargo build --workspace --locked --manifest-path "$MANIFEST"
+          elapsed=$((SECONDS - start))
+          {
+            echo "Rust build: ${elapsed}s"
+            echo "Runner: $RUNNER_NAME; jobs: $CARGO_BUILD_JOBS"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Test Rust with nextest
+        if: steps.workspace.outputs.manifest != ''
+        shell: bash
+        env:
+          MANIFEST: ${{ steps.workspace.outputs.manifest }}
+        run: |
+          set -euo pipefail
+          start=$SECONDS
           cargo nextest run --workspace --locked --manifest-path "$MANIFEST"
           elapsed=$((SECONDS - start))
           {
-            echo "Rust build + nextest: ${elapsed}s"
-            echo "Runner: $RUNNER_NAME; jobs: $CARGO_BUILD_JOBS"
-            echo 'For proof, compare the same commit and inputs: a cache miss (cold), then a cache hit (warm). Warm must take <=50% of cold.'
+            echo "Rust nextest: ${elapsed}s"
+            echo 'For proof, compare the same commit and inputs: a cache miss (cold), then a cache hit (warm). Warm build + test must take <=50% of cold.'
           } | tee -a "$GITHUB_STEP_SUMMARY"
