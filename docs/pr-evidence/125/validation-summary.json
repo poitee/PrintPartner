@@ -1,0 +1,28 @@
+{
+  "head": "11f1d0b2d2d4e9ca9acbd739c7bf3abc2e02a48c",
+  "cargo_fmt_check": "PASS",
+  "cargo_clippy_workspace_all_targets_locked_D_warnings": "PASS",
+  "cargo_nextest_workspace_locked": {
+    "passed": 48,
+    "skipped": 0
+  },
+  "boundaries_self_test": "PASS, six packages and intentional violation rejection",
+  "web_tests": {
+    "passed": 3909,
+    "desktop_parity": "PASS",
+    "schemas": "PASS",
+    "release": "PASS",
+    "build_tools": "PASS"
+  },
+  "enforced_launcher": "PASS",
+  "native_legacy_default_directory": "PASS",
+  "native_ready_stopping_failed": "PASS",
+  "native_normal_startup_error_dialog_and_redacted_cause": "PASS",
+  "macos_bundle_workflow": "not present",
+  "preceding_attempts": {
+    "f11f979_nextest": "Rejected changed dependency inventory during concurrent web tests; sequential manifest regeneration and rerun passed",
+    "f11f979_web": "Upload-memory test exceeded its 96 MiB threshold by about 90 KiB; unchanged rerun passed at 79.4 MiB",
+    "ordinary_linux_dialog": "Probe exposed a blocked background dialog after Tauri GTK initialization; fixed in 11f1d0b, final native capture passed"
+  },
+  "rust_verification_skill": "PASS at final head: authenticated gateway, persisted Source, exit 0 and complete cleanup"
+}

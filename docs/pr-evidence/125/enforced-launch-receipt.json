@@ -1,0 +1,129 @@
+{
+  "fixture": "/tmp/pr125-final2/enforced-launch-8zolobrn",
+  "stage": "/tmp/pr125-final2/runtime",
+  "initial_and_restart_launches": [
+    {
+      "mode": "node_path",
+      "unguarded_control_sentinels": true,
+      "generations": [
+        {
+          "pid": 180051,
+          "argv": [
+            "/tmp/pr125-final2/runtime/bin/node",
+            "--no-global-search-paths",
+            "--import",
+            "/tmp/pr125-final2/runtime/web/apps/server/dist/current/desktop-resolution.js",
+            "/tmp/pr125-final2/runtime/web/apps/server/dist/current/desktop.js",
+            "--pp-desktop-package-root=/tmp/pr125-final2/runtime"
+          ],
+          "injected_environment_absent": true,
+          "sentinels_absent": true,
+          "outside_package_sqlite_plan_id": 1
+        },
+        {
+          "pid": 180458,
+          "argv": [
+            "/tmp/pr125-final2/runtime/bin/node",
+            "--no-global-search-paths",
+            "--import",
+            "/tmp/pr125-final2/runtime/web/apps/server/dist/current/desktop-resolution.js",
+            "/tmp/pr125-final2/runtime/web/apps/server/dist/current/desktop.js",
+            "--pp-desktop-package-root=/tmp/pr125-final2/runtime"
+          ],
+          "injected_environment_absent": true,
+          "sentinels_absent": true,
+          "outside_package_sqlite_plan_id": 2
+        }
+      ]
+    },
+    {
+      "mode": "ancestor",
+      "unguarded_control_sentinels": true,
+      "generations": [
+        {
+          "pid": 181468,
+          "argv": [
+            "/tmp/pr125-final2/runtime/bin/node",
+            "--no-global-search-paths",
+            "--import",
+            "/tmp/pr125-final2/runtime/web/apps/server/dist/current/desktop-resolution.js",
+            "/tmp/pr125-final2/runtime/web/apps/server/dist/current/desktop.js",
+            "--pp-desktop-package-root=/tmp/pr125-final2/runtime"
+          ],
+          "injected_environment_absent": true,
+          "sentinels_absent": true,
+          "outside_package_sqlite_plan_id": 1
+        },
+        {
+          "pid": 181879,
+          "argv": [
+            "/tmp/pr125-final2/runtime/bin/node",
+            "--no-global-search-paths",
+            "--import",
+            "/tmp/pr125-final2/runtime/web/apps/server/dist/current/desktop-resolution.js",
+            "/tmp/pr125-final2/runtime/web/apps/server/dist/current/desktop.js",
+            "--pp-desktop-package-root=/tmp/pr125-final2/runtime"
+          ],
+          "injected_environment_absent": true,
+          "sentinels_absent": true,
+          "outside_package_sqlite_plan_id": 2
+        }
+      ]
+    },
+    {
+      "mode": "symlink_ancestor",
+      "unguarded_control_sentinels": true,
+      "generations": [
+        {
+          "pid": 182057,
+          "argv": [
+            "/tmp/pr125-final2/runtime/bin/node",
+            "--no-global-search-paths",
+            "--import",
+            "/tmp/pr125-final2/runtime/web/apps/server/dist/current/desktop-resolution.js",
+            "/tmp/pr125-final2/runtime/web/apps/server/dist/current/desktop.js",
+            "--pp-desktop-package-root=/tmp/pr125-final2/runtime"
+          ],
+          "injected_environment_absent": true,
+          "sentinels_absent": true,
+          "outside_package_sqlite_plan_id": 1
+        },
+        {
+          "pid": 182326,
+          "argv": [
+            "/tmp/pr125-final2/runtime/bin/node",
+            "--no-global-search-paths",
+            "--import",
+            "/tmp/pr125-final2/runtime/web/apps/server/dist/current/desktop-resolution.js",
+            "/tmp/pr125-final2/runtime/web/apps/server/dist/current/desktop.js",
+            "--pp-desktop-package-root=/tmp/pr125-final2/runtime"
+          ],
+          "injected_environment_absent": true,
+          "sentinels_absent": true,
+          "outside_package_sqlite_plan_id": 2
+        }
+      ]
+    }
+  ],
+  "preload_negatives": [
+    {
+      "case": "missing",
+      "exit": 1,
+      "before_owner_and_database": true,
+      "error": "Error: No such file or directory (os error 2)"
+    },
+    {
+      "case": "changed",
+      "exit": 1,
+      "before_owner_and_database": true,
+      "error": "Error: Release artifact content mismatch"
+    },
+    {
+      "case": "outside_symlink",
+      "exit": 1,
+      "before_owner_and_database": true,
+      "error": "Error: Desktop preload escaped package"
+    }
+  ],
+  "native_or_rendered_ui": false
+}

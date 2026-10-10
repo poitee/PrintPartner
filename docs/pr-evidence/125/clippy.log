@@ -1,0 +1,6 @@
+   Compiling pp-compat v0.1.0 (/persist/worktrees/t3/PrintPartner/helper-pr-125-land-ready/rust/crates/pp-compat)
+   Compiling pp-desktop v0.1.0 (/persist/worktrees/t3/PrintPartner/helper-pr-125-land-ready/rust/crates/pp-desktop)
+    Checking pp-gateway v0.1.0 (/persist/worktrees/t3/PrintPartner/helper-pr-125-land-ready/rust/crates/pp-gateway)
+    Checking pp-core v0.1.0 (/persist/worktrees/t3/PrintPartner/helper-pr-125-land-ready/rust/crates/pp-core)
+    Checking pp-server v0.1.0 (/persist/worktrees/t3/PrintPartner/helper-pr-125-land-ready/rust/crates/pp-server)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 8.22s

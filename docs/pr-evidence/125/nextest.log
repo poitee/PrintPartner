@@ -1,0 +1,63 @@
+   Compiling pp-compat v0.1.0 (/persist/worktrees/t3/PrintPartner/helper-pr-125-land-ready/rust/crates/pp-compat)
+   Compiling pp-desktop v0.1.0 (/persist/worktrees/t3/PrintPartner/helper-pr-125-land-ready/rust/crates/pp-desktop)
+   Compiling pp-gateway v0.1.0 (/persist/worktrees/t3/PrintPartner/helper-pr-125-land-ready/rust/crates/pp-gateway)
+   Compiling pp-core v0.1.0 (/persist/worktrees/t3/PrintPartner/helper-pr-125-land-ready/rust/crates/pp-core)
+   Compiling pp-server v0.1.0 (/persist/worktrees/t3/PrintPartner/helper-pr-125-land-ready/rust/crates/pp-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 14.48s
+────────────
+ Nextest run ID a593a957-187d-464a-9e30-7086aa5fc771 with nextest profile: default
+    Starting 48 tests across 10 binaries
+        PASS [   0.013s] ( 1/48) pp-compat tests::product_backoff_schedule
+        PASS [   0.018s] ( 2/48) pp-compat release::tests::dependency_aliases_are_measured_and_cannot_escape
+        PASS [   0.107s] ( 3/48) pp-contracts autosave::tests::codepoint_length_does_not_apply_legacy_utf16_bounds
+        PASS [   0.123s] ( 4/48) pp-contracts autosave::tests::basis_consistency_cannot_relax
+        PASS [   0.128s] ( 5/48) pp-contracts autosave::tests::duplicate_target_field_rejects_but_distinct_fields_remain_valid
+        PASS [   0.141s] ( 6/48) pp-contracts autosave::tests::receipt_identity_and_digest_preserve_exact_values
+        PASS [   0.220s] ( 7/48) pp-contracts autosave::tests::observed_draft_state_and_base_linkage_cannot_relax
+        PASS [   0.106s] ( 8/48) pp-contracts::consumer malformed_scalar_text_rejected_and_valid_pairs_preserved
+        PASS [   0.017s] ( 9/48) pp-core storage_lease::tests::matching_process_identity_remains_live
+        PASS [   0.134s] (10/48) pp-contracts::consumer public_construction_and_deserialization_cannot_bypass_invariants
+        PASS [   0.173s] (11/48) pp-contracts::consumer external_consumer_reads_typed_request_and_constructs_exact_receipt
+        PASS [   0.362s] (12/48) pp-contracts autosave::tests::required_nullable_fields_cannot_become_optional
+        PASS [   0.431s] (13/48) pp-contracts autosave::tests::decision_count_bounds_cannot_relax
+        PASS [   0.477s] (14/48) pp-contracts autosave::tests::integer_bounds_and_no_coercion_cannot_relax
+        PASS [   0.378s] (15/48) pp-contracts autosave::tests::strict_fields_and_discriminator_cannot_relax
+        PASS [   6.213s] (16/48) pp-core::runtime_m0 changed_or_missing_built_artifacts_are_rejected
+        PASS [  20.775s] (17/48) pp-core::runtime_m0 cleanup_error_publishes_failed_and_preserves_failure
+        PASS [  20.907s] (18/48) pp-core::runtime_m0 authenticated_logout_requests_complete_shutdown
+        PASS [  22.091s] (19/48) pp-core::runtime_m0 compatibility_cleanup_failure_reports_failed_instead_of_ready
+        PASS [  24.276s] (20/48) pp-core::runtime_m0 crash_left_marker_allows_later_start
+        PASS [  24.235s] (21/48) pp-core::runtime_m0 desktop_manifest_and_icons_are_served_as_assets
+        PASS [  24.643s] (22/48) pp-core::runtime_m0 drop_after_caller_runtime_teardown_reaps_writer_and_descendant
+        PASS [   9.878s] (23/48) pp-core::runtime_m0 live_marker_owner_still_blocks_start
+        PASS [  23.910s] (24/48) pp-core::runtime_m0 stale_owner_recovery_admits_only_one_concurrent_start
+        PASS [  34.113s] (25/48) pp-core::runtime_m0 failed_bind_releases_owner_before_any_child
+        PASS [   0.015s] (26/48) pp-desktop tests::admits_only_the_exact_loopback_origin
+        PASS [   0.014s] (27/48) pp-desktop tests::generated_authority_denies_native_commands_for_every_origin
+        PASS [   0.012s] (28/48) pp-desktop tests::resource_paths_must_remain_inside_the_package
+        PASS [   0.011s] (29/48) pp-desktop tests::startup_diagnostics_keep_causes_without_private_values
+        PASS [   0.008s] (30/48) pp-desktop tests::upgrades_reuse_the_legacy_desktop_store
+        PASS [   0.010s] (31/48) pp-gateway spa_tests::spa_client_paths_match_the_node_router
+        PASS [   0.010s] (32/48) pp-gateway target::tests::ambiguous_or_invalid_segments_are_denied
+        PASS [   0.013s] (33/48) pp-gateway target::tests::encoded_segments_are_canonical_before_signing
+        PASS [   0.078s] (34/48) pp-gateway tests::admission_and_drain_share_one_barrier
+        PASS [   0.043s] (35/48) pp-gateway tests::effectful_get_is_explicit
+        PASS [   0.016s] (36/48) pp-gateway tests::encoded_artifact_segments_preserve_safe_names_and_reject_ambiguity
+        PASS [   0.035s] (37/48) pp-gateway tests::global_options_denial_remains_universal
+        PASS [   0.055s] (38/48) pp-gateway tests::manifest_wildcards_preserve_methods_and_aliases
+        PASS [   0.010s] (39/48) pp-gateway tests::operation_sort_preserves_exact_static_parameter_and_wildcard_priority
+        PASS [   0.014s] (40/48) pp-gateway tests::shutdown_request_observation_is_monotonic
+        PASS [   0.009s] (41/48) pp-gateway tests::wildcard_requires_its_slash_boundary
+        PASS [  25.173s] (42/48) pp-core::runtime_m0 unexpected_marker_directory_is_preserved_and_reported
+        PASS [  33.126s] (43/48) pp-core::runtime_m0 reused_pid_with_different_identity_recovers_marker_and_lease
+        SLOW [> 60.000s] (─────) pp-core::runtime_m0 crash_guard_stops_after_five_failures_and_recovers_explicitly
+        SLOW [> 60.000s] (─────) pp-core::runtime_m0 expired_bootstrap_is_denied_by_real_listener
+        PASS [  23.849s] (44/48) pp-core::runtime_m0 wrong_release_is_rejected_before_storage_or_child
+        PASS [  56.154s] (45/48) pp-core::runtime_m0 protected_real_node_lifecycle
+        SLOW [> 60.000s] (─────) pp-core::runtime_m0 stable_child_resets_backoff_without_erasing_rapid_crash_escalation
+        PASS [  82.981s] (46/48) pp-core::runtime_m0 expired_bootstrap_is_denied_by_real_listener
+        PASS [ 103.406s] (47/48) pp-core::runtime_m0 crash_guard_stops_after_five_failures_and_recovers_explicitly
+        SLOW [>120.000s] (─────) pp-core::runtime_m0 stable_child_resets_backoff_without_erasing_rapid_crash_escalation
+        PASS [ 172.815s] (48/48) pp-core::runtime_m0 stable_child_resets_backoff_without_erasing_rapid_crash_escalation
+────────────
+     Summary [ 197.530s] 48 tests run: 48 passed (3 slow), 0 skipped

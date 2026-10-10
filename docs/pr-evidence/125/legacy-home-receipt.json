@@ -1,0 +1,37 @@
+{
+  "head": "11f1d0b2d2d4e9ca9acbd739c7bf3abc2e02a48c",
+  "default_data_override": false,
+  "legacy_directory": "~/.print-partner",
+  "saved_build": {
+    "id": 1,
+    "name": "Saved desktop Build",
+    "order_number": null,
+    "special_request": null,
+    "part_count": 0,
+    "build_stale": false,
+    "freshness": {
+      "status": "untracked",
+      "accepted_input_set_id": null,
+      "accepted_at": null,
+      "reasons": [
+        {
+          "kind": "no_accepted_inputs"
+        }
+      ]
+    },
+    "archived_at": null,
+    "last_used_at": "2026-10-10T11:25:39.472Z",
+    "accepted_progress": {
+      "kind": "empty"
+    },
+    "layers": []
+  },
+  "same_database_inode": true,
+  "saved_row_tables": [
+    "build_profiles"
+  ],
+  "normal_exit": 0,
+  "owner_marker_removed": true,
+  "new_platform_store_created": false,
+  "screenshot": "native-legacy-build.png"
+}

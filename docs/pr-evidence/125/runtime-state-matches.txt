@@ -1,0 +1,8 @@
+rust/crates/pp-desktop/src/main.rs:218:                CoreStatus::Stopping => "Service stopping",
+rust/crates/pp-desktop/src/main.rs:220:                CoreStatus::Failed => "Service failed",
+rust/crates/pp-compat/src/lib.rs:58:    Stopping,
+rust/crates/pp-compat/src/lib.rs:60:    Failed,
+rust/crates/pp-compat/src/lib.rs:444:                    states.send_replace(Status::Stopping);
+rust/crates/pp-compat/src/lib.rs:446:                        states.send_replace(Status::Failed);
+rust/crates/pp-core/src/lib.rs:234:                CoreStatus::Guarded | CoreStatus::Stopped | CoreStatus::Failed => {
+rust/crates/pp-core/src/lib.rs:237:                CoreStatus::Starting | CoreStatus::Backoff { .. } | CoreStatus::Stopping => {}

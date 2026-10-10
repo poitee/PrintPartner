@@ -1,0 +1,3 @@
+
+(pp-desktop:183845): dbind-WARNING **: 11:27:50.602: AT-SPI: Error retrieving accessibility bus address: org.freedesktop.DBus.Error.ServiceUnknown: The name org.a11y.Bus was not provided by any .service files
+desktop_startup_failed: resource_verification -> resources_unavailable -> os_error=2

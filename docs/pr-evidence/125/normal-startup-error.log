@@ -1,0 +1,2 @@
+Openbox-Message: Unable to find a valid menu file "/var/lib/openbox/debian-menu.xml"
+PASS: normal native startup logged a redacted cause, showed the dialog and exited 1 after dismissal

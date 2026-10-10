@@ -1,0 +1,27 @@
+[
+  {
+    "screenshot": "native-ready.png",
+    "menu": "(2, (0, {'children-display': 'submenu'}, [(2, {'label': 'Show Print Partner'}, []), (3, {'enabled': False, 'label': 'Service ready'}, []), (4, {'enabled': False, 'label': 'Restart service'}, []), (5, {'label': 'Quit Print Partner'}, [])]))",
+    "seconds": 32.38
+  },
+  {
+    "screenshot": "tray-ready.png",
+    "menu": "(2, (0, {'children-display': 'submenu'}, [(2, {'label': 'Show Print Partner'}, []), (3, {'enabled': False, 'label': 'Service ready'}, []), (4, {'enabled': False, 'label': 'Restart service'}, []), (5, {'label': 'Quit Print Partner'}, [])]))",
+    "seconds": 33.71
+  },
+  {
+    "screenshot": "tray-stopping.png",
+    "menu": "(2, (0, {'children-display': 'submenu'}, [(2, {'label': 'Show Print Partner'}, []), (3, {'enabled': False, 'label': 'Service stopping'}, []), (4, {'enabled': False, 'label': 'Restart service'}, []), (5, {'label': 'Quit Print Partner'}, [])]))",
+    "seconds": 67.71
+  },
+  {
+    "screenshot": "tray-failed.png",
+    "menu": "(2, (0, {'children-display': 'submenu'}, [(2, {'label': 'Show Print Partner'}, []), (3, {'enabled': False, 'label': 'Service failed'}, []), (4, {'enabled': False, 'label': 'Restart service'}, []), (5, {'label': 'Quit Print Partner'}, [])]))",
+    "seconds": 78.02
+  },
+  {
+    "exit": 1,
+    "expected_failure": true,
+    "head": "11f1d0b2d2d4e9ca9acbd739c7bf3abc2e02a48c"
+  }
+]

@@ -1,0 +1,10 @@
+{
+  "head": "11f1d0b2d2d4e9ca9acbd739c7bf3abc2e02a48c",
+  "merge": "d2daeed9",
+  "accepted_media_cache_identical_to_main": true,
+  "nlink_fix_preserved": true,
+  "sha256": "bd1aa7aa3711079190fdb20fbe0caab0c19f5390e2ea450c84f4167ff1bb65a2",
+  "previous_full_merge_and_match_audit": "https://github.com/poitee/PrintPartner/pull/125#issuecomment-6096748660",
+  "runtime_state_review": "pp-core, pp-compat, tray and runtime tests include Stopping/Failed; no separate UI/status-screen state match or installed-bundle test found",
+  "macos_bundle_workflow": false
+}
