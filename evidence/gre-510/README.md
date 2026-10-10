@@ -31,3 +31,6 @@ Model/harness: Codex gpt-6.1-sol (medium), T3 VM 135.
 - `npm --prefix web run typecheck`: passed (both server and client, server unchanged).
 - Changed-file ESLint and client typecheck rerun after the final test-only adjustment: passed.
 - PR diff is limited to four files in `web/apps/web`. `git diff origin/main -- web/apps/server` is empty. Local `main` is stale at `292783d`, while the requested origin/main base is `0ccdecd`; no old server files were restored from that stale ref.
+
+- Final aggregate `npm --prefix web test`: exit 0. Client: 1,440 tests; main server run: 2,197 tests; separate accepted-STL bundle suite: passed. Contracts, domain, desktop parity, schema, release and build-tool checks also passed.
+- Owned API and Vite processes stopped, and the exact disposable directory `/tmp/pp-gre510-GKvBp6` was removed after verification.
