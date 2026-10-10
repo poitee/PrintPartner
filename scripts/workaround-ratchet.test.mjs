@@ -392,9 +392,15 @@ test("extracts YAML run plain scalars starting on the next line", () => {
   }
 });
 
-test("extracts single-line YAML run commands without adjacent keys or comments", () => {
+test("extracts single-line YAML run commands with trailing comments and without adjacent keys", () => {
   const source = 'steps:\n  - run: echo "TODO" # FIXME metadata\n    name: HACK metadata\n    env:\n      NOTE: TODO metadata';
   assert.deepEqual(countText(source, "workflow.yml"), { todoComments: 1, eslintDisable: 0, rustAllow: 0 });
+});
+
+test("counts YAML comments on the whole physical inline run line", () => {
+  for (const source of ["run: echo x # TODO a", "- run: echo x # TODO a", 'run: "echo x" # TODO a', "command: &command echo x\nrun: *command # TODO a"]) {
+    assert.deepEqual(countText(source, "workflow.yml"), { todoComments: 1, eslintDisable: 0, rustAllow: 0 });
+  }
 });
 
 test("ignores run-like text inside other YAML scalar values", () => {

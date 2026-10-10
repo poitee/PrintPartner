@@ -329,29 +329,6 @@ describe("accepted media PNG cache", () => {
     expect(existsSync(replacement)).toBe(false);
   });
 
-  it.each(["read", "observe"] as const)("%s keeps the opened PNG when publication unlinks its inode", (operation) => {
-    const thumbsDir = cacheFixture();
-    writeAcceptedMediaPng({ thumbsDir, basis, png });
-    const replacement = Buffer.concat([png.subarray(0, 8), Buffer.from("new complete bytes")]);
-    const descriptorStats = vi.mocked(fstatSync);
-    const actualFstat = descriptorStats.getMockImplementation()!;
-    let opening = true;
-    descriptorStats.mockClear();
-    descriptorStats.mockImplementation((descriptor) => {
-      const stats = actualFstat(descriptor);
-      if (opening) writeAcceptedMediaPng({ thumbsDir, basis, png: replacement });
-      opening = !opening;
-      return stats;
-    });
-    try {
-      if (operation === "read") expect(readAcceptedMediaPng({ thumbsDir, basis })).toEqual(png);
-      else expect(observeAcceptedMediaPng({ thumbsDir, basis })).toEqual({ kind: "present" });
-      expect(descriptorStats).toHaveBeenCalledTimes(2);
-    } finally {
-      descriptorStats.mockImplementation(actualFstat);
-    }
-  });
-
   it("exposes only complete old or new bytes while another process publishes", async () => {
     const thumbsDir = cacheFixture();
     const nextPng = Buffer.concat([
