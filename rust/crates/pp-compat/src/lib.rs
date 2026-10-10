@@ -46,6 +46,7 @@ pub struct SpawnSpec {
     pub lease: String,
     pub lease_file: std::fs::File,
     pub port: u16,
+    pub record_child: fn(&std::path::Path, u32) -> Result<()>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -272,6 +273,14 @@ impl Process {
             });
         }
         let mut child = command.spawn().context("Could not start bundled Node")?;
+        // Persist ownership before the child can receive setup or open storage.
+        if let Err(error) =
+            (spec.record_child)(&spec.data_dir, child.id().context("Missing child PID")?)
+        {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            return Err(error.context("Could not record child ownership"));
+        }
         let mut stdin = child.stdin.take().context("Missing parent-liveness pipe")?;
         let setup = serde_json::json!({ "version":1, "data_dir":spec.data_dir, "socket_path":endpoint.socket,
             "generation":endpoint.generation, "key":hex::encode(key), "lease":spec.lease, "parent_pid":std::process::id(), "port":spec.port });
