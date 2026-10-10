@@ -93,21 +93,21 @@ try {
   await recoveryPage.route(jobStatus, (route) => {
     if (route.request().method() !== "GET") return route.continue();
     pollCount += 1;
-    // Transient failures keep observing; only a missing job ends observation.
-    const status = pollCount <= 2 ? 503 : 404;
-    return route.fulfill({ status, contentType: "application/json", body: JSON.stringify({ error: status === 503 ? "Test connection interrupted" : "Job not found" }) });
+    // Transient failures keep observing; a non-retryable poll failure ends observation.
+    const status = pollCount <= 2 ? 503 : 400;
+    return route.fulfill({ status, contentType: "application/json", body: JSON.stringify({ error: status === 503 ? "Test connection interrupted" : "Test invalid job request" }) });
   });
   await recoveryPage.goto(`${ui}/export?profile=${build.id}`);
   await recoveryPage.getByRole("button", { name: "Download sorted STL files", exact: true }).click();
   await recoveryPage.getByText("Could not download the STL files", { exact: true }).waitFor();
-  await recoveryPage.getByText("Job not found", { exact: true }).first().waitFor();
-  assert.equal(pollCount, 3, "Both transient failures must be retried before the terminal 404");
-  assert.ok(wsInterceptCount >= 1, "WebSocket intercept must fire for /ws/jobs/:jobId");
+  await recoveryPage.getByText(/Lost contact with the job/).first().waitFor();
+  assert.ok(wsInterceptCount >= 1, "WebSocket intercept must fire for /ws/jobs/:jobId (not HTTP-only recovery)");
   assert.equal(await recoveryPage.getByRole("button", { name: "Download sorted STL files", exact: true }).isEnabled(), true);
+  assert.equal(pollCount, 3, "Both transient failures must be retried before the non-retryable 400");
   await recoveryPage.unroute(jobStatus);
   await recoveryPage.getByRole("button", { name: "Try again", exact: true }).click();
   await recoveryPage.getByRole("link", { name: "Save the files", exact: true }).waitFor();
   await recoveryPage.close();
-  log("PASS: transient job polls retry; missing job stops the spinner; retry completes through HTTP polling without WebSocket");
+  log("PASS: transient job polls retry; non-retryable job poll stops the spinner; retry completes through HTTP polling without WebSocket");
   log("PASS: real upload, saved rules reload, Accent + Structural ZIP download with identical STL bytes, overlap warning, mobile layout", { build: build.id });
 } finally { await browser.close(); }
