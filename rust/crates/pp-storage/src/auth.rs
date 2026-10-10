@@ -1006,3 +1006,34 @@ pub(crate) fn job_key_actor(
         _ => Err(AuthFailure::SessionRequired.into()),
     }
 }
+
+pub(crate) fn reconciliation_actor(
+    tx: &Transaction<'_>,
+    credential: crate::read_model::Credential,
+    policy: AuthPolicy,
+) -> Result<(String, String)> {
+    match credential {
+        crate::read_model::Credential::Session(secret) => {
+            ensure!(
+                !secret.expose().is_empty() && secret.expose().len() <= 4096,
+                "Authentication required"
+            );
+            let user = actor(tx, &crypto::digest(secret.expose()))?;
+            let tenant = policy::tenant_for_authenticated_actor(tx, &user, policy)?;
+            Ok((tenant, user.user_id))
+        }
+        crate::read_model::Credential::ApiKey {
+            routed_tenant,
+            secret,
+        } => match keys::resolve(tx, &routed_tenant, secret)? {
+            Outcome::KeyResolved {
+                principal: Some(principal),
+                ..
+            } => {
+                let actor = format!("tenant:{}", principal.tenant_id);
+                Ok((principal.tenant_id, actor))
+            }
+            _ => bail!("Authentication required"),
+        },
+    }
+}

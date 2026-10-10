@@ -1,0 +1,128 @@
+{
+  "profile": 1,
+  "draft": 2,
+  "key": "selection",
+  "request": {
+    "expected_snapshot_digest": "3053fc914dfaf337f2985855d5a844b1052c2243c764730b29b0670bffcf6db7",
+    "decisions": []
+  },
+  "result": {
+    "kind": "ready",
+    "workspace": {
+      "profile_id": 1,
+      "draft": {
+        "draft_id": 2,
+        "state": "open",
+        "lifecycle_version": 0,
+        "snapshot_digest": "9ce587840ffe5597396bd45c06b37048226737365bc6bf7ba96a8dc910bc3003",
+        "base": {
+          "revision_id": 1,
+          "plan_version": 1
+        }
+      },
+      "parts": [
+        {
+          "draft_part_id": 4,
+          "base_revision_part_id": 1,
+          "part_key": "bracket.stl",
+          "filename": "bracket.stl",
+          "relative_path": "bracket.stl",
+          "source_layer": "base:Fixture Source",
+          "role": "primary",
+          "quantity_inferred": 1,
+          "quantity_override": 2,
+          "quantity_effective": 2,
+          "included": true
+        },
+        {
+          "draft_part_id": 5,
+          "base_revision_part_id": 2,
+          "part_key": "excluded.stl",
+          "filename": "excluded.stl",
+          "relative_path": "excluded.stl",
+          "source_layer": "base:Fixture Source",
+          "role": "primary",
+          "quantity_inferred": 1,
+          "quantity_override": 1,
+          "quantity_effective": 1,
+          "included": false
+        },
+        {
+          "draft_part_id": 6,
+          "base_revision_part_id": 3,
+          "part_key": "gear.stl",
+          "filename": "gear.stl",
+          "relative_path": "gear.stl",
+          "source_layer": "base:Fixture Source",
+          "role": "primary",
+          "quantity_inferred": 1,
+          "quantity_override": 2,
+          "quantity_effective": 2,
+          "included": true
+        }
+      ],
+      "diff": {
+        "base_is_current": true,
+        "added": [],
+        "removed": [],
+        "changed": [
+          {
+            "before": {
+              "revision_part_id": 1,
+              "filename": "bracket.stl",
+              "relative_path": "bracket.stl",
+              "source_layer": "base:Fixture Source"
+            },
+            "after": {
+              "draft_part_id": 4,
+              "base_revision_part_id": 1,
+              "part_key": "bracket.stl",
+              "filename": "bracket.stl",
+              "relative_path": "bracket.stl",
+              "source_layer": "base:Fixture Source",
+              "role": "primary",
+              "quantity_inferred": 1,
+              "quantity_override": 2,
+              "quantity_effective": 2,
+              "included": true
+            },
+            "fields": [
+              "quantityOverride",
+              "quantityEffective"
+            ]
+          },
+          {
+            "before": {
+              "revision_part_id": 2,
+              "filename": "excluded.stl",
+              "relative_path": "excluded.stl",
+              "source_layer": "base:Fixture Source"
+            },
+            "after": {
+              "draft_part_id": 5,
+              "base_revision_part_id": 2,
+              "part_key": "excluded.stl",
+              "filename": "excluded.stl",
+              "relative_path": "excluded.stl",
+              "source_layer": "base:Fixture Source",
+              "role": "primary",
+              "quantity_inferred": 1,
+              "quantity_override": 1,
+              "quantity_effective": 1,
+              "included": false
+            },
+            "fields": [
+              "status"
+            ]
+          }
+        ]
+      },
+      "reconciliation": {
+        "kind": "ready",
+        "reused_units": 5,
+        "new_units": 0,
+        "surplus_units": 1
+      }
+    }
+  }
+}
