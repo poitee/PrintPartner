@@ -344,6 +344,36 @@ test("keeps closed nested comments protected when recovering an unfinished outer
   });
 });
 
+test("preserves closed nested comment boundaries despite quotes exposed by EOF recovery", () => {
+  const source = '/* outer\n" /* inner " #[allow(ignored)] */\n#[allow(dead_code)]';
+  assert.deepEqual(countText(source, "a.rs"), {
+    todoComments: 0, eslintDisable: 0, rustAllow: 1,
+  });
+});
+
+test("preserves multiline closed nested spans during EOF recovery", () => {
+  for (const prefix of ['"', '//']) {
+    const source = [
+      "/* outer TODO",
+      `${prefix} /* inner`,
+      '" /* deeper #[allow(ignored)] */',
+      "#[allow(also_ignored)] FIXME eslint-disable */",
+      "#[allow(dead_code)]",
+    ].join("\n");
+    assert.deepEqual(countText(source, "a.rs"), {
+      todoComments: 2, eslintDisable: 1, rustAllow: 1,
+    }, source);
+  }
+});
+
+test("recovers many unfinished nested openers together", () => {
+  const source = "/* TODO #[allow(unused)]\n".repeat(10_000) +
+    '" /* closed #[allow(ignored)] */ "\n#[allow(dead_code)]';
+  assert.deepEqual(countText(source, "a.rs"), {
+    todoComments: 10_000, eslintDisable: 0, rustAllow: 10_001,
+  });
+});
+
 test("recovers each unfinished nested Rust block comment", () => {
   const source = "/* outer TODO #[allow(unused)]\n/* inner FIXME eslint-disable #[allow(dead_code)]";
   assert.deepEqual(countText(source, "a.rs"), {
