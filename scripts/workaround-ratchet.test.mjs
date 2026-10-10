@@ -257,6 +257,55 @@ for (const hashCount of [0, 1, 3, 255]) {
   });
 }
 
+for (const [name, open, close] of [
+  ["ordinary", '"', '"'],
+  ["raw", 'r#"', '"#'],
+  ["raw C", 'cr#"', '"#'],
+  ["byte", 'b"', '"'],
+  ["raw byte", 'br#"', '"#'],
+  ["C", 'c"', '"'],
+]) {
+  test(`counts markers after unterminated Rust ${name} strings at EOF`, () => {
+    for (const body of [
+      "// TODO FIXME HACK eslint-disable\n#[allow(dead_code)]",
+      "text\n// TODO FIXME HACK eslint-disable\n#[allow(dead_code)]\n",
+      "text\n/* TODO eslint-disable */\n#[\nallow(dead_code)\n]",
+    ]) {
+      const source = `let valid = "// TODO #[allow(ignored)]"; let broken = ${open}${body}`;
+      assert.deepEqual(countText(source, "a.rs"), {
+        todoComments: 1, eslintDisable: 1, rustAllow: 1,
+      }, source);
+    }
+  });
+
+  test(`keeps terminated Rust ${name} strings unchanged`, () => {
+    const source = `let text = ${open}// TODO eslint-disable\n#[allow(ignored)]${close};\n` +
+      "// FIXME eslint-disable\n#[allow(dead_code)]";
+    assert.deepEqual(countText(source, "a.rs"), {
+      todoComments: 1, eslintDisable: 1, rustAllow: 1,
+    });
+  });
+}
+
+test("does not let quotes in the rewound Rust suffix hide markers again", () => {
+  const source = [
+    '#[allow(unused)] let valid = "// TODO"; let broken = r##"text',
+    '"# // TODO: short closing delimiter',
+    '" // FIXME: another unmatched quote',
+    "#[allow(dead_code)]",
+  ].join("\n");
+  assert.deepEqual(countText(source, "a.rs"), {
+    todoComments: 2, eslintDisable: 0, rustAllow: 2,
+  });
+});
+
+test("rewinds an unterminated Rust string ending in an escaped quote", () => {
+  const source = 'let broken = "text\n// HACK eslint-disable\n#[allow(dead_code)]\\"';
+  assert.deepEqual(countText(source, "a.rs"), {
+    todoComments: 1, eslintDisable: 1, rustAllow: 1,
+  });
+});
+
 test("keeps Rust character literals separate from strings and lifetimes", () => {
   const fixtures = {
     quote: ["let quote = '\"'; // TODO: real", "#[allow(dead_code)]"].join("\n"),

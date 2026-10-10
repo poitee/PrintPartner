@@ -233,7 +233,7 @@ function countRustAllowMeta(meta) {
   return args.slice(1).reduce((count, arg) => count + countRustAllowMeta(arg), 0);
 }
 
-function scanLine(line, syntax, initialState) {
+function scanLine(line, syntax, initialState, lineIndex, codeFrom) {
   const commentText = Array(line.length).fill(" ");
   const unquotedCodeText = Array(line.length).fill(" ");
   let state = initialState;
@@ -296,11 +296,15 @@ function scanLine(line, syntax, initialState) {
       }
     }
 
-    const quote = (!syntax.html || state.kind === "htmlTag") && quoteAt(line, index, syntax);
+    const ignoreQuotes = codeFrom && (lineIndex > codeFrom.line ||
+      (lineIndex === codeFrom.line && index >= codeFrom.index));
+    const quote = !ignoreQuotes && (!syntax.html || state.kind === "htmlTag") && quoteAt(line, index, syntax);
     if (quote) {
+      const opening = { line: lineIndex, index };
       index += quote.open.length;
       state = {
         kind: "quote",
+        opening,
         close: quote.close,
         escape: quote.escape,
         multiline: quote.multiline,
@@ -319,17 +323,22 @@ function scanLine(line, syntax, initialState) {
   return { commentText: commentText.join(""), unquotedCodeText: unquotedCodeText.join(""), state };
 }
 
-function countNonJavaScriptText(text, path) {
+function countNonJavaScriptText(text, path, codeFrom = null) {
   const counts = Object.fromEntries(Object.keys(MARKERS).map((key) => [key, 0]));
   const syntax = syntaxFor(path);
   let state = CODE_STATE;
   const unquotedLines = [];
-  for (const line of text.split("\n")) {
-    const scanned = scanLine(line, syntax, state);
+  for (const [lineIndex, line] of text.split("\n").entries()) {
+    const scanned = scanLine(line, syntax, state, lineIndex, codeFrom);
     state = scanned.state;
     unquotedLines.push(scanned.unquotedCodeText);
     if (MARKERS.todoComments.test(scanned.commentText)) counts.todoComments += 1;
     if (MARKERS.eslintDisable.test(scanned.commentText)) counts.eslintDisable += 1;
+  }
+  if (syntax.rustRawStrings && state.kind === "quote" && !codeFrom) {
+    // An unfinished Rust string must not hide the remaining markers. Rewind
+    // to its opening and treat the rest as code, conservatively ignoring quotes.
+    return countNonJavaScriptText(text, path, state.opening);
   }
   if (syntax.rustAllow) counts.rustAllow = countRustAllowMarkers(unquotedLines.join("\n"));
   return counts;
