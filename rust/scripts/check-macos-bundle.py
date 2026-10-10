@@ -1007,70 +1007,96 @@ class ParserTests(unittest.TestCase):
             with self.subTest(output=bad), self.assertRaises(ValueError):
                 linked_libraries(bad)
 
+    def completed_stage_fixture(self, root):
+        web = root / WEB
+        node = root / 'MacOS/printpartner-node'
+        node.parent.mkdir(parents=True)
+        node.write_text('fixture node bytes')
+        node.chmod(0o755)
+        for suffix in ARTIFACTS.values():
+            directory = web / suffix
+            directory.mkdir(parents=True)
+            (directory / 'index.js').write_text('fixture artifact')
+        (web / ARTIFACTS['backend'] / 'desktop-resolution.js').write_text('fixture preload')
+        (web / ARTIFACTS['frontend'] / 'desktop-build.json').write_text(json.dumps(
+            {'mode': 'desktop', 'version': '3.3.0', 'service_worker': False}))
+        metadata = ['package.json', 'package-lock.json', 'apps/server/package.json',
+                    'packages/contracts/package.json', 'packages/domain/package.json']
+        source = root / 'source'
+        for name in [*metadata, 'apps/web/package.json']:
+            target = source / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(json.dumps({'version': '3.3.0'}))
+        # Execute the producer's metadata-copy loop so an extra copied file
+        # cannot silently diverge from the completed-stage inventory again.
+        staging = ast.parse(pathlib.Path(__file__).with_name('stage-desktop.py').read_text())
+        copy_loop, = [statement for statement in staging.body
+                      if isinstance(statement, ast.For) and isinstance(statement.iter, ast.List)
+                      and any(isinstance(item, ast.Constant) and item.value == 'package-lock.json'
+                              for item in statement.iter.elts)]
+        exec(compile(ast.Module(body=[copy_loop], type_ignores=[]), '<staged metadata>', 'exec'),
+             {'source': source, 'web': web, 'shutil': shutil})
+        shutil.rmtree(source)
+        (web / 'package-lock.json').write_text(json.dumps({'packages': {
+            'node_modules/better-sqlite3': {'version': 'fixture'}}}))
+        addon = root / 'Frameworks/fixture.node'
+        addon.parent.mkdir()
+        addon.write_text('fixture addon bytes')
+        alias = web / better_sqlite3_addon_path('arm64')
+        alias.parent.mkdir(parents=True)
+        alias.symlink_to(os.path.relpath(addon, alias.parent))
+        workspaces = web / 'node_modules/@print-partner'
+        workspaces.mkdir()
+        for name in ('contracts', 'domain'):
+            (workspaces / name).symlink_to('../../packages/'+name)
+        roots = dependency_roots(root, web)
+        manifest = {'schema': 1, 'commit': 'a'*40, 'node_version': 'v24.21.0',
+                    'runtime_version': '3.3.0-web', 'node_sha256': digest(node),
+                    'metadata': {name: digest(web / name) for name in metadata},
+                    'dependencies': {'web_path': WEB, 'roots': roots, **dependency_inventory(root, roots)},
+                    **{key: measured_files(root, web / suffix) for key, suffix in ARTIFACTS.items()}}
+        (root / 'Resources/desktop-runtime/release.json').write_text(json.dumps({
+            'runtime_version': '3.3.0-web', 'commit': 'a'*40, 'node': 'MacOS/printpartner-node',
+            'web': WEB, 'os': 'macos', 'arch': 'aarch64', 'node_version': 'v24.21.0', 'node_abi': '137'}))
+        self.assertGreater(verify_resources(root, manifest, 'arm64')['dependency_files'], 0)
+        (root / 'bundle-manifest.json').write_text(json.dumps(manifest))
+        (root / 'bundle-config.json').write_text(json.dumps({'bundle': {
+            'active': True, 'resources': {}, 'macOS': {
+                'minimumSystemVersion': '13.5',
+                'files': {name: str(root / name) for name in
+                          ['MacOS/printpartner-node', 'Frameworks/fixture.node']}}}}))
+        spec = importlib.util.spec_from_file_location(
+            'macos_assembly', pathlib.Path(__file__).with_name('assemble-macos-resources.py'))
+        assembly = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(assembly)
+        return manifest, node, addon, web, workspaces, assembly
+
+    def test_completed_stage_accepts_symlinked_temporary_parent(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = pathlib.Path(temporary).resolve()
+            private_tmp = parent / 'private/tmp'
+            private_tmp.mkdir(parents=True)
+            tmp = parent / 'tmp'
+            tmp.symlink_to(private_tmp, target_is_directory=True)
+            root = tmp / 'desktop-stage'
+            root.mkdir()
+            _, _, _, _, _, assembly = self.completed_stage_fixture(root.resolve(strict=True))
+            config_path = root / 'bundle-config.json'
+            config = json.loads(config_path.read_text())
+            config['bundle']['macOS']['files'] = {
+                name: str(root / name) for name in config['bundle']['macOS']['files']}
+            config_path.write_text(json.dumps(config))
+
+            self.assertNotEqual(root.absolute(), root.resolve(strict=True))
+            stage = assembly.completed_stage(root)
+            self.assertEqual(stage.root, root.resolve(strict=True))
+            self.assertEqual(set(stage.native_files),
+                             {'MacOS/printpartner-node', 'Frameworks/fixture.node'})
+
     def test_staged_metadata_passes_completed_stage_and_rejects_changed_or_missing_closure(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary).resolve()
-            web = root / WEB
-            node = root / 'MacOS/printpartner-node'
-            node.parent.mkdir(parents=True)
-            node.write_text('fixture node bytes')
-            node.chmod(0o755)
-            for suffix in ARTIFACTS.values():
-                directory = web / suffix
-                directory.mkdir(parents=True)
-                (directory / 'index.js').write_text('fixture artifact')
-            (web / ARTIFACTS['backend'] / 'desktop-resolution.js').write_text('fixture preload')
-            (web / ARTIFACTS['frontend'] / 'desktop-build.json').write_text(json.dumps(
-                {'mode': 'desktop', 'version': '3.3.0', 'service_worker': False}))
-            metadata = ['package.json', 'package-lock.json', 'apps/server/package.json',
-                        'packages/contracts/package.json', 'packages/domain/package.json']
-            source = root / 'source'
-            for name in [*metadata, 'apps/web/package.json']:
-                target = source / name
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text(json.dumps({'version': '3.3.0'}))
-            # Execute the producer's metadata-copy loop so an extra copied file
-            # cannot silently diverge from the completed-stage inventory again.
-            staging = ast.parse(pathlib.Path(__file__).with_name('stage-desktop.py').read_text())
-            copy_loop, = [statement for statement in staging.body
-                          if isinstance(statement, ast.For) and isinstance(statement.iter, ast.List)
-                          and any(isinstance(item, ast.Constant) and item.value == 'package-lock.json'
-                                  for item in statement.iter.elts)]
-            exec(compile(ast.Module(body=[copy_loop], type_ignores=[]), '<staged metadata>', 'exec'),
-                 {'source': source, 'web': web, 'shutil': shutil})
-            shutil.rmtree(source)
-            (web / 'package-lock.json').write_text(json.dumps({'packages': {
-                'node_modules/better-sqlite3': {'version': 'fixture'}}}))
-            addon = root / 'Frameworks/fixture.node'
-            addon.parent.mkdir()
-            addon.write_text('fixture addon bytes')
-            alias = web / better_sqlite3_addon_path('arm64')
-            alias.parent.mkdir(parents=True)
-            alias.symlink_to(os.path.relpath(addon, alias.parent))
-            workspaces = web / 'node_modules/@print-partner'
-            workspaces.mkdir()
-            for name in ('contracts', 'domain'):
-                (workspaces / name).symlink_to('../../packages/'+name)
-            roots = dependency_roots(root, web)
-            manifest = {'schema': 1, 'commit': 'a'*40, 'node_version': 'v24.21.0',
-                        'runtime_version': '3.3.0-web', 'node_sha256': digest(node),
-                        'metadata': {name: digest(web / name) for name in metadata},
-                        'dependencies': {'web_path': WEB, 'roots': roots, **dependency_inventory(root, roots)},
-                        **{key: measured_files(root, web / suffix) for key, suffix in ARTIFACTS.items()}}
-            (root / 'Resources/desktop-runtime/release.json').write_text(json.dumps({
-                'runtime_version': '3.3.0-web', 'commit': 'a'*40, 'node': 'MacOS/printpartner-node',
-                'web': WEB, 'os': 'macos', 'arch': 'aarch64', 'node_version': 'v24.21.0', 'node_abi': '137'}))
-            self.assertGreater(verify_resources(root, manifest, 'arm64')['dependency_files'], 0)
-            (root / 'bundle-manifest.json').write_text(json.dumps(manifest))
-            (root / 'bundle-config.json').write_text(json.dumps({'bundle': {
-                'active': True, 'resources': {}, 'macOS': {
-                    'minimumSystemVersion': '13.5',
-                    'files': {name: str(root / name) for name in
-                              ['MacOS/printpartner-node', 'Frameworks/fixture.node']}}}}))
-            spec = importlib.util.spec_from_file_location(
-                'macos_assembly', pathlib.Path(__file__).with_name('assemble-macos-resources.py'))
-            assembly = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(assembly)
+            manifest, node, addon, web, workspaces, assembly = self.completed_stage_fixture(root)
             self.assertIn(WEB+'/package.json', assembly.completed_stage(root).runtime_files)
             extra = web / 'apps/web/package.json'
             extra.write_text('{}')

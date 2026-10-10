@@ -99,7 +99,8 @@ def completed_stage(path):
     config = json.loads((root / 'bundle-config.json').read_text())['bundle']
     require(config['active'] is True and config['resources'] == {} and
             config['macOS']['minimumSystemVersion'] == '13.5' and
-            config['macOS']['files'] == {name: str(root / name) for name in native},
+            {name: Path(path).resolve(strict=True) for name, path in config['macOS']['files'].items()} ==
+            {name: (root / name).resolve(strict=True) for name in native},
             'Stage configuration must leave runtime assembly to this helper')
     return CompletedMeasuredStage(root, manifest_bytes, manifest, architecture, files, links, native)
 
