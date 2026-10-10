@@ -64,10 +64,12 @@ function capture(name, parser, input, rawInput) {
   }
   supplemental.push({ name, direction: parser === "parseSavePlanChoicesRequest" ? "input" : "output", parser, ...(rawInput ? { raw_input: rawInput } : { input }), outcome });
 }
-for (const count of [1000, 1001]) {
-  const input = globalThis.structuredClone(baseline);
-  input.decisions[0].target.source_layer = "🙂".repeat(count);
-  capture(`source-layer-codepoints-${count}-emoji`, "parseSavePlanChoicesRequest", input);
+for (const [glyph, label] of [["🙂", "emoji"], ["漢", "cjk"], ["\u0301", "combining-mark"]]) {
+  for (const count of [1000, 1001]) {
+    const input = globalThis.structuredClone(baseline);
+    input.decisions[0].target.source_layer = glyph.repeat(count);
+    capture(`source-layer-codepoints-${count}-${label}`, "parseSavePlanChoicesRequest", input);
+  }
 }
 const integral = globalThis.structuredClone(baseline);
 integral.decisions[0].value = 1;
@@ -78,7 +80,18 @@ capture("receipt-time-is-bounded-text", "parseApplyPlanDraftReceipt", { ...recei
 capture("receipt-safe-integer-limit", "parseApplyPlanDraftReceipt", { ...receipt, profile_id: Number.MAX_SAFE_INTEGER });
 capture("receipt-unsafe-integer-rejected", "parseApplyPlanDraftReceipt", { ...receipt, profile_id: Number.MAX_SAFE_INTEGER + 1 });
 for (const [field, parser] of [["part_key", "parseSavePlanChoicesRequest"], ["relative_path", "parseSavePlanChoicesRequest"], ["source_layer", "parseSavePlanChoicesRequest"], ["applied_at", "parseApplyPlanDraftReceipt"]]) {
-  for (const [label, rawText, accepted] of [["lone-high", "\\ud800", false], ["lone-low", "\\udfff", false], ["reversed-pair", "\\udfff\\ud800", false], ["valid-pair", "\\ud83d\\ude42", true], ["mixed-scalars", "a\\ud83d\\ude42é", true]]) {
+  for (const [label, rawText, accepted] of [
+    ["lone-high", "\\ud800", false],
+    ["lone-low", "\\udfff", false],
+    ["reversed-pair", "\\udfff\\ud800", false],
+    ["valid-pair", "\\ud83d\\ude42", true],
+    ["mixed-scalars", "a\\ud83d\\ude42é", true],
+    ["cjk", "中文 日本語 한국어", true],
+    // Keep decomposed accents and stacked marks unchanged, without normalization.
+    ["combining-marks", "e\\u0301 a\\u0308\\u0323", true],
+    ["zwj-emoji", "👩🏽‍💻 👨‍👩‍👧‍👦", true],
+    ["regional-indicator-flags", "🇯🇵 🇰🇷 🇨🇳", true],
+  ]) {
     const input = globalThis.structuredClone(parser === "parseSavePlanChoicesRequest" ? baseline : receipt);
     if (parser === "parseSavePlanChoicesRequest") input.decisions[0].target[field] = "TEXT_SLOT";
     else input[field] = "TEXT_SLOT";
@@ -89,7 +102,8 @@ for (const [field, parser] of [["part_key", "parseSavePlanChoicesRequest"], ["re
     capture(`${field}-${label}`, parser, value, raw);
     const outcome = supplemental.at(-1).outcome;
     assert.equal(outcome.kind === "accepted", accepted, `${field}-${label}`);
-    if (!accepted) assert(outcome.issues.some((issue) => issue.message === "invalid_unicode_scalar_text"));
+    if (accepted) assert.deepEqual(outcome.parsed, value, `${field}-${label} exact round-trip`);
+    else assert(outcome.issues.some((issue) => issue.message === "invalid_unicode_scalar_text"));
   }
 }
 const schemaResults = [];
@@ -130,7 +144,7 @@ const semanticRules = {
   wire_semantics: {
     nullable_presence: "revision_id, expected_draft, source_layer and quantity value are required fields whose values may be null; no serde default",
     numeric: "JSON numbers must be mathematically integral and bounded; integral float lexemes accepted, strings and booleans rejected; IDs and versions limited to JavaScript MAX_SAFE_INTEGER",
-    strings: "Installed Zod4.5.4 uses Unicode code-point lengths; Rust chars().count() matches the measured 1000/1001 emoji bounds",
+    strings: "Installed Zod4.5.4 uses Unicode code-point lengths; Rust chars().count() matches the measured 1000/1001 emoji, CJK and combining-mark bounds",
     receipt: "applied_at is bounded nonempty text, not an ISO timestamp refinement; all IDs/digests are serialized from provided values unchanged",
   },
   diagnostic_projection: {
