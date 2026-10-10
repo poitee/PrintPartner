@@ -376,6 +376,70 @@ impl AuthClient {
             .recv()
             .map_err(|_| anyhow!(AuthFailure::CommitUnknown))?
     }
+    fn login(
+        &self,
+        mut credential: Credential,
+        password: &Secret,
+        cancelled: &AtomicBool,
+    ) -> Result<Outcome> {
+        let user_id = credential.user.user_id.clone();
+        let email = credential
+            .user
+            .email
+            .clone()
+            .ok_or_else(|| anyhow!(AuthFailure::InvalidCredentials))?;
+        for attempt in 0..2 {
+            ensure!(
+                !cancelled.load(Ordering::Acquire),
+                "Cancelled before verification"
+            );
+            ensure!(
+                credential.user.user_id == user_id
+                    && credential
+                        .hash
+                        .as_ref()
+                        .is_some_and(|hash| crypto::verify(password, hash)),
+                AuthFailure::InvalidCredentials
+            );
+            let replacement = if credential
+                .hash
+                .as_ref()
+                .is_some_and(|hash| hash.starts_with("scrypt:"))
+            {
+                crypto::hash(password).ok()
+            } else {
+                None
+            };
+            match self.command(
+                Command::Login {
+                    credential,
+                    replacement,
+                },
+                cancelled,
+            ) {
+                Ok(Reply::Outcome(outcome)) => return Ok(outcome),
+                Ok(_) => bail!("Unexpected authentication reply"),
+                Err(error)
+                    if attempt == 0
+                        && matches!(
+                            error.downcast_ref::<AuthFailure>(),
+                            Some(AuthFailure::CredentialChanged)
+                        ) =>
+                {
+                    // A concurrent upgrade may preserve the password. Reverify the
+                    // current hash outside the writer, then retain the transaction CAS.
+                    let Reply::Credential(Some(current)) =
+                        self.command(Command::CredentialByEmail(email.clone()), cancelled)?
+                    else {
+                        bail!(AuthFailure::InvalidCredentials);
+                    };
+                    credential = current;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        unreachable!("login returns after its bounded retry")
+    }
     fn perform(&self, request: Request, cancelled: &AtomicBool) -> Result<Outcome> {
         let command = match request {
             Request::Status => Command::Status,
@@ -408,26 +472,7 @@ impl AuthClient {
                 else {
                     bail!(AuthFailure::InvalidCredentials);
                 };
-                ensure!(
-                    credential
-                        .hash
-                        .as_ref()
-                        .is_some_and(|hash| crypto::verify(&password, hash)),
-                    AuthFailure::InvalidCredentials
-                );
-                let replacement = if credential
-                    .hash
-                    .as_ref()
-                    .is_some_and(|hash| hash.starts_with("scrypt:"))
-                {
-                    crypto::hash(&password).ok()
-                } else {
-                    None
-                };
-                Command::Login {
-                    credential,
-                    replacement,
-                }
+                return self.login(credential, &password, cancelled);
             }
             Request::ChangePassword {
                 session,
@@ -533,6 +578,7 @@ fn validate_identity(provider: Provider, id: &str) -> Result<()> {
     );
     Ok(())
 }
+
 pub(super) struct Credential {
     user: User,
     hash: Option<String>,

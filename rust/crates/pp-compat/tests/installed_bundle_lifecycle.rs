@@ -37,6 +37,29 @@ struct TestOwnership {
 }
 
 impl TestOwnership {
+    // The installed-bundle fixture owns its marker; compat stays storage-independent.
+    fn record_child(directory: &Path, pid: u32) -> Result<()> {
+        let path = directory.join(".desktop-owner.json");
+        let mut marker: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)?;
+        marker["child_pid"] = pid.into();
+        marker["child_process_identity"] =
+            format!("instance:{}", hex::encode(rand::random::<[u8; 16]>())).into();
+        let temporary = directory.join(format!(
+            ".desktop-owner-{}.json.new",
+            hex::encode(rand::random::<[u8; 16]>())
+        ));
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&temporary)?;
+        file.write_all(&serde_json::to_vec(&marker)?)?;
+        file.sync_all()?;
+        std::fs::rename(temporary, path)?;
+        File::open(directory)?.sync_all()?;
+        Ok(())
+    }
+
     fn create(data_dir: PathBuf, runtime_dir: PathBuf) -> Result<Self> {
         ensure!(
             data_dir.is_absolute(),
@@ -133,7 +156,9 @@ async fn wait_for_ready(
                     bail!("Compatibility child entered backoff {attempt}")
                 }
                 Status::Guarded => bail!("Compatibility child entered crash guard"),
+                Status::Stopping => bail!("Compatibility child stopping before readiness"),
                 Status::Stopped => bail!("Compatibility child stopped before readiness"),
+                Status::Failed => bail!("Compatibility child failed before readiness"),
             }
             status
                 .changed()
@@ -200,6 +225,7 @@ async fn installed_bundle_start_health_shutdown() -> Result<()> {
         runtime_dir: ownership.runtime_dir.clone(),
         lease: ownership.lease.clone(),
         lease_file: ownership.lock.try_clone()?,
+        record_child: TestOwnership::record_child,
         port,
     })?;
     let mut status = supervisor.handle.status.clone();

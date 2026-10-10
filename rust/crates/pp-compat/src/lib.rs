@@ -47,6 +47,7 @@ pub struct SpawnSpec {
     pub lease: String,
     pub lease_file: std::fs::File,
     pub port: u16,
+    pub record_child: fn(&std::path::Path, u32) -> Result<()>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -56,7 +57,9 @@ pub enum Status {
     Ready { generation: String, pid: u32 },
     Backoff { attempt: usize },
     Guarded,
+    Stopping,
     Stopped,
+    Failed,
 }
 
 #[derive(Clone)]
@@ -329,14 +332,17 @@ impl Process {
             .env_remove("NODE_OPTIONS")
             .env_remove("NODE_PATH")
             .current_dir(&spec.bundle.web_root)
+            .env_clear()
+            .envs(
+                ["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "TZ"]
+                    .iter()
+                    .filter_map(|name| std::env::var_os(name).map(|value| (*name, value))),
+            )
             .env("PP_COMMIT", release::manifest()?.commit)
             .env("PRINT_PARTNER_UPDATE_CHECK", "0")
             .env("AI_ENABLED", "0")
             .env("HOST", "127.0.0.1")
             .env("DEPLOY_MODE", "self-host")
-            .env_remove("DATABASE_URL")
-            .env_remove("MULTI_USER")
-            .env_remove("PRINT_PARTNER_DATA_DIR")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -352,6 +358,14 @@ impl Process {
             });
         }
         let mut child = command.spawn().context("Could not start bundled Node")?;
+        // Persist ownership before the child can receive setup or open storage.
+        if let Err(error) =
+            (spec.record_child)(&spec.data_dir, child.id().context("Missing child PID")?)
+        {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            return Err(error.context("Could not record child ownership"));
+        }
         let mut stdin = child.stdin.take().context("Missing parent-liveness pipe")?;
         let setup = serde_json::json!({ "version":1, "data_dir":spec.data_dir, "socket_path":endpoint.socket,
             "generation":endpoint.generation, "key":hex::encode(key), "lease":spec.lease, "parent_pid":std::process::id(), "port":spec.port });
@@ -516,6 +530,7 @@ impl Supervisor {
                             generation: process.endpoint.generation.clone(),
                             pid,
                         });
+                        let ready_since = tokio::time::Instant::now();
                         let mut failures = 0;
                         loop {
                             tokio::select! {
@@ -531,9 +546,21 @@ impl Supervisor {
                                 }
                             }
                         }
+                        // Preserve escalation for repeated crashes, but forget old failures
+                        // once the child has stayed ready for the crash-guard window.
+                        if ready_since.elapsed() >= Duration::from_secs(120) {
+                            attempt = 0;
+                        }
                     }
                     endpoints.send_replace(None);
-                    let stop_intent = process.stop(observed_exit, &cancelled).await?;
+                    states.send_replace(Status::Stopping);
+                    let stop_intent = match process.stop(observed_exit, &cancelled).await {
+                        Ok(intent) => intent,
+                        Err(error) => {
+                            states.send_replace(Status::Failed);
+                            return Err(error);
+                        }
+                    };
                     logs.event("compat_reaped", 30);
                     if stop_intent == StopIntent::PlannedShutdown {
                         break;

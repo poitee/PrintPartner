@@ -96,7 +96,7 @@ fn public_construction_and_deserialization_cannot_bypass_invariants() {
 #[test]
 fn malformed_scalar_text_rejected_and_valid_pairs_preserved() {
     let request = golden("quantity-null-reset");
-    for malformed in [r"\ud800", r"\udfff", r"\udfff\ud800"] {
+    for malformed in [r"\ud800", r"\udfff", r"\udfff\ud800", r"中文\ud800"] {
         let mut input = request.clone();
         input["decisions"][0]["target"]["source_layer"] = json!("PLACEHOLDER");
         let raw = input.to_string().replace("PLACEHOLDER", malformed);
