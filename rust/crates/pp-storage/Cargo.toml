@@ -21,3 +21,4 @@ base64 = "=0.22.1"
 subtle = { version = "=2.6.1", default-features = false }
 hmac.workspace = true
 getrandom = "=0.3.4"
+libc.workspace = true

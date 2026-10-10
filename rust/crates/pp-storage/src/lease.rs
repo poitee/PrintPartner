@@ -1,4 +1,5 @@
-use anyhow::{Context, Result, bail, ensure};
+mod guard;
+use anyhow::{Context, Result, ensure};
 use fs2::FileExt;
 use sha2::{Digest, Sha256};
 use std::{
@@ -19,6 +20,7 @@ pub struct LeaseRelease {
 
 pub struct StorageLease {
     lock: Option<File>,
+    lease_guard: Option<guard::StorageLease>,
     data_dir: PathBuf,
     runtime_dir: PathBuf,
     lease: String,
@@ -38,9 +40,22 @@ impl StorageLease {
             .open(data_dir.join(".desktop.lock"))?;
         lock.try_lock_exclusive()
             .context("Data directory already owned")?;
+        let lease_guard = guard::StorageLease::acquire(&data_dir)?;
         let marker_path = data_dir.join(".desktop-owner.json");
         if marker_path.exists() {
-            bail!("A prior writer marker remains; verify no prior writer is alive before recovery");
+            let marker: serde_json::Value = serde_json::from_slice(&std::fs::read(&marker_path)?)?;
+            let pid = marker["pid"]
+                .as_u64()
+                .filter(|pid| *pid > 0 && *pid <= i32::MAX as u64)
+                .context("Invalid prior writer PID")? as u32;
+            ensure!(
+                guard::owner_is_stale(pid, marker["process_identity"].as_str()),
+                "A prior writer may still be alive"
+            );
+            std::fs::rename(
+                &marker_path,
+                data_dir.join(".desktop-lease/previous-marker.json"),
+            )?;
         }
         let lease = hex::encode(rand::random::<[u8; 32]>());
         let runtime_dir = std::env::temp_dir().join(format!(
@@ -50,7 +65,7 @@ impl StorageLease {
         ));
         std::fs::create_dir(&runtime_dir)?;
         std::fs::set_permissions(&runtime_dir, std::fs::Permissions::from_mode(0o700))?;
-        let marker = serde_json::json!({"pid":std::process::id(),"lease_hash":hex::encode(Sha256::digest(lease.as_bytes())),"runtime_dir":runtime_dir});
+        let marker = serde_json::json!({"pid":std::process::id(),"process_identity":lease_guard.identity,"lease_hash":hex::encode(Sha256::digest(lease.as_bytes())),"runtime_dir":runtime_dir});
         let result = (|| -> Result<()> {
             let mut file = OpenOptions::new()
                 .write(true)
@@ -67,6 +82,7 @@ impl StorageLease {
         }
         Ok(Self {
             lock: Some(lock),
+            lease_guard: Some(lease_guard),
             data_dir,
             runtime_dir,
             lease,
@@ -132,10 +148,16 @@ impl StorageLease {
         let runtime_removed =
             !self.runtime_dir.exists() || std::fs::remove_dir(&self.runtime_dir).is_ok();
         let marker = self.data_dir.join(".desktop-owner.json");
-        let marker_removed = runtime_removed && std::fs::remove_file(&marker).is_ok();
-        if !runtime_removed || !marker_removed {
+        let guard_released = runtime_removed
+            && self
+                .lease_guard
+                .as_mut()
+                .is_none_or(|guard| guard.release().is_ok());
+        let marker_removed = guard_released && std::fs::remove_file(&marker).is_ok();
+        if !runtime_removed || !marker_removed || !guard_released {
             let retained = Self {
                 lock: self.lock.take(),
+                lease_guard: self.lease_guard.take(),
                 data_dir: self.data_dir.clone(),
                 runtime_dir: self.runtime_dir.clone(),
                 lease: self.lease.clone(),

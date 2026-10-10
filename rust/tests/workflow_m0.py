@@ -12,6 +12,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+from urllib.parse import quote
 
 ROOT = Path(__file__).resolve().parents[2]
 COMMIT = json.loads((ROOT / "rust/bundle-manifest.json").read_text())["commit"]
@@ -68,9 +69,16 @@ def main():
         source, _ = request("/sources", "POST", {"name": "Isolated desktop source", "source_kind": "local"})
         boundary = "pp-m0-local-upload"
         stl = (ROOT / "rust/tests/fixtures/part.stl").read_bytes()
-        body = (f'--{boundary}\r\nContent-Disposition: form-data; name="files"; filename="cube.stl"\r\nContent-Type: application/octet-stream\r\n\r\n'.encode() + stl +
-                f'\r\n--{boundary}\r\nContent-Disposition: form-data; name="relative_paths"\r\n\r\n["cube.stl"]\r\n--{boundary}--\r\n'.encode())
+        filename = "cube café (sample).stl"
+        body = (f'--{boundary}\r\nContent-Disposition: form-data; name="files"; filename="{filename}"\r\nContent-Type: application/octet-stream\r\n\r\n'.encode() + stl +
+                f'\r\n--{boundary}\r\nContent-Disposition: form-data; name="relative_paths"\r\n\r\n{json.dumps([filename])}\r\n--{boundary}--\r\n'.encode())
         request(f'/sources/{source["id"]}/upload-files', "POST", body, {"Content-Type": f"multipart/form-data; boundary={boundary}"})
+        encoded_filename = quote(filename, safe="")
+        mesh, _ = request(f'/sources/{source["id"]}/stl/{encoded_filename}/mesh')
+        assert mesh == stl, "encoded artifact did not reach the real Node file route"
+        rejected_paths = ["%2e%2e", "%2F", "%5C", "%00", "%252e%252e", "%zz"]
+        for bad in rejected_paths:
+            request(f'/sources/{source["id"]}/stl/{bad}/mesh', allowed=(400,))
         created, _ = request("/plans", "POST", {"name": "Protected desktop workflow"})
         build = created["id"]
         request(f"/plans/{build}/layers/base", "PUT", {"project_id": source["id"]})
@@ -140,7 +148,8 @@ def main():
                   "fixture": str(fixture), "source_id": source["id"], "build_id": build, "part_id": accepted_part["id"],
                   "receipt": saved["receipt"], "revision_count_before": before, "revision_count_after": revision_count(),
                   "old_child_pid": old_pid, "new_child_pid": state["compat"]["pid"], "printed_count": progress["printed_count"],
-                  "export_sha256": hashlib.sha256(export).hexdigest(), "export_bytes": len(export), "checkoff_reload": isinstance(checkoff, dict), "effectful_get_fetch_metadata": True, "document_csp": document_headers["Content-Security-Policy"]}
+                  "export_sha256": hashlib.sha256(export).hexdigest(), "export_bytes": len(export), "checkoff_reload": isinstance(checkoff, dict), "effectful_get_fetch_metadata": True, "document_csp": document_headers["Content-Security-Policy"], "encoded_artifact_filename": filename,
+                  "encoded_artifact_sha256": hashlib.sha256(mesh).hexdigest(), "ambiguous_paths_denied": len(rejected_paths)}
         (fixture / "receipt.json").write_text(json.dumps(result, indent=2) + "\n")
         print(json.dumps(result))
     finally:

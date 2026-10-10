@@ -469,7 +469,11 @@ async fn handle(
     let spa = is_spa_client_path(&path);
     if (document && spa)
         || path.starts_with("/assets/")
-        || matches!(path.as_str(), "/favicon.ico" | "/logo.png")
+        || path.starts_with("/icons/")
+        || matches!(
+            path.as_str(),
+            "/favicon.ico" | "/logo.png" | "/manifest.json"
+        )
     {
         let relative = if document && spa {
             "index.html"
@@ -490,6 +494,7 @@ async fn handle(
                         Some("css") => "text/css",
                         Some("html") => "text/html; charset=utf-8",
                         Some("svg") => "image/svg+xml",
+                        Some("json") => "application/manifest+json",
                         Some("png") => "image/png",
                         _ => "application/octet-stream",
                     },
@@ -707,6 +712,44 @@ impl http_body::Body for TrackedBody {
 #[cfg(test)]
 mod tests {
     use tokio_util::sync::CancellationToken;
+
+    #[test]
+    fn encoded_artifact_segments_preserve_safe_names_and_reject_ambiguity() {
+        for path in [
+            "/sources/1/stl/caf%C3%A9%20%28sample%29.stl/mesh",
+            "/exports/a%20b.zip",
+            "/sources/1/stl/folder/model.stl/mesh",
+            "/",
+        ] {
+            assert!(
+                super::target::CanonicalTarget::parse(&path.parse().unwrap()).is_ok(),
+                "{path}"
+            );
+        }
+        for path in [
+            "/sources/1/stl/%2e%2e/mesh",
+            "/a/./b",
+            "/a/../b",
+            "/a//b",
+            "/a%2Fb",
+            "/a%2fb",
+            "/a%5Cb",
+            "/a\\b",
+            "/a%00b",
+            "/a%0Ab",
+            "/a%252fb",
+            "/a%252e%252eb",
+            "/a%",
+            "/a%2",
+            "/a%zz",
+            "/a%ff",
+        ] {
+            assert!(
+                super::target::CanonicalTarget::parse(&path.parse().unwrap()).is_err(),
+                "{path}"
+            );
+        }
+    }
 
     #[test]
     fn admission_and_drain_share_one_barrier() {
