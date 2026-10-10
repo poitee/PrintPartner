@@ -1,3 +1,7 @@
+#[allow(dead_code)]
+#[path = "support/schema.rs"]
+mod schema_fixture;
+
 use pp_storage::{
     Limits, WriterOwner,
     auth::{AuthPolicy, FirstUserTenant, RegistrationPolicy, SessionTenantPolicy},
@@ -44,12 +48,13 @@ fn physical_family(root: &std::path::Path) -> Vec<(String, u32, Option<Vec<u8>>)
 }
 
 #[test]
-fn schema39_wal_migrates_atomically_to_40_and_keeps_the_exact_backup() {
+fn schema39_wal_migrates_atomically_to_42_and_keeps_the_exact_backup() {
     let root = directory("source-scan-schema40");
     let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
     owner.shutdown().unwrap();
     let database = root.join("print-partner.db");
     let connection = Connection::open(&database).unwrap();
+    schema_fixture::remove_schema42(&connection);
     connection
         .execute_batch(
             "DROP TABLE source_scan_executions;
@@ -65,7 +70,7 @@ fn schema39_wal_migrates_atomically_to_40_and_keeps_the_exact_backup() {
     let (owner, ready) = WriterOwner::open(&root, Limits::default()).unwrap();
     drop(connection);
     assert_eq!(ready.previous_version, 39);
-    assert_eq!(ready.version, 40);
+    assert_eq!(ready.version, 42);
     let backup = ready.backup.unwrap();
     assert_eq!(backup.file_name().unwrap(), "pre-schema40.db");
     let snapshot = Connection::open_with_flags(&backup, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
@@ -91,18 +96,19 @@ fn schema39_wal_migrates_atomically_to_40_and_keeps_the_exact_backup() {
     );
     owner.shutdown().unwrap();
     let (_, reopened) = WriterOwner::open(&root, Limits::default()).unwrap();
-    assert_eq!(reopened.previous_version, 40);
-    assert_eq!(reopened.version, 40);
+    assert_eq!(reopened.previous_version, 42);
+    assert_eq!(reopened.version, 42);
     assert!(reopened.backup.is_none());
 }
 
 #[test]
-fn schema40_failure_rolls_back_to_39_and_future_41_is_refused() {
+fn schema40_failure_rolls_back_to_39_and_future_43_is_refused() {
     let root = directory("source-scan-schema40-rollback");
     let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
     owner.shutdown().unwrap();
     let database = root.join("print-partner.db");
     let connection = Connection::open(&database).unwrap();
+    schema_fixture::remove_schema42(&connection);
     connection
         .execute_batch(
             "DROP TABLE source_scan_executions;
@@ -127,7 +133,7 @@ fn schema40_failure_rolls_back_to_39_and_future_41_is_refused() {
     );
     connection
         .execute(
-            "UPDATE app_settings SET value='41' WHERE tenant_id='default' AND key='schema_version'",
+            "UPDATE app_settings SET value='43' WHERE tenant_id='default' AND key='schema_version'",
             [],
         )
         .unwrap();

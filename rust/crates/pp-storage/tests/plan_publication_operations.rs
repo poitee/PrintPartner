@@ -1,3 +1,7 @@
+#[allow(dead_code)]
+#[path = "support/schema.rs"]
+mod schema_fixture;
+
 use pp_contracts::{
     autosave::PositiveId,
     publication::{ApplyRequest, Outcome},
@@ -861,7 +865,8 @@ fn legacy_schema36_rows_keep_execution_fallback_without_backfill() {
     ));
     owner.shutdown().unwrap();
     let connection = f.sql();
-    connection.execute_batch("DROP TRIGGER trg_plan_apply_admissions_immutable_delete; DROP TRIGGER trg_plan_apply_admissions_immutable_update; DROP TABLE plan_apply_admissions; UPDATE app_settings SET value='36' WHERE tenant_id='default' AND key='schema_version'; PRAGMA wal_checkpoint(TRUNCATE);").unwrap();
+    schema_fixture::remove_after(&connection, 36);
+    connection.execute_batch("UPDATE app_settings SET value='36' WHERE tenant_id='default' AND key='schema_version'; PRAGMA wal_checkpoint(TRUNCATE);").unwrap();
     drop(connection);
     let owner = f.open();
     assert!(matches!(
@@ -945,7 +950,8 @@ fn schema37_and_legacy36_backups_restore_identity_semantics() {
     owner.shutdown().unwrap();
 
     let connection = f.sql();
-    connection.execute_batch("DROP TRIGGER trg_plan_apply_admissions_immutable_delete; DROP TRIGGER trg_plan_apply_admissions_immutable_update; DROP TABLE plan_apply_admissions; UPDATE app_settings SET value='36' WHERE tenant_id='default' AND key='schema_version'; PRAGMA wal_checkpoint(TRUNCATE);").unwrap();
+    schema_fixture::remove_after(&connection, 36);
+    connection.execute_batch("UPDATE app_settings SET value='36' WHERE tenant_id='default' AND key='schema_version'; PRAGMA wal_checkpoint(TRUNCATE);").unwrap();
     drop(connection);
     let (owner, ready) = WriterOwner::open(&f.path, Limits::default()).unwrap();
     let backup36 = ready.backup.unwrap();

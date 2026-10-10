@@ -1,3 +1,7 @@
+#[allow(dead_code)]
+#[path = "support/schema.rs"]
+mod schema_fixture;
+
 use anyhow::Result;
 use pp_storage::{
     Limits, WriterOwner,
@@ -956,7 +960,7 @@ fn ticket_t_28_claims_ordinary_transaction_error_rolls_back() {
 }
 
 #[test]
-fn ticket_t_28_recovery_every_existing_kind_has_incomplete_intent_policy() {
+fn ticket_t_28_recovery_every_existing_kind_has_current_intent_policy() {
     let token = format!("ppu_{}", "a".repeat(32));
     let payloads = vec![
         Payload::Sync {
@@ -1010,12 +1014,45 @@ fn ticket_t_28_recovery_every_existing_kind_has_incomplete_intent_policy() {
             matches!(kind, JobKind::ImportScan | JobKind::ExtractSourceDocs)
         );
         let mut lease = claim.lease;
+        if kind == JobKind::Sync {
+            let error = worker
+                .update(
+                    &mut lease,
+                    WorkerOperation::BeginEffect(intent(
+                        EffectOperation::SourceRefresh,
+                        "source:1",
+                    )),
+                )
+                .unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("Sync operation belongs to its journal owner")
+            );
+            owner.shutdown().unwrap();
+            let (owner, _) = WriterOwner::open(&path, Limits::default()).unwrap();
+            let current = get(&owner, &queued.job_id);
+            assert_eq!(current.state, PersistentState::Queued);
+            assert!(current.effects.is_empty());
+            assert_eq!(
+                owner
+                    .job_worker(admission())
+                    .unwrap()
+                    .claim()
+                    .unwrap()
+                    .unwrap()
+                    .job
+                    .job_id,
+                queued.job_id
+            );
+            owner.shutdown().unwrap();
+            continue;
+        }
         let (operation, target) = match kind {
             JobKind::PrinterUpload => (EffectOperation::PrinterUploadAndStart, "test-printer"),
-            JobKind::Sync
-            | JobKind::ImportScan
-            | JobKind::ExtractSourceDocs
-            | JobKind::CheckSourceUpdates => (EffectOperation::SourceRefresh, "source:1"),
+            JobKind::ImportScan | JobKind::ExtractSourceDocs | JobKind::CheckSourceUpdates => {
+                (EffectOperation::SourceRefresh, "source:1")
+            }
             _ => (EffectOperation::LocalArtifact, "exports/candidate"),
         };
         worker
@@ -1287,7 +1324,7 @@ fn ticket_t_28_claims_list_filters_pagination_and_history() {
 #[test]
 fn ticket_t_28_claims_schema35_corruption_and37_preserve_input_bytes() {
     for corruption in [
-        "UPDATE app_settings SET value='41' WHERE tenant_id='default' AND key='schema_version'",
+        "UPDATE app_settings SET value='43' WHERE tenant_id='default' AND key='schema_version'",
         "ALTER TABLE durable_jobs ADD COLUMN unintended TEXT",
         "UPDATE durable_jobs SET version=version+1",
     ] {
@@ -1419,7 +1456,8 @@ fn ticket_t_28_claims_schema35_migration_rollback_and_backup_restart() {
     let (path, owner) = fixture();
     owner.shutdown().unwrap();
     let fixture = Connection::open(path.join("print-partner.db")).unwrap();
-    fixture.execute_batch("DROP INDEX source_scan_execution_receipt; DROP TABLE source_scan_executions; DROP TRIGGER trg_source_revision_observations_preclaim_cursor_insert; DROP TABLE source_preclaim_refusals; DROP TRIGGER trg_plan_apply_admissions_immutable_delete; DROP TRIGGER trg_plan_apply_admissions_immutable_update; DROP TABLE plan_apply_admissions; DROP TABLE source_import_quota; DROP TABLE source_import_operations; DROP TABLE durable_job_reconciliations; DROP TABLE durable_job_history; DROP TABLE durable_job_keys; DROP TABLE durable_jobs; UPDATE app_settings SET value='34' WHERE tenant_id='default' AND key='schema_version'; CREATE TRIGGER reject_schema35 BEFORE UPDATE ON app_settings WHEN NEW.key='schema_version' AND NEW.value='35' BEGIN SELECT RAISE(ABORT,'fixture migration constraint'); END;").unwrap();
+    schema_fixture::remove_after(&fixture, 34);
+    fixture.execute_batch("DROP TABLE source_import_quota; DROP TABLE source_import_operations; DROP TABLE durable_job_reconciliations; DROP TABLE durable_job_history; DROP TABLE durable_job_keys; DROP TABLE durable_jobs; UPDATE app_settings SET value='34' WHERE tenant_id='default' AND key='schema_version'; CREATE TRIGGER reject_schema35 BEFORE UPDATE ON app_settings WHEN NEW.key='schema_version' AND NEW.value='35' BEGIN SELECT RAISE(ABORT,'fixture migration constraint'); END;").unwrap();
     drop(fixture);
     assert!(WriterOwner::open(&path, Limits::default()).is_err());
     let raw = Connection::open(path.join("print-partner.db")).unwrap();
@@ -4382,87 +4420,102 @@ fn integration_drop_and_orderly_restart_keep_source_reservations() {
     owner.shutdown().unwrap();
 }
 #[test]
+fn integration_queued_sync_does_not_hold_legacy_wildcard_reservations() {
+    use pp_storage::catalog::Deletion;
+    let (_, owner) = fixture();
+    let catalog = owner.local_source_catalog();
+    let id = source(&catalog, "Sync target");
+    let another = source(&catalog, "Sync other");
+    enqueue(&owner, "sync", Payload::Sync { project_ids: None });
+    // Source Sync acquires individual target reservations through its batch API.
+    assert_eq!(deletion(&catalog, id), Deletion::Deleted { source_id: id });
+    assert_eq!(
+        deletion(&catalog, another),
+        Deletion::Deleted { source_id: another }
+    );
+    let worker = owner.job_worker(admission()).unwrap();
+    let lease = worker.claim().unwrap().unwrap().lease;
+    assert!(source_lease(&worker, &lease, None).is_err());
+    assert!(source_lease(&worker, &lease, Some(id)).is_err());
+    owner.shutdown().unwrap();
+}
+#[test]
 fn integration_wildcard_uncertainty_and_abandon_guard_until_matching_resolution() {
     use pp_storage::catalog::Deletion;
-    for payload in [
-        Payload::Sync { project_ids: None },
-        Payload::CheckSourceUpdates {},
-    ] {
-        let (path, owner) = fixture();
-        let catalog = owner.local_source_catalog();
-        let id = source(&catalog, "Wildcard");
-        let another = source(&catalog, "Wildcard other");
-        let queued = enqueue(&owner, "wildcard", payload);
-        assert_eq!(deletion(&catalog, id), Deletion::ActiveWork);
-        let worker = owner.job_worker(admission()).unwrap();
-        let mut lease = worker.claim().unwrap().unwrap().lease;
-        assert!(source_lease(&worker, &lease, None).is_err());
-        let mut live = source_lease(&worker, &lease, Some(id)).unwrap();
-        live.release().unwrap();
-        worker
-            .update(
-                &mut lease,
-                WorkerOperation::BeginEffect(intent(
-                    EffectOperation::SourceRefresh,
-                    "source-operation",
-                )),
-            )
-            .unwrap();
-        assert_eq!(deletion(&catalog, another), Deletion::ActiveWork);
-        owner.shutdown().unwrap();
-        let owner = WriterOwner::open(&path, Limits::default()).unwrap().0;
-        let catalog = owner.local_source_catalog();
-        let recovered = get(&owner, &queued.job_id);
-        assert_eq!(recovered.state, PersistentState::ReconciliationRequired);
-        assert_eq!(deletion(&catalog, id), Deletion::ActiveWork);
-        let decide = |record: &JobRecord, hash: &str, decision| UserOperation::Reconcile {
-            job_id: record.job_id.clone(),
-            expected_version: record.state_version,
-            expected_generation: record.generation,
-            effect_hash: hash.into(),
-            decision,
-            receipt: None,
-        };
-        assert!(
-            call(
-                &owner,
-                decide(&recovered, &"c".repeat(64), Decision::ConfirmNoEffect)
-            )
-            .is_err()
-        );
-        let abandoned = job(call(
-            &owner,
-            decide(&recovered, &"b".repeat(64), Decision::Abandon),
-        )
-        .unwrap());
-        assert_eq!(deletion(&catalog, another), Deletion::ActiveWork);
-        let additional = enqueue(
-            &owner,
-            "second-reservation",
-            Payload::ImportScan {
-                project_id: id as u64,
-            },
-        );
-        call(
-            &owner,
-            decide(&abandoned, &"b".repeat(64), Decision::ConfirmNoEffect),
+    let (path, owner) = fixture();
+    let catalog = owner.local_source_catalog();
+    let id = source(&catalog, "Wildcard");
+    let another = source(&catalog, "Wildcard other");
+    let queued = enqueue(&owner, "wildcard", Payload::CheckSourceUpdates {});
+    assert_eq!(deletion(&catalog, id), Deletion::ActiveWork);
+    let worker = owner.job_worker(admission()).unwrap();
+    let mut lease = worker.claim().unwrap().unwrap().lease;
+    assert!(source_lease(&worker, &lease, None).is_err());
+    let mut live = source_lease(&worker, &lease, Some(id)).unwrap();
+    live.release().unwrap();
+    worker
+        .update(
+            &mut lease,
+            WorkerOperation::BeginEffect(intent(
+                EffectOperation::SourceRefresh,
+                "source-operation",
+            )),
         )
         .unwrap();
-        assert_eq!(
-            deletion(&catalog, another),
-            Deletion::Deleted { source_id: another }
-        );
-        assert_eq!(deletion(&catalog, id), Deletion::ActiveWork);
+    assert_eq!(deletion(&catalog, another), Deletion::ActiveWork);
+    owner.shutdown().unwrap();
+    let owner = WriterOwner::open(&path, Limits::default()).unwrap().0;
+    let catalog = owner.local_source_catalog();
+    let recovered = get(&owner, &queued.job_id);
+    assert_eq!(recovered.state, PersistentState::ReconciliationRequired);
+    assert_eq!(deletion(&catalog, id), Deletion::ActiveWork);
+    let decide = |record: &JobRecord, hash: &str, decision| UserOperation::Reconcile {
+        job_id: record.job_id.clone(),
+        expected_version: record.state_version,
+        expected_generation: record.generation,
+        effect_hash: hash.into(),
+        decision,
+        receipt: None,
+    };
+    assert!(
         call(
             &owner,
-            UserOperation::Cancel {
-                job_id: additional.job_id,
-            },
+            decide(&recovered, &"c".repeat(64), Decision::ConfirmNoEffect)
         )
-        .unwrap();
-        assert_eq!(deletion(&catalog, id), Deletion::Deleted { source_id: id });
-        owner.shutdown().unwrap();
-    }
+        .is_err()
+    );
+    let abandoned = job(call(
+        &owner,
+        decide(&recovered, &"b".repeat(64), Decision::Abandon),
+    )
+    .unwrap());
+    assert_eq!(deletion(&catalog, another), Deletion::ActiveWork);
+    let additional = enqueue(
+        &owner,
+        "second-reservation",
+        Payload::ImportScan {
+            project_id: id as u64,
+        },
+    );
+    call(
+        &owner,
+        decide(&abandoned, &"b".repeat(64), Decision::ConfirmNoEffect),
+    )
+    .unwrap();
+    assert_eq!(
+        deletion(&catalog, another),
+        Deletion::Deleted { source_id: another }
+    );
+    assert_eq!(deletion(&catalog, id), Deletion::ActiveWork);
+    call(
+        &owner,
+        UserOperation::Cancel {
+            job_id: additional.job_id,
+        },
+    )
+    .unwrap();
+    assert_eq!(deletion(&catalog, id), Deletion::Deleted { source_id: id });
+    owner.shutdown().unwrap();
 }
 #[test]
 fn integration_source_bridge_rejects_foreign_worker_missing_source_and_non_source_attempt() {
