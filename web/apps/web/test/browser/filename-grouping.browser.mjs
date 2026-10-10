@@ -82,8 +82,12 @@ try {
   assert.equal(await page.evaluate(() => globalThis.document.documentElement.scrollWidth > globalThis.innerWidth), false);
   assert.deepEqual(errors, []);
   const recoveryPage = await browser.newPage();
+  let wsInterceptCount = 0;
   // Disable the actual job stream so WebSocket completion cannot race the failed HTTP poll.
-  await recoveryPage.routeWebSocket(/\/ws\/jobs\/[^/?]+$/, (socket) => socket.close());
+  await recoveryPage.routeWebSocket(/\/ws\/jobs\/[^/?]+$/, (socket) => {
+    wsInterceptCount += 1;
+    socket.close();
+  });
   const jobStatus = /\/jobs\/[^/?]+$/;
   await recoveryPage.route(jobStatus, (route) => route.request().method() === "GET"
     ? route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "Test connection interrupted" }) })
@@ -93,6 +97,7 @@ try {
   await recoveryPage.getByRole("button", { name: "Download sorted STL files", exact: true }).click();
   await recoveryPage.getByText("Could not download the STL files", { exact: true }).waitFor();
   await recoveryPage.getByText(/Lost contact with the job/).first().waitFor();
+  assert.ok(wsInterceptCount >= 1, "WebSocket intercept must fire for /ws/jobs/:jobId (not HTTP-only recovery)");
   assert.equal(await recoveryPage.getByRole("button", { name: "Download sorted STL files", exact: true }).isEnabled(), true);
   await recoveryPage.unroute(jobStatus);
   await recoveryPage.getByRole("button", { name: "Try again", exact: true }).click();
