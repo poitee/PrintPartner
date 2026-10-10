@@ -84,6 +84,7 @@ for (const [field, parser] of [["part_key", "parseSavePlanChoicesRequest"], ["re
     ["lone-high", "\\ud800", false],
     ["lone-low", "\\udfff", false],
     ["reversed-pair", "\\udfff\\ud800", false],
+    ["cjk-lone-high", "中文\\ud800", false],
     ["valid-pair", "\\ud83d\\ude42", true],
     ["mixed-scalars", "a\\ud83d\\ude42é", true],
     ["cjk", "中文 日本語 한국어", true],
@@ -115,7 +116,7 @@ for (const item of [...inputCases, ...supplemental]) {
 }
 const expectedSchemaGaps = ["empty-base-version-mismatch", "revision-base-version-zero", "observed-consumed-draft", "observed-draft-base-mismatch", "duplicate-field"];
 for (const field of ["part_key", "relative_path", "source_layer", "applied_at"]) {
-  for (const suffix of ["lone-high", "lone-low", "reversed-pair"]) expectedSchemaGaps.push(`${field}-${suffix}`);
+  for (const suffix of ["lone-high", "lone-low", "reversed-pair", "cjk-lone-high"]) expectedSchemaGaps.push(`${field}-${suffix}`);
 }
 assert.deepEqual(schemaResults.filter((item) => !item.matches).map((item) => item.name), expectedSchemaGaps, "Unreviewed JSON Schema semantic coverage drift");
 const source = {
