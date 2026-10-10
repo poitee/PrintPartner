@@ -1,0 +1,110 @@
+name: Desktop runtime
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'rust/**'
+      - 'rust-toolchain.toml'
+      - 'web/apps/server/**'
+      - 'web/apps/web/**'
+      - 'web/packages/domain/**'
+      - 'web/packages/contracts/**'
+      - 'web/package.json'
+      - 'web/package-lock.json'
+      - 'web/scripts/**'
+      - '.github/workflows/desktop-runtime.yml'
+  push:
+    branches: [main, master]
+    paths:
+      - 'rust/**'
+      - 'rust-toolchain.toml'
+      - 'web/apps/server/**'
+      - 'web/apps/web/**'
+      - 'web/packages/domain/**'
+      - 'web/packages/contracts/**'
+      - 'web/package.json'
+      - 'web/package-lock.json'
+      - 'web/scripts/**'
+      - '.github/workflows/desktop-runtime.yml'
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  runtime:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      VITE_PRINT_PARTNER_DESKTOP: '1'
+      CARGO_INCREMENTAL: '0'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Initialize evidence
+        run: |
+          export PP_EVIDENCE="$RUNNER_TEMP/desktop-runtime-evidence"
+          echo "PP_EVIDENCE=$PP_EVIDENCE" >> "$GITHUB_ENV"
+          mkdir -p "$PP_EVIDENCE"
+          uname -a > "$PP_EVIDENCE/runner.txt"
+          git rev-parse HEAD > "$PP_EVIDENCE/head.txt"
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24.21.0'
+      - name: Install pinned tools and build desktop assets
+        run: |
+          rustup toolchain install 1.99.0 --profile minimal
+          rustc --version --verbose > "$PP_EVIDENCE/rust-version.txt"
+          sudo ln -sf "$(command -v node)" /usr/bin/node
+          test "$(/usr/bin/node --version)" = v24.21.0
+          /usr/bin/node -p 'JSON.stringify({node:process.version,abi:process.versions.modules,os:process.platform,arch:process.arch})' > "$PP_EVIDENCE/node-version.json"
+          npm --prefix web ci 2>&1 | tee "$PP_EVIDENCE/npm-ci.log"
+          npm --prefix web run build 2>&1 | tee "$PP_EVIDENCE/desktop-build.log"
+          python3 rust/scripts/build-desktop-manifest.py --web web --node /usr/bin/node --output rust/bundle-manifest.json --commit "$GITHUB_SHA" 2>&1 | tee "$PP_EVIDENCE/manifest.log"
+          cp rust/bundle-manifest.json "$PP_EVIDENCE/bundle-manifest.json"
+      - name: Build real server and check crate boundaries
+        run: |
+          cargo build --manifest-path rust/Cargo.toml --locked -p pp-server 2>&1 | tee "$PP_EVIDENCE/server-build.log"
+          python3 rust/scripts/check-boundaries.py --self-test 2>&1 | tee "$PP_EVIDENCE/boundaries.log"
+          cargo fmt --manifest-path rust/Cargo.toml --all --check 2>&1 | tee "$PP_EVIDENCE/fmt.log"
+          git diff --exit-code -- rust/Cargo.lock web/package-lock.json
+      - name: Run eight real core lifecycle tests
+        run: |
+          cargo test --manifest-path rust/Cargo.toml --locked -p pp-core --test runtime_m0 -- --nocapture --test-threads=1 2>&1 | tee "$PP_EVIDENCE/core-runtime.log"
+      - name: Run backend units and lint
+        run: |
+          cargo test --manifest-path rust/Cargo.toml --locked -p pp-core -p pp-compat -p pp-gateway -p pp-server --lib --bins 2>&1 | tee "$PP_EVIDENCE/backend-units.log"
+          cargo clippy --manifest-path rust/Cargo.toml --locked -p pp-core -p pp-compat -p pp-gateway -p pp-server --all-targets -- -D warnings 2>&1 | tee "$PP_EVIDENCE/backend-clippy.log"
+      - name: Verify authenticated workflow and process cleanup
+        run: |
+          python3 rust/tests/workflow_m0.py 2>&1 | tee "$PP_EVIDENCE/workflow.log"
+          python3 rust/tests/lifecycle_m0.py 2>&1 | tee "$PP_EVIDENCE/lifecycle.log"
+      - name: Verify gateway effects and product routes
+        run: |
+          python3 rust/tests/gateway_effects.py 2>&1 | tee "$PP_EVIDENCE/gateway-effects.log"
+          python3 rust/tests/gateway_product.py 2>&1 | tee "$PP_EVIDENCE/gateway-product.log"
+      - name: Verify gateway streaming and shutdown
+        run: |
+          python3 rust/tests/gateway_product.py --streams 2>&1 | tee "$PP_EVIDENCE/gateway-streams.log"
+      - name: Preserve final inventory and lockfile state
+        if: always()
+        run: |
+          export PP_EVIDENCE="$RUNNER_TEMP/desktop-runtime-evidence"
+          mkdir -p "$PP_EVIDENCE"
+          if test -f rust/bundle-manifest.json; then
+            cp rust/bundle-manifest.json "$PP_EVIDENCE/manifest-after-checks.json"
+          fi
+          git diff -- rust/Cargo.lock web/package-lock.json > "$PP_EVIDENCE/lockfile-diff.patch"
+          df -h > "$PP_EVIDENCE/storage-after.txt"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: desktop-runtime-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/desktop-runtime-evidence/
+          if-no-files-found: error
+          retention-days: 14

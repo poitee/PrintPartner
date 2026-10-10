@@ -40,7 +40,7 @@ Transitive packages are recorded in `web/package-lock.json` and remain subject t
 | @tailwindcss/vite | 4.3.3 | MIT | https://tailwindcss.com |
 | @tanstack/react-query | 5.103.2 | MIT | https://tanstack.com/query |
 | adm-zip | 0.6.1 | MIT | https://github.com/cthackers/adm-zip |
-| better-sqlite3 | 12.11.1 | MIT | https://github.com/WiseLibs/better-sqlite3 |
+| better-sqlite3 | 13.0.3 | MIT | https://github.com/WiseLibs/better-sqlite3 |
 | chokidar | 4.0.3 | MIT | https://github.com/paulmillr/chokidar |
 | class-variance-authority | 0.7.1 | Apache-2.0 | https://github.com/joe-bell/cva#readme |
 | clsx | 2.1.1 | MIT | https://github.com/lukeed/clsx |
