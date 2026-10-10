@@ -79,6 +79,7 @@ jobs:
       - name: Run backend units and lint
         run: |
           cargo test --manifest-path rust/Cargo.toml --locked -p pp-api -p pp-core -p pp-compat -p pp-gateway -p pp-server --lib --bins 2>&1 | tee "$PP_EVIDENCE/backend-units.log"
+          cargo test --manifest-path rust/Cargo.toml --locked -p pp-api --test auth_http 2>&1 | tee "$PP_EVIDENCE/pp-api-http.log"
           cargo clippy --manifest-path rust/Cargo.toml --locked -p pp-api -p pp-core -p pp-compat -p pp-gateway -p pp-server --all-targets -- -D warnings 2>&1 | tee "$PP_EVIDENCE/backend-clippy.log"
       - name: Verify authenticated workflow and process cleanup
         run: |
