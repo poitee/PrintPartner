@@ -1,4 +1,3 @@
-mod target;
 use anyhow::{Context, Result};
 use axum::{
     body::Body,
@@ -8,6 +7,7 @@ use axum::{
     serve::Listener,
 };
 use pp_compat::CompatHandle;
+use pp_net::target;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::{

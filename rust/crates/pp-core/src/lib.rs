@@ -57,7 +57,13 @@ impl StorageOwner {
                 .filter(|pid| *pid > 0 && *pid <= i32::MAX as u64)
                 .context("Invalid prior writer PID")? as i32;
             anyhow::ensure!(
-                storage_lease::owner_is_stale(pid as u32, marker["process_identity"].as_str()),
+                storage_lease::owner_is_stale(pid as u32, marker["process_identity"].as_str())
+                    && (marker["kind"] == "standalone"
+                        // Version 1 guarantees recording the child before setup opens storage.
+                        || (marker["storage_protocol_version"].as_u64() == Some(1)
+                            && marker.get("child_pid").is_none()
+                            && marker.get("child_process_identity").is_none())
+                        || storage_lease::child_is_stale(&marker)),
                 "A prior writer may still be alive"
             );
             std::fs::rename(
@@ -73,7 +79,7 @@ impl StorageOwner {
         ));
         std::fs::create_dir(&runtime_dir)?;
         std::fs::set_permissions(&runtime_dir, std::fs::Permissions::from_mode(0o700))?;
-        let marker = serde_json::json!({"pid":std::process::id(),"process_identity":lease_guard.identity,"lease_hash":hex::encode(Sha256::digest(lease.as_bytes())),"runtime_dir":runtime_dir});
+        let marker = serde_json::json!({"storage_protocol_version":1,"pid":std::process::id(),"process_identity":lease_guard.identity,"lease_hash":hex::encode(Sha256::digest(lease.as_bytes())),"runtime_dir":runtime_dir});
         let result = (|| -> Result<()> {
             let mut file = OpenOptions::new()
                 .write(true)
@@ -224,6 +230,7 @@ async fn start_resources(input: DesktopLaunch) -> Result<Resources> {
         lease: owner.lease.clone(),
         lease_file: owner.lock.try_clone()?,
         port: listener.local_addr()?.port(),
+        record_child: storage_lease::record_child,
     })?;
     owner.release_allowed = false;
     let mut status = supervisor.handle.status.clone();
