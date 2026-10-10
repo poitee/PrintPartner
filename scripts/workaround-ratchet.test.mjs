@@ -491,6 +491,18 @@ test("counts spaced, multiline, and cfg_attr Rust allow attributes", () => {
   assert.deepEqual(countText(source, "a.rs"), { todoComments: 0, eslintDisable: 0, rustAllow: 3 });
 });
 
+test("counts HTML markers anywhere, once per key per physical line", () => {
+  assert.deepEqual(countText("<script>// TODO</script>\n<style>/* FIXME */</style>", "a.html"), {
+    todoComments: 2, eslintDisable: 0, rustAllow: 0,
+  });
+  assert.deepEqual(countText("<script>// TODO</script><style>/* FIXME */</style>", "a.html"), {
+    todoComments: 1, eslintDisable: 0, rustAllow: 0,
+  });
+  assert.deepEqual(countText('<div title="TODO FIXME eslint-disable eslint-disable # [allow(x)]">HACK</div>', "a.html"), {
+    todoComments: 1, eslintDisable: 1, rustAllow: 1,
+  });
+});
+
 test("uses path-specific comment and quote syntax", () => {
   assert.equal(countText(["value = '# TODO'", "# TODO: real"].join("\n"), "a.py").todoComments, 1);
   assert.equal(
@@ -503,7 +515,7 @@ test("uses path-specific comment and quote syntax", () => {
   );
   assert.equal(
     countText(['<p>TODO</p>', '<div title="<!-- TODO -->">', "<!-- TODO: real -->"].join("\n"), "a.html").todoComments,
-    1,
+    3,
   );
 });
 
