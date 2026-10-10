@@ -1,0 +1,18 @@
+tint2: Using glib slice allocator (default). Run tint2 with environment variable G_SLICE=always-malloc in case of strange behavior or crashes
+tint2: xRandr: Found crtc's: 1
+[1;34mtint2: xRandr: Linking output screen with crtc 0, resolution 1440x1000, DPI 96[0m
+tint2: No XSETTINGS manager, tint2 uses config option 'launcher_icon_theme'.
+tint2: Loading config file: /tmp/pp125-tray-11f1d0b2/tint2rc
+tint2: real transparency off.... depth: 24
+tint2: panel items: S
+tint2: Systray composited rendering off
+tint2: systray_asb forced to 100 0 0
+tint2: nb monitors 1, nb monitors used 1, nb desktops 4
+[1;34mtint2: panel 1 uses scale 1 [0m
+tint2: pixmap background detection failed
+tint2: Kernel uevent interface initialized...
+tint2: systray window 4194311
+[1;32mtint2: systray started[0m
+tint2: pixmap background detection failed
+[1;32madd_icon: 8388638 (pp-desktop), pid 8961, visual 0x5c114722c2e0, colormap 32, depth 24, width 1, height 1[0m
+[1;33mtint2: remove_icon: 8388638 (pp-desktop)[0m

@@ -1,0 +1,2 @@
+{"manifest_sha256": "a8e32f05e20442e05f7d1bddfc8411f7e1a874af7321b78f7f154033384c17ee", "measured_files": 1527, "dependency_files": 28573, "dependency_links": 4, "node_version": "v24.21.0"}
+{"stage": "/tmp/pp125-tray-11f1d0b2/runtime", "release": {"runtime_version": "3.3.0-web", "commit": "11f1d0b2d2d4e9ca9acbd739c7bf3abc2e02a48c", "node": "bin/node", "web": "web", "os": "linux", "arch": "x86_64", "node_version": "v24.21.0", "node_abi": "137"}, "sqlite_answer": 42, "signed": false, "manifest": "/tmp/pp125-tray-11f1d0b2/runtime/bundle-manifest.json"}

@@ -1,0 +1,4 @@
+
+thread 'main' (271034) panicked at /home/poitee/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tao-0.37.1/src/platform_impl/linux/event_loop.rs:217:53:
+Failed to initialize gtk backend!: BoolError { message: "Failed to initialize GTK", filename: "/home/poitee/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/gtk-0.18.2/src/rt.rs", function: "gtk::rt::init", line: 141 }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace

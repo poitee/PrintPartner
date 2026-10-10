@@ -1,0 +1,21 @@
+HEAD=11f1d0b2d2d4e9ca9acbd739c7bf3abc2e02a48c
+$ uname -a
+Linux agent-fleet-2 7.0.0-38-generic #38-Ubuntu SMP PREEMPT_DYNAMIC Fri Sep  4 09:10:14 UTC 2026 x86_64 GNU/Linux
+
+command_exit=0
+$ lsb_release -ds
+Ubuntu 26.04.1 LTS
+
+command_exit=0
+$ date -u --iso-8601=seconds
+2026-10-10T16:35:11+00:00
+
+command_exit=0
+HOME=/tmp/pp125-tray-11f1d0b2/home
+$ /persist/worktrees/t3/PrintPartner/evidence-pr-125-tray-11f1d0b2/rust/target/debug/pp-desktop --dev-stage /tmp/pp125-tray-11f1d0b2/runtime --data /tmp/pp125-tray-11f1d0b2/data
+app_pid=271034
+Traceback (most recent call last):
+  File "/tmp/pp125-tray-11f1d0b2/capture-tray.py", line 66, in <module>
+    assert app.poll() is None,'App exited during startup'
+           ^^^^^^^^^^^^^^^^^^
+AssertionError: App exited during startup

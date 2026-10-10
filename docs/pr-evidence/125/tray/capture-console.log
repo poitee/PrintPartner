@@ -1,0 +1,136 @@
+HEAD=11f1d0b2d2d4e9ca9acbd739c7bf3abc2e02a48c
+$ uname -a
+Linux agent-fleet-2 7.0.0-38-generic #38-Ubuntu SMP PREEMPT_DYNAMIC Fri Sep  4 09:10:14 UTC 2026 x86_64 GNU/Linux
+
+command_exit=0
+$ lsb_release -ds
+Ubuntu 26.04.1 LTS
+
+command_exit=0
+$ date -u --iso-8601=seconds
+2026-10-10T16:35:46+00:00
+
+command_exit=0
+HOME=/tmp/pp125-tray-11f1d0b2/home
+$ /persist/worktrees/t3/PrintPartner/evidence-pr-125-tray-11f1d0b2/rust/target/debug/pp-desktop --dev-stage /tmp/pp125-tray-11f1d0b2/runtime --data /tmp/pp125-tray-11f1d0b2/data
+app_pid=271105
+$ xdotool search --onlyvisible --name ^Print Partner$
+8388611
+
+command_exit=0
+$ import -display :125 -window root /tmp/pp125-tray-11f1d0b2/01-native-ready.png
+
+command_exit=0
+marker={"lease_hash": "99469320cfa0d30477a3a7394b208e08c1de017bfdd609f938753f9b64650efa", "pid": 271105, "process_identity": "672bdbd1-fea0-4931-a996-747189419779:10194662", "runtime_dir": "/persist/tmp/pp-271105-030dff427274aac1"}
+node_child_pid=271161
+$ ps -p 271105,271161 -o pid,ppid,stat,etime,args
+    PID    PPID STAT     ELAPSED COMMAND
+ 271105  271074 Sl         00:29 /persist/worktrees/t3/PrintPartner/evidence-pr-125-tray-11f1d0b2/rust/target/debug/pp-desktop --dev-stage /tmp/pp125-tray-11f1d0b2/runtime --data /tmp/pp125-tray-11f1d0b2/data
+ 271161  271105 Sl         00:17 /tmp/pp125-tray-11f1d0b2/runtime/bin/node --no-global-search-paths --import /tmp/pp125-tray-11f1d0b2/runtime/web/apps/server/dist/current/desktop-resolution.js /tmp/pp125-tray-11f1d0b2/runtime/web/apps/server/dist/current/desktop.js --pp-desktop-package-root=/tmp/pp125-tray-11f1d0b2/runtime
+
+command_exit=0
+$ ls -la /tmp/pp125-tray-11f1d0b2/data/.desktop.lock /tmp/pp125-tray-11f1d0b2/data/.desktop-owner.json /tmp/pp125-tray-11f1d0b2/data/.desktop-lease /persist/tmp/pp-271105-030dff427274aac1/22c661c6f5b7.sock
+srw------- 1 poitee poitee   0 Oct 10 16:36 /persist/tmp/pp-271105-030dff427274aac1/22c661c6f5b7.sock
+-rw------- 1 poitee poitee 217 Oct 10 16:35 /tmp/pp125-tray-11f1d0b2/data/.desktop-owner.json
+-rw------- 1 poitee poitee   0 Oct 10 16:35 /tmp/pp125-tray-11f1d0b2/data/.desktop.lock
+
+/tmp/pp125-tray-11f1d0b2/data/.desktop-lease:
+total 4
+drwx------ 2 poitee poitee  60 Oct 10 16:35 .
+drwx------ 9 poitee poitee 300 Oct 10 16:36 ..
+-rw------- 1 poitee poitee 127 Oct 10 16:35 owner.json
+
+command_exit=0
+$ xdotool search --onlyvisible --name ^Print Partner$
+8388611
+
+command_exit=0
+$ xdotool windowactivate --sync 8388611 key alt+F4
+
+command_exit=0
+AFTER WINDOW CLOSE
+$ xdotool search --onlyvisible --name ^Print Partner$
+
+command_exit=1
+$ ps -p 271105,271161 -o pid,ppid,stat,etime,args
+    PID    PPID STAT     ELAPSED COMMAND
+ 271105  271074 Sl         00:33 /persist/worktrees/t3/PrintPartner/evidence-pr-125-tray-11f1d0b2/rust/target/debug/pp-desktop --dev-stage /tmp/pp125-tray-11f1d0b2/runtime --data /tmp/pp125-tray-11f1d0b2/data
+ 271161  271105 Sl         00:20 /tmp/pp125-tray-11f1d0b2/runtime/bin/node --no-global-search-paths --import /tmp/pp125-tray-11f1d0b2/runtime/web/apps/server/dist/current/desktop-resolution.js /tmp/pp125-tray-11f1d0b2/runtime/web/apps/server/dist/current/desktop.js --pp-desktop-package-root=/tmp/pp125-tray-11f1d0b2/runtime
+
+command_exit=0
+$ import -display :125 -window root /tmp/pp125-tray-11f1d0b2/02-closed-tray-only.png
+
+command_exit=0
+$ xdotool mousemove 1418 982 click 3
+
+command_exit=0
+$ import -display :125 -window root /tmp/pp125-tray-11f1d0b2/03-tray-menu.png
+
+command_exit=0
+after_close_menu=(2, (0, {'children-display': 'submenu'}, [(2, {'label': 'Show Print Partner'}, []), (3, {'enabled': False, 'label': 'Service ready'}, []), (4, {'enabled': False, 'label': 'Restart service'}, []), (5, {'label': 'Quit Print Partner'}, [])]))
+$ xdotool key Escape
+
+command_exit=0
+dbus_layout=(2, (0, {'children-display': 'submenu'}, [(2, {'label': 'Show Print Partner'}, []), (3, {'enabled': False, 'label': 'Service ready'}, []), (4, {'enabled': False, 'label': 'Restart service'}, []), (5, {'label': 'Quit Print Partner'}, [])]))
+DBus (':1.2', '/org/ayatana/NotificationItem/tray_icon_tray_app_printpartner/Menu') com.canonical.dbusmenu.Event id=2 event=clicked label=Show Print Partner
+()
+$ xdotool search --onlyvisible --name ^Print Partner$
+8388611
+
+command_exit=0
+$ import -display :125 -window root /tmp/pp125-tray-11f1d0b2/04-restored-window.png
+
+command_exit=0
+$ ps -p 271105,271161 -o pid,ppid,stat,etime,args
+    PID    PPID STAT     ELAPSED COMMAND
+ 271105  271074 Sl         00:40 /persist/worktrees/t3/PrintPartner/evidence-pr-125-tray-11f1d0b2/rust/target/debug/pp-desktop --dev-stage /tmp/pp125-tray-11f1d0b2/runtime --data /tmp/pp125-tray-11f1d0b2/data
+ 271161  271105 Sl         00:28 /tmp/pp125-tray-11f1d0b2/runtime/bin/node --no-global-search-paths --import /tmp/pp125-tray-11f1d0b2/runtime/web/apps/server/dist/current/desktop-resolution.js /tmp/pp125-tray-11f1d0b2/runtime/web/apps/server/dist/current/desktop.js --pp-desktop-package-root=/tmp/pp125-tray-11f1d0b2/runtime
+
+command_exit=0
+$ xdotool mousemove 1418 982 click 3
+
+command_exit=0
+$ import -display :125 -window root /tmp/pp125-tray-11f1d0b2/05-tray-quit-menu.png
+
+command_exit=0
+$ xdotool key Escape
+
+command_exit=0
+dbus_layout=(2, (0, {'children-display': 'submenu'}, [(2, {'label': 'Show Print Partner'}, []), (3, {'enabled': False, 'label': 'Service ready'}, []), (4, {'enabled': False, 'label': 'Restart service'}, []), (5, {'label': 'Quit Print Partner'}, [])]))
+DBus (':1.2', '/org/ayatana/NotificationItem/tray_icon_tray_app_printpartner/Menu') com.canonical.dbusmenu.Event id=5 event=clicked label=Quit Print Partner
+()
+TRAY_QUIT_EXIT_CODE=0
+AFTER TRAY QUIT
+$ ps -p 271105,271161 -o pid,ppid,stat,etime,args
+    PID    PPID STAT     ELAPSED COMMAND
+
+command_exit=1
+/tmp/pp125-tray-11f1d0b2/data/.desktop-owner.json exists=False
+/tmp/pp125-tray-11f1d0b2/data/.desktop-lease exists=False
+/persist/tmp/pp-271105-030dff427274aac1 exists=False
+/persist/tmp/pp-271105-030dff427274aac1/22c661c6f5b7.sock exists=False
+/tmp/pp125-tray-11f1d0b2/data/.desktop.lock exists=True (retained by implementation)
+flock LOCK_EX|LOCK_NB on retained .desktop.lock: SUCCESS (lock released)
+$ cat /tmp/pp125-tray-11f1d0b2/native.stdout.log
+{"proof_class":"headless_unsigned","compat_reaped":true,"storage_released":true,"gateway_stopped":true,"marker_removed":true,"runtime_removed":true,"errors":[]}
+
+command_exit=0
+$ ls -la /tmp/pp125-tray-11f1d0b2/data
+total 596
+drwx------ 8 poitee poitee    220 Oct 10 16:36 .
+drwx------ 7 poitee poitee    540 Oct 10 16:36 ..
+-rw------- 1 poitee poitee      0 Oct 10 16:35 .desktop.lock
+drwx------ 2 poitee poitee     40 Oct 10 16:36 covers
+-rw------- 1 poitee poitee     13 Oct 10 16:35 desktop.toml
+drwx------ 3 poitee poitee     60 Oct 10 16:36 exports
+drwx------ 2 poitee poitee     60 Oct 10 16:35 logs
+-rw------- 1 poitee poitee 606208 Oct 10 16:36 print-partner.db
+drwx------ 2 poitee poitee     40 Oct 10 16:36 repos
+drwx------ 2 poitee poitee     40 Oct 10 16:36 sources
+drwx------ 2 poitee poitee     40 Oct 10 16:36 thumbs
+
+command_exit=0
+$ import -display :125 -window root /tmp/pp125-tray-11f1d0b2/06-after-quit.png
+
+command_exit=0
+RESULT: close/show/quit assertions passed; persistent lock file explicitly retained

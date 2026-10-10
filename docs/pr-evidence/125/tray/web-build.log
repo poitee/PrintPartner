@@ -1,0 +1,181 @@
+
+> print-partner-web@3.3.0 build
+> npm run build -w @print-partner/contracts && npm run build -w @print-partner/domain && npm run build -w @print-partner/server && npm run build -w @print-partner/web
+
+
+> @print-partner/contracts@0.1.0 build
+> node ../../scripts/atomic-package-build.mjs --project tsconfig.build.json
+
+
+> @print-partner/domain@0.1.0 build
+> node ../../scripts/atomic-package-build.mjs --project tsconfig.build.json
+
+
+> @print-partner/server@0.1.0 build
+> node ../../scripts/atomic-package-build.mjs --project tsconfig.build.json --copy src/data data --require-file data/ambrosia_fallback.json --require-file data/assistant-domain/_global/alias_map.yaml --require-file data/assistant-domain/_global/merge_conflicts.yaml --require-file data/assistant-domain/_global/pitfalls.md --require-file data/assistant-domain/_global/stacks.yaml --require-file data/assistant-domain/sources/README.md --require-file data/kit-catalog.yaml --require-file data/legal/ATTRIBUTION.md --require-file data/legal/LICENSE --require-file data/legal/LICENSE-SUMMARY.md --require-file data/legal/THIRD_PARTY_NOTICES.md --require-file data/manifests/registry-index.yaml --require-file data/path-hints.yaml --require-file data/postgres/0000_init.sql --require-file data/printer_presets.json
+
+
+> @print-partner/web@0.1.0 build
+> tsc -p tsconfig.json --noEmit && vite build --manifest
+
+vite v8.2.2 building client environment for production...
+[2Ktransforming...✓ 2834 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/desktop-build.json                                                                 0.05 kB │ gzip:   0.07 kB
+dist/index.html                                                                         3.33 kB │ gzip:   1.14 kB
+dist/.vite/manifest.json                                                               59.20 kB │ gzip:   6.42 kB
+dist/assets/index-mT8luoJt.css                                                        117.22 kB │ gzip:  20.61 kB
+dist/assets/chevron-right-rv6SSfdw.js                                                   0.12 kB │ gzip:   0.14 kB
+dist/assets/thumbnailCache-yPChGMuy.js                                                  0.14 kB │ gzip:   0.12 kB
+dist/assets/search-i6peiVk2.js                                                          0.17 kB │ gzip:   0.16 kB
+dist/assets/runtime-Bvy4KeMQ.js                                                         0.21 kB │ gzip:   0.18 kB
+dist/assets/copy-btzv7yfz.js                                                            0.23 kB │ gzip:   0.20 kB
+dist/assets/acceptedPlateColor-DDaUdKT8.js                                              0.24 kB │ gzip:   0.18 kB
+dist/assets/external-link-CkA1QnfO.js                                                   0.24 kB │ gzip:   0.19 kB
+dist/assets/pencil-Cg4RJFqg.js                                                          0.27 kB │ gzip:   0.22 kB
+dist/assets/book-open-FcNOmz84.js                                                       0.28 kB │ gzip:   0.22 kB
+dist/assets/folder-open-swc3kL6G.js                                                     0.28 kB │ gzip:   0.22 kB
+dist/assets/PageHeaderActions-C4RUyCkx.js                                               0.29 kB │ gzip:   0.22 kB
+dist/assets/clipboard-check-CyfcRXJy.js                                                 0.30 kB │ gzip:   0.23 kB
+dist/assets/kitImportStash-C613gk2-.js                                                  0.31 kB │ gzip:   0.21 kB
+dist/assets/printer-BhA5qOVg.js                                                         0.31 kB │ gzip:   0.23 kB
+dist/assets/trash-2-COO6UNbN.js                                                         0.32 kB │ gzip:   0.21 kB
+dist/assets/newspaper-B_lKAaSX.js                                                       0.34 kB │ gzip:   0.24 kB
+dist/assets/useMediaQuery-kSlB4U2s.js                                                   0.37 kB │ gzip:   0.25 kB
+dist/assets/hammer-NPBR1ZIb.js                                                          0.39 kB │ gzip:   0.27 kB
+dist/assets/factory-D157SJra.js                                                         0.40 kB │ gzip:   0.25 kB
+dist/assets/upload-DbjevU2F.js                                                          0.40 kB │ gzip:   0.24 kB
+dist/assets/externalAccess-BhRpJMos.js                                                  0.41 kB │ gzip:   0.28 kB
+dist/assets/fetchWithRetry-D3ppF2Vf.js                                                  0.41 kB │ gzip:   0.30 kB
+dist/assets/buildTracking-DT90J8-r.js                                                   0.42 kB │ gzip:   0.28 kB
+dist/assets/ellipsis-QAg8che1.js                                                        0.42 kB │ gzip:   0.27 kB
+dist/assets/file-archive-TrlvT8Hh.js                                                    0.42 kB │ gzip:   0.28 kB
+dist/assets/jsx-runtime-Bd5ulOAF.js                                                     0.43 kB │ gzip:   0.30 kB
+dist/assets/QueryClientProvider-YqCCy2tV.js                                             0.45 kB │ gzip:   0.30 kB
+dist/assets/exportActions-B_3RX2GM.js                                                   0.45 kB │ gzip:   0.29 kB
+dist/assets/workflowState-bJFoFn2V.js                                                   0.51 kB │ gzip:   0.22 kB
+dist/assets/printerCheckoff-TT96TuxI.js                                                 0.52 kB │ gzip:   0.29 kB
+dist/assets/input-BvlVsvn4.js                                                           0.55 kB │ gzip:   0.37 kB
+dist/assets/textarea-BRdCWFse.js                                                        0.55 kB │ gzip:   0.37 kB
+dist/assets/dist-DGi8lWSj.js                                                            0.56 kB │ gzip:   0.39 kB
+dist/assets/BrandMark-C3q_Zk-d.js                                                       0.57 kB │ gzip:   0.38 kB
+dist/assets/buildWorkflow-BV0LORF2.js                                                   0.59 kB │ gzip:   0.42 kB
+dist/assets/skeleton-BQcSbH5s.js                                                        0.64 kB │ gzip:   0.41 kB
+dist/assets/SupportCta-2l1lkvpj.js                                                      0.65 kB │ gzip:   0.45 kB
+dist/assets/exportStlJobResult-C4t-wLJ4.js                                              0.69 kB │ gzip:   0.45 kB
+dist/assets/FilamentSwatch-B4i9Hbhz.js                                                  0.70 kB │ gzip:   0.34 kB
+dist/assets/printerPlanBind-BiTrkuGq.js                                                 0.72 kB │ gzip:   0.42 kB
+dist/assets/label-B-1MZwyX.js                                                           0.74 kB │ gzip:   0.47 kB
+dist/assets/segmented-control-CjH0VT0w.js                                               0.77 kB │ gzip:   0.47 kB
+dist/assets/planVariants-ByZxh4s2.js                                                    0.85 kB │ gzip:   0.53 kB
+dist/assets/useEngineHealth-DNLHuN-P.js                                                 0.87 kB │ gzip:   0.56 kB
+dist/assets/plansList-CJ-gCUwL.js                                                       0.87 kB │ gzip:   0.45 kB
+dist/assets/BuildSaveFlushContext-NSSj808S.js                                           0.88 kB │ gzip:   0.47 kB
+dist/assets/badge-OSi1bW6y.js                                                           0.91 kB │ gzip:   0.46 kB
+dist/assets/separator-IxycbK5A.js                                                       0.92 kB │ gzip:   0.53 kB
+dist/assets/stlAutoSync-4aORMsl_.js                                                     0.95 kB │ gzip:   0.45 kB
+dist/assets/stlNaming-BHo7Qf01.js                                                       0.95 kB │ gzip:   0.51 kB
+dist/assets/rolldown-runtime-W7wSyTde.js                                                0.97 kB │ gzip:   0.56 kB
+dist/assets/filaments-ByedlEZ6.js                                                       0.98 kB │ gzip:   0.38 kB
+dist/assets/AuthScreen-BGXVPoB3.js                                                      1.00 kB │ gzip:   0.50 kB
+dist/assets/NotFoundPage-hFL7ymzF.js                                                    1.02 kB │ gzip:   0.51 kB
+dist/assets/slicers-Bw2KqCXB.js                                                         1.05 kB │ gzip:   0.35 kB
+dist/assets/DateFormatContext-CfvxdJiL.js                                               1.08 kB │ gzip:   0.63 kB
+dist/assets/settings-BENK2c_h.js                                                        1.09 kB │ gzip:   0.46 kB
+dist/assets/table-BKt-O_tJ.js                                                           1.19 kB │ gzip:   0.48 kB
+dist/assets/PageShell-0S4RXQ3v.js                                                       1.20 kB │ gzip:   0.57 kB
+dist/assets/printerSendModel-DNtcv3mE.js                                                1.23 kB │ gzip:   0.56 kB
+dist/assets/sheet-BpvHF90s.js                                                           1.30 kB │ gzip:   0.60 kB
+dist/assets/routes-CUDXkowo.js                                                          1.33 kB │ gzip:   0.48 kB
+dist/assets/browserFiles-ekyn0cPe.js                                                    1.44 kB │ gzip:   0.56 kB
+dist/assets/layers-5absUwBQ.js                                                          1.44 kB │ gzip:   0.73 kB
+dist/assets/loader-circle-CE3NyQJy.js                                                   1.50 kB │ gzip:   0.86 kB
+dist/assets/productionSend-CczvrvWe.js                                                  1.50 kB │ gzip:   0.64 kB
+dist/assets/media-DRafkrcc.js                                                           1.52 kB │ gzip:   0.76 kB
+dist/assets/card-BOjWMc2X.js                                                            1.61 kB │ gzip:   0.71 kB
+dist/assets/alert-5H8w4fXY.js                                                           1.66 kB │ gzip:   0.71 kB
+dist/assets/asyncView-IJ8GIFC_.js                                                       1.82 kB │ gzip:   0.92 kB
+dist/assets/dialog-CdzvDA5_.js                                                          1.86 kB │ gzip:   0.87 kB
+dist/assets/planLayers-Cc3UrVSZ.js                                                      1.88 kB │ gzip:   0.74 kB
+dist/assets/ResetPasswordPage-B0-XUIMk.js                                               1.89 kB │ gzip:   0.95 kB
+dist/assets/colorPresets-BrE5yvoD.js                                                    1.98 kB │ gzip:   0.87 kB
+dist/assets/BuildSummaryHeader-DuyT-1vQ.js                                              2.07 kB │ gzip:   0.97 kB
+dist/assets/EmptyState-Mkw5CtC8.js                                                      2.23 kB │ gzip:   0.86 kB
+dist/assets/useAppUpdateCheck-CEpY-XuS.js                                               2.28 kB │ gzip:   1.11 kB
+dist/assets/planManifests-BZ4PW7ZK.js                                                   2.35 kB │ gzip:   1.10 kB
+dist/assets/ForgotPasswordPage-DOtytebW.js                                              2.38 kB │ gzip:   1.18 kB
+dist/assets/sourceMonitoring-DK9X4d7v.js                                                2.45 kB │ gzip:   1.25 kB
+dist/assets/progress-CuSBM0sW.js                                                        2.54 kB │ gzip:   1.23 kB
+dist/assets/ProfileContext-GPQqWYOq.js                                                  2.56 kB │ gzip:   1.24 kB
+dist/assets/PrinterSendQueuePanel-qRl0ROkl.js                                           3.19 kB │ gzip:   1.36 kB
+dist/assets/AuthContext-JpOtcq3N.js                                                     3.30 kB │ gzip:   1.38 kB
+dist/assets/tabs-AJl2EJ5H.js                                                            3.33 kB │ gzip:   1.46 kB
+dist/assets/ReferenceShareImport-3h7C9hlH.js                                            3.37 kB │ gzip:   1.51 kB
+dist/assets/mutation-Dx9fC1gJ.js                                                        3.44 kB │ gzip:   1.13 kB
+dist/assets/AcceptedPlate3DPreview-Di1GgFks.js                                          3.44 kB │ gzip:   1.83 kB
+dist/assets/react-dom-DKwHqKH5.js                                                       3.58 kB │ gzip:   1.36 kB
+dist/assets/ObjectProposalRows-Bj85RghT.js                                              3.66 kB │ gzip:   1.47 kB
+dist/assets/LoginPage-BZjNQaJl.js                                                       3.78 kB │ gzip:   1.59 kB
+dist/assets/printerFleet-CkvkNSPO.js                                                    3.83 kB │ gzip:   1.42 kB
+dist/assets/dist-BbDIFuwB.js                                                            4.23 kB │ gzip:   1.85 kB
+dist/assets/ConfirmDialog-C7kBqzse.js                                                   4.26 kB │ gzip:   1.51 kB
+dist/assets/buildSourceLayers-pRzcFDxu.js                                               4.52 kB │ gzip:   2.02 kB
+dist/assets/UnattributedPrintCard-CHgChTxq.js                                           4.58 kB │ gzip:   1.72 kB
+dist/assets/switch-CxJfn-0_.js                                                          4.62 kB │ gzip:   2.01 kB
+dist/assets/engineTransport-DX-IyBe2.js                                                 4.75 kB │ gzip:   1.84 kB
+dist/assets/dist-CgOq_XUY.js                                                            4.87 kB │ gzip:   1.75 kB
+dist/assets/popover-B0k84tm4.js                                                         4.91 kB │ gzip:   1.87 kB
+dist/assets/checkbox-DsIz6P6O.js                                                        5.22 kB │ gzip:   2.14 kB
+dist/assets/button-ChZebYLl.js                                                          5.27 kB │ gzip:   2.16 kB
+dist/assets/checkoff-BU00mzc9.js                                                        5.36 kB │ gzip:   1.75 kB
+dist/assets/previewTheme-D39ZijuI.js                                                    5.39 kB │ gzip:   2.40 kB
+dist/assets/profiles-Bs0PvkGi.js                                                        5.42 kB │ gzip:   1.75 kB
+dist/assets/PrinterLiveStrip-xaStuSQD.js                                                5.58 kB │ gzip:   2.34 kB
+dist/assets/BoardPage-CDbh58KT.js                                                       5.82 kB │ gzip:   2.09 kB
+dist/assets/sources-7e5wOXRO.js                                                         5.84 kB │ gzip:   2.14 kB
+dist/assets/stlThumbnail-DJbMNeTE.js                                                    6.35 kB │ gzip:   2.70 kB
+dist/assets/radio-group-hotPGepd.js                                                     6.48 kB │ gzip:   2.56 kB
+dist/assets/react-ILl6kF47.js                                                           7.53 kB │ gzip:   2.88 kB
+dist/assets/ShareBuildExportDialog-jculwJ71.js                                          8.00 kB │ gzip:   3.04 kB
+dist/assets/printerStatuses-Dws_pBo-.js                                                 8.18 kB │ gzip:   3.31 kB
+dist/assets/workPackageProjection-CKOHYU9t.js                                           8.22 kB │ gzip:   2.85 kB
+dist/assets/SourceCategoryManager-BM3MSoNW.js                                           8.29 kB │ gzip:   3.44 kB
+dist/assets/waitForSheetThumbnails-ClJjxqyK.js                                          8.40 kB │ gzip:   3.66 kB
+dist/assets/keys-97nduGoB.js                                                            9.21 kB │ gzip:   3.40 kB
+dist/assets/GlobalProductionPage-CxBUUt9T.js                                            9.68 kB │ gzip:   3.13 kB
+dist/assets/SourceUpdateIntervalSelect-B-s1IgMW.js                                     10.35 kB │ gzip:   3.36 kB
+dist/assets/sliced-object-matching-D-7dBeuq.js                                         10.65 kB │ gzip:   4.10 kB
+dist/assets/PlansPage-CNiINMaf.js                                                      11.32 kB │ gzip:   3.70 kB
+dist/assets/HelpPage-CTg7HeOI.js                                                       13.45 kB │ gzip:   4.15 kB
+dist/assets/useJobRunner-BF3sDWwu.js                                                   13.60 kB │ gzip:   4.63 kB
+dist/assets/PrinterSendPanel-BTM1EVF1.js                                               14.38 kB │ gzip:   4.89 kB
+dist/assets/ImportRulesTree-DYNxSvnl.js                                                14.54 kB │ gzip:   4.80 kB
+dist/assets/query-BvwlGLlA.js                                                          14.59 kB │ gzip:   4.98 kB
+dist/assets/Preview3D-C9-TlAcz.js                                                      14.87 kB │ gzip:   6.10 kB
+dist/assets/planPickerGroups-DUDAK3-S.js                                               15.18 kB │ gzip:   5.74 kB
+dist/assets/dist-DXWsf1hD.js                                                           15.32 kB │ gzip:   5.45 kB
+dist/assets/PrintersPage-BM_sD_k6.js                                                   16.58 kB │ gzip:   5.79 kB
+dist/assets/OrbitControls-Dv0ZNTbz.js                                                  19.84 kB │ gzip:   4.40 kB
+dist/assets/dropdown-menu-BLCkFkCW.js                                                  20.95 kB │ gzip:   6.11 kB
+dist/assets/select-Co22Bm7o.js                                                         21.32 kB │ gzip:   7.28 kB
+dist/assets/dist-CS2BF_1A.js                                                           23.24 kB │ gzip:   8.39 kB
+dist/assets/dist-BbMdoCds.js                                                           25.67 kB │ gzip:   9.95 kB
+dist/assets/PrinterFilesView-XlFMduRH.js                                               28.52 kB │ gzip:   8.51 kB
+dist/assets/PlanWorkspaceContext-CNw6XCUq.js                                           30.46 kB │ gzip:   9.23 kB
+dist/assets/dist-D8ugAitK.js                                                           33.59 kB │ gzip:   9.36 kB
+dist/assets/BuildPage-DPHLsFgA.js                                                      33.66 kB │ gzip:  10.38 kB
+dist/assets/statusTone-BGECiioo.js                                                     33.78 kB │ gzip:  10.63 kB
+dist/assets/SortableDragHandle-DGbIVVIg.js                                             45.66 kB │ gzip:  15.08 kB
+dist/assets/AuthenticatedApp-9gFXk0Aj.js                                               70.58 kB │ gzip:  21.82 kB
+dist/assets/PartsPage-Bsbf8psZ.js                                                      71.89 kB │ gzip:  20.43 kB
+dist/assets/SourcesPage-DoIvE2AW.js                                                    88.90 kB │ gzip:  25.69 kB
+dist/assets/jszip.min-Dy1zC6RX.js                                                      95.97 kB │ gzip:  28.50 kB
+dist/assets/SettingsPage-DN33xO7K.js                                                  102.09 kB │ gzip:  25.01 kB
+dist/assets/CheckoffPage-D6COtZnI.js                                                  109.21 kB │ gzip:  30.49 kB
+dist/assets/release-mv2m0hu7-263466-d501d749-3aa0-4f9f-82f2-6c5ad30def54-DGzUhnRT.js  118.94 kB │ gzip:  33.12 kB
+dist/assets/ExportPage-BOcT2wKY.js                                                    132.95 kB │ gzip:  38.24 kB
+dist/assets/index-C63AiiIX.js                                                         288.10 kB │ gzip:  92.51 kB
+dist/assets/previewRig-8H-fs6ej.js                                                    549.46 kB │ gzip: 137.52 kB
+
+✓ built in 2.00s
