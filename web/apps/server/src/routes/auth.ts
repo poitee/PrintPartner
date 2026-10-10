@@ -204,6 +204,7 @@ export function registerAuthRoutes(
         display_name: user.displayName,
         email: emailRaw,
         provider: "email",
+        hasPassword: true,
         is_admin: user.isAdmin,
       };
       return { user: toPublicUser(sessionUser) };
@@ -230,6 +231,7 @@ export function registerAuthRoutes(
           display_name: user.displayName,
           email: emailRaw,
           provider: "email",
+          hasPassword: true,
           is_admin: user.isAdmin,
         }),
       };
@@ -300,6 +302,7 @@ export function registerAuthRoutes(
           display_name: user.displayName,
           email: user.email,
           provider: "email",
+          hasPassword: true,
           is_admin: user.isAdmin,
         }),
       };

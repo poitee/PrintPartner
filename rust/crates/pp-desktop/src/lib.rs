@@ -4,6 +4,56 @@ use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use tauri::Url;
 
+/// Reuse the legacy desktop store in place; the native shell must not select a
+/// fresh platform-specific store when upgrading an existing installation.
+pub fn desktop_data_dir(home: &Path) -> Result<PathBuf> {
+    ensure!(home.is_absolute(), "Desktop home directory unavailable");
+    Ok(home.join(".print-partner"))
+}
+
+/// Only emit known diagnostic categories and OS error numbers. Arbitrary error
+/// messages can include private paths, bootstrap URLs or backend payloads.
+pub fn startup_diagnostic(error: &anyhow::Error) -> String {
+    let mut codes = Vec::new();
+    for cause in error.chain() {
+        let code = match cause.to_string().as_str() {
+            "Desktop resources unavailable" => Some("resources_unavailable"),
+            "Desktop resource verification failed" => Some("resource_verification"),
+            "Desktop core startup failed" => Some("core_startup"),
+            "Desktop home directory unavailable" => Some("home_unavailable"),
+            "Native shell initialization failed" => Some("shell_initialization"),
+            "Native window initialization failed" => Some("window_initialization"),
+            "Native tray initialization failed" => Some("tray_initialization"),
+            "Desktop shutdown incomplete" => Some("shutdown_incomplete"),
+            "Data directory already owned" => Some("data_directory_owned"),
+            "Persisted desktop origin is unavailable" => Some("persisted_origin_unavailable"),
+            "Release artifact missing" | "Release root missing" => Some("release_missing"),
+            "Release artifact content mismatch" | "Node executable content mismatch" => {
+                Some("release_content_mismatch")
+            }
+            "Release file inventory mismatch" => Some("release_inventory_mismatch"),
+            "Desktop architecture mismatch" => Some("architecture_mismatch"),
+            "Desktop Node identity mismatch" => Some("node_identity_mismatch"),
+            "Desktop commit identity missing" => Some("commit_identity_missing"),
+            "Unsupported desktop launch argument" => Some("unsupported_argument"),
+            _ => None,
+        };
+        if let Some(code) = code {
+            codes.push(code.to_owned());
+        }
+        if let Some(errno) = cause
+            .downcast_ref::<std::io::Error>()
+            .and_then(std::io::Error::raw_os_error)
+        {
+            codes.push(format!("os_error={errno}"));
+        }
+    }
+    if codes.is_empty() {
+        codes.push("unclassified".to_owned());
+    }
+    format!("desktop_startup_failed: {}", codes.join(" -> "))
+}
+
 #[derive(Clone)]
 pub struct AllowedOrigin(Url);
 
@@ -109,6 +159,46 @@ fn contained(root: &Path, relative: &Path) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn upgrades_reuse_the_legacy_desktop_store() {
+        assert_eq!(
+            desktop_data_dir(Path::new("/users/existing-owner")).unwrap(),
+            PathBuf::from("/users/existing-owner/.print-partner")
+        );
+        assert!(desktop_data_dir(Path::new("relative-home")).is_err());
+    }
+
+    #[test]
+    fn startup_diagnostics_keep_causes_without_private_values() {
+        let secret = "private/path?bootstrap=secret-token";
+        let error = anyhow::anyhow!(secret)
+            .context("Data directory already owned")
+            .context("Desktop core startup failed");
+        assert_eq!(
+            startup_diagnostic(&error),
+            "desktop_startup_failed: core_startup -> data_directory_owned"
+        );
+        assert!(!startup_diagnostic(&anyhow::anyhow!(secret)).contains(secret));
+        let error = anyhow::Error::from(std::io::Error::from_raw_os_error(13))
+            .context("Desktop resources unavailable");
+        assert_eq!(
+            startup_diagnostic(&error),
+            "desktop_startup_failed: resources_unavailable -> os_error=13"
+        );
+        for (cause, code) in [
+            ("Release artifact missing", "release_missing"),
+            (
+                "Release artifact content mismatch",
+                "release_content_mismatch",
+            ),
+            (
+                "Persisted desktop origin is unavailable",
+                "persisted_origin_unavailable",
+            ),
+        ] {
+            assert!(startup_diagnostic(&anyhow::anyhow!(cause)).ends_with(code));
+        }
+    }
     #[test]
     fn generated_authority_denies_native_commands_for_every_origin() {
         let mut context: tauri::Context<tauri::Wry> = tauri::generate_context!();

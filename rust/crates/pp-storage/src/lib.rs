@@ -4,6 +4,7 @@ pub mod jobs;
 pub mod lease;
 pub mod read_model;
 mod schema;
+mod storage_lease;
 
 use anyhow::{Result, anyhow, ensure};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, params};

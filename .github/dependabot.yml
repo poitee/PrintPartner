@@ -5,6 +5,13 @@ updates:
     open-pull-requests-limit: 5
     schedule:
       interval: weekly
+    groups:
+      web-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
     ignore:
       - dependency-name: "*"
         update-types:
