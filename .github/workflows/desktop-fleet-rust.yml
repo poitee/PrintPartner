@@ -4,7 +4,16 @@ on:
   pull_request:
     paths:
       - 'rust/**'
-      - 'web/**'
+      # Desktop Rust CI always runs `npm --prefix web ci` + `build`, then
+      # `rust/scripts/build-desktop-manifest.py`, which hashes built artifacts under
+      # web/apps/{web,server} and web/packages/{contracts,domain} plus root lockfiles.
+      # `pp-compat` embeds that manifest; `pp-contracts` tests read
+      # web/packages/contracts/test-fixtures. Omit unrelated web-only paths (e.g.
+      # knip/eslint config) so ordinary web PRs do not always pay for a full Rust job.
+      - 'web/package.json'
+      - 'web/package-lock.json'
+      - 'web/apps/**'
+      - 'web/packages/**'
       - '.github/workflows/desktop-fleet-rust.yml'
   workflow_dispatch:
     inputs:
