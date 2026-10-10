@@ -66,6 +66,9 @@ export function connectJobWebSocket(
     try {
       const current = new WebSocket(url.toString());
       socket = current;
+      current.onopen = () => {
+        if (!closed && socket === current) retryDelay = 500;
+      };
       current.onmessage = (event) => {
         if (closed || socket !== current) return;
         try {
@@ -73,7 +76,6 @@ export function connectJobWebSocket(
           if (!isJobEvent(value)) {
             throw new Error("Job event stream returned an invalid event");
           }
-          retryDelay = 500;
           if (value.status === "done" || value.status === "error" || value.status === "cancelled") {
             disconnect();
           }
@@ -93,10 +95,10 @@ export function connectJobWebSocket(
           onError(new JobNotFoundError());
           return;
         }
-        // Retry only transport loss and transient server failures. Normal,
-        // policy, and protocol closes require no new connection.
-        if ([1006, 1011, 1012, 1013].includes(event.code)) reconnect();
-        else closed = true;
+        // Policy rejection is terminal. Every other close can be a restart,
+        // including a no-code shutdown (1005 in the browser).
+        if (event.code === 1008) closed = true;
+        else reconnect();
       };
     } catch (error) {
       onError(error instanceof Error ? error : new Error(String(error)));

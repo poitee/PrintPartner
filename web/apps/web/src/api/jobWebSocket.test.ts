@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 class TestSocket {
   static readonly connections: TestSocket[] = [];
+  onopen: (() => void) | null = null;
   onmessage: ((event: MessageEvent) => void) | null = null;
   onerror: (() => void) | null = null;
   onclose: ((event: Pick<CloseEvent, "code" | "reason">) => void) | null = null;
@@ -116,11 +117,37 @@ describe("job stream observation lifetime", () => {
     expect(onEvent).not.toHaveBeenCalled();
   });
 
-  it.each([1000, 1001, 1008, 1002, 1003])("does not retry a non-transient close %s", async (code) => {
+  it("does not retry a policy rejection", async () => {
     const { socket, disconnect } = await connection();
-    socket.onclose?.({ code, reason: "" });
+    socket.onclose?.({ code: 1008, reason: "Policy rejected" });
     await vi.advanceTimersByTimeAsync(60_000);
     expect(TestSocket.connections).toHaveLength(1);
+    disconnect();
+  });
+
+  it.each([1000, 1001, 1002, 1003, 1005, 1006, 1007, 1009, 1010, 1011, 1012, 1013, 1014, 4000])("retries close %s before a final job state", async (code) => {
+    const { socket, disconnect } = await connection();
+    socket.onclose?.({ code, reason: "" });
+    await vi.advanceTimersByTimeAsync(499);
+    expect(TestSocket.connections).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(TestSocket.connections).toHaveLength(2);
+    disconnect();
+  });
+
+  it("resets backoff on open before receiving any message", async () => {
+    const { socket, disconnect } = await connection();
+    socket.onclose?.({ code: 1006, reason: "" });
+    await vi.advanceTimersByTimeAsync(500);
+    TestSocket.connections.at(-1)?.onclose?.({ code: 1006, reason: "" });
+    await vi.advanceTimersByTimeAsync(1000);
+    const opened = TestSocket.connections.at(-1);
+    opened?.onopen?.();
+    opened?.onclose?.({ code: 1005, reason: "" });
+    await vi.advanceTimersByTimeAsync(499);
+    expect(TestSocket.connections).toHaveLength(3);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(TestSocket.connections).toHaveLength(4);
     disconnect();
   });
 

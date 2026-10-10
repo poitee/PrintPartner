@@ -10,6 +10,7 @@ import {
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { JobEvent, JobSnapshot } from "@print-partner/contracts";
+import { EngineHttpError } from "../api/engineTransport";
 import { fetchJob } from "../api/endpoints/jobs";
 import { connectJobWebSocket, JobNotFoundError } from "../api/jobWebSocket";
 import { invalidateAfterJob } from "../queries/invalidation";
@@ -76,12 +77,18 @@ async function pollJobUntilTerminal(
   let lastSnap: JobSnapshot | null = null;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     if (signal.aborted) return;
-    const snap = await fetchJob(jobId, signal);
-    if (signal.aborted) return;
-    lastSnap = snap;
-    onProgress(snap);
-    if (JOB_TERMINAL.has(snap.status)) {
-      return;
+    try {
+      const snap = await fetchJob(jobId, signal);
+      if (signal.aborted) return;
+      lastSnap = snap;
+      onProgress(snap);
+      if (JOB_TERMINAL.has(snap.status)) return;
+    } catch (error) {
+      if (signal.aborted) return;
+      // An API restart must not let the fallback poll cancel socket reconnects.
+      // fetch rejects network failures with TypeError; the dev proxy uses 5xx.
+      if (!(error instanceof TypeError) &&
+          !(error instanceof EngineHttpError && error.status >= 500)) throw error;
     }
     await new Promise<void>((resolve) => {
       const done = () => {
@@ -261,7 +268,9 @@ export function JobProvider({ children }: { children: ReactNode }) {
 
         void pollJobUntilTerminal(jobId, onProgress, observer.signal, 400, pollAttemptsForKind(kind)).catch((e) => {
           if (finished) return;
-          const message = `Lost contact with the job. It may still be running on the server. ${e instanceof Error ? e.message : String(e)}`;
+          const message = e instanceof EngineHttpError && e.status === 404
+            ? "Job not found"
+            : `Lost contact with the job. It may still be running on the server. ${e instanceof Error ? e.message : String(e)}`;
           finish({ job_id: jobId, kind, status: "error", message, error: message, progress: null, result: null });
           refreshAcceptedExportHistory();
         });
