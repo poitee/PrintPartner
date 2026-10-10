@@ -316,6 +316,7 @@ impl CapturedClaimFixture {
             claim: self.resolved(),
             worker: "capture-worker".into(),
             admission: Self::admission(),
+            policy: None,
             storage: self.owner.client(),
         }
     }
@@ -455,6 +456,7 @@ fn captured_claim_token_overflow_rolls_back_recovery_and_allows_sourceless_work(
             job_id: None,
             worker: "no-source-worker".into(),
             admission: CapturedClaimFixture::admission(),
+            policy: None,
             storage: fixture.owner.client(),
         },
     )

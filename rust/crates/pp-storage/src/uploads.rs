@@ -1099,13 +1099,13 @@ pub(crate) fn validate_resolved_claim(
         job.tenant == operation.tenant
             && job.job_id == operation.job_id
             && matches!(
-                &job.payload,
-                jobs::Payload::SuppliedSourceImport {
-                    project_id,
-                    operation_key,
-                    input_version: 2,
-                } if *project_id as i64 == operation.source_id
-                    && operation_key == &operation.key
+                    &job.payload,
+                    jobs::Payload::SuppliedSourceImport {
+                        project_id,
+                        operation_key,
+                        input_version: 2,
+                    } if *project_id as i64 == operation.source_id
+                        && operation_key == &operation.key
             ),
         "Captured import requires repair"
     );
@@ -1148,18 +1148,18 @@ pub(crate) fn execute(
                 storage.import_epoch.load(Ordering::Acquire) == accounting_epoch,
                 "Import accounting changed; retry admission"
             );
-            let (tenant, actor) = match authority {
+            let (tenant, actor, durable_authority) = match authority {
                 AdmissionAuthority::Credential(credential) => {
-                    jobs::actor(&tx, credential, policy, &storage)?
+                    jobs::admit_actor(&tx, credential, policy, &storage)?
                 }
                 AdmissionAuthority::Preflighted(preflight) => {
-                    let (tenant, actor) =
-                        jobs::actor_ref(&tx, &preflight.credential, policy, &storage)?;
+                    let (tenant, actor, durable_authority) =
+                        jobs::admit_actor(&tx, preflight.credential, policy, &storage)?;
                     ensure!(
                         tenant == preflight.tenant && actor == preflight.actor,
                         "Capture authority changed"
                     );
-                    (tenant, actor)
+                    (tenant, actor, durable_authority)
                 }
             };
             ensure!(
@@ -1253,10 +1253,11 @@ pub(crate) fn execute(
                     operation_key: request.key.clone(),
                     input_version,
                 };
-                let job = match jobs::user(
+                let job = match jobs::user_with_authority(
                     &tx,
                     &tenant,
                     &actor,
+                    durable_authority,
                     jobs::UserOperation::Enqueue {
                         key: format!(
                             "source-import:{}",

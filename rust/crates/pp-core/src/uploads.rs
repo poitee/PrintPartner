@@ -38,12 +38,15 @@ impl SourceImports {
     pub fn new(owner: &WriterOwner, policy: AuthPolicy, quota: u64) -> Result<Self> {
         Ok(Self {
             client: owner.imports(policy, quota)?,
-            worker: owner.job_worker(WorkerAdmission {
-                kinds: vec![(JobKind::SuppliedSourceImport, 1)],
-                total: 1,
-                per_resource: 1,
-                lease_seconds: 3600,
-            })?,
+            worker: owner.job_worker_with_policy(
+                policy,
+                WorkerAdmission {
+                    kinds: vec![(JobKind::SuppliedSourceImport, 1)],
+                    total: 1,
+                    per_resource: 1,
+                    lease_seconds: 3600,
+                },
+            )?,
             repos: owner.import_repos_root()?,
         })
     }

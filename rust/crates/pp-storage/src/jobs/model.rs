@@ -477,6 +477,7 @@ fn is_false(value: &bool) -> bool {
 }
 pub enum EffectOutcome<'a> {
     Unresolved,
+    Observed(&'a ResultArtifact),
     Confirmed(&'a ResultArtifact),
     Denied,
 }
@@ -484,18 +485,21 @@ impl EffectReceipt {
     pub(super) fn outcome(&self) -> Result<EffectOutcome<'_>> {
         match (self.confirmed, self.no_effect, self.receipt.as_ref()) {
             (false, false, None) => Ok(EffectOutcome::Unresolved),
+            (false, false, Some(receipt)) => Ok(EffectOutcome::Observed(receipt)),
             (true, false, Some(receipt)) => Ok(EffectOutcome::Confirmed(receipt)),
             (false, true, None) => Ok(EffectOutcome::Denied),
             _ => Err(anyhow::anyhow!("Invalid effect outcome")),
         }
     }
     pub(super) fn confirm(&mut self, receipt: ResultArtifact) -> Result<()> {
-        ensure!(
-            matches!(self.outcome()?, EffectOutcome::Unresolved),
-            "Effect already resolved"
-        );
+        match self.outcome()? {
+            EffectOutcome::Unresolved => self.receipt = Some(receipt),
+            EffectOutcome::Observed(stored) => ensure!(stored == &receipt, "Receipt mismatch"),
+            EffectOutcome::Confirmed(_) | EffectOutcome::Denied => {
+                return Err(anyhow::anyhow!("Effect already resolved"));
+            }
+        }
         self.confirmed = true;
-        self.receipt = Some(receipt);
         Ok(())
     }
     pub(super) fn deny(&mut self) -> Result<()> {
@@ -521,7 +525,44 @@ impl ResultArtifact {
         text(&self.target, 1024)
     }
 }
-#[derive(Clone, Serialize, Deserialize)]
+
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub(super) enum AuthorityDisposition {
+    Original,
+    PhysicalOwner,
+    #[default]
+    LegacyMissing,
+}
+
+#[derive(Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum AuthorityRefusalReason {
+    MissingOriginal,
+    CredentialInvalid,
+    PolicyChanged,
+    TenantChanged,
+    SubjectChanged,
+}
+
+#[derive(Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum AuthorityRefusalPhase {
+    Claim,
+    TargetedClaim,
+    WorkerAdvance,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct AuthorityRefusalObservation {
+    pub(super) version: u8,
+    pub(super) reason: AuthorityRefusalReason,
+    pub(super) phase: AuthorityRefusalPhase,
+    pub(super) observed_at: i64,
+    pub(super) generation: i64,
+}
+
+#[derive(Serialize, Deserialize)]
 pub struct JobRecord {
     pub job_id: String,
     pub tenant: String,
@@ -541,6 +582,12 @@ pub struct JobRecord {
     pub effects: Vec<EffectReceipt>,
     pub result: Option<ResultArtifact>,
     pub recovery: Option<String>,
+    #[serde(skip)]
+    pub(crate) authority: Option<crate::auth::authority::AuthorityBasis>,
+    #[serde(skip)]
+    pub(super) authority_disposition: AuthorityDisposition,
+    #[serde(skip)]
+    pub(super) authority_refusal: Option<AuthorityRefusalObservation>,
     #[serde(skip)]
     pub(crate) fence: Option<String>,
     #[serde(skip)]
@@ -565,13 +612,29 @@ impl JobRecord {
             digest(&effect.intent.basis_hash)?;
             digest(&effect.intent.content_hash)?;
             text(&effect.intent.target, 1024)?;
-            if let EffectOutcome::Confirmed(receipt) = outcome {
-                receipt.validate()?;
-                ensure!(
-                    receipt.content_hash == effect.intent.content_hash
-                        && receipt.target == effect.intent.target,
-                    "Effect receipt mismatch"
-                );
+            match outcome {
+                EffectOutcome::Observed(receipt) => {
+                    ensure!(
+                        self.state == PersistentState::ReconciliationRequired
+                            && self.authority_refusal.is_some(),
+                        "Observed effect requires authority reconciliation"
+                    );
+                    receipt.validate()?;
+                    ensure!(
+                        receipt.content_hash == effect.intent.content_hash
+                            && receipt.target == effect.intent.target,
+                        "Effect receipt mismatch"
+                    );
+                }
+                EffectOutcome::Confirmed(receipt) => {
+                    receipt.validate()?;
+                    ensure!(
+                        receipt.content_hash == effect.intent.content_hash
+                            && receipt.target == effect.intent.target,
+                        "Effect receipt mismatch"
+                    );
+                }
+                EffectOutcome::Unresolved | EffectOutcome::Denied => {}
             }
             ensure!(
                 !effect.no_effect || self.state.terminal(),
@@ -613,11 +676,10 @@ impl JobRecord {
                         return None;
                     }
                 }
-                EffectOperation::SpoolmanDeduction => {
-                    if matches!(outcome, EffectOutcome::Unresolved) {
-                        return None;
-                    }
-                }
+                EffectOperation::SpoolmanDeduction => match outcome {
+                    EffectOutcome::Confirmed(_) | EffectOutcome::Denied => {}
+                    EffectOutcome::Unresolved | EffectOutcome::Observed(_) => return None,
+                },
                 _ => return None,
             }
         }

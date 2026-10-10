@@ -57,6 +57,12 @@ fn job(outcome: Outcome) -> JobRecord {
         _ => panic!("Expected job"),
     }
 }
+fn job_error(outcome: Result<Outcome>) -> anyhow::Error {
+    match outcome {
+        Err(error) => error,
+        Ok(_) => panic!("job error expected"),
+    }
+}
 fn enqueue(owner: &WriterOwner, key: &str, payload: Payload) -> JobRecord {
     job(call(
         owner,
@@ -195,6 +201,25 @@ fn uploaded_only_parent(owner: &WriterOwner, key: &str, printer_id: &str) -> Job
     )
     .unwrap())
 }
+fn uploaded_only_spoolman_parent(owner: &WriterOwner, key: &str, printer_id: &str) -> JobRecord {
+    enqueue(owner, key, printer(printer_id));
+    let worker = owner.job_worker(admission()).unwrap();
+    let mut lease = worker.claim().unwrap().unwrap().lease;
+    let upload = distinct_intent(EffectOperation::PrinterUpload, printer_id, 900);
+    let upload_receipt = begin_and_confirm(&worker, &mut lease, upload, "observed-upload");
+    let spoolman = distinct_intent(EffectOperation::SpoolmanDeduction, "spoolman:observed", 901);
+    let spoolman_receipt = begin_and_confirm(&worker, &mut lease, spoolman, "observed-spoolman");
+    let uncertain = worker.update(&mut lease, WorkerOperation::Fail).unwrap();
+    let settled = job(reconcile(
+        owner,
+        &uncertain,
+        Decision::ConfirmSucceeded,
+        Some(spoolman_receipt),
+    )
+    .unwrap());
+    assert_eq!(settled.result, Some(upload_receipt));
+    settled
+}
 fn denied_start_parent(owner: &WriterOwner, key: &str, printer_id: &str, seed: u64) -> JobRecord {
     enqueue(owner, key, printer(printer_id));
     let worker = owner.job_worker(admission()).unwrap();
@@ -224,6 +249,22 @@ fn readonly(path: &std::path::Path) -> Connection {
         OpenFlags::SQLITE_OPEN_READ_ONLY,
     )
     .unwrap()
+}
+fn observe_effect(document: &mut serde_json::Value, index: usize) {
+    document["state"] = "reconciliation_required".into();
+    document["result"] = serde_json::Value::Null;
+    document["effects"][index]["confirmed"] = false.into();
+    document["effects"][index]
+        .as_object_mut()
+        .unwrap()
+        .remove("no_effect");
+    document["_authority_refusal"] = serde_json::json!({
+        "version": 1,
+        "reason": "credential_invalid",
+        "phase": "worker_advance",
+        "observed_at": 1,
+        "generation": document["generation"]
+    });
 }
 fn register(owner: &WriterOwner, email: &str) -> (auth::User, String) {
     let result = owner
@@ -1138,24 +1179,45 @@ fn ticket_t_28_claims_duplicate_concurrent_enqueue_and_no_handler_admission() {
 }
 #[test]
 fn ticket_t_28_claims_expired_lease_fences_old_worker() {
-    let (_, owner) = fixture();
+    let (path, owner) = fixture();
     let queued = enqueue(&owner, "expiry", Payload::CheckSourceUpdates {});
     let mut config = admission();
     config.lease_seconds = 1;
-    let worker = owner.job_worker(config).unwrap();
-    let mut old = worker.claim().unwrap().unwrap().lease;
+    let expired_worker = owner.job_worker(config).unwrap();
+    let ClaimedAttempt {
+        job: first,
+        lease: mut old,
+        source_work,
+    } = expired_worker.claim().unwrap().unwrap();
+    assert!(source_work.is_none());
     thread::sleep(Duration::from_millis(1100));
-    assert!(worker.update(&mut old, WorkerOperation::Heartbeat).is_err());
-    let claim = worker.claim().unwrap().unwrap();
-    let next = claim.job;
-    let mut current = claim.lease;
+    assert!(
+        expired_worker
+            .update(&mut old, WorkerOperation::Heartbeat)
+            .is_err()
+    );
+    owner.shutdown().unwrap();
+
+    let owner = WriterOwner::open(&path, Limits::default()).unwrap().0;
+    let current_worker = owner.job_worker(admission()).unwrap();
+    let ClaimedAttempt {
+        job: next,
+        lease: mut current,
+        source_work,
+    } = current_worker.claim().unwrap().unwrap();
+    assert!(source_work.is_none());
     assert_eq!(next.job_id, queued.job_id);
     assert_eq!(next.attempt, 2);
-    assert!(next.generation > 1);
-    assert!(worker.update(&mut old, WorkerOperation::Fail).is_err());
-    worker
+    assert!(next.generation > first.generation);
+    assert!(
+        expired_worker
+            .update(&mut old, WorkerOperation::Fail)
+            .is_err()
+    );
+    let finished = current_worker
         .update(&mut current, WorkerOperation::Finish(None))
         .unwrap();
+    assert_eq!(finished.state, PersistentState::Succeeded);
     owner.shutdown().unwrap();
 }
 #[test]
@@ -1419,8 +1481,13 @@ fn ticket_t_28_recovery_reconciliation_records_authenticated_subject() {
         },
     )
     .unwrap());
-    let worker = owner.job_worker(admission()).unwrap();
-    let mut lease = worker.claim().unwrap().unwrap().lease;
+    let worker = owner.job_worker_with_policy(policy(), admission()).unwrap();
+    let ClaimedAttempt {
+        job: _,
+        mut lease,
+        source_work,
+    } = worker.claim().unwrap().unwrap();
+    assert!(source_work.is_none());
     worker
         .update(
             &mut lease,
@@ -2986,12 +3053,12 @@ fn denied_start_child_failure_allows_only_a_fresh_deliberate_key() {
     owner.shutdown().unwrap();
 }
 #[test]
-fn persisted_effect_outcome_truth_table_accepts_exactly_three_shapes() {
+fn persisted_effect_outcome_truth_table_accepts_exactly_four_shapes() {
     let (path, owner) = fixture();
     let worker = owner.job_worker(admission()).unwrap();
     let cases = [
         (false, false, false, true),
-        (false, false, true, false),
+        (false, false, true, true),
         (false, true, false, true),
         (false, true, true, false),
         (true, false, false, false),
@@ -3040,8 +3107,18 @@ fn persisted_effect_outcome_truth_table_accepts_exactly_three_shapes() {
         } else {
             serde_json::Value::Null
         };
+        if !confirmed && !no_effect && has_receipt {
+            document["state"] = "reconciliation_required".into();
+            document["_authority_refusal"] = serde_json::json!({
+                "version": 1,
+                "reason": "credential_invalid",
+                "phase": "worker_advance",
+                "observed_at": 1,
+                "generation": document["generation"]
+            });
+        }
         raw.execute(
-            "UPDATE durable_jobs SET document=?2 WHERE id=?1",
+            "UPDATE durable_jobs SET state=json_extract(?2,'$.state'),document=?2 WHERE id=?1",
             rusqlite::params![failed.job_id, document.to_string()],
         )
         .unwrap();
@@ -3060,6 +3137,240 @@ fn persisted_effect_outcome_truth_table_accepts_exactly_three_shapes() {
     }
     owner.shutdown().unwrap();
 }
+
+#[test]
+fn observed_receipt_mismatch_fails_live_and_archived_decode() {
+    let (path, owner) = fixture();
+    let parent = uploaded_only_parent(&owner, "observed-live", "observed-live-printer");
+    let raw = Connection::open(path.join("print-partner.db")).unwrap();
+    let original: String = raw
+        .query_row(
+            "SELECT document FROM durable_jobs WHERE id=?1",
+            [&parent.job_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let mut observed: serde_json::Value = serde_json::from_str(&original).unwrap();
+    observe_effect(&mut observed, 0);
+    raw.execute(
+        "UPDATE durable_jobs SET state='reconciliation_required',document=?2 WHERE id=?1",
+        rusqlite::params![parent.job_id, observed.to_string()],
+    )
+    .unwrap();
+    assert_eq!(
+        get(&owner, &parent.job_id).state,
+        PersistentState::ReconciliationRequired
+    );
+    for field in ["content_hash", "target"] {
+        let mut malformed = observed.clone();
+        malformed["effects"][0]["receipt"][field] = if field == "content_hash" {
+            "f".repeat(64).into()
+        } else {
+            "mismatch".into()
+        };
+        raw.execute(
+            "UPDATE durable_jobs SET document=?2 WHERE id=?1",
+            rusqlite::params![parent.job_id, malformed.to_string()],
+        )
+        .unwrap();
+        let error = job_error(call(
+            &owner,
+            UserOperation::Get {
+                job_id: parent.job_id.clone(),
+            },
+        ));
+        assert!(
+            error.to_string().contains("Effect receipt mismatch"),
+            "{error:?}"
+        );
+    }
+    raw.execute(
+        "UPDATE durable_jobs SET state='uploaded_only',document=?2 WHERE id=?1",
+        rusqlite::params![parent.job_id, original],
+    )
+    .unwrap();
+    assert_eq!(
+        get(&owner, &parent.job_id).state,
+        PersistentState::UploadedOnly
+    );
+    assert!(enqueue_start(&owner, "observed-live-valid-child", &parent.job_id).is_ok());
+    owner.shutdown().unwrap();
+
+    let (path, owner) = fixture();
+    let parent = uploaded_only_parent(&owner, "observed-archive", "observed-archive-printer");
+    uploaded_only_parent(
+        &owner,
+        "observed-archive-newer",
+        "observed-archive-newer-printer",
+    );
+    let raw = Connection::open(path.join("print-partner.db")).unwrap();
+    raw.execute(
+        "UPDATE durable_jobs SET updated=updated-172800,document=json_set(document,'$.updated_at',updated-172800) WHERE id=?1",
+        [&parent.job_id],
+    )
+    .unwrap();
+    drop(raw);
+    assert_eq!(owner.retain_jobs(1, 1).unwrap(), 1);
+    let raw = Connection::open(path.join("print-partner.db")).unwrap();
+    let original: String = raw
+        .query_row(
+            "SELECT archived_document FROM durable_job_keys WHERE job_id=?1",
+            [&parent.job_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let mut observed: serde_json::Value = serde_json::from_str(&original).unwrap();
+    observe_effect(&mut observed, 0);
+    raw.execute(
+        "UPDATE durable_job_keys SET archived_document=?2 WHERE job_id=?1",
+        rusqlite::params![parent.job_id, observed.to_string()],
+    )
+    .unwrap();
+    assert!(
+        job_error(enqueue_start(
+            &owner,
+            "observed-archive-valid-shape",
+            &parent.job_id,
+        ))
+        .to_string()
+        .contains("Parent job is not an uploaded-only print")
+    );
+    for field in ["content_hash", "target"] {
+        let mut malformed = observed.clone();
+        malformed["effects"][0]["receipt"][field] = if field == "content_hash" {
+            "f".repeat(64).into()
+        } else {
+            "mismatch".into()
+        };
+        raw.execute(
+            "UPDATE durable_job_keys SET archived_document=?2 WHERE job_id=?1",
+            rusqlite::params![parent.job_id, malformed.to_string()],
+        )
+        .unwrap();
+        let error = job_error(enqueue_start(
+            &owner,
+            &format!("observed-archive-malformed-{field}"),
+            &parent.job_id,
+        ));
+        assert!(
+            error.to_string().contains("Effect receipt mismatch"),
+            "{error:?}"
+        );
+    }
+    raw.execute(
+        "UPDATE durable_job_keys SET archived_document=?2 WHERE job_id=?1",
+        rusqlite::params![parent.job_id, original],
+    )
+    .unwrap();
+    drop(raw);
+    assert!(enqueue_start(&owner, "observed-archive-valid-child", &parent.job_id).is_ok());
+    owner.shutdown().unwrap();
+}
+
+#[test]
+fn observed_spoolman_cannot_be_read_or_bound_as_uploaded_only() {
+    let (path, owner) = fixture();
+    let parent = uploaded_only_spoolman_parent(
+        &owner,
+        "observed-spoolman-live",
+        "observed-spoolman-live-printer",
+    );
+    let raw = Connection::open(path.join("print-partner.db")).unwrap();
+    let original: String = raw
+        .query_row(
+            "SELECT document FROM durable_jobs WHERE id=?1",
+            [&parent.job_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let mut invalid: serde_json::Value = serde_json::from_str(&original).unwrap();
+    invalid["effects"][1]["confirmed"] = false.into();
+    invalid["_authority_refusal"] = serde_json::json!({
+        "version": 1,
+        "reason": "credential_invalid",
+        "phase": "worker_advance",
+        "observed_at": 1,
+        "generation": invalid["generation"]
+    });
+    raw.execute(
+        "UPDATE durable_jobs SET document=?2 WHERE id=?1",
+        rusqlite::params![parent.job_id, invalid.to_string()],
+    )
+    .unwrap();
+    assert!(
+        call(
+            &owner,
+            UserOperation::Get {
+                job_id: parent.job_id.clone(),
+            },
+        )
+        .is_err()
+    );
+    assert!(enqueue_start(&owner, "observed-spoolman-live-child", &parent.job_id).is_err());
+    raw.execute(
+        "UPDATE durable_jobs SET document=?2 WHERE id=?1",
+        rusqlite::params![parent.job_id, original],
+    )
+    .unwrap();
+    assert_eq!(
+        get(&owner, &parent.job_id).state,
+        PersistentState::UploadedOnly
+    );
+    assert!(enqueue_start(&owner, "observed-spoolman-live-valid", &parent.job_id).is_ok());
+    owner.shutdown().unwrap();
+
+    let (path, owner) = fixture();
+    let parent = uploaded_only_spoolman_parent(
+        &owner,
+        "observed-spoolman-archive",
+        "observed-spoolman-archive-printer",
+    );
+    uploaded_only_parent(
+        &owner,
+        "observed-spoolman-archive-newer",
+        "observed-spoolman-archive-newer-printer",
+    );
+    let raw = Connection::open(path.join("print-partner.db")).unwrap();
+    raw.execute(
+        "UPDATE durable_jobs SET updated=updated-172800,document=json_set(document,'$.updated_at',updated-172800) WHERE id=?1",
+        [&parent.job_id],
+    )
+    .unwrap();
+    drop(raw);
+    assert_eq!(owner.retain_jobs(1, 1).unwrap(), 1);
+    let raw = Connection::open(path.join("print-partner.db")).unwrap();
+    let original: String = raw
+        .query_row(
+            "SELECT archived_document FROM durable_job_keys WHERE job_id=?1",
+            [&parent.job_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let mut invalid: serde_json::Value = serde_json::from_str(&original).unwrap();
+    invalid["effects"][1]["confirmed"] = false.into();
+    invalid["_authority_refusal"] = serde_json::json!({
+        "version": 1,
+        "reason": "credential_invalid",
+        "phase": "worker_advance",
+        "observed_at": 1,
+        "generation": invalid["generation"]
+    });
+    raw.execute(
+        "UPDATE durable_job_keys SET archived_document=?2 WHERE job_id=?1",
+        rusqlite::params![parent.job_id, invalid.to_string()],
+    )
+    .unwrap();
+    assert!(enqueue_start(&owner, "observed-spoolman-archive-child", &parent.job_id).is_err());
+    raw.execute(
+        "UPDATE durable_job_keys SET archived_document=?2 WHERE job_id=?1",
+        rusqlite::params![parent.job_id, original],
+    )
+    .unwrap();
+    drop(raw);
+    assert!(enqueue_start(&owner, "observed-spoolman-archive-valid", &parent.job_id).is_ok());
+    owner.shutdown().unwrap();
+}
+
 #[test]
 fn duplicate_confirmed_upload_parent_fails_read_bind_and_restart_without_writes() {
     let (path, owner) = fixture();
@@ -3580,7 +3891,7 @@ fn ticket_t_28_recovery_global_and_per_tenant_history_limits() {
     let (_, owner) = fixture();
     let (_, a) = register(&owner, "history-a@example.com");
     let (_, b) = register(&owner, "history-b@example.com");
-    let worker = owner.job_worker(admission()).unwrap();
+    let worker = owner.job_worker_with_policy(policy(), admission()).unwrap();
     for token in [&a, &b] {
         for index in 0..3 {
             session_call(
@@ -3913,8 +4224,13 @@ fn integration_wildcard_lookup_and_reservations_are_tenant_owned() {
         },
     )
     .unwrap());
-    let worker = owner.job_worker(admission()).unwrap();
-    let lease = worker.claim().unwrap().unwrap().lease;
+    let worker = owner.job_worker_with_policy(policy(), admission()).unwrap();
+    let ClaimedAttempt {
+        job: _,
+        lease,
+        source_work,
+    } = worker.claim().unwrap().unwrap();
+    assert!(source_work.is_none());
     assert!(source_lease(&worker, &lease, Some(local_id)).is_err());
     let mut live = source_lease(&worker, &lease, Some(tenant_id)).unwrap();
     assert_eq!(deletion(&tenant_catalog, tenant_id), Deletion::ActiveWork);
