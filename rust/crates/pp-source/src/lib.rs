@@ -5,7 +5,8 @@ use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::BTreeSet,
+    borrow::Borrow,
+    collections::{BTreeMap, BTreeSet},
     fmt,
     io::{self, Read, Write},
     path::Path,
@@ -389,16 +390,57 @@ fn expected_paths(files: &[ContentFile]) -> BTreeSet<String> {
     paths
 }
 
+fn canonical_destination(
+    path: &SourcePath,
+    directories: &mut BTreeMap<String, String>,
+) -> Result<SourcePath> {
+    let mut original = String::new();
+    let mut canonical = String::new();
+    let mut components = path.as_str().split('/').peekable();
+    while let Some(component) = components.next() {
+        if !original.is_empty() {
+            original.push('/');
+            canonical.push('/');
+        }
+        original.push_str(component);
+        canonical.push_str(component);
+        if components.peek().is_some() {
+            canonical = directories
+                .entry(original.to_lowercase())
+                .or_insert_with(|| canonical.clone())
+                .clone();
+        }
+    }
+    SourcePath::try_from(canonical)
+}
+
 impl SourceRoot {
     pub fn materialize(
         &mut self,
-        mut request: SnapshotRequest,
+        request: SnapshotRequest,
         input: &LocalFiles,
+        budget: ArtifactBudget,
+    ) -> Result<PublishedSnapshot> {
+        self.materialize_lazy(request, || Ok(input), budget)
+    }
+    /// Open local inputs only if the revision needs a new publication.
+    pub fn materialize_from_directory(
+        &mut self,
+        request: SnapshotRequest,
+        input_directory: &Path,
+        budget: ArtifactBudget,
+    ) -> Result<PublishedSnapshot> {
+        self.materialize_lazy(request, || LocalFiles::open(input_directory), budget)
+    }
+    fn materialize_lazy<I: Borrow<LocalFiles>>(
+        &mut self,
+        mut request: SnapshotRequest,
+        open_input: impl FnOnce() -> Result<I>,
         budget: ArtifactBudget,
     ) -> Result<PublishedSnapshot> {
         validate_request(&mut request)?;
         self.revisions.0.lock_exclusive()?;
-        let result = self.materialize_locked(request, input, budget);
+        let result = self.materialize_locked(request, open_input, budget);
         let unlocked = FileExt::unlock(&self.revisions.0);
         match result {
             Err(error) => Err(error),
@@ -408,10 +450,10 @@ impl SourceRoot {
             }
         }
     }
-    fn materialize_locked(
+    fn materialize_locked<I: Borrow<LocalFiles>>(
         &self,
         request: SnapshotRequest,
-        input: &LocalFiles,
+        open_input: impl FnOnce() -> Result<I>,
         budget: ArtifactBudget,
     ) -> Result<PublishedSnapshot> {
         self.revisions.remove_tree(CANDIDATE)?;
@@ -420,8 +462,9 @@ impl SourceRoot {
             Err(Error::Io(error)) if error.kind() == io::ErrorKind::NotFound => {}
             Err(error) => return Err(error),
         }
+        let input = open_input()?;
         let candidate = self.revisions.child(CANDIDATE, true)?;
-        let outcome = self.write_candidate(&candidate, request, input, budget);
+        let outcome = self.write_candidate(&candidate, request, input.borrow(), budget);
         let cleanup = self
             .revisions
             .remove_tree(CANDIDATE)
@@ -445,10 +488,14 @@ impl SourceRoot {
         let mut docs = 0;
         let mut stls = 0;
         let mut files = Vec::new();
+        let mut directories = BTreeMap::new();
         for selected in request.files {
             let source = input.root.file(selected.path.as_str(), false)?;
             let length = source.metadata()?.len();
-            let mut destination = candidate.file(selected.path.as_str(), true)?;
+            // Keep the original spelling for reading case-sensitive inputs, but
+            // share one deterministic spelling for destination directories.
+            let path = canonical_destination(&selected.path, &mut directories)?;
+            let mut destination = candidate.file(path.as_str(), true)?;
             let (size_bytes, sha256) = copy_hash(
                 source,
                 &mut destination,
@@ -470,12 +517,13 @@ impl SourceRoot {
                 return Err(Error::Limit);
             }
             files.push(ContentFile {
-                path: selected.path,
+                path,
                 kind: selected.kind,
                 size_bytes,
                 sha256,
             });
         }
+        files.sort_by(|a, b| compare_paths(a.path.as_str(), b.path.as_str()));
         let manifest = Manifest {
             version: 1,
             upstream_revision_key: request.upstream_revision_key,

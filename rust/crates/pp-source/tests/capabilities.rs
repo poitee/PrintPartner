@@ -256,3 +256,102 @@ fn max_flat_snapshot_publishes_and_retries_cleanly() {
     let second = source.materialize(req, &input, budget).unwrap();
     assert_eq!(second.publication, Publication::Reused);
 }
+
+#[test]
+fn cli_retry_reuses_revision_after_inputs_are_deleted() {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let fixture = Fixture::new();
+    let command = serde_json::json!({
+        "tenantId": "tenant-fixture", "sourceId": 42,
+        "reposDir": fixture.0.join("repos"), "inputDir": fixture.0.join("input"),
+        "reservedStoredBytes": 1024 * 1024, "snapshot": request(),
+    });
+    let invoke = || {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_pp-source"))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(command.to_string().as_bytes())
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()
+    };
+    let first = invoke();
+    assert_eq!(first["publication"], "created");
+    fs::remove_dir_all(fixture.0.join("input")).unwrap();
+    let reused = invoke();
+    assert_eq!(reused["publication"], "reused");
+    for key in [
+        "manifestDigest",
+        "files",
+        "selection",
+        "storedBytes",
+        "snapshotLocator",
+    ] {
+        assert_eq!(reused[key], first[key]);
+    }
+}
+
+#[test]
+fn shared_directory_case_publishes_with_one_spelling_and_reuses() {
+    let fixture = Fixture::new();
+    let paths = ["Parts/Nested/a.stl", "parts/nested/b.stl"];
+    for (path, bytes) in paths
+        .iter()
+        .zip([b"first".as_slice(), b"second".as_slice()])
+    {
+        let full = fixture.0.join("input").join(path);
+        fs::create_dir_all(full.parent().unwrap()).unwrap();
+        fs::write(full, bytes).unwrap();
+    }
+    let mut selected = request();
+    selected.files = paths
+        .into_iter()
+        .rev()
+        .map(|path| SelectedFile {
+            path: SourcePath::try_from(path.to_owned()).unwrap(),
+            kind: FileKind::Stl,
+            size_hint_bytes: None,
+        })
+        .collect();
+    let input = LocalFiles::open(&fixture.0.join("input")).unwrap();
+    let mut source = fixture.repos().source(42).unwrap();
+    let first = source
+        .materialize(selected.clone(), &input, budget())
+        .unwrap();
+    assert_eq!(first.publication, Publication::Created);
+    assert_eq!(
+        first
+            .files
+            .iter()
+            .map(|f| f.path.as_str())
+            .collect::<Vec<_>>(),
+        ["Parts/Nested/a.stl", "Parts/Nested/b.stl"]
+    );
+    let published = fixture.0.join("repos/42/revisions/caller-uuid");
+    assert_eq!(
+        fs::read(published.join("Parts/Nested/a.stl")).unwrap(),
+        b"first"
+    );
+    assert_eq!(
+        fs::read(published.join("Parts/Nested/b.stl")).unwrap(),
+        b"second"
+    );
+    assert_eq!(fs::read_dir(published.join("Parts")).unwrap().count(), 1);
+    let second = source.materialize(selected, &input, budget()).unwrap();
+    assert_eq!(second.publication, Publication::Reused);
+    assert_eq!(second.manifest_digest, first.manifest_digest);
+    assert_eq!(second.files, first.files);
+}

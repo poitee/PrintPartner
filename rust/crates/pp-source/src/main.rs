@@ -1,4 +1,4 @@
-use pp_source::{ArtifactBudget, LocalFiles, MAX_CONTENT_BYTES, SnapshotRequest, TenantRepos};
+use pp_source::{ArtifactBudget, MAX_CONTENT_BYTES, SnapshotRequest, TenantRepos};
 use serde::Deserialize;
 use std::{
     io::{self, Read},
@@ -38,9 +38,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let command: Command = serde_json::from_slice(&bytes)?;
     let tenant = TenantRepos::open(command.tenant_id, Path::new(&command.repos_dir))?;
     let mut source = tenant.source(command.source_id)?;
-    let input = LocalFiles::open(Path::new(&command.input_dir))?;
     let budget = ArtifactBudget::new(command.reserved_stored_bytes, command.max_content_bytes)?;
-    let receipt = source.materialize(command.snapshot, &input, budget)?;
+    let receipt = source.materialize_from_directory(
+        command.snapshot,
+        Path::new(&command.input_dir),
+        budget,
+    )?;
     println!("{}", serde_json::to_string(&receipt)?);
     Ok(())
 }
