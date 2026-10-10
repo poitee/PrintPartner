@@ -1,8 +1,9 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
-import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
+import { acquireStorageLease, ownerIsStale } from "./storage-lease.js";
 import type { SessionUser } from "./routes/auth-types.js";
 
 const setupSchema = z.strictObject({
@@ -51,7 +52,13 @@ function assertDataDirectoryAvailable(dataDir: string): void {
   const canonical = realpathSync(dataDir);
   if (!existsSync(join(canonical, ".desktop-owner.json"))) return;
   if (context?.data_dir === canonical) return;
-  throw new Error("Data directory is owned by the desktop runtime; stop it before opening another writer");
+  const owner = z.object({ kind: z.literal("standalone"), pid: z.number().int().positive().max(2147483647), process_identity: z.string().optional() })
+    .safeParse(JSON.parse(readFileSync(join(canonical, ".desktop-owner.json"), "utf8")));
+  if (owner.success && ownerIsStale(owner.data)) {
+    renameSync(join(canonical, ".desktop-owner.json"), join(canonical, ".desktop-lease", "previous-marker.json"));
+    return;
+  }
+  throw new Error("Data directory is already owned; stop the other process before opening another writer");
 }
 
 export function desktopPrincipal(request: FastifyRequest): SessionUser | null {
@@ -95,18 +102,30 @@ export function verifyDesktopPrincipal(
 }
 
 export function acquireDataDirectory(dataDir: string): () => void {
-  assertDataDirectoryAvailable(dataDir);
-  if (context) return () => {};
+  if (context) {
+    if (realpathSync(dataDir) !== context.data_dir) throw new Error("Desktop storage lease rejected");
+    return () => {};
+  }
   mkdirSync(dataDir, { recursive: true });
-  const marker = join(realpathSync(dataDir), ".desktop-owner.json");
-  const fd = openSync(marker, "wx", 0o600);
-  try { writeFileSync(fd, JSON.stringify({ pid: process.pid, kind: "standalone" })); }
-  catch (error) { closeSync(fd); rmSync(marker); throw error; }
-  closeSync(fd);
+  const canonical = realpathSync(dataDir);
+  const lease = acquireStorageLease(canonical);
+  const marker = join(canonical, ".desktop-owner.json");
+  try {
+    assertDataDirectoryAvailable(canonical);
+    const fd = openSync(marker, "wx", 0o600);
+    try { writeFileSync(fd, JSON.stringify({ pid: process.pid, kind: "standalone", process_identity: lease.identity })); }
+    catch (error) { rmSync(marker); throw error; }
+    finally { closeSync(fd); }
+  } catch (error) {
+    lease.release();
+    throw error;
+  }
   let released = false;
   return () => {
     if (released) return;
-    released = true;
+    // Preserve ownership if marker cleanup fails, so callers can retry safely.
     rmSync(marker);
+    lease.release();
+    released = true;
   };
 }
