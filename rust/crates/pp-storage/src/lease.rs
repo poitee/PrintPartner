@@ -49,7 +49,12 @@ impl StorageLease {
                 .filter(|pid| *pid > 0 && *pid <= i32::MAX as u64)
                 .context("Invalid prior writer PID")? as u32;
             ensure!(
-                guard::owner_is_stale(pid, marker["process_identity"].as_str()),
+                guard::owner_is_stale(pid, marker["process_identity"].as_str())
+                    && (marker["kind"] == "standalone"
+                        || (marker["storage_protocol_version"].as_u64() == Some(1)
+                            && marker.get("child_pid").is_none()
+                            && marker.get("child_process_identity").is_none())
+                        || guard::child_is_stale(&marker)),
                 "A prior writer may still be alive"
             );
             std::fs::rename(
@@ -65,7 +70,7 @@ impl StorageLease {
         ));
         std::fs::create_dir(&runtime_dir)?;
         std::fs::set_permissions(&runtime_dir, std::fs::Permissions::from_mode(0o700))?;
-        let marker = serde_json::json!({"pid":std::process::id(),"process_identity":lease_guard.identity,"lease_hash":hex::encode(Sha256::digest(lease.as_bytes())),"runtime_dir":runtime_dir});
+        let marker = serde_json::json!({"storage_protocol_version":1,"pid":std::process::id(),"process_identity":lease_guard.identity,"lease_hash":hex::encode(Sha256::digest(lease.as_bytes())),"runtime_dir":runtime_dir});
         let result = (|| -> Result<()> {
             let mut file = OpenOptions::new()
                 .write(true)
@@ -88,6 +93,9 @@ impl StorageLease {
             lease,
             release_allowed: true,
         })
+    }
+    pub fn record_child(directory: &Path, pid: u32) -> Result<()> {
+        guard::record_child(directory, pid)
     }
     pub fn data_dir(&self) -> &Path {
         &self.data_dir
