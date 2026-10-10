@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["node", "@fastify/cookie"],
+    "declaration": false,
+    "declarationMap": false
+  },
+  "include": ["*.mts", "../../apps/server/src/routes/auth.ts"]
+}

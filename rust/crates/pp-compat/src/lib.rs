@@ -15,7 +15,7 @@ use std::{
     os::fd::AsRawFd,
     path::PathBuf,
     process::Stdio,
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::{
@@ -25,7 +25,10 @@ use tokio::{
     sync::{mpsc, watch},
     task::JoinHandle,
 };
-use tokio_util::sync::CancellationToken;
+use tokio_util::{
+    sync::CancellationToken,
+    task::{TaskTracker, task_tracker::TaskTrackerToken},
+};
 
 #[derive(Clone)]
 pub struct Bundle {
@@ -52,7 +55,9 @@ pub enum Status {
     Ready { generation: String, pid: u32 },
     Backoff { attempt: usize },
     Guarded,
+    Stopping,
     Stopped,
+    Failed,
 }
 
 #[derive(Clone)]
@@ -60,6 +65,37 @@ pub struct Endpoint {
     socket: PathBuf,
     generation: String,
     key: [u8; 32],
+    connections: Arc<Connections>,
+}
+
+struct Connections {
+    closed: Mutex<bool>,
+    tasks: TaskTracker,
+    cancelled: CancellationToken,
+}
+impl Connections {
+    fn new() -> Self {
+        Self {
+            closed: Mutex::new(false),
+            tasks: TaskTracker::new(),
+            cancelled: CancellationToken::new(),
+        }
+    }
+    fn admit(&self) -> Result<TaskTrackerToken> {
+        let closed = self.closed.lock().expect("Connection gate poisoned");
+        anyhow::ensure!(!*closed, "Compatibility generation is stopping");
+        Ok(self.tasks.token())
+    }
+    fn close(&self) {
+        *self.closed.lock().expect("Connection gate poisoned") = true;
+        self.cancelled.cancel();
+        self.tasks.close();
+    }
+    async fn join(&self) -> Result<()> {
+        tokio::time::timeout(Duration::from_secs(2), self.tasks.wait())
+            .await
+            .context("Compatibility connection join timed out")
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -75,6 +111,7 @@ struct Principal<'a> {
 
 impl Endpoint {
     pub async fn forward(&self, mut request: Request<Body>) -> Result<Response<Body>> {
+        let admitted = self.connections.admit()?;
         let target = request
             .uri()
             .path_and_query()
@@ -103,18 +140,30 @@ impl Endpoint {
         request
             .headers_mut()
             .insert("host", HeaderValue::from_static("desktop-compat"));
-        let stream = UnixStream::connect(&self.socket)
-            .await
-            .context("Compatibility socket unavailable")?;
-        let (mut sender, connection) =
-            hyper::client::conn::http1::handshake(TokioIo::new(stream)).await?;
+        let stream = tokio::select! {
+            biased;
+            _ = self.connections.cancelled.cancelled() => bail!("Compatibility connection stopped"),
+            stream = UnixStream::connect(&self.socket) => stream.context("Compatibility socket unavailable")?,
+        };
+        let (mut sender, connection) = tokio::select! {
+            biased;
+            _ = self.connections.cancelled.cancelled() => bail!("Compatibility connection stopped"),
+            handshake = hyper::client::conn::http1::handshake(TokioIo::new(stream)) => handshake?,
+        };
+        let cancelled = self.connections.cancelled.clone();
         tokio::spawn(async move {
-            let _ = connection.with_upgrades().await;
+            let _admitted = admitted;
+            tokio::select! {
+                biased;
+                _ = cancelled.cancelled() => {},
+                _ = connection.with_upgrades() => {},
+            }
         });
-        let response = sender
-            .send_request(request)
-            .await
-            .context("Compatibility dispatch outcome unknown")?;
+        let response = tokio::select! {
+            biased;
+            _ = self.connections.cancelled.cancelled() => bail!("Compatibility dispatch outcome unknown"),
+            response = sender.send_request(request) => response.context("Compatibility dispatch outcome unknown")?,
+        };
         Ok(response.map(Body::new))
     }
 
@@ -190,9 +239,11 @@ impl Process {
             socket,
             generation,
             key,
+            connections: Arc::new(Connections::new()),
         });
         let mut command = Command::new(&spec.bundle.node);
         command
+            .arg("--no-global-search-paths")
             .arg(&spec.bundle.entry)
             .current_dir(&spec.bundle.web_root)
             .env_clear()
@@ -252,6 +303,7 @@ impl Process {
     }
 
     async fn stop(mut self) -> Result<()> {
+        self.endpoint.connections.close();
         self.stdin.take();
         let pid = Some(self.pid);
         let waited = match tokio::time::timeout(Duration::from_secs(10), self.child.wait()).await {
@@ -289,6 +341,7 @@ impl Process {
             .await
             .context("Process group still present")?;
         }
+        self.endpoint.connections.join().await?;
         for mut log in self.logs {
             match tokio::time::timeout(Duration::from_secs(1), &mut log).await {
                 Ok(result) => result.context("Log reader join failed")?,
@@ -372,8 +425,9 @@ impl Supervisor {
                         }
                     }
                     endpoints.send_replace(None);
+                    states.send_replace(Status::Stopping);
                     if let Err(error) = process.stop().await {
-                        states.send_replace(Status::Stopped);
+                        states.send_replace(Status::Failed);
                         return Err(error);
                     }
                     logs.event("compat_reaped", 30);
