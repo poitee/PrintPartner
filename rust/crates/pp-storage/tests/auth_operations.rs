@@ -684,6 +684,7 @@ fn ticket_t_17_missing_and_expired_sessions() {
 
 #[test]
 fn ticket_t_17_hostile_costs_reject_before_hashing() {
+    // crypto's matching unit test proves rejection never invokes either KDF.
     let path = directory();
     let owner = open(&path);
     owner.shutdown().unwrap();
@@ -703,7 +704,6 @@ fn ticket_t_17_hostile_costs_reject_before_hashing() {
     drop(db);
     let owner = open(&path);
     let client = owner.auth(FirstUserTenant::NewUser);
-    let start = std::time::Instant::now();
     for i in 0..invalid.len() {
         assert!(
             login(
@@ -714,7 +714,6 @@ fn ticket_t_17_hostile_costs_reject_before_hashing() {
             .is_err()
         );
     }
-    assert!(start.elapsed() < Duration::from_secs(1));
     assert!(
         client
             .submit(
