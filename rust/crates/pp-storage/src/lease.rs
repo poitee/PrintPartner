@@ -32,6 +32,11 @@ pub fn record_child(directory: &Path, pid: u32) -> Result<()> {
     guard::record_child(directory, pid)
 }
 
+#[cfg(test)]
+pub(crate) fn current_process_identity() -> String {
+    guard::process_identity(std::process::id()).expect("own process identity")
+}
+
 /// A prior marker is retirable only when its owner and any recorded child are dead.
 fn prior_writer_is_stale(marker: &serde_json::Value, pid: u32) -> bool {
     guard::owner_is_stale(pid, marker["process_identity"].as_str())

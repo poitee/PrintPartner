@@ -521,7 +521,7 @@ fn wal_only_unsupported_versions_preserve_every_input_file() {
                     prior.wait().unwrap();
                     std::fs::write(
                         target.join(".desktop-owner.json"),
-                        serde_json::json!({"pid": pid}).to_string(),
+                        serde_json::json!({"storage_protocol_version": 1, "pid": pid}).to_string(),
                     )
                     .unwrap();
                 }
@@ -574,7 +574,7 @@ fn public_open_recovers_dead_writer_marker_and_atomic_lease() {
     let mut prior = std::process::Command::new("/bin/true").spawn().unwrap();
     let pid = prior.id();
     prior.wait().unwrap();
-    let marker = serde_json::json!({"pid": pid, "process_identity": "prior-process", "instance": "ab".repeat(16)});
+    let marker = serde_json::json!({"storage_protocol_version": 1, "pid": pid, "process_identity": "prior-process", "instance": "ab".repeat(16)});
     std::fs::write(path.join(".desktop-owner.json"), marker.to_string()).unwrap();
     std::fs::create_dir(path.join(".desktop-lease")).unwrap();
     std::fs::write(path.join(".desktop-lease/owner.json"), marker.to_string()).unwrap();
@@ -596,10 +596,18 @@ fn public_open_recovers_dead_writer_marker_and_atomic_lease() {
 
 #[test]
 fn unowned_preflight_rejects_live_and_invalid_markers_without_changes() {
+    let mut prior = std::process::Command::new("/bin/true").spawn().unwrap();
+    let pid = prior.id();
+    prior.wait().unwrap();
+    let child = lease::current_process_identity();
     for contents in [
         serde_json::json!({"pid": std::process::id()}).to_string(),
         serde_json::json!({"pid": 0}).to_string(),
         "not json".into(),
+        // A dead legacy Rust owner may have left an unrecorded child holding storage.
+        serde_json::json!({"pid": pid, "process_identity": "prior"}).to_string(),
+        // A dead owner whose recorded child is still alive keeps storage blocked.
+        serde_json::json!({"storage_protocol_version": 1, "pid": pid, "process_identity": "prior", "child_pid": std::process::id(), "child_process_identity": child}).to_string(),
     ] {
         let path = directory("blocked-marker");
         std::fs::write(path.join(".desktop-owner.json"), &contents).unwrap();
