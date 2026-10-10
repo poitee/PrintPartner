@@ -55,7 +55,8 @@
     "tsx": "^4.23.13",
     "typescript": "^6.0.3",
     "vite": "^8.2.2",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.11",
+    "ws": "8.21.3"
   },
   "description": "Print Partner Fastify API — SQLite/Postgres, jobs, MCP attach, printer/Spoolman/slicer integrations."
 }

@@ -329,6 +329,28 @@ describe("accepted media PNG cache", () => {
     expect(existsSync(replacement)).toBe(false);
   });
 
+  it.each(["read", "observe"] as const)("%s accepts an unlink-only ctime change", (operation) => {
+    const thumbsDir = cacheFixture();
+    writeAcceptedMediaPng({ thumbsDir, basis, png });
+    const stats = statSync(acceptedMediaCachePath({ thumbsDir, basis }));
+    const unlinkedStats = Object.assign(Object.create(Object.getPrototypeOf(stats)), stats, {
+      ctimeMs: stats.ctimeMs + 1,
+      nlink: 0,
+    });
+    const descriptorStats = vi.mocked(fstatSync);
+    const actualFstat = descriptorStats.getMockImplementation()!;
+    let calls = 0;
+    descriptorStats.mockClear();
+    descriptorStats.mockImplementation(() => ++calls % 2 === 1 ? stats : unlinkedStats);
+    try {
+      if (operation === "read") expect(readAcceptedMediaPng({ thumbsDir, basis })).toEqual(png);
+      else expect(observeAcceptedMediaPng({ thumbsDir, basis })).toEqual({ kind: "present" });
+      expect(descriptorStats).toHaveBeenCalledTimes(2);
+    } finally {
+      descriptorStats.mockImplementation(actualFstat);
+    }
+  });
+
   it("exposes only complete old or new bytes while another process publishes", async () => {
     const thumbsDir = cacheFixture();
     const nextPng = Buffer.concat([
