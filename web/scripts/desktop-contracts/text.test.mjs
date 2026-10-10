@@ -19,10 +19,12 @@ for (const field of ["part_key", "relative_path", "source_layer", "applied_at"])
     });
   }
 }
-test("scalar source-layer bounds preserve codepoint counting", () => {
-  const input = fixture("quantity-null-reset");
-  input.decisions[0].target.source_layer = "🙂".repeat(1000);
-  assert.deepEqual(parseSavePlanChoicesRequest(input), input);
-  input.decisions[0].target.source_layer += "🙂";
-  assert.throws(() => parseSavePlanChoicesRequest(input));
-});
+for (const [label, glyph] of [["emoji", "🙂"], ["CJK", "漢"], ["combining mark", "\u0301"]]) {
+  test(`scalar source-layer bounds preserve codepoint counting (${label})`, () => {
+    const input = fixture("quantity-null-reset");
+    input.decisions[0].target.source_layer = glyph.repeat(1000);
+    assert.deepEqual(parseSavePlanChoicesRequest(input), input);
+    input.decisions[0].target.source_layer += glyph;
+    assert.throws(() => parseSavePlanChoicesRequest(input));
+  });
+}
