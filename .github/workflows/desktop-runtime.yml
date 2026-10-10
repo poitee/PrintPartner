@@ -6,6 +6,7 @@ on:
     paths:
       - 'rust/**'
       - 'rust-toolchain.toml'
+      - 'manifests/**'
       - 'scripts/workaround-*'
       - 'web/apps/server/**'
       - 'web/apps/web/**'
@@ -20,6 +21,7 @@ on:
     paths:
       - 'rust/**'
       - 'rust-toolchain.toml'
+      - 'manifests/**'
       - 'scripts/workaround-*'
       - 'web/apps/server/**'
       - 'web/apps/web/**'

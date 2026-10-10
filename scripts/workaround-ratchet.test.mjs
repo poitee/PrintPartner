@@ -273,6 +273,33 @@ test("counts Rust allow attributes with whitespace after the hash and bang", () 
   assert.deepEqual(countText(source, "a.rs"), { todoComments: 0, eslintDisable: 0, rustAllow: 4 });
 });
 
+test("restricts Rust allow counts to emitted lint attributes", () => {
+  const source = [
+    "#[some_proc_macro(option(allow(foo)))]",
+    "#[cfg_attr(allow(condition), some_proc_macro(allow(foo)))]",
+    "#[cfg_attr(unix, allow(dead_code), allow(unused_variables))]",
+    "#[cfg_attr(unix, cfg_attr(feature = \"x\", allow(unused)), allow(dead_code))]",
+  ].join("\n");
+  assert.equal(countText(source, "a.rs").rustAllow, 4);
+});
+
+test("counts spaced, multiline, and cfg_attr Rust allow attributes", () => {
+  const source = [
+    "#[allow (dead_code)]",
+    "#[ allow(unused)]",
+    "#[",
+    "allow(clippy::all)",
+    "]",
+    "#",
+    "[allow(unused)]",
+    "#\n!\n[allow(unused)]",
+    "#![cfg_attr(unix, allow(unused))]",
+    "#[cfg_attr(unix, allow(x))]",
+    'const IGNORED: &str = "#[allow(dead_code)]";',
+  ].join("\n");
+  assert.deepEqual(countText(source, "a.rs"), { todoComments: 0, eslintDisable: 0, rustAllow: 7 });
+});
+
 test("counts shell markers anywhere on a line, once per key per physical line", () => {
   const source = ['echo "TODO"', "echo '# FIXME'", "echo $# HACK", 'echo "eslint-disable # [allow(x)]"'].join("\n");
   assert.deepEqual(countText(source, "a.sh"), { todoComments: 3, eslintDisable: 1, rustAllow: 1 });

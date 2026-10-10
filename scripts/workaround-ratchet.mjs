@@ -31,7 +31,7 @@ const EXCLUDED_PATHS = new Set([
 export const MARKERS = {
   todoComments: /\b(?:TODO|FIXME|HACK)\b/,
   eslintDisable: /eslint-disable/,
-  rustAllow: /#\s*!?\s*\[allow\(/,
+  rustAllow: /#\s*!?\s*\[\s*allow\s*\(/,
 };
 
 const JS_LINE_TERMINATORS = /\r\n|[\n\r\u2028\u2029]/;
@@ -139,7 +139,7 @@ function syntaxFor(path) {
 function lineCommentLength(line, index, syntax) {
   if ((syntax.line === "slash" || syntax.line === "mixed") && line.startsWith("//", index)) return 2;
   if (syntax.line === "hash" || syntax.line === "mixed") {
-    if (syntax.rustAllow && /^#\s*!?\s*\[allow\(/.test(line.slice(index))) {
+    if (syntax.rustAllow && /^#\s*!?\s*\[\s*allow\s*\(/.test(line.slice(index))) {
       return 0;
     }
     return line[index] === "#" ? 1 : 0;
@@ -168,6 +168,69 @@ function quoteAt(line, index, syntax) {
     if (raw) return raw;
   }
   return syntax.quotes.find(({ open }) => line.startsWith(open, index)) ?? null;
+}
+
+function findMatchingBracket(text, openIndex, openChar, closeChar) {
+  let depth = 0;
+  for (let i = openIndex; i < text.length; i += 1) {
+    if (text[i] === openChar) depth += 1;
+    else if (text[i] === closeChar) {
+      depth -= 1;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
+function countRustAllowMarkers(unquotedText) {
+  let count = 0;
+  let index = 0;
+  while (index < unquotedText.length) {
+    if (unquotedText[index] !== "#") {
+      index += 1;
+      continue;
+    }
+    let cursor = index + 1;
+    while (/\s/.test(unquotedText[cursor] ?? "")) cursor += 1;
+    if (unquotedText[cursor] === "!") cursor += 1;
+    while (/\s/.test(unquotedText[cursor] ?? "")) cursor += 1;
+    if (unquotedText[cursor] !== "[") {
+      index += 1;
+      continue;
+    }
+    const close = findMatchingBracket(unquotedText, cursor, "[", "]");
+    if (close === -1) {
+      index += 1;
+      continue;
+    }
+    const inner = unquotedText.slice(cursor + 1, close);
+    count += countRustAllowMeta(inner);
+    index = close + 1;
+  }
+  return count;
+}
+
+function countRustAllowMeta(meta) {
+  if (/^\s*allow\s*\(/.test(meta)) return 1;
+  const cfg = /^\s*cfg_attr\s*\(/.exec(meta);
+  if (!cfg) return 0;
+  const open = cfg[0].length - 1;
+  const close = findMatchingBracket(meta, open, "(", ")");
+  if (close === -1) return 0;
+  const args = [];
+  let start = open + 1;
+  let depth = 0;
+  for (let index = start; index < close; index += 1) {
+    if ("([{".includes(meta[index])) depth += 1;
+    else if (")]}".includes(meta[index])) depth -= 1;
+    else if (meta[index] === "," && depth === 0) {
+      args.push(meta.slice(start, index));
+      start = index + 1;
+    }
+  }
+  args.push(meta.slice(start, close));
+  // The first cfg_attr argument is a condition, not an emitted attribute.
+  return args.slice(1).reduce((count, arg) => count + countRustAllowMeta(arg), 0);
 }
 
 function scanLine(line, syntax, initialState) {
@@ -256,13 +319,15 @@ function countNonJavaScriptText(text, path) {
   const counts = Object.fromEntries(Object.keys(MARKERS).map((key) => [key, 0]));
   const syntax = syntaxFor(path);
   let state = CODE_STATE;
+  const unquotedLines = [];
   for (const line of text.split("\n")) {
     const scanned = scanLine(line, syntax, state);
     state = scanned.state;
+    unquotedLines.push(scanned.unquotedCodeText);
     if (MARKERS.todoComments.test(scanned.commentText)) counts.todoComments += 1;
     if (MARKERS.eslintDisable.test(scanned.commentText)) counts.eslintDisable += 1;
-    if (syntax.rustAllow && MARKERS.rustAllow.test(scanned.unquotedCodeText)) counts.rustAllow += 1;
   }
+  if (syntax.rustAllow) counts.rustAllow = countRustAllowMarkers(unquotedLines.join("\n"));
   return counts;
 }
 
