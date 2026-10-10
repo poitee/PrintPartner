@@ -37,9 +37,9 @@
     "fflate": "^0.8.3"
   },
   "devDependencies": {
-    "@types/node": "^22.20.1",
+    "@types/node": "^22.20.5",
     "typescript": "^6.0.3",
-    "vite": "^8.2.2",
+    "vite": "^8.3.3",
     "vitest": "^4.1.11"
   },
   "description": "Framework-agnostic Print Partner domain logic (plans, packing, export paths)."
