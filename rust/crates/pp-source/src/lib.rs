@@ -279,34 +279,14 @@ fn validate_request(request: &mut SnapshotRequest) -> Result<()> {
     {
         return Err(Error::Limit);
     }
-    let mut paths = BTreeSet::new();
+    // Snapshot destinations share one spelling per ASCII-lowercased folder,
+    // so only folder spellings that canonicalize together may differ.
+    let mut paths = PathCollisions::merging_folder_case();
     for file in &request.files {
         if file.size_hint_bytes.is_some_and(|n| n > MAX_SAFE_INTEGER) {
             return Err(Error::Limit);
         }
-        if !paths.insert(file.path.0.to_lowercase()) {
-            return Err(Error::DuplicatePath);
-        }
-    }
-    for path in &paths {
-        let mut parent = path.as_str();
-        while let Some((prefix, _)) = parent.rsplit_once('/') {
-            if paths.contains(prefix) {
-                return Err(Error::DuplicatePath);
-            }
-            parent = prefix;
-        }
-    }
-    let mut tree_entries = paths.clone();
-    for path in &paths {
-        let mut parent = path.as_str();
-        while let Some((prefix, _)) = parent.rsplit_once('/') {
-            tree_entries.insert(format!("{prefix}/"));
-            if tree_entries.len() > MAX_ENTRIES {
-                return Err(Error::Limit);
-            }
-            parent = prefix;
-        }
+        paths.insert(&file.path, false)?;
     }
     let selected_paths: BTreeSet<_> = request
         .files
