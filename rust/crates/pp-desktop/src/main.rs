@@ -19,12 +19,40 @@ fn main() -> std::process::ExitCode {
             {
                 return std::process::ExitCode::FAILURE;
             }
-            rfd::MessageDialog::new().set_title("Print Partner could not start")
-                .set_description("The desktop runtime or its verified resources could not start. Check that this installation is complete and that another Print Partner instance is not using its data directory.")
-                .set_level(rfd::MessageLevel::Error).show();
+            show_startup_error();
             std::process::ExitCode::FAILURE
         }
     }
+}
+
+fn show_startup_error() {
+    let title = "Print Partner could not start";
+    let description = "The desktop runtime or its verified resources could not start. Check that this installation is complete and that another Print Partner instance is not using its data directory.";
+    #[cfg(target_os = "linux")]
+    {
+        use gtk::prelude::*;
+        // Tauri initializes GTK on this thread and owns its main context. A
+        // background dialog thread cannot acquire that context before run().
+        // Run the modal GTK loop here, including failures before shell setup.
+        if gtk::init().is_ok() {
+            let dialog = gtk::MessageDialog::builder()
+                .title(title)
+                .text(title)
+                .secondary_text(description)
+                .message_type(gtk::MessageType::Error)
+                .buttons(gtk::ButtonsType::Ok)
+                .modal(true)
+                .build();
+            dialog.run();
+            dialog.close();
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    rfd::MessageDialog::new()
+        .set_title(title)
+        .set_description(description)
+        .set_level(rfd::MessageLevel::Error)
+        .show();
 }
 
 fn run() -> Result<u8> {
