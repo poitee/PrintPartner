@@ -683,6 +683,7 @@ fn drop_after_caller_runtime_teardown_reaps_writer_and_descendant() {
             && child_reaped
             && !data.join(".desktop-owner.json").exists()
             && !runtime_dir.exists()
+            && lock.try_lock_exclusive().is_ok()
         {
             break;
         }
@@ -692,7 +693,6 @@ fn drop_after_caller_runtime_teardown_reaps_writer_and_descendant() {
         );
         std::thread::sleep(Duration::from_millis(10));
     }
-    lock.try_lock_exclusive().unwrap();
     println!(
         "{}",
         serde_json::json!({"case":"drop_after_runtime_teardown","child_pid":pid,"descendant_pid":descendant_pid,"child_reaped":true,"descendant_reaped":true,"marker_removed":true,"runtime_removed":true,"lock_reacquired":true})

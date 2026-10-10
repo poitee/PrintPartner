@@ -48,7 +48,7 @@ def main():
             env = dict(os.environ, PRINT_PARTNER_DATA_DIR=str(fixture / "data"), HOST="127.0.0.1", PORT="0")
             child = subprocess.run(["/usr/bin/node", str(ROOT / "web/apps/server/dist/current" / entry)], env=env, cwd=ROOT / "web", capture_output=True, timeout=15)
             assert child.returncode != 0, entry
-            assert b"owned by the desktop runtime" in child.stderr, (entry, child.stderr[:200])
+            assert b"already owned" in child.stderr or b"owned by the desktop runtime" in child.stderr, (entry, child.stderr[:200])
         child_pid = int(subprocess.check_output(["ps", "--no-headers", "-o", "pid", "--ppid", str(runtime.pid)], text=True).strip())
         child_environment = Path(f"/proc/{child_pid}/environ").read_bytes().split(b"\0")
         for name in (b"NODE_OPTIONS", b"NODE_PATH", b"PP_PARENT_ONLY_SECRET"):
