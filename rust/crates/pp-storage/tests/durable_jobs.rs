@@ -4127,7 +4127,8 @@ fn checklist_generic_effect_and_success_operations_refuse_without_mutation() {
             receipt: Some(receipt("checklists/7/result.html")),
         },
     )
-    .unwrap_err();
+    .err()
+    .expect("checklist reconciliation should refuse without owning reconciler");
     assert!(confirm.to_string().contains("owning reconciler"));
     let after_refusals = get(&owner, &queued.job_id);
     assert_eq!(after_refusals.state, running.state);
@@ -4261,7 +4262,8 @@ fn checklist_legacy_claimless_reconciliation_refuses_without_mutation() {
             }),
         },
     )
-    .unwrap_err();
+    .err()
+    .expect("legacy checklist reconciliation should refuse without owning reconciler");
     assert!(error.to_string().contains("owning reconciler"));
     let after = job(
         session_call(
