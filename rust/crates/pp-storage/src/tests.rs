@@ -494,33 +494,45 @@ fn wal_only_unsupported_versions_preserve_every_input_file() {
         entries.sort();
         entries
     };
-    for version in [30, 35] {
-        for with_shm in [false, true] {
-            let source = directory("wal-source");
-            let raw = Connection::open(source.join("print-partner.db")).unwrap();
-            raw.execute_batch("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE app_settings(tenant_id TEXT,key TEXT,value TEXT); INSERT INTO app_settings VALUES('default','schema_version','34'); PRAGMA wal_checkpoint(TRUNCATE);").unwrap();
-            raw.execute("UPDATE app_settings SET value=?1", [version.to_string()])
-                .unwrap();
-            let target = directory("wal-rejection");
-            for suffix in if with_shm {
-                vec!["", "-wal", "-shm"]
-            } else {
-                vec!["", "-wal"]
-            } {
-                std::fs::copy(
-                    source.join(format!("print-partner.db{suffix}")),
-                    target.join(format!("print-partner.db{suffix}")),
-                )
-                .unwrap();
+    for stale_marker in [false, true] {
+        for version in [30, 35] {
+            for with_shm in [false, true] {
+                let source = directory("wal-source");
+                let raw = Connection::open(source.join("print-partner.db")).unwrap();
+                raw.execute_batch("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE app_settings(tenant_id TEXT,key TEXT,value TEXT); INSERT INTO app_settings VALUES('default','schema_version','34'); PRAGMA wal_checkpoint(TRUNCATE);").unwrap();
+                raw.execute("UPDATE app_settings SET value=?1", [version.to_string()])
+                    .unwrap();
+                let target = directory("wal-rejection");
+                for suffix in if with_shm {
+                    vec!["", "-wal", "-shm"]
+                } else {
+                    vec!["", "-wal"]
+                } {
+                    std::fs::copy(
+                        source.join(format!("print-partner.db{suffix}")),
+                        target.join(format!("print-partner.db{suffix}")),
+                    )
+                    .unwrap();
+                }
+                std::fs::write(target.join("retain-user-file"), b"untouched").unwrap();
+                if stale_marker {
+                    let mut prior = std::process::Command::new("/bin/true").spawn().unwrap();
+                    let pid = prior.id();
+                    prior.wait().unwrap();
+                    std::fs::write(
+                        target.join(".desktop-owner.json"),
+                        serde_json::json!({"pid": pid}).to_string(),
+                    )
+                    .unwrap();
+                }
+                let before = tree(&target);
+                let error = WriterOwner::open(&target, Limits::default())
+                    .err()
+                    .unwrap()
+                    .to_string();
+                assert!(error.contains(&format!("version {version}")), "{error}");
+                assert_eq!(tree(&target), before);
             }
-            std::fs::write(target.join("retain-user-file"), b"untouched").unwrap();
-            let before = tree(&target);
-            let error = WriterOwner::open(&target, Limits::default())
-                .err()
-                .unwrap()
-                .to_string();
-            assert!(error.contains(&format!("version {version}")), "{error}");
-            assert_eq!(tree(&target), before);
         }
     }
 }
@@ -547,4 +559,62 @@ fn unproved_closure_cannot_be_released_by_cleanup_retry() {
             .is_err()
     );
     assert!(lease::StorageLease::acquire(&path).is_err());
+}
+
+#[test]
+fn public_open_recovers_dead_writer_marker_and_atomic_lease() {
+    let (path, owner, client) = fixture("crash-reopen");
+    set(&client, "survives", "crash")
+        .unwrap()
+        .recv()
+        .unwrap()
+        .unwrap();
+    assert!(WriterOwner::open(&path, Limits::default()).is_err());
+    owner.shutdown().unwrap();
+    let mut prior = std::process::Command::new("/bin/true").spawn().unwrap();
+    let pid = prior.id();
+    prior.wait().unwrap();
+    let marker = serde_json::json!({"pid": pid, "process_identity": "prior-process", "instance": "ab".repeat(16)});
+    std::fs::write(path.join(".desktop-owner.json"), marker.to_string()).unwrap();
+    std::fs::create_dir(path.join(".desktop-lease")).unwrap();
+    std::fs::write(path.join(".desktop-lease/owner.json"), marker.to_string()).unwrap();
+    let (reopened, _) = WriterOwner::open(&path, Limits::default()).unwrap();
+    let client = reopened.client();
+    let reader = client.reader(Duration::ZERO).unwrap();
+    assert_eq!(
+        reader.snapshot("test", "survives").unwrap(),
+        SettingSnapshot::Stored {
+            value: "crash".into()
+        }
+    );
+    drop(reader);
+    reopened.shutdown().unwrap();
+    assert!(!path.join(".desktop-owner.json").exists());
+    assert!(!path.join(".desktop-lease").exists());
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
+fn unowned_preflight_rejects_live_and_invalid_markers_without_changes() {
+    for contents in [
+        serde_json::json!({"pid": std::process::id()}).to_string(),
+        serde_json::json!({"pid": 0}).to_string(),
+        "not json".into(),
+    ] {
+        let path = directory("blocked-marker");
+        std::fs::write(path.join(".desktop-owner.json"), &contents).unwrap();
+        assert!(WriterOwner::open(&path, Limits::default()).is_err());
+        assert_eq!(
+            std::fs::read_to_string(path.join(".desktop-owner.json")).unwrap(),
+            contents
+        );
+        assert_eq!(std::fs::read_dir(&path).unwrap().count(), 1);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+    let path = directory("unreadable-marker");
+    std::fs::create_dir(path.join(".desktop-owner.json")).unwrap();
+    assert!(WriterOwner::open(&path, Limits::default()).is_err());
+    assert!(path.join(".desktop-owner.json").is_dir());
+    assert_eq!(std::fs::read_dir(&path).unwrap().count(), 1);
+    std::fs::remove_dir_all(path).unwrap();
 }

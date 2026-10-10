@@ -27,6 +27,26 @@ pub struct StorageLease {
     release_allowed: bool,
 }
 
+/// Inspect marker liveness without changing storage before schema validation.
+/// Acquisition checks the marker again while holding both ownership guards.
+pub(crate) fn prior_owner_blocks_unowned(marker_path: &Path) -> bool {
+    let bytes = match std::fs::read(marker_path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return false,
+        Err(_) => return true,
+    };
+    let Ok(marker) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return true;
+    };
+    let Some(pid) = marker["pid"]
+        .as_u64()
+        .filter(|pid| *pid > 0 && *pid <= i32::MAX as u64)
+    else {
+        return true;
+    };
+    !guard::owner_is_stale(pid as u32, marker["process_identity"].as_str())
+}
+
 impl StorageLease {
     pub fn acquire(path: &Path) -> Result<Self> {
         std::fs::create_dir_all(path)?;
