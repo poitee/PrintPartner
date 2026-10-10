@@ -281,6 +281,28 @@ test("ignores markers inside multiline shell quotes and heredocs", () => {
   );
 });
 
+test("does not treat << inside shell arithmetic as a heredoc", () => {
+  const dollar = ["echo $(( 1 << 2 ))", "# TODO: real"].join("\n");
+  assert.equal(countText(dollar, "a.sh").todoComments, 1);
+  const double = ["(( 1 << 3 ))", "# TODO: real"].join("\n");
+  assert.equal(countText(double, "a.sh").todoComments, 1);
+});
+
+test("does not open shell strings on backslash-escaped quotes", () => {
+  const source = ['echo \\"# TODO not a string', "# TODO: real"].join("\n");
+  assert.equal(countText(source, "a.sh").todoComments, 1);
+});
+
+test("handles ANSI-C $'...' quoting with backslash escapes", () => {
+  const source = ["echo $'it\\'s # not a comment'", "# TODO: real"].join("\n");
+  assert.equal(countText(source, "a.sh").todoComments, 1);
+});
+
+test("tracks multiple heredocs declared on one line", () => {
+  const source = ["cat <<A <<B", "TODO in A", "A", "FIXME in B", "B", "# TODO: real"].join("\n");
+  assert.equal(countText(source, "a.sh").todoComments, 1);
+});
+
 test("counts workaround markers inside nested Rust block comments", () => {
   const nested = "/* outer /* inner */ TODO hidden */";
   assert.deepEqual(countText(nested, "a.rs"), { todoComments: 1, eslintDisable: 0, rustAllow: 0 });
