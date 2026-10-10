@@ -469,7 +469,11 @@ async fn handle(
     let spa = is_spa_client_path(&path);
     if (document && spa)
         || path.starts_with("/assets/")
-        || matches!(path.as_str(), "/favicon.ico" | "/logo.png")
+        || path.starts_with("/icons/")
+        || matches!(
+            path.as_str(),
+            "/favicon.ico" | "/logo.png" | "/manifest.json"
+        )
     {
         let relative = if document && spa {
             "index.html"
@@ -490,6 +494,7 @@ async fn handle(
                         Some("css") => "text/css",
                         Some("html") => "text/html; charset=utf-8",
                         Some("svg") => "image/svg+xml",
+                        Some("json") => "application/manifest+json",
                         Some("png") => "image/png",
                         _ => "application/octet-stream",
                     },

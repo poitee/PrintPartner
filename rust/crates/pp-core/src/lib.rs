@@ -1,3 +1,4 @@
+mod storage_lease;
 use anyhow::{Context, Result, bail};
 use fs2::FileExt;
 use pp_compat::{Bundle, CompatHandle, SpawnSpec, Supervisor};
@@ -25,6 +26,7 @@ pub use pp_gateway::LaunchTarget as DesktopLaunchTarget;
 
 struct StorageOwner {
     lock: File,
+    _lease_guard: storage_lease::StorageLease,
     data_dir: PathBuf,
     runtime_dir: PathBuf,
     lease: String,
@@ -44,6 +46,7 @@ impl StorageOwner {
             .open(data_dir.join(".desktop.lock"))?;
         lock.try_lock_exclusive()
             .context("Data directory already owned")?;
+        let lease_guard = storage_lease::StorageLease::acquire(&data_dir)?;
         let marker_path = data_dir.join(".desktop-owner.json");
         if marker_path.exists() {
             // The OS lock serializes inspection and replacement with every cooperating writer.
@@ -53,12 +56,14 @@ impl StorageOwner {
                 .as_u64()
                 .filter(|pid| *pid > 0 && *pid <= i32::MAX as u64)
                 .context("Invalid prior writer PID")? as i32;
-            let result = unsafe { libc::kill(pid, 0) };
             anyhow::ensure!(
-                result < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH),
+                storage_lease::owner_is_stale(pid as u32, marker["process_identity"].as_str()),
                 "A prior writer may still be alive"
             );
-            std::fs::remove_file(&marker_path)?;
+            std::fs::rename(
+                &marker_path,
+                data_dir.join(".desktop-lease/previous-marker.json"),
+            )?;
         }
         let lease = hex::encode(rand::random::<[u8; 32]>());
         let runtime_dir = std::env::temp_dir().join(format!(
@@ -68,7 +73,7 @@ impl StorageOwner {
         ));
         std::fs::create_dir(&runtime_dir)?;
         std::fs::set_permissions(&runtime_dir, std::fs::Permissions::from_mode(0o700))?;
-        let marker = serde_json::json!({"pid":std::process::id(),"lease_hash":hex::encode(Sha256::digest(lease.as_bytes())),"runtime_dir":runtime_dir});
+        let marker = serde_json::json!({"pid":std::process::id(),"process_identity":lease_guard.identity,"lease_hash":hex::encode(Sha256::digest(lease.as_bytes())),"runtime_dir":runtime_dir});
         let result = (|| -> Result<()> {
             let mut file = OpenOptions::new()
                 .write(true)
@@ -85,6 +90,7 @@ impl StorageOwner {
         }
         Ok(Self {
             lock,
+            _lease_guard: lease_guard,
             data_dir,
             runtime_dir,
             lease,
@@ -394,6 +400,10 @@ async fn stop_resources(mut resources: Resources) -> ShutdownReceipt {
     if !receipt.runtime_removed {
         receipt.errors.push("runtime_directory_cleanup_failed");
     }
+    let lease_released = resources.owner._lease_guard.release().is_ok();
+    if !lease_released {
+        receipt.errors.push("storage_lease_cleanup_failed");
+    }
     let unlocked = FileExt::unlock(&resources.owner.lock).is_ok();
     let reacquired = unlocked
         && OpenOptions::new()
@@ -404,7 +414,8 @@ async fn stop_resources(mut resources: Resources) -> ShutdownReceipt {
     if !reacquired {
         receipt.errors.push("storage_unlock_unproved");
     }
-    receipt.storage_released = receipt.marker_removed && receipt.runtime_removed && reacquired;
+    receipt.storage_released =
+        receipt.marker_removed && receipt.runtime_removed && lease_released && reacquired;
     receipt
 }
 

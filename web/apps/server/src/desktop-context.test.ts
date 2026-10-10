@@ -96,13 +96,15 @@ it("preserves a live legacy standalone marker without an OS lock", async () => {
 
 it("serializes competing stale-marker recovery across processes", async () => {
   const { spawn } = await import("node:child_process");
-  const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+  const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
   const directory = mkdtempSync(join(tmpdir(), "pp-owner-race-"));
   const dead = spawn(process.execPath, ["-e", ""], { stdio: "ignore" });
   await once(dead, "exit");
   writeFileSync(join(directory, ".desktop-owner.json"), JSON.stringify({ pid: dead.pid, kind: "standalone" }));
+  mkdirSync(join(directory, ".desktop-lease"));
+  writeFileSync(join(directory, ".desktop-lease/owner.json"), JSON.stringify({ pid: dead.pid, process_identity: "prior-boot:prior-start", instance: "cd".repeat(16) }));
   const script = `import { acquireDataDirectory } from ${JSON.stringify(new URL("./desktop-context.ts", import.meta.url).href)};
     try { acquireDataDirectory(${JSON.stringify(directory)}); console.log("owned"); }
     catch { console.log("blocked"); }
@@ -126,4 +128,37 @@ it("serializes competing stale-marker recovery across processes", async () => {
     }));
     rmSync(directory, { recursive: true, force: true });
   }
+});
+
+it("recovers reused-PID markers and leases with a different process identity", async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { acquireDataDirectory } = await import("./desktop-context.js");
+  const { processIdentity } = await import("./storage-lease.js");
+  const directory = mkdtempSync(join(tmpdir(), "pp-reused-pid-"));
+  try {
+    const owner = { pid: process.pid, kind: "standalone", process_identity: `${processIdentity(process.pid)}-prior`, instance: "ab".repeat(16) };
+    mkdirSync(join(directory, ".desktop-lease"));
+    writeFileSync(join(directory, ".desktop-lease/owner.json"), JSON.stringify(owner));
+    writeFileSync(join(directory, ".desktop-owner.json"), JSON.stringify(owner));
+    const release = acquireDataDirectory(directory);
+    const current = JSON.parse(readFileSync(join(directory, ".desktop-owner.json"), "utf8"));
+    expect(current.process_identity).toBe(processIdentity(process.pid));
+    expect(() => acquireDataDirectory(directory)).toThrow("already owned");
+    release();
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+it("keeps a live matching-identity marker owned", async () => {
+  const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { acquireDataDirectory } = await import("./desktop-context.js");
+  const { processIdentity } = await import("./storage-lease.js");
+  const directory = mkdtempSync(join(tmpdir(), "pp-matching-pid-"));
+  try {
+    writeFileSync(join(directory, ".desktop-owner.json"), JSON.stringify({ pid: process.pid, kind: "standalone", process_identity: processIdentity(process.pid) }));
+    expect(() => acquireDataDirectory(directory)).toThrow("already owned");
+  } finally { rmSync(directory, { recursive: true, force: true }); }
 });

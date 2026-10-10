@@ -689,3 +689,75 @@ async fn stale_owner_recovery_admits_only_one_concurrent_start() {
     assert!(runtime.shutdown().await.complete());
     std::fs::remove_dir_all(data).unwrap();
 }
+
+#[tokio::test]
+async fn reused_pid_with_different_identity_recovers_marker_and_lease() {
+    let data = temporary("reused-pid");
+    std::fs::create_dir_all(data.join(".desktop-lease")).unwrap();
+    let owner = serde_json::json!({"pid": std::process::id(), "process_identity": "prior-boot:prior-start", "instance": "ab".repeat(16)});
+    std::fs::write(data.join(".desktop-owner.json"), owner.to_string()).unwrap();
+    std::fs::write(data.join(".desktop-lease/owner.json"), owner.to_string()).unwrap();
+    let runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
+    let current: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(data.join(".desktop-owner.json")).unwrap()).unwrap();
+    assert_ne!(current["process_identity"], owner["process_identity"]);
+    assert!(CoreRuntime::start(launch(data.clone())).await.is_err());
+    assert!(runtime.shutdown().await.complete());
+    std::fs::remove_dir_all(data).unwrap();
+}
+
+#[tokio::test]
+async fn desktop_manifest_and_icons_are_served_as_assets() {
+    let data = temporary("desktop-icons");
+    let mut runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
+    let bootstrap = runtime.take_launch_target().unwrap().into_url();
+    let (_, headers, _) = request(
+        runtime.origin(),
+        bootstrap.strip_prefix(runtime.origin()).unwrap(),
+        "GET",
+        None,
+        None,
+        None,
+        None,
+    )
+    .await;
+    let cookie = headers["set-cookie"]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap();
+    for (path, expected_type) in [
+        ("/manifest.json", "application/manifest+json"),
+        ("/icons/icon-192.png", "image/png"),
+        ("/icons/icon-512.png", "image/png"),
+        ("/icons/icon.svg", "image/svg+xml"),
+    ] {
+        let (status, headers, bytes) = request(
+            runtime.origin(),
+            path,
+            "GET",
+            Some(cookie),
+            None,
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{path}");
+        assert_eq!(headers["content-type"], expected_type);
+        assert!(!bytes.is_empty());
+    }
+    let (status, _, _) = request(
+        runtime.origin(),
+        "/icons/../../Cargo.toml",
+        "GET",
+        Some(cookie),
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(runtime.shutdown().await.complete());
+    std::fs::remove_dir_all(data).unwrap();
+}
