@@ -5,7 +5,7 @@ import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import { fetchJob } from "../api/endpoints/jobs";
-import { connectJobWebSocket } from "../api/jobWebSocket";
+import { connectJobWebSocket, JobNotFoundError } from "../api/jobWebSocket";
 import { queryKeys } from "../queries/keys";
 import { JobProvider, useJobContext } from "./JobContext";
 
@@ -13,7 +13,8 @@ vi.mock("../api/endpoints/jobs", () => ({
   fetchJob: vi.fn(),
 }));
 
-vi.mock("../api/jobWebSocket", () => ({
+vi.mock("../api/jobWebSocket", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../api/jobWebSocket")>(),
   connectJobWebSocket: vi.fn(() => vi.fn()),
 }));
 
@@ -24,6 +25,30 @@ afterEach(() => {
 });
 
 describe("JobProvider terminal retention", () => {
+  it("shows Job not found immediately and aborts polling on a missing-job close", async () => {
+    let signal: AbortSignal | undefined;
+    vi.mocked(fetchJob).mockImplementationOnce((_id, pollSignal) => new Promise((_resolve, reject) => {
+      signal = pollSignal;
+      pollSignal?.addEventListener("abort", () => reject(new Error("Aborted")), { once: true });
+    }));
+    const disconnect = vi.fn();
+    vi.mocked(connectJobWebSocket).mockReturnValue(disconnect);
+    const queryClient = new QueryClient();
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}><JobProvider>{children}</JobProvider></QueryClientProvider>
+    );
+    const { result } = renderHook(useJobContext, { wrapper });
+    const onDone = vi.fn();
+    await act(async () => {
+      await result.current.runJob("stl-export", () => Promise.resolve("missing"), onDone);
+      vi.mocked(connectJobWebSocket).mock.calls.at(-1)?.[2](new JobNotFoundError());
+    });
+    expect(result.current.activeJobs).toEqual([expect.objectContaining({ status: "error", message: "Job not found" })]);
+    expect(onDone).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ status: "error", error: "Job not found" }));
+    expect(signal?.aborted).toBe(true);
+    expect(disconnect).toHaveBeenCalledOnce();
+  });
+
   it.each(["completion", "unmount"])("aborts a stalled poll on %s", async (reason) => {
     let pollSignal: AbortSignal | undefined;
     vi.mocked(fetchJob).mockImplementationOnce((_id, signal) => new Promise((_resolve, reject) => {

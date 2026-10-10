@@ -1,6 +1,13 @@
 import type { JobEvent } from "@print-partner/contracts";
 import { getEngineBaseUrl } from "./contractRequest";
 
+export class JobNotFoundError extends Error {
+  constructor() {
+    super("Job not found");
+    this.name = "JobNotFoundError";
+  }
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -48,7 +55,8 @@ export function connectJobWebSocket(
 
   function reconnect() {
     if (closed) return;
-    retryTimer = setTimeout(connect, retryDelay);
+    const delay = Math.min(retryDelay * (0.8 + Math.random() * 0.4), 10_000);
+    retryTimer = setTimeout(connect, delay);
     retryDelay = Math.min(retryDelay * 2, 10_000);
   }
 
@@ -77,10 +85,18 @@ export function connectJobWebSocket(
       current.onerror = () => {
         if (!closed && socket === current) onError(new Error("Job event stream failed"));
       };
-      current.onclose = () => {
+      current.onclose = (event) => {
         if (closed || socket !== current) return;
         socket = null;
-        reconnect();
+        if (event.code === 1008 && event.reason === "Job not found") {
+          closed = true;
+          onError(new JobNotFoundError());
+          return;
+        }
+        // Retry only transport loss and transient server failures. Normal,
+        // policy, and protocol closes require no new connection.
+        if ([1006, 1011, 1012, 1013].includes(event.code)) reconnect();
+        else closed = true;
       };
     } catch (error) {
       onError(error instanceof Error ? error : new Error(String(error)));
