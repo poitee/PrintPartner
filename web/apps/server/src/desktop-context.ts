@@ -52,7 +52,8 @@ function assertDataDirectoryAvailable(dataDir: string): void {
   const canonical = realpathSync(dataDir);
   if (!existsSync(join(canonical, ".desktop-owner.json"))) return;
   if (context?.data_dir === canonical) return;
-  const owner = z.object({ kind: z.literal("standalone"), pid: z.number().int().positive().max(2147483647), process_identity: z.string().optional() })
+  // Under the shared storage lease, recover stale markers from either runtime.
+  const owner = z.object({ pid: z.number().int().positive().max(2147483647), process_identity: z.string().optional() })
     .safeParse(JSON.parse(readFileSync(join(canonical, ".desktop-owner.json"), "utf8")));
   if (owner.success && ownerIsStale(owner.data)) {
     renameSync(join(canonical, ".desktop-owner.json"), join(canonical, ".desktop-lease", "previous-marker.json"));
