@@ -12,6 +12,7 @@ parser.add_argument('--bin-dir', type=Path, required=True)
 parser.add_argument('--original-bin-dir', type=Path, required=True)
 parser.add_argument('--frozen-output', type=Path, required=True)
 args = parser.parse_args()
+args.output = args.output.resolve()
 args.output.mkdir(parents=True, exist_ok=False)
 rows = []
 
