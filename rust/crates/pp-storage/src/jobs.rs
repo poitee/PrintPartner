@@ -536,7 +536,7 @@ fn save(tx: &Transaction<'_>, job: &mut JobRecord, event: &str) -> Result<()> {
         job.worker = None;
     }
     job.validate_state()?;
-    tx.execute("INSERT INTO durable_jobs(id,tenant,kind,state,resource,version,generation,lease_until,created,updated,document) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11) ON CONFLICT(id) DO UPDATE SET state=excluded.state,version=excluded.version,generation=excluded.generation,lease_until=excluded.lease_until,updated=excluded.updated,document=excluded.document",params![job.job_id,job.tenant,job.kind.name(),job.state.name(),job.payload.resource(),job.state_version,job.generation,job.lease_until,job.created_at,job.updated_at,encode(job)?])?;
+    tx.execute("INSERT INTO durable_jobs(id,tenant,kind,state,resource,version,generation,lease_until,created,updated,document) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11) ON CONFLICT(id) DO UPDATE SET state=excluded.state,resource=excluded.resource,version=excluded.version,generation=excluded.generation,lease_until=excluded.lease_until,updated=excluded.updated,document=excluded.document",params![job.job_id,job.tenant,job.kind.name(),job.state.name(),job.payload.resource(),job.state_version,job.generation,job.lease_until,job.created_at,job.updated_at,encode(job)?])?;
     tx.execute("DELETE FROM durable_job_history WHERE job_id=?1 AND event IN ('heartbeat','progress') AND version<?2",params![job.job_id,job.state_version-128])?;
     tx.execute(
         "INSERT INTO durable_job_history(job_id,version,at,state,event) VALUES(?1,?2,?3,?4,?5)",
@@ -1006,8 +1006,11 @@ fn claim(tx: &Transaction<'_>, worker: &str, admission: &WorkerAdmission) -> Res
             };
             let resource = job.payload.resource();
             if !resource.is_empty() {
-                let count:i64=tx.query_row("SELECT COUNT(*) FROM durable_jobs WHERE tenant=?1 AND state IN ('running','effect_admitted','reconciliation_required','quarantined') AND (resource=?2 OR (?2 LIKE 'source:%' AND resource='source:*') OR (?2='source:*' AND resource LIKE 'source:%'))",params![job.tenant,resource],|r|r.get(0))?;
-                if count >= admission.per_resource as i64 {
+                let count = reserved_resources(tx, &job.tenant, false)?
+                    .iter()
+                    .filter(|reserved| resources_overlap(&resource, reserved))
+                    .count();
+                if count >= admission.per_resource {
                     continue;
                 }
             }
@@ -1033,6 +1036,22 @@ fn claim(tx: &Transaction<'_>, worker: &str, admission: &WorkerAdmission) -> Res
     Ok(Outcome::Claimed(None))
 }
 fn proven_primary_printer_receipt(job: &JobRecord) -> Option<&ResultArtifact> {
+    if let Payload::PrinterStart(request) = &job.payload {
+        let upload = request.upload_effect()?;
+        return job.effects.iter().find_map(|effect| {
+            if effect.intent.operation != EffectOperation::PrinterStart
+                || effect.intent.basis_hash != upload.intent.basis_hash
+                || effect.intent.content_hash != upload.intent.content_hash
+                || effect.intent.target != upload.intent.target
+            {
+                return None;
+            }
+            match effect.outcome().ok()? {
+                EffectOutcome::Confirmed(receipt) => Some(receipt),
+                EffectOutcome::Unresolved | EffectOutcome::Denied => None,
+            }
+        });
+    }
     let Payload::PrinterUpload {
         printer_id, start, ..
     } = &job.payload
@@ -1153,7 +1172,17 @@ pub(crate) fn claimed_source(
             );
             i64::try_from(project_id)?
         }
-        Payload::Sync { .. } | Payload::CheckSourceUpdates {} => {
+        Payload::Sync { project_ids } => {
+            let id = source_id.ok_or_else(|| anyhow!("Sync attempt requires Source"))?;
+            if let Some(ids) = project_ids {
+                ensure!(
+                    u64::try_from(id).is_ok_and(|id| ids.contains(&id)),
+                    "Source outside Sync scope"
+                );
+            }
+            id
+        }
+        Payload::CheckSourceUpdates {} => {
             source_id.ok_or_else(|| anyhow!("Wildcard Source attempt requires Source"))?
         }
         _ => return Err(anyhow!("Attempt is not Source work")),
@@ -1161,7 +1190,54 @@ pub(crate) fn claimed_source(
     Ok((job.tenant, id))
 }
 pub(crate) fn source_reserved(tx: &Transaction<'_>, tenant: &str, id: i64) -> Result<bool> {
-    Ok(tx.query_row("SELECT EXISTS(SELECT 1 FROM durable_jobs WHERE tenant=?1 AND resource IN (?2,'source:*') AND state IN ('queued','running','effect_admitted','reconciliation_required','quarantined'))", params![tenant, format!("source:{id}")], |row| row.get(0))?)
+    let resource = format!("source:{id}");
+    Ok(reserved_resources(tx, tenant, true)?
+        .iter()
+        .any(|reserved| resources_overlap(&resource, reserved)))
+}
+// The column is retained for damaged rows. Healthy legacy scoped Sync rows may
+// still have source:* in the column; their validated payload supplies the scope.
+fn reserved_resources(tx: &Transaction<'_>, tenant: &str, queued: bool) -> Result<Vec<String>> {
+    let rows = tx.prepare("SELECT id,document,resource,state FROM durable_jobs WHERE tenant=?1 AND (state IN ('running','effect_admitted','reconciliation_required','quarantined') OR (?2 AND state='queued')) AND resource<>''")?
+        .query_map(params![tenant, queued], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, document, resource, state)| {
+            if state == "quarantined" {
+                return resource;
+            }
+            decode_row(&id, &document)
+                .map(|job| job.payload.resource())
+                .unwrap_or(resource)
+        })
+        .collect())
+}
+fn resources_overlap(left: &str, right: &str) -> bool {
+    let sources = |resource: &str| -> Option<Vec<String>> {
+        if let Some(ids) = resource.strip_prefix("source-set:") {
+            Some(
+                ids.split(',')
+                    .filter(|id| !id.is_empty())
+                    .map(str::to_owned)
+                    .collect(),
+            )
+        } else {
+            resource
+                .strip_prefix("source:")
+                .map(|id| vec![id.to_owned()])
+        }
+    };
+    match (sources(left), sources(right)) {
+        (Some(left), Some(right)) => {
+            !left.is_empty()
+                && !right.is_empty()
+                && (left.iter().any(|id| id == "*")
+                    || right.iter().any(|id| id == "*")
+                    || left.iter().any(|id| right.contains(id)))
+        }
+        _ => left == right,
+    }
 }
 fn advance(
     tx: &Transaction<'_>,
@@ -1382,7 +1458,13 @@ pub(crate) fn validate_schema(connection: &Connection, version: u64) -> Result<(
                 && job.tenant == row.get::<_, String>(1)?
                 && job.kind.name() == row.get::<_, String>(2)?
                 && job.state.name() == row.get::<_, String>(3)?
-                && job.payload.resource() == row.get::<_, String>(4)?
+                && (job.payload.resource() == row.get::<_, String>(4)?
+                    || (matches!(
+                        job.payload,
+                        Payload::Sync {
+                            project_ids: Some(_)
+                        }
+                    ) && row.get::<_, String>(4)? == "source:*"))
                 && job.state_version == row.get::<_, i64>(5)?
                 && job.generation == row.get::<_, i64>(6)?
                 && job.lease_until == row.get::<_, Option<i64>>(7)?

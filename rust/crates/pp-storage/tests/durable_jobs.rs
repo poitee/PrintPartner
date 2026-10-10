@@ -1881,11 +1881,11 @@ fn start_child_cannot_finish_without_confirmed_start() {
             WorkerOperation::ConfirmEffect(receipt("finish-printer")),
         )
         .unwrap();
-    assert!(
-        worker
-            .update(&mut lease, WorkerOperation::Finish(None))
-            .is_err()
-    );
+    let done = worker
+        .update(&mut lease, WorkerOperation::Finish(None))
+        .unwrap();
+    assert_eq!(done.state, PersistentState::Succeeded);
+    assert_eq!(done.result, Some(receipt("finish-printer")));
     owner.shutdown().unwrap();
 }
 #[test]
@@ -4443,5 +4443,163 @@ fn list_limit_skips_invalid_newest_rows_and_returns_a_usable_cursor() {
         panic!("Expected list");
     };
     assert!(records.is_empty());
+    owner.shutdown().unwrap();
+}
+
+#[test]
+fn bound_printer_start_finish_none_uses_confirmed_start_receipt() {
+    let (_, owner) = fixture();
+    let parent = uploaded_only_parent(&owner, "finish-child-parent", "finish-child-printer");
+    let child = job(enqueue_start(&owner, "finish-child", &parent.job_id).unwrap());
+    let Payload::PrinterStart(request) = &child.payload else {
+        panic!("start payload")
+    };
+    let mut start = request.upload_effect().unwrap().intent.clone();
+    start.operation = EffectOperation::PrinterStart;
+    let worker = owner.job_worker(admission()).unwrap();
+    let (claimed, mut lease) = worker.claim().unwrap().unwrap();
+    assert_eq!(claimed.job_id, child.job_id);
+    assert!(
+        worker
+            .update(&mut lease, WorkerOperation::Finish(None))
+            .is_err()
+    );
+    let receipt = begin_and_confirm(&worker, &mut lease, start, "child-start-result");
+    let done = worker
+        .update(&mut lease, WorkerOperation::Finish(None))
+        .unwrap();
+    assert_eq!(done.state, PersistentState::Succeeded);
+    assert_eq!(done.progress, Some(100));
+    assert_eq!(done.result, Some(receipt));
+    assert_eq!(
+        serde_json::to_value(get(&owner, &child.job_id)).unwrap(),
+        serde_json::to_value(done).unwrap()
+    );
+    owner.shutdown().unwrap();
+}
+
+#[test]
+fn scoped_sync_reserves_and_leases_only_listed_sources() {
+    use pp_storage::catalog::Deletion;
+    let (_, owner) = fixture();
+    let catalog = owner.local_source_catalog();
+    let first = source(&catalog, "Sync first");
+    let second = source(&catalog, "Sync second");
+    let outside = source(&catalog, "Outside sync");
+    let removable = source(&catalog, "Unrelated deletion");
+    let sync = enqueue(
+        &owner,
+        "scoped-sync",
+        Payload::Sync {
+            project_ids: Some(vec![first as u64, second as u64]),
+        },
+    );
+    assert_eq!(deletion(&catalog, first), Deletion::ActiveWork);
+    assert_eq!(deletion(&catalog, second), Deletion::ActiveWork);
+    assert_eq!(
+        deletion(&catalog, removable),
+        Deletion::Deleted {
+            source_id: removable
+        }
+    );
+    let worker = owner.job_worker(admission()).unwrap();
+    let (claimed, mut lease) = worker.claim().unwrap().unwrap();
+    assert_eq!(claimed.job_id, sync.job_id);
+    assert!(source_lease(&worker, &lease, None).is_err());
+    assert!(source_lease(&worker, &lease, Some(outside)).is_err());
+    for id in [first, second] {
+        source_lease(&worker, &lease, Some(id))
+            .unwrap()
+            .release()
+            .unwrap();
+    }
+    let unrelated = enqueue(
+        &owner,
+        "outside-import",
+        Payload::ImportScan {
+            project_id: outside as u64,
+        },
+    );
+    enqueue(
+        &owner,
+        "overlapping-extract",
+        Payload::ExtractSourceDocs {
+            project_id: second as u64,
+        },
+    );
+    let (claimed, mut other_lease) = worker.claim().unwrap().unwrap();
+    assert_eq!(claimed.job_id, unrelated.job_id);
+    worker
+        .update(&mut other_lease, WorkerOperation::Finish(None))
+        .unwrap();
+    assert!(worker.claim().unwrap().is_none());
+    worker
+        .update(&mut lease, WorkerOperation::Finish(None))
+        .unwrap();
+    assert!(worker.claim().unwrap().is_some());
+    owner.shutdown().unwrap();
+}
+
+#[test]
+fn legacy_scoped_sync_wildcard_column_reopens_with_payload_scope() {
+    use pp_storage::catalog::Deletion;
+    let (path, owner) = fixture();
+    let catalog = owner.local_source_catalog();
+    let id = source(&catalog, "Legacy scoped");
+    let other = source(&catalog, "Legacy unrelated");
+    let sync = enqueue(
+        &owner,
+        "legacy-sync",
+        Payload::Sync {
+            project_ids: Some(vec![id as u64]),
+        },
+    );
+    owner.shutdown().unwrap();
+    let raw = Connection::open(path.join("print-partner.db")).unwrap();
+    raw.execute(
+        "UPDATE durable_jobs SET resource='source:*' WHERE id=?1",
+        [&sync.job_id],
+    )
+    .unwrap();
+    drop(raw);
+    let owner = WriterOwner::open(&path, Limits::default()).unwrap().0;
+    let catalog = owner.local_source_catalog();
+    assert_eq!(deletion(&catalog, id), Deletion::ActiveWork);
+    assert_eq!(
+        deletion(&catalog, other),
+        Deletion::Deleted { source_id: other }
+    );
+    let worker = owner.job_worker(admission()).unwrap();
+    let (_, lease) = worker.claim().unwrap().unwrap();
+    assert!(source_lease(&worker, &lease, Some(other)).is_err());
+    let stored: String = readonly(&path)
+        .query_row(
+            "SELECT resource FROM durable_jobs WHERE id=?1",
+            [&sync.job_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(stored, format!("source-set:{id}"));
+    owner.shutdown().unwrap();
+}
+
+#[test]
+fn empty_scoped_sync_does_not_reserve_any_source() {
+    use pp_storage::catalog::Deletion;
+    let (_, owner) = fixture();
+    let catalog = owner.local_source_catalog();
+    let id = source(&catalog, "Empty sync unrelated");
+    enqueue(
+        &owner,
+        "empty-sync",
+        Payload::Sync {
+            project_ids: Some(vec![]),
+        },
+    );
+    assert_eq!(deletion(&catalog, id), Deletion::Deleted { source_id: id });
+    let worker = owner.job_worker(admission()).unwrap();
+    let (_, lease) = worker.claim().unwrap().unwrap();
+    assert!(source_lease(&worker, &lease, Some(id)).is_err());
+    assert!(source_lease(&worker, &lease, None).is_err());
     owner.shutdown().unwrap();
 }
