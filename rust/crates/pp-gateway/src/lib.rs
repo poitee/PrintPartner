@@ -744,23 +744,25 @@ async fn snapshot_refresh_guard<'a>(
     mutex: &'a tokio::sync::Mutex<()>,
     cancelled: &CancellationToken,
     deadline: tokio::time::Instant,
-) -> Option<tokio::sync::MutexGuard<'a, ()>> {
+) -> Option<(tokio::sync::MutexGuard<'a, ()>, tokio::time::Instant)> {
     tokio::select! { biased;
         _ = cancelled.cancelled() => None,
-        guard = tokio::time::timeout_at(deadline, mutex.lock()) => guard.ok(),
+        guard = tokio::time::timeout_at(deadline, mutex.lock()) => guard.ok().map(|guard|
+            (guard, tokio::time::Instant::now() + Duration::from_secs(2))),
     }
 }
 async fn refresh_watchers(state: &GatewayState) -> bool {
     // Serialize snapshots without blocking already-cached reads on the Node round trip.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
-    let Some(_refresh) =
+    // Queue contention must not shorten the independent Node-read budget.
+    let Some((_refresh, read_deadline)) =
         snapshot_refresh_guard(&state.snapshot_refresh, &state.watcher_cancelled, deadline).await
     else {
         return false;
     };
     let snapshot = tokio::select! { biased;
         _ = state.watcher_cancelled.cancelled() => return false,
-        snapshot = tokio::time::timeout_at(deadline, async {
+        snapshot = tokio::time::timeout_at(read_deadline, async {
             let endpoint = state
                 .compat
                 .endpoint()
@@ -798,6 +800,44 @@ async fn refresh_watchers(state: &GatewayState) -> bool {
 #[cfg(test)]
 mod spa_tests {
     use super::is_spa_client_path;
+
+    #[tokio::test]
+    async fn ticket_t_4_queued_refresh_keeps_full_read_budget() {
+        use std::time::Duration;
+        use tokio::time::{Instant, timeout_at};
+        let mutex = std::sync::Arc::new(tokio::sync::Mutex::new(()));
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let (first, first_deadline) =
+            super::snapshot_refresh_guard(&mutex, &cancel, Instant::now() + Duration::from_secs(2))
+                .await
+                .unwrap();
+        let queued_mutex = mutex.clone();
+        let queued = tokio::spawn(async move {
+            let (_second, read_deadline) = super::snapshot_refresh_guard(
+                &queued_mutex,
+                &cancel,
+                Instant::now() + Duration::from_secs(2),
+            )
+            .await
+            .unwrap();
+            assert!(read_deadline.duration_since(Instant::now()) > Duration::from_millis(1900));
+            // This healthy 1.2s read would time out with the queue's remaining 0.8s.
+            timeout_at(
+                read_deadline,
+                tokio::time::sleep(Duration::from_millis(1200)),
+            )
+            .await
+            .unwrap();
+        });
+        timeout_at(
+            first_deadline,
+            tokio::time::sleep(Duration::from_millis(1200)),
+        )
+        .await
+        .unwrap();
+        drop(first);
+        queued.await.unwrap();
+    }
 
     #[tokio::test]
     async fn ticket_t_4_snapshot_queue_deadline_and_shutdown_cancellation() {

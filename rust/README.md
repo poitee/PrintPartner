@@ -43,7 +43,8 @@ The desktop gateway starts status monitoring independently of browser requests
 and window visibility. Node retains storage ownership and provides a private,
 signed-principal-only UDS snapshot of Moonraker configuration. That endpoint is
 not admitted through the public gateway. Snapshot reconciliation runs once per
-second, has a two-second deadline and also runs after successful integration
+second, has an independently bounded two-second queue wait and two-second Node
+read (at most four seconds total before reconciliation), and also runs after successful integration
 creation/update/removal. At most 128 Moonraker configurations are admitted; malformed or
 unavailable snapshots cancel monitoring. A missing snapshot cannot fall back to
 Node's on-demand Moonraker status path through the gateway.
