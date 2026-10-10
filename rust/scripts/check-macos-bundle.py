@@ -142,7 +142,8 @@ def verify_resources(root, manifest, arch):
     require('desktop-resolution.js' in manifest['backend'], 'Measured preload missing')
     hash_map(manifest.get('metadata'))
     expected_metadata = {'package.json', 'package-lock.json', 'apps/server/package.json',
-                         'packages/contracts/package.json', 'packages/domain/package.json'}
+                         'apps/web/package.json', 'packages/contracts/package.json',
+                         'packages/domain/package.json'}
     require(set(manifest['metadata']) == expected_metadata, 'Incomplete metadata inventory')
     for name, checksum in manifest['metadata'].items():
         require(digest(contained(root, web / name)) == checksum, 'Changed metadata: '+name)
@@ -1021,7 +1022,8 @@ class ParserTests(unittest.TestCase):
             (web / ARTIFACTS['frontend'] / 'desktop-build.json').write_text(json.dumps(
                 {'mode': 'desktop', 'version': '3.3.0', 'service_worker': False}))
             metadata = ['package.json', 'package-lock.json', 'apps/server/package.json',
-                        'packages/contracts/package.json', 'packages/domain/package.json']
+                        'apps/web/package.json', 'packages/contracts/package.json',
+                        'packages/domain/package.json']
             for name in metadata:
                 (web / name).write_text(json.dumps({'version': '3.3.0'}))
             (web / 'package-lock.json').write_text(json.dumps({'packages': {

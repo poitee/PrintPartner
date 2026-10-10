@@ -90,7 +90,8 @@ def dependencies():
     return {'web_path': web_path, 'roots': sorted(roots), 'files': files, 'links': links}
 
 metadata = ['package.json', 'package-lock.json', 'apps/server/package.json',
-            'packages/contracts/package.json', 'packages/domain/package.json']
+            'apps/web/package.json', 'packages/contracts/package.json',
+            'packages/domain/package.json']
 frontend = web / 'apps/web/dist'
 desktop = json.loads((frontend / 'desktop-build.json').read_text())
 if desktop['mode'] != 'desktop' or desktop['service_worker'] is not False:
