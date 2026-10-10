@@ -355,3 +355,62 @@ fn shared_directory_case_publishes_with_one_spelling_and_reuses() {
     assert_eq!(second.manifest_digest, first.manifest_digest);
     assert_eq!(second.files, first.files);
 }
+
+#[test]
+fn accented_shared_folder_case_publishes_and_reuses_with_stable_manifest() {
+    let fixture = Fixture::new();
+    let paths = [
+        "Pièces/Nested/a.stl",
+        "pièces/nested/b.stl",
+        "PIÈCES/NESTED/c.stl",
+    ];
+    for (path, bytes) in paths.iter().zip([b"first".as_slice(), b"second", b"third"]) {
+        let full = fixture.0.join("input").join(path);
+        fs::create_dir_all(full.parent().unwrap()).unwrap();
+        fs::write(full, bytes).unwrap();
+    }
+    let mut selected = request();
+    selected.files = paths
+        .into_iter()
+        .rev()
+        .map(|path| SelectedFile {
+            path: SourcePath::try_from(path.to_owned()).unwrap(),
+            kind: FileKind::Stl,
+            size_hint_bytes: None,
+        })
+        .collect();
+    let input = LocalFiles::open(&fixture.0.join("input")).unwrap();
+    let mut source = fixture.repos().source(42).unwrap();
+    let first = source
+        .materialize(selected.clone(), &input, budget())
+        .unwrap();
+    assert_eq!(first.publication, Publication::Created);
+    assert_eq!(
+        first
+            .files
+            .iter()
+            .map(|file| file.path.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "PIÈCES/NESTED/a.stl",
+            "PIÈCES/NESTED/b.stl",
+            "PIÈCES/NESTED/c.stl",
+        ]
+    );
+    let published = fixture.0.join("repos/42/revisions/caller-uuid");
+    assert_eq!(fs::read_dir(&published).unwrap().count(), 2); // folder + manifest
+    for (name, bytes) in
+        ["a.stl", "b.stl", "c.stl"]
+            .into_iter()
+            .zip([b"first".as_slice(), b"second", b"third"])
+    {
+        assert_eq!(
+            fs::read(published.join("PIÈCES/NESTED").join(name)).unwrap(),
+            bytes
+        );
+    }
+    let second = source.materialize(selected, &input, budget()).unwrap();
+    assert_eq!(second.publication, Publication::Reused);
+    assert_eq!(second.files, first.files);
+    assert_eq!(second.manifest_digest, first.manifest_digest);
+}
