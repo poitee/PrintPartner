@@ -23,8 +23,17 @@ const EXEMPTION_NONE = "none";
 const PLACEHOLDER_EXEMPTION =
   /^<?\s*none\s*\|\s*docs-only\s*\|\s*ci-only\s*\|\s*dependency-only\s*\|\s*internal refactor\s*>?$/i;
 
-/** Chad's LAN instances (.80/.81) must never be targeted by automated verification. */
+/** Chad's LAN instances (.x.80 / .x.81) must never be verification targets. */
 const BANNED_LAN_IP = /\b192\.168(?:\.\d+){1,2}\.(?:80|81)\b/;
+
+const FIELD_LABELS = Object.freeze({
+  journey: "Journey exercised",
+  steps: "Steps followed to produce the evidence",
+  result: "Result observed",
+  artifact:
+    "Screenshot / recording / verify-skill output or trace",
+  reason: "Exemption reason",
+});
 
 function stripHtmlComments(text) {
   return text.replace(/<!--[\s\S]*?-->/g, "");
@@ -59,10 +68,10 @@ function parseExemption(sectionText) {
   }
   const lower = raw.toLowerCase();
   if (lower === EXEMPTION_NONE) return { raw, value: EXEMPTION_NONE };
-  // Accept the longer phrasing from the docs.
+  // Accept only the documented spellings (no open-ended prefix match).
   if (
-    lower === "internal refactor with no user-visible change" ||
-    lower.startsWith("internal refactor")
+    lower === "internal refactor" ||
+    lower === "internal refactor with no user-visible change"
   ) {
     return { raw, value: "internal refactor" };
   }
@@ -70,68 +79,120 @@ function parseExemption(sectionText) {
   return { raw, value: null, unknown: true };
 }
 
-function extractExemptionReason(sectionText) {
+function fieldLabelPattern(label) {
+  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  if (label === FIELD_LABELS.reason) {
+    return `${escaped}(?:[ \\t]*\\([^)]*\\))?`;
+  }
+  return escaped;
+}
+
+/**
+ * Read a template field value (same line and optional following freeform lines).
+ */
+function readField(sectionText, label) {
   const cleaned = stripHtmlComments(sectionText);
-  // Keep colon spacing on the same line so the next bullet is not treated as the reason.
+  const labelRe = fieldLabelPattern(label);
   const labeled = cleaned.match(
-    /^[ \t]*[-*][ \t]*Exemption reason(?:[ \t]*\([^)]*\))?[ \t]*:[ \t]*(.*)$/im,
+    new RegExp(`^[ \\t]*[-*][ \\t]*${labelRe}[ \\t]*:[ \\t]*(.*)$`, "im"),
   );
-  if (labeled) {
-    const sameLine = labeled[1].trim();
-    if (sameLine) return sameLine;
-    // Collect following non-empty lines until the next field-style bullet.
-    const after = cleaned.slice(labeled.index + labeled[0].length);
-    const lines = [];
-    for (const line of after.split("\n")) {
-      if (/^[ \t]*[-*][ \t]+\S[^:]*:[ \t]*/.test(line)) break;
-      if (/^[ \t]*Exemption[ \t]*:/i.test(line)) break;
-      if (/^[ \t]*##[ \t]+/.test(line)) break;
-      const trimmed = line.trim();
-      if (!trimmed) {
-        if (lines.length) break;
-        continue;
-      }
-      lines.push(trimmed);
+  if (!labeled) return "";
+  const sameLine = labeled[1].trim();
+  const lines = sameLine ? [sameLine] : [];
+  const after = cleaned.slice(labeled.index + labeled[0].length);
+  for (const line of after.split("\n")) {
+    if (/^[ \t]*[-*][ \t]+\S[^:]*:[ \t]*/.test(line)) break;
+    if (/^[ \t]*Exemption[ \t]*:/i.test(line)) break;
+    if (/^[ \t]*##[ \t]+/.test(line)) break;
+    const trimmed = line.trim();
+    if (!trimmed) {
+      if (lines.length) break;
+      continue;
     }
-    return lines.join(" ").trim();
+    lines.push(trimmed);
   }
-  return "";
+  return lines.join(" ").trim();
 }
 
-const EMPTY_FIELD =
-  /^\s*[-*]\s+(?:Journey exercised|Steps followed to produce the evidence|Result observed|Screenshot\s*\/\s*recording\s*\/\s*verify-skill output or trace|Exemption reason(?:\s*\([^)]*\))?)\s*:\s*$/i;
-
-function hasEvidenceContent(sectionText) {
-  const cleaned = stripHtmlComments(sectionText)
-    .replace(/^\s*Exemption\s*:.*$/gim, "")
-    .replace(
-      /^\s*[-*]\s*Exemption reason(?:\s*\([^)]*\))?\s*:.*$/gim,
-      "",
-    );
-
-  const meaningful = cleaned
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-    .filter((line) => !EMPTY_FIELD.test(line))
-    .filter((line) => !/^[-*]\s*$/.test(line));
-
-  if (meaningful.length === 0) return false;
-
-  // A filled field value, markdown media/link, or freeform paragraph counts.
-  for (const line of meaningful) {
-    if (/!\[[^\]]*]\([^)]+\)/.test(line)) return true;
-    if (/\[[^\]]+]\(https?:\/\/[^)]+\)/.test(line)) return true;
-    if (/https?:\/\/\S+/.test(line)) return true;
-    if (/`[^`]+`/.test(line)) return true;
-    if (/^\s*[-*]\s+[^:]+:\s+\S+/.test(line)) return true;
-    if (!/^\s*[-*]\s+/.test(line) && line.length >= 8) return true;
-  }
-  return meaningful.some((line) => line.replace(/^[-*]\s*/, "").length >= 12);
+function extractExemptionReason(sectionText) {
+  return readField(sectionText, FIELD_LABELS.reason);
 }
 
-function mentionsBannedLan(text) {
-  return BANNED_LAN_IP.test(text);
+function looksLikeArtifact(value) {
+  if (!value) return false;
+  if (/!\[[^\]]*]\([^)]+\)/.test(value)) return true;
+  if (/\[[^\]]+]\([^)]+\)/.test(value)) return true;
+  if (/https?:\/\/\S+/i.test(value)) return true;
+  if (/`[^`]+`/.test(value)) return true;
+  // Paths / filenames commonly used for verify traces and screenshots.
+  if (/\.(?:png|jpe?g|gif|webp|mp4|webm|mov|json|txt|log|md)\b/i.test(value)) {
+    return true;
+  }
+  if (/(?:screenshot|recording|trace|verify[- ]skill|evidence)\b/i.test(value)) {
+    return value.length >= 8;
+  }
+  return false;
+}
+
+/**
+ * Evidence requires steps, observed result, and an artifact (not journey alone,
+ * and not exemption-reason text).
+ */
+export function hasEvidenceContent(sectionText) {
+  const steps = readField(sectionText, FIELD_LABELS.steps);
+  const result = readField(sectionText, FIELD_LABELS.result);
+  const artifact = readField(sectionText, FIELD_LABELS.artifact);
+
+  if (!steps || !result || !looksLikeArtifact(artifact)) {
+    // Also accept a markdown image / evidence URL elsewhere in the section
+    // (outside Exemption / reason / journey-only stubs), but still require
+    // steps + result so a journey name alone cannot pass.
+    const cleaned = stripHtmlComments(sectionText)
+      .replace(/^[ \t]*Exemption[ \t]*:.*$/gim, "")
+      .replace(
+        new RegExp(
+          `^[ \\t]*[-*][ \\t]*${fieldLabelPattern(FIELD_LABELS.reason)}[ \\t]*:[ \\t]*.*$`,
+          "gim",
+        ),
+        "",
+      );
+
+    // Drop multiline exemption-reason paragraphs that follow an empty reason label.
+    // readField already consumed them when present; strip residual freeform that
+    // sits only under the reason bullet by removing reason field text explicitly.
+    const reason = extractExemptionReason(sectionText);
+    let withoutReason = cleaned;
+    if (reason) {
+      withoutReason = withoutReason.split(reason).join("");
+    }
+
+    const freeformArtifact =
+      /!\[[^\]]*]\([^)]+\)/.test(withoutReason) ||
+      /\[[^\]]+]\(https?:\/\/[^)]+\)/.test(withoutReason) ||
+      /https?:\/\/\S+/i.test(withoutReason) ||
+      /\.(?:png|jpe?g|gif|webp|mp4|webm|mov)\b/i.test(withoutReason);
+
+    return Boolean(steps && result && (looksLikeArtifact(artifact) || freeformArtifact));
+  }
+
+  return true;
+}
+
+/**
+ * Fail only when verification evidence targets banned LAN hosts.
+ * Docs/CI exemptions may mention those hosts without using them as targets.
+ */
+function targetsBannedLan(sectionText, exemptionValue) {
+  if (exemptionValue && exemptionValue !== EXEMPTION_NONE) {
+    return false;
+  }
+  const verificationText = [
+    readField(sectionText, FIELD_LABELS.journey),
+    readField(sectionText, FIELD_LABELS.steps),
+    readField(sectionText, FIELD_LABELS.result),
+    readField(sectionText, FIELD_LABELS.artifact),
+  ].join("\n");
+  return BANNED_LAN_IP.test(verificationText);
 }
 
 /**
@@ -161,15 +222,15 @@ export function lintPrEvidence(body) {
     };
   }
 
-  if (mentionsBannedLan(body)) {
+  const { raw, value, unknown } = parseExemption(section);
+  const reason = extractExemptionReason(section);
+  const hasEvidence = hasEvidenceContent(section);
+
+  if (targetsBannedLan(section, value)) {
     errors.push(
       "Evidence must not target Chad's LAN instances (.80/.81). Use a disposable local verify instance instead.",
     );
   }
-
-  const { raw, value, unknown } = parseExemption(section);
-  const reason = extractExemptionReason(section);
-  const hasEvidence = hasEvidenceContent(section);
 
   if (raw == null) {
     errors.push('Missing "Exemption:" field in the Evidence section.');
@@ -184,7 +245,7 @@ export function lintPrEvidence(body) {
   } else if (value === EXEMPTION_NONE) {
     if (!hasEvidence) {
       errors.push(
-        "Evidence block is empty. Attach/link verify output, tests, or screenshots/recording, or claim a named Exemption with a reason.",
+        "Evidence is incomplete. For Exemption: none, fill Steps followed, Result observed, and Screenshot/recording/verify-skill output or trace (a journey name alone is not enough).",
       );
     }
   } else if (VALID_EXEMPTIONS.includes(value)) {

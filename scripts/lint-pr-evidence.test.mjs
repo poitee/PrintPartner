@@ -70,7 +70,38 @@ test("fails when Evidence is empty even with Exemption: none", () => {
 `),
   );
   assert.equal(result.ok, false);
-  assert.match(result.errors.join("\n"), /Evidence block is empty/i);
+  assert.match(result.errors.join("\n"), /Evidence is incomplete|Evidence block is empty/i);
+});
+
+test("fails when only Journey exercised is filled (Greptile P1)", () => {
+  const result = lintPrEvidence(
+    bodyWithEvidence(`Exemption: none
+
+- Journey exercised: login
+- Steps followed to produce the evidence:
+- Result observed:
+- Screenshot / recording / verify-skill output or trace:
+`),
+  );
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join("\n"), /incomplete|journey name alone/i);
+});
+
+test("fails when multiline Exemption reason is the only filled text", () => {
+  const result = lintPrEvidence(
+    bodyWithEvidence(`Exemption: none
+
+- Exemption reason (required when claiming an exemption):
+  We exercised the journey carefully and things looked fine in review.
+
+- Journey exercised:
+- Steps followed to produce the evidence:
+- Result observed:
+- Screenshot / recording / verify-skill output or trace:
+`),
+  );
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join("\n"), /incomplete|empty/i);
 });
 
 test("passes with Exemption: none and filled evidence fields", () => {
@@ -158,6 +189,28 @@ test("fails when evidence targets Chad's LAN .80/.81 hosts", () => {
   );
   assert.equal(result.ok, false);
   assert.match(result.errors.join("\n"), /\.80\/\.81/);
+});
+
+test("allows docs-only PRs that mention LAN hosts without targeting them (Greptile P1)", () => {
+  const result = lintPrEvidence(
+    bodyWithEvidence(`Exemption: docs-only
+
+- Exemption reason: Document why http://192.168.200.80:8080 needs HTTPS and must not be used for automated verify.
+`),
+  );
+  assert.equal(result.ok, true, result.errors.join("; "));
+  assert.equal(result.exemption, "docs-only");
+});
+
+test("rejects unknown internal-refactor suffixes", () => {
+  const result = lintPrEvidence(
+    bodyWithEvidence(`Exemption: internal refactor with user-visible changes
+
+- Exemption reason: renamed helpers
+`),
+  );
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join("\n"), /Unknown Exemption/i);
 });
 
 test("CLI --body-file exits 0 for a valid exempt body", () => {
