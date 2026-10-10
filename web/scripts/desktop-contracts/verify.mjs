@@ -18,7 +18,7 @@ const checks = [];
 function files(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap((item) => item.name === "target" || item.name === "node_modules" ? [] : item.isDirectory() ? files(join(directory, item.name)) : [join(directory, item.name)]);
 }
-const sourceFiles = [...files(join(repo, "rust/crates/pp-contracts")), ...files(join(web, "scripts/desktop-contracts")), join(web, "packages/contracts/src/plan-drafts.ts"), join(web, "packages/contracts/test-fixtures/desktop/autosave-v1.json"), join(web, "package.json"), join(web, "package-lock.json"), join(repo, "rust/Cargo.toml"), join(repo, "rust/Cargo.lock"), join(repo, "rust/scripts/check-boundaries.py")];
+const sourceFiles = [...files(join(repo, "rust/crates/pp-contracts")), ...files(join(repo, "rust/crates/pp-api-types")), ...files(join(repo, "rust/crates/pp-domain")), ...files(join(web, "scripts/desktop-contracts")), join(web, "packages/contracts/src/plan-drafts.ts"), join(web, "packages/contracts/test-fixtures/desktop/autosave-v1.json"), join(web, "package.json"), join(web, "package-lock.json"), join(repo, "rust/Cargo.toml"), join(repo, "rust/Cargo.lock"), join(repo, "rust/scripts/check-boundaries.py")];
 const sources = Object.fromEntries(sourceFiles.map((path) => [path, sha256(readFileSync(path))]));
 let failure;
 function run(name, executable, args, cwd) {
