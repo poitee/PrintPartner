@@ -1,2 +1,4 @@
 /target/
 /bundle-manifest.json
+/desktop-stage/
+/desktop-data/
