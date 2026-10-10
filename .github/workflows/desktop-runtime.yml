@@ -108,3 +108,43 @@ jobs:
           path: ${{ runner.temp }}/desktop-runtime-evidence/
           if-no-files-found: error
           retention-days: 14
+
+  source-artifacts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24.21.0'
+      - name: Install source artifact validation tools
+        run: |
+          rustup toolchain install 1.99.0 --profile minimal
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends strace time
+      - name: Build Node and Rust snapshot implementations
+        run: |
+          npm --prefix web ci
+          npm --prefix web run build -w @print-partner/contracts
+          npm --prefix web run build -w @print-partner/domain
+          npm --prefix web run build -w @print-partner/server
+          cargo build --manifest-path rust/Cargo.toml --locked -p pp-source
+      - name: Verify source artifact compatibility and crash recovery
+        run: |
+          python3 rust/tests/source-artifacts/verify.py \
+            --output "$RUNNER_TEMP/source-artifacts-evidence" \
+            --node "$(command -v node)" \
+            --node-snapshot web/apps/server/dist/current/services/local-source-snapshot.js \
+            --binary rust/target/debug/pp-source
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: source-artifacts-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/source-artifacts-evidence/checks.json
+            ${{ runner.temp }}/source-artifacts-evidence/*.strace
+            ${{ runner.temp }}/source-artifacts-evidence/*.stderr
+          if-no-files-found: warn
+          retention-days: 14
