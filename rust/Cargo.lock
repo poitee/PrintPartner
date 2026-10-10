@@ -2522,6 +2522,7 @@ name = "pp-desktop"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "gtk",
  "pp-core",
  "rfd",
  "serde",
@@ -2568,6 +2569,7 @@ dependencies = [
  "caseless",
  "fs2",
  "hex",
+ "libc",
  "rustix",
  "serde",
  "serde_json",
@@ -2583,6 +2585,7 @@ dependencies = [
  "anyhow",
  "fs2",
  "hex",
+ "libc",
  "rand",
  "rusqlite",
  "serde",
