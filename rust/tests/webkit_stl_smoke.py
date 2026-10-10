@@ -48,7 +48,13 @@ const [encoded, filename, done] = arguments;
     expected_snapshot_digest: draft.snapshot_digest,
     expected_lifecycle_version: draft.lifecycle_version, expected_base: draft.base,
   }, {'Idempotency-Key': 'webkit-smoke-publish'});
+  done({source_id: source.id, plan_id: plan.id});
+})().catch(error => done({error: String(error)}));
+"""
+
+OBSERVE_MESH = r"""
   // Observe the bytes consumed by the production viewer without replacing its response.
+  const bytes = Uint8Array.from(atob(arguments[0]), c => c.charCodeAt(0));
   const originalFetch = window.fetch;
   window.__smokeMesh = {matched: false};
   window.fetch = async function(...args) {
@@ -61,10 +67,6 @@ const [encoded, filename, done] = arguments;
     }
     return response;
   };
-  history.pushState({}, '', `/plan?profile=${plan.id}`);
-  window.dispatchEvent(new PopStateEvent('popstate'));
-  done({source_id: source.id, plan_id: plan.id});
-})().catch(error => done({error: String(error)}));
 """
 
 PIXELS = r"""
@@ -173,11 +175,17 @@ def main():
                          'authenticated native launch')
                 fixture = (ROOT / 'rust/tests/fixtures/part.stl').read_bytes()
                 filename = 'webkit-known-mesh.stl'
-                seeded = execute(SEED, base64.b64encode(fixture).decode(), filename, asynchronous=True)
+                encoded = base64.b64encode(fixture).decode()
+                seeded = execute(SEED, encoded, filename, asynchronous=True)
+                origin = execute('return location.origin;')
+                # Reload to populate the UI's initial cached Build list with the
+                # fixture; do not mutate React state or its query cache in the test.
+                command(f'/session/{session}/url', {'url': f'{origin}/plan?profile={seeded["plan_id"]}'})
                 selector = f'button[aria-label="Preview 3D model of {filename}"]'
                 element = wait_for(lambda: command(f'/session/{session}/elements',
                     {'using': 'css selector', 'value': selector}), 'Plan preview button')[0]
                 element_id = element['element-6066-11e4-a52e-4f735466cecf']
+                execute(OBSERVE_MESH, encoded)
                 command(f'/session/{session}/element/{element_id}/click', {})
                 wait_for(lambda: execute("return !!document.querySelector('[role=dialog] canvas');"),
                          'production STL WebGL canvas')
@@ -189,8 +197,11 @@ def main():
                 assert pixels['mesh']['matched'], pixels
                 assert pixels['gl_error'] == 0, pixels
                 assert pixels['width'] >= 100 and pixels['height'] >= 100, pixels
-                assert pixels['visible_pixels'] > 1000 and pixels['center_visible_pixels'] > 1000, pixels
-                assert pixels['unique_colors'] > 32, pixels
+                # This fixture is a flat triangle: few solid colors are expected.
+                # Require a substantial opaque mesh region and reject a uniform
+                # clear/background covering the whole canvas.
+                assert 1000 < pixels['visible_pixels'] < pixels['width'] * pixels['height'] * 0.8, pixels
+                assert pixels['center_visible_pixels'] > 1000 and pixels['unique_colors'] > 1, pixels
                 receipt = {'result': 'PASS', 'proof_class': 'native_linux_webkitgtk_webgl',
                     'commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
                     'capabilities': result['capabilities'], 'fixture_sha256': hashlib.sha256(fixture).hexdigest(),
