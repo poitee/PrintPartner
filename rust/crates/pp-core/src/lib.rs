@@ -137,6 +137,7 @@ async fn start_resources(input: DesktopLaunch) -> Result<Resources> {
         lease: owner.secret().to_owned(),
         lease_file: owner.clone_file()?,
         port: listener.local_addr()?.port(),
+        record_child: pp_storage::lease::record_child,
     })?;
     owner.retain_on_drop();
     let mut status = supervisor.handle.status.clone();
