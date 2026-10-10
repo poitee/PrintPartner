@@ -1,0 +1,71 @@
+{
+  "checks": [
+    {
+      "conclusion": "SUCCESS",
+      "name": "rust",
+      "status": "COMPLETED",
+      "url": "https://github.com/poitee/PrintPartner/actions/runs/38045622520/job/114194443447"
+    },
+    {
+      "conclusion": "SUCCESS",
+      "name": "parity (22)",
+      "status": "COMPLETED",
+      "url": "https://github.com/poitee/PrintPartner/actions/runs/38045622440/job/114194442103"
+    },
+    {
+      "conclusion": "SUCCESS",
+      "name": "parity (22)",
+      "status": "COMPLETED",
+      "url": "https://github.com/poitee/PrintPartner/actions/runs/38045619011/job/114194431900"
+    },
+    {
+      "conclusion": "SUCCESS",
+      "name": "postgres",
+      "status": "COMPLETED",
+      "url": "https://github.com/poitee/PrintPartner/actions/runs/38045622432/job/114194441979"
+    },
+    {
+      "conclusion": "SUCCESS",
+      "name": "web",
+      "status": "COMPLETED",
+      "url": "https://github.com/poitee/PrintPartner/actions/runs/38045622434/job/114194441835"
+    },
+    {
+      "conclusion": "SUCCESS",
+      "name": "parity (24)",
+      "status": "COMPLETED",
+      "url": "https://github.com/poitee/PrintPartner/actions/runs/38045622440/job/114194441983"
+    },
+    {
+      "conclusion": "SUCCESS",
+      "name": "parity (24)",
+      "status": "COMPLETED",
+      "url": "https://github.com/poitee/PrintPartner/actions/runs/38045619011/job/114194431795"
+    },
+    {
+      "conclusion": "SKIPPED",
+      "name": "slicer-sidecar",
+      "status": "COMPLETED",
+      "url": "https://github.com/poitee/PrintPartner/actions/runs/38045622432/job/114194442909"
+    },
+    {
+      "conclusion": "SUCCESS",
+      "name": "docker",
+      "status": "COMPLETED",
+      "url": "https://github.com/poitee/PrintPartner/actions/runs/38045622434/job/114195690020"
+    },
+    {
+      "conclusion": "SUCCESS",
+      "name": "CodeRabbit",
+      "status": "SUCCESS",
+      "url": ""
+    },
+    {
+      "conclusion": "SUCCESS",
+      "name": "Cursor Bugbot",
+      "status": "COMPLETED",
+      "url": "https://cursor.com/docs/bugbot"
+    }
+  ],
+  "head": "9fea133c96f161cff4a7cc4ddb1504dd1862251d"
+}

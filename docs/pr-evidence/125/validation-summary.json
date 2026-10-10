@@ -1,0 +1,18 @@
+{
+  "head": "9fea133c96f161cff4a7cc4ddb1504dd1862251d",
+  "fmt": "PASS",
+  "clippy": "PASS: workspace, all-targets, locked, -D warnings",
+  "nextest": "PASS: 46/46",
+  "boundaries": "PASS: 6 packages, allowed edges, intentional violation rejected",
+  "web": "PASS: npm test; 3909 workspace Vitest tests plus parity/schema/release/build-tool checks",
+  "lint": "PASS",
+  "knip": "PASS (two existing configuration hints)",
+  "workflow_script_tests": "PASS: 12/12",
+  "native_rendering": "PASS: actual pp-desktop/GTK WebKit Builds window",
+  "native_states": "PASS: Service ready, Service stopping, Service failed; real child suspension and socket cleanup failure",
+  "normal_native_exit": "PASS: exit 0, close_hid=true, show_visible=true, all shutdown receipt fields true, errors=[]",
+  "injected_native_exit": "PASS: expected exit 1, compat_cleanup_unproved, conservative storage ownership",
+  "enforced_launch": "PASS: NODE_PATH/ancestor/symlink-ancestor controls; initial+restart; missing/changed/outside-symlink preload rejected before storage",
+  "macos_workflow": "ABSENT; unsigned macOS helper exists, no macOS bundle CI workflow on branch",
+  "rust_verify_skill": "PASS: after all requested checks; actual pinned Node; complete transcript attached"
+}

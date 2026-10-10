@@ -1,0 +1,7 @@
+
+(pp-desktop:156835): dbind-WARNING **: 10:47:30.767: AT-SPI: Error retrieving accessibility bus address: org.freedesktop.DBus.Error.ServiceUnknown: The name org.a11y.Bus was not provided by any .service files
+
+(pp-desktop:156835): libayatana-appindicator-WARNING **: 10:47:49.595: libayatana-appindicator is deprecated. Please use libayatana-appindicator-glib in newly written code.
+
+(pp-desktop:156835): Gdk-CRITICAL **: 10:47:50.097: gdk_window_thaw_toplevel_updates: assertion 'window->update_and_descendants_freeze_count > 0' failed
+Desktop shutdown incomplete

@@ -1,0 +1,16 @@
+{
+  "head": "9fea133c96f161cff4a7cc4ddb1504dd1862251d",
+  "merge": "d2daeed94a7f1513dafeac543af10cdf93997e1e",
+  "main": "0946f74",
+  "cache_matches_main": true,
+  "state_matches": [
+    "pp-core/src/lib.rs:233",
+    "pp-desktop/src/main.rs:200",
+    "pp-core/tests/runtime_m0.rs:214,294,556,673"
+  ],
+  "compat_states": "Supervisor explicitly publishes Stopping before process.stop and Failed on cleanup failure; no state match with wildcard.",
+  "desktop_status_screen": "No separate runtime-state UI/status screen on this branch; native tray is the state presentation.",
+  "installed_bundle_test": "Absent",
+  "macos_bundle_workflow": "Absent; desktop-bundle.sh is a macOS-only unsigned helper, not a CI workflow.",
+  "hosts": "Local Linux Xvfb :125 and loopback only; no .80/.81 hosts used."
+}

@@ -1,0 +1,61 @@
+   Compiling pp-compat v0.1.0 (/persist/worktrees/t3/PrintPartner/helper-pr-125-land-ready/rust/crates/pp-compat)
+   Compiling pp-desktop v0.1.0 (/persist/worktrees/t3/PrintPartner/helper-pr-125-land-ready/rust/crates/pp-desktop)
+   Compiling pp-gateway v0.1.0 (/persist/worktrees/t3/PrintPartner/helper-pr-125-land-ready/rust/crates/pp-gateway)
+   Compiling pp-core v0.1.0 (/persist/worktrees/t3/PrintPartner/helper-pr-125-land-ready/rust/crates/pp-core)
+   Compiling pp-server v0.1.0 (/persist/worktrees/t3/PrintPartner/helper-pr-125-land-ready/rust/crates/pp-server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 15.74s
+────────────
+ Nextest run ID 45a906d9-a7f1-450d-9d91-29029d7136e2 with nextest profile: default
+    Starting 46 tests across 10 binaries
+        PASS [   0.018s] ( 1/46) pp-compat tests::product_backoff_schedule
+        PASS [   0.026s] ( 2/46) pp-compat release::tests::dependency_aliases_are_measured_and_cannot_escape
+        PASS [   0.132s] ( 3/46) pp-contracts autosave::tests::codepoint_length_does_not_apply_legacy_utf16_bounds
+        PASS [   0.138s] ( 4/46) pp-contracts autosave::tests::duplicate_target_field_rejects_but_distinct_fields_remain_valid
+        PASS [   0.139s] ( 5/46) pp-contracts autosave::tests::basis_consistency_cannot_relax
+        PASS [   0.135s] ( 6/46) pp-contracts autosave::tests::receipt_identity_and_digest_preserve_exact_values
+        PASS [   0.229s] ( 7/46) pp-contracts autosave::tests::observed_draft_state_and_base_linkage_cannot_relax
+        PASS [   0.015s] ( 8/46) pp-core storage_lease::tests::matching_process_identity_remains_live
+        PASS [   0.125s] ( 9/46) pp-contracts::consumer malformed_scalar_text_rejected_and_valid_pairs_preserved
+        PASS [   0.121s] (10/46) pp-contracts::consumer public_construction_and_deserialization_cannot_bypass_invariants
+        PASS [   0.212s] (11/46) pp-contracts::consumer external_consumer_reads_typed_request_and_constructs_exact_receipt
+        PASS [   0.393s] (12/46) pp-contracts autosave::tests::required_nullable_fields_cannot_become_optional
+        PASS [   0.593s] (13/46) pp-contracts autosave::tests::integer_bounds_and_no_coercion_cannot_relax
+        PASS [   0.476s] (14/46) pp-contracts autosave::tests::strict_fields_and_discriminator_cannot_relax
+        PASS [   0.718s] (15/46) pp-contracts autosave::tests::decision_count_bounds_cannot_relax
+        PASS [   7.191s] (16/46) pp-core::runtime_m0 changed_or_missing_built_artifacts_are_rejected
+        PASS [  23.005s] (17/46) pp-core::runtime_m0 compatibility_cleanup_failure_reports_failed_instead_of_ready
+        PASS [  23.038s] (18/46) pp-core::runtime_m0 crash_left_marker_allows_later_start
+        PASS [  23.515s] (19/46) pp-core::runtime_m0 cleanup_error_publishes_failed_and_preserves_failure
+        PASS [  24.399s] (20/46) pp-core::runtime_m0 desktop_manifest_and_icons_are_served_as_assets
+        PASS [  24.924s] (21/46) pp-core::runtime_m0 drop_after_caller_runtime_teardown_reaps_writer_and_descendant
+        PASS [  25.867s] (22/46) pp-core::runtime_m0 authenticated_logout_requests_complete_shutdown
+        PASS [  10.549s] (23/46) pp-core::runtime_m0 live_marker_owner_still_blocks_start
+        PASS [  25.591s] (24/46) pp-core::runtime_m0 stale_owner_recovery_admits_only_one_concurrent_start
+        PASS [  33.313s] (25/46) pp-core::runtime_m0 failed_bind_releases_owner_before_any_child
+        PASS [   0.016s] (26/46) pp-desktop tests::admits_only_the_exact_loopback_origin
+        PASS [   0.011s] (27/46) pp-desktop tests::generated_authority_denies_native_commands_for_every_origin
+        PASS [   0.015s] (28/46) pp-desktop tests::resource_paths_must_remain_inside_the_package
+        PASS [   0.015s] (29/46) pp-gateway spa_tests::spa_client_paths_match_the_node_router
+        PASS [   0.014s] (30/46) pp-gateway target::tests::ambiguous_or_invalid_segments_are_denied
+        PASS [  22.562s] (31/46) pp-core::runtime_m0 unexpected_marker_directory_is_preserved_and_reported
+        PASS [   0.014s] (32/46) pp-gateway target::tests::encoded_segments_are_canonical_before_signing
+        PASS [   0.044s] (33/46) pp-gateway tests::effectful_get_is_explicit
+        PASS [   0.010s] (34/46) pp-gateway tests::encoded_artifact_segments_preserve_safe_names_and_reject_ambiguity
+        PASS [   0.070s] (35/46) pp-gateway tests::admission_and_drain_share_one_barrier
+        PASS [   0.027s] (36/46) pp-gateway tests::global_options_denial_remains_universal
+        PASS [   0.008s] (37/46) pp-gateway tests::operation_sort_preserves_exact_static_parameter_and_wildcard_priority
+        PASS [   0.013s] (38/46) pp-gateway tests::shutdown_request_observation_is_monotonic
+        PASS [   0.013s] (39/46) pp-gateway tests::wildcard_requires_its_slash_boundary
+        PASS [   0.062s] (40/46) pp-gateway tests::manifest_wildcards_preserve_methods_and_aliases
+        PASS [  34.627s] (41/46) pp-core::runtime_m0 reused_pid_with_different_identity_recovers_marker_and_lease
+        SLOW [> 60.000s] (─────) pp-core::runtime_m0 crash_guard_stops_after_five_failures_and_recovers_explicitly
+        SLOW [> 60.000s] (─────) pp-core::runtime_m0 expired_bootstrap_is_denied_by_real_listener
+        PASS [  27.008s] (42/46) pp-core::runtime_m0 wrong_release_is_rejected_before_storage_or_child
+        PASS [  56.804s] (43/46) pp-core::runtime_m0 protected_real_node_lifecycle
+        SLOW [> 60.000s] (─────) pp-core::runtime_m0 stable_child_resets_backoff_without_erasing_rapid_crash_escalation
+        PASS [  85.414s] (44/46) pp-core::runtime_m0 expired_bootstrap_is_denied_by_real_listener
+        PASS [ 105.716s] (45/46) pp-core::runtime_m0 crash_guard_stops_after_five_failures_and_recovers_explicitly
+        SLOW [>120.000s] (─────) pp-core::runtime_m0 stable_child_resets_backoff_without_erasing_rapid_crash_escalation
+        PASS [ 177.850s] (46/46) pp-core::runtime_m0 stable_child_resets_backoff_without_erasing_rapid_crash_escalation
+────────────
+     Summary [ 203.496s] 46 tests run: 46 passed (3 slow), 0 skipped

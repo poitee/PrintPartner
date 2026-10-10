@@ -1,0 +1,4 @@
+
+(pp-desktop:157424): dbind-WARNING **: 10:49:06.041: AT-SPI: Error retrieving accessibility bus address: org.freedesktop.DBus.Error.ServiceUnknown: The name org.a11y.Bus was not provided by any .service files
+
+(pp-desktop:157424): libayatana-appindicator-WARNING **: 10:49:24.581: libayatana-appindicator is deprecated. Please use libayatana-appindicator-glib in newly written code.

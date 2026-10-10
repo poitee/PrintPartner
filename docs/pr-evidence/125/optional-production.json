@@ -1,0 +1,12 @@
+{
+  "devOptional_packages_retained": [
+    "node_modules/@types/better-sqlite3",
+    "node_modules/@types/pg",
+    "node_modules/@types/react",
+    "node_modules/@types/react-dom",
+    "node_modules/csstype",
+    "node_modules/esbuild",
+    "node_modules/tsx"
+  ],
+  "count": 7
+}

@@ -1,0 +1,227 @@
+Rust verification checkout: /persist/worktrees/t3/PrintPartner/helper-pr-125-land-ready
+Commit: 9fea133c96f161cff4a7cc4ddb1504dd1862251d
+BUILD: npm --prefix web ci
+npm warn EBADENGINE Unsupported engine {
+npm warn EBADENGINE   package: 'print-partner-web@3.3.0',
+npm warn EBADENGINE   required: { node: '22.x', npm: '>=10' },
+npm warn EBADENGINE   current: { node: 'v24.21.0', npm: '11.19.0' }
+npm warn EBADENGINE }
+npm warn deprecated prebuild-install@7.1.3: No longer maintained. Please contact the author of the relevant native addon; alternatives are available.
+
+added 737 packages, and audited 742 packages in 30s
+
+175 packages are looking for funding
+  run `npm fund` for details
+
+found 0 vulnerabilities
+npm warn install-scripts 5 packages have install scripts not yet covered by allowScripts:
+npm warn install-scripts   better-sqlite3@12.11.1 (install: prebuild-install || node-gyp rebuild --release)
+npm warn install-scripts   cpu-features@0.0.10 (install: node buildcheck.js > buildcheck.gypi && node-gyp rebuild)
+npm warn install-scripts   esbuild@0.28.2 (postinstall: node install.js)
+npm warn install-scripts   protobufjs@7.6.5 (postinstall: node scripts/postinstall)
+npm warn install-scripts   ssh2@1.17.0 (install: node install.js)
+npm warn install-scripts
+npm warn install-scripts Run `npm install-scripts ls` to review, or `npm install-scripts approve <pkg>` to allow.
+BUILD: npm --prefix web run build
+
+> print-partner-web@3.3.0 build
+> npm run build -w @print-partner/contracts && npm run build -w @print-partner/domain && npm run build -w @print-partner/server && npm run build -w @print-partner/web
+
+
+> @print-partner/contracts@0.1.0 build
+> node ../../scripts/atomic-package-build.mjs --project tsconfig.build.json
+
+
+> @print-partner/domain@0.1.0 build
+> node ../../scripts/atomic-package-build.mjs --project tsconfig.build.json
+
+
+> @print-partner/server@0.1.0 build
+> node ../../scripts/atomic-package-build.mjs --project tsconfig.build.json --copy src/data data --require-file data/ambrosia_fallback.json --require-file data/assistant-domain/_global/alias_map.yaml --require-file data/assistant-domain/_global/merge_conflicts.yaml --require-file data/assistant-domain/_global/pitfalls.md --require-file data/assistant-domain/_global/stacks.yaml --require-file data/assistant-domain/sources/README.md --require-file data/kit-catalog.yaml --require-file data/legal/ATTRIBUTION.md --require-file data/legal/LICENSE --require-file data/legal/LICENSE-SUMMARY.md --require-file data/legal/THIRD_PARTY_NOTICES.md --require-file data/manifests/registry-index.yaml --require-file data/path-hints.yaml --require-file data/postgres/0000_init.sql --require-file data/printer_presets.json
+
+
+> @print-partner/web@0.1.0 build
+> tsc -p tsconfig.json --noEmit && vite build --manifest
+
+vite v8.2.2 building client environment for production...
+[2Ktransforming...✓ 2834 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/desktop-build.json                                                                 0.05 kB │ gzip:   0.07 kB
+dist/index.html                                                                         3.33 kB │ gzip:   1.14 kB
+dist/.vite/manifest.json                                                               59.20 kB │ gzip:   6.42 kB
+dist/assets/index-mT8luoJt.css                                                        117.22 kB │ gzip:  20.61 kB
+dist/assets/chevron-right-rv6SSfdw.js                                                   0.12 kB │ gzip:   0.14 kB
+dist/assets/thumbnailCache-yPChGMuy.js                                                  0.14 kB │ gzip:   0.12 kB
+dist/assets/search-i6peiVk2.js                                                          0.17 kB │ gzip:   0.16 kB
+dist/assets/runtime-2J89Ns5y.js                                                         0.21 kB │ gzip:   0.18 kB
+dist/assets/copy-btzv7yfz.js                                                            0.23 kB │ gzip:   0.20 kB
+dist/assets/acceptedPlateColor-DDaUdKT8.js                                              0.24 kB │ gzip:   0.18 kB
+dist/assets/external-link-CkA1QnfO.js                                                   0.24 kB │ gzip:   0.19 kB
+dist/assets/pencil-Cg4RJFqg.js                                                          0.27 kB │ gzip:   0.22 kB
+dist/assets/book-open-FcNOmz84.js                                                       0.28 kB │ gzip:   0.22 kB
+dist/assets/folder-open-swc3kL6G.js                                                     0.28 kB │ gzip:   0.22 kB
+dist/assets/PageHeaderActions-C4RUyCkx.js                                               0.29 kB │ gzip:   0.22 kB
+dist/assets/clipboard-check-CyfcRXJy.js                                                 0.30 kB │ gzip:   0.23 kB
+dist/assets/kitImportStash-C613gk2-.js                                                  0.31 kB │ gzip:   0.21 kB
+dist/assets/printer-BhA5qOVg.js                                                         0.31 kB │ gzip:   0.23 kB
+dist/assets/trash-2-COO6UNbN.js                                                         0.32 kB │ gzip:   0.21 kB
+dist/assets/newspaper-B_lKAaSX.js                                                       0.34 kB │ gzip:   0.24 kB
+dist/assets/useMediaQuery-kSlB4U2s.js                                                   0.37 kB │ gzip:   0.25 kB
+dist/assets/hammer-NPBR1ZIb.js                                                          0.39 kB │ gzip:   0.27 kB
+dist/assets/factory-D157SJra.js                                                         0.40 kB │ gzip:   0.25 kB
+dist/assets/upload-DbjevU2F.js                                                          0.40 kB │ gzip:   0.24 kB
+dist/assets/externalAccess-BgHkRMDV.js                                                  0.41 kB │ gzip:   0.28 kB
+dist/assets/fetchWithRetry-D3ppF2Vf.js                                                  0.41 kB │ gzip:   0.30 kB
+dist/assets/buildTracking-BQm1ituE.js                                                   0.42 kB │ gzip:   0.28 kB
+dist/assets/ellipsis-QAg8che1.js                                                        0.42 kB │ gzip:   0.27 kB
+dist/assets/file-archive-TrlvT8Hh.js                                                    0.42 kB │ gzip:   0.28 kB
+dist/assets/jsx-runtime-Bd5ulOAF.js                                                     0.43 kB │ gzip:   0.30 kB
+dist/assets/QueryClientProvider-YqCCy2tV.js                                             0.45 kB │ gzip:   0.30 kB
+dist/assets/exportActions-B_3RX2GM.js                                                   0.45 kB │ gzip:   0.29 kB
+dist/assets/workflowState-bJFoFn2V.js                                                   0.51 kB │ gzip:   0.22 kB
+dist/assets/printerCheckoff-TT96TuxI.js                                                 0.52 kB │ gzip:   0.29 kB
+dist/assets/input-BvlVsvn4.js                                                           0.55 kB │ gzip:   0.37 kB
+dist/assets/textarea-BRdCWFse.js                                                        0.55 kB │ gzip:   0.37 kB
+dist/assets/dist-DGi8lWSj.js                                                            0.56 kB │ gzip:   0.39 kB
+dist/assets/BrandMark-C3q_Zk-d.js                                                       0.57 kB │ gzip:   0.38 kB
+dist/assets/buildWorkflow-DU6L6k_b.js                                                   0.59 kB │ gzip:   0.42 kB
+dist/assets/skeleton-BQcSbH5s.js                                                        0.64 kB │ gzip:   0.41 kB
+dist/assets/SupportCta-2l1lkvpj.js                                                      0.65 kB │ gzip:   0.45 kB
+dist/assets/exportStlJobResult-C4t-wLJ4.js                                              0.69 kB │ gzip:   0.45 kB
+dist/assets/FilamentSwatch-B4i9Hbhz.js                                                  0.70 kB │ gzip:   0.34 kB
+dist/assets/printerPlanBind-BiTrkuGq.js                                                 0.72 kB │ gzip:   0.42 kB
+dist/assets/label-B-1MZwyX.js                                                           0.74 kB │ gzip:   0.47 kB
+dist/assets/segmented-control-CjH0VT0w.js                                               0.77 kB │ gzip:   0.47 kB
+dist/assets/planVariants-ByZxh4s2.js                                                    0.85 kB │ gzip:   0.53 kB
+dist/assets/useEngineHealth-Bosq2NRa.js                                                 0.87 kB │ gzip:   0.56 kB
+dist/assets/plansList-CJ-gCUwL.js                                                       0.87 kB │ gzip:   0.45 kB
+dist/assets/BuildSaveFlushContext-NSSj808S.js                                           0.88 kB │ gzip:   0.47 kB
+dist/assets/badge-OSi1bW6y.js                                                           0.91 kB │ gzip:   0.46 kB
+dist/assets/separator-IxycbK5A.js                                                       0.92 kB │ gzip:   0.53 kB
+dist/assets/stlAutoSync-4aORMsl_.js                                                     0.95 kB │ gzip:   0.45 kB
+dist/assets/stlNaming-B8Ql6k18.js                                                       0.95 kB │ gzip:   0.51 kB
+dist/assets/rolldown-runtime-W7wSyTde.js                                                0.97 kB │ gzip:   0.56 kB
+dist/assets/filaments-ByedlEZ6.js                                                       0.98 kB │ gzip:   0.38 kB
+dist/assets/AuthScreen-BGXVPoB3.js                                                      1.00 kB │ gzip:   0.50 kB
+dist/assets/NotFoundPage-hSHFapqb.js                                                    1.02 kB │ gzip:   0.51 kB
+dist/assets/slicers-Bw2KqCXB.js                                                         1.05 kB │ gzip:   0.35 kB
+dist/assets/DateFormatContext-Dd0QT8DR.js                                               1.08 kB │ gzip:   0.63 kB
+dist/assets/settings-Co_bUWvA.js                                                        1.09 kB │ gzip:   0.46 kB
+dist/assets/table-BKt-O_tJ.js                                                           1.19 kB │ gzip:   0.48 kB
+dist/assets/PageShell-0S4RXQ3v.js                                                       1.20 kB │ gzip:   0.57 kB
+dist/assets/printerSendModel-DNtcv3mE.js                                                1.23 kB │ gzip:   0.56 kB
+dist/assets/sheet-BpvHF90s.js                                                           1.30 kB │ gzip:   0.60 kB
+dist/assets/routes-CUDXkowo.js                                                          1.33 kB │ gzip:   0.48 kB
+dist/assets/browserFiles-ekyn0cPe.js                                                    1.44 kB │ gzip:   0.56 kB
+dist/assets/layers-5absUwBQ.js                                                          1.44 kB │ gzip:   0.73 kB
+dist/assets/loader-circle-CE3NyQJy.js                                                   1.50 kB │ gzip:   0.86 kB
+dist/assets/productionSend-CczvrvWe.js                                                  1.50 kB │ gzip:   0.64 kB
+dist/assets/media-CXwD7_4R.js                                                           1.52 kB │ gzip:   0.76 kB
+dist/assets/card-BOjWMc2X.js                                                            1.61 kB │ gzip:   0.71 kB
+dist/assets/alert-5H8w4fXY.js                                                           1.66 kB │ gzip:   0.71 kB
+dist/assets/asyncView-IJ8GIFC_.js                                                       1.82 kB │ gzip:   0.92 kB
+dist/assets/dialog-CdzvDA5_.js                                                          1.86 kB │ gzip:   0.87 kB
+dist/assets/planLayers-BrCU2R0S.js                                                      1.88 kB │ gzip:   0.73 kB
+dist/assets/ResetPasswordPage-DCLWdc_V.js                                               1.89 kB │ gzip:   0.95 kB
+dist/assets/colorPresets-BrE5yvoD.js                                                    1.98 kB │ gzip:   0.87 kB
+dist/assets/BuildSummaryHeader-Biyb6coH.js                                              2.07 kB │ gzip:   0.96 kB
+dist/assets/EmptyState-Mkw5CtC8.js                                                      2.23 kB │ gzip:   0.86 kB
+dist/assets/useAppUpdateCheck-C136RYJD.js                                               2.28 kB │ gzip:   1.11 kB
+dist/assets/planManifests-CWKBuEnN.js                                                   2.35 kB │ gzip:   1.10 kB
+dist/assets/ForgotPasswordPage-DOxxY9Qz.js                                              2.38 kB │ gzip:   1.18 kB
+dist/assets/sourceMonitoring-CEqSwROr.js                                                2.45 kB │ gzip:   1.25 kB
+dist/assets/progress-CuSBM0sW.js                                                        2.54 kB │ gzip:   1.23 kB
+dist/assets/ProfileContext-CK50l4VE.js                                                  2.56 kB │ gzip:   1.24 kB
+dist/assets/PrinterSendQueuePanel-qRl0ROkl.js                                           3.19 kB │ gzip:   1.36 kB
+dist/assets/AuthContext-tIse7dxj.js                                                     3.30 kB │ gzip:   1.38 kB
+dist/assets/tabs-AJl2EJ5H.js                                                            3.33 kB │ gzip:   1.46 kB
+dist/assets/ReferenceShareImport-MhToOPaQ.js                                            3.37 kB │ gzip:   1.51 kB
+dist/assets/mutation-Dx9fC1gJ.js                                                        3.44 kB │ gzip:   1.13 kB
+dist/assets/AcceptedPlate3DPreview-CUf62laM.js                                          3.44 kB │ gzip:   1.83 kB
+dist/assets/react-dom-DKwHqKH5.js                                                       3.58 kB │ gzip:   1.36 kB
+dist/assets/ObjectProposalRows-DXCpXbRh.js                                              3.66 kB │ gzip:   1.47 kB
+dist/assets/LoginPage-D9MJbOPB.js                                                       3.78 kB │ gzip:   1.59 kB
+dist/assets/printerFleet-CkvkNSPO.js                                                    3.83 kB │ gzip:   1.42 kB
+dist/assets/dist-BbDIFuwB.js                                                            4.23 kB │ gzip:   1.85 kB
+dist/assets/ConfirmDialog-C7kBqzse.js                                                   4.26 kB │ gzip:   1.51 kB
+dist/assets/buildSourceLayers-D5rB-Gvo.js                                               4.52 kB │ gzip:   2.02 kB
+dist/assets/UnattributedPrintCard-CHgChTxq.js                                           4.58 kB │ gzip:   1.72 kB
+dist/assets/switch-CxJfn-0_.js                                                          4.62 kB │ gzip:   2.01 kB
+dist/assets/engineTransport-DX-IyBe2.js                                                 4.75 kB │ gzip:   1.84 kB
+dist/assets/dist-CgOq_XUY.js                                                            4.87 kB │ gzip:   1.75 kB
+dist/assets/popover-B0k84tm4.js                                                         4.91 kB │ gzip:   1.87 kB
+dist/assets/checkbox-DsIz6P6O.js                                                        5.22 kB │ gzip:   2.14 kB
+dist/assets/button-ChZebYLl.js                                                          5.27 kB │ gzip:   2.16 kB
+dist/assets/checkoff-BU00mzc9.js                                                        5.36 kB │ gzip:   1.75 kB
+dist/assets/previewTheme-D39ZijuI.js                                                    5.39 kB │ gzip:   2.40 kB
+dist/assets/profiles-Bs0PvkGi.js                                                        5.42 kB │ gzip:   1.75 kB
+dist/assets/PrinterLiveStrip-Bw6VeKvz.js                                                5.58 kB │ gzip:   2.34 kB
+dist/assets/BoardPage-AHKg_-mq.js                                                       5.82 kB │ gzip:   2.09 kB
+dist/assets/sources-7e5wOXRO.js                                                         5.84 kB │ gzip:   2.14 kB
+dist/assets/stlThumbnail-BwGg7hue.js                                                    6.35 kB │ gzip:   2.70 kB
+dist/assets/radio-group-hotPGepd.js                                                     6.48 kB │ gzip:   2.56 kB
+dist/assets/react-ILl6kF47.js                                                           7.53 kB │ gzip:   2.88 kB
+dist/assets/ShareBuildExportDialog-Kz1gBLjQ.js                                          8.00 kB │ gzip:   3.04 kB
+dist/assets/printerStatuses-Dws_pBo-.js                                                 8.18 kB │ gzip:   3.31 kB
+dist/assets/workPackageProjection-CKOHYU9t.js                                           8.22 kB │ gzip:   2.85 kB
+dist/assets/SourceCategoryManager-DC44mq4y.js                                           8.29 kB │ gzip:   3.43 kB
+dist/assets/waitForSheetThumbnails-DmU4tiHi.js                                          8.40 kB │ gzip:   3.66 kB
+dist/assets/keys-97nduGoB.js                                                            9.21 kB │ gzip:   3.40 kB
+dist/assets/GlobalProductionPage-DaNOmlyG.js                                            9.68 kB │ gzip:   3.12 kB
+dist/assets/SourceUpdateIntervalSelect-Ck1u2YZO.js                                     10.35 kB │ gzip:   3.36 kB
+dist/assets/sliced-object-matching-CLpzyBak.js                                         10.65 kB │ gzip:   4.10 kB
+dist/assets/PlansPage-D3l4BjzP.js                                                      11.32 kB │ gzip:   3.70 kB
+dist/assets/HelpPage-l0h4MECc.js                                                       13.45 kB │ gzip:   4.15 kB
+dist/assets/useJobRunner-eBSd0lZW.js                                                   13.60 kB │ gzip:   4.64 kB
+dist/assets/PrinterSendPanel-BFPzJtBP.js                                               14.38 kB │ gzip:   4.89 kB
+dist/assets/ImportRulesTree-DYNxSvnl.js                                                14.54 kB │ gzip:   4.80 kB
+dist/assets/query-BvwlGLlA.js                                                          14.59 kB │ gzip:   4.98 kB
+dist/assets/Preview3D-BXX2hUw1.js                                                      14.87 kB │ gzip:   6.11 kB
+dist/assets/planPickerGroups-DUDAK3-S.js                                               15.18 kB │ gzip:   5.74 kB
+dist/assets/dist-DXWsf1hD.js                                                           15.32 kB │ gzip:   5.45 kB
+dist/assets/PrintersPage-BjF6-3J1.js                                                   16.58 kB │ gzip:   5.78 kB
+dist/assets/OrbitControls-Dv0ZNTbz.js                                                  19.84 kB │ gzip:   4.40 kB
+dist/assets/dropdown-menu-BLCkFkCW.js                                                  20.95 kB │ gzip:   6.11 kB
+dist/assets/select-Co22Bm7o.js                                                         21.32 kB │ gzip:   7.28 kB
+dist/assets/dist-CS2BF_1A.js                                                           23.24 kB │ gzip:   8.39 kB
+dist/assets/dist-BbMdoCds.js                                                           25.67 kB │ gzip:   9.95 kB
+dist/assets/PrinterFilesView-CHJDKt5P.js                                               28.52 kB │ gzip:   8.51 kB
+dist/assets/PlanWorkspaceContext-DppXouQ-.js                                           30.46 kB │ gzip:   9.23 kB
+dist/assets/dist-D8ugAitK.js                                                           33.59 kB │ gzip:   9.36 kB
+dist/assets/BuildPage-DrmBV6nJ.js                                                      33.66 kB │ gzip:  10.37 kB
+dist/assets/statusTone-BGECiioo.js                                                     33.78 kB │ gzip:  10.63 kB
+dist/assets/SortableDragHandle-DGbIVVIg.js                                             45.66 kB │ gzip:  15.08 kB
+dist/assets/AuthenticatedApp-7NOaYLz7.js                                               70.58 kB │ gzip:  21.82 kB
+dist/assets/PartsPage-CLy7KNdw.js                                                      71.89 kB │ gzip:  20.43 kB
+dist/assets/SourcesPage-Dy9mWPwt.js                                                    88.90 kB │ gzip:  25.69 kB
+dist/assets/jszip.min-Dy1zC6RX.js                                                      95.97 kB │ gzip:  28.50 kB
+dist/assets/SettingsPage-CdpaSNy7.js                                                  102.09 kB │ gzip:  25.01 kB
+dist/assets/CheckoffPage-BpiMDh2h.js                                                  109.21 kB │ gzip:  30.48 kB
+dist/assets/release-mv29vesr-158150-4a82a290-7e58-4482-90e3-07748f2c6ae8-DGzUhnRT.js  118.94 kB │ gzip:  33.12 kB
+dist/assets/ExportPage-IVGFG7Rs.js                                                    132.95 kB │ gzip:  38.23 kB
+dist/assets/index-C0qNMntA.js                                                         288.10 kB │ gzip:  92.51 kB
+dist/assets/previewRig-8H-fs6ej.js                                                    549.46 kB │ gzip: 137.52 kB
+
+✓ built in 2.33s
+BUILD: /usr/bin/python3 rust/scripts/build-desktop-manifest.py --web web --node /opt/agent-fleet/artifacts/.local/share/mise/installs/node/24.21.0/bin/node --output rust/bundle-manifest.json --commit 9fea133c96f161cff4a7cc4ddb1504dd1862251d
+{"manifest_sha256": "c4029eddea3e91cfd64ac6ce55928a70a740b93dc29f1ce4289e9707fc7010ee", "measured_files": 1527, "dependency_files": 44640, "dependency_links": 53, "node_version": "v24.21.0"}
+BUILD: cargo build --manifest-path rust/Cargo.toml --locked -p pp-server --message-format=json
+   Compiling pp-compat v0.1.0 (/persist/worktrees/t3/PrintPartner/helper-pr-125-land-ready/rust/crates/pp-compat)
+   Compiling pp-gateway v0.1.0 (/persist/worktrees/t3/PrintPartner/helper-pr-125-land-ready/rust/crates/pp-gateway)
+   Compiling pp-core v0.1.0 (/persist/worktrees/t3/PrintPartner/helper-pr-125-land-ready/rust/crates/pp-core)
+   Compiling pp-server v0.1.0 (/persist/worktrees/t3/PrintPartner/helper-pr-125-land-ready/rust/crates/pp-server)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 9.76s
+EXECUTABLE: /persist/worktrees/t3/PrintPartner/helper-pr-125-land-ready/rust/target/debug/pp-server
+START: pid=158612 origin=http://127.0.0.1:43335
+HTTP GET /health -> 401: {"detail": "Desktop session required"}
+HTTP GET /__desktop/bootstrap [redacted] -> 303: 0 bytes
+HTTP GET /health -> 200: {"ok": true, "version": "3.3.0-web", "semver": "v3.3.0-dev", "build": {"version": "3.3.0", "commit": "9fea133", "branch": "development", "tag": "unknown", "buildDate": "unknown", "nodeVersion": "v24.21.0"}, "release": {"version": "3.3.0", "runtime_version": "3.3.0-web", "commit": "9fea133c96f161cff4a7cc4ddb1504dd1862251d", "tag": null, "image_digest": null, "deployment_mode": "self-host", "github_release_url": null, "build_date": null}, "deploy_mode": "self-host", "multi_user": false, "authenticated": true, "authentication_required": true, "registration_open": false, "data_dir": "/persist/tmp/pp-verify-rust-mna6qnh3/data", "port": 43335, "api_version": "v1", "capabilities": ["kit_planning", "accepted_plate_revisions", "accepted_plate_export", "jobs_ws", "fleet_presets", "integrations_api", "mcp_http", "backups", "api_key_management", "webhook_security", "logging"], "db": {"connected": true, "driver": "sqlite", "postgres": null, "support_status": "supported"}, "deployment": {"database": "sqlite", "job_runner": "in_process", "tenant_mode": "single", "support_status": "supported", "restart": {"database_rows": "survive", "local_artifacts": "survive", "in_flight_jobs": "lost"}}, "google_drive": {"client_id": null}}
+HTTP GET /__runtime -> 200: {"compat": {"generation": "4dcc54f412c3a08722cd08ef017031d4", "pid": 158624, "state": "ready"}, "gateway": {"active_requests": 0, "active_upgrades": 0}, "proof_class": "headless_unsigned"}
+HTTP GET /builds -> 200: 3330 bytes
+HTTP POST /sources -> 200: {"id": 1, "name": "Rust verification source", "url": "", "source_kind": "local", "source_type": "local", "role": "unassigned", "category": null, "branch": "main", "tag": null, "local_path": "/persist/tmp/pp-verify-rust-mna6qnh3/data/repos/1", "content_available": true, "last_synced_at": null, "last_commit_sha": null, "current_source_revision_id": null, "docs_url": null, "manifest_community_slug": null, "metadata": null, "naming_use_defaults": true, "update_status": null, "update_checked_at": null, "doc_count": 0}
+HTTP GET /sources/1 -> 200: {"id": 1, "name": "Rust verification source", "url": "", "source_kind": "local", "source_type": "local", "role": "unassigned", "category": null, "branch": "main", "tag": null, "local_path": "/persist/tmp/pp-verify-rust-mna6qnh3/data/repos/1", "content_available": true, "last_synced_at": null, "last_commit_sha": null, "current_source_revision_id": null, "docs_url": null, "manifest_community_slug": null, "metadata": null, "naming_use_defaults": true, "update_status": null, "update_checked_at": null, "doc_count": 0}
+SERVER STDERR:
+
+STOP: exit=0; owner marker removed; private sockets removed; data lock reacquired
+PASS: Rust build, gateway endpoints, persisted Source and shutdown

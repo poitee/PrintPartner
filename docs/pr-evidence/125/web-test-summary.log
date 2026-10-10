@@ -1,0 +1,44 @@
+> npm run test:desktop-parity && npm run contracts:schemas && npm run test:release && npm run test:build-tools && npm run test -w @print-partner/contracts --if-present && npm run test -w @print-partner/domain --if-present && npm run test -w @print-partner/web --if-present && npm run test:ci -w @print-partner/server --if-present
+ℹ tests 13
+ℹ pass 13
+ℹ fail 0
+> print-partner-web@3.3.0 contracts:schemas
+PASS: 41 original cases; 8 exported Zod input/output schemas; 26 separate measured supplemental cases; deterministic --check
+ℹ tests 38
+ℹ pass 38
+ℹ fail 0
+ℹ tests 7
+ℹ pass 7
+ℹ fail 0
+ Test Files  10 passed (10)
+      Tests  101 passed (101)
+   Duration  1.43s (transform 1.20s, setup 0ms, import 3.94s, tests 510ms, environment 8ms)
+ Test Files  18 passed (18)
+      Tests  152 passed (152)
+   Duration  2.36s (transform 2.67s, setup 0ms, import 6.61s, tests 697ms, environment 5ms)
+ Test Files  272 passed (272)
+      Tests  1432 passed (1432)
+   Duration  90.52s (transform 22.94s, setup 0ms, import 146.29s, tests 177.24s, environment 197.37s)
+ Test Files  278 passed (278)
+      Tests  2197 passed (2197)
+   Duration  157.60s (transform 28.45s, setup 0ms, import 517.38s, tests 474.77s, environment 90ms)
+ Test Files  1 passed (1)
+      Tests  27 passed (27)
+   Duration  48.35s (transform 926ms, setup 0ms, import 1.39s, tests 46.54s, environment 0ms)
+t-fleet-1","msg":"[source-watcher] Stopped"}
+{"level":30,"time":1791628610474,"pid":144267,"hostname":"agent-fleet-1","msg":"[profile-sync] stopped"}
+
+ Test Files  278 passed (278)
+      Tests  2197 passed (2197)
+   Start at  10:34:13
+   Duration  157.60s (transform 28.45s, setup 0ms, import 517.38s, tests 474.77s, environment 90ms)
+
+
+ RUN  v4.1.11 /persist/worktrees/t3/PrintPartner/helper-pr-125-land-ready/web/apps/server
+
+
+ Test Files  1 passed (1)
+      Tests  27 passed (27)
+   Start at  10:36:51
+   Duration  48.35s (transform 926ms, setup 0ms, import 1.39s, tests 46.54s, environment 0ms)
+
