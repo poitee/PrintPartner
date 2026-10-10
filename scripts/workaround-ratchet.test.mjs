@@ -303,6 +303,77 @@ test("tracks multiple heredocs declared on one line", () => {
   assert.equal(countText(source, "a.sh").todoComments, 1);
 });
 
+test("consumes complete shell heredoc delimiter words with quote removal", () => {
+  for (const word of ["END.txt", "'END'.txt", "END\\.txt", '"END.txt"']) {
+    const source = [`cat << ${word}`, "# TODO: body", "END.txt", "# TODO: real"].join("\n");
+    assert.equal(countText(source, "a.sh").todoComments, 1, word);
+  }
+});
+
+test("queues heredocs separated by fd prefixes and command tokens", () => {
+  for (const command of ["cat 3<<A 4<<B", "cat <<A /dev/stdin <<B"]) {
+    const source = [command, "# TODO: A", "A", "# TODO: B", "B", "# TODO: real"].join("\n");
+    assert.equal(countText(source, "a.sh").todoComments, 1, command);
+  }
+});
+
+test("does not enter ANSI-C quoting after an escaped dollar", () => {
+  const source = String.raw`echo \$'foo\' # TODO: real`;
+  assert.equal(countText(source, "a.sh").todoComments, 1);
+});
+
+test("starts heredoc bodies after the continued command ends", () => {
+  const source = [
+    "cat <<EOF \\",
+    "/dev/stdin # TODO: command",
+    "# TODO: body",
+    "EOF",
+    "# TODO: after",
+  ].join("\n");
+  assert.equal(countText(source, "a.sh").todoComments, 2);
+});
+
+test("fails closed on unterminated shell heredocs", () => {
+  for (const command of ["cat <<EOF", "cat <<A <<B\nA"]) {
+    assert.throws(() => countText(`${command}\n# TODO: hidden`, "broken.sh"),
+      /broken\.sh: unterminated shell heredoc at EOF/);
+  }
+});
+
+test("fails closed on unterminated shell strings", () => {
+  for (const opener of ['"', "'", "$'"]) {
+    assert.throws(() => countText(`echo ${opener}\n# TODO: hidden`, "broken.sh"),
+      /broken\.sh: unterminated shell (?:ansiCQuote|quote) at EOF/);
+  }
+});
+
+test("counts executable comments in quoted shell command substitutions", () => {
+  const source = [
+    'value="$(',
+    "# TODO: substitution",
+    'echo "$(echo nested # TODO: nested',
+    ')"',
+    ') # TODO: literal"',
+    "# TODO: after",
+  ].join("\n");
+  assert.equal(countText(source, "a.sh").todoComments, 3);
+});
+
+test("keeps shell here-strings separate from heredocs", () => {
+  const source = ['cat <<< "# TODO: literal"', "# TODO: real"].join("\n");
+  assert.equal(countText(source, "a.sh").todoComments, 1);
+});
+
+test("restricts Rust allow counts to emitted lint attributes", () => {
+  const source = [
+    "#[some_proc_macro(option(allow(foo)))]",
+    "#[cfg_attr(allow(condition), some_proc_macro(allow(foo)))]",
+    "#[cfg_attr(unix, allow(dead_code), allow(unused_variables))]",
+    "#[cfg_attr(unix, cfg_attr(feature = \"x\", allow(unused)), allow(dead_code))]",
+  ].join("\n");
+  assert.equal(countText(source, "a.rs").rustAllow, 4);
+});
+
 test("counts workaround markers inside nested Rust block comments", () => {
   const nested = "/* outer /* inner */ TODO hidden */";
   assert.deepEqual(countText(nested, "a.rs"), { todoComments: 1, eslintDisable: 0, rustAllow: 0 });

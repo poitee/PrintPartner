@@ -181,12 +181,6 @@ function heredocDelimiterMatches(line, { delimiter, stripTabs }) {
   return candidate === delimiter;
 }
 
-function shellQuoteEscaped(line, index) {
-  let backslashes = 0;
-  for (let i = index - 1; i >= 0 && line[i] === "\\"; i -= 1) backslashes += 1;
-  return backslashes % 2 === 1;
-}
-
 function shellArithmeticOpenerAt(line, index) {
   if (line.startsWith("$((", index)) return { kind: "dollar", length: 3, depth: 2 };
   if (line.startsWith("((", index)) return { kind: "double", length: 2, depth: 2 };
@@ -201,23 +195,27 @@ function parseShellHeredoc(line, index) {
     stripTabs = true;
     cursor += 1;
   }
-  let delimiter;
-  if (line[cursor] === "'") {
-    const end = line.indexOf("'", cursor + 1);
-    if (end === -1) return null;
-    delimiter = line.slice(cursor + 1, end);
-    cursor = end + 1;
-  } else if (line[cursor] === '"') {
-    const end = line.indexOf('"', cursor + 1);
-    if (end === -1) return null;
-    delimiter = line.slice(cursor + 1, end);
-    cursor = end + 1;
-  } else {
-    const match = /^[A-Za-z0-9_+-]+/.exec(line.slice(cursor));
-    if (!match) return null;
-    delimiter = match[0];
-    cursor += match[0].length;
+  cursor = skipShellWhitespace(line, cursor);
+  let delimiter = "";
+  let quote = null;
+  let hasWord = false;
+  while (cursor < line.length) {
+    const char = line[cursor];
+    if (!quote && /[\t ;|&()<>]/.test(char)) break;
+    hasWord = true;
+    if (char === quote) quote = null;
+    else if (!quote && (char === "'" || char === '"')) quote = char;
+    else if (char === "\\" && quote !== "'") {
+      const next = line[cursor + 1];
+      if (next === undefined) return null;
+      if (!quote || /[$`"\\]/.test(next)) {
+        delimiter += next;
+        cursor += 1;
+      } else delimiter += char;
+    } else delimiter += char;
+    cursor += 1;
   }
+  if (!hasWord || quote) return null;
   return { delimiter, stripTabs, endIndex: cursor };
 }
 
@@ -253,10 +251,33 @@ function countRustAllowMarkers(unquotedText) {
       continue;
     }
     const inner = unquotedText.slice(cursor + 1, close);
-    if (/\ballow\s*\(/.test(inner)) count += 1;
+    count += countRustAllowMeta(inner);
     index = close + 1;
   }
   return count;
+}
+
+function countRustAllowMeta(meta) {
+  if (/^\s*allow\s*\(/.test(meta)) return 1;
+  const cfg = /^\s*cfg_attr\s*\(/.exec(meta);
+  if (!cfg) return 0;
+  const open = cfg[0].length - 1;
+  const close = findMatchingBracket(meta, open, "(", ")");
+  if (close === -1) return 0;
+  const args = [];
+  let start = open + 1;
+  let depth = 0;
+  for (let index = start; index < close; index += 1) {
+    if ("([{".includes(meta[index])) depth += 1;
+    else if (")]}".includes(meta[index])) depth -= 1;
+    else if (meta[index] === "," && depth === 0) {
+      args.push(meta.slice(start, index));
+      start = index + 1;
+    }
+  }
+  args.push(meta.slice(start, close));
+  // The first cfg_attr argument is a condition, not an emitted attribute.
+  return args.slice(1).reduce((count, arg) => count + countRustAllowMeta(arg), 0);
 }
 
 function skipShellWhitespace(line, index) {
@@ -264,44 +285,7 @@ function skipShellWhitespace(line, index) {
   return index;
 }
 
-function startShellHeredocState(line, index, resume) {
-  const first = parseShellHeredoc(line, index);
-  if (!first) return null;
-  const queue = [];
-  let endIndex = first.endIndex;
-  while (true) {
-    endIndex = skipShellWhitespace(line, endIndex);
-    const next = parseShellHeredoc(line, endIndex);
-    if (!next) break;
-    queue.push({ delimiter: next.delimiter, stripTabs: next.stripTabs });
-    endIndex = next.endIndex;
-  }
-  return {
-    endIndex,
-    state: {
-      kind: "heredoc",
-      delimiter: first.delimiter,
-      stripTabs: first.stripTabs,
-      queue,
-      resume,
-    },
-  };
-}
-
-function advanceShellHeredocState(state) {
-  const queue = state.queue ?? [];
-  if (queue.length === 0) return state.resume;
-  const next = queue[0];
-  return {
-    kind: "heredoc",
-    delimiter: next.delimiter,
-    stripTabs: next.stripTabs,
-    queue: queue.slice(1),
-    resume: state.resume,
-  };
-}
-
-function scanLine(line, syntax, initialState) {
+function scanLine(line, syntax, initialState, shell) {
   const commentText = Array(line.length).fill(" ");
   const unquotedCodeText = Array(line.length).fill(" ");
   let state = initialState;
@@ -330,7 +314,11 @@ function scanLine(line, syntax, initialState) {
     }
 
     if (state.kind === "quote") {
-      if (line.startsWith(state.close, index)) {
+      if (syntax.line === "shellHash" && state.close === '"' &&
+          line.startsWith("$(", index) && !line.startsWith("$((", index)) {
+        index += 2;
+        state = { kind: "shellSubst", depth: 1, resume: state };
+      } else if (line.startsWith(state.close, index)) {
         index += state.close.length;
         state = state.resume;
       } else {
@@ -371,21 +359,45 @@ function scanLine(line, syntax, initialState) {
     }
 
     if (syntax.line === "shellHash") {
+      // Escapes apply to all tokens, including $' and comment introducers.
+      if (line[index] === "\\") {
+        if (index === line.length - 1) shell.continued = true;
+        index += 2;
+        continue;
+      }
       const arith = shellArithmeticOpenerAt(line, index);
       if (arith) {
         index += arith.length;
         state = { kind: "shellArith", depth: arith.depth, resume: state };
         continue;
       }
+      if (line.startsWith("$(", index)) {
+        index += 2;
+        state = { kind: "shellSubst", depth: 1, resume: state };
+        continue;
+      }
+      if (state.kind === "shellSubst") {
+        if (line[index] === "(") state = { ...state, depth: state.depth + 1 };
+        else if (line[index] === ")") {
+          const depth = state.depth - 1;
+          state = depth === 0 ? state.resume : { ...state, depth };
+          index += 1;
+          continue;
+        }
+      }
       if (line[index] === "$" && line[index + 1] === "'") {
         index += 2;
         state = { kind: "ansiCQuote", resume: state };
         continue;
       }
-      const heredoc = startShellHeredocState(line, index, state);
+      if (line.startsWith("<<<", index)) {
+        index += 3;
+        continue;
+      }
+      const heredoc = parseShellHeredoc(line, index);
       if (heredoc) {
+        shell.pending.push(heredoc);
         index = heredoc.endIndex;
-        state = heredoc.state;
         continue;
       }
     }
@@ -406,8 +418,7 @@ function scanLine(line, syntax, initialState) {
       }
     }
 
-    let quote = (!syntax.html || state.kind === "htmlTag") && quoteAt(line, index, syntax);
-    if (quote && syntax.line === "shellHash" && shellQuoteEscaped(line, index)) quote = null;
+    const quote = (!syntax.html || state.kind === "htmlTag") && quoteAt(line, index, syntax);
     if (quote) {
       index += quote.open.length;
       state = {
@@ -435,16 +446,28 @@ function countNonJavaScriptText(text, path) {
   const syntax = syntaxFor(path);
   let state = CODE_STATE;
   const unquotedLines = [];
+  const shell = { pending: [], continued: false };
+  let readingHeredocs = false;
   for (const line of text.split("\n")) {
-    if (state.kind === "heredoc") {
-      if (heredocDelimiterMatches(line, state)) state = advanceShellHeredocState(state);
+    if (readingHeredocs) {
+      if (heredocDelimiterMatches(line, shell.pending[0])) shell.pending.shift();
+      readingHeredocs = shell.pending.length > 0;
       continue;
     }
-    const scanned = scanLine(line, syntax, state);
+    shell.continued = false;
+    const scanned = scanLine(line, syntax, state, shell);
     state = scanned.state;
+    if (syntax.line === "shellHash" && !shell.continued &&
+        (state.kind === "code" || state.kind === "shellSubst")) {
+      readingHeredocs = shell.pending.length > 0;
+    }
     unquotedLines.push(scanned.unquotedCodeText);
     if (MARKERS.todoComments.test(scanned.commentText)) counts.todoComments += 1;
     if (MARKERS.eslintDisable.test(scanned.commentText)) counts.eslintDisable += 1;
+  }
+  if (syntax.line === "shellHash" && (state.kind !== "code" || shell.pending.length > 0)) {
+    const construct = shell.pending.length > 0 ? "heredoc" : state.kind;
+    throw new Error(`Workaround ratchet could not parse ${path}: unterminated shell ${construct} at EOF`);
   }
   if (syntax.rustAllow) counts.rustAllow = countRustAllowMarkers(unquotedLines.join("\n"));
   return counts;
