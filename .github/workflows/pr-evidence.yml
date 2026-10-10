@@ -1,0 +1,27 @@
+name: PR evidence
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  lint-pr-body:
+    name: Lint Evidence block
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+      - name: Unit-test PR evidence lint
+        run: node --test scripts/lint-pr-evidence.test.mjs
+      - name: Lint pull request Evidence block
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: node scripts/lint-pr-evidence.mjs
