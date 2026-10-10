@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, ensure};
 use pp_core::{CoreHandle, CoreRuntime, CoreStatus};
-use pp_desktop::{AllowedOrigin, ResourceLayout};
+use pp_desktop::{AllowedOrigin, ResourceLayout, desktop_data_dir, startup_diagnostic};
 use std::path::PathBuf;
 use tauri::{
     Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent,
@@ -13,10 +13,10 @@ fn main() -> std::process::ExitCode {
     match run() {
         Ok(code) => std::process::ExitCode::from(code),
         Err(error) => {
+            eprintln!("{}", startup_diagnostic(&error));
             if cfg!(debug_assertions)
                 && std::env::args().any(|argument| argument == "--test-exit-seconds")
             {
-                eprintln!("{}", error);
                 return std::process::ExitCode::FAILURE;
             }
             rfd::MessageDialog::new().set_title("Print Partner could not start")
@@ -32,7 +32,9 @@ fn run() -> Result<u8> {
         .enable_all()
         .build()?;
     tauri::async_runtime::set(runtime.handle().clone());
-    let app = tauri::Builder::default().build(tauri::generate_context!())?;
+    let app = tauri::Builder::default()
+        .build(tauri::generate_context!())
+        .context("Native shell initialization failed")?;
     let mut args = std::env::args().skip(1);
     let mut stage = None;
     let mut data = None;
@@ -73,9 +75,20 @@ fn run() -> Result<u8> {
             }
         }
     };
-    let data = data.unwrap_or(app.path().app_local_data_dir()?.join("core"));
-    let launch = ResourceLayout::read(&stage)?.into_launch(data)?;
-    let mut core = runtime.block_on(CoreRuntime::start(launch))?;
+    let data = match data {
+        Some(data) => data,
+        None => desktop_data_dir(
+            &app.path()
+                .home_dir()
+                .context("Desktop home directory unavailable")?,
+        )?,
+    };
+    let launch = ResourceLayout::read(&stage)
+        .and_then(|layout| layout.into_launch(data))
+        .context("Desktop resource verification failed")?;
+    let mut core = runtime
+        .block_on(CoreRuntime::start(launch))
+        .context("Desktop core startup failed")?;
     let setup = (|| -> Result<_> {
         let origin = AllowedOrigin::parse(core.origin())?;
         let url = core.take_launch_target()?.into_url().parse()?;
