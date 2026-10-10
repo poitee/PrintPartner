@@ -13,20 +13,39 @@ impl Directory {
         if !path.is_absolute() {
             return Err(Error::UnsafePath);
         }
-        let mut root = Self(File::from(fs::open(
-            "/",
-            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
-            Mode::empty(),
-        )?));
+        let mut names = Vec::new();
         for component in path.components() {
             match component {
                 Component::RootDir => {}
                 Component::Normal(name) => {
-                    let name = name.to_str().ok_or(Error::UnsafePath)?;
-                    root = root.child(name, false)?;
+                    names.push(name.to_str().ok_or(Error::UnsafePath)?);
                 }
                 _ => return Err(Error::UnsafePath),
             }
+        }
+        // Ancestors need only search permission; O_RDONLY would require them to be
+        // listable (e.g. fails on execute-only /home). Use O_PATH until the leaf.
+        let mut root = Self(File::from(fs::open(
+            "/",
+            if names.is_empty() {
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC
+            } else {
+                OFlags::PATH | OFlags::DIRECTORY | OFlags::CLOEXEC
+            },
+            Mode::empty(),
+        )?));
+        for (index, name) in names.iter().enumerate() {
+            let flags = if index + 1 == names.len() {
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC
+            } else {
+                OFlags::PATH | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC
+            };
+            root = Self(File::from(fs::openat(
+                &root.0,
+                *name,
+                flags,
+                Mode::empty(),
+            )?));
         }
         Ok(root)
     }
