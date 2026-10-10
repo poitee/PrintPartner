@@ -4244,7 +4244,22 @@ fn checklist_legacy_claimless_reconciliation_refuses_without_mutation() {
     );
     assert_eq!(before.state, PersistentState::ReconciliationRequired);
     assert_eq!(before.effects.len(), 1);
-    let before_history = history(&owner, &queued.job_id);
+    let read_history = || match session_call(
+        &owner,
+        policy(),
+        &token,
+        UserOperation::History {
+            job_id: queued.job_id.clone(),
+            before_version: None,
+            limit: 200,
+        },
+    )
+    .unwrap()
+    {
+        Outcome::History(entries) => entries,
+        _ => panic!("history"),
+    };
+    let before_history = read_history();
     let error = session_call(
         &owner,
         policy(),
@@ -4284,7 +4299,7 @@ fn checklist_legacy_claimless_reconciliation_refuses_without_mutation() {
     assert_eq!(after.public_result, before.public_result);
     assert_eq!(after.recovery, before.recovery);
     assert_eq!(
-        serde_json::to_value(history(&owner, &queued.job_id)).unwrap(),
+        serde_json::to_value(read_history()).unwrap(),
         serde_json::to_value(before_history).unwrap()
     );
     owner.shutdown().unwrap();
