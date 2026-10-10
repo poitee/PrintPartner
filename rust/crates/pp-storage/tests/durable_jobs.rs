@@ -29,7 +29,7 @@ fn policy() -> AuthPolicy {
 fn fixture() -> (PathBuf, WriterOwner) {
     let path = directory();
     let (owner, ready) = WriterOwner::open(&path, Limits::default()).unwrap();
-    assert_eq!(ready.version, 40);
+    assert_eq!(ready.version, 42);
     (path, owner)
 }
 fn admission() -> WorkerAdmission {
