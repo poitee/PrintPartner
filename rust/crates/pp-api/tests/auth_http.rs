@@ -249,6 +249,10 @@ async fn registration_race_and_owner_policy_are_transactional() {
         .json()
         .await
         .unwrap();
+    assert_eq!(
+        health["degraded_detail"],
+        "Explicit account owner mapping is required"
+    );
     assert_eq!(health["owner_mapping_required"], true);
     assert_eq!(health["authenticated"], false);
     server.close().await;
@@ -948,6 +952,8 @@ async fn stopped_writer_is_service_unavailable() {
         ..
     } = server;
     owner.shutdown().unwrap();
+    let health = client.get(format!("{origin}/health")).send().await.unwrap();
+    assert_eq!(health.status(), 503);
     let response = client
         .post(format!("{origin}/auth/login"))
         .header("Origin", &origin)
@@ -963,4 +969,78 @@ async fn stopped_writer_is_service_unavailable() {
     shutdown.send(()).unwrap();
     task.await.unwrap();
     std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[tokio::test]
+async fn me_reports_password_presence_independent_of_session_provider() {
+    let server = Server::start(RegistrationPolicy::Open, false, false, None).await;
+    let password_cookie = cookie(&server.register("password@example.com").await);
+    let Outcome::Session {
+        token: oauth_token, ..
+    } = call(
+        &server.auth,
+        Request::OAuthLogin {
+            provider: Provider::Github,
+            provider_user_id: "oauth-only".into(),
+            email: Some("oauth-only@example.com".into()),
+            display_name: "OAuth only".into(),
+        },
+    )
+    .await
+    .unwrap()
+    else {
+        panic!()
+    };
+    let linked_cookie = cookie(&server.register("linked@example.com").await);
+    call(
+        &server.auth,
+        Request::LinkIdentity {
+            session: secret(linked_cookie.strip_prefix("pp_session=").unwrap()),
+            provider: Provider::Github,
+            provider_user_id: "linked".into(),
+        },
+    )
+    .await
+    .unwrap();
+    let Outcome::Session {
+        token: linked_token,
+        ..
+    } = call(
+        &server.auth,
+        Request::OAuthLogin {
+            provider: Provider::Github,
+            provider_user_id: "linked".into(),
+            email: Some("linked@example.com".into()),
+            display_name: "Linked".into(),
+        },
+    )
+    .await
+    .unwrap()
+    else {
+        panic!()
+    };
+    for (cookie, provider, has_password) in [
+        (password_cookie, "email", true),
+        (
+            format!("pp_session={}", oauth_token.expose()),
+            "github",
+            false,
+        ),
+        (
+            format!("pp_session={}", linked_token.expose()),
+            "github",
+            true,
+        ),
+    ] {
+        let response = server
+            .request(Method::GET, "/auth/me", None, Some(&cookie))
+            .await;
+        assert_eq!(response.status(), 200);
+        let body: Value = response.json().await.unwrap();
+        assert_eq!(body["user"]["provider"], provider);
+        assert_eq!(body["user"]["hasPassword"], has_password);
+        assert!(body["user"].get("hash").is_none());
+        assert!(body["user"].get("password_hash").is_none());
+    }
+    server.close().await;
 }

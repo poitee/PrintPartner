@@ -67,6 +67,7 @@ pub struct User {
     pub email: Option<String>,
     pub provider: Provider,
     pub is_admin: bool,
+    pub has_password: bool,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -618,6 +619,7 @@ fn read_user(row: &rusqlite::Row<'_>) -> rusqlite::Result<Credential> {
             email,
             provider: Provider::Email,
             is_admin: row.get(4)?,
+            has_password: row.get::<_, Option<String>>(3)?.is_some(),
         },
         hash: row.get(3)?,
     })

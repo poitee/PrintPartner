@@ -460,28 +460,32 @@ async fn change(
     .await?;
     session_response(&app, outcome, true, true)
 }
+fn health_auth(outcome: Result<Outcome, Failure>) -> Result<(bool, Option<&'static str>), Failure> {
+    match outcome {
+        Ok(Outcome::User(user)) => Ok((user.is_some(), None)),
+        // Authentication/policy rejection is degraded auth, not failed liveness.
+        Err(Failure(status, detail)) if status.is_client_error() => Ok((false, Some(detail))),
+        Err(error) => Err(error),
+        Ok(_) => unreachable!(),
+    }
+}
 async fn health(State(app): State<App>, headers: HeaderMap) -> Result<Response, Failure> {
     let Outcome::Status(status) = invoke(&app.auth, Request::Status).await? else {
         unreachable!()
     };
-    let authenticated = if let Some(token) = wire::cookie(&headers, "pp_session") {
-        match invoke(
-            &app.auth,
-            Request::ResolveSession {
-                token: Secret::new(token),
-            },
-        )
-        .await
-        {
-            Ok(Outcome::User(user)) => user.is_some(),
-            Err(Failure(StatusCode::FORBIDDEN, "Explicit account owner mapping is required")) => {
-                false
-            }
-            Err(error) => return Err(error),
-            Ok(_) => unreachable!(),
-        }
+    let (authenticated, degraded_detail) = if let Some(token) = wire::cookie(&headers, "pp_session")
+    {
+        health_auth(
+            invoke(
+                &app.auth,
+                Request::ResolveSession {
+                    token: Secret::new(token),
+                },
+            )
+            .await,
+        )?
     } else {
-        false
+        (false, None)
     };
     let mut capabilities = Vec::new();
     if app.providers.configured(Provider::Github) {
@@ -491,7 +495,7 @@ async fn health(State(app): State<App>, headers: HeaderMap) -> Result<Response, 
         capabilities.push("discord_oauth");
     }
     Ok(wire::json_response(
-        json!({"authentication_required":true,"authenticated":authenticated,"capabilities":capabilities,"multi_user":app.config.multi_user,"single_user_auth":status.single_user_auth,"single_user_setup_required":status.single_user_setup_required,"registration_open":status.registration_open,"owner_mapping_required":status.owner_mapping_required,"github_oauth_configured":app.providers.configured(Provider::Github),"discord_oauth_configured":app.providers.configured(Provider::Discord)}),
+        json!({"ok":true,"authentication_required":true,"authenticated":authenticated,"degraded_detail":degraded_detail,"capabilities":capabilities,"multi_user":app.config.multi_user,"single_user_auth":status.single_user_auth,"single_user_setup_required":status.single_user_setup_required,"registration_open":status.registration_open,"owner_mapping_required":status.owner_mapping_required,"github_oauth_configured":app.providers.configured(Provider::Github),"discord_oauth_configured":app.providers.configured(Provider::Discord)}),
     ))
 }
 async fn keys(State(app): State<App>, headers: HeaderMap) -> Result<Response, Failure> {
@@ -560,5 +564,40 @@ async fn revoke_key(
             Ok(wire::json_response(json!({"success":true})))
         }
         _ => Err(Failure(StatusCode::NOT_FOUND, "API key not found")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pp_storage::auth::{AuthFailure, AuthInputFailure};
+
+    #[test]
+    fn health_keeps_policy_rejections_degraded_and_runtime_failures_fatal() {
+        for error in [
+            AuthFailure::RegistrationClosed,
+            AuthFailure::SingleAccountExists,
+            AuthFailure::OwnerMappingRequired,
+            AuthFailure::InvalidInput(AuthInputFailure::Policy),
+            AuthFailure::InvalidCredentials,
+            AuthFailure::SessionRequired,
+            AuthFailure::CurrentPasswordIncorrect,
+            AuthFailure::OAuthOnlyAccount,
+            AuthFailure::DuplicateEmail,
+            AuthFailure::CredentialChanged,
+        ] {
+            let (authenticated, detail) =
+                health_auth(Err(Failure::from(anyhow::Error::new(error)))).unwrap();
+            assert!(!authenticated);
+            assert!(detail.is_some());
+        }
+        for error in [
+            AuthFailure::Storage,
+            AuthFailure::Stopped,
+            AuthFailure::QueueFull,
+            AuthFailure::CommitUnknown,
+        ] {
+            assert!(health_auth(Err(Failure::from(anyhow::Error::new(error)))).is_err());
+        }
     }
 }

@@ -176,8 +176,28 @@ async fn smtp_delivers_real_envelope_subject_link_and_reports_uncertain_send() {
     }
 }
 
+struct CapturedLogs(Mutex<Vec<String>>);
+static LOGS: CapturedLogs = CapturedLogs(Mutex::new(Vec::new()));
+impl log::Log for CapturedLogs {
+    fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
+        metadata.target() == "pp_api::reset_mail"
+    }
+    fn log(&self, record: &log::Record<'_>) {
+        if self.enabled(record.metadata()) {
+            self.0
+                .lock()
+                .unwrap()
+                .push(format!("{} {}", record.level(), record.args()));
+        }
+    }
+    fn flush(&self) {}
+}
+
 #[tokio::test]
 async fn smtp_http_failure_keeps_committed_token_without_enumeration_or_retry() {
+    log::set_logger(&LOGS).unwrap();
+    log::set_max_level(log::LevelFilter::Warn);
+    let mut baseline = None;
     for mode in [Mode::Success, Mode::Reject, Mode::DropAfterData] {
         let fake = SmtpFake::start(mode).await;
         let directory = directory();
@@ -236,19 +256,38 @@ async fn smtp_http_failure_keeps_committed_token_without_enumeration_or_retry() 
             .await
             .unwrap();
         assert_eq!(known.status(), 200);
-        let known: Value = known.json().await.unwrap();
-        let unknown: Value = client
+        let known = known.bytes().await.unwrap();
+        let unknown = client
             .post(format!("{origin}/auth/forgot-password"))
             .header("Origin", &origin)
             .json(&json!({"email":"unknown@example.com"}))
             .send()
             .await
             .unwrap()
-            .json()
+            .bytes()
             .await
             .unwrap();
         assert_eq!(known, unknown);
-        assert!(known.get("dev_reset_url").is_none());
+        if let Some(baseline) = &baseline {
+            assert_eq!(&known, baseline);
+        } else {
+            baseline = Some(known.clone());
+        }
+        assert!(
+            serde_json::from_slice::<Value>(&known)
+                .unwrap()
+                .get("dev_reset_url")
+                .is_none()
+        );
+        if matches!(mode, Mode::Reject) {
+            let logs = LOGS.0.lock().unwrap();
+            assert!(logs.iter().any(|line| line.contains(
+                "WARN Password reset mail delivery failed; provider=smtp error_class=smtp_permanent"
+            )));
+            assert!(logs.iter().all(|line| !line.contains('@')
+                && !line.contains("token=")
+                && !line.contains("canonical.example")));
+        }
         assert_eq!(fake.connections.load(Ordering::Relaxed), 1);
         let token = {
             let messages = fake.messages.lock().unwrap();

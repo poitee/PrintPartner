@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 pp-storage = { path = "../pp-storage" }
 anyhow.workspace = true
+log = "=0.4.34"
 axum.workspace = true
 tokio.workspace = true
 serde.workspace = true
