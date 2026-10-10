@@ -408,7 +408,8 @@ impl Payload {
             | Self::SuppliedSourceImport { project_id, .. } => {
                 format!("source:{project_id}")
             }
-            Self::Sync { .. } | Self::CheckSourceUpdates {} => "source:*".into(),
+            Self::CheckSourceUpdates {} => "source:*".into(),
+            Self::Sync { .. } => String::new(),
             _ => String::new(),
         }
     }
@@ -484,6 +485,8 @@ pub struct EffectReceipt {
     #[serde(default, skip_serializing_if = "is_false")]
     pub no_effect: bool,
     pub receipt: Option<ResultArtifact>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) checklist_completion: Option<Box<ChecklistCompletionClaim>>,
 }
 fn is_false(value: &bool) -> bool {
     !*value
@@ -650,6 +653,26 @@ pub struct ChecklistHtmlResult {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ChecklistCompletionClaim {
+    pub(super) version: u8,
+    pub(super) attempt: i64,
+    pub(super) generation: i64,
+    pub(super) tenant_binding: String,
+    pub(super) capture: ChecklistCaptureSeal,
+    pub(super) content_sha256: String,
+    pub(super) tenant_relative_target: String,
+    pub(super) result: ChecklistHtmlResult,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ChecklistCaptureSeal {
+    pub(super) capture_id: String,
+    pub(super) accepted_basis: Option<ExportBasis>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct KitBundleResult {
     pub path: String,
     pub download_url: Option<String>,
@@ -718,7 +741,7 @@ pub struct PrinterUploadResult {
     pub checkoff_units: u64,
 }
 impl ResultArtifact {
-    pub(super) fn validate(&self) -> Result<()> {
+    pub(crate) fn validate(&self) -> Result<()> {
         text(&self.receipt_id, 128)?;
         digest(&self.content_hash)?;
         text(&self.target, 1024)
@@ -846,6 +869,7 @@ impl JobRecord {
                 "Denied effect requires terminal job"
             );
         }
+        super::checklist::validate_claims(self)?;
         ensure!(
             self.state != PersistentState::UploadedOnly || self.uploaded_only_proof().is_some(),
             "Invalid uploaded-only job"

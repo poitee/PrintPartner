@@ -5,6 +5,7 @@ pub mod native_secrets;
 pub mod profile_interpreter;
 pub mod review_observations;
 pub mod source_acquisition;
+pub mod source_sync;
 pub mod uploads;
 use anyhow::{Context, Result, bail};
 use pp_compat::{Bundle, CompatHandle, SpawnSpec, Supervisor};

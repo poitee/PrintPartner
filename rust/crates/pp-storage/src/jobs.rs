@@ -1,3 +1,4 @@
+mod checklist;
 mod filename;
 mod model;
 mod subscriptions;
@@ -80,6 +81,9 @@ impl AttemptLease {
     pub(crate) fn generation(&self) -> i64 {
         self.generation
     }
+    pub(crate) fn version(&self) -> i64 {
+        self.version
+    }
     pub(crate) fn tenant(&self) -> &str {
         &self.tenant
     }
@@ -141,7 +145,6 @@ pub enum UserOperation {
         before_version: Option<i64>,
         limit: u16,
     },
-    /// A cancelled supplied import stays queued until the prior Source lease is released.
     Cancel {
         job_id: String,
     },
@@ -183,6 +186,13 @@ pub enum Outcome {
     LocalScanCompletion(crate::source_scan::LocalCompletionInspection),
     HeldLocalScan(crate::source_scan::HeldLocalScanInspection),
     LocalScanReconciled(JobRecord),
+    SourceSyncOpened,
+    SourceSyncTarget(Option<crate::source_sync::TargetCandidate>, i64),
+    SourceSyncBound(crate::source_sync::BoundTarget),
+    SourceSyncInspection(crate::source_sync::SyncTargetInspection, Option<i64>),
+    SourceSyncFinish(crate::source_sync::SourceSyncFinishOutcome, LocalCommit),
+    SourceSyncRecovery(crate::source_sync::SyncRecoveryInspection),
+    SourceSyncHalted(JobRecord),
 }
 
 enum TransactionDecision {
@@ -304,6 +314,70 @@ pub(crate) enum Command {
         source_work: crate::catalog::SourceWorkProof,
         applied: crate::source_scan::LocalScanApplied,
         reason: String,
+    },
+    OpenSourceSync {
+        lease: AttemptLease,
+        policy: AuthPolicy,
+    },
+    NextSourceSyncTarget {
+        lease: AttemptLease,
+        policy: AuthPolicy,
+    },
+    BindSourceSyncTarget {
+        lease: AttemptLease,
+        key: crate::source_sync::SyncTargetKey,
+        source_work: crate::catalog::SourceWorkProof,
+        policy: AuthPolicy,
+    },
+    SettleSourceSyncTarget {
+        lease: AttemptLease,
+        key: crate::source_sync::SyncTargetKey,
+        source_work: crate::catalog::SourceWorkProof,
+        claim_generation: i64,
+        policy: AuthPolicy,
+        settlement: crate::source_scan::LocalScanSettlement,
+    },
+    FailSourceSyncTarget {
+        lease: AttemptLease,
+        key: crate::source_sync::SyncTargetKey,
+        source_work: crate::catalog::SourceWorkProof,
+        claim_generation: i64,
+        policy: AuthPolicy,
+        detail: String,
+    },
+    AcknowledgeSourceSyncTarget {
+        lease: AttemptLease,
+        key: crate::source_sync::SyncTargetKey,
+        source_work: crate::catalog::SourceWorkProof,
+        claim_generation: i64,
+        observation: crate::source_scan::LocalScanObservation,
+        policy: AuthPolicy,
+    },
+    AdoptSourceSyncTarget {
+        lease: AttemptLease,
+        key: crate::source_sync::SyncTargetKey,
+        policy: AuthPolicy,
+    },
+    InspectSourceSyncTarget {
+        lease: AttemptLease,
+        key: crate::source_sync::SyncTargetKey,
+        policy: AuthPolicy,
+    },
+    FinishSourceSync {
+        lease: AttemptLease,
+        policy: AuthPolicy,
+    },
+    InspectRetainedSourceSync {
+        credential: Credential,
+        policy: AuthPolicy,
+        job_id: String,
+        expected_version: i64,
+        storage: Arc<crate::Shared>,
+    },
+    HaltSourceSync {
+        lease: AttemptLease,
+        halt: crate::source_sync::SourceSyncHalt,
+        detail: String,
     },
     Observe {
         credential: Credential,
@@ -573,7 +647,347 @@ impl AtomicJobClient {
             _ => unreachable!(),
         }
     }
+
+    pub fn inspect_source_sync_recovery(
+        &self,
+        credential: Credential,
+        job_id: String,
+        expected_version: i64,
+        cancelled: &AtomicBool,
+        wait: Duration,
+    ) -> Result<crate::source_sync::SyncRecoveryInspection> {
+        match submit(
+            &self.storage,
+            Command::InspectRetainedSourceSync {
+                credential,
+                policy: self.policy,
+                job_id,
+                expected_version,
+                storage: self.storage.shared.clone(),
+            },
+            cancelled,
+            wait,
+        )?
+        .receive()?
+        {
+            Outcome::SourceSyncRecovery(value) => Ok(value),
+            _ => unreachable!(),
+        }
+    }
 }
+impl ServerWorkerClient {
+    pub fn open_source_sync(&self, lease: &AttemptLease) -> Result<()> {
+        ensure!(lease.worker == self.identity, "Foreign worker lease");
+        let policy = self.policy.ok_or(auth::AuthorityFailure::PolicyRequired)?;
+        match submit(
+            &self.storage,
+            Command::OpenSourceSync {
+                lease: lease.clone(),
+                policy,
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?
+        .receive()?
+        {
+            Outcome::SourceSyncOpened => Ok(()),
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn claim_next_source_sync_target(
+        &self,
+        lease: &mut AttemptLease,
+    ) -> Result<crate::source_sync::NextSyncTarget> {
+        ensure!(lease.worker == self.identity, "Foreign worker lease");
+        let policy = self.policy.ok_or(auth::AuthorityFailure::PolicyRequired)?;
+        let (candidate, version) = match submit(
+            &self.storage,
+            Command::NextSourceSyncTarget {
+                lease: lease.clone(),
+                policy,
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?
+        .receive()?
+        {
+            Outcome::SourceSyncTarget(candidate, version) => (candidate, version),
+            _ => unreachable!(),
+        };
+        lease.version = version;
+        let Some(candidate) = candidate else {
+            return Ok(crate::source_sync::NextSyncTarget::Complete);
+        };
+        if candidate.source_id == 0 {
+            return Ok(crate::source_sync::NextSyncTarget::OrdinaryFailure(
+                self.inspect_source_sync_target(lease, candidate.key)?,
+            ));
+        }
+        if candidate.source_id < 0 {
+            if candidate.source_id == -2 {
+                return self
+                    .adopt_source_sync_target(lease, candidate.key)
+                    .map(crate::source_sync::NextSyncTarget::Recovered);
+            }
+            return Ok(crate::source_sync::NextSyncTarget::Halted);
+        }
+        let mut source_work = crate::catalog::begin_sync_target_work(
+            &self.storage,
+            lease.clone(),
+            candidate.key.clone(),
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?;
+        let proof = source_work.proof()?;
+        let bound = match submit(
+            &self.storage,
+            Command::BindSourceSyncTarget {
+                lease: lease.clone(),
+                key: candidate.key,
+                source_work: proof,
+                policy,
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?
+        .receive()
+        {
+            Ok(Outcome::SourceSyncBound(bound)) => bound,
+            Ok(_) => unreachable!(),
+            Err(error) => {
+                let _ = source_work.release();
+                return Err(error);
+            }
+        };
+        Ok(crate::source_sync::NextSyncTarget::Local(
+            crate::source_sync::SyncTargetLease {
+                key: bound.key,
+                source_work,
+                observation: bound.observation,
+                claim_generation: bound.claim_generation,
+            },
+        ))
+    }
+
+    pub fn settle_source_sync_target(
+        &self,
+        lease: &mut AttemptLease,
+        target: &mut crate::source_sync::SyncTargetLease,
+        settlement: crate::source_scan::LocalScanSettlement,
+    ) -> Result<crate::source_sync::SyncTargetInspection> {
+        ensure!(lease.worker == self.identity, "Foreign worker lease");
+        let policy = self.policy.ok_or(auth::AuthorityFailure::PolicyRequired)?;
+        let proof = target.source_work.proof()?;
+        let (inspection, version) = match submit(
+            &self.storage,
+            Command::SettleSourceSyncTarget {
+                lease: lease.clone(),
+                key: target.key.clone(),
+                source_work: proof.clone(),
+                claim_generation: target.claim_generation,
+                policy,
+                settlement,
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?
+        .receive()?
+        {
+            Outcome::SourceSyncInspection(inspection, Some(version)) => (inspection, version),
+            _ => unreachable!(),
+        };
+        lease.version = version;
+        if inspection == crate::source_sync::SyncTargetInspection::ReconciliationRequired {
+            target.source_work.release()?;
+            return Ok(inspection);
+        }
+        target.source_work.release()?;
+        match submit(
+            &self.storage,
+            Command::AcknowledgeSourceSyncTarget {
+                lease: lease.clone(),
+                key: target.key.clone(),
+                source_work: proof,
+                claim_generation: target.claim_generation,
+                observation: target.observation.clone(),
+                policy,
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?
+        .receive()?
+        {
+            Outcome::SourceSyncInspection(acknowledged, Some(version)) => {
+                lease.version = version;
+                if acknowledged == crate::source_sync::SyncTargetInspection::ReconciliationRequired
+                {
+                    return Ok(acknowledged);
+                }
+                ensure!(
+                    acknowledged == inspection,
+                    "Sync target acknowledgement changed outcome"
+                );
+                Ok(acknowledged)
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn fail_source_sync_target(
+        &self,
+        lease: &mut AttemptLease,
+        target: &mut crate::source_sync::SyncTargetLease,
+        detail: String,
+    ) -> Result<crate::source_sync::SyncTargetInspection> {
+        ensure!(lease.worker == self.identity, "Foreign worker lease");
+        let policy = self.policy.ok_or(auth::AuthorityFailure::PolicyRequired)?;
+        let proof = target.source_work.proof()?;
+        let (inspection, version) = match submit(
+            &self.storage,
+            Command::FailSourceSyncTarget {
+                lease: lease.clone(),
+                key: target.key.clone(),
+                source_work: proof.clone(),
+                claim_generation: target.claim_generation,
+                policy,
+                detail,
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?
+        .receive()?
+        {
+            Outcome::SourceSyncInspection(inspection, Some(version)) => (inspection, version),
+            _ => unreachable!(),
+        };
+        lease.version = version;
+        if inspection == crate::source_sync::SyncTargetInspection::ReconciliationRequired {
+            target.source_work.release()?;
+            return Ok(inspection);
+        }
+        target.source_work.release()?;
+        match submit(
+            &self.storage,
+            Command::AcknowledgeSourceSyncTarget {
+                lease: lease.clone(),
+                key: target.key.clone(),
+                source_work: proof,
+                claim_generation: target.claim_generation,
+                observation: target.observation.clone(),
+                policy,
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?
+        .receive()?
+        {
+            Outcome::SourceSyncInspection(inspection, Some(version)) => {
+                lease.version = version;
+                Ok(inspection)
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn inspect_source_sync_target(
+        &self,
+        lease: &AttemptLease,
+        key: crate::source_sync::SyncTargetKey,
+    ) -> Result<crate::source_sync::SyncTargetInspection> {
+        ensure!(lease.worker == self.identity, "Foreign worker lease");
+        let policy = self.policy.ok_or(auth::AuthorityFailure::PolicyRequired)?;
+        match submit(
+            &self.storage,
+            Command::InspectSourceSyncTarget {
+                lease: lease.clone(),
+                key,
+                policy,
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?
+        .receive()?
+        {
+            Outcome::SourceSyncInspection(inspection, None) => Ok(inspection),
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn adopt_source_sync_target(
+        &self,
+        lease: &mut AttemptLease,
+        key: crate::source_sync::SyncTargetKey,
+    ) -> Result<crate::source_sync::SyncTargetInspection> {
+        ensure!(lease.worker == self.identity, "Foreign worker lease");
+        let policy = self.policy.ok_or(auth::AuthorityFailure::PolicyRequired)?;
+        match submit(
+            &self.storage,
+            Command::AdoptSourceSyncTarget {
+                lease: lease.clone(),
+                key,
+                policy,
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?
+        .receive()?
+        {
+            Outcome::SourceSyncInspection(inspection, Some(version)) => {
+                lease.version = version;
+                Ok(inspection)
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn finish_source_sync(
+        &self,
+        lease: &AttemptLease,
+    ) -> Result<crate::source_sync::SourceSyncFinishOutcome> {
+        ensure!(lease.worker == self.identity, "Foreign worker lease");
+        let policy = self.policy.ok_or(auth::AuthorityFailure::PolicyRequired)?;
+        match submit(
+            &self.storage,
+            Command::FinishSourceSync {
+                lease: lease.clone(),
+                policy,
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?
+        .receive()?
+        {
+            Outcome::SourceSyncFinish(outcome, _) => Ok(outcome),
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn halt_source_sync(
+        &self,
+        lease: &AttemptLease,
+        halt: crate::source_sync::SourceSyncHalt,
+        detail: String,
+    ) -> Result<JobRecord> {
+        ensure!(lease.worker == self.identity, "Foreign worker lease");
+        match submit(
+            &self.storage,
+            Command::HaltSourceSync {
+                lease: lease.clone(),
+                halt,
+                detail,
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?
+        .receive()?
+        {
+            Outcome::SourceSyncHalted(job) => Ok(job),
+            _ => unreachable!(),
+        }
+    }
+}
+
 impl ServerWorkerClient {
     pub fn observe_local_scan(
         &self,
@@ -1066,6 +1480,36 @@ fn recover_in(tx: &Transaction<'_>, all: bool) -> Result<()> {
     let documents=tx.prepare("SELECT document FROM durable_jobs WHERE state IN ('running','effect_admitted') AND (?1 OR lease_until<=?2)")?.query_map(params![all,now()],|r|r.get::<_,String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
     for document in documents {
         let mut job: JobRecord = decode(&document)?;
+        if job.kind == JobKind::Sync {
+            let retained_evidence: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM source_sync_targets WHERE job_id=?1 AND (state='reconciliation_required' OR (state IN ('succeeded','failed') AND reservation_acknowledged=0)))",
+                [&job.job_id],
+                |row| row.get(0),
+            )?;
+            if retained_evidence {
+                crate::source_sync::halt_job(
+                    tx,
+                    job,
+                    "uncertain_target",
+                    "Source Sync recovery retained committed or reconciliation evidence",
+                )?;
+                continue;
+            }
+            if job.cancel_requested || job.attempt >= 100 || !job.effects.is_empty() {
+                let (code, detail) = if job.cancel_requested {
+                    ("cancelled", "Sync was cancelled during recovery")
+                } else if job.attempt >= 100 {
+                    ("fatal", "Source Sync attempt limit reached")
+                } else {
+                    (
+                        "uncertain_target",
+                        "Legacy generic Sync effect requires inspection",
+                    )
+                };
+                crate::source_sync::halt_job(tx, job, code, detail)?;
+                continue;
+            }
+        }
         job.generation += 1;
         job.fence = None;
         job.worker = None;
@@ -1285,6 +1729,183 @@ pub(crate) fn execute(
             &applied,
             &reason,
         )?),
+        Command::OpenSourceSync { lease, policy } => {
+            crate::source_sync::open(&tx, &lease, policy)?;
+            TransactionDecision::Outcome(Outcome::SourceSyncOpened)
+        }
+        Command::NextSourceSyncTarget { lease, policy } => {
+            let (target, version) = crate::source_sync::next(&tx, &lease, policy)?;
+            TransactionDecision::Outcome(Outcome::SourceSyncTarget(target, version))
+        }
+        Command::BindSourceSyncTarget {
+            lease,
+            key,
+            source_work,
+            policy,
+        } => TransactionDecision::Outcome(Outcome::SourceSyncBound(crate::source_sync::bind(
+            &tx,
+            catalog_state,
+            &lease,
+            &key,
+            &source_work,
+            policy,
+        )?)),
+        Command::SettleSourceSyncTarget {
+            lease,
+            key,
+            source_work,
+            claim_generation,
+            policy,
+            settlement,
+        } => {
+            let command = crate::source_sync::ClaimedSyncTargetCommand {
+                lease: &lease,
+                key: &key,
+                proof: &source_work,
+                claim_generation,
+                policy,
+            };
+            let result = crate::source_sync::settle(&tx, catalog_state, command, settlement)?;
+            TransactionDecision::Outcome(Outcome::SourceSyncInspection(
+                result.value,
+                Some(result.current_version),
+            ))
+        }
+        Command::FailSourceSyncTarget {
+            lease,
+            key,
+            source_work,
+            claim_generation,
+            policy,
+            detail,
+        } => {
+            let command = crate::source_sync::ClaimedSyncTargetCommand {
+                lease: &lease,
+                key: &key,
+                proof: &source_work,
+                claim_generation,
+                policy,
+            };
+            let result = crate::source_sync::fail(&tx, catalog_state, command, &detail)?;
+            TransactionDecision::Outcome(Outcome::SourceSyncInspection(
+                result.value,
+                Some(result.current_version),
+            ))
+        }
+        Command::AcknowledgeSourceSyncTarget {
+            lease,
+            key,
+            source_work,
+            claim_generation,
+            observation,
+            policy,
+        } => {
+            let command = crate::source_sync::ClaimedSyncTargetCommand {
+                lease: &lease,
+                key: &key,
+                proof: &source_work,
+                claim_generation,
+                policy,
+            };
+            let result =
+                crate::source_sync::acknowledge(&tx, catalog_state, command, &observation)?;
+            TransactionDecision::Outcome(Outcome::SourceSyncInspection(
+                result.value,
+                Some(result.current_version),
+            ))
+        }
+        Command::AdoptSourceSyncTarget { lease, key, policy } => {
+            let result = crate::source_sync::adopt(&tx, catalog_state, &lease, &key, policy)?;
+            TransactionDecision::Outcome(Outcome::SourceSyncInspection(
+                result.value,
+                Some(result.current_version),
+            ))
+        }
+        Command::InspectSourceSyncTarget { lease, key, policy } => {
+            TransactionDecision::Outcome(Outcome::SourceSyncInspection(
+                crate::source_sync::inspect(&tx, catalog_state, &lease, &key, policy)?,
+                None,
+            ))
+        }
+        Command::FinishSourceSync { lease, policy } => {
+            let result = crate::source_sync::finish(&tx, &lease, policy)?;
+            let outcome = crate::source_sync::SourceSyncFinishOutcome::Completed(Box::new(
+                crate::source_sync::CompletedSourceSync {
+                    job: result.job,
+                    aggregate: result.value,
+                },
+            ));
+            TransactionDecision::Outcome(Outcome::SourceSyncFinish(outcome, result.commit))
+        }
+        Command::InspectRetainedSourceSync {
+            credential,
+            policy,
+            job_id,
+            expected_version,
+            storage,
+        } => {
+            let (tenant, actor) = actor(&tx, credential, policy, &storage)?;
+            let job = owned(&tx, &job_id, &tenant)?;
+            let (subject, status) = match require_original_authority(&tx, &job, policy) {
+                Ok(authority) => (
+                    Some(authority.subject().to_owned()),
+                    crate::source_sync::OriginalAuthorityStatus::Valid,
+                ),
+                Err(error) => {
+                    let status = match error.downcast_ref::<auth::AuthorityFailure>() {
+                        Some(auth::AuthorityFailure::CredentialInvalid) => {
+                            crate::source_sync::OriginalAuthorityStatus::Refused(
+                                crate::source_sync::SyncAuthorityRefusal::CredentialInvalid,
+                            )
+                        }
+                        Some(auth::AuthorityFailure::PolicyChanged) => {
+                            crate::source_sync::OriginalAuthorityStatus::Refused(
+                                crate::source_sync::SyncAuthorityRefusal::PolicyChanged,
+                            )
+                        }
+                        Some(auth::AuthorityFailure::TenantChanged) => {
+                            crate::source_sync::OriginalAuthorityStatus::Refused(
+                                crate::source_sync::SyncAuthorityRefusal::TenantChanged,
+                            )
+                        }
+                        Some(auth::AuthorityFailure::SubjectChanged) => {
+                            crate::source_sync::OriginalAuthorityStatus::Refused(
+                                crate::source_sync::SyncAuthorityRefusal::SubjectChanged,
+                            )
+                        }
+                        Some(auth::AuthorityFailure::Missing) => {
+                            crate::source_sync::OriginalAuthorityStatus::Unavailable
+                        }
+                        _ => return Err(error),
+                    };
+                    (None, status)
+                }
+            };
+            let access = crate::source_sync::AuthorizedSyncRead::new(
+                job,
+                tenant,
+                actor,
+                expected_version,
+                subject,
+                status,
+            )?;
+            TransactionDecision::Outcome(Outcome::SourceSyncRecovery(
+                crate::source_sync::inspect_retained(&tx, &access)?,
+            ))
+        }
+        Command::HaltSourceSync {
+            lease,
+            halt,
+            detail,
+        } => {
+            ensure!(
+                !detail.is_empty() && detail.len() <= 1024,
+                "Invalid Sync halt detail"
+            );
+            let job = crate::source_sync::halt_after_error(&tx, &lease, halt.stored(), &detail)?
+                .ok_or_else(|| anyhow!("Sync batch is not open"))?;
+            TransactionDecision::Outcome(Outcome::SourceSyncHalted(job))
+        }
         Command::Observe {
             credential,
             policy,
@@ -1307,6 +1928,10 @@ pub(crate) fn execute(
     if matches!(&decision,TransactionDecision::Outcome(Outcome::Job(job,LocalCommit::Committed)) if job.state.terminal())
         || matches!(&decision, TransactionDecision::Refused(CommittedRefusal { job, .. }) if job.state.terminal())
         || matches!(&decision, TransactionDecision::LocalScanCompleted(_))
+        || matches!(
+            &decision,
+            TransactionDecision::Outcome(Outcome::SourceSyncFinish(_, LocalCommit::Committed))
+        )
     {
         prune(&tx, 1000, 10000)?;
     }
@@ -1394,6 +2019,12 @@ fn prune(tx: &Transaction<'_>, per_tenant: usize, global: usize) -> Result<usize
             SELECT id,document,updated,rowid AS sequence,
                    ROW_NUMBER() OVER(PARTITION BY tenant ORDER BY updated DESC,rowid DESC) AS local_rank
             FROM durable_jobs WHERE state IN ('uploaded_only','succeeded','failed','cancelled')
+              AND NOT EXISTS (
+                  SELECT 1 FROM source_sync_targets t
+                  WHERE t.job_id=durable_jobs.id
+                    AND (t.state IN ('pending','claimed','reconciliation_required')
+                         OR (t.state IN ('succeeded','failed') AND t.reservation_acknowledged=0))
+              )
          )
          SELECT id,document FROM ranked
          WHERE updated<=?3 OR local_rank>?1 OR id NOT IN (
@@ -1641,6 +2272,10 @@ pub(crate) fn user_with_authority(
                 return Ok(Outcome::Job(job, LocalCommit::ReadOnly));
             }
             job.cancel_requested = true;
+            if job.kind == JobKind::Sync {
+                let job = crate::source_sync::halt_job(tx, job, "cancelled", "Sync was cancelled")?;
+                return Ok(Outcome::Job(job, LocalCommit::Committed));
+            }
             if job.kind == JobKind::SuppliedSourceImport {
                 job.state = PersistentState::Queued;
                 job.generation += 1;
@@ -1670,6 +2305,18 @@ pub(crate) fn user_with_authority(
             receipt,
         } => {
             let mut job = owned(tx, &job_id, tenant)?;
+            ensure!(
+                job.kind != JobKind::Sync,
+                "Sync cannot use generic effect reconciliation"
+            );
+            ensure!(
+                decision != Decision::ConfirmSucceeded
+                    || job
+                        .effects
+                        .iter()
+                        .all(|effect| effect.checklist_completion.is_none()),
+                "Checklist completion requires its owning reconciler"
+            );
             ensure!(
                 job.state == PersistentState::ReconciliationRequired
                     && job.state_version == expected_version
@@ -1788,7 +2435,8 @@ fn source_binding(payload: &Payload) -> Result<SourceBinding> {
         | Payload::SuppliedSourceImport { project_id, .. } => {
             SourceBinding::Individual(i64::try_from(*project_id)?)
         }
-        Payload::Sync { .. } | Payload::CheckSourceUpdates {} => SourceBinding::Wildcard,
+        Payload::CheckSourceUpdates {} => SourceBinding::Wildcard,
+        Payload::Sync { .. } => SourceBinding::None,
         _ => SourceBinding::None,
     })
 }
@@ -1854,6 +2502,10 @@ fn claim(
                 }
             }
             ensure!(job.attempt < 100, "Job attempt limit reached");
+            ensure!(
+                job.kind != JobKind::Sync || filter.job_id.is_none(),
+                "Sync has no targeted claim path"
+            );
             let authority = match job.authority_disposition {
                 AuthorityDisposition::PhysicalOwner => None,
                 AuthorityDisposition::LegacyMissing => Some(AuthorityDecision::Refused(
@@ -1876,6 +2528,26 @@ fn claim(
             }
             if let Some(AuthorityDecision::Refused(reason)) = authority {
                 let failure = reason.failure();
+                if job.kind == JobKind::Sync {
+                    ensure!(filter.job_id.is_none(), "Sync has no targeted claim path");
+                    job.authority_refusal = Some(AuthorityRefusalObservation {
+                        version: 1,
+                        reason,
+                        phase: AuthorityRefusalPhase::Claim,
+                        observed_at: now(),
+                        generation: job.generation,
+                    });
+                    let job = crate::source_sync::halt_job(
+                        tx,
+                        job,
+                        "authority_refused",
+                        "Original authority is no longer valid",
+                    )?;
+                    return Ok(TransactionDecision::Refused(CommittedRefusal {
+                        job,
+                        failure,
+                    }));
+                }
                 if filter.job_id.is_some() {
                     crate::uploads::record_targeted_authority_refusal(tx, &job)?;
                 }
@@ -2160,6 +2832,17 @@ fn advance(
     policy: Option<AuthPolicy>,
 ) -> Result<TransactionDecision> {
     let mut job = claimed_job(tx, &lease)?;
+    if job.kind == JobKind::Sync {
+        match &operation {
+            WorkerOperation::BeginEffect(_)
+            | WorkerOperation::ConfirmEffect(_)
+            | WorkerOperation::Finish(_)
+            | WorkerOperation::FinishPublic { .. } => {
+                return Err(anyhow!("Sync operation belongs to its journal owner"));
+            }
+            WorkerOperation::Heartbeat | WorkerOperation::Progress(_) | WorkerOperation::Fail => {}
+        }
+    }
     let authority = match job.authority_disposition {
         AuthorityDisposition::PhysicalOwner => None,
         AuthorityDisposition::LegacyMissing => Some(AuthorityDecision::Refused(
@@ -2178,6 +2861,26 @@ fn advance(
         debug_assert_eq!(authority.tenant(), job.tenant);
     }
     if let Some(AuthorityDecision::Refused(reason)) = authority {
+        if job.kind == JobKind::Sync {
+            let failure = reason.failure();
+            job.authority_refusal = Some(AuthorityRefusalObservation {
+                version: 1,
+                reason,
+                phase: AuthorityRefusalPhase::WorkerAdvance,
+                observed_at: now(),
+                generation: job.generation,
+            });
+            let job = crate::source_sync::halt_job(
+                tx,
+                job,
+                "authority_refused",
+                "Original authority is no longer valid",
+            )?;
+            return Ok(TransactionDecision::Refused(CommittedRefusal {
+                job,
+                failure,
+            }));
+        }
         let matching_receipt = if let WorkerOperation::ConfirmEffect(receipt) = &operation {
             ensure!(
                 job.state == PersistentState::EffectAdmitted,
@@ -2219,6 +2922,13 @@ fn advance(
             ),
         "Supplied imports advance through owned phases"
     );
+    if job.kind == JobKind::Sync && matches!(operation, WorkerOperation::Fail) {
+        let job = crate::source_sync::halt_job(tx, job, "fatal", "Source Sync worker failed")?;
+        return Ok(TransactionDecision::Outcome(Outcome::Job(
+            job,
+            LocalCommit::Committed,
+        )));
+    }
     let event = match operation {
         WorkerOperation::Heartbeat => "heartbeat",
         WorkerOperation::Progress(progress) => {
@@ -2322,6 +3032,7 @@ fn advance(
                 confirmed: false,
                 no_effect: false,
                 receipt: None,
+                checklist_completion: None,
             });
             job.state = PersistentState::EffectAdmitted;
             "effect_intent"
@@ -2348,6 +3059,14 @@ fn advance(
         }
         WorkerOperation::Finish(result) => {
             ensure!(
+                job.kind != JobKind::Sync
+                    && job
+                        .effects
+                        .iter()
+                        .all(|effect| effect.checklist_completion.is_none()),
+                "Job requires its owning finalizer"
+            );
+            ensure!(
                 job.state == PersistentState::Running && !job.cancel_requested,
                 "Job cannot finish"
             );
@@ -2370,6 +3089,14 @@ fn advance(
             "finished"
         }
         WorkerOperation::FinishPublic { artifact, result } => {
+            ensure!(
+                job.kind != JobKind::Sync
+                    && job
+                        .effects
+                        .iter()
+                        .all(|effect| effect.checklist_completion.is_none()),
+                "Job requires its owning finalizer"
+            );
             ensure!(
                 job.state == PersistentState::Running && !job.cancel_requested,
                 "Job cannot finish"
@@ -2484,6 +3211,42 @@ pub(crate) fn commit_source_authority_refusal(
     };
     record_refusal(tx, job, reason, AuthorityRefusalPhase::SourceWriter, None)?;
     save(tx, job, "source_authority_refused")?;
+    Ok(true)
+}
+
+pub(crate) fn set_sync_source_writer_authority_refusal(
+    job: &mut JobRecord,
+    error: &anyhow::Error,
+) -> Result<bool> {
+    let reason = if job.authority_disposition == AuthorityDisposition::LegacyMissing {
+        Some(AuthorityRefusalReason::MissingOriginal)
+    } else {
+        match error.downcast_ref::<auth::AuthorityFailure>() {
+            Some(auth::AuthorityFailure::CredentialInvalid) => {
+                Some(AuthorityRefusalReason::CredentialInvalid)
+            }
+            Some(auth::AuthorityFailure::PolicyChanged) => {
+                Some(AuthorityRefusalReason::PolicyChanged)
+            }
+            Some(auth::AuthorityFailure::TenantChanged) => {
+                Some(AuthorityRefusalReason::TenantChanged)
+            }
+            Some(auth::AuthorityFailure::SubjectChanged) => {
+                Some(AuthorityRefusalReason::SubjectChanged)
+            }
+            _ => None,
+        }
+    };
+    let Some(reason) = reason else {
+        return Ok(false);
+    };
+    job.authority_refusal = Some(AuthorityRefusalObservation {
+        version: 1,
+        reason,
+        phase: AuthorityRefusalPhase::SourceWriter,
+        observed_at: now(),
+        generation: job.generation,
+    });
     Ok(true)
 }
 

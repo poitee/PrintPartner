@@ -180,7 +180,7 @@ fn fail_before_settlement(
     }
 }
 
-fn read_documents(path: Option<&str>) -> Result<Vec<LocalDocumentRecord>> {
+pub(crate) fn read_documents(path: Option<&str>) -> Result<Vec<LocalDocumentRecord>> {
     let Some(path) = path else {
         return Ok(Vec::new());
     };
