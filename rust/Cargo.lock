@@ -2514,6 +2514,7 @@ version = "0.1.0"
 dependencies = [
  "fs2",
  "hex",
+ "libc",
  "rustix",
  "serde",
  "serde_json",

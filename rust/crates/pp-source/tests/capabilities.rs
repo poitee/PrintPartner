@@ -52,6 +52,69 @@ fn budget() -> ArtifactBudget {
 }
 
 #[test]
+fn searchable_ancestor_without_read_access_allows_publication_and_reuse() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = Fixture::new();
+    struct RestorePermissions<'a>(&'a std::path::Path, fs::Permissions);
+    impl Drop for RestorePermissions<'_> {
+        fn drop(&mut self) {
+            fs::set_permissions(self.0, self.1.clone()).unwrap();
+        }
+    }
+    let _restore = RestorePermissions(&fixture.0, fs::metadata(&fixture.0).unwrap().permissions());
+    fs::set_permissions(&fixture.0, fs::Permissions::from_mode(0o111)).unwrap();
+    // Root and processes with DAC overrides cannot exercise this restriction.
+    if fs::read_dir(&fixture.0).is_ok() {
+        eprintln!("Skipping permission restriction with privileged filesystem access");
+        return;
+    }
+    assert_eq!(
+        fs::read_dir(&fixture.0).unwrap_err().kind(),
+        std::io::ErrorKind::PermissionDenied
+    );
+    let input = LocalFiles::open(&fixture.0.join("input")).unwrap();
+    let mut source = fixture.repos().source(42).unwrap();
+    assert_eq!(
+        source
+            .materialize(request(), &input, budget())
+            .unwrap()
+            .publication,
+        Publication::Created
+    );
+    assert_eq!(
+        source
+            .materialize(request(), &input, budget())
+            .unwrap()
+            .publication,
+        Publication::Reused
+    );
+    assert_eq!(
+        fs::read(fixture.0.join("repos/42/revisions/caller-uuid/part.stl")).unwrap(),
+        b"solid bytes"
+    );
+}
+
+#[test]
+fn root_walk_rejects_symlink_ancestors_and_selected_roots() {
+    use std::os::unix::fs::symlink;
+
+    let fixture = Fixture::new();
+    let alias = fixture.0.with_extension("alias");
+    symlink(&fixture.0, &alias).unwrap();
+    let repos = TenantRepos::open("tenant-fixture".into(), &alias.join("repos"));
+    let input = LocalFiles::open(&alias.join("input"));
+    fs::remove_file(&alias).unwrap();
+    assert!(repos.is_err());
+    assert!(input.is_err());
+
+    symlink(fixture.0.join("repos"), fixture.0.join("repos-alias")).unwrap();
+    symlink(fixture.0.join("input"), fixture.0.join("input-alias")).unwrap();
+    assert!(TenantRepos::open("tenant-fixture".into(), &fixture.0.join("repos-alias")).is_err());
+    assert!(LocalFiles::open(&fixture.0.join("input-alias")).is_err());
+}
+
+#[test]
 fn source_handle_survives_repos_path_replacement_without_following_it() {
     let fixture = Fixture::new();
     let mut source = fixture.repos().source(42).unwrap();
