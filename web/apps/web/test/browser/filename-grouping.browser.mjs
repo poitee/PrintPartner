@@ -102,6 +102,7 @@ try {
       })]);
     } finally { globalThis.clearTimeout(timer); }
   };
+
   const jobStatus = /\/jobs\/[^/?]+$/;
   const jobIdFromUrl = (url) => {
     const match = new globalThis.URL(url).pathname.match(/\/jobs\/([^/]+)$/);
