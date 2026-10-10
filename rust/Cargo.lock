@@ -2815,6 +2815,7 @@ dependencies = [
  "getrandom 0.3.4",
  "hex",
  "lettre",
+ "log",
  "pp-storage",
  "reqwest",
  "rusqlite",

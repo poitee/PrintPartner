@@ -38,7 +38,7 @@ impl From<anyhow::Error> for Failure {
     }
 }
 pub(super) fn public_user(user: User) -> Value {
-    json!({"user_id":user.user_id,"login":user.login,"display_name":user.display_name,"email":user.email,"provider":user.provider,"is_admin":user.is_admin})
+    json!({"user_id":user.user_id,"login":user.login,"display_name":user.display_name,"email":user.email,"provider":user.provider,"is_admin":user.is_admin,"hasPassword":user.has_password})
 }
 pub(super) fn cookie(headers: &HeaderMap, name: &str) -> Option<String> {
     let mut result = None;
