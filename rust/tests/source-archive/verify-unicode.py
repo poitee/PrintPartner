@@ -12,6 +12,7 @@ parser.add_argument('--bin-dir', type=Path, required=True)
 parser.add_argument('--original-bin-dir', type=Path, required=True)
 parser.add_argument('--frozen-output', type=Path, required=True)
 args = parser.parse_args()
+args.output = args.output.resolve()
 args.output.mkdir(parents=True, exist_ok=False)
 rows = []
 
@@ -95,9 +96,14 @@ code, rejected = invoke(args.bin_dir / 'pp-source', snapshot_command, 'accepted-
 assert code == 1 and rejected['error'] == 'duplicate-path'
 assert inventory(accepted) == before
 
-root, archive_command, snapshot_command = fixture('omitted-collision', ['Straße.stl'])
+# Node parity: omitted paths conflict with selected paths only on exact spelling.
+root, archive_command, snapshot_command = fixture('omitted-case-pair', ['Straße.stl'])
+(root / 'input/Straße.stl').write_bytes(b'x')
 snapshot_command['snapshot']['selection']['omittedFiles'] = [dict(path='STRASSE.stl', kind='md', sizeHintBytes=1, reason='documentation-byte-budget')]
-code, result = invoke(args.bin_dir / 'pp-source', snapshot_command, 'omitted-collision')
+code, result = invoke(args.bin_dir / 'pp-source', snapshot_command, 'omitted-case-pair')
+assert code == 0 and result['publication'] == 'created', result
+snapshot_command['snapshot']['selection']['omittedFiles'][0]['path'] = 'Straße.stl'
+code, result = invoke(args.bin_dir / 'pp-source', snapshot_command, 'omitted-exact-duplicate')
 assert code == 1 and result['error'] == 'duplicate-path'
 
 root = args.output / 'frozen-normal'
