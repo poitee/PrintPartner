@@ -8,6 +8,7 @@ on:
     paths:
       - "web/**"
       - "scripts/**"
+      - "manifests/**"
       - "docs/**"
       - ".agents/**"
       - ".cursor/skills/verify-print-partner/helpers/**"
@@ -27,6 +28,7 @@ on:
     paths:
       - "web/**"
       - "scripts/**"
+      - "manifests/**"
       - "docs/**"
       - ".agents/**"
       - ".cursor/skills/verify-print-partner/helpers/**"

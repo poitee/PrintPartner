@@ -261,6 +261,43 @@ test("keeps Rust character literals separate from strings and lifetimes", () => 
   assert.deepEqual(actual, { quote: expected, escapedQuote: expected, controls: expected });
 });
 
+test("ignores markers inside multiline shell quotes and heredocs", () => {
+  const multilineDouble = ['echo "text', "# TODO shown to users", '"', "# TODO: real"].join("\n");
+  assert.deepEqual(countText(multilineDouble, "a.sh"), { todoComments: 1, eslintDisable: 0, rustAllow: 0 });
+
+  const multilineSingle = ["echo 'text", "# TODO shown to users", "'", "# TODO: real"].join("\n");
+  assert.deepEqual(countText(multilineSingle, "a.sh"), { todoComments: 1, eslintDisable: 0, rustAllow: 0 });
+
+  const heredoc = ["cat <<EOF", "# TODO in heredoc", "EOF", "# TODO: real"].join("\n");
+  assert.deepEqual(countText(heredoc, "a.sh"), { todoComments: 1, eslintDisable: 0, rustAllow: 0 });
+
+  assert.equal(
+    countText(["cat <<'EOF'", "FIXME inside", "EOF"].join("\n"), "a.sh").todoComments,
+    0,
+  );
+  assert.equal(
+    countText(["cat <<'EOF'", "FIXME inside", "EOF", "# TODO: real"].join("\n"), "a.sh").todoComments,
+    1,
+  );
+});
+
+test("counts workaround markers inside nested Rust block comments", () => {
+  const nested = "/* outer /* inner */ TODO hidden */";
+  assert.deepEqual(countText(nested, "a.rs"), { todoComments: 1, eslintDisable: 0, rustAllow: 0 });
+});
+
+test("counts spaced, multiline, and cfg_attr Rust allow attributes", () => {
+  const source = [
+    "#[allow (dead_code)]",
+    "#[",
+    "allow(clippy::all)",
+    "]",
+    "#![cfg_attr(unix, allow(unused))]",
+    'const IGNORED = "#[allow(dead_code)]";',
+  ].join("\n");
+  assert.deepEqual(countText(source, "a.rs"), { todoComments: 0, eslintDisable: 0, rustAllow: 3 });
+});
+
 test("uses path-specific comment and quote syntax", () => {
   assert.equal(countText(["value = '# TODO'", "# TODO: real"].join("\n"), "a.py").todoComments, 1);
   assert.equal(

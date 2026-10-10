@@ -53,8 +53,8 @@ const QUOTES = {
   ],
   rust: [{ open: '"', close: '"', escape: true, multiline: true }],
   shell: [
-    { open: '"', close: '"', escape: true, multiline: false },
-    { open: "'", close: "'", escape: false, multiline: false },
+    { open: '"', close: '"', escape: true, multiline: true },
+    { open: "'", close: "'", escape: false, multiline: true },
   ],
 };
 
@@ -63,7 +63,14 @@ const SYNTAX = {
   default: { block: ["/*", "*/"], line: "mixed", quotes: QUOTES.default, leadingStar: true, rustAllow: true },
   html: { block: ["<!--", "-->"], line: null, quotes: QUOTES.cStyle, html: true, rustAllow: false },
   python: { block: null, line: "hash", quotes: QUOTES.python, rustAllow: false },
-  rust: { block: ["/*", "*/"], line: "slash", quotes: QUOTES.rust, rustRawStrings: true, rustAllow: true },
+  rust: {
+    block: ["/*", "*/"],
+    line: "slash",
+    quotes: QUOTES.rust,
+    rustRawStrings: true,
+    rustAllow: true,
+    nestedBlockComments: true,
+  },
   shell: { block: null, line: "shellHash", quotes: QUOTES.shell, rustAllow: false },
 };
 
@@ -169,6 +176,77 @@ function quoteAt(line, index, syntax) {
   return syntax.quotes.find(({ open }) => line.startsWith(open, index)) ?? null;
 }
 
+function heredocDelimiterMatches(line, { delimiter, stripTabs }) {
+  const candidate = stripTabs ? line.replace(/^\t+/, "") : line;
+  return candidate === delimiter;
+}
+
+function parseShellHeredoc(line, index) {
+  if (!line.startsWith("<<", index) || line.startsWith("<<<", index)) return null;
+  let cursor = index + 2;
+  let stripTabs = false;
+  if (line[cursor] === "-") {
+    stripTabs = true;
+    cursor += 1;
+  }
+  let delimiter;
+  if (line[cursor] === "'") {
+    const end = line.indexOf("'", cursor + 1);
+    if (end === -1) return null;
+    delimiter = line.slice(cursor + 1, end);
+    cursor = end + 1;
+  } else if (line[cursor] === '"') {
+    const end = line.indexOf('"', cursor + 1);
+    if (end === -1) return null;
+    delimiter = line.slice(cursor + 1, end);
+    cursor = end + 1;
+  } else {
+    const match = /^[A-Za-z0-9_+-]+/.exec(line.slice(cursor));
+    if (!match) return null;
+    delimiter = match[0];
+    cursor += match[0].length;
+  }
+  return { delimiter, stripTabs, endIndex: cursor };
+}
+
+function findMatchingBracket(text, openIndex, openChar, closeChar) {
+  let depth = 0;
+  for (let i = openIndex; i < text.length; i += 1) {
+    if (text[i] === openChar) depth += 1;
+    else if (text[i] === closeChar) {
+      depth -= 1;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
+function countRustAllowMarkers(unquotedText) {
+  let count = 0;
+  let index = 0;
+  while (index < unquotedText.length) {
+    if (unquotedText[index] !== "#") {
+      index += 1;
+      continue;
+    }
+    let cursor = index + 1;
+    if (unquotedText[cursor] === "!") cursor += 1;
+    if (unquotedText[cursor] !== "[") {
+      index += 1;
+      continue;
+    }
+    const close = findMatchingBracket(unquotedText, cursor, "[", "]");
+    if (close === -1) {
+      index += 1;
+      continue;
+    }
+    const inner = unquotedText.slice(cursor + 1, close);
+    if (/\ballow\s*\(/.test(inner)) count += 1;
+    index = close + 1;
+  }
+  return count;
+}
+
 function scanLine(line, syntax, initialState) {
   const commentText = Array(line.length).fill(" ");
   const unquotedCodeText = Array(line.length).fill(" ");
@@ -177,10 +255,23 @@ function scanLine(line, syntax, initialState) {
 
   while (index < line.length) {
     if (state.kind === "blockComment") {
-      const length = line.startsWith(state.close, index) ? state.close.length : 1;
+      const [blockOpen, blockClose] = syntax.block ?? [];
+      if (syntax.nestedBlockComments && blockOpen && line.startsWith(blockOpen, index)) {
+        for (let offset = 0; offset < blockOpen.length; offset += 1) {
+          commentText[index + offset] = line[index + offset];
+        }
+        index += blockOpen.length;
+        state = { ...state, depth: state.depth + 1 };
+        continue;
+      }
+      const closes = line.startsWith(state.close, index);
+      const length = closes ? state.close.length : 1;
       for (let offset = 0; offset < length; offset += 1) commentText[index + offset] = line[index + offset];
       index += length;
-      if (length === state.close.length) state = state.resume;
+      if (closes) {
+        const depth = (state.depth ?? 1) - 1;
+        state = depth === 0 ? state.resume : { ...state, depth };
+      }
       continue;
     }
 
@@ -199,8 +290,22 @@ function scanLine(line, syntax, initialState) {
       const [open, close] = syntax.block;
       for (let offset = 0; offset < open.length; offset += 1) commentText[index + offset] = line[index + offset];
       index += open.length;
-      state = { kind: "blockComment", close, resume: state };
+      state = { kind: "blockComment", close, resume: state, depth: 1 };
       continue;
+    }
+
+    if (syntax.line === "shellHash") {
+      const heredoc = parseShellHeredoc(line, index);
+      if (heredoc) {
+        index = heredoc.endIndex;
+        state = {
+          kind: "heredoc",
+          delimiter: heredoc.delimiter,
+          stripTabs: heredoc.stripTabs,
+          resume: state,
+        };
+        continue;
+      }
     }
 
     const lineComment = lineCommentLength(line, index, syntax);
@@ -246,13 +351,19 @@ function countNonJavaScriptText(text, path) {
   const counts = Object.fromEntries(Object.keys(MARKERS).map((key) => [key, 0]));
   const syntax = syntaxFor(path);
   let state = CODE_STATE;
+  const unquotedLines = [];
   for (const line of text.split("\n")) {
+    if (state.kind === "heredoc") {
+      if (heredocDelimiterMatches(line, state)) state = state.resume;
+      continue;
+    }
     const scanned = scanLine(line, syntax, state);
     state = scanned.state;
+    unquotedLines.push(scanned.unquotedCodeText);
     if (MARKERS.todoComments.test(scanned.commentText)) counts.todoComments += 1;
     if (MARKERS.eslintDisable.test(scanned.commentText)) counts.eslintDisable += 1;
-    if (syntax.rustAllow && MARKERS.rustAllow.test(scanned.unquotedCodeText)) counts.rustAllow += 1;
   }
+  if (syntax.rustAllow) counts.rustAllow = countRustAllowMarkers(unquotedLines.join("\n"));
   return counts;
 }
 
