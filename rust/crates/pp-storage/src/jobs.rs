@@ -150,10 +150,17 @@ pub(crate) enum Command {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JobFailure {
     CommitUnknown,
+    JobDocTooLarge { size: usize, limit: usize },
 }
 impl std::fmt::Display for JobFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("Job commit outcome unknown")
+        match self {
+            Self::CommitUnknown => f.write_str("Job commit outcome unknown"),
+            Self::JobDocTooLarge { size, limit } => write!(
+                f,
+                "Durable job document is {size} bytes, exceeding the {limit}-byte limit"
+            ),
+        }
     }
 }
 impl std::error::Error for JobFailure {}
@@ -358,14 +365,39 @@ fn random() -> String {
 fn now() -> i64 {
     time::OffsetDateTime::now_utc().unix_timestamp()
 }
+pub const JOB_DOC_SIZE_LIMIT: usize = 131072;
+
+fn check_document_size(size: usize) -> Result<()> {
+    ensure!(
+        size <= JOB_DOC_SIZE_LIMIT,
+        JobFailure::JobDocTooLarge {
+            size,
+            limit: JOB_DOC_SIZE_LIMIT
+        }
+    );
+    Ok(())
+}
+
+fn decode_row(id: &str, document: &str) -> Option<JobRecord> {
+    match decode(document) {
+        Ok(job) => Some(job),
+        Err(error) => {
+            eprintln!("Skipping invalid durable job row {id}: {error}");
+            None
+        }
+    }
+}
+
 fn encode(job: &JobRecord) -> Result<String> {
     let mut document = serde_json::to_value(job)?;
     document["_attempt_worker"] = serde_json::to_value(&job.worker)?;
     document["_attempt_fence"] = serde_json::to_value(&job.fence)?;
-    Ok(serde_json::to_string(&document)?)
+    let document = serde_json::to_string(&document)?;
+    check_document_size(document.len())?;
+    Ok(document)
 }
 fn decode(document: &str) -> Result<JobRecord> {
-    ensure!(document.len() <= 131072, "Durable job document too large");
+    check_document_size(document.len())?;
     let value: serde_json::Value = serde_json::from_str(document)?;
     let mut job: JobRecord = serde_json::from_value(value.clone())?;
     job.fence = serde_json::from_value(
@@ -503,9 +535,11 @@ fn save(tx: &Transaction<'_>, job: &mut JobRecord, event: &str) -> Result<()> {
     Ok(())
 }
 fn recover_in(tx: &Transaction<'_>, all: bool) -> Result<()> {
-    let documents=tx.prepare("SELECT document FROM durable_jobs WHERE state IN ('running','effect_admitted') AND (?1 OR lease_until<=?2)")?.query_map(params![all,now()],|r|r.get::<_,String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
-    for document in documents {
-        let mut job: JobRecord = decode(&document)?;
+    let documents=tx.prepare("SELECT id,document FROM durable_jobs WHERE state IN ('running','effect_admitted') AND (?1 OR lease_until<=?2)")?.query_map(params![all,now()],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    for (id, document) in documents {
+        let Some(mut job) = decode_row(&id, &document) else {
+            continue;
+        };
         job.generation += 1;
         job.fence = None;
         job.worker = None;
@@ -693,9 +727,12 @@ fn user(
             if let Some((_, id)) = &query.before {
                 model::text(id, 128)?;
             }
-            let documents=tx.prepare("SELECT document FROM durable_jobs WHERE tenant=?1 AND (?2 IS NULL OR CASE state WHEN 'queued' THEN 'pending' WHEN 'running' THEN 'running' WHEN 'effect_admitted' THEN 'running' WHEN 'uploaded_only' THEN 'done' WHEN 'succeeded' THEN 'done' WHEN 'cancelled' THEN 'cancelled' ELSE 'error' END=?2) AND (?3 IS NULL OR updated>=?3) AND (?4 IS NULL OR json_extract(document,'$.payload.payload.profile_id')=?4) AND (?5 IS NULL OR updated<?5 OR (updated=?5 AND id<?6)) ORDER BY updated DESC,id DESC LIMIT ?7")?.query_map(params![tenant,query.status,query.since,query.profile_id.map(|v|v as i64),query.before.as_ref().map(|c|c.0),query.before.as_ref().map(|c|c.1.as_str()),query.limit],|r|r.get::<_,String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+            let documents=tx.prepare("SELECT id,document FROM durable_jobs WHERE tenant=?1 AND (?2 IS NULL OR CASE state WHEN 'queued' THEN 'pending' WHEN 'running' THEN 'running' WHEN 'effect_admitted' THEN 'running' WHEN 'uploaded_only' THEN 'done' WHEN 'succeeded' THEN 'done' WHEN 'cancelled' THEN 'cancelled' ELSE 'error' END=?2) AND (?3 IS NULL OR updated>=?3) AND (?4 IS NULL OR json_extract(document,'$.payload.payload.profile_id')=?4) AND (?5 IS NULL OR updated<?5 OR (updated=?5 AND id<?6)) ORDER BY updated DESC,id DESC LIMIT ?7")?.query_map(params![tenant,query.status,query.since,query.profile_id.map(|v|v as i64),query.before.as_ref().map(|c|c.0),query.before.as_ref().map(|c|c.1.as_str()),query.limit],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
             Ok(Outcome::List(
-                documents.iter().map(|s| decode(s)).collect::<Result<_>>()?,
+                documents
+                    .iter()
+                    .filter_map(|(id, document)| decode_row(id, document))
+                    .collect(),
             ))
         }
         UserOperation::History {
@@ -876,9 +913,11 @@ fn claim(tx: &Transaction<'_>, worker: &str, admission: &WorkerAdmission) -> Res
         if count >= *capacity as i64 {
             continue;
         }
-        let documents=tx.prepare("SELECT document FROM durable_jobs WHERE state='queued' AND kind=?1 ORDER BY created,id")?.query_map([kind.name()],|r|r.get::<_,String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
-        for document in documents {
-            let mut job: JobRecord = decode(&document)?;
+        let documents=tx.prepare("SELECT id,document FROM durable_jobs WHERE state='queued' AND kind=?1 ORDER BY created,id")?.query_map([kind.name()],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        for (id, document) in documents {
+            let Some(mut job) = decode_row(&id, &document) else {
+                continue;
+            };
             let resource = job.payload.resource();
             if !resource.is_empty() {
                 let count:i64=tx.query_row("SELECT COUNT(*) FROM durable_jobs WHERE tenant=?1 AND state IN ('running','effect_admitted','reconciliation_required') AND (resource=?2 OR (?2 LIKE 'source:%' AND resource='source:*') OR (?2='source:*' AND resource LIKE 'source:%'))",params![job.tenant,resource],|r|r.get(0))?;
@@ -1246,7 +1285,9 @@ pub(crate) fn validate_schema(connection: &Connection, version: u64) -> Result<(
     let mut query=connection.prepare("SELECT id,tenant,kind,state,resource,version,generation,lease_until,created,updated,document FROM durable_jobs")?;
     let mut rows = query.query([])?;
     while let Some(row) = rows.next()? {
-        let job = decode(&row.get::<_, String>(10)?)?;
+        let Some(job) = decode_row(&row.get::<_, String>(0)?, &row.get::<_, String>(10)?) else {
+            continue;
+        };
         job.payload.validate_stored()?;
         ensure!(
             job.payload_version == 1
@@ -1278,4 +1319,106 @@ pub(crate) fn validate_schema(connection: &Connection, version: u64) -> Result<(
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn record() -> JobRecord {
+        JobRecord {
+            job_id: "size-boundary".into(),
+            tenant: "default".into(),
+            kind: JobKind::CheckSourceUpdates,
+            payload_version: 1,
+            payload: Payload::CheckSourceUpdates {},
+            state: PersistentState::Queued,
+            state_version: 0,
+            attempt: 0,
+            generation: 0,
+            lease_until: None,
+            created_at: now(),
+            updated_at: now(),
+            finished_at: None,
+            cancel_requested: false,
+            progress: None,
+            effects: vec![],
+            result: None,
+            recovery: Some(String::new()),
+            fence: None,
+            worker: None,
+        }
+    }
+
+    fn sized_record(size: usize) -> JobRecord {
+        let mut job = record();
+        let padding = size - encode(&job).unwrap().len();
+        // Non-ASCII text makes the boundary a byte count, not a character count.
+        job.recovery = Some("é".repeat(padding / 2) + &"a".repeat(padding % 2));
+        job
+    }
+
+    #[test]
+    fn job_document_exact_size_limit_saves_and_decodes() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(include_str!("jobs/schema.sql"))
+            .unwrap();
+        let tx = connection.transaction().unwrap();
+        let mut job = sized_record(JOB_DOC_SIZE_LIMIT);
+        save(&tx, &mut job, "enqueued").unwrap();
+        tx.commit().unwrap();
+        let document: String = connection
+            .query_row("SELECT document FROM durable_jobs", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(document.len(), JOB_DOC_SIZE_LIMIT);
+        assert_eq!(decode(&document).unwrap().recovery, job.recovery);
+        validate_schema(&connection, 35).unwrap();
+    }
+
+    #[test]
+    fn job_document_over_size_limit_rejects_without_any_writes() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(include_str!("jobs/schema.sql"))
+            .unwrap();
+        let tx = connection.transaction().unwrap();
+        let mut job = sized_record(JOB_DOC_SIZE_LIMIT + 1);
+        let error = save(&tx, &mut job, "enqueued").unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<JobFailure>(),
+            Some(&JobFailure::JobDocTooLarge {
+                size: JOB_DOC_SIZE_LIMIT + 1,
+                limit: JOB_DOC_SIZE_LIMIT,
+            })
+        );
+        // Even committing after the error cannot persist a document or history row.
+        tx.commit().unwrap();
+        for table in ["durable_jobs", "durable_job_history", "durable_job_keys"] {
+            let count: i64 = connection
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            assert_eq!(count, 0);
+        }
+
+        let tx = connection.transaction().unwrap();
+        let mut job = record();
+        save(&tx, &mut job, "enqueued").unwrap();
+        let original = encode(&job).unwrap();
+        job.recovery = sized_record(JOB_DOC_SIZE_LIMIT + 1).recovery;
+        assert!(save(&tx, &mut job, "progress").is_err());
+        tx.commit().unwrap();
+        let stored: String = connection
+            .query_row("SELECT document FROM durable_jobs", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(stored, original);
+        let count: i64 = connection
+            .query_row("SELECT COUNT(*) FROM durable_job_history", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(count, 1);
+    }
 }

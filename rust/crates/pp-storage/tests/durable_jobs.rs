@@ -215,6 +215,27 @@ fn readonly(path: &std::path::Path) -> Connection {
     )
     .unwrap()
 }
+fn assert_invalid_job_skipped_on_restart(path: &std::path::Path, id: &str) {
+    let document = || {
+        readonly(path)
+            .query_row(
+                "SELECT document FROM durable_jobs WHERE id=?1",
+                [id],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap()
+    };
+    let before = document();
+    let (owner, _) = WriterOwner::open(path, Limits::default()).unwrap();
+    match call(&owner, UserOperation::List(JobListQuery::default())).unwrap() {
+        Outcome::List(records) => assert!(records.is_empty()),
+        _ => panic!("Expected list"),
+    }
+    assert!(call(&owner, UserOperation::Get { job_id: id.into() }).is_err());
+    assert!(enqueue_start(&owner, "invalid-parent-child", id).is_err());
+    owner.shutdown().unwrap();
+    assert_eq!(document(), before);
+}
 fn register(owner: &WriterOwner, email: &str) -> (auth::User, String) {
     let result = owner
         .auth(FirstUserTenant::NewUser)
@@ -2827,7 +2848,7 @@ fn invalid_persisted_effect_outcomes_fail_closed() {
     )
     .unwrap();
     drop(raw);
-    assert!(WriterOwner::open(&path, Limits::default()).is_err());
+    assert_invalid_job_skipped_on_restart(&path, &parent.job_id);
 
     let (path, owner) = fixture();
     let parent = denied_start_parent(&owner, "tamper-conflict", "tamper-conflict-printer", 100);
@@ -2839,7 +2860,7 @@ fn invalid_persisted_effect_outcomes_fail_closed() {
     )
     .unwrap();
     drop(raw);
-    assert!(WriterOwner::open(&path, Limits::default()).is_err());
+    assert_invalid_job_skipped_on_restart(&path, &parent.job_id);
 
     let (path, owner) = fixture();
     let parent = denied_start_parent(&owner, "tamper-running", "tamper-running-printer", 110);
@@ -2851,7 +2872,7 @@ fn invalid_persisted_effect_outcomes_fail_closed() {
     )
     .unwrap();
     drop(raw);
-    assert!(WriterOwner::open(&path, Limits::default()).is_err());
+    assert_invalid_job_skipped_on_restart(&path, &parent.job_id);
 
     for (index, operation) in ["printer_start", "printer_upload_and_start"]
         .into_iter()
@@ -2872,7 +2893,7 @@ fn invalid_persisted_effect_outcomes_fail_closed() {
         )
         .unwrap();
         drop(raw);
-        assert!(WriterOwner::open(&path, Limits::default()).is_err());
+        assert_invalid_job_skipped_on_restart(&path, &parent.job_id);
     }
 
     let (path, owner) = fixture();
@@ -2885,7 +2906,7 @@ fn invalid_persisted_effect_outcomes_fail_closed() {
     )
     .unwrap();
     drop(raw);
-    assert!(WriterOwner::open(&path, Limits::default()).is_err());
+    assert_invalid_job_skipped_on_restart(&path, &parent.job_id);
 
     let (path, owner) = fixture();
     let parent = denied_start_parent(&owner, "tamper-operation", "tamper-operation-printer", 115);
@@ -2897,7 +2918,7 @@ fn invalid_persisted_effect_outcomes_fail_closed() {
     )
     .unwrap();
     drop(raw);
-    assert!(WriterOwner::open(&path, Limits::default()).is_err());
+    assert_invalid_job_skipped_on_restart(&path, &parent.job_id);
 }
 #[test]
 fn uploaded_only_result_tamper_rejects_decode_and_child_binding() {
@@ -2931,7 +2952,7 @@ fn uploaded_only_result_tamper_rejects_decode_and_child_binding() {
     drop(raw);
     assert!(enqueue_start(&owner, "tampered-result-child", &parent.job_id).is_err());
     owner.shutdown().unwrap();
-    assert!(WriterOwner::open(&path, Limits::default()).is_err());
+    assert_invalid_job_skipped_on_restart(&path, &parent.job_id);
 }
 #[test]
 fn retained_parent_rejects_embedded_job_id_mismatch_without_writes() {
@@ -3121,7 +3142,7 @@ fn persisted_effect_outcome_truth_table_accepts_exactly_three_shapes() {
     owner.shutdown().unwrap();
 }
 #[test]
-fn duplicate_confirmed_upload_parent_fails_read_bind_and_restart_without_writes() {
+fn duplicate_confirmed_upload_parent_rejects_read_and_bind_but_allows_restart() {
     let (path, owner) = fixture();
     let parent = uploaded_only_parent(&owner, "duplicate-upload-parent", "duplicate-printer");
     let raw = Connection::open(path.join("print-partner.db")).unwrap();
@@ -3157,7 +3178,7 @@ fn duplicate_confirmed_upload_parent_fails_read_bind_and_restart_without_writes(
         .unwrap();
     assert_eq!(after, before);
     owner.shutdown().unwrap();
-    assert!(WriterOwner::open(&path, Limits::default()).is_err());
+    assert_invalid_job_skipped_on_restart(&path, &parent.job_id);
 }
 #[test]
 fn uploaded_only_persisted_proof_rejects_independent_corruptions() {
@@ -4197,4 +4218,100 @@ fn filename_grouping_normalizes_before_hashing_and_persistence() {
         filename_payload(canonical)
     );
     owner.shutdown().unwrap();
+}
+
+#[test]
+fn gre_526_startup_and_load_skip_and_log_invalid_saved_rows() {
+    const CHILD_DATA_DIR: &str = "PP_GRE_526_CHILD_DATA_DIR";
+    if let Some(path) = std::env::var_os(CHILD_DATA_DIR) {
+        let (owner, _) = WriterOwner::open(&PathBuf::from(path), Limits::default()).unwrap();
+        let records = match call(&owner, UserOperation::List(JobListQuery::default())).unwrap() {
+            Outcome::List(records) => records,
+            _ => panic!("Expected list"),
+        };
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].state, PersistentState::Queued);
+        assert_eq!(records[0].generation, 2);
+        assert_eq!(get(&owner, &records[0].job_id).job_id, records[0].job_id);
+        owner.shutdown().unwrap();
+        return;
+    }
+
+    let (path, owner) = fixture();
+    let healthy = enqueue(&owner, "healthy", Payload::CheckSourceUpdates {});
+    owner
+        .job_worker(admission())
+        .unwrap()
+        .claim()
+        .unwrap()
+        .unwrap();
+    owner.shutdown().unwrap();
+    let raw = Connection::open(path.join("print-partner.db")).unwrap();
+    let document: String = raw
+        .query_row(
+            "SELECT document FROM durable_jobs WHERE id=?1",
+            [&healthy.job_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let mut oversized: serde_json::Value = serde_json::from_str(&document).unwrap();
+    oversized["job_id"] = "oversized-row".into();
+    oversized["recovery"] = "x".repeat(JOB_DOC_SIZE_LIMIT).into();
+    let oversized = serde_json::to_string(&oversized).unwrap();
+    assert!(oversized.len() > JOB_DOC_SIZE_LIMIT);
+    for (id, document) in [("corrupt-row", "{}"), ("oversized-row", oversized.as_str())] {
+        // Valid JSON with invalid job data can be inserted despite the JSON expression index.
+        raw.execute(
+            "INSERT INTO durable_jobs(id,tenant,kind,state,resource,version,generation,lease_until,created,updated,document)
+             SELECT ?1,tenant,kind,state,resource,version,generation,lease_until,created,updated,?2 FROM durable_jobs WHERE id=?3",
+            rusqlite::params![id, document, healthy.job_id],
+        ).unwrap();
+    }
+    drop(raw);
+
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "gre_526_startup_and_load_skip_and_log_invalid_saved_rows",
+            "--nocapture",
+        ])
+        .env(CHILD_DATA_DIR, &path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let log = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        log.contains("Skipping invalid durable job row corrupt-row"),
+        "{log}"
+    );
+    assert!(
+        log.contains("Skipping invalid durable job row oversized-row"),
+        "{log}"
+    );
+    assert!(
+        log.contains(&format!("exceeding the {JOB_DOC_SIZE_LIMIT}-byte limit")),
+        "{log}"
+    );
+    let raw = readonly(&path);
+    let stored: String = raw
+        .query_row(
+            "SELECT document FROM durable_jobs WHERE id='oversized-row'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(stored, oversized);
+    let corrupt: String = raw
+        .query_row(
+            "SELECT document FROM durable_jobs WHERE id='corrupt-row'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(corrupt, "{}");
 }
