@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 import argparse
+import ast
 from dataclasses import asdict, dataclass
 import hashlib
+import importlib.util
 import json
 import os
 import pathlib
@@ -1005,7 +1007,7 @@ class ParserTests(unittest.TestCase):
             with self.subTest(output=bad), self.assertRaises(ValueError):
                 linked_libraries(bad)
 
-    def test_resource_verifier_rejects_changed_or_missing_closure(self):
+    def test_staged_metadata_passes_completed_stage_and_rejects_changed_or_missing_closure(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary).resolve()
             web = root / WEB
@@ -1022,8 +1024,21 @@ class ParserTests(unittest.TestCase):
                 {'mode': 'desktop', 'version': '3.3.0', 'service_worker': False}))
             metadata = ['package.json', 'package-lock.json', 'apps/server/package.json',
                         'packages/contracts/package.json', 'packages/domain/package.json']
-            for name in metadata:
-                (web / name).write_text(json.dumps({'version': '3.3.0'}))
+            source = root / 'source'
+            for name in [*metadata, 'apps/web/package.json']:
+                target = source / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(json.dumps({'version': '3.3.0'}))
+            # Execute the producer's metadata-copy loop so an extra copied file
+            # cannot silently diverge from the completed-stage inventory again.
+            staging = ast.parse(pathlib.Path(__file__).with_name('stage-desktop.py').read_text())
+            copy_loop, = [statement for statement in staging.body
+                          if isinstance(statement, ast.For) and isinstance(statement.iter, ast.List)
+                          and any(isinstance(item, ast.Constant) and item.value == 'package-lock.json'
+                                  for item in statement.iter.elts)]
+            exec(compile(ast.Module(body=[copy_loop], type_ignores=[]), '<staged metadata>', 'exec'),
+                 {'source': source, 'web': web, 'shutil': shutil})
+            shutil.rmtree(source)
             (web / 'package-lock.json').write_text(json.dumps({'packages': {
                 'node_modules/better-sqlite3': {'version': 'fixture'}}}))
             addon = root / 'Frameworks/fixture.node'
@@ -1046,6 +1061,22 @@ class ParserTests(unittest.TestCase):
                 'runtime_version': '3.3.0-web', 'commit': 'a'*40, 'node': 'MacOS/printpartner-node',
                 'web': WEB, 'os': 'macos', 'arch': 'aarch64', 'node_version': 'v24.21.0', 'node_abi': '137'}))
             self.assertGreater(verify_resources(root, manifest, 'arm64')['dependency_files'], 0)
+            (root / 'bundle-manifest.json').write_text(json.dumps(manifest))
+            (root / 'bundle-config.json').write_text(json.dumps({'bundle': {
+                'active': True, 'resources': {}, 'macOS': {
+                    'minimumSystemVersion': '13.5',
+                    'files': {name: str(root / name) for name in
+                              ['MacOS/printpartner-node', 'Frameworks/fixture.node']}}}}))
+            spec = importlib.util.spec_from_file_location(
+                'macos_assembly', pathlib.Path(__file__).with_name('assemble-macos-resources.py'))
+            assembly = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(assembly)
+            self.assertIn(WEB+'/package.json', assembly.completed_stage(root).runtime_files)
+            extra = web / 'apps/web/package.json'
+            extra.write_text('{}')
+            with self.assertRaisesRegex(ValueError, 'Runtime tree differs'):
+                assembly.completed_stage(root)
+            extra.unlink()
             for key in ['frontend', 'backend', 'metadata', 'dependencies']:
                 broken = json.loads(json.dumps(manifest))
                 if key == 'dependencies':
