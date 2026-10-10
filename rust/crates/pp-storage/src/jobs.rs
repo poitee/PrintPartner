@@ -1177,6 +1177,7 @@ fn advance(
                 job.state == PersistentState::Running && !job.cancel_requested,
                 "Job cannot finish"
             );
+            let result = result.or_else(|| proven_primary_printer_receipt(&job).cloned());
             if let Some(result) = &result {
                 result.validate()?;
                 ensure!(

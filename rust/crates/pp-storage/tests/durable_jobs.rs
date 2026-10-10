@@ -1308,16 +1308,20 @@ fn ticket_t_28_recovery_success_requires_effect_receipts() {
             WorkerOperation::BeginEffect(intent(EffectOperation::PrinterStart, "p")),
         )
         .unwrap();
+    let mut start_receipt = receipt("p");
+    start_receipt.receipt_id = "confirmed-start".into();
     worker
-        .update(&mut lease, WorkerOperation::ConfirmEffect(receipt("p")))
+        .update(
+            &mut lease,
+            WorkerOperation::ConfirmEffect(start_receipt.clone()),
+        )
         .unwrap();
-    assert_eq!(
-        worker
-            .update(&mut lease, WorkerOperation::Finish(None))
-            .unwrap()
-            .state,
-        PersistentState::Succeeded
-    );
+    let finished = worker
+        .update(&mut lease, WorkerOperation::Finish(None))
+        .unwrap();
+    assert_eq!(finished.state, PersistentState::Succeeded);
+    assert_eq!(finished.result, Some(start_receipt.clone()));
+    assert_eq!(get(&owner, &finished.job_id).result, Some(start_receipt));
     enqueue(
         &owner,
         "no-fake-export",
