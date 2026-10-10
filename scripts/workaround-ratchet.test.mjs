@@ -261,11 +261,241 @@ test("keeps Rust character literals separate from strings and lifetimes", () => 
   assert.deepEqual(actual, { quote: expected, escapedQuote: expected, controls: expected });
 });
 
+function assertShellCounts(source, expected) {
+  const inputs = [
+    ["a.sh", source],
+    ["a.yml", `steps:\n  - run: |\n${source.split("\n").map((line) => `      ${line}`).join("\n")}`],
+    ["a.yaml", `steps:\n  - run: >-\n${source.split("\n").map((line) => `      ${line}`).join("\n")}`],
+  ];
+  for (const [path, text] of inputs) {
+    let counts;
+    assert.doesNotThrow(() => { counts = countText(text, path); }, path);
+    assert.deepEqual(counts, { todoComments: expected, eslintDisable: 0, rustAllow: 0 }, path);
+  }
+}
+
+test("Gate: counts backtick substitution spanning lines inside double quotes", () => {
+  assertShellCounts(['value="`', "# TODO: executable", '`"'].join("\n"), 1);
+});
+
+test("Gate: counts a case arm inside a quoted command substitution", () => {
+  assertShellCounts(['value="$(case x in', "x) # TODO: case arm", "printf x ;;", 'esac)"'].join("\n"), 1);
+});
+
+test("Gate: counts command substitution comments inside arithmetic", () => {
+  assertShellCounts(["value=$(( $(", "# TODO: executable", "printf 1", ") + 2 ))"].join("\n"), 1);
+});
+
+test("Gate: counts Rust allow attributes with whitespace after markers", () => {
+  const source = [
+    "# [allow(dead_code)]",
+    "#  [allow(unused)]",
+    "#![allow(unused)]",
+    "# ! [allow(unused)]",
+    "#\n[allow(unused)]",
+    "#\n!\n[allow(unused)]",
+    '// # [allow(ignored)]',
+    'const TEXT: &str = "# ! [allow(ignored)]";',
+  ].join("\n");
+  let counts;
+  assert.doesNotThrow(() => { counts = countText(source, "a.rs"); });
+  assert.deepEqual(counts, { todoComments: 0, eslintDisable: 0, rustAllow: 6 });
+});
+
+test("Gate: accepts Greptile P1 case-pattern input at old line 383", () => {
+  assertShellCounts(`value="$(case x in x) printf '"' ;; esac)"`, 0);
+});
+
+test("Gate: accepts Greptile P1 quoted-parenthesis input at old line 348", () => {
+  assertShellCounts('echo $(( $(printf "1" "(") + 1 ))', 0);
+});
+
+test("Gate: counts Greptile P1 outer heredoc/substitution input at old line 462", () => {
+  assertShellCounts(['cat <<EOF "$(printf x', "# TODO: executable", ')"', "# FIXME: literal body", "EOF"].join("\n"), 2);
+});
+
+test("conservatively counts shell strings, heredocs, and unfinished constructs", () => {
+  const fixtures = [
+    ['echo "text\n# TODO: literal\n"\n# TODO: real', 2],
+    ["echo 'text\n# TODO: literal\n'\n# TODO: real", 2],
+    ["cat <<END.txt\n# TODO: body\nEND.txt\n# TODO: real", 2],
+    ["cat 3<<A 4<<B\nTODO in A\nA\nFIXME in B\nB\n# TODO: real", 3],
+    [String.raw`echo \$'foo\' # TODO: real`, 1],
+    ["cat <<EOF \\\n/dev/stdin # TODO: command\n# TODO: body\nEOF\n# TODO: real", 3],
+    ["cat <<EOF\n# TODO: unfinished", 1],
+    ['echo "\n# TODO: unfinished', 1],
+    ["echo $'it\\'s TODO: literal'", 1],
+    ['cat <<< "# TODO: literal"\n# TODO: real', 2],
+    ["cat <<EO\\\nF\nTODO: literal body\nEOF", 1],
+  ];
+  for (const [source, expected] of fixtures) assertShellCounts(source, expected);
+});
+
+test("counts every marker key once per physical shell line", () => {
+  assert.deepEqual(countText('echo "TODO FIXME eslint-disable eslint-disable # [allow(x)]"', "a.sh"), {
+    todoComments: 1, eslintDisable: 1, rustAllow: 1,
+  });
+});
+
+test("counts YAML run scalars, blocks, and metadata conservatively", () => {
+  const source = [
+    "name: TODO metadata",
+    "defaults:",
+    "  run:",
+    "    working-directory: TODO-directory",
+    "steps:",
+    '  - run: echo "TODO literal eslint-disable"',
+    "    name: FIXME metadata",
+    "  - run: |+",
+    "      echo 'TODO literal'",
+    "      cat <<EOF",
+    "      FIXME body",
+    "      EOF",
+    "    env:",
+    "      NOTE: HACK metadata",
+    "  - run: >-",
+    "      echo HACK",
+    "  - 'run': echo TODO",
+    "  - run: 'echo",
+    "      TODO multiline scalar'",
+  ].join("\n");
+  for (const path of ["a.yml", "a.yaml"]) {
+    let counts;
+    assert.doesNotThrow(() => { counts = countText(source, path); });
+    assert.deepEqual(counts, { todoComments: 10, eslintDisable: 1, rustAllow: 0 });
+  }
+});
+
+for (const header of ["|", "|-", "|+", ">", ">-", ">+", "|2", "|2-", "|2+", "|-2", "|+2", ">2", ">2-", ">2+", ">-2", ">+2"]) {
+  test(`counts all YAML lines around block scalar ${header}`, () => {
+    for (const prefix of ["run:", "- run:", "  - run:"]) {
+      const indent = prefix.indexOf("run");
+      const source = [
+        `${prefix} ${header} # TODO key line`,
+        `${" ".repeat(indent + 2)}echo TODO`,
+        "",
+        `${" ".repeat(indent + 2)}echo FIXME`,
+        `${" ".repeat(indent)}# HACK after block`,
+        `${" ".repeat(indent)}description: |`,
+        `${" ".repeat(indent + 2)}run: echo TODO not executed`,
+      ].join("\n");
+      for (const path of ["workflow.yml", "workflow.yaml"]) {
+        assert.deepEqual(countText(source, path), { todoComments: 5, eslintDisable: 0, rustAllow: 0 }, prefix);
+      }
+    }
+  });
+}
+
+test("counts YAML run plain scalars starting on the next line", () => {
+  for (const source of ["run:\n  echo TODO", "- run:\n    echo TODO", "run: # FIXME metadata\n  echo TODO"]) {
+    assert.equal(countText(source, "workflow.yml").todoComments, source.startsWith("run: #") ? 2 : 1);
+  }
+});
+
+test("counts inline YAML run lines and adjacent metadata", () => {
+  const source = 'steps:\n  - run: echo "TODO" # FIXME metadata\n    name: HACK metadata\n    env:\n      NOTE: TODO metadata';
+  assert.deepEqual(countText(source, "workflow.yml"), { todoComments: 3, eslintDisable: 0, rustAllow: 0 });
+});
+
+test("counts YAML comments on the whole physical inline run line", () => {
+  for (const source of ["run: echo x # TODO a", "- run: echo x # TODO a", 'run: "echo x" # TODO a', "command: &command echo x\nrun: *command # TODO a"]) {
+    assert.deepEqual(countText(source, "workflow.yml"), { todoComments: 1, eslintDisable: 0, rustAllow: 0 });
+  }
+});
+
+test("counts trailing comments on next-line YAML run values", () => {
+  for (const path of ["workflow.yml", "workflow.yaml"]) {
+    assert.deepEqual(countText("run:\n  echo ok # TODO", path), {
+      todoComments: 1, eslintDisable: 0, rustAllow: 0,
+    });
+  }
+});
+
+test("counts trailing comments on the alias node's own line", () => {
+  for (const run of ["run: *command # TODO", "run:\n  *command # TODO"]) {
+    assert.deepEqual(countText(`command: &command echo ok\n${run}`, "workflow.yml"), {
+      todoComments: 1, eslintDisable: 0, rustAllow: 0,
+    });
+  }
+});
+
+test("counts YAML lines before and after value boundaries", () => {
+  const source = ["run: # TODO key", '  "echo ok', "  # FIXME middle", '  ok" # HACK end', "# TODO outside", "name: TODO outside"].join("\n");
+  assert.deepEqual(countText(source, "workflow.yml"), { todoComments: 5, eslintDisable: 0, rustAllow: 0 });
+});
+
+test("counts markers anywhere in YAML flow mappings", () => {
+  for (const source of ["{ name: TODO, run: echo ok }", "{ run: echo ok, name: TODO }"]) {
+    assert.equal(countText(source, "workflow.yml").todoComments, 1);
+  }
+  assert.equal(countText("{ name: FIXME, run: echo TODO } # HACK", "workflow.yml").todoComments, 1);
+  assert.equal(countText("{ command: &command echo TODO, name: FIXME, run: *command }", "workflow.yml").todoComments, 1);
+});
+
+test("Gate: counts nested workflow flow mappings without extraction", () => {
+  for (const path of ["workflow.yml", "workflow.yaml"]) {
+    assert.deepEqual(countText("build: {runs-on: x, steps: [{run: echo TODO}]}", path), {
+      todoComments: 1, eslintDisable: 0, rustAllow: 0,
+    });
+  }
+});
+
+test("allows conservative overcounting in YAML descriptions, comments, and defaults", () => {
+  for (const source of [
+    "description: |\n  run: echo TODO",
+    "description: >-\n  run: echo TODO",
+    "description: |2-\n  run: echo TODO",
+    'description: "text\n  run: echo TODO"',
+    "# run: echo TODO\nother: FIXME",
+    "defaults:\n  run:\n    working-directory: TODO-folder",
+  ]) {
+    assert.deepEqual(countText(source, "workflow.yaml"), { todoComments: source.startsWith("#") ? 2 : 1, eslintDisable: 0, rustAllow: 0 });
+  }
+});
+
+test("counts aliased YAML run scalars and multiple documents", () => {
+  const source = "command: &command |\n  echo TODO\nsteps:\n  - run: *command\n---\nrun: echo FIXME";
+  assert.equal(countText(source, "workflow.yml").todoComments, 2);
+});
+
+test("counts malformed YAML conservatively without throwing", () => {
+  assert.doesNotThrow(() => {
+    assert.equal(countText("run: [echo TODO", "workflow.yml").todoComments, 1);
+  });
+});
+
+test("restricts Rust allow counts to emitted lint attributes", () => {
+  const source = [
+    "#[some_proc_macro(option(allow(foo)))]",
+    "#[cfg_attr(allow(condition), some_proc_macro(allow(foo)))]",
+    "#[cfg_attr(unix, allow(dead_code), allow(unused_variables))]",
+    "#[cfg_attr(unix, cfg_attr(feature = \"x\", allow(unused)), allow(dead_code))]",
+  ].join("\n");
+  assert.equal(countText(source, "a.rs").rustAllow, 4);
+});
+
+test("counts workaround markers inside nested Rust block comments", () => {
+  const nested = "/* outer /* inner */ TODO hidden */";
+  assert.deepEqual(countText(nested, "a.rs"), { todoComments: 1, eslintDisable: 0, rustAllow: 0 });
+});
+
+test("counts spaced, multiline, and cfg_attr Rust allow attributes", () => {
+  const source = [
+    "#[allow (dead_code)]",
+    "#[",
+    "allow(clippy::all)",
+    "]",
+    "#![cfg_attr(unix, allow(unused))]",
+    'const IGNORED = "#[allow(dead_code)]";',
+  ].join("\n");
+  assert.deepEqual(countText(source, "a.rs"), { todoComments: 0, eslintDisable: 0, rustAllow: 3 });
+});
+
 test("uses path-specific comment and quote syntax", () => {
   assert.equal(countText(["value = '# TODO'", "# TODO: real"].join("\n"), "a.py").todoComments, 1);
   assert.equal(
     countText(["echo '# TODO'", "echo $#", "echo ${name#prefix}", "# TODO: real"].join("\n"), "a.sh").todoComments,
-    1,
+    2,
   );
   assert.equal(
     countText(['content: "/* TODO */";', "// TODO", "/* TODO: real */"].join("\n"), "a.css").todoComments,
@@ -301,6 +531,8 @@ test("only scans source extensions and skips the ratchet itself", () => {
   assert.equal(isSourcePath("web/apps/web/src/App.tsx"), true);
   assert.equal(isSourcePath("docs/ARCHITECTURE.md"), false);
   assert.equal(isSourcePath("scripts/workaround-ratchet.mjs"), false);
+  assert.equal(isSourcePath(".github/workflows/web-ci.yml"), true);
+  assert.equal(isSourcePath("workflow.yaml"), true);
 });
 
 test("fails on increases and allows decreases", () => {

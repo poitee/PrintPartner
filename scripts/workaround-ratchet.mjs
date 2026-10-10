@@ -16,6 +16,8 @@ const SOURCE_EXTENSIONS = new Set([
   ".rs",
   ".py",
   ".sh",
+  ".yml",
+  ".yaml",
   ".css",
   ".html",
 ]);
@@ -29,7 +31,7 @@ const EXCLUDED_PATHS = new Set([
 export const MARKERS = {
   todoComments: /\b(?:TODO|FIXME|HACK)\b/,
   eslintDisable: /eslint-disable/,
-  rustAllow: /#!?\[allow\(/,
+  rustAllow: /#\s*!?\s*\[\s*allow\s*\(/,
 };
 
 const JS_LINE_TERMINATORS = /\r\n|[\n\r\u2028\u2029]/;
@@ -52,10 +54,6 @@ const QUOTES = {
     { open: "'", close: "'", escape: true, multiline: false },
   ],
   rust: [{ open: '"', close: '"', escape: true, multiline: true }],
-  shell: [
-    { open: '"', close: '"', escape: true, multiline: false },
-    { open: "'", close: "'", escape: false, multiline: false },
-  ],
 };
 
 const SYNTAX = {
@@ -63,14 +61,19 @@ const SYNTAX = {
   default: { block: ["/*", "*/"], line: "mixed", quotes: QUOTES.default, leadingStar: true, rustAllow: true },
   html: { block: ["<!--", "-->"], line: null, quotes: QUOTES.cStyle, html: true, rustAllow: false },
   python: { block: null, line: "hash", quotes: QUOTES.python, rustAllow: false },
-  rust: { block: ["/*", "*/"], line: "slash", quotes: QUOTES.rust, rustRawStrings: true, rustAllow: true },
-  shell: { block: null, line: "shellHash", quotes: QUOTES.shell, rustAllow: false },
+  rust: {
+    block: ["/*", "*/"],
+    line: "slash",
+    quotes: QUOTES.rust,
+    rustRawStrings: true,
+    rustAllow: true,
+    nestedBlockComments: true,
+  },
 };
 
 const SYNTAX_BY_EXTENSION = new Map([
   [".rs", SYNTAX.rust],
   [".py", SYNTAX.python],
-  [".sh", SYNTAX.shell],
   [".css", SYNTAX.cStyle],
   [".html", SYNTAX.html],
 ]);
@@ -141,8 +144,6 @@ function lineCommentLength(line, index, syntax) {
     }
     return line[index] === "#" ? 1 : 0;
   }
-  if (syntax.line !== "shellHash" || line[index] !== "#") return 0;
-  if (index === 0 || /[\s;|&()]/.test(line[index - 1])) return 1;
   return 0;
 }
 
@@ -169,6 +170,69 @@ function quoteAt(line, index, syntax) {
   return syntax.quotes.find(({ open }) => line.startsWith(open, index)) ?? null;
 }
 
+function findMatchingBracket(text, openIndex, openChar, closeChar) {
+  let depth = 0;
+  for (let i = openIndex; i < text.length; i += 1) {
+    if (text[i] === openChar) depth += 1;
+    else if (text[i] === closeChar) {
+      depth -= 1;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
+function countRustAllowMarkers(unquotedText) {
+  let count = 0;
+  let index = 0;
+  while (index < unquotedText.length) {
+    if (unquotedText[index] !== "#") {
+      index += 1;
+      continue;
+    }
+    let cursor = index + 1;
+    while (/\s/.test(unquotedText[cursor] ?? "")) cursor += 1;
+    if (unquotedText[cursor] === "!") cursor += 1;
+    while (/\s/.test(unquotedText[cursor] ?? "")) cursor += 1;
+    if (unquotedText[cursor] !== "[") {
+      index += 1;
+      continue;
+    }
+    const close = findMatchingBracket(unquotedText, cursor, "[", "]");
+    if (close === -1) {
+      index += 1;
+      continue;
+    }
+    const inner = unquotedText.slice(cursor + 1, close);
+    count += countRustAllowMeta(inner);
+    index = close + 1;
+  }
+  return count;
+}
+
+function countRustAllowMeta(meta) {
+  if (/^\s*allow\s*\(/.test(meta)) return 1;
+  const cfg = /^\s*cfg_attr\s*\(/.exec(meta);
+  if (!cfg) return 0;
+  const open = cfg[0].length - 1;
+  const close = findMatchingBracket(meta, open, "(", ")");
+  if (close === -1) return 0;
+  const args = [];
+  let start = open + 1;
+  let depth = 0;
+  for (let index = start; index < close; index += 1) {
+    if ("([{".includes(meta[index])) depth += 1;
+    else if (")]}".includes(meta[index])) depth -= 1;
+    else if (meta[index] === "," && depth === 0) {
+      args.push(meta.slice(start, index));
+      start = index + 1;
+    }
+  }
+  args.push(meta.slice(start, close));
+  // The first cfg_attr argument is a condition, not an emitted attribute.
+  return args.slice(1).reduce((count, arg) => count + countRustAllowMeta(arg), 0);
+}
+
 function scanLine(line, syntax, initialState) {
   const commentText = Array(line.length).fill(" ");
   const unquotedCodeText = Array(line.length).fill(" ");
@@ -177,10 +241,23 @@ function scanLine(line, syntax, initialState) {
 
   while (index < line.length) {
     if (state.kind === "blockComment") {
-      const length = line.startsWith(state.close, index) ? state.close.length : 1;
+      const [blockOpen, blockClose] = syntax.block ?? [];
+      if (syntax.nestedBlockComments && blockOpen && line.startsWith(blockOpen, index)) {
+        for (let offset = 0; offset < blockOpen.length; offset += 1) {
+          commentText[index + offset] = line[index + offset];
+        }
+        index += blockOpen.length;
+        state = { ...state, depth: state.depth + 1 };
+        continue;
+      }
+      const closes = line.startsWith(state.close, index);
+      const length = closes ? state.close.length : 1;
       for (let offset = 0; offset < length; offset += 1) commentText[index + offset] = line[index + offset];
       index += length;
-      if (length === state.close.length) state = state.resume;
+      if (closes) {
+        const depth = (state.depth ?? 1) - 1;
+        state = depth === 0 ? state.resume : { ...state, depth };
+      }
       continue;
     }
 
@@ -199,7 +276,7 @@ function scanLine(line, syntax, initialState) {
       const [open, close] = syntax.block;
       for (let offset = 0; offset < open.length; offset += 1) commentText[index + offset] = line[index + offset];
       index += open.length;
-      state = { kind: "blockComment", close, resume: state };
+      state = { kind: "blockComment", close, resume: state, depth: 1 };
       continue;
     }
 
@@ -246,17 +323,32 @@ function countNonJavaScriptText(text, path) {
   const counts = Object.fromEntries(Object.keys(MARKERS).map((key) => [key, 0]));
   const syntax = syntaxFor(path);
   let state = CODE_STATE;
+  const unquotedLines = [];
   for (const line of text.split("\n")) {
     const scanned = scanLine(line, syntax, state);
     state = scanned.state;
+    unquotedLines.push(scanned.unquotedCodeText);
     if (MARKERS.todoComments.test(scanned.commentText)) counts.todoComments += 1;
     if (MARKERS.eslintDisable.test(scanned.commentText)) counts.eslintDisable += 1;
-    if (syntax.rustAllow && MARKERS.rustAllow.test(scanned.unquotedCodeText)) counts.rustAllow += 1;
+  }
+  if (syntax.rustAllow) counts.rustAllow = countRustAllowMarkers(unquotedLines.join("\n"));
+  return counts;
+}
+
+// Shell and YAML text are counted without interpreting syntax.
+function countMarkerLines(lines) {
+  const counts = Object.fromEntries(Object.keys(MARKERS).map((key) => [key, 0]));
+  for (const line of lines) {
+    for (const [key, marker] of Object.entries(MARKERS)) {
+      if (marker.test(line)) counts[key] += 1;
+    }
   }
   return counts;
 }
 
 export function countText(text, path = "") {
+  const extension = extensionOf(path);
+  if ([".sh", ".yml", ".yaml"].includes(extension)) return countMarkerLines(text.split("\n"));
   if (JAVASCRIPT_EXTENSIONS.has(extensionOf(path))) return countJavaScriptComments(text, path);
   return countNonJavaScriptText(text, path);
 }
