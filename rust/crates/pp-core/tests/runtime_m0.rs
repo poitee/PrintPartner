@@ -723,7 +723,10 @@ fn drop_after_caller_runtime_teardown_reaps_writer_and_descendant() {
 async fn crash_left_marker_allows_later_start() {
     let data = temporary("stale-owner");
     std::fs::create_dir_all(&data).unwrap();
-    let mut child = std::process::Command::new("/bin/true").spawn().unwrap();
+    let mut child = std::process::Command::new("/bin/sh")
+        .args(["-c", "exit 0"])
+        .spawn()
+        .unwrap();
     let pid = child.id();
     child.wait().unwrap();
     std::fs::write(
@@ -781,7 +784,10 @@ async fn compatibility_cleanup_failure_reports_failed_instead_of_ready() {
 async fn stale_owner_recovery_admits_only_one_concurrent_start() {
     let data = temporary("stale-owner-race");
     std::fs::create_dir_all(&data).unwrap();
-    let mut child = std::process::Command::new("/bin/true").spawn().unwrap();
+    let mut child = std::process::Command::new("/bin/sh")
+        .args(["-c", "exit 0"])
+        .spawn()
+        .unwrap();
     let pid = child.id();
     child.wait().unwrap();
     std::fs::write(
@@ -1015,10 +1021,13 @@ fn core_death_with_live_child_refuses_standalone_node() {
 }
 
 #[tokio::test]
-async fn dead_core_marker_without_child_info_refuses_start() {
+async fn dead_core_marker_without_child_info_allows_start() {
     let data = temporary("missing-child-info");
     std::fs::create_dir_all(&data).unwrap();
-    let mut dead = std::process::Command::new("/bin/true").spawn().unwrap();
+    let mut dead = std::process::Command::new("/bin/sh")
+        .args(["-c", "exit 0"])
+        .spawn()
+        .unwrap();
     let pid = dead.id();
     dead.wait().unwrap();
     let marker = data.join(".desktop-owner.json");
@@ -1026,8 +1035,45 @@ async fn dead_core_marker_without_child_info_refuses_start() {
         serde_json::json!({"pid": pid, "process_identity": "prior", "lease_hash": "cd".repeat(32)})
             .to_string();
     std::fs::write(&marker, &contents).unwrap();
-    assert!(CoreRuntime::start(launch(data.clone())).await.is_err());
-    assert_eq!(std::fs::read_to_string(marker).unwrap(), contents);
+    let runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
+    assert_eq!(
+        std::fs::read_to_string(data.join(".desktop-lease/previous-marker.json")).unwrap(),
+        contents
+    );
+    assert_ne!(std::fs::read_to_string(&marker).unwrap(), contents);
+    assert!(runtime.shutdown().await.complete());
+    assert!(!marker.exists());
+    std::fs::remove_dir_all(data).unwrap();
+}
+
+#[tokio::test]
+async fn dead_core_marker_with_partial_or_invalid_child_info_refuses_start() {
+    let data = temporary("invalid-child-info");
+    std::fs::create_dir_all(&data).unwrap();
+    let mut dead = std::process::Command::new("/bin/sh")
+        .args(["-c", "exit 0"])
+        .spawn()
+        .unwrap();
+    let pid = dead.id();
+    dead.wait().unwrap();
+    let marker = data.join(".desktop-owner.json");
+    for child in [
+        serde_json::json!({"child_pid": pid}),
+        serde_json::json!({"child_process_identity": "prior"}),
+        serde_json::json!({"child_pid": null, "child_process_identity": null}),
+        serde_json::json!({"child_pid": 0, "child_process_identity": "prior"}),
+        serde_json::json!({"child_pid": pid, "child_process_identity": ""}),
+    ] {
+        let mut owner = serde_json::json!({"pid": pid, "process_identity": "prior", "lease_hash": "cd".repeat(32)});
+        owner
+            .as_object_mut()
+            .unwrap()
+            .extend(child.as_object().unwrap().clone());
+        let contents = owner.to_string();
+        std::fs::write(&marker, &contents).unwrap();
+        assert!(CoreRuntime::start(launch(data.clone())).await.is_err());
+        assert_eq!(std::fs::read_to_string(&marker).unwrap(), contents);
+    }
     std::fs::remove_dir_all(data).unwrap();
 }
 
@@ -1035,7 +1081,10 @@ async fn dead_core_marker_without_child_info_refuses_start() {
 async fn desktop_marker_with_both_processes_dead_allows_start() {
     let data = temporary("both-processes-dead");
     std::fs::create_dir_all(&data).unwrap();
-    let mut dead = std::process::Command::new("/bin/true").spawn().unwrap();
+    let mut dead = std::process::Command::new("/bin/sh")
+        .args(["-c", "exit 0"])
+        .spawn()
+        .unwrap();
     let pid = dead.id();
     dead.wait().unwrap();
     std::fs::write(

@@ -248,7 +248,10 @@ mod tests {
         assert!(!super::child_is_stale(
             &json!({"child_pid": std::process::id(), "child_process_identity": identity})
         ));
-        let mut dead = std::process::Command::new("/bin/true").spawn().unwrap();
+        let mut dead = std::process::Command::new("/bin/sh")
+            .args(["-c", "exit 0"])
+            .spawn()
+            .unwrap();
         let pid = dead.id();
         dead.wait().unwrap();
         assert!(super::child_is_stale(

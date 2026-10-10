@@ -44,9 +44,28 @@ describe("Rust-written storage markers", () => {
     } finally { rmSync(directory, { recursive: true, force: true }); }
   });
 
-  it.each([undefined, {}, { child_pid: 0, child_process_identity: "prior" },
-    { child_pid: process.pid, child_process_identity: processIdentity(process.pid) }])
-    ("refuses a dead core marker with missing, invalid or live child info %j", (child) => {
+  it("recovers a dead core marker before child metadata was recorded", () => {
+    const directory = mkdtempSync(join(tmpdir(), "pp-rust-no-child-"));
+    const dead = spawnSync(process.execPath, ["-e", ""]);
+    expect(dead.status).toBe(0);
+    const marker = JSON.stringify({ pid: dead.pid, process_identity: "prior", lease_hash: "cd".repeat(32) });
+    try {
+      writeFileSync(join(directory, ".desktop-owner.json"), marker);
+      const release = acquireDataDirectory(directory);
+      try {
+        expect(readFileSync(join(directory, ".desktop-lease/previous-marker.json"), "utf8")).toBe(marker);
+        expect(() => acquireDataDirectory(directory)).toThrow("already owned");
+      } finally { release(); }
+      acquireDataDirectory(directory)();
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  it.each([{ child_pid: process.pid }, { child_process_identity: "prior" },
+    { child_pid: null, child_process_identity: null },
+    { child_pid: 0, child_process_identity: "prior" },
+    { child_pid: process.pid, child_process_identity: "" },
+    { child_pid: process.pid, child_process_identity: processIdentity(process.pid) }])(
+    "refuses a dead core marker with partial, invalid or live child info %j", (child) => {
       const directory = mkdtempSync(join(tmpdir(), "pp-rust-child-owner-"));
       const dead = spawnSync(process.execPath, ["-e", ""]);
       expect(dead.status).toBe(0);

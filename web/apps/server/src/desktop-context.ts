@@ -58,6 +58,8 @@ function assertDataDirectoryAvailable(dataDir: string): void {
     child_process_identity: z.string().min(1).optional() })
     .safeParse(JSON.parse(readFileSync(join(canonical, ".desktop-owner.json"), "utf8")));
   if (owner.success && ownerIsStale(owner.data) && (owner.data.kind === "standalone" ||
+      // Spawn records the child before setup permits it to open storage.
+      (owner.data.child_pid === undefined && owner.data.child_process_identity === undefined) ||
       (owner.data.child_pid !== undefined && owner.data.child_process_identity !== undefined &&
        ownerIsStale({ pid: owner.data.child_pid, process_identity: owner.data.child_process_identity })))) {
     renameSync(join(canonical, ".desktop-owner.json"), join(canonical, ".desktop-lease", "previous-marker.json"));
