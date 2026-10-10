@@ -108,12 +108,22 @@ jobs:
         run: |
           set -euo pipefail
           start=$SECONDS
-          cargo nextest run --workspace --locked --manifest-path "$MANIFEST" --partition "count:${PARTITION}/2"
+          status=0
+          cargo nextest run --workspace --locked --profile ci --manifest-path "$MANIFEST" --partition "count:${PARTITION}/2" || status=$?
           elapsed=$((SECONDS - start))
           {
             echo "Rust nextest partition ${PARTITION}/2: ${elapsed}s"
             echo 'Target: warm Rust build + nextest <=90s per partition. Compare a cold run and warm rerun of the same commit and inputs.'
           } | tee -a "$GITHUB_STEP_SUMMARY"
+          python3 rust/scripts/nextest-junit-summary.py --junit rust/target/nextest/ci/junit.xml --partition "$PARTITION"
+          exit "$status"
+      - name: Upload nextest JUnit report
+        if: always() && steps.workspace.outputs.manifest != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: nextest-junit-partition-${{ env.PARTITION }}
+          path: rust/target/nextest/ci/junit.xml
+          if-no-files-found: warn
 
   rust-partition-2:
     name: Rust partition (2/2)
