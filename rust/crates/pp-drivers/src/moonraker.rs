@@ -1,0 +1,445 @@
+//! One cancellable, bounded status-only task per enabled host. No storage/send APIs.
+use anyhow::{Result, ensure};
+use pp_api_types::printer_status::{PrinterHostState as State, PrinterHostStatus as Status};
+use pp_net::outbound::{HttpGuard, SystemResolver};
+use serde::Deserialize;
+use serde_json::Value;
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
+use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
+
+pub const QUERY: &str =
+    "/printer/objects/query?print_stats&virtual_sdcard&display_status&extruder&heater_bed";
+pub const MAX_HOSTS: usize = 128;
+#[derive(Clone, Deserialize, PartialEq, Eq)]
+pub struct Host {
+    pub id: String,
+    pub base_url: String,
+    pub api_key: Option<String>,
+    pub enabled: bool,
+}
+struct Poller {
+    host: Host,
+    cancel: CancellationToken,
+    task: Option<JoinHandle<()>>,
+    status: Arc<Mutex<Status>>,
+}
+impl Drop for Poller {
+    fn drop(&mut self) {
+        self.cancel.cancel();
+        if let Some(task) = &self.task {
+            task.abort();
+        }
+    }
+}
+pub struct Watchers {
+    hosts: HashMap<String, Poller>,
+    guard: HttpGuard,
+    interval: Duration,
+}
+impl Watchers {
+    pub fn new() -> Self {
+        Self::with_guard(
+            HttpGuard::new(
+                Arc::new(SystemResolver),
+                Duration::from_secs(5),
+                2 * 1024 * 1024,
+            )
+            .expect("Static bounds"),
+            Duration::from_secs(2),
+        )
+    }
+    pub fn with_guard(guard: HttpGuard, interval: Duration) -> Self {
+        assert!(!interval.is_zero());
+        Self {
+            hosts: HashMap::new(),
+            guard,
+            interval,
+        }
+    }
+    pub fn status(&self, id: &str) -> Option<Status> {
+        self.hosts
+            .get(id)
+            .map(|p| p.status.lock().expect("Status mutex").clone())
+    }
+    /// The caller serializes snapshots; join removed/replaced tasks before spawning.
+    /// An empty snapshot is also the sleep/shutdown/backend-loss cancellation path.
+    pub async fn replace(&mut self, hosts: Vec<Host>) -> Result<()> {
+        let valid = hosts.len() <= MAX_HOSTS
+            && hosts.iter().all(|h| {
+                !h.id.is_empty()
+                    && h.id.len() <= 256
+                    && h.base_url.len() <= 4096
+                    && h.api_key.as_ref().is_none_or(|key| key.len() <= 4096)
+            });
+        let wanted: HashMap<_, _> = hosts.iter().map(|h| (h.id.clone(), h.clone())).collect();
+        if !valid || wanted.len() != hosts.len() {
+            self.stop().await;
+            anyhow::bail!("Invalid host snapshot");
+        }
+        let removed: Vec<_> = self
+            .hosts
+            .iter()
+            .filter(|(id, p)| wanted.get(*id) != Some(&p.host))
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in removed {
+            if let Some(mut poller) = self.hosts.remove(&id) {
+                poller.cancel.cancel();
+                if let Some(task) = poller.task.take() {
+                    let _ = task.await;
+                }
+            }
+        }
+        for (id, host) in wanted {
+            if self.hosts.contains_key(&id) {
+                continue;
+            }
+            let cancel = CancellationToken::new();
+            let status = Arc::new(Mutex::new(Status::offline(if host.enabled {
+                "Awaiting status"
+            } else {
+                "Integration disabled"
+            })));
+            let task = if host.enabled {
+                let config = host.clone();
+                let stopped = cancel.clone();
+                let current = status.clone();
+                let guard = self.guard.clone();
+                let interval = self.interval;
+                Some(tokio::spawn(async move {
+                    let mut failures = 0u32;
+                    loop {
+                        let response = tokio::select! { biased; _=stopped.cancelled()=>break, response=poll(&guard,&config)=>response };
+                        let delay = match response {
+                            Ok(value) => {
+                                failures = 0;
+                                *current.lock().expect("Status mutex") = value;
+                                interval
+                            }
+                            Err(_) => {
+                                failures = failures.saturating_add(1);
+                                *current.lock().expect("Status mutex") =
+                                    Status::offline("Moonraker status unavailable");
+                                backoff(interval, failures)
+                            }
+                        };
+                        tokio::select! { biased; _=stopped.cancelled()=>break, _=tokio::time::sleep(delay)=>{} }
+                    }
+                }))
+            } else {
+                None
+            };
+            self.hosts.insert(
+                id,
+                Poller {
+                    host,
+                    cancel,
+                    task,
+                    status,
+                },
+            );
+        }
+        Ok(())
+    }
+    pub async fn stop(&mut self) {
+        for (_, mut p) in self.hosts.drain() {
+            p.cancel.cancel();
+            if let Some(task) = p.task.take() {
+                let _ = task.await;
+            }
+        }
+    }
+}
+impl Default for Watchers {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+fn backoff(interval: Duration, failures: u32) -> Duration {
+    interval
+        .saturating_mul(1u32 << failures.min(5))
+        .min(Duration::from_secs(60))
+}
+async fn poll(guard: &HttpGuard, host: &Host) -> Result<Status> {
+    // Accept only an origin plus optional provider path; never append to a query.
+    let base = host.base_url.trim().trim_end_matches('/');
+    ensure!(
+        !base.contains('?') && !base.contains('#'),
+        "Invalid base URL"
+    );
+    let reply = guard
+        .get(
+            &format!("{base}{QUERY}"),
+            host.api_key.as_deref().map(str::trim),
+        )
+        .await?;
+    if reply.status != 200 {
+        anyhow::bail!("HTTP status");
+    }
+    recorded_status(&reply.body, base)
+}
+pub fn recorded_status(body: &[u8], base: &str) -> Result<Status> {
+    let value: Value = serde_json::from_slice(body)?;
+    let status = value
+        .get("result")
+        .and_then(|v| v.get("status"))
+        .and_then(Value::as_object)
+        .ok_or_else(|| anyhow::anyhow!("Missing status"))?;
+    let stats = status.get("print_stats");
+    let raw = stats.and_then(|v| v.get("state")).and_then(Value::as_str);
+    let state = match raw.map(str::to_lowercase).as_deref() {
+        Some("printing") => State::Printing,
+        Some("paused") => State::Paused,
+        Some("complete") => State::Complete,
+        Some("error") => State::Error,
+        Some("standby" | "cancelled") => State::Idle,
+        _ => State::Unknown,
+    };
+    let mut result = Status::offline("");
+    result.state = state;
+    result.filename = stats
+        .and_then(|v| v.get("filename"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned);
+    result.message = match result.state {
+        State::Printing => result
+            .filename
+            .as_ref()
+            .map(|f| format!("Printing {f}"))
+            .or_else(|| raw.map(str::to_owned)),
+        State::Complete => Some(
+            result
+                .filename
+                .as_ref()
+                .map_or_else(|| "Complete".into(), |f| format!("Complete · {f}")),
+        ),
+        State::Idle => Some("Idle".into()),
+        _ => raw.map(str::to_owned),
+    };
+    let uri: axum::http::Uri = base.parse()?;
+    result.ip_address = uri.host().map(str::to_owned);
+    let number = |object: &str, field: &str| {
+        status
+            .get(object)
+            .and_then(|v| v.get(field))
+            .and_then(Value::as_f64)
+            .filter(|v| v.is_finite())
+    };
+    if matches!(result.state, State::Printing | State::Paused) {
+        let progress = status
+            .get("virtual_sdcard")
+            .and_then(|v| v.get("progress"))
+            .filter(|v| !v.is_null())
+            .or_else(|| status.get("display_status").and_then(|v| v.get("progress")));
+        result.progress = progress
+            .and_then(Value::as_f64)
+            .filter(|v| v.is_finite())
+            .map(|v| (v * 100.0).clamp(0.0, 100.0).round());
+    }
+    result.nozzle_temperature_c = number("extruder", "temperature");
+    result.nozzle_target_c = number("extruder", "target");
+    result.bed_temperature_c = number("heater_bed", "temperature");
+    result.bed_target_c = number("heater_bed", "target");
+    Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
+    const SUCCESS: &[u8] = include_bytes!("../tests/fixtures/moonraker-success.json");
+    #[test]
+    fn ticket_t_4_recorded_success_error_offline_wire_shape() {
+        let status = recorded_status(SUCCESS, "http://printer.test:7125").unwrap();
+        assert_eq!(
+            serde_json::to_value(status).unwrap(),
+            serde_json::json!({"state":"printing","progress":43.0,"filename":"bracket.gcode","message":"Printing bracket.gcode","ip_address":"printer.test","nozzle_temperature_c":210.2,"nozzle_target_c":215.0,"bed_temperature_c":59.8,"bed_target_c":60.0})
+        );
+        let error = recorded_status(
+            include_bytes!("../tests/fixtures/moonraker-error.json"),
+            "http://printer.test",
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(error).unwrap(),
+            serde_json::json!({"state":"error","filename":"bracket.gcode","message":"error","ip_address":"printer.test"})
+        );
+        assert!(
+            recorded_status(
+                include_bytes!("../tests/fixtures/moonraker-offline.json"),
+                "http://printer.test"
+            )
+            .is_err()
+        );
+        assert_eq!(
+            serde_json::to_value(Status::offline("Moonraker status unavailable")).unwrap(),
+            serde_json::json!({"state":"offline","message":"Moonraker status unavailable"})
+        );
+    }
+    #[test]
+    fn ticket_t_4_state_progress_and_optional_fields() {
+        for (raw, expected) in [
+            ("standby", State::Idle),
+            ("cancelled", State::Idle),
+            ("complete", State::Complete),
+            ("paused", State::Paused),
+            ("READY", State::Unknown),
+        ] {
+            let body=serde_json::to_vec(&serde_json::json!({"result":{"status":{"print_stats":{"state":raw},"virtual_sdcard":{"progress":2}}}})).unwrap();
+            let status = recorded_status(&body, "http://printer.test").unwrap();
+            assert_eq!(status.state, expected);
+            assert_eq!(
+                status.progress,
+                if raw == "paused" { Some(100.0) } else { None }
+            );
+            assert!(status.filename.is_none());
+        }
+        assert!(recorded_status(b"{}", "http://printer.test").is_err());
+    }
+    async fn simulator(stall: bool) -> (String, Arc<AtomicUsize>, JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let seen = calls.clone();
+        let task = tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let mut bytes = [0; 4096];
+                let len = socket.read(&mut bytes).await.unwrap();
+                let request = String::from_utf8_lossy(&bytes[..len]);
+                assert!(request.starts_with(&format!("GET {QUERY} HTTP/1.1")));
+                assert!(request.contains("x-api-key: fixture-key"));
+                seen.fetch_add(1, Ordering::SeqCst);
+                if stall {
+                    let mut end = [0; 1];
+                    assert_eq!(socket.read(&mut end).await.unwrap(), 0);
+                } else {
+                    let head = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n",
+                        SUCCESS.len()
+                    );
+                    socket.write_all(head.as_bytes()).await.unwrap();
+                    socket.write_all(SUCCESS).await.unwrap();
+                }
+            }
+        });
+        (url, calls, task)
+    }
+    fn host(url: String) -> Host {
+        Host {
+            id: "host".into(),
+            base_url: url,
+            api_key: Some("fixture-key".into()),
+            enabled: true,
+        }
+    }
+    async fn wait_calls(calls: &AtomicUsize, count: usize) {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while calls.load(Ordering::SeqCst) < count {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+    #[tokio::test]
+    async fn ticket_t_4_hidden_window_no_duplicate_and_replacement_removal() {
+        let (url, calls, server) = simulator(false).await;
+        let guard = HttpGuard::new(Arc::new(SystemResolver), Duration::from_secs(1), 4096).unwrap();
+        let mut watchers = Watchers::with_guard(guard, Duration::from_millis(40));
+        let config = host(url.clone());
+        watchers.replace(vec![config.clone()]).await.unwrap();
+        // No UI client is connected; status updates solely from the owner task.
+        wait_calls(&calls, 2).await;
+        for _ in 0..20 {
+            watchers.replace(vec![config.clone()]).await.unwrap();
+        }
+        assert_eq!(watchers.hosts.len(), 1);
+        assert_eq!(watchers.status("host").unwrap().state, State::Printing);
+        let mut disabled = config.clone();
+        disabled.enabled = false;
+        watchers.replace(vec![disabled]).await.unwrap();
+        let before = calls.load(Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(calls.load(Ordering::SeqCst), before);
+        assert_eq!(watchers.status("host").unwrap().state, State::Offline);
+        watchers.replace(vec![config.clone()]).await.unwrap();
+        wait_calls(&calls, before + 1).await;
+        // Sleep/shutdown use the same cancellation path, and resume has one task.
+        watchers.stop().await;
+        watchers.replace(vec![config]).await.unwrap();
+        wait_calls(&calls, before + 2).await;
+        watchers.replace(vec![]).await.unwrap();
+        let before = calls.load(Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(calls.load(Ordering::SeqCst), before);
+        assert!(watchers.status("host").is_none());
+        server.abort();
+    }
+    #[tokio::test]
+    async fn ticket_t_4_prompt_inflight_cancellation_and_invalid_snapshot() {
+        let (url, calls, server) = simulator(true).await;
+        let mut watchers = Watchers::new();
+        watchers.replace(vec![host(url.clone())]).await.unwrap();
+        wait_calls(&calls, 1).await;
+        tokio::time::timeout(Duration::from_millis(200), watchers.replace(vec![]))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(watchers.hosts.is_empty());
+        watchers.replace(vec![host(url.clone())]).await.unwrap();
+        wait_calls(&calls, 2).await;
+        assert!(
+            watchers
+                .replace(vec![host(url.clone()), host(url)])
+                .await
+                .is_err()
+        );
+        assert!(watchers.hosts.is_empty());
+        server.abort();
+    }
+    #[tokio::test]
+    async fn ticket_t_4_http_errors_backoff_and_offline() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let seen = calls.clone();
+        let server = tokio::spawn(async move {
+            loop {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut data = [0; 4096];
+                let _ = socket.read(&mut data).await;
+                seen.fetch_add(1, Ordering::SeqCst);
+                let _ = socket
+                    .write_all(b"HTTP/1.1 503 Unavailable\r\nContent-Length: 0\r\n\r\n")
+                    .await;
+            }
+        });
+        let mut watchers = Watchers::with_guard(
+            HttpGuard::new(Arc::new(SystemResolver), Duration::from_secs(1), 4096).unwrap(),
+            Duration::from_millis(50),
+        );
+        watchers.replace(vec![host(url)]).await.unwrap();
+        wait_calls(&calls, 1).await;
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        assert_eq!(watchers.status("host").unwrap().state, State::Offline);
+        assert!(calls.load(Ordering::SeqCst) <= 3);
+        assert_eq!(backoff(Duration::from_secs(2), 1), Duration::from_secs(4));
+        assert_eq!(
+            backoff(Duration::from_secs(2), 100),
+            Duration::from_secs(60)
+        );
+        watchers.stop().await;
+        server.abort();
+    }
+}

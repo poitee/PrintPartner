@@ -1148,3 +1148,236 @@ async fn desktop_marker_with_both_processes_dead_allows_start() {
     assert!(runtime.shutdown().await.complete());
     std::fs::remove_dir_all(data).unwrap();
 }
+
+#[tokio::test]
+async fn ticket_t_4_real_gateway_hidden_status_and_config_cancellation() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let calls = Arc::new(AtomicUsize::new(0));
+    let seen = calls.clone();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let printer_url = format!("http://{}", listener.local_addr().unwrap());
+    let mode = Arc::new(AtomicUsize::new(0));
+    let served_mode = mode.clone();
+
+    let simulator = tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut bytes = [0; 4096];
+            let count = stream.read(&mut bytes).await.unwrap();
+            let request = String::from_utf8_lossy(&bytes[..count]);
+            assert!(request.starts_with("GET /printer/objects/query?"));
+            assert!(request.contains("x-api-key: recorded-test-key"));
+            seen.fetch_add(1, Ordering::SeqCst);
+            let fixture: &[u8] = match served_mode.load(Ordering::SeqCst) {
+                1 => include_bytes!("../../pp-drivers/tests/fixtures/moonraker-error.json"),
+                2 => include_bytes!("../../pp-drivers/tests/fixtures/moonraker-offline.json"),
+                _ => include_bytes!("../../pp-drivers/tests/fixtures/moonraker-success.json"),
+            };
+            let header = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n",
+                fixture.len()
+            );
+            stream.write_all(header.as_bytes()).await.unwrap();
+            stream.write_all(fixture).await.unwrap();
+        }
+    });
+    let data =
+        std::env::temp_dir().join(format!("pp-t4-{}", hex::encode(rand::random::<[u8; 8]>())));
+    let mut runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
+    let origin = runtime.origin().to_owned();
+    let target = runtime.take_launch_target().unwrap().into_url();
+    let bootstrap = request(
+        &origin,
+        target.strip_prefix(&origin).unwrap(),
+        "GET",
+        None,
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(bootstrap.0, StatusCode::SEE_OTHER);
+    let cookie = bootstrap.1["set-cookie"]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap();
+    let created = request(&origin,"/api/v1/integrations","POST",Some(cookie),None,None,Some(serde_json::json!({"name":"Isolated simulator","type":"moonraker","config":{"base_url":printer_url,"api_key":"recorded-test-key"}}))).await;
+    assert_eq!(
+        created.0,
+        StatusCode::CREATED,
+        "{}",
+        String::from_utf8_lossy(&created.2)
+    );
+    let item: serde_json::Value = serde_json::from_slice(&created.2).unwrap();
+    let id = item["id"].as_str().unwrap();
+    assert_eq!(item["config"]["api_key"], "****");
+    // No browser/window/request traffic drives the polling loop.
+    tokio::time::sleep(Duration::from_millis(2300)).await;
+    assert!(calls.load(Ordering::SeqCst) >= 2);
+    let count = calls.load(Ordering::SeqCst);
+    for alias in ["/api/v1/integrations/"] {
+        let response = request(
+            &origin,
+            &format!("{alias}{id}/status"),
+            "GET",
+            Some(cookie),
+            None,
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(response.0, StatusCode::OK);
+        assert_eq!(response.1["cache-control"], "no-store");
+        let body: serde_json::Value = serde_json::from_slice(&response.2).unwrap();
+        assert_eq!(body["state"], "printing");
+        assert_eq!(body["filename"], "bracket.gcode");
+        assert!(!String::from_utf8_lossy(&response.2).contains("recorded-test-key"));
+    }
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        count,
+        "Reads must not make another outbound request"
+    );
+    for (fixture_mode, expected) in [(1, "error"), (2, "offline")] {
+        mode.store(fixture_mode, Ordering::SeqCst);
+        tokio::time::timeout(Duration::from_secs(6), async {
+            loop {
+                let response = request(
+                    &origin,
+                    &format!("/api/v1/integrations/{id}/status"),
+                    "GET",
+                    Some(cookie),
+                    None,
+                    None,
+                    None,
+                )
+                .await;
+                if serde_json::from_slice::<serde_json::Value>(&response.2).unwrap()["state"]
+                    == expected
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+    mode.store(0, Ordering::SeqCst);
+    let control = runtime.handle();
+    tokio::time::timeout(Duration::from_millis(300), control.suspend_monitoring())
+        .await
+        .unwrap();
+    let asleep = calls.load(Ordering::SeqCst);
+    tokio::time::sleep(Duration::from_millis(2200)).await;
+    assert_eq!(calls.load(Ordering::SeqCst), asleep);
+    control.resume_monitoring();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while calls.load(Ordering::SeqCst) == asleep {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        request(
+            &origin,
+            "/__desktop/moonraker-hosts",
+            "GET",
+            Some(cookie),
+            None,
+            None,
+            None
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        request(
+            &origin,
+            &format!("/api/v1/integrations/{id}/status"),
+            "GET",
+            None,
+            None,
+            None,
+            None
+        )
+        .await
+        .0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        request(
+            &origin,
+            &format!("/api/v1/integrations/{id}"),
+            "PATCH",
+            Some(cookie),
+            None,
+            None,
+            Some(serde_json::json!({"config":{"enabled":false}}))
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let count = calls.load(Ordering::SeqCst);
+    tokio::time::sleep(Duration::from_millis(2200)).await;
+    assert_eq!(calls.load(Ordering::SeqCst), count);
+    let response = request(
+        &origin,
+        &format!("/api/v1/integrations/{id}/status"),
+        "GET",
+        Some(cookie),
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&response.2).unwrap()["state"],
+        "offline"
+    );
+    assert_eq!(
+        request(
+            &origin,
+            &format!("/api/v1/integrations/{id}"),
+            "DELETE",
+            Some(cookie),
+            None,
+            None,
+            None
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        request(
+            &origin,
+            &format!("/api/v1/integrations/{id}/status"),
+            "GET",
+            Some(cookie),
+            None,
+            None,
+            None
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    let receipt = runtime.shutdown().await;
+    assert!(receipt.complete(), "{receipt:?}");
+    assert_eq!(calls.load(Ordering::SeqCst), count);
+    simulator.abort();
+    std::fs::remove_dir_all(data).unwrap();
+    println!(
+        "ticket_t_4 gateway: hidden polling, existing v1 alias, no request-driven polls, secret isolation, suspend/resume, disable/removal/shutdown passed"
+    );
+}

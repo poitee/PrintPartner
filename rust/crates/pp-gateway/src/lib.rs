@@ -6,7 +6,9 @@ use axum::{
     response::IntoResponse,
     serve::Listener,
 };
+use http_body_util::BodyExt;
 use pp_compat::CompatHandle;
+use pp_drivers::moonraker::{Host, Watchers};
 use pp_net::target;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -70,6 +72,10 @@ enum EffectClass {
 }
 
 struct GatewayState {
+    watchers: tokio::sync::Mutex<Watchers>,
+    watcher_cancelled: CancellationToken,
+    watcher_tasks: TaskTracker,
+    monitoring_suspended: tokio::sync::watch::Sender<bool>,
     origin: String,
     host: String,
     cookie_name: String,
@@ -81,6 +87,20 @@ struct GatewayState {
     relays: TaskTracker,
     cancelled: CancellationToken,
     shutdown_requested: CancellationToken,
+}
+
+/// Native power adapters call suspend before sleep and resume after wake.
+/// Window visibility must never call this control.
+#[derive(Clone)]
+pub struct MonitoringControl(Arc<GatewayState>);
+impl MonitoringControl {
+    pub async fn suspend(&self) {
+        self.0.monitoring_suspended.send_replace(true);
+        self.0.watchers.lock().await.stop().await;
+    }
+    pub fn resume(&self) {
+        self.0.monitoring_suspended.send_replace(false);
+    }
 }
 
 pub struct Gateway {
@@ -112,6 +132,10 @@ impl Gateway {
             "{origin}/__desktop/bootstrap?token={token}"
         )));
         let state = Arc::new(GatewayState {
+            watchers: tokio::sync::Mutex::new(Watchers::new()),
+            watcher_cancelled: CancellationToken::new(),
+            watcher_tasks: TaskTracker::new(),
+            monitoring_suspended: tokio::sync::watch::channel(false).0,
             origin,
             host,
             cookie_name: format!("pp_desktop_{}", address.port()),
@@ -131,6 +155,30 @@ impl Gateway {
             relays: TaskTracker::new(),
             cancelled: CancellationToken::new(),
             shutdown_requested: CancellationToken::new(),
+        });
+        let monitoring = state.clone();
+        state.watcher_tasks.spawn(async move {
+            let mut suspension = monitoring.monitoring_suspended.subscribe();
+            loop {
+                if *suspension.borrow_and_update() {
+                    monitoring.watchers.lock().await.stop().await;
+                    tokio::select! { biased;
+                        _=monitoring.watcher_cancelled.cancelled()=>break,
+                        _=suspension.changed()=>continue,
+                    }
+                }
+                tokio::select! { biased;
+                    _ = monitoring.watcher_cancelled.cancelled() => break,
+                    _ = suspension.changed() => continue,
+                    _ = refresh_watchers(&monitoring) => {},
+                }
+                tokio::select! { biased;
+                    _ = monitoring.watcher_cancelled.cancelled() => break,
+                    _ = suspension.changed() => continue,
+                    _ = tokio::time::sleep(Duration::from_secs(1)) => {},
+                }
+            }
+            monitoring.watchers.lock().await.stop().await;
         });
         let stop = CancellationToken::new();
         let stopping = stop.clone();
@@ -186,12 +234,16 @@ impl Gateway {
             .take()
             .context("Launch target already transferred")
     }
+    pub fn monitoring_control(&self) -> MonitoringControl {
+        MonitoringControl(self.state.clone())
+    }
     pub fn shutdown_requested(&self) -> ShutdownRequested {
         ShutdownRequested {
             token: self.state.shutdown_requested.clone(),
         }
     }
     pub async fn drain(&self) {
+        self.state.watcher_cancelled.cancel();
         {
             let mut access = self.state.access.lock().expect("Session mutex poisoned");
             access.draining = true;
@@ -211,10 +263,14 @@ impl Gateway {
             }
         })
         .await;
+        self.state.watcher_cancelled.cancel();
         self.state.cancelled.cancel();
         self.state.relays.close();
     }
     pub async fn stop(self) -> Result<()> {
+        self.state.watcher_cancelled.cancel();
+        self.state.watcher_tasks.close();
+        self.state.watcher_tasks.wait().await;
         self.stop.cancel();
         let mut task = self.task;
         let listener = match tokio::time::timeout(Duration::from_secs(1), &mut task).await {
@@ -230,6 +286,7 @@ impl Gateway {
                 }
             }
         };
+        self.state.watcher_cancelled.cancel();
         self.state.cancelled.cancel();
         self.state.relays.close();
         listener?;
@@ -453,6 +510,7 @@ async fn handle(
             .expect("Session mutex poisoned")
             .sessions
             .clear();
+        state.watcher_cancelled.cancel();
         state.cancelled.cancel();
         state.shutdown_requested.cancel();
         return axum::Json(serde_json::json!({"ok":true})).into_response();
@@ -542,6 +600,40 @@ async fn handle(
             "Origin required for operation with effects",
         );
     }
+    if request.method() == "GET"
+        && let Some(id) = moonraker_status_id(&path)
+    {
+        let cached = state.watchers.lock().await.status(id);
+        let status = if cached.is_some() {
+            cached
+        } else {
+            // A missing/failed snapshot must never fall back to on-demand Node
+            // Moonraker requests. A valid snapshot proves a non-Moonraker/missing ID.
+            if !refresh_watchers(&state).await {
+                return error(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "Printer monitoring unavailable",
+                );
+            }
+            state.watchers.lock().await.status(id)
+        };
+        if let Some(status) = status {
+            let mut response = axum::Json(status).into_response();
+            response
+                .headers_mut()
+                .insert("cache-control", HeaderValue::from_static("no-store"));
+            return response;
+        }
+    }
+    let integrations_changed = matches!(request.method().as_str(), "POST" | "PATCH" | "DELETE")
+        && (path == "/integrations"
+            || path == "/api/v1/integrations"
+            || path
+                .strip_prefix("/integrations/")
+                .is_some_and(|tail| !tail.contains('/'))
+            || path
+                .strip_prefix("/api/v1/integrations/")
+                .is_some_and(|tail| !tail.contains('/')));
     let Some(endpoint) = state.compat.endpoint() else {
         let mut response = error(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -581,6 +673,13 @@ async fn handle(
     };
     match result {
         Ok(mut response) => {
+            if integrations_changed && response.status().is_success() {
+                // Read the committed Node configuration; never replay a mutation.
+                tokio::select! { biased;
+                    _ = state.watcher_cancelled.cancelled() => {},
+                    _ = refresh_watchers(&state) => {},
+                }
+            }
             if response.status() == StatusCode::SWITCHING_PROTOCOLS
                 && let Some(inbound) = inbound_upgrade
             {
@@ -621,6 +720,45 @@ async fn handle(
             StatusCode::BAD_GATEWAY,
             "Compatibility response unavailable; operation outcome may be unknown",
         ),
+    }
+}
+
+fn moonraker_status_id(path: &str) -> Option<&str> {
+    let tail = path.strip_prefix("/api/v1/integrations/")?;
+    let id = tail.strip_suffix("/status")?;
+    (!id.is_empty() && !id.contains('/')).then_some(id)
+}
+async fn refresh_watchers(state: &GatewayState) -> bool {
+    // Serialize the read with reconciliation, including concurrent mutation receipts.
+    let mut watchers = state.watchers.lock().await;
+    let snapshot = tokio::time::timeout(Duration::from_secs(2), async {
+        let endpoint = state
+            .compat
+            .endpoint()
+            .ok_or_else(|| anyhow::anyhow!("Backend unavailable"))?;
+        let request = Request::builder()
+            .uri("/__desktop/moonraker-hosts")
+            .body(Body::empty())?;
+        let response = endpoint.forward(request).await?;
+        anyhow::ensure!(response.status().is_success(), "Snapshot denied");
+        let body = http_body_util::Limited::new(response.into_body(), 1024 * 1024)
+            .collect()
+            .await
+            .map_err(|_| anyhow::anyhow!("Snapshot body unavailable"))?
+            .to_bytes();
+        Ok::<Vec<Host>, anyhow::Error>(serde_json::from_slice(&body)?)
+    })
+    .await;
+    match snapshot {
+        Ok(Ok(hosts))
+            if !*state.monitoring_suspended.borrow() && !state.watcher_cancelled.is_cancelled() =>
+        {
+            watchers.replace(hosts).await.is_ok()
+        }
+        _ => {
+            watchers.stop().await;
+            false
+        }
     }
 }
 

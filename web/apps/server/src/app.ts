@@ -1,4 +1,4 @@
-import { acquireDataDirectory, desktopContext, registerDesktopBoundary } from "./desktop-context.js";
+import { acquireDataDirectory, desktopContext, desktopPrincipal, registerDesktopBoundary } from "./desktop-context.js";
 import Fastify, { type FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
@@ -214,6 +214,23 @@ async function configureApp(app: FastifyInstance, config: ServerConfig, ports: R
   const authStore = resolveAuthStore(ports, config);
   const boardStore = resolveBoardStore(ports, config);
   const repository = resolveRepository(ports);
+  // Private UDS-only snapshot for the Rust status watcher. The desktop boundary
+  // authenticates the signed principal; the public gateway does not admit this path.
+  if (desktopContext() && repository) {
+    app.get("/__desktop/moonraker-hosts", async (request, reply) => {
+      if (!desktopPrincipal(request)) return reply.code(403).send({ detail: "Desktop principal required" });
+      const raw = repository.getSetting("integrations");
+      const items: unknown = raw ? JSON.parse(raw) : [];
+      if (!Array.isArray(items) || items.length > 128) return reply.code(503).send({ detail: "Host snapshot unavailable" });
+      return items.filter((item) => item?.type === "moonraker").map((item) => {
+        const config = item.config ?? {};
+        const base = config.base_url ?? config.baseUrl;
+        const key = config.api_key ?? config.apiKey;
+        return { id: String(item.id), base_url: typeof base === "string" ? base : "",
+          api_key: typeof key === "string" ? key : null, enabled: config.enabled !== false };
+      });
+    });
+  }
   const planning = hostedPlanningPolicy(config.deployMode);
   setPrivateOutboundDenied(!planning.allowPrivateOutbound);
   if (planning.hostedPlanning) {

@@ -36,3 +36,45 @@ Logs keep only approved event names, severity and timestamps. Raw Node output, U
 The loopback document carries `frame-src 'none'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'`. Existing blob thumbnails/downloads and popup-based handoffs are preserved. This CSP does not deny popups; the native shell must deny new windows separately.
 
 Browser interaction, native window permissions, macOS WebKit cookies, signed/notarized packaging and installed-app process behavior remain separate acceptance requirements. Job WebSocket path/reconnect work is owned by another worker; the gateway supports upgrade relay but that journey is not proved by these tests. Slow-consumer stress, steady-health three-failure timing and broader operation admission remain follow-up verification work.
+
+## Moonraker status seed (GRE-335)
+
+The desktop gateway starts status monitoring independently of browser requests
+and window visibility. Node retains storage ownership and provides a private,
+signed-principal-only UDS snapshot of Moonraker configuration. That endpoint is
+not admitted through the public gateway. Snapshot reconciliation runs once per
+second, has a two-second deadline and also runs after successful integration
+creation/update/removal. At most 128 configurations are admitted; malformed or
+unavailable snapshots cancel monitoring. A missing snapshot cannot fall back to
+Node's on-demand Moonraker status path through the gateway.
+
+`pp-drivers` owns one task per enabled host and serves the existing optional-field
+`PrinterHostStatus` DTO from `pp-api-types` at the admitted v1 status route. A
+successful poll waits two seconds; errors mark the host offline and back off
+from four to sixty seconds. Reconciliation joins removed/replaced tasks before
+starting replacements. Core shutdown cancels and joins monitoring. Native power
+adapters can await `CoreHandle::suspend_monitoring()` before sleep and call
+`resume_monitoring()` on wake; hiding the window never suspends monitoring.
+OS-specific power notification delivery has not been proved here.
+
+Each status poll makes only a GET to `/printer/objects/query`. `pp-net` resolves
+once per request, rejects the entire answer set if any address is prohibited,
+and connects using checked `SocketAddr` values without another resolution.
+Explicit LAN and loopback printer targets are allowed. Metadata, link-local,
+unspecified, multicast and IPv6 transition/translation targets are rejected.
+HTTP requests have five-second monotonic and wall-time deadlines (sleep must
+not extend a socket's life), at most 32 DNS answers and a 2 MiB response limit.
+Redirects are not followed. This seed supports explicit HTTP; HTTPS/TLS provider
+work belongs to GRE-359. API-key/JWT headers stay on the configured connection.
+
+Monitoring has no database, Checkoff, upload or dispatch dependencies. Node's
+other printer operations retain their existing behavior. Simulator fixtures and
+the real gateway test cover successful, printer-error and offline responses,
+cancellation, backoff, duplicate prevention, DNS rebinding and trust boundaries:
+
+```sh
+cargo nextest run --locked --manifest-path rust/Cargo.toml --no-tests=fail -E 'test(ticket_t_4)'
+```
+
+GRE-449 and controlled hardware/native-window/power evidence remain separate
+completion gates. These seed receipts do not mark GRE-335 or its parent Done.
