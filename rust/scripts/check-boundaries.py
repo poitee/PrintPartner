@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 
@@ -13,7 +14,10 @@ def violations(packages):
 
 
 manifest = Path(__file__).resolve().parents[1] / "Cargo.toml"
-metadata = json.loads(subprocess.check_output([str(Path.home() / ".cargo/bin/cargo"), "metadata", "--manifest-path", str(manifest), "--locked", "--format-version", "1", "--no-deps"]))
+cargo = shutil.which("cargo")
+if cargo is None:
+    raise SystemExit("cargo not found in PATH")
+metadata = json.loads(subprocess.check_output([cargo, "metadata", "--manifest-path", str(manifest), "--locked", "--format-version", "1", "--no-deps"]))
 assert not violations(metadata["packages"]), violations(metadata["packages"])
 if "--self-test" in sys.argv:
     invalid = [{"name": "pp-compat", "dependencies": [{"name": "pp-gateway"}]}]

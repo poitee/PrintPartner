@@ -8,6 +8,7 @@ on:
     paths:
       - "web/**"
       - "scripts/**"
+      - "manifests/**"
       - "docs/**"
       - ".agents/**"
       - ".cursor/skills/verify-print-partner/helpers/**"
@@ -16,6 +17,7 @@ on:
       - "CHANGELOG.md"
       - "OPERATIONS.md"
       - ".github/FUNDING.yml"
+      - ".github/ISSUE_TEMPLATE/**"
       - "Dockerfile"
       - "docker-entrypoint.sh"
       - "docker-compose*.yml"
@@ -23,10 +25,12 @@ on:
       - "slicer-sidecar/**"
       - ".github/dependabot.yml"
       - ".github/workflows/**"
+      - ".github/actions/**"
   pull_request:
     paths:
       - "web/**"
       - "scripts/**"
+      - "manifests/**"
       - "docs/**"
       - ".agents/**"
       - ".cursor/skills/verify-print-partner/helpers/**"
@@ -35,6 +39,7 @@ on:
       - "CHANGELOG.md"
       - "OPERATIONS.md"
       - ".github/FUNDING.yml"
+      - ".github/ISSUE_TEMPLATE/**"
       - "Dockerfile"
       - "docker-entrypoint.sh"
       - "docker-compose*.yml"
@@ -42,6 +47,7 @@ on:
       - "slicer-sidecar/**"
       - ".github/dependabot.yml"
       - ".github/workflows/**"
+      - ".github/actions/**"
 
 permissions:
   contents: read
@@ -61,6 +67,8 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - name: Install
         run: npm ci
+      - name: Check workaround ratchet
+        run: node ../scripts/workaround-ratchet.mjs && node --test ../scripts/workaround-ratchet.test.mjs
       - name: Audit high-severity vulnerabilities
         run: npm audit --audit-level=high
       - name: Full quality suite
