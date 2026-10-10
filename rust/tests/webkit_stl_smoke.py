@@ -208,7 +208,8 @@ def main():
                     **seeded, **pixels}
                 (output / 'receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
                 print(json.dumps(receipt), flush=True)
-            except Exception:
+            except Exception as error:
+                (output / 'failure.json').write_text(json.dumps({'error': str(error)}, indent=2) + '\n')
                 if session:
                     try:
                         (output / 'failure.png').write_bytes(base64.b64decode(command(f'/session/{session}/screenshot')))
