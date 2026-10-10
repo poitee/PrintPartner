@@ -82,22 +82,32 @@ try {
   assert.equal(await page.evaluate(() => globalThis.document.documentElement.scrollWidth > globalThis.innerWidth), false);
   assert.deepEqual(errors, []);
   const recoveryPage = await browser.newPage();
+  let wsInterceptCount = 0;
   // Disable the actual job stream so WebSocket completion cannot race the failed HTTP poll.
-  await recoveryPage.routeWebSocket(/\/ws\/jobs\/[^/?]+$/, (socket) => socket.close());
+  await recoveryPage.routeWebSocket(/\/ws\/jobs\/[^/?]+$/, (socket) => {
+    wsInterceptCount += 1;
+    socket.close();
+  });
   const jobStatus = /\/jobs\/[^/?]+$/;
-  await recoveryPage.route(jobStatus, (route) => route.request().method() === "GET"
-    ? route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "Test connection interrupted" }) })
-    : route.continue());
+  let pollCount = 0;
+  await recoveryPage.route(jobStatus, (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    pollCount += 1;
+    // Transient failures keep observing; only a missing job ends observation.
+    const status = pollCount <= 2 ? 503 : 404;
+    return route.fulfill({ status, contentType: "application/json", body: JSON.stringify({ error: status === 503 ? "Test connection interrupted" : "Job not found" }) });
+  });
   await recoveryPage.goto(`${ui}/export?profile=${build.id}`);
-  await recoveryPage.getByRole("button", { name: /Download.*STL|Choose and download/i }).first().click();
   await recoveryPage.getByRole("button", { name: "Download sorted STL files", exact: true }).click();
   await recoveryPage.getByText("Could not download the STL files", { exact: true }).waitFor();
-  await recoveryPage.getByText(/Lost contact with the job/).first().waitFor();
+  await recoveryPage.getByText("Job not found", { exact: true }).first().waitFor();
+  assert.equal(pollCount, 3, "Both transient failures must be retried before the terminal 404");
+  assert.ok(wsInterceptCount >= 1, "WebSocket intercept must fire for /ws/jobs/:jobId");
   assert.equal(await recoveryPage.getByRole("button", { name: "Download sorted STL files", exact: true }).isEnabled(), true);
   await recoveryPage.unroute(jobStatus);
   await recoveryPage.getByRole("button", { name: "Try again", exact: true }).click();
   await recoveryPage.getByRole("link", { name: "Save the files", exact: true }).waitFor();
   await recoveryPage.close();
-  log("PASS: interrupted job observation stops the spinner; retry completes through HTTP polling without WebSocket");
+  log("PASS: transient job polls retry; missing job stops the spinner; retry completes through HTTP polling without WebSocket");
   log("PASS: real upload, saved rules reload, Accent + Structural ZIP download with identical STL bytes, overlap warning, mobile layout", { build: build.id });
 } finally { await browser.close(); }
