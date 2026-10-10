@@ -1560,7 +1560,7 @@
   "wire_semantics": {
     "nullable_presence": "revision_id, expected_draft, source_layer and quantity value are required fields whose values may be null; no serde default",
     "numeric": "JSON numbers must be mathematically integral and bounded; integral float lexemes accepted, strings and booleans rejected; IDs and versions limited to JavaScript MAX_SAFE_INTEGER",
-    "strings": "Installed Zod4.5.4 uses Unicode code-point lengths; Rust chars().count() matches the measured 1000/1001 emoji bounds",
+    "strings": "Installed Zod4.5.4 uses Unicode code-point lengths; Rust chars().count() matches the measured 1000/1001 emoji, CJK and combining-mark bounds",
     "receipt": "applied_at is bounded nonempty text, not an ISO timestamp refinement; all IDs/digests are serialized from provided values unchanged"
   },
   "diagnostic_projection": {

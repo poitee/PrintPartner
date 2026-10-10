@@ -64,10 +64,12 @@ function capture(name, parser, input, rawInput) {
   }
   supplemental.push({ name, direction: parser === "parseSavePlanChoicesRequest" ? "input" : "output", parser, ...(rawInput ? { raw_input: rawInput } : { input }), outcome });
 }
-for (const count of [1000, 1001]) {
-  const input = globalThis.structuredClone(baseline);
-  input.decisions[0].target.source_layer = "🙂".repeat(count);
-  capture(`source-layer-codepoints-${count}-emoji`, "parseSavePlanChoicesRequest", input);
+for (const [glyph, label] of [["🙂", "emoji"], ["漢", "cjk"], ["\u0301", "combining-mark"]]) {
+  for (const count of [1000, 1001]) {
+    const input = globalThis.structuredClone(baseline);
+    input.decisions[0].target.source_layer = glyph.repeat(count);
+    capture(`source-layer-codepoints-${count}-${label}`, "parseSavePlanChoicesRequest", input);
+  }
 }
 const integral = globalThis.structuredClone(baseline);
 integral.decisions[0].value = 1;
@@ -142,7 +144,7 @@ const semanticRules = {
   wire_semantics: {
     nullable_presence: "revision_id, expected_draft, source_layer and quantity value are required fields whose values may be null; no serde default",
     numeric: "JSON numbers must be mathematically integral and bounded; integral float lexemes accepted, strings and booleans rejected; IDs and versions limited to JavaScript MAX_SAFE_INTEGER",
-    strings: "Installed Zod4.5.4 uses Unicode code-point lengths; Rust chars().count() matches the measured 1000/1001 emoji bounds",
+    strings: "Installed Zod4.5.4 uses Unicode code-point lengths; Rust chars().count() matches the measured 1000/1001 emoji, CJK and combining-mark bounds",
     receipt: "applied_at is bounded nonempty text, not an ISO timestamp refinement; all IDs/digests are serialized from provided values unchanged",
   },
   diagnostic_projection: {

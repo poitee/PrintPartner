@@ -41,7 +41,7 @@ try {
   const report = JSON.parse(readFileSync(join(output, "rust-cases.json"), "utf8"));
   assert.equal(report.mismatches.length, 0);
   assert.equal(report.cases.filter((item) => item.collection === "cases").length, 41);
-  assert.equal(report.cases.filter((item) => item.collection === "supplemental").length, 42);
+  assert.equal(report.cases.filter((item) => item.collection === "supplemental").length, 46);
   assert.equal(report.route_receipts.length, 5);
 } catch (error) {
   failure = error;
@@ -53,4 +53,4 @@ try {
   process.stdout.write(`Receipts: ${output}\n`);
 }
 if (failure) throw failure;
-process.stdout.write("PASS: 41 frozen cases, 42 supplemental cases and five receipts match; per-run evidence remains independently verifiable\n");
+process.stdout.write("PASS: 41 frozen cases, 46 supplemental cases and five receipts match; per-run evidence remains independently verifiable\n");
