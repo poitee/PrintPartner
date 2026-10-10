@@ -4,26 +4,26 @@ on:
   pull_request:
     paths:
       - 'rust/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
       - '.github/workflows/desktop-fleet-rust.yml'
   workflow_dispatch:
     inputs:
       build_jobs:
         description: Cargo build jobs (default 6 for 8 cores / 16 GiB)
-        default: '6'
       cache_root:
         description: Persistent writable cache root on the fleet VM
-        default: /persist/cargo-cache/PrintPartner
       cache_key:
         description: Use a fresh key for cold, then the same key and VM for warm
-        default: default
 
 permissions:
   contents: read
 
+concurrency:
+  group: fleet-rust-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   rust:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ${{ fromJSON(vars.FLEET_RUST_RUNNER_LABELS || '["self-hosted", "linux", "x64", "agent-fleet"]') }}
     timeout-minutes: 45
     env:
@@ -32,16 +32,16 @@ jobs:
       CACHE_KEY: ${{ inputs.cache_key || 'default' }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Find Rust workspace
         id: workspace
         shell: bash
         run: |
           if [[ -f rust/Cargo.toml ]]; then
             echo 'manifest=rust/Cargo.toml' >> "$GITHUB_OUTPUT"
-          elif [[ -f Cargo.toml ]]; then
-            echo 'manifest=Cargo.toml' >> "$GITHUB_OUTPUT"
           else
-            echo 'No Rust workspace (rust/Cargo.toml or Cargo.toml); skipping.' | tee -a "$GITHUB_STEP_SUMMARY"
+            echo 'No Rust workspace (rust/Cargo.toml); skipping.' | tee -a "$GITHUB_STEP_SUMMARY"
           fi
       - name: Build and test with persistent Cargo cache
         if: steps.workspace.outputs.manifest != ''
@@ -51,7 +51,8 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$CARGO_BUILD_JOBS" =~ ^[1-9][0-9]*$ ]] || { echo 'build_jobs must be a positive integer'; exit 1; }
-          [[ "$CACHE_ROOT" == /persist/* ]] || { echo 'cache_root must be under /persist/'; exit 1; }
+          CACHE_ROOT=$(realpath -m -- "$CACHE_ROOT")
+          [[ "$CACHE_ROOT" == /persist/* ]] || { echo 'cache_root must resolve under /persist/'; exit 1; }
           [[ "$CACHE_KEY" =~ ^[a-zA-Z0-9_-]+$ ]] || { echo 'cache_key must contain only letters, digits, underscores or hyphens'; exit 1; }
           command -v cargo
           cargo nextest --version
