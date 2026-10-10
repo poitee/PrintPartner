@@ -88,6 +88,11 @@ pub enum UserOperation {
         job_id: String,
     },
     List(JobListQuery),
+    /// Operator-visible damaged rows, with uncertain reservations explicitly flagged.
+    Quarantined {
+        before: Option<(i64, String)>,
+        limit: u16,
+    },
     History {
         job_id: String,
         before_version: Option<i64>,
@@ -118,9 +123,20 @@ pub enum WorkerOperation {
     Finish(Option<ResultArtifact>),
     Fail,
 }
+/// A damaged document is retained for inspection and repair, never executed.
+#[derive(Debug)]
+pub struct QuarantinedJob {
+    pub job_id: String,
+    pub kind: String,
+    pub updated_at: i64,
+    pub reason: String,
+    /// This reservation remains held until an operator investigates the effect.
+    pub uncertain_resource: Option<String>,
+}
 pub enum Outcome {
     Job(JobRecord, LocalCommit),
     List(Vec<JobRecord>),
+    Quarantined(Vec<QuarantinedJob>),
     History(Vec<HistoryEntry>),
     Reconciliations(Vec<ReconciliationRecord>),
     Claimed(Option<(JobRecord, AttemptLease)>),
@@ -150,10 +166,17 @@ pub(crate) enum Command {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JobFailure {
     CommitUnknown,
+    JobDocTooLarge { size: usize, limit: usize },
 }
 impl std::fmt::Display for JobFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("Job commit outcome unknown")
+        match self {
+            Self::CommitUnknown => f.write_str("Job commit outcome unknown"),
+            Self::JobDocTooLarge { size, limit } => write!(
+                f,
+                "Durable job document is {size} bytes, exceeding the {limit}-byte limit"
+            ),
+        }
     }
 }
 impl std::error::Error for JobFailure {}
@@ -265,7 +288,7 @@ impl AtomicJobClient {
     pub fn submit(
         &self,
         credential: Credential,
-        operation: UserOperation,
+        mut operation: UserOperation,
         cancelled: &AtomicBool,
         wait: Duration,
     ) -> Result<Pending> {
@@ -273,10 +296,17 @@ impl AtomicJobClient {
             key,
             payload_version,
             payload,
-        } = &operation
+        } = &mut operation
         {
             model::text(key, 128)?;
             ensure!(*payload_version == 1, "Unsupported payload version");
+            if let Payload::ExportStlPack {
+                filename_grouping: Some(grouping),
+                ..
+            } = payload
+            {
+                grouping.normalize();
+            }
             payload.validate()?;
         }
         submit(
@@ -351,14 +381,39 @@ fn random() -> String {
 fn now() -> i64 {
     time::OffsetDateTime::now_utc().unix_timestamp()
 }
+pub const JOB_DOC_SIZE_LIMIT: usize = 131072;
+
+fn check_document_size(size: usize) -> Result<()> {
+    ensure!(
+        size <= JOB_DOC_SIZE_LIMIT,
+        JobFailure::JobDocTooLarge {
+            size,
+            limit: JOB_DOC_SIZE_LIMIT
+        }
+    );
+    Ok(())
+}
+
+fn decode_row(id: &str, document: &str) -> Option<JobRecord> {
+    match decode(document) {
+        Ok(job) => Some(job),
+        Err(error) => {
+            eprintln!("Skipping invalid durable job row {id}: {error}");
+            None
+        }
+    }
+}
+
 fn encode(job: &JobRecord) -> Result<String> {
     let mut document = serde_json::to_value(job)?;
     document["_attempt_worker"] = serde_json::to_value(&job.worker)?;
     document["_attempt_fence"] = serde_json::to_value(&job.fence)?;
-    Ok(serde_json::to_string(&document)?)
+    let document = serde_json::to_string(&document)?;
+    check_document_size(document.len())?;
+    Ok(document)
 }
 fn decode(document: &str) -> Result<JobRecord> {
-    ensure!(document.len() <= 131072, "Durable job document too large");
+    check_document_size(document.len())?;
     let value: serde_json::Value = serde_json::from_str(document)?;
     let mut job: JobRecord = serde_json::from_value(value.clone())?;
     job.fence = serde_json::from_value(
@@ -481,7 +536,7 @@ fn save(tx: &Transaction<'_>, job: &mut JobRecord, event: &str) -> Result<()> {
         job.worker = None;
     }
     job.validate_state()?;
-    tx.execute("INSERT INTO durable_jobs(id,tenant,kind,state,resource,version,generation,lease_until,created,updated,document) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11) ON CONFLICT(id) DO UPDATE SET state=excluded.state,version=excluded.version,generation=excluded.generation,lease_until=excluded.lease_until,updated=excluded.updated,document=excluded.document",params![job.job_id,job.tenant,job.kind.name(),job.state.name(),job.payload.resource(),job.state_version,job.generation,job.lease_until,job.created_at,job.updated_at,encode(job)?])?;
+    tx.execute("INSERT INTO durable_jobs(id,tenant,kind,state,resource,version,generation,lease_until,created,updated,document) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11) ON CONFLICT(id) DO UPDATE SET state=excluded.state,resource=excluded.resource,version=excluded.version,generation=excluded.generation,lease_until=excluded.lease_until,updated=excluded.updated,document=excluded.document",params![job.job_id,job.tenant,job.kind.name(),job.state.name(),job.payload.resource(),job.state_version,job.generation,job.lease_until,job.created_at,job.updated_at,encode(job)?])?;
     tx.execute("DELETE FROM durable_job_history WHERE job_id=?1 AND event IN ('heartbeat','progress') AND version<?2",params![job.job_id,job.state_version-128])?;
     tx.execute(
         "INSERT INTO durable_job_history(job_id,version,at,state,event) VALUES(?1,?2,?3,?4,?5)",
@@ -495,10 +550,31 @@ fn save(tx: &Transaction<'_>, job: &mut JobRecord, event: &str) -> Result<()> {
     )?;
     Ok(())
 }
+fn quarantine(tx: &Transaction<'_>, id: &str) -> Result<()> {
+    // Preserve the original document and resource; only the attempt index changes.
+    let changed = tx.execute(
+        "UPDATE durable_jobs SET state='quarantined',lease_until=NULL,version=version+1,updated=?2 WHERE id=?1 AND state!='quarantined'",
+        params![id, now()],
+    )?;
+    if changed != 0 {
+        tx.execute(
+            "INSERT INTO durable_job_history(job_id,version,at,state,event)
+             SELECT id,version,updated,state,CASE WHEN resource='' THEN 'document_quarantined' ELSE 'document_quarantined_resource_uncertain' END FROM durable_jobs WHERE id=?1",
+            [id],
+        )?;
+    }
+    Ok(())
+}
 fn recover_in(tx: &Transaction<'_>, all: bool) -> Result<()> {
-    let documents=tx.prepare("SELECT document FROM durable_jobs WHERE state IN ('running','effect_admitted') AND (?1 OR lease_until<=?2)")?.query_map(params![all,now()],|r|r.get::<_,String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
-    for document in documents {
-        let mut job: JobRecord = decode(&document)?;
+    let documents=tx.prepare("SELECT id,document,lease_until FROM durable_jobs WHERE state IN ('running','effect_admitted')")?.query_map([],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,Option<i64>>(2)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    for (id, document, lease_until) in documents {
+        let Some(mut job) = decode_row(&id, &document) else {
+            quarantine(tx, &id)?;
+            continue;
+        };
+        if !all && !lease_until.is_some_and(|until| until <= now()) {
+            continue;
+        }
         job.generation += 1;
         job.fence = None;
         job.worker = None;
@@ -618,22 +694,17 @@ fn user(
                 payload_version,
                 &payload,
             ))?));
-            let prior: Option<(String, String, Option<String>)> = tx
+            let prior: Option<(String, String)> = tx
                 .query_row(
-                    "SELECT intent,job_id,archived_document FROM durable_job_keys WHERE tenant=?1 AND key=?2",
+                    "SELECT intent,job_id FROM durable_job_keys WHERE tenant=?1 AND key=?2",
                     params![tenant, key],
-                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                    |r| Ok((r.get(0)?, r.get(1)?)),
                 )
                 .optional()?;
-            if let Some((hash, id, archived)) = prior {
+            if let Some((hash, id)) = prior {
                 ensure!(hash == intent, "Idempotency conflict");
                 return Ok(Outcome::Job(
-                    match load(tx, &id)? {
-                        Some(job) => job,
-                        None => {
-                            decode(&archived.ok_or_else(|| anyhow!("Missing retained receipt"))?)?
-                        }
-                    },
+                    retained_owned(tx, &id, tenant)?,
                     LocalCommit::ReadOnly,
                 ));
             }
@@ -691,10 +762,64 @@ fn user(
             if let Some((_, id)) = &query.before {
                 model::text(id, 128)?;
             }
-            let documents=tx.prepare("SELECT document FROM durable_jobs WHERE tenant=?1 AND (?2 IS NULL OR CASE state WHEN 'queued' THEN 'pending' WHEN 'running' THEN 'running' WHEN 'effect_admitted' THEN 'running' WHEN 'uploaded_only' THEN 'done' WHEN 'succeeded' THEN 'done' WHEN 'cancelled' THEN 'cancelled' ELSE 'error' END=?2) AND (?3 IS NULL OR updated>=?3) AND (?4 IS NULL OR json_extract(document,'$.payload.payload.profile_id')=?4) AND (?5 IS NULL OR updated<?5 OR (updated=?5 AND id<?6)) ORDER BY updated DESC,id DESC LIMIT ?7")?.query_map(params![tenant,query.status,query.since,query.profile_id.map(|v|v as i64),query.before.as_ref().map(|c|c.0),query.before.as_ref().map(|c|c.1.as_str()),query.limit],|r|r.get::<_,String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
-            Ok(Outcome::List(
-                documents.iter().map(|s| decode(s)).collect::<Result<_>>()?,
-            ))
+            let mut statement = tx.prepare("SELECT id,document FROM durable_jobs WHERE tenant=?1 AND (?2 IS NULL OR CASE state WHEN 'queued' THEN 'pending' WHEN 'running' THEN 'running' WHEN 'effect_admitted' THEN 'running' WHEN 'uploaded_only' THEN 'done' WHEN 'succeeded' THEN 'done' WHEN 'cancelled' THEN 'cancelled' ELSE 'error' END=?2) AND (?3 IS NULL OR updated>=?3) AND (?4 IS NULL OR json_extract(document,'$.payload.payload.profile_id')=?4) AND (?5 IS NULL OR updated<?5 OR (updated=?5 AND id<?6)) ORDER BY updated DESC,id DESC")?;
+            let mut rows = statement.query(params![
+                tenant,
+                query.status,
+                query.since,
+                query.profile_id.map(|v| v as i64),
+                query.before.as_ref().map(|c| c.0),
+                query.before.as_ref().map(|c| c.1.as_str()),
+            ])?;
+            let mut jobs = Vec::with_capacity(usize::from(query.limit));
+            while jobs.len() < usize::from(query.limit) {
+                let Some(row) = rows.next()? else {
+                    break;
+                };
+                let id: String = row.get(0)?;
+                let document: String = row.get(1)?;
+                if let Some(job) = decode_row(&id, &document) {
+                    jobs.push(job);
+                }
+            }
+            Ok(Outcome::List(jobs))
+        }
+        UserOperation::Quarantined { before, limit } => {
+            ensure!((1..=200).contains(&limit), "Invalid quarantine list limit");
+            if let Some((_, id)) = &before {
+                model::text(id, 128)?;
+            }
+            let mut statement = tx.prepare(
+                "SELECT id,kind,updated,resource,document FROM durable_jobs WHERE tenant=?1 AND state='quarantined'
+                 AND (?2 IS NULL OR updated<?2 OR (updated=?2 AND id<?3)) ORDER BY updated DESC,id DESC LIMIT ?4",
+            )?;
+            let records = statement
+                .query_map(
+                    params![
+                        tenant,
+                        before.as_ref().map(|c| c.0),
+                        before.as_ref().map(|c| c.1.as_str()),
+                        limit
+                    ],
+                    |row| {
+                        let resource: String = row.get(3)?;
+                        let document: String = row.get(4)?;
+                        Ok(QuarantinedJob {
+                            job_id: row.get(0)?,
+                            kind: row.get(1)?,
+                            updated_at: row.get(2)?,
+                            reason: decode(&document)
+                                .err()
+                                .map(|e| e.to_string())
+                                .unwrap_or_else(|| {
+                                    "Document quarantined; operator inspection required".into()
+                                }),
+                            uncertain_resource: (!resource.is_empty()).then_some(resource),
+                        })
+                    },
+                )?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(Outcome::Quarantined(records))
         }
         UserOperation::History {
             job_id,
@@ -813,7 +938,10 @@ fn user(
                     }
                     subject_receipt = Some(receipt.clone());
                     job.result = Some(receipt);
-                    if completion_proven(&job, job.result.as_ref()) {
+                    if let Some(primary) = proven_primary_printer_receipt(&job).cloned() {
+                        job.result = Some(primary);
+                        job.state = PersistentState::Succeeded;
+                    } else if completion_proven(&job, job.result.as_ref()) {
                         job.state = PersistentState::Succeeded;
                     } else if !settle_uploaded_only(&mut job) {
                         if resolved_printer_failure(&job) {
@@ -829,7 +957,10 @@ fn user(
                 Decision::ConfirmNoEffect => {
                     ensure!(receipt.is_none(), "No-effect decision cannot carry receipt");
                     job.effects[effect_index].deny()?;
-                    if !settle_uploaded_only(&mut job) {
+                    if let Some(primary) = proven_primary_printer_receipt(&job).cloned() {
+                        job.result = Some(primary);
+                        job.state = PersistentState::Succeeded;
+                    } else if !settle_uploaded_only(&mut job) {
                         job.result = prior_result;
                         job.state = PersistentState::Failed;
                     }
@@ -868,13 +999,18 @@ fn claim(tx: &Transaction<'_>, worker: &str, admission: &WorkerAdmission) -> Res
         if count >= *capacity as i64 {
             continue;
         }
-        let documents=tx.prepare("SELECT document FROM durable_jobs WHERE state='queued' AND kind=?1 ORDER BY created,id")?.query_map([kind.name()],|r|r.get::<_,String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
-        for document in documents {
-            let mut job: JobRecord = decode(&document)?;
+        let documents=tx.prepare("SELECT id,document FROM durable_jobs WHERE state='queued' AND kind=?1 ORDER BY created,id")?.query_map([kind.name()],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        for (id, document) in documents {
+            let Some(mut job) = decode_row(&id, &document) else {
+                continue;
+            };
             let resource = job.payload.resource();
             if !resource.is_empty() {
-                let count:i64=tx.query_row("SELECT COUNT(*) FROM durable_jobs WHERE tenant=?1 AND state IN ('running','effect_admitted','reconciliation_required') AND (resource=?2 OR (?2 LIKE 'source:%' AND resource='source:*') OR (?2='source:*' AND resource LIKE 'source:%'))",params![job.tenant,resource],|r|r.get(0))?;
-                if count >= admission.per_resource as i64 {
+                let count = reserved_resources(tx, &job.tenant, false)?
+                    .iter()
+                    .filter(|reserved| resources_overlap(&resource, reserved))
+                    .count();
+                if count >= admission.per_resource {
                     continue;
                 }
             }
@@ -899,19 +1035,54 @@ fn claim(tx: &Transaction<'_>, worker: &str, admission: &WorkerAdmission) -> Res
     }
     Ok(Outcome::Claimed(None))
 }
+fn proven_primary_printer_receipt(job: &JobRecord) -> Option<&ResultArtifact> {
+    if let Payload::PrinterStart(request) = &job.payload {
+        let upload = request.upload_effect()?;
+        return job.effects.iter().find_map(|effect| {
+            if effect.intent.operation != EffectOperation::PrinterStart
+                || effect.intent.basis_hash != upload.intent.basis_hash
+                || effect.intent.content_hash != upload.intent.content_hash
+                || effect.intent.target != upload.intent.target
+            {
+                return None;
+            }
+            match effect.outcome().ok()? {
+                EffectOutcome::Confirmed(receipt) => Some(receipt),
+                EffectOutcome::Unresolved | EffectOutcome::Denied => None,
+            }
+        });
+    }
+    let Payload::PrinterUpload {
+        printer_id, start, ..
+    } = &job.payload
+    else {
+        return None;
+    };
+    let confirmed = |operation| {
+        job.effects.iter().find_map(|effect| {
+            if effect.intent.operation != operation || effect.intent.target != *printer_id {
+                return None;
+            }
+            match effect.outcome().ok()? {
+                EffectOutcome::Confirmed(receipt) => Some(receipt),
+                EffectOutcome::Unresolved | EffectOutcome::Denied => None,
+            }
+        })
+    };
+    if let Some(receipt) = confirmed(EffectOperation::PrinterUploadAndStart) {
+        return Some(receipt);
+    }
+    let upload = confirmed(EffectOperation::PrinterUpload)?;
+    if *start {
+        confirmed(EffectOperation::PrinterStart)
+    } else {
+        Some(upload)
+    }
+}
 fn completion_proven(job: &JobRecord, result: Option<&ResultArtifact>) -> bool {
     match &job.payload {
-        Payload::PrinterUpload {
-            printer_id, start, ..
-        } => {
-            let confirmed = |op| {
-                job.effects.iter().any(|e| {
-                    e.intent.operation == op && e.intent.target == *printer_id && e.confirmed
-                })
-            };
-            confirmed(EffectOperation::PrinterUploadAndStart)
-                || (confirmed(EffectOperation::PrinterUpload)
-                    && (!*start || confirmed(EffectOperation::PrinterStart)))
+        Payload::PrinterUpload { .. } => {
+            proven_primary_printer_receipt(job).is_some_and(|primary| result == Some(primary))
         }
         Payload::PrinterStart(request) => request.upload_effect().is_some_and(|upload| {
             job.effects.iter().any(|effect| {
@@ -1001,7 +1172,17 @@ pub(crate) fn claimed_source(
             );
             i64::try_from(project_id)?
         }
-        Payload::Sync { .. } | Payload::CheckSourceUpdates {} => {
+        Payload::Sync { project_ids } => {
+            let id = source_id.ok_or_else(|| anyhow!("Sync attempt requires Source"))?;
+            if let Some(ids) = project_ids {
+                ensure!(
+                    u64::try_from(id).is_ok_and(|id| ids.contains(&id)),
+                    "Source outside Sync scope"
+                );
+            }
+            id
+        }
+        Payload::CheckSourceUpdates {} => {
             source_id.ok_or_else(|| anyhow!("Wildcard Source attempt requires Source"))?
         }
         _ => return Err(anyhow!("Attempt is not Source work")),
@@ -1009,7 +1190,54 @@ pub(crate) fn claimed_source(
     Ok((job.tenant, id))
 }
 pub(crate) fn source_reserved(tx: &Transaction<'_>, tenant: &str, id: i64) -> Result<bool> {
-    Ok(tx.query_row("SELECT EXISTS(SELECT 1 FROM durable_jobs WHERE tenant=?1 AND resource IN (?2,'source:*') AND state IN ('queued','running','effect_admitted','reconciliation_required'))", params![tenant, format!("source:{id}")], |row| row.get(0))?)
+    let resource = format!("source:{id}");
+    Ok(reserved_resources(tx, tenant, true)?
+        .iter()
+        .any(|reserved| resources_overlap(&resource, reserved)))
+}
+// The column is retained for damaged rows. Healthy legacy scoped Sync rows may
+// still have source:* in the column; their validated payload supplies the scope.
+fn reserved_resources(tx: &Transaction<'_>, tenant: &str, queued: bool) -> Result<Vec<String>> {
+    let rows = tx.prepare("SELECT id,document,resource,state FROM durable_jobs WHERE tenant=?1 AND (state IN ('running','effect_admitted','reconciliation_required','quarantined') OR (?2 AND state='queued')) AND resource<>''")?
+        .query_map(params![tenant, queued], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, document, resource, state)| {
+            if state == "quarantined" {
+                return resource;
+            }
+            decode_row(&id, &document)
+                .map(|job| job.payload.resource())
+                .unwrap_or(resource)
+        })
+        .collect())
+}
+fn resources_overlap(left: &str, right: &str) -> bool {
+    let sources = |resource: &str| -> Option<Vec<String>> {
+        if let Some(ids) = resource.strip_prefix("source-set:") {
+            Some(
+                ids.split(',')
+                    .filter(|id| !id.is_empty())
+                    .map(str::to_owned)
+                    .collect(),
+            )
+        } else {
+            resource
+                .strip_prefix("source:")
+                .map(|id| vec![id.to_owned()])
+        }
+    };
+    match (sources(left), sources(right)) {
+        (Some(left), Some(right)) => {
+            !left.is_empty()
+                && !right.is_empty()
+                && (left.iter().any(|id| id == "*")
+                    || right.iter().any(|id| id == "*")
+                    || left.iter().any(|id| right.contains(id)))
+        }
+        _ => left == right,
+    }
 }
 fn advance(
     tx: &Transaction<'_>,
@@ -1150,6 +1378,7 @@ fn advance(
                 job.state == PersistentState::Running && !job.cancel_requested,
                 "Job cannot finish"
             );
+            let result = result.or_else(|| proven_primary_printer_receipt(&job).cloned());
             if let Some(result) = &result {
                 result.validate()?;
                 ensure!(
@@ -1206,13 +1435,21 @@ pub(crate) fn validate_schema(connection: &Connection, version: u64) -> Result<(
         ensure!(actual.is_empty(), "Unversioned durable job objects");
         return Ok(());
     }
-    let expected = Connection::open_in_memory()?;
-    expected.execute_batch(include_str!("jobs/schema.sql"))?;
-    ensure!(actual == objects(&expected)?, "Durable job schema mismatch");
+    let legacy = Connection::open_in_memory()?;
+    legacy.execute_batch(include_str!("jobs/schema.sql"))?;
+    let indexed = Connection::open_in_memory()?;
+    indexed.execute_batch(include_str!("jobs/schema.sql"))?;
+    indexed.execute_batch(include_str!("jobs/printer-start-indexes.sql"))?;
+    ensure!(
+        actual == objects(&legacy)? || actual == objects(&indexed)?,
+        "Durable job schema mismatch"
+    );
     let mut query=connection.prepare("SELECT id,tenant,kind,state,resource,version,generation,lease_until,created,updated,document FROM durable_jobs")?;
     let mut rows = query.query([])?;
     while let Some(row) = rows.next()? {
-        let job = decode(&row.get::<_, String>(10)?)?;
+        let Some(job) = decode_row(&row.get::<_, String>(0)?, &row.get::<_, String>(10)?) else {
+            continue;
+        };
         job.payload.validate_stored()?;
         ensure!(
             job.payload_version == 1
@@ -1221,7 +1458,13 @@ pub(crate) fn validate_schema(connection: &Connection, version: u64) -> Result<(
                 && job.tenant == row.get::<_, String>(1)?
                 && job.kind.name() == row.get::<_, String>(2)?
                 && job.state.name() == row.get::<_, String>(3)?
-                && job.payload.resource() == row.get::<_, String>(4)?
+                && (job.payload.resource() == row.get::<_, String>(4)?
+                    || (matches!(
+                        job.payload,
+                        Payload::Sync {
+                            project_ids: Some(_)
+                        }
+                    ) && row.get::<_, String>(4)? == "source:*"))
                 && job.state_version == row.get::<_, i64>(5)?
                 && job.generation == row.get::<_, i64>(6)?
                 && job.lease_until == row.get::<_, Option<i64>>(7)?
@@ -1244,4 +1487,106 @@ pub(crate) fn validate_schema(connection: &Connection, version: u64) -> Result<(
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn record() -> JobRecord {
+        JobRecord {
+            job_id: "size-boundary".into(),
+            tenant: "default".into(),
+            kind: JobKind::CheckSourceUpdates,
+            payload_version: 1,
+            payload: Payload::CheckSourceUpdates {},
+            state: PersistentState::Queued,
+            state_version: 0,
+            attempt: 0,
+            generation: 0,
+            lease_until: None,
+            created_at: now(),
+            updated_at: now(),
+            finished_at: None,
+            cancel_requested: false,
+            progress: None,
+            effects: vec![],
+            result: None,
+            recovery: Some(String::new()),
+            fence: None,
+            worker: None,
+        }
+    }
+
+    fn sized_record(size: usize) -> JobRecord {
+        let mut job = record();
+        let padding = size - encode(&job).unwrap().len();
+        // Non-ASCII text makes the boundary a byte count, not a character count.
+        job.recovery = Some("é".repeat(padding / 2) + &"a".repeat(padding % 2));
+        job
+    }
+
+    #[test]
+    fn job_document_exact_size_limit_saves_and_decodes() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(include_str!("jobs/schema.sql"))
+            .unwrap();
+        let tx = connection.transaction().unwrap();
+        let mut job = sized_record(JOB_DOC_SIZE_LIMIT);
+        save(&tx, &mut job, "enqueued").unwrap();
+        tx.commit().unwrap();
+        let document: String = connection
+            .query_row("SELECT document FROM durable_jobs", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(document.len(), JOB_DOC_SIZE_LIMIT);
+        assert_eq!(decode(&document).unwrap().recovery, job.recovery);
+        validate_schema(&connection, 35).unwrap();
+    }
+
+    #[test]
+    fn job_document_over_size_limit_rejects_without_any_writes() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(include_str!("jobs/schema.sql"))
+            .unwrap();
+        let tx = connection.transaction().unwrap();
+        let mut job = sized_record(JOB_DOC_SIZE_LIMIT + 1);
+        let error = save(&tx, &mut job, "enqueued").unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<JobFailure>(),
+            Some(&JobFailure::JobDocTooLarge {
+                size: JOB_DOC_SIZE_LIMIT + 1,
+                limit: JOB_DOC_SIZE_LIMIT,
+            })
+        );
+        // Even committing after the error cannot persist a document or history row.
+        tx.commit().unwrap();
+        for table in ["durable_jobs", "durable_job_history", "durable_job_keys"] {
+            let count: i64 = connection
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            assert_eq!(count, 0);
+        }
+
+        let tx = connection.transaction().unwrap();
+        let mut job = record();
+        save(&tx, &mut job, "enqueued").unwrap();
+        let original = encode(&job).unwrap();
+        job.recovery = sized_record(JOB_DOC_SIZE_LIMIT + 1).recovery;
+        assert!(save(&tx, &mut job, "progress").is_err());
+        tx.commit().unwrap();
+        let stored: String = connection
+            .query_row("SELECT document FROM durable_jobs", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(stored, original);
+        let count: i64 = connection
+            .query_row("SELECT COUNT(*) FROM durable_job_history", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(count, 1);
+    }
 }

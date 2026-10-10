@@ -55,7 +55,40 @@ fn folder(value: &str) -> String {
     }
     name.to_lowercase()
 }
+fn trim(value: &str) -> &str {
+    value.trim_matches(|c: char| {
+        matches!(
+            c,
+            '\u{0009}'..='\u{000d}'
+                | ' '
+                | '\u{00a0}'
+                | '\u{1680}'
+                | '\u{2000}'..='\u{200a}'
+                | '\u{2028}'
+                | '\u{2029}'
+                | '\u{202f}'
+                | '\u{205f}'
+                | '\u{3000}'
+                | '\u{feff}'
+        )
+    })
+}
+
 impl FilenameExport {
+    pub(super) fn normalize(&mut self) {
+        self.definition.name = trim(&self.definition.name).to_owned();
+        for rule in &mut self.definition.rules {
+            rule.suffix = trim(&rule.suffix).to_owned();
+            rule.group = trim(&rule.group).to_owned();
+        }
+        for value in self.definition.overrides.values_mut() {
+            *value = trim(value).to_owned();
+        }
+        for value in [&mut self.group, &mut self.role].into_iter().flatten() {
+            *value = trim(value).to_owned();
+        }
+    }
+
     pub(super) fn validate(&self) -> Result<()> {
         label(&self.definition.name)?;
         ensure!(self.definition.rules.len() <= 50, "Too many filename rules");

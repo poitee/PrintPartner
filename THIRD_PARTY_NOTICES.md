@@ -20,7 +20,7 @@ Transitive packages are recorded in `web/package-lock.json` and remain subject t
 | @fastify/swagger | 9.8.1 | MIT | https://github.com/fastify/fastify-swagger#readme |
 | @fastify/swagger-ui | 6.1.1 | MIT | https://github.com/fastify/fastify-swagger-ui#readme |
 | @fastify/websocket | 11.3.0 | MIT | https://github.com/fastify/fastify-websocket#readme |
-| @modelcontextprotocol/sdk | 1.30.0 | MIT | https://modelcontextprotocol.io |
+| @modelcontextprotocol/sdk | 1.31.0 | MIT | https://modelcontextprotocol.io |
 | @octokit/rest | 22.0.1 | MIT | https://github.com/octokit/rest.js |
 | @radix-ui/react-alert-dialog | 1.1.23 | MIT | https://radix-ui.com/primitives |
 | @radix-ui/react-checkbox | 1.3.11 | MIT | https://radix-ui.com/primitives |

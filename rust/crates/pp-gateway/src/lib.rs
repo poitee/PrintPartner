@@ -5,6 +5,7 @@ use axum::{
     extract::State,
     http::{HeaderValue, Request, Response, StatusCode},
     response::IntoResponse,
+    serve::Listener,
 };
 use pp_compat::CompatHandle;
 use serde::Deserialize;
@@ -22,6 +23,16 @@ pub struct LaunchTarget(String);
 impl LaunchTarget {
     pub fn into_url(self) -> String {
         self.0
+    }
+}
+
+#[derive(Clone)]
+pub struct ShutdownRequested {
+    token: CancellationToken,
+}
+impl ShutdownRequested {
+    pub async fn wait(self) {
+        self.token.cancelled_owned().await;
     }
 }
 
@@ -69,6 +80,7 @@ struct GatewayState {
     denied: Vec<DeniedOperation>,
     relays: TaskTracker,
     cancelled: CancellationToken,
+    shutdown_requested: CancellationToken,
 }
 
 pub struct Gateway {
@@ -95,20 +107,7 @@ impl Gateway {
                 "Invalid operation ownership manifest"
             );
         }
-        manifest.routes.sort_by(|a, b| {
-            fn rank(path: &str) -> impl Iterator<Item = u8> + '_ {
-                path.split('/').map(|part| {
-                    if part == "*" {
-                        0
-                    } else if part.starts_with(':') {
-                        1
-                    } else {
-                        2
-                    }
-                })
-            }
-            rank(&b.path).cmp(rank(&a.path))
-        });
+        sort_routes(&mut manifest.routes);
         let launch = Some(LaunchTarget(format!(
             "{origin}/__desktop/bootstrap?token={token}"
         )));
@@ -131,6 +130,7 @@ impl Gateway {
             denied: manifest.denied,
             relays: TaskTracker::new(),
             cancelled: CancellationToken::new(),
+            shutdown_requested: CancellationToken::new(),
         });
         let stop = CancellationToken::new();
         let stopping = stop.clone();
@@ -138,11 +138,12 @@ impl Gateway {
         let accepted = connections.clone();
         let gateway = state.clone();
         let task = tokio::spawn(async move {
+            let mut listener = listener;
             loop {
                 let (stream, _) = tokio::select! {
                     biased;
                     _ = stopping.cancelled() => break,
-                    next = listener.accept() => next?,
+                    next = Listener::accept(&mut listener) => next,
                 };
                 let state = gateway.clone();
                 let cancelled = stopping.clone();
@@ -184,6 +185,11 @@ impl Gateway {
         self.launch
             .take()
             .context("Launch target already transferred")
+    }
+    pub fn shutdown_requested(&self) -> ShutdownRequested {
+        ShutdownRequested {
+            token: self.state.shutdown_requested.clone(),
+        }
     }
     pub async fn drain(&self) {
         {
@@ -281,11 +287,28 @@ fn error(status: StatusCode, detail: &'static str) -> Response<Body> {
 fn header<'a>(request: &'a Request<Body>, name: &str) -> Option<&'a str> {
     request.headers().get(name)?.to_str().ok()
 }
+fn sort_routes(routes: &mut [Operation]) {
+    fn rank(path: &str) -> impl Iterator<Item = u8> + '_ {
+        path.split('/')
+            .map(|part| {
+                if part == "*" {
+                    0
+                } else if part.starts_with(':') {
+                    1
+                } else {
+                    2
+                }
+            })
+            .chain(std::iter::once(3))
+    }
+    routes.sort_by(|a, b| rank(&b.path).cmp(rank(&a.path)));
+}
+
 fn matches_path(pattern: &str, path: &str) -> bool {
     let mut actual = path.split('/');
     for segment in pattern.split('/') {
         if segment == "*" {
-            return true;
+            return actual.next().is_some();
         }
         let Some(value) = actual.next() else {
             return false;
@@ -299,6 +322,56 @@ fn matches_path(pattern: &str, path: &str) -> bool {
         }
     }
     actual.next().is_none()
+}
+
+fn is_spa_client_path(path: &str) -> bool {
+    if matches!(
+        path,
+        "/" | "/login"
+            | "/setup"
+            | "/forgot-password"
+            | "/reset-password"
+            | "/sources"
+            | "/build"
+            | "/builds"
+            | "/review"
+            | "/checkoff"
+            | "/settings"
+            | "/help"
+            | "/plan"
+            | "/plans"
+            | "/plate"
+            | "/print"
+            | "/printers"
+            | "/library"
+            | "/parts"
+            | "/progress"
+            | "/export"
+            | "/production"
+            | "/board"
+    ) {
+        return true;
+    }
+    let path_bytes = path.as_bytes();
+    if path_bytes
+        .get(..7)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"/board/"))
+    {
+        let bytes = &path_bytes[7..];
+        return bytes.len() == 36
+            && bytes[8] == b'-'
+            && bytes[13] == b'-'
+            && matches!(bytes[14], b'1'..=b'8')
+            && bytes[18] == b'-'
+            && matches!(bytes[19].to_ascii_lowercase(), b'8' | b'9' | b'a' | b'b')
+            && bytes[23] == b'-'
+            && bytes.iter().enumerate().all(|(index, byte)| {
+                matches!(index, 8 | 13 | 18 | 23) || byte.is_ascii_hexdigit()
+            });
+    }
+    path.strip_prefix("/plans/")
+        .and_then(|value| value.strip_suffix("/studio"))
+        .is_some_and(|id| !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
 async fn handle(
@@ -381,6 +454,7 @@ async fn handle(
             .sessions
             .clear();
         state.cancelled.cancel();
+        state.shutdown_requested.cancel();
         return axum::Json(serde_json::json!({"ok":true})).into_response();
     }
     if path == "/mcp" || path == "/api/v1/mcp" {
@@ -392,23 +466,7 @@ async fn handle(
     let document = request.method() == "GET"
         && (header(&request, "sec-fetch-mode") == Some("navigate")
             || header(&request, "accept").is_some_and(|v| v.contains("text/html")));
-    let spa = matches!(
-        path.as_str(),
-        "/" | "/builds"
-            | "/library"
-            | "/sources"
-            | "/plan"
-            | "/production"
-            | "/progress"
-            | "/settings"
-            | "/printers"
-            | "/help"
-            | "/parts"
-            | "/plans"
-            | "/export"
-            | "/login"
-            | "/setup"
-    );
+    let spa = is_spa_client_path(&path);
     if (document && spa)
         || path.starts_with("/assets/")
         || matches!(path.as_str(), "/favicon.ico" | "/logo.png")
@@ -561,6 +619,63 @@ async fn handle(
     }
 }
 
+#[cfg(test)]
+mod spa_tests {
+    use super::is_spa_client_path;
+
+    #[test]
+    fn spa_client_paths_match_the_node_router() {
+        for path in [
+            "/",
+            "/login",
+            "/setup",
+            "/forgot-password",
+            "/reset-password",
+            "/sources",
+            "/build",
+            "/builds",
+            "/review",
+            "/checkoff",
+            "/settings",
+            "/help",
+            "/plan",
+            "/plans",
+            "/plate",
+            "/print",
+            "/printers",
+            "/library",
+            "/parts",
+            "/progress",
+            "/export",
+            "/production",
+            "/board",
+            "/board/123e4567-e89b-42d3-a456-426614174000",
+            "/board/123E4567-E89B-42D3-B456-426614174000",
+            "/BOARD/123e4567-e89b-42d3-a456-426614174000",
+            "/BoArD/123E4567-E89B-42D3-B456-426614174000",
+            "/plans/1/studio",
+            "/plans/000/studio",
+        ] {
+            assert!(is_spa_client_path(path), "expected SPA path: {path}");
+        }
+
+        for path in [
+            "/unknown",
+            "/api/unknown",
+            "/board/not-a-uuid",
+            "/board/123e4567-e89b-02d3-a456-426614174000",
+            "/board/123e4567-e89b-42d3-7456-426614174000",
+            "/board/123e4567-e89b-42d3-a456-426614174000/extra",
+            "/plans/-1/studio",
+            "/plans/1.5/studio",
+            "/plans/abc/studio",
+            "/plans/1/studio/extra",
+        ] {
+            assert!(!is_spa_client_path(path), "unexpected SPA path: {path}");
+        }
+    }
+}
+
 struct TrackedBody {
     body: Body,
     _admission: Admission,
@@ -591,6 +706,8 @@ impl http_body::Body for TrackedBody {
 
 #[cfg(test)]
 mod tests {
+    use tokio_util::sync::CancellationToken;
+
     #[test]
     fn admission_and_drain_share_one_barrier() {
         use super::*;
@@ -636,6 +753,120 @@ mod tests {
             assert_eq!(access.lock().unwrap().active, 0);
         }
     }
+
+    #[test]
+    fn wildcard_requires_its_slash_boundary() {
+        for (pattern, prefix) in [
+            ("/exports/*", "/exports"),
+            ("/sources/:id/stl/*", "/sources/1/stl"),
+            ("/sources/:id/docs/*", "/sources/1/docs"),
+        ] {
+            assert!(!super::matches_path(pattern, prefix));
+            for tail in ["/", "/file", "/nested/file"] {
+                assert!(super::matches_path(pattern, &format!("{prefix}{tail}")));
+            }
+        }
+        assert!(!super::matches_path(
+            "/sources/:id/stl/*",
+            "/sources//stl/file"
+        ));
+    }
+
+    #[test]
+    fn manifest_wildcards_preserve_methods_and_aliases() {
+        let mut manifest: super::Manifest =
+            serde_json::from_str(include_str!("../operations.json")).unwrap();
+        super::sort_routes(&mut manifest.routes);
+        for method in ["GET", "HEAD"] {
+            for alias in ["", "/api/v1"] {
+                for (pattern, prefix) in [
+                    ("/exports/*", "/exports"),
+                    ("/sources/:id/stl/*", "/sources/1/stl"),
+                ] {
+                    let pattern = format!("{alias}{pattern}");
+                    let prefix = format!("{alias}{prefix}");
+                    let selected = |path: &str| {
+                        manifest.routes.iter().find(|route| {
+                            route.method == method && super::matches_path(&route.path, path)
+                        })
+                    };
+                    assert!(selected(&prefix).is_none());
+                    for tail in ["/", "/file", "/nested/file"] {
+                        assert_eq!(selected(&format!("{prefix}{tail}")).unwrap().path, pattern);
+                    }
+                }
+                let exact = format!("{alias}/sources/:id/docs");
+                let wildcard = format!("{exact}/*");
+                let exact_index = manifest
+                    .routes
+                    .iter()
+                    .position(|route| route.method == method && route.path == exact)
+                    .unwrap();
+                let wildcard_index = manifest
+                    .routes
+                    .iter()
+                    .position(|route| route.method == method && route.path == wildcard)
+                    .unwrap();
+                assert!(exact_index < wildcard_index);
+                let selected = manifest
+                    .routes
+                    .iter()
+                    .find(|route| {
+                        route.method == method
+                            && super::matches_path(&route.path, &format!("{alias}/sources/1/docs"))
+                    })
+                    .unwrap();
+                assert_eq!(selected.path, exact);
+            }
+        }
+    }
+
+    #[test]
+    fn operation_sort_preserves_exact_static_parameter_and_wildcard_priority() {
+        let mut routes: Vec<_> = ["/files/*", "/files/:id", "/files/settings", "/files"]
+            .into_iter()
+            .map(|path| super::Operation {
+                method: "GET".into(),
+                path: path.into(),
+                owner: "compat".into(),
+                effect: super::EffectClass::Observation,
+            })
+            .collect();
+        super::sort_routes(&mut routes);
+        for (path, expected) in [
+            ("/files", "/files"),
+            ("/files/settings", "/files/settings"),
+            ("/files/42", "/files/:id"),
+            ("/files/42/nested", "/files/*"),
+            ("/files/", "/files/*"),
+        ] {
+            let selected = routes
+                .iter()
+                .find(|route| super::matches_path(&route.path, path))
+                .unwrap();
+            assert_eq!(selected.path, expected);
+        }
+    }
+
+    #[test]
+    fn global_options_denial_remains_universal() {
+        let manifest: super::Manifest =
+            serde_json::from_str(include_str!("../operations.json")).unwrap();
+        let denied = manifest
+            .denied
+            .iter()
+            .find(|route| route.method == "OPTIONS" && route.path == "*")
+            .unwrap();
+        for path in [
+            "/",
+            "/exports",
+            "/exports/",
+            "/sources/1/stl/nested/file.stl/mesh",
+        ] {
+            assert!(super::matches_path(&denied.path, path));
+        }
+    }
+
     #[test]
     fn effectful_get_is_explicit() {
         let manifest: super::Manifest =
@@ -643,5 +874,18 @@ mod tests {
         assert!(manifest.routes.iter().any(|r| r.method == "GET"
             && r.path == "/printer-checkoff"
             && r.effect == super::EffectClass::LocalCommit));
+    }
+
+    #[tokio::test]
+    async fn shutdown_request_observation_is_monotonic() {
+        let token = CancellationToken::new();
+        let requested = super::ShutdownRequested {
+            token: token.clone(),
+        };
+        let first = requested.clone();
+        token.cancel();
+        first.wait().await;
+        token.cancel();
+        requested.wait().await;
     }
 }

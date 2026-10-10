@@ -295,6 +295,47 @@ fn ticket_t_17_sessions() {
     owner.shutdown().unwrap();
 }
 #[test]
+fn resolved_oauth_session_preserves_authenticated_provider_after_reopen() {
+    let path = directory();
+    let owner = open(&path);
+    let client = owner.auth(FirstUserTenant::NewUser);
+    let Outcome::Session { user, token } = call(
+        &client,
+        Request::OAuthLogin {
+            provider: Provider::Github,
+            provider_user_id: "session-account".into(),
+            email: Some("session-account@example.com".into()),
+            display_name: "Session Account".into(),
+        },
+    )
+    .unwrap() else {
+        panic!("session expected")
+    };
+    assert_eq!(user.provider, Provider::Github);
+    let account = user;
+    assert_eq!(resolve(&client, token.expose()), Some(account.clone()));
+    owner.shutdown().unwrap();
+
+    let owner = open(&path);
+    let client = owner.auth(FirstUserTenant::NewUser);
+    assert_eq!(resolve(&client, token.expose()), Some(account.clone()));
+    let Outcome::Session { user: linked, .. } = call(
+        &client,
+        Request::OAuthLogin {
+            provider: Provider::Github,
+            provider_user_id: "session-account".into(),
+            email: Some("different-account@example.com".into()),
+            display_name: "Different Account".into(),
+        },
+    )
+    .unwrap() else {
+        panic!("linked session expected")
+    };
+    assert_eq!(linked, account);
+    assert_eq!(resolve(&client, token.expose()), Some(account));
+    owner.shutdown().unwrap();
+}
+#[test]
 fn ticket_t_17_identity_and_tenant_keys() {
     let path = directory();
     let owner = open(&path);

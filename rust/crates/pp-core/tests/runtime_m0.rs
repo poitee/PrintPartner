@@ -12,15 +12,19 @@ fn launch(data: PathBuf) -> DesktopLaunch {
         .join("../../..")
         .canonicalize()
         .unwrap();
+    let manifest = std::env::var_os("PP_DESKTOP_RELEASE_MANIFEST")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| root.join("rust/bundle-manifest.json"));
     let release: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(root.join("rust/bundle-manifest.json")).unwrap())
-            .unwrap();
+        serde_json::from_slice(&std::fs::read(manifest).unwrap()).unwrap();
     let web = root.join("web");
     DesktopLaunch {
         data_dir: data,
         assets: web.join("apps/web/dist"),
         bundle: VerifiedBundle {
-            node: PathBuf::from("/usr/bin/node"),
+            node: std::env::var_os("PP_TEST_NODE")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("/usr/bin/node")),
             entry: web.join("apps/server/dist/current/desktop.js"),
             web_root: web,
             runtime_version: "3.3.0-web".into(),
@@ -219,6 +223,108 @@ async fn protected_real_node_lifecycle() {
     println!(
         "{}",
         serde_json::json!({"proof_class":"headless_unsigned","case":"protected_real_node_lifecycle","origin":origin,"child_reaped":true,"persisted_origin":true,"build_id":build["id"],"data_dir":data})
+    );
+}
+
+#[tokio::test]
+async fn authenticated_logout_requests_complete_shutdown() {
+    use fs2::FileExt;
+
+    let data = temporary("logout");
+    let mut runtime = CoreRuntime::start(launch(data.clone()))
+        .await
+        .expect("real Node reaches verified readiness");
+    let origin = runtime.origin().to_owned();
+    let target = runtime.take_launch_target().unwrap().into_url();
+    let bootstrap = target.strip_prefix(&origin).unwrap();
+    let (status, headers, _) = request(&origin, bootstrap, "GET", None, None, None, None).await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let cookie = headers["set-cookie"]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap();
+    assert_eq!(
+        request(&origin, bootstrap, "GET", None, None, None, None)
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+    for (cookie, host, foreign, expected) in [
+        (None, None, None, StatusCode::UNAUTHORIZED),
+        (
+            Some(cookie),
+            Some("foreign.invalid"),
+            None,
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            Some(cookie),
+            None,
+            Some("http://foreign.invalid"),
+            StatusCode::FORBIDDEN,
+        ),
+    ] {
+        assert_eq!(
+            request(&origin, "/auth/logout", "POST", cookie, host, foreign, None,)
+                .await
+                .0,
+            expected
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), runtime.shutdown_requested())
+                .await
+                .is_err(),
+            "rejected logout requested shutdown"
+        );
+    }
+    let marker: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(data.join(".desktop-owner.json")).unwrap()).unwrap();
+    let runtime_dir = PathBuf::from(marker["runtime_dir"].as_str().unwrap());
+    let child_pid = match runtime.handle().subscribe().borrow().clone() {
+        CoreStatus::Ready { pid, .. } => pid,
+        _ => panic!("not ready"),
+    };
+    let first = runtime.shutdown_requested();
+    let second = runtime.shutdown_requested();
+    let (status, _, body) = request(
+        &origin,
+        "/auth/logout",
+        "POST",
+        Some(cookie),
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+        serde_json::json!({"ok":true})
+    );
+    tokio::time::timeout(Duration::from_secs(1), first)
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(1), second)
+        .await
+        .unwrap();
+    let receipt = tokio::time::timeout(Duration::from_secs(16), runtime.shutdown())
+        .await
+        .unwrap();
+    assert!(receipt.complete(), "incomplete receipt: {receipt:?}");
+    assert_eq!(unsafe { libc::kill(child_pid as i32, 0) }, -1);
+    assert!(!data.join(".desktop-owner.json").exists());
+    assert!(!runtime_dir.exists());
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(data.join(".desktop.lock"))
+        .unwrap();
+    lock.try_lock_exclusive().unwrap();
+    println!(
+        "{}",
+        serde_json::json!({"proof_class":"headless_unsigned","case":"authenticated_logout_requests_complete_shutdown","receipt":receipt,"child_reaped":true,"marker_removed":true,"runtime_removed":true,"lock_reacquired":true})
     );
 }
 

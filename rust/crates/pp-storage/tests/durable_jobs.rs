@@ -215,6 +215,27 @@ fn readonly(path: &std::path::Path) -> Connection {
     )
     .unwrap()
 }
+fn assert_invalid_job_skipped_on_restart(path: &std::path::Path, id: &str) {
+    let document = || {
+        readonly(path)
+            .query_row(
+                "SELECT document FROM durable_jobs WHERE id=?1",
+                [id],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap()
+    };
+    let before = document();
+    let (owner, _) = WriterOwner::open(path, Limits::default()).unwrap();
+    match call(&owner, UserOperation::List(JobListQuery::default())).unwrap() {
+        Outcome::List(records) => assert!(records.is_empty()),
+        _ => panic!("Expected list"),
+    }
+    assert!(call(&owner, UserOperation::Get { job_id: id.into() }).is_err());
+    assert!(enqueue_start(&owner, "invalid-parent-child", id).is_err());
+    owner.shutdown().unwrap();
+    assert_eq!(document(), before);
+}
 fn register(owner: &WriterOwner, email: &str) -> (auth::User, String) {
     let result = owner
         .auth(FirstUserTenant::NewUser)
@@ -1203,6 +1224,51 @@ fn ticket_t_28_claims_schema35_corruption_and36_preserve_input_bytes() {
     }
 }
 #[test]
+fn schema35_auxiliary_indexes_install_and_reopen() {
+    let (path, owner) = fixture();
+    owner.shutdown().unwrap();
+    let raw = Connection::open(path.join("print-partner.db")).unwrap();
+    raw.execute_batch(
+        "DROP INDEX durable_jobs_printer_start_parent;
+         DROP INDEX durable_job_keys_archived_printer_start_parent;",
+    )
+    .unwrap();
+    drop(raw);
+    let (owner, ready) = WriterOwner::open(&path, Limits::default()).unwrap();
+    assert_eq!(ready.version, 35);
+    assert_eq!(ready.previous_version, 35);
+    owner.shutdown().unwrap();
+    let raw = readonly(&path);
+    let indexes = raw
+        .prepare("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'durable_%_printer_start_parent' ORDER BY name")
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    assert_eq!(
+        indexes,
+        [
+            "durable_job_keys_archived_printer_start_parent",
+            "durable_jobs_printer_start_parent",
+        ]
+    );
+    assert_eq!(
+        raw.query_row(
+            "SELECT value FROM app_settings WHERE tenant_id='default' AND key='schema_version'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .unwrap(),
+        "35"
+    );
+    drop(raw);
+    let (owner, ready) = WriterOwner::open(&path, Limits::default()).unwrap();
+    assert_eq!(ready.version, 35);
+    assert_eq!(ready.previous_version, 35);
+    owner.shutdown().unwrap();
+}
+#[test]
 fn ticket_t_28_claims_wire_job_kinds_match_existing_contract() {
     assert_eq!(
         JobKind::ALL.map(JobKind::name),
@@ -1263,16 +1329,20 @@ fn ticket_t_28_recovery_success_requires_effect_receipts() {
             WorkerOperation::BeginEffect(intent(EffectOperation::PrinterStart, "p")),
         )
         .unwrap();
+    let mut start_receipt = receipt("p");
+    start_receipt.receipt_id = "confirmed-start".into();
     worker
-        .update(&mut lease, WorkerOperation::ConfirmEffect(receipt("p")))
+        .update(
+            &mut lease,
+            WorkerOperation::ConfirmEffect(start_receipt.clone()),
+        )
         .unwrap();
-    assert_eq!(
-        worker
-            .update(&mut lease, WorkerOperation::Finish(None))
-            .unwrap()
-            .state,
-        PersistentState::Succeeded
-    );
+    let finished = worker
+        .update(&mut lease, WorkerOperation::Finish(None))
+        .unwrap();
+    assert_eq!(finished.state, PersistentState::Succeeded);
+    assert_eq!(finished.result, Some(start_receipt.clone()));
+    assert_eq!(get(&owner, &finished.job_id).result, Some(start_receipt));
     enqueue(
         &owner,
         "no-fake-export",
@@ -1811,11 +1881,11 @@ fn start_child_cannot_finish_without_confirmed_start() {
             WorkerOperation::ConfirmEffect(receipt("finish-printer")),
         )
         .unwrap();
-    assert!(
-        worker
-            .update(&mut lease, WorkerOperation::Finish(None))
-            .is_err()
-    );
+    let done = worker
+        .update(&mut lease, WorkerOperation::Finish(None))
+        .unwrap();
+    assert_eq!(done.state, PersistentState::Succeeded);
+    assert_eq!(done.result, Some(receipt("finish-printer")));
     owner.shutdown().unwrap();
 }
 #[test]
@@ -1852,6 +1922,77 @@ fn confirmed_combined_receipt_cannot_be_rewritten() {
     .unwrap());
     assert_eq!(resolved.state, PersistentState::Succeeded);
     assert_eq!(resolved.job_id, queued.job_id);
+    owner.shutdown().unwrap();
+}
+#[test]
+fn printer_finish_rejects_ancillary_result_then_accepts_primary_receipt() {
+    let (_, owner) = fixture();
+    let worker = owner.job_worker(admission()).unwrap();
+    for (index, start) in [false, true].into_iter().enumerate() {
+        let printer_id = format!("finish-primary-printer-{index}");
+        let mut payload = printer(&printer_id);
+        let Payload::PrinterUpload {
+            start: requested_start,
+            ..
+        } = &mut payload
+        else {
+            unreachable!()
+        };
+        *requested_start = start;
+        let queued = enqueue(&owner, &format!("finish-primary-{index}"), payload);
+        let (claimed, mut lease) = worker.claim().unwrap().unwrap();
+        assert_eq!(claimed.job_id, queued.job_id);
+        assert!(
+            worker
+                .update(&mut lease, WorkerOperation::Finish(None))
+                .is_err()
+        );
+        let upload = distinct_intent(
+            EffectOperation::PrinterUpload,
+            &printer_id,
+            600 + index as u64,
+        );
+        let upload_receipt = begin_and_confirm(
+            &worker,
+            &mut lease,
+            upload,
+            &format!("finish-upload-{index}"),
+        );
+        let primary_receipt = if start {
+            let start = distinct_intent(
+                EffectOperation::PrinterStart,
+                &printer_id,
+                610 + index as u64,
+            );
+            begin_and_confirm(&worker, &mut lease, start, &format!("finish-start-{index}"))
+        } else {
+            upload_receipt
+        };
+        let spoolman = distinct_intent(
+            EffectOperation::SpoolmanDeduction,
+            &format!("spoolman:finish:{index}"),
+            620 + index as u64,
+        );
+        let spoolman_receipt = begin_and_confirm(
+            &worker,
+            &mut lease,
+            spoolman,
+            &format!("finish-spoolman-{index}"),
+        );
+        assert!(
+            worker
+                .update(&mut lease, WorkerOperation::Finish(Some(spoolman_receipt)),)
+                .is_err()
+        );
+        let succeeded = worker
+            .update(
+                &mut lease,
+                WorkerOperation::Finish(Some(primary_receipt.clone())),
+            )
+            .unwrap();
+        assert_eq!(succeeded.state, PersistentState::Succeeded);
+        assert_eq!(succeeded.result, Some(primary_receipt));
+    }
     owner.shutdown().unwrap();
 }
 #[test]
@@ -2028,6 +2169,29 @@ fn archived_started_child_blocks_new_key_and_replays_original_key() {
         job(enqueue_start(&owner, "archive-child", &parent.job_id).unwrap()).job_id,
         child.job_id
     );
+    let raw = readonly(&path);
+    for (sql, expected) in [
+        (
+            "EXPLAIN QUERY PLAN SELECT document FROM durable_jobs WHERE tenant=?1 AND json_extract(document,'$.payload.payload.uploaded_job_id')=?2",
+            "durable_jobs_printer_start_parent",
+        ),
+        (
+            "EXPLAIN QUERY PLAN SELECT archived_document FROM durable_job_keys WHERE tenant=?1 AND archived_document IS NOT NULL AND json_extract(archived_document,'$.payload.payload.uploaded_job_id')=?2",
+            "durable_job_keys_archived_printer_start_parent",
+        ),
+    ] {
+        let details = raw
+            .prepare(sql)
+            .unwrap()
+            .query_map(rusqlite::params!["default", parent.job_id], |row| {
+                row.get::<_, String>(3)
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        assert!(details.iter().any(|detail| detail.contains(expected)));
+    }
+    drop(raw);
     owner.shutdown().unwrap();
 }
 #[test]
@@ -2293,11 +2457,57 @@ fn confirmed_spoolman_rejects_changed_or_denied_outcome() {
     owner.shutdown().unwrap();
 }
 #[test]
+fn denying_spoolman_deduction_preserves_confirmed_print() {
+    let (_, owner) = fixture();
+    enqueue(&owner, "started-print", printer("started-printer"));
+    let worker = owner.job_worker(admission()).unwrap();
+    let (_, mut lease) = worker.claim().unwrap().unwrap();
+    begin_and_confirm(
+        &worker,
+        &mut lease,
+        intent(EffectOperation::PrinterUpload, "started-printer"),
+        "upload-receipt",
+    );
+    let start_receipt = begin_and_confirm(
+        &worker,
+        &mut lease,
+        intent(EffectOperation::PrinterStart, "started-printer"),
+        "start-receipt",
+    );
+    worker
+        .update(
+            &mut lease,
+            WorkerOperation::BeginEffect(intent(EffectOperation::SpoolmanDeduction, "spool:3")),
+        )
+        .unwrap();
+    let uncertain = worker.update(&mut lease, WorkerOperation::Fail).unwrap();
+    let settled = job(reconcile(&owner, &uncertain, Decision::ConfirmNoEffect, None).unwrap());
+    assert_eq!(settled.state, PersistentState::Succeeded);
+    assert_eq!(settled.result, Some(start_receipt));
+    assert!(settled.effects[0].confirmed);
+    assert!(settled.effects[1].confirmed);
+    assert!(settled.effects[2].no_effect);
+    let audit = reconciliations(&owner, &settled.job_id);
+    assert_eq!(audit.len(), 1);
+    assert_eq!(audit[0].decision, "ConfirmNoEffect");
+    assert_eq!(audit[0].receipt, None);
+    let stored = get(&owner, &settled.job_id);
+    assert_eq!(stored.state, PersistentState::Succeeded);
+    assert_eq!(stored.result, settled.result);
+    assert!(stored.effects[2].no_effect);
+    owner.shutdown().unwrap();
+}
+#[test]
 fn unresolved_spoolman_settles_by_either_explicit_decision() {
     let (_, owner) = fixture();
     let worker = owner.job_worker(admission()).unwrap();
-    for (index, decision) in [Decision::ConfirmNoEffect, Decision::ConfirmSucceeded]
+    for (index, (start_confirmed, decision)) in [false, true]
         .into_iter()
+        .flat_map(|start_confirmed| {
+            [Decision::ConfirmNoEffect, Decision::ConfirmSucceeded]
+                .into_iter()
+                .map(move |decision| (start_confirmed, decision))
+        })
         .enumerate()
     {
         let printer_id = format!("unresolved-spoolman-printer-{index}");
@@ -2318,6 +2528,21 @@ fn unresolved_spoolman_settles_by_either_explicit_decision() {
             upload,
             &format!("upload-receipt-3{index}"),
         );
+        let primary_receipt = if start_confirmed {
+            let start = distinct_intent(
+                EffectOperation::PrinterStart,
+                &printer_id,
+                35 + index as u64,
+            );
+            begin_and_confirm(
+                &worker,
+                &mut lease,
+                start,
+                &format!("start-receipt-3{index}"),
+            )
+        } else {
+            upload_receipt
+        };
         let spoolman = distinct_intent(
             EffectOperation::SpoolmanDeduction,
             &format!("spoolman:3{index}"),
@@ -2330,14 +2555,29 @@ fn unresolved_spoolman_settles_by_either_explicit_decision() {
         let uncertain = worker.update(&mut lease, WorkerOperation::Fail).unwrap();
         let supplied = (decision == Decision::ConfirmSucceeded).then_some(spoolman_receipt.clone());
         let settled = job(reconcile(&owner, &uncertain, decision, supplied).unwrap());
-        assert_eq!(settled.state, PersistentState::UploadedOnly);
-        assert_eq!(settled.result, Some(upload_receipt));
         assert_eq!(
-            settled.effects[1].no_effect,
+            settled.state,
+            if start_confirmed {
+                PersistentState::Succeeded
+            } else {
+                PersistentState::UploadedOnly
+            }
+        );
+        assert_eq!(settled.result, Some(primary_receipt));
+        let spoolman_effect = settled.effects.last().unwrap();
+        assert_eq!(
+            spoolman_effect.no_effect,
             decision == Decision::ConfirmNoEffect
         );
         assert_eq!(
-            settled.effects[1].receipt,
+            spoolman_effect.receipt,
+            (decision == Decision::ConfirmSucceeded).then_some(spoolman_receipt.clone())
+        );
+        let audit = reconciliations(&owner, &settled.job_id);
+        assert_eq!(audit.len(), 1);
+        assert_eq!(audit[0].decision, format!("{decision:?}"));
+        assert_eq!(
+            audit[0].receipt,
             (decision == Decision::ConfirmSucceeded).then_some(spoolman_receipt)
         );
     }
@@ -2608,7 +2848,7 @@ fn invalid_persisted_effect_outcomes_fail_closed() {
     )
     .unwrap();
     drop(raw);
-    assert!(WriterOwner::open(&path, Limits::default()).is_err());
+    assert_invalid_job_skipped_on_restart(&path, &parent.job_id);
 
     let (path, owner) = fixture();
     let parent = denied_start_parent(&owner, "tamper-conflict", "tamper-conflict-printer", 100);
@@ -2620,7 +2860,7 @@ fn invalid_persisted_effect_outcomes_fail_closed() {
     )
     .unwrap();
     drop(raw);
-    assert!(WriterOwner::open(&path, Limits::default()).is_err());
+    assert_invalid_job_skipped_on_restart(&path, &parent.job_id);
 
     let (path, owner) = fixture();
     let parent = denied_start_parent(&owner, "tamper-running", "tamper-running-printer", 110);
@@ -2632,7 +2872,7 @@ fn invalid_persisted_effect_outcomes_fail_closed() {
     )
     .unwrap();
     drop(raw);
-    assert!(WriterOwner::open(&path, Limits::default()).is_err());
+    assert_invalid_job_skipped_on_restart(&path, &parent.job_id);
 
     for (index, operation) in ["printer_start", "printer_upload_and_start"]
         .into_iter()
@@ -2653,7 +2893,7 @@ fn invalid_persisted_effect_outcomes_fail_closed() {
         )
         .unwrap();
         drop(raw);
-        assert!(WriterOwner::open(&path, Limits::default()).is_err());
+        assert_invalid_job_skipped_on_restart(&path, &parent.job_id);
     }
 
     let (path, owner) = fixture();
@@ -2666,7 +2906,7 @@ fn invalid_persisted_effect_outcomes_fail_closed() {
     )
     .unwrap();
     drop(raw);
-    assert!(WriterOwner::open(&path, Limits::default()).is_err());
+    assert_invalid_job_skipped_on_restart(&path, &parent.job_id);
 
     let (path, owner) = fixture();
     let parent = denied_start_parent(&owner, "tamper-operation", "tamper-operation-printer", 115);
@@ -2678,7 +2918,7 @@ fn invalid_persisted_effect_outcomes_fail_closed() {
     )
     .unwrap();
     drop(raw);
-    assert!(WriterOwner::open(&path, Limits::default()).is_err());
+    assert_invalid_job_skipped_on_restart(&path, &parent.job_id);
 }
 #[test]
 fn uploaded_only_result_tamper_rejects_decode_and_child_binding() {
@@ -2712,7 +2952,7 @@ fn uploaded_only_result_tamper_rejects_decode_and_child_binding() {
     drop(raw);
     assert!(enqueue_start(&owner, "tampered-result-child", &parent.job_id).is_err());
     owner.shutdown().unwrap();
-    assert!(WriterOwner::open(&path, Limits::default()).is_err());
+    assert_invalid_job_skipped_on_restart(&path, &parent.job_id);
 }
 #[test]
 fn retained_parent_rejects_embedded_job_id_mismatch_without_writes() {
@@ -2902,7 +3142,7 @@ fn persisted_effect_outcome_truth_table_accepts_exactly_three_shapes() {
     owner.shutdown().unwrap();
 }
 #[test]
-fn duplicate_confirmed_upload_parent_fails_read_bind_and_restart_without_writes() {
+fn duplicate_confirmed_upload_parent_rejects_read_and_bind_but_allows_restart() {
     let (path, owner) = fixture();
     let parent = uploaded_only_parent(&owner, "duplicate-upload-parent", "duplicate-printer");
     let raw = Connection::open(path.join("print-partner.db")).unwrap();
@@ -2938,7 +3178,7 @@ fn duplicate_confirmed_upload_parent_fails_read_bind_and_restart_without_writes(
         .unwrap();
     assert_eq!(after, before);
     owner.shutdown().unwrap();
-    assert!(WriterOwner::open(&path, Limits::default()).is_err());
+    assert_invalid_job_skipped_on_restart(&path, &parent.job_id);
 }
 #[test]
 fn uploaded_only_persisted_proof_rejects_independent_corruptions() {
@@ -3288,6 +3528,7 @@ fn reachable_printer_reconciliation_truth_table_has_no_stranded_shape() {
                 );
                 let (_, mut lease) = worker.claim().unwrap().unwrap();
                 let mut last_receipt = None;
+                let mut scenario_receipts = Vec::new();
                 let mut valid = true;
                 for (index, operation) in operations.iter().copied().enumerate() {
                     let target = if operation == EffectOperation::SpoolmanDeduction {
@@ -3321,6 +3562,7 @@ fn reachable_printer_reconciliation_truth_table_has_no_stranded_shape() {
                             )
                             .unwrap();
                     }
+                    scenario_receipts.push((operation, effect_receipt.clone()));
                     last_receipt = Some(effect_receipt);
                 }
                 if !valid {
@@ -3384,6 +3626,21 @@ fn reachable_printer_reconciliation_truth_table_has_no_stranded_shape() {
                         PersistentState::Failed
                     }
                 );
+                if ordinary_success {
+                    let expected_operation =
+                        if operations.contains(&EffectOperation::PrinterUploadAndStart) {
+                            EffectOperation::PrinterUploadAndStart
+                        } else if start {
+                            EffectOperation::PrinterStart
+                        } else {
+                            EffectOperation::PrinterUpload
+                        };
+                    let expected = scenario_receipts
+                        .iter()
+                        .find(|(operation, _)| *operation == expected_operation)
+                        .map(|(_, receipt)| receipt.clone());
+                    assert_eq!(terminal.result, expected);
+                }
                 if operations == &[EffectOperation::SpoolmanDeduction] {
                     saw_spoolman_only[usize::from(start)] = true;
                     assert_eq!(terminal.state, PersistentState::Failed);
@@ -3835,5 +4092,514 @@ fn integration_individual_uncertain_reservation_survives_restart_and_matching_su
     assert_eq!(deletion(&catalog, id), Deletion::ActiveWork);
     call(&owner, resolve(receipt("source-effect"))).unwrap();
     assert_eq!(deletion(&catalog, id), Deletion::Deleted { source_id: id });
+    owner.shutdown().unwrap();
+}
+
+fn filename_payload(grouping: FilenameExport) -> Payload {
+    Payload::ExportStlPack {
+        profile_id: 1,
+        missing_only: false,
+        group_by: GroupBy::ColorDir,
+        unit_tokens: vec![],
+        filename_grouping: Some(grouping),
+    }
+}
+
+fn filename_definition() -> FilenameExport {
+    FilenameExport {
+        definition: FilenameGrouping {
+            name: "Print settings".into(),
+            rules: vec![FilenameRule {
+                suffix: "-A".into(),
+                group: "Aesthetic".into(),
+            }],
+            overrides: [("part.stl".into(), "Unassigned".into())].into(),
+        },
+        arrangement: Arrangement::Group,
+        group: Some("Aesthetic".into()),
+        role: Some("Structural".into()),
+    }
+}
+
+#[test]
+fn filename_grouping_rejects_padded_reserved_labels_before_admission() {
+    let (_path, owner) = fixture();
+    for (index, reserved) in [" conflict ", "\tUnassigned\n", "\u{feff}CONFLICT\u{feff}"]
+        .into_iter()
+        .enumerate()
+    {
+        let mut grouping = filename_definition();
+        grouping.definition.rules[0].group = reserved.into();
+        assert!(
+            call(
+                &owner,
+                UserOperation::Enqueue {
+                    key: format!("reserved-rule-{index}"),
+                    payload_version: 1,
+                    payload: filename_payload(grouping),
+                },
+            )
+            .is_err()
+        );
+    }
+    for (index, reserved) in [" conflict ", "\u{feff}Conflict\t"].into_iter().enumerate() {
+        let mut grouping = filename_definition();
+        grouping
+            .definition
+            .overrides
+            .insert("part.stl".into(), reserved.into());
+        assert!(
+            call(
+                &owner,
+                UserOperation::Enqueue {
+                    key: format!("reserved-override-{index}"),
+                    payload_version: 1,
+                    payload: filename_payload(grouping),
+                },
+            )
+            .is_err()
+        );
+    }
+    let mut grouping = filename_definition();
+    grouping.definition.rules[0].group = "\u{0085}Aesthetic\u{0085}".into();
+    assert!(
+        call(
+            &owner,
+            UserOperation::Enqueue {
+                key: "non-js-whitespace".into(),
+                payload_version: 1,
+                payload: filename_payload(grouping),
+            },
+        )
+        .is_err()
+    );
+    owner.shutdown().unwrap();
+}
+
+#[test]
+fn filename_grouping_normalizes_before_hashing_and_persistence() {
+    let (path, owner) = fixture();
+    let canonical = filename_definition();
+    let mut padded = canonical.clone();
+    padded.definition.name = "\u{feff} Print settings \t".into();
+    padded.definition.rules[0].suffix = "\n -A \r".into();
+    padded.definition.rules[0].group = "\u{00a0} Aesthetic \u{feff}".into();
+    padded
+        .definition
+        .overrides
+        .insert("part.stl".into(), " Unassigned ".into());
+    padded.group = Some(" Aesthetic ".into());
+    padded.role = Some("\tStructural\n".into());
+    let first = enqueue(&owner, "normalized-filename", filename_payload(padded));
+    assert_eq!(first.payload, filename_payload(canonical.clone()));
+    let same = enqueue(
+        &owner,
+        "normalized-filename",
+        filename_payload(canonical.clone()),
+    );
+    assert_eq!(first.job_id, same.job_id);
+    assert_eq!(first.state_version, same.state_version);
+    let mut bounded = canonical.clone();
+    bounded.definition.rules[0].group = format!(" {} ", "A".repeat(80));
+    bounded.group = None;
+    let bounded = enqueue(&owner, "trim-before-length", filename_payload(bounded));
+    let Payload::ExportStlPack {
+        filename_grouping: Some(grouping),
+        ..
+    } = bounded.payload
+    else {
+        panic!("Expected filename grouping");
+    };
+    assert_eq!(grouping.definition.rules[0].group, "A".repeat(80));
+    owner.shutdown().unwrap();
+    let (owner, _) = WriterOwner::open(&path, Limits::default()).unwrap();
+    assert_eq!(
+        get(&owner, &first.job_id).payload,
+        filename_payload(canonical)
+    );
+    owner.shutdown().unwrap();
+}
+
+#[test]
+fn gre_526_startup_and_load_skip_and_log_invalid_saved_rows() {
+    const CHILD_DATA_DIR: &str = "PP_GRE_526_CHILD_DATA_DIR";
+    if let Some(path) = std::env::var_os(CHILD_DATA_DIR) {
+        let (owner, _) = WriterOwner::open(&PathBuf::from(path), Limits::default()).unwrap();
+        let records = match call(&owner, UserOperation::List(JobListQuery::default())).unwrap() {
+            Outcome::List(records) => records,
+            _ => panic!("Expected list"),
+        };
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].state, PersistentState::Queued);
+        assert_eq!(records[0].generation, 2);
+        assert_eq!(get(&owner, &records[0].job_id).job_id, records[0].job_id);
+        owner.shutdown().unwrap();
+        return;
+    }
+
+    let (path, owner) = fixture();
+    let healthy = enqueue(&owner, "healthy", Payload::CheckSourceUpdates {});
+    owner
+        .job_worker(admission())
+        .unwrap()
+        .claim()
+        .unwrap()
+        .unwrap();
+    owner.shutdown().unwrap();
+    let raw = Connection::open(path.join("print-partner.db")).unwrap();
+    let document: String = raw
+        .query_row(
+            "SELECT document FROM durable_jobs WHERE id=?1",
+            [&healthy.job_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let mut oversized: serde_json::Value = serde_json::from_str(&document).unwrap();
+    oversized["job_id"] = "oversized-row".into();
+    oversized["recovery"] = "x".repeat(JOB_DOC_SIZE_LIMIT).into();
+    let oversized = serde_json::to_string(&oversized).unwrap();
+    assert!(oversized.len() > JOB_DOC_SIZE_LIMIT);
+    for (id, document) in [("corrupt-row", "{}"), ("oversized-row", oversized.as_str())] {
+        // Valid JSON with invalid job data can be inserted despite the JSON expression index.
+        raw.execute(
+            "INSERT INTO durable_jobs(id,tenant,kind,state,resource,version,generation,lease_until,created,updated,document)
+             SELECT ?1,tenant,kind,state,resource,version,generation,lease_until,created,updated,?2 FROM durable_jobs WHERE id=?3",
+            rusqlite::params![id, document, healthy.job_id],
+        ).unwrap();
+    }
+    drop(raw);
+
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "gre_526_startup_and_load_skip_and_log_invalid_saved_rows",
+            "--nocapture",
+        ])
+        .env(CHILD_DATA_DIR, &path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let log = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        log.contains("Skipping invalid durable job row corrupt-row"),
+        "{log}"
+    );
+    assert!(
+        log.contains("Skipping invalid durable job row oversized-row"),
+        "{log}"
+    );
+    assert!(
+        log.contains(&format!("exceeding the {JOB_DOC_SIZE_LIMIT}-byte limit")),
+        "{log}"
+    );
+    let raw = readonly(&path);
+    let stored: String = raw
+        .query_row(
+            "SELECT document FROM durable_jobs WHERE id='oversized-row'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(stored, oversized);
+    let corrupt: String = raw
+        .query_row(
+            "SELECT document FROM durable_jobs WHERE id='corrupt-row'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(corrupt, "{}");
+}
+
+#[test]
+fn invalid_attempts_do_not_consume_worker_capacity_but_keep_printer_reservations() {
+    for effect_admitted in [false, true] {
+        for expired in [false, true] {
+            for total in [1, 4] {
+                let (path, owner) = fixture();
+                let damaged = enqueue(&owner, "damaged", printer("uncertain-printer"));
+                let mut limits = admission();
+                limits.total = total;
+                let worker = owner.job_worker(limits.clone()).unwrap();
+                let (_, mut lease) = worker.claim().unwrap().unwrap();
+                if effect_admitted {
+                    worker
+                        .update(
+                            &mut lease,
+                            WorkerOperation::BeginEffect(intent(
+                                EffectOperation::PrinterUpload,
+                                "uncertain-printer",
+                            )),
+                        )
+                        .unwrap();
+                }
+                let blocked = enqueue(&owner, "blocked", printer("uncertain-printer"));
+                let healthy = enqueue(&owner, "healthy", printer("healthy-printer"));
+                owner.shutdown().unwrap();
+                let raw = Connection::open(path.join("print-partner.db")).unwrap();
+                raw.execute(
+                    "UPDATE durable_jobs SET document='{}',lease_until=?2 WHERE id=?1",
+                    rusqlite::params![damaged.job_id, if expired { 0 } else { i64::MAX }],
+                )
+                .unwrap();
+                let before: (String, String, String, i64, i64, i64) = raw.query_row(
+                    "SELECT document,state,resource,version,generation,lease_until FROM durable_jobs WHERE id=?1",
+                    [&damaged.job_id],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
+                ).unwrap();
+                drop(raw);
+
+                let (owner, _) = WriterOwner::open(&path, Limits::default()).unwrap();
+                let Outcome::Quarantined(records) = call(
+                    &owner,
+                    UserOperation::Quarantined {
+                        before: None,
+                        limit: 1,
+                    },
+                )
+                .unwrap() else {
+                    panic!("Expected quarantined rows");
+                };
+                assert_eq!(records.len(), 1);
+                assert_eq!(records[0].job_id, damaged.job_id);
+                assert!(!records[0].reason.is_empty());
+                assert_eq!(
+                    records[0].uncertain_resource.as_deref(),
+                    Some("printer:uncertain-printer")
+                );
+                let worker = owner.job_worker(limits).unwrap();
+                let (claimed, mut lease) = worker.claim().unwrap().unwrap();
+                assert_eq!(claimed.job_id, healthy.job_id);
+                worker.update(&mut lease, WorkerOperation::Fail).unwrap();
+                assert!(worker.claim().unwrap().is_none());
+                assert_eq!(get(&owner, &blocked.job_id).state, PersistentState::Queued);
+                owner.shutdown().unwrap();
+                let after: (String, String, String, i64, i64, Option<i64>) = readonly(&path).query_row(
+                    "SELECT document,state,resource,version,generation,lease_until FROM durable_jobs WHERE id=?1",
+                    [&damaged.job_id],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
+                ).unwrap();
+                assert_eq!(after.0, before.0); // Preserve the damaged document exactly.
+                assert_eq!(after.1, "quarantined");
+                assert_eq!(after.2, before.2); // Preserve the uncertain resource reservation.
+                assert_eq!(after.3, before.3 + 1);
+                assert_eq!(after.4, before.4);
+                assert_eq!(after.5, None);
+                let event: String = readonly(&path).query_row(
+                    "SELECT event FROM durable_job_history WHERE job_id=?1 ORDER BY version DESC LIMIT 1",
+                    [&damaged.job_id], |row| row.get(0),
+                ).unwrap();
+                assert_eq!(event, "document_quarantined_resource_uncertain");
+            }
+        }
+    }
+}
+
+#[test]
+fn list_limit_skips_invalid_newest_rows_and_returns_a_usable_cursor() {
+    let (path, owner) = fixture();
+    let older = enqueue(&owner, "older", Payload::CheckSourceUpdates {});
+    let healthy = enqueue(&owner, "healthy", Payload::CheckSourceUpdates {});
+    let damaged = enqueue(&owner, "damaged", Payload::CheckSourceUpdates {});
+    owner.shutdown().unwrap();
+    let raw = Connection::open(path.join("print-partner.db")).unwrap();
+    // Give each row a distinct, deterministic ordering in both document and index.
+    for (id, updated) in [
+        (&older.job_id, 1),
+        (&healthy.job_id, 2),
+        (&damaged.job_id, 3),
+    ] {
+        raw.execute(
+            "UPDATE durable_jobs SET updated=?2,document=json_set(document,'$.updated_at',?2) WHERE id=?1",
+            rusqlite::params![id, updated],
+        ).unwrap();
+    }
+    raw.execute(
+        "UPDATE durable_jobs SET document='{}' WHERE id=?1",
+        [&damaged.job_id],
+    )
+    .unwrap();
+    drop(raw);
+    let (owner, _) = WriterOwner::open(&path, Limits::default()).unwrap();
+    let mut query = JobListQuery {
+        limit: 1,
+        ..JobListQuery::default()
+    };
+    for expected in [&healthy.job_id, &older.job_id] {
+        let Outcome::List(records) = call(&owner, UserOperation::List(query.clone())).unwrap()
+        else {
+            panic!("Expected list");
+        };
+        assert_eq!(records.len(), 1);
+        assert_eq!(&records[0].job_id, expected);
+        query.before = Some((records[0].updated_at, records[0].job_id.clone()));
+    }
+    let Outcome::List(records) = call(&owner, UserOperation::List(query)).unwrap() else {
+        panic!("Expected list");
+    };
+    assert!(records.is_empty());
+    owner.shutdown().unwrap();
+}
+
+#[test]
+fn bound_printer_start_finish_none_uses_confirmed_start_receipt() {
+    let (_, owner) = fixture();
+    let parent = uploaded_only_parent(&owner, "finish-child-parent", "finish-child-printer");
+    let child = job(enqueue_start(&owner, "finish-child", &parent.job_id).unwrap());
+    let Payload::PrinterStart(request) = &child.payload else {
+        panic!("start payload")
+    };
+    let mut start = request.upload_effect().unwrap().intent.clone();
+    start.operation = EffectOperation::PrinterStart;
+    let worker = owner.job_worker(admission()).unwrap();
+    let (claimed, mut lease) = worker.claim().unwrap().unwrap();
+    assert_eq!(claimed.job_id, child.job_id);
+    assert!(
+        worker
+            .update(&mut lease, WorkerOperation::Finish(None))
+            .is_err()
+    );
+    let receipt = begin_and_confirm(&worker, &mut lease, start, "child-start-result");
+    let done = worker
+        .update(&mut lease, WorkerOperation::Finish(None))
+        .unwrap();
+    assert_eq!(done.state, PersistentState::Succeeded);
+    assert_eq!(done.progress, Some(100));
+    assert_eq!(done.result, Some(receipt));
+    assert_eq!(
+        serde_json::to_value(get(&owner, &child.job_id)).unwrap(),
+        serde_json::to_value(done).unwrap()
+    );
+    owner.shutdown().unwrap();
+}
+
+#[test]
+fn scoped_sync_reserves_and_leases_only_listed_sources() {
+    use pp_storage::catalog::Deletion;
+    let (_, owner) = fixture();
+    let catalog = owner.local_source_catalog();
+    let first = source(&catalog, "Sync first");
+    let second = source(&catalog, "Sync second");
+    let outside = source(&catalog, "Outside sync");
+    let removable = source(&catalog, "Unrelated deletion");
+    let sync = enqueue(
+        &owner,
+        "scoped-sync",
+        Payload::Sync {
+            project_ids: Some(vec![first as u64, second as u64]),
+        },
+    );
+    assert_eq!(deletion(&catalog, first), Deletion::ActiveWork);
+    assert_eq!(deletion(&catalog, second), Deletion::ActiveWork);
+    assert_eq!(
+        deletion(&catalog, removable),
+        Deletion::Deleted {
+            source_id: removable
+        }
+    );
+    let worker = owner.job_worker(admission()).unwrap();
+    let (claimed, mut lease) = worker.claim().unwrap().unwrap();
+    assert_eq!(claimed.job_id, sync.job_id);
+    assert!(source_lease(&worker, &lease, None).is_err());
+    assert!(source_lease(&worker, &lease, Some(outside)).is_err());
+    for id in [first, second] {
+        source_lease(&worker, &lease, Some(id))
+            .unwrap()
+            .release()
+            .unwrap();
+    }
+    let unrelated = enqueue(
+        &owner,
+        "outside-import",
+        Payload::ImportScan {
+            project_id: outside as u64,
+        },
+    );
+    enqueue(
+        &owner,
+        "overlapping-extract",
+        Payload::ExtractSourceDocs {
+            project_id: second as u64,
+        },
+    );
+    let (claimed, mut other_lease) = worker.claim().unwrap().unwrap();
+    assert_eq!(claimed.job_id, unrelated.job_id);
+    worker
+        .update(&mut other_lease, WorkerOperation::Finish(None))
+        .unwrap();
+    assert!(worker.claim().unwrap().is_none());
+    worker
+        .update(&mut lease, WorkerOperation::Finish(None))
+        .unwrap();
+    assert!(worker.claim().unwrap().is_some());
+    owner.shutdown().unwrap();
+}
+
+#[test]
+fn legacy_scoped_sync_wildcard_column_reopens_with_payload_scope() {
+    use pp_storage::catalog::Deletion;
+    let (path, owner) = fixture();
+    let catalog = owner.local_source_catalog();
+    let id = source(&catalog, "Legacy scoped");
+    let other = source(&catalog, "Legacy unrelated");
+    let sync = enqueue(
+        &owner,
+        "legacy-sync",
+        Payload::Sync {
+            project_ids: Some(vec![id as u64]),
+        },
+    );
+    owner.shutdown().unwrap();
+    let raw = Connection::open(path.join("print-partner.db")).unwrap();
+    raw.execute(
+        "UPDATE durable_jobs SET resource='source:*' WHERE id=?1",
+        [&sync.job_id],
+    )
+    .unwrap();
+    drop(raw);
+    let owner = WriterOwner::open(&path, Limits::default()).unwrap().0;
+    let catalog = owner.local_source_catalog();
+    assert_eq!(deletion(&catalog, id), Deletion::ActiveWork);
+    assert_eq!(
+        deletion(&catalog, other),
+        Deletion::Deleted { source_id: other }
+    );
+    let worker = owner.job_worker(admission()).unwrap();
+    let (_, lease) = worker.claim().unwrap().unwrap();
+    assert!(source_lease(&worker, &lease, Some(other)).is_err());
+    let stored: String = readonly(&path)
+        .query_row(
+            "SELECT resource FROM durable_jobs WHERE id=?1",
+            [&sync.job_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(stored, format!("source-set:{id}"));
+    owner.shutdown().unwrap();
+}
+
+#[test]
+fn empty_scoped_sync_does_not_reserve_any_source() {
+    use pp_storage::catalog::Deletion;
+    let (_, owner) = fixture();
+    let catalog = owner.local_source_catalog();
+    let id = source(&catalog, "Empty sync unrelated");
+    enqueue(
+        &owner,
+        "empty-sync",
+        Payload::Sync {
+            project_ids: Some(vec![]),
+        },
+    );
+    assert_eq!(deletion(&catalog, id), Deletion::Deleted { source_id: id });
+    let worker = owner.job_worker(admission()).unwrap();
+    let (_, lease) = worker.claim().unwrap().unwrap();
+    assert!(source_lease(&worker, &lease, Some(id)).is_err());
+    assert!(source_lease(&worker, &lease, None).is_err());
     owner.shutdown().unwrap();
 }
