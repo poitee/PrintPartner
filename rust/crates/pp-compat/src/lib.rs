@@ -270,10 +270,14 @@ impl CleanupErrors {
 
 fn validate_stop_outcome(outcome: StopOutcome, intent: StopIntent) -> Result<()> {
     match outcome {
+        StopOutcome::Observed(_) | StopOutcome::ForcedAfterTimeout(_)
+            if matches!(intent, StopIntent::Restart) =>
+        {
+            Ok(())
+        }
         StopOutcome::ForcedAfterTimeout(status) => {
             bail!("Compatibility child required parent-forced termination: {status}")
         }
-        StopOutcome::Observed(_) if matches!(intent, StopIntent::Restart) => Ok(()),
         StopOutcome::Observed(status)
             if status.success() || status.signal() == Some(libc::SIGKILL) =>
         {
@@ -669,6 +673,22 @@ mod tests {
         );
     }
 
+    #[test]
+    fn forced_exit_without_cancellation_still_restarts() {
+        let active = tokio_util::sync::CancellationToken::new();
+
+        assert_eq!(
+            super::classify_stop_outcome(
+                super::StopOutcome::ForcedAfterTimeout(std::process::ExitStatus::from_raw(
+                    libc::SIGKILL,
+                )),
+                &active,
+            )
+            .unwrap(),
+            super::StopIntent::Restart
+        );
+    }
+
     #[tokio::test]
     async fn process_stop_continues_cleanup_after_log_join_error() {
         let mut command = tokio::process::Command::new("sh");
@@ -805,7 +825,7 @@ mod tests {
                 )),
                 super::StopIntent::Restart,
             )
-            .is_err()
+            .is_ok()
         );
     }
 
