@@ -1,0 +1,22 @@
+{
+  "implementationHead": "2e34ab468400ea7719b1e73d92a2a8ec19b03f05",
+  "completionIdle": {
+    "traceLength": 90,
+    "lastEventAt": "2026-10-10T21:28:43.761Z",
+    "checkedAt": "2026-10-10T21:28:58.713Z",
+    "activeRow": false
+  },
+  "missingJobIdle": {
+    "traceLength": 20,
+    "last": {
+      "kind": "socket-close",
+      "at": "2026-10-10T21:30:55.402Z",
+      "ms": 201423,
+      "path": "/ws/jobs/00d7430b-7bf2-453e-9e51-22ca8f02a34d",
+      "code": 1008,
+      "reason": "Job not found"
+    },
+    "now": "2026-10-10T21:31:18.636Z",
+    "activeRow": false
+  }
+}

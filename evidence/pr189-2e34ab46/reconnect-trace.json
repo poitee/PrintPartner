@@ -1,0 +1,640 @@
+{
+  "trace": [
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:27:53.134Z",
+      "ms": 19157,
+      "path": "/jobs/check-source-updates",
+      "status": 200
+    },
+    {
+      "kind": "socket-created",
+      "at": "2026-10-10T21:27:53.140Z",
+      "ms": 19162,
+      "path": "/ws/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c"
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:27:53.391Z",
+      "ms": 19413,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "socket-open",
+      "at": "2026-10-10T21:27:53.411Z",
+      "ms": 19433,
+      "path": "/ws/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c"
+    },
+    {
+      "kind": "job-event",
+      "at": "2026-10-10T21:27:53.447Z",
+      "ms": 19469,
+      "path": "/ws/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": "running",
+      "message": "Running…",
+      "progress": 10
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:27:53.863Z",
+      "ms": 19885,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "socket-close",
+      "at": "2026-10-10T21:27:54.104Z",
+      "ms": 20125,
+      "path": "/ws/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "code": 1005,
+      "reason": ""
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:27:54.272Z",
+      "ms": 20294,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 502
+    },
+    {
+      "kind": "socket-created",
+      "at": "2026-10-10T21:27:54.536Z",
+      "ms": 20558,
+      "path": "/ws/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c"
+    },
+    {
+      "kind": "socket-close",
+      "at": "2026-10-10T21:27:54.551Z",
+      "ms": 20573,
+      "path": "/ws/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "code": 1006,
+      "reason": ""
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:27:54.682Z",
+      "ms": 20703,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 502
+    },
+    {
+      "kind": "socket-created",
+      "at": "2026-10-10T21:27:55.375Z",
+      "ms": 21397,
+      "path": "/ws/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c"
+    },
+    {
+      "kind": "socket-close",
+      "at": "2026-10-10T21:27:55.383Z",
+      "ms": 21405,
+      "path": "/ws/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "code": 1006,
+      "reason": ""
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:27:55.493Z",
+      "ms": 21514,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 502
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:27:57.101Z",
+      "ms": 23123,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 502
+    },
+    {
+      "kind": "socket-created",
+      "at": "2026-10-10T21:27:57.205Z",
+      "ms": 23227,
+      "path": "/ws/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c"
+    },
+    {
+      "kind": "socket-close",
+      "at": "2026-10-10T21:27:57.211Z",
+      "ms": 23233,
+      "path": "/ws/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "code": 1006,
+      "reason": ""
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:00.311Z",
+      "ms": 26332,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 502
+    },
+    {
+      "kind": "socket-created",
+      "at": "2026-10-10T21:28:01.125Z",
+      "ms": 27147,
+      "path": "/ws/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c"
+    },
+    {
+      "kind": "socket-close",
+      "at": "2026-10-10T21:28:01.131Z",
+      "ms": 27152,
+      "path": "/ws/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "code": 1006,
+      "reason": ""
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:06.720Z",
+      "ms": 32741,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 502
+    },
+    {
+      "kind": "socket-created",
+      "at": "2026-10-10T21:28:09.145Z",
+      "ms": 35166,
+      "path": "/ws/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c"
+    },
+    {
+      "kind": "socket-close",
+      "at": "2026-10-10T21:28:09.151Z",
+      "ms": 35172,
+      "path": "/ws/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "code": 1006,
+      "reason": ""
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:16.732Z",
+      "ms": 42754,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:17.143Z",
+      "ms": 43165,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:17.555Z",
+      "ms": 43576,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:17.966Z",
+      "ms": 43987,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:18.378Z",
+      "ms": 44399,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:18.790Z",
+      "ms": 44811,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "socket-created",
+      "at": "2026-10-10T21:28:19.152Z",
+      "ms": 45173,
+      "path": "/ws/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c"
+    },
+    {
+      "kind": "socket-open",
+      "at": "2026-10-10T21:28:19.161Z",
+      "ms": 45182,
+      "path": "/ws/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c"
+    },
+    {
+      "kind": "job-event",
+      "at": "2026-10-10T21:28:19.161Z",
+      "ms": 45183,
+      "path": "/ws/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": "running",
+      "message": "Running…",
+      "progress": 10
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:19.444Z",
+      "ms": 45465,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:19.855Z",
+      "ms": 45877,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:20.265Z",
+      "ms": 46287,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:20.676Z",
+      "ms": 46698,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:21.088Z",
+      "ms": 47109,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:21.499Z",
+      "ms": 47520,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:21.910Z",
+      "ms": 47931,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:22.320Z",
+      "ms": 48342,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:22.732Z",
+      "ms": 48754,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:23.144Z",
+      "ms": 49165,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:23.763Z",
+      "ms": 49784,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:24.175Z",
+      "ms": 50197,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:24.586Z",
+      "ms": 50607,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:24.999Z",
+      "ms": 51020,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:25.411Z",
+      "ms": 51432,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:25.822Z",
+      "ms": 51843,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:26.233Z",
+      "ms": 52255,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:26.645Z",
+      "ms": 52667,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:27.058Z",
+      "ms": 53079,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:27.469Z",
+      "ms": 53491,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:27.880Z",
+      "ms": 53901,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:28.292Z",
+      "ms": 54314,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:28.704Z",
+      "ms": 54725,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:29.117Z",
+      "ms": 55138,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:29.528Z",
+      "ms": 55550,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:29.939Z",
+      "ms": 55961,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:30.352Z",
+      "ms": 56373,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:30.766Z",
+      "ms": 56787,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:31.209Z",
+      "ms": 57231,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:32.001Z",
+      "ms": 58022,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:32.414Z",
+      "ms": 58435,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:32.832Z",
+      "ms": 58853,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:33.242Z",
+      "ms": 59263,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:33.654Z",
+      "ms": 59675,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:34.067Z",
+      "ms": 60088,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:34.478Z",
+      "ms": 60499,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:34.889Z",
+      "ms": 60910,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:35.300Z",
+      "ms": 61321,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:35.709Z",
+      "ms": 61730,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:36.122Z",
+      "ms": 62143,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:36.533Z",
+      "ms": 62554,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:36.944Z",
+      "ms": 62965,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:37.356Z",
+      "ms": 63377,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:37.768Z",
+      "ms": 63789,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:38.179Z",
+      "ms": 64200,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:38.590Z",
+      "ms": 64612,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:39.001Z",
+      "ms": 65022,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:39.411Z",
+      "ms": 65433,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:39.821Z",
+      "ms": 65842,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:40.679Z",
+      "ms": 66701,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:41.091Z",
+      "ms": 67112,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:41.501Z",
+      "ms": 67523,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:41.915Z",
+      "ms": 67937,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:42.328Z",
+      "ms": 68350,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:42.741Z",
+      "ms": 68763,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "http-response",
+      "at": "2026-10-10T21:28:43.154Z",
+      "ms": 69175,
+      "path": "/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": 200
+    },
+    {
+      "kind": "job-event",
+      "at": "2026-10-10T21:28:43.384Z",
+      "ms": 69405,
+      "path": "/ws/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "status": "done",
+      "message": "Complete",
+      "progress": 100
+    },
+    {
+      "kind": "socket-close",
+      "at": "2026-10-10T21:28:43.761Z",
+      "ms": 69782,
+      "path": "/ws/jobs/2056221b-25d0-495f-ba61-4d7b68c6466c",
+      "code": 1005,
+      "reason": ""
+    }
+  ],
+  "text": "Skip to main content\nPrintPartner\nPRINT PLANNING & PRODUCTION\n\nON THE BENCH\n\nNew Build\nNew Build\n\nPREPARE\n\nSources\nSelect a Build to view Sources.\nPlan\nSelect a Build to view its Plan.\n\nMAKE\n\nProduction\nSelect a Build to view Production.\nCheckoff\nSelect a Build to view Checkoff.\n\nWORKSHOP\n\nBuilds\nSource Library\nAdd sources and their files\nAll Production\nPrinters\nSettings\nHelp\nSponsor\nCollapse sidebar\nSponsor\n\nWORKSHOP\n\nSource Library\n\n2 sources · Add sources and their files here, then attach them to a Build on Sources.\n\nSearch STLs everywhere\n⌘K\nAdd source\nMore\nSource monitoring\n1 update status unknown\n\nKeep reusable projects current here. Existing Builds keep their saved Plan. Open a Build's Sources when you want to use updated files.\n\nCheck now\nSync GitHub\nAutomatic coverage\n2 GitHub repos\nTracked manual sources\n0 model pages\nLast update check\nOct 10, 2026, 9:28 PM\nAutomatic checks\nCheck schedule\nEvery 24 hours\nRefresh GitHub sources automatically\nThe app records the refresh and notifies you. Published Build Plans do not change automatically.\n\nPrintables, MakerWorld, and Thangs model pages stay tracked here, but refreshing their files requires a new archive downloaded from the provider.\n\nImport a repository list\nRecent source alerts\n\nSource updates and automatic refreshes will appear here and in the app banner.\n\nCATEGORIES\nEdit\nAll sources\n2\nPrinter kits\n0\nToolheads\n0\nProbes & sensors\n0\nMods\n0\nHardware\n0\nOther\n0\nUncategorised\n2\nADD SOURCE\nGitHub repo\nLocal folder\nZip upload\nPrintables model\nMakerWorld model\nThangs model\nSingle STL\nPlan bundle\nAnother instance\nFilters\nCategories\nReconnect evidence\npoitee/PrintPartner\nUncategorised\nGitHub\nSynced Oct 10, 2026, 9:28 PM\nnot attached\nReconnect evidence 2\npoitee/PrintPartner\nUncategorised\nGitHub\nNot synced\nnot attached\nCHECK SOURCE UPDATES\nComplete\n100%\nDone\nUpdate check finished",
+  "at": "2026-10-10T21:28:44.419Z"
+}
