@@ -2432,6 +2432,47 @@ fn confirmed_spoolman_rejects_changed_or_denied_outcome() {
     owner.shutdown().unwrap();
 }
 #[test]
+fn denying_spoolman_deduction_preserves_confirmed_print() {
+    let (_, owner) = fixture();
+    enqueue(&owner, "started-print", printer("started-printer"));
+    let worker = owner.job_worker(admission()).unwrap();
+    let (_, mut lease) = worker.claim().unwrap().unwrap();
+    begin_and_confirm(
+        &worker,
+        &mut lease,
+        intent(EffectOperation::PrinterUpload, "started-printer"),
+        "upload-receipt",
+    );
+    let start_receipt = begin_and_confirm(
+        &worker,
+        &mut lease,
+        intent(EffectOperation::PrinterStart, "started-printer"),
+        "start-receipt",
+    );
+    worker
+        .update(
+            &mut lease,
+            WorkerOperation::BeginEffect(intent(EffectOperation::SpoolmanDeduction, "spool:3")),
+        )
+        .unwrap();
+    let uncertain = worker.update(&mut lease, WorkerOperation::Fail).unwrap();
+    let settled = job(reconcile(&owner, &uncertain, Decision::ConfirmNoEffect, None).unwrap());
+    assert_eq!(settled.state, PersistentState::Succeeded);
+    assert_eq!(settled.result, Some(start_receipt));
+    assert!(settled.effects[0].confirmed);
+    assert!(settled.effects[1].confirmed);
+    assert!(settled.effects[2].no_effect);
+    let audit = reconciliations(&owner, &settled.job_id);
+    assert_eq!(audit.len(), 1);
+    assert_eq!(audit[0].decision, "ConfirmNoEffect");
+    assert_eq!(audit[0].receipt, None);
+    let stored = get(&owner, &settled.job_id);
+    assert_eq!(stored.state, PersistentState::Succeeded);
+    assert_eq!(stored.result, settled.result);
+    assert!(stored.effects[2].no_effect);
+    owner.shutdown().unwrap();
+}
+#[test]
 fn unresolved_spoolman_settles_by_either_explicit_decision() {
     let (_, owner) = fixture();
     let worker = owner.job_worker(admission()).unwrap();
