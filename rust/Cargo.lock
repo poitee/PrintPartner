@@ -2660,6 +2660,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "pp-services"
+version = "0.1.0"
+
+[[package]]
 name = "pp-source"
 version = "0.1.0"
 dependencies = [
@@ -2696,9 +2700,6 @@ dependencies = [
  "subtle",
  "time",
 ]
-[[package]]
-name = "pp-services"
-version = "0.1.0"
 
 [[package]]
 name = "ppv-lite86"

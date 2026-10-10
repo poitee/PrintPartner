@@ -25,7 +25,6 @@ pub use pp_gateway::LaunchTarget as DesktopLaunchTarget;
 
 async fn bind_origin(owner: &StorageLease) -> Result<TcpListener> {
     let path = owner.data_dir().join("desktop.toml");
-
     let port = if path.exists() {
         let config = std::fs::read_to_string(&path)?;
         let value = config
