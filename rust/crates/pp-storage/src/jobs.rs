@@ -88,6 +88,11 @@ pub enum UserOperation {
         job_id: String,
     },
     List(JobListQuery),
+    /// Operator-visible damaged rows, with uncertain reservations explicitly flagged.
+    Quarantined {
+        before: Option<(i64, String)>,
+        limit: u16,
+    },
     History {
         job_id: String,
         before_version: Option<i64>,
@@ -118,9 +123,20 @@ pub enum WorkerOperation {
     Finish(Option<ResultArtifact>),
     Fail,
 }
+/// A damaged document is retained for inspection and repair, never executed.
+#[derive(Debug)]
+pub struct QuarantinedJob {
+    pub job_id: String,
+    pub kind: String,
+    pub updated_at: i64,
+    pub reason: String,
+    /// This reservation remains held until an operator investigates the effect.
+    pub uncertain_resource: Option<String>,
+}
 pub enum Outcome {
     Job(JobRecord, LocalCommit),
     List(Vec<JobRecord>),
+    Quarantined(Vec<QuarantinedJob>),
     History(Vec<HistoryEntry>),
     Reconciliations(Vec<ReconciliationRecord>),
     Claimed(Option<(JobRecord, AttemptLease)>),
@@ -534,12 +550,31 @@ fn save(tx: &Transaction<'_>, job: &mut JobRecord, event: &str) -> Result<()> {
     )?;
     Ok(())
 }
+fn quarantine(tx: &Transaction<'_>, id: &str) -> Result<()> {
+    // Preserve the original document and resource; only the attempt index changes.
+    let changed = tx.execute(
+        "UPDATE durable_jobs SET state='quarantined',lease_until=NULL,version=version+1,updated=?2 WHERE id=?1 AND state!='quarantined'",
+        params![id, now()],
+    )?;
+    if changed != 0 {
+        tx.execute(
+            "INSERT INTO durable_job_history(job_id,version,at,state,event)
+             SELECT id,version,updated,state,CASE WHEN resource='' THEN 'document_quarantined' ELSE 'document_quarantined_resource_uncertain' END FROM durable_jobs WHERE id=?1",
+            [id],
+        )?;
+    }
+    Ok(())
+}
 fn recover_in(tx: &Transaction<'_>, all: bool) -> Result<()> {
-    let documents=tx.prepare("SELECT id,document FROM durable_jobs WHERE state IN ('running','effect_admitted') AND (?1 OR lease_until<=?2)")?.query_map(params![all,now()],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
-    for (id, document) in documents {
+    let documents=tx.prepare("SELECT id,document,lease_until FROM durable_jobs WHERE state IN ('running','effect_admitted')")?.query_map([],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,Option<i64>>(2)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    for (id, document, lease_until) in documents {
         let Some(mut job) = decode_row(&id, &document) else {
+            quarantine(tx, &id)?;
             continue;
         };
+        if !all && !lease_until.is_some_and(|until| until <= now()) {
+            continue;
+        }
         job.generation += 1;
         job.fence = None;
         job.worker = None;
@@ -727,13 +762,64 @@ fn user(
             if let Some((_, id)) = &query.before {
                 model::text(id, 128)?;
             }
-            let documents=tx.prepare("SELECT id,document FROM durable_jobs WHERE tenant=?1 AND (?2 IS NULL OR CASE state WHEN 'queued' THEN 'pending' WHEN 'running' THEN 'running' WHEN 'effect_admitted' THEN 'running' WHEN 'uploaded_only' THEN 'done' WHEN 'succeeded' THEN 'done' WHEN 'cancelled' THEN 'cancelled' ELSE 'error' END=?2) AND (?3 IS NULL OR updated>=?3) AND (?4 IS NULL OR json_extract(document,'$.payload.payload.profile_id')=?4) AND (?5 IS NULL OR updated<?5 OR (updated=?5 AND id<?6)) ORDER BY updated DESC,id DESC LIMIT ?7")?.query_map(params![tenant,query.status,query.since,query.profile_id.map(|v|v as i64),query.before.as_ref().map(|c|c.0),query.before.as_ref().map(|c|c.1.as_str()),query.limit],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
-            Ok(Outcome::List(
-                documents
-                    .iter()
-                    .filter_map(|(id, document)| decode_row(id, document))
-                    .collect(),
-            ))
+            let mut statement = tx.prepare("SELECT id,document FROM durable_jobs WHERE tenant=?1 AND (?2 IS NULL OR CASE state WHEN 'queued' THEN 'pending' WHEN 'running' THEN 'running' WHEN 'effect_admitted' THEN 'running' WHEN 'uploaded_only' THEN 'done' WHEN 'succeeded' THEN 'done' WHEN 'cancelled' THEN 'cancelled' ELSE 'error' END=?2) AND (?3 IS NULL OR updated>=?3) AND (?4 IS NULL OR json_extract(document,'$.payload.payload.profile_id')=?4) AND (?5 IS NULL OR updated<?5 OR (updated=?5 AND id<?6)) ORDER BY updated DESC,id DESC")?;
+            let mut rows = statement.query(params![
+                tenant,
+                query.status,
+                query.since,
+                query.profile_id.map(|v| v as i64),
+                query.before.as_ref().map(|c| c.0),
+                query.before.as_ref().map(|c| c.1.as_str()),
+            ])?;
+            let mut jobs = Vec::with_capacity(usize::from(query.limit));
+            while jobs.len() < usize::from(query.limit) {
+                let Some(row) = rows.next()? else {
+                    break;
+                };
+                let id: String = row.get(0)?;
+                let document: String = row.get(1)?;
+                if let Some(job) = decode_row(&id, &document) {
+                    jobs.push(job);
+                }
+            }
+            Ok(Outcome::List(jobs))
+        }
+        UserOperation::Quarantined { before, limit } => {
+            ensure!((1..=200).contains(&limit), "Invalid quarantine list limit");
+            if let Some((_, id)) = &before {
+                model::text(id, 128)?;
+            }
+            let mut statement = tx.prepare(
+                "SELECT id,kind,updated,resource,document FROM durable_jobs WHERE tenant=?1 AND state='quarantined'
+                 AND (?2 IS NULL OR updated<?2 OR (updated=?2 AND id<?3)) ORDER BY updated DESC,id DESC LIMIT ?4",
+            )?;
+            let records = statement
+                .query_map(
+                    params![
+                        tenant,
+                        before.as_ref().map(|c| c.0),
+                        before.as_ref().map(|c| c.1.as_str()),
+                        limit
+                    ],
+                    |row| {
+                        let resource: String = row.get(3)?;
+                        let document: String = row.get(4)?;
+                        Ok(QuarantinedJob {
+                            job_id: row.get(0)?,
+                            kind: row.get(1)?,
+                            updated_at: row.get(2)?,
+                            reason: decode(&document)
+                                .err()
+                                .map(|e| e.to_string())
+                                .unwrap_or_else(|| {
+                                    "Document quarantined; operator inspection required".into()
+                                }),
+                            uncertain_resource: (!resource.is_empty()).then_some(resource),
+                        })
+                    },
+                )?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(Outcome::Quarantined(records))
         }
         UserOperation::History {
             job_id,
@@ -920,7 +1006,7 @@ fn claim(tx: &Transaction<'_>, worker: &str, admission: &WorkerAdmission) -> Res
             };
             let resource = job.payload.resource();
             if !resource.is_empty() {
-                let count:i64=tx.query_row("SELECT COUNT(*) FROM durable_jobs WHERE tenant=?1 AND state IN ('running','effect_admitted','reconciliation_required') AND (resource=?2 OR (?2 LIKE 'source:%' AND resource='source:*') OR (?2='source:*' AND resource LIKE 'source:%'))",params![job.tenant,resource],|r|r.get(0))?;
+                let count:i64=tx.query_row("SELECT COUNT(*) FROM durable_jobs WHERE tenant=?1 AND state IN ('running','effect_admitted','reconciliation_required','quarantined') AND (resource=?2 OR (?2 LIKE 'source:%' AND resource='source:*') OR (?2='source:*' AND resource LIKE 'source:%'))",params![job.tenant,resource],|r|r.get(0))?;
                 if count >= admission.per_resource as i64 {
                     continue;
                 }
@@ -1075,7 +1161,7 @@ pub(crate) fn claimed_source(
     Ok((job.tenant, id))
 }
 pub(crate) fn source_reserved(tx: &Transaction<'_>, tenant: &str, id: i64) -> Result<bool> {
-    Ok(tx.query_row("SELECT EXISTS(SELECT 1 FROM durable_jobs WHERE tenant=?1 AND resource IN (?2,'source:*') AND state IN ('queued','running','effect_admitted','reconciliation_required'))", params![tenant, format!("source:{id}")], |row| row.get(0))?)
+    Ok(tx.query_row("SELECT EXISTS(SELECT 1 FROM durable_jobs WHERE tenant=?1 AND resource IN (?2,'source:*') AND state IN ('queued','running','effect_admitted','reconciliation_required','quarantined'))", params![tenant, format!("source:{id}")], |row| row.get(0))?)
 }
 fn advance(
     tx: &Transaction<'_>,

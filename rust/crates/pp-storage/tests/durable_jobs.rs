@@ -4315,3 +4315,133 @@ fn gre_526_startup_and_load_skip_and_log_invalid_saved_rows() {
         .unwrap();
     assert_eq!(corrupt, "{}");
 }
+
+#[test]
+fn invalid_attempts_do_not_consume_worker_capacity_but_keep_printer_reservations() {
+    for effect_admitted in [false, true] {
+        for expired in [false, true] {
+            for total in [1, 4] {
+                let (path, owner) = fixture();
+                let damaged = enqueue(&owner, "damaged", printer("uncertain-printer"));
+                let mut limits = admission();
+                limits.total = total;
+                let worker = owner.job_worker(limits.clone()).unwrap();
+                let (_, mut lease) = worker.claim().unwrap().unwrap();
+                if effect_admitted {
+                    worker
+                        .update(
+                            &mut lease,
+                            WorkerOperation::BeginEffect(intent(
+                                EffectOperation::PrinterUpload,
+                                "uncertain-printer",
+                            )),
+                        )
+                        .unwrap();
+                }
+                let blocked = enqueue(&owner, "blocked", printer("uncertain-printer"));
+                let healthy = enqueue(&owner, "healthy", printer("healthy-printer"));
+                owner.shutdown().unwrap();
+                let raw = Connection::open(path.join("print-partner.db")).unwrap();
+                raw.execute(
+                    "UPDATE durable_jobs SET document='{}',lease_until=?2 WHERE id=?1",
+                    rusqlite::params![damaged.job_id, if expired { 0 } else { i64::MAX }],
+                )
+                .unwrap();
+                let before: (String, String, String, i64, i64, i64) = raw.query_row(
+                    "SELECT document,state,resource,version,generation,lease_until FROM durable_jobs WHERE id=?1",
+                    [&damaged.job_id],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
+                ).unwrap();
+                drop(raw);
+
+                let (owner, _) = WriterOwner::open(&path, Limits::default()).unwrap();
+                let Outcome::Quarantined(records) = call(
+                    &owner,
+                    UserOperation::Quarantined {
+                        before: None,
+                        limit: 1,
+                    },
+                )
+                .unwrap() else {
+                    panic!("Expected quarantined rows");
+                };
+                assert_eq!(records.len(), 1);
+                assert_eq!(records[0].job_id, damaged.job_id);
+                assert!(!records[0].reason.is_empty());
+                assert_eq!(
+                    records[0].uncertain_resource.as_deref(),
+                    Some("printer:uncertain-printer")
+                );
+                let worker = owner.job_worker(limits).unwrap();
+                let (claimed, mut lease) = worker.claim().unwrap().unwrap();
+                assert_eq!(claimed.job_id, healthy.job_id);
+                worker.update(&mut lease, WorkerOperation::Fail).unwrap();
+                assert!(worker.claim().unwrap().is_none());
+                assert_eq!(get(&owner, &blocked.job_id).state, PersistentState::Queued);
+                owner.shutdown().unwrap();
+                let after: (String, String, String, i64, i64, Option<i64>) = readonly(&path).query_row(
+                    "SELECT document,state,resource,version,generation,lease_until FROM durable_jobs WHERE id=?1",
+                    [&damaged.job_id],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
+                ).unwrap();
+                assert_eq!(after.0, before.0); // Preserve the damaged document exactly.
+                assert_eq!(after.1, "quarantined");
+                assert_eq!(after.2, before.2); // Preserve the uncertain resource reservation.
+                assert_eq!(after.3, before.3 + 1);
+                assert_eq!(after.4, before.4);
+                assert_eq!(after.5, None);
+                let event: String = readonly(&path).query_row(
+                    "SELECT event FROM durable_job_history WHERE job_id=?1 ORDER BY version DESC LIMIT 1",
+                    [&damaged.job_id], |row| row.get(0),
+                ).unwrap();
+                assert_eq!(event, "document_quarantined_resource_uncertain");
+            }
+        }
+    }
+}
+
+#[test]
+fn list_limit_skips_invalid_newest_rows_and_returns_a_usable_cursor() {
+    let (path, owner) = fixture();
+    let older = enqueue(&owner, "older", Payload::CheckSourceUpdates {});
+    let healthy = enqueue(&owner, "healthy", Payload::CheckSourceUpdates {});
+    let damaged = enqueue(&owner, "damaged", Payload::CheckSourceUpdates {});
+    owner.shutdown().unwrap();
+    let raw = Connection::open(path.join("print-partner.db")).unwrap();
+    // Give each row a distinct, deterministic ordering in both document and index.
+    for (id, updated) in [
+        (&older.job_id, 1),
+        (&healthy.job_id, 2),
+        (&damaged.job_id, 3),
+    ] {
+        raw.execute(
+            "UPDATE durable_jobs SET updated=?2,document=json_set(document,'$.updated_at',?2) WHERE id=?1",
+            rusqlite::params![id, updated],
+        ).unwrap();
+    }
+    raw.execute(
+        "UPDATE durable_jobs SET document='{}' WHERE id=?1",
+        [&damaged.job_id],
+    )
+    .unwrap();
+    drop(raw);
+    let (owner, _) = WriterOwner::open(&path, Limits::default()).unwrap();
+    let mut query = JobListQuery {
+        limit: 1,
+        ..JobListQuery::default()
+    };
+    for expected in [&healthy.job_id, &older.job_id] {
+        let Outcome::List(records) = call(&owner, UserOperation::List(query.clone())).unwrap()
+        else {
+            panic!("Expected list");
+        };
+        assert_eq!(records.len(), 1);
+        assert_eq!(&records[0].job_id, expected);
+        query.before = Some((records[0].updated_at, records[0].job_id.clone()));
+    }
+    let Outcome::List(records) = call(&owner, UserOperation::List(query)).unwrap() else {
+        panic!("Expected list");
+    };
+    assert!(records.is_empty());
+    owner.shutdown().unwrap();
+}
