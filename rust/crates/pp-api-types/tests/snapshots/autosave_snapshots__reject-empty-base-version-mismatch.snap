@@ -1,9 +1,9 @@
 ---
 source: crates/pp-api-types/tests/autosave_snapshots.rs
-expression: value
+expression: boundary_error_value(error)
 ---
 {
   "category": "basis_inconsistent",
-  "detail": "basis_inconsistent at line 1 column 182",
+  "detail": "basis_inconsistent",
   "field": "expected_base"
 }

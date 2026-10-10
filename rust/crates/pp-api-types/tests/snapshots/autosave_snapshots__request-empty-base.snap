@@ -16,7 +16,7 @@ expression: value
   ],
   "expected_base": {
     "plan_version": 0,
-    "revision_id": "[revision_id]"
+    "revision_id": null
   },
   "expected_draft": null,
   "remap_checkoff_links": true
