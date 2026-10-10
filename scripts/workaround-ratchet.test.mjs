@@ -321,6 +321,22 @@ test("counts markers on later lines after an unterminated Rust block comment", (
   }
 });
 
+for (const prefix of ['"', 'r#"', 'cr#"', "'", "//", "#"]) {
+  test(`does not parse quotes or line comments inside an unterminated block comment: ${prefix}`, () => {
+    for (const suffix of ["", "\n"]) {
+      const source = [
+        '#[allow(unused)] let valid = "#[allow(ignored)]";',
+        `/* TODO eslint-disable ${prefix} #[allow(dead_code)]`,
+        '" /* closed FIXME #[allow(also_ignored)] */',
+        "#![allow(unused_variables)]",
+      ].join("\n") + suffix;
+      assert.deepEqual(countText(source, "a.rs"), {
+        todoComments: 2, eslintDisable: 1, rustAllow: 3,
+      }, source);
+    }
+  });
+}
+
 test("does not double-count markers before an unterminated block comment", () => {
   const source = [
     "// TODO eslint-disable",
