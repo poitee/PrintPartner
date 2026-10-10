@@ -152,15 +152,16 @@ impl HttpGuard {
                 && addresses.iter().all(|ip| permitted(*ip)),
             "Prohibited DNS answer"
         );
-        let mut connected = None;
-        for ip in addresses {
-            // SocketAddr cannot trigger a second DNS lookup (including retries).
-            if let Ok(stream) = TcpStream::connect(SocketAddr::new(ip, port)).await {
-                connected = Some(stream);
-                break;
-            }
-        }
-        let stream = connected.context("Host unavailable")?;
+        // Race only the checked, pinned addresses. The request deadline bounds
+        // the whole race, and dropping the JoinSet cancels every losing socket.
+        let stream = connect_addresses(
+            addresses
+                .into_iter()
+                .map(|ip| SocketAddr::new(ip, port))
+                .collect(),
+            TcpStream::connect,
+        )
+        .await?;
         let (mut sender, connection) =
             hyper::client::conn::http1::handshake(TokioIo::new(stream)).await?;
         let task = tokio::spawn(connection);
@@ -202,6 +203,27 @@ impl HttpGuard {
     }
 }
 
+async fn connect_addresses<T, F>(
+    addresses: Vec<SocketAddr>,
+    connect: impl Fn(SocketAddr) -> F,
+) -> Result<T>
+where
+    T: Send + 'static,
+    F: Future<Output = std::io::Result<T>> + Send + 'static,
+{
+    let mut attempts = tokio::task::JoinSet::new();
+    for address in addresses {
+        // SocketAddr cannot trigger another DNS lookup, including retries.
+        attempts.spawn(connect(address));
+    }
+    while let Some(attempt) = attempts.join_next().await {
+        if let Ok(Ok(stream)) = attempt {
+            return Ok(stream);
+        }
+    }
+    anyhow::bail!("Host unavailable")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -221,6 +243,48 @@ mod tests {
             };
             Box::pin(async move { Ok(answers) })
         }
+    }
+    #[tokio::test]
+    async fn ticket_t_4_stalled_first_address_does_not_hide_reachable_answer() {
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let completed = tokio::time::timeout(
+            Duration::from_millis(200),
+            connect_addresses(
+                vec![
+                    "127.0.0.1:1".parse().unwrap(),
+                    "127.0.0.2:1".parse().unwrap(),
+                ],
+                |address| {
+                    let dropped = dropped.clone();
+                    async move {
+                        if address.ip().to_string() == "127.0.0.1" {
+                            struct PendingAttempt(Arc<AtomicUsize>);
+                            impl Drop for PendingAttempt {
+                                fn drop(&mut self) {
+                                    self.0.fetch_add(1, Ordering::SeqCst);
+                                }
+                            }
+                            let _pending = PendingAttempt(dropped);
+                            std::future::pending::<()>().await;
+                        }
+                        // Let the first attempt start before this one succeeds.
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                        Ok(address)
+                    }
+                },
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(completed.ip().to_string(), "127.0.0.2");
+        tokio::time::timeout(Duration::from_millis(200), async {
+            while dropped.load(Ordering::SeqCst) == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
     }
     #[tokio::test]
     async fn ticket_t_4_prohibited_and_mixed_dns_answers() {

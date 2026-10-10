@@ -740,30 +740,47 @@ fn moonraker_status_id(path: &str) -> Option<&str> {
     let id = tail.strip_suffix("/status")?;
     (!id.is_empty() && !id.contains('/')).then_some(id)
 }
+async fn snapshot_refresh_guard<'a>(
+    mutex: &'a tokio::sync::Mutex<()>,
+    cancelled: &CancellationToken,
+    deadline: tokio::time::Instant,
+) -> Option<tokio::sync::MutexGuard<'a, ()>> {
+    tokio::select! { biased;
+        _ = cancelled.cancelled() => None,
+        guard = tokio::time::timeout_at(deadline, mutex.lock()) => guard.ok(),
+    }
+}
 async fn refresh_watchers(state: &GatewayState) -> bool {
     // Serialize snapshots without blocking already-cached reads on the Node round trip.
-    let _refresh = state.snapshot_refresh.lock().await;
-    let snapshot = tokio::time::timeout(Duration::from_secs(2), async {
-        let endpoint = state
-            .compat
-            .endpoint()
-            .ok_or_else(|| anyhow::anyhow!("Backend unavailable"))?;
-        let request = Request::builder()
-            .uri("/__desktop/moonraker-hosts")
-            .body(Body::empty())?;
-        let response = endpoint.forward(request).await?;
-        anyhow::ensure!(response.status().is_success(), "Snapshot denied");
-        let body = http_body_util::Limited::new(
-            response.into_body(),
-            pp_drivers::moonraker::MAX_SNAPSHOT_BYTES,
-        )
-        .collect()
-        .await
-        .map_err(|_| anyhow::anyhow!("Snapshot body unavailable"))?
-        .to_bytes();
-        Ok::<Vec<Host>, anyhow::Error>(serde_json::from_slice(&body)?)
-    })
-    .await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    let Some(_refresh) =
+        snapshot_refresh_guard(&state.snapshot_refresh, &state.watcher_cancelled, deadline).await
+    else {
+        return false;
+    };
+    let snapshot = tokio::select! { biased;
+        _ = state.watcher_cancelled.cancelled() => return false,
+        snapshot = tokio::time::timeout_at(deadline, async {
+            let endpoint = state
+                .compat
+                .endpoint()
+                .ok_or_else(|| anyhow::anyhow!("Backend unavailable"))?;
+            let request = Request::builder()
+                .uri("/__desktop/moonraker-hosts")
+                .body(Body::empty())?;
+            let response = endpoint.forward(request).await?;
+            anyhow::ensure!(response.status().is_success(), "Snapshot denied");
+            let body = http_body_util::Limited::new(
+                response.into_body(),
+                pp_drivers::moonraker::MAX_SNAPSHOT_BYTES,
+            )
+            .collect()
+            .await
+            .map_err(|_| anyhow::anyhow!("Snapshot body unavailable"))?
+            .to_bytes();
+            Ok::<Vec<Host>, anyhow::Error>(serde_json::from_slice(&body)?)
+        }) => snapshot,
+    };
     let mut watchers = state.watchers.lock().await;
     match snapshot {
         Ok(Ok(hosts))
@@ -781,6 +798,53 @@ async fn refresh_watchers(state: &GatewayState) -> bool {
 #[cfg(test)]
 mod spa_tests {
     use super::is_spa_client_path;
+
+    #[tokio::test]
+    async fn ticket_t_4_snapshot_queue_deadline_and_shutdown_cancellation() {
+        let mutex = std::sync::Arc::new(tokio::sync::Mutex::new(()));
+        let held = mutex.lock().await;
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let mut queued = tokio::task::JoinSet::new();
+        for _ in 0..8 {
+            let mutex = mutex.clone();
+            let cancel = cancel.clone();
+            queued.spawn(async move {
+                super::snapshot_refresh_guard(
+                    &mutex,
+                    &cancel,
+                    tokio::time::Instant::now() + std::time::Duration::from_millis(50),
+                )
+                .await
+                .is_none()
+            });
+        }
+        tokio::time::timeout(std::time::Duration::from_millis(200), async {
+            while let Some(result) = queued.join_next().await {
+                assert!(result.unwrap());
+            }
+        })
+        .await
+        .unwrap();
+        let pending = super::snapshot_refresh_guard(
+            &mutex,
+            &cancel,
+            tokio::time::Instant::now() + std::time::Duration::from_secs(2),
+        );
+        tokio::pin!(pending);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(10), &mut pending)
+                .await
+                .is_err()
+        );
+        cancel.cancel();
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), pending)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        drop(held);
+    }
 
     #[test]
     fn spa_client_paths_match_the_node_router() {
