@@ -73,6 +73,7 @@ enum EffectClass {
 
 struct GatewayState {
     watchers: tokio::sync::Mutex<Watchers>,
+    snapshot_refresh: tokio::sync::Mutex<()>,
     watcher_cancelled: CancellationToken,
     watcher_tasks: TaskTracker,
     monitoring_suspended: tokio::sync::watch::Sender<bool>,
@@ -133,6 +134,7 @@ impl Gateway {
         )));
         let state = Arc::new(GatewayState {
             watchers: tokio::sync::Mutex::new(Watchers::new()),
+            snapshot_refresh: tokio::sync::Mutex::new(()),
             watcher_cancelled: CancellationToken::new(),
             watcher_tasks: TaskTracker::new(),
             monitoring_suspended: tokio::sync::watch::channel(false).0,
@@ -600,7 +602,7 @@ async fn handle(
             "Origin required for operation with effects",
         );
     }
-    if request.method() == "GET"
+    if matches!(request.method().as_str(), "GET" | "HEAD")
         && let Some(id) = moonraker_status_id(&path)
     {
         let cached = state.watchers.lock().await.status(id);
@@ -622,6 +624,16 @@ async fn handle(
             response
                 .headers_mut()
                 .insert("cache-control", HeaderValue::from_static("no-store"));
+            if request.method() == "HEAD" {
+                // Keep GET's representation length even though HEAD has no body.
+                if let Some(length) = http_body::Body::size_hint(response.body()).exact() {
+                    response.headers_mut().insert(
+                        "content-length",
+                        HeaderValue::from_str(&length.to_string()).expect("decimal length"),
+                    );
+                }
+                *response.body_mut() = Body::empty();
+            }
             return response;
         }
     }
@@ -729,8 +741,8 @@ fn moonraker_status_id(path: &str) -> Option<&str> {
     (!id.is_empty() && !id.contains('/')).then_some(id)
 }
 async fn refresh_watchers(state: &GatewayState) -> bool {
-    // Serialize the read with reconciliation, including concurrent mutation receipts.
-    let mut watchers = state.watchers.lock().await;
+    // Serialize snapshots without blocking already-cached reads on the Node round trip.
+    let _refresh = state.snapshot_refresh.lock().await;
     let snapshot = tokio::time::timeout(Duration::from_secs(2), async {
         let endpoint = state
             .compat
@@ -741,14 +753,18 @@ async fn refresh_watchers(state: &GatewayState) -> bool {
             .body(Body::empty())?;
         let response = endpoint.forward(request).await?;
         anyhow::ensure!(response.status().is_success(), "Snapshot denied");
-        let body = http_body_util::Limited::new(response.into_body(), 1024 * 1024)
-            .collect()
-            .await
-            .map_err(|_| anyhow::anyhow!("Snapshot body unavailable"))?
-            .to_bytes();
+        let body = http_body_util::Limited::new(
+            response.into_body(),
+            pp_drivers::moonraker::MAX_SNAPSHOT_BYTES,
+        )
+        .collect()
+        .await
+        .map_err(|_| anyhow::anyhow!("Snapshot body unavailable"))?
+        .to_bytes();
         Ok::<Vec<Host>, anyhow::Error>(serde_json::from_slice(&body)?)
     })
     .await;
+    let mut watchers = state.watchers.lock().await;
     match snapshot {
         Ok(Ok(hosts))
             if !*state.monitoring_suspended.borrow() && !state.watcher_cancelled.is_cancelled() =>

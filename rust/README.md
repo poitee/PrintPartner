@@ -44,7 +44,7 @@ and window visibility. Node retains storage ownership and provides a private,
 signed-principal-only UDS snapshot of Moonraker configuration. That endpoint is
 not admitted through the public gateway. Snapshot reconciliation runs once per
 second, has a two-second deadline and also runs after successful integration
-creation/update/removal. At most 128 configurations are admitted; malformed or
+creation/update/removal. At most 128 Moonraker configurations are admitted; malformed or
 unavailable snapshots cancel monitoring. A missing snapshot cannot fall back to
 Node's on-demand Moonraker status path through the gateway.
 
@@ -57,7 +57,14 @@ adapters can await `CoreHandle::suspend_monitoring()` before sleep and call
 `resume_monitoring()` on wake; hiding the window never suspends monitoring.
 OS-specific power notification delivery has not been proved here.
 
-Each status poll makes only a GET to `/printer/objects/query`. `pp-net` resolves
+Both GET and HEAD status requests use the cache; HEAD returns no body.
+Snapshot reads use a separate reconciliation lock so cached reads do not wait
+for Node. The bounded snapshot transport covers worst-case JSON escaping of
+all accepted host fields.
+
+Each status poll makes only a GET to `/printer/objects/query`. This seed omits
+system uptime, which requires a separate Moonraker endpoint; the printer page
+hides the uptime row when that optional field is absent. `pp-net` resolves
 once per request, rejects the entire answer set if any address is prohibited,
 and connects using checked `SocketAddr` values without another resolution.
 Explicit LAN and loopback printer targets are allowed. Metadata, link-local,

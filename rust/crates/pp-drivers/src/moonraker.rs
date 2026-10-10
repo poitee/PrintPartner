@@ -15,6 +15,11 @@ use tokio_util::sync::CancellationToken;
 pub const QUERY: &str =
     "/printer/objects/query?print_stats&virtual_sdcard&display_status&extruder&heater_bed";
 pub const MAX_HOSTS: usize = 128;
+pub const MAX_ID_BYTES: usize = 256;
+pub const MAX_CONFIG_BYTES: usize = 4096;
+// JSON can escape every input byte as six bytes (\u00XX), plus keys/punctuation.
+pub const MAX_SNAPSHOT_BYTES: usize =
+    MAX_HOSTS * (6 * (MAX_ID_BYTES + 2 * MAX_CONFIG_BYTES) + 128) + 2;
 #[derive(Clone, Deserialize, PartialEq, Eq)]
 pub struct Host {
     pub id: String,
@@ -72,9 +77,11 @@ impl Watchers {
         let valid = hosts.len() <= MAX_HOSTS
             && hosts.iter().all(|h| {
                 !h.id.is_empty()
-                    && h.id.len() <= 256
-                    && h.base_url.len() <= 4096
-                    && h.api_key.as_ref().is_none_or(|key| key.len() <= 4096)
+                    && h.id.len() <= MAX_ID_BYTES
+                    && h.base_url.len() <= MAX_CONFIG_BYTES
+                    && h.api_key
+                        .as_ref()
+                        .is_none_or(|key| key.len() <= MAX_CONFIG_BYTES)
             });
         let wanted: HashMap<_, _> = hosts.iter().map(|h| (h.id.clone(), h.clone())).collect();
         if !valid || wanted.len() != hosts.len() {
@@ -253,6 +260,23 @@ pub fn recorded_status(body: &[u8], base: &str) -> Result<Status> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn ticket_t_4_maximum_escaped_snapshot_fits_transport_bound() {
+        let hosts: Vec<_> = (0..MAX_HOSTS)
+            .map(|i| {
+                serde_json::json!({
+                    "id": format!("{i:03}{}", "\u{0001}".repeat(MAX_ID_BYTES - 3)),
+                    "base_url": "\u{0001}".repeat(MAX_CONFIG_BYTES),
+                    "api_key": "\u{0001}".repeat(MAX_CONFIG_BYTES), "enabled": false
+                })
+            })
+            .collect();
+        let bytes = serde_json::to_vec(&hosts).unwrap();
+        assert!(bytes.len() > 1024 * 1024);
+        assert!(bytes.len() <= MAX_SNAPSHOT_BYTES);
+        let hosts: Vec<Host> = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(hosts.len(), MAX_HOSTS);
+    }
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},

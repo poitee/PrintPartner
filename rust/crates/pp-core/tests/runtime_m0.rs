@@ -1239,10 +1239,58 @@ async fn ticket_t_4_real_gateway_hidden_status_and_config_cancellation() {
         assert_eq!(body["filename"], "bracket.gcode");
         assert!(!String::from_utf8_lossy(&response.2).contains("recorded-test-key"));
     }
+    let head = request(
+        &origin,
+        &format!("/api/v1/integrations/{id}/status"),
+        "HEAD",
+        Some(cookie),
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(head.0, StatusCode::OK);
+    assert_eq!(head.1["cache-control"], "no-store");
+    assert!(head.2.is_empty());
+    assert!(
+        head.1["content-length"]
+            .to_str()
+            .unwrap()
+            .parse::<usize>()
+            .unwrap()
+            > 0
+    );
     assert_eq!(
         calls.load(Ordering::SeqCst),
         count,
         "Reads must not make another outbound request"
+    );
+    // A stalled compatibility snapshot must not stall an already-cached read.
+    let pid = match runtime.handle().subscribe().borrow().clone() {
+        CoreStatus::Ready { pid, .. } => pid,
+        _ => panic!("backend not ready"),
+    };
+    assert_eq!(unsafe { libc::kill(pid as i32, libc::SIGSTOP) }, 0);
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    let cached_while_node_stopped = tokio::time::timeout(
+        Duration::from_millis(300),
+        request(
+            &origin,
+            &format!("/api/v1/integrations/{id}/status"),
+            "GET",
+            Some(cookie),
+            None,
+            None,
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(unsafe { libc::kill(pid as i32, libc::SIGCONT) }, 0);
+    assert_eq!(
+        cached_while_node_stopped
+            .expect("cached read blocked on Node")
+            .0,
+        StatusCode::OK
     );
     for (fixture_mode, expected) in [(1, "error"), (2, "offline")] {
         mode.store(fixture_mode, Ordering::SeqCst);
