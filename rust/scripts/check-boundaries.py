@@ -7,10 +7,9 @@ import sys
 ALLOWED = {"pp-source": set(), "pp-storage": set(), "pp-core": {"pp-gateway", "pp-compat", "pp-storage"}, "pp-gateway": {"pp-compat", "pp-net"}, "pp-compat": set(), "pp-server": {"pp-core"}, "pp-contracts": {"pp-api-types"}, "pp-desktop": {"pp-core"}, "pp-domain": set(), "pp-api-types": {"pp-domain"}, "pp-net": set(), "pp-drivers": set(), "pp-services": set()}
 
 
-
 def violations(packages):
     return [(package["name"], dependency["name"]) for package in packages
-            if package["name"] in ALLOWED for dependency in package["dependencies"]
+            for dependency in package["dependencies"]
             if dependency["name"].startswith("pp-") and dependency["name"] not in ALLOWED[package["name"]]]
 
 
@@ -19,6 +18,11 @@ cargo = shutil.which("cargo")
 if cargo is None:
     raise SystemExit("cargo not found in PATH")
 metadata = json.loads(subprocess.check_output([cargo, "metadata", "--manifest-path", str(manifest), "--locked", "--format-version", "1", "--no-deps"]))
+package_names = {package["name"] for package in metadata["packages"]}
+assert package_names == set(ALLOWED), {
+    "unlisted_packages": sorted(package_names - set(ALLOWED)),
+    "missing_packages": sorted(set(ALLOWED) - package_names),
+}
 assert not violations(metadata["packages"]), violations(metadata["packages"])
 if "--self-test" in sys.argv:
     invalid = [{"name": "pp-compat", "dependencies": [{"name": "pp-gateway"}]}]
