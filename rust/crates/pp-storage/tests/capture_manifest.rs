@@ -1,3 +1,7 @@
+#[allow(dead_code)]
+#[path = "support/schema.rs"]
+mod schema_fixture;
+
 use pp_storage::uploads::inspect_capture_manifest;
 
 #[test]
@@ -13,7 +17,7 @@ fn manifest_fixture_with_metadata(overrides: &[(&str, &str, &[u8])]) -> std::pat
     let path = std::env::temp_dir().join(format!("pp-u15-manifest-{:016x}", rand::random::<u64>()));
     let (owner, ready) =
         pp_storage::WriterOwner::open(&path, pp_storage::Limits::default()).unwrap();
-    assert_eq!(ready.version, 41);
+    assert_eq!(ready.version, 42);
     owner.shutdown().unwrap();
     let conn = rusqlite::Connection::open(path.join("print-partner.db")).unwrap();
     conn.execute_batch("INSERT INTO build_profiles(id,name) VALUES(1,'U15 owned fixture');
@@ -74,6 +78,7 @@ fn manifest_generation41_preserves_six_scalar_columns_and_reopens_canonical_blob
     .unwrap();
     {
         let conn = rusqlite::Connection::open(path.join("print-partner.db")).unwrap();
+        schema_fixture::remove_schema42(&conn);
         conn.execute(
             "UPDATE app_settings SET value='40' WHERE tenant_id='default' AND key='schema_version'",
             [],
@@ -82,7 +87,7 @@ fn manifest_generation41_preserves_six_scalar_columns_and_reopens_canonical_blob
     }
     let (owner, ready) =
         pp_storage::WriterOwner::open(&path, pp_storage::Limits::default()).unwrap();
-    assert_eq!((ready.previous_version, ready.version), (40, 41));
+    assert_eq!((ready.previous_version, ready.version), (40, 42));
     owner.shutdown().unwrap();
     assert_eq!(manifest_rows(&path), before);
     let backup = rusqlite::Connection::open(path.join("backups/pre-schema41.db")).unwrap();
@@ -118,7 +123,7 @@ fn manifest_generation41_preserves_six_scalar_columns_and_reopens_canonical_blob
     );
     let (owner, ready) =
         pp_storage::WriterOwner::open(&canonical_path, pp_storage::Limits::default()).unwrap();
-    assert_eq!(ready.previous_version, 41);
+    assert_eq!(ready.previous_version, 42);
     owner.shutdown().unwrap();
     assert_eq!(manifest_rows(&canonical_path), blobs);
     println!(
@@ -128,7 +133,7 @@ fn manifest_generation41_preserves_six_scalar_columns_and_reopens_canonical_blob
 }
 
 #[test]
-fn manifest_generation_refuses_pre41_blobs_malformed41_other_column_blobs_and42() {
+fn manifest_generation_refuses_pre41_blobs_malformed41_other_column_blobs_and43() {
     for table in ["parts", "plan_revision_parts", "plan_draft_parts"] {
         for column in ["requirement", "option_group_id"] {
             for (generation, bytes) in [
@@ -138,6 +143,7 @@ fn manifest_generation_refuses_pre41_blobs_malformed41_other_column_blobs_and42(
                 let path = manifest_fixture_with_metadata(&[(table, column, bytes)]);
                 {
                     let conn = rusqlite::Connection::open(path.join("print-partner.db")).unwrap();
+                    schema_fixture::remove_schema42(&conn);
                     conn.execute("UPDATE app_settings SET value=?1 WHERE tenant_id='default' AND key='schema_version'", [generation.to_string()]).unwrap();
                 }
                 let before = manifest_rows(&path);
@@ -174,7 +180,7 @@ fn manifest_generation_refuses_pre41_blobs_malformed41_other_column_blobs_and42(
     {
         let conn = rusqlite::Connection::open(path.join("print-partner.db")).unwrap();
         conn.execute(
-            "UPDATE app_settings SET value='42' WHERE tenant_id='default' AND key='schema_version'",
+            "UPDATE app_settings SET value='43' WHERE tenant_id='default' AND key='schema_version'",
             [],
         )
         .unwrap();
@@ -184,6 +190,6 @@ fn manifest_generation_refuses_pre41_blobs_malformed41_other_column_blobs_and42(
             .err()
             .unwrap()
             .to_string()
-            .contains("newer than supported version 41")
+            .contains("newer than supported version 42")
     );
 }

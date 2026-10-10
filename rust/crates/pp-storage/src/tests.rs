@@ -1,3 +1,10 @@
+#[allow(dead_code)]
+#[path = "../tests/support/schema.rs"]
+mod schema_fixture;
+use schema_fixture::{
+    remove_schema37, remove_schema38, remove_schema39, remove_schema40, remove_schema42,
+};
+
 use super::*;
 use std::sync::mpsc;
 fn directory(name: &str) -> PathBuf {
@@ -199,7 +206,7 @@ fn reader_pool_resets_pragmas_rejects_writes_and_is_bounded() {
 }
 #[test]
 fn ahead_and_old_versions_reject_before_side_effects() {
-    for version in [30, 41] {
+    for version in [30, 43] {
         let path = directory("version");
         let database = path.join("print-partner.db");
         let conn = Connection::open(&database).unwrap();
@@ -218,16 +225,6 @@ fn ahead_and_old_versions_reject_before_side_effects() {
         assert_eq!(std::fs::read(&database).unwrap(), before);
         assert_eq!(std::fs::read_dir(&path).unwrap().count(), 1);
     }
-}
-
-fn remove_schema37(connection: &Connection) {
-    connection
-        .execute_batch(
-            "DROP TRIGGER trg_plan_apply_admissions_immutable_delete;
-             DROP TRIGGER trg_plan_apply_admissions_immutable_update;
-             DROP TABLE plan_apply_admissions;",
-        )
-        .unwrap();
 }
 
 fn schema_object_exists(connection: &Connection, name: &str) -> bool {
@@ -341,50 +338,6 @@ fn database_rows_image(connection: &Connection) -> Vec<(String, Vec<Vec<String>>
         .collect()
 }
 
-fn remove_schema38(connection: &Connection) {
-    connection
-        .execute_batch(
-            "DROP TRIGGER trg_source_revisions_provenance_immutable_update;
-             DROP TRIGGER trg_source_revisions_provenance_immutable_delete;
-             DROP TRIGGER trg_source_revision_attempts_immutable_update;
-             DROP TRIGGER trg_source_revision_attempts_immutable_delete;
-             DROP TRIGGER trg_source_revision_artifacts_immutable_update;
-             DROP TRIGGER trg_source_revision_artifacts_immutable_delete;
-             DROP TRIGGER trg_source_revision_observations_immutable_update;
-             DROP TRIGGER trg_source_revision_observations_immutable_delete;
-             DROP TABLE source_revision_observations;
-             DROP TABLE source_revision_artifacts;
-             DROP TABLE source_revision_attempts;
-             ALTER TABLE source_docs DROP COLUMN producer_version;
-             ALTER TABLE source_docs DROP COLUMN input_digest;
-             ALTER TABLE source_docs DROP COLUMN source_revision_id;
-             ALTER TABLE source_revisions DROP COLUMN producer_version;
-             ALTER TABLE source_revisions DROP COLUMN input_digest;
-             ALTER TABLE source_revisions DROP COLUMN activation_observation_digest;
-             ALTER TABLE source_revisions DROP COLUMN source_configuration_version;
-             ALTER TABLE projects DROP COLUMN source_configuration_version;",
-        )
-        .unwrap();
-}
-
-fn remove_schema39(connection: &Connection) {
-    connection
-        .execute_batch(
-            "DROP TRIGGER trg_source_revision_observations_preclaim_cursor_insert;
-             DROP TRIGGER trg_source_preclaim_refusals_cursor_insert;
-             DROP TRIGGER trg_source_preclaim_refusals_immutable_delete;
-             DROP TRIGGER trg_source_preclaim_refusals_immutable_update;
-             DROP TABLE source_preclaim_refusals;",
-        )
-        .unwrap();
-}
-
-fn remove_schema40(connection: &Connection) {
-    connection
-        .execute_batch("DROP TABLE source_scan_executions;")
-        .unwrap();
-}
-
 fn assert_schema40(connection: &Connection, expected: bool) {
     assert_eq!(
         schema_object_exists(connection, "source_scan_executions"),
@@ -440,12 +393,13 @@ fn assert_schema38(connection: &Connection, expected: bool) {
 }
 
 #[test]
-fn supported_versions_migrate_through_schema40_with_exact_backups_and_reopen() {
+fn supported_versions_migrate_through_schema42_with_exact_backups_and_reopen() {
     for version in 31..=39 {
         let path = directory("schema38-version");
         let (owner, _) = WriterOwner::open(&path, Limits::default()).unwrap();
         owner.shutdown().unwrap();
         let connection = Connection::open(path.join("print-partner.db")).unwrap();
+        remove_schema42(&connection);
         remove_schema40(&connection);
         if version < 39 {
             remove_schema39(&connection);
@@ -480,7 +434,7 @@ fn supported_versions_migrate_through_schema40_with_exact_backups_and_reopen() {
         drop(connection);
         let (owner, ready) = WriterOwner::open(&path, Limits::default()).unwrap();
         assert_eq!(ready.previous_version, version);
-        assert_eq!(ready.version, 40);
+        assert_eq!(ready.version, 42);
         let backup = ready.backup.unwrap();
         assert!(backup.ends_with(match version {
             31..=35 => "pre-schema36.db",
@@ -526,8 +480,8 @@ fn supported_versions_migrate_through_schema40_with_exact_backups_and_reopen() {
         drop(backup_connection);
         owner.shutdown().unwrap();
         let (owner, reopened) = WriterOwner::open(&path, Limits::default()).unwrap();
-        assert_eq!(reopened.previous_version, 40);
-        assert_eq!(reopened.version, 40);
+        assert_eq!(reopened.previous_version, 42);
+        assert_eq!(reopened.version, 42);
         assert!(reopened.backup.is_none());
         assert_eq!(std::fs::read(&backup).unwrap(), original_backup);
         let reopened_connection = Connection::open(path.join("print-partner.db")).unwrap();
@@ -545,6 +499,8 @@ fn schema37_migration_rolls_back_as_one_unit() {
     let (owner, _) = WriterOwner::open(&path, Limits::default()).unwrap();
     owner.shutdown().unwrap();
     let connection = Connection::open(path.join("print-partner.db")).unwrap();
+    remove_schema42(&connection);
+    remove_schema40(&connection);
     remove_schema39(&connection);
     remove_schema38(&connection);
     remove_schema37(&connection);
@@ -582,7 +538,7 @@ fn schema37_migration_rolls_back_as_one_unit() {
         .unwrap();
     drop(connection);
     let (owner, ready) = WriterOwner::open(&path, Limits::default()).unwrap();
-    assert_eq!(ready.version, 39);
+    assert_eq!(ready.version, 42);
     owner.shutdown().unwrap();
 }
 
@@ -593,6 +549,8 @@ fn schema38_journal_migration_rolls_back_and_preserves_pre_schema38_backup() {
     owner.shutdown().unwrap();
     let database = path.join("print-partner.db");
     let connection = Connection::open(&database).unwrap();
+    remove_schema42(&connection);
+    remove_schema40(&connection);
     remove_schema39(&connection);
     remove_schema38(&connection);
     connection
@@ -708,7 +666,7 @@ fn schema38_journal_migration_rolls_back_and_preserves_pre_schema38_backup() {
     drop(connection);
     let (owner, ready) = WriterOwner::open(&path, Limits::default()).unwrap();
     assert_eq!(ready.previous_version, 37);
-    assert_eq!(ready.version, 39);
+    assert_eq!(ready.version, 42);
     assert!(ready.backup.unwrap().ends_with("pre-schema38.db"));
     owner.shutdown().unwrap();
 }
@@ -720,6 +678,8 @@ fn schema39_preclaim_migration_rolls_back_and_preserves_pre_schema39_backup() {
     owner.shutdown().unwrap();
     let database = path.join("print-partner.db");
     let connection = Connection::open(&database).unwrap();
+    remove_schema42(&connection);
+    remove_schema40(&connection);
     remove_schema39(&connection);
     connection
         .execute_batch(
@@ -851,7 +811,7 @@ fn schema39_preclaim_migration_rolls_back_and_preserves_pre_schema39_backup() {
 
     let (owner, ready) = WriterOwner::open(&path, Limits::default()).unwrap();
     assert_eq!(ready.previous_version, 38);
-    assert_eq!(ready.version, 39);
+    assert_eq!(ready.version, 42);
     assert!(ready.backup.unwrap().ends_with("pre-schema39.db"));
     owner.shutdown().unwrap();
 }
@@ -988,7 +948,7 @@ fn fresh_schema38_failure_leaves_all_source38_definitions_uninstalled() {
         .unwrap();
     drop(connection);
     let (owner, ready) = WriterOwner::open(&path, Limits::default()).unwrap();
-    assert_eq!(ready.version, 39);
+    assert_eq!(ready.version, 42);
     owner.shutdown().unwrap();
 }
 
@@ -998,6 +958,7 @@ fn schema38_migration_keeps_historical_documents_unknown_and_requires_complete_p
     let (owner, _) = WriterOwner::open(&path, Limits::default()).unwrap();
     owner.shutdown().unwrap();
     let connection = Connection::open(path.join("print-partner.db")).unwrap();
+    remove_schema42(&connection);
     remove_schema40(&connection);
     remove_schema39(&connection);
     remove_schema38(&connection);
@@ -1044,7 +1005,7 @@ fn schema38_migration_keeps_historical_documents_unknown_and_requires_complete_p
     assert_eq!(known, (102, "0".repeat(64), "fixture-v1".into()));
     drop(connection);
     let (owner, ready) = WriterOwner::open(&path, Limits::default()).unwrap();
-    assert_eq!(ready.previous_version, 40);
+    assert_eq!(ready.previous_version, 42);
     owner.shutdown().unwrap();
 }
 
@@ -1106,7 +1067,7 @@ fn schema38_reopen_accepts_canonical_source_sql_formatting_changes() {
     ).unwrap();
     drop(connection);
     let (owner, ready) = WriterOwner::open(&path, Limits::default()).unwrap();
-    assert_eq!(ready.previous_version, 40);
+    assert_eq!(ready.previous_version, 42);
     owner.shutdown().unwrap();
 }
 
@@ -1166,6 +1127,7 @@ fn schema37_backup_captures_schema36_wal_and_reopen_keeps_original_backup() {
     owner.shutdown().unwrap();
     let database = path.join("print-partner.db");
     let connection = Connection::open(&database).unwrap();
+    remove_schema42(&connection);
     remove_schema40(&connection);
     remove_schema39(&connection);
     remove_schema38(&connection);
@@ -1460,7 +1422,7 @@ fn wal_only_unsupported_versions_preserve_every_input_file() {
         entries.sort();
         entries
     };
-    for version in [30, 41] {
+    for version in [30, 43] {
         for with_shm in [false, true] {
             let source = directory("wal-source");
             let raw = Connection::open(source.join("print-partner.db")).unwrap();
@@ -1568,6 +1530,7 @@ fn schema37_backup_preserves_pre36_and_existing_pre37_copies() {
         let (owner, _) = WriterOwner::open(&path, Limits::default()).unwrap();
         owner.shutdown().unwrap();
         let connection = Connection::open(path.join("print-partner.db")).unwrap();
+        remove_schema42(&connection);
         remove_schema40(&connection);
         remove_schema39(&connection);
         remove_schema38(&connection);
@@ -1584,7 +1547,7 @@ fn schema37_backup_preserves_pre36_and_existing_pre37_copies() {
         }
         let (owner, ready) = WriterOwner::open(&path, Limits::default()).unwrap();
         assert_eq!(ready.previous_version, 36);
-        assert_eq!(ready.version, 40);
+        assert_eq!(ready.version, 42);
         assert_eq!(ready.backup.as_ref(), Some(&selected));
         owner.shutdown().unwrap();
         assert_eq!(

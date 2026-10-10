@@ -703,7 +703,7 @@ fn refused_queue_entries_commit_and_do_not_poison_healthy_work() {
         &owner,
         Credential::Session(Secret::new(token.clone())),
         "refused-cross-kind",
-        Payload::Sync { project_ids: None },
+        Payload::CheckSourceUpdates {},
     );
     let source_id = local_source(&owner, "Healthy cross-kind Source");
     let healthy = enqueue_payload(
@@ -896,11 +896,12 @@ fn authority_loss_fences_the_attempt_and_preserves_only_matching_evidence() {
     let path = directory();
     let owner = open(&path);
     let (user, token) = register(&owner, "effect-refusal@example.com");
+    // Exercise generic effect recovery; Source Sync owns a separate target journal.
     let queued = enqueue_payload(
         &owner,
         Credential::Session(Secret::new(token.clone())),
         "effect-refusal",
-        Payload::Sync { project_ids: None },
+        Payload::CheckSourceUpdates {},
     );
     let worker = owner.job_worker_with_policy(policy(), admission()).unwrap();
     let ClaimedAttempt {
@@ -942,7 +943,7 @@ fn authority_loss_fences_the_attempt_and_preserves_only_matching_evidence() {
         &owner,
         Credential::Session(Secret::new(replacement)),
         "resource-blocked",
-        Payload::Sync { project_ids: None },
+        Payload::CheckSourceUpdates {},
     );
     assert_ne!(blocked.job_id, queued.job_id);
     assert!(worker.claim().unwrap().is_none());
@@ -1016,7 +1017,7 @@ fn authority_loss_fences_the_attempt_and_preserves_only_matching_evidence() {
         &owner,
         Credential::Session(Secret::new(token.clone())),
         "mismatch-refusal",
-        Payload::Sync { project_ids: None },
+        Payload::CheckSourceUpdates {},
     );
     let worker = owner.job_worker_with_policy(policy(), admission()).unwrap();
     let ClaimedAttempt {
