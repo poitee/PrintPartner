@@ -44,6 +44,49 @@ pub(crate) fn owner_is_stale(pid: u32, identity: Option<&str>) -> bool {
     identity.is_some_and(|identity| process_identity(pid).is_ok_and(|actual| actual != identity))
 }
 
+// On platforms without foreign-process identity lookup, use an instance token.
+// A live foreign PID cannot be declared stale from a token mismatch there.
+pub(crate) fn record_child(directory: &Path, pid: u32) -> Result<()> {
+    #[cfg(target_os = "linux")]
+    let identity = process_identity(pid)?;
+    #[cfg(not(target_os = "linux"))]
+    let identity = format!("instance:{}", hex::encode(rand::random::<[u8; 16]>()));
+    let path = directory.join(".desktop-owner.json");
+    let mut marker: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)?;
+    marker["child_pid"] = pid.into();
+    marker["child_process_identity"] = identity.into();
+    let temporary = directory.join(format!(
+        ".desktop-owner-{}.json.new",
+        hex::encode(rand::random::<[u8; 16]>())
+    ));
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&temporary)?;
+    file.write_all(&serde_json::to_vec(&marker)?)?;
+    file.sync_all()?;
+    std::fs::rename(temporary, path)?;
+    std::fs::File::open(directory)?.sync_all()?;
+    Ok(())
+}
+
+pub(crate) fn child_is_stale(marker: &serde_json::Value) -> bool {
+    let Some(pid) = marker["child_pid"]
+        .as_u64()
+        .filter(|pid| *pid > 0 && *pid <= i32::MAX as u64)
+    else {
+        return false;
+    };
+    let Some(identity) = marker["child_process_identity"]
+        .as_str()
+        .filter(|identity| !identity.is_empty())
+    else {
+        return false;
+    };
+    owner_is_stale(pid as u32, Some(identity))
+}
+
 #[derive(Deserialize, Serialize)]
 struct Owner {
     pid: u32,
@@ -186,6 +229,31 @@ mod tests {
         assert!(super::process_identity(pid).is_err());
         assert!(!super::owner_is_stale(pid, Some("different-instance")));
         assert!(!super::owner_is_stale(pid, None));
+    }
+
+    #[test]
+    fn child_marker_requires_complete_info_and_a_stale_child() {
+        use serde_json::json;
+        assert!(!super::child_is_stale(&json!({})));
+        assert!(!super::child_is_stale(
+            &json!({"child_pid": 0, "child_process_identity": "prior"})
+        ));
+        assert!(!super::child_is_stale(
+            &json!({"child_pid": std::process::id()})
+        ));
+        assert!(!super::child_is_stale(
+            &json!({"child_pid": std::process::id(), "child_process_identity": ""})
+        ));
+        let identity = super::process_identity(std::process::id()).unwrap();
+        assert!(!super::child_is_stale(
+            &json!({"child_pid": std::process::id(), "child_process_identity": identity})
+        ));
+        let mut dead = std::process::Command::new("/bin/true").spawn().unwrap();
+        let pid = dead.id();
+        dead.wait().unwrap();
+        assert!(super::child_is_stale(
+            &json!({"child_pid": pid, "child_process_identity": "prior"})
+        ));
     }
 
     #[test]

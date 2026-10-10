@@ -57,7 +57,8 @@ impl StorageOwner {
                 .filter(|pid| *pid > 0 && *pid <= i32::MAX as u64)
                 .context("Invalid prior writer PID")? as i32;
             anyhow::ensure!(
-                storage_lease::owner_is_stale(pid as u32, marker["process_identity"].as_str()),
+                storage_lease::owner_is_stale(pid as u32, marker["process_identity"].as_str())
+                    && (marker["kind"] == "standalone" || storage_lease::child_is_stale(&marker)),
                 "A prior writer may still be alive"
             );
             std::fs::rename(
@@ -224,6 +225,7 @@ async fn start_resources(input: DesktopLaunch) -> Result<Resources> {
         lease: owner.lease.clone(),
         lease_file: owner.lock.try_clone()?,
         port: listener.local_addr()?.port(),
+        record_child: storage_lease::record_child,
     })?;
     owner.release_allowed = false;
     let mut status = supervisor.handle.status.clone();

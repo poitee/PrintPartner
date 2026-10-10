@@ -28,6 +28,7 @@ describe("Rust-written storage markers", () => {
       instance: "ab".repeat(16),
     };
     const marker = JSON.stringify({ pid: owner.pid, process_identity: owner.process_identity,
+      child_pid: owner.pid, child_process_identity: owner.process_identity,
       lease_hash: "cd".repeat(32), runtime_dir: join(tmpdir(), "pp-prior-runtime") });
     try {
       mkdirSync(join(directory, ".desktop-lease"));
@@ -42,6 +43,22 @@ describe("Rust-written storage markers", () => {
       } finally { release(); }
     } finally { rmSync(directory, { recursive: true, force: true }); }
   });
+
+  it.each([undefined, {}, { child_pid: 0, child_process_identity: "prior" },
+    { child_pid: process.pid, child_process_identity: processIdentity(process.pid) }])
+    ("refuses a dead core marker with missing, invalid or live child info %j", (child) => {
+      const directory = mkdtempSync(join(tmpdir(), "pp-rust-child-owner-"));
+      const dead = spawnSync(process.execPath, ["-e", ""]);
+      expect(dead.status).toBe(0);
+      const marker = JSON.stringify({ pid: dead.pid, process_identity: "prior",
+        lease_hash: "cd".repeat(32), ...child });
+      const path = join(directory, ".desktop-owner.json");
+      try {
+        writeFileSync(path, marker);
+        expect(() => acquireDataDirectory(directory)).toThrow("already owned");
+        expect(readFileSync(path, "utf8")).toBe(marker);
+      } finally { rmSync(directory, { recursive: true, force: true }); }
+    });
 
   it.each([true, false])("preserves a live owner's marker (identity present: %s)", (withIdentity) => {
     const directory = mkdtempSync(join(tmpdir(), "pp-rust-live-owner-"));

@@ -805,7 +805,7 @@ async fn stale_owner_recovery_admits_only_one_concurrent_start() {
 async fn reused_pid_with_different_identity_recovers_marker_and_lease() {
     let data = temporary("reused-pid");
     std::fs::create_dir_all(data.join(".desktop-lease")).unwrap();
-    let owner = serde_json::json!({"pid": std::process::id(), "process_identity": "prior-boot:prior-start", "instance": "ab".repeat(16)});
+    let owner = serde_json::json!({"pid": std::process::id(), "kind": "standalone", "process_identity": "prior-boot:prior-start", "instance": "ab".repeat(16)});
     std::fs::write(data.join(".desktop-owner.json"), owner.to_string()).unwrap();
     std::fs::write(data.join(".desktop-lease/owner.json"), owner.to_string()).unwrap();
     let runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
@@ -869,6 +869,185 @@ async fn desktop_manifest_and_icons_are_served_as_assets() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(runtime.shutdown().await.complete());
+    std::fs::remove_dir_all(data).unwrap();
+}
+
+// Run as a subprocess so SIGKILL ends the actual Rust owner, not the test runner.
+#[tokio::test]
+async fn core_process_fixture() {
+    let Some(data) = std::env::var_os("PP_CORE_DEATH_FIXTURE") else {
+        return;
+    };
+    let _runtime = CoreRuntime::start(launch(data.into())).await.unwrap();
+    println!("PP_CORE_READY");
+    use std::io::Write;
+    std::io::stdout().flush().unwrap();
+    std::future::pending::<()>().await;
+}
+
+#[test]
+fn core_death_with_live_child_refuses_standalone_node() {
+    use std::io::{BufRead, BufReader};
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+    let data = temporary("core-death-live-child");
+    let mut core = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "core_process_fixture", "--nocapture"])
+        .env("PP_CORE_DEATH_FIXTURE", &data)
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut child_pid = None;
+    let mut group_peer = None;
+    let mut runtime_dir = None;
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let output = BufReader::new(core.stdout.take().unwrap());
+        assert!(
+            output
+                .lines()
+                .any(|line| line.unwrap().contains("PP_CORE_READY"))
+        );
+        let marker_path = data.join(".desktop-owner.json");
+        let contents = std::fs::read(&marker_path).unwrap();
+        let marker: serde_json::Value = serde_json::from_slice(&contents).unwrap();
+        assert_eq!(marker["pid"], core.id());
+        let pid = marker["child_pid"].as_u64().unwrap() as i32;
+        child_pid = Some(pid);
+        runtime_dir = Some(PathBuf::from(marker["runtime_dir"].as_str().unwrap()));
+        assert!(
+            !marker["child_process_identity"]
+                .as_str()
+                .unwrap()
+                .is_empty()
+        );
+        // Keep the group non-orphaned after core death. Otherwise POSIX sends
+        // SIGHUP/SIGCONT to the stopped group, killing the child before the check.
+        group_peer = Some(
+            Command::new("sleep")
+                .arg("60")
+                .process_group(pid)
+                .spawn()
+                .unwrap(),
+        );
+        // Freeze the child with its DB open to deterministically hold the shutdown window.
+        assert_eq!(unsafe { libc::kill(pid, libc::SIGSTOP) }, 0);
+        // waitpid cannot observe this non-child on macOS; ps works on both hosts.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let state = Command::new("ps")
+                .args(["-o", "stat=", "-p", &pid.to_string()])
+                .output()
+                .unwrap();
+            if String::from_utf8_lossy(&state.stdout).contains('T') {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "child did not stop");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        core.kill().unwrap();
+        core.wait().unwrap();
+        assert_eq!(unsafe { libc::kill(pid, 0) }, 0, "child must remain alive");
+        let input = launch(data.clone());
+        let mut standalone = Command::new(input.bundle.node)
+            .arg(
+                input
+                    .bundle
+                    .web_root
+                    .join("apps/server/dist/current/index.js"),
+            )
+            .current_dir(&input.bundle.web_root)
+            .env("PRINT_PARTNER_DATA_DIR", &data)
+            .env("HOST", "127.0.0.1")
+            .env("PORT", "0")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+        while standalone.try_wait().unwrap().is_none() {
+            if std::time::Instant::now() >= deadline {
+                let _ = standalone.kill();
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let standalone = standalone.wait_with_output().unwrap();
+        assert_eq!(
+            unsafe { libc::kill(pid, 0) },
+            0,
+            "child must survive the entire refusal check"
+        );
+        assert!(!standalone.status.success());
+        assert!(
+            String::from_utf8_lossy(&standalone.stderr).contains("already owned"),
+            "{}",
+            String::from_utf8_lossy(&standalone.stderr)
+        );
+        assert_eq!(std::fs::read(&marker_path).unwrap(), contents);
+        // The Rust startup must obey the same two-process marker gate.
+        let caller = tokio::runtime::Runtime::new().unwrap();
+        assert!(
+            caller
+                .block_on(CoreRuntime::start(launch(data.clone())))
+                .is_err()
+        );
+        assert_eq!(std::fs::read(&marker_path).unwrap(), contents);
+    }));
+    let _ = core.kill();
+    let _ = core.wait();
+    if let Some(pid) = child_pid {
+        unsafe {
+            libc::kill(-pid, libc::SIGKILL);
+        }
+    }
+    if let Some(mut peer) = group_peer {
+        let _ = peer.kill();
+        let _ = peer.wait();
+    }
+    if let Some(path) = runtime_dir {
+        let _ = std::fs::remove_dir_all(path);
+    }
+    let _ = std::fs::remove_dir_all(data);
+    if let Err(error) = result {
+        std::panic::resume_unwind(error);
+    }
+}
+
+#[tokio::test]
+async fn dead_core_marker_without_child_info_refuses_start() {
+    let data = temporary("missing-child-info");
+    std::fs::create_dir_all(&data).unwrap();
+    let mut dead = std::process::Command::new("/bin/true").spawn().unwrap();
+    let pid = dead.id();
+    dead.wait().unwrap();
+    let marker = data.join(".desktop-owner.json");
+    let contents =
+        serde_json::json!({"pid": pid, "process_identity": "prior", "lease_hash": "cd".repeat(32)})
+            .to_string();
+    std::fs::write(&marker, &contents).unwrap();
+    assert!(CoreRuntime::start(launch(data.clone())).await.is_err());
+    assert_eq!(std::fs::read_to_string(marker).unwrap(), contents);
+    std::fs::remove_dir_all(data).unwrap();
+}
+
+#[tokio::test]
+async fn desktop_marker_with_both_processes_dead_allows_start() {
+    let data = temporary("both-processes-dead");
+    std::fs::create_dir_all(&data).unwrap();
+    let mut dead = std::process::Command::new("/bin/true").spawn().unwrap();
+    let pid = dead.id();
+    dead.wait().unwrap();
+    std::fs::write(
+        data.join(".desktop-owner.json"),
+        serde_json::json!({
+            "pid": pid, "process_identity": "prior-core", "child_pid": pid,
+            "child_process_identity": "prior-child", "lease_hash": "cd".repeat(32)
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
     assert!(runtime.shutdown().await.complete());
     std::fs::remove_dir_all(data).unwrap();
 }
