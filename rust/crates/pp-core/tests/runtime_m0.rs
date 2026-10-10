@@ -607,3 +607,85 @@ fn drop_after_caller_runtime_teardown_reaps_writer_and_descendant() {
         serde_json::json!({"case":"drop_after_runtime_teardown","child_pid":pid,"descendant_pid":descendant_pid,"child_reaped":true,"descendant_reaped":true,"marker_removed":true,"runtime_removed":true,"lock_reacquired":true})
     );
 }
+
+#[tokio::test]
+async fn crash_left_marker_allows_later_start() {
+    let data = temporary("stale-owner");
+    std::fs::create_dir_all(&data).unwrap();
+    let mut child = std::process::Command::new("/bin/true").spawn().unwrap();
+    let pid = child.id();
+    child.wait().unwrap();
+    std::fs::write(
+        data.join(".desktop-owner.json"),
+        serde_json::json!({"pid": pid, "kind": "standalone"}).to_string(),
+    )
+    .unwrap();
+    let runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
+    assert!(matches!(
+        *runtime.handle().subscribe().borrow(),
+        CoreStatus::Ready { .. }
+    ));
+    assert!(runtime.shutdown().await.complete());
+    std::fs::remove_dir_all(data).unwrap();
+}
+
+#[tokio::test]
+async fn live_marker_owner_still_blocks_start() {
+    let data = temporary("live-marker-owner");
+    std::fs::create_dir_all(&data).unwrap();
+    let marker = data.join(".desktop-owner.json");
+    let contents = serde_json::json!({"pid": std::process::id(), "kind": "standalone"}).to_string();
+    std::fs::write(&marker, &contents).unwrap();
+    assert!(CoreRuntime::start(launch(data.clone())).await.is_err());
+    assert_eq!(std::fs::read_to_string(marker).unwrap(), contents);
+    std::fs::remove_dir_all(data).unwrap();
+}
+
+#[tokio::test]
+async fn compatibility_cleanup_failure_reports_failed_instead_of_ready() {
+    let data = temporary("compat-cleanup-failure");
+    let runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
+    let state = runtime.handle().subscribe();
+    assert!(matches!(*state.borrow(), CoreStatus::Ready { .. }));
+    let marker: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(data.join(".desktop-owner.json")).unwrap()).unwrap();
+    let runtime_dir = PathBuf::from(marker["runtime_dir"].as_str().unwrap());
+    let socket = std::fs::read_dir(&runtime_dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| path.extension().is_some_and(|ext| ext == "sock"))
+        .unwrap();
+    std::fs::remove_file(&socket).unwrap();
+    std::fs::create_dir(&socket).unwrap();
+    let receipt = runtime.shutdown().await;
+    assert!(!receipt.compat_reaped);
+    assert!(!receipt.complete());
+    assert!(receipt.errors.contains(&"compat_cleanup_unproved"));
+    assert!(matches!(*state.borrow(), CoreStatus::Failed));
+    std::fs::remove_dir_all(runtime_dir).unwrap();
+    std::fs::remove_dir_all(data).unwrap();
+}
+
+#[tokio::test]
+async fn stale_owner_recovery_admits_only_one_concurrent_start() {
+    let data = temporary("stale-owner-race");
+    std::fs::create_dir_all(&data).unwrap();
+    let mut child = std::process::Command::new("/bin/true").spawn().unwrap();
+    let pid = child.id();
+    child.wait().unwrap();
+    std::fs::write(
+        data.join(".desktop-owner.json"),
+        serde_json::json!({"pid": pid, "kind": "standalone"}).to_string(),
+    )
+    .unwrap();
+    let (first, second) = tokio::join!(
+        CoreRuntime::start(launch(data.clone())),
+        CoreRuntime::start(launch(data.clone()))
+    );
+    let runtime = match (first, second) {
+        (Ok(runtime), Err(_)) | (Err(_), Ok(runtime)) => runtime,
+        _ => panic!("exactly one concurrent owner must acquire storage"),
+    };
+    assert!(runtime.shutdown().await.complete());
+    std::fs::remove_dir_all(data).unwrap();
+}

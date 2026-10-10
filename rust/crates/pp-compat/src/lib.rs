@@ -55,7 +55,9 @@ pub enum Status {
     Ready { generation: String, pid: u32 },
     Backoff { attempt: usize },
     Guarded,
+    Stopping,
     Stopped,
+    Failed,
 }
 
 #[derive(Clone)]
@@ -414,7 +416,11 @@ impl Supervisor {
                         }
                     }
                     endpoints.send_replace(None);
-                    process.stop().await?;
+                    states.send_replace(Status::Stopping);
+                    if let Err(error) = process.stop().await {
+                        states.send_replace(Status::Failed);
+                        return Err(error);
+                    }
                     logs.event("compat_reaped", 30);
                 }
                 if cancelled.is_cancelled() {

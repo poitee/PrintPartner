@@ -3,6 +3,7 @@ import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, re
 import { join } from "node:path";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
+import { flockSync } from "fs-ext";
 import type { SessionUser } from "./routes/auth-types.js";
 
 const setupSchema = z.strictObject({
@@ -51,7 +52,19 @@ function assertDataDirectoryAvailable(dataDir: string): void {
   const canonical = realpathSync(dataDir);
   if (!existsSync(join(canonical, ".desktop-owner.json"))) return;
   if (context?.data_dir === canonical) return;
-  throw new Error("Data directory is owned by the desktop runtime; stop it before opening another writer");
+  // Called only while holding .desktop.lock. Unknown/desktop markers stay strict.
+  const owner = z.object({ kind: z.literal("standalone"), pid: z.number().int().positive().max(2147483647) })
+    .safeParse(JSON.parse(readFileSync(join(canonical, ".desktop-owner.json"), "utf8")));
+  if (owner.success) {
+    try { process.kill(owner.data.pid, 0); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ESRCH") {
+        rmSync(join(canonical, ".desktop-owner.json"));
+        return;
+      }
+    }
+  }
+  throw new Error("Data directory is already owned; stop the other process before opening another writer");
 }
 
 export function desktopPrincipal(request: FastifyRequest): SessionUser | null {
@@ -95,18 +108,33 @@ export function verifyDesktopPrincipal(
 }
 
 export function acquireDataDirectory(dataDir: string): () => void {
-  assertDataDirectoryAvailable(dataDir);
-  if (context) return () => {};
+  if (context) {
+    assertDataDirectoryAvailable(dataDir);
+    return () => {};
+  }
   mkdirSync(dataDir, { recursive: true });
-  const marker = join(realpathSync(dataDir), ".desktop-owner.json");
-  const fd = openSync(marker, "wx", 0o600);
-  try { writeFileSync(fd, JSON.stringify({ pid: process.pid, kind: "standalone" })); }
-  catch (error) { closeSync(fd); rmSync(marker); throw error; }
-  closeSync(fd);
+  const canonical = realpathSync(dataDir);
+  // Keep this inode: deleting a lock file allows two owners to lock different files.
+  const lock = openSync(join(canonical, ".desktop.lock"), "a+", 0o600);
+  const marker = join(canonical, ".desktop-owner.json");
+  try {
+    try { flockSync(lock, "exnb"); }
+    catch { throw new Error("Data directory is already owned; stop the other process before opening another writer"); }
+    assertDataDirectoryAvailable(canonical);
+    const fd = openSync(marker, "wx", 0o600);
+    try { writeFileSync(fd, JSON.stringify({ pid: process.pid, kind: "standalone" })); }
+    catch (error) { rmSync(marker); throw error; }
+    finally { closeSync(fd); }
+  } catch (error) {
+    closeSync(lock);
+    throw error;
+  }
   let released = false;
   return () => {
     if (released) return;
-    released = true;
+    // Preserve ownership if marker cleanup fails, so callers can retry safely.
     rmSync(marker);
+    closeSync(lock);
+    released = true;
   };
 }

@@ -46,7 +46,19 @@ impl StorageOwner {
             .context("Data directory already owned")?;
         let marker_path = data_dir.join(".desktop-owner.json");
         if marker_path.exists() {
-            bail!("A prior writer marker remains; verify no prior writer is alive before recovery");
+            // The OS lock serializes inspection and replacement with every cooperating writer.
+            // A free lock alone is insufficient for older standalone writers using only markers.
+            let marker: serde_json::Value = serde_json::from_slice(&std::fs::read(&marker_path)?)?;
+            let pid = marker["pid"]
+                .as_u64()
+                .filter(|pid| *pid > 0 && *pid <= i32::MAX as u64)
+                .context("Invalid prior writer PID")? as i32;
+            let result = unsafe { libc::kill(pid, 0) };
+            anyhow::ensure!(
+                result < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH),
+                "A prior writer may still be alive"
+            );
+            std::fs::remove_file(&marker_path)?;
         }
         let lease = hex::encode(rand::random::<[u8; 32]>());
         let runtime_dir = std::env::temp_dir().join(format!(
@@ -214,7 +226,10 @@ async fn start_resources(input: DesktopLaunch) -> Result<Resources> {
             if matches!(*status.borrow(), CoreStatus::Ready { .. }) {
                 return Ok(());
             }
-            if matches!(*status.borrow(), CoreStatus::Guarded | CoreStatus::Stopped) {
+            if matches!(
+                *status.borrow(),
+                CoreStatus::Guarded | CoreStatus::Stopped | CoreStatus::Failed
+            ) {
                 bail!("Compatibility startup failed");
             }
             status
