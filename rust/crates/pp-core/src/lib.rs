@@ -137,16 +137,18 @@ async fn start_resources(input: DesktopLaunch) -> Result<Resources> {
         lease: owner.secret().to_owned(),
         lease_file: owner.clone_file()?,
         port: listener.local_addr()?.port(),
+        record_child: pp_storage::lease::record_child,
     })?;
     owner.retain_on_drop();
     let mut status = supervisor.handle.status.clone();
     let ready = tokio::time::timeout(Duration::from_secs(32), async {
         loop {
-            if matches!(*status.borrow(), CoreStatus::Ready { .. }) {
-                return Ok(());
-            }
-            if matches!(*status.borrow(), CoreStatus::Guarded | CoreStatus::Stopped) {
-                bail!("Compatibility startup failed");
+            match *status.borrow() {
+                CoreStatus::Ready { .. } => return Ok(()),
+                CoreStatus::Guarded | CoreStatus::Stopped | CoreStatus::Failed => {
+                    bail!("Compatibility startup failed");
+                }
+                CoreStatus::Starting | CoreStatus::Backoff { .. } | CoreStatus::Stopping => {}
             }
             status
                 .changed()
