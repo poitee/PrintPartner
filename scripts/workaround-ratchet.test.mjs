@@ -337,7 +337,7 @@ test("counts every marker key once per physical shell line", () => {
   });
 });
 
-test("scans YAML run scalars and blocks while excluding unrelated metadata", () => {
+test("counts YAML run scalars, blocks, and metadata conservatively", () => {
   const source = [
     "name: TODO metadata",
     "defaults:",
@@ -362,12 +362,12 @@ test("scans YAML run scalars and blocks while excluding unrelated metadata", () 
   for (const path of ["a.yml", "a.yaml"]) {
     let counts;
     assert.doesNotThrow(() => { counts = countText(source, path); });
-    assert.deepEqual(counts, { todoComments: 6, eslintDisable: 1, rustAllow: 0 });
+    assert.deepEqual(counts, { todoComments: 10, eslintDisable: 1, rustAllow: 0 });
   }
 });
 
 for (const header of ["|", "|-", "|+", ">", ">-", ">+", "|2", "|2-", "|2+", "|-2", "|+2", ">2", ">2-", ">2+", ">-2", ">+2"]) {
-  test(`extracts only YAML run content for block scalar ${header}`, () => {
+  test(`counts all YAML lines around block scalar ${header}`, () => {
     for (const prefix of ["run:", "- run:", "  - run:"]) {
       const indent = prefix.indexOf("run");
       const source = [
@@ -380,21 +380,21 @@ for (const header of ["|", "|-", "|+", ">", ">-", ">+", "|2", "|2-", "|2+", "|-2
         `${" ".repeat(indent + 2)}run: echo TODO not executed`,
       ].join("\n");
       for (const path of ["workflow.yml", "workflow.yaml"]) {
-        assert.deepEqual(countText(source, path), { todoComments: 3, eslintDisable: 0, rustAllow: 0 }, prefix);
+        assert.deepEqual(countText(source, path), { todoComments: 5, eslintDisable: 0, rustAllow: 0 }, prefix);
       }
     }
   });
 }
 
-test("extracts YAML run plain scalars starting on the next line", () => {
+test("counts YAML run plain scalars starting on the next line", () => {
   for (const source of ["run:\n  echo TODO", "- run:\n    echo TODO", "run: # FIXME metadata\n  echo TODO"]) {
     assert.equal(countText(source, "workflow.yml").todoComments, source.startsWith("run: #") ? 2 : 1);
   }
 });
 
-test("extracts single-line YAML run commands with trailing comments and without adjacent keys", () => {
+test("counts inline YAML run lines and adjacent metadata", () => {
   const source = 'steps:\n  - run: echo "TODO" # FIXME metadata\n    name: HACK metadata\n    env:\n      NOTE: TODO metadata';
-  assert.deepEqual(countText(source, "workflow.yml"), { todoComments: 1, eslintDisable: 0, rustAllow: 0 });
+  assert.deepEqual(countText(source, "workflow.yml"), { todoComments: 3, eslintDisable: 0, rustAllow: 0 });
 });
 
 test("counts YAML comments on the whole physical inline run line", () => {
@@ -419,20 +419,28 @@ test("counts trailing comments on the alias node's own line", () => {
   }
 });
 
-test("counts each physical run line through the value end with comments", () => {
+test("counts YAML lines before and after value boundaries", () => {
   const source = ["run: # TODO key", '  "echo ok', "  # FIXME middle", '  ok" # HACK end', "# TODO outside", "name: TODO outside"].join("\n");
-  assert.deepEqual(countText(source, "workflow.yml"), { todoComments: 3, eslintDisable: 0, rustAllow: 0 });
+  assert.deepEqual(countText(source, "workflow.yml"), { todoComments: 5, eslintDisable: 0, rustAllow: 0 });
 });
 
-test("excludes non-run fields in flow mappings without dropping comments or aliases", () => {
+test("counts markers anywhere in YAML flow mappings", () => {
   for (const source of ["{ name: TODO, run: echo ok }", "{ run: echo ok, name: TODO }"]) {
-    assert.equal(countText(source, "workflow.yml").todoComments, 0);
+    assert.equal(countText(source, "workflow.yml").todoComments, 1);
   }
   assert.equal(countText("{ name: FIXME, run: echo TODO } # HACK", "workflow.yml").todoComments, 1);
   assert.equal(countText("{ command: &command echo TODO, name: FIXME, run: *command }", "workflow.yml").todoComments, 1);
 });
 
-test("ignores run-like text inside other YAML scalar values", () => {
+test("Gate: counts nested workflow flow mappings without extraction", () => {
+  for (const path of ["workflow.yml", "workflow.yaml"]) {
+    assert.deepEqual(countText("build: {runs-on: x, steps: [{run: echo TODO}]}", path), {
+      todoComments: 1, eslintDisable: 0, rustAllow: 0,
+    });
+  }
+});
+
+test("allows conservative overcounting in YAML descriptions, comments, and defaults", () => {
   for (const source of [
     "description: |\n  run: echo TODO",
     "description: >-\n  run: echo TODO",
@@ -441,7 +449,7 @@ test("ignores run-like text inside other YAML scalar values", () => {
     "# run: echo TODO\nother: FIXME",
     "defaults:\n  run:\n    working-directory: TODO-folder",
   ]) {
-    assert.deepEqual(countText(source, "workflow.yaml"), { todoComments: 0, eslintDisable: 0, rustAllow: 0 });
+    assert.deepEqual(countText(source, "workflow.yaml"), { todoComments: source.startsWith("#") ? 2 : 1, eslintDisable: 0, rustAllow: 0 });
   }
 });
 
