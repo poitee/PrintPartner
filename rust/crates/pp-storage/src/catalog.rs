@@ -163,6 +163,10 @@ pub(super) enum Command {
         authority: Authority,
         id: i64,
     },
+    BeginJob {
+        lease: crate::jobs::AttemptLease,
+        source_id: Option<i64>,
+    },
     End(u64),
 }
 pub(super) enum Reply {
@@ -352,6 +356,28 @@ impl SourceCatalogClient {
         }
     }
 }
+pub(crate) fn begin_job_work(
+    client: &SettingsClient,
+    lease: crate::jobs::AttemptLease,
+    source_id: Option<i64>,
+    cancelled: &AtomicBool,
+    wait: Duration,
+) -> Result<SourceWorkLease> {
+    match enqueue(
+        client,
+        Command::BeginJob { lease, source_id },
+        cancelled,
+        wait,
+    )?
+    .recv()??
+    {
+        Reply::Lease(token) => Ok(SourceWorkLease {
+            client: client.clone(),
+            token: Some(token),
+        }),
+        _ => Err(anyhow!("Unexpected lease reply")),
+    }
+}
 impl SourceWorkLease {
     pub fn release(&mut self) -> Result<()> {
         let token = *self
@@ -392,6 +418,18 @@ pub(super) fn execute(
             ensure!(state.active.remove(&token).is_some(), "Unknown work lease");
             tx.commit()?;
             Ok(Reply::Released)
+        }
+        Command::BeginJob { lease, source_id } => {
+            let (tenant, id) = crate::jobs::claimed_source(&tx, &lease, source_id)?;
+            require(&tx, &tenant, id)?;
+            let token = state
+                .next
+                .checked_add(1)
+                .ok_or_else(|| anyhow!("Work lease overflow"))?;
+            tx.commit()?;
+            state.next = token;
+            state.active.insert(token, (tenant, id));
+            Ok(Reply::Lease(token))
         }
         Command::Begin { authority, id } => {
             let tenant = authority.tenant(&tx)?;
@@ -778,7 +816,9 @@ fn delete(tx: &Transaction<'_>, state: &State, tenant: &str, id: i64) -> Result<
     let Some(source) = get(tx, tenant, id)? else {
         return Ok(Deletion::NotFound);
     };
-    if state.active.values().any(|(t, s)| t == tenant && *s == id) {
+    if state.active.values().any(|(t, s)| t == tenant && *s == id)
+        || crate::jobs::source_reserved(tx, tenant, id)?
+    {
         return Ok(Deletion::ActiveWork);
     }
     if tx.query_row(

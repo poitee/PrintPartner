@@ -199,7 +199,7 @@ fn reader_pool_resets_pragmas_rejects_writes_and_is_bounded() {
 }
 #[test]
 fn ahead_and_old_versions_reject_before_side_effects() {
-    for version in [30, 35] {
+    for version in [30, 36] {
         let path = directory("version");
         let database = path.join("print-partner.db");
         let conn = Connection::open(&database).unwrap();
@@ -223,10 +223,15 @@ fn ahead_and_old_versions_reject_before_side_effects() {
 #[test]
 fn reopen_preserves_the_pre_upgrade_backup() {
     let path = directory("upgrade-backup");
-    let (owner, _) = WriterOwner::open(&path, Limits::default()).unwrap();
-    owner.shutdown().unwrap();
-
     let database = path.join("print-partner.db");
+    std::fs::write(
+        &database,
+        include_bytes!("../tests/fixtures/accepted-plan-node.db"),
+    )
+    .unwrap();
+    let older_backup = path.join("backups/pre-schema34.db");
+    std::fs::create_dir_all(older_backup.parent().unwrap()).unwrap();
+    std::fs::write(&older_backup, b"retained older recovery copy").unwrap();
     let raw = Connection::open(&database).unwrap();
     raw.execute(
         "UPDATE app_settings SET value='33' WHERE tenant_id='default' AND key='schema_version'",
@@ -254,6 +259,11 @@ fn reopen_preserves_the_pre_upgrade_backup() {
     assert!(ready.backup.is_none());
     owner.shutdown().unwrap();
     assert_eq!(version(&backup), "33");
+    assert_ne!(backup, older_backup);
+    assert_eq!(
+        std::fs::read(older_backup).unwrap(),
+        b"retained older recovery copy"
+    );
 }
 #[test]
 fn backup_includes_uncheckpointed_wal() {
@@ -494,7 +504,7 @@ fn wal_only_unsupported_versions_preserve_every_input_file() {
         entries.sort();
         entries
     };
-    for version in [30, 35] {
+    for version in [30, 36] {
         for with_shm in [false, true] {
             let source = directory("wal-source");
             let raw = Connection::open(source.join("print-partner.db")).unwrap();
