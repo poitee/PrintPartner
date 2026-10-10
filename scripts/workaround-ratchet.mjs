@@ -16,6 +16,8 @@ const SOURCE_EXTENSIONS = new Set([
   ".rs",
   ".py",
   ".sh",
+  ".yml",
+  ".yaml",
   ".css",
   ".html",
 ]);
@@ -29,7 +31,7 @@ const EXCLUDED_PATHS = new Set([
 export const MARKERS = {
   todoComments: /\b(?:TODO|FIXME|HACK)\b/,
   eslintDisable: /eslint-disable/,
-  rustAllow: /#!?\[allow\(/,
+  rustAllow: /#\s*!?\s*\[allow\(/,
 };
 
 const JS_LINE_TERMINATORS = /\r\n|[\n\r\u2028\u2029]/;
@@ -52,10 +54,6 @@ const QUOTES = {
     { open: "'", close: "'", escape: true, multiline: false },
   ],
   rust: [{ open: '"', close: '"', escape: true, multiline: true }],
-  shell: [
-    { open: '"', close: '"', escape: true, multiline: false },
-    { open: "'", close: "'", escape: false, multiline: false },
-  ],
 };
 
 const SYNTAX = {
@@ -71,13 +69,11 @@ const SYNTAX = {
     rustRawStrings: true,
     rustAllow: true,
   },
-  shell: { block: null, line: "shellHash", quotes: QUOTES.shell, rustAllow: false },
 };
 
 const SYNTAX_BY_EXTENSION = new Map([
   [".rs", SYNTAX.rust],
   [".py", SYNTAX.python],
-  [".sh", SYNTAX.shell],
   [".css", SYNTAX.cStyle],
   [".html", SYNTAX.html],
 ]);
@@ -143,13 +139,11 @@ function syntaxFor(path) {
 function lineCommentLength(line, index, syntax) {
   if ((syntax.line === "slash" || syntax.line === "mixed") && line.startsWith("//", index)) return 2;
   if (syntax.line === "hash" || syntax.line === "mixed") {
-    if (syntax.rustAllow && (line.startsWith("#[allow(", index) || line.startsWith("#![allow(", index))) {
+    if (syntax.rustAllow && /^#\s*!?\s*\[allow\(/.test(line.slice(index))) {
       return 0;
     }
     return line[index] === "#" ? 1 : 0;
   }
-  if (syntax.line !== "shellHash" || line[index] !== "#") return 0;
-  if (index === 0 || /[\s;|&()]/.test(line[index - 1])) return 1;
   return 0;
 }
 
@@ -272,7 +266,44 @@ function countNonJavaScriptText(text, path) {
   return counts;
 }
 
+// Shell text is deliberately counted without interpreting quotes or syntax.
+function countMarkerLines(lines) {
+  const counts = Object.fromEntries(Object.keys(MARKERS).map((key) => [key, 0]));
+  for (const line of lines) {
+    for (const [key, marker] of Object.entries(MARKERS)) {
+      if (marker.test(line)) counts[key] += 1;
+    }
+  }
+  return counts;
+}
+
+// Physical source lines of every `run` scalar value. Source tokens exclude block
+// headers, trailing comments, and adjacent keys, and handle every chomping/indent indicator.
+function yamlRunLines(text) {
+  const { isAlias, isScalar, parseAllDocuments, visit } = requireWeb("yaml");
+  const lines = [];
+  const documents = parseAllDocuments(text, { keepSourceTokens: true });
+  // Malformed YAML still gets a conservative count instead of throwing.
+  if (documents.some((document) => document.errors.length > 0)) return text.split("\n");
+  for (const document of documents) {
+    visit(document, {
+      Pair(_key, pair) {
+        if (!isScalar(pair.key) || pair.key.value !== "run") return;
+        const value = isAlias(pair.value) ? pair.value.resolve(document) : pair.value;
+        if (!isScalar(value) || typeof value.value !== "string" || !value.range) return;
+        const source =
+          value.srcToken?.type === "block-scalar" ? value.srcToken.source : text.slice(value.range[0], value.range[1]);
+        lines.push(...source.split("\n"));
+      },
+    });
+  }
+  return lines;
+}
+
 export function countText(text, path = "") {
+  const extension = extensionOf(path);
+  if (extension === ".sh") return countMarkerLines(text.split("\n"));
+  if (extension === ".yml" || extension === ".yaml") return countMarkerLines(yamlRunLines(text));
   if (JAVASCRIPT_EXTENSIONS.has(extensionOf(path))) return countJavaScriptComments(text, path);
   return countNonJavaScriptText(text, path);
 }
