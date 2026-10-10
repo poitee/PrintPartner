@@ -757,7 +757,7 @@ async fn desktop_manifest_and_icons_are_served_as_assets() {
         None,
     )
     .await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(runtime.shutdown().await.complete());
     std::fs::remove_dir_all(data).unwrap();
 }
