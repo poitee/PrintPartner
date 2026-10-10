@@ -91,7 +91,7 @@ impl ReconciliationRequest {
 #[serde(deny_unknown_fields)]
 pub struct PartView {
     pub draft_part_id: PositiveId,
-    #[serde(deserialize_with = "crate::autosave::required_nullable")]
+    #[serde(deserialize_with = "required_nullable")]
     pub base_revision_part_id: Option<PositiveId>,
     pub part_key: Text<1, 4096>,
     pub filename: Text<1, 1000>,
@@ -99,7 +99,7 @@ pub struct PartView {
     pub source_layer: Text<0, 1000>,
     pub role: Text<0, 200>,
     pub quantity_inferred: Quantity,
-    #[serde(deserialize_with = "crate::autosave::required_nullable")]
+    #[serde(deserialize_with = "required_nullable")]
     pub quantity_override: Option<Quantity>,
     pub quantity_effective: Quantity,
     pub included: bool,
@@ -197,4 +197,30 @@ fn nonempty_ids<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<Positi
         return Err(de::Error::custom("empty predecessor candidates"));
     }
     Ok(ids)
+}
+
+// Required keys may contain null, but omission must still fail deserialization.
+fn required_nullable<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
+    deserializer: D,
+) -> Result<Option<T>, D::Error> {
+    Option::<T>::deserialize(deserializer)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn part_view_requires_nullable_keys_after_api_types_split() {
+        let part = serde_json::json!({
+            "draft_part_id": 1, "base_revision_part_id": null,
+            "part_key": "part.stl", "filename": "part.stl", "relative_path": "part.stl",
+            "source_layer": "base", "role": "primary", "quantity_inferred": 1,
+            "quantity_override": null, "quantity_effective": 1, "included": true
+        });
+        assert!(serde_json::from_value::<super::PartView>(part.clone()).is_ok());
+        for field in ["base_revision_part_id", "quantity_override"] {
+            let mut missing = part.clone();
+            missing.as_object_mut().unwrap().remove(field);
+            assert!(serde_json::from_value::<super::PartView>(missing).is_err());
+        }
+    }
 }
