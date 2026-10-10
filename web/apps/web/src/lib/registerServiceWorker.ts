@@ -5,6 +5,7 @@
  * Call once at app startup (main.tsx).
  */
 export function registerServiceWorker() {
+  if (import.meta.env.VITE_PRINT_PARTNER_DESKTOP === "1") return;
   if (!("serviceWorker" in navigator)) return;
 
   window.addEventListener("load", () => {

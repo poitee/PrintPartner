@@ -1,4 +1,5 @@
-import Fastify from "fastify";
+import { acquireDataDirectory, desktopContext, registerDesktopBoundary } from "./desktop-context.js";
+import Fastify, { type FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
 import compress from "@fastify/compress";
@@ -189,10 +190,21 @@ function isAdministrativeRoute(url: string): boolean {
 
 export async function buildApp(config: ServerConfig, ports: RuntimePorts) {
   const app = Fastify({
-    logger: true,
+    logger: desktopContext() ? { redact: ["req", "res", "err"] } : true,
     bodyLimit: MAX_JSON_BODY_BYTES,
     trustProxy: config.trustProxy,
   });
+  registerDesktopBoundary(app);
+  try {
+    await configureApp(app, config, ports);
+    return app;
+  } catch (error) {
+    await app.close();
+    throw error;
+  }
+}
+
+async function configureApp(app: FastifyInstance, config: ServerConfig, ports: RuntimePorts): Promise<void> {
   app.addHook("onSend", async (_request, reply, payload) => {
     if (!reply.hasHeader("Cache-Control")) {
       reply.header("Cache-Control", "private, no-store");
@@ -538,64 +550,76 @@ export async function buildApp(config: ServerConfig, ports: RuntimePorts) {
 
   registerOpenApiJsonRoutes(app);
 
-  return app;
 }
 
 export async function startServer(config: ServerConfig) {
-  validateProductionConfig(config);
-  if (!config.databaseUrl) {
-    const preparation = await prepareSqliteUpgrade({
-      dataDir: config.dataDir,
-      appVersion: config.version,
-    });
-    if (preparation.kind === "backup-created") {
-      console.info(
-        `[upgrade] protected schema ${preparation.fromVersion} at ${preparation.backupPath} before starting schema ${preparation.toVersion}`,
-      );
-    }
-  }
-  const ports = createPorts(config);
-  await ports.db.connect();
-
-  // One-time migration: move print_outcomes blob → print_job_parts SQL rows.
-  if (ports.repository) {
-    try {
-      const { migratePrintOutcomesBlob } = await import(
-        "./services/printer-outcomes-store.js"
-      );
-      migratePrintOutcomesBlob(ports.repository);
-    } catch (err) {
-      console.warn("[print-outcomes] blob migration skipped:", err);
-    }
-  }
-
-  // Best-effort: upsert Advisor notes from shipped/imported domain pack onto matching sources.
-  if (ports.repository) {
-    try {
-      const { backfillAdvisorNotesFromDomainPack } = await import(
-        "./assistant/domain-pack.js"
-      );
-      const result = backfillAdvisorNotesFromDomainPack(
-        ports.repository,
-        config.dataDir,
-      );
-      if (result.notes_upserted > 0) {
+  const releaseOwner = acquireDataDirectory(config.dataDir);
+  try {
+    validateProductionConfig(config);
+    if (!config.databaseUrl) {
+      const preparation = await prepareSqliteUpgrade({
+        dataDir: config.dataDir,
+        appVersion: config.version,
+      });
+      if (preparation.kind === "backup-created") {
         console.info(
-          `[assistant-domain] backfilled ${result.notes_upserted} advisor note(s) across ${result.sources_matched} source(s)`,
+          `[upgrade] protected schema ${preparation.fromVersion} at ${preparation.backupPath} before starting schema ${preparation.toVersion}`,
         );
       }
-    } catch (err) {
-      console.warn("[assistant-domain] note backfill skipped:", err);
     }
-  }
+    const ports = createPorts(config);
+    const closeDatabase = ports.db.close.bind(ports.db);
+    ports.db.close = async () => {
+      await closeDatabase();
+      releaseOwner();
+    };
+    let app: FastifyInstance | null = null;
+    try {
+      await ports.db.connect();
 
-  const app = await buildApp(config, ports);
+      // One-time migration: move print_outcomes blob → print_job_parts SQL rows.
+      if (ports.repository) {
+        try {
+          const { migratePrintOutcomesBlob } = await import(
+            "./services/printer-outcomes-store.js"
+          );
+          migratePrintOutcomesBlob(ports.repository);
+        } catch (err) {
+          console.warn("[print-outcomes] blob migration skipped:", err);
+        }
+      }
 
-  try {
-    await app.listen({ host: config.host, port: config.port });
-    return { app, ports };
-  } catch (err) {
-    await ports.db.close();
-    throw err;
+      // Best-effort: upsert Advisor notes from shipped/imported domain pack onto matching sources.
+      if (ports.repository) {
+        try {
+          const { backfillAdvisorNotesFromDomainPack } = await import(
+            "./assistant/domain-pack.js"
+          );
+          const result = backfillAdvisorNotesFromDomainPack(
+            ports.repository,
+            config.dataDir,
+          );
+          if (result.notes_upserted > 0) {
+            console.info(
+              `[assistant-domain] backfilled ${result.notes_upserted} advisor note(s) across ${result.sources_matched} source(s)`,
+            );
+          }
+        } catch (err) {
+          console.warn("[assistant-domain] note backfill skipped:", err);
+        }
+      }
+
+      app = await buildApp(config, ports);
+      const desktop = desktopContext();
+      await app.listen(desktop ? { path: desktop.socket_path } : { host: config.host, port: config.port });
+      return { app, ports };
+    } catch (err) {
+      await app?.close();
+      await ports.db.close();
+      throw err;
+    }
+  } catch (error) {
+    releaseOwner();
+    throw error;
   }
 }

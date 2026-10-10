@@ -6,7 +6,7 @@ export type SessionUser = {
   login: string;
   display_name: string;
   email: string | null;
-  provider: "github" | "discord" | "email" | "basic" | "anonymous";
+  provider: "github" | "discord" | "email" | "basic" | "anonymous" | "desktop";
   is_admin: boolean;
 };
 

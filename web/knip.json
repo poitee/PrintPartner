@@ -6,7 +6,10 @@
   "workspaces": {
     ".": {
       "entry": [
-        "scripts/*.{mjs,mts,ts}"
+        "scripts/*.{mjs,mts,ts}",
+        "scripts/desktop-parity/verify.mts",
+        "scripts/desktop-parity/capture.mts",
+        "scripts/desktop-parity/compare.mts"
       ],
       "project": [
         "scripts/**"
@@ -15,7 +18,8 @@
     "apps/server": {
       "entry": [
         "capture-digest-fixtures.ts",
-        "src/**/*.test.ts"
+        "src/**/*.test.ts",
+        "src/desktop.ts"
       ],
       "project": [
         "src/**/*.ts",
