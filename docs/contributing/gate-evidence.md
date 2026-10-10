@@ -1,10 +1,9 @@
 # Gate evidence
 
-> User-visible pull requests must include a screenshot, recording, or verify-skill output/trace in the PR's Evidence section. Gate returns **FAIL** if a user-visible PR lacks this evidence or a non-user-visible PR does not say so.
+> User-visible pull requests must attach or link evidence from the real running app, not mocks or stubs, and include the steps followed to produce it in the PR's Evidence section. Gate returns **FAIL** without this evidence unless one of the four exemptions below applies. Automated verification must never target Chad's LAN instances (.80/.81).
 
-A change is user-visible when it changes behavior a user can see or reach in
-the desk-loop UI (Library → Builds → Sources → Plan → Production ↔ Checkoff)
-or an equivalent product surface.
+"User-visible" means any change to the UI, routes, printer actions, or the
+desktop shell.
 
 Accepted evidence includes:
 
@@ -13,8 +12,20 @@ Accepted evidence includes:
 - Verify-skill output or a trace demonstrating the result.
 
 Put evidence in the PR body's **Evidence** section. Attach files or link to
-screenshots, recordings, verify output, or trace artifacts. Name the journey
-exercised and the result observed so reviewers can assess the change.
+screenshots, recordings, verify output, or trace artifacts from the real running
+app, not mocks or stubs. Include the steps followed to produce the evidence and
+the result observed. Automated verification must never target Chad's LAN
+instances (.80/.81).
 
-Non-user-visible PRs must say so in the Evidence section, with a brief reason.
-Gate returns **FAIL** when these requirements are not met.
+The only exemptions are exactly these four:
+
+- docs-only
+- CI-only
+- dependency-only
+- internal refactor with no user-visible change
+
+Authors must either attach or link evidence and set `Exemption: none`, or name
+one of these four exemptions in the Evidence section and explain why it applies.
+Use `Exemption: internal refactor` only when there is no user-visible change.
+Gate returns **FAIL** if the evidence or a valid named exemption is missing, or
+if automated verification targets Chad's LAN instances (.80/.81).
