@@ -16,6 +16,8 @@ const SOURCE_EXTENSIONS = new Set([
   ".rs",
   ".py",
   ".sh",
+  ".yml",
+  ".yaml",
   ".css",
   ".html",
 ]);
@@ -29,7 +31,7 @@ const EXCLUDED_PATHS = new Set([
 export const MARKERS = {
   todoComments: /\b(?:TODO|FIXME|HACK)\b/,
   eslintDisable: /eslint-disable/,
-  rustAllow: /#!?\[allow\(/,
+  rustAllow: /#\s*!?\s*\[\s*allow\s*\(/,
 };
 
 const JS_LINE_TERMINATORS = /\r\n|[\n\r\u2028\u2029]/;
@@ -52,10 +54,6 @@ const QUOTES = {
     { open: "'", close: "'", escape: true, multiline: false },
   ],
   rust: [{ open: '"', close: '"', escape: true, multiline: true }],
-  shell: [
-    { open: '"', close: '"', escape: true, multiline: true },
-    { open: "'", close: "'", escape: false, multiline: true },
-  ],
 };
 
 const SYNTAX = {
@@ -71,13 +69,11 @@ const SYNTAX = {
     rustAllow: true,
     nestedBlockComments: true,
   },
-  shell: { block: null, line: "shellHash", quotes: QUOTES.shell, rustAllow: false },
 };
 
 const SYNTAX_BY_EXTENSION = new Map([
   [".rs", SYNTAX.rust],
   [".py", SYNTAX.python],
-  [".sh", SYNTAX.shell],
   [".css", SYNTAX.cStyle],
   [".html", SYNTAX.html],
 ]);
@@ -148,8 +144,6 @@ function lineCommentLength(line, index, syntax) {
     }
     return line[index] === "#" ? 1 : 0;
   }
-  if (syntax.line !== "shellHash" || line[index] !== "#") return 0;
-  if (index === 0 || /[\s;|&()]/.test(line[index - 1])) return 1;
   return 0;
 }
 
@@ -176,49 +170,6 @@ function quoteAt(line, index, syntax) {
   return syntax.quotes.find(({ open }) => line.startsWith(open, index)) ?? null;
 }
 
-function heredocDelimiterMatches(line, { delimiter, stripTabs }) {
-  const candidate = stripTabs ? line.replace(/^\t+/, "") : line;
-  return candidate === delimiter;
-}
-
-function shellArithmeticOpenerAt(line, index) {
-  if (line.startsWith("$((", index)) return { kind: "dollar", length: 3, depth: 2 };
-  if (line.startsWith("((", index)) return { kind: "double", length: 2, depth: 2 };
-  return null;
-}
-
-function parseShellHeredoc(line, index) {
-  if (!line.startsWith("<<", index) || line.startsWith("<<<", index)) return null;
-  let cursor = index + 2;
-  let stripTabs = false;
-  if (line[cursor] === "-") {
-    stripTabs = true;
-    cursor += 1;
-  }
-  cursor = skipShellWhitespace(line, cursor);
-  let delimiter = "";
-  let quote = null;
-  let hasWord = false;
-  while (cursor < line.length) {
-    const char = line[cursor];
-    if (!quote && /[\t ;|&()<>]/.test(char)) break;
-    hasWord = true;
-    if (char === quote) quote = null;
-    else if (!quote && (char === "'" || char === '"')) quote = char;
-    else if (char === "\\" && quote !== "'") {
-      const next = line[cursor + 1];
-      if (next === undefined) return null;
-      if (!quote || /[$`"\\]/.test(next)) {
-        delimiter += next;
-        cursor += 1;
-      } else delimiter += char;
-    } else delimiter += char;
-    cursor += 1;
-  }
-  if (!hasWord || quote) return null;
-  return { delimiter, stripTabs, endIndex: cursor };
-}
-
 function findMatchingBracket(text, openIndex, openChar, closeChar) {
   let depth = 0;
   for (let i = openIndex; i < text.length; i += 1) {
@@ -240,7 +191,9 @@ function countRustAllowMarkers(unquotedText) {
       continue;
     }
     let cursor = index + 1;
+    while (/\s/.test(unquotedText[cursor] ?? "")) cursor += 1;
     if (unquotedText[cursor] === "!") cursor += 1;
+    while (/\s/.test(unquotedText[cursor] ?? "")) cursor += 1;
     if (unquotedText[cursor] !== "[") {
       index += 1;
       continue;
@@ -280,12 +233,7 @@ function countRustAllowMeta(meta) {
   return args.slice(1).reduce((count, arg) => count + countRustAllowMeta(arg), 0);
 }
 
-function skipShellWhitespace(line, index) {
-  while (index < line.length && /[\t ]/.test(line[index])) index += 1;
-  return index;
-}
-
-function scanLine(line, syntax, initialState, shell) {
+function scanLine(line, syntax, initialState) {
   const commentText = Array(line.length).fill(" ");
   const unquotedCodeText = Array(line.length).fill(" ");
   let state = initialState;
@@ -314,38 +262,12 @@ function scanLine(line, syntax, initialState, shell) {
     }
 
     if (state.kind === "quote") {
-      if (syntax.line === "shellHash" && state.close === '"' &&
-          line.startsWith("$(", index) && !line.startsWith("$((", index)) {
-        index += 2;
-        state = { kind: "shellSubst", depth: 1, resume: state };
-      } else if (line.startsWith(state.close, index)) {
+      if (line.startsWith(state.close, index)) {
         index += state.close.length;
         state = state.resume;
       } else {
         index += state.escape && line[index] === "\\" ? 2 : 1;
       }
-      continue;
-    }
-
-    if (state.kind === "ansiCQuote") {
-      if (line[index] === "'") {
-        index += 1;
-        state = state.resume;
-      } else if (line[index] === "\\") {
-        index += Math.min(2, line.length - index);
-      } else {
-        index += 1;
-      }
-      continue;
-    }
-
-    if (state.kind === "shellArith") {
-      if (line[index] === "(") state = { ...state, depth: state.depth + 1 };
-      else if (line[index] === ")") {
-        const depth = state.depth - 1;
-        state = depth === 0 ? state.resume : { ...state, depth };
-      }
-      index += 1;
       continue;
     }
 
@@ -356,50 +278,6 @@ function scanLine(line, syntax, initialState, shell) {
       index += open.length;
       state = { kind: "blockComment", close, resume: state, depth: 1 };
       continue;
-    }
-
-    if (syntax.line === "shellHash") {
-      // Escapes apply to all tokens, including $' and comment introducers.
-      if (line[index] === "\\") {
-        if (index === line.length - 1) shell.continued = true;
-        index += 2;
-        continue;
-      }
-      const arith = shellArithmeticOpenerAt(line, index);
-      if (arith) {
-        index += arith.length;
-        state = { kind: "shellArith", depth: arith.depth, resume: state };
-        continue;
-      }
-      if (line.startsWith("$(", index)) {
-        index += 2;
-        state = { kind: "shellSubst", depth: 1, resume: state };
-        continue;
-      }
-      if (state.kind === "shellSubst") {
-        if (line[index] === "(") state = { ...state, depth: state.depth + 1 };
-        else if (line[index] === ")") {
-          const depth = state.depth - 1;
-          state = depth === 0 ? state.resume : { ...state, depth };
-          index += 1;
-          continue;
-        }
-      }
-      if (line[index] === "$" && line[index + 1] === "'") {
-        index += 2;
-        state = { kind: "ansiCQuote", resume: state };
-        continue;
-      }
-      if (line.startsWith("<<<", index)) {
-        index += 3;
-        continue;
-      }
-      const heredoc = parseShellHeredoc(line, index);
-      if (heredoc) {
-        shell.pending.push(heredoc);
-        index = heredoc.endIndex;
-        continue;
-      }
     }
 
     const lineComment = lineCommentLength(line, index, syntax);
@@ -446,34 +324,51 @@ function countNonJavaScriptText(text, path) {
   const syntax = syntaxFor(path);
   let state = CODE_STATE;
   const unquotedLines = [];
-  const shell = { pending: [], continued: false };
-  let readingHeredocs = false;
   for (const line of text.split("\n")) {
-    if (readingHeredocs) {
-      if (heredocDelimiterMatches(line, shell.pending[0])) shell.pending.shift();
-      readingHeredocs = shell.pending.length > 0;
-      continue;
-    }
-    shell.continued = false;
-    const scanned = scanLine(line, syntax, state, shell);
+    const scanned = scanLine(line, syntax, state);
     state = scanned.state;
-    if (syntax.line === "shellHash" && !shell.continued &&
-        (state.kind === "code" || state.kind === "shellSubst")) {
-      readingHeredocs = shell.pending.length > 0;
-    }
     unquotedLines.push(scanned.unquotedCodeText);
     if (MARKERS.todoComments.test(scanned.commentText)) counts.todoComments += 1;
     if (MARKERS.eslintDisable.test(scanned.commentText)) counts.eslintDisable += 1;
-  }
-  if (syntax.line === "shellHash" && (state.kind !== "code" || shell.pending.length > 0)) {
-    const construct = shell.pending.length > 0 ? "heredoc" : state.kind;
-    throw new Error(`Workaround ratchet could not parse ${path}: unterminated shell ${construct} at EOF`);
   }
   if (syntax.rustAllow) counts.rustAllow = countRustAllowMarkers(unquotedLines.join("\n"));
   return counts;
 }
 
+// Shell text is deliberately counted without interpreting quotes or syntax.
+function countMarkerLines(lines) {
+  const counts = Object.fromEntries(Object.keys(MARKERS).map((key) => [key, 0]));
+  for (const line of lines) {
+    for (const [key, marker] of Object.entries(MARKERS)) {
+      if (marker.test(line)) counts[key] += 1;
+    }
+  }
+  return counts;
+}
+
+function yamlRunLines(text) {
+  const lines = [];
+  let runIndent = null;
+  for (const line of text.split("\n")) {
+    const indent = /^\s*/.exec(line)[0].length;
+    if (runIndent !== null && (line.trim() === "" || indent > runIndent)) {
+      lines.push(line);
+      continue;
+    }
+    runIndent = null;
+    const run = /^(\s*(?:-\s+)?)(?:run|"run"|'run')\s*:\s*(.*)$/.exec(line);
+    if (!run || !run[2] || run[2].startsWith("#")) continue;
+    lines.push(run[2]);
+    // Include indented scalar continuations, literal and folded blocks alike.
+    runIndent = run[1].length;
+  }
+  return lines;
+}
+
 export function countText(text, path = "") {
+  const extension = extensionOf(path);
+  if (extension === ".sh") return countMarkerLines(text.split("\n"));
+  if (extension === ".yml" || extension === ".yaml") return countMarkerLines(yamlRunLines(text));
   if (JAVASCRIPT_EXTENSIONS.has(extensionOf(path))) return countJavaScriptComments(text, path);
   return countNonJavaScriptText(text, path);
 }

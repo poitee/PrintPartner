@@ -261,107 +261,109 @@ test("keeps Rust character literals separate from strings and lifetimes", () => 
   assert.deepEqual(actual, { quote: expected, escapedQuote: expected, controls: expected });
 });
 
-test("ignores markers inside multiline shell quotes and heredocs", () => {
-  const multilineDouble = ['echo "text', "# TODO shown to users", '"', "# TODO: real"].join("\n");
-  assert.deepEqual(countText(multilineDouble, "a.sh"), { todoComments: 1, eslintDisable: 0, rustAllow: 0 });
-
-  const multilineSingle = ["echo 'text", "# TODO shown to users", "'", "# TODO: real"].join("\n");
-  assert.deepEqual(countText(multilineSingle, "a.sh"), { todoComments: 1, eslintDisable: 0, rustAllow: 0 });
-
-  const heredoc = ["cat <<EOF", "# TODO in heredoc", "EOF", "# TODO: real"].join("\n");
-  assert.deepEqual(countText(heredoc, "a.sh"), { todoComments: 1, eslintDisable: 0, rustAllow: 0 });
-
-  assert.equal(
-    countText(["cat <<'EOF'", "FIXME inside", "EOF"].join("\n"), "a.sh").todoComments,
-    0,
-  );
-  assert.equal(
-    countText(["cat <<'EOF'", "FIXME inside", "EOF", "# TODO: real"].join("\n"), "a.sh").todoComments,
-    1,
-  );
-});
-
-test("does not treat << inside shell arithmetic as a heredoc", () => {
-  const dollar = ["echo $(( 1 << 2 ))", "# TODO: real"].join("\n");
-  assert.equal(countText(dollar, "a.sh").todoComments, 1);
-  const double = ["(( 1 << 3 ))", "# TODO: real"].join("\n");
-  assert.equal(countText(double, "a.sh").todoComments, 1);
-});
-
-test("does not open shell strings on backslash-escaped quotes", () => {
-  const source = ['echo \\"# TODO not a string', "# TODO: real"].join("\n");
-  assert.equal(countText(source, "a.sh").todoComments, 1);
-});
-
-test("handles ANSI-C $'...' quoting with backslash escapes", () => {
-  const source = ["echo $'it\\'s # not a comment'", "# TODO: real"].join("\n");
-  assert.equal(countText(source, "a.sh").todoComments, 1);
-});
-
-test("tracks multiple heredocs declared on one line", () => {
-  const source = ["cat <<A <<B", "TODO in A", "A", "FIXME in B", "B", "# TODO: real"].join("\n");
-  assert.equal(countText(source, "a.sh").todoComments, 1);
-});
-
-test("consumes complete shell heredoc delimiter words with quote removal", () => {
-  for (const word of ["END.txt", "'END'.txt", "END\\.txt", '"END.txt"']) {
-    const source = [`cat << ${word}`, "# TODO: body", "END.txt", "# TODO: real"].join("\n");
-    assert.equal(countText(source, "a.sh").todoComments, 1, word);
+function assertShellCounts(source, expected) {
+  const inputs = [
+    ["a.sh", source],
+    ["a.yml", `steps:\n  - run: |\n${source.split("\n").map((line) => `      ${line}`).join("\n")}`],
+    ["a.yaml", `steps:\n  - run: >-\n${source.split("\n").map((line) => `      ${line}`).join("\n")}`],
+  ];
+  for (const [path, text] of inputs) {
+    let counts;
+    assert.doesNotThrow(() => { counts = countText(text, path); }, path);
+    assert.deepEqual(counts, { todoComments: expected, eslintDisable: 0, rustAllow: 0 }, path);
   }
+}
+
+test("Gate: counts backtick substitution spanning lines inside double quotes", () => {
+  assertShellCounts(['value="`', "# TODO: executable", '`"'].join("\n"), 1);
 });
 
-test("queues heredocs separated by fd prefixes and command tokens", () => {
-  for (const command of ["cat 3<<A 4<<B", "cat <<A /dev/stdin <<B"]) {
-    const source = [command, "# TODO: A", "A", "# TODO: B", "B", "# TODO: real"].join("\n");
-    assert.equal(countText(source, "a.sh").todoComments, 1, command);
-  }
+test("Gate: counts a case arm inside a quoted command substitution", () => {
+  assertShellCounts(['value="$(case x in', "x) # TODO: case arm", "printf x ;;", 'esac)"'].join("\n"), 1);
 });
 
-test("does not enter ANSI-C quoting after an escaped dollar", () => {
-  const source = String.raw`echo \$'foo\' # TODO: real`;
-  assert.equal(countText(source, "a.sh").todoComments, 1);
+test("Gate: counts command substitution comments inside arithmetic", () => {
+  assertShellCounts(["value=$(( $(", "# TODO: executable", "printf 1", ") + 2 ))"].join("\n"), 1);
 });
 
-test("starts heredoc bodies after the continued command ends", () => {
+test("Gate: counts Rust allow attributes with whitespace after markers", () => {
   const source = [
-    "cat <<EOF \\",
-    "/dev/stdin # TODO: command",
-    "# TODO: body",
-    "EOF",
-    "# TODO: after",
+    "# [allow(dead_code)]",
+    "#  [allow(unused)]",
+    "#![allow(unused)]",
+    "# ! [allow(unused)]",
+    "#\n[allow(unused)]",
+    "#\n!\n[allow(unused)]",
+    '// # [allow(ignored)]',
+    'const TEXT: &str = "# ! [allow(ignored)]";',
   ].join("\n");
-  assert.equal(countText(source, "a.sh").todoComments, 2);
+  let counts;
+  assert.doesNotThrow(() => { counts = countText(source, "a.rs"); });
+  assert.deepEqual(counts, { todoComments: 0, eslintDisable: 0, rustAllow: 6 });
 });
 
-test("fails closed on unterminated shell heredocs", () => {
-  for (const command of ["cat <<EOF", "cat <<A <<B\nA"]) {
-    assert.throws(() => countText(`${command}\n# TODO: hidden`, "broken.sh"),
-      /broken\.sh: unterminated shell heredoc at EOF/);
-  }
+test("Gate: accepts Greptile P1 case-pattern input at old line 383", () => {
+  assertShellCounts(`value="$(case x in x) printf '"' ;; esac)"`, 0);
 });
 
-test("fails closed on unterminated shell strings", () => {
-  for (const opener of ['"', "'", "$'"]) {
-    assert.throws(() => countText(`echo ${opener}\n# TODO: hidden`, "broken.sh"),
-      /broken\.sh: unterminated shell (?:ansiCQuote|quote) at EOF/);
-  }
+test("Gate: accepts Greptile P1 quoted-parenthesis input at old line 348", () => {
+  assertShellCounts('echo $(( $(printf "1" "(") + 1 ))', 0);
 });
 
-test("counts executable comments in quoted shell command substitutions", () => {
+test("Gate: counts Greptile P1 outer heredoc/substitution input at old line 462", () => {
+  assertShellCounts(['cat <<EOF "$(printf x', "# TODO: executable", ')"', "# FIXME: literal body", "EOF"].join("\n"), 2);
+});
+
+test("conservatively counts shell strings, heredocs, and unfinished constructs", () => {
+  const fixtures = [
+    ['echo "text\n# TODO: literal\n"\n# TODO: real', 2],
+    ["echo 'text\n# TODO: literal\n'\n# TODO: real", 2],
+    ["cat <<END.txt\n# TODO: body\nEND.txt\n# TODO: real", 2],
+    ["cat 3<<A 4<<B\nTODO in A\nA\nFIXME in B\nB\n# TODO: real", 3],
+    [String.raw`echo \$'foo\' # TODO: real`, 1],
+    ["cat <<EOF \\\n/dev/stdin # TODO: command\n# TODO: body\nEOF\n# TODO: real", 3],
+    ["cat <<EOF\n# TODO: unfinished", 1],
+    ['echo "\n# TODO: unfinished', 1],
+    ["echo $'it\\'s TODO: literal'", 1],
+    ['cat <<< "# TODO: literal"\n# TODO: real', 2],
+    ["cat <<EO\\\nF\nTODO: literal body\nEOF", 1],
+  ];
+  for (const [source, expected] of fixtures) assertShellCounts(source, expected);
+});
+
+test("counts every marker key once per physical shell line", () => {
+  assert.deepEqual(countText('echo "TODO FIXME eslint-disable eslint-disable # [allow(x)]"', "a.sh"), {
+    todoComments: 1, eslintDisable: 1, rustAllow: 1,
+  });
+});
+
+test("scans YAML run scalars and blocks while excluding unrelated metadata", () => {
   const source = [
-    'value="$(',
-    "# TODO: substitution",
-    'echo "$(echo nested # TODO: nested',
-    ')"',
-    ') # TODO: literal"',
-    "# TODO: after",
+    "name: TODO metadata",
+    "defaults:",
+    "  run:",
+    "    working-directory: TODO-directory",
+    "steps:",
+    '  - run: echo "TODO literal eslint-disable"',
+    "    name: FIXME metadata",
+    "  - run: |+",
+    "      echo 'TODO literal'",
+    "      cat <<EOF",
+    "      FIXME body",
+    "      EOF",
+    "    env:",
+    "      NOTE: HACK metadata",
+    "  - run: >-",
+    "      echo HACK",
+    "  - 'run': echo TODO",
+    "  - run: 'echo",
+    "      TODO multiline scalar'",
   ].join("\n");
-  assert.equal(countText(source, "a.sh").todoComments, 3);
-});
-
-test("keeps shell here-strings separate from heredocs", () => {
-  const source = ['cat <<< "# TODO: literal"', "# TODO: real"].join("\n");
-  assert.equal(countText(source, "a.sh").todoComments, 1);
+  for (const path of ["a.yml", "a.yaml"]) {
+    let counts;
+    assert.doesNotThrow(() => { counts = countText(source, path); });
+    assert.deepEqual(counts, { todoComments: 6, eslintDisable: 1, rustAllow: 0 });
+  }
 });
 
 test("restricts Rust allow counts to emitted lint attributes", () => {
@@ -395,7 +397,7 @@ test("uses path-specific comment and quote syntax", () => {
   assert.equal(countText(["value = '# TODO'", "# TODO: real"].join("\n"), "a.py").todoComments, 1);
   assert.equal(
     countText(["echo '# TODO'", "echo $#", "echo ${name#prefix}", "# TODO: real"].join("\n"), "a.sh").todoComments,
-    1,
+    2,
   );
   assert.equal(
     countText(['content: "/* TODO */";', "// TODO", "/* TODO: real */"].join("\n"), "a.css").todoComments,
@@ -431,6 +433,8 @@ test("only scans source extensions and skips the ratchet itself", () => {
   assert.equal(isSourcePath("web/apps/web/src/App.tsx"), true);
   assert.equal(isSourcePath("docs/ARCHITECTURE.md"), false);
   assert.equal(isSourcePath("scripts/workaround-ratchet.mjs"), false);
+  assert.equal(isSourcePath(".github/workflows/web-ci.yml"), true);
+  assert.equal(isSourcePath("workflow.yaml"), true);
 });
 
 test("fails on increases and allows decreases", () => {
