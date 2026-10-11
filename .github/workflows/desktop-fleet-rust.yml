@@ -46,7 +46,7 @@ jobs:
       CARGO_BUILD_JOBS: ${{ inputs.build_jobs || vars.CARGO_BUILD_JOBS || '6' }}
       PARTITION: '1'
     steps: &rust-steps
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
       - name: Find Rust workspace
@@ -58,7 +58,7 @@ jobs:
           else
             echo 'No Rust workspace (rust/Cargo.toml); skipping.' | tee -a "$GITHUB_STEP_SUMMARY"
           fi
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: steps.workspace.outputs.manifest != ''
         with:
           workspaces: rust -> target
@@ -100,7 +100,7 @@ jobs:
           echo "SCCACHE_DIR=$RUNNER_TEMP/sccache" >> "$GITHUB_ENV"
           echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
           echo "RUSTFLAGS=-C link-arg=-fuse-ld=mold" >> "$GITHUB_ENV"
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         if: steps.workspace.outputs.manifest != ''
         with:
           node-version: '24.21.0'
@@ -181,11 +181,11 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '24.21.0'
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: rust -> target
       - name: Install locked dependencies and build measured desktop assets

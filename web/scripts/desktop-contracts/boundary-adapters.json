@@ -1,0 +1,6 @@
+{
+  "unicode-scalars": "pp-domain WireText and serde_json; ADR 0006",
+  "autosave-basis": "pp-api-types autosave.rs PlanDraftBasisWire::try_from",
+  "autosave-save": "pp-api-types autosave.rs SavePlanChoicesRequestWire::try_from",
+  "semantic-write": "pp-api-types semantics.rs conformance probe write_requires_positive_default"
+}
