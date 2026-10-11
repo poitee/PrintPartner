@@ -35,7 +35,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     if bytes.len() > 8 * 1024 * 1024 {
         return Err("command-limit".into());
     }
-    let command: Command = serde_json::from_slice(&bytes)?;
+    let command: Command = serde_json::from_slice(&bytes).map_err(pp_source::Error::from)?;
     let tenant = TenantRepos::open(command.tenant_id, Path::new(&command.repos_dir))?;
     let mut source = tenant.source(command.source_id)?;
     let budget = ArtifactBudget::new(command.reserved_stored_bytes, command.max_content_bytes)?;

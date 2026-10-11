@@ -32,6 +32,12 @@ startup. The helper exchanges its private bootstrap credential for a session.
 
 The helper checks `/health` returns `{ "ok": true }` and `/__runtime` reports
 `compat.state == "ready"` on that owned origin before driving the feature.
+It also compares the exact recursive keys and JSON types of the 401 and
+authenticated `/health` responses and `/__runtime` against
+`helpers/health-runtime-shape.json`. Array element types are checked; lengths and
+scalar values (including versions, paths, ports and process IDs) are not frozen.
+The fixture describes the isolated desktop SQLite runtime. Intentional contract
+changes require reviewing and updating the fixture.
 Rerun the command with fresh disposable data if those checks fail.
 
 ## Drive
