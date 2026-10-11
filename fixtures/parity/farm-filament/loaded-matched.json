@@ -1,0 +1,49 @@
+{
+  "case": "loaded-matched",
+  "context": {
+    "configured": true,
+    "physically_empty": false
+  },
+  "input": {
+    "machine": {
+      "loaded_filaments": [
+        {
+          "slot": 1,
+          "filament_color_id": " spoolman:workshop:filament:7 ",
+          "label": " LDO Black "
+        }
+      ]
+    },
+    "spools_by_color_id": {
+      "spoolman:workshop:filament:7": [
+        {
+          "spool_id": 1,
+          "remaining_g": 480
+        },
+        {
+          "spool_id": 2,
+          "remaining_g": 310
+        }
+      ]
+    }
+  },
+  "expected": {
+    "slots": [
+      {
+        "slot": 1,
+        "label": "LDO Black",
+        "filament_color_id": "spoolman:workshop:filament:7",
+        "remaining_g": 790,
+        "spool_ids": [
+          1,
+          2
+        ],
+        "empty": false,
+        "low": false
+      }
+    ],
+    "needs_filament_swap": false,
+    "filament_swap_reason": null,
+    "filament_remaining_g": 790
+  }
+}
