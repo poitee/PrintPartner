@@ -6,7 +6,8 @@ use pp_source::{
 use std::{
     fs::{self, File},
     io::Write,
-    path::{Path, PathBuf},
+    os::unix::fs::PermissionsExt,
+    path::PathBuf,
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -20,16 +21,18 @@ static NEXT: AtomicU64 = AtomicU64::new(0);
 struct Fixture(PathBuf);
 impl Fixture {
     fn new() -> Self {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join(".archive-tests")
-            .join(format!(
-                "{}-{}",
-                std::process::id(),
-                NEXT.fetch_add(1, Ordering::Relaxed)
-            ));
-        fs::create_dir_all(root.join("repos")).unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "pp-source-archive-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir(&root).unwrap();
+        fs::create_dir(root.join("repos")).unwrap();
         fs::create_dir(root.join("input")).unwrap();
-        Self(root)
+        for dir in [root.clone(), root.join("repos"), root.join("input")] {
+            fs::set_permissions(dir, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        Self(fs::canonicalize(root).unwrap())
     }
     fn zip(&self, size: usize) {
         let mut zip = ZipWriter::new(File::create(self.0.join("input/upload.zip")).unwrap());

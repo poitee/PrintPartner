@@ -30,6 +30,7 @@ type Result<T> = std::result::Result<T, Error>;
 #[derive(Debug)]
 pub enum Error {
     UnsafePath,
+    UnsafeAncestor,
     InvalidIdentity,
     DuplicatePath,
     Limit,
@@ -70,6 +71,7 @@ impl Error {
     pub fn category(&self) -> &'static str {
         match self {
             Self::UnsafePath => "unsafe-path",
+            Self::UnsafeAncestor => "unsafe-ancestor",
             Self::InvalidIdentity => "invalid-identity",
             Self::DuplicatePath => "duplicate-path",
             Self::Limit => "limit",
@@ -777,6 +779,7 @@ mod tests {
     use super::*;
     use std::{
         fs,
+        os::unix::fs::PermissionsExt,
         sync::atomic::{AtomicU64, Ordering},
     };
 
@@ -790,6 +793,8 @@ mod tests {
                 NEXT.fetch_add(1, Ordering::Relaxed)
             ));
             fs::create_dir(&path).unwrap();
+            // Pin the root mode so the ancestor check does not depend on umask.
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
             Self(fs::canonicalize(path).unwrap())
         }
         fn paths(&self) -> Result<BTreeSet<String>> {
