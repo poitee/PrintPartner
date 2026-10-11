@@ -41,24 +41,24 @@ utils:
   # $MODULE is bound by the Command use site and must match its imported name.
   process-module-import:
     any:
-      - kind: use_declaration
+      - matches: std-process-path
         has:
-          field: argument
+          field: name
+          pattern: $MODULE
+        # Terminal imports can occur directly or inside bare brace groups.
+        # A path nested in another scoped path imports that child, not process.
+        inside:
+          any:
+            - kind: use_declaration
+            - kind: use_list
+      - kind: use_as_clause
+        has:
+          field: path
           matches: std-process-path
-          has:
-            field: name
-            pattern: $MODULE
-      - kind: use_declaration
-        has:
-          field: argument
-          kind: use_as_clause
-          has:
-            field: path
-            matches: std-process-path
-          all:
-            - has:
-                field: alias
-                pattern: $MODULE
+        all:
+          - has:
+              field: alias
+              pattern: $MODULE
       - all:
           - any:
               - kind: identifier
