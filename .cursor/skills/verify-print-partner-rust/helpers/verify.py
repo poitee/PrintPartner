@@ -68,7 +68,7 @@ def release_signals():
 
 
 def stop_group(process, grace=5):
-    # No subprocesses are spawned here, so blocking cannot leak a mask into build workers.
+    # Build workers are already spawned, so blocking cannot leak a mask into them.
     # Deliver any additional stop only after the whole group has been cleaned up.
     previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM, signal.SIGINT})
     try:
@@ -80,7 +80,7 @@ def stop_group(process, grace=5):
 def _stop_group(process, grace):
     # The build runs in its own session, so its pid is also its process group id. Terminate the
     # whole group (npm, node, rustc, ...), escalate to SIGKILL after `grace` seconds, and return
-    # only once no member is left, so a replacement launch never overlaps with leftover writers.
+    # only once no live member is left, so a replacement launch cannot overlap leftover writers.
     group = process.pid
 
     def signal_group(signum):
@@ -95,7 +95,19 @@ def _stop_group(process, grace):
             os.killpg(group, 0)
         except ProcessLookupError:
             return True
-        return False
+        # An orphan can remain as a zombie until PID 1 reaps it. Such a member cannot
+        # execute or write files; killpg(0) alone cannot distinguish it from a live worker.
+        try:
+            members = subprocess.check_output(["ps", "-axo", "pgid=,stat="], text=True, timeout=1)
+            for line in members.splitlines():
+                fields = line.split()
+                if len(fields) == 2 and int(fields[0]) == group and not fields[1].startswith("Z"):
+                    return False
+        except (OSError, subprocess.SubprocessError, ValueError):
+            # Failed inspection cannot establish that workers exited. Keep waiting and
+            # escalate normally rather than abandoning cleanup before SIGKILL.
+            return False
+        return True
 
     def wait_gone(seconds):
         deadline = time.monotonic() + seconds

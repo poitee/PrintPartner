@@ -12,8 +12,10 @@ import subprocess
 import sys
 import tempfile
 import threading
+from types import SimpleNamespace
 import time
 import unittest
+from unittest import mock
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -35,7 +37,10 @@ def process_alive(pid):
         return False
     except PermissionError:
         return True
-    return True
+    result = subprocess.run(["ps", "-p", str(pid), "-o", "stat="],
+                            capture_output=True, text=True, timeout=5)
+    return result.returncode == 0 and any(not state.startswith("Z")
+                                         for state in result.stdout.split())
 
 
 def wait_until_gone(pid, timeout):
@@ -197,6 +202,55 @@ class CredentialFileTest(unittest.TestCase):
 
 
 class BuildGroupTest(unittest.TestCase):
+    def test_zombie_only_group_is_already_stopped(self):
+        verify = load_verify()
+        # A separate guardian retains an exited session leader without reaping it.
+        # This reproduces a zombie-only process group independently of PID 1 behavior.
+        driver = """import os, sys
+pid = os.fork()
+if pid == 0:
+    os.setsid()
+    os._exit(0)
+os.waitid(os.P_PID, pid, os.WEXITED | os.WNOWAIT)
+print(pid, flush=True)
+sys.stdin.readline()
+os.waitpid(pid, 0)
+"""
+        guardian = subprocess.Popen([sys.executable, "-c", driver], stdin=subprocess.PIPE,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            pid = int(guardian.stdout.readline())
+            os.killpg(pid, 0)  # The group exists even though its sole member has exited.
+            self.assertFalse(process_alive(pid))
+            process = SimpleNamespace(pid=pid, poll=lambda: None, stdout=None)
+            started = time.monotonic()
+            verify.stop_group(process, grace=0.1)
+            self.assertLess(time.monotonic() - started, 2)
+            os.killpg(pid, 0)  # Cleanup succeeds while the guardian still retains the zombie.
+        finally:
+            guardian.communicate("\n", timeout=10)
+        self.assertEqual(guardian.returncode, 0)
+
+    def test_failed_process_inspection_still_kills_live_worker(self):
+        verify = load_verify()
+        failures = (FileNotFoundError("ps"), subprocess.CalledProcessError(1, "ps"),
+                    subprocess.TimeoutExpired("ps", 1))
+        for failure in failures:
+            with self.subTest(error=type(failure).__name__):
+                worker = "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); print('ready', flush=True); time.sleep(600)"
+                process = subprocess.Popen([sys.executable, "-c", worker], start_new_session=True,
+                                           stdout=subprocess.PIPE, text=True)
+                try:
+                    self.assertEqual(process.stdout.readline().strip(), "ready")
+                    with mock.patch.object(verify.subprocess, "check_output", side_effect=failure):
+                        verify.stop_group(process, grace=0.1)
+                    self.assertEqual(process.returncode, -signal.SIGKILL)
+                finally:
+                    if process.poll() is None:
+                        process.kill()
+                        process.wait(timeout=5)
+                    process.stdout.close()
+
     def test_completed_build_reaps_background_children(self):
         verify = load_verify()
         with tempfile.TemporaryDirectory(prefix="pp-build-group-test-") as temporary:
