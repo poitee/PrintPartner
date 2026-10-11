@@ -55,3 +55,17 @@ updates:
       - dependency-name: "*"
         update-types:
           - version-update:semver-major
+
+  - package-ecosystem: cargo
+    directory: /rust
+    open-pull-requests-limit: 5
+    schedule:
+      interval: weekly
+    versioning-strategy: increase
+    groups:
+      rust-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
