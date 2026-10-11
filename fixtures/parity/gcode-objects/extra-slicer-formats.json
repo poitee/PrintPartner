@@ -1,0 +1,226 @@
+{
+  "source": [
+    "web/apps/server/src/services/gcode-object-parser.ts",
+    "web/packages/domain/src/sliced-object-matching.ts"
+  ],
+  "origin": "extra: one name per slicer wrapper, with paths and extension stacks",
+  "input": {
+    "names": [
+      "a_drive_frame_lower.stl_id_0_copy_0",
+      "a_drive_frame_lower.stl_id_0_copy_1",
+      "'a_drive_frame_upper_stl'",
+      "'a_drive_frame_upper_stl__Instance_1_'",
+      "\"x_carriage.stl\"",
+      "x_carriage.stl (instance 2)",
+      "tool_head_stl",
+      "  padded_part.STL  ",
+      "kit-a\\sub\\bracket.stl.gcode",
+      "kit-b/bracket.3mf.bgcode",
+      "part.stl_id_1_copy_99999999999999999999",
+      "line\nbreak.stl_id_0_copy_2"
+    ],
+    "libraryFilenames": [
+      "a_drive_frame_lower.stl",
+      "a_drive_frame_upper.stl",
+      "x_carriage.stl",
+      "tool_head.stl",
+      "padded_part.stl",
+      "kit-a/sub/bracket.stl",
+      "kit-b/bracket.stl",
+      "part.stl"
+    ]
+  },
+  "expected": {
+    "groups": [
+      {
+        "key": "a_drive_frame_lower.stl",
+        "stlBasename": "a_drive_frame_lower.stl",
+        "count": 2,
+        "objects": [
+          {
+            "name": "a_drive_frame_lower.stl_id_0_copy_0",
+            "stlBasename": "a_drive_frame_lower.stl",
+            "copyIndex": 0,
+            "format": "exclude_object_orca"
+          },
+          {
+            "name": "a_drive_frame_lower.stl_id_0_copy_1",
+            "stlBasename": "a_drive_frame_lower.stl",
+            "copyIndex": 1,
+            "format": "exclude_object_orca"
+          }
+        ]
+      },
+      {
+        "key": "a_drive_frame_upper.stl",
+        "stlBasename": "a_drive_frame_upper.stl",
+        "count": 2,
+        "objects": [
+          {
+            "name": "'a_drive_frame_upper_stl'",
+            "stlBasename": "a_drive_frame_upper.stl",
+            "copyIndex": 0,
+            "format": "exclude_object_prusa"
+          },
+          {
+            "name": "'a_drive_frame_upper_stl__Instance_1_'",
+            "stlBasename": "a_drive_frame_upper.stl",
+            "copyIndex": 0,
+            "format": "exclude_object_prusa"
+          }
+        ]
+      },
+      {
+        "key": "x_carriage.stl",
+        "stlBasename": "x_carriage.stl",
+        "count": 2,
+        "objects": [
+          {
+            "name": "\"x_carriage.stl\"",
+            "stlBasename": "x_carriage.stl",
+            "copyIndex": 0,
+            "format": "m486"
+          },
+          {
+            "name": "x_carriage.stl (instance 2)",
+            "stlBasename": "x_carriage.stl",
+            "copyIndex": 1,
+            "format": "exclude_object_prusa"
+          }
+        ]
+      },
+      {
+        "key": "tool_head.stl",
+        "stlBasename": "tool_head.stl",
+        "count": 1,
+        "objects": [
+          {
+            "name": "tool_head_stl",
+            "stlBasename": "tool_head.stl",
+            "copyIndex": 0,
+            "format": "m486"
+          }
+        ]
+      },
+      {
+        "key": "padded_part.stl",
+        "stlBasename": "padded_part.stl",
+        "count": 1,
+        "objects": [
+          {
+            "name": "  padded_part.STL  ",
+            "stlBasename": "padded_part.STL",
+            "copyIndex": 0,
+            "format": "m486"
+          }
+        ]
+      },
+      {
+        "key": "kit-a\\sub\\bracket.stl.gcode",
+        "stlBasename": "kit-a\\sub\\bracket.stl.gcode",
+        "count": 1,
+        "objects": [
+          {
+            "name": "kit-a\\sub\\bracket.stl.gcode",
+            "stlBasename": "kit-a\\sub\\bracket.stl.gcode",
+            "copyIndex": 0,
+            "format": "m486"
+          }
+        ]
+      },
+      {
+        "key": "kit-b/bracket.3mf.bgcode",
+        "stlBasename": "kit-b/bracket.3mf.bgcode",
+        "count": 1,
+        "objects": [
+          {
+            "name": "kit-b/bracket.3mf.bgcode",
+            "stlBasename": "kit-b/bracket.3mf.bgcode",
+            "copyIndex": 0,
+            "format": "m486"
+          }
+        ]
+      },
+      {
+        "key": "part.stl",
+        "stlBasename": "part.stl",
+        "count": 1,
+        "objects": [
+          {
+            "name": "part.stl_id_1_copy_99999999999999999999",
+            "stlBasename": "part.stl",
+            "copyIndex": 100000000000000000000,
+            "format": "exclude_object_orca"
+          }
+        ]
+      },
+      {
+        "key": "line\nbreak.stl_id_0_copy_2",
+        "stlBasename": "line\nbreak.stl_id_0_copy_2",
+        "count": 1,
+        "objects": [
+          {
+            "name": "line\nbreak.stl_id_0_copy_2",
+            "stlBasename": "line\nbreak.stl_id_0_copy_2",
+            "copyIndex": 0,
+            "format": "m486"
+          }
+        ]
+      }
+    ],
+    "matches": [
+      {
+        "key": "a_drive_frame_lower.stl",
+        "filenames": [
+          "a_drive_frame_lower.stl"
+        ]
+      },
+      {
+        "key": "a_drive_frame_upper.stl",
+        "filenames": [
+          "a_drive_frame_upper.stl"
+        ]
+      },
+      {
+        "key": "x_carriage.stl",
+        "filenames": [
+          "x_carriage.stl"
+        ]
+      },
+      {
+        "key": "tool_head.stl",
+        "filenames": [
+          "tool_head.stl"
+        ]
+      },
+      {
+        "key": "padded_part.stl",
+        "filenames": [
+          "padded_part.stl"
+        ]
+      },
+      {
+        "key": "kit-a\\sub\\bracket.stl.gcode",
+        "filenames": [
+          "kit-a/sub/bracket.stl"
+        ]
+      },
+      {
+        "key": "kit-b/bracket.3mf.bgcode",
+        "filenames": [
+          "kit-b/bracket.stl"
+        ]
+      },
+      {
+        "key": "part.stl",
+        "filenames": [
+          "part.stl"
+        ]
+      },
+      {
+        "key": "line\nbreak.stl_id_0_copy_2",
+        "filenames": []
+      }
+    ]
+  }
+}
