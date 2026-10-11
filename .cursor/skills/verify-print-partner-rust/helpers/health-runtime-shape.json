@@ -1,0 +1,71 @@
+{
+  "GET /health 401": {
+    "detail": "string"
+  },
+  "GET /health": {
+    "ok": "boolean",
+    "version": "string",
+    "semver": "string",
+    "build": {
+      "version": "string",
+      "commit": "string",
+      "branch": "string",
+      "tag": "string",
+      "buildDate": "string",
+      "nodeVersion": "string"
+    },
+    "release": {
+      "version": "string",
+      "runtime_version": "string",
+      "commit": "string",
+      "tag": "null",
+      "image_digest": "null",
+      "deployment_mode": "string",
+      "github_release_url": "null",
+      "build_date": "null"
+    },
+    "deploy_mode": "string",
+    "multi_user": "boolean",
+    "authenticated": "boolean",
+    "authentication_required": "boolean",
+    "registration_open": "boolean",
+    "data_dir": "string",
+    "port": "number",
+    "api_version": "string",
+    "capabilities": [
+      "string"
+    ],
+    "db": {
+      "connected": "boolean",
+      "driver": "string",
+      "postgres": "null",
+      "support_status": "string"
+    },
+    "deployment": {
+      "database": "string",
+      "job_runner": "string",
+      "tenant_mode": "string",
+      "support_status": "string",
+      "restart": {
+        "database_rows": "string",
+        "local_artifacts": "string",
+        "in_flight_jobs": "string"
+      }
+    },
+    "google_drive": {
+      "client_id": "null"
+    }
+  },
+  "GET /__runtime": {
+    "compat": {
+      "generation": "string",
+      "pid": "number",
+      "state": "string"
+    },
+    "gateway": {
+      "active_requests": "number",
+      "active_upgrades": "number"
+    },
+    "proof_class": "string"
+  }
+}
