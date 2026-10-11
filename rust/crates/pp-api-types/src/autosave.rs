@@ -198,13 +198,19 @@ fn parse<T: de::DeserializeOwned>(text: &str) -> Result<T, BoundaryError> {
 }
 
 pub fn parse_request(text: &str) -> Result<SavePlanChoicesRequest, BoundaryError> {
-    parse(text)
+    let value = parse(text)?;
+    crate::semantics::request(text, &value)?;
+    Ok(value)
 }
 pub fn parse_receipt(text: &str) -> Result<ApplyPlanDraftReceipt, BoundaryError> {
-    parse(text)
+    let value = parse(text)?;
+    crate::semantics::receipt(text, &value)?;
+    Ok(value)
 }
 pub fn parse_identity(text: &str) -> Result<PlanDraftIdentity, BoundaryError> {
-    parse(text)
+    let value = parse(text)?;
+    crate::semantics::identity(text, &value)?;
+    Ok(value)
 }
 
 impl PlanDraftBasis {

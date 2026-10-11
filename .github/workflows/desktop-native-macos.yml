@@ -2,29 +2,65 @@ name: Native macOS bundle
 
 on:
   workflow_dispatch:
+  # No workflow-level paths filter: a PR-level `paths:` skip leaves the
+  # "bundle (...)" checks absent, which blocks any required check. The
+  # `changes` job decides instead, and `bundle` is skipped (a passing status)
+  # when no native inputs changed.
   pull_request:
-    paths:
-      - 'rust/**'
-      - 'rust-toolchain.toml'
-      - 'web/**'
-      - '.github/workflows/desktop-native-macos.yml'
   push:
     branches: [main, master]
-    paths:
-      - 'rust/**'
-      - 'rust-toolchain.toml'
-      - 'web/**'
-      - '.github/workflows/desktop-native-macos.yml'
 
 permissions:
   contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 defaults:
   run:
     shell: bash
 
 jobs:
+  changes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      native: ${{ steps.select.outputs.native }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Select native macOS inputs
+        id: select
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          # Keep in sync with the desktop-fleet-rust.yml web inputs: the bundle
+          # builds web/apps and web/packages plus the root npm and TS config.
+          NATIVE_PATHS: '^(rust/|rust-toolchain\.toml$|web/apps/|web/packages/|web/package(-lock)?\.json$|web/tsconfig\.base\.json$|web/scripts/atomic-package-build\.mjs$|\.github/workflows/desktop-native-macos\.yml$)'
+        run: |
+          set -euo pipefail
+          # Fail open: manual runs, new branches, and unknown bases always build.
+          native=true
+          if [[ "$EVENT_NAME" != workflow_dispatch ]] && [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]] && git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+            changed_files=$(git diff --name-only --no-renames "$BASE_SHA" "$GITHUB_SHA")
+            native=false
+            if grep -Eq "$NATIVE_PATHS" <<< "$changed_files"; then
+              native=true
+            fi
+          fi
+          echo "Native inputs changed: $native" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "native=$native" >> "$GITHUB_OUTPUT"
+
   bundle:
+    needs: changes
+    # Expand the matrix so every bundle check reports. Only an explicit
+    # native=false skips the work; a failed changes job builds. !cancelled()
+    # lets a superseded run honor concurrency cancellation.
+    if: ${{ !cancelled() }}
     strategy:
       fail-fast: false
       matrix:
@@ -39,7 +75,8 @@ jobs:
             node_arch: x64
             rust_host: x86_64-apple-darwin
             tauri_cli_sha256: e5386ba6dadc3fbbdcf46c1f95b700f28caf03db979de50a29adb872022b4a57
-    runs-on: ${{ matrix.runner }}
+    # Skipped variants run on a cheap runner so every matrix check still reports.
+    runs-on: ${{ needs.changes.outputs.native != 'false' && matrix.runner || 'ubuntu-24.04' }}
     timeout-minutes: 90
     env:
       MACOSX_DEPLOYMENT_TARGET: '13.5'
@@ -48,10 +85,12 @@ jobs:
       CARGO_PROFILE_RELEASE_DEBUG: '0'
       npm_config_build_from_source: 'true'
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: needs.changes.outputs.native != 'false'
         with:
           persist-credentials: false
       - name: Record runner and check parser controls
+        if: needs.changes.outputs.native != 'false'
         run: |
           export PP_EVIDENCE="$RUNNER_TEMP/desktop-evidence"
           echo "PP_EVIDENCE=$PP_EVIDENCE" >> "$GITHUB_ENV"
@@ -63,11 +102,13 @@ jobs:
           xcodebuild -version >> "$PP_EVIDENCE/runner.txt"
           test "$(uname -m)" = '${{ matrix.arch }}'
           python3 rust/scripts/check-macos-bundle.py --self-test 2>&1 | tee "$PP_EVIDENCE/self-tests.log"
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: needs.changes.outputs.native != 'false'
         with:
           node-version: '24.21.0'
           architecture: ${{ matrix.node_arch }}
       - name: Install pinned Rust and Tauri CLI
+        if: needs.changes.outputs.native != 'false'
         run: |
           rustup toolchain install 1.99.0 --profile minimal
           rustc --version --verbose | tee "$PP_EVIDENCE/rust-version.txt"
@@ -85,6 +126,7 @@ jobs:
           grep -Fx 'tauri-cli 2.12.1' "$PP_EVIDENCE/tauri-version.txt"
           echo "$RUNNER_TEMP/tauri-cli/bin" >> "$GITHUB_PATH"
       - name: Build desktop React and target-native production modules
+        if: needs.changes.outputs.native != 'false'
         run: |
           node -p 'JSON.stringify({node:process.version,abi:process.versions.modules,os:process.platform,arch:process.arch})' | tee "$PP_EVIDENCE/node-version.json"
           test "$(node -p process.arch)" = '${{ matrix.node_arch }}'
@@ -95,6 +137,7 @@ jobs:
           npm --prefix web run build 2>&1 | tee "$PP_EVIDENCE/react-build.log"
           git diff --exit-code -- web/package-lock.json
       - name: Measure completed native stage
+        if: needs.changes.outputs.native != 'false'
         run: |
           python3 rust/scripts/stage-desktop.py --web web --node "$(command -v node)" --output "$PP_DESKTOP_STAGE" --commit "$GITHUB_SHA" 2>&1 | tee "$PP_EVIDENCE/stage.log"
           cp "$PP_DESKTOP_STAGE/bundle-manifest.json" "$PP_EVIDENCE/bundle-manifest.json"
@@ -102,6 +145,7 @@ jobs:
           cp "$PP_DESKTOP_STAGE/Resources/desktop-runtime/release.json" "$PP_EVIDENCE/release.json"
           shasum -a 256 "$PP_EVIDENCE/bundle-manifest.json" > "$PP_EVIDENCE/manifest.sha256"
       - name: Assemble one unsigned app with the measured inventory
+        if: needs.changes.outputs.native != 'false'
         run: |
           cargo tauri --version | tee "$PP_EVIDENCE/tauri-version.txt"
           cargo fetch --manifest-path rust/Cargo.toml --locked 2>&1 | tee "$PP_EVIDENCE/cargo-fetch.log"
@@ -109,6 +153,7 @@ jobs:
           cmp "$PP_EVIDENCE/bundle-manifest.json" "$PP_DESKTOP_STAGE/bundle-manifest.json"
           git diff --exit-code -- rust/Cargo.lock
       - name: Verify bundled compatibility lifecycle
+        if: needs.changes.outputs.native != 'false'
         run: |
           set -o pipefail
           app="$GITHUB_WORKSPACE/rust/target/release/bundle/macos/Print Partner.app"
@@ -135,6 +180,7 @@ jobs:
               raise SystemExit('Compatibility lifecycle cleanup is incomplete')
           PY
       - name: Verify installed app and relocated copy
+        if: needs.changes.outputs.native != 'false'
         run: |
           app="$GITHUB_WORKSPACE/rust/target/release/bundle/macos/Print Partner.app"
           python3 rust/scripts/check-macos-bundle.py --app "$app" --manifest "$PP_EVIDENCE/bundle-manifest.json" --arch '${{ matrix.arch }}' --receipt "$PP_EVIDENCE/bundle-verifier.json" 2>&1 | tee "$PP_EVIDENCE/bundle-verifier.log"
@@ -144,7 +190,7 @@ jobs:
           python3 rust/scripts/check-macos-bundle.py --app "$relocated" --manifest "$PP_EVIDENCE/bundle-manifest.json" --arch '${{ matrix.arch }}' --receipt "$PP_EVIDENCE/relocation-verifier.json" 2>&1 | tee "$PP_EVIDENCE/relocation-verifier.log"
           cmp "$PP_EVIDENCE/bundle-manifest.json" "$PP_DESKTOP_STAGE/bundle-manifest.json"
       - name: Preserve available bundle and receipts
-        if: always()
+        if: ${{ !cancelled() && needs.changes.outputs.native != 'false' }}
         run: |
           export PP_EVIDENCE="$RUNNER_TEMP/desktop-evidence"
           export PP_DESKTOP_STAGE="$RUNNER_TEMP/desktop-stage"
@@ -158,8 +204,8 @@ jobs:
           fi
           git diff -- rust/Cargo.lock web/package-lock.json > "$PP_EVIDENCE/lockfile-diff.patch"
           df -h > "$PP_EVIDENCE/storage-after.txt"
-      - uses: actions/upload-artifact@v7
-        if: always()
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() && needs.changes.outputs.native != 'false' }}
         with:
           name: native-macos-${{ matrix.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/desktop-evidence/
