@@ -1,8 +1,9 @@
 # PR #132 — local body additions
 
-Prepared locally for the coordinator. Append the sections below to the existing
-PR body only after the chain lands and pushing is explicitly authorized. No code,
-evidence branch, PR body, review reply, or thread resolution was published.
+Resumed from the held local commits after explicit authorization to push normally
+and update PR evidence. The sections below document this preparation; the PR body
+records the pushed head and published artifact links. Keep the stack held behind
+#128–#130. Do not merge, mark ready, or ping Gate.
 
 ## Evidence at new head
 
@@ -10,13 +11,15 @@ Exemption: none.
 
 Model/harness: Codex gpt-6.1-sol xhigh, T3 VM 135
 
-The tested source includes the local merge of main and the reset-capacity fix.
-The final local head used for fresh captures is recorded in
-`/persist/home/evidence/pr132-vm135-20261011/head.txt`; each live JSON receipt
-also records its full head SHA. Substitute that exact SHA and the eventual
-published artifact links into this draft when updating the PR body.
+The tested source includes both merges of main and the held reset-capacity fix.
+The final head used for fresh captures is recorded in
+`/persist/home/evidence/pr132-vm135-resume-20261011/head.txt`; each live JSON
+receipt also records its full head SHA. The PR body records that exact SHA and
+the published artifact links without introducing a self-referential code commit.
 
-Local evidence root: `/persist/home/evidence/pr132-vm135-20261011/`.
+Current evidence root: `/persist/home/evidence/pr132-vm135-resume-20261011/`.
+The original held evidence, including the failing-before P1 regression, remains
+at `/persist/home/evidence/pr132-vm135-20261011/`.
 
 ### Integration and review
 
@@ -27,6 +30,11 @@ Local evidence root: `/persist/home/evidence/pr132-vm135-20261011/`.
   `6c037fcb459bb0dd42aab463aaebf2c83febaa12` was already included.
 - Merged `origin/main` at `b497e887651e10d26c0cdd4a0f0b26130f5ac7d1` through
   merge commit `d6c416173c27c4f2859a31a5bc48b2bb230e2f02`.
+- Resumed at `11b564fe50462ebd91add26d7a88f65ad6e3fb88`, fetched origin again,
+  and confirmed the current PR head and parent were unchanged. The newer
+  `origin/main` at `c9847db9abc2828894030c8160f061a59a30271b` was merged through
+  `a18e333f397b55d92a7b92e5d9a5f21f5f6f8fe0` without conflicts. No other local
+  #132/auth-http work was found to integrate.
 - Resolved six files: `rust/Cargo.toml`, `rust/Cargo.lock`,
   `rust/crates/pp-core/src/lib.rs`,
   `rust/crates/pp-compat/tests/installed_bundle_lifecycle.rs`,
@@ -55,7 +63,7 @@ Local evidence root: `/persist/home/evidence/pr132-vm135-20261011/`.
   the corrected handler passes. See `p1-before.log` and `p1-regression.log`.
 - The separate P2 [shutdown drops reset emails](https://github.com/poitee/PrintPartner/pull/132#discussion_r4239420546)
   remains open and is outside the requested P0/P1 fixes. Delivery tasks are
-  still detached. No remote review threads were resolved during local prep.
+  still detached. The fixed P1 is closed out after publishing the verified fix.
 
 ### Required local checks
 
@@ -63,13 +71,20 @@ Local evidence root: `/persist/home/evidence/pr132-vm135-20261011/`.
 scripts/check-github-actions-pinned.sh
 cargo fmt --manifest-path rust/Cargo.toml --all --check
 cargo clippy --locked --manifest-path rust/Cargo.toml --workspace --all-targets -- -D warnings
-cargo test --locked --manifest-path rust/Cargo.toml --workspace
+(cd rust && cargo test --locked --workspace)
 ```
 
-Final result: **159 passed, 0 failed, 0 ignored** across the locked
-workspace, including 21 API tests, 37 source tests, and 23 real core runtime
+Resumed result: **163 passed, 0 failed, 0 ignored** across 45 result groups in
+the locked workspace, including 21 API tests, 41 source tests, and 23 real core runtime
 tests. Formatting, strict workspace/all-target Clippy, and action pin checks
 passed (`checked=48 exempt_local=2 unpinned=0`).
+
+The held run passed 159 tests; the current main adds four source CLI contract
+tests. The resumed runtime result was:
+
+```text
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 135.50s
+```
 
 The desktop runtime tests require the real locked web build and measured
 manifest, prepared first with:
@@ -91,7 +106,7 @@ counts are recorded in `test-counts.json`.
 Build `auth-http-fixture` from the final prepared local head, then run:
 
 ```sh
-python3 /persist/home/evidence/pr132-vm135-20261011/reset-capacity-proof.py
+python3 /persist/home/evidence/pr132-vm135-resume-20261011/reset-capacity-proof.py
 ```
 
 This drives the actual bound Rust auth HTTP surface and SQLite writer with
@@ -109,13 +124,13 @@ app with that exact manifest, and run the retained lifecycle harness:
 
 ```sh
 python3 rust/scripts/stage-desktop.py --web web --node /opt/agent-fleet/bin/node \
-  --output /persist/home/evidence/pr132-vm135-20261011/native-stage \
+  --output /persist/home/evidence/pr132-vm135-resume-20261011/native-stage \
   --commit "$(git rev-parse HEAD)"
-PP_DESKTOP_RELEASE_MANIFEST=/persist/home/evidence/pr132-vm135-20261011/native-stage/bundle-manifest.json \
+PP_DESKTOP_RELEASE_MANIFEST=/persist/home/evidence/pr132-vm135-resume-20261011/native-stage/bundle-manifest.json \
   cargo build --locked --manifest-path rust/Cargo.toml -p pp-desktop --message-format=json
-/usr/bin/python3 /persist/home/evidence/pr132-vm135-20261011/desktop-lifecycle-proof.py \
+/usr/bin/python3 /persist/home/evidence/pr132-vm135-resume-20261011/desktop-lifecycle-proof.py \
   <executable-from-compiler-artifact> \
-  /persist/home/evidence/pr132-vm135-20261011/native-stage
+  /persist/home/evidence/pr132-vm135-resume-20261011/native-stage
 ```
 
 The harness uses fresh temporary data and the real native window on `:99`.
@@ -145,8 +160,8 @@ SMTP, PostgreSQL, or full application acceptance. No LAN instance was used.
 
 ## Coordinator handoff
 
-Keep this worktree and its local commits. Push only after #128 lands and the
-coordinator explicitly authorizes `git push origin HEAD:desktop/auth-http`.
-Then publish reviewed local artifacts, append refreshed evidence to the PR body,
-and reply to the fixed P1 with the pushed commit SHA. No rebase, force-push, or
-PR merge is part of this preparation.
+Keep this worktree and its commits. The resumed request explicitly authorizes
+`git push origin HEAD:desktop/auth-http`, publication of reviewed evidence, and
+the PR body update. Reply to the fixed P1 with the pushed commit SHA. The chain
+remains held behind #128–#130; no rebase, force-push, PR merge, ready-state change,
+or Gate ping is part of this preparation.
