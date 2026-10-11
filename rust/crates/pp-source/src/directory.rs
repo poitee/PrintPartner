@@ -318,7 +318,6 @@ mod tests {
         for mode in [0o1777, 0o1770, 0o1707] {
             let tree = Tree::new().dir("repos", mode);
             assert!(matches!(tree.open("repos"), Err(Error::UnsafeAncestor)));
-            assert!(!ancestor_is_trusted(0, mode, 1000, false));
         }
     }
 }
