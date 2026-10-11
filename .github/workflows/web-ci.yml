@@ -54,6 +54,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: web-ci-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   web:
     runs-on: ubuntu-latest
