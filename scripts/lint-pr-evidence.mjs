@@ -122,7 +122,10 @@ function stripHiddenMarkdown(text, { inlineMultiline = true, includeRawHtml = fa
   let htmlBlock = null;
   let indentedCode = null;
   let paragraphOpen = false;
-  for (const raw of text.replace(/\r\n/g, "\n").split("\n")) {
+  let referenceEnd = -1;
+  const sourceLines = text.replace(/\r\n/g, "\n").split("\n");
+  const referenceLines = referenceContainerLines(sourceLines.join("\n"));
+  for (const [lineIndex, raw] of sourceLines.entries()) {
     const indent = indentWidth(raw.match(/^[ \t]*/)[0]);
     if (htmlBlock && !insideFenceContainer(raw, htmlBlock)) htmlBlock = null;
     if (htmlBlock) {
@@ -224,7 +227,11 @@ function stripHiddenMarkdown(text, { inlineMultiline = true, includeRawHtml = fa
     }
     const shown = inline.visible;
     kept.push(shown);
-    paragraphOpen = Boolean(shown.trim()) && !LEAF_BLOCK_START.test(shown);
+    if (!paragraphOpen && lineIndex > referenceEnd) {
+      const definition = referenceDestination(referenceLines, lineIndex, true);
+      if (definition) referenceEnd = definition.end;
+    }
+    paragraphOpen = lineIndex > referenceEnd && Boolean(shown.trim()) && !LEAF_BLOCK_START.test(shown);
   }
   return kept.join("\n");
 }
@@ -1024,7 +1031,7 @@ function referenceUses(value, { requireVisible = false } = {}) {
   }
   text = stripLinks(text, new Set()).rest;
   const references = new Set();
-  const uses = /\[((?:[^\]\\\n]|\\.){1,999})\](?:\[((?:[^\]\\\n]|\\.){0,999})\])?/g;
+  const uses = /\[((?:[^\]\\\n]|\\.){0,999})\](?:\[((?:[^\]\\\n]|\\.){0,999})\])?/g;
   for (const match of text.matchAll(uses)) {
     if (text[match.index + match[0].length] === ":") continue;
     let escapes = 0;
@@ -1068,8 +1075,12 @@ function visibleFieldText(value) {
   return decodeCharacterReferences(text).replace(/[*_`~]/g, "").trim();
 }
 
-function decodeCharacterReferences(text) {
-  return text.replace(/&(#[xX][\da-fA-F]+|#\d+|[a-zA-Z][a-zA-Z\d]*);/g, (match, entity) => {
+function decodeCharacterReferences(text, { htmlNumeric = false } = {}) {
+  const pattern = htmlNumeric
+    ? /&(#[xX][\da-fA-F]+;?|#\d+;?|[a-zA-Z][a-zA-Z\d]*;)/g
+    : /&(#[xX][\da-fA-F]+;|#\d+;|[a-zA-Z][a-zA-Z\d]*;)/g;
+  return text.replace(pattern, (match, rawEntity) => {
+    const entity = rawEntity.replace(/;$/, "");
     if (entity[0] !== "#") return Object.hasOwn(NAMED_CHARACTER_REFERENCES, entity) ? NAMED_CHARACTER_REFERENCES[entity] : match;
     const code = entity[1].toLowerCase() === "x" ? Number.parseInt(entity.slice(2), 16) : Number(entity.slice(1));
     return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : "\ufffd";
@@ -1119,7 +1130,7 @@ function targetsBannedLan(sectionText, definitions) {
   );
   const bannedTarget = (value) => {
     if (BANNED_LAN_IP.test(value)) return true;
-    const decoded = decodeCharacterReferences(value).replace(/\\(.)/g, "$1").replace(/[\t\n\r]/g, "");
+    const decoded = decodeCharacterReferences(value, { htmlNumeric: true }).replace(/\\(.)/g, "$1").replace(/[\t\n\r]/g, "");
     return [...decoded.matchAll(/(?:https?:|\/\/)[^\s<>()"'`]+/gi)].some((match) => {
       try {
         const target = trimToken(match[0]);

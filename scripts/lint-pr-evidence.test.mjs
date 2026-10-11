@@ -1534,3 +1534,25 @@ test('visible artifact after nested hidden raw-text child remains valid', () => 
 test('safe slashless HTTP verification target remains allowed', () => {
   assert.equal(lintPrEvidence(bodyWithEvidence('Exemption: docs-only\n- Exemption reason: Updated docs.\n- Journey exercised: [preview](http:example.test)')).ok, true);
 });
+
+for (const artifact of ['[][proof]', '[ ][proof]', String.raw`\![][proof]`]) {
+  test(`empty full-reference link cannot supply artifact ${artifact}`, () => {
+    assert.equal(lintPrEvidence(bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n${ARTIFACT_LABEL} ${artifact}\n\n[proof]: https://example.test/shot.png`)).ok, false);
+  });
+}
+test('empty-alt full-reference image remains visible proof', () => {
+  assert.equal(lintPrEvidence(bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n${ARTIFACT_LABEL} ![][proof]\n\n[proof]: https://example.test/shot.png`)).ok, true);
+});
+for (const entity of ['&#x2F','&#47']) {
+  test(`HTML target decodes semicolonless numeric slash ${entity}`, () => {
+    assert.equal(lintPrEvidence(bodyWithEvidence(`Exemption: docs-only\n- Exemption reason: Updated docs.\n- Journey exercised: <a href="http:${entity}/3232235856">preview</a>`)).ok, false);
+  });
+}
+for (const definition of ['[ref]: /target', '[ref]: /target "title\nmore title"', '> [ref]: /target']) {
+  test(`reference block boundary allows type-7 HTML ${JSON.stringify(definition)}`, () => {
+    assert.equal(lintPrEvidence(`${definition}\n<span>\n## Evidence\nExemption: docs-only\n- Exemption reason: Updated docs.\n</span>`).ok, false);
+  });
+}
+test('invalid reference prefix remains paragraph text before inline span', () => {
+  assert.equal(lintPrEvidence('[ref]: /target garbage\n<span>\n## Evidence\nExemption: docs-only\n- Exemption reason: Updated docs.').ok, true);
+});
