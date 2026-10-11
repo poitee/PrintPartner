@@ -215,24 +215,50 @@ def parent_death_signal(launcher):
     return arm
 
 
-def guard_group(group):
-    # Covers every platform and every descendant (e.g. Node under pp-server), which PDEATHSIG alone
-    # would miss. The watcher holds the read end; once the launcher dies, its write end closes and
-    # the watcher SIGKILLs the child's session group. A normal exit closes it through release_guard().
+def guard_group(group, read_fd, done_fd):
+    # Called in the child after setsid, before exec can create descendants. The watcher
+    # inherits only the read end, so launcher death is observable even during setup.
+    return subprocess.Popen([sys.executable, "-I", "-c", GUARD_SOURCE, str(read_fd), str(group)],
+                            pass_fds=(read_fd,), start_new_session=True,
+                            stdin=subprocess.DEVNULL, stdout=done_fd, stderr=subprocess.DEVNULL)
+
+
+def guarded_popen(args, **kwargs):
     read_fd, write_fd = os.pipe()
+    done_fd, done_write = os.pipe()
+    death_signal = parent_death_signal(os.getpid())
+
+    def arm():
+        if death_signal is not None:
+            death_signal()
+        os.close(write_fd)
+        # Retain the watcher Popen until exec replaces this child.
+        arm.watcher = guard_group(os.getpgrp(), read_fd, done_write)
+        os.close(read_fd)
+        os.close(done_write)
+
     try:
-        watcher = subprocess.Popen([sys.executable, "-I", "-c", GUARD_SOURCE, str(read_fd), str(group)],
-                                   pass_fds=(read_fd,), start_new_session=True,
-                                   stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        process = subprocess.Popen(args, start_new_session=True, preexec_fn=arm,
+                                   pass_fds=(read_fd, write_fd, done_write), **kwargs)
+    except BaseException:
+        os.close(write_fd)
+        os.close(done_fd)
+        raise
     finally:
         os.close(read_fd)
-    return watcher, write_fd
+        os.close(done_write)
+    process.guard = (done_fd, write_fd)
+    return process
 
 
 def release_guard(guard):
-    watcher, write_fd = guard
+    done_fd, write_fd = guard
     os.close(write_fd)
-    watcher.wait()
+    try:
+        while os.read(done_fd, 1):
+            pass
+    finally:
+        os.close(done_fd)
 
 
 def run(root, *args, env=None, stdout=None, timeout=600):
@@ -245,9 +271,8 @@ def run(root, *args, env=None, stdout=None, timeout=600):
     process = None
     guard = None
     try:
-        process = subprocess.Popen(args, cwd=root, env=env, stdout=stdout, text=True, start_new_session=True,
-                                   preexec_fn=parent_death_signal(os.getpid()))
-        guard = guard_group(process.pid)
+        process = guarded_popen(args, cwd=root, env=env, stdout=stdout, text=True)
+        guard = process.guard
         deadline = time.monotonic() + timeout
         while True:
             try:
@@ -315,9 +340,8 @@ def start_server(binary, root, node, commit, fixture, errors, credentials=None, 
     if credentials is not None:
         args += ["--test-credential-file", str(credentials)]
     # A new session keeps terminal Ctrl-C from reaching pp-server before its signal handlers exist.
-    return subprocess.Popen(args, cwd=root, stdout=subprocess.PIPE, stderr=errors, text=True,
-                            start_new_session=isolated,
-                            preexec_fn=parent_death_signal(os.getpid()) if isolated else None)
+    spawn = guarded_popen if isolated else subprocess.Popen
+    return spawn(args, cwd=root, stdout=subprocess.PIPE, stderr=errors, text=True)
 
 
 def read_origin(process, errors):
@@ -570,7 +594,7 @@ def serve(binary, root, node, commit, credentials):
             internal = fixture / "bootstrap.json" if credentials is not None else None
             held["active"] = True
             process = start_server(binary, root, node, commit, fixture, errors, internal, isolated=True)
-            guard = guard_group(process.pid)
+            guard = process.guard
             try:
                 origin = read_origin(process, errors)
                 marker = fixture / "data/.desktop-owner.json"

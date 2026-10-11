@@ -303,6 +303,30 @@ fn classify_stop_outcome(
     Ok(intent)
 }
 
+fn configure_child(command: &mut Command, lease_fd: std::os::fd::RawFd) {
+    command.process_group(0);
+    #[cfg(target_os = "linux")]
+    let parent = std::process::id() as libc::pid_t;
+    unsafe {
+        command.pre_exec(move || {
+            // Node has its own group for normal shutdown; tie it to the Rust owner too.
+            #[cfg(target_os = "linux")]
+            {
+                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                if libc::getppid() != parent {
+                    return Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe));
+                }
+            }
+            if libc::dup2(lease_fd, 198) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+}
+
 impl Process {
     async fn spawn(spec: &SpawnSpec, capture: &logs::Logs) -> Result<Self> {
         release::verify_backend(&spec.bundle)?;
@@ -351,16 +375,7 @@ impl Process {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
-        command.process_group(0);
-        let lease_fd = spec.lease_file.as_raw_fd();
-        unsafe {
-            command.pre_exec(move || {
-                if libc::dup2(lease_fd, 198) < 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
+        configure_child(&mut command, spec.lease_file.as_raw_fd());
         let mut child = command.spawn().context("Could not start bundled Node")?;
         // Persist ownership before the child can receive setup or open storage.
         if let Err(error) =
@@ -715,6 +730,78 @@ mod tests {
             )
             .unwrap(),
             super::StopIntent::Restart
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn parent_death_fixture() {
+        let Some(pidfile) = std::env::var_os("PP_COMPAT_DEATH_PIDFILE") else {
+            return;
+        };
+        let lease = std::fs::File::open("/dev/null").unwrap();
+        let mut command = tokio::process::Command::new("sleep");
+        command.arg("600");
+        super::configure_child(&mut command, std::os::fd::AsRawFd::as_raw_fd(&lease));
+        let mut child = command.spawn().unwrap();
+        let pidfile = std::path::PathBuf::from(pidfile);
+        let temporary = pidfile.with_extension("tmp");
+        std::fs::write(&temporary, child.id().unwrap().to_string()).unwrap();
+        std::fs::rename(temporary, pidfile).unwrap();
+        child.wait().await.unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn separate_group_child_dies_with_force_killed_parent() {
+        use std::os::unix::process::CommandExt;
+        let pidfile = std::env::temp_dir().join(format!(
+            "pp-compat-death-{}-{}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        let mut owner = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["parent_death_fixture", "--nocapture"])
+            .env("PP_COMPAT_DEATH_PIDFILE", &pidfile)
+            .stdout(std::process::Stdio::null())
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !pidfile.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        if !pidfile.exists() {
+            owner.kill().unwrap();
+            owner.wait().unwrap();
+            panic!("child never spawned");
+        }
+        let pid: i32 = std::fs::read_to_string(&pidfile).unwrap().parse().unwrap();
+        let group = unsafe { libc::getpgid(pid) };
+        unsafe {
+            libc::kill(-(owner.id() as i32), libc::SIGKILL);
+        }
+        owner.wait().unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        let alive = || {
+            std::fs::read_to_string(format!("/proc/{pid}/stat"))
+                .is_ok_and(|stat| !stat.split_once(") ").unwrap().1.starts_with('Z'))
+        };
+        while alive() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let survived = alive();
+        unsafe {
+            libc::kill(pid, libc::SIGKILL);
+        }
+        std::fs::remove_file(pidfile).unwrap();
+        assert_eq!(
+            group, pid,
+            "fixture must reproduce Node's separate process group"
+        );
+        assert!(
+            !survived,
+            "Node-group child outlived its force-killed parent"
         );
     }
 

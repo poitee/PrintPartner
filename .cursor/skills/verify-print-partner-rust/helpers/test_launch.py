@@ -232,7 +232,7 @@ class StartupStopTest(unittest.TestCase):
         for failure in (None, 'exit', 'owner', 'runtime'):
             with self.subTest(failure=failure):
                 verify = load_verify()
-                process = SimpleNamespace(pid=123, returncode=3 if failure == 'exit' else 0,
+                process = SimpleNamespace(pid=123, guard=None, returncode=3 if failure == 'exit' else 0,
                                           stdout=io.StringIO())
                 with tempfile.TemporaryDirectory(prefix='pp-early-stop-test-') as temporary:
                     runtime = Path(temporary) / 'runtime'
@@ -252,6 +252,7 @@ class StartupStopTest(unittest.TestCase):
                             runtime.rmdir()
                     output = io.StringIO()
                     with mock.patch.object(verify, 'start_server', return_value=process), \
+                            mock.patch.object(verify, 'release_guard'), \
                             mock.patch.object(verify, 'read_origin', side_effect=stop_before_origin), \
                             mock.patch.object(verify, 'terminate', side_effect=terminate), \
                             mock.patch.object(verify, 'ignore_signals'), contextlib.redirect_stdout(output):
@@ -642,7 +643,7 @@ class ServerExitTest(unittest.TestCase):
 
     def test_stop_at_launch_cleanup_entry_removes_credential_and_checks_shutdown(self):
         verify = load_verify()
-        process = SimpleNamespace(pid=123, returncode=0, stdout=io.StringIO(), wait=lambda timeout=None: 0)
+        process = SimpleNamespace(pid=123, guard=None, returncode=0, stdout=io.StringIO(), wait=lambda timeout=None: 0)
         with tempfile.TemporaryDirectory(prefix="pp-launch-cleanup-test-") as temporary:
             credentials = Path(temporary) / "credential.json"
             def origin(_process, errors):
@@ -653,6 +654,7 @@ class ServerExitTest(unittest.TestCase):
                 (fixture / "bootstrap.json").write_text('{}')
                 return "http://127.0.0.1:12345"
             with mock.patch.object(verify, "start_server", return_value=process), \
+                mock.patch.object(verify, "release_guard"), \
                     mock.patch.object(verify, "read_origin", side_effect=origin), \
                     mock.patch.object(verify, "terminate") as terminate, \
                     mock.patch.object(verify, "verify_shutdown") as shutdown, \
@@ -666,7 +668,7 @@ class ServerExitTest(unittest.TestCase):
 
     def assert_server_exit(self, status):
         verify = load_verify()
-        process = SimpleNamespace(pid=123, returncode=status, stdout=io.StringIO(), wait=lambda timeout=None: status)
+        process = SimpleNamespace(pid=123, guard=None, returncode=status, stdout=io.StringIO(), wait=lambda timeout=None: status)
         runtime = Path("/tmp/pp-test-runtime")
 
         def origin(_process, errors):
@@ -677,6 +679,7 @@ class ServerExitTest(unittest.TestCase):
 
         output = io.StringIO()
         with mock.patch.object(verify, "start_server", return_value=process), \
+                mock.patch.object(verify, "release_guard"), \
                 mock.patch.object(verify, "read_origin", side_effect=origin), \
                 mock.patch.object(verify, "terminate") as terminate, \
                 mock.patch.object(verify, "verify_shutdown") as shutdown, \
@@ -900,6 +903,53 @@ class StopDuringBuildTest(unittest.TestCase):
                 if child_pid is not None and process_alive(child_pid):
                     with contextlib.suppress(ProcessLookupError):
                         os.kill(child_pid, signal.SIGKILL)
+
+
+class GuardStartupTest(unittest.TestCase):
+    def test_sigkill_during_watcher_setup_leaves_no_descendants(self):
+        # Delay the watcher at the exact startup boundary, without relying on scheduler luck.
+        for mode in ("run", "server"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                pidfile, armed = root / "worker.pid", root / "arming"
+                binary = root / "server"
+                write_executable(binary, f'#!/bin/sh\nsleep 600 &\necho $! > "{pidfile}"\nwait\n')
+                driver = f"""import sys, time
+from pathlib import Path
+sys.path.insert(0, {str(HELPER.parent)!r})
+import verify
+original = verify.guard_group
+def delayed(*args):
+    time.sleep(0.3)
+    Path({str(armed)!r}).touch()
+    time.sleep(2)
+    return original(*args)
+verify.guard_group = delayed
+if {mode!r} == 'run':
+    verify.run({str(root)!r}, {str(binary)!r})
+else:
+    verify.serve(Path({str(binary)!r}), Path({str(root)!r}), 'node', 'commit', None)
+"""
+                with (root / "log").open("w") as log:
+                    launcher = subprocess.Popen([sys.executable, "-c", driver], stdout=log, stderr=log)
+                try:
+                    deadline = time.monotonic() + 10
+                    while not armed.exists() and time.monotonic() < deadline:
+                        time.sleep(0.01)
+                    self.assertTrue(armed.exists(), "watcher setup was not reached")
+                    launcher.kill()
+                    launcher.wait(timeout=5)
+                    time.sleep(2.2)  # also catch a child that execs after the launcher has died
+                    if pidfile.exists():
+                        self.assertTrue(wait_until_gone(int(pidfile.read_text()), 3),
+                                        "worker escaped during watcher startup")
+                finally:
+                    if launcher.poll() is None:
+                        launcher.kill()
+                        launcher.wait(timeout=5)
+                    if pidfile.exists():
+                        with contextlib.suppress(ProcessLookupError):
+                            os.kill(int(pidfile.read_text()), signal.SIGKILL)
 
 
 class ForceKillTest(unittest.TestCase):
