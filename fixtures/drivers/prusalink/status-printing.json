@@ -1,0 +1,23 @@
+{
+  "status": 200,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "printer": {
+      "state": "PRINTING",
+      "temp_nozzle": 214.5,
+      "target_nozzle": 215,
+      "temp_bed": 59.5,
+      "target_bed": 60
+    },
+    "job": {
+      "progress": 33.3,
+      "time_remaining": 1200,
+      "file": {
+        "name": "BENCHY.GCO",
+        "display_name": "benchy.gcode"
+      }
+    }
+  }
+}
