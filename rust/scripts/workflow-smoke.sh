@@ -18,6 +18,14 @@ ws_pid=''
 log() { printf '[smoke] %s\n' "$*"; }
 fail() { printf '[smoke] FAIL: %s\n' "$*" >&2; exit 1; }
 alive() { kill -0 "$1" 2>/dev/null; }
+# Wait up to $2 seconds for pid $1 to exit; status 1 on timeout.
+wait_exit() {
+  local deadline=$((SECONDS + $2))
+  while alive "$1"; do
+    ((SECONDS < deadline)) || return 1
+    sleep 0.2
+  done
+}
 
 cleanup() {
   result=$?
@@ -25,6 +33,7 @@ cleanup() {
   if test -n "$ws_pid" && alive "$ws_pid"; then kill "$ws_pid" 2>/dev/null || true; fi
   if test -n "$server_pid" && alive "$server_pid"; then
     kill -TERM "$server_pid" 2>/dev/null || true
+    wait_exit "$server_pid" 20 || kill -KILL "$server_pid" 2>/dev/null || true
     wait "$server_pid" 2>/dev/null || true
     result=1
   fi
@@ -41,16 +50,19 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-# Exit status 0 when the OS lock on the data directory is free, 1 when held.
-lock_free() {
+# Prints "free" or "held" for the OS lock on the data directory; any other
+# error (missing file, unexpected errno) makes the probe itself fail.
+lock_state() {
   python3 - "$data/.desktop.lock" <<'PY'
 import fcntl, sys
 with open(sys.argv[1], 'rb') as lock:
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
-        sys.exit(1)
+        print('held')
+        sys.exit(0)
     fcntl.flock(lock, fcntl.LOCK_UN)
+    print('free')
 PY
 }
 
@@ -73,7 +85,8 @@ log "ready: $origin (pid $server_pid)"
 
 # Data lock taken at boot.
 test -f "$data/.desktop-owner.json" || fail 'owner marker missing after boot'
-if lock_free; then fail 'data lock is not held while running'; fi
+lock="$(lock_state)" || fail 'data lock probe failed at boot'
+test "$lock" = held || fail "data lock is $lock while running"
 log 'lock: held at boot (flock EWOULDBLOCK, owner marker present)'
 
 # Authenticate with the one-use bootstrap credential.
@@ -132,6 +145,7 @@ log 'mcp: initialize -> 401 without session, 403 fail-closed with session'
 alive "$ws_pid" || fail 'websocket client exited before shutdown'
 if grep -q '"closed"' "$fixture/ws.out"; then fail 'websocket closed before shutdown'; fi
 kill -TERM "$server_pid"
+wait_exit "$server_pid" 40 || fail 'server did not exit within 40s of SIGTERM'
 set +e
 wait "$server_pid"
 server_exit=$?
@@ -139,6 +153,7 @@ set -e
 server_pid_stopped="$server_pid"
 server_pid=''
 test "$server_exit" = 0 || fail "server exited $server_exit after SIGTERM"
+wait_exit "$ws_pid" 10 || fail 'websocket client did not exit after shutdown'
 set +e
 wait "$ws_pid"
 ws_exit=$?
@@ -153,7 +168,8 @@ log "stop: SIGTERM -> exit 0, ws closed, child $child_pid gone, no process-group
 
 # Data lock released at stop.
 test ! -e "$data/.desktop-owner.json" || fail 'owner marker survived stop'
-lock_free || fail 'data lock still held after stop'
+lock="$(lock_state)" || fail 'data lock probe failed after stop'
+test "$lock" = free || fail "data lock is $lock after stop"
 log 'lock: released at stop (flock acquired, owner marker removed)'
 
 python3 - "$commit" "$origin" "$child_pid" "$plan_id" <<'PY'
