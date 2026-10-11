@@ -81,6 +81,7 @@ if args.self_test:
                 assert classification == 'observation' and evidence == PURE_READS[pure]
     print(json.dumps({'corrected_registered_reads': len(observed), 'unknown_reads_guarded': 6,
                       'pure_exception_families': len(PURE_READS)}))
+    raise SystemExit(0)
 
 routes = []
 exclusions = []
