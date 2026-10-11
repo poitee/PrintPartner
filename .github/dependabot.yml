@@ -61,7 +61,7 @@ updates:
     open-pull-requests-limit: 5
     schedule:
       interval: weekly
-    versioning-strategy: auto
+    versioning-strategy: lockfile-only
     groups:
       rust-minor-patch:
         patterns:
