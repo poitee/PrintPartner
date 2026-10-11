@@ -18,6 +18,20 @@ ws_pid=''
 log() { printf '[smoke] %s\n' "$*"; }
 fail() { printf '[smoke] FAIL: %s\n' "$*" >&2; exit 1; }
 alive() { kill -0 "$1" 2>/dev/null; }
+# pgrep status 1 means no match; every other nonzero status is a probe error.
+check_no_leftovers() {
+  local leftover probe_status
+  if leftover="$(pgrep "$@")"; then
+    probe_status=0
+  else
+    probe_status=$?
+  fi
+  case "$probe_status" in
+    0) fail "leftover processes after stop (pgrep $*): $leftover" ;;
+    1) return 0 ;;
+    *) fail "leftover process probe failed (pgrep $*, exit $probe_status)" ;;
+  esac
+}
 # Wait up to $2 seconds for pid $1 to exit; status 1 on timeout.
 wait_exit() {
   local deadline=$((SECONDS + $2))
@@ -162,8 +176,8 @@ ws_pid=''
 test "$ws_exit" = 0 || fail "websocket client exited $ws_exit"
 grep -q '"closed":true' "$fixture/ws.out" || fail 'websocket was not closed by shutdown'
 if alive "$child_pid"; then fail "compat child $child_pid survived stop"; fi
-leftover="$(pgrep -g "$child_pid" 2>/dev/null || true)$(pgrep -P "$server_pid_stopped" 2>/dev/null || true)"
-test -z "$leftover" || fail "leftover processes after stop: $leftover"
+check_no_leftovers -g "$child_pid"
+check_no_leftovers -P "$server_pid_stopped"
 log "stop: SIGTERM -> exit 0, ws closed, child $child_pid gone, no process-group or child leftovers"
 
 # Data lock released at stop.
