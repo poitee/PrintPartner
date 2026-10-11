@@ -56,5 +56,8 @@ count in its suite name, including future additions. Every `state-*` and
 `home-assistant.fixtures.test.ts`. The suite serves those payloads through a
 mocked fetch to the real adapter's `getStatus` or `testConnection` method and
 compares the complete output, including status, progress, filename and message.
-A coverage assertion requires expectations for any newly added state or API
-probe fixture.
+The webhook fixtures exercise the real adapter's `uploadFile` method. The
+suite compares the outbound URL, method, multipart content type, field names,
+file bytes and filename with the request descriptor, checks that authorization
+is absent, and verifies the complete upload result using the response fixture.
+A coverage assertion requires adapter replay coverage for every JSON fixture.

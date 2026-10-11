@@ -44,6 +44,16 @@ const expectedConnections: Record<string, IntegrationTestResult> = {
   "api-running.json": { ok: true, message: "Connected" },
   "api-running-version.json": { ok: true, message: "Connected (HA 2024.1.0)" },
 };
+const webhookFixtures = ["webhook-upload.json", "webhook-response.json"];
+interface WebhookUploadFixture {
+  method: string;
+  path: string;
+  content_type: string;
+  fields: {
+    file: { filename: string; content: string };
+    filename: string;
+  };
+}
 const config = {
   base_url: "http://192.168.1.10:8123",
   token: "synthetic-fixture-token",
@@ -77,12 +87,12 @@ describe(`Home Assistant JSON fixtures (${fixtureNames.length} fixtures)`, () =>
     expect(Array.isArray(payload)).toBe(false);
   });
 
-  it("has expected adapter outputs for every state and API probe fixture", () => {
-    const consumedFixtures = fixtureNames.filter(
-      (name) => name.startsWith("state-") || name.startsWith("api-running"),
-    );
-    expect([...Object.keys(expectedStatuses), ...Object.keys(expectedConnections)].sort())
-      .toStrictEqual(consumedFixtures);
+  it("has adapter replay coverage for every fixture", () => {
+    expect([
+      ...Object.keys(expectedStatuses),
+      ...Object.keys(expectedConnections),
+      ...webhookFixtures,
+    ].sort()).toStrictEqual(fixtureNames);
   });
 
   it.each(Object.keys(expectedStatuses))("maps adapter status for %s", async (name) => {
@@ -104,5 +114,46 @@ describe(`Home Assistant JSON fixtures (${fixtureNames.length} fixtures)`, () =>
     expect(actual).toStrictEqual(expectedConnections[name]);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(String(fetchMock.mock.calls[0]?.[0])).toBe(`${config.base_url}/api/`);
+  });
+
+  it("replays webhook upload and response fixtures through the adapter", async () => {
+    const fixture = JSON.parse(readFileSync(
+      new URL("webhook-upload.json", fixtureDirectory), "utf8",
+    )) as WebhookUploadFixture;
+    const responsePayload: unknown = JSON.parse(readFileSync(
+      new URL("webhook-response.json", fixtureDirectory), "utf8",
+    ));
+    expect(responsePayload).toStrictEqual({});
+    const fetchMock = mockFixtureResponse("webhook-response.json");
+    // Inputs and expected output are independent of the fixture's request fields.
+    const actual = await homeAssistantAdapter.uploadFile!(
+      { ...config, webhook_id: "fixture/id" },
+      new TextEncoder().encode("; fixture gcode\n"),
+      "part.gcode",
+      { start: true },
+    );
+    expect(actual).toStrictEqual({
+      ok: true,
+      remote_path: "part.gcode",
+      started: false,
+      message: "Sent part.gcode to Home Assistant webhook",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(String(url)).toBe(
+      `${config.base_url}${fixture.path.replace("{webhook_id}", "fixture%2Fid")}`,
+    );
+    expect(init?.method).toBe(fixture.method);
+    const request = new Request(String(url), init);
+    expect(request.headers.get("content-type")?.split(";")[0]).toBe(fixture.content_type);
+    expect(request.headers.has("authorization")).toBe(false);
+    const form = init?.body;
+    if (!(form instanceof FormData)) throw new Error("Expected multipart FormData");
+    expect([...form.keys()].sort()).toStrictEqual(Object.keys(fixture.fields).sort());
+    expect(form.get("filename")).toBe(fixture.fields.filename);
+    const file = form.get("file");
+    if (!(file instanceof File)) throw new Error("Expected uploaded file");
+    expect(file.name).toBe(fixture.fields.file.filename);
+    expect(await file.text()).toBe(fixture.fields.file.content);
   });
 });
