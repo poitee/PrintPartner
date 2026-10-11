@@ -53,11 +53,11 @@ jobs:
           else
             echo 'No Rust workspace (rust/Cargo.toml); skipping.' | tee -a "$GITHUB_STEP_SUMMARY"
           fi
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: steps.workspace.outputs.manifest != ''
         with:
           workspaces: rust -> target
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
         if: steps.workspace.outputs.manifest != ''
         with:
           tool: nextest
@@ -130,6 +130,7 @@ jobs:
     needs: [rust-partition-1, rust-partition-2]
     if: always() && (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Require both Rust partitions
         env:
@@ -148,7 +149,7 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24.21.0'
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: rust -> target
       - name: Install locked dependencies and build measured desktop assets

@@ -10,7 +10,7 @@ feature file as the recipe.
   (fallback: `--mode npm`).
 - Desk-loop surface for Docker verification is `http://127.0.0.1:8080`.
 - Run `… doctor` and require health `ok`, owned project, and disposable data dir.
-- Never drive Chad's LAN `192.168.200.80:8080` from a cloud agent — that path is
+- Never drive Chad's LAN `192.168.200.80:8080` or `192.168.200.81:8080` from a cloud agent — that path is
   documented separately in [live-lan-walk.md](./live-lan-walk.md).
 - Never aim `web/scripts/workflow-smoke.sh` at a persistent developer volume.
 - Put `CONTROL` on your shell as the control helper invocation from `SKILL.md`.
