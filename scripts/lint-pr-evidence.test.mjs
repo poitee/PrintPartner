@@ -709,3 +709,141 @@ test("ends an ordered-list field at an unindented paragraph after a blank line (
   assert.equal(result.ok, false);
   assert.match(result.errors.join("\n"), /\.80\/\.81/);
 });
+
+const ARTIFACT_LABEL = "- Screenshot / recording / verify-skill output or trace:";
+
+for (const artifact of ["[screenshot](# 'see evidence.png')", "[screenshot](# (see evidence.png))", '[screenshot](#  "evidence.png")']) {
+  test(`fails when a placeholder link hides a filename in its title: ${artifact} (substitute review r1 P1: link titles)`, () => {
+    const result = lintPrEvidence(
+      bodyWithEvidence(`Exemption: none
+- Steps followed to produce the evidence: opened local
+- Result observed: rendered
+${ARTIFACT_LABEL} ${artifact}
+`),
+    );
+    assert.equal(result.ok, false);
+    assert.match(result.errors.join("\n"), /Evidence is incomplete/);
+  });
+}
+
+test("passes a concrete link with a single-quoted title (substitute review r1 P1: link titles)", () => {
+  const result = lintPrEvidence(
+    bodyWithEvidence(`Exemption: none
+- Steps followed to produce the evidence: opened local
+- Result observed: rendered
+${ARTIFACT_LABEL} [shot](https://example.test/shot.png 'Builds page')
+`),
+  );
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+
+for (const opener of ["  - ```text", "  > ```text", "  1. ~~~"]) {
+  test(`ignores a fence opened inside a nested container: ${opener.trim()} (substitute review r1 P1: nested list fences)`, () => {
+    const closer = opener.includes("~") ? "~~~" : "```";
+    const result = lintPrEvidence(
+      bodyWithEvidence(`Exemption: none
+- Steps followed to produce the evidence: opened local
+- Result observed: rendered
+${ARTIFACT_LABEL}
+${opener}
+    https://example.test/example.png
+    ${closer}
+`),
+    );
+    assert.equal(result.ok, false);
+    assert.match(result.errors.join("\n"), /Evidence is incomplete/);
+  });
+}
+
+test("ends a field after a fence, so an outer paragraph is not a lazy continuation (substitute review r1 P1: nested list fences)", () => {
+  const result = lintPrEvidence(
+    bodyWithEvidence(`Exemption: docs-only
+- Exemption reason: Updated docs.
+  \`\`\`text
+  example
+  \`\`\`
+Verified against http://192.168.1.80:8080
+`),
+  );
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join("\n"), /\.80\/\.81/);
+});
+
+test("treats a field label nested inside the Exemption reason as reason text (substitute review r1 P1: nested labels)", () => {
+  const result = lintPrEvidence(
+    bodyWithEvidence(`Exemption: none
+- Steps followed to produce the evidence: opened local
+- Result observed: rendered
+- Exemption reason: Context only
+  ${ARTIFACT_LABEL} https://example.test/context.png
+`),
+  );
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join("\n"), /Evidence is incomplete/);
+});
+
+for (const block of ["  ### Background", "  ---", "  <div>"]) {
+  test(`ends the Exemption reason at an outer paragraph after a nested ${block.trim()} (substitute review r1 P1: no lazy continuation after blocks)`, () => {
+    const result = lintPrEvidence(
+      bodyWithEvidence(`Exemption: docs-only
+- Exemption reason: Updated docs.
+${block}
+Verified against http://192.168.1.80:8080
+`),
+    );
+    assert.equal(result.ok, false);
+    assert.match(result.errors.join("\n"), /\.80\/\.81/);
+  });
+}
+
+for (const tag of ["<fieldset>", "<iframe src=x>", "<dd>", "<?php", "<!DOCTYPE html>", "<center>"]) {
+  test(`ends the Exemption reason at the outer HTML block ${tag} (substitute review r1 P1: HTML block boundaries)`, () => {
+    const result = lintPrEvidence(
+      bodyWithEvidence(`Exemption: docs-only
+- Exemption reason: Updated docs.
+${tag}
+Verified against http://192.168.1.80:8080
+`),
+    );
+    assert.equal(result.ok, false);
+    assert.match(result.errors.join("\n"), /\.80\/\.81/);
+  });
+}
+
+test("keeps lazy continuation lines of the Exemption reason in the reason (substitute review r1 P1 guard)", () => {
+  const result = lintPrEvidence(
+    bodyWithEvidence(`Exemption: docs-only
+- Exemption reason: Document the prohibited host
+http://192.168.1.80:8080 in the setup guide.
+`),
+  );
+  assert.equal(result.ok, true, result.errors.join("; "));
+});
+
+test("trims artifact tokens in linear time (substitute review r1 P2: quadratic token cleanup)", () => {
+  for (const noise of [`a${".".repeat(60000)}x`, `a${")".repeat(60000)}x`, `Exemption: a${" ".repeat(60000)}x`, `_ ${"_ ".repeat(30000)}x`]) {
+    const started = performance.now();
+    lintPrEvidence(
+      bodyWithEvidence(`Exemption: none
+- Steps followed to produce the evidence: opened local
+- Result observed: rendered
+${ARTIFACT_LABEL} ${noise}
+`),
+    );
+    const elapsed = performance.now() - started;
+    assert.ok(elapsed < 1000, `lint took ${Math.round(elapsed)} ms for ${noise.slice(0, 12)}...`);
+  }
+});
+
+for (const artifact of ["screenshot.tiff", "run.trace", "session.cast"]) {
+  test(`passes when the artifact is the bare file ${artifact} (substitute review r1 P2: extension shortlist)`, () => {
+    const result = lintPrEvidence(
+      bodyWithEvidence(`Exemption: none
+- Steps followed to produce the evidence: opened local
+- Result observed: rendered
+${ARTIFACT_LABEL} ${artifact}
+`),
+    );
+    assert.equal(result.ok, true, result.errors.join("; "));
+  });
+}

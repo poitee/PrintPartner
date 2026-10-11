@@ -41,11 +41,16 @@ function stripHtmlComments(text) {
   return text.replace(/<!--[\s\S]*?-->/g, "");
 }
 
-/** A backtick fence opener cannot have backticks later on its line (inline code). */
-const FENCE_OPEN = /^[ \t]*(`{3,}(?=[^`]*$)|~{3,})/;
+/**
+ * A fence opener, also inside list items or blockquotes. A backtick opener
+ * cannot have backticks later on its line (that is inline code).
+ */
+const FENCE_OPEN = /^(?:[ \t]*(?:[-*+]|\d{1,9}[.)])[ \t]+|[ \t]*>)*[ \t]*(`{3,}(?=[^`]*$)|~{3,})/;
 
 /**
- * The body as a reviewer sees it: no CRLF, fenced code, or HTML comments. One
+ * The body as a reviewer sees it: no CRLF, fenced code, or HTML comments. Fence
+ * lines become blank lines so the text after a fence is not read as a lazy
+ * continuation of the paragraph before it. One
  * pass in document order, so comment text cannot open a fence and fence text
  * cannot hide a comment. A closing fence uses the same character and at least
  * the opening length; an unclosed fence runs to the end of the text.
@@ -60,12 +65,14 @@ function stripHiddenMarkdown(text) {
       if (close && close[1][0] === fence[0] && close[1].length >= fence.length) {
         fence = null;
       }
+      kept.push("");
       continue;
     }
     if (!inComment) {
       const open = raw.match(FENCE_OPEN);
       if (open) {
         fence = open[1];
+        kept.push("");
         continue;
       }
     }
@@ -153,13 +160,33 @@ const LABEL_LINE = new RegExp(
 /** A line that ends any field regardless of indentation. */
 const EXEMPTION_START = /^[ \t]*Exemption[ \t]*:/i;
 
+/** CommonMark HTML blocks that can interrupt a paragraph (types 1 and 3-6). */
+const HTML_BLOCK_START = new RegExp(
+  `^[ \\t]*(?:<(?:script|pre|style|textarea)(?:[\\s>]|$)|<\\?|<![A-Za-z]|<!\\[CDATA\\[|</?(?:${[
+    "address", "article", "aside", "base", "basefont", "blockquote", "body", "caption",
+    "center", "col", "colgroup", "dd", "details", "dialog", "dir", "div", "dl", "dt",
+    "fieldset", "figcaption", "figure", "footer", "form", "frame", "frameset",
+    "h[1-6]", "head", "header", "hr", "html", "iframe", "legend", "li", "link", "main",
+    "menu", "menuitem", "nav", "noframes", "ol", "optgroup", "option", "p", "param",
+    "search", "section", "summary", "table", "tbody", "td", "tfoot", "th", "thead",
+    "title", "tr", "track", "ul",
+  ].join("|")})(?:[\\s/>]|$))`,
+  "i",
+);
+
+/** Non-paragraph blocks: no lazy continuation line can follow them. */
+const LEAF_BLOCK_START = new RegExp(
+  `^[ \\t]*(?:#{1,6}(?:[ \\t]|$)|(?:[-*_][ \\t]*){3,}$)|${HTML_BLOCK_START.source}`,
+  "i",
+);
+
 /**
  * Blocks that interrupt a paragraph and, outside a list item's content column,
  * end the item: list items of any marker, ATX headings, blockquotes, thematic
  * breaks, and HTML blocks.
  */
 const BLOCK_START = new RegExp(
-  `^[ \\t]*(?:${LIST_MARKER}(?:[ \\t]|$)|#{1,6}(?:[ \\t]|$)|>|(?:[-*_][ \\t]*){3,}$|</?(?:address|article|aside|blockquote|details|dialog|div|dl|figure|footer|form|h[1-6]|header|hr|li|main|nav|ol|p|pre|script|section|style|summary|table|tbody|td|textarea|th|thead|tr|ul)(?:[\\s/>]|$))`,
+  `^[ \\t]*(?:${LIST_MARKER}(?:[ \\t]|$)|>)|${LEAF_BLOCK_START.source}`,
   "i",
 );
 
@@ -179,22 +206,26 @@ function labelKey(text) {
  * Split comment-free section text into template fields in one pass. A field is
  * its label line plus every line that belongs to that list item in Markdown:
  * lazy continuation lines and, after a blank line, blocks indented to the
- * item's content column (nested lists, later paragraphs). It ends at the next
- * field label, the Exemption line, a blank-separated block left of the content
- * column, or any outer list item, heading, blockquote, rule, or HTML block.
+ * item's content column (nested lists, later paragraphs, even nested field
+ * labels). It ends at an outer field label, the Exemption line, a block left
+ * of the content column that follows a blank line or a heading, rule, or HTML
+ * block (no lazy continuation there), or any outer list item, heading,
+ * blockquote, rule, or HTML block.
  */
 function parseFields(cleaned) {
   const fields = [];
   let current = null;
   let blankSeen = false;
+  let lazyOk = false;
   let offset = 0;
   for (const line of cleaned.split("\n")) {
     const lineStart = offset;
     offset += line.length + 1;
     const end = Math.min(offset, cleaned.length);
 
+    const indent = indentWidth(line.match(/^[ \t]*/)[0]);
     const labeled = line.match(LABEL_LINE);
-    if (labeled) {
+    if (labeled && !(current && indent >= current.contentIndent)) {
       const [, lead, marker, gap, label, rest] = labeled;
       const markerEnd = indentWidth(lead + " ".repeat(marker.length));
       const gapWidth = indentWidth(lead + " ".repeat(marker.length) + gap) - markerEnd;
@@ -207,6 +238,7 @@ function parseFields(cleaned) {
       };
       fields.push(current);
       blankSeen = false;
+      lazyOk = true;
       continue;
     }
     if (!current) continue;
@@ -216,14 +248,18 @@ function parseFields(cleaned) {
       blankSeen = true;
       continue;
     }
-    const outer = indentWidth(line.match(/^[ \t]*/)[0]) < current.contentIndent;
-    if (EXEMPTION_START.test(line) || (outer && (blankSeen || BLOCK_START.test(line)))) {
+    const outer = indent < current.contentIndent;
+    if (
+      EXEMPTION_START.test(line) ||
+      (outer && (blankSeen || !lazyOk || BLOCK_START.test(line)))
+    ) {
       current = null;
       continue;
     }
     current.lines.push(trimmed);
     current.end = end;
     blankSeen = false;
+    lazyOk = !LEAF_BLOCK_START.test(line);
   }
   return fields.map(({ label, lines, start, end }) => ({
     label,
@@ -300,7 +336,7 @@ function hasSubstantiveCodeSpan(value) {
 
 /** File extensions for screenshots, recordings, traces, logs, and archives. */
 const ARTIFACT_EXTENSION =
-  /\.(?:png|jpe?g|gif|webp|avif|svg|bmp|heic|mp4|webm|mov|mkv|avi|json|jsonl|ndjson|har|txt|log|md|html?|csv|xml|ya?ml|pdf|zip|gz|tgz|tar|7z)$/i;
+  /\.(?:png|jpe?g|gif|webp|avif|svg|bmp|tiff?|heic|heif|jxl|mp4|m4v|webm|mov|mkv|avi|ogv|gifv|cast|json|jsonl|ndjson|har|trace|pcap|sarif|txt|log|out|md|html?|csv|xml|ya?ml|pdf|zip|gz|tgz|tar|7z|xz|zst|bz2)$/i;
 
 /**
  * A concrete file path: a known artifact extension, or a directory path ending
@@ -313,11 +349,20 @@ function isArtifactPath(token) {
   return ARTIFACT_EXTENSION.test(name) || (token.includes("/") && /\.[a-z][a-z0-9]{0,7}$/i.test(name));
 }
 
+const LEADING_PUNCTUATION = new Set("(<\"'`");
+const TRAILING_PUNCTUATION = new Set(")>\"'`.,;:!?");
+
+/** Strip surrounding punctuation with index loops (no backtracking regex). */
+function trimToken(token) {
+  let start = 0;
+  let end = token.length;
+  while (start < end && LEADING_PUNCTUATION.has(token[start])) start += 1;
+  while (end > start && TRAILING_PUNCTUATION.has(token[end - 1])) end -= 1;
+  return token.slice(start, end);
+}
+
 function mentionsArtifactPath(value) {
-  return value
-    .split(/\s+/)
-    .map((token) => token.replace(/^[(<"'`]+|[)>"'`.,;:!?]+$/g, ""))
-    .some(isArtifactPath);
+  return value.split(/\s+/).map(trimToken).some(isArtifactPath);
 }
 
 const HTTP_URL = /https?:\/\/[^\s/?#<>()"'`]+/i;
@@ -328,8 +373,12 @@ function isConcreteTarget(destination) {
   return /^https?:\/\/[^\s/?#<>]+/i.test(target) || isArtifactPath(target);
 }
 
-/** Markdown links and images (no nested brackets); bounded per line. */
-const MARKDOWN_LINK = /!?\[([^[\]\n]*)\]\((<[^<>\n]*>|[^()\s]*)(?:[ \t]+"[^"\n]*")?\)/g;
+/**
+ * Markdown links and images (no nested brackets) with an optional "", '', or ()
+ * title; each part stops at a delimiter, so matching stays linear.
+ */
+const MARKDOWN_LINK =
+  /!?\[([^[\]\n]*)\]\(\s*(<[^<>\n]*>|[^()\s]*)(?:\s+(?:"[^"]*"|'[^']*'|\([^()]*\)))?\s*\)/g;
 
 function looksLikeArtifact(value) {
   if (!value) return false;
