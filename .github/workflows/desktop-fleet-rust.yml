@@ -33,7 +33,7 @@ env:
   FLEET_RUST_ACCEL: ${{ vars.FLEET_RUST_ACCEL || 'on' }}
 
 concurrency:
-  group: fleet-rust-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
