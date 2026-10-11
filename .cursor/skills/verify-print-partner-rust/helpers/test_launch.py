@@ -338,6 +338,109 @@ verify.main()
                         os.kill(child_pid, signal.SIGKILL)
 
 
+class StopAtEveryLineTest(unittest.TestCase):
+    # Deliver a real SIGTERM as each line of serve()/verify() is reached, including the first
+    # lines of their cleanup blocks, against a fake pp-server that also exits on its own.
+    SERVER = """
+import json, os, signal, sys, time
+from pathlib import Path
+data = Path(sys.argv[sys.argv.index('--data') + 1])
+runtime = data / 'runtime'
+runtime.mkdir(parents=True)
+(data / '.desktop.lock').touch()
+marker = data / '.desktop-owner.json'
+marker.write_text(json.dumps({'runtime_dir': str(runtime)}))
+if '--test-credential-file' in sys.argv:
+    Path(sys.argv[sys.argv.index('--test-credential-file') + 1]).write_text('{}')
+def stop(*_):
+    marker.unlink()
+    runtime.rmdir()
+    sys.exit(0)
+signal.signal(signal.SIGTERM, stop)
+Path(%r).write_text(str(os.getpid()))
+print('http://127.0.0.1:43210', flush=True)
+time.sleep(0.3)
+stop()
+"""
+
+    def each_line(self, function, call, check):
+        verify = load_verify()
+        previous = {signum: signal.getsignal(signum) for signum in verify.STOP_SIGNALS}
+        lines, first = inspect.getsourcelines(getattr(verify, function))
+        code = getattr(verify, function).__code__
+        with tempfile.TemporaryDirectory(prefix="pp-every-line-test-") as temporary:
+            temp = Path(temporary)
+            pidfile = temp / "server.pid"
+            binary = temp / "server"
+            write_executable(binary, f"#!{sys.executable}\n" + self.SERVER % str(pidfile))
+            for target in range(first + 1, first + len(lines)):
+                with self.subTest(function=function, line=target):
+                    pidfile.unlink(missing_ok=True)
+                    (temp / "credential.json").unlink(missing_ok=True)  # keep a failure from cascading
+                    verify.held.update(active=False, pending=None, on_stop=None)
+                    verify.install_stop_handlers()
+                    fired = []
+
+                    def trace(frame, event, _arg):
+                        if frame.f_code is not code:
+                            return None
+                        if event == "line" and frame.f_lineno == target and not fired:
+                            fired.append(target)
+                            os.kill(os.getpid(), signal.SIGTERM)
+                        return trace
+
+                    raised = None
+                    try:
+                        with contextlib.redirect_stdout(io.StringIO()) as output:
+                            sys.settrace(trace)
+                            try:
+                                call(verify, binary, temp)
+                            except (verify.Stop, RuntimeError) as error:
+                                raised = error
+                            finally:
+                                sys.settrace(None)
+                        started = pidfile.exists()
+                        if started:
+                            self.assertTrue(wait_until_gone(int(pidfile.read_text()), 5), output.getvalue())
+                        check(verify, temp, started, raised, output.getvalue())
+                    finally:
+                        for signum, handler in previous.items():
+                            signal.signal(signum, handler)  # begin_stop() ignored them in this process
+                        if pidfile.exists():
+                            with contextlib.suppress(ProcessLookupError):
+                                os.kill(int(pidfile.read_text()), signal.SIGKILL)
+
+    def test_stop_at_any_line_of_serve_keeps_cleanup_and_shutdown_checks(self):
+        def call(verify, binary, temp):
+            verify.serve(binary, temp, "node", "commit", temp / "credential.json")
+
+        def check(verify, temp, started, raised, output):
+            self.assertFalse((temp / "credential.json").exists(), output)
+            if isinstance(raised, verify.Stop):
+                # Escaping serve() means launch reports "before pp-server started".
+                self.assertFalse(started, output)
+            else:
+                self.assertIsNone(raised, output)
+                if "pp-server stopped before readiness" not in output:
+                    self.assertIn("data lock reacquired", output)
+
+        self.each_line("serve", call, check)
+
+    def test_stop_at_any_line_of_verify_reaps_server(self):
+        def call(verify, binary, temp):
+            verify.checkout = lambda *_: ("commit", "node")
+            verify.build = lambda *_: binary
+            verify.read_origin = mock.Mock(side_effect=RuntimeError("injected startup failure"))
+            verify.verify(temp)
+
+        def check(verify, temp, started, raised, output):
+            self.assertIsNotNone(raised, output)
+            if isinstance(raised, verify.Stop):
+                self.assertFalse(started, output)
+
+        self.each_line("verify", call, check)
+
+
 class VerifyServerStopTest(unittest.TestCase):
     def test_cancelled_successful_verify_cleans_up_then_exits_nonzero(self):
         verify = load_verify()
@@ -448,8 +551,11 @@ verify.verify(Path({str(temp)!r}))
                                                 text=True, timeout=10)
                         child_pid = int(pidfile.read_text())
                         self.assertNotEqual(result.returncode, 0)
-                        self.assertIn("Stop: SIGTERM" if phase == "acquisition" else
-                                      "injected startup failure", result.stderr)
+                        # Signals are held from acquisition through cleanup, so the stop is recorded
+                        # (and pp-server signalled) rather than raised over the injected failure.
+                        self.assertIn("injected startup failure", result.stderr)
+                        if phase == "acquisition":
+                            self.assertIn("STOP: SIGTERM received; proof cancelled", result.stdout)
                         self.assertNotIn("CLEANUP ERROR", result.stdout)
                         self.assertFalse(process_alive(child_pid), result.stdout + result.stderr)
                     finally:
@@ -469,7 +575,7 @@ class ServerExitTest(unittest.TestCase):
 
     def test_stop_at_launch_cleanup_entry_removes_credential_and_checks_shutdown(self):
         verify = load_verify()
-        process = SimpleNamespace(pid=123, returncode=0, stdout=io.StringIO(), wait=lambda: 0)
+        process = SimpleNamespace(pid=123, returncode=0, stdout=io.StringIO(), wait=lambda timeout=None: 0)
         with tempfile.TemporaryDirectory(prefix="pp-launch-cleanup-test-") as temporary:
             credentials = Path(temporary) / "credential.json"
             def origin(_process, errors):
@@ -493,7 +599,7 @@ class ServerExitTest(unittest.TestCase):
 
     def assert_server_exit(self, status):
         verify = load_verify()
-        process = SimpleNamespace(pid=123, returncode=status, stdout=io.StringIO(), wait=lambda: status)
+        process = SimpleNamespace(pid=123, returncode=status, stdout=io.StringIO(), wait=lambda timeout=None: status)
         runtime = Path("/tmp/pp-test-runtime")
 
         def origin(_process, errors):

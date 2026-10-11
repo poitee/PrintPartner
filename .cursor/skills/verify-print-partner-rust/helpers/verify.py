@@ -57,15 +57,29 @@ def begin_stop(name):
 
 # While held, a signal is recorded and raised only after release_signals(), so
 # pp-server is never stopped before it is recorded or before its origin is printed.
-held = {"active": False, "pending": None}
+# Holding also means no stop can escape between statements of a cleanup path; work that
+# must react promptly polls `pending` or registers `on_stop`, called from the handler.
+held = {"active": False, "pending": None, "on_stop": None}
 
 
 def stop_on_signal(signum, _frame):
     name = signal.Signals(signum).name
     if held["active"]:
         held["pending"] = name
+        if held.get("on_stop") is not None:
+            held["on_stop"]()
         return
     raise begin_stop(name)
+
+
+def signal_server(process):
+    # Called from the stop handler: the proof's next request then fails fast. Once reaped,
+    # the pid is never signalled again, so it cannot hit a reused pid.
+    if process.returncode is None:
+        try:
+            os.kill(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
 
 
 def install_stop_handlers():
@@ -280,11 +294,15 @@ def verify(root):
         fixture = Path(temporary)
         credentials = fixture / "credentials.json"
         with (fixture / "server.stderr").open("w+") as errors:
+            # Signals stay held until cleanup ends, so a stop can never skip it. A stop during
+            # the proof stops pp-server at once and is raised after cleanup.
             held["active"] = True
             process = start_server(binary, root, node, commit, fixture, errors, credentials)
             runtime_dir = None
+            held["on_stop"] = lambda: signal_server(process)
             try:
-                release_signals()
+                if held["pending"] is not None:
+                    signal_server(process)
                 origin = read_origin(process, errors)
                 print(f"START: pid={process.pid} origin={origin}", flush=True)
                 marker = fixture / "data/.desktop-owner.json"
@@ -340,8 +358,13 @@ def verify(root):
                     # The handler installed ignored handlers before raising. Finish cleanup
                     # before propagating cancellation, preserving any earlier proof failure.
                     cleanup_stop = stop
+                held["on_stop"] = None
+                if cleanup_stop is None and held["pending"] is not None:
+                    cleanup_stop = Stop(held["pending"])
                 held["active"] = False
                 failed = sys.exc_info()[0] is not None
+                if failed and cleanup_stop is not None:
+                    print(f"STOP: {cleanup_stop} received; proof cancelled", flush=True)
                 try:
                     terminate(process)
                     credentials.unlink(missing_ok=True)
@@ -457,8 +480,16 @@ def serve(binary, root, node, commit, credentials):
                     published = publish_credential(internal, credentials)
                 port = urllib.parse.urlsplit(origin).port
                 print(f"PP_SERVER_URL={origin} PP_SERVER_PORT={port} PP_SERVER_PID={process.pid}", flush=True)
-                release_signals()
-                process.wait()
+                # Signals stay held while serving, so a stop is only recorded and cannot escape
+                # between statements of the cleanup below; poll for it instead.
+                while held["pending"] is None:
+                    try:
+                        process.wait(timeout=0.1)
+                        break
+                    except subprocess.TimeoutExpired:
+                        pass
+                if held["pending"] is not None:
+                    release_signals()
                 if process.returncode != 0:
                     raise RuntimeError(f"pp-server exited without a stop request (exit={process.returncode})")
                 print("STOP: pp-server exited cleanly; checking shutdown", flush=True)
