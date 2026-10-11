@@ -1,4 +1,5 @@
-import { globSync } from "node:fs";
+import { globSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import ts from "typescript";
 import type { RouteOptions } from "fastify";
@@ -6,7 +7,7 @@ import type { RouteOptions } from "fastify";
 type Limits = Record<string, number>;
 
 /** Test-only source reader: multipart overrides are inside handlers, not Fastify route options. */
-export function readMultipartRouteLimits(srcDir: string): Map<string, Limits> {
+function readMultipartRouteLimits(srcDir: string): Map<string, Limits> {
   const files = globSync("**/*.ts", { cwd: srcDir })
     .filter((file) => !file.endsWith(".test.ts") && !file.includes("__tests__"))
     .map((file) => resolve(srcDir, file));
@@ -48,20 +49,32 @@ export function readMultipartRouteLimits(srcDir: string): Map<string, Limits> {
     }
     throw new Error(`Unsupported multipart options: ${node.getText()}`);
   }
+  const attributedCalls = new Set<ts.CallExpression>();
+  function isMultipartCall(node: ts.Node): boolean {
+    return ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) &&
+      ["file", "files", "parts", "saveRequestFiles"].includes(node.expression.name.text) &&
+      !!checker.getTypeAtLocation(node.expression.expression).getProperty("isMultipart");
+  }
   function multipartIn(handler: ts.Node, visited = new Set<ts.Node>()): Limits[] {
     if (visited.has(handler)) return [];
     visited.add(handler);
+    if (ts.isIdentifier(handler)) {
+      const decl = declaration(handler);
+      if (decl) return multipartIn(decl, visited);
+    }
     const found: Limits[] = [];
     function visit(node: ts.Node): void {
       if (ts.isCallExpression(node)) {
         const callee = node.expression;
-        if (ts.isPropertyAccessExpression(callee) &&
-            ts.isIdentifier(callee.expression) && callee.expression.text === "request" &&
-            ["file", "files", "parts"].includes(callee.name.text)) {
+        if (isMultipartCall(node)) {
+          attributedCalls.add(node);
           const limits: Limits = {};
           if (node.arguments[0]) {
             const options = object(node.arguments[0]);
             const property = options.properties.find((p) => p.name?.getText() === "limits");
+            if (property && !ts.isPropertyAssignment(property)) {
+              throw new Error("Unsupported multipart limits property");
+            }
             if (property && ts.isPropertyAssignment(property)) {
               for (const entry of object(property.initializer).properties) {
                 if (!ts.isPropertyAssignment(entry)) throw new Error("Unsupported multipart limit property");
@@ -71,12 +84,11 @@ export function readMultipartRouteLimits(srcDir: string): Map<string, Limits> {
           }
           found.push(limits);
         } else if (ts.isIdentifier(callee) && node.arguments.some(
-          (arg) => ts.isIdentifier(arg) && arg.text === "request",
+          (arg) => !!checker.getTypeAtLocation(arg).getProperty("isMultipart"),
         )) {
           const decl = declaration(callee);
-          if (decl && ts.isFunctionDeclaration(decl) && decl.body &&
-              decl.getSourceFile().fileName.startsWith(srcDir)) {
-            found.push(...multipartIn(decl.body, visited));
+          if (decl && decl.getSourceFile().fileName.startsWith(srcDir)) {
+            found.push(...multipartIn(decl, visited));
           }
         }
       }
@@ -91,7 +103,7 @@ export function readMultipartRouteLimits(srcDir: string): Map<string, Limits> {
     function visit(node: ts.Node): void {
       if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) &&
           ["get", "post", "put", "patch", "delete", "head", "options"].includes(node.expression.name.text) &&
-          node.arguments[0] && ts.isStringLiteral(node.arguments[0])) {
+          node.arguments[0] && (ts.isStringLiteral(node.arguments[0]) || ts.isNoSubstitutionTemplateLiteral(node.arguments[0]))) {
         const handler = node.arguments.at(-1)!;
         const limits = multipartIn(handler);
         if (limits.length > 1) throw new Error(`Multiple multipart parsers: ${node.arguments[0].text}`);
@@ -101,7 +113,45 @@ export function readMultipartRouteLimits(srcDir: string): Map<string, Limits> {
     }
     visit(source);
   }
+  // Fail closed when an upload parser cannot be attributed (for example app.route or a dynamic path).
+  for (const file of files) {
+    function check(node: ts.Node): void {
+      if (ts.isCallExpression(node) && isMultipartCall(node) && !attributedCalls.has(node)) {
+        throw new Error(`Unattributed multipart parser: ${file}: ${node.getText()}`);
+      }
+      ts.forEachChild(node, check);
+    }
+    check(program.getSourceFile(file)!);
+  }
   return routes;
+}
+
+function readBusboyDefaults(): Record<string, number | null> {
+  const require = createRequire(import.meta.url);
+  const multipartRequire = createRequire(require.resolve("@fastify/multipart"));
+  const path = multipartRequire.resolve("@fastify/busboy/lib/types/multipart.js");
+  const source = ts.createSourceFile(path, readFileSync(path, "utf8"), ts.ScriptTarget.ES2022, true);
+  function value(node: ts.Expression): number {
+    if (ts.isNumericLiteral(node)) return Number(node.text);
+    if (ts.isIdentifier(node) && node.text === "Infinity") return Infinity;
+    if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.AsteriskToken) {
+      return value(node.left) * value(node.right);
+    }
+    throw new Error(`Unsupported Busboy default: ${node.getText()}`);
+  }
+  const limits: Record<string, number | null> = {};
+  function visit(node: ts.Node): void {
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "getLimit") {
+      const name = node.arguments[1];
+      if (!name || !ts.isStringLiteral(name) || !node.arguments[2]) throw new Error("Unsupported Busboy default");
+      const limit = value(node.arguments[2]);
+      limits[name.text] = Number.isFinite(limit) ? limit : null;
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(source);
+  if (!Object.keys(limits).length) throw new Error("Busboy multipart defaults not found");
+  return limits;
 }
 
 /** Export the effective TS limits for every method/path, including versioned aliases. */
@@ -110,16 +160,19 @@ export function exportHttpBodyLimits(
   defaults: {
     jsonBodyBytes: number;
     multipart: Limits;
+    rateLimitedRoutes: WeakSet<RouteOptions>;
     rateLimit: {
       max: number;
       timeWindow: string;
       allowList: (request: { url: string }) => boolean;
+      keyGenerator: (request: { url: string; ip: string }) => string;
     };
   },
   srcDir: string,
 ) {
   const multipartRoutes = readMultipartRouteLimits(srcDir);
   const seenMultipart = new Set<string>();
+  const busboyDefaults = readBusboyDefaults();
   const entries = registrations.flatMap((route) => {
     const methods = Array.isArray(route.method) ? route.method : [route.method];
     return methods.map((method) => {
@@ -127,23 +180,25 @@ export function exportHttpBodyLimits(
       const key = `${method} ${path}`;
       const multipart = multipartRoutes.get(key);
       if (multipart) seenMultipart.add(key);
-      const request = { url: route.url, ip: "127.0.0.1" };
+      const request = { url: route.url.replace(/:[^/]+/g, "1"), ip: "127.0.0.1" };
       const rate = route.config?.rateLimit;
+      const rateValues = {
+        max: typeof rate === "object" ? rate.max ?? defaults.rateLimit.max : defaults.rateLimit.max,
+        timeWindow: typeof rate === "object" ? rate.timeWindow ?? defaults.rateLimit.timeWindow : defaults.rateLimit.timeWindow,
+      };
+      const enforced = defaults.rateLimitedRoutes.has(route);
       return {
         method, path: route.url,
         jsonBodyBytes: route.bodyLimit ?? defaults.jsonBodyBytes,
         // Unspecified parser limits inherit the app registration and Busboy defaults.
         multipart: multipart ? {
-          fieldSize: 1024 * 1024, fields: null,
-          headerPairs: 2000, ...defaults.multipart, ...multipart,
+          ...busboyDefaults, ...defaults.multipart, ...multipart,
         } : null,
-        rateLimit: rate === false || defaults.rateLimit.allowList(request) ? null : {
-          max: defaults.rateLimit.max, timeWindow: defaults.rateLimit.timeWindow,
-          ...(typeof rate === "object" ? {
-            max: rate.max ?? defaults.rateLimit.max,
-            timeWindow: rate.timeWindow ?? defaults.rateLimit.timeWindow,
-          } : {}),
+        rateLimit: !enforced || rate === false || defaults.rateLimit.allowList(request) ? null : {
+          ...rateValues,
+          bucket: typeof rate === "object" ? "route" : defaults.rateLimit.keyGenerator(request).replace("127.0.0.1:", ""),
         },
+        ...(!enforced && typeof rate === "object" ? { unenforcedRateLimit: rateValues } : {}),
       };
     });
   }).sort((a, b) => `${a.path} ${a.method}`.localeCompare(`${b.path} ${b.method}`, "en"));
@@ -160,5 +215,15 @@ export function exportHttpBodyLimits(
     unique.set(key, route);
   }
   const routes = [...unique.values()];
-  return { routes };
+  return {
+    semantics: {
+      routeSurface: "Union of self-host/saas production/static and development/docs registrations",
+      multipartNull: "Route has no multipart parser",
+      multipartLimitNull: "Unlimited",
+      rateLimitNull: "No enforced rate limit (uninstalled or allow-listed)",
+      unenforcedRateLimit: "Declared route config with no installed limiter",
+      rateBucket: "app/media share an IP budget; route uses a separate route counter",
+    },
+    routes,
+  };
 }
