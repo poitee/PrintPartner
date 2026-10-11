@@ -298,12 +298,22 @@ function evidenceSectionEnd(text) {
  */
 export function extractEvidenceSection(body, options) {
   if (typeof body !== "string" || !body.trim()) return null;
-  const visible = inlineCodeMetadataView(stripHiddenMarkdown(structuralMetadataView(body), options));
-  const match = [...referenceHeadingView(visible).matchAll(EVIDENCE_HEADING)][0];
+  const metadata = structuralMetadataView(body);
+  const visible = stripHiddenMarkdown(metadata, options?.includeRawHtml ? undefined : options);
+  const headings = referenceHeadingView(inlineCodeHeadingView(visible));
+  const match = [...headings.matchAll(EVIDENCE_HEADING)][0];
   if (!match || match.index == null) return null;
   const start = match.index + match[0].length;
-  const rest = visible.slice(start);
-  return rest.slice(0, evidenceSectionEnd(rest));
+  const end = start + evidenceSectionEnd(headings.slice(start));
+  if (options?.includeRawHtml) {
+    // Both stripped views retain one output line per metadata input line.
+    // Select boundaries from visible Markdown, then scan the same raw lines.
+    const firstLine = visible.slice(0, start).split("\n").length;
+    const lastLine = visible.slice(0, end).split("\n").length - (end < visible.length ? 1 : 0);
+    const rawLines = stripHiddenMarkdown(metadata, options).split("\n");
+    return inlineCodeMetadataView("\n" + rawLines.slice(firstLine, lastLine).join("\n"));
+  }
+  return inlineCodeMetadataView(visible.slice(start, end));
 }
 
 function parseExemption(sectionText) {
@@ -471,7 +481,7 @@ function findField(sectionText, label) {
 }
 
 function readField(sectionText, label) {
-  return findField(sectionText, label)?.value ?? "";
+  return findField(sectionText, label)?.text ?? "";
 }
 
 /**
@@ -823,6 +833,18 @@ function inlineCodeMetadataView(value) {
   return kept + value.slice(cursor);
 }
 
+/** Mask code spans for block-boundary discovery without moving line offsets. */
+function inlineCodeHeadingView(value) {
+  let cursor = 0;
+  let kept = "";
+  for (const range of codeSpanRanges(value)) {
+    kept += value.slice(cursor, range.start)
+      + value.slice(range.start, range.end).replace(/[^\n]/g, " ");
+    cursor = range.end;
+  }
+  return kept + value.slice(cursor);
+}
+
 /** Type-7 HTML blocks require a complete tag alone on a boundary line. */
 function isCompleteHtmlTag(value) {
   return /^[ \t]*<\/[A-Za-z][A-Za-z0-9-]*[ \t]*>[ \t]*$/.test(value)
@@ -943,7 +965,7 @@ function stripRawHtmlTags(value) {
     const closing = markup.startsWith("</");
     if (closing && name === hidden.at(-1)) hidden.pop();
     else if (!closing && ["script", "style", "template", "head", "title"].includes(name)
-      && (!hidden.length || name === "template" && hidden.at(-1) === "template")) hidden.push(name);
+      && !["script", "style", "title"].includes(hidden.at(-1))) hidden.push(name);
     cursor = end;
   }
   return kept + (hidden.length ? "" : value.slice(cursor));
@@ -1018,6 +1040,7 @@ function referenceUses(value, { requireVisible = false } = {}) {
 /** Visible inline text for required fields: destinations and HTML attributes
  * cannot turn a placeholder label into a substantive explanation. */
 function visibleFieldText(value) {
+  value = referenceHeadingView(value);
   let text = "";
   let cursor = 0;
   for (let at = value.indexOf("]("); at !== -1; at = value.indexOf("](", cursor)) {
@@ -1097,9 +1120,10 @@ function targetsBannedLan(sectionText, definitions) {
   const bannedTarget = (value) => {
     if (BANNED_LAN_IP.test(value)) return true;
     const decoded = decodeCharacterReferences(value).replace(/\\(.)/g, "$1").replace(/[\t\n\r]/g, "");
-    return [...decoded.matchAll(/(?:https?:)?\/\/[^\s<>()"'`]+/gi)].some((match) => {
+    return [...decoded.matchAll(/(?:https?:|\/\/)[^\s<>()"'`]+/gi)].some((match) => {
       try {
-        let host = new URL(trimToken(match[0]), "https://example.test/").hostname;
+        const target = trimToken(match[0]);
+        let host = new URL(target, /^https?:/i.test(target) ? undefined : "https://example.test/").hostname;
         const mapped = host.match(/^\[::ffff:([\da-f]{1,4}):([\da-f]{1,4})\]$/i);
         if (mapped) {
           const high = parseInt(mapped[1], 16);

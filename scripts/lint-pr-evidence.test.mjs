@@ -1495,3 +1495,42 @@ test('visible prose survives surrounding non-rendering elements', () => {
 test('nested template content cannot supply artifact', () => {
   assert.equal(lintPrEvidence(bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n${ARTIFACT_LABEL} <template><template>hidden</template>https://example.test/shot.png</template>`)).ok, false);
 });
+
+for (const target of ['http:3232235856','http:/3232235856','https:0xc0a80151']) {
+  test(`rejects normalized slashless HTTP target ${target}`, () => {
+    assert.equal(lintPrEvidence(bodyWithEvidence(`Exemption: docs-only\n- Exemption reason: Updated docs.\n- Journey exercised: [preview](${target})`)).ok, false);
+  });
+}
+for (const child of ['style','script','title']) {
+  test(`raw text child ${child} keeps template inert`, () => {
+    assert.equal(lintPrEvidence(bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n${ARTIFACT_LABEL} <template><${child}></template>https://example.test/shot.png</${child}></template>`)).ok, false);
+  });
+}
+test('raw HTML decoy heading cannot truncate verification LAN scan', () => {
+  assert.equal(lintPrEvidence(bodyWithEvidence('Exemption: docs-only\n- Exemption reason: Updated docs.\n\n<div>\n## Evidence\n</div>\n\n<div><a href="http://3232235856/">preview</a></div>')).ok, false);
+});
+test('raw HTML decoy heading cannot hide later mapped LAN target', () => {
+  assert.equal(lintPrEvidence(bodyWithEvidence('Exemption: docs-only\n- Exemption reason: Updated docs.\n\n<div>\n## Other\n</div>\n\n<div><a href="http://[::ffff:c0a8:151]/">preview</a></div>')).ok, false);
+});
+test('raw LAN scan stops at actual outer section boundary', () => {
+  assert.equal(lintPrEvidence(bodyWithEvidence('Exemption: docs-only\n- Exemption reason: Updated docs.\n\n<div>\n## Evidence\n</div>\n\n## Background\n<div><a href="http://3232235856/">old deployment</a></div>')).ok, true);
+});
+test('reference definition cannot supply exemption reason', () => {
+  assert.equal(lintPrEvidence(bodyWithEvidence('Exemption: docs-only\n- Exemption reason:\n  [reason]: /updated-docs')).ok, false);
+});
+for (const field of ['Steps followed to produce the evidence','Result observed']) {
+  test(`reference definition cannot supply required field ${field}`, () => {
+    const steps=field.startsWith('Steps')?'\n  [steps]: /ran-locally':'ran locally';
+    const result=field.startsWith('Result')?'\n  [result]: /passed':'passed';
+    assert.equal(lintPrEvidence(bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: ${steps}\n- Result observed: ${result}\n${ARTIFACT_LABEL} trace.json`)).ok, false);
+  });
+}
+test('visible reason after reference definition remains substantive', () => {
+  assert.equal(lintPrEvidence(bodyWithEvidence('Exemption: docs-only\n- Exemption reason:\n  [reason]: /updated-docs\n\n  Updated docs.')).ok, true);
+});
+test('visible artifact after nested hidden raw-text child remains valid', () => {
+  assert.equal(lintPrEvidence(bodyWithEvidence(`Exemption: none\n- Steps followed to produce the evidence: ran locally\n- Result observed: passed\n${ARTIFACT_LABEL} <template><style>hidden</style></template> https://example.test/shot.png`)).ok, true);
+});
+test('safe slashless HTTP verification target remains allowed', () => {
+  assert.equal(lintPrEvidence(bodyWithEvidence('Exemption: docs-only\n- Exemption reason: Updated docs.\n- Journey exercised: [preview](http:example.test)')).ok, true);
+});
